@@ -88,9 +88,9 @@ try {
 	assert(view.markdownWriteEnabled === true, "view should state Markdown write is enabled");
 	assert(view.bashEnabled === false, "view should state bash is disabled");
 	assert(view.nativePiFilesystemToolsEnabled === false, "view should state native Pi filesystem tools are disabled");
-	assert(!viewJson.includes(workspaceRoot), "view must not expose raw workspace path");
-	assert(!viewJson.includes(repoRoot), "view must not expose raw repo path");
-	assert(!viewJson.includes(exxetaStateRoot), "view must not expose raw exxeta path");
+	assert(!viewJson.includes(JSON.stringify(workspaceRoot).slice(1, -1)), "view must not expose raw workspace path");
+	assert(!viewJson.includes(JSON.stringify(repoRoot).slice(1, -1)), "view must not expose raw repo path");
+	assert(!viewJson.includes(JSON.stringify(exxetaStateRoot).slice(1, -1)), "view must not expose raw exxeta path");
 
 	writePersistentRoomCapabilityPolicy(policy, { persistentAgentsRoot });
 	const policyPath = persistentRoomWorkspacePolicyPath(agentId, "c_workspace_policy_smoke", { persistentAgentsRoot });
@@ -156,7 +156,7 @@ try {
 	const storedDefaultPolicyJson = fs.readFileSync(defaultPolicyPath, "utf-8");
 	assert(storedDefaultPolicyJson.includes(JSON.stringify(defaultWorkspaceRoot).slice(1, -1)), "server-side room-default policy should retain raw workspace path for enforcement");
 	const defaultViewJson = JSON.stringify(persistentRoomCapabilityPolicyView(defaultPolicy));
-	assert(!defaultViewJson.includes(defaultWorkspaceRoot), "room-default policy view must not expose raw workspace path");
+	assert(!defaultViewJson.includes(JSON.stringify(defaultWorkspaceRoot).slice(1, -1)), "room-default policy view must not expose raw workspace path");
 	const resolvedDefault = resolvePersistentRoomCapabilityPolicy(agentId, "c_workspace_policy_smoke", { persistentAgentsRoot });
 	assert(resolvedDefault.source === "room-default", "resolver should fall back to room-default policy when thread policy is missing");
 	assert(resolvedDefault.policy?.roots[0]?.realpath === fs.realpathSync.native(defaultWorkspaceRoot), "resolver default fallback should return room-default root");

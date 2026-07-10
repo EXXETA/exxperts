@@ -216,9 +216,9 @@ try {
 	const legacySidecarJson = fs.readFileSync(legacySidecarPath, "utf-8");
 	assert(legacySidecarJson.includes(JSON.stringify(workspaceRoot).slice(1, -1)), "legacy active thread sidecar should preserve original default root");
 	assert(legacySidecarJson.includes('"bashEnabled": true'), "legacy active thread sidecar should preserve original default bash setting before mutation");
-	assert(!legacySidecarJson.includes(changedWorkspaceRoot), "legacy active thread sidecar must not be rewritten to changed default root");
+	assert(!legacySidecarJson.includes(JSON.stringify(changedWorkspaceRoot).slice(1, -1)), "legacy active thread sidecar must not be rewritten to changed default root");
 	const changedDefaultJson = fs.readFileSync(defaultPath, "utf-8");
-	assert(changedDefaultJson.includes(changedWorkspaceRoot), "room default should be updated to changed workspace root");
+	assert(changedDefaultJson.includes(JSON.stringify(changedWorkspaceRoot).slice(1, -1)), "room default should be updated to changed workspace root");
 	assertNoPathLeak(changedDefault.body, "PUT changed default", [tempHome, tempAgentsRoot, repoRoot, workspaceRoot, changedWorkspaceRoot, agentRoot]);
 
 	const invalidRepo = await requestJson(`/api/persistent-agents/${encodedAgentId}/workspace-default`, {
