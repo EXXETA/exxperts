@@ -69,6 +69,16 @@ npm install -g ./exxeta-exxperts-app-0.6.0-f6.0.tgz
 
 For bash, write the PATH line to `~/.bashrc` or `~/.bash_profile` instead.
 
+Already ran the install with `sudo`? Undo it first, or the next update fails with new permission errors (root-owned files in the global folder, the npm cache, and your clone):
+
+```bash
+sudo npm uninstall -g @exxeta/exxperts-app
+sudo chown -R $(whoami) ~/.npm
+sudo chown -R $(whoami) .    # run inside your exxperts clone
+```
+
+Then apply the user-level prefix steps above and reinstall.
+
 Uninstall later:
 
 ```bash
