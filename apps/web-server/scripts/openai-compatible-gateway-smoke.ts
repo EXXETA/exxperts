@@ -1,4 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer } from "./smoke-server-process.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -162,6 +163,7 @@ try {
 
 	server = spawn("npx", ["tsx", "src/index.ts"], {
 		shell: process.platform === "win32",
+		...SMOKE_SERVER_SPAWN_TREE_OPTIONS,
 		cwd: webServerDir,
 		env: smokeEnv(),
 	});
@@ -247,10 +249,7 @@ try {
 	console.error(`temp HOME preserved for inspection: ${tempHome}`);
 	process.exitCode = 1;
 } finally {
-	if (server && server.exitCode == null) {
-		server.kill("SIGTERM");
-		await new Promise((resolve) => server?.once("exit", resolve));
-	}
+	await stopSmokeServer(server);
 	if (process.exitCode == null || process.exitCode === 0) {
 		fs.rmSync(tempHome, { recursive: true, force: true });
 	}

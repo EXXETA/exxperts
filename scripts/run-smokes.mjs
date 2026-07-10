@@ -26,18 +26,39 @@ if (smokes.length === 0) {
 	process.exit(1);
 }
 
+// Hard ceiling per smoke: a wedged smoke (or a server process it failed to
+// tear down) must fail loudly instead of eating the CI job's entire timeout.
+const SMOKE_TIMEOUT_MS = 300_000;
+
+function killSmokeTree(child) {
+	if (child.pid == null) return;
+	if (process.platform === "win32") {
+		spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"], { stdio: "ignore" });
+		return;
+	}
+	try { process.kill(-child.pid, "SIGKILL"); } catch { try { child.kill("SIGKILL"); } catch {} }
+}
+
 function runSmoke(name) {
 	return new Promise((resolve) => {
 		const startedAt = Date.now();
 		const child = spawn(process.execPath, ["--import", tsxLoader, path.join(smokeDir, name)], {
 			cwd: repoRoot,
 			stdio: ["ignore", "pipe", "pipe"],
+			...(process.platform === "win32" ? {} : { detached: true }),
 		});
 		let output = "";
+		let timedOut = false;
+		const timer = setTimeout(() => {
+			timedOut = true;
+			output += `\n[run-smokes] timed out after ${SMOKE_TIMEOUT_MS / 1000}s; killing the smoke's process tree\n`;
+			killSmokeTree(child);
+		}, SMOKE_TIMEOUT_MS);
 		child.stdout.on("data", (chunk) => { output += chunk; });
 		child.stderr.on("data", (chunk) => { output += chunk; });
 		child.on("close", (code) => {
-			resolve({ name, code: code ?? 1, output, seconds: (Date.now() - startedAt) / 1000 });
+			clearTimeout(timer);
+			resolve({ name, code: timedOut ? 1 : (code ?? 1), output, seconds: (Date.now() - startedAt) / 1000 });
 		});
 	});
 }
