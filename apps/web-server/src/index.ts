@@ -1162,7 +1162,7 @@ app.put("/api/persistent-agents/:id/maintenance-settings", async (req, reply) =>
 	try {
 		const status = getUsablePersistentAgentStatusForNormalUse(idRaw);
 		const body = (req.body ?? {}) as any;
-		const settings = writePersistentRoomMaintenanceSettings(status.id, { fastPathSecondApproval: body.fastPathSecondApproval, memoryBudgetTokens: body.memoryBudgetTokens });
+		const settings = writePersistentRoomMaintenanceSettings(status.id, { fastPathSecondApproval: body.fastPathSecondApproval, quickCheckpointAutoApply: body.quickCheckpointAutoApply, memoryBudgetTokens: body.memoryBudgetTokens });
 		return { agentId: status.id, settings };
 	} catch (e) {
 		return persistentAgentNormalUseErrorReply(reply, e);

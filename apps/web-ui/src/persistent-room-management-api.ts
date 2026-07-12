@@ -55,6 +55,7 @@ export function renamePersistentRoom(agentId: PersistentAgentId, displayName: st
 export interface PersistentRoomMaintenanceSettings {
 	schemaVersion: 1;
 	fastPathSecondApproval: boolean;
+	quickCheckpointAutoApply: boolean;
 	memoryBudgetTokens: number;
 	updatedAt: string;
 }
@@ -72,7 +73,7 @@ export function fetchPersistentRoomMaintenanceSettings(agentId: PersistentAgentI
 	);
 }
 
-export function updatePersistentRoomMaintenanceSettings(agentId: PersistentAgentId, update: { fastPathSecondApproval?: boolean; memoryBudgetTokens?: number }): Promise<PersistentRoomMaintenanceSettingsResponse> {
+export function updatePersistentRoomMaintenanceSettings(agentId: PersistentAgentId, update: { fastPathSecondApproval?: boolean; quickCheckpointAutoApply?: boolean; memoryBudgetTokens?: number }): Promise<PersistentRoomMaintenanceSettingsResponse> {
 	return fetchJson<PersistentRoomMaintenanceSettingsResponse>(
 		`/api/persistent-agents/${encodeURIComponent(agentId)}/maintenance-settings`,
 		{

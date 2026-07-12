@@ -12,6 +12,13 @@ import { DEFAULT_PERSISTENT_ROOM_AGENTS_ROOT, persistentAgentRootPath } from "./
  * and the server-side propose/approve split is unchanged — this file only
  * stores the preference.
  *
+ * `quickCheckpointAutoApply` governs the default Checkpoint button: when true
+ * (the default, matching historical behaviour) a blocker-free proposal is
+ * approved immediately without showing the preview; when false the quick
+ * button still generates the proposal but always falls back to the manual
+ * preview for approval. Proposals with blockers fall back to the preview
+ * either way, and the server-side propose/approve split is unchanged.
+ *
  * `memoryBudgetTokens` is the room's advisory memory budget: the size the
  * whole L1b should stay near. It never gates anything — it drives the
  * settings meter, the room-card nudge, and a target line in the absorb /
@@ -21,6 +28,7 @@ import { DEFAULT_PERSISTENT_ROOM_AGENTS_ROOT, persistentAgentRootPath } from "./
 export interface PersistentRoomMaintenanceSettings {
 	schemaVersion: 1;
 	fastPathSecondApproval: boolean;
+	quickCheckpointAutoApply: boolean;
 	memoryBudgetTokens: number;
 	updatedAt: string;
 }
@@ -41,6 +49,7 @@ function clampMemoryBudgetTokens(value: unknown): number {
 const DEFAULT_SETTINGS: PersistentRoomMaintenanceSettings = {
 	schemaVersion: 1,
 	fastPathSecondApproval: false,
+	quickCheckpointAutoApply: true,
 	memoryBudgetTokens: MEMORY_BUDGET_DEFAULT_TOKENS,
 	updatedAt: "",
 };
@@ -65,6 +74,9 @@ export function readPersistentRoomMaintenanceSettings(agentIdRaw: string, option
 		return {
 			schemaVersion: 1,
 			fastPathSecondApproval: raw.fastPathSecondApproval === true,
+			// Settings files written before this field existed must keep the
+			// historical auto-apply behaviour, so only an explicit false disables.
+			quickCheckpointAutoApply: raw.quickCheckpointAutoApply !== false,
 			memoryBudgetTokens: clampMemoryBudgetTokens(raw.memoryBudgetTokens),
 			updatedAt: typeof raw.updatedAt === "string" ? raw.updatedAt : "",
 		};
@@ -73,14 +85,16 @@ export function readPersistentRoomMaintenanceSettings(agentIdRaw: string, option
 	}
 }
 
-export function writePersistentRoomMaintenanceSettings(agentIdRaw: string, input: { fastPathSecondApproval?: unknown; memoryBudgetTokens?: unknown }, options: PersistentRoomMaintenanceSettingsStorageOptions = {}, now = new Date()): PersistentRoomMaintenanceSettings {
+export function writePersistentRoomMaintenanceSettings(agentIdRaw: string, input: { fastPathSecondApproval?: unknown; quickCheckpointAutoApply?: unknown; memoryBudgetTokens?: unknown }, options: PersistentRoomMaintenanceSettingsStorageOptions = {}, now = new Date()): PersistentRoomMaintenanceSettings {
 	if (input?.fastPathSecondApproval !== undefined && typeof input.fastPathSecondApproval !== "boolean") throw new Error("fastPathSecondApproval must be a boolean");
+	if (input?.quickCheckpointAutoApply !== undefined && typeof input.quickCheckpointAutoApply !== "boolean") throw new Error("quickCheckpointAutoApply must be a boolean");
 	if (input?.memoryBudgetTokens !== undefined && (typeof input.memoryBudgetTokens !== "number" || !Number.isFinite(input.memoryBudgetTokens))) throw new Error("memoryBudgetTokens must be a number");
 	const current = readPersistentRoomMaintenanceSettings(agentIdRaw, options);
 	const settingsPath = persistentRoomMaintenanceSettingsPath(agentIdRaw, options);
 	const settings: PersistentRoomMaintenanceSettings = {
 		schemaVersion: 1,
 		fastPathSecondApproval: input?.fastPathSecondApproval !== undefined ? input.fastPathSecondApproval as boolean : current.fastPathSecondApproval,
+		quickCheckpointAutoApply: input?.quickCheckpointAutoApply !== undefined ? input.quickCheckpointAutoApply as boolean : current.quickCheckpointAutoApply,
 		memoryBudgetTokens: input?.memoryBudgetTokens !== undefined ? clampMemoryBudgetTokens(input.memoryBudgetTokens) : current.memoryBudgetTokens,
 		updatedAt: now.toISOString(),
 	};

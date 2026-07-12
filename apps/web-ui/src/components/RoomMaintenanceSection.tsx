@@ -14,6 +14,7 @@ function fmtTokensK(value: number): string {
 
 export function RoomMaintenanceSection({ status }: { status: PersistentAgentStatus }) {
 	const [fastPath, setFastPath] = useState<boolean | null>(null);
+	const [quickAutoApply, setQuickAutoApply] = useState<boolean | null>(null);
 	const [budget, setBudget] = useState<number | null>(null);
 	const [savedBudget, setSavedBudget] = useState<number | null>(null);
 	const [saving, setSaving] = useState(false);
@@ -23,6 +24,7 @@ export function RoomMaintenanceSection({ status }: { status: PersistentAgentStat
 	useEffect(() => {
 		let cancelled = false;
 		setFastPath(null);
+		setQuickAutoApply(null);
 		setBudget(null);
 		setSavedBudget(null);
 		setError(null);
@@ -30,6 +32,7 @@ export function RoomMaintenanceSection({ status }: { status: PersistentAgentStat
 			.then((response) => {
 				if (cancelled) return;
 				setFastPath(response.settings.fastPathSecondApproval);
+				setQuickAutoApply(response.settings.quickCheckpointAutoApply);
 				setBudget(response.settings.memoryBudgetTokens);
 				setSavedBudget(response.settings.memoryBudgetTokens);
 			})
@@ -78,6 +81,23 @@ export function RoomMaintenanceSection({ status }: { status: PersistentAgentStat
 		}
 	}
 
+	async function toggleQuickAutoApply(next: boolean) {
+		if (saving || quickAutoApply === null) return;
+		setSaving(true);
+		setError(null);
+		const previous = quickAutoApply;
+		setQuickAutoApply(next);
+		try {
+			const response = await updatePersistentRoomMaintenanceSettings(status.id, { quickCheckpointAutoApply: next });
+			setQuickAutoApply(response.settings.quickCheckpointAutoApply);
+		} catch (e) {
+			setQuickAutoApply(previous);
+			setError((e as Error).message);
+		} finally {
+			setSaving(false);
+		}
+	}
+
 	const currentMemoryTokens = status.promptBudget?.l1bEstimatedTokens ?? null;
 	const usagePercent = budget !== null && currentMemoryTokens !== null ? Math.round((currentMemoryTokens / budget) * 100) : null;
 	const overBudget = usagePercent !== null && usagePercent > 100;
@@ -103,6 +123,29 @@ export function RoomMaintenanceSection({ status }: { status: PersistentAgentStat
 					applied without the second review screen. Proposals that touch must-keep memory
 					or fail validation always come back for manual review, and the worker's notes are
 					shown after applying. Every change still archives the previous memory and writes
+					an audit record.
+				</p>
+			</details>
+			<label className="workspaces-tool-row">
+				<span>Quick checkpoint applies automatically</span>
+				<input
+					className="workspaces-tool-switch"
+					type="checkbox"
+					checked={quickAutoApply === true}
+					disabled={quickAutoApply === null || saving}
+					onChange={(e) => void toggleQuickAutoApply(e.target.checked)}
+					aria-label="Quick checkpoint applies automatically"
+				/>
+			</label>
+			<p className="room-maintenance-hint">Save blocker-free Checkpoint proposals without showing the preview.</p>
+			<details className="room-settings-details">
+				<summary>How it works</summary>
+				<p>
+					The Checkpoint button drafts a memory proposal and, when nothing deterministic
+					blocks it, saves it without showing you the content first. Turn this off to
+					always review the proposed entry before it becomes memory. Proposals with
+					blockers — trimmed transcripts or incomplete drafts — always come back for
+					review either way, and every save still archives the previous memory and writes
 					an audit record.
 				</p>
 			</details>

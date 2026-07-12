@@ -18,9 +18,10 @@ function assert(condition: unknown, message: string): asserts condition {
 }
 
 try {
-	// Default: off, 20k budget, no file created by reading.
+	// Default: off, quick-checkpoint auto-apply on, 20k budget, no file created by reading.
 	const initial = readPersistentRoomMaintenanceSettings(agentId);
 	assert(initial.fastPathSecondApproval === false, "default fast-path must be off");
+	assert(initial.quickCheckpointAutoApply === true, "default quick-checkpoint auto-apply must be on");
 	assert(initial.memoryBudgetTokens === 20_000, "default memory budget must be 20k tokens");
 	assert(!fs.existsSync(persistentRoomMaintenanceSettingsPath(agentId)), "read must not create the settings file");
 
@@ -61,6 +62,20 @@ try {
 	writePersistentRoomMaintenanceSettings(agentId, { fastPathSecondApproval: false });
 	assert(readPersistentRoomMaintenanceSettings(agentId).fastPathSecondApproval === false, "toggle off should persist");
 
+	// Quick-checkpoint auto-apply: off round-trips, other writes preserve it,
+	// and settings files written before the field existed keep auto-apply on.
+	const quickOff = writePersistentRoomMaintenanceSettings(agentId, { quickCheckpointAutoApply: false });
+	assert(quickOff.quickCheckpointAutoApply === false, "quick auto-apply off should persist");
+	assert(quickOff.fastPathSecondApproval === false, "quick auto-apply write should preserve the fast-path toggle");
+	assert(readPersistentRoomMaintenanceSettings(agentId).quickCheckpointAutoApply === false, "reread should see quick auto-apply off");
+	assert(writePersistentRoomMaintenanceSettings(agentId, { memoryBudgetTokens: 25_000 }).quickCheckpointAutoApply === false, "budget-only write should preserve quick auto-apply");
+	writePersistentRoomMaintenanceSettings(agentId, { quickCheckpointAutoApply: true });
+	assert(readPersistentRoomMaintenanceSettings(agentId).quickCheckpointAutoApply === true, "quick auto-apply back on should persist");
+	const legacy = JSON.parse(fs.readFileSync(persistentRoomMaintenanceSettingsPath(agentId), "utf-8"));
+	delete legacy.quickCheckpointAutoApply;
+	fs.writeFileSync(persistentRoomMaintenanceSettingsPath(agentId), JSON.stringify(legacy, null, 2) + "\n", "utf-8");
+	assert(readPersistentRoomMaintenanceSettings(agentId).quickCheckpointAutoApply === true, "legacy settings without the field should keep auto-apply on");
+
 	// Validation.
 	let threw = false;
 	try {
@@ -69,6 +84,13 @@ try {
 		threw = /must be a boolean/.test((error as Error).message);
 	}
 	assert(threw, "non-boolean input should be rejected");
+	let quickThrew = false;
+	try {
+		writePersistentRoomMaintenanceSettings(agentId, { quickCheckpointAutoApply: "yes" as unknown as boolean });
+	} catch (error) {
+		quickThrew = /quickCheckpointAutoApply must be a boolean/.test((error as Error).message);
+	}
+	assert(quickThrew, "non-boolean quick auto-apply should be rejected");
 	let threwId = false;
 	try {
 		readPersistentRoomMaintenanceSettings("../escape");
@@ -80,6 +102,7 @@ try {
 	// Corrupt file falls back to defaults.
 	fs.writeFileSync(persistentRoomMaintenanceSettingsPath(agentId), "not json", "utf-8");
 	assert(readPersistentRoomMaintenanceSettings(agentId).fastPathSecondApproval === false, "corrupt settings should fall back to default off");
+	assert(readPersistentRoomMaintenanceSettings(agentId).quickCheckpointAutoApply === true, "corrupt settings should fall back to auto-apply on");
 
 	fs.rmSync(root, { recursive: true, force: true });
 	console.log("persistent-room maintenance settings smoke passed");

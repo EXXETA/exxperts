@@ -3246,6 +3246,10 @@ export function App() {
 			setCheckpointQuickBlockedReasons(blockers);
 			return;
 		}
+		if (!(await roomQuickCheckpointAutoApplyEnabled(targetChat.agentId))) {
+			setCheckpointQuickBlockedReasons(["automatic apply is turned off for this room"]);
+			return;
+		}
 		setCheckpointApprovalLoading(true);
 		try {
 			const approvedRecentContext = buildApprovedRecentContextMarkdown(proposal, {
@@ -3257,7 +3261,7 @@ export function App() {
 			await bindToApprovedCheckpointRuntime(approval, targetChat);
 			void refreshPersistentAgentStatus();
 			resetCheckpointInput();
-			const savedNote = approval.warnings.length > 0 ? `Checkpoint saved to memory. ${approval.warnings.join(" ")}` : "Checkpoint saved to memory.";
+			const savedNote = approval.warnings.length > 0 ? `Checkpoint saved to memory automatically. ${approval.warnings.join(" ")}` : "Checkpoint saved to memory automatically.";
 			setItems((s) => [...s, { kind: "system", id: nid(), text: savedNote }]);
 		} catch (e) {
 			setCheckpointApprovalError(`The checkpoint could not save automatically. Review and approve it manually. ${(e as Error).message}`);
@@ -3802,6 +3806,16 @@ export function App() {
 		try {
 			return (await fetchPersistentRoomMaintenanceSettings(agentId)).settings.fastPathSecondApproval === true;
 		} catch {
+			return false;
+		}
+	}
+
+	async function roomQuickCheckpointAutoApplyEnabled(agentId: PersistentAgentId): Promise<boolean> {
+		try {
+			return (await fetchPersistentRoomMaintenanceSettings(agentId)).settings.quickCheckpointAutoApply !== false;
+		} catch {
+			// When the preference cannot be read, fall back to manual review —
+			// the safe direction is showing the proposal, not silently applying it.
 			return false;
 		}
 	}
