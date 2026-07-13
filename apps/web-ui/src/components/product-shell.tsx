@@ -36,7 +36,7 @@ export function firstWordOfLabel(label: string): string {
 	return label.split(" ")[0] || label;
 }
 
-export type ProductSidebarActive = "home" | "ai-setup" | "dashboard" | "connectors" | "memory";
+export type ProductSidebarActive = "home" | "ai-setup" | "dashboard" | "connectors" | "memory" | "skills";
 
 export function ThemeToggle({ theme, onToggle }: { theme: ThemeMode; onToggle: () => void }) {
 	return (
@@ -213,7 +213,7 @@ function SidebarConfigMenu({ onAiSetup, theme, onToggleTheme, active, aiProfileS
 	);
 }
 
-export function ProductSidebar({ onHome, onAiSetup, onDashboard, onConnectors, onMemory, connected, theme, onToggleTheme, active, aiProfileStatus, onSelectAiProfile, onRefreshAiProfile, standbyLockedModels }: { onHome: () => void; onAiSetup: () => void; onDashboard: () => void; onConnectors?: () => void; onMemory?: () => void; connected: boolean; theme: ThemeMode; onToggleTheme: () => void; active: ProductSidebarActive } & SidebarAiProfileProps) {
+export function ProductSidebar({ onHome, onAiSetup, onDashboard, onConnectors, onMemory, onSkills, connected, theme, onToggleTheme, active, aiProfileStatus, onSelectAiProfile, onRefreshAiProfile, standbyLockedModels }: { onHome: () => void; onAiSetup: () => void; onDashboard: () => void; onConnectors?: () => void; onMemory?: () => void; onSkills?: () => void; connected: boolean; theme: ThemeMode; onToggleTheme: () => void; active: ProductSidebarActive } & SidebarAiProfileProps) {
 	return (
 		<aside className="product-sidebar">
 			<div className="product-sidebar-header">
@@ -236,6 +236,7 @@ export function ProductSidebar({ onHome, onAiSetup, onDashboard, onConnectors, o
 				<div className="product-nav-section">
 					<div className="product-nav-label">Tools</div>
 					{onConnectors && <button className={`list-btn ${active === "connectors" ? "active" : ""}`} onClick={onConnectors}>Connectors</button>}
+					{onSkills && <button className={`list-btn ${active === "skills" ? "active" : ""}`} onClick={onSkills}>Skills</button>}
 				</div>
 			</nav>
 			<div className="product-sidebar-footer">

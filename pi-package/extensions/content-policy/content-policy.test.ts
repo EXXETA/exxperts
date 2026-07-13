@@ -54,7 +54,7 @@ const ctx = {
 const handoffResult = await toolCallHandler!({
 	toolName: "start_handoff",
 	input: {
-		targetAgent: "content-producer",
+		targetAgent: "target-room",
 		task: "Create a deck from notes that mention .env access as a policy example.",
 	},
 }, ctx);

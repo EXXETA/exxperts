@@ -62,8 +62,18 @@ session start, changes apply the next time a room is entered or resumed.
 The page also includes a **directory** of verified connectors
 (`apps/web-ui/src/connector-catalog.ts`): open servers that work with no
 login, one-click OAuth servers (dynamic client registration verified),
-token-based servers (GitHub, HubSpot — paste an API token once), and
-guided entries for providers that require your own credentials. Gmail,
+token-based servers (GitHub — paste an API token once), OAuth-app servers
+(HubSpot — create an app in the provider's developer settings, then the
+card opens the custom form with the Custom OAuth client fields prefilled),
+and guided entries for providers that require your own credentials.
+
+Providers whose auth servers do not support dynamic client registration
+(HubSpot is one; most enterprise identity providers are configured this
+way) fail the one-click login with "does not support dynamic client
+registration". For those, create an app in the provider's developer
+settings with the redirect URL `http://localhost:19876/callback`, then
+add the connector with its credentials under **Custom OAuth client** in
+the add-connector form. The same works by hand in a config file. Gmail,
 for example, needs your own Google Cloud OAuth client; once you have it,
 add it to a config file as:
 

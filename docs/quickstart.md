@@ -44,7 +44,7 @@ Prefer running straight from the clone without installing commands? `npm run bui
 Open **AI setup** in the web app.
 
 - **Claude or ChatGPT Plus/Pro:** click **Sign in →** on the provider's card. The provider's login opens in a new browser tab; complete it there and the page updates by itself. Credentials stay on your machine, in the local credential store.
-- **OpenAI-compatible gateway:** run `exxperts setup openai-compatible` in the terminal, then add the API key via the CLI's `/login`. Details: [Provider setup and AI profiles](provider-setup.md).
+- **OpenAI-compatible gateway (or any other provider):** on the same page, open **Add another provider**. For a gateway, choose **Set up gateway**, enter the base URL and model ids, then paste your token on the gateway's profile row; the terminal wizard (`exxperts setup openai-compatible`) still works too. Details: [Provider setup and AI profiles](provider-setup.md).
 
 Signing in is enough — the matching profile activates by itself. You can switch between connected profiles anytime on the same page.
 

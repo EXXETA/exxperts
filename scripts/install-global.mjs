@@ -65,7 +65,11 @@ if (pack.status !== 0) {
 	process.stderr.write(pack.stderr ?? "");
 	process.exit(pack.status ?? 1);
 }
-const filename = JSON.parse(pack.stdout)[0]?.filename;
+// npm <=11 prints an array of pack reports; npm 12 prints an object keyed by
+// package name. Accept both.
+const packReport = JSON.parse(pack.stdout);
+const packEntry = Array.isArray(packReport) ? packReport[0] : Object.values(packReport ?? {})[0];
+const filename = packEntry?.filename;
 if (!filename) {
 	console.error("[exxperts] npm pack did not report a tarball filename");
 	process.exit(1);
@@ -77,6 +81,23 @@ console.log("[exxperts] removing any previous global install…");
 spawnSync("npm", ["uninstall", "-g", "@exxeta/exxperts-app"], { cwd: root, stdio: "inherit", shell });
 
 console.log(`[exxperts] installing ${filename} globally…`);
-run(["install", "-g", path.join(root, filename)]);
+// npm reads neither the project .npmrc nor package.json allowScripts in
+// global mode, so npm 12's gates need explicit flags on this one step:
+// allow-remote for the SheetJS CDN tarball (root scoping cannot apply here,
+// the tarball itself is the root so xlsx counts as non-root) and
+// allow-scripts so the package's own postinstall and native deps still run.
+// allow-scripts name entries only match registry deps; a local tarball is
+// matched by its exact path, so the tarball path itself must be an entry or
+// the package's own postinstall is silently skipped.
+const npmVersion = spawnSync("npm", ["--version"], { cwd: root, encoding: "utf8", shell });
+const npmMajor = Number.parseInt(npmVersion.stdout ?? "", 10);
+const tarball = path.join(root, filename);
+const installArgs = ["install", "-g", tarball];
+if (npmMajor >= 12) {
+	const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
+	const scriptAllows = [tarball, pkg.name, ...Object.keys(pkg.allowScripts ?? {})];
+	installArgs.push("--allow-remote=all", ...scriptAllows.map((entry) => `--allow-scripts=${entry}`));
+}
+run(installArgs);
 
 console.log("[exxperts] done — run: exxperts web  (web app)  or: exxperts cli  (CLI/TUI)");

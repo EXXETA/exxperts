@@ -145,7 +145,7 @@ function shortTopic(title: string, max = 34): string {
 }
 
 function fmtAgo(ts: number | null): string {
-	if (!ts) return "—";
+	if (!ts) return "–";
 	const s = Math.max(0, Math.round((Date.now() - ts) / 1000));
 	if (s < 60) return s + "s ago";
 	if (s < 3600) return Math.round(s / 60) + "m ago";
@@ -630,7 +630,7 @@ export function Memory({ onMaintain, maintainBlocked }: { onMaintain?: (target: 
 						<div className="dash-section-label">At a glance</div>
 						<div className="mem-glance">
 							<div className="mem-glance-nums">
-								<div className="mem-g" title="Measured from the memory documents on disk, converted to tokens. Token counts are always approximate — each model's tokenizer splits text differently."><div className="v">{fmtTok(t.l1bTokens)} tok</div><div className="k">memory (est.)</div></div>
+								<div className="mem-g" title="Measured from the memory documents on disk, converted to tokens. Token counts are always approximate. Each model's tokenizer splits text differently."><div className="v">{fmtTok(t.l1bTokens)} tok</div><div className="k">memory (est.)</div></div>
 								<div className="mem-g"><div className="v">{t.checkpoints.toLocaleString()}</div><div className="k">sessions</div></div>
 								<div className="mem-g"><div className="v">{toAbsorb}</div><div className="k">to learn</div></div>
 								<div className="mem-g"><div className="v">{t.rooms}</div><div className="k">exxperts</div></div>
@@ -696,7 +696,7 @@ export function Memory({ onMaintain, maintainBlocked }: { onMaintain?: (target: 
 											<div className="st"><div className="v">{r.sessions}<span className="mem-st-cap">/{r.sessionsCap}</span></div><div className="k">To learn</div></div>
 										</div>
 																					<div className="mem-card-spark">
-												{r.series.length >= 2 ? <GrowthChart series={r.series} height={38} /> : <span className="mem-card-empty">{r.checkpoints > 0 ? "First memory saved — the curve appears with the next one" : "No memories yet — have a session with this exxpert"}</span>}
+												{r.series.length >= 2 ? <GrowthChart series={r.series} height={38} /> : <span className="mem-card-empty">{r.checkpoints > 0 ? "First memory saved. The curve appears with the next one" : "No memories yet. Have a session with this exxpert"}</span>}
 											</div>
 											{(() => {
 												// Deep vs to-learn at a glance — same palette as the big chart.
@@ -731,7 +731,7 @@ export function Memory({ onMaintain, maintainBlocked }: { onMaintain?: (target: 
 								<div className="mem-detail-hero">
 									<div className="mem-detail-name">
 										<h1>{detail.displayName}.</h1>
-										<span className="mem-pill" title="How developed this exxpert's memory is — grows with sessions and consolidated deep memory.">{detail.maturity.label}</span>
+										<span className="mem-pill" title="How developed this exxpert's memory is. It grows with sessions and consolidated deep memory.">{detail.maturity.label}</span>
 									</div>
 									{detail.description && <div className="sub">{detail.description}</div>}
 									{(() => {

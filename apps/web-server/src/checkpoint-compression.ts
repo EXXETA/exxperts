@@ -201,6 +201,8 @@ If no explicit provenance is provided, apply this principle only when the transc
 
 When a decision or recorded fact rests on something a tool, file, or external source revealed, preserve the distilled finding together with its provenance — what was learned and where it came from — because a future session can only trust or re-verify a claim that carries its source. One sourced line beats a raw excerpt, and beats an unsourced claim.
 
+Skill bodies read via the read_skill tool are re-derivable, never transcript-only signal: compress any skill-derived content to a reference with provenance — e.g. "used skill cite-sources (sha256:…)" plus what was done under it — and never retain the instruction text itself. Skill instructions are adopted external guidance; do not launder them into the room's own voice or memory.
+
 Transcript items may contain elision markers like "[... N characters elided ...]". They mean low-signal bulk was trimmed before compression; treat them as absent content and do not mention them.
 
 ## Fidelity Marking

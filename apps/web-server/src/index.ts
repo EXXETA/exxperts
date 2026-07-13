@@ -14,6 +14,7 @@
  */
 
 import "dotenv/config";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -24,7 +25,8 @@ import { createAgentSession, DefaultResourceLoader, getAgentDir, getModelsPath, 
 import { createWebUiContext } from "./web-ui-context.js";
 import { cancelProviderLogin, logoutProvider, ProviderAuthError, providerLoginState, saveProviderApiKey, startProviderLogin } from "./provider-auth.js";
 import { builtInProfileIdForProvider, deleteCustomAiProfile, isCustomAiProfileId, isReservedCustomProfileProvider, readCustomAiProfiles, writeCustomAiProfile } from "./custom-ai-profiles.js";
-import { archivePersistentAgent, beginPersistentAgentTurn, buildAbsorbAssessment, buildAbsorbDiscussionSignoff, buildAbsorbDiscussionTurn, buildAbsorbProposal, buildCheckpointProposal, buildPersistentAgentBootContext, buildStructuralReviewAssessment, buildStructuralReviewDiscussionSignoff, buildStructuralReviewDiscussionTurn, buildStructuralReviewProposal, createPersistentAgentFromScaffoldInput, createPersistentAgentPiSessionJsonlThreadRuntime, deletePersistentAgentThread, PERSISTENT_AGENT_L1A_DEFAULT_MODE_ID, PERSISTENT_AGENT_L1A_MODES, discardEmptyPreparedBoundaryThread, finishPersistentAgentTurn, getAbsorbAvailability, getPersistentAgentActiveTurnState, getPersistentAgentRuntimeState, getPersistentAgentStatus, getPersistentAgentThread, getStructuralReviewAvailability, isPersistentAgentArchived, listPersistentAgents, markPersistentAgentTurnCancelling, openPersistentAgentPiSessionManager, parseAbsorbApprovalRequest, parseCheckpointApprovalRequest, parseStructuralReviewApprovalRequest, readPersistentAgentBootPromptSnapshot, renamePersistentAgent, validatePersistentAgentId, writeApprovedAbsorb, writeApprovedCheckpoint, writeApprovedStructuralReview, writePersistentAgentMementoBoundary, writePersistentAgentRuntimeState, writePersistentAgentThread } from "./persistent-agents.js";
+import { ConsultPromptOverflowError } from "./consult.js";
+import { archivePersistentAgent, beginPersistentAgentTurn, buildAbsorbAssessment, buildAbsorbDiscussionSignoff, buildAbsorbDiscussionTurn, buildAbsorbProposal, buildCheckpointProposal, buildConsultAnswer, buildPersistentAgentBootContext, buildStructuralReviewAssessment, buildStructuralReviewDiscussionSignoff, buildStructuralReviewDiscussionTurn, buildStructuralReviewProposal, createPersistentAgentFromScaffoldInput, createPersistentAgentPiSessionJsonlThreadRuntime, clearPersistentAgentThreadPendingHandoffs, deletePersistentAgentThread, PERSISTENT_AGENT_L1A_DEFAULT_MODE_ID, PERSISTENT_AGENT_L1A_MODES, discardEmptyPreparedBoundaryThread, finishPersistentAgentTurn, getAbsorbAvailability, getPersistentAgentActiveTurnState, getPersistentAgentRuntimeState, getPersistentAgentStatus, getPersistentAgentThread, getStructuralReviewAvailability, isPersistentAgentArchived, listPersistentAgents, markPersistentAgentTurnCancelling, openPersistentAgentPiSessionManager, parseAbsorbApprovalRequest, parseCheckpointApprovalRequest, parseStructuralReviewApprovalRequest, readPersistentAgentBootPromptSnapshot, renamePersistentAgent, validatePersistentAgentId, writeApprovedAbsorb, writeApprovedCheckpoint, writeApprovedStructuralReview, writePersistentAgentMementoBoundary, writePersistentAgentRuntimeState, writePersistentAgentThread } from "./persistent-agents.js";
 import { buildPersistentRoomRestoredLiveThreadContext } from "./persistent-room-resume-context.js";
 import {
 	getPersistentRoomToolPolicy,
@@ -32,8 +34,14 @@ import {
 } from "./persistent-room-tool-policy.js";
 import { createPersistentRoomCapabilityPolicy, createPersistentRoomDefaultCapabilityPolicy, deletePersistentRoomCapabilityPolicy, deletePersistentRoomDefaultCapabilityPolicy, ensurePersistentRoomThreadEffectiveWorkspacePolicySnapshot, missingPersistentRoomWorkspaceRootWarnings, normalizePersistentRoomWorkspaceAccessModeInput, persistentRoomCapabilityPolicyView, persistentRoomRuntimeCwdForEffectiveWorkspacePolicy, PersistentRoomWorkspacePolicyError, PERSISTENT_ROOM_WORKSPACE_DEFAULT_STORAGE_SOURCE, PERSISTENT_ROOM_WORKSPACE_POLICY_STORAGE_SOURCE, readPersistentRoomCapabilityPolicy, readPersistentRoomDefaultCapabilityPolicy, resolvePersistentRoomCapabilityPolicy, snapshotPersistentRoomDefaultCapabilityPolicyForThread, updatePersistentRoomCapabilityPolicyWorkspaceSettings, writePersistentRoomCapabilityPolicy, writePersistentRoomDefaultCapabilityPolicy } from "./persistent-room-workspace-policy.js";
 import { MEMORY_BUDGET_DEFAULT_TOKENS, readPersistentRoomMaintenanceSettings, writePersistentRoomMaintenanceSettings } from "./persistent-room-maintenance-settings.js";
+import { computeSkillStatuses, disablePersistentRoomSkill, effectiveEnabledSkills, enablePersistentRoomSkill, readPersistentRoomSkillSettings } from "./persistent-room-skill-settings.js";
+import { buildEnabledSkillsIndexSection, createReadSkillTool } from "./persistent-room-skill-tool.js";
+import { buildSpecialistTemplatesIndexSection, createDelegateTaskTool } from "./persistent-room-delegate-tool.js";
+import { buildSpecialistSessionPlan, runSpecialistWorker, listSpecialistTaskArtifacts, type SpecialistSessionPlan } from "./persistent-room-specialist-execution.js";
+import { getSpecialistTemplate, SPECIALIST_TASK_CAPS } from "./specialist-templates.js";
+import { generateTaskArtifactThumbnails } from "./task-artifact-thumbnails.js";
 import { createPersistentRoomWorkspaceTools } from "./persistent-room-workspace-tools.js";
-import { assertPersistentRoomModelForActiveProfile, DEFAULT_PERSISTENT_AGENT_AI_PROFILE_ID, getAbsorbModelLock, getAvailablePersistentAgentAiProfiles, getPersistentAgentAiProfile, getPersistentRoomModelLocks, getStructuralReviewModelLock, isPersistentAgentAiProfileId, isPersistentRoomModelForProfile, OPENAI_COMPATIBLE_AI_PROFILE_ID, OPENAI_COMPATIBLE_PROVIDER_ID, readLocalOpenAiCompatibleAiProfile } from "./persistent-agent-ai-profiles.js";
+import { assertPersistentRoomModelForActiveProfile, DEFAULT_PERSISTENT_AGENT_AI_PROFILE_ID, getAbsorbModelLock, getAvailablePersistentAgentAiProfiles, getConsultModelLock, getPersistentAgentAiProfile, getPersistentRoomModelLocks, getStructuralReviewModelLock, isPersistentAgentAiProfileId, isPersistentRoomModelForProfile, OPENAI_COMPATIBLE_AI_PROFILE_ID, OPENAI_COMPATIBLE_PROVIDER_ID, readLocalOpenAiCompatibleAiProfile } from "./persistent-agent-ai-profiles.js";
 import { runIsolatedPersistentAgentWorker } from "./persistent-agent-worker-runtime.js";
 import { PERSISTENT_AGENTS_ROOT } from "./persistent-agents.js";
 import { registerUsageApi } from "./usage-api.js";
@@ -68,13 +76,17 @@ import { chooseLocalFolder } from "./local-folder-picker.js";
 import contentPolicyExt from "../../../pi-package/extensions/content-policy/index.js";
 import permissionsExt from "../../../pi-package/extensions/permissions/index.js";
 import kbExt from "../../../pi-package/extensions/kb/index.js";
-import artifactsExt from "../../../pi-package/extensions/artifacts/index.js";
+import artifactsExt, { SAFE_SEGMENT, validateArtifactPath } from "../../../pi-package/extensions/artifacts/index.js";
 import mcpExt from "../../../pi-package/extensions/mcp/index.js";
 import webSearchExt from "../../../pi-package/extensions/web-search/index.js";
 import fetchUrlExt from "../../../pi-package/extensions/fetch_url/index.js";
 import { addPersistentRoomScheduleJob, listPersistentRoomScheduleJobs, removePersistentRoomScheduleJob, summarizePersistentRoomScheduleJobs, updatePersistentRoomScheduleJob } from "../../../pi-package/extensions/schedule-prompt/index.js";
 import type { AddPersistentRoomScheduleJobInput, PersistentRoomScheduleJob, PersistentRoomScheduleSummary, PersistentRoomScheduleType, UpdatePersistentRoomScheduleJobInput } from "../../../pi-package/extensions/schedule-prompt/index.js";
 import { ensureProductAppUserDirs, productAppStatePath, productAppStateRoot } from "../../../pi-package/product-state-paths.js";
+import { agentSkillsDir, localSkillProvenance, migrateLegacyUserSkills, readSkillProvenance, removeManagedSkillDir, sha256, SKILL_PROVENANCE_FILENAME, writeSkillProvenance, type SkillProvenance } from "./skills-store.js";
+import { filterRepoScanSkillFiles, scanInvisibleUnicode, type InvisibleUnicodeFinding } from "./skills-import.js";
+import { cloneRepoShallow, getCheckout, installCheckoutCleanup, loadFeaturedSource, parseSkillFrontmatter as parseFrontmatter, readRepoCandidate, registerCheckout, resolveFeaturedSources, resolveRepoSource, scanRepoSkills, vendorRepoSkill } from "./skills-repo-fetch.js";
+import JSZip from "jszip";
 import { appendUsage, resolveUsageAuthType } from "./usage-log.js";
 import type { UsageKind, UsageRow } from "./usage-log.js";
 import { importHistoricalSessionUsage } from "./usage-import.js";
@@ -999,7 +1011,7 @@ app.put("/api/persistent-agents/:id/threads/:threadId", async (req, reply) => {
 		const body = (req.body ?? {}) as any;
 		const effectiveWorkspacePolicy = ensurePersistentRoomThreadEffectiveWorkspacePolicySnapshot(status.id, threadId);
 		const runtimeCwd = persistentRoomRuntimeCwdForEffectiveWorkspacePolicy(effectiveWorkspacePolicy, REPO_ROOT);
-		return writePersistentAgentThread(status.id, threadId, { state: body.state, origin: body.origin, model: body.model, items: body.items }, {
+		return writePersistentAgentThread(status.id, threadId, { state: body.state, origin: body.origin, model: body.model, items: body.items, pendingHandoffs: body.pendingHandoffs }, {
 			createRuntime: ({ model }) => createPersistentAgentPiSessionJsonlThreadRuntime({
 				agentId: status.id,
 				threadId,
@@ -1164,6 +1176,39 @@ app.put("/api/persistent-agents/:id/maintenance-settings", async (req, reply) =>
 		const body = (req.body ?? {}) as any;
 		const settings = writePersistentRoomMaintenanceSettings(status.id, { fastPathSecondApproval: body.fastPathSecondApproval, memoryBudgetTokens: body.memoryBudgetTokens });
 		return { agentId: status.id, settings };
+	} catch (e) {
+		return persistentAgentNormalUseErrorReply(reply, e);
+	}
+});
+app.get("/api/persistent-agents/:id/skill-settings", async (req, reply) => {
+	const idRaw = String((req.params as any).id ?? "").trim();
+	try {
+		const status = getUsablePersistentAgentStatusForNormalUse(idRaw);
+		const settings = readPersistentRoomSkillSettings(status.id);
+		// `skills` is the mismatch view the settings panel (MR-5) renders:
+		// ok | hash-mismatch | missing per enabled skill.
+		return { agentId: status.id, settings, skills: computeSkillStatuses(settings.enabledSkills, skillLibraryFingerprint) };
+	} catch (e) {
+		return persistentAgentNormalUseErrorReply(reply, e);
+	}
+});
+app.put("/api/persistent-agents/:id/skill-settings", async (req, reply) => {
+	const idRaw = String((req.params as any).id ?? "").trim();
+	try {
+		const status = getUsablePersistentAgentStatusForNormalUse(idRaw);
+		const body = (req.body ?? {}) as any;
+		const action = String(body.action ?? "");
+		const name = String(body.name ?? "");
+		if (action !== "enable" && action !== "disable") return reply.code(400).send({ error: "action must be 'enable' or 'disable'" });
+		// Enable pins sha256(current library body), computed server-side by the
+		// resolver — the client never supplies the hash. An unknown skill is a 4xx.
+		const result = action === "enable"
+			? enablePersistentRoomSkill(status.id, name, skillLibraryFingerprint)
+			: disablePersistentRoomSkill(status.id, name);
+		if (!result.ok) {
+			return reply.code(400).send({ error: result.reason === "unknown-skill" ? `unknown skill: ${name}` : "invalid skill name" });
+		}
+		return { agentId: status.id, settings: result.settings, skills: computeSkillStatuses(result.settings.enabledSkills, skillLibraryFingerprint) };
 	} catch (e) {
 		return persistentAgentNormalUseErrorReply(reply, e);
 	}
@@ -1487,6 +1532,29 @@ app.post("/api/persistent-agents/:id/checkpoint/approve", async (req, reply) => 
 		const runtimeCwd = persistentRoomRuntimeCwdForEffectiveWorkspacePolicy(effectiveWorkspacePolicy, REPO_ROOT);
 		const result = writeApprovedCheckpoint(parsed.request, parsed.warnings, new Date(), { runtimeCwd });
 		return browserSafeCheckpointApprovalResponse(result);
+	} catch (e) {
+		return persistentAgentNormalUseErrorReply(reply, e);
+	}
+});
+
+app.post("/api/persistent-agents/:targetId/consult", async (req, reply) => {
+	const idRaw = String((req.params as any).targetId ?? "").trim();
+	try {
+		// Maintenance guard: `needs_absorb` rooms stay consultable (their memory
+		// is valid; a warning notes it may lag). Read-only, so no room-lock check.
+		const status = getPersistentAgentStatusForMaintenance(idRaw);
+		const id = status.id;
+		const body = (req.body ?? {}) as any;
+		const selection = activeConsultModelSelection();
+		// Consult usage bills to the asking room (room A) when one is named;
+		// a direct consult with no asking room bills to the consulted room.
+		const usageAgent = String(body.fromRoomId ?? "").trim() || id;
+		return await buildConsultAnswer(
+			{ ...body, targetAgentId: id, targetLifecycleStatus: status.status },
+			selection.modelLock,
+			async (prompt, modelLock) => runIsolatedLifecycleWorker(prompt, modelLock, resolveConsultModel, "consult worker", CONSULT_TRIGGER_PROMPT, "consult worker produced no text", { agent: usageAgent, kind: "consult" }),
+			{ resolveModelWindow: consultModelWindow },
+		);
 	} catch (e) {
 		return persistentAgentNormalUseErrorReply(reply, e);
 	}
@@ -2087,8 +2155,40 @@ function activeStructuralReviewModelSelection() {
 	};
 }
 
+function activeConsultModelSelection() {
+	const state = readPersistentAgentAiProfileState();
+	return {
+		profile: state.profile,
+		modelLock: getConsultModelLock(state.profileId),
+	};
+}
+
 function resolveAbsorbModel(registry: ModelRegistry, modelLock: { provider: string; model: string }) {
 	return resolveConfiguredWorkerModel(registry, modelLock, "absorb model");
+}
+
+function resolveConsultModel(registry: ModelRegistry, modelLock: { provider: string; model: string }) {
+	return resolveConfiguredWorkerModel(registry, modelLock, "consult model");
+}
+
+// Specialists ride the same profile-level lock as consults (visuals contract
+// D6); the per-template override slot is reserved, not implemented.
+function resolveSpecialistModel(registry: ModelRegistry, modelLock: { provider: string; model: string }) {
+	return resolveConfiguredWorkerModel(registry, modelLock, "specialist model");
+}
+
+// Fixed worker trigger (house pattern): the question lives in the system
+// prompt, so the trigger carries no user content.
+const CONSULT_TRIGGER_PROMPT = "Answer the consult question now, from your memory only.";
+
+// Arms the consult prompt's overflow guard: the consulted room's memory is the
+// prompt material and cannot be elided honestly, so oversize consults refuse
+// with guidance instead of running against a truncated memory.
+function consultModelWindow(modelLock: { provider: string; model: string }) {
+	const registry = getWebChatModelRegistry();
+	const model = registry.find(modelLock.provider, modelLock.model);
+	if (!model) throw new Error(`model not found: ${modelLock.provider}/${modelLock.model}`);
+	return { contextWindow: model.contextWindow, maxOutputTokens: model.maxTokens };
 }
 
 function resolveStructuralReviewModel(registry: ModelRegistry, modelLock: { provider: string; model: string }) {
@@ -2403,23 +2503,52 @@ interface SkillInfo {
 	source: string;
 	protected: boolean;
 	usedByAgents: string[];
+	/** Import origin + license + date from the provenance sidecar (spec §1). Null for
+	 *  builtin/project skills, which carry no sidecar. Surfaced by the library list and
+	 *  the review/detail screen (the trust moment — where it came from, what license). */
+	provenance: { source: string; license: string | null; importedAt: string } | null;
 }
 
-function parseFrontmatter(raw: string): { fm: Record<string, string>; body: string } {
-	const m = raw.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);
-	if (!m) return { fm: {}, body: raw };
-	const fm: Record<string, string> = {};
-	for (const line of m[1].split(/\n/)) {
-		const kv = line.match(/^(\w[\w-]*)\s*:\s*(.*)$/);
-		if (kv) fm[kv[1]] = kv[2].trim();
-	}
-	return { fm, body: m[2] };
+/** A not-yet-saved skill returned by the upload endpoint for the review screen (spec §3).
+ *  The web UI's review component consumes exactly this shape (its clean seam), so an
+ *  MR-4 repo-import candidate is interchangeable with an upload candidate. */
+interface SkillUploadCandidate {
+	/** Slugified dir/id the skill will be saved under. */
+	id: string;
+	/** Display name (frontmatter displayName/name). */
+	name: string;
+	description: string;
+	/** Full SKILL.md instruction body (post-frontmatter) — the text the user adopts. */
+	body: string;
+	/** Provenance source recorded on accept ("upload" here; a git URL for MR-4). */
+	source: string;
+	/** SPDX-ish license, or null when the package declares none (review shows a warning). */
+	license: string | null;
+	/** Hidden/zero-width/bidi characters found in the body (never silently stripped). */
+	scanFindings: InvisibleUnicodeFinding[];
+	/** Names of bundled scripts in the package. They are NEVER run — the review says so. */
+	bundledScripts: string[];
 }
+
+/** Hard ceiling on a decoded upload (spec §7 / hard rule: enforce size limits). */
+const MAX_SKILL_UPLOAD_BYTES = 8 * 1024 * 1024;
+/** Ceiling on a single SKILL.md body pulled from an archive (zip-bomb guard). */
+const MAX_SKILL_BODY_BYTES = 512 * 1024;
+/** Entry-count guard for uploaded archives. */
+const MAX_SKILL_ARCHIVE_ENTRIES = 4096;
+/** Extensions we treat as bundled scripts to flag ("instructions only" — never executed). */
+const SKILL_SCRIPT_EXTENSIONS = new Set([".py", ".sh", ".bash", ".zsh", ".js", ".mjs", ".cjs", ".ts", ".rb", ".pl", ".ps1", ".bat", ".cmd", ".php", ".rs", ".go"]);
+
+// Frontmatter parsing is unified on skills-repo-fetch's YAML-subset parser
+// (imported below as parseFrontmatter) so the library, the room index, and
+// repo import all read a manifest identically.
 
 function skillDirs(): { dir: string; source: string }[] {
 	return [
 		{ dir: path.join(PKG, "skills"), source: "builtin" },
-		{ dir: productAppStatePath("skills"), source: "user" },
+		// The canonical user store is the Pi loader's user dir (spec §1) — a skill
+		// written here is visible to the CLI and vice versa.
+		{ dir: agentSkillsDir(), source: "user" },
 		{ dir: path.join(REPO_ROOT, ".exxeta", "skills"), source: "project" },
 	];
 }
@@ -2435,6 +2564,8 @@ function listSkills(): SkillInfo[] {
 			const { fm, body } = parseFrontmatter(fs.readFileSync(file, "utf-8"));
 			const name = (fm.name || entry.name).trim();
 			if (!name) continue;
+			// Provenance lives only next to user-store skills (builtin/project carry none).
+			const sidecar = source === "user" ? readSkillProvenance(path.join(dir, entry.name)) : null;
 			byName.set(name, {
 				name,
 				displayName: fm.displayName || fm.display_name || undefined,
@@ -2443,6 +2574,7 @@ function listSkills(): SkillInfo[] {
 				source,
 				protected: source !== "user",
 				usedByAgents: [],
+				provenance: sidecar ? { source: sidecar.source, license: sidecar.license, importedAt: sidecar.importedAt } : null,
 			});
 		}
 	}
@@ -2463,13 +2595,71 @@ function skillExistsAnySource(id: string): boolean {
 	return skillDirs().some(({ dir }) => fs.existsSync(path.join(dir, id, "SKILL.md")));
 }
 
+/**
+ * The per-room skill-settings body resolver (spec §4): the CURRENT library body
+ * of a skill by name, or null when the skill no longer exists. This is the seam
+ * `enablePersistentRoomSkill`/`computeSkillStatuses` hash against, so enablement
+ * pins — and mismatch detection re-derives — `sha256` server-side from the
+ * canonical store, never from client input.
+ */
+/**
+ * Resolve a library skill's full SKILL.md manifest + parsed parts by name,
+ * matching listSkills' source precedence (builtin < user < project, last wins).
+ * The FINGERPRINT is `sha256(manifest)` — the whole SKILL.md, frontmatter
+ * included — so a description/license/name edit trips re-review just like a body
+ * edit (skills MR-5 hardening: the L2 index injects the description, so it must
+ * be inside the pinned region — spec §7 must 2). read_skill still returns only
+ * the (defanged) body; the manifest is the integrity unit, not the output.
+ */
+function resolveLibrarySkillManifest(name: string): { manifest: string; body: string; description: string } | null {
+	let match: { manifest: string; body: string; description: string } | null = null;
+	for (const { dir } of skillDirs()) {
+		let entries: fs.Dirent[];
+		try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { continue; }
+		for (const entry of entries) {
+			if (!entry.isDirectory()) continue;
+			const file = path.join(dir, entry.name, "SKILL.md");
+			let manifest: string;
+			try {
+				if (fs.lstatSync(file).isSymbolicLink()) continue; // never fingerprint through a symlink
+				manifest = fs.readFileSync(file, "utf-8");
+			} catch { continue; }
+			const { fm, body } = parseFrontmatter(manifest);
+			const skillName = (fm.name || entry.name).trim();
+			if (skillName !== name) continue;
+			match = { manifest, body, description: (fm.description || "").trim() }; // last source wins, mirroring listSkills
+		}
+	}
+	return match;
+}
+
+/** The enablement fingerprint source (spec §7 must 2): the full SKILL.md manifest
+ *  by name, or null when the skill is gone. enablePersistentRoomSkill hashes it. */
+function skillLibraryFingerprint(name: string): string | null {
+	return resolveLibrarySkillManifest(name)?.manifest ?? null;
+}
+
 function getUserSkillFile(id: string): string | null {
 	const safeId = slugifySkillId(id);
 	if (!safeId || safeId !== id) return null;
-	const file = productAppStatePath("skills", id, "SKILL.md");
+	const file = path.join(agentSkillsDir(), id, "SKILL.md");
 	if (!fs.existsSync(file)) return null;
 	const { fm } = parseFrontmatter(fs.readFileSync(file, "utf-8"));
 	return (fm.name || id) === id ? file : null;
+}
+
+/**
+ * Emit a frontmatter scalar that round-trips through parseFrontmatter. A value that
+ * BEGINS with a quote char, written as a bare plain scalar, would be mis-read by the
+ * parser (a leading `'`/`"` is the quoted-scalar sigil) — so wrap those in an escaped
+ * double-quoted scalar. Everything else stays a plain scalar, so no existing manifest
+ * changes shape (and its sha256 fingerprint is unaffected).
+ */
+function frontmatterScalar(value: string): string {
+	if (value.startsWith('"') || value.startsWith("'")) {
+		return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+	}
+	return value;
 }
 
 function buildUserSkillMarkdown(input: { id: string; displayName: string; description: string; instructions: string }): string {
@@ -2477,7 +2667,7 @@ function buildUserSkillMarkdown(input: { id: string; displayName: string; descri
 		"---",
 		`name: ${input.id}`,
 		`displayName: ${input.displayName.trim()}`,
-		`description: ${input.description.trim()}`,
+		`description: ${frontmatterScalar(input.description.trim())}`,
 		"---",
 		"",
 		input.instructions.trim(),
@@ -2485,7 +2675,7 @@ function buildUserSkillMarkdown(input: { id: string; displayName: string; descri
 	].join("\n");
 }
 
-function validateSkillWritePayload(body: any, expectedId?: string): { ok: true; value: { id: string; displayName: string; description: string; instructions: string } } | { ok: false; code: number; error: string } {
+function validateSkillWritePayload(body: any, expectedId?: string, opts: { grandfatheredDescription?: string } = {}): { ok: true; value: { id: string; displayName: string; description: string; instructions: string } } | { ok: false; code: number; error: string } {
 	const rawId = String(body.id ?? expectedId ?? "");
 	const id = slugifySkillId(rawId);
 	const displayName = String(body.displayName ?? "").trim();
@@ -2498,8 +2688,127 @@ function validateSkillWritePayload(body: any, expectedId?: string): { ok: true; 
 	if (displayName.includes("\n")) return { ok: false, code: 400, error: "displayName must be one line" };
 	if (!description) return { ok: false, code: 400, error: "description is required" };
 	if (description.includes("\n")) return { ok: false, code: 400, error: "description must be one line" };
+	// The ≤1024 rule applies to NEW or CHANGED descriptions only. On the edit path an
+	// unchanged (byte-identical) description is grandfathered, so a pre-existing skill
+	// whose stored description already exceeds the limit can still have its body edited.
+	if (description.length > 1024 && description !== opts.grandfatheredDescription) return { ok: false, code: 400, error: "description must be at most 1024 characters" };
 	if (!instructions) return { ok: false, code: 400, error: "instructions are required" };
 	return { ok: true, value: { id, displayName, description, instructions } };
+}
+
+function segmentCount(relPath: string): number {
+	return relPath.split("/").filter(Boolean).length;
+}
+
+function isScriptFile(relPath: string): boolean {
+	return SKILL_SCRIPT_EXTENSIONS.has(path.posix.extname(relPath).toLowerCase());
+}
+
+/** True when the buffer carries a local-file zip signature ("PK\x03\x04" etc). We sniff
+ *  bytes rather than trust the extension, so a `.skill` that is really a zip is handled
+ *  as one and a `.zip` that is really text does not blow up the unzip path. */
+function looksLikeZip(buffer: Buffer): boolean {
+	return buffer.length >= 4 && buffer[0] === 0x50 && buffer[1] === 0x4b && (buffer[2] === 0x03 || buffer[2] === 0x05 || buffer[2] === 0x07);
+}
+
+/**
+ * Decompress a zip entry to a UTF-8 string via JSZip's PUBLIC `nodeStream()` API,
+ * aborting the instant the decompressed size exceeds `maxBytes`. This is the zip-bomb
+ * guard: it never trusts JSZip's private `_data.uncompressedSize` shape and never
+ * materializes oversized content (a small zip inflating to GBs is stopped mid-stream
+ * instead of OOMing the server on a full `async("string")` decompress). Throws
+ * `onOverflow()` the moment the cap is crossed.
+ */
+function readZipEntryCapped(entry: JSZip.JSZipObject, maxBytes: number, onOverflow: () => Error): Promise<string> {
+	return new Promise((resolve, reject) => {
+		const chunks: Buffer[] = [];
+		let total = 0;
+		let aborted = false;
+		const stream = entry.nodeStream();
+		stream.on("data", (chunk: Buffer | string) => {
+			if (aborted) return;
+			const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk), "utf-8");
+			total += buf.length;
+			if (total > maxBytes) {
+				aborted = true;
+				reject(onOverflow());
+				stream.pause();
+				(stream as unknown as { destroy?: () => void }).destroy?.();
+				return;
+			}
+			chunks.push(buf);
+		});
+		stream.on("error", (err: Error) => { if (!aborted) reject(err); });
+		stream.on("end", () => { if (!aborted) resolve(Buffer.concat(chunks).toString("utf-8")); });
+	});
+}
+
+/**
+ * Turn an uploaded `.md`/`.skill`/`.zip` into a review candidate (spec §3). NEVER executes
+ * anything — a zip is unpacked as file-reads only, and only its single SKILL.md is
+ * decompressed; bundled scripts are listed by name (to warn "instructions only"), never run.
+ * The invisible-unicode scan flags hidden characters so the review can surface them.
+ * Throws a plain Error (mapped to 400) on any validation failure.
+ */
+async function buildSkillCandidateFromUpload(filename: string, buffer: Buffer): Promise<SkillUploadCandidate> {
+	let skillMd: string;
+	let dirHint: string;
+	let bundledScripts: string[] = [];
+
+	if (looksLikeZip(buffer)) {
+		let zip: JSZip;
+		try {
+			zip = await JSZip.loadAsync(buffer);
+		} catch {
+			throw new Error("could not read the archive (not a valid zip)");
+		}
+		const relPaths = Object.keys(zip.files).filter((p) => !zip.files[p].dir);
+		if (relPaths.length > MAX_SKILL_ARCHIVE_ENTRIES) throw new Error("archive has too many entries");
+		// Only true SKILL.md manifests count — the loader's discovery filter (minus the
+		// root-.md rule), so a README/docs file is never mistaken for a skill.
+		const manifests = filterRepoScanSkillFiles(relPaths).sort((a, b) => segmentCount(a) - segmentCount(b) || a.localeCompare(b));
+		if (manifests.length === 0) throw new Error("no SKILL.md found in the archive");
+		const manifestPath = manifests[0];
+		const entry = zip.files[manifestPath];
+		// Enforce the SKILL.md cap over the DECOMPRESSED byte stream, aborting the moment
+		// it is exceeded — a zip bomb never gets fully materialized (zip-bomb guard).
+		skillMd = await readZipEntryCapped(entry, MAX_SKILL_BODY_BYTES, () => new Error("SKILL.md in the archive is too large"));
+		const skillRoot = path.posix.dirname(manifestPath);
+		const prefix = skillRoot === "." ? "" : `${skillRoot}/`;
+		bundledScripts = Array.from(
+			new Set(
+				relPaths
+					.filter((p) => p !== manifestPath && (prefix === "" || p.startsWith(prefix)) && isScriptFile(p))
+					.map((p) => path.posix.basename(p)),
+			),
+		).sort();
+		dirHint = skillRoot === "." ? "" : path.posix.basename(skillRoot);
+	} else {
+		if (buffer.byteLength > MAX_SKILL_BODY_BYTES) throw new Error("skill file is too large");
+		skillMd = buffer.toString("utf-8");
+		dirHint = filename ? path.basename(filename).replace(/\.(md|skill|txt)$/i, "") : "";
+	}
+
+	const { fm, body } = parseFrontmatter(skillMd);
+	const instructions = body.trim();
+	if (!instructions) throw new Error("the SKILL.md has no instruction body");
+	const rawName = (fm.name || dirHint || "").trim();
+	const id = slugifySkillId(rawName || "uploaded-skill");
+	if (!id) throw new Error("could not derive a valid skill id from the upload");
+	const displayName = (fm.displayName || fm.display_name || rawName || id).trim();
+	const description = (fm.description || "").trim();
+	const license = (fm.license || "").trim() || null;
+	return {
+		id,
+		name: displayName,
+		description,
+		body: instructions,
+		source: "upload",
+		license,
+		// Scan body AND description — the description reaches the system prompt too.
+		scanFindings: scanInvisibleUnicode(`${instructions}\n${description}`).findings,
+		bundledScripts,
+	};
 }
 
 app.get("/api/skills", async () => listSkills());
@@ -2507,7 +2816,43 @@ app.get("/api/skills/:id", async (req, reply) => {
 	const id = slugifySkillId(String((req.params as any).id ?? ""));
 	const skill = listSkills().find((s) => s.name === id);
 	if (!skill) return reply.code(404).send({ error: `skill not found: ${id}` });
-	return reply.send(skill);
+	// The detail view IS the review screen: attach the same trust-moment data an upload
+	// candidate carries. An imported skill keeps no bundled scripts (instructions only).
+	return reply.send({ ...skill, scanFindings: scanInvisibleUnicode(`${skill.body}\n${skill.description ?? ""}`).findings, bundledScripts: [] as string[] });
+});
+app.post("/api/skills/upload", { bodyLimit: 12 * 1024 * 1024 }, async (req, reply) => {
+	const raw = (req.body ?? {}) as { filename?: unknown; contentBase64?: unknown };
+	const filename = typeof raw.filename === "string" ? raw.filename : "";
+	const contentBase64 = typeof raw.contentBase64 === "string" ? raw.contentBase64 : "";
+	if (!contentBase64) return reply.code(400).send({ error: "no file content" });
+	const buffer = Buffer.from(contentBase64, "base64");
+	if (buffer.byteLength === 0) return reply.code(400).send({ error: "the file is empty or not valid base64" });
+	if (buffer.byteLength > MAX_SKILL_UPLOAD_BYTES) return reply.code(413).send({ error: `file too large (max ${Math.floor(MAX_SKILL_UPLOAD_BYTES / (1024 * 1024))} MB)` });
+	try {
+		return reply.send(await buildSkillCandidateFromUpload(filename, buffer));
+	} catch (e) {
+		return reply.code(400).send({ error: (e as Error).message });
+	}
+});
+app.post("/api/skills/accept", async (req, reply) => {
+	// Write a reviewed candidate to the library. Reuses the write validation, but records
+	// the candidate's own provenance (source/license) instead of forcing "local".
+	const raw = (req.body ?? {}) as Record<string, unknown>;
+	const validation = validateSkillWritePayload(raw);
+	if (!validation.ok) return reply.code(validation.code).send({ error: validation.error });
+	const value = validation.value;
+	if (skillExistsAnySource(value.id)) return reply.code(409).send({ error: `skill id already exists: ${value.id}` });
+	const source = typeof raw.source === "string" && raw.source.trim() ? raw.source.trim() : "upload";
+	const license = typeof raw.license === "string" && raw.license.trim() ? raw.license.trim() : null;
+	const skillDir = path.join(agentSkillsDir(), value.id);
+	fs.mkdirSync(skillDir, { recursive: true, mode: 0o700 });
+	const acceptedManifest = buildUserSkillMarkdown(value);
+	fs.writeFileSync(path.join(skillDir, "SKILL.md"), acceptedManifest, { mode: 0o600, flag: "wx" });
+	// sha256 pins the whole accepted SKILL.md (frontmatter + body), so any later
+	// edit — description included — forces re-review (spec §7 must 2).
+	writeSkillProvenance(skillDir, { source, importedAt: new Date().toISOString(), license, sha256: sha256(acceptedManifest) });
+	const created = listSkills().find((skill) => skill.name === value.id);
+	return reply.code(201).send(created ?? { name: value.id, displayName: value.displayName, description: value.description, body: value.instructions, source: "user", protected: false, usedByAgents: [], provenance: { source, license, importedAt: new Date().toISOString() } });
 });
 app.post("/api/skills", async (req, reply) => {
 	const validation = validateSkillWritePayload(req.body ?? {});
@@ -2515,32 +2860,140 @@ app.post("/api/skills", async (req, reply) => {
 	const value = validation.value;
 	if (skillExistsAnySource(value.id)) return reply.code(409).send({ error: `skill id already exists: ${value.id}` });
 
-	const skillDir = productAppStatePath("skills", value.id);
+	const skillDir = path.join(agentSkillsDir(), value.id);
 	const file = path.join(skillDir, "SKILL.md");
 	fs.mkdirSync(skillDir, { recursive: true, mode: 0o700 });
 	const markdown = buildUserSkillMarkdown(value);
 	fs.writeFileSync(file, markdown, { mode: 0o600, flag: "wx" });
+	// Provenance sidecar: hand-written skills are source "local"; sha256 pins the
+	// whole SKILL.md, so a later description/body edit forces re-review.
+	writeSkillProvenance(skillDir, localSkillProvenance(markdown));
 	const created = listSkills().find((skill) => skill.name === value.id);
-	return reply.code(201).send(created ?? { name: value.id, displayName: value.displayName, description: value.description, body: value.instructions, source: "user", protected: false, usedByAgents: [] });
+	return reply.code(201).send(created ?? { name: value.id, displayName: value.displayName, description: value.description, body: value.instructions, source: "user", protected: false, usedByAgents: [], provenance: { source: "local", license: null, importedAt: new Date().toISOString() } });
 });
 app.put("/api/skills/:id", async (req, reply) => {
 	const id = slugifySkillId(String((req.params as any).id ?? ""));
 	const file = getUserSkillFile(id);
 	if (!file) return reply.code(404).send({ error: `editable user skill not found: ${id}` });
-	const validation = validateSkillWritePayload(req.body ?? {}, id);
+	// Grandfather the stored description: a body-only edit of a pre-existing skill whose
+	// description already exceeds ≤1024 must not be blocked by that rule (spec fix). The
+	// limit is still enforced the moment the description actually changes.
+	const storedDescription = (parseFrontmatter(fs.readFileSync(file, "utf-8")).fm.description || "").trim();
+	const validation = validateSkillWritePayload(req.body ?? {}, id, { grandfatheredDescription: storedDescription });
 	if (!validation.ok) return reply.code(validation.code).send({ error: validation.error });
 	const value = validation.value;
-	fs.writeFileSync(file, buildUserSkillMarkdown(value), { mode: 0o600, flag: "w" });
+	const editedManifest = buildUserSkillMarkdown(value);
+	fs.writeFileSync(file, editedManifest, { mode: 0o600, flag: "w" });
+	// Refresh the sha256 over the whole SKILL.md — a description-only edit must
+	// trip re-review just like a body edit. Origin (source/license/importedAt)
+	// survives: a local edit of an imported skill must not erase where it came from.
+	const existingProvenance = readSkillProvenance(path.dirname(file));
+	writeSkillProvenance(path.dirname(file), existingProvenance ? { ...existingProvenance, sha256: sha256(editedManifest) } : localSkillProvenance(editedManifest));
 	const updated = listSkills().find((skill) => skill.name === id);
-	return reply.send(updated ?? { name: id, displayName: value.displayName, description: value.description, body: value.instructions, source: "user", protected: false, usedByAgents: [] });
+	return reply.send(updated ?? { name: id, displayName: value.displayName, description: value.description, body: value.instructions, source: "user", protected: false, usedByAgents: [], provenance: null });
 });
 app.delete("/api/skills/:id", async (req, reply) => {
 	const id = slugifySkillId(String((req.params as any).id ?? ""));
 	const file = getUserSkillFile(id);
 	if (!file) return reply.code(404).send({ error: `deletable user skill not found: ${id}` });
-	fs.unlinkSync(file);
-	try { fs.rmdirSync(path.dirname(file)); } catch {}
+	// Repo-imported skills (MR-4) can bundle asset files next to SKILL.md, so a
+	// bare unlink+rmdir would leave a non-empty dir behind. removeManagedSkillDir
+	// removes the whole dir recursively, but only after re-checking it is a real
+	// `<store>/<id>` skill dir under the canonical store (never a path outside it).
+	if (!removeManagedSkillDir(path.dirname(file))) {
+		// Guard tripped (should not happen for a getUserSkillFile hit): fall back to
+		// the minimal unlink so a single-file skill still deletes.
+		fs.unlinkSync(file);
+		try { fs.unlinkSync(path.join(path.dirname(file), SKILL_PROVENANCE_FILENAME)); } catch {}
+		try { fs.rmdirSync(path.dirname(file)); } catch {}
+	}
 	return reply.send({ ok: true, deleted: id });
+});
+
+// --- Import from repo + featured Browse (spec §3 path 3 + Browse, MR-4) -------
+//
+// A pasted git/GitHub URL (or a featured source) is SHALLOW-cloned server-side
+// into a temp checkout (clone/read only — never executed), scanned for its true
+// SKILL.md skills, and turned into review-screen candidates. The scan hands back
+// a token; review + accept reuse that same checkout so the accepted body is
+// byte-identical to the reviewed one. Nothing enters the library before accept.
+// Local repo paths (file://, absolute paths) are OFF by default — enabling them
+// turns repo-scan into a local-file-read primitive if the server is ever fronted.
+// Smokes need them, so they are gated behind an explicit env flag the smokes set,
+// rather than always-on. Default deny keeps the production endpoint URL-only.
+const SKILLS_ALLOW_LOCAL_REPO = process.env.EXXETA_SKILLS_ALLOW_LOCAL_REPO === "1";
+installCheckoutCleanup();
+
+app.post("/api/skills/repo/scan", async (req, reply) => {
+	const source = String((req.body as any)?.source ?? "");
+	const resolved = resolveRepoSource(source, { allowLocal: SKILLS_ALLOW_LOCAL_REPO });
+	if (!resolved.ok) return reply.code(400).send({ error: resolved.error });
+	let dir: string;
+	try {
+		dir = await cloneRepoShallow(resolved.value);
+	} catch (err) {
+		return reply.code(502).send({ error: `could not fetch repository: ${err instanceof Error ? err.message : String(err)}` });
+	}
+	const token = registerCheckout(dir, resolved.value.display);
+	return reply.send({ token, source: resolved.value.display, skills: scanRepoSkills(dir) });
+});
+
+app.post("/api/skills/repo/candidate", async (req, reply) => {
+	const body = (req.body as any) ?? {};
+	const checkout = getCheckout(String(body.token ?? ""));
+	if (!checkout) return reply.code(404).send({ error: "repository checkout expired — rescan the URL" });
+	const candidate = readRepoCandidate(checkout.dir, String(body.path ?? ""), checkout.source);
+	if (!candidate) return reply.code(404).send({ error: "skill not found in the fetched repository" });
+	return reply.send(candidate);
+});
+
+app.post("/api/skills/repo/import", async (req, reply) => {
+	const body = (req.body as any) ?? {};
+	const checkout = getCheckout(String(body.token ?? ""));
+	if (!checkout) return reply.code(404).send({ error: "repository checkout expired — rescan the URL" });
+	const skillPath = String(body.path ?? "");
+	const candidate = readRepoCandidate(checkout.dir, skillPath, checkout.source);
+	if (!candidate) return reply.code(404).send({ error: "skill not found in the fetched repository" });
+	// The store id MUST be the FRONTMATTER name the skill will be listed under, not the
+	// repo DIRECTORY name: listSkills keys on `fm.name`, and delete/edit/enable all
+	// resolve `<store>/<id>` where id must equal that listed name — so a dir named after
+	// the directory instead would strand a library entry that can't be deleted, edited or
+	// enabled. Vendoring is verbatim (the reviewed body/sha256 is untouched), so the name
+	// must already be a canonical skill id (the same rule every other write enforces); a
+	// non-canonical name can't round-trip, so reject THIS skill's import naming the file.
+	const manifestRel = skillPath ? `${skillPath.replace(/\\/g, "/").replace(/\/+$/, "")}/SKILL.md` : "SKILL.md";
+	const rawName = candidate.name.trim();
+	const id = slugifySkillId(String(body.id ?? rawName));
+	if (!id || id !== rawName || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(id)) {
+		return reply.code(400).send({ error: `could not import ${manifestRel}: skill name "${candidate.name}" is not a valid skill id (expected lowercase letters, numbers and hyphens)` });
+	}
+	if (skillExistsAnySource(id)) return reply.code(409).send({ error: `skill id already exists: ${id}` });
+	const skillDir = path.join(agentSkillsDir(), id);
+	// Only clean up a dir THIS import created — never delete a pre-existing one on
+	// a vendor failure (skillExistsAnySource gates on SKILL.md, so a bare leftover
+	// dir could otherwise be removed out from under the user).
+	const skillDirPreexisted = fs.existsSync(skillDir);
+	let vendored: ReturnType<typeof vendorRepoSkill>;
+	try {
+		vendored = vendorRepoSkill(checkout.dir, skillPath, skillDir);
+	} catch (err) {
+		if (!skillDirPreexisted) fs.rmSync(skillDir, { recursive: true, force: true });
+		return reply.code(400).send({ error: `could not import skill: ${err instanceof Error ? err.message : String(err)}` });
+	}
+	// Provenance via MR-1 machinery: source is the repo, sha256 pins the whole
+	// SKILL.md that actually landed on disk — exactly what enablement/re-review
+	// re-derive (spec §0/§2/§7).
+	const vendoredManifest = fs.readFileSync(path.join(skillDir, "SKILL.md"), "utf-8");
+	const provenance: SkillProvenance = { source: checkout.source, importedAt: new Date().toISOString(), license: vendored.license, sha256: sha256(vendoredManifest) };
+	writeSkillProvenance(skillDir, provenance);
+	const created = listSkills().find((s) => s.name === candidate.name) ?? listSkills().find((s) => s.name === id) ?? null;
+	return reply.code(201).send({ skill: created, provenance, bundledCopied: vendored.bundledCopied });
+});
+
+app.get("/api/skills/featured", async () => {
+	const sources = resolveFeaturedSources();
+	const results = await Promise.all(sources.map((entry) => loadFeaturedSource(entry)));
+	return { sources: results };
 });
 // --- usage tracking -----------------------------------------------------
 //
@@ -2955,6 +3408,35 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 		promptSettled: boolean;
 	};
 	let activePersistentWebTurn: ActivePersistentWebTurn | null = null;
+	// One consult at a time per connection (v1). The consult worker is
+	// independent of the room's turn machinery: prompts stay allowed while a
+	// consult runs; starting a consult while a turn is in flight is rejected.
+	type ActiveWebConsult = { consultId: string; abortController: AbortController; stoppedByUser: boolean };
+	let activeWebConsult: ActiveWebConsult | null = null;
+	// Specialist tasks (visuals V2): run-free beside the turn like consults, but
+	// model-proposed (delegate_task) rather than socket-initiated, so the only
+	// inbound frame is task_abort. Cap 1 per connection for v1: the UI has a
+	// single card slot, so a second concurrent task would be invisible and
+	// uncancellable — the contract's cap-2 (D9) returns with the multi-card slice.
+	type ActiveWebTask = { taskId: string; templateId: string; abortController: AbortController; stoppedByUser: boolean };
+	const activeWebTasks = new Map<string, ActiveWebTask>();
+	const WEB_TASK_CAP = 1;
+	// Server-owned record of tasks that finished on THIS connection, so the
+	// one-click iterate path (task_iterate) can derive template and read scope
+	// from what the server itself produced instead of trusting client fields.
+	// This is what makes the user's Iterate click sufficient as the approval
+	// (the D7 shape: click-as-consent over a fully server-derived operation).
+	type CompletedWebTask = { templateId: string; artifacts: string[] };
+	const completedWebTasks = new Map<string, CompletedWebTask>();
+	const COMPLETED_WEB_TASK_MEMORY = 8;
+	// The approval card used to be the de-facto rate limiter on specialist
+	// spawns; with one-click iterate a short cooldown takes over that duty.
+	const ITERATE_COOLDOWN_MS = 5_000;
+	let lastIterateLaunchAt = 0;
+	// The shared specialist launch. Assigned during bindSession (it closes over
+	// the session's model-selection plumbing); the task_iterate frame handler
+	// refuses cleanly while it is still null.
+	let launchSpecialistTask: ((plan: SpecialistSessionPlan) => { ok: true } | { ok: false; reason: string }) | null = null;
 	let sessionDisposed = false;
 	let autoSummaryRunning = false;
 	type PromptDiagnosticsPendingTurn = {
@@ -2980,7 +3462,16 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 		finalAssistantText: string;
 	} = { toolCalls: [], toolResults: [], toolNameById: new Map(), sawToolResult: false, sawAssistantAfterToolResult: false, usedRetrievalTools: false, finalAssistantText: "" };
 
+	// Skills MR-5 telemetry (spec §5): bodies read via read_skill, surfaced per
+	// turn. Mutated by the tool, reported + reset when the next turn's trace opens.
+	const persistentRoomSkillTelemetry = { reads: 0, bodyChars: 0 };
 	const resetTurnTrace = () => {
+		if (persistentRoomSkillTelemetry.reads > 0) {
+			app.log.info({ agentId: persistentAgentIdForSession, skillReads: persistentRoomSkillTelemetry.reads, skillBodyChars: persistentRoomSkillTelemetry.bodyChars }, "persistent-room turn read skill bodies");
+			streamTrace.note("skill_reads", { reads: persistentRoomSkillTelemetry.reads, bodyChars: persistentRoomSkillTelemetry.bodyChars });
+			persistentRoomSkillTelemetry.reads = 0;
+			persistentRoomSkillTelemetry.bodyChars = 0;
+		}
 		turnTrace = { toolCalls: [], toolResults: [], toolNameById: new Map(), sawToolResult: false, sawAssistantAfterToolResult: false, usedRetrievalTools: false, finalAssistantText: "" };
 	};
 
@@ -3287,6 +3778,142 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 		const persistentRoomWorkspaceCapability = persistentRoomEffectiveWorkspacePolicy?.capability;
 		if (persistentAgentThreadLoadError) throw new Error(`failed to load persistent-agent thread runtime: ${persistentAgentThreadLoadError.message}`);
 		const persistentRoomThreadRuntime = persistentAgentThreadForSession?.runtime;
+		// Skills MR-5 (spec §5): the room's EFFECTIVE enabled set — hash-pinned and
+		// verified by effectiveEnabledSkills, so drifted/deleted skills never reach
+		// the session. The index (name + description) rides the L2 envelope at
+		// thread boot (thread-snapshot semantics, like the workspace policy); the
+		// read_skill tool re-verifies the live set + hash pin on every call.
+		const persistentRoomEnabledSkillEntries: { name: string; description: string }[] = (() => {
+			try {
+				const skillSettings = readPersistentRoomSkillSettings(persistentAgentId);
+				const effective = effectiveEnabledSkills(skillSettings.enabledSkills, skillLibraryFingerprint);
+				if (effective.length === 0) return [];
+				// Description comes from the SAME manifest the fingerprint pins, so the
+				// index can never surface a description whose change was not re-reviewed.
+				return effective.map((skill) => ({ name: skill.name, description: resolveLibrarySkillManifest(skill.name)?.description ?? "" }));
+			} catch (error) {
+				app.log.warn({ err: error }, "failed to resolve enabled skills for room session");
+				return [];
+			}
+		})();
+		// Visuals V2 (contract §5): the specialist launch, created per connection so
+		// it owns this socket's send + slot map. The worker itself is fire-and-forget
+		// — run-free beside the turn, exactly like a consult. Shared by BOTH
+		// initiation paths: the model-proposed delegate_task tool and the
+		// user-initiated task_iterate frame (§5 amendment) — same slot hygiene,
+		// same task_* event family, taskId always server-generated in the plan.
+		const launchSpecialistTaskForSession = (plan: SpecialistSessionPlan): { ok: true } | { ok: false; reason: string } => {
+			if (activeWebTasks.size >= WEB_TASK_CAP) return { ok: false, reason: `the specialist limit (${WEB_TASK_CAP}) is reached` };
+			// Resolve the model BEFORE claiming the slot: this closure's contract
+			// with the delegate tool is "must not throw", and a selection failure
+			// (profile/registry drift) after activeWebTasks.set would strand the
+			// cap slot for the rest of the connection.
+			let selection: ReturnType<typeof activeConsultModelSelection>;
+			try {
+				selection = activeConsultModelSelection();
+			} catch (e) {
+				return { ok: false, reason: `no usable specialist model: ${(e as Error).message}` };
+			}
+			const task: ActiveWebTask = { taskId: plan.taskId, templateId: plan.template.id, abortController: new AbortController(), stoppedByUser: false };
+			activeWebTasks.set(plan.taskId, task);
+			try {
+				send({ type: "task_started", taskId: plan.taskId, template: plan.template.id, templateVersion: plan.template.version, templateLabel: plan.template.label, title: plan.title, model: selection.modelLock });
+			} catch (e) {
+				activeWebTasks.delete(plan.taskId);
+				return { ok: false, reason: `the task could not be announced to the client: ${(e as Error).message}` };
+			}
+			void (async () => {
+				try {
+					const result = await runSpecialistWorker({
+						plan,
+						modelLock: selection.modelLock,
+						resolveExpectedModel: resolveSpecialistModel,
+						modelRegistry: getWebChatModelRegistry(),
+						cwd: REPO_ROOT,
+						agentDir: getAgentDir(),
+						signal: task.abortController.signal,
+						onEvent: (event: any) => {
+							if (event?.type === "message_update") {
+								const update = event.assistantMessageEvent;
+								if (update?.type === "text_delta" && typeof update.delta === "string") {
+									send({ type: "task_delta", taskId: plan.taskId, delta: update.delta });
+								}
+							} else if (event?.type === "tool_execution_start" && typeof event?.toolName === "string") {
+								send({ type: "task_delta", taskId: plan.taskId, delta: `\n[${event.toolName}]\n` });
+							}
+						},
+					});
+					// Task usage bills to this room (the requester), consult precedent.
+					recordWorkerUsage(persistentAgentIdForSession, "task", selection.modelLock, result.usage);
+					if (task.abortController.signal.aborted) {
+						send({ type: "task_error", taskId: plan.taskId, message: task.stoppedByUser ? "Task stopped by you. Artifacts already written are kept." : "The task was cancelled.", artifacts: result.artifacts });
+					} else {
+						// Write-time thumbnails (contract D8): rendered once here, stored
+						// under .thumbs/, shipped as data: URIs. Best-effort — no
+						// Playwright or a failed render just means the card shows chips.
+						// task_end waits on this call, so it is bounded + never-throw by
+						// construction; the .catch is the backstop guarantee that a
+						// cosmetic failure can never turn a finished task into
+						// task_error or strand the card in "running".
+						const thumbnails = await generateTaskArtifactThumbnails(plan.taskFolder, result.artifacts, (message) => app.log.warn(message)).catch(() => []);
+						send({
+							type: "task_end",
+							taskId: plan.taskId,
+							template: plan.template.id,
+							text: result.text,
+							artifacts: result.artifacts,
+							...(thumbnails.length > 0 ? { thumbnails } : {}),
+							generatedAt: new Date().toISOString(),
+							...(result.usage ? { usage: result.usage } : {}),
+						});
+						// Remember the finished task so Iterate can re-derive it server-side.
+						completedWebTasks.set(plan.taskId, {
+							templateId: plan.template.id,
+							artifacts: result.artifacts.map((artifact: { relativePath: string }) => artifact.relativePath),
+						});
+						while (completedWebTasks.size > COMPLETED_WEB_TASK_MEMORY) {
+							const oldest = completedWebTasks.keys().next().value;
+							if (oldest === undefined) break;
+							completedWebTasks.delete(oldest);
+						}
+					}
+				} catch (e) {
+					const stopped = task.abortController.signal.aborted;
+					// Keep chips for files already on disk, same shape/derivation as the
+					// aborted-resolved branch (result.artifacts). Recomputing scans the
+					// task folder and can itself throw (fs races) — guard it so task_error
+					// ALWAYS fires (the task_end-always-fires doctrine); a listing failure
+					// degrades the card to no chips, never loses the error frame.
+					let writtenArtifacts: ReturnType<typeof listSpecialistTaskArtifacts> = [];
+					try { writtenArtifacts = listSpecialistTaskArtifacts(plan.taskFolder); } catch {}
+					send({ type: "task_error", taskId: plan.taskId, message: stopped ? (task.stoppedByUser ? "Task stopped by you. Artifacts already written are kept." : "The task was cancelled.") : (e as Error).message, artifacts: writtenArtifacts });
+				} finally {
+					activeWebTasks.delete(plan.taskId);
+				}
+			})();
+			return { ok: true };
+		};
+		launchSpecialistTask = launchSpecialistTaskForSession;
+		const persistentRoomDelegateTools = [createDelegateTaskTool({
+			agentId: persistentAgentId,
+			taskCap: WEB_TASK_CAP,
+			runningCount: () => activeWebTasks.size,
+			generateTaskId: () => `tsk-${crypto.randomBytes(6).toString("hex")}`,
+			launch: launchSpecialistTaskForSession,
+		})];
+		const persistentRoomSkillTools = persistentRoomEnabledSkillEntries.length > 0
+			? [createReadSkillTool({
+				agentId: persistentAgentId,
+				// The tool verifies the pinned manifest hash and returns the defanged
+				// body; both come from one manifest read, so verified and served bytes
+				// can never diverge.
+				lookupSkill: (name) => {
+					const resolved = resolveLibrarySkillManifest(name);
+					return resolved ? { manifest: resolved.manifest, body: resolved.body, description: resolved.description } : null;
+				},
+				telemetry: persistentRoomSkillTelemetry,
+			})]
+			: [];
 		const persistentRoomBootContext = persistentRoomThreadRuntime?.kind !== "pi-session-jsonl"
 			? buildPersistentAgentBootContext({
 				agentId: persistentAgentId,
@@ -3296,9 +3923,24 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 				...(persistentRoomWorkspaceCapability ? { workspaceCapability: persistentRoomWorkspaceCapability } : {}),
 			})
 			: undefined;
-		const persistentRoomRawSystemPrompt = persistentRoomThreadRuntime?.kind === "pi-session-jsonl"
+		// The enabled-skills index (skills MR-5, spec §5) is appended to the system
+		// prompt at CONNECT for BOTH runtimes. The default pi-session-jsonl runtime
+		// serves a frozen, hash-pinned boot snapshot that predates enablement, so
+		// baking the index into the snapshot (as buildPersistentAgentBootContext
+		// would) never reaches it; appending here instead makes the index reflect
+		// the room's CURRENT effective enabled set every time the room is opened —
+		// consistent with read_skill, which enforces the live set per call.
+		const persistentRoomEnabledSkillsIndex = buildEnabledSkillsIndexSection(persistentRoomEnabledSkillEntries);
+		// The specialist-templates index (visuals V2, contract §5) rides the same
+		// connect-time append as the skills index: static registry content, so it
+		// is identical for every room and every connect.
+		const persistentRoomSpecialistIndex = buildSpecialistTemplatesIndexSection();
+		const persistentRoomRawBootPrompt = persistentRoomThreadRuntime?.kind === "pi-session-jsonl"
 			? readPersistentAgentBootPromptSnapshot(persistentAgentId, persistentRoomThreadRuntime)
 			: persistentRoomBootContext?.systemPrompt;
+		const persistentRoomRawSystemPrompt = persistentRoomRawBootPrompt != null
+			? `${persistentRoomRawBootPrompt}${persistentRoomEnabledSkillsIndex}${persistentRoomSpecialistIndex}`
+			: persistentRoomRawBootPrompt;
 		const persistentRoomRuntimeCwd = persistentRoomRuntimeCwdForEffectiveWorkspacePolicy(persistentRoomEffectiveWorkspacePolicy, REPO_ROOT);
 		const persistentRoomSessionManager = persistentRoomThreadRuntime?.kind === "pi-session-jsonl"
 			? openPersistentAgentPiSessionManager(persistentAgentId, persistentRoomThreadRuntime, persistentRoomRuntimeCwd)
@@ -3372,8 +4014,12 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 			modelRegistry: webChatModelRegistry,
 			model: webChatModel,
 			...(persistentRoomRawSystemPrompt ? { rawSystemPrompt: persistentRoomRawSystemPrompt } : {}),
-			...(persistentRoomToolPolicy ? { tools: persistentRoomToolPolicy.allowedToolNames } : {}),
-			...(persistentRoomCustomTools.length > 0 ? { customTools: persistentRoomCustomTools } : {}),
+			// read_skill and delegate_task ride beside the workspace tools: appended
+			// AFTER the workspace-policy mismatch check (they are not workspace
+			// tools) and added to the allowlist explicitly, since customTools are
+			// allowlist-filtered.
+			...(persistentRoomToolPolicy ? { tools: [...persistentRoomToolPolicy.allowedToolNames, ...persistentRoomSkillTools.map((tool) => tool.name), ...persistentRoomDelegateTools.map((tool) => tool.name)] } : {}),
+			...(persistentRoomCustomTools.length + persistentRoomSkillTools.length + persistentRoomDelegateTools.length > 0 ? { customTools: [...persistentRoomCustomTools, ...persistentRoomSkillTools, ...persistentRoomDelegateTools] } : {}),
 		});
 		session = created.session;
 		sessionDisposed = false;
@@ -3560,6 +4206,12 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 				resetTurnTrace();
 				const sessionAtPromptStart = session;
 				const userText = String(msg.text ?? "");
+				// Consult MR-5 hardening: this prompt has consumed any queued handoff
+				// blocks (the client prepended them to userText). Clear the persisted
+				// queue now, atomically with the consume, so a crash or a reordered
+				// client save can never re-queue an already-sent block. Best-effort:
+				// never let it break the turn.
+				try { clearPersistentAgentThreadPendingHandoffs(persistentAgentIdForSession, persistentConversationId); } catch (error) { app.log.warn({ err: error }, "failed to clear consult pending-transfer queue on prompt"); }
 				preparePromptDiagnosticsTurn("user");
 				await session!.prompt(withPersistentRoomRestoredLiveThreadContext(userText));
 				if (!activePersistentWebTurn?.terminalReason) setActivePersistentWebTurnTerminalReason("completed");
@@ -3581,11 +4233,179 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 			}
 		} else if (msg.type === "abort") {
 			await abortActivePersistentWebTurn("cancelled");
+		} else if (msg.type === "consult") {
+			const consultId = String(msg.consultId ?? "").trim();
+			if (!consultId) return;
+			// §8.6: overflow must reach the client as a DISTINGUISHABLE error (a
+			// machine-readable `code`), so the card can render the "no longer fits"
+			// state without string-matching the message. Other errors carry no code.
+			const consultError = (message: string, code?: string) => send({ type: "consult_error", consultId, message, ...(code ? { code } : {}) });
+			// Start gate: a consult may not start while this room is answering.
+			// (The reverse is allowed — prompts process normally during a consult.)
+			if (activePersistentWebTurn) {
+				consultError("This room is answering right now. Wait for the current turn to finish, then consult.");
+				return;
+			}
+			if (activeWebConsult) {
+				consultError("A consult is already running. One consult at a time — stop it or wait for it to finish.");
+				return;
+			}
+			const consult: ActiveWebConsult = { consultId, abortController: new AbortController(), stoppedByUser: false };
+			activeWebConsult = consult;
+			try {
+				const targetStatus = getPersistentAgentStatusForMaintenance(String(msg.targetRoomId ?? "").trim());
+				const selection = activeConsultModelSelection();
+				send({ type: "consult_started", consultId, targetRoomId: targetStatus.id, targetDisplayName: targetStatus.displayName ?? targetStatus.id, model: selection.modelLock });
+				const response = await buildConsultAnswer(
+					// §8.1: the client holds the conversation; `priorExchanges` re-feeds
+					// B's own earlier Q/A. The server stays stateless — buildConsultAnswer
+					// validates the wire shape + backstop cap (§8.6) before use.
+					{ targetAgentId: targetStatus.id, fromRoomId: persistentAgentIdForSession, question: String(msg.question ?? ""), priorExchanges: msg.priorExchanges, targetLifecycleStatus: targetStatus.status },
+					selection.modelLock,
+					async (prompt, modelLock) => {
+						const workerResult = await runIsolatedPersistentAgentWorker({
+							workerSystemPrompt: prompt,
+							triggerPrompt: CONSULT_TRIGGER_PROMPT,
+							modelLock,
+							resolveExpectedModel: resolveConsultModel,
+							workerLabel: "consult worker",
+							emptyTextError: "consult worker produced no text",
+							cwd: REPO_ROOT,
+							agentDir: getAgentDir(),
+							modelRegistry: getWebChatModelRegistry(),
+							signal: consult.abortController.signal,
+							onEvent: (event: any) => {
+								if (event?.type !== "message_update") return;
+								const update = event.assistantMessageEvent;
+								if (update?.type === "text_delta" && typeof update.delta === "string") {
+									send({ type: "consult_delta", consultId, delta: update.delta });
+								}
+							},
+						});
+						// Consult usage bills to this room (room A), not the consulted room.
+						recordWorkerUsage(persistentAgentIdForSession, "consult", modelLock, workerResult.usage);
+						return workerResult;
+					},
+					{ resolveModelWindow: consultModelWindow },
+				);
+				if (consult.abortController.signal.aborted) {
+					consultError(consult.stoppedByUser ? "Consult stopped by you." : "The consult was cancelled.");
+				} else {
+					send({
+						type: "consult_end",
+						consultId,
+						text: response.answerMarkdown,
+						l1bFingerprint: response.source.l1bFingerprint,
+						generatedAt: response.source.generatedAt,
+						...(response.consultUsage ? { usage: response.consultUsage } : {}),
+						warnings: response.warnings,
+					});
+				}
+			} catch (e) {
+				if (consult.abortController.signal.aborted) {
+					consultError(consult.stoppedByUser ? "Consult stopped by you." : "The consult was cancelled.");
+				} else if (e instanceof ConsultPromptOverflowError) {
+					// §8.6: the stacked conversation no longer fits B's context. Tag the
+					// error so the card disables the follow-up input and shows the
+					// "no longer fits" state instead of a generic failure.
+					consultError((e as Error).message, "prompt_overflow");
+				} else {
+					consultError((e as Error).message);
+				}
+			} finally {
+				if (activeWebConsult === consult) activeWebConsult = null;
+			}
+		} else if (msg.type === "consult_abort") {
+			// Unknown or stale consult ids are ignored — same discipline the
+			// client applies to stale consult events.
+			const consultId = String(msg.consultId ?? "").trim();
+			if (!activeWebConsult || activeWebConsult.consultId !== consultId) return;
+			activeWebConsult.stoppedByUser = true;
+			activeWebConsult.abortController.abort();
+		} else if (msg.type === "task_abort") {
+			// Same stale-id discipline. Artifacts already on disk are kept — only
+			// the running worker dies (boundary matrix, visuals contract §6).
+			const taskId = String(msg.taskId ?? "").trim();
+			const task = activeWebTasks.get(taskId);
+			if (!task) return;
+			task.stoppedByUser = true;
+			task.abortController.abort();
+		} else if (msg.type === "task_iterate") {
+			// Iterate chip-chat (contract §5 amendment 2026-07-12, ONE-CLICK
+			// amendment 2026-07-13 — pending review): the ONE client-initiated
+			// delegation path. The brief is USER-authored (typed on the done card)
+			// and the click IS the approval, the D7 shape (export precedent):
+			// legitimate because every other field is server-derived — the frame
+			// carries only {taskId, brief}; template and read scope come from
+			// completedWebTasks, the server's own record of what THIS connection
+			// finished; the write scope is a fresh server-named task folder; the
+			// plan builder re-validates every path; the shared launch closure
+			// re-checks the cap; and a cooldown replaces the approval card as the
+			// spawn rate limiter. Model-authored delegations (delegate_task,
+			// including "Iterate via room") keep the interactive approval — only
+			// the user-authored direct path is one-click.
+			void (async () => {
+				try {
+					const launch = launchSpecialistTask;
+					if (!launch) {
+						send({ type: "task_iterate_result", ok: false, reason: "The room session is not ready yet." });
+						return;
+					}
+					const sourceTaskId = String(msg.taskId ?? "").trim();
+					const source = completedWebTasks.get(sourceTaskId);
+					if (!source) {
+						send({ type: "task_iterate_result", ok: false, reason: "That task is no longer available to iterate on. Ask the room to delegate a fresh one instead." });
+						return;
+					}
+					const template = getSpecialistTemplate(source.templateId);
+					if (!template) {
+						send({ type: "task_iterate_result", ok: false, reason: `"${source.templateId}" is not a specialist template.` });
+						return;
+					}
+					if (activeWebTasks.size >= WEB_TASK_CAP) {
+						send({ type: "task_iterate_result", ok: false, reason: "A specialist is already running. Wait for it to finish or stop it first." });
+						return;
+					}
+					const sinceLast = Date.now() - lastIterateLaunchAt;
+					if (sinceLast < ITERATE_COOLDOWN_MS) {
+						send({ type: "task_iterate_result", ok: false, reason: "Give it a few seconds between iterations." });
+						return;
+					}
+					let plan: SpecialistSessionPlan;
+					try {
+						plan = buildSpecialistSessionPlan({
+							taskId: `tsk-${crypto.randomBytes(6).toString("hex")}`,
+							templateId: source.templateId,
+							brief: String(msg.brief ?? ""),
+							inputArtifacts: source.artifacts,
+						});
+					} catch (e) {
+						send({ type: "task_iterate_result", ok: false, reason: `Iteration not possible: ${(e as Error).message}` });
+						return;
+					}
+					const started = launch(plan);
+					if (!started.ok) {
+						send({ type: "task_iterate_result", ok: false, reason: `The specialist could not start: ${started.reason}` });
+						return;
+					}
+					lastIterateLaunchAt = Date.now();
+					send({ type: "task_iterate_result", ok: true, taskId: plan.taskId });
+				} catch (e) {
+					try { send({ type: "task_iterate_result", ok: false, reason: (e as Error).message }); } catch { /* socket gone */ }
+				}
+			})();
 		}
 	});
 
 	socket.on("close", () => {
 		app.log.info("ws client disconnected");
+		// A consult answer that was never transferred is re-derivable: kill the
+		// worker and discard silently (boundary matrix, locked 2026-07-10).
+		activeWebConsult?.abortController.abort();
+		// Specialist tasks die with the connection too, but their artifacts are
+		// already on disk and persist (visuals contract §6 — leave = abort worker,
+		// keep files).
+		for (const task of activeWebTasks.values()) task.abortController.abort();
 		void disposeSessionAfterAbortIfNeeded("disconnect_cancelled").catch((error) => {
 			app.log.warn({ err: error }, "persistent-room disconnect cleanup failed");
 			if (!sessionDisposed && session) {
@@ -3594,6 +4414,206 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 			}
 		});
 	});
+});
+
+// Baseline security headers for everything the static path serves. The API
+// has no client auth (loopback + Host/Origin guard only), so the app origin
+// must never execute anything beyond the built bundle: no external scripts,
+// no framing, no plugin content. style-src keeps 'unsafe-inline' (mermaid
+// injects style attributes into its rendered SVG); connect-src names loopback
+// websockets explicitly because CSP 'self' does not reliably match ws:;
+// frame-src 'self' is reserved for the sandboxed artifact viewer, which
+// frames a same-origin route.
+const STATIC_SECURITY_HEADERS: Record<string, string> = {
+	"content-security-policy": [
+		"default-src 'self'",
+		"script-src 'self'",
+		"style-src 'self' 'unsafe-inline'",
+		"img-src 'self' data: blob:",
+		"font-src 'self'",
+		"connect-src 'self' ws://127.0.0.1:* ws://localhost:*",
+		"frame-src 'self'",
+		"object-src 'none'",
+		"base-uri 'self'",
+		"frame-ancestors 'none'",
+		"form-action 'self'",
+	].join("; "),
+	"x-content-type-options": "nosniff",
+	"referrer-policy": "no-referrer",
+};
+
+// Artifact bytes are model-generated and potentially hostile, and the API has
+// no client auth (loopback + Host/Origin guard only), so a same-origin document
+// would own the whole instance. Every artifact response therefore carries a CSP
+// sandbox header, which hands even a directly-navigated top-level document an
+// opaque origin: no cookies/localStorage, and same-origin fetch to the API
+// fails. This header is load-bearing, not hygiene. Distinct from the static
+// bundle's STATIC_SECURITY_HEADERS — different policy, different purpose.
+// No allow-scripts / script-src: every v1 template's output is static by
+// construction (deck = deterministic renderer, others = no-script templates in
+// a sandbox="" viewer), so nothing legitimate needs to execute even in a
+// directly-opened tab. Opaque origin + default-src 'none' stays the real
+// containment; this just removes an execution capability nothing uses.
+// (Hardening pass 2026-07-12, spec §4 updated — a future scripted template
+// must widen this deliberately, per-decision, not inherit it.)
+const ARTIFACT_SECURITY_HEADERS: Record<string, string> = {
+	"content-security-policy": "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:",
+	"x-content-type-options": "nosniff",
+	"referrer-policy": "no-referrer",
+	"cache-control": "no-store",
+};
+
+// Servable artifact types. .md is served as text/plain deliberately so markdown
+// source renders inert in a tab rather than as HTML. Named explicitly rather
+// than reusing the store's write-side allowlist so a future widening of what
+// may be WRITTEN (e.g. .pptx derivatives) never silently widens what this
+// route SERVES with these headers.
+const ARTIFACT_SERVABLE_EXTENSIONS: ReadonlySet<string> = new Set([".md", ".html", ".svg"]);
+
+function artifactContentType(extension: string): string | null {
+	if (extension === ".svg") return "image/svg+xml; charset=utf-8";
+	if (extension === ".html") return "text/html; charset=utf-8";
+	if (extension === ".md") return "text/plain; charset=utf-8";
+	return null;
+}
+
+app.get("/api/artifacts/:taskId/*", async (req, reply) => {
+	// Sandbox headers ride every response from this route — success and error —
+	// so no artifact path can ever return document bytes without the CSP.
+	reply.headers(ARTIFACT_SECURITY_HEADERS);
+	const taskId = String((req.params as any).taskId ?? "");
+	const rest = String((req.params as any)["*"] ?? "");
+	// taskId is a per-task subfolder governed by the same SAFE_SEGMENT that
+	// specialists write under; reject anything else and never echo it back.
+	if (!SAFE_SEGMENT.test(taskId)) return reply.code(404).send({ error: "Artifact not found." });
+	// Reject any dot-leading path segment. validateArtifactPath's SAFE_SEGMENT
+	// already rejects these, but assert it here so server-internal dot-dirs
+	// (e.g. .thumbs) can never be served even if that validation ever loosens.
+	if (rest.split("/").some((segment) => segment.startsWith("."))) return reply.code(404).send({ error: "Artifact not found." });
+	let target: ReturnType<typeof validateArtifactPath>;
+	try {
+		target = validateArtifactPath(rest, "default", `tasks/${taskId}`, ARTIFACT_SERVABLE_EXTENSIONS);
+	} catch {
+		return reply.code(404).send({ error: "Artifact not found." });
+	}
+	const type = artifactContentType(target.extension);
+	// Unreachable (validateArtifactPath rejects other extensions) but fail closed.
+	if (!type) return reply.code(404).send({ error: "Artifact not found." });
+	let stat: fs.Stats;
+	try {
+		// lstat, not stat: a symlink under the task folder must not be followed
+		// out of the store, so refuse anything that is not a real regular file.
+		stat = fs.lstatSync(target.fullPath);
+	} catch {
+		return reply.code(404).send({ error: "Artifact not found." });
+	}
+	if (!stat.isFile()) return reply.code(404).send({ error: "Artifact not found." });
+	if (stat.size > 40_000_000) return reply.code(413).send({ error: "Artifact is too large to serve." });
+	if (String((req.query as any)?.download ?? "") === "1") {
+		// Strip quotes/backslashes/control chars so the basename cannot break out
+		// of the quoted filename or inject additional header directives.
+		const basename = path.basename(target.relativePath).replace(/["\\\r\n]/g, "").replace(/[\x00-\x1f\x7f]/g, "");
+		reply.header("content-disposition", `attachment; filename="${basename}"`);
+	}
+	reply.header("content-length", String(stat.size));
+	return reply.type(type).send(fs.createReadStream(target.fullPath));
+});
+
+// V5 — export a task artifact into a room's workspace folder. Self-contained
+// sibling to the GET route above. The UI "Save to workspace" click IS the human
+// approval (locked decision D7): there is no ui_request bridge and no interactive
+// confirm here. The route therefore applies the SAME source path discipline as
+// the GET route (SAFE_SEGMENT taskId, validateArtifactPath, dot-segment refusal)
+// and additionally confines the DESTINATION to the room's approved workspace
+// root. The global loopback guard (onRequest) is inherited automatically.
+app.post("/api/artifacts/:taskId/export", async (req, reply) => {
+	const taskId = String((req.params as any).taskId ?? "");
+	if (!SAFE_SEGMENT.test(taskId)) return reply.code(404).send({ error: "Artifact not found." });
+	const body = (req.body ?? {}) as { relativePath?: unknown; roomId?: unknown; conversationId?: unknown };
+	const relativePath = String(body.relativePath ?? "");
+	const roomId = String(body.roomId ?? "").trim();
+	const conversationId = String(body.conversationId ?? "").trim();
+	if (!roomId) return reply.code(400).send({ error: "roomId is required." });
+
+	// The UI passes the store-relative path (tasks/<taskId>/<rest>); the taskId in
+	// the URL must own it. A mismatched prefix is rejected without guessing a path.
+	const prefix = `tasks/${taskId}/`;
+	if (!relativePath.startsWith(prefix)) return reply.code(400).send({ error: "relativePath must be inside this task." });
+	const rest = relativePath.slice(prefix.length);
+	// Mirror the GET route: never copy server-internal dot-dirs (e.g. .thumbs) even
+	// if validateArtifactPath's segment check ever loosens.
+	if (!rest || rest.split("/").some((segment) => segment.startsWith("."))) return reply.code(404).send({ error: "Artifact not found." });
+
+	let source: ReturnType<typeof validateArtifactPath>;
+	try {
+		source = validateArtifactPath(rest, "default", `tasks/${taskId}`, ARTIFACT_SERVABLE_EXTENSIONS);
+	} catch {
+		return reply.code(404).send({ error: "Artifact not found." });
+	}
+	let sourceStat: fs.Stats;
+	try {
+		// lstat, not stat: a symlink under the task folder must not be followed out
+		// of the store, so refuse anything that is not a real regular file.
+		sourceStat = fs.lstatSync(source.fullPath);
+	} catch {
+		return reply.code(404).send({ error: "Artifact not found." });
+	}
+	if (!sourceStat.isFile()) return reply.code(404).send({ error: "Artifact not found." });
+	if (sourceStat.size > 40_000_000) return reply.code(413).send({ error: "Artifact is too large to export." });
+
+	// Resolve the room's THREAD-EFFECTIVE workspace policy when the UI names the
+	// conversation (thread override → room default, same resolution the room's
+	// own tools use), falling back to the room default for calls without one.
+	// Both readers validate the id shapes (throw on malformed) and return null
+	// when the room does not exist or has no workspace configured — every
+	// failure surfaces as the same 400 below.
+	let workspaceRoot: string | null = null;
+	try {
+		const policy = conversationId
+			? resolvePersistentRoomCapabilityPolicy(roomId, conversationId).policy
+			: readPersistentRoomDefaultCapabilityPolicy(roomId);
+		const rootGrant = policy?.roots?.[0];
+		if (rootGrant) {
+			// Prefer the realpath grant; fall back to the stored path. Resolving the
+			// real path here means the confinement check below compares like with like.
+			for (const candidate of [rootGrant.realpath, rootGrant.path]) {
+				try {
+					const real = fs.realpathSync.native(candidate);
+					if (fs.statSync(real).isDirectory()) { workspaceRoot = real; break; }
+				} catch {
+					// try the next candidate
+				}
+			}
+		}
+	} catch {
+		workspaceRoot = null;
+	}
+	if (!workspaceRoot) return reply.code(400).send({ error: "This room has no workspace folder configured; exports need one." });
+
+	// Destination = source basename directly inside the workspace root. basename()
+	// strips any separators, and we re-check confinement so a resolved destination
+	// can never land outside the approved workspace folder.
+	const destName = path.basename(source.relativePath);
+	const destPath = path.resolve(workspaceRoot, destName);
+	if (destPath !== workspaceRoot && !destPath.startsWith(workspaceRoot + path.sep)) {
+		return reply.code(400).send({ error: "Export destination escapes the room workspace folder." });
+	}
+	if (fs.existsSync(destPath)) {
+		return reply.code(409).send({ error: "A file with this name already exists in the room workspace." });
+	}
+	try {
+		const bytes = fs.readFileSync(source.fullPath);
+		// flag "wx" fails closed if a same-name file appears between the check above
+		// and the write (TOCTOU); 0o600 keeps the exported copy private like other
+		// server-side writes.
+		fs.writeFileSync(destPath, bytes, { flag: "wx", mode: 0o600 });
+	} catch (e) {
+		if ((e as NodeJS.ErrnoException).code === "EEXIST") {
+			return reply.code(409).send({ error: "A file with this name already exists in the room workspace." });
+		}
+		return reply.code(500).send({ error: "Failed to export the artifact to the room workspace." });
+	}
+	return reply.send({ savedTo: destPath });
 });
 
 function contentType(file: string): string {
@@ -3620,12 +4640,14 @@ function safeStaticPath(urlPath: string): string | null {
 }
 
 app.get("/", async (_req, reply) => {
+	reply.headers(STATIC_SECURITY_HEADERS);
 	const file = safeStaticPath("/");
 	if (!file) return reply.code(404).send({ error: "web UI dist not found; run npm run build --workspace @exxeta/pi-web-ui" });
 	return reply.type(contentType(file)).send(fs.createReadStream(file));
 });
 
 async function sendStatic(req: { raw: { url?: string } }, reply: any) {
+	reply.headers(STATIC_SECURITY_HEADERS);
 	const file = safeStaticPath((req.raw.url ?? "/").split("?")[0]);
 	if (!file) return reply.code(404).send({ error: "web UI dist not found" });
 	return reply.type(contentType(file)).send(fs.createReadStream(file));
@@ -3636,6 +4658,18 @@ app.get("/brand/*", sendStatic);
 app.get("/fonts/*", sendStatic);
 
 ensureProductAppUserDirs();
+
+// Unify the skills store (spec §1): move any skills left in the pre-unification
+// web dir (~/.exxperts/app/skills) into the canonical loader dir. No overwrite on
+// a name collision (canonical wins, the legacy copy is left in place + warned).
+try {
+	const migrated = migrateLegacyUserSkills((message) => app.log.warn(message));
+	if (migrated.moved.length > 0) {
+		app.log.info(`skills migration: moved ${migrated.moved.length} skill(s) into the canonical store: ${migrated.moved.join(", ")}`);
+	}
+} catch (e) {
+	app.log.warn({ err: (e as Error).message }, "skills migration failed");
+}
 
 // Reconcile the ledger with the pi-session files (CLI-attach turns land there
 // from a separate process; disconnect races can also drop rows). Exact-match

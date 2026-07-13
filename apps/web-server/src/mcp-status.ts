@@ -19,6 +19,12 @@ const ADAPTER_CACHE = "pi-mcp-adapter/metadata-cache.ts" as string;
 
 export interface McpConnectorAuthStatus {
 	mode: "oauth" | "bearer" | "none";
+	// True when the entry explicitly configures OAuth (auth: "oauth" or a
+	// custom client), as opposed to the URL-server auto-detect. Explicitly
+	// configured OAuth means a login IS expected — even if the server lists
+	// tools without one (Gmail and HubSpot expose their catalogs
+	// unauthenticated, which otherwise looks like "no login needed").
+	explicit: boolean;
 	hasStoredTokens: boolean;
 	tokenExpired: boolean | null;
 	// An expired access token with a refresh token is not a problem — the
@@ -117,6 +123,7 @@ export async function getMcpConnectorsStatus(): Promise<McpConnectorsStatusRespo
 			source: source ? { path: tildePath(source.path), kind: source.kind, importKind: source.importKind } : null,
 			auth: {
 				mode,
+				explicit: mode === "oauth" && (entry.auth === "oauth" || (typeof entry.oauth === "object" && entry.oauth !== null)),
 				hasStoredTokens: mode === "oauth" ? Boolean(authMod.hasStoredTokens(name)) : false,
 				tokenExpired: mode === "oauth" ? (authMod.isTokenExpired(name) as boolean | null) : null,
 				hasRefreshToken: mode === "oauth" ? Boolean(authMod.getAuthEntry(name)?.tokens?.refreshToken) : false,

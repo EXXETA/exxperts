@@ -1,7 +1,7 @@
 /**
  * Local artifact tools for exxperts.
  *
- * Approval-gated local artifact writes plus safe list/read inspection under the
+ * Approval-gated local artifact writes (.md/.html/.svg) plus safe list/read inspection under the
  * default ~/.exxperts/app/artifacts root and explicitly approved local destination roots.
  * Includes a narrow deterministic HTML deck helper. No auto-open, preview, PDF,
  * PPTX, or export behaviour.
@@ -19,9 +19,15 @@ import PptxGenJS from "pptxgenjs";
 import type { ExtensionAPI } from "@exxeta/exxperts-runtime";
 import { productAppStatePath } from "../../product-state-paths.js";
 
-const ALLOWED_EXTENSIONS = new Set([".md", ".html"]);
-const SAFE_SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+const ALLOWED_EXTENSIONS = new Set([".md", ".html", ".svg"]);
+export const SAFE_SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const MAX_READ_BYTES = 180_000;
+// Per-file write caps (validation-rejected, never truncated). SVG is capped
+// everywhere; HTML/MD caps apply inside a pre-approved write scope, where no
+// human sees the content before it lands on disk.
+export const MAX_SVG_ARTIFACT_BYTES = 1_000_000;
+export const MAX_SCOPED_HTML_ARTIFACT_BYTES = 5_000_000;
+export const MAX_SCOPED_MD_ARTIFACT_BYTES = 1_000_000;
 const MAX_APPROVAL_PREVIEW_BYTES = 180_000;
 const MAX_PPTX_BYTES = 25 * 1024 * 1024;
 const MAX_PPTX_SLIDES = 50;
@@ -456,6 +462,129 @@ export function validateArtifactPath(filename: string, destination = "default", 
 	const fullPath = path.resolve(root, relativePath);
 	if (fullPath !== root && !fullPath.startsWith(root + path.sep)) throw new Error("Artifact path escapes the approved destination folder.");
 	return { destination: dest, root, relativePath, fullPath, extension };
+}
+
+// ── Pre-approved write scope (specialist delegation) ────────────────────────────────────────────
+// A headless specialist session cannot answer ctx.ui.confirm, so the user's
+// delegation approval doubles as a write grant for exactly one task-private
+// folder. The grant never widens approval semantics anywhere else: writes
+// outside the scope still require interactive approval (and therefore fail
+// headless), and scoped writes are validation-rejected against hard caps.
+
+export interface ArtifactsPreApprovedWriteScope {
+	/** Destination name the grant is confined to (normally "default"). */
+	destination: string;
+	/** Store-relative folder (forward-slash), e.g. "tasks/tsk-abc123". */
+	folder: string;
+	/** Maximum number of files that may exist under the folder. */
+	maxArtifacts: number;
+	/** Maximum total bytes under the folder after the write. */
+	maxTotalBytes: number;
+	/** Per-file byte caps by extension; unlisted extensions use the scoped defaults. */
+	perFileBytesByExtension?: Record<string, number>;
+	/**
+	 * When set, writes inside the scope are validation-REJECTED for any other
+	 * extension (defense-in-depth under the template's outputExtensions — the
+	 * store-wide ALLOWED_EXTENSIONS floor still applies first).
+	 */
+	allowedExtensions?: string[];
+}
+
+/**
+ * Read confinement for delegated (specialist) sessions: the session may read
+ * and list ONLY its own task folder plus the exact input artifacts its brief
+ * declared — "no access beyond your brief", the read-side mirror of the
+ * pre-approved write scope. Absent scope = unconfined (normal room sessions).
+ */
+export interface ArtifactsReadScope {
+	/** Destination name reads are confined to (normally "default"). */
+	destination: string;
+	/** Store-relative folders (forward-slash) readable in full, e.g. ["tasks/tsk-abc123"]. */
+	folders: string[];
+	/** Exact store-relative file paths additionally readable (declared input artifacts). */
+	paths: string[];
+}
+
+export function isWithinArtifactsReadScope(destinationName: string, relativePath: string, scope: ArtifactsReadScope): boolean {
+	if (destinationName !== String(scope.destination).trim().toLowerCase()) return false;
+	for (const folder of scope.folders) {
+		const clean = String(folder ?? "").replace(/\/+$/, "");
+		if (clean && relativePath.startsWith(clean + "/")) return true;
+	}
+	return scope.paths.includes(relativePath);
+}
+
+export interface ArtifactsExtensionOptions {
+	preApprovedWriteScope?: ArtifactsPreApprovedWriteScope;
+	readScope?: ArtifactsReadScope;
+}
+
+function scopedPerFileCap(extension: string, scope: ArtifactsPreApprovedWriteScope): number {
+	const explicit = scope.perFileBytesByExtension?.[extension];
+	if (typeof explicit === "number" && explicit > 0) return explicit;
+	if (extension === ".svg") return MAX_SVG_ARTIFACT_BYTES;
+	if (extension === ".html") return MAX_SCOPED_HTML_ARTIFACT_BYTES;
+	return MAX_SCOPED_MD_ARTIFACT_BYTES;
+}
+
+export function isWithinPreApprovedWriteScope(target: ArtifactTarget, scope: ArtifactsPreApprovedWriteScope): boolean {
+	if (target.destination.name !== String(scope.destination).trim().toLowerCase()) return false;
+	const folder = scope.folder.replace(/\/+$/, "");
+	if (!folder) return false;
+	return target.relativePath.startsWith(folder + "/");
+}
+
+function walkScopeFiles(scopeRoot: string): { count: number; totalBytes: number } {
+	let count = 0;
+	let totalBytes = 0;
+	const walk = (dir: string) => {
+		if (!fs.existsSync(dir)) return;
+		for (const name of fs.readdirSync(dir)) {
+			// Dot-entries (e.g. server-written .thumbs previews) never count against
+			// the model's caps — SAFE_SEGMENT already makes them unwritable by tools.
+			if (name.startsWith(".")) continue;
+			const file = path.join(dir, name);
+			const stat = fs.lstatSync(file);
+			if (stat.isDirectory()) walk(file);
+			else if (stat.isFile()) { count += 1; totalBytes += stat.size; }
+		}
+	};
+	walk(scopeRoot);
+	return { count, totalBytes };
+}
+
+export type PreApprovedWriteDecision =
+	| { granted: false; rejected?: undefined }
+	| { granted: true; rejected?: undefined }
+	| { granted: false; rejected: string };
+
+/**
+ * granted=true  → write proceeds without interactive approval.
+ * granted=false → caller falls through to normal interactive approval.
+ * rejected      → hard validation failure (cap exceeded inside the scope); the
+ *                 caller must error out and must NOT fall through to approval.
+ */
+export function preApprovedWriteDecision(target: ArtifactTarget, contentBytes: number, scope: ArtifactsPreApprovedWriteScope | undefined): PreApprovedWriteDecision {
+	if (!scope) return { granted: false };
+	if (!isWithinPreApprovedWriteScope(target, scope)) return { granted: false };
+	if (scope.allowedExtensions && !scope.allowedExtensions.includes(target.extension)) {
+		return { granted: false, rejected: `This task's template only writes ${scope.allowedExtensions.join(", ")} artifacts (got ${target.extension}).` };
+	}
+	const perFileCap = scopedPerFileCap(target.extension, scope);
+	if (contentBytes > perFileCap) {
+		return { granted: false, rejected: `Artifact exceeds the ${target.extension} size cap for this task (${contentBytes} > ${perFileCap} bytes).` };
+	}
+	const scopeRoot = path.resolve(target.root, ...scope.folder.split("/").filter(Boolean));
+	const existing = walkScopeFiles(scopeRoot);
+	const replacedBytes = fs.existsSync(target.fullPath) ? fs.lstatSync(target.fullPath).size : null;
+	if (replacedBytes === null && existing.count >= scope.maxArtifacts) {
+		return { granted: false, rejected: `Task artifact limit reached (${scope.maxArtifacts} files).` };
+	}
+	const projectedTotal = existing.totalBytes - (replacedBytes ?? 0) + contentBytes;
+	if (projectedTotal > scope.maxTotalBytes) {
+		return { granted: false, rejected: `Task artifact storage limit reached (${projectedTotal} > ${scope.maxTotalBytes} bytes).` };
+	}
+	return { granted: true };
 }
 
 export type ResolvedPastedPptxPath =
@@ -3767,7 +3896,11 @@ export async function renderDeckHtmlToSlideImages(html: string, options?: { maxS
 	const maxSlides = Math.max(1, Math.min(HTML_PREVIEW_MAX_RENDER_SLIDES, options?.maxSlides ?? HTML_PREVIEW_MAX_RENDER_SLIDES));
 	const browser = await chromium.launch({ headless: true });
 	try {
-		const page = await browser.newPage({ viewport: { width: HTML_PREVIEW_SLIDE_W, height: HTML_PREVIEW_SLIDE_H }, deviceScaleFactor: 2 });
+		// javaScriptEnabled:false — this page renders MODEL-AUTHORED HTML in server-side
+		// Chromium; a static screenshot never needs the page's own scripts, so they are
+		// off wholesale rather than relying on the write-time blocklist alone. Locator
+		// evaluate/screenshot below still work: they run over CDP, not as page scripts.
+		const page = await browser.newPage({ viewport: { width: HTML_PREVIEW_SLIDE_W, height: HTML_PREVIEW_SLIDE_H }, deviceScaleFactor: 2, javaScriptEnabled: false });
 		// Defense in depth: block all network. Safe deck HTML is fully self-contained, so nothing
 		// legitimate is lost, and a missed external reference cannot reach out.
 		await page.route("**/*", (route: any) => route.abort());
@@ -3788,6 +3921,28 @@ export async function renderDeckHtmlToSlideImages(html: string, options?: { maxS
 		}
 		if (images.length === 0) throw new Error("Rendering produced no usable slide images (no <section class=\"slide\"> found or all frames over the size cap).");
 		return { images, rendererUsed: "playwright-chromium" };
+	} finally {
+		try { await browser.close(); } catch { /* best-effort cleanup */ }
+	}
+}
+
+// Generic single-frame HTML→PNG preview (visuals V4 card thumbnails): the
+// deck renderer above frames <section class="slide"> elements, but chart/
+// document artifacts have no slide structure, so this screenshots the page
+// itself. Same doctrine: network fully blocked, fixed viewport, size-capped.
+export async function renderHtmlToPreviewImage(html: string): Promise<{ pngBase64: string; bytes: number } | null> {
+	const chromium = await loadPlaywrightChromium();
+	if (!chromium) return null;
+	const browser = await chromium.launch({ headless: true });
+	try {
+		// Same doctrine as the deck renderer: model-authored HTML, so page scripts are
+		// disabled outright — a preview screenshot never needs them.
+		const page = await browser.newPage({ viewport: { width: HTML_PREVIEW_SLIDE_W, height: HTML_PREVIEW_SLIDE_H }, deviceScaleFactor: 2, javaScriptEnabled: false });
+		await page.route("**/*", (route: any) => route.abort());
+		await page.setContent(html, { waitUntil: "load", timeout: HTML_PREVIEW_RENDER_TIMEOUT_MS });
+		const buf: Buffer = await page.screenshot({ type: "png" });
+		if (buf.byteLength > HTML_PREVIEW_MAX_IMAGE_BYTES) return null;
+		return { pngBase64: buf.toString("base64"), bytes: buf.byteLength };
 	} finally {
 		try { await browser.close(); } catch { /* best-effort cleanup */ }
 	}
@@ -4475,7 +4630,18 @@ function evaluateDeckFilenameWarnings(filename: string): DeckSpecValidationIssue
 	return warnings;
 }
 
-export default function (pi: ExtensionAPI) {
+/**
+ * Parameterized factory. The default export stays the zero-option extension
+ * every existing session uses; a specialist session passes a pre-approved
+ * write scope so its delegation approval covers writes to one task folder.
+ */
+export function createArtifactsExtension(options: ArtifactsExtensionOptions = {}) {
+	return (pi: ExtensionAPI) => registerArtifactTools(pi, options);
+}
+
+export default createArtifactsExtension();
+
+function registerArtifactTools(pi: ExtensionAPI, options: ArtifactsExtensionOptions) {
 	pi.registerTool({
 		name: "artifact_destinations",
 		label: "List artifact destinations",
@@ -4574,8 +4740,15 @@ export default function (pi: ExtensionAPI) {
 		async execute(_id, { destination, limit = 200 }) {
 			try {
 				const dest = resolveDestination(destination);
+				const scope = options.readScope;
+				if (scope && dest.name !== String(scope.destination).trim().toLowerCase()) {
+					throw new Error(`This session can only list artifacts under the "${scope.destination}" destination.`);
+				}
 				fs.mkdirSync(dest.path, { recursive: true, mode: 0o700 });
-				const artifacts = listArtifacts(dest.path, Math.min(Math.max(Number(limit) || 200, 1), 1000));
+				let artifacts = listArtifacts(dest.path, Math.min(Math.max(Number(limit) || 200, 1), 1000));
+				// Read scope (specialist sessions): only the own task folder + declared
+				// input artifacts are visible — other tasks' outputs never enumerate.
+				if (scope) artifacts = artifacts.filter((a) => isWithinArtifactsReadScope(dest.name, a.path, scope));
 				const text = artifacts.length
 					? artifacts.map((a) => `- ${a.path} (${a.bytes} bytes, modified ${a.modified})`).join("\n")
 					: `No Markdown/HTML artifacts found under ${dest.path}.`;
@@ -4595,15 +4768,28 @@ export default function (pi: ExtensionAPI) {
 			filename: Type.String({ description: "Relative artifact filename ending in .md or .html." }),
 			destination: Type.Optional(Type.String({ description: "Approved destination name. Default: default (~/.exxperts/app/artifacts)." })),
 			folder: Type.Optional(Type.String({ description: "Optional relative folder inside the destination." })),
+			offset: Type.Optional(Type.Number({ description: "Byte offset to start reading from. Default 0. Large files are returned in slices; when truncated, the appended notice names the exact offset to pass on the next call." })),
 		}),
-		async execute(_id, { filename, destination, folder }) {
+		async execute(_id, { filename, destination, folder, offset }) {
 			try {
+				const startOffset = offset === undefined ? 0 : Number(offset);
+				if (!Number.isInteger(startOffset) || startOffset < 0) throw new Error("offset must be a non-negative integer.");
 				const target = validateArtifactPath(filename, destination, folder);
+				// Read scope (specialist sessions): reject before the existence check so
+				// the error never leaks whether an out-of-scope artifact exists.
+				if (options.readScope && !isWithinArtifactsReadScope(target.destination.name, target.relativePath, options.readScope)) {
+					throw new Error(`Artifact is outside this session's read scope: ${target.relativePath}`);
+				}
 				if (!fs.existsSync(target.fullPath)) throw new Error(`Artifact not found: ${target.relativePath}`);
 				if (!fs.statSync(target.fullPath).isFile()) throw new Error(`Not a file: ${target.relativePath}`);
 				const buf = fs.readFileSync(target.fullPath);
-				const truncated = buf.byteLength > MAX_READ_BYTES;
-				const text = buf.subarray(0, MAX_READ_BYTES).toString("utf-8") + (truncated ? "\n\n[truncated]" : "");
+				// Slice bytes then toString, same as the single-read path — a slice
+				// boundary can split a multi-byte char; byte offsets keep continuation
+				// deterministic (the split char resolves across the two slices).
+				const nextOffset = startOffset + MAX_READ_BYTES;
+				const truncated = buf.byteLength > nextOffset;
+				const text = buf.subarray(startOffset, nextOffset).toString("utf-8")
+					+ (truncated ? `\n\n[truncated — file is ${buf.byteLength} bytes; call artifact_read again with offset=${nextOffset} to continue]` : "");
 				const styleProfile = target.extension === ".html"
 					? buildHtmlStyleProfile(text, `${target.destination.name}/${target.relativePath.split(path.sep).join("/")}`)
 					: undefined;
@@ -5512,7 +5698,7 @@ export default function (pi: ExtensionAPI) {
 	pi.registerTool({
 		name: "artifact_deck_workbench_assist_context",
 		label: "Get transient deck workbench assist context",
-		description: "Return deterministic bounded selected-scope context for Content Producer targeted assist. No mutation, no writes, no approval, no model calls, no suggestions, no export.",
+		description: "Return deterministic bounded selected-scope context for targeted deck assist. No mutation, no writes, no approval, no model calls, no suggestions, no export.",
 		promptSnippet: "Use `artifact_deck_workbench_assist_context` to fetch bounded selected slide/field or repair-target context only. Apply changes later via update/repair + validate.",
 		parameters: Type.Object({
 			workbenchId: Type.String({ description: "Transient workbench id from artifact_deck_workbench_create." }),
@@ -5877,10 +6063,12 @@ export default function (pi: ExtensionAPI) {
 				}
 				const filenameWarnings = evaluateDeckFilenameWarnings(target.relativePath);
 				const warnings = [...preValidation.warnings, ...postValidation.warnings, ...filenameWarnings];
+				const grant = preApprovedWriteDecision(target, Buffer.byteLength(body.trimEnd() + "\n", "utf-8"), options.preApprovedWriteScope);
+				if (grant.rejected) throw new Error(grant.rejected);
 
 				const exists = fs.existsSync(target.fullPath);
 				const warningSummary = formatDeckWarningSummary(warnings);
-				const ok = await approve(
+				const ok = grant.granted ? true : await approve(
 					ctx,
 					exists ? "Replace local HTML deck?" : "Create local HTML deck?",
 					[
@@ -5920,17 +6108,17 @@ export default function (pi: ExtensionAPI) {
 		name: "artifact_write",
 		label: "Write artifact",
 		description: [
-			"Create or replace a local Markdown or HTML artifact after user approval.",
+			"Create or replace a local Markdown, HTML, or SVG artifact after user approval.",
 			"Writes are restricted to the default artifact folder or an explicitly connected artifact destination.",
 			"Pass raw final content; this tool does not auto-open, export, convert, or template artifacts.",
 		].join(" "),
 		promptSnippet:
-			"Use `artifact_write` when the user explicitly asks to save a non-deck local Markdown/HTML artifact, explicitly asks for a Markdown deck/outline, or provides an accessible HTML reference deck/template and asks to match its format closely. For generic saved slide decks prefer `artifact_write_html_deck`, but use raw `.html` here when preserving reference CSS/layout is materially required. It requires approval and can write only .md/.html under the default or an approved artifact destination.",
+			"Use `artifact_write` when the user explicitly asks to save a non-deck local Markdown/HTML artifact, explicitly asks for a Markdown deck/outline, or provides an accessible HTML reference deck/template and asks to match its format closely. For generic saved slide decks prefer `artifact_write_html_deck`, but use raw `.html` here when preserving reference CSS/layout is materially required. It requires approval and can write only .md/.html/.svg under the default or an approved artifact destination.",
 		parameters: Type.Object({
-			filename: Type.String({ description: "Relative artifact filename ending in .md or .html." }),
+			filename: Type.String({ description: "Relative artifact filename ending in .md, .html, or .svg." }),
 			destination: Type.Optional(Type.String({ description: "Approved destination name. Default: default (~/.exxperts/app/artifacts)." })),
 			folder: Type.Optional(Type.String({ description: "Optional relative folder inside the destination." })),
-			content: Type.String({ description: "Raw Markdown or HTML content to save." }),
+			content: Type.String({ description: "Raw Markdown, HTML, or SVG content to save." }),
 			reason: Type.Optional(Type.String({ description: "Why this artifact should be saved." })),
 		}),
 		async execute(_id, { filename, destination, folder, content, reason }, _signal, _onUpdate, ctx) {
@@ -5939,9 +6127,15 @@ export default function (pi: ExtensionAPI) {
 				const body = String(content ?? "");
 				if (!body.trim()) throw new Error("Artifact content is empty.");
 				if (target.extension === ".html") validateRawHtmlArtifactContent(body);
+				const contentBytes = Buffer.byteLength(body.trimEnd() + "\n", "utf-8");
+				if (target.extension === ".svg" && contentBytes > MAX_SVG_ARTIFACT_BYTES) {
+					throw new Error(`SVG artifacts are capped at ${MAX_SVG_ARTIFACT_BYTES} bytes (got ${contentBytes}).`);
+				}
+				const grant = preApprovedWriteDecision(target, contentBytes, options.preApprovedWriteScope);
+				if (grant.rejected) throw new Error(grant.rejected);
 
 				const exists = fs.existsSync(target.fullPath);
-				const ok = await approve(
+				const ok = grant.granted ? true : await approve(
 					ctx,
 					exists ? "Replace local artifact?" : "Create local artifact?",
 					[

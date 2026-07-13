@@ -1,10 +1,12 @@
 import { memo, useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import type { CSSProperties, KeyboardEvent, MutableRefObject, ReactNode, Ref } from "react";
 import { Approval } from "./Approval";
-import { Message } from "./Message";
+import { ConsultThreadItem, Message, TaskThreadItem } from "./Message";
+import { MentionConsultPopover, MentionConsultPopoverBusy, type MentionSupport } from "./mention-consult-popover";
 import { useEscapeKey } from "./use-escape-key";
 import type { ApprovalPreviewData } from "../approval-preview";
 import type { ChatItem, ContextHealthStatus } from "../types";
+import { completeMention, detectMentionQuery, filterMentionCandidates, resolveLeadingMention, type MentionCandidateRoom } from "../mention-popover";
 import { modelDisplayName } from "../model-names";
 
 export interface InRoomChatUsage {
@@ -42,6 +44,7 @@ export interface InRoomChatShellViewProps {
 	sendUnavailable?: boolean;
 	initialDraftValue?: string;
 	draftResetKey?: string | number;
+	mention?: MentionSupport;
 	onResolveApproval: (requestId: string, value: any, label: string) => void;
 	onApprovalPreview?: (preview: ApprovalPreviewData) => void;
 	previewSlot?: ReactNode;
@@ -55,6 +58,10 @@ export interface InRoomChatShellViewProps {
 	beforeMessagesSlot?: ReactNode;
 	emptySlot?: ReactNode;
 	renderItem?: (item: ChatItem, index: number, items: ChatItem[]) => ReactNode;
+	/** Consult MR-5: ids of transferred consult items still awaiting the next send. */
+	pendingConsultIds?: ReadonlySet<string>;
+	/** Visuals V6: opens a transferred task item's artifact in the right-pane viewer. */
+	onOpenTaskArtifact?: (taskId: string, relativePath: string) => void;
 	aboveComposerSlot?: ReactNode;
 }
 
@@ -240,6 +247,10 @@ interface TranscriptItemsProps {
 	renderItem?: (item: ChatItem, index: number, items: ChatItem[]) => ReactNode;
 	onResolveApproval: (requestId: string, value: any, label: string) => void;
 	onApprovalPreview?: (preview: ApprovalPreviewData) => void;
+	/** Consult MR-5: ids of transferred consult items still awaiting the next send. */
+	pendingConsultIds?: ReadonlySet<string>;
+	/** Visuals V6: opens a transferred task item's artifact in the right-pane viewer. */
+	onOpenTaskArtifact?: (taskId: string, relativePath: string) => void;
 	showThinkingIndicator: boolean;
 }
 
@@ -250,6 +261,8 @@ const TranscriptItems = memo(function TranscriptItems({
 	renderItem,
 	onResolveApproval,
 	onApprovalPreview,
+	pendingConsultIds,
+	onOpenTaskArtifact,
 	showThinkingIndicator,
 }: TranscriptItemsProps) {
 	return (
@@ -262,6 +275,10 @@ const TranscriptItems = memo(function TranscriptItems({
 				items.map((it) =>
 					it.kind === "approval" ? (
 						<Approval key={it.id} item={it} onResolve={onResolveApproval} onPreview={onApprovalPreview} />
+					) : it.kind === "consult" ? (
+						<ConsultThreadItem key={it.id} item={it} pending={pendingConsultIds?.has(it.id) ?? false} />
+					) : it.kind === "task" ? (
+						<TaskThreadItem key={it.id} item={it} onOpenTaskArtifact={onOpenTaskArtifact} />
 					) : (
 						<Message key={it.id} item={it} />
 					),
@@ -287,6 +304,7 @@ interface ComposerInputProps {
 	sendUnavailable?: boolean;
 	initialDraftValue?: string;
 	draftResetKey?: string | number;
+	mention?: MentionSupport;
 	statusSlot?: ReactNode;
 	rightActions?: ReactNode;
 }
@@ -302,12 +320,37 @@ function ComposerInput({
 	sendUnavailable = false,
 	initialDraftValue,
 	draftResetKey,
+	mention,
 	statusSlot,
 	rightActions,
 }: ComposerInputProps) {
 	const [draft, setDraft] = useState(() => initialDraftValue ?? "");
+	const [caret, setCaret] = useState(0);
+	const [mentionIndex, setMentionIndex] = useState(0);
+	// §8.3: the visible rejection when a composer @-mention is attempted while a
+	// consult card is docked. Cleared on the next keystroke so it never lingers.
+	const [consultGateNotice, setConsultGateNotice] = useState<string | null>(null);
+	// Esc dismisses the popover for the current trigger; any further typing
+	// (onChange) clears this so it reopens.
+	const [mentionDismissed, setMentionDismissed] = useState(false);
 	const textareaNodeRef = useRef<HTMLTextAreaElement | null>(null);
+	// Caret to restore after a programmatic draft edit (mention completion).
+	const pendingCaretRef = useRef<number | null>(null);
 	const sendDisabled = sendUnavailable || !draft.trim();
+
+	// Mention popover state. The interactive picker opens only when a trigger is
+	// active, the room is not busy, it has not been dismissed, and at least one
+	// room matches — so an unmatched '@' never traps Enter. While busy a trigger
+	// shows only the disabled affordance (with a title), and submit falls back to
+	// normal send.
+	const rawTrigger = mention ? detectMentionQuery(draft, caret) : null;
+	const mentionQuery = mention && !mention.busy && !mentionDismissed ? rawTrigger : null;
+	const mentionMatches: MentionCandidateRoom[] = mention && mentionQuery
+		? filterMentionCandidates(mention.candidates, mentionQuery.query, mention.currentRoomId)
+		: [];
+	const mentionOpen = Boolean(mentionQuery) && mentionMatches.length > 0;
+	const mentionBusyActive = Boolean(mention?.busy) && rawTrigger !== null;
+	const activeMentionIndex = mentionMatches.length > 0 ? Math.min(mentionIndex, mentionMatches.length - 1) : 0;
 
 	const setTextareaNode = useCallback((node: HTMLTextAreaElement | null) => {
 		textareaNodeRef.current = node;
@@ -316,7 +359,13 @@ function ComposerInput({
 
 	useEffect(() => {
 		setDraft(initialDraftValue ?? "");
+		setMentionDismissed(false);
 	}, [draftResetKey]);
+
+	// Reset the highlighted row whenever the query changes.
+	useEffect(() => {
+		setMentionIndex(0);
+	}, [mentionQuery?.query]);
 
 	useLayoutEffect(() => {
 		const el = textareaNodeRef.current;
@@ -325,15 +374,71 @@ function ComposerInput({
 		el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
 	}, [draft]);
 
+	// Restore the caret after a mention completion rewrote the draft.
+	useLayoutEffect(() => {
+		const el = textareaNodeRef.current;
+		if (!el || pendingCaretRef.current == null) return;
+		const pos = pendingCaretRef.current;
+		pendingCaretRef.current = null;
+		el.focus();
+		el.setSelectionRange(pos, pos);
+		setCaret(pos);
+	}, [draft]);
+
+	const syncCaret = useCallback((el: HTMLTextAreaElement) => {
+		setCaret(el.selectionStart ?? el.value.length);
+	}, []);
+
+	const selectMention = useCallback((room: MentionCandidateRoom) => {
+		const trigger = detectMentionQuery(draft, caret);
+		if (!trigger) return;
+		const { text, caret: nextCaret } = completeMention(draft, trigger, room);
+		pendingCaretRef.current = nextCaret;
+		setMentionDismissed(false);
+		setDraft(text);
+	}, [draft, caret]);
+
 	const submitDraft = useCallback(() => {
 		if (sendDisabled) return;
+		// Submit routing: a leading mention of a known room consults it instead of
+		// sending normally. Skipped while busy (falls back to normal send).
+		if (mention && !mention.busy) {
+			const resolved = resolveLeadingMention(draft, mention.candidates, mention.currentRoomId);
+			if (resolved) {
+				// §8.3: a composer @-mention always means a FRESH consult, but while a
+				// card is docked that is rejected VISIBLY (the card is where you follow
+				// up) — no auto-dismiss (an affirmative keystroke must not drop an
+				// untransferred stack). The draft is kept so nothing is lost.
+				if (mention.activeConsultDisplayName) {
+					setConsultGateNotice(`a consult with @${mention.activeConsultDisplayName} is open. Follow up in the card, or dismiss it first.`);
+					return;
+				}
+				// Only clear the composer if the consult was actually accepted — if
+				// one is already active (or the socket is down) the request is
+				// rejected, and silently wiping the user's typed question would lose
+				// it with no feedback. Keep the draft so they can retry.
+				const accepted = mention.onConsultRequest(resolved.room.id, resolved.question);
+				if (accepted) {
+					setDraft("");
+					setMentionDismissed(false);
+				}
+				return;
+			}
+		}
 		const accepted = onSend(draft);
 		if (accepted) {
 			setDraft("");
 		}
-	}, [draft, onSend, sendDisabled]);
+	}, [draft, onSend, sendDisabled, mention]);
 
 	function handleComposerKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
+		if (mentionOpen) {
+			// Navigation and selection never submit the message (spec invariant).
+			if (e.key === "ArrowDown") { e.preventDefault(); setMentionIndex((i) => (Math.min(i, mentionMatches.length - 1) + 1) % mentionMatches.length); return; }
+			if (e.key === "ArrowUp") { e.preventDefault(); setMentionIndex((i) => (Math.min(i, mentionMatches.length - 1) - 1 + mentionMatches.length) % mentionMatches.length); return; }
+			if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); selectMention(mentionMatches[activeMentionIndex]); return; }
+			if (e.key === "Escape") { e.preventDefault(); setMentionDismissed(true); return; }
+		}
 		if (e.key === "Enter" && !e.shiftKey) {
 			e.preventDefault();
 			submitDraft();
@@ -342,10 +447,24 @@ function ComposerInput({
 
 	return (
 		<div className="composer-box">
+			{mentionOpen && mentionQuery && (
+				<MentionConsultPopover
+					matches={mentionMatches}
+					query={mentionQuery.query}
+					activeIndex={activeMentionIndex}
+					onHover={setMentionIndex}
+					onSelect={selectMention}
+				/>
+			)}
+			{mentionBusyActive && mention && <MentionConsultPopoverBusy title={mention.busyTitle} />}
+			{consultGateNotice && <div className="composer-consult-gate" role="status">{consultGateNotice}</div>}
 			<textarea
 				ref={setTextareaNode}
 				value={draft}
-				onChange={(e) => setDraft(e.target.value)}
+				onChange={(e) => { setMentionDismissed(false); setConsultGateNotice(null); setDraft(e.target.value); setCaret(e.target.selectionStart ?? e.target.value.length); }}
+				onKeyUp={(e) => syncCaret(e.currentTarget)}
+				onClick={(e) => syncCaret(e.currentTarget)}
+				onSelect={(e) => syncCaret(e.currentTarget)}
 				onKeyDown={handleComposerKeyDown}
 				placeholder={placeholder}
 				rows={2}
@@ -391,6 +510,7 @@ export function InRoomChatShellView({
 	sendUnavailable,
 	initialDraftValue,
 	draftResetKey,
+	mention,
 	onResolveApproval,
 	onApprovalPreview,
 	previewSlot,
@@ -402,6 +522,8 @@ export function InRoomChatShellView({
 	beforeMessagesSlot,
 	emptySlot,
 	renderItem,
+	pendingConsultIds,
+	onOpenTaskArtifact,
 	aboveComposerSlot,
 }: InRoomChatShellViewProps) {
 	const messagesElRef = useRef<HTMLDivElement | null>(null);
@@ -509,6 +631,8 @@ export function InRoomChatShellView({
 								renderItem={renderItem}
 								onResolveApproval={onResolveApproval}
 								onApprovalPreview={onApprovalPreview}
+								pendingConsultIds={pendingConsultIds}
+								onOpenTaskArtifact={onOpenTaskArtifact}
 								showThinkingIndicator={showThinkingIndicator}
 							/>
 						</div>
@@ -533,6 +657,7 @@ export function InRoomChatShellView({
 								sendUnavailable={sendUnavailable}
 								initialDraftValue={initialDraftValue}
 								draftResetKey={draftResetKey}
+								mention={mention}
 								statusSlot={contextHealth ? (
 									<ContextPill
 										status={contextHealth}

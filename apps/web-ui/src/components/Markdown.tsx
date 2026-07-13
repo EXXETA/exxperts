@@ -38,12 +38,38 @@ function isMermaidElement(children: unknown): boolean {
 	return false;
 }
 
+// An image is rendered only when fetching it cannot reach the network:
+// data: URIs and same-origin/relative paths. Anything with a scheme or a
+// protocol-relative host is a remote fetch the model can use as a read
+// beacon, so it must stay a click away.
+function isSafeImageSrc(src: string): boolean {
+	if (/^data:image\//i.test(src)) return true;
+	return !/^[a-z][a-z0-9+.-]*:|^\/\//i.test(src);
+}
+
 // Intercept ```mermaid / ```mmd fences. A diagram renders only when
 // renderMermaid is true — the caller passes false while the message streams,
 // so expensive rendering never runs on incomplete content; the fence shows as
 // a normal code block until the message is complete.
 function markdownComponents(renderMermaid: boolean): Components {
 	return {
+		a({ href, children, ...props }) {
+			return (
+				<a href={href} target="_blank" rel="noopener noreferrer" {...props}>
+					{children}
+				</a>
+			);
+		},
+		img({ src, alt }) {
+			const url = typeof src === "string" ? src : "";
+			if (url && isSafeImageSrc(url)) return <img src={url} alt={alt ?? ""} loading="lazy" />;
+			if (!url) return <span>{alt ?? ""}</span>;
+			return (
+				<a href={url} target="_blank" rel="noopener noreferrer">
+					{alt ? `${alt} (image: ${url})` : `image: ${url}`}
+				</a>
+			);
+		},
 		code({ className, children, ...props }) {
 			const language = /(?:^|\s)language-([^\s]+)/.exec(className ?? "")?.[1]?.toLowerCase();
 			if (language === "mermaid" || language === "mmd") {

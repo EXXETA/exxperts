@@ -58,6 +58,13 @@
     "smoke:structural-review": "tsx scripts/structural-review-smoke.ts",
     "smoke:structural-review-write": "tsx scripts/structural-review-write-smoke.ts",
     "smoke:structural-review-discussion": "tsx scripts/structural-review-discussion-smoke.ts",
+    "smoke:artifact-export": "tsx scripts/artifact-export-smoke.ts",
+    "smoke:artifact-route": "tsx scripts/artifact-route-smoke.ts",
+    "smoke:delegate-task": "tsx scripts/delegate-task-smoke.ts",
+    "smoke:specialist-handoff": "tsx scripts/specialist-handoff-smoke.ts",
+    "smoke:specialist-runtime": "tsx scripts/specialist-runtime-smoke.ts",
+    "smoke:static-security-headers": "tsx scripts/static-security-headers-smoke.ts",
+    "smoke:task-card": "tsx scripts/task-card-smoke.ts",
     "smoke:usage-ledger": "tsx scripts/usage-ledger-smoke.ts"
   },
   "dependencies": {
@@ -65,6 +72,7 @@
     "@exxeta/exxperts-runtime": "*",
     "dotenv": "^16.4.5",
     "fastify": "^5.8.5",
+    "jszip": "^3.10.1",
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
   },
   "devDependencies": {

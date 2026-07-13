@@ -1,6 +1,6 @@
 {
   "name": "@exxeta/exxperts-app",
-  "version": "0.6.6",
+  "version": "0.6.7",
   "license": "SEE LICENSE IN LICENSE",
   "private": true,
   "type": "module",
@@ -119,6 +119,15 @@
   },
   "engines": {
     "node": ">=20.6.0"
+  },
+  "allowScripts": {
+    "@google/genai": true,
+    "@parcel/watcher": true,
+    "canvas": true,
+    "esbuild": true,
+    "fsevents": true,
+    "koffi": true,
+    "protobufjs": true
   },
   "optionalDependencies": {
     "@mariozechner/clipboard": "^0.3.5",

@@ -168,9 +168,9 @@ function usageFromMessageUsage(usage: any): PersistentRoomBackgroundExecutionRes
 	};
 }
 
-function createHeadlessUiContext(): ExtensionUIContext {
+export function createHeadlessUiContext(rejectMessage = "scheduled background room work cannot answer interactive UI requests"): ExtensionUIContext {
 	const rejectInteractive = async () => {
-		throw new Error("scheduled background room work cannot answer interactive UI requests");
+		throw new Error(rejectMessage);
 	};
 	return {
 		select: rejectInteractive,

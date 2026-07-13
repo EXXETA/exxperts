@@ -18,9 +18,6 @@
       "./extensions/web-search",
       "./extensions/cli-rooms"
     ],
-    "skills": [
-      "./skills"
-    ],
     "themes": [
       "./themes"
     ]

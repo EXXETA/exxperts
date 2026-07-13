@@ -50,7 +50,9 @@ The web app is the full product: AI setup, memory review and approvals, the wall
 
 - Local web workspace with landing page, persistent rooms, approvals, and wallet.
 - Rooms-only CLI/TUI sharing the same room runtime and governance.
-- User-created skills from the web UI.
+- Skills page in the web app: write a skill, upload .md/.zip/.skill files, or import from a repo, review before accepting, then enable per room.
+- Room-to-room consult: @-mention another room in chat to ask it a question; it answers read-only from its own memory and context.
+- Delegated tasks shown as task cards in chat, with artifacts viewable in a sandboxed artifacts viewer.
 - Approval-gated memory, KB writes, and Markdown/HTML artifacts.
 - Markdown/Obsidian KB tools and local web search.
 - MCP connectors on web and CLI through a single proxy tool. Bring your own servers; see [`docs/mcp.md`](docs/mcp.md).
@@ -60,7 +62,23 @@ The web app is the full product: AI setup, memory review and approvals, the wall
 
 ## Quick start
 
-Prerequisites: [Node.js](https://nodejs.org) 20.6+ and npm. **On Windows, apply the two Git settings from the [Windows quickstart](#windows-quickstart) before cloning.**
+Prerequisites: [git](https://git-scm.com) and [Node.js](https://nodejs.org) 20.6+ with npm (on Windows, [Git for Windows](https://gitforwindows.org) 2.40+). One command installs everything:
+
+macOS / Linux:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/EXXETA/exxperts/main/install.sh | bash
+```
+
+Windows (PowerShell):
+
+```powershell
+irm https://raw.githubusercontent.com/EXXETA/exxperts/main/install.ps1 | iex
+```
+
+The installer checks prerequisites, clones the repo into `~/exxperts` (pick another spot with the `EXXPERTS_DIR` environment variable), and builds and installs the `exxperts` command. Re-run the same command anytime to update.
+
+Prefer to do it by hand? It is three commands. **On Windows, apply the two Git settings from the [Windows quickstart](#windows-quickstart) before cloning** (the one-line installer applies them to its clone for you):
 
 ```bash
 git clone https://github.com/EXXETA/exxperts.git
@@ -86,7 +104,7 @@ New here? [`docs/quickstart.md`](docs/quickstart.md) walks the whole path in abo
 
 ### Updating
 
-Same on every platform, from the repo folder:
+Re-run the one-line install command from the quick start; it pulls the latest version and reinstalls. Or manually, same on every platform, from the repo folder:
 
 ```bash
 git pull
@@ -111,9 +129,10 @@ git config --global core.longpaths true
 git config --global core.autocrlf false   # the repo's .gitattributes manages line endings
 ```
 
-Then install from PowerShell or Git Bash, with the same commands as everywhere else:
+Then install from PowerShell or Git Bash, with the same commands as everywhere else. Clone into a folder your user owns (for example under `%USERPROFILE%`, like `C:\Users\you\exxperts`) — cloning into `C:\` or `C:\Program Files` leads to permission errors:
 
 ```powershell
+cd $env:USERPROFILE
 git clone https://github.com/EXXETA/exxperts.git
 cd exxperts
 npm install
@@ -142,7 +161,7 @@ Everything runs locally. Full functionality is four layers; only the first is re
 
 **Verify any setup with `npm run doctor`** from the repo root: it checks all of the above, plus MCP config and that outbound web fetches decode cleanly (corporate TLS-inspection proxies can corrupt responses), and prints the fix for anything missing.
 
-`install:global` wraps `npm run build && npm pack && npm install -g <tarball>`; the manual steps and one-off runs via `npm exec` (no global install) are documented in [`docs/packaging-local.md`](docs/packaging-local.md). If macOS returns `EACCES`, use a user-level npm prefix instead of `sudo`; that is also covered there. If a newer npm warns that install scripts were blocked (`allow-scripts`), the app still works. The blocked steps are the Chromium download (recoverable anytime with `npx playwright install chromium`) and cosmetic MCP page branding.
+`install:global` wraps `npm run build && npm pack && npm install -g <tarball>`; the manual steps and one-off runs via `npm exec` (no global install) are documented in [`docs/packaging-local.md`](docs/packaging-local.md). If macOS returns `EACCES`, use a user-level npm prefix instead of `sudo`; that is also covered there. npm 12 is supported out of the box: `package.json` carries the `allowScripts` approvals and a committed `.npmrc` allows the SheetJS CDN tarball dependency, so installs need no extra flags. On npm 11.11+ a harmless `Unknown project config` line may print during install. If the Chromium download was ever skipped, recover it anytime with `npx playwright install chromium`.
 
 ## Web search (optional)
 
@@ -226,7 +245,7 @@ Contact: borja.odriozola.schick@exxeta.ch · fernando.pastor@exxeta.ch
 
 ## Contributing
 
-Issues and pull requests are welcome. Before reporting a problem, run `npm run doctor` from the repo root and include its output; it often names the fix. For an orientation to the codebase, start with [`docs/developer.md`](docs/developer.md).
+Issues and pull requests are welcome; [`CONTRIBUTING.md`](CONTRIBUTING.md) has the full guide (setup, smoke suite, and how PRs get merged). Before reporting a problem, run `npm run doctor` from the repo root and include its output; it often names the fix. For an orientation to the codebase, start with [`docs/developer.md`](docs/developer.md).
 
 ## License
 

@@ -76,7 +76,14 @@ function allowTool(t: string): boolean {
 		t.startsWith("mcp_") ||
 		t === "mcp" ||
 		t === "web_search" ||
-		t === "fetch_url"
+		t === "fetch_url" ||
+		// read_skill is registered only for rooms with enabled skills, is read-only,
+		// and verifies the user-reviewed hash pin itself — safe at the policy baseline.
+		t === "read_skill" ||
+		// delegate_task never acts by itself: it validates against the static
+		// template registry and requires per-delegation interactive user approval,
+		// which doubles as the specialist's only write grant.
+		t === "delegate_task"
 	);
 }
 

@@ -35,3 +35,99 @@ jobs:
 
       - name: Smoke suite
         run: npm run smokes
+
+  # npm 12 gates dependency install scripts (allowScripts) and URL-tarball
+  # dependencies (allow-remote). Node 20's npm 10 never exercises those gates,
+  # so this job installs the way a new user on current Node does. Deliberately
+  # `npm install`, not `npm ci`: it is the command the README tells people to run.
+  npm12-install:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    env:
+      EXXETA_SKIP_BROWSER_INSTALL: "1"
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: latest
+
+      - name: Use npm 12
+        run: npm install -g npm@12
+
+      - name: Fresh install with npm 12 defaults
+        run: |
+          npm install 2>&1 | tee install.log
+          if grep -q "not yet covered by allowScripts" install.log; then
+            echo "A dependency runs install scripts that are not approved in package.json allowScripts." >&2
+            exit 1
+          fi
+
+      # npm 12 changed `npm pack --json` from an array to an object keyed by
+      # package name; install:global parses that output to find the tarball.
+      # Keep the parse below in sync with scripts/install-global.mjs.
+      - name: npm pack reports a tarball filename under npm 12
+        run: |
+          npm pack --json --dry-run --ignore-scripts > pack.json
+          node -e "const r=JSON.parse(require('fs').readFileSync('pack.json','utf8'));const e=Array.isArray(r)?r[0]:Object.values(r??{})[0];if(!e||!e.filename)throw new Error('npm pack --json did not report a tarball filename');console.log('pack reports', e.filename)"
+
+      # The full README path. npm 12 applies neither the project .npmrc nor
+      # allowScripts to the final `npm install -g <tarball>` step, so this
+      # catches global-mode gate regressions the in-repo install above cannot.
+      - name: Packaged install end to end (install:global)
+        run: npm run install:global
+
+      - name: Global exxperts command launches
+        run: exxperts --help
+
+  # The one-line installers (install.sh / install.ps1), run against the local
+  # checkout (EXXPERTS_DIR points at it, so the GitHub clone step is skipped;
+  # main on GitHub may be older than this commit).
+  install-script-linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      EXXETA_SKIP_BROWSER_INSTALL: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Run install.sh against the local checkout
+        run: EXXPERTS_DIR="$GITHUB_WORKSPACE" bash install.sh
+
+      - name: Verify the installed command
+        run: exxperts --help
+
+  install-script-windows:
+    runs-on: windows-latest
+    timeout-minutes: 35
+    env:
+      EXXETA_SKIP_BROWSER_INSTALL: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Run install.ps1 against the local checkout
+        shell: pwsh
+        run: |
+          $env:EXXPERTS_DIR = $env:GITHUB_WORKSPACE
+          ./install.ps1
+
+      - name: Verify the installed command
+        shell: pwsh
+        run: exxperts --help

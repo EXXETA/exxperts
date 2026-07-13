@@ -344,7 +344,14 @@ export interface InRoomChatFixtureState {
 	composerRightActions?: InRoomChatActionItem[];
 }
 
-export type FixtureState = HomeFixtureState | SidebarFixtureState | CreateRoomFixtureState | InRoomChatFixtureState;
+export interface TaskCardsFixtureState {
+	kind: "task-cards";
+	id: string;
+	label: string;
+	description: string;
+}
+
+export type FixtureState = HomeFixtureState | SidebarFixtureState | CreateRoomFixtureState | InRoomChatFixtureState | TaskCardsFixtureState;
 
 export const sidebarFixtureStates: SidebarFixtureState[] = [
 	{ kind: "sidebar", id: "sidebar-home", label: "ProductSidebar / Home active", description: "Product navigation with Home selected.", active: "home", connected: true },
@@ -581,7 +588,7 @@ const activeConversationItems: ChatItem[] = [
 	{
 		kind: "assistant",
 		id: "fixture-assistant-brief",
-		text: "Yes. I would structure it as:\n\n1. **Decision** — what was agreed.\n2. **Rationale** — why this direction is preferable.\n3. **Open questions** — what still needs evidence.\n4. **Next actions** — owners and timing.\n\nThe main gap is the evidence behind the customer segment priority, so I would ask Researcher to validate that before the final version.",
+		text: "Yes. I would structure it as:\n\n1. **Decision** — what was agreed.\n2. **Rationale** — why this direction is preferable.\n3. **Open questions** — what still needs evidence.\n4. **Next actions** — owners and timing.\n\nThe main gap is the evidence behind the customer segment priority, so I would ask the research room to validate that before the final version.",
 	},
 ];
 
@@ -594,16 +601,16 @@ const markdownStressItems: ChatItem[] = [
 	{
 		kind: "assistant",
 		id: "fixture-assistant-markdown",
-		text: "## Recommended framing\n\nUse a short decision-led opening, then separate confirmed facts from working assumptions. The safest phrasing is to say the team has **prioritized** a segment, not that the segment has been proven. This keeps leadership oriented without hiding uncertainty from the delivery team.\n\n### Draft structure\n\n- Lead with the practical decision.\n- Keep evidence qualifiers visible.\n- Convert risks into owner-based next steps.\n  - Name the owner when the follow-up is known.\n  - Mark the item as an assumption when evidence is still directional.\n\n1. State the decision in one calm sentence.\n2. Add the rationale and confidence level.\n3. Close with the next action and review point.\n\n> Working assumption: the segment priority is directionally supported, but the pricing evidence should not be presented as final.\n\nInline code such as `priority_segment_confidence` should remain readable without breaking the column, and longer links or identifiers should wrap safely.\n\n```ts\ntype DecisionRecord = {\n  decision: string;\n  rationale: string[];\n  openQuestions: string[];\n  confidence: \"confirmed\" | \"directional\" | \"unknown\";\n};\n\nconst synthesizedReviewLine = \"Segment priority is directionally supported by fixture notes, but pricing confidence remains intentionally provisional until a named owner validates the assumption in the next review cycle.\";\n```\n\n| Area | Status | Recommended wording | Owner note |\n| --- | --- | --- | --- |\n| Segment choice | Draft | Directionally supported by current notes; not yet proven as the only viable segment. | Ask Researcher to validate the confidence level. |\n| Offer narrative | Ready | Keep concise and decision-led so leadership can repeat it consistently. | Coordinator can include this in the decision record. |\n| Delivery plan | Pending | Convert each risk into a named follow-up action before presenting the plan. | Delivery lead should confirm sequencing. |\n\n---\n\nThe final answer should feel useful now while making the remaining uncertainty easy to spot.",
+		text: "## Recommended framing\n\nUse a short decision-led opening, then separate confirmed facts from working assumptions. The safest phrasing is to say the team has **prioritized** a segment, not that the segment has been proven. This keeps leadership oriented without hiding uncertainty from the delivery team.\n\n### Draft structure\n\n- Lead with the practical decision.\n- Keep evidence qualifiers visible.\n- Convert risks into owner-based next steps.\n  - Name the owner when the follow-up is known.\n  - Mark the item as an assumption when evidence is still directional.\n\n1. State the decision in one calm sentence.\n2. Add the rationale and confidence level.\n3. Close with the next action and review point.\n\n> Working assumption: the segment priority is directionally supported, but the pricing evidence should not be presented as final.\n\nInline code such as `priority_segment_confidence` should remain readable without breaking the column, and longer links or identifiers should wrap safely.\n\n```ts\ntype DecisionRecord = {\n  decision: string;\n  rationale: string[];\n  openQuestions: string[];\n  confidence: \"confirmed\" | \"directional\" | \"unknown\";\n};\n\nconst synthesizedReviewLine = \"Segment priority is directionally supported by fixture notes, but pricing confidence remains intentionally provisional until a named owner validates the assumption in the next review cycle.\";\n```\n\n| Area | Status | Recommended wording | Owner note |\n| --- | --- | --- | --- |\n| Segment choice | Draft | Directionally supported by current notes; not yet proven as the only viable segment. | Ask the research room to validate the confidence level. |\n| Offer narrative | Ready | Keep concise and decision-led so leadership can repeat it consistently. | This room can include it in the decision record. |\n| Delivery plan | Pending | Convert each risk into a named follow-up action before presenting the plan. | Delivery lead should confirm sequencing. |\n\n---\n\nThe final answer should feel useful now while making the remaining uncertainty easy to spot.",
 	},
 ];
 
 const mermaidDiagramItems: ChatItem[] = [
-	{ kind: "user", id: "fixture-user-mermaid-diagram", text: "Can you show me the Coordinator routing as a diagram?" },
+	{ kind: "user", id: "fixture-user-mermaid-diagram", text: "Can you show me the decision-record review flow as a diagram?" },
 	{
 		kind: "assistant",
 		id: "fixture-assistant-mermaid-diagram",
-		text: "Here is the simplest version:\n\n```mermaid\nflowchart LR\n    User[User] --> Coordinator[Coordinator]\n    Coordinator --> Direct[Answer directly]\n    Coordinator --> Researcher[Researcher]\n    Coordinator --> KnowledgeWeaver[Knowledge Weaver]\n    Coordinator --> ContentProducer[Content Producer]\n    Researcher --> Coordinator\n    KnowledgeWeaver --> Coordinator\n    ContentProducer --> Coordinator\n```\n\nFor a saved or polished artifact, I would route the work to Content Producer.",
+		text: "Here is the simplest version:\n\n```mermaid\nflowchart LR\n    Notes[Meeting notes] --> Draft[Draft record]\n    Draft --> Review[Team review]\n    Review --> Approved[Approved record]\n    Review --> Revise[Revise draft]\n    Revise --> Draft\n    Approved --> Share[Share with leadership]\n```\n\nOnce approved, the record can be saved as an artifact and shared.",
 	},
 ];
 
@@ -676,6 +683,10 @@ const toolActivityItems: ChatItem[] = [
 	{ kind: "user", id: "fixture-user-tools", text: "Check the knowledge base and show me what tool activity looks like." },
 	{ kind: "tool", id: "fixture-tool-running", name: "kb_search", args: { vault: "Strategy notes", query: "segment priority evidence" }, status: "running" },
 	{ kind: "tool", id: "fixture-tool-done", name: "read", args: { path: "fixture-notes/market-summary.md" }, status: "done", result: "Found three notes that support the segment priority, but two are directional rather than conclusive." },
+	{ kind: "tool", id: "fixture-tool-bash", name: "bash", args: { command: "wc -l workspace/notes/*.md" }, status: "done", result: "  42 workspace/notes/segment-priority.md\n  38 workspace/notes/pricing-confidence.md\n  51 workspace/notes/delivery-risks.md\n 131 total" },
+	{ kind: "tool", id: "fixture-tool-grep", name: "grep", args: { path: "workspace/notes", pattern: "pricing" }, status: "done", result: Array.from({ length: 40 }, (_, i) => `workspace/notes/pricing-confidence.md:${i + 1}: pricing evidence line ${i + 1} for the long scrollable output state`).join("\n") },
+	{ kind: "tool", id: "fixture-tool-write-doc", name: "write_markdown_file", args: { path: "workspace/planning/decision-memo.md", content: "# Decision memo\n\nDraft body…", overwrite: false }, status: "done", result: "Wrote workspace/planning/decision-memo.md (2 sections)." },
+	{ kind: "tool", id: "fixture-tool-unknown", name: "summarize_meeting", args: { title: "Steering sync" }, status: "done", result: "Summary stored." },
 	{ kind: "tool", id: "fixture-tool-error", name: "web_lookup", args: { query: "fixture market benchmark" }, status: "error", result: "Synthetic lookup unavailable in this fixture." },
 	{
 		kind: "assistant",
@@ -704,6 +715,24 @@ const approvalItems: ChatItem[] = [
 		message: "Resolved approval cards stay visible as part of the chat record.",
 		options: ["Continue", "Rest"],
 		done: "Continue",
+	},
+	{
+		kind: "approval",
+		id: "fixture-approval-delegate",
+		requestId: "fixture-approval-delegate-request",
+		uiKind: "confirm",
+		title: "Have a specialist create a slide deck?",
+		// Live delegate approvals arrive as `message` (ui.confirm's second arg).
+		message: [
+			"A separate specialist runs this task in isolation: no memory access, no web access, no shell.",
+			"",
+			"It can only write into one new folder made for this task: tasks/tsk-fixture01/ (at most 8 files). Approving starts it and grants that folder write access.",
+			"",
+			"The result lands on a task card. Keep it by adding it to the conversation or saving it to your workspace.",
+			"",
+			"─── Brief it will receive (written by the room's model; the app has not verified anything below this line) ───",
+			"Task brief: Turn the Q3 roadmap notes into a six-slide deck for the steering meeting. Lead with the two decisions we need, keep one message per slide.",
+		].join("\n"),
 	},
 ];
 
@@ -806,7 +835,7 @@ export const inRoomChatFixtureStates: InRoomChatFixtureState[] = [
 	chatFixture({
 		id: "in-room-mermaid-diagram",
 		label: "In-room / Mermaid diagram",
-		description: "Coordinator answer with an inline Mermaid code fence rendered as an in-chat diagram.",
+		description: "Room answer with an inline Mermaid code fence rendered as an in-chat diagram.",
 		activeDisplay: "Strategy Room",
 		ownerSecondary: "Persistent room · diagram rendering",
 		busy: false,
@@ -891,7 +920,7 @@ export const inRoomChatFixtureStates: InRoomChatFixtureState[] = [
 	chatFixture({
 		id: "in-room-tool-activity",
 		label: "In-room / tool activity",
-		description: "Running, done, and error tool chips inside a persistent room.",
+		description: "Running, done, and error tool chips inside a persistent room, including human tool labels, an unknown-tool fallback, and a long scrollable output.",
 		activeDisplay: "Strategy Room",
 		ownerSecondary: "Persistent room · tool activity",
 		busy: false,
@@ -926,4 +955,13 @@ export const inRoomChatFixtureStates: InRoomChatFixtureState[] = [
 	}),
 ];
 
-export const fixtureStates: FixtureState[] = [...sidebarFixtureStates, ...homeFixtureStates, ...createRoomFixtureStates, ...inRoomChatFixtureStates];
+export const taskCardsFixtureStates: TaskCardsFixtureState[] = [
+	{
+		kind: "task-cards",
+		id: "task-cards",
+		label: "Specialist / task cards",
+		description: "The delegation family beside the chat: running, done, stopped, and the kept thread item.",
+	},
+];
+
+export const fixtureStates: FixtureState[] = [...sidebarFixtureStates, ...homeFixtureStates, ...createRoomFixtureStates, ...inRoomChatFixtureStates, ...taskCardsFixtureStates];

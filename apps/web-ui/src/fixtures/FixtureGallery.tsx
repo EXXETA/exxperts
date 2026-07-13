@@ -5,7 +5,10 @@ import { PersistentAgentCard } from "../components/launcher-room-card";
 import { ProductSidebar, type ProductSidebarActive, type ThemeMode } from "../components/product-shell";
 import { Sidebar } from "../components/Sidebar";
 import type { PersistentAgentAiProfileSelectionStatus, PersistentAgentStatus, WebChatModelOption, WebChatModelStatus } from "../types";
-import { FIXTURE_DEFAULT_AGENT_ID, fixtureStates, type CreateRoomFixtureState, type FixtureState, type HomeFixtureState, type InRoomChatActionItem, type InRoomChatFixtureState, type SidebarFixtureState } from "./fixture-data";
+import { FIXTURE_DEFAULT_AGENT_ID, fixtureStates, type CreateRoomFixtureState, type FixtureState, type HomeFixtureState, type InRoomChatActionItem, type InRoomChatFixtureState, type SidebarFixtureState, type TaskCardsFixtureState } from "./fixture-data";
+import { TaskDock } from "../components/delegation-card";
+import { TaskThreadItem } from "../components/Message";
+import type { TaskState } from "../task-stream";
 
 const noop = () => {};
 
@@ -204,6 +207,84 @@ function InRoomChatFixtureScreen({ fixture, theme }: { fixture: InRoomChatFixtur
 	);
 }
 
+const TASK_FIXTURE_BASE: TaskState = {
+	phase: "running",
+	taskId: "tsk-fixture01",
+	template: "deck",
+	templateVersion: 3,
+	templateLabel: "Slide deck",
+	title: "Turn the Q3 roadmap notes into a six-slide deck for the steering meeting",
+	model: null,
+	tail: "I'll open with the two decisions we need.\n[artifact_write_html_deck]\nwriting q3-roadmap-deck.html…",
+	summary: "",
+	artifacts: [],
+	thumbnails: [],
+	generatedAt: null,
+	usage: null,
+	minimized: false,
+	stopRequested: false,
+	errorMessage: null,
+};
+
+const TASK_FIXTURE_DONE: TaskState = {
+	...TASK_FIXTURE_BASE,
+	phase: "done",
+	summary: "Built a six-slide deck: two decision slides up front, then timeline, risks, owners, and a closing action slide. **File:** `tasks/tsk-fixture01/q3-roadmap-deck.html`",
+	artifacts: [{ relativePath: "tasks/tsk-fixture01/q3-roadmap-deck.html", bytes: 48_213, extension: ".html" }],
+	generatedAt: "2026-07-13T11:00:00.000Z",
+};
+
+const TASK_FIXTURE_STOPPED: TaskState = {
+	...TASK_FIXTURE_BASE,
+	phase: "error",
+	stopRequested: true,
+	errorMessage: null,
+};
+
+function TaskCardsFixtureScreen({ fixture }: { fixture: TaskCardsFixtureState }) {
+	void fixture;
+	const stack = [
+		{ key: "running", state: TASK_FIXTURE_BASE },
+		{ key: "done", state: TASK_FIXTURE_DONE },
+		{ key: "stopped", state: TASK_FIXTURE_STOPPED },
+	];
+	return (
+		<div className="fixture-frame" style={{ display: "flex", flexDirection: "column", gap: 18, padding: 24, maxWidth: 860 }}>
+			{stack.map(({ key, state }) => (
+				<TaskDock
+					key={key}
+					state={state}
+					onMinimize={noop}
+					onOpen={noop}
+					onStop={noop}
+					onDismiss={noop}
+					onTransfer={noop}
+					onIterateSubmit={() => true}
+					iteratePending={false}
+					iterateNotice={null}
+				/>
+			))}
+			<div className="messages" style={{ overflow: "visible" }}>
+				<TaskThreadItem
+					item={{
+						kind: "task",
+						id: "fixture-task-item",
+						taskId: "tsk-fixture01",
+						template: "deck",
+						templateVersion: 3,
+						templateLabel: "Slide deck",
+						title: "Turn the Q3 roadmap notes into a six-slide deck for the steering meeting",
+						summary: TASK_FIXTURE_DONE.summary,
+						artifacts: TASK_FIXTURE_DONE.artifacts,
+						generatedAt: "2026-07-13T11:00:00.000Z",
+						transferred: true,
+					}}
+				/>
+			</div>
+		</div>
+	);
+}
+
 function FixturePreview({ fixture, theme }: { fixture: FixtureState; theme: ThemeMode }) {
 	switch (fixture.kind) {
 		case "sidebar":
@@ -214,6 +295,8 @@ function FixturePreview({ fixture, theme }: { fixture: FixtureState; theme: Them
 			return <CreateRoomFixtureScreen fixture={fixture} theme={theme} />;
 		case "in-room-chat":
 			return <InRoomChatFixtureScreen fixture={fixture} theme={theme} />;
+		case "task-cards":
+			return <TaskCardsFixtureScreen fixture={fixture} />;
 	}
 }
 

@@ -312,9 +312,15 @@ export function RoomWorkspaceSection({ status, onDirtyChange }: { status: Persis
 									<svg className="workspace-folder-icon" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M1.5 2.5A1.5 1.5 0 0 1 3 1h3.2c.4 0 .78.16 1.06.44L8.6 2.78c.1.1.22.15.35.15H13a1.5 1.5 0 0 1 1.5 1.5v8.07A1.5 1.5 0 0 1 13 14H3a1.5 1.5 0 0 1-1.5-1.5v-10Z" /></svg>
 									{choosingFolder ? "Choosing…" : "Choose folder…"}
 								</button>
-								<span className={`workspace-folder-selection${trimmedDraftRoot ? " chosen" : ""}`}>
-									{trimmedDraftRoot ? trimmedDraftRoot : savedFolderLabel ? `Keeping the saved folder: ${savedFolderLabel}` : "No folder chosen yet."}
-								</span>
+								<input
+									className="launcher-path-input workspace-folder-path-input"
+									type="text"
+									value={draftRoot}
+									placeholder={savedFolderLabel ? `Keeping the saved folder: ${savedFolderLabel}` : "Type a folder path, or choose one"}
+									aria-label="Workspace folder path"
+									disabled={saving || choosingFolder}
+									onChange={(event) => { setDraftRoot(event.target.value); setError(null); setMessage(null); }}
+								/>
 								{trimmedDraftRoot.length > 0 && policy && (
 									<button className="inline-action" type="button" disabled={saving} onClick={() => { setDraftRoot(""); setError(null); setMessage(null); }}>Keep saved folder</button>
 								)}

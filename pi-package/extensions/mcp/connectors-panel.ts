@@ -170,7 +170,7 @@ class ConnectorsPanel {
 	private view: "list" | "add" = "list";
 	private addCursor = 0;
 	private confirmRemove: string | null = null;
-	private input: { label: string; value: string; mask: boolean; submit: (value: string) => void; cancel: () => void } | null = null;
+	private input: { label: string; value: string; mask: boolean; hint?: string; submit: (value: string) => void; cancel: () => void } | null = null;
 	private configDrift: boolean;
 	private visible: VisibleItem[] = [];
 	private closed = false;
@@ -293,7 +293,7 @@ class ConnectorsPanel {
 				if (this.cancelledLogin === row.name) return;
 				const message = (e as Error).message ?? String(e);
 				const friendly = /404|not found/i.test(message)
-					? "This connector doesn't offer a login — it likely works without one."
+					? "This connector doesn't offer a login. It likely works without one."
 					: message;
 				this.setNotice(friendly, "error");
 			}
@@ -363,7 +363,13 @@ class ConnectorsPanel {
 					// cache refresh is best-effort
 				}
 				this.busy = null;
-				this.setNotice(`${row.name}: connection OK — ${count} tool${count === 1 ? "" : "s"}.`, "ok");
+				const oauthConf = row.entry.oauth;
+				const explicitOAuth = row.entry.auth === "oauth" || (typeof oauthConf === "object" && oauthConf !== null && "clientId" in oauthConf);
+				if (explicitOAuth && !row.hasTokens) {
+					this.setNotice(`${row.name}: reachable, but not logged in yet. Press l to log in.`, "warn");
+				} else {
+					this.setNotice(`${row.name}: connection OK · ${count} tool${count === 1 ? "" : "s"} available.`, "ok");
+				}
 				await this.refresh();
 			} catch (e) {
 				const message = (e as Error).message ?? String(e);
@@ -371,7 +377,7 @@ class ConnectorsPanel {
 				if (needsAuth) await dropCacheEntry(row.name);
 				this.busy = null;
 				this.setNotice(
-					needsAuth ? `${row.name} needs a login — press l.` : `${row.name}: connection failed — ${message}`,
+					needsAuth ? `${row.name} needs a login. Press l.` : `${row.name}: connection failed · ${message}`,
 					"error",
 				);
 				await this.refresh();
@@ -402,7 +408,7 @@ class ConnectorsPanel {
 			const configMod = await import(ADAPTER_CONFIG);
 			configMod.writeSharedServerEntry(configMod.getPiGlobalConfigPath(), name, entry);
 			this.view = "list";
-			this.setNotice(`${name} added — press t to test it.`, "ok");
+			this.setNotice(`${name} added. Press t to test it.`, "ok");
 			await this.refresh();
 		} catch (e) {
 			this.setNotice((e as Error).message, "error");
@@ -414,16 +420,6 @@ class ConnectorsPanel {
 			this.setNotice(`${entry.name} is already configured.`, "warn");
 			return;
 		}
-		if (entry.kind === "guided") {
-			this.detail = {
-				title: entry.name,
-				subtitle: "needs setup",
-				body: `${entry.guideNote ?? ""}\n\nGuide: ${entry.docsUrl ?? ""}`.trim(),
-			};
-			this.detailScroll = 0;
-			this.tui.requestRender();
-			return;
-		}
 		if (entry.kind === "token") {
 			this.input = {
 				label: `${entry.tokenHint ?? "API token"} for ${entry.name}`,
@@ -432,7 +428,7 @@ class ConnectorsPanel {
 				submit: (value) => {
 					this.input = null;
 					if (!value.trim()) {
-						this.setNotice("Cancelled — no token entered.", "warn");
+						this.setNotice("Cancelled. No token entered.", "warn");
 						return;
 					}
 					void this.writeServer(entry.id, { url: entry.url, auth: "bearer", bearerToken: value.trim() });
@@ -445,19 +441,123 @@ class ConnectorsPanel {
 			this.tui.requestRender();
 			return;
 		}
-		void this.writeServer(entry.id, { url: entry.url });
+		if (entry.kind === "oauth-client" && entry.url) {
+			// Needs a pre-registered OAuth app (no dynamic client registration).
+			const url = entry.url;
+			const hint = [entry.guideNote, entry.docsUrl ? `Guide: ${entry.docsUrl}` : "", "The app's redirect URL must be http://localhost:19876/callback."]
+				.filter(Boolean)
+				.join("\n");
+			this.input = {
+				label: `OAuth client ID for ${entry.name}`,
+				value: "",
+				mask: false,
+				hint,
+				submit: (value) => {
+					this.input = null;
+					const clientId = value.trim();
+					if (!clientId) {
+						this.setNotice("Cancelled. No client ID entered.", "warn");
+						return;
+					}
+					this.askOAuthClientDetails(entry.id, url, clientId);
+				},
+				cancel: () => {
+					this.input = null;
+					this.tui.requestRender();
+				},
+			};
+			this.tui.requestRender();
+			return;
+		}
+		if (entry.kind === "open" || entry.kind === "oauth") {
+			void this.writeServer(entry.id, { url: entry.url });
+			return;
+		}
+		// "guided" and any kind this build doesn't know: show the setup notes
+		// instead of silently writing a bare URL entry.
+		this.detail = {
+			title: entry.name,
+			subtitle: "needs setup",
+			body: `${entry.guideNote ?? ""}\n\nGuide: ${entry.docsUrl ?? ""}`.trim(),
+		};
+		this.detailScroll = 0;
+		this.tui.requestRender();
+	}
+
+	/** Client secret + scopes prompts, then write the explicit OAuth client
+	 * entry — the same shape the web server writes for providers without
+	 * dynamic client registration ({ url, auth: "oauth", oauth: {…} }). */
+	private askOAuthClientDetails(name: string, url: string, clientId: string): void {
+		const cancel = () => {
+			this.input = null;
+			this.tui.requestRender();
+		};
+		const askScope = (clientSecret: string) => {
+			this.input = {
+				label: "Scopes (optional, enter to skip)",
+				value: "",
+				mask: false,
+				submit: (value) => {
+					this.input = null;
+					const scope = value.trim();
+					void this.writeServer(name, {
+						url,
+						auth: "oauth",
+						oauth: { clientId, ...(clientSecret ? { clientSecret } : {}), ...(scope ? { scope } : {}) },
+					});
+				},
+				cancel,
+			};
+			this.tui.requestRender();
+		};
+		this.input = {
+			label: "Client secret (optional, enter to skip)",
+			value: "",
+			mask: true,
+			submit: (value) => {
+				this.input = null;
+				askScope(value.trim());
+			},
+			cancel,
+		};
+		this.tui.requestRender();
 	}
 
 	private startCustomAdd(): void {
+		const askOAuthClientId = (name: string, url: string) => {
+			this.input = {
+				label: "OAuth client ID (optional, for providers without automatic registration)",
+				value: "",
+				mask: false,
+				hint: "The app's redirect URL must be http://localhost:19876/callback.",
+				submit: (value) => {
+					this.input = null;
+					const clientId = value.trim();
+					if (!clientId) {
+						void this.writeServer(name, { url });
+						return;
+					}
+					this.askOAuthClientDetails(name, url, clientId);
+				},
+				cancel: () => {
+					this.input = null;
+					this.tui.requestRender();
+				},
+			};
+			this.tui.requestRender();
+		};
 		const askToken = (name: string, url: string) => {
 			this.input = {
-				label: "API token (optional — enter to skip)",
+				label: "API token (optional, enter to skip)",
 				value: "",
 				mask: true,
 				submit: (token) => {
 					this.input = null;
-					const entry: Record<string, unknown> = token.trim() ? { url, auth: "bearer", bearerToken: token.trim() } : { url };
-					void this.writeServer(name, entry);
+					if (token.trim()) {
+						void this.writeServer(name, { url, auth: "bearer", bearerToken: token.trim() });
+						return;
+					}
+					askOAuthClientId(name, url);
 				},
 				cancel: () => {
 					this.input = null;
@@ -475,7 +575,7 @@ class ConnectorsPanel {
 					this.input = null;
 					const trimmed = target.trim();
 					if (!trimmed) {
-						this.setNotice("Cancelled — no URL or command entered.", "warn");
+						this.setNotice("Cancelled. No URL or command entered.", "warn");
 						return;
 					}
 					if (/^https?:\/\//.test(trimmed)) {
@@ -500,7 +600,7 @@ class ConnectorsPanel {
 				this.input = null;
 				const trimmed = name.trim();
 				if (!trimmed) {
-					this.setNotice("Cancelled — no name entered.", "warn");
+					this.setNotice("Cancelled. No name entered.", "warn");
 					return;
 				}
 				askTarget(trimmed);
@@ -537,7 +637,7 @@ class ConnectorsPanel {
 					}
 				}
 				if (!removed) {
-					this.setNotice(`${name} is defined in a project config (.mcp.json) — remove it there.`, "warn");
+					this.setNotice(`${name} is defined in a project config (.mcp.json). Remove it there.`, "warn");
 					return;
 				}
 				try {
@@ -548,7 +648,7 @@ class ConnectorsPanel {
 				}
 				await dropCacheEntry(name);
 				this.expanded.delete(name);
-				this.setNotice(`${name} removed — open rooms keep it until re-entered.`, "ok");
+				this.setNotice(`${name} removed. Open rooms keep it until re-entered.`, "ok");
 				await this.refresh();
 			} catch (e) {
 				this.setNotice((e as Error).message, "error");
@@ -561,12 +661,18 @@ class ConnectorsPanel {
 			const label = this.busy.kind === "login" ? "logging in" : this.busy.kind === "test" ? "testing" : "clearing";
 			return { label, token: "warning" };
 		}
-		if (row.mode === "bearer") return { label: "api token", token: "success" };
+		if (row.mode === "bearer") return { label: "API token", token: "success" };
 		if (row.mode === "oauth") {
 			if (row.hasTokens && row.tokenExpired && !row.hasRefreshToken) return { label: "login expired", token: "warning" };
 			if (row.hasTokens) return { label: "logged in", token: "success" };
+			// Explicitly configured OAuth (auth: "oauth" or a custom client)
+			// expects a login even when the server lists tools without one —
+			// same semantics as the web Connectors page.
+			const oauthConf = row.entry.oauth;
+			const explicit = row.entry.auth === "oauth" || (typeof oauthConf === "object" && oauthConf !== null && "clientId" in oauthConf);
+			if (explicit) return { label: "login required", token: "warning" };
 			if (row.tools) return { label: "no login needed", token: "dim" };
-			return { label: "not connected", token: "muted" };
+			return { label: "not tested", token: "muted" };
 		}
 		return { label: "local", token: "dim" };
 	}
@@ -682,7 +788,7 @@ class ConnectorsPanel {
 				return;
 			}
 			if (!row.tools || row.tools.length === 0) {
-				this.setNotice(`${row.name}: no tools listed yet — press t to test the connection.`, "warn");
+				this.setNotice(`${row.name}: no tools listed yet. Press t to test the connection.`, "warn");
 				return;
 			}
 			if (this.expanded.has(row.name)) this.expanded.delete(row.name);
@@ -747,7 +853,7 @@ class ConnectorsPanel {
 		lines.push(blank());
 
 		if (this.configDrift) {
-			lines.push(row(t.fg("warning", "Connector config changed since this room opened — reopen the room to apply.")));
+			lines.push(row(t.fg("warning", "Connector config changed since this room opened. Reopen the room to apply.")));
 			lines.push(blank());
 		}
 
@@ -777,6 +883,7 @@ class ConnectorsPanel {
 				open: "no login",
 				oauth: "one-click login",
 				token: "API token",
+				"oauth-client": "OAuth app",
 				guided: "needs setup",
 			};
 			lines.push(row(t.bold(t.fg("text", "Add a connector")) + "  " + t.fg("dim", "verified servers, plus custom")));
@@ -799,7 +906,8 @@ class ConnectorsPanel {
 				}
 				const entry = CONNECTOR_CATALOG[i];
 				const name = isCursor ? t.bold(t.fg("accent", padTo(entry.name, nameW))) : t.fg("text", padTo(entry.name, nameW));
-				const kind = t.fg("dim", padTo(KIND_LABELS[entry.kind], kindW));
+				// A catalog kind this build doesn't know must not crash the paint.
+				const kind = t.fg("dim", padTo(KIND_LABELS[entry.kind] ?? "custom setup", kindW));
 				const added = this.isInstalled(entry) ? t.fg("success", "✓ added") : "";
 				lines.push(row(`${caret} ${name}  ${kind}  ${added}`));
 				// Full description on its own line for the cursor row only.
@@ -811,6 +919,12 @@ class ConnectorsPanel {
 			}
 			lines.push(blank());
 			if (this.input) {
+				if (this.input.hint) {
+					for (const hintLine of wrapText(this.input.hint, innerW - 4)) {
+						lines.push(row(t.fg("dim", hintLine)));
+					}
+					lines.push(blank());
+				}
 				lines.push(row(`${t.fg("text", this.input.label)}: ${t.fg("accent", this.input.mask ? "•".repeat(this.input.value.length) : this.input.value)}${t.fg("accent", "▌")}`));
 				lines.push(blank());
 			} else if (this.notice) {
@@ -828,7 +942,7 @@ class ConnectorsPanel {
 		}
 
 		if (this.rows.length === 0) {
-			lines.push(row(t.fg("dim", "No connectors configured — press a to add one.")));
+			lines.push(row(t.fg("dim", "No connectors configured. Press a to add one.")));
 		} else {
 			// Aligned columns: caret+name | tool count | status.
 			const nameW = Math.max(...this.rows.map((server) => visibleWidth(server.name)));
@@ -889,7 +1003,7 @@ class ConnectorsPanel {
 		lines.push(blank());
 		lines.push(row(t.fg("muted", "↑↓ navigate  ⏎ open  a add  x remove  s setup/import  esc close")));
 		lines.push(row(t.fg("muted", "l log in  o log out  t test")));
-		lines.push(row(t.fg("muted", "Rooms use connectors through the single mcp tool — no per-tool setup needed.")));
+		lines.push(row(t.fg("muted", "Rooms use connectors through the single mcp tool. No per-tool setup needed.")));
 		lines.push(border("╰" + "─".repeat(innerW) + "╯"));
 		return lines;
 	}

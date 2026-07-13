@@ -862,6 +862,8 @@ export interface PersistentAgentThreadRecord {
 	 * runtime continuity truth.
 	 */
 	items: unknown[];
+	/** Consult MR-5 pending-transfer queue (§2.3); omitted when empty. */
+	pendingHandoffs?: string[];
 	createdAt: number;
 	updatedAt: number;
 }
@@ -1167,4 +1169,53 @@ export type ChatItem =
 			placeholder?: string;
 			done?: string;         // set after user answers; we keep card visible
 	  }
-	| { kind: "system"; id: string; text: string; level?: "info" | "error" };
+	| { kind: "system"; id: string; text: string; level?: "info" | "error" }
+	| {
+			// Consult MR-5 (§4.4): the permanent thread item left by a transfer.
+			// `l1bFingerprint` is the `algorithm:value` string — machine provenance
+			// that lives here and in the handoff block only; the UI never renders it.
+			kind: "consult";
+			id: string;
+			targetRoomId: string;
+			targetDisplayName: string;
+			question: string;
+			answer: string;
+			l1bFingerprint: string;
+			consultedAt: number;
+			transferred: true;
+			// Stacked consult (§8.4): the whole conversation, oldest-first, present
+			// only for N≥2 transfers. The flat fields above mirror the LATEST exchange.
+			// Legacy/N=1 items omit this and keep rendering from the flat fields.
+			exchanges?: {
+				question: string;
+				answer: string;
+				l1bFingerprint: string;
+				consultedAt: number;
+			}[];
+	  }
+	| {
+			// Specialist MR "V6" (delegation contract spec §2.2): the permanent thread
+			// item a specialist-task transfer leaves behind. `taskId` + `generatedAt`
+			// are provenance kept here and in the handoff block (the durable record —
+			// unlike the card face, the thread item may show the template id + date).
+			// ONE representative thumbnail rides the item: the FIRST artifact's
+			// write-time thumbnail (a `data:` URI) if the card had one; full
+			// per-artifact thumbnails stay card-side.
+			kind: "task";
+			id: string;
+			taskId: string;
+			template: string;
+			/**
+			 * Registry template version, threaded from task_started for the §2.2
+			 * block; optional because items persisted before the hardening pass
+			 * predate the field (readers fall back to 1).
+			 */
+			templateVersion?: number;
+			templateLabel: string;
+			title: string;
+			summary: string;
+			artifacts: { relativePath: string; bytes: number; extension: string }[];
+			thumbnailDataUri?: string;
+			generatedAt: string;
+			transferred: true;
+	  };

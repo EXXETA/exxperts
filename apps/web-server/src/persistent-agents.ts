@@ -7,6 +7,10 @@ import { SessionManager } from "@exxeta/exxperts-runtime";
 import { ABSORB_CONSOLIDATION_WORKER_TYPE, ABSORB_DISCUSSION_WORKER_TYPE, ABSORB_EMPTY_RECENT_CONTEXT_PLACEHOLDER, absorbAvailabilityFromL1b, buildAbsorbAssessmentPrompt, buildAbsorbDiscussionPrompt, buildAbsorbProposalPrompt, buildAbsorbProposalReview, buildSectionPurposeMap, parseAbsorbAssessment, parseAbsorbProposal, validateAbsorbCandidateL1b } from "./absorb-consolidation.js";
 import type { AbsorbAssessmentFields, AbsorbAssessmentHandoffInput, AbsorbAvailability, AbsorbDiscussionMessage, AbsorbDiscussionPromptTelemetry, AbsorbDiscussionTokenBudget, AbsorbModelLock, AbsorbPromptTelemetry, AbsorbProposalFields, AbsorbProposalReview } from "./absorb-consolidation.js";
 import { assembleProposedRecentContext, buildCheckpointCompressionPrompt, buildCheckpointCompressionRetryPrompt, buildCheckpointProposalPreview, CHECKPOINT_COMPRESSION_WORKER_TYPE, parseCheckpointCompressionFields } from "./checkpoint-compression.js";
+import { buildConsultPrompt, CONSULT_MAX_STACK_EXCHANGES, CONSULT_PRIOR_ANSWER_BOUNDARY_MAX_CHARS, CONSULT_QUESTION_MAX_CHARS, CONSULT_WORKER_TYPE } from "./consult.js";
+import type { ConsultPriorExchange, ConsultPromptTelemetry } from "./consult.js";
+import { buildConsultHandoffBlock, buildConsultHandoffBlockFromStack, readConsultHandoffQueue, validateConsultHandoffQueue, type ConsultHandoffExchange } from "./consult-handoff.js";
+import { buildSpecialistHandoffBlock } from "./specialist-handoff.js";
 import type { CheckpointCompressionFields, CheckpointCompressionPromptTelemetry, CheckpointProposalPreview } from "./checkpoint-compression.js";
 import { buildStructuralReviewAssessmentPrompt, buildStructuralReviewDiscussionPrompt, buildStructuralReviewProposalPrompt, extractStructuralReviewSourceParts, parseStructuralReviewAssessment, parseStructuralReviewProposal, STRUCTURAL_REVIEW_DISCUSSION_WORKER_TYPE, STRUCTURAL_REVIEW_MODE, STRUCTURAL_REVIEW_WORKER_TYPE, structuralReviewMetrics, validateStructuralReviewCandidateReviewTarget } from "./structural-review.js";
 import type { StructuralReviewAssessmentFields, StructuralReviewAssessmentHandoffInput, StructuralReviewCandidateValidationResult, StructuralReviewDiscussionMessage, StructuralReviewDiscussionPromptTelemetry, StructuralReviewDiscussionTokenBudget, StructuralReviewMemoryMapRow, StructuralReviewModelLock, StructuralReviewPromptTelemetry, StructuralReviewProposalFields } from "./structural-review.js";
@@ -804,6 +808,11 @@ export interface PersistentAgentBootContract {
 	model: PersistentAgentModelLock;
 	/** Redacted current-room workspace capability summary; omitted when no workspace tools are active. */
 	workspaceCapability?: PersistentAgentWorkspaceCapabilitySummary;
+	/** Pre-rendered enabled-skills index section for the L2 envelope (skills MR-5,
+	 *  spec §5), or ""/omitted when the room has no effective enabled skills.
+	 *  Computed by the caller from the room's skill settings — this module stays
+	 *  library-agnostic. */
+	enabledSkillsIndex?: string;
 }
 
 export interface PersistentAgentPromptLayer {
@@ -871,6 +880,13 @@ export interface PersistentAgentThreadRecord {
 	 * runtime continuity truth.
 	 */
 	items: unknown[];
+	/**
+	 * Consult MR-5 pending-transfer queue (§2.3): handoff blocks that will ride
+	 * the user's next prompt. Never a memory-write path — the block enters the
+	 * session JSONL like any user text and is compressible only by a checkpoint.
+	 * Omitted when empty.
+	 */
+	pendingHandoffs?: string[];
 	createdAt: number;
 	updatedAt: number;
 }
@@ -880,6 +896,13 @@ export interface PersistentAgentThreadWriteInput {
 	origin?: PersistentAgentThreadOrigin;
 	model?: PersistentAgentModelLock | null;
 	items?: unknown[];
+	/**
+	 * Consult MR-5 pending-transfer queue (§2.3). Preserve-if-absent: when
+	 * undefined the stored queue is kept; when provided (incl. []) it replaces
+	 * the stored queue. Validated (array of ≤20 strings, each within the block
+	 * cap) — junk is rejected, not stored.
+	 */
+	pendingHandoffs?: string[];
 }
 
 export interface PersistentAgentThreadRuntimeCreateContext {
@@ -1598,6 +1621,64 @@ function normalizeLegacyCheckpointTranscriptItems(rawItems: unknown[]): Checkpoi
 				const text = boundedCheckpointTranscriptText(item?.text);
 				return text ? { kind, ...(id ? { id } : {}), text } : null;
 			}
+			if (kind === "consult") {
+				// Legacy (transcript-recap-v1) compression source: a transferred
+				// consult must reach the compressor with its provenance header, the
+				// same way it enters modern threads via the prompt. Rebuild the
+				// canonical handoff block from the display item and fold it in as a
+				// system line. (Modern pi-session-jsonl threads carry the block
+				// through the prompt and never hit this path.)
+				const targetRoomId = String(item?.targetRoomId ?? "").trim();
+				const targetDisplayName = String(item?.targetDisplayName ?? "").trim() || targetRoomId || "the room";
+				const parseFingerprint = (raw: unknown) => {
+					const value = String(raw ?? "").trim();
+					const sep = value.indexOf(":");
+					return sep >= 0 ? { algorithm: value.slice(0, sep), value: value.slice(sep + 1) } : { algorithm: "sha256", value };
+				};
+				const toIso = (ms: unknown) => (Number.isFinite(ms) && (ms as number) > 0 ? new Date(Math.floor(ms as number)).toISOString() : new Date().toISOString());
+				// §8.4: a stacked item carries the whole conversation in `exchanges[]`;
+				// render the numbered §8.8 form. A legacy single-exchange item (no
+				// `exchanges`) renders the byte-identical §2.1 block from the flat fields.
+				const stackedExchanges: unknown[] = Array.isArray(item?.exchanges) ? item.exchanges : [];
+				const block = stackedExchanges.length > 0
+					? buildConsultHandoffBlockFromStack({
+						slug: targetRoomId || targetDisplayName,
+						displayName: targetDisplayName,
+						agentId: targetRoomId,
+						exchanges: stackedExchanges.map((exchange: any): ConsultHandoffExchange => {
+							const asOf = toIso(exchange?.consultedAt);
+							return { question: String(exchange?.question ?? ""), answerMarkdown: String(exchange?.answer ?? ""), fingerprint: parseFingerprint(exchange?.l1bFingerprint), asOf, requestedAt: asOf };
+						}),
+					})
+					: buildConsultHandoffBlock({
+						slug: targetRoomId || targetDisplayName,
+						displayName: targetDisplayName,
+						agentId: targetRoomId,
+						requestedAt: toIso(item?.consultedAt),
+						question: String(item?.question ?? ""),
+						fingerprint: parseFingerprint(item?.l1bFingerprint),
+						answerMarkdown: String(item?.answer ?? ""),
+					});
+				const text = boundedCheckpointTranscriptText(block);
+				return text ? { kind: "system", ...(id ? { id } : {}), text } : null;
+			}
+			if (kind === "task") {
+				// Mirror of the consult branch above: a transferred specialist task
+				// must reach the compressor with its §2.2 provenance block, the same
+				// way it enters modern threads via the prompt. (Legacy
+				// transcript-recap-v1 rooms only; the builder defangs + caps.)
+				const templateVersion = Number(item?.templateVersion);
+				const block = buildSpecialistHandoffBlock({
+					templateId: String(item?.template ?? ""),
+					templateVersion: Number.isFinite(templateVersion) && templateVersion >= 1 ? Math.floor(templateVersion) : 1,
+					taskTitle: String(item?.title ?? ""),
+					ranAtIso: String(item?.generatedAt ?? "").trim() || new Date().toISOString(),
+					artifactPaths: Array.isArray(item?.artifacts) ? item.artifacts.map((artifact: any) => String(artifact?.relativePath ?? "")) : [],
+					summary: String(item?.summary ?? ""),
+				});
+				const text = boundedCheckpointTranscriptText(block);
+				return text ? { kind: "system", ...(id ? { id } : {}), text } : null;
+			}
 			if (kind === "tool") {
 				return {
 					kind: "tool",
@@ -2229,6 +2310,7 @@ function normalizePersistentAgentThreadRecord(raw: any, agentId: PersistentAgent
 		model,
 		runtime: normalizePersistentAgentThreadRuntime(raw.runtime),
 		items: normalizePersistentAgentThreadItems(raw.items),
+		...(readConsultHandoffQueue(raw.pendingHandoffs).length ? { pendingHandoffs: readConsultHandoffQueue(raw.pendingHandoffs) } : {}),
 		createdAt,
 		updatedAt,
 	};
@@ -2251,6 +2333,13 @@ export function writePersistentAgentThread(agentIdRaw: string, threadIdRaw: stri
 	if (!state || state === "closed") throw new Error("thread state must be active or standby");
 	const existing = getPersistentAgentThread(instance.agentId, threadId);
 	if (existing?.state === "closed") throw new Error(`persistent-agent thread is closed and non-resumable: ${threadId}`);
+	// Preserve-if-absent (Consult MR-5 §2.3): an omitted pendingHandoffs keeps the
+	// stored queue (so unrelated saves never clobber it); a provided value (incl.
+	// []) replaces it. Validated up-front, before any runtime side effect, so junk
+	// is rejected cleanly without materialising a boot/session artifact.
+	const pendingHandoffs = input.pendingHandoffs !== undefined
+		? validateConsultHandoffQueue(input.pendingHandoffs)
+		: readConsultHandoffQueue(existing?.pendingHandoffs);
 	const model = normalizeRuntimeModel(input.model ?? existing?.model);
 	if (!model) throw new Error("thread model is required");
 	if (!options.allowInactiveProfileModel) assertActiveProfilePersistentRoomModel(model, "persistent-agent thread writes");
@@ -2272,6 +2361,7 @@ export function writePersistentAgentThread(agentIdRaw: string, threadIdRaw: stri
 		model,
 		runtime: threadRuntime,
 		items: normalizePersistentAgentThreadItems(input.items ?? existing?.items ?? []),
+		...(pendingHandoffs.length ? { pendingHandoffs } : {}),
 		createdAt: existing?.createdAt ?? now,
 		updatedAt: now,
 	};
@@ -2280,6 +2370,30 @@ export function writePersistentAgentThread(agentIdRaw: string, threadIdRaw: stri
 	fs.writeFileSync(file, JSON.stringify(thread, null, 2) + "\n", { mode: 0o600, flag: "w" });
 	const runtime = writePersistentAgentRuntimeState(instance.agentId, { state, activeThreadId: threadId, model }, { allowInFlightActiveThread: true, ...(options.allowInactiveProfileModel ? { allowInactiveProfileModel: true } : {}) });
 	return { thread, runtime };
+}
+
+/**
+ * Consult MR-5 hardening: clear the pending-transfer queue the instant a prompt
+ * consumes it. The client prepends any queued handoff blocks to the outgoing
+ * prompt text, so the moment the WS prompt handler receives a prompt the queue
+ * is logically consumed — clearing it here, in the same handler, makes consume
+ * and clear atomic server-side. Without this the clear rode a separate debounced
+ * client PUT, so a crash (or a reordered client save) between the two could leave
+ * an already-sent block queued to be injected into the room's context a second
+ * time. No-op when the queue is already empty; only the `pendingHandoffs` field
+ * is touched — items, state, model, and runtime are preserved verbatim.
+ */
+export function clearPersistentAgentThreadPendingHandoffs(agentIdRaw: string, threadIdRaw: string): void {
+	const instance = createPersistentAgentInstance(agentIdRaw);
+	const threadId = safeRuntimeThreadId(threadIdRaw);
+	if (!threadId) return;
+	const existing = getPersistentAgentThread(instance.agentId, threadId);
+	if (!existing || !existing.pendingHandoffs || existing.pendingHandoffs.length === 0) return;
+	const { pendingHandoffs: _consumed, ...rest } = existing;
+	const cleared: PersistentAgentThreadRecord = { ...rest, updatedAt: Date.now() };
+	const file = instance.runtimeThreadPath(threadId);
+	ensureDir(path.dirname(file));
+	fs.writeFileSync(file, JSON.stringify(cleared, null, 2) + "\n", { mode: 0o600, flag: "w" });
 }
 
 export function closePersistentAgentThreadForCheckpoint(agentIdRaw: string, threadIdRaw: string, checkpointIdRaw: string, closedAtRaw: number = Date.now()): PersistentAgentThreadRecord {
@@ -3252,16 +3366,20 @@ If a requested file or folder is outside the workspace or denied by policy, say 
 This workspace configuration is runtime metadata for tool use. Mention workspace setup only when it is relevant to the user's request.`;
 }
 
-export function persistentAgentRuntimeEnvelope(now = new Date(), workspaceCapability?: PersistentAgentWorkspaceCapabilitySummary): string {
+export function persistentAgentRuntimeEnvelope(now = new Date(), workspaceCapability?: PersistentAgentWorkspaceCapabilitySummary, enabledSkillsIndex?: string): string {
 	const year = now.getFullYear();
 	const month = String(now.getMonth() + 1).padStart(2, "0");
 	const day = String(now.getDate()).padStart(2, "0");
 	const currentDate = `${year}-${month}-${day}`;
+	// The enabled-skills index (skills MR-5, spec §5) is a pre-rendered section:
+	// ~100 tokens per enabled skill, reference only — bodies are fetched on demand
+	// via read_skill and never live in the envelope. Empty string for skill-free
+	// rooms keeps the envelope byte-identical to the pre-skills shape.
 	return `# Persistent Agent Runtime Envelope
 
 <!-- exxeta:persistent-agent:l2 schema_version=3 -->
 
-Current date: ${currentDate}.${persistentAgentWorkspaceCapabilitySnippet(workspaceCapability)}
+Current date: ${currentDate}.${persistentAgentWorkspaceCapabilitySnippet(workspaceCapability)}${enabledSkillsIndex ?? ""}
 `;
 }
 
@@ -3539,7 +3657,7 @@ export function buildPersistentAgentBootContext(contract: PersistentAgentBootCon
 	const l0 = persistentAgentPlatformKernel();
 	const l1a = fs.readFileSync(l1aPath, "utf-8");
 	const l1b = fs.readFileSync(l1bPath, "utf-8");
-	const l2 = persistentAgentRuntimeEnvelope(new Date(), normalizedContract.workspaceCapability);
+	const l2 = persistentAgentRuntimeEnvelope(new Date(), normalizedContract.workspaceCapability, normalizedContract.enabledSkillsIndex);
 	const displayName = String(meta.displayName ?? "").trim() || instance.agentId;
 	const layers: PersistentAgentPromptLayer[] = [
 		{ id: "l0", title: "Persistent Agent Platform Kernel", content: l0, estimatedTokens: estimateTokens(l0) },
@@ -5210,9 +5328,142 @@ export async function buildAbsorbProposal(raw: any, model: AbsorbModelLock, gene
 	};
 }
 
+export interface ConsultGenerateResult {
+	text: string;
+	usage?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; totalTokens?: number; cost?: number };
+}
+
+export type ConsultModelLock = { provider: string; model: string; label?: string };
+
+export interface ConsultAnswerOptions {
+	/**
+	 * When provided, the consult prompt is checked against the locked model's
+	 * window (same budget formula as the checkpoint worker) and overflow raises
+	 * ConsultPromptOverflowError instead of sending an elided prompt.
+	 */
+	resolveModelWindow?: (model: ConsultModelLock) => CheckpointModelWindow;
+}
+
+export interface ConsultAnswerResponse {
+	targetAgentId: PersistentAgentId;
+	writesMemory: false;
+	process: { type: typeof CONSULT_WORKER_TYPE; model: ConsultModelLock };
+	target: { displayName: string };
+	source: { l1bFingerprint: L1bSourceFingerprint; generatedAt: string };
+	answerMarkdown: string;
+	consultTelemetry: ConsultPromptTelemetry;
+	consultUsage?: ConsultGenerateResult["usage"];
+	warnings: string[];
+}
+
+/**
+ * Strict validation for the stacked-consult `priorExchanges` wire field (§8.1,
+ * §8.6). The server stays stateless — the client holds the history — so this is
+ * the trust boundary: reject junk, enforce the 20-exchange backstop cap, and the
+ * per-question length limit. A follow-up carries N-1 prior exchanges, so a 20th
+ * prior would make a 21st exchange; that (and above) is rejected. Returns [] for
+ * an absent field (single-shot consult).
+ */
+export function normalizeConsultPriorExchanges(raw: unknown): ConsultPriorExchange[] {
+	if (raw == null) return [];
+	if (!Array.isArray(raw)) throw new Error("priorExchanges must be an array");
+	if (raw.length >= CONSULT_MAX_STACK_EXCHANGES) throw new Error(`priorExchanges exceeds the ${CONSULT_MAX_STACK_EXCHANGES}-exchange stack cap`);
+	return raw.map((entry: any, index) => {
+		const question = String(entry?.question ?? "").trim();
+		// Defensive length cap on the re-fed answer (hardening 2026-07-11): without
+		// it, 20 multi-MB answers sit in server memory before the prompt-side trim
+		// (trimPriorAnswer → 2,000 chars) ever runs. Truncation, not rejection —
+		// long legitimate answers are re-fed truncated, matching the prompt's own
+		// trim discipline; the question cap stays a hard reject (user-typed, capped
+		// at source).
+		const answerMarkdown = String(entry?.answerMarkdown ?? "").slice(0, CONSULT_PRIOR_ANSWER_BOUNDARY_MAX_CHARS);
+		if (!question) throw new Error(`priorExchanges[${index}].question is required`);
+		if (question.length > CONSULT_QUESTION_MAX_CHARS) throw new Error(`priorExchanges[${index}].question is too long`);
+		if (!answerMarkdown.trim()) throw new Error(`priorExchanges[${index}].answerMarkdown is required`);
+		return { question, answerMarkdown };
+	});
+}
+
+/**
+ * One-shot, read-only consult of a room's memory. Assembles the target room's
+ * L0/L1a/L1b with the consult envelope replacing the normal L2, and answers
+ * through the injected isolated worker. The consulted room is never activated:
+ * no session, no thread record, no runtime-state write, no lock, no memory
+ * mutation, and no trace under the room's root.
+ */
+export async function buildConsultAnswer(raw: any, model: ConsultModelLock, generate: (prompt: string, model: ConsultModelLock) => Promise<ConsultGenerateResult>, options?: ConsultAnswerOptions): Promise<ConsultAnswerResponse> {
+	const targetAgentId = validatePersistentAgentId(raw?.targetAgentId);
+	const question = String(raw?.question ?? "").trim();
+	if (!question) throw new Error("question is required");
+
+	// Stacked consult (§8.1): earlier exchanges in THIS consult, re-fed into the
+	// prompt. The WS boundary validates the wire shape + backstop cap (§8.6); here
+	// we only normalise into the buildConsultPrompt contract. Absent → single-shot.
+	const priorExchanges = normalizeConsultPriorExchanges(raw?.priorExchanges);
+
+	let fromRoomDisplayName: string | undefined;
+	const fromRoomIdRaw = String(raw?.fromRoomId ?? "").trim();
+	if (fromRoomIdRaw) {
+		const fromRoomId = validatePersistentAgentId(fromRoomIdRaw);
+		if (fromRoomId === targetAgentId) throw new Error("a room cannot consult itself");
+		const fromInstance = createPersistentAgentInstance(fromRoomId);
+		const fromMeta = fromInstance.readAgentJson();
+		if (!fromMeta) throw new Error(`consulting room not found: ${fromRoomId}`);
+		fromRoomDisplayName = String(fromMeta.displayName ?? "").trim() || fromRoomId;
+	}
+
+	const instance = createPersistentAgentInstance(targetAgentId);
+	const meta = instance.readAgentJson();
+	if (!meta) throw new Error("agent.json is missing or invalid JSON");
+	const l1aPath = instance.l1aPath(meta);
+	const l1bPath = instance.l1bCurrentPath(meta);
+	if (!fs.existsSync(l1aPath)) throw new Error("L1a.md is missing");
+	if (!fs.existsSync(l1bPath)) throw new Error("L1b/current.md is missing");
+	const l1a = fs.readFileSync(l1aPath, "utf-8");
+	const l1b = fs.readFileSync(l1bPath, "utf-8");
+	const targetDisplayName = String(meta.displayName ?? "").trim() || instance.agentId;
+
+	// Custom gateway models may omit window metadata — the guard only arms on
+	// finite numbers; otherwise the consult runs unguarded (pre-MR-2 behavior).
+	const window = options?.resolveModelWindow?.(model);
+	const windowArmed = window != null && Number.isFinite(window.contextWindow) && Number.isFinite(window.maxOutputTokens);
+	const assembly = buildConsultPrompt({
+		targetAgentId: instance.agentId,
+		targetDisplayName,
+		fromRoomDisplayName,
+		question,
+		...(priorExchanges.length ? { priorExchanges } : {}),
+		l0: persistentAgentPlatformKernel(),
+		l1a,
+		l1b,
+		model,
+		...(windowArmed ? { promptTokenBudget: checkpointPromptTokenBudget(window) } : {}),
+	});
+	const generated = await generate(assembly.prompt, model);
+	const answerMarkdown = generated.text.trim();
+	if (!answerMarkdown) throw new Error("consult worker produced no text");
+
+	const warnings = ["no memory has been written", "the consulted room was not activated and records no trace of this consult"];
+	if (String(raw?.targetLifecycleStatus ?? "") === "needs_absorb") {
+		warnings.unshift("the consulted room has recent context awaiting Learn; its stable memory may lag its latest sessions");
+	}
+	return {
+		targetAgentId: instance.agentId,
+		writesMemory: false,
+		process: { type: CONSULT_WORKER_TYPE, model },
+		target: { displayName: targetDisplayName },
+		source: { l1bFingerprint: fingerprintL1bSource(l1b), generatedAt: new Date().toISOString() },
+		answerMarkdown,
+		consultTelemetry: assembly.telemetry,
+		consultUsage: generated.usage,
+		warnings,
+	};
+}
+
 // The prompt budget keeps a margin under the model's context window: the
 // chars/4 estimator undercounts for code-heavy text (hence the window factor),
 // and the worker's own output (including any reasoning tokens) needs room.
+// Shared by the checkpoint and consult workers (same estimator, same margins).
 const CHECKPOINT_PROMPT_WINDOW_FACTOR = 0.85;
 const CHECKPOINT_PROMPT_OUTPUT_RESERVE_TOKENS = 4_000;
 const CHECKPOINT_PROMPT_MIN_TOKEN_BUDGET = 1_000;

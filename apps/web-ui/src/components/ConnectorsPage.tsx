@@ -30,6 +30,10 @@ function authView(server: McpConnectorStatus, knownOpen: boolean): { label: stri
 			return { label: "Login expired", state: "missing", note: "Log in again below, or let the room re-auth on next use." };
 		}
 		if (auth.hasStoredTokens) return { label: "Logged in", state: "ready" };
+		// An explicitly configured OAuth client expects a login even when the
+		// server lists tools unauthenticated (Gmail, HubSpot expose their
+		// catalogs publicly — calls still need the token).
+		if (auth.explicit) return { label: "Login required", state: "missing", note: "Log in below to finish connecting this account." };
 		if (server.tools) return { label: "No login needed", state: "ready" };
 		// The directory knows some servers are public — no point offering a
 		// login or flagging them red before the first connection.
@@ -71,7 +75,7 @@ function ConnectorRow({ server, onChanged, onNotice }: { server: McpConnectorSta
 	// directory knows are public, always after a test reported "needs
 	// authentication".
 	const canLogin = server.auth.mode === "oauth" && server.transport === "http";
-	const showLogin = canLogin && !server.auth.hasStoredTokens && (needsAuthSeen || (!server.tools && !knownOpen));
+	const showLogin = canLogin && !server.auth.hasStoredTokens && (server.auth.explicit === true || needsAuthSeen || (!server.tools && !knownOpen));
 
 	async function run(action: "test" | "login" | "logout" | "remove", fn: () => Promise<void>) {
 		setBusy(action);
@@ -109,7 +113,7 @@ function ConnectorRow({ server, onChanged, onNotice }: { server: McpConnectorSta
 
 	// "not connected yet" next to a "Logged in" badge reads as a contradiction —
 	// the missing piece is only the tool list, so say that.
-	const toolsSummary = server.tools ? `${server.tools.count} tool${server.tools.count === 1 ? "" : "s"}` : "tools not listed yet · test or just use it in a room";
+	const toolsSummary = server.tools ? `${server.tools.count} tool${server.tools.count === 1 ? "" : "s"}` : "Tools not listed yet. Test the connection, or just use it in a room.";
 	// The default config file is the same for every row and the page footnote
 	// already explains it — only surface the source when it is the odd one out.
 	const defaultSource = server.source?.path.includes(".exxperts") && !server.source.importKind;
@@ -144,7 +148,10 @@ function ConnectorRow({ server, onChanged, onNotice }: { server: McpConnectorSta
 						onClick={() => void run("test", async () => {
 							const result = await testMcpServer(server.name);
 							setBusy(null);
-							if (result.ok) {
+							if (result.ok && server.auth.explicit && !server.auth.hasStoredTokens) {
+								setOutcome({ text: "Reachable, but not logged in yet. Use Log in below.", tone: "error" });
+								await onChanged();
+							} else if (result.ok) {
 								setOutcome({ text: `Connection OK · ${result.toolCount} tool${result.toolCount === 1 ? "" : "s"} available.`, tone: "ok" });
 								setNeedsAuthSeen(false);
 								await onChanged();
@@ -210,7 +217,7 @@ function ConnectorRow({ server, onChanged, onNotice }: { server: McpConnectorSta
 								onClick={() => void run("remove", async () => {
 									await removeMcpServer(server.name);
 									setBusy(null);
-									onNotice(APPLY_NOTE);
+									onNotice(`Removed ${server.name}. Rooms pick it up the next time you enter or resume them.`);
 									await onChanged();
 								})}
 							>
@@ -226,12 +233,16 @@ function ConnectorRow({ server, onChanged, onNotice }: { server: McpConnectorSta
 	);
 }
 
-function AddConnectorForm({ onAdded, onCancel }: { onAdded: () => Promise<void>; onCancel: () => void }) {
-	const [name, setName] = useState("");
+function AddConnectorForm({ onAdded, onCancel, prefill }: { onAdded: () => Promise<void>; onCancel: () => void; prefill?: AddConnectorPrefill }) {
+	const [name, setName] = useState(prefill?.name ?? "");
 	const [kind, setKind] = useState<"url" | "command">("url");
-	const [url, setUrl] = useState("");
+	const [url, setUrl] = useState(prefill?.url ?? "");
 	const [bearerToken, setBearerToken] = useState("");
 	const [command, setCommand] = useState("");
+	const [showOAuthClient, setShowOAuthClient] = useState(prefill?.openOAuthClient ?? false);
+	const [oauthClientId, setOauthClientId] = useState("");
+	const [oauthClientSecret, setOauthClientSecret] = useState("");
+	const [oauthScope, setOauthScope] = useState("");
 	const [saving, setSaving] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const blockRef = useRef<HTMLDivElement | null>(null);
@@ -247,7 +258,13 @@ function AddConnectorForm({ onAdded, onCancel }: { onAdded: () => Promise<void>;
 		setError(null);
 		try {
 			if (kind === "url") {
-				await addMcpServer({ name: name.trim(), url: url.trim(), bearerToken: bearerToken.trim() || undefined });
+				const clientId = oauthClientId.trim();
+				await addMcpServer({
+					name: name.trim(),
+					url: url.trim(),
+					bearerToken: bearerToken.trim() || undefined,
+					oauth: clientId ? { clientId, clientSecret: oauthClientSecret.trim() || undefined, scope: oauthScope.trim() || undefined } : undefined,
+				});
 			} else {
 				const parts = command.trim().split(/\s+/);
 				await addMcpServer({ name: name.trim(), command: parts[0] ?? "", args: parts.slice(1) });
@@ -263,6 +280,7 @@ function AddConnectorForm({ onAdded, onCancel }: { onAdded: () => Promise<void>;
 	return (
 		<div className="ai-setup-block" aria-label="Custom connector" ref={blockRef}>
 			<h3>Custom connector</h3>
+			{prefill?.note && <p className="cli-note">{prefill.note}</p>}
 			<div className="connector-form">
 				<label className="connector-form-field">
 					<span>Name</span>
@@ -282,6 +300,26 @@ function AddConnectorForm({ onAdded, onCancel }: { onAdded: () => Promise<void>;
 							<span>API token (optional, for servers that use a bearer token instead of a login)</span>
 							<input type="password" value={bearerToken} placeholder="leave empty for OAuth or public servers" onChange={(e) => setBearerToken(e.target.value)} />
 						</label>
+						<button type="button" className="connector-oauth-toggle" onClick={() => setShowOAuthClient((current) => !current)} aria-expanded={showOAuthClient}>
+							{showOAuthClient ? "▾" : "▸"} Custom OAuth client (for providers without automatic registration, like HubSpot)
+						</button>
+						{showOAuthClient && (
+							<div className="connector-oauth-fields">
+								<p className="cli-note">Create an app in the provider's developer settings with the redirect URL <code>http://localhost:19876/callback</code>, then paste its credentials here. Login opens the provider's normal consent screen.</p>
+								<label className="connector-form-field">
+									<span>Client ID</span>
+									<input type="text" value={oauthClientId} onChange={(e) => setOauthClientId(e.target.value)} />
+								</label>
+								<label className="connector-form-field">
+									<span>Client secret (optional, for confidential clients)</span>
+									<input type="password" value={oauthClientSecret} onChange={(e) => setOauthClientSecret(e.target.value)} />
+								</label>
+								<label className="connector-form-field">
+									<span>Scopes (optional, space-separated)</span>
+									<input type="text" value={oauthScope} placeholder="crm.objects.contacts.read" onChange={(e) => setOauthScope(e.target.value)} />
+								</label>
+							</div>
+						)}
 					</>
 				) : (
 					<label className="connector-form-field">
@@ -320,10 +358,19 @@ const KIND_LABELS: Record<ConnectorCatalogEntry["kind"], string> = {
 	open: "no login",
 	oauth: "one-click login",
 	token: "API token",
+	"oauth-client": "OAuth app",
 	guided: "needs setup",
 };
 
-function DirectoryCard({ entry, installed, onAdd }: { entry: ConnectorCatalogEntry; installed: boolean; onAdd: (entry: ConnectorCatalogEntry, token?: string) => Promise<void> }) {
+/** Prefill for the custom form when a directory card routes into it. */
+export interface AddConnectorPrefill {
+	name?: string;
+	url?: string;
+	note?: string;
+	openOAuthClient?: boolean;
+}
+
+function DirectoryCard({ entry, installed, onAdd, onOpenCustom }: { entry: ConnectorCatalogEntry; installed: boolean; onAdd: (entry: ConnectorCatalogEntry, token?: string) => Promise<void>; onOpenCustom: (prefill?: AddConnectorPrefill) => void }) {
 	const [tokenOpen, setTokenOpen] = useState(false);
 	const [token, setToken] = useState("");
 	const [adding, setAdding] = useState(false);
@@ -353,13 +400,27 @@ function DirectoryCard({ entry, installed, onAdd }: { entry: ConnectorCatalogEnt
 				</div>
 			</div>
 			<p className="connector-dir-desc">{entry.description}</p>
-			{entry.kind === "guided" && entry.guideNote && <p className="connector-dir-note">{entry.guideNote}</p>}
+			{entry.shortNote && <p className="connector-dir-note">{entry.shortNote}</p>}
 			{error && <p className="connector-dir-note connector-outcome-error">{error}</p>}
 			<div className="connector-dir-actions">
 				{installed ? (
 					<span className="connector-dir-added">✓ Added</span>
 				) : entry.kind === "guided" ? (
 					entry.docsUrl && <a className="inline-action" href={entry.docsUrl} target="_blank" rel="noreferrer">Setup guide ↗</a>
+				) : entry.kind === "oauth-client" ? (
+					<>
+						<button
+							className="inline-action"
+							onClick={() => onOpenCustom({ name: entry.id, url: entry.url, note: entry.guideNote, openOAuthClient: true })}
+						>
+							Add with OAuth app
+						</button>
+						{entry.docsUrl && (
+							<a className="connector-dir-token-guide" href={entry.docsUrl} target="_blank" rel="noreferrer">
+								Where do I create one? ↗
+							</a>
+						)}
+					</>
 				) : entry.kind === "token" ? (
 					tokenOpen ? (
 						<>
@@ -393,7 +454,7 @@ function DirectoryCard({ entry, installed, onAdd }: { entry: ConnectorCatalogEnt
 	);
 }
 
-function ConnectorDirectory({ status, onChanged, onNotice, customOpen, onOpenCustom, customForm }: { status: McpConnectorsStatusResponse | null; onChanged: () => Promise<void>; onNotice: (text: string) => void; customOpen: boolean; onOpenCustom: () => void; customForm: React.ReactNode }) {
+function ConnectorDirectory({ status, onChanged, onNotice, customOpen, onOpenCustom, customForm }: { status: McpConnectorsStatusResponse | null; onChanged: () => Promise<void>; onNotice: (text: string) => void; customOpen: boolean; onOpenCustom: (prefill?: AddConnectorPrefill) => void; customForm: React.ReactNode }) {
 	const [query, setQuery] = useState("");
 
 	const configured = status?.servers ?? [];
@@ -434,9 +495,9 @@ function ConnectorDirectory({ status, onChanged, onNotice, customOpen, onOpenCus
 			{customForm}
 			<div className="connector-dir-grid">
 				{entries.map((entry) => (
-					<DirectoryCard key={entry.id} entry={entry} installed={isInstalled(entry)} onAdd={add} />
+					<DirectoryCard key={entry.id} entry={entry} installed={isInstalled(entry)} onAdd={add} onOpenCustom={onOpenCustom} />
 				))}
-				{entries.length === 0 && <p className="cli-note">No matches. Use the custom connector card to add it.</p>}
+				{entries.length === 0 && <p className="cli-note">No matches. Use the custom connector card to add one.</p>}
 				<article className="connector-dir-card connector-dir-custom">
 					<div className="connector-dir-head">
 						<span className="connector-avatar" style={{ width: 34, height: 34 }}>+</span>
@@ -447,7 +508,7 @@ function ConnectorDirectory({ status, onChanged, onNotice, customOpen, onOpenCus
 					</div>
 					<p className="connector-dir-desc">Add any MCP server that isn't in the list.</p>
 					<div className="connector-dir-actions">
-						<button className="inline-action" onClick={onOpenCustom} disabled={customOpen}>
+						<button className="inline-action" onClick={() => onOpenCustom()} disabled={customOpen}>
 							{customOpen ? "Fill in the form above" : "Add custom"}
 						</button>
 					</div>
@@ -462,6 +523,7 @@ export function ConnectorsPage() {
 	const [error, setError] = useState<string | null>(null);
 	const [loading, setLoading] = useState(true);
 	const [addOpen, setAddOpen] = useState(false);
+	const [addPrefill, setAddPrefill] = useState<AddConnectorPrefill | undefined>(undefined);
 	const [notice, setNotice] = useState<string | null>(null);
 
 	const refresh = useCallback(async () => {
@@ -491,7 +553,7 @@ export function ConnectorsPage() {
 	return (
 		<>
 			<section className="landing-hero ai-setup-hero">
-				<h1>MCP connectors.</h1>
+				<h1>Connectors.</h1>
 				<p>External MCP servers your rooms can use. Same list on the web and in the CLI.</p>
 			</section>
 			<section className="ai-setup-section" aria-label="MCP connectors">
@@ -501,6 +563,7 @@ export function ConnectorsPage() {
 				</div>
 				{notice && <p className="cli-note" role="status">{notice}</p>}
 				{error && <div className="checkpoint-proposal-error">{error}</div>}
+				{!error && loading && !status && <p className="ai-setup-copy">Loading connectors…</p>}
 				{!error && servers.length > 0 && (
 					<div className="connector-rows" aria-label="Configured MCP servers">
 						{servers.map((server) => (
@@ -517,16 +580,25 @@ export function ConnectorsPage() {
 				onChanged={refresh}
 				onNotice={setNotice}
 				customOpen={addOpen}
-				onOpenCustom={() => setAddOpen(true)}
+				onOpenCustom={(prefill) => {
+					setAddPrefill(prefill);
+					setAddOpen(true);
+				}}
 				customForm={
 					addOpen ? (
 						<AddConnectorForm
+							key={addPrefill?.name ?? "blank"}
+							prefill={addPrefill}
 							onAdded={async () => {
 								setAddOpen(false);
+								setAddPrefill(undefined);
 								setNotice(APPLY_NOTE);
 								await refresh();
 							}}
-							onCancel={() => setAddOpen(false)}
+							onCancel={() => {
+								setAddOpen(false);
+								setAddPrefill(undefined);
+							}}
 						/>
 					) : null
 				}

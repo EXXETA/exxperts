@@ -77,6 +77,7 @@ const KIND_LABELS: Record<string, string> = {
 	scheduled: "scheduled",
 	hivemind: "hivemind",
 	cli: "cli",
+	consult: "consult",
 };
 
 function fmtTok(n: number): string {
@@ -421,7 +422,7 @@ export function Dashboard() {
 /** "plus upkeep ≈ $0.12 over 6 runs" line under an exxpert with background kinds. */
 function backgroundKindsNote(kinds: Record<string, { cost: number; turns: number }>): string | undefined {
 	const parts: string[] = [];
-	for (const kind of ["upkeep", "scheduled", "hivemind", "cli"]) {
+	for (const kind of ["upkeep", "consult", "scheduled", "hivemind", "cli"]) {
 		const k = kinds[kind];
 		if (!k || k.turns === 0) continue;
 		parts.push(`${kind} ${fmtEst(k.cost)} over ${k.turns} run${k.turns === 1 ? "" : "s"}`);

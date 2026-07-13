@@ -132,7 +132,15 @@ Rooms get tools through a per-room policy rather than a global grant:
 - **`fetch_url`** — HTTP fetching with SSRF defenses (private-range and
   redirect protection).
 - **Web search** — via a local SearXNG instance ([`web-search.md`](web-search.md)).
-- **Artifacts** — documents/outputs produced into the app state.
+- **Artifacts** — documents/outputs produced into the app state,
+  viewable in a sandboxed artifacts viewer; delegated tasks a room runs
+  appear as task cards in chat.
+- **`read_skill`**: rooms read the skills enabled for them through this
+  tool; skills are the sanctioned way to give rooms new instructions
+  (extensions never load in rooms).
+- **Consult**: a room can ask another room a question via @-mention in
+  chat; the consulted room answers read-only from its own memory and
+  context.
 - **MCP** — external MCP connectors ([`mcp.md`](mcp.md)).
 - **Schedules** — recurring background prompts with preflight checks
   and run history.

@@ -1,6 +1,7 @@
 import { memo, useId, useState } from "react";
 import type { ChatItem } from "../types";
 import { MarkdownRenderer, looksLikeMarkdown, unwrapOuterMarkdownFence } from "./Markdown";
+import { artifactBasename, artifactKindLabel, isSvgArtifact, taskArtifactUrl } from "../task-stream";
 
 /**
  * Compact, single-line preview of a tool call's key argument. Used as
@@ -8,20 +9,6 @@ import { MarkdownRenderer, looksLikeMarkdown, unwrapOuterMarkdownFence } from ".
  */
 function utf8ByteLength(value: string): number {
 	return new TextEncoder().encode(value).length;
-}
-
-function summarizeOmittedContent(value: unknown): string {
-	if (typeof value !== "string") return "[omitted]";
-	return `[omitted: ${value.length} chars, ${utf8ByteLength(value)} bytes]`;
-}
-
-function sanitizedToolArgs(name: string, args: any): any {
-	if (name !== "write_markdown_file" || !args || typeof args !== "object") return args ?? {};
-	return {
-		path: String(args.path ?? ""),
-		content: summarizeOmittedContent(args.content),
-		overwrite: args.overwrite === true,
-	};
 }
 
 function domainOf(url: string): string {
@@ -57,6 +44,37 @@ function mcpChipView(args: any): { name: string; summary: string } {
 	return { name: "🔌 Connector status", summary: "" };
 }
 
+/**
+ * Human chip labels for the remaining tools, matching the web_search /
+ * fetch_url / mcp treatment: an emoji plus what the tool is doing in user
+ * terms, never the internal tool name. Running gets the in-flight form; done
+ * and error get the finished form (the status icon carries the outcome).
+ */
+const GENERIC_TOOL_VIEWS: Record<string, { icon: string; running: string; done: string }> = {
+	bash: { icon: "⌨️", running: "Running command", done: "Ran command" },
+	read: { icon: "📄", running: "Reading file", done: "Read file" },
+	write: { icon: "✏️", running: "Writing file", done: "Wrote file" },
+	edit: { icon: "✏️", running: "Editing file", done: "Edited file" },
+	ls: { icon: "📁", running: "Listing files", done: "Listed files" },
+	find: { icon: "📁", running: "Finding files", done: "Found files" },
+	grep: { icon: "🔎", running: "Searching files", done: "Searched files" },
+	write_markdown_file: { icon: "📝", running: "Writing document", done: "Wrote document" },
+	read_spreadsheet: { icon: "📊", running: "Reading spreadsheet", done: "Read spreadsheet" },
+	kb_search: { icon: "📚", running: "Searching knowledge base", done: "Searched knowledge base" },
+	artifact_list: { icon: "🗂️", running: "Listing artifacts", done: "Listed artifacts" },
+	artifact_read: { icon: "🗂️", running: "Reading artifact", done: "Read artifact" },
+	artifact_write: { icon: "🗂️", running: "Writing artifact", done: "Wrote artifact" },
+	artifact_write_html_deck: { icon: "🗂️", running: "Building deck", done: "Built deck" },
+};
+
+function genericChipName(name: string, status: "running" | "done" | "error"): string {
+	const view = GENERIC_TOOL_VIEWS[name];
+	if (view) return `${view.icon} ${status === "running" ? view.running : view.done}`;
+	// Unknown tool: humanize the internal name rather than showing it raw.
+	const humanized = name.replace(/_/g, " ").trim() || "Tool";
+	return `🛠️ ${humanized.charAt(0).toUpperCase()}${humanized.slice(1)}`;
+}
+
 function summariseToolArgs(name: string, args: any): string {
 	if (!args || typeof args !== "object") return "";
 	if (name === "bash") return String(args.command ?? "").slice(0, 160);
@@ -76,6 +94,12 @@ function summariseToolArgs(name: string, args: any): string {
 		const q = args.query ? ` · ${args.query}` : "";
 		return `${vault}${p}${q}`.slice(0, 160);
 	}
+	// Unknown tool: surface the most telling argument value instead of raw JSON.
+	for (const key of ["query", "path", "url", "name", "title", "id"]) {
+		if (typeof args[key] === "string" && args[key].trim()) return args[key].trim().slice(0, 160);
+	}
+	const firstString = Object.values(args).find((value) => typeof value === "string" && value.trim());
+	if (typeof firstString === "string") return firstString.trim().slice(0, 160);
 	try {
 		const s = JSON.stringify(args);
 		return s.length > 160 ? s.slice(0, 157) + "…" : s;
@@ -126,6 +150,200 @@ function UserMessageText({ text }: { text: string }) {
 	);
 }
 
+/** "8 Jul 2026" — the human-readable provenance date for a transferred consult. */
+function formatConsultDate(ms: number): string {
+	if (!Number.isFinite(ms)) return "";
+	return new Date(ms).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
+}
+
+/**
+ * The permanent thread item a Consult transfer leaves behind (Consult MR-5
+ * §4.4). Visitor (lila) accent, `@room` chip, question line, a collapsed answer
+ * (expandable), and a human-readable provenance footer. The raw sha256 is NEVER
+ * rendered (Borja 2026-07-11) — it lives in the item data and the handoff block
+ * only. `pending` drives the "included with your next message" hint, shown until
+ * the next send consumes the pending-transfer queue.
+ */
+/** One expandable Q/A within a transferred consult item (latest or earlier). */
+function ConsultThreadExchange({ label, question, answer, asOf, defaultExpanded }: { label: string; question: string; answer: string; asOf?: string; defaultExpanded: boolean }) {
+	const contentId = useId();
+	const [expanded, setExpanded] = useState(defaultExpanded);
+	const isLong = answer.split(/\r\n|\r|\n/).length > 6 || answer.length > 320;
+	const folded = isLong && !expanded;
+	return (
+		<div className="consult-exchange">
+			<div className="consult-q">
+				<span className="q-label">{label}</span>
+				{question}
+				{asOf && <span className="hx-asof">memory updated · {asOf}</span>}
+			</div>
+			<div id={contentId} className={`consult-answer consult-item-answer ${folded ? "is-folded" : ""}`}>
+				<div className="md">
+					<MarkdownRenderer>{answer}</MarkdownRenderer>
+				</div>
+			</div>
+			{isLong && (
+				<button type="button" className="consult-item-toggle" aria-expanded={expanded} aria-controls={contentId} onClick={() => setExpanded((value) => !value)}>
+					{expanded ? "Show less" : "Show more"}
+				</button>
+			)}
+		</div>
+	);
+}
+
+export function ConsultThreadItem({ item, pending }: { item: Extract<ChatItem, { kind: "consult" }>; pending: boolean }) {
+	// §8.4: a stacked item (N≥2) carries the whole conversation in `exchanges[]`;
+	// a legacy/N=1 item renders from the flat fields as a single-exchange stack.
+	const exchanges = item.exchanges && item.exchanges.length > 0
+		? item.exchanges
+		: [{ question: item.question, answer: item.answer, l1bFingerprint: item.l1bFingerprint, consultedAt: item.consultedAt }];
+	const stacked = exchanges.length > 1;
+	const lastIndex = exchanges.length - 1;
+	// ONE provenance footer: the latest as-of (§8.4). The raw sha256 is never
+	// rendered (Borja 2026-07-11) — it lives in the item data + handoff block only.
+	const footerDate = formatConsultDate(exchanges[lastIndex].consultedAt);
+	return (
+		<div className="consult-item">
+			<div className="head-row">
+				<span className="consult-chip">@{item.targetDisplayName}</span>
+				<span className="consult-sub">consulted from this room{stacked ? ` · ${exchanges.length} exchanges` : ""}</span>
+				{pending && (
+					<span className="pending-hint" title="The answer enters this room's context together with your next message">
+						⧗ included with your next message
+					</span>
+				)}
+			</div>
+			{exchanges.map((exchange, index) => {
+				// Latest expanded; earlier collapsed (§8.4). Per-exchange as-of shows on
+				// the collapsed rows only when the fingerprint differs from the previous.
+				const prev = index > 0 ? exchanges[index - 1] : null;
+				const drifted = prev != null && prev.l1bFingerprint !== exchange.l1bFingerprint;
+				const asOf = stacked && drifted ? formatConsultDate(exchange.consultedAt) : undefined;
+				return (
+					<ConsultThreadExchange
+						key={index}
+						label={stacked ? `Exchange ${index + 1}` : "Question"}
+						question={exchange.question}
+						answer={exchange.answer}
+						asOf={asOf}
+						defaultExpanded={index === lastIndex}
+					/>
+				);
+			})}
+			<div className="consult-foot">
+				<span className="meta">from {item.targetDisplayName}'s memory{footerDate ? ` · ${footerDate}` : ""}</span>
+			</div>
+		</div>
+	);
+}
+
+/** "8 Jul 2026" from an ISO-8601 string — the provenance date on the task thread item. */
+function formatTaskDate(iso: string): string {
+	const ms = Date.parse(iso);
+	if (!Number.isFinite(ms)) return "";
+	return new Date(ms).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
+}
+
+type TaskChatItem = Extract<ChatItem, { kind: "task" }>;
+type TaskArtifactItem = TaskChatItem["artifacts"][number];
+
+/**
+ * One artifact on the transferred task item — the thread-item counterpart of the
+ * card's TaskArtifactTile, using the same task-stream helpers (no duplication).
+ * Precedence: (1) the ONE representative thumbnail rides only the FIRST artifact
+ * (item.thumbnailDataUri); (2) an SVG whose route URL is derivable renders inline
+ * via that URL; (3) otherwise a typed chip (DECK/HTML/SVG kind + basename). Click
+ * routes to the coordinator-wired viewer via onOpen.
+ */
+function TaskThreadArtifact({ item, artifact, isFirst, onOpen }: { item: TaskChatItem; artifact: TaskArtifactItem; isFirst: boolean; onOpen: (relativePath: string) => void }) {
+	const name = artifactBasename(artifact.relativePath);
+	const open = () => onOpen(artifact.relativePath);
+
+	if (isFirst && item.thumbnailDataUri) {
+		return (
+			<button className="task-thumb" type="button" onClick={open} title={`Open ${name}`}>
+				<img src={item.thumbnailDataUri} alt="" />
+				<span className="task-name">{name}</span>
+			</button>
+		);
+	}
+	if (isSvgArtifact(artifact.extension)) {
+		// A malformed / cross-task path yields null → fall through to the chip rather
+		// than emitting a broken/unsafe <img>. SVG is the one type safe to render.
+		const url = taskArtifactUrl(item.taskId, artifact.relativePath);
+		if (url) {
+			return (
+				<button className="task-thumb" type="button" onClick={open} title={`Open ${name}`}>
+					<img src={url} alt="" />
+					<span className="task-name">{name}</span>
+				</button>
+			);
+		}
+	}
+	return (
+		<button className="task-file-chip" type="button" onClick={open} title={`Open ${name}`}>
+			<span className="task-kind">{artifactKindLabel(artifact.extension, item.template)}</span>
+			<span className="task-file-name">{name}</span>
+		</button>
+	);
+}
+
+/**
+ * The permanent thread item a specialist-task transfer leaves behind (delegation
+ * contract spec §2.2 / §4.4-style item). Sibling of ConsultThreadItem: a
+ * `<templateLabel> specialist` chip, the task title line, the representative
+ * thumbnail / typed artifact chips (reusing the task-stream helpers), a folded
+ * summary, and a muted one-line provenance footer (template id + date — allowed
+ * here because the thread item is the durable record, unlike the card face).
+ *
+ * `onOpenTaskArtifact` is exposed for the coordinator to wire (App.tsx / the
+ * in-room-chat dispatch pass it the V5 panel-viewer opener); when it is absent
+ * the chips/thumbnail are inert no-ops, so the item always renders safely.
+ */
+export function TaskThreadItem({ item, onOpenTaskArtifact }: { item: TaskChatItem; onOpenTaskArtifact?: (taskId: string, relativePath: string) => void }) {
+	const contentId = useId();
+	// Same shape as the done card: the specialist's narration folds to zero
+	// lines behind a "Specialist notes" toggle; the artifact is the item.
+	const [notesOpen, setNotesOpen] = useState(false);
+	const summary = item.summary ?? "";
+	const footerDate = formatTaskDate(item.generatedAt);
+	const open = (relativePath: string) => onOpenTaskArtifact?.(item.taskId, relativePath);
+
+	return (
+		<div className="task-item">
+			<div className="head-row">
+				<span className="task-item-chip">{item.templateLabel} specialist</span>
+				<span className="task-item-sub">delegated from this room</span>
+			</div>
+			{item.title && (
+				<div className="task-item-title">{item.title}</div>
+			)}
+			{item.artifacts.length > 0 && (
+				<div className="task-artifact-strip">
+					{item.artifacts.map((artifact, index) => (
+						<TaskThreadArtifact key={artifact.relativePath || index} item={item} artifact={artifact} isFirst={index === 0} onOpen={open} />
+					))}
+				</div>
+			)}
+			{summary && (
+				<div className="task-notes">
+					<button type="button" className="task-notes-toggle" aria-expanded={notesOpen} aria-controls={contentId} onClick={() => setNotesOpen((value) => !value)}>
+						<span className="task-notes-tri">{notesOpen ? "▾" : "▸"}</span> Specialist notes
+					</button>
+					{notesOpen && (
+						<div id={contentId} className="task-summary md">
+							<MarkdownRenderer>{summary}</MarkdownRenderer>
+						</div>
+					)}
+				</div>
+			)}
+			<div className="task-item-foot">
+				<span className="meta" title={item.template}>{footerDate || item.templateLabel || item.template}</span>
+			</div>
+		</div>
+	);
+}
+
 function MessageImpl({ item }: { item: ChatItem }) {
 	if (item.kind === "system") {
 		return <div className={`system-line ${item.level === "error" ? "error" : ""}`}>{item.text}</div>;
@@ -146,7 +364,7 @@ function MessageImpl({ item }: { item: ChatItem }) {
 			? `🌐 ${String(item.details?.title || "Fetch URL")}`
 			: isWebSearch
 				? `🔍 ${searchQuery || "Web search"}`
-				: mcpView ? mcpView.name : item.name;
+				: mcpView ? mcpView.name : genericChipName(item.name, item.status);
 		const chipSummary = isFetchUrl ? fetchDomain || summary : isWebSearch ? "" : mcpView ? mcpView.summary : summary;
 		return (
 			<div className="bubble-row">
@@ -158,17 +376,13 @@ function MessageImpl({ item }: { item: ChatItem }) {
 						{item.status === "running" && <span className="spinner" />}
 					</summary>
 					<div className="chip-body">
-						{summary && (
-							<div className="chip-args">
-								<span className="label">args</span>
-								<pre>{JSON.stringify(sanitizedToolArgs(item.name, item.args), null, 2)}</pre>
-							</div>
-						)}
-						{item.result && item.status !== "running" && (
+						{item.result && item.status !== "running" ? (
 							<div className="chip-result">
 								<span className="label">{item.status === "error" ? "error" : "result"}</span>
 								<ResultBody text={item.result} />
 							</div>
+						) : (
+							<div className="chip-empty">{item.status === "running" ? "Working…" : "No output."}</div>
 						)}
 					</div>
 				</details>

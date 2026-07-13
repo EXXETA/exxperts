@@ -442,6 +442,26 @@ assert.ok(readResult.details.styleProfile.fonts.some((f: any) => /Sen/.test(f.fa
 assert.ok(readResult.details.styleProfile.layouts.length >= 1);
 assert.ok(readResult.details.styleProfile.caveats.some((c: string) => /approximate/i.test(c)));
 
+// Offset paging (bug 8): a file larger than MAX_READ_BYTES (180_000) reads in
+// byte slices. The truncation notice must name the exact next offset so an
+// iterate specialist can continue instead of silently rebuilding a partial file.
+{
+	const bigDir = path.join((mod.artifactRoot as () => string)(), "big");
+	fs.mkdirSync(bigDir, { recursive: true, mode: 0o700 });
+	const tail = "TAILMARKER-END";
+	fs.writeFileSync(path.join(bigDir, "large.md"), "A".repeat(180_000) + tail); // 180_014 bytes, ASCII
+	const first = await read!.execute("big-1", { filename: "large.md", folder: "big" });
+	assert.equal(first.details.truncated, true, "first slice of an oversized file must report truncated");
+	assert.match(first.content[0].text, /\[truncated — file is 180014 bytes; call artifact_read again with offset=180000 to continue\]/);
+	assert.ok(!first.content[0].text.includes(tail), "the tail must not appear in the first slice");
+	const cont = await read!.execute("big-2", { filename: "large.md", folder: "big", offset: 180_000 });
+	assert.equal(cont.details.truncated, false, "the continuation slice must not report truncated");
+	assert.ok(cont.content[0].text.startsWith(tail), "continuation from the named offset must return the remaining bytes");
+	const badOffset = await read!.execute("big-3", { filename: "large.md", folder: "big", offset: -1 });
+	assert.equal(badOffset.isError, true, "a negative offset must be rejected");
+	assert.match(badOffset.content[0].text, /offset must be a non-negative integer/);
+}
+
 const pastedHtmlStyle = await inspectReferenceStyle!.execute("style-pasted", {
 	html: "<!doctype html><html><head><style>.slide{background:#123456;color:#ffffff;font-family:'Inter', Arial;font-size:32px;border:1px solid #ffcc00}</style></head><body><section class='slide title'><h1>Hi</h1></section></body></html>",
 });

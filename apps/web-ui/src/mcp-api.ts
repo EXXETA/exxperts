@@ -1,5 +1,8 @@
 export interface McpConnectorAuthStatus {
 	mode: "oauth" | "bearer" | "none";
+	// Entry explicitly configures OAuth (custom client) — a login is expected
+	// even when the server lists tools unauthenticated.
+	explicit?: boolean;
 	hasStoredTokens: boolean;
 	tokenExpired: boolean | null;
 	hasRefreshToken: boolean;
@@ -59,6 +62,7 @@ export interface AddMcpServerRequest {
 	command?: string;
 	args?: string[];
 	bearerToken?: string;
+	oauth?: { clientId: string; clientSecret?: string; scope?: string };
 }
 
 export function addMcpServer(request: AddMcpServerRequest): Promise<{ name: string; path: string }> {

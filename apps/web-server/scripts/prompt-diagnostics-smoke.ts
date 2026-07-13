@@ -92,6 +92,11 @@ async function runPermissionSmoke(): Promise<void> {
 			assert(result?.block === true, `selected persistent-room workspace marker should still block ${toolName}`);
 		}
 
+		// read_skill sits on the policy baseline (field bug 2026-07-11: the L2 index
+		// advertised it but this gate blocked it — the tool never reached the room).
+		assert(!(await businessHandler({ toolName: "read_skill", input: {} }, { cwd: tmp }))?.block, "policy baseline should allow read_skill without persistent-room markers");
+		assert(!(await persistentRoomHandler({ toolName: "read_skill", input: {} }, { cwd: tmp }))?.block, "policy baseline should allow read_skill in persistent rooms");
+
 		const badAgentHandler = await loadPermissionToolCallHandler({
 			EXXETA_PERSONA: "business",
 			EXXETA_PERSISTENT_ROOM_SESSION: "1",

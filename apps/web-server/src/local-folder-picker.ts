@@ -4,6 +4,10 @@ const MACOS_CHOOSE_FOLDER_SCRIPT = 'POSIX path of (choose folder with prompt "Ch
 const DEFAULT_CHOOSE_FOLDER_TIMEOUT_MS = 60_000;
 const DEFAULT_OSASCRIPT_PATH = "/usr/bin/osascript";
 const DEFAULT_POWERSHELL_PATH = "powershell.exe";
+const DEFAULT_ZENITY_PATH = "zenity";
+
+// zenity prints the selected path on stdout and exits 0; cancel exits 1 with empty stdout.
+const LINUX_CHOOSE_FOLDER_ARGS = ["--file-selection", "--directory", '--title=Choose workspace folder'];
 
 // Prints "OK:<path>" or "CANCEL" so selection, cancellation, and failure are unambiguous.
 // The TopMost owner form keeps the dialog from opening behind the terminal/browser.
@@ -34,6 +38,7 @@ export interface ChooseMacosFolderOptions {
 
 export interface ChooseLocalFolderOptions extends ChooseMacosFolderOptions {
 	powershellPath?: string;
+	zenityPath?: string;
 }
 
 function defaultFolderPickerRunner(command: string, args: string[], options: { timeoutMs: number }): Promise<{ stdout: string; stderr: string }> {
@@ -179,16 +184,72 @@ async function chooseWindowsFolder(options: ChooseLocalFolderOptions = {}): Prom
 	}
 }
 
+// zenity exits 1 both on cancel and on some real failures; cancel is the exit-1 case with empty stdout.
+function isZenityCancellation(error: unknown): boolean {
+	const code = (error as { code?: unknown } | undefined)?.code;
+	const stdout = String((error as { stdout?: unknown } | undefined)?.stdout ?? "");
+	return code === 1 && stdout.trim() === "";
+}
+
+async function chooseLinuxFolder(options: ChooseLocalFolderOptions = {}): Promise<LocalFolderPickerResult> {
+	const runner = options.runner ?? defaultFolderPickerRunner;
+	const timeoutMs = options.timeoutMs ?? DEFAULT_CHOOSE_FOLDER_TIMEOUT_MS;
+	const zenityPath = options.zenityPath ?? DEFAULT_ZENITY_PATH;
+
+	try {
+		const result = await runner(zenityPath, LINUX_CHOOSE_FOLDER_ARGS, { timeoutMs });
+		const selectedPath = result.stdout.trim();
+		if (!selectedPath) {
+			return {
+				ok: false,
+				supported: true,
+				cancelled: false,
+				code: "choose_folder_failed",
+				error: "Folder chooser did not return a folder path. Enter the path manually.",
+			};
+		}
+		return { ok: true, supported: true, cancelled: false, path: selectedPath };
+	} catch (error) {
+		if (isMissingOsascript(error)) {
+			return {
+				ok: false,
+				supported: false,
+				cancelled: false,
+				code: "folder_chooser_unavailable",
+				error: "Folder chooser is unavailable because zenity is not installed. Enter the path manually.",
+			};
+		}
+		if (isTimeout(error)) {
+			return {
+				ok: false,
+				supported: true,
+				cancelled: false,
+				code: "folder_chooser_timeout",
+				error: "Folder chooser timed out. Enter the path manually.",
+			};
+		}
+		if (isZenityCancellation(error)) return { ok: true, supported: true, cancelled: true, path: null };
+		return {
+			ok: false,
+			supported: true,
+			cancelled: false,
+			code: "choose_folder_failed",
+			error: "Folder chooser failed. Enter the path manually.",
+		};
+	}
+}
+
 // Platform dispatcher used by the web server; the macOS path is unchanged.
 export async function chooseLocalFolder(options: ChooseLocalFolderOptions = {}): Promise<LocalFolderPickerResult> {
 	const platform = options.platform ?? process.platform;
 	if (platform === "darwin") return chooseMacosFolder(options);
 	if (platform === "win32") return chooseWindowsFolder(options);
+	if (platform === "linux") return chooseLinuxFolder(options);
 	return {
 		ok: false,
 		supported: false,
 		cancelled: false,
 		code: "unsupported_platform",
-		error: "Folder chooser is only available on macOS and Windows. Enter the path manually.",
+		error: "Folder chooser is only available on macOS, Windows, and Linux. Enter the path manually.",
 	};
 }

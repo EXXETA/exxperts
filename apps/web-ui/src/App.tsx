@@ -8,6 +8,7 @@ import { useEscapeKey } from "./components/use-escape-key";
 import { PersistentAgentCard } from "./components/launcher-room-card";
 import { firstWordOfLabel, ProductSidebar, strandedBySwitchCount, type ThemeMode } from "./components/product-shell";
 import { ConnectorsPage } from "./components/ConnectorsPage";
+import { SkillsPage } from "./components/SkillsPage";
 import { Preview } from "./components/Preview";
 import { Help } from "./components/Help";
 import { MarkdownRenderer } from "./components/Markdown";
@@ -20,8 +21,18 @@ import type { ApprovalPreviewData } from "./approval-preview";
 import type { AbsorbApprovalResponse, AbsorbAssessmentResponse, AbsorbAvailability, AbsorbDiscussionMessage, AbsorbDiscussionSignoffResponse, AbsorbDiscussionTokenBudget, AbsorbDiscussionTurnResponse, AbsorbProposalResponse, AbsorbProposalSourceMetadata, AbsorbReviewAction, AbsorbReviewEntryChange, AbsorbReviewSectionChange, AuthStatusResponse, ChatItem, CheckpointApprovalResponse, CheckpointProposalResponse, ContextHealthStatus, LoginProviderCatalogEntry, PersistentAgentAiProfileSelectionStatus, PersistentAgentAiProfileStatus, PersistentAgentArchiveResponse, PersistentAgentCreateRequest, PersistentAgentCreateResponse, PersistentAgentId, PersistentAgentMementoBoundaryResponse, PersistentAgentStatus, PersistentAgentThreadOrigin, PersistentAgentThreadRecord, StructuralReviewApprovalResponse, StructuralReviewAssessmentResponse, StructuralReviewAvailability, StructuralReviewDiscussionMessage, StructuralReviewDiscussionSignoffResponse, StructuralReviewDiscussionTokenBudget, StructuralReviewDiscussionTurnResponse, StructuralReviewMemoryMapRow, StructuralReviewProposalResponse, StructuralReviewSourceMetadata, WebChatModelOption, WebChatModelStatus } from "./types";
 import { archivePersistentRoom, fetchPersistentRoomMaintenanceSettings } from "./persistent-room-management-api";
 import { createAssistantStreamState, DEFAULT_REVEAL_PACING, isAssistantStreamActive, reduceAssistantStream, type AssistantStreamAction, type AssistantStreamEffect, type AssistantStreamState, type RevealPacing } from "./assistant-stream";
+import { consultStack, createConsultState, reduceConsult, type ConsultAction, type ConsultExchange, type ConsultState } from "./consult-stream";
+import { createTaskState, reduceTask, type TaskAction, type TaskState } from "./task-stream";
+import { ConsultDock, TaskDock } from "./components/delegation-card";
+import { ArtifactViewer } from "./components/ArtifactViewer";
+// The handoff grammar + queue helpers are the ONE shared source of truth, imported
+// straight from the server workspace's pure module (no node/server deps; vite
+// bundles it) so transfer here and the checkpoint formatter there agree exactly.
+import { buildConsultHandoffBlockFromStack, composeOutgoingPromptWithHandoffs, readConsultHandoffQueue, type ConsultHandoffExchange } from "../../web-server/src/consult-handoff";
+import { buildSpecialistHandoffBlock } from "../../web-server/src/specialist-handoff";
+import type { MentionCandidateRoom } from "./mention-popover";
 
-type MainView = "home" | "chat" | "dashboard" | "ai-setup" | "connectors" | "memory";
+type MainView = "home" | "chat" | "dashboard" | "ai-setup" | "connectors" | "memory" | "skills";
 type CheckpointDensity = "compact" | "standard" | "rich";
 type AbsorbWorkflowStep = "closed" | "checking" | "assessing" | "assessment" | "discussing" | "signing_off" | "proposing" | "proposal" | "approving" | "saved" | "unavailable" | "error";
 type StructuralReviewWorkflowStep = "closed" | "checking" | "assessing" | "assessment" | "discussing" | "signing_off" | "proposing" | "proposal" | "approving" | "saved" | "unavailable" | "error";
@@ -126,14 +137,25 @@ function maintenanceFastPathBlockers(proposal: { candidateValidation: { valid: b
 	return blockers;
 }
 
+// The transcript-elision notice (checkpoint-compression.ts) is a quality
+// hedge, not a defect: it fires on long tool-heavy sessions — exactly where
+// the one-click path matters most — elision never touches the user's own
+// messages, and the entry lands in Recent Context where Learn re-reviews it.
+// So it is disclosed on the saved line instead of forcing the full preview.
+function isTranscriptElisionWarning(warning: string): boolean {
+	return /trimmed to fit the compression budget/i.test(warning);
+}
+
 // Quick-checkpoint gate (same shape as the maintenance fast path): only
-// deterministic problems block — transcript elision or parse warnings from the
-// worker, or an incomplete proposal. The server stamps every propose response
-// with the informational "no memory has been written" line; that is status,
-// not a problem, so it is filtered out like the maintenance gate does.
+// deterministic problems block — parse warnings from the worker, or an
+// incomplete proposal. The server stamps every propose response with the
+// informational "no memory has been written" line; that is status, not a
+// problem, so it is filtered out like the maintenance gate does. The
+// transcript-elision notice does not block either — the user chose the
+// no-preview path — it is appended to the saved system line instead.
 // Anything blocked falls back to the full preview with the reasons named.
 function quickCheckpointBlockers(proposal: CheckpointProposalResponse): string[] {
-	const blockers: string[] = [...meaningfulMaintenanceWarnings(proposal.warnings)];
+	const blockers: string[] = meaningfulMaintenanceWarnings(proposal.warnings).filter((warning) => !isTranscriptElisionWarning(warning));
 	if (!proposal.fields.sessionArc.trim()) blockers.push("the proposal is missing its session arc");
 	if (!proposal.fields.body.trim()) blockers.push("the proposal is missing its body");
 	return blockers;
@@ -220,6 +242,20 @@ function threadRecordToLocalThread(record: PersistentAgentThreadRecord, fallback
 		model,
 		items: Array.isArray(record.items) ? record.items as ChatItem[] : [],
 	};
+}
+
+// Consult MR-5: reconstruct which consult items still show the pending hint when
+// a thread is restored — the `count` most recent consult items in the transcript,
+// since each un-consumed transfer contributes exactly one queued block and one
+// (trailing) consult item.
+function deriveTrailingConsultIds(items: ChatItem[], count: number): Set<string> {
+	const ids = new Set<string>();
+	if (count <= 0) return ids;
+	for (let i = items.length - 1; i >= 0 && ids.size < count; i--) {
+		const item = items[i];
+		if (item.kind === "consult") ids.add(item.id);
+	}
+	return ids;
 }
 
 const ZERO_USAGE: SessionUsage = {
@@ -810,7 +846,7 @@ function AiProfileSwitcherSection({ status, onSelect, onRefresh, onRefreshAuth, 
 	);
 }
 
-function Landing({ onOpenAiSetup, onOpenDashboard, onOpenConnectors, onOpenMemory, onOpenPersistentAgent, onResumePersistentAgent, onMaintainPersistentAgent, onCreatePersistentAgent, onArchiveRoom, modelStatus, persistentAgentStatuses, persistentThread, persistentLive, persistentResumeError, onRefreshPersistentAgent, theme, onToggleTheme, connected, aiProfileStatus: aiProfileSelection, onSelectAiProfile, onRefreshAiProfile, standbyLockedModels }: { onOpenAiSetup: () => void; onOpenDashboard: () => void; onOpenConnectors: () => void; onOpenMemory: () => void; onOpenPersistentAgent: (status: PersistentAgentStatus, model: WebChatModelOption) => Promise<void> | void; onResumePersistentAgent: (status: PersistentAgentStatus) => Promise<void> | void; onMaintainPersistentAgent: (target: MaintainTarget) => void; onCreatePersistentAgent: (request: PersistentAgentCreateRequest) => Promise<void>; onArchiveRoom: (agentId: PersistentAgentId, confirmation: string) => Promise<PersistentAgentArchiveResponse>; modelStatus: WebChatModelStatus | null; persistentAgentStatuses: PersistentAgentStatus[]; persistentThread: PersistentAgentThread | null; persistentLive: boolean; persistentResumeError: string | null; onRefreshPersistentAgent: () => void; theme: ThemeMode; onToggleTheme: () => void; connected: boolean; aiProfileStatus: PersistentAgentAiProfileSelectionStatus | null; onSelectAiProfile: (profileId: string) => Promise<void>; onRefreshAiProfile: () => void; standbyLockedModels?: Array<{ provider: string; model: string }> }) {
+function Landing({ onOpenAiSetup, onOpenDashboard, onOpenConnectors, onOpenMemory, onOpenSkills, onOpenPersistentAgent, onResumePersistentAgent, onMaintainPersistentAgent, onCreatePersistentAgent, onArchiveRoom, modelStatus, persistentAgentStatuses, persistentThread, persistentLive, persistentResumeError, onRefreshPersistentAgent, theme, onToggleTheme, connected, aiProfileStatus: aiProfileSelection, onSelectAiProfile, onRefreshAiProfile, standbyLockedModels }: { onOpenAiSetup: () => void; onOpenDashboard: () => void; onOpenConnectors: () => void; onOpenMemory: () => void; onOpenSkills: () => void; onOpenPersistentAgent: (status: PersistentAgentStatus, model: WebChatModelOption) => Promise<void> | void; onResumePersistentAgent: (status: PersistentAgentStatus) => Promise<void> | void; onMaintainPersistentAgent: (target: MaintainTarget) => void; onCreatePersistentAgent: (request: PersistentAgentCreateRequest) => Promise<void>; onArchiveRoom: (agentId: PersistentAgentId, confirmation: string) => Promise<PersistentAgentArchiveResponse>; modelStatus: WebChatModelStatus | null; persistentAgentStatuses: PersistentAgentStatus[]; persistentThread: PersistentAgentThread | null; persistentLive: boolean; persistentResumeError: string | null; onRefreshPersistentAgent: () => void; theme: ThemeMode; onToggleTheme: () => void; connected: boolean; aiProfileStatus: PersistentAgentAiProfileSelectionStatus | null; onSelectAiProfile: (profileId: string) => Promise<void>; onRefreshAiProfile: () => void; standbyLockedModels?: Array<{ provider: string; model: string }> }) {
 	const [createOpen, setCreateOpen] = useState(false);
 	useEscapeKey(() => setCreateOpen(false), createOpen);
 	const [settingsRoomId, setSettingsRoomId] = useState<PersistentAgentId | null>(null);
@@ -844,7 +880,7 @@ function Landing({ onOpenAiSetup, onOpenDashboard, onOpenConnectors, onOpenMemor
 
 	return (
 		<div className="landing-shell with-product-sidebar">
-			<ProductSidebar onHome={() => {}} onAiSetup={onOpenAiSetup} onDashboard={onOpenDashboard} onConnectors={onOpenConnectors} onMemory={onOpenMemory} connected={connected} theme={theme} onToggleTheme={onToggleTheme} active="home" aiProfileStatus={aiProfileSelection} onSelectAiProfile={onSelectAiProfile} onRefreshAiProfile={onRefreshAiProfile} standbyLockedModels={standbyLockedModels} />
+			<ProductSidebar onHome={() => {}} onAiSetup={onOpenAiSetup} onDashboard={onOpenDashboard} onConnectors={onOpenConnectors} onMemory={onOpenMemory} onSkills={onOpenSkills} connected={connected} theme={theme} onToggleTheme={onToggleTheme} active="home" aiProfileStatus={aiProfileSelection} onSelectAiProfile={onSelectAiProfile} onRefreshAiProfile={onRefreshAiProfile} standbyLockedModels={standbyLockedModels} />
 			<div className="landing home-page">
 			<section className="landing-hero">
 				<div className="landing-hero-head">
@@ -901,10 +937,10 @@ function Landing({ onOpenAiSetup, onOpenDashboard, onOpenConnectors, onOpenMemor
 	);
 }
 
-function AiSetupShell({ onHome, onDashboard, onConnectors, onMemory, onRefreshAuth, aiProfileStatus, onRefreshAiProfile, onSelectAiProfile, connected, theme, onToggleTheme, standbyLockedModels }: { onHome: () => void; onDashboard: () => void; onConnectors: () => void; onMemory: () => void; onRefreshAuth: () => void; aiProfileStatus: PersistentAgentAiProfileSelectionStatus | null; onRefreshAiProfile: () => void; onSelectAiProfile: (profileId: string) => Promise<void>; connected: boolean; theme: ThemeMode; onToggleTheme: () => void; standbyLockedModels?: Array<{ provider: string; model: string }> }) {
+function AiSetupShell({ onHome, onDashboard, onConnectors, onMemory, onSkills, onRefreshAuth, aiProfileStatus, onRefreshAiProfile, onSelectAiProfile, connected, theme, onToggleTheme, standbyLockedModels }: { onHome: () => void; onDashboard: () => void; onConnectors: () => void; onMemory: () => void; onSkills: () => void; onRefreshAuth: () => void; aiProfileStatus: PersistentAgentAiProfileSelectionStatus | null; onRefreshAiProfile: () => void; onSelectAiProfile: (profileId: string) => Promise<void>; connected: boolean; theme: ThemeMode; onToggleTheme: () => void; standbyLockedModels?: Array<{ provider: string; model: string }> }) {
 	return (
 		<div className="landing-shell with-product-sidebar">
-			<ProductSidebar onHome={onHome} onAiSetup={() => {}} onDashboard={onDashboard} onConnectors={onConnectors} onMemory={onMemory} connected={connected} theme={theme} onToggleTheme={onToggleTheme} active="ai-setup" aiProfileStatus={aiProfileStatus} onSelectAiProfile={onSelectAiProfile} onRefreshAiProfile={onRefreshAiProfile} standbyLockedModels={standbyLockedModels} />
+			<ProductSidebar onHome={onHome} onAiSetup={() => {}} onDashboard={onDashboard} onConnectors={onConnectors} onMemory={onMemory} onSkills={onSkills} connected={connected} theme={theme} onToggleTheme={onToggleTheme} active="ai-setup" aiProfileStatus={aiProfileStatus} onSelectAiProfile={onSelectAiProfile} onRefreshAiProfile={onRefreshAiProfile} standbyLockedModels={standbyLockedModels} />
 			<div className="landing ai-setup-page">
 				<section className="landing-hero ai-setup-hero">
 					<h1>AI setup.</h1>
@@ -917,10 +953,10 @@ function AiSetupShell({ onHome, onDashboard, onConnectors, onMemory, onRefreshAu
 	);
 }
 
-function ConnectorsShell({ onHome, onAiSetup, onDashboard, onMemory, connected, theme, onToggleTheme, aiProfileStatus, onSelectAiProfile, onRefreshAiProfile, standbyLockedModels }: { onHome: () => void; onAiSetup: () => void; onDashboard: () => void; onMemory: () => void; connected: boolean; theme: ThemeMode; onToggleTheme: () => void; aiProfileStatus: PersistentAgentAiProfileSelectionStatus | null; onSelectAiProfile: (profileId: string) => Promise<void>; onRefreshAiProfile: () => void; standbyLockedModels?: Array<{ provider: string; model: string }> }) {
+function ConnectorsShell({ onHome, onAiSetup, onDashboard, onMemory, onSkills, connected, theme, onToggleTheme, aiProfileStatus, onSelectAiProfile, onRefreshAiProfile, standbyLockedModels }: { onHome: () => void; onAiSetup: () => void; onDashboard: () => void; onMemory: () => void; onSkills: () => void; connected: boolean; theme: ThemeMode; onToggleTheme: () => void; aiProfileStatus: PersistentAgentAiProfileSelectionStatus | null; onSelectAiProfile: (profileId: string) => Promise<void>; onRefreshAiProfile: () => void; standbyLockedModels?: Array<{ provider: string; model: string }> }) {
 	return (
 		<div className="landing-shell with-product-sidebar">
-			<ProductSidebar onHome={onHome} onAiSetup={onAiSetup} onDashboard={onDashboard} onConnectors={() => {}} onMemory={onMemory} connected={connected} theme={theme} onToggleTheme={onToggleTheme} active="connectors" aiProfileStatus={aiProfileStatus} onSelectAiProfile={onSelectAiProfile} onRefreshAiProfile={onRefreshAiProfile} standbyLockedModels={standbyLockedModels} />
+			<ProductSidebar onHome={onHome} onAiSetup={onAiSetup} onDashboard={onDashboard} onConnectors={() => {}} onMemory={onMemory} onSkills={onSkills} connected={connected} theme={theme} onToggleTheme={onToggleTheme} active="connectors" aiProfileStatus={aiProfileStatus} onSelectAiProfile={onSelectAiProfile} onRefreshAiProfile={onRefreshAiProfile} standbyLockedModels={standbyLockedModels} />
 			<div className="landing ai-setup-page connectors-page">
 				<ConnectorsPage />
 			</div>
@@ -928,10 +964,19 @@ function ConnectorsShell({ onHome, onAiSetup, onDashboard, onMemory, connected, 
 	);
 }
 
-function MemoryShell({ onHome, onAiSetup, onDashboard, onConnectors, onMaintain, maintainBlocked, connected, theme, onToggleTheme, aiProfileStatus, onSelectAiProfile, onRefreshAiProfile, standbyLockedModels }: { onHome: () => void; onAiSetup: () => void; onDashboard: () => void; onConnectors: () => void; onMaintain: (target: MaintainTarget) => void; maintainBlocked?: (agentId: PersistentAgentId) => string | null; connected: boolean; theme: ThemeMode; onToggleTheme: () => void; aiProfileStatus: PersistentAgentAiProfileSelectionStatus | null; onSelectAiProfile: (profileId: string) => Promise<void>; onRefreshAiProfile: () => void; standbyLockedModels?: Array<{ provider: string; model: string }> }) {
+function SkillsShell({ onHome, onAiSetup, onDashboard, onConnectors, onMemory, connected, theme, onToggleTheme, aiProfileStatus, onSelectAiProfile, onRefreshAiProfile, standbyLockedModels }: { onHome: () => void; onAiSetup: () => void; onDashboard: () => void; onConnectors: () => void; onMemory: () => void; connected: boolean; theme: ThemeMode; onToggleTheme: () => void; aiProfileStatus: PersistentAgentAiProfileSelectionStatus | null; onSelectAiProfile: (profileId: string) => Promise<void>; onRefreshAiProfile: () => void; standbyLockedModels?: Array<{ provider: string; model: string }> }) {
 	return (
 		<div className="landing-shell with-product-sidebar">
-			<ProductSidebar onHome={onHome} onAiSetup={onAiSetup} onDashboard={onDashboard} onConnectors={onConnectors} onMemory={() => {}} connected={connected} theme={theme} onToggleTheme={onToggleTheme} active="memory" aiProfileStatus={aiProfileStatus} onSelectAiProfile={onSelectAiProfile} onRefreshAiProfile={onRefreshAiProfile} standbyLockedModels={standbyLockedModels} />
+			<ProductSidebar onHome={onHome} onAiSetup={onAiSetup} onDashboard={onDashboard} onConnectors={onConnectors} onMemory={onMemory} onSkills={() => {}} connected={connected} theme={theme} onToggleTheme={onToggleTheme} active="skills" aiProfileStatus={aiProfileStatus} onSelectAiProfile={onSelectAiProfile} onRefreshAiProfile={onRefreshAiProfile} standbyLockedModels={standbyLockedModels} />
+			<SkillsPage />
+		</div>
+	);
+}
+
+function MemoryShell({ onHome, onAiSetup, onDashboard, onConnectors, onSkills, onMaintain, maintainBlocked, connected, theme, onToggleTheme, aiProfileStatus, onSelectAiProfile, onRefreshAiProfile, standbyLockedModels }: { onHome: () => void; onAiSetup: () => void; onDashboard: () => void; onConnectors: () => void; onSkills: () => void; onMaintain: (target: MaintainTarget) => void; maintainBlocked?: (agentId: PersistentAgentId) => string | null; connected: boolean; theme: ThemeMode; onToggleTheme: () => void; aiProfileStatus: PersistentAgentAiProfileSelectionStatus | null; onSelectAiProfile: (profileId: string) => Promise<void>; onRefreshAiProfile: () => void; standbyLockedModels?: Array<{ provider: string; model: string }> }) {
+	return (
+		<div className="landing-shell with-product-sidebar">
+			<ProductSidebar onHome={onHome} onAiSetup={onAiSetup} onDashboard={onDashboard} onConnectors={onConnectors} onMemory={() => {}} onSkills={onSkills} connected={connected} theme={theme} onToggleTheme={onToggleTheme} active="memory" aiProfileStatus={aiProfileStatus} onSelectAiProfile={onSelectAiProfile} onRefreshAiProfile={onRefreshAiProfile} standbyLockedModels={standbyLockedModels} />
 			<div className="landing dashboard-page">
 				<section className="landing-hero">
 					<h1>Memory.</h1>
@@ -1020,7 +1065,7 @@ function StructuralReviewMemoryMap({ rows }: { rows: StructuralReviewMemoryMapRo
 	const totalWords = mainRows.reduce((sum, row) => sum + row.words, 0);
 	const totalTokens = mainRows.reduce((sum, row) => sum + row.estimatedTokens, 0);
 	function share(row: StructuralReviewMemoryMapRow): string {
-		if (row.area.includes(" / ") || totalTokens <= 0) return "—";
+		if (row.area.includes(" / ") || totalTokens <= 0) return "–";
 		return `${Math.round((row.estimatedTokens / totalTokens) * 100)}%`;
 	}
 	return (
@@ -1072,8 +1117,8 @@ function StructuralReviewMemoryMapDiff({ current, proposed }: { current: Structu
 						return (
 							<tr key={`${area}-${index}`}>
 								<td>{area}</td>
-								<td className="n">{currentRow ? currentRow.estimatedTokens : "—"}</td>
-								<td className="n">{proposedRow ? proposedRow.estimatedTokens : "—"}</td>
+								<td className="n">{currentRow ? currentRow.estimatedTokens : "–"}</td>
+								<td className="n">{proposedRow ? proposedRow.estimatedTokens : "–"}</td>
 								{deltaCell(currentRow?.estimatedTokens ?? null, proposedRow?.estimatedTokens ?? null)}
 							</tr>
 						);
@@ -1649,7 +1694,7 @@ function EntryChangesDetail({ changes, fallback }: { changes?: AbsorbReviewEntry
 			<div className="absorb-table-wrap">
 				<table className="absorb-change-table">
 					<thead><tr><th>Source</th><th>Action</th><th>Destination</th><th>Why</th></tr></thead>
-					<tbody>{changes.map((change, index) => <tr key={`${change.sourceEntry}-${index}`}><td>{change.sourceEntry}</td><td><AbsorbActionBadge action={change.action} /></td><td>{change.targetSection || "—"}</td><td>{change.rationale}</td></tr>)}</tbody>
+					<tbody>{changes.map((change, index) => <tr key={`${change.sourceEntry}-${index}`}><td>{change.sourceEntry}</td><td><AbsorbActionBadge action={change.action} /></td><td>{change.targetSection || "–"}</td><td>{change.rationale}</td></tr>)}</tbody>
 				</table>
 			</div>
 		</details>
@@ -1939,7 +1984,7 @@ function formatStructuralReviewWorkflowError(message: string): string {
 	return message;
 }
 
-function CheckpointPreviewShell({ chat, itemCount, rememberText, density, proposal, loading, error, approvalLoading, approvalError, approvalResult, quickRequested, quickBlockedReasons, onRememberTextChange, onDensityChange, onGenerate, onApprove, onDiscard, onContinueAfterCheckpoint, onRestAfterCheckpoint, onClose }: { chat: NonNullable<PersistentChatConfig>; itemCount: number; rememberText: string; density: CheckpointDensity; proposal: CheckpointProposalResponse | null; loading: boolean; error: string | null; approvalLoading: boolean; approvalError: string | null; approvalResult: CheckpointApprovalResponse | null; quickRequested: boolean; quickBlockedReasons: string[] | null; onRememberTextChange: (text: string) => void; onDensityChange: (density: CheckpointDensity) => void; onGenerate: () => void; onApprove: (approvedRecentContext: string) => void; onDiscard: () => void; onContinueAfterCheckpoint: () => void; onRestAfterCheckpoint: () => void; onClose: () => void }) {
+function CheckpointPreviewShell({ chat, itemCount, rememberText, density, proposal, loading, error, approvalLoading, approvalError, approvalResult, quickRequested, quickBlockedReasons, consultRunning, taskRunning, pendingConsultHandoffCount, pendingTaskHandoffCount, onRememberTextChange, onDensityChange, onGenerate, onApprove, onDiscard, onContinueAfterCheckpoint, onRestAfterCheckpoint, onClose }: { chat: NonNullable<PersistentChatConfig>; itemCount: number; rememberText: string; density: CheckpointDensity; proposal: CheckpointProposalResponse | null; loading: boolean; error: string | null; approvalLoading: boolean; approvalError: string | null; approvalResult: CheckpointApprovalResponse | null; quickRequested: boolean; quickBlockedReasons: string[] | null; consultRunning: boolean; taskRunning: boolean; pendingConsultHandoffCount: number; pendingTaskHandoffCount: number; onRememberTextChange: (text: string) => void; onDensityChange: (density: CheckpointDensity) => void; onGenerate: () => void; onApprove: (approvedRecentContext: string) => void; onDiscard: () => void; onContinueAfterCheckpoint: () => void; onRestAfterCheckpoint: () => void; onClose: () => void }) {
 	const [showFullEntry, setShowFullEntry] = useState(false);
 	const [editing, setEditing] = useState(false);
 	const [approvedFields, setApprovedFields] = useState<CheckpointApprovalEditFields>({ sessionArc: "", body: "", parked: "None" });
@@ -1969,6 +2014,22 @@ function CheckpointPreviewShell({ chat, itemCount, rememberText, density, propos
 		const ok = window.confirm("Discard this memory proposal?\n\nIt has not been saved. If you discard it, you return to the active thread and the proposal is lost.");
 		if (ok) onDiscard();
 	}
+	// Consult MR-5 checkpoint-time honesty (§2.3): one-line notices, NOT gates —
+	// they never block the checkpoint, they just tell the truth about consults.
+	const consultHonestyNotices: string[] = [];
+	if (consultRunning) consultHonestyNotices.push("A consult is still running; the checkpoint will discard it.");
+	// Task parity (visuals V6): unlike a discarded consult, a task's files persist —
+	// the honest copy says what is and is not lost. The consult line below is the
+	// §2.3 locked verbatim string; the queue holds both block kinds, so each kind
+	// gets its own line.
+	if (taskRunning) consultHonestyNotices.push("A specialist task is still running; its result won't be in this checkpoint (artifacts already written stay on disk).");
+	if (pendingConsultHandoffCount > 0) consultHonestyNotices.push("A transferred consult hasn't entered memory yet; it will carry into the fresh conversation.");
+	if (pendingTaskHandoffCount > 0) consultHonestyNotices.push("A transferred task result hasn't entered memory yet; it will carry into the fresh conversation.");
+	const honestyNoticesNode = consultHonestyNotices.length > 0 ? (
+		<div className="checkpoint-consult-notices" role="status">
+			{consultHonestyNotices.map((notice) => <div key={notice}>{notice}</div>)}
+		</div>
+	) : null;
 	return (
 		<div className="checkpoint-preview-backdrop" role="dialog" aria-modal="true" aria-label="Checkpoint proposal">
 			<section className="checkpoint-input-card">
@@ -2059,6 +2120,7 @@ function CheckpointPreviewShell({ chat, itemCount, rememberText, density, propos
 							{displayWarnings.length > 0 && <div className="checkpoint-proposal-warnings">{displayWarnings.map((warning) => <div key={warning}>{warning}</div>)}</div>}
 							{approvalError && <div className="checkpoint-proposal-error">{approvalError}</div>}
 						</div>
+						{honestyNoticesNode}
 						<div className="checkpoint-preview-actions">
 							<button className="landing-action secondary" disabled={approvalLoading} onClick={confirmDiscard}>Discard</button>
 							<button className="landing-action" disabled={approvalLoading || !approvalReady} onClick={() => onApprove(approvedDraft)}>{approvalLoading ? "Saving…" : "Save to memory"}</button>
@@ -2096,6 +2158,7 @@ function CheckpointPreviewShell({ chat, itemCount, rememberText, density, propos
 							/>
 						</label>
 						{error && <div className="checkpoint-proposal-error">{error}</div>}
+						{honestyNoticesNode}
 						<div className="checkpoint-preview-actions">
 							<button className="landing-action secondary" onClick={onClose}>Close</button>
 							<button className="landing-action" disabled={itemCount === 0} onClick={onGenerate}>Generate memory proposal</button>
@@ -2152,6 +2215,11 @@ export function App() {
 	});
 	const [items, setItems] = useState<ChatItem[]>([]);
 	const [composerResetNonce, setComposerResetNonce] = useState(0);
+	// V6 iterate affordance: a one-shot composer prefill. Set together with a
+	// nonce bump (the composer re-seeds its draft from initialDraftValue on a
+	// nonce change); cleared by every OTHER nonce bump site so a stale prefill
+	// never resurrects after send/reset.
+	const [composerPrefill, setComposerPrefill] = useState("");
 	const [connected, setConnected] = useState(false);
 	const [busy, setBusy] = useState(false);
 	const [turnCancelling, setTurnCancelling] = useState(false);
@@ -2160,7 +2228,18 @@ export function App() {
 	const [usage, setUsage] = useState<SessionUsage>(ZERO_USAGE);
 	const [contextHealth, setContextHealth] = useState<ContextHealthStatus | null>(null);
 	const [helpOpen, setHelpOpen] = useState(false);
-	const [preview, setPreview] = useState<ApprovalPreviewData | null>(null);
+	// V5: the right pane is a single slot with two possible occupants — the
+	// approval preview and the artifact viewer. One state value = last-click-wins
+	// by construction; the pane header always names the occupant.
+	type RightPaneOccupant =
+		| { kind: "preview"; data: ApprovalPreviewData }
+		| { kind: "artifactViewer"; taskId: string; templateLabel: string; artifact: { relativePath: string; extension: string } };
+	const [rightPane, setRightPane] = useState<RightPaneOccupant | null>(null);
+	const [artifactMaximized, setArtifactMaximized] = useState(false);
+	const [exportNotice, setExportNotice] = useState<{ kind: "success" | "error"; text: string } | null>(null);
+	// Low-churn shim: the existing preview call sites keep working unchanged.
+	const preview = rightPane?.kind === "preview" ? rightPane.data : null;
+	const setPreview = (data: ApprovalPreviewData | null) => setRightPane(data ? { kind: "preview", data } : null);
 	const [conversationId, setConversationId] = useState<string>(() => newConversationId());
 	const [authStatus, setAuthStatus] = useState<AuthStatusResponse | null>(null);
 	const [modelStatus, setModelStatus] = useState<WebChatModelStatus | null>(null);
@@ -2225,6 +2304,34 @@ export function App() {
 	// retry flow swaps in and out.
 	const streamStateRef = useRef<AssistantStreamState>(createAssistantStreamState());
 	const revealPacingRef = useRef<RevealPacing>(readRevealPacing());
+	// The consult (DelegationCard) client state machine — see consult-stream.ts.
+	// The ref is the source of truth the WS closures read; the state drives the
+	// docked card / folded pill render.
+	const [consultState, setConsultState] = useState<ConsultState>(createConsultState);
+	const consultStateRef = useRef<ConsultState>(consultState);
+	// The specialist-task card state machine (visuals V4) — see task-stream.ts.
+	const [taskState, setTaskState] = useState<TaskState>(createTaskState);
+	const taskStateRef = useRef<TaskState>(taskState);
+	// Iterate chip-chat (§5 amendment): pending = the frame is out and the
+	// approval card / launch is in flight; notice = the last ok:false reason.
+	// Both reset when the fresh task's task_started supersedes the card.
+	const [taskIteratePending, setTaskIteratePending] = useState(false);
+	const [taskIterateNotice, setTaskIterateNotice] = useState<string | null>(null);
+	// Consult MR-5 pending-transfer queue (§2, §2.3): handoff blocks that ride the
+	// user's NEXT prompt (not a memory-write path — the block enters the session
+	// JSONL like any user text). The ref is the synchronous source the send path
+	// reads; `pendingConsultItemIds` tracks which transferred thread items still
+	// show the "included with your next message" hint until a send consumes them.
+	const [pendingHandoffs, setPendingHandoffs] = useState<string[]>([]);
+	const pendingHandoffsRef = useRef<string[]>(pendingHandoffs);
+	const [pendingConsultItemIds, setPendingConsultItemIds] = useState<ReadonlySet<string>>(() => new Set());
+	const pendingConsultItemIdsRef = useRef<ReadonlySet<string>>(pendingConsultItemIds);
+	function applyPendingHandoffs(blocks: string[], itemIds: ReadonlySet<string>): void {
+		pendingHandoffsRef.current = blocks;
+		pendingConsultItemIdsRef.current = itemIds;
+		setPendingHandoffs(blocks);
+		setPendingConsultItemIds(itemIds);
+	}
 	const streamTickRafRef = useRef<number | null>(null);
 	const streamTickTimerRef = useRef<number | null>(null);
 	const streamErrorLineIdRef = useRef<string | null>(null);
@@ -2305,11 +2412,15 @@ export function App() {
 		return body.thread;
 	}
 
-	async function savePersistentAgentThread(thread: PersistentAgentThread | NonNullable<PersistentChatConfig>, state: "active" | "standby", origin: PersistentAgentThreadOrigin, nextItems: ChatItem[] = []): Promise<PersistentAgentThreadRecord> {
+	async function savePersistentAgentThread(thread: PersistentAgentThread | NonNullable<PersistentChatConfig>, state: "active" | "standby", origin: PersistentAgentThreadOrigin, nextItems: ChatItem[] = [], pendingHandoffs?: string[]): Promise<PersistentAgentThreadRecord> {
+		// Consult MR-5: `pendingHandoffs` is preserve-if-absent on the server — only
+		// the callers that own the current room's queue pass it (send/transfer via
+		// the debounced persist, the boundary carries/clears). Reconciliation saves
+		// for other threads omit it, so they never clobber a stored queue.
 		const res = await fetch(`/api/persistent-agents/${encodeURIComponent(thread.agentId)}/threads/${encodeURIComponent(thread.conversationId)}`, {
 			method: "PUT",
 			headers: { "content-type": "application/json" },
-			body: JSON.stringify({ state, origin, model: thread.model, items: nextItems }),
+			body: JSON.stringify({ state, origin, model: thread.model, items: nextItems, ...(pendingHandoffs !== undefined ? { pendingHandoffs } : {}) }),
 		});
 		if (!res.ok) throw await persistentAgentResponseError(res, `Failed to save persistent-agent thread (${res.status})`);
 		const body = await res.json() as { thread: PersistentAgentThreadRecord; runtime: PersistentAgentStatus["runtime"] };
@@ -2373,7 +2484,8 @@ export function App() {
 		if (hasUserInput(thread.items) || hasUserVisibleTurn(thread.items)) {
 			const standbyThread: PersistentAgentThread = { ...thread, state: "standby" };
 			setPersistentThread(standbyThread);
-			await savePersistentAgentThread(standbyThread, "standby", origin, standbyThread.items);
+			// Carry the pending-transfer queue into standby so a resume re-queues it.
+			await savePersistentAgentThread(standbyThread, "standby", origin, standbyThread.items, pendingHandoffsRef.current);
 			return standbyThread;
 		}
 		const statuses = await fetchPersistentAgentStatuses();
@@ -2464,7 +2576,9 @@ export function App() {
 
 	async function persistConversation() {
 		try {
-			if (persistentChat) await savePersistentAgentThread(persistentChat, "active", "unknown", items);
+			// The debounced persist owns the current live room — carry its queue so a
+			// transfer (enqueue) or a send (clear) reaches the thread record.
+			if (persistentChat) await savePersistentAgentThread(persistentChat, "active", "unknown", items, pendingHandoffsRef.current);
 		} catch {}
 	}
 
@@ -2568,6 +2682,48 @@ export function App() {
 		return effects;
 	}
 
+	// Drive the consult state machine and apply its WS side effects. The reducer
+	// is pure; the host sends the frames it asks for and logs a rejected second
+	// consult (no toast, per spec §3).
+	function dispatchConsult(action: ConsultAction): ConsultState {
+		const { state, effects } = reduceConsult(consultStateRef.current, action);
+		consultStateRef.current = state;
+		setConsultState(state);
+		for (const effect of effects) {
+			if (effect.kind === "send_consult") {
+				const ws = wsRef.current;
+				if (ws && ws.readyState === WebSocket.OPEN) {
+					// §8.1: a follow-up carries the prior exchanges (B's own Q/A); a fresh
+					// consult omits the field. The server stays stateless and validates it.
+					ws.send(JSON.stringify({ type: "consult", consultId: effect.consultId, targetRoomId: effect.targetRoomId, question: effect.question, ...(effect.priorExchanges?.length ? { priorExchanges: effect.priorExchanges } : {}) }));
+				}
+			} else if (effect.kind === "send_abort") {
+				const ws = wsRef.current;
+				if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "consult_abort", consultId: effect.consultId }));
+			} else if (effect.kind === "rejected") {
+				console.info("[consult] request rejected — one consult at a time", { reason: effect.reason });
+			}
+		}
+		return state;
+	}
+
+	// The task sibling of dispatchConsult: the only effect is the task_abort
+	// frame; `dropped` is host-loggable stale-event tracing.
+	function dispatchTask(action: TaskAction): TaskState {
+		const { state, effects } = reduceTask(taskStateRef.current, action);
+		taskStateRef.current = state;
+		setTaskState(state);
+		for (const effect of effects) {
+			if (effect.kind === "send_abort") {
+				const ws = wsRef.current;
+				if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "task_abort", taskId: effect.taskId }));
+			} else if (effect.kind === "dropped") {
+				console.info("[task] event dropped", { reason: effect.reason, taskId: effect.taskId });
+			}
+		}
+		return state;
+	}
+
 	// Synchronous flush: everything the machine has received lands in the
 	// transcript now (itemsRef too — exit paths persist right after calling
 	// this), with no interrupt note. Safe to call when idle.
@@ -2662,7 +2818,7 @@ export function App() {
 					method: "PUT",
 					headers: { "content-type": "application/json" },
 					keepalive: true,
-					body: JSON.stringify({ state: "active", origin: "unknown", model: chat.model, items: itemsRef.current }),
+					body: JSON.stringify({ state: "active", origin: "unknown", model: chat.model, items: itemsRef.current, pendingHandoffs: pendingHandoffsRef.current }),
 				});
 			} catch {}
 		};
@@ -2759,6 +2915,81 @@ export function App() {
 				}
 				return;
 			}
+			if (msg.type === "consult_started") {
+				dispatchConsult({ type: "started", consultId: String(msg.consultId ?? ""), targetRoomId: String(msg.targetRoomId ?? ""), targetDisplayName: String(msg.targetDisplayName ?? msg.targetRoomId ?? ""), model: msg.model });
+				return;
+			}
+			if (msg.type === "consult_delta") {
+				dispatchConsult({ type: "delta", consultId: String(msg.consultId ?? ""), delta: String(msg.delta ?? "") });
+				return;
+			}
+			if (msg.type === "consult_end") {
+				// Every consult_end carries two standing invariant lines (exact
+				// strings from the server's buildConsultAnswer in
+				// persistent-agents.ts) — the card's subline already states both,
+				// so only room-specific warnings (e.g. the needs_absorb memory-lag
+				// warning) surface as a ⚠ notice.
+				const consultInvariantWarnings = new Set([
+					"no memory has been written",
+					"the consulted room was not activated and records no trace of this consult",
+				]);
+				const consultWarnings = (Array.isArray(msg.warnings) ? msg.warnings.map((w: unknown) => String(w)) : []).filter((w: string) => !consultInvariantWarnings.has(w));
+				dispatchConsult({ type: "end", consultId: String(msg.consultId ?? ""), text: String(msg.text ?? ""), l1bFingerprint: msg.l1bFingerprint, generatedAt: String(msg.generatedAt ?? ""), warnings: consultWarnings });
+				return;
+			}
+			if (msg.type === "consult_error") {
+				// §8.6: a machine-readable `code` (e.g. "prompt_overflow") lets the card
+				// render the "no longer fits" state instead of string-matching the copy.
+				dispatchConsult({ type: "error", consultId: String(msg.consultId ?? ""), message: String(msg.message ?? "The consult failed."), ...(msg.code ? { code: String(msg.code) } : {}) });
+				return;
+			}
+			if (msg.type === "task_iterate_result") {
+				// ok:true needs no card action — the fresh task's task_started (next
+				// frame) supersedes the done card; ok:false surfaces the reason.
+				setTaskIteratePending(false);
+				if (!msg.ok) setTaskIterateNotice(String(msg.reason ?? "The iteration could not start."));
+				return;
+			}
+			if (msg.type === "task_started") {
+				setTaskIteratePending(false);
+				setTaskIterateNotice(null);
+				dispatchTask({
+					type: "started",
+					taskId: String(msg.taskId ?? ""),
+					template: String(msg.template ?? ""),
+					templateVersion: Number.isFinite(Number(msg.templateVersion)) && Number(msg.templateVersion) >= 1 ? Math.floor(Number(msg.templateVersion)) : null,
+					templateLabel: String(msg.templateLabel ?? msg.template ?? ""),
+					...(msg.title ? { title: String(msg.title) } : {}),
+					model: msg.model ?? null,
+				});
+				return;
+			}
+			if (msg.type === "task_delta") {
+				dispatchTask({ type: "delta", taskId: String(msg.taskId ?? ""), delta: String(msg.delta ?? "") });
+				return;
+			}
+			if (msg.type === "task_end") {
+				dispatchTask({
+					type: "end",
+					taskId: String(msg.taskId ?? ""),
+					template: String(msg.template ?? ""),
+					text: String(msg.text ?? ""),
+					artifacts: Array.isArray(msg.artifacts) ? msg.artifacts : [],
+					...(Array.isArray(msg.thumbnails) ? { thumbnails: msg.thumbnails } : {}),
+					generatedAt: String(msg.generatedAt ?? ""),
+					...(msg.usage ? { usage: msg.usage } : {}),
+				});
+				return;
+			}
+			if (msg.type === "task_error") {
+				dispatchTask({
+					type: "error",
+					taskId: String(msg.taskId ?? ""),
+					message: String(msg.message ?? "The task did not finish."),
+					...(Array.isArray(msg.artifacts) ? { artifacts: msg.artifacts } : {}),
+				});
+				return;
+			}
 			if (msg.type !== "event") return;
 			handleEvent(msg.event);
 		};
@@ -2768,6 +2999,11 @@ export function App() {
 			flushAssistantStream();
 			clearTransientStreamNotes();
 			dispatchStream({ type: "reset" });
+			// Socket close kills the consult server-side (no re-attach; a lost
+			// answer is re-derivable) — drop the card/pill with the connection.
+			dispatchConsult({ type: "reset" });
+			// Same for a running task; its artifacts persist on disk either way.
+			dispatchTask({ type: "reset" });
 			try { ws.close(); } catch {}
 		};
 	}, [sessionVersion, conversationId, persistentChat]);
@@ -2819,7 +3055,7 @@ export function App() {
 			setItems((s) => {
 				const next = errorLineId ? s.filter((it) => it.id !== errorLineId) : s;
 				if (next.some((it) => it.id === noteId)) return next;
-				return [...next, { kind: "system", id: noteId, text: "Connection hiccup — retrying…" }];
+				return [...next, { kind: "system", id: noteId, text: "Connection hiccup. Retrying…" }];
 			});
 			return;
 		}
@@ -2862,6 +3098,13 @@ export function App() {
 						if (isRoutineRetrievalTool(name)) {
 							hiddenRoutineToolByIdRef.current.set(toolId, { name, args });
 							noteRetrievalActivity();
+							continue;
+						}
+						if (name === "delegate_task") {
+							// The approval card and the task card ARE this tool's UI; a raw
+							// tool chip above them is noise. Errors still surface via the
+							// hidden-tool path.
+							hiddenRoutineToolByIdRef.current.set(toolId, { name, args });
 							continue;
 						}
 						const itemId = nid();
@@ -3016,10 +3259,25 @@ export function App() {
 		if (!payload) return false;
 		const ws = wsRef.current;
 		if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+		// Consult MR-5 (§2): any queued handoff blocks ride ahead of the user's text
+		// on the wire (entering the session JSONL, where a checkpoint can compress
+		// them), then the queue clears. The chat bubble shows only the user's text.
+		const pending = pendingHandoffsRef.current;
+		const wireText = composeOutgoingPromptWithHandoffs(pending, payload);
+		if (pending.length) {
+			applyPendingHandoffs([], new Set());
+			// The block is consumed exactly once: the SERVER clears the persisted
+			// queue atomically when it receives this prompt (index.ts prompt handler),
+			// so a crash or reordered save can't re-queue it. Cancel any in-flight
+			// debounced persist here too, so a stale save can't re-write the old queue
+			// before the setItems below reschedules an empty-queue persist.
+			if (persistTimerRef.current) { window.clearTimeout(persistTimerRef.current); persistTimerRef.current = null; }
+		}
 		setItems((s) => [...s, { kind: "user", id: nid(), text: payload }]);
-		ws.send(JSON.stringify({ type: "prompt", text: payload }));
+		ws.send(JSON.stringify({ type: "prompt", text: wireText }));
 		dispatchStream({ type: "new_turn", now: performance.now() });
 		retrievalActivityIdRef.current = null;
+		setComposerPrefill("");
 		setComposerResetNonce((value) => value + 1);
 		setTurnInterruptedNote(null);
 		turnInterruptedNoteRef.current = null;
@@ -3029,6 +3287,193 @@ export function App() {
 		busyRef.current = true;
 		return true;
 	};
+
+	// The composer @-mention popover (Consult MR-3) resolves a leading mention of
+	// a known room and hands off here instead of the normal send. MR-4 wires it to
+	// the consult WS family + DelegationCard: generate the client-side consultId,
+	// capture the consulted room's display name and last memory-write time (for
+	// the "as of" recency line), and drive the reducer — which sends the frame and
+	// rejects a second consult while one is active.
+	// Returns whether the consult was accepted, so the composer keeps the user's
+	// typed question when it is rejected (socket down, or one already active).
+	function handleConsultRequest(targetRoomId: string, question: string): boolean {
+		const ws = wsRef.current;
+		if (!ws || ws.readyState !== WebSocket.OPEN) {
+			console.info("[consult] socket not open — consult request dropped", { targetRoomId });
+			return false;
+		}
+		const targetStatus = persistentAgentStatuses.find((status) => status.id === targetRoomId) ?? null;
+		const consultId = `local_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+		const next = dispatchConsult({
+			type: "request",
+			consultId,
+			targetRoomId,
+			question,
+			requestedAt: new Date().toISOString(),
+			targetDisplayName: targetStatus?.displayName ?? targetRoomId,
+			asOfCheckpointAt: targetStatus?.memoryStatus?.lastCheckpointAt ?? null,
+		});
+		// Accepted iff the reducer adopted this consult (a rejected second consult
+		// leaves the previous consultId in place).
+		return next.consultId === consultId;
+	}
+
+	// Stacked consult (§8.1/§8.2): a follow-up from the done card asks the SAME
+	// room again, building on the stack. Each follow-up is a fresh isolated worker
+	// run (the governance invariant is untouched); the reducer accumulates the
+	// completed exchange and re-enters streaming, and its send_consult effect
+	// carries the prior exchanges. The as-of is re-read from the room's current
+	// status (a fresh point-in-time read, §8.5), not pinned to the first ask.
+	function handleConsultFollowUp(question: string): boolean {
+		// Socket guard (hardening 2026-07-11, fresh-eyes MAJOR): without this, a
+		// follow-up during a reconnect blip advanced the reducer to `streaming`
+		// with no frame sent — a permanently hung card whose completed (and still
+		// transferable) answer became unreachable. Mirror handleConsultRequest:
+		// reject before dispatching so the card stays `done` and the draft is kept.
+		const ws = wsRef.current;
+		if (!ws || ws.readyState !== WebSocket.OPEN) {
+			console.info("[consult] socket not open — follow-up dropped");
+			return false;
+		}
+		const consult = consultStateRef.current;
+		const targetRoomId = consult.targetRoomId;
+		if (!targetRoomId) return false;
+		const targetStatus = persistentAgentStatuses.find((status) => status.id === targetRoomId) ?? null;
+		const consultId = `local_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+		const next = dispatchConsult({
+			type: "followUp",
+			consultId,
+			question,
+			requestedAt: new Date().toISOString(),
+			asOfCheckpointAt: targetStatus?.memoryStatus?.lastCheckpointAt ?? null,
+		});
+		// Accepted iff the reducer adopted this follow-up (same discipline as
+		// handleConsultRequest — a rejected follow-up keeps the previous state).
+		return next.consultId === consultId;
+	}
+
+	// Consult MR-5 (§2.1, §2, §3, §4.4): transfer the done consult into the thread.
+	// GOVERNANCE — this never writes memory: it appends a display item AND enqueues
+	// the canonical handoff block for the user's next prompt. It does NOT touch any
+	// memory-write door. Then it dismisses the card (freeing the one-consult gate).
+	function transferConsultToThread() {
+		const consult = consultStateRef.current;
+		// §8.7: transfer moves the WHOLE stack as one item + one block, then frees
+		// the gate. `done` transfers everything; a failed/stopped follow-up transfers
+		// the preserved completed stack (§8.1). Nothing to transfer → no-op.
+		if (!consult.targetRoomId) return;
+		const stack = consultStack(consult);
+		if (stack.length === 0) return;
+		const targetRoomId = consult.targetRoomId;
+		const displayName = consult.targetDisplayName ?? targetRoomId;
+		const nowIso = new Date().toISOString();
+		const fingerprintString = (exchange: ConsultExchange) => {
+			const fingerprint = exchange.l1bFingerprint ?? { algorithm: "sha256", value: "" };
+			return `${fingerprint.algorithm}:${fingerprint.value}`;
+		};
+		// The ONE §8.8 block. N=1 delegates to the byte-identical §2.1 grammar.
+		const blockExchanges: ConsultHandoffExchange[] = stack.map((exchange) => ({
+			question: exchange.question,
+			answerMarkdown: exchange.answer,
+			fingerprint: exchange.l1bFingerprint ?? { algorithm: "sha256", value: "" },
+			// Per-exchange as-of (§8.5) and the request time (header range, §8.8);
+			// fall back through generation time to now if somehow unset.
+			asOf: exchange.asOfCheckpointAt || exchange.generatedAt || nowIso,
+			requestedAt: exchange.requestedAt || exchange.generatedAt || nowIso,
+		}));
+		const block = buildConsultHandoffBlockFromStack({ slug: targetRoomId, displayName, agentId: targetRoomId, exchanges: blockExchanges });
+		const itemId = nid();
+		const consultedAtOf = (exchange: ConsultExchange) => {
+			const ms = exchange.generatedAt ? Date.parse(exchange.generatedAt) : NaN;
+			return Number.isFinite(ms) ? ms : Date.now();
+		};
+		// §8.4: the item carries the whole stack in `exchanges[]` for N≥2; the flat
+		// fields mirror the LATEST exchange so legacy single-exchange renderers still
+		// show a sensible provenance. N=1 keeps today's flat-only shape byte-for-byte
+		// (no `exchanges` field), so old persisted items and the N=1 path are unchanged.
+		const latest = stack[stack.length - 1];
+		const item: ChatItem = {
+			kind: "consult",
+			id: itemId,
+			targetRoomId,
+			targetDisplayName: displayName,
+			question: latest.question,
+			answer: latest.answer,
+			l1bFingerprint: fingerprintString(latest),
+			consultedAt: consultedAtOf(latest),
+			transferred: true,
+			...(stack.length > 1
+				? { exchanges: stack.map((exchange) => ({ question: exchange.question, answer: exchange.answer, l1bFingerprint: fingerprintString(exchange), consultedAt: consultedAtOf(exchange) })) }
+				: {}),
+		};
+		// itemsRef is the synchronous mirror room-exit paths persist from.
+		itemsRef.current = [...itemsRef.current, item];
+		setItems((s) => [...s, item]);
+		const nextIds = new Set(pendingConsultItemIdsRef.current);
+		nextIds.add(itemId);
+		applyPendingHandoffs([...pendingHandoffsRef.current, block], nextIds);
+		dispatchConsult({ type: "dismiss" });
+	}
+
+	// Visuals V6: transfer mirrors transferConsultToThread — one permanent thread
+	// item + one defanged block into the SAME pending-transfer queue (persistence,
+	// memento-clear, and prompt-prepend all ride the consult MR-5 machinery). The
+	// artifact bytes never move; the block carries paths + the distilled summary.
+	function transferTaskToThread() {
+		const task = taskStateRef.current;
+		if (task.phase !== "done" || !task.taskId) return;
+		const block = buildSpecialistHandoffBlock({
+			templateId: task.template ?? "",
+			// The real registry version rides task_started → TaskState; 1 is only
+			// the fallback for a state that predates the threading.
+			templateVersion: task.templateVersion ?? 1,
+			taskTitle: task.title ?? "",
+			ranAtIso: task.generatedAt ?? new Date().toISOString(),
+			artifactPaths: task.artifacts.map((artifact) => artifact.relativePath),
+			summary: task.summary,
+		});
+		const item: ChatItem = {
+			kind: "task",
+			id: nid(),
+			taskId: task.taskId,
+			template: task.template ?? "",
+			templateVersion: task.templateVersion ?? 1,
+			templateLabel: task.templateLabel ?? "visual",
+			title: task.title ?? "",
+			summary: task.summary,
+			artifacts: task.artifacts.map((artifact) => ({ relativePath: artifact.relativePath, bytes: artifact.bytes, extension: artifact.extension })),
+			...(task.thumbnails[0]?.dataUri ? { thumbnailDataUri: task.thumbnails[0].dataUri } : {}),
+			generatedAt: task.generatedAt ?? new Date().toISOString(),
+			transferred: true,
+		};
+		// itemsRef is the synchronous mirror room-exit paths persist from.
+		itemsRef.current = [...itemsRef.current, item];
+		setItems((s) => [...s, item]);
+		applyPendingHandoffs([...pendingHandoffsRef.current, block], pendingConsultItemIdsRef.current);
+		dispatchTask({ type: "dismiss" });
+	}
+
+	// Iterate chip-chat (contract §5 amendment, one-click 2026-07-13): the typed
+	// text is the brief of a FRESH delegation. The frame carries ONLY the source
+	// taskId and the brief — the server derives template and read scope from its
+	// own record of the finished task, which is what makes the click sufficient
+	// as the approval (D7 shape). The new task rides the normal task_* family
+	// (its task_started supersedes this done card).
+	// Returns whether the frame went out, so the card keeps the draft on failure.
+	function submitTaskIterate(brief: string): boolean {
+		const task = taskStateRef.current;
+		if (task.phase !== "done" || !task.taskId || task.artifacts.length === 0) return false;
+		const ws = wsRef.current;
+		if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+		try {
+			ws.send(JSON.stringify({ type: "task_iterate", taskId: task.taskId, brief }));
+		} catch {
+			return false;
+		}
+		setTaskIteratePending(true);
+		setTaskIterateNotice(null);
+		return true;
+	}
 
 	async function requestCheckpointProposal(targetChat: NonNullable<PersistentChatConfig>, density: CheckpointDensity, rememberText: string): Promise<CheckpointProposalResponse> {
 		// A paced tail may still be draining after busy cleared — the proposal
@@ -3111,7 +3556,15 @@ export function App() {
 		setItems(liveThread.items);
 		setPersistentThread(liveThread);
 		setPersistentChat({ agentId: liveThread.agentId, displayName: liveThread.displayName, conversationId: liveThread.conversationId, model: liveThread.model });
-		await savePersistentAgentThread(liveThread, "active", "checkpoint", liveThread.items);
+		// Consult MR-5 checkpoint EXCEPTION (§2.3): the checkpoint closes this thread
+		// and prepares a fresh one; an un-transferred-into-memory consult must survive
+		// into it. The server-created fresh thread starts empty (the checkpoint write
+		// path is off-limits), so carry the queue client-side onto the fresh thread's
+		// first save. The fresh transcript has no consult display items, so the hint
+		// set is empty even though the blocks still ride the next prompt.
+		const carriedQueue = pendingHandoffsRef.current;
+		applyPendingHandoffs(carriedQueue, deriveTrailingConsultIds(liveThread.items, carriedQueue.length));
+		await savePersistentAgentThread(liveThread, "active", "checkpoint", liveThread.items, carriedQueue);
 		setCurrentModelLabel(modelDisplayName(liveThread.model));
 		setView("chat");
 		setSessionVersion((v) => v + 1);
@@ -3139,8 +3592,11 @@ export function App() {
 		setItems(liveThread.items);
 		setPersistentThread(liveThread);
 		setPersistentChat({ agentId: liveThread.agentId, displayName: liveThread.displayName, conversationId: liveThread.conversationId, model: liveThread.model });
+		// Consult MR-5 (§2.3): Memento (forget-this-conversation) discards the pending
+		// queue — the fresh thread starts with nothing queued.
+		applyPendingHandoffs([], new Set());
 		try {
-			await savePersistentAgentThread(liveThread, "active", "memento", liveThread.items);
+			await savePersistentAgentThread(liveThread, "active", "memento", liveThread.items, []);
 		} catch (e) {
 			// The fresh thread may inherit a model the active AI profile no longer
 			// provides (Memento is how a stuck room gets freed), and activating it
@@ -3257,7 +3713,10 @@ export function App() {
 			await bindToApprovedCheckpointRuntime(approval, targetChat);
 			void refreshPersistentAgentStatus();
 			resetCheckpointInput();
-			const savedNote = approval.warnings.length > 0 ? `Checkpoint saved to memory. ${approval.warnings.join(" ")}` : "Checkpoint saved to memory.";
+			// Disclose what the gate no longer blocks on: elision notices from the
+			// propose step ride the saved line together with approval warnings.
+			const disclosedNotes = [...proposal.warnings.filter(isTranscriptElisionWarning), ...approval.warnings];
+			const savedNote = disclosedNotes.length > 0 ? `Checkpoint saved to memory. ${disclosedNotes.join(" ")}` : "Checkpoint saved to memory.";
 			setItems((s) => [...s, { kind: "system", id: nid(), text: savedNote }]);
 		} catch (e) {
 			setCheckpointApprovalError(`The checkpoint could not save automatically. Review and approve it manually. ${(e as Error).message}`);
@@ -3314,6 +3773,7 @@ export function App() {
 		setPreview(null);
 		setBusy(false);
 		setCurrentModelLabel("");
+		setComposerPrefill("");
 		setComposerResetNonce((value) => value + 1);
 		flushAssistantStream();
 		clearTransientStreamNotes();
@@ -3944,8 +4404,10 @@ export function App() {
 		setItems([]);
 		setPersistentThread(nextThread);
 		setPersistentChat({ agentId: nextThread.agentId, displayName: nextThread.displayName, conversationId: nextThread.conversationId, model: nextThread.model });
+		// A fresh conversation starts with an empty pending-transfer queue.
+		applyPendingHandoffs([], new Set());
 		try {
-			await savePersistentAgentThread(nextThread, "active", "launcher", []);
+			await savePersistentAgentThread(nextThread, "active", "launcher", [], []);
 		} catch (e) {
 			// The server rejected the new conversation (model gate after a
 			// concurrent profile change, or the room's state moved). Entering
@@ -3977,7 +4439,11 @@ export function App() {
 			const record = await fetchPersistentAgentThread(status.id, threadId);
 			const thread = threadRecordToLocalThread(record, status.displayName || "Exxpert");
 			const liveThread = { ...thread, state: "live" as const };
-			await savePersistentAgentThread(liveThread, "active", "launcher", liveThread.items);
+			// Standby → resume re-queues the persisted pending-transfer queue (§2.3)
+			// before the first save, so a stale ref from a prior room can't leak in.
+			const restoredQueue = readConsultHandoffQueue(record.pendingHandoffs);
+			applyPendingHandoffs(restoredQueue, deriveTrailingConsultIds(liveThread.items, restoredQueue.length));
+			await savePersistentAgentThread(liveThread, "active", "launcher", liveThread.items, restoredQueue);
 			resetLiveUiState();
 			setPersistentThread(null);
 			setPersistentChat(null);
@@ -4043,6 +4509,7 @@ export function App() {
 		setPersistentThread(null);
 		setPersistentChat(null);
 		resetLiveUiState();
+		applyPendingHandoffs([], new Set());
 		setConversationId(newConversationId());
 		setItems([]);
 		setView("home");
@@ -4050,7 +4517,11 @@ export function App() {
 	}
 
 	const resolveApproval = useCallback((requestId: string, value: any, label: string) => {
-		setPreview(null);
+		// Clear the right pane only when it currently shows the approval preview —
+		// leave an artifact viewer (or any other occupant) the user is reading in
+		// place. The preview payload carries no per-approval identity, so pane kind
+		// is the only available discriminant.
+		setRightPane((cur) => (cur?.kind === "preview" ? null : cur));
 		const ws = wsRef.current;
 		if (ws && ws.readyState === WebSocket.OPEN) {
 			ws.send(JSON.stringify({ type: "ui_response", id: requestId, value }));
@@ -4065,6 +4536,51 @@ export function App() {
 	const openApprovalPreview = useCallback((next: ApprovalPreviewData) => {
 		setPreview(next);
 	}, []);
+
+	// V5: open a task artifact beside the chat (the pane's second occupant).
+	// Every fresh open starts un-maximized; opening over a preview (or vice
+	// versa) swaps the occupant — one slot, last click wins.
+	const openArtifactViewer = useCallback((taskId: string, templateLabel: string, artifact: { relativePath: string; extension: string }) => {
+		setArtifactMaximized(false);
+		setRightPane({ kind: "artifactViewer", taskId, templateLabel, artifact });
+	}, []);
+
+	// V5 export (D7): the click IS the approval — no ui_request bridge. Server
+	// messages are already user-facing, so failures surface verbatim.
+	const saveArtifactToWorkspace = useCallback(async (occupant: { taskId: string; artifact: { relativePath: string; extension: string } }) => {
+		const roomId = persistentChat?.agentId;
+		if (!roomId) {
+			setExportNotice({ kind: "error", text: "Open a room with a workspace to save this artifact." });
+			return;
+		}
+		try {
+			const res = await fetch(`/api/artifacts/${encodeURIComponent(occupant.taskId)}/export`, {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				// conversationId → the server resolves the THREAD-effective workspace
+				// policy (thread override → room default), not just the room default.
+				body: JSON.stringify({ relativePath: occupant.artifact.relativePath, roomId, conversationId: persistentChat?.conversationId ?? "" }),
+			});
+			const data = await res.json().catch(() => null);
+			if (!res.ok) {
+				setExportNotice({ kind: "error", text: data?.error || "Could not save to the room workspace." });
+				return;
+			}
+			const isHtml = occupant.artifact.extension.toLowerCase() === ".html";
+			setExportNotice({
+				kind: "success",
+				text: "Saved to the room workspace." + (isHtml ? " Heads up: an exported HTML file opens unsandboxed from disk." : ""),
+			});
+		} catch {
+			setExportNotice({ kind: "error", text: "Could not save to the room workspace." });
+		}
+	}, [persistentChat]);
+
+	useEffect(() => {
+		if (!exportNotice) return;
+		const timer = window.setTimeout(() => setExportNotice(null), 6000);
+		return () => window.clearTimeout(timer);
+	}, [exportNotice]);
 
 	const empty = items.length === 0;
 	const currentThreadHasUserInput = hasUserInput(items);
@@ -4130,6 +4646,16 @@ export function App() {
 		})
 		.map((status) => ({ provider: status.runtime.model!.provider, model: status.runtime.model!.model }));
 
+	// Consult MR-3 candidate rooms for the composer @-mention popover. The list is
+	// already archived-free (the server filters archived rooms); the current room
+	// is excluded inside the popover logic.
+	const mentionCandidates: MentionCandidateRoom[] = persistentAgentStatuses.map((status) => ({
+		id: status.id,
+		displayName: status.displayName || status.id,
+		status: status.status,
+		lastCheckpointAt: status.memoryStatus?.lastCheckpointAt ?? null,
+	}));
+
 	if (view === "home") {
 		if (absorbWorkflowOpen) {
 			return (
@@ -4150,19 +4676,23 @@ export function App() {
 		if (maintainChooserOpen && maintainTarget) {
 			return <MaintainChooserShell target={maintainTarget} memoryStatus={persistentAgentStatuses.find((status) => status.id === maintainTarget.agentId)?.memoryStatus ?? null} onAbsorb={startAbsorbWorkflow} onPrune={startPruneMemoryWorkflow} onReturn={closeMaintainChooser} returnLabel={maintainReturnLabel} />;
 		}
-		return <Landing onOpenAiSetup={() => setView("ai-setup")} onOpenDashboard={() => setView("dashboard")} onOpenConnectors={() => setView("connectors")} onOpenMemory={() => setView("memory")} onOpenPersistentAgent={openPersistentAgent} onResumePersistentAgent={openPersistentAgentResume} onMaintainPersistentAgent={(target) => { if (!openMaintainChooser(target)) setPersistentResumeError(maintainBlockedReason(target.agentId) ?? "Maintain is not available for this room right now."); }} onCreatePersistentAgent={createPersistentAgentRoom} onArchiveRoom={archivePersistentAgentRoom} modelStatus={modelStatus} persistentAgentStatuses={persistentAgentStatuses} persistentThread={persistentThread} persistentLive={!!persistentChat} persistentResumeError={persistentResumeError} onRefreshPersistentAgent={refreshPersistentAgentStatus} theme={theme} onToggleTheme={() => setTheme((t) => (t === "dark" ? "light" : "dark"))} connected={connected} aiProfileStatus={aiProfileStatus} onSelectAiProfile={selectAiProfile} onRefreshAiProfile={refreshAiProfileStatus} standbyLockedModels={standbyLockedModels} />;
+		return <Landing onOpenAiSetup={() => setView("ai-setup")} onOpenDashboard={() => setView("dashboard")} onOpenConnectors={() => setView("connectors")} onOpenMemory={() => setView("memory")} onOpenSkills={() => setView("skills")} onOpenPersistentAgent={openPersistentAgent} onResumePersistentAgent={openPersistentAgentResume} onMaintainPersistentAgent={(target) => { if (!openMaintainChooser(target)) setPersistentResumeError(maintainBlockedReason(target.agentId) ?? "Maintain is not available for this room right now."); }} onCreatePersistentAgent={createPersistentAgentRoom} onArchiveRoom={archivePersistentAgentRoom} modelStatus={modelStatus} persistentAgentStatuses={persistentAgentStatuses} persistentThread={persistentThread} persistentLive={!!persistentChat} persistentResumeError={persistentResumeError} onRefreshPersistentAgent={refreshPersistentAgentStatus} theme={theme} onToggleTheme={() => setTheme((t) => (t === "dark" ? "light" : "dark"))} connected={connected} aiProfileStatus={aiProfileStatus} onSelectAiProfile={selectAiProfile} onRefreshAiProfile={refreshAiProfileStatus} standbyLockedModels={standbyLockedModels} />;
 	}
 
 	if (view === "ai-setup") {
-		return <AiSetupShell onHome={goHome} onDashboard={() => setView("dashboard")} onConnectors={() => setView("connectors")} onMemory={() => setView("memory")} onRefreshAuth={refreshAuthStatus} aiProfileStatus={aiProfileStatus} onRefreshAiProfile={refreshAiProfileStatus} onSelectAiProfile={selectAiProfile} connected={connected} theme={theme} onToggleTheme={() => setTheme((t) => (t === "dark" ? "light" : "dark"))} standbyLockedModels={standbyLockedModels} />;
+		return <AiSetupShell onHome={goHome} onDashboard={() => setView("dashboard")} onConnectors={() => setView("connectors")} onMemory={() => setView("memory")} onSkills={() => setView("skills")} onRefreshAuth={refreshAuthStatus} aiProfileStatus={aiProfileStatus} onRefreshAiProfile={refreshAiProfileStatus} onSelectAiProfile={selectAiProfile} connected={connected} theme={theme} onToggleTheme={() => setTheme((t) => (t === "dark" ? "light" : "dark"))} standbyLockedModels={standbyLockedModels} />;
 	}
 
 	if (view === "connectors") {
-		return <ConnectorsShell onHome={goHome} onAiSetup={() => setView("ai-setup")} onDashboard={() => setView("dashboard")} onMemory={() => setView("memory")} connected={connected} theme={theme} onToggleTheme={() => setTheme((t) => (t === "dark" ? "light" : "dark"))} aiProfileStatus={aiProfileStatus} onSelectAiProfile={selectAiProfile} onRefreshAiProfile={refreshAiProfileStatus} standbyLockedModels={standbyLockedModels} />;
+		return <ConnectorsShell onHome={goHome} onAiSetup={() => setView("ai-setup")} onDashboard={() => setView("dashboard")} onMemory={() => setView("memory")} onSkills={() => setView("skills")} connected={connected} theme={theme} onToggleTheme={() => setTheme((t) => (t === "dark" ? "light" : "dark"))} aiProfileStatus={aiProfileStatus} onSelectAiProfile={selectAiProfile} onRefreshAiProfile={refreshAiProfileStatus} standbyLockedModels={standbyLockedModels} />;
 	}
 
 	if (view === "memory") {
-		return <MemoryShell onHome={goHome} onAiSetup={() => setView("ai-setup")} onDashboard={() => setView("dashboard")} onConnectors={() => setView("connectors")} onMaintain={(target) => { if (openMaintainChooser(target, "memory")) setView("home"); }} maintainBlocked={maintainBlockedReason} connected={connected} theme={theme} onToggleTheme={() => setTheme((t) => (t === "dark" ? "light" : "dark"))} aiProfileStatus={aiProfileStatus} onSelectAiProfile={selectAiProfile} onRefreshAiProfile={refreshAiProfileStatus} standbyLockedModels={standbyLockedModels} />;
+		return <MemoryShell onHome={goHome} onAiSetup={() => setView("ai-setup")} onDashboard={() => setView("dashboard")} onConnectors={() => setView("connectors")} onSkills={() => setView("skills")} onMaintain={(target) => { if (openMaintainChooser(target, "memory")) setView("home"); }} maintainBlocked={maintainBlockedReason} connected={connected} theme={theme} onToggleTheme={() => setTheme((t) => (t === "dark" ? "light" : "dark"))} aiProfileStatus={aiProfileStatus} onSelectAiProfile={selectAiProfile} onRefreshAiProfile={refreshAiProfileStatus} standbyLockedModels={standbyLockedModels} />;
+	}
+
+	if (view === "skills") {
+		return <SkillsShell onHome={goHome} onAiSetup={() => setView("ai-setup")} onDashboard={() => setView("dashboard")} onConnectors={() => setView("connectors")} onMemory={() => setView("memory")} connected={connected} theme={theme} onToggleTheme={() => setTheme((t) => (t === "dark" ? "light" : "dark"))} aiProfileStatus={aiProfileStatus} onSelectAiProfile={selectAiProfile} onRefreshAiProfile={refreshAiProfileStatus} standbyLockedModels={standbyLockedModels} />;
 	}
 
 	if (view === "dashboard") {
@@ -4174,6 +4704,7 @@ export function App() {
 					onDashboard={() => {}}
 					onConnectors={() => setView("connectors")}
 					onMemory={() => setView("memory")}
+					onSkills={() => setView("skills")}
 					connected={connected}
 					theme={theme}
 					onToggleTheme={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}
@@ -4194,15 +4725,29 @@ export function App() {
 		);
 	}
 
-	const rightPaneVisible = Boolean(preview);
-	const workbenchStyle = rightPaneVisible
+	const rightPaneVisible = Boolean(rightPane);
+	const artifactPaneMaximized = artifactMaximized && rightPane?.kind === "artifactViewer";
+	// Maximized: no inline style — the .artifact-pane-maximized class drives a
+	// single-track grid (an inline 3-track style would override it).
+	const workbenchStyle = rightPaneVisible && !artifactPaneMaximized
 		? { gridTemplateColumns: `minmax(0, 1fr) 8px minmax(${RIGHT_PANE_MIN_WIDTH}px, ${rightPaneWidth}px)` }
 		: undefined;
 
 	const rightPaneSlot = (
 		<>
-			{rightPaneVisible && <div className="pane-resizer" role="separator" aria-orientation="vertical" onMouseDown={() => setResizingRightPane(true)} />}
+			{rightPaneVisible && !artifactPaneMaximized && <div className="pane-resizer" role="separator" aria-orientation="vertical" onMouseDown={() => setResizingRightPane(true)} />}
 			{preview && <Preview content={preview.content} title={preview.title} type={preview.type} onClose={() => setPreview(null)} />}
+			{rightPane?.kind === "artifactViewer" && (
+				<ArtifactViewer
+					taskId={rightPane.taskId}
+					templateLabel={rightPane.templateLabel}
+					artifact={rightPane.artifact}
+					maximized={artifactMaximized}
+					onToggleMaximize={() => setArtifactMaximized((m) => !m)}
+					onClose={() => { setArtifactMaximized(false); setRightPane(null); }}
+					onSaveToWorkspace={() => void saveArtifactToWorkspace(rightPane)}
+				/>
+			)}
 		</>
 	);
 
@@ -4219,7 +4764,7 @@ export function App() {
 			}
 			withPreview={false}
 			workbenchRef={workbenchRef}
-			workbenchClassName={rightPaneVisible ? "with-right-pane" : ""}
+			workbenchClassName={rightPaneVisible ? (artifactPaneMaximized ? "with-right-pane artifact-pane-maximized" : "with-right-pane") : ""}
 			workbenchStyle={workbenchStyle}
 			activeDisplay={activeDisplay || ""}
 			ownerSecondary=""
@@ -4242,6 +4787,12 @@ export function App() {
 			}
 			connected={connected}
 			items={items}
+			pendingConsultIds={pendingConsultItemIds}
+			onOpenTaskArtifact={(taskId, relativePath) => {
+				const extension = relativePath.includes(".") ? relativePath.slice(relativePath.lastIndexOf(".")).toLowerCase() : "";
+				const item = itemsRef.current.find((it): it is Extract<ChatItem, { kind: "task" }> => it.kind === "task" && it.taskId === taskId);
+				openArtifactViewer(taskId, item?.templateLabel ?? "visual", { relativePath, extension });
+			}}
 			empty={empty}
 			onSend={send}
 			onStop={() => void abortCurrentTurn()}
@@ -4251,12 +4802,63 @@ export function App() {
 			textareaRef={textareaRef}
 			composerPlaceholder={persistentRoomCancelling ? "Stopping current response…" : persistentRoomRunning ? "Working… Stop before sending another message" : `Ask ${activeDisplay}…`}
 			sendUnavailable={!connected || persistentRoomInFlight}
+			initialDraftValue={composerPrefill || undefined}
 			draftResetKey={composerResetNonce}
+			mention={persistentChat ? {
+				candidates: mentionCandidates,
+				currentRoomId: persistentChat.agentId,
+				busy: persistentRoomInFlight,
+				busyTitle: "You can consult another room once this room's current response finishes.",
+				onConsultRequest: handleConsultRequest,
+				// §8.3: while a consult card is docked, a composer @-mention is rejected
+				// visibly (the card is the place to follow up) — name the docked room.
+				activeConsultDisplayName: consultState.phase !== "none" ? (consultState.targetDisplayName ?? consultState.targetRoomId) : null,
+			} : undefined}
 			onResolveApproval={resolveApproval}
 			onApprovalPreview={openApprovalPreview}
+			aboveComposerSlot={persistentChat ? (
+				<>
+					<ConsultDock
+						state={consultState}
+						onMinimize={() => dispatchConsult({ type: "minimize" })}
+						onOpen={() => dispatchConsult({ type: "open" })}
+						onStop={() => dispatchConsult({ type: "abort_requested" })}
+						onDismiss={() => dispatchConsult({ type: "dismiss" })}
+						onTransfer={transferConsultToThread}
+						onFollowUp={handleConsultFollowUp}
+					/>
+					<TaskDock
+						state={taskState}
+						onMinimize={() => dispatchTask({ type: "minimize" })}
+						onOpen={() => dispatchTask({ type: "open" })}
+						onStop={() => dispatchTask({ type: "abort_requested" })}
+						onDismiss={() => dispatchTask({ type: "dismiss" })}
+						onTransfer={transferTaskToThread}
+						onOpenArtifact={(relativePath) => {
+							const state = taskStateRef.current;
+							if (!state.taskId) return;
+							const artifact = state.artifacts.find((a) => a.relativePath === relativePath);
+							if (!artifact) return;
+							openArtifactViewer(state.taskId, state.templateLabel ?? "visual", { relativePath: artifact.relativePath, extension: artifact.extension });
+						}}
+						onIterateSubmit={submitTaskIterate}
+						iteratePending={taskIteratePending}
+						iterateNotice={taskIterateNotice}
+					/>
+				</>
+			) : undefined}
 			previewSlot={rightPaneSlot}
-			checkpointPreviewSlot={checkpointPreviewOpen && persistentChat && <CheckpointPreviewShell chat={persistentChat} itemCount={items.length} rememberText={checkpointRememberText} density={checkpointDensity} proposal={checkpointProposal} loading={checkpointProposalLoading} error={checkpointProposalError} approvalLoading={checkpointApprovalLoading} approvalError={checkpointApprovalError} approvalResult={checkpointApprovalResult} quickRequested={checkpointQuickRequested} quickBlockedReasons={checkpointQuickBlockedReasons} onRememberTextChange={(text) => { setCheckpointRememberText(text); setCheckpointProposal(null); setCheckpointProposalError(null); setCheckpointApprovalError(null); setCheckpointApprovalResult(null); }} onDensityChange={(next) => { setCheckpointDensity(next); setCheckpointProposal(null); setCheckpointProposalError(null); setCheckpointApprovalError(null); setCheckpointApprovalResult(null); }} onGenerate={generateCheckpointProposal} onApprove={approveCheckpointProposal} onDiscard={() => { setCheckpointProposal(null); setCheckpointProposalError(null); setCheckpointApprovalError(null); setCheckpointApprovalResult(null); setCheckpointQuickRequested(false); setCheckpointQuickBlockedReasons(null); setCheckpointPreviewOpen(false); }} onContinueAfterCheckpoint={continueAfterCheckpoint} onRestAfterCheckpoint={restAfterCheckpoint} onClose={() => setCheckpointPreviewOpen(false)} />}
-			globalOverlaySlot={helpOpen && <Help onClose={() => setHelpOpen(false)} />}
+			checkpointPreviewSlot={checkpointPreviewOpen && persistentChat && <CheckpointPreviewShell chat={persistentChat} itemCount={items.length} rememberText={checkpointRememberText} density={checkpointDensity} proposal={checkpointProposal} loading={checkpointProposalLoading} error={checkpointProposalError} approvalLoading={checkpointApprovalLoading} approvalError={checkpointApprovalError} approvalResult={checkpointApprovalResult} quickRequested={checkpointQuickRequested} quickBlockedReasons={checkpointQuickBlockedReasons} consultRunning={consultState.phase === "streaming"} taskRunning={taskState.phase === "running"} pendingConsultHandoffCount={pendingHandoffs.filter((block) => !block.startsWith("[SPECIALIST RESULT")).length} pendingTaskHandoffCount={pendingHandoffs.filter((block) => block.startsWith("[SPECIALIST RESULT")).length} onRememberTextChange={(text) => { setCheckpointRememberText(text); setCheckpointProposal(null); setCheckpointProposalError(null); setCheckpointApprovalError(null); setCheckpointApprovalResult(null); }} onDensityChange={(next) => { setCheckpointDensity(next); setCheckpointProposal(null); setCheckpointProposalError(null); setCheckpointApprovalError(null); setCheckpointApprovalResult(null); }} onGenerate={generateCheckpointProposal} onApprove={approveCheckpointProposal} onDiscard={() => { setCheckpointProposal(null); setCheckpointProposalError(null); setCheckpointApprovalError(null); setCheckpointApprovalResult(null); setCheckpointQuickRequested(false); setCheckpointQuickBlockedReasons(null); setCheckpointPreviewOpen(false); }} onContinueAfterCheckpoint={continueAfterCheckpoint} onRestAfterCheckpoint={restAfterCheckpoint} onClose={() => setCheckpointPreviewOpen(false)} />}
+			globalOverlaySlot={
+				<>
+					{helpOpen && <Help onClose={() => setHelpOpen(false)} />}
+					{exportNotice && (
+						<div className={`artifact-export-toast ${exportNotice.kind}`} role="status" aria-live="polite">
+							{exportNotice.text}
+						</div>
+					)}
+				</>
+			}
 		/>
 	);
 }

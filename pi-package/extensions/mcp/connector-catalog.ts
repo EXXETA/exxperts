@@ -8,20 +8,28 @@
  * manual setup last, so they sit next to the custom-connector card.
  *
  * kind:
- * - "open"   — works immediately, no login
- * - "oauth"  — one-click login (dynamic client registration verified)
- * - "token"  — needs an API token pasted once (no DCR support upstream)
- * - "guided" — needs own credentials/tenant setup; card links the guide
+ * - "open"         — works immediately, no login
+ * - "oauth"        — one-click login (dynamic client registration verified
+ *                    live, path-aware .well-known discovery)
+ * - "token"        — needs an API token pasted once
+ * - "oauth-client" — OAuth without dynamic registration: needs a
+ *                    pre-registered app (client ID/secret) created in the
+ *                    provider's developer settings; card opens the custom
+ *                    form with the Custom OAuth client section
+ * - "guided"       — needs own credentials/tenant setup; card links the guide
  */
 
 export interface ConnectorCatalogEntry {
 	id: string;
 	name: string;
 	description: string;
-	kind: "open" | "oauth" | "token" | "guided";
+	kind: "open" | "oauth" | "token" | "oauth-client" | "guided";
 	url?: string;
 	tokenHint?: string;
 	docsUrl?: string;
+	/** One short line shown on the directory card. Keep it to a sentence. */
+	shortNote?: string;
+	/** Full setup instructions, shown in the add form (web) and the detail/prompt view (CLI). */
 	guideNote?: string;
 }
 
@@ -32,7 +40,7 @@ export const CONNECTOR_CATALOG: ConnectorCatalogEntry[] = [
 		description: "Repositories, issues, pull requests, and code search.",
 		kind: "token",
 		url: "https://api.githubcopilot.com/mcp/",
-		tokenHint: "GitHub personal access token",
+		tokenHint: "Personal access token",
 		docsUrl: "https://github.com/github/github-mcp-server",
 	},
 	{
@@ -116,9 +124,11 @@ export const CONNECTOR_CATALOG: ConnectorCatalogEntry[] = [
 		id: "hubspot",
 		name: "HubSpot",
 		description: "CRM context: contacts, companies, and deals.",
-		kind: "token",
-		url: "https://app.hubspot.com/mcp/v1/http",
-		tokenHint: "HubSpot private app access token",
+		kind: "oauth-client",
+		url: "https://mcp.hubspot.com",
+		shortNote: "Needs an OAuth app from your HubSpot developer settings; the form walks you through it.",
+		guideNote:
+			"HubSpot has no automatic client registration. In HubSpot, go to Development, then MCP Auth Apps, create an app with redirect URL http://localhost:19876/callback, and paste its client ID and secret here. Grant the CRM read scopes on the consent screen when you log in.",
 		docsUrl: "https://developers.hubspot.com/mcp",
 	},
 	{
@@ -133,16 +143,22 @@ export const CONNECTOR_CATALOG: ConnectorCatalogEntry[] = [
 		id: "google-drive",
 		name: "Google Drive",
 		description: "Search, read, and organize files in your Drive.",
-		kind: "guided",
-		guideNote: "Needs your own Google OAuth client — see the guide, then add it as a custom connector.",
+		kind: "oauth-client",
+		url: "https://drivemcp.googleapis.com/mcp/v1",
+		shortNote: "Needs your own Google Cloud OAuth client; Google previews this server to enrolled accounts.",
+		guideNote:
+			"Create an OAuth client in Google Cloud (redirect URL http://localhost:19876/callback) and enable the Drive MCP API in the same project, then paste the client ID and secret here. Google currently gates tool calls behind its Workspace Developer Preview Program.",
 		docsUrl: "https://developers.google.com/workspace/drive/api/guides/configure-mcp-server",
 	},
 	{
 		id: "gmail",
 		name: "Gmail",
 		description: "Search threads, draft replies, and manage labels.",
-		kind: "guided",
-		guideNote: "Needs your own Google OAuth client — see the guide, then add it as a custom connector.",
+		kind: "oauth-client",
+		url: "https://gmailmcp.googleapis.com/mcp/v1",
+		shortNote: "Needs your own Google Cloud OAuth client; Google previews this server to enrolled accounts.",
+		guideNote:
+			"Create an OAuth client in Google Cloud (redirect URL http://localhost:19876/callback) and enable the Gmail MCP API in the same project, then paste the client ID and secret here. Google currently gates tool calls behind its Workspace Developer Preview Program.",
 		docsUrl: "https://developers.google.com/workspace/gmail/api/guides/configure-mcp-server",
 	},
 	{
@@ -150,7 +166,8 @@ export const CONNECTOR_CATALOG: ConnectorCatalogEntry[] = [
 		name: "Microsoft 365",
 		description: "Teams, SharePoint, OneDrive, and Outlook (Work IQ, preview).",
 		kind: "guided",
-		guideNote: "Per-tenant — needs Entra setup by your admin. See the guide, then add it as a custom connector.",
+		shortNote: "Per-tenant: needs Entra setup by your admin.",
+		guideNote: "Per-tenant: needs Entra setup by your admin. See the guide, then add it as a custom connector.",
 		docsUrl: "https://learn.microsoft.com/en-us/microsoft-agent-365/tooling-servers-overview",
 	},
 ];

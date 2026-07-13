@@ -18,6 +18,14 @@ export interface IsolatedPersistentAgentWorkerInput<TModelLock extends { provide
 	cwd: string;
 	agentDir: string;
 	modelRegistry: ModelRegistry;
+	/**
+	 * Optional live tap on the worker session's event stream (message_update
+	 * text deltas and the rest). Strictly additive: when omitted, worker
+	 * behavior is byte-identical to before this hook existed.
+	 */
+	onEvent?: (event: unknown) => void;
+	/** Optional abort hook: aborting the signal aborts the worker session's turn. */
+	signal?: AbortSignal;
 }
 
 export interface IsolatedPersistentAgentWorkerResult {
@@ -103,6 +111,10 @@ export async function runIsolatedPersistentAgentWorker<TModelLock extends { prov
 		}
 
 		created.session.subscribe((event: any) => {
+			if (input.onEvent) {
+				// A listener failure must never break the worker itself.
+				try { input.onEvent(event); } catch {}
+			}
 			if (event?.type !== "message_end" || event?.message?.role !== "assistant") return;
 			const partText = textFromMessageParts(event.message.content);
 			if (partText) text = [text, partText].filter(Boolean).join("\n\n");
@@ -121,7 +133,16 @@ export async function runIsolatedPersistentAgentWorker<TModelLock extends { prov
 					: messageUsage;
 			}
 		});
-		await created.session.prompt(input.triggerPrompt);
+		const onAbort = () => { void Promise.resolve(created.session.abort()).catch(() => {}); };
+		if (input.signal) {
+			if (input.signal.aborted) onAbort();
+			else input.signal.addEventListener("abort", onAbort, { once: true });
+		}
+		try {
+			await created.session.prompt(input.triggerPrompt);
+		} finally {
+			input.signal?.removeEventListener("abort", onAbort);
+		}
 	} finally {
 		try {
 			created.session.dispose();

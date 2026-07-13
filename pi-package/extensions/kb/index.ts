@@ -264,7 +264,7 @@ export default function (pi: ExtensionAPI) {
 	pi.registerTool({
 		name: "kb_vaults",
 		label: "Knowledge bases",
-		description: "List configured Markdown knowledge-base folders available to the Knowledge Weaver.",
+		description: "List the configured Markdown knowledge-base folders available to this agent.",
 		parameters: Type.Object({}),
 		async execute() {
 			const vaults = parseVaults();
@@ -340,7 +340,7 @@ export default function (pi: ExtensionAPI) {
 	pi.registerTool({
 		name: "kb_index",
 		label: "KB index",
-		description: "Read a knowledge-base folder's KB-INDEX.md knowledge index before searching so Knowledge Weaver can navigate targeted files.",
+		description: "Read a knowledge-base folder's KB-INDEX.md knowledge index before searching so the agent can navigate targeted files.",
 		parameters: Type.Object({
 			vault: Type.Optional(Type.String({ description: "Knowledge-base name. Omit to use default." })),
 		}),

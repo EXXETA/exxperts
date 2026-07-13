@@ -48,7 +48,9 @@ function extractContent(detail: string): string {
 }
 
 function isHtml(content: string, title: string): boolean {
-	return /\.html?\b/i.test(title) || /<!doctype\s+html|<html[\s>]|<body[\s>]|<section\b/i.test(content);
+	// Content sniffing only at the start: a brief that merely MENTIONS markup
+	// ("change the <section> headers") must not turn the approval into an iframe.
+	return /\.html?\b/i.test(title) || /^\s*(<!doctype\s+html|<html[\s>]|<body[\s>]|<section\b)/i.test(content);
 }
 
 function isMarkdown(content: string, title: string): boolean {
@@ -60,6 +62,10 @@ export function approvalPreviewFromItem(item: ApprovalItem): ApprovalPreviewData
 	if (item.done || !raw) return null;
 	const detail = raw.trim();
 	if (detail.split(/\r?\n/).length < 2) return null;
+	// Delegate approvals fence the model-written brief with ─── lines; that text
+	// is consent copy, not previewable content. Render it via the plain
+	// pre-wrap approval detail so the line structure and the fence survive.
+	if (detail.includes("───")) return null;
 
 	const file = lineValue(detail, "File") || lineValue(detail, "Path");
 	const folder = lineValue(detail, "Folder") || lineValue(detail, "Knowledge base") || lineValue(detail, "Vault");

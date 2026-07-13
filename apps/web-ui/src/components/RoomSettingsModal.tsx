@@ -4,6 +4,7 @@ import { renamePersistentRoom } from "../persistent-room-management-api";
 import { RoomSessionSection } from "./RoomSessionSection";
 import { RoomWorkspaceSection } from "./RoomWorkspaceSection";
 import { RoomMaintenanceSection } from "./RoomMaintenanceSection";
+import { RoomSkillsSection } from "./RoomSkillsSection";
 import { RoomScheduledTasksSection } from "./RoomScheduledTasksSection";
 import { RoomDangerZone } from "./RoomDangerZone";
 import { useEscapeKey } from "./use-escape-key";
@@ -162,6 +163,10 @@ export function RoomSettingsModal({ status, onClose, onArchive, onRefresh }: { s
 					<section className="room-settings-section">
 						<h3>Memory maintenance</h3>
 						<RoomMaintenanceSection status={status} />
+					</section>
+					<section className="room-settings-section">
+						<h3>Skills</h3>
+						<RoomSkillsSection status={status} />
 					</section>
 					<section className="room-settings-section">
 						<h3>Scheduled tasks</h3>

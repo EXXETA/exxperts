@@ -1,0 +1,160 @@
+# Official exxperts one-line installer (Windows PowerShell):
+#
+#   irm https://raw.githubusercontent.com/EXXETA/exxperts/main/install.ps1 | iex
+#
+# What it does: checks prerequisites (Git for Windows with Git Bash, Node.js),
+# clones the repo into $HOME\exxperts (override with EXXPERTS_DIR), then runs
+# `npm install` and `npm run install:global`. Re-running the same command
+# updates an existing install. exxperts is source-distributed, so the install
+# builds the app locally; give it a few minutes.
+#
+# Env overrides:
+#   EXXPERTS_DIR   install directory (default: $HOME\exxperts)
+#   EXXPERTS_REPO  clone URL (default: https://github.com/EXXETA/exxperts.git)
+
+$ErrorActionPreference = "Stop"
+
+$script:RepoUrl = if ($env:EXXPERTS_REPO) { $env:EXXPERTS_REPO } else { "https://github.com/EXXETA/exxperts.git" }
+$script:PkgName = "@exxeta/exxperts-app"
+
+function Say([string]$Message) { Write-Host "[exxperts] $Message" }
+function Fail([string]$Message) {
+    foreach ($line in $Message -split "`n") { Write-Host "[exxperts] $line" -ForegroundColor Red }
+    # throw, not exit: under `irm | iex` an exit would close the user's
+    # PowerShell window and take the message above with it.
+    throw "exxperts install failed (see the message above)"
+}
+
+function Test-ExxpertsClone([string]$Dir) {
+    $pkg = Join-Path $Dir "package.json"
+    if (-not (Test-Path $pkg)) { return $false }
+    return (Get-Content $pkg -Raw) -match [regex]::Escape("`"name`": `"$script:PkgName`"")
+}
+
+function Test-Prerequisites {
+    if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
+        Fail "git is not installed. Install Git for Windows 2.40 or newer from https://gitforwindows.org, then re-run this command."
+    }
+    # The agent's shell tool runs commands through Git Bash; Git for Windows
+    # provides it. Check both PATH and the standard install location.
+    $bashOnPath = Get-Command bash.exe -ErrorAction SilentlyContinue
+    $bashStandard = Test-Path "C:\Program Files\Git\bin\bash.exe"
+    if (-not $bashOnPath -and -not $bashStandard) {
+        Fail "Git Bash (bash.exe) was not found. exxperts needs Git for Windows 2.40 or newer, which includes it. Install it from https://gitforwindows.org, then re-run this command."
+    }
+    if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
+        Fail "Node.js is not installed. Install Node.js 20.6 or newer from https://nodejs.org, then re-run this command."
+    }
+    if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
+        Fail "npm is not installed. It normally ships with Node.js; reinstall Node.js from https://nodejs.org, then re-run this command."
+    }
+
+    $nodeVersionRaw = (& node --version).Trim()
+    $nodeVersion = [version]($nodeVersionRaw.TrimStart("v"))
+    if ($nodeVersion -lt [version]"20.6.0") {
+        Fail "Node.js $nodeVersionRaw is too old; exxperts needs Node.js 20.6 or newer. Update it from https://nodejs.org, then re-run this command."
+    }
+
+    # npm 12 refuses to run on Node versions outside its own engines range
+    # (^22.22.2 || ^24.15.0 || >=26). Catch that mismatch here, before minutes
+    # of cloning and building, instead of letting npm hard-fail mid-install.
+    $npmVersion = (& npm --version).Trim()
+    $npmMajor = [int]($npmVersion.Split(".")[0])
+    if ($npmMajor -ge 12) {
+        $nodeOk = ($nodeVersion.Major -ge 26) -or
+            ($nodeVersion.Major -eq 24 -and $nodeVersion -ge [version]"24.15.0") -or
+            ($nodeVersion.Major -eq 22 -and $nodeVersion -ge [version]"22.22.2")
+        if (-not $nodeOk) {
+            Fail "You have npm $npmVersion, which requires Node.js 22.22.2+, 24.15.0+ (within 24.x), or 26+, but Node.js $nodeVersionRaw is installed. Update Node.js from https://nodejs.org, then re-run this command."
+        }
+    }
+}
+
+# Bring an existing clone up to date. Skips quietly when the clone has no
+# upstream branch to pull from (e.g. a CI checkout on a detached commit).
+function Update-Clone([string]$Dir) {
+    & git -C $Dir rev-parse --abbrev-ref --symbolic-full-name "@{u}" *> $null
+    if ($LASTEXITCODE -ne 0) {
+        Say "no upstream branch configured in $Dir; skipping the update pull."
+        return
+    }
+    Say "updating existing clone in $Dir ..."
+    & git -C $Dir pull --ff-only
+    if ($LASTEXITCODE -ne 0) {
+        Fail ("could not update ${Dir}: the clone has local changes or has diverged from the remote.`n" +
+            "Either commit/stash your changes and run 'git pull' there yourself,`n" +
+            "or install into a fresh directory: set EXXPERTS_DIR to another path and re-run this command.`n" +
+            "This installer never overwrites local work.")
+    }
+}
+
+function Resolve-InstallDir {
+    # Running from inside an exxperts clone (e.g. re-running the installer from
+    # the install directory) reuses that clone.
+    if (Test-ExxpertsClone (Get-Location).Path) { return (Get-Location).Path }
+    if ($env:EXXPERTS_DIR) { return $env:EXXPERTS_DIR }
+    return (Join-Path $HOME "exxperts")
+}
+
+function Install-Exxperts {
+    Say "official exxperts installer"
+    Test-Prerequisites
+
+    $dir = Resolve-InstallDir
+
+    if (Test-ExxpertsClone $dir) {
+        Update-Clone $dir
+    }
+    elseif (Test-Path $dir) {
+        Fail ("$dir already exists but is not an exxperts clone. Move it out of the way,`n" +
+            "or pick another directory: set EXXPERTS_DIR to another path and re-run this command.")
+    }
+    else {
+        Say "cloning $script:RepoUrl into $dir ..."
+        # Repo-local Git settings from the README's Windows quickstart: long
+        # paths (node_modules trees exceed MAX_PATH) and no CRLF rewriting
+        # (the repo's .gitattributes manages line endings). Scoped to this
+        # clone only; your global Git config is not touched.
+        & git clone -c core.longpaths=true -c core.autocrlf=false $script:RepoUrl $dir
+        if ($LASTEXITCODE -ne 0) {
+            Fail "git clone failed. Check your network connection (and proxy settings, if any), then re-run this command."
+        }
+    }
+
+    Push-Location $dir
+    try {
+        Say "installing dependencies (npm install) ..."
+        & npm install
+        if ($LASTEXITCODE -ne 0) {
+            Fail "npm install failed. From $dir, run 'npm run doctor'; it checks every layer and prints the fix."
+        }
+
+        Say "building and installing the exxperts command (npm run install:global) ..."
+        Say "this builds the whole app; give it a few minutes."
+        & npm run install:global
+        if ($LASTEXITCODE -ne 0) {
+            Fail "the build-and-install step failed. From $dir, run 'npm run doctor'; it checks every layer and prints the fix."
+        }
+    }
+    finally {
+        Pop-Location
+    }
+
+    if (-not (Get-Command exxperts -ErrorAction SilentlyContinue)) {
+        $npmPrefix = (& npm config get prefix).Trim()
+        Say "exxperts installed, but the 'exxperts' command is not on your PATH yet."
+        Say "npm's global bin directory is: $npmPrefix"
+        Say "Add it to your PATH (Settings > System > About > Advanced system settings > Environment Variables),"
+        Say "then open a new terminal."
+    }
+
+    Say ""
+    Say "all set. Start exxperts with:"
+    Say ""
+    Say "  exxperts web"
+    Say ""
+    Say "To update later, just run this same install command again."
+    Say "Installed from: $dir"
+}
+
+Install-Exxperts

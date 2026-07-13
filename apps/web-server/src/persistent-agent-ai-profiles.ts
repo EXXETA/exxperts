@@ -280,6 +280,12 @@ export function getStructuralReviewModelLock(profileId: PersistentAgentAiProfile
 	return cloneModelLock(getPersistentAgentAiProfile(profileId).processes.structuralReview);
 }
 
+// Consult is a maintenance-class read-only worker; it rides the absorb process
+// lock until profiles gain a dedicated consult policy entry.
+export function getConsultModelLock(profileId: PersistentAgentAiProfileId = DEFAULT_PERSISTENT_AGENT_AI_PROFILE_ID): PersistentAgentModelLock {
+	return cloneModelLock(getPersistentAgentAiProfile(profileId).processes.absorb);
+}
+
 export function isPersistentRoomModelForProfile(profileId: PersistentAgentAiProfileId, provider: string, model: string): boolean {
 	return getPersistentAgentAiProfile(profileId).processes.persistentRoom.some((candidate) => candidate.provider === provider && candidate.model === model);
 }

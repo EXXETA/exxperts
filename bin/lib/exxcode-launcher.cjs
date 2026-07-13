@@ -15,6 +15,12 @@ const ROOM_EXTENSIONS = [
   "cli-rooms",
 ];
 
+// Package-manager commands are runtime commands, not rooms: route them
+// straight to the CLI runtime (like `setup`) instead of the room picker.
+// `uninstall` and `config` are handled by the runtime as well (alias of
+// `remove` / interactive config selector).
+const PACKAGE_COMMANDS = ["install", "remove", "uninstall", "update", "list", "config"];
+
 const TERMINAL_RESTORE_SEQUENCE = [
   "\x1b[?2004l", // bracketed paste off
   "\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l", // mouse modes off
@@ -86,7 +92,7 @@ function exitWithTerminalRestore(code) {
 }
 
 function usage(command) {
-  return `Usage: ${command} [runtime options]\n\nOpens the exxperts rooms picker. Pick a room (your own persistent workspace,\nwith its own memory and exxpert) or create a new one. The package install\ndirectory is used as EXXETA_HOME.\n\nExplicit packaged commands:\n  exxperts web       Open the web app\n  exxperts cli       Open this rooms CLI/TUI\n  exxperts           Pick a surface interactively (web app recommended)\n\nOptions:\n  --help, -h      Show this launcher help\n\nOther arguments are passed through to the room runtime.\n`;
+  return `Usage: ${command} [runtime options]\n\nOpens the exxperts rooms picker. Pick a room (your own persistent workspace,\nwith its own memory and exxpert) or create a new one. The package install\ndirectory is used as EXXETA_HOME.\n\nExplicit packaged commands:\n  exxperts web       Open the web app\n  exxperts cli       Open this rooms CLI/TUI\n  exxperts           Pick a surface interactively (web app recommended)\n\nPackage commands (routed to the runtime):\n  exxperts install|remove|update|list|config …\n\nOptions:\n  --help, -h      Show this launcher help\n\nOther arguments are passed through to the room runtime.\n`;
 }
 
 function ensureDirs() {
@@ -114,20 +120,19 @@ const BRAND = {
 // painting a banner over the previous session's leftover frame.
 const CLEAR_SCREEN = "\x1b[2J\x1b[H";
 
-// Half-block "exxperts" logotype, rendered entirely in lila. Traced directly
-// from the brand wordmark artwork (downscaled into the half-block pixel grid),
-// so the letterforms — including the interlocked double-x — are the real ones.
+// Half-block "exxperts" logotype, rendered entirely in lila. Derived by
+// downscaling the plain-wordmark brand PNG (Bandeins Strange Bold, no
+// ligature) into the half-block pixel grid, so the letterforms are the real ones.
 const WORDMARK = [
-  "                                                         ███",
-  "    ▄▄                       ▄▄▄         ▄▄             ▄███",
-  " ▄██████▄   ██▄  ▄██     ██▄██████▄   ▄██████▄   ██████ ██████  ████████",
-  "▄██▀   ▀██   ▀████▀  ▄▄  ███▀   ▀██▄ ███▀  ▀███  ███     ███    ███",
-  "██████████▄ ▄█████▄▄███  ██▀     ███ ██████████  ███     ███     ▀███▄",
-  "███    ▄▄   ██▀ ▀████    ███    ▄██▀ ███    ▄▄   ███     ███       ▀▀██▄",
-  " ████▄███▀     ▄▄█████▄  ████▄▄███▀   ███▄▄███▀  ███     ███▄▄▄ ████████",
-  "  ▀▀▀▀▀▀       ██▀  ▀██  ██▀▀▀▀▀▀      ▀▀▀▀▀▀    ▀▀▀     ▀▀▀▀▀▀ ▀▀▀▀▀▀▀▀",
-  "                         ██",
-  "                         ██",
+  "                                                             ██",
+  "   ▄▄▄▄    ▄▄    ▄▄  ▄▄    ▄▄  ▄▄  ▄▄▄       ▄▄▄▄    ▄▄▄▄▄ ▄███▄▄  ▄▄▄▄▄▄",
+  " ███████▄  ▀██  ██▀  ▀██  ██▀  ████▀▀██▄   ███████▄  █████ ██████ ████████",
+  "███▄▄▄▄██▄  ▀████▀    ▀████▀   ██▀    ███ ███▄▄▄▄██  ██      ██    ██▄▄",
+  "███▀▀▀▀▀▀▀   ████      ████    ██▄    ▄██ ███▀▀▀▀▀▀▀ ██      ██     ▀▀██▄",
+  "▀██▄▄▄▄██  ▄██▀▀██▄  ▄██▀▀██▄  ███▄▄▄▄██▀ ▀██▄▄▄▄██  ██      ██▄▄  ▄▄▄▄███",
+  "  ▀████▀   ██▀  ▀██  ██▀  ▀██  ██▀▀███▀     ▀████▀   ██      ████▀▀███████",
+  "                               ██",
+  "                               ██",
 ];
 
 function brandWordmark(indent) {
@@ -360,9 +365,11 @@ async function runCreateRoom(root, env) {
 async function main(argv = process.argv.slice(2), command = path.basename(process.argv[1] || "exxperts-cli")) {
   const root = path.resolve(__dirname, "..", "..");
 
-  // Product setup commands should not require an agent file, banner, theme, or
-  // extension wrapper. Route them directly to the runtime.
-  if (argv[0] === "setup") {
+  // Product setup and package-manager commands should not require an agent
+  // file, banner, theme, or extension wrapper. Route them directly to the
+  // runtime, before the --help check so `exxperts install --help` shows the
+  // runtime's install help rather than the launcher usage.
+  if (argv[0] === "setup" || PACKAGE_COMMANDS.includes(argv[0])) {
     loadDotenv(root);
     const env = { ...process.env, EXXETA_HOME: root };
     const result = spawnCliRuntime(process.execPath, [path.join(root, "runtime", "packages", "coding-agent", "dist", "cli.js"), ...argv], {

@@ -1,14 +1,14 @@
-// Best-effort browser fetch for Content Producer's visual deck review.
+// Best-effort headless-Chromium fetch for the browser-backed features.
 //
-// Content Producer authors bespoke HTML decks and then renders them with a headless Chromium
-// (via Playwright) so a vision-capable model can actually look at the output and revise it before
-// you ever see a preview. The Chromium binary is a separate ~150 MB download that `npm install`
-// does not pull on its own, so we fetch it here after install.
+// A local Chromium (via Playwright) powers the HTML artifact visual-review loop (a vision-capable
+// model renders and critiques HTML decks before you ever see a preview), fetch_url's JS-rendered
+// page fallback, and task artifact thumbnails. The Chromium binary is a separate ~150 MB download
+// that `npm install` does not pull on its own, so we fetch it here after install.
 //
 // This is intentionally NON-FATAL: if the download can't run (offline, corporate proxy, CI,
-// `--ignore-scripts`, Playwright not installed), we never fail `npm install`. HTML decks still work
-// without it — Content Producer just skips the visual-critique pass — and the browser can be
-// fetched later with `npx playwright install chromium`.
+// `--ignore-scripts`, Playwright not installed), we never fail `npm install`. Everything still works
+// without it — the visual-critique pass and browser fallbacks are just skipped — and the browser can
+// be fetched later with `npx playwright install chromium`.
 
 import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
@@ -18,7 +18,7 @@ import { existsSync } from "node:fs";
 function skip(reason) {
 	console.warn("");
 	console.warn(`[exxperts] ${reason}`);
-	console.warn("[exxperts] HTML decks still work; Content Producer just skips the visual-critique pass.");
+	console.warn("[exxperts] HTML decks still work; the visual-critique pass is just skipped.");
 	console.warn("[exxperts] To enable it later, run:  npx playwright install chromium");
 	console.warn("");
 	process.exit(0); // never block setup
@@ -42,7 +42,7 @@ for (const pkg of ["playwright", "playwright-core"]) {
 }
 if (!cli) skip("Playwright is not installed, so Chromium can't be fetched.");
 
-console.log("[exxperts] Fetching headless Chromium for Content Producer's visual deck review (one-time, ~150 MB)…");
+console.log("[exxperts] Fetching headless Chromium for visual deck review and browser-backed tools (one-time, ~150 MB)…");
 const result = spawnSync(process.execPath, [cli, "install", "chromium"], { stdio: "inherit" });
 
 if (result.error || result.status !== 0) {

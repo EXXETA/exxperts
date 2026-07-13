@@ -7,7 +7,7 @@ Audience: users who need to connect a provider/profile before using persistent-a
 There are two setup paths, depending on how the provider authenticates:
 
 - **Subscription (OAuth) providers — Claude, ChatGPT Plus/Pro:** sign in directly from the web app's **AI setup** page. Each profile that is not connected yet shows a **Sign in →** button; it opens the provider's login in a new browser tab, and the page updates when the sign-in completes. The CLI `/login` flow remains available as an alternative — both paths write to the same local credential store.
-- **API-key providers — OpenAI-compatible gateway:** configured in the terminal (`exxperts setup openai-compatible`), with the API key entered through the CLI `/login` prompt. The web app never asks for or displays API keys.
+- **API-key providers, including the OpenAI-compatible gateway:** set up in the web app: open **AI setup**, then **Add another provider**, then **Set up gateway**; enter the base URL and the model ids your gateway routes, pick the Learn/Review Memory model, then paste your token on the gateway's profile row. The terminal wizard (`exxperts setup openai-compatible`, with the API key entered through the CLI `/login` prompt) remains available as an alternative.
 
 In both cases:
 
@@ -26,7 +26,7 @@ These are the current product-approved profiles for persistent-room/product work
 | `anthropic` | Claude | `anthropic` | In-app sign-in (or CLI `/login`). Requires a Claude Pro/Max subscription. |
 | `openai-compatible` | OpenAI-compatible gateway | `openai-compatible` | Terminal setup + CLI `/login` API-key entry; bring-your-own gateway for advanced users/orgs. |
 
-Other providers may exist in the embedded runtime auth/model layer, but GitHub Copilot, direct OpenAI API-key, OpenRouter, Google, and similar providers are not first-class persistent-room AI profiles until product profile/model policy is added.
+Any other provider the runtime knows (Google Gemini, Groq, Mistral, DeepSeek, OpenRouter, xAI, and about 25 more) can be added from the web app: open **AI setup** and use **Add another provider**, then sign in with a subscription where the provider offers one, or paste an API key. After signing in, approve the models that provider may use in rooms plus the one that runs Learn and Review Memory. Approval creates the provider's AI profile; without it, the provider is signed in but not usable in rooms.
 
 ## ChatGPT Plus/Pro / Codex setup
 
@@ -229,9 +229,6 @@ The local app policy approves only the model ids entered during setup:
 | Checkpoint compression | Inherits the selected persistent-room model |
 | Learn (absorb recent context) | `maintenanceModel` |
 | Structural review | `maintenanceModel` |
-| Built-in specialist `knowledge-weaver` chat turn | `maintenanceModel` |
-| Built-in specialist `researcher` chat turn | `maintenanceModel` |
-| Built-in specialist `content-producer` chat turn | `maintenanceModel` |
 
 A maintenance-only model is included in runtime `models.json` so maintenance processes can use it, but it is not automatically selectable for persistent-room conversation unless you also list it as a room model.
 
@@ -262,9 +259,6 @@ Current `chatgpt-codex` mapping:
 | Checkpoint compression | Inherits the selected persistent-room model |
 | Learn (absorb recent context) | `openai-codex/gpt-5.5` |
 | Structural review | `openai-codex/gpt-5.5` |
-| Built-in specialist `knowledge-weaver` chat turn | `openai-codex/gpt-5.5` |
-| Built-in specialist `researcher` chat turn | `openai-codex/gpt-5.5` |
-| Built-in specialist `content-producer` chat turn | `openai-codex/gpt-5.5` |
 
 Model-policy editing is not a user/admin feature today. Any editable policy needs a separate product design for storage, schema, validation, merge behavior, thread-lock safety, and rollback.
 
@@ -280,9 +274,6 @@ Current `anthropic` mapping:
 | Checkpoint compression | Inherits the selected persistent-room model |
 | Learn (absorb recent context) | `anthropic/claude-opus-4-8` |
 | Structural review | `anthropic/claude-opus-4-8` |
-| Built-in specialist `knowledge-weaver` chat turn | `anthropic/claude-opus-4-8` |
-| Built-in specialist `researcher` chat turn | `anthropic/claude-opus-4-8` |
-| Built-in specialist `content-producer` chat turn | `anthropic/claude-opus-4-8` |
 
 `claude-opus-4-8` is the default/recommended model. `claude-sonnet-5` and `claude-fable-5` are approved as additional persistent-room conversation choices.
 

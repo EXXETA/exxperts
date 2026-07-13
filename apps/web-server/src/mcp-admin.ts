@@ -37,20 +37,28 @@ function ensureAgentDirEnv(): void {
 
 const SERVER_NAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/;
 
+export interface AddMcpServerOAuthInput {
+	clientId?: string;
+	clientSecret?: string;
+	scope?: string;
+}
+
 export interface AddMcpServerInput {
 	name: string;
 	url?: string;
 	command?: string;
 	args?: string[];
 	bearerToken?: string;
+	oauth?: AddMcpServerOAuthInput;
 }
 
 interface ServerEntryShape {
 	url?: string;
 	command?: string;
 	args?: string[];
-	auth?: "bearer";
+	auth?: "bearer" | "oauth";
 	bearerToken?: string;
+	oauth?: { clientId: string; clientSecret?: string; scope?: string };
 }
 
 function validateAddInput(input: AddMcpServerInput): { name: string; entry: ServerEntryShape } {
@@ -72,10 +80,29 @@ function validateAddInput(input: AddMcpServerInput): { name: string; entry: Serv
 			throw new McpAdminError("The server URL must use http(s).");
 		}
 		const bearerToken = String(input.bearerToken ?? "").trim();
+		const clientId = String(input.oauth?.clientId ?? "").trim();
+		const clientSecret = String(input.oauth?.clientSecret ?? "").trim();
+		const scope = String(input.oauth?.scope ?? "").trim();
+		if ((clientSecret || scope) && !clientId) {
+			throw new McpAdminError("A custom OAuth client needs at least a client ID.");
+		}
+		if (bearerToken && clientId) {
+			throw new McpAdminError("Provide either an API token or a custom OAuth client, not both.");
+		}
 		if (bearerToken) return { name, entry: { url, auth: "bearer", bearerToken } };
+		if (clientId) {
+			// Pre-registered client: the adapter's OAuth provider uses it directly
+			// and skips dynamic client registration, which providers like HubSpot
+			// do not support.
+			return {
+				name,
+				entry: { url, auth: "oauth", oauth: { clientId, ...(clientSecret ? { clientSecret } : {}), ...(scope ? { scope } : {}) } },
+			};
+		}
 		return { name, entry: { url } };
 	}
 	if (input.bearerToken) throw new McpAdminError("API tokens only apply to remote (URL) connectors.");
+	if (input.oauth?.clientId) throw new McpAdminError("Custom OAuth clients only apply to remote (URL) connectors.");
 	if (command) {
 		const args = Array.isArray(input.args) ? input.args.map((a) => String(a)).filter((a) => a.trim() !== "") : [];
 		return { name, entry: args.length > 0 ? { command, args } : { command } };
@@ -142,7 +169,7 @@ export async function removeMcpServer(name: string): Promise<{ name: string; rem
 		const provenance = configMod.getServerProvenance().get(name);
 		const from = provenance?.importKind ? ` It is imported from your ${provenance.importKind} config` : "";
 		throw new McpAdminError(
-			`"${name}" is not defined in an exxperts config file.${from} — remove it in that tool, or drop the import from ~/.exxperts/agent/mcp.json.`,
+			`"${name}" is not defined in an exxperts config file.${from} Remove it in that tool, or drop the import from ~/.exxperts/agent/mcp.json.`,
 			409,
 		);
 	}
@@ -167,14 +194,30 @@ const pendingLogins = new Map<string, { startedAt: number; error?: string; done:
 // OAuth is auto-detected for URL servers, so "log in" against a public server
 // fails at endpoint discovery with SDK internals (404s, JSON parse noise).
 // Translate that into what it actually means.
+/**
+ * Transport errors can embed the entire HTTP response body (the MCP SDK's
+ * "Error POSTing to endpoint: <body>" includes full tool catalogs — observed
+ * live with Google's Gmail MCP returning 403 with the complete tools list as
+ * the body). Cap what reaches the UI; the point of the message is the first
+ * line, not the payload.
+ */
+function trimTransportError(message: string, max = 280): string {
+	const trimmed = message.trim();
+	if (trimmed.length <= max) return trimmed;
+	return `${trimmed.slice(0, max)}… [response body trimmed]`;
+}
+
 function friendlyLoginError(message: string): string {
+	if (/does not support dynamic client registration/i.test(message)) {
+		return "This provider needs a pre-registered OAuth app: create one in the provider's developer settings with redirect URL http://localhost:19876/callback, then re-add the connector with its client ID and secret under Custom OAuth client.";
+	}
 	if (/invalid oauth error response|404|not found|no authorization server/i.test(message)) {
-		return "This connector doesn't offer a login — it likely works without one. Use Test connection to check.";
+		return "This connector doesn't offer a login. It likely works without one. Use Test connection to check.";
 	}
 	if (/timed? ?out/i.test(message)) {
-		return "The login timed out — try again.";
+		return "The login timed out. Try again.";
 	}
-	return `Login failed: ${message}`;
+	return `Login failed: ${trimTransportError(message)}`;
 }
 
 /**
@@ -221,7 +264,7 @@ export async function startMcpServerLogin(name: string): Promise<{ started: bool
 		// cancel it and start fresh instead of locking the user out.
 		await cancelPendingLoginAttempt(name, pending);
 		if (!pending.done) {
-			throw new McpAdminError("A previous login attempt is still winding down — try again in a few seconds.", 409);
+			throw new McpAdminError("A previous login attempt is still winding down. Try again in a few seconds.", 409);
 		}
 	}
 	const record = { startedAt: Date.now(), done: false as boolean, error: undefined as string | undefined };
@@ -323,7 +366,7 @@ export async function testMcpServer(name: string): Promise<McpServerTestResult> 
 			// this connection attempt just proved otherwise.
 			await dropMetadataCacheEntry(name);
 		}
-		return { ok: false, error: message, needsAuth };
+		return { ok: false, error: trimTransportError(message), needsAuth };
 	} finally {
 		try {
 			await manager.closeAll();

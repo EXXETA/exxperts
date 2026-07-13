@@ -83,3 +83,38 @@ export function updatePersistentRoomMaintenanceSettings(agentId: PersistentAgent
 		"Failed to save memory maintenance settings."
 	);
 }
+
+// ── Skills MR-5: per-room skill enablement (spec §4/§5) ──────────────────────
+
+export interface PersistentRoomEnabledSkillStatus {
+	name: string;
+	sha256: string;
+	currentSha256: string | null;
+	status: "ok" | "hash-mismatch" | "missing";
+}
+
+export interface PersistentRoomSkillSettingsResponse {
+	agentId: PersistentAgentId;
+	settings: { schemaVersion: 1; enabledSkills: { name: string; sha256: string }[]; updatedAt: string };
+	skills: PersistentRoomEnabledSkillStatus[];
+}
+
+export function fetchPersistentRoomSkillSettings(agentId: PersistentAgentId): Promise<PersistentRoomSkillSettingsResponse> {
+	return fetchJson<PersistentRoomSkillSettingsResponse>(
+		`/api/persistent-agents/${encodeURIComponent(agentId)}/skill-settings`,
+		undefined,
+		"Failed to load room skill settings."
+	);
+}
+
+export function updatePersistentRoomSkillSetting(agentId: PersistentAgentId, action: "enable" | "disable", name: string): Promise<PersistentRoomSkillSettingsResponse> {
+	return fetchJson<PersistentRoomSkillSettingsResponse>(
+		`/api/persistent-agents/${encodeURIComponent(agentId)}/skill-settings`,
+		{
+			method: "PUT",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ action, name }),
+		},
+		"Failed to update room skill settings."
+	);
+}
