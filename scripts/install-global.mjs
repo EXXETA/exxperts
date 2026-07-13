@@ -112,4 +112,28 @@ const installEnv = { ...process.env, npm_config_allow_remote: "all", npm_config_
 console.log(`[exxperts] npm ${npmVersionString || "(version not detected)"}: allowing the tarball's remote dependency and install scripts for the global step`);
 run(installArgs, { env: installEnv });
 
+// npm's allow-scripts matching for a local tarball root is inconsistent
+// across versions and platforms (npm 11.14+ on Windows skips the package's
+// own postinstall no matter which entry form is passed, and npm runs it
+// silently elsewhere), so the postinstall is run directly in the installed
+// copy: the same two scripts the manifest names, both idempotent, no gate.
+const prefixProbe = spawnSync("npm", ["config", "get", "prefix"], { cwd: root, encoding: "utf8", shell });
+const globalPrefix = (prefixProbe.stdout ?? "").trim();
+const installedRoot = process.platform === "win32"
+	? path.join(globalPrefix, "node_modules", pkg.name)
+	: path.join(globalPrefix, "lib", "node_modules", pkg.name);
+if (globalPrefix && fs.existsSync(installedRoot)) {
+	console.log("[exxperts] running the package postinstall in the installed copy…");
+	for (const script of ["scripts/patch-mcp-adapter.mjs", "scripts/install-chromium.mjs"]) {
+		const res = spawnSync(process.execPath, [path.join(installedRoot, script)], { cwd: installedRoot, stdio: "inherit" });
+		if (res.status !== 0) {
+			console.error(`[exxperts] ${script} failed in the installed copy; run "npm run doctor" from the clone to diagnose.`);
+			process.exit(res.status ?? 1);
+		}
+	}
+} else {
+	console.error(`[exxperts] could not locate the installed copy under ${installedRoot} to run its postinstall`);
+	process.exit(1);
+}
+
 console.log("[exxperts] done — run: exxperts web  (web app)  or: exxperts cli  (CLI/TUI)");

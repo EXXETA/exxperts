@@ -85,8 +85,12 @@ jobs:
       # The full README path. npm 12 applies neither the project .npmrc nor
       # allowScripts to the final `npm install -g <tarball>` step, so this
       # catches global-mode gate regressions the in-repo install above cannot.
+      # The patch-mcp-adapter grep asserts the installed copy's postinstall
+      # actually ran; npm 11.14+ on Windows silently skips it otherwise.
       - name: Packaged install end to end (install:global)
-        run: npm run install:global
+        run: |
+          npm run install:global 2>&1 | tee ig.log
+          grep -q "patch-mcp-adapter:" ig.log || { echo "the installed copy's postinstall did not run" >&2; exit 1; }
 
       - name: Global exxperts command launches
         run: exxperts --help
