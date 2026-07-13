@@ -45,7 +45,10 @@ function Test-Prerequisites {
     if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
         Fail "Node.js is not installed. Install Node.js 20.6 or newer from https://nodejs.org, then re-run this command."
     }
-    if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
+    # npm.cmd, deliberately: plain `npm` resolves to npm's .ps1 shim, which the
+    # default Windows execution policy (Restricted) refuses to run. The .cmd
+    # shim works under every policy. Same for every npm call below.
+    if (-not (Get-Command npm.cmd -ErrorAction SilentlyContinue)) {
         Fail "npm is not installed. It normally ships with Node.js; reinstall Node.js from https://nodejs.org, then re-run this command."
     }
 
@@ -58,7 +61,7 @@ function Test-Prerequisites {
     # npm 12 refuses to run on Node versions outside its own engines range
     # (^22.22.2 || ^24.15.0 || >=26). Catch that mismatch here, before minutes
     # of cloning and building, instead of letting npm hard-fail mid-install.
-    $npmVersion = (& npm --version).Trim()
+    $npmVersion = (& npm.cmd --version).Trim()
     $npmMajor = [int]($npmVersion.Split(".")[0])
     if ($npmMajor -ge 12) {
         $nodeOk = ($nodeVersion.Major -ge 26) -or
@@ -124,14 +127,14 @@ function Install-Exxperts {
     Push-Location $dir
     try {
         Say "installing dependencies (npm install) ..."
-        & npm install
+        & npm.cmd install
         if ($LASTEXITCODE -ne 0) {
             Fail "npm install failed. From $dir, run 'npm run doctor'; it checks every layer and prints the fix."
         }
 
         Say "building and installing the exxperts command (npm run install:global) ..."
         Say "this builds the whole app; give it a few minutes."
-        & npm run install:global
+        & npm.cmd run install:global
         if ($LASTEXITCODE -ne 0) {
             Fail "the build-and-install step failed. From $dir, run 'npm run doctor'; it checks every layer and prints the fix."
         }
@@ -140,12 +143,26 @@ function Install-Exxperts {
         Pop-Location
     }
 
-    if (-not (Get-Command exxperts -ErrorAction SilentlyContinue)) {
-        $npmPrefix = (& npm config get prefix).Trim()
+    if (-not (Get-Command exxperts.cmd -ErrorAction SilentlyContinue)) {
+        $npmPrefix = (& npm.cmd config get prefix).Trim()
         Say "exxperts installed, but the 'exxperts' command is not on your PATH yet."
         Say "npm's global bin directory is: $npmPrefix"
         Say "Add it to your PATH (Settings > System > About > Advanced system settings > Environment Variables),"
         Say "then open a new terminal."
+    }
+
+    # With the default Restricted policy, `exxperts` in PowerShell resolves to
+    # npm's .ps1 shim and is refused. One-time, current-user-only fix below;
+    # cmd.exe and `exxperts.cmd` work either way.
+    $policy = Get-ExecutionPolicy
+    if ($policy -in @("Restricted", "AllSigned", "Undefined")) {
+        Say ""
+        Say "One more thing: your PowerShell execution policy ($policy) blocks npm-installed"
+        Say "commands like 'exxperts'. Allow them for your user with:"
+        Say ""
+        Say "  Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser"
+        Say ""
+        Say "then open a new terminal. (Alternatively, run 'exxperts.cmd' or use cmd.exe.)"
     }
 
     Say ""

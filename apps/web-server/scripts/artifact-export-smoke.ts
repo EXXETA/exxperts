@@ -127,8 +127,12 @@ try {
 	assert(savedTo === path.join(workspaceRealRoot, "page.html"), `happy export: savedTo should be inside the workspace root, got "${savedTo}"`);
 	assert(fs.existsSync(savedTo), "happy export: destination file should exist");
 	assert(fs.readFileSync(savedTo, "utf-8") === HTML_BODY, "happy export: destination bytes must match source");
-	const mode = fs.statSync(savedTo).mode & 0o777;
-	assert(mode === 0o600, `happy export: destination should be 0o600, got 0o${mode.toString(8)}`);
+	// POSIX permission bits do not exist on Windows; stat reports 0o666 there
+	// no matter what mode the write requested.
+	if (process.platform !== "win32") {
+		const mode = fs.statSync(savedTo).mode & 0o777;
+		assert(mode === 0o600, `happy export: destination should be 0o600, got 0o${mode.toString(8)}`);
+	}
 
 	// 2. Second export of the same name → 409, and the existing file is untouched.
 	const conflict = await exportArtifact("tsk-export1", "tasks/tsk-export1/page.html", ROOM_WITH_WORKSPACE);

@@ -122,12 +122,17 @@ jobs:
           node-version: 22
           cache: npm
 
-      - name: Run install.ps1 against the local checkout
+      # powershell.exe with -ExecutionPolicy Restricted emulates a default
+      # Windows machine, where .ps1 shims (npm.ps1, exxperts.ps1) are refused;
+      # piping the script body mirrors the README's `irm | iex` form. Caught
+      # live: the installer must call npm.cmd, never plain npm.
+      - name: Run install.ps1 against the local checkout (default execution policy)
         shell: pwsh
         run: |
           $env:EXXPERTS_DIR = $env:GITHUB_WORKSPACE
-          ./install.ps1
+          powershell.exe -NoProfile -ExecutionPolicy Restricted -Command "Get-Content install.ps1 -Raw | Invoke-Expression"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Verify the installed command
+      - name: Verify the installed command (policy-proof shim)
         shell: pwsh
-        run: exxperts --help
+        run: exxperts.cmd --help
