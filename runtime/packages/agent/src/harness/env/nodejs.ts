@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import { access, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { type ExecutionEnv, FileError, type FileInfo, type FileKind } from "../types.js";
 
 function resolvePath(cwd: string, path: string): string {
@@ -100,6 +100,19 @@ async function findBashOnPath(): Promise<string | null> {
 	return firstMatch && (await pathExists(firstMatch)) ? firstMatch : null;
 }
 
+// Windows: derive Git Bash from git's own install location. git.exe is usually
+// on PATH while bash.exe deliberately is not (Git's recommended setup), and
+// no-admin per-user installs live under AppData instead of Program Files, so
+// <install root>\cmd\git.exe -> <install root>\bin\bash.exe is the reliable route.
+async function findGitBashViaGit(): Promise<string | null> {
+	const result = await runCommand("where", ["git.exe"], 5000);
+	if (result.status !== 0 || !result.stdout) return null;
+	const firstMatch = result.stdout.trim().split(/\r?\n/)[0];
+	if (!firstMatch) return null;
+	const candidate = join(dirname(dirname(firstMatch)), "bin", "bash.exe");
+	return (await pathExists(candidate)) ? candidate : null;
+}
+
 async function getShellConfig(customShellPath?: string): Promise<{ shell: string; args: string[] }> {
 	if (customShellPath) {
 		if (await pathExists(customShellPath)) {
@@ -113,10 +126,16 @@ async function getShellConfig(customShellPath?: string): Promise<{ shell: string
 		if (programFiles) candidates.push(`${programFiles}\\Git\\bin\\bash.exe`);
 		const programFilesX86 = process.env["ProgramFiles(x86)"];
 		if (programFilesX86) candidates.push(`${programFilesX86}\\Git\\bin\\bash.exe`);
+		const localAppData = process.env.LOCALAPPDATA;
+		if (localAppData) candidates.push(`${localAppData}\\Programs\\Git\\bin\\bash.exe`);
 		for (const candidate of candidates) {
 			if (await pathExists(candidate)) {
 				return { shell: candidate, args: ["-c"] };
 			}
+		}
+		const bashNearGit = await findGitBashViaGit();
+		if (bashNearGit) {
+			return { shell: bashNearGit, args: ["-c"] };
 		}
 		const bashOnPath = await findBashOnPath();
 		if (bashOnPath) {

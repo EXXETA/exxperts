@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { delimiter } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import { spawn, spawnSync } from "child_process";
 import { getBinDir } from "../config.js";
 
@@ -44,6 +44,30 @@ function findBashOnPath(): string | null {
 }
 
 /**
+ * Windows: derive Git Bash from git's own install location. git.exe is usually
+ * on PATH while bash.exe deliberately is not (Git's recommended setup), and
+ * no-admin per-user installs live under AppData instead of Program Files, so
+ * <install root>\cmd\git.exe -> <install root>\bin\bash.exe is the reliable route.
+ */
+function findGitBashViaGit(): string | null {
+	try {
+		const result = spawnSync("where", ["git.exe"], { encoding: "utf-8", timeout: 5000 });
+		if (result.status === 0 && result.stdout) {
+			const firstMatch = result.stdout.trim().split(/\r?\n/)[0];
+			if (firstMatch) {
+				const candidate = join(dirname(dirname(firstMatch)), "bin", "bash.exe");
+				if (existsSync(candidate)) {
+					return candidate;
+				}
+			}
+		}
+	} catch {
+		// Ignore errors
+	}
+	return null;
+}
+
+/**
  * Resolve shell configuration based on platform and an optional explicit shell path.
  * Resolution order:
  * 1. User-specified shellPath
@@ -60,7 +84,7 @@ export function getShellConfig(customShellPath?: string): ShellConfig {
 	}
 
 	if (process.platform === "win32") {
-		// 2. Try Git Bash in known locations
+		// 2. Try Git Bash in known locations, including no-admin per-user installs
 		const paths: string[] = [];
 		const programFiles = process.env.ProgramFiles;
 		if (programFiles) {
@@ -70,6 +94,10 @@ export function getShellConfig(customShellPath?: string): ShellConfig {
 		if (programFilesX86) {
 			paths.push(`${programFilesX86}\\Git\\bin\\bash.exe`);
 		}
+		const localAppData = process.env.LOCALAPPDATA;
+		if (localAppData) {
+			paths.push(`${localAppData}\\Programs\\Git\\bin\\bash.exe`);
+		}
 
 		for (const path of paths) {
 			if (existsSync(path)) {
@@ -77,7 +105,13 @@ export function getShellConfig(customShellPath?: string): ShellConfig {
 			}
 		}
 
-		// 3. Fallback: search bash.exe on PATH (Cygwin, MSYS2, WSL, etc.)
+		// 3. Ask git itself: git.exe is on PATH in setups where bash.exe is not.
+		const bashNearGit = findGitBashViaGit();
+		if (bashNearGit) {
+			return { shell: bashNearGit, args: ["-c"] };
+		}
+
+		// 4. Fallback: search bash.exe on PATH (Cygwin, MSYS2, WSL, etc.)
 		const bashOnPath = findBashOnPath();
 		if (bashOnPath) {
 			return { shell: bashOnPath, args: ["-c"] };

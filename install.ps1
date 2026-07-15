@@ -36,10 +36,25 @@ function Test-Prerequisites {
         Fail "git is not installed. Install Git for Windows 2.40 or newer from https://gitforwindows.org, then re-run this command."
     }
     # The agent's shell tool runs commands through Git Bash; Git for Windows
-    # provides it. Check both PATH and the standard install location.
+    # provides it. bash.exe is deliberately NOT on PATH under Git's recommended
+    # setup, and no-admin (per-user) installs live under AppData, not Program
+    # Files - so derive bash from git's own location first, then fall back to
+    # PATH and both machine-wide and per-user standard locations.
+    $bashNearGit = $false
+    $gitCommand = Get-Command git -ErrorAction SilentlyContinue
+    if ($gitCommand -and $gitCommand.Source) {
+        # <install root>\cmd\git.exe -> <install root>\bin\bash.exe
+        $gitRoot = Split-Path -Parent (Split-Path -Parent $gitCommand.Source)
+        if ($gitRoot) {
+            $bashNearGit = Test-Path (Join-Path $gitRoot "bin\bash.exe")
+        }
+    }
     $bashOnPath = Get-Command bash.exe -ErrorAction SilentlyContinue
     $bashStandard = Test-Path "C:\Program Files\Git\bin\bash.exe"
-    if (-not $bashOnPath -and -not $bashStandard) {
+    if (-not $bashStandard -and $env:LOCALAPPDATA) {
+        $bashStandard = Test-Path (Join-Path $env:LOCALAPPDATA "Programs\Git\bin\bash.exe")
+    }
+    if (-not $bashNearGit -and -not $bashOnPath -and -not $bashStandard) {
         Fail "Git Bash (bash.exe) was not found. exxperts needs Git for Windows 2.40 or newer, which includes it. Install it from https://gitforwindows.org, then re-run this command."
     }
     if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
