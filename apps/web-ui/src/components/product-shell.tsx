@@ -4,8 +4,8 @@ import { Help } from "./Help";
 
 export type ThemeMode = "dark" | "light";
 
-// Bump per release. Keep in sync with the root package.json "version" field.
-const APP_VERSION = "0.6.6";
+// Injected at build time from the root package.json "version" field (vite define).
+const APP_VERSION = __APP_VERSION__;
 const GITHUB_URL = "https://github.com/EXXETA/exxperts";
 
 export interface SidebarAiProfileProps {
