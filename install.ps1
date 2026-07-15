@@ -196,8 +196,10 @@ function Install-Exxperts {
         & npm.cmd install
         if ($LASTEXITCODE -ne 0) {
             Fail ("npm install failed. From $dir, run 'npm run doctor'; it checks every layer and prints the fix.`n" +
-                "If the error above mentions EPERM, EBUSY, or a file in use, an antivirus is likely`n" +
-                "scanning the install as it runs; add an exclusion for $dir, then re-run this command.")
+                "If the error above mentions EPERM, EBUSY, or a file in use: close exxperts if it is`n" +
+                "running (Windows locks its files while it runs), then re-run this command. If it keeps`n" +
+                "failing with exxperts closed, an antivirus may be scanning the install; add an`n" +
+                "exclusion for $dir and re-run.")
         }
 
         Say "building and installing the exxperts command (npm run install:global) ..."
@@ -205,8 +207,10 @@ function Install-Exxperts {
         & npm.cmd run install:global
         if ($LASTEXITCODE -ne 0) {
             Fail ("the build-and-install step failed. From $dir, run 'npm run doctor'; it checks every layer and prints the fix.`n" +
-                "If the error above mentions EPERM, EBUSY, or a file in use, an antivirus is likely`n" +
-                "scanning the install as it runs; add an exclusion for $dir, then re-run this command.")
+                "If the error above mentions EPERM, EBUSY, or a file in use: close exxperts if it is`n" +
+                "running (Windows locks its files while it runs), then re-run this command. If it keeps`n" +
+                "failing with exxperts closed, an antivirus may be scanning the install; add an`n" +
+                "exclusion for $dir and re-run.")
         }
     }
     finally {

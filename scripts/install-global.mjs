@@ -56,6 +56,43 @@ if (process.platform !== "win32") {
 	}
 }
 
+// Windows locks files a running app holds open, so replacing the global
+// install fails with EBUSY halfway through. Probe the exact operation that
+// breaks (a rename round-trip of the installed dir) BEFORE minutes of
+// building, and name the real fix: close exxperts first.
+const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
+if (process.platform === "win32") {
+	const prefixProbeEarly = spawnSync("npm", ["config", "get", "prefix"], { cwd: root, encoding: "utf8", shell });
+	const prefixEarly = prefixProbeEarly.status === 0 ? (prefixProbeEarly.stdout ?? "").trim() : "";
+	const installedRootEarly = prefixEarly ? path.join(prefixEarly, "node_modules", pkg.name) : "";
+	if (installedRootEarly && fs.existsSync(installedRootEarly)) {
+		const probeTarget = `${installedRootEarly}.update-probe`;
+		let renamedAway = false;
+		try {
+			fs.renameSync(installedRootEarly, probeTarget);
+			renamedAway = true;
+			fs.renameSync(probeTarget, installedRootEarly);
+			renamedAway = false;
+		} catch {
+			if (renamedAway) {
+				// The round-trip half-failed; put the installed app back before erroring.
+				try { fs.renameSync(probeTarget, installedRootEarly); renamedAway = false; } catch {}
+			}
+			if (renamedAway) {
+				console.error(`[exxperts] the installed app could not be restored after an update probe.
+[exxperts] Rename "${probeTarget}" back to "${installedRootEarly}" by hand, then re-run this command.`);
+			} else {
+				console.error(`[exxperts] the installed app at ${installedRootEarly}
+[exxperts] is locked, which usually means exxperts is still running.
+[exxperts] Close the exxperts app and any terminal running it, then re-run this command.
+[exxperts] If it keeps failing with exxperts closed, an antivirus may be scanning that
+[exxperts] folder; add an exclusion and re-run.`);
+			}
+			process.exit(1);
+		}
+	}
+}
+
 console.log("[exxperts] building…");
 run(["run", "build"]);
 
@@ -105,7 +142,6 @@ function detectNpm() {
 // values via environment, so a shell layer dropping one leaves the other.
 const npmVersionString = detectNpm();
 const tarball = path.join(root, filename);
-const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
 const scriptAllows = [tarball, pkg.name, ...Object.keys(pkg.allowScripts ?? {})];
 const installArgs = ["install", "-g", tarball, "--allow-remote=all", ...scriptAllows.map((entry) => `--allow-scripts=${entry}`)];
 const installEnv = { ...process.env, npm_config_allow_remote: "all", npm_config_allow_scripts: scriptAllows.join(",") };
