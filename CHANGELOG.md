@@ -5,6 +5,10 @@ User-visible changes per release. Historical private/internal development notes 
 ## Unreleased
 
 - Rooms: quick checkpoints can be set to stop at the review gate per room (Settings, Memory pane) instead of applying automatically. Contributed by [@blue-az](https://github.com/blue-az) in [#2](https://github.com/EXXETA/exxperts/pull/2).
+- Install: `exxperts --version` reports the product version, and the installers print it when they finish, so "did the update land?" is answerable.
+- Windows installer: when Git is installed but missing from PATH (installed without the "Git from the command line" option), the installer finds and uses it instead of asking for a reinstall.
+- Installer messages now cover no-admin installs of Git and Node and corporate TLS-inspection networks (`NODE_EXTRA_CA_CERTS`, `git http.sslCAInfo`).
+- `npm run doctor` finds Git Bash for per-user Git installs (it previously reported it missing on machines where the install itself succeeded).
 
 ## 0.6.7 (2026-07-13)
 

@@ -33,7 +33,26 @@ function Test-ExxpertsClone([string]$Dir) {
 
 function Test-Prerequisites {
     if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
-        Fail "git is not installed. Install Git for Windows 2.40 or newer from https://gitforwindows.org, then re-run this command."
+        # Git is often installed but invisible to PowerShell: Git for Windows
+        # set up without the "Git from the command line" option never lands on
+        # PATH. Probe the standard install roots (machine-wide and per-user)
+        # and use a found git for this session instead of demanding a reinstall.
+        $gitCmdDirs = @()
+        if ($env:ProgramFiles) { $gitCmdDirs += (Join-Path $env:ProgramFiles "Git\cmd") }
+        if (${env:ProgramFiles(x86)}) { $gitCmdDirs += (Join-Path ${env:ProgramFiles(x86)} "Git\cmd") }
+        if ($env:LOCALAPPDATA) { $gitCmdDirs += (Join-Path $env:LOCALAPPDATA "Programs\Git\cmd") }
+        $foundGitDir = $gitCmdDirs | Where-Object { Test-Path (Join-Path $_ "git.exe") } | Select-Object -First 1
+        if ($foundGitDir) {
+            Say "git is installed at $foundGitDir but not on your PATH; using it for this install."
+            Say "To make git available everywhere, reinstall Git for Windows keeping the default"
+            Say "option 'Git from the command line and also from 3rd-party software'."
+            $env:PATH = "$foundGitDir;$env:PATH"
+        }
+        else {
+            Fail ("git is not installed. Install Git for Windows 2.40 or newer from https://gitforwindows.org,`n" +
+                "then re-run this command. No admin rights? Run its installer anyway: it offers an`n" +
+                "install just for your user account.")
+        }
     }
     # The agent's shell tool runs commands through Git Bash; Git for Windows
     # provides it. bash.exe is deliberately NOT on PATH under Git's recommended
@@ -58,7 +77,9 @@ function Test-Prerequisites {
         Fail "Git Bash (bash.exe) was not found. exxperts needs Git for Windows 2.40 or newer, which includes it. Install it from https://gitforwindows.org, then re-run this command."
     }
     if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
-        Fail "Node.js is not installed. Install Node.js 20.6 or newer from https://nodejs.org, then re-run this command."
+        Fail ("Node.js is not installed. Install Node.js 20.6 or newer from https://nodejs.org, then`n" +
+            "re-run this command. No admin rights? The ZIP download from nodejs.org needs none:`n" +
+            "unpack it into a folder you own and add that folder to your PATH.")
     }
     # npm.cmd, deliberately: plain `npm` resolves to npm's .ps1 shim, which the
     # default Windows execution policy (Restricted) refuses to run. The .cmd
@@ -186,7 +207,10 @@ function Install-Exxperts {
         # clone only; your global Git config is not touched.
         & git clone -c core.longpaths=true -c core.autocrlf=false $script:RepoUrl $dir
         if ($LASTEXITCODE -ne 0) {
-            Fail "git clone failed. Check your network connection (and proxy settings, if any), then re-run this command."
+            Fail ("git clone failed. Check your network connection (and proxy settings, if any), then re-run`n" +
+                "this command. If the error above mentions an SSL certificate, your company network inspects`n" +
+                "TLS: ask IT for the corporate root certificate (a .pem file) and point git at it with`n" +
+                "  git config --global http.sslCAInfo C:\path\to\corp-root.pem")
         }
     }
 
@@ -199,7 +223,11 @@ function Install-Exxperts {
                 "If the error above mentions EPERM, EBUSY, or a file in use: close exxperts if it is`n" +
                 "running (Windows locks its files while it runs), then re-run this command. If it keeps`n" +
                 "failing with exxperts closed, an antivirus may be scanning the install; add an`n" +
-                "exclusion for $dir and re-run.")
+                "exclusion for $dir and re-run.`n" +
+                "If it mentions a certificate (UNABLE_TO_VERIFY_LEAF_SIGNATURE, SELF_SIGNED_CERT_IN_CHAIN),`n" +
+                "your company network inspects TLS: ask IT for the corporate root certificate (a .pem file),`n" +
+                "then run this first and re-run the install command in the same window:`n" +
+                "  `$env:NODE_EXTRA_CA_CERTS = 'C:\path\to\corp-root.pem'")
         }
 
         Say "building and installing the exxperts command (npm run install:global) ..."
@@ -212,6 +240,9 @@ function Install-Exxperts {
                 "failing with exxperts closed, an antivirus may be scanning the install; add an`n" +
                 "exclusion for $dir and re-run.")
         }
+
+        $script:InstalledVersion = ""
+        try { $script:InstalledVersion = (& node -p "require('./package.json').version").Trim() } catch {}
     }
     finally {
         Pop-Location
@@ -227,9 +258,15 @@ function Install-Exxperts {
 
     # With the default Restricted policy, `exxperts` in PowerShell resolves to
     # npm's .ps1 shim and is refused. One-time, current-user-only fix below;
-    # cmd.exe and `exxperts.cmd` work either way.
-    $policy = Get-ExecutionPolicy
+    # cmd.exe and `exxperts.cmd` work either way. The documented one-liner runs
+    # this script under a process-scope Bypass, so the effective policy here
+    # says nothing about the user's NEXT session; inspect the persistent
+    # scopes instead (both Undefined means the Restricted default applies).
+    $userPolicy = Get-ExecutionPolicy -Scope CurrentUser
+    $machinePolicy = Get-ExecutionPolicy -Scope LocalMachine
+    $policy = if ($userPolicy -ne "Undefined") { $userPolicy } else { $machinePolicy }
     if ($policy -in @("Restricted", "AllSigned", "Undefined")) {
+        if ($policy -eq "Undefined") { $policy = "Restricted, the default" }
         Say ""
         Say "One more thing: your PowerShell execution policy ($policy) blocks npm-installed"
         Say "commands like 'exxperts'. Allow them for your user with:"
@@ -244,6 +281,8 @@ function Install-Exxperts {
     Say ""
     Say "  exxperts web"
     Say ""
+    $versionShown = if ($script:InstalledVersion) { $script:InstalledVersion } else { "unknown" }
+    Say "Installed version: $versionShown (check anytime with: exxperts --version)"
     Say "To update later, just run this same install command again."
     Say "Installed from: $dir"
 }

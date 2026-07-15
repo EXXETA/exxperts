@@ -7,6 +7,13 @@ const onError = (err) => {
   process.exit(1);
 };
 const argv = process.argv.slice(2);
+if (argv[0] === "--version" || argv[0] === "-v" || argv[0] === "-V") {
+  // The product version (from the packed root package.json), so "which
+  // version am I on?" is answerable after an update; the CLI runtime keeps
+  // its own versioning underneath.
+  console.log(`exxperts ${require("../package.json").version}`);
+  process.exit(0);
+}
 if (argv[0] === "web" || argv[0] === "ui") {
   require("./lib/web-launcher.cjs").main(argv.slice(1), "exxperts web");
 } else if (argv[0] === "cli") {

@@ -63,7 +63,7 @@ source ~/.zshrc
 
 Prefer running straight from the clone without installing commands? `npm run build`, then `./scripts/exxperts-web` (macOS/Linux/Git Bash) or `node bin\exxperts-web.cjs` (Windows).
 
-**Updating later**: re-run the one-line install command, or from the repo folder: `git pull`, `npm install`, `npm run install:global`. If anything misbehaves, `npm run doctor` checks every layer and prints the fix.
+**Updating later**: re-run the one-line install command, or from the repo folder: `git pull`, `npm install`, `npm run install:global`. Confirm with `exxperts --version`. If anything misbehaves, `npm run doctor` checks every layer and prints the fix.
 
 ## 2. Connect your AI
 

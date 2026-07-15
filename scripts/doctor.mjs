@@ -179,12 +179,29 @@ if (isWindows) {
 }
 
 // --- Git Bash (Windows only: the agent's shell tool runs through bash.exe) -----
+// Same discovery as install.ps1 and the runtime shell resolvers: Git's
+// recommended setup puts git.exe on PATH but never bash.exe, and no-admin
+// (per-user) installs live under AppData, not Program Files - so derive bash
+// from git's own install root first, then check the standard locations.
 if (isWindows) {
-	const candidates = [
-		process.env.ProgramFiles && path.join(process.env.ProgramFiles, "Git", "bin", "bash.exe"),
-		process.env["ProgramFiles(x86)"] && path.join(process.env["ProgramFiles(x86)"], "Git", "bin", "bash.exe"),
-	].filter(Boolean);
-	let bashPath = candidates.find((candidate) => fs.existsSync(candidate)) ?? null;
+	let bashPath = null;
+	{
+		// <install root>\cmd\git.exe -> <install root>\bin\bash.exe
+		const where = spawnSync("where.exe", ["git.exe"], { encoding: "utf8" });
+		const gitPath = (where.stdout ?? "").split(/\r?\n/).map((line) => line.trim()).find(Boolean);
+		if (gitPath) {
+			const derived = path.join(path.dirname(path.dirname(gitPath)), "bin", "bash.exe");
+			if (fs.existsSync(derived)) bashPath = derived;
+		}
+	}
+	if (!bashPath) {
+		const candidates = [
+			process.env.ProgramFiles && path.join(process.env.ProgramFiles, "Git", "bin", "bash.exe"),
+			process.env["ProgramFiles(x86)"] && path.join(process.env["ProgramFiles(x86)"], "Git", "bin", "bash.exe"),
+			process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, "Programs", "Git", "bin", "bash.exe"),
+		].filter(Boolean);
+		bashPath = candidates.find((candidate) => fs.existsSync(candidate)) ?? null;
+	}
 	if (!bashPath) {
 		for (const dir of String(process.env.PATH ?? "").split(path.delimiter)) {
 			if (dir && fs.existsSync(path.join(dir, "bash.exe"))) {
@@ -198,7 +215,7 @@ if (isWindows) {
 	} else {
 		bad(
 			"Git Bash not found — the agent cannot run shell commands on Windows",
-			"install Git for Windows (https://gitforwindows.org) with the default install path",
+			"install Git for Windows (https://gitforwindows.org); no admin rights needed, its installer can install just for your user",
 		);
 	}
 }

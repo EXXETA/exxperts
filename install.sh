@@ -146,12 +146,23 @@ main() {
 [exxperts] or pick another directory: EXXPERTS_DIR=/some/other/dir and re-run this command."
 	else
 		say "cloning $REPO_URL into $dir ..."
-		git clone "$REPO_URL" "$dir"
+		if ! git clone "$REPO_URL" "$dir"; then
+			fail "git clone failed. Check your network connection (and proxy settings, if any).
+[exxperts] If the error above mentions an SSL certificate, your company network inspects TLS:
+[exxperts] ask IT for the corporate root certificate (a .pem file) and point git at it with
+[exxperts]   git config --global http.sslCAInfo /path/to/corp-root.pem
+[exxperts] then re-run this command."
+		fi
 	fi
 
 	say "installing dependencies (npm install) ..."
 	if ! (cd "$dir" && npm install); then
-		fail "npm install failed. From $dir, run 'npm run doctor'; it checks every layer and prints the fix."
+		fail "npm install failed. From $dir, run 'npm run doctor'; it checks every layer and prints the fix.
+[exxperts] If the error above mentions a certificate (UNABLE_TO_VERIFY_LEAF_SIGNATURE or
+[exxperts] SELF_SIGNED_CERT_IN_CHAIN), your company network inspects TLS: ask IT for the
+[exxperts] corporate root certificate (a .pem file), then run this first and re-run the
+[exxperts] install command in the same terminal:
+[exxperts]   export NODE_EXTRA_CA_CERTS=/path/to/corp-root.pem"
 	fi
 
 	say "building and installing the exxperts command (npm run install:global) ..."
@@ -170,11 +181,15 @@ main() {
 		say "then open a new terminal."
 	fi
 
+	local version
+	version="$(cd "$dir" && node -p "require('./package.json').version" 2>/dev/null || true)"
+
 	say ""
 	say "all set. Start exxperts with:"
 	say ""
 	say "  exxperts web"
 	say ""
+	say "Installed version: ${version:-unknown} (check anytime with: exxperts --version)"
 	say "To update later, just run this same install command again."
 	say "Installed from: $dir"
 }

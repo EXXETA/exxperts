@@ -117,6 +117,9 @@ jobs:
       - name: Verify the installed command
         run: exxperts --help
 
+      - name: Verify the product version is reported
+        run: test "$(exxperts --version)" = "exxperts $(node -p 'require("./package.json").version')"
+
   install-script-windows:
     runs-on: windows-latest
     timeout-minutes: 35
@@ -144,3 +147,10 @@ jobs:
       - name: Verify the installed command (policy-proof shim)
         shell: pwsh
         run: exxperts.cmd --help
+
+      - name: Verify the product version is reported
+        shell: pwsh
+        run: |
+          $version = (node -p "require('./package.json').version").Trim()
+          $actual = (exxperts.cmd --version | Out-String).Trim()
+          if ($actual -ne "exxperts $version") { Write-Error "expected 'exxperts $version', got '$actual'"; exit 1 }

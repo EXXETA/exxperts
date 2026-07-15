@@ -76,7 +76,7 @@ Windows (PowerShell):
 irm https://raw.githubusercontent.com/EXXETA/exxperts/main/install.ps1 | iex
 ```
 
-The installer checks prerequisites, clones the repo into `~/exxperts` (pick another spot with the `EXXPERTS_DIR` environment variable), and builds and installs the `exxperts` command. Re-run the same command anytime to update.
+The installer checks prerequisites, clones the repo into `~/exxperts` (pick another spot with the `EXXPERTS_DIR` environment variable), and builds and installs the `exxperts` command. Re-run the same command anytime to update; `exxperts --version` tells you which version you are on.
 
 Prefer to do it by hand? It is three commands. **On Windows, apply the two Git settings from the [Windows quickstart](#windows-quickstart) before cloning** (the one-line installer applies them to its clone for you):
 
@@ -112,13 +112,13 @@ npm install              # in case dependencies changed
 npm run install:global   # rebuilds and reinstalls the global commands
 ```
 
-The global `exxperts` commands then run the new version. If anything misbehaves after an update, or anytime, run `npm run doctor` from the repo folder. Developing from the clone instead of the global install? Update with `git pull && npm install && npm run build`.
+The global `exxperts` commands then run the new version; confirm with `exxperts --version`. If anything misbehaves after an update, or anytime, run `npm run doctor` from the repo folder. Developing from the clone instead of the global install? Update with `git pull && npm install && npm run build`.
 
 ## Windows quickstart
 
 Windows is supported for both the web app and the CLI/TUI. Requirements:
 
-1. **Git for Windows ≥ 2.40** (https://gitforwindows.org). **Git Bash is required**: the agent's shell tool runs commands through `bash.exe`, which is discovered automatically in the standard Git for Windows install location (`C:\Program Files\Git\bin\bash.exe`) or on `PATH`.
+1. **Git for Windows ≥ 2.40** (https://gitforwindows.org). **Git Bash is required**: the agent's shell tool runs commands through `bash.exe`, which is discovered automatically from your Git installation, whether machine-wide (`C:\Program Files\Git`) or per-user (`%LOCALAPPDATA%\Programs\Git`, the no-admin install), or on `PATH`.
 2. **Node.js 20.6+ (LTS recommended) and npm** (https://nodejs.org).
 3. **Windows Terminal** recommended for the CLI/TUI (legacy conhost is untested).
 
