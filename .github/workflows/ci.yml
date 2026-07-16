@@ -102,6 +102,8 @@ jobs:
   # The one-line installers (install.sh / install.ps1), run against the local
   # checkout (EXXPERTS_DIR points at it, so the GitHub clone step is skipped;
   # main on GitHub may be older than this commit).
+  # Setting EXXPERTS_DIR opts out of the archive path, so by construction this
+  # job exercises the source/legacy fallback mode of the archive-first installer.
   install-script-linux:
     runs-on: ubuntu-latest
     timeout-minutes: 35
@@ -124,6 +126,8 @@ jobs:
       - name: Verify the product version is reported
         run: test "$(exxperts --version)" = "exxperts $(node -p 'require("./package.json").version')"
 
+  # Setting EXXPERTS_DIR opts out of the archive path, so by construction this
+  # job exercises the source/legacy fallback mode of the archive-first installer.
   install-script-windows:
     runs-on: windows-latest
     timeout-minutes: 35
@@ -157,6 +161,280 @@ jobs:
         run: |
           $version = (node -p "require('./package.json').version").Trim()
           $actual = (exxperts.cmd --version | Out-String).Trim()
+          if ($actual -ne "exxperts $version") { Write-Error "expected 'exxperts $version', got '$actual'"; exit 1 }
+
+  # The archive-first path of install.sh: build the linux release archive in
+  # the job, then drive the installer with EXXPERTS_INSTALL_METHOD=archive and
+  # EXXPERTS_ARCHIVE_URL / EXXPERTS_SUMS_URL pointing at the local files (the
+  # installer accepts file paths as well as URLs), against a throwaway HOME.
+  # This is the acceptance test for install-time state preservation: the
+  # installer must never write ~/.exxperts (rooms, memory, logins), and the
+  # install-dir app/.env must survive a re-run update. The tail steps prove
+  # the fallback chain: a dead archive URL hard-fails when the archive path is
+  # forced, and reaches the legacy source flow when it is not.
+  install-script-archive-linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      EXXETA_SKIP_BROWSER_INSTALL: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build the linux release archive
+        run: node scripts/bundle-release.mjs --target linux-x64 --out dist-release
+
+      # Same assembly as release.yml, so the installer parses the exact
+      # checksum-file format that GitHub Releases serves.
+      - name: Assemble SHA256SUMS.txt
+        run: cat dist-release/*.sha256 > dist-release/SHA256SUMS.txt
+
+      - name: Point the installer at the local archive and a throwaway HOME
+        run: |
+          FAKE_HOME="$RUNNER_TEMP/archive-home"
+          mkdir -p "$FAKE_HOME"
+          {
+            echo "FAKE_HOME=$FAKE_HOME"
+            echo "EXXPERTS_INSTALL_METHOD=archive"
+            echo "EXXPERTS_ARCHIVE_URL=$(ls "$PWD"/dist-release/exxperts-*-linux-x64.tar.gz)"
+            echo "EXXPERTS_SUMS_URL=$PWD/dist-release/SHA256SUMS.txt"
+          } >> "$GITHUB_ENV"
+
+      - name: Plant pre-existing user state in ~/.exxperts
+        run: |
+          mkdir -p "$FAKE_HOME/.exxperts"
+          echo "user state predates the install" > "$FAKE_HOME/.exxperts/marker"
+
+      - name: Run install.sh (archive path forced, local archive)
+        run: HOME="$FAKE_HOME" bash install.sh
+
+      # Only --version below: it exits before the launcher touches any state,
+      # so the ~/.exxperts assertions observe the installer alone.
+      # A wrapper script, not a symlink: the archive's launcher locates its app
+      # tree from its own unresolved path, so a symlink would break it.
+      - name: Verify the ~/.local/bin launcher and the product version
+        run: |
+          test -x "$FAKE_HOME/.local/bin/exxperts"
+          test "$(HOME="$FAKE_HOME" "$FAKE_HOME/.local/bin/exxperts" --version)" = "exxperts $(node -p 'require("./package.json").version')"
+
+      - name: 'State preservation: the installer never writes ~/.exxperts'
+        run: |
+          test "$(cat "$FAKE_HOME/.exxperts/marker")" = "user state predates the install"
+          test "$(ls -A "$FAKE_HOME/.exxperts")" = "marker"
+
+      # The canary proves the update actually replaced the tree: a no-op
+      # short-circuit would keep app/.env trivially and pass every other
+      # assertion here.
+      - name: 'State preservation: plant app/.env and a tree canary, re-run as an update'
+        run: |
+          echo "PLANTED_SENTINEL=survives-the-update" > "$FAKE_HOME/.local/share/exxperts/exxperts/app/.env"
+          touch "$FAKE_HOME/.local/share/exxperts/exxperts/canary-from-the-old-tree"
+          HOME="$FAKE_HOME" bash install.sh
+
+      - name: 'State preservation: app/.env survives the update, the old tree does not'
+        run: |
+          grep -q "PLANTED_SENTINEL=survives-the-update" "$FAKE_HOME/.local/share/exxperts/exxperts/app/.env"
+          test ! -e "$FAKE_HOME/.local/share/exxperts/exxperts/canary-from-the-old-tree"
+          test "$(ls -A "$FAKE_HOME/.exxperts")" = "marker"
+          test "$(HOME="$FAKE_HOME" "$FAKE_HOME/.local/bin/exxperts" --version)" = "exxperts $(node -p 'require("./package.json").version')"
+
+      # Migration coverage: a fake old npm-global install (npm_config_prefix
+      # at a temp dir, so 'npm prefix -g' resolves to it) must have its .env
+      # inherited into the new tree BEFORE the uninstall, and be uninstalled
+      # only when ~/.local/bin is on PATH.
+      - name: 'Migration: old npm install .env inherited, then removed (~/.local/bin on PATH)'
+        run: |
+          set -o pipefail
+          MIG_HOME="$RUNNER_TEMP/mig-home-onpath"
+          MIG_PREFIX="$RUNNER_TEMP/mig-prefix-onpath"
+          mkdir -p "$MIG_HOME" "$MIG_PREFIX/bin" "$MIG_PREFIX/lib/node_modules/@exxeta/exxperts-app"
+          echo '{ "name": "@exxeta/exxperts-app", "version": "0.0.1" }' > "$MIG_PREFIX/lib/node_modules/@exxeta/exxperts-app/package.json"
+          echo "INHERITED_SENTINEL=from-the-old-npm-install" > "$MIG_PREFIX/lib/node_modules/@exxeta/exxperts-app/.env"
+          printf '#!/bin/sh\nexit 0\n' > "$MIG_PREFIX/bin/exxperts" && chmod +x "$MIG_PREFIX/bin/exxperts"
+          HOME="$MIG_HOME" PATH="$MIG_HOME/.local/bin:$PATH" npm_config_prefix="$MIG_PREFIX" bash install.sh 2>&1 | tee mig-onpath.log
+          grep -q "removing the old npm-based global install" mig-onpath.log
+          grep -q "INHERITED_SENTINEL=from-the-old-npm-install" "$MIG_HOME/.local/share/exxperts/exxperts/app/.env"
+          test ! -d "$MIG_PREFIX/lib/node_modules/@exxeta/exxperts-app"
+
+      # When ~/.local/bin is NOT on PATH, uninstalling the old npm global
+      # would leave no resolvable 'exxperts' in new terminals: the installer
+      # must keep it, say so loudly, and still inherit the .env.
+      - name: 'Migration: uninstall is skipped when ~/.local/bin is not on PATH'
+        run: |
+          set -o pipefail
+          MIG_HOME="$RUNNER_TEMP/mig-home-offpath"
+          MIG_PREFIX="$RUNNER_TEMP/mig-prefix-offpath"
+          mkdir -p "$MIG_HOME" "$MIG_PREFIX/bin" "$MIG_PREFIX/lib/node_modules/@exxeta/exxperts-app"
+          echo '{ "name": "@exxeta/exxperts-app", "version": "0.0.1" }' > "$MIG_PREFIX/lib/node_modules/@exxeta/exxperts-app/package.json"
+          echo "INHERITED_SENTINEL=from-the-old-npm-install" > "$MIG_PREFIX/lib/node_modules/@exxeta/exxperts-app/.env"
+          printf '#!/bin/sh\nexit 0\n' > "$MIG_PREFIX/bin/exxperts" && chmod +x "$MIG_PREFIX/bin/exxperts"
+          HOME="$MIG_HOME" npm_config_prefix="$MIG_PREFIX" bash install.sh 2>&1 | tee mig-offpath.log
+          grep -q "The old npm-based install was kept for now" mig-offpath.log
+          if grep -q "removing the old npm-based global install" mig-offpath.log; then
+            echo "the uninstall must be skipped when ~/.local/bin is not on PATH" >&2
+            exit 1
+          fi
+          test -d "$MIG_PREFIX/lib/node_modules/@exxeta/exxperts-app"
+          grep -q "INHERITED_SENTINEL=from-the-old-npm-install" "$MIG_HOME/.local/share/exxperts/exxperts/app/.env"
+
+      # EXXPERTS_INSTALL_METHOD=archive is still exported from GITHUB_ENV
+      # here: forcing the archive path means no fallback, so a dead URL must
+      # be a hard failure, not a silent source build.
+      - name: A dead archive URL hard-fails when the archive path is forced
+        run: |
+          if HOME="$FAKE_HOME" EXXPERTS_ARCHIVE_URL="$RUNNER_TEMP/does-not-exist.tar.gz" bash install.sh; then
+            echo "forced archive install with a dead URL must fail, not fall back" >&2
+            exit 1
+          fi
+
+      # Without forcing, the same dead URL must fall back to the legacy source
+      # flow. EXXPERTS_DIR must stay unset here (setting it skips the archive
+      # attempt entirely); the source flow still installs from this checkout
+      # because the job runs inside it and resolve_install_dir reuses $PWD
+      # when it is already an exxperts clone - no clone happens, and
+      # EXXPERTS_REPO only feeds the network reachability probe. The grep pins
+      # the actual archive-to-source transition.
+      - name: 'Fallback: a dead archive URL reaches the legacy source flow'
+        run: |
+          unset EXXPERTS_INSTALL_METHOD
+          set -o pipefail
+          HOME="$FAKE_HOME" EXXPERTS_ARCHIVE_URL="$RUNNER_TEMP/does-not-exist.tar.gz" EXXPERTS_SUMS_URL="$RUNNER_TEMP/does-not-exist.txt" EXXPERTS_REPO="$GITHUB_WORKSPACE" bash install.sh 2>&1 | tee fallback.log
+          grep -q "falling back to the source install" fallback.log
+
+      - name: The fallback install produced a working global command
+        run: exxperts --help
+
+  # Same acceptance test as install-script-archive-linux, on the win-x64
+  # archive and install.ps1. The installer is driven exactly like the
+  # install-script-windows job: powershell.exe -ExecutionPolicy Restricted
+  # with the script body piped in, mirroring the README's `irm | iex` form on
+  # a default Windows machine. USERPROFILE/HOME/LOCALAPPDATA plus
+  # HOMEDRIVE/HOMEPATH point at a throwaway profile so assertions cannot be
+  # satisfied by runner leftovers (Windows PowerShell 5.1 derives $HOME from
+  # HOMEDRIVE+HOMEPATH, not from the HOME variable, so those two must be
+  # overridden too for the isolation to hold inside powershell.exe).
+  install-script-archive-windows:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      EXXETA_SKIP_BROWSER_INSTALL: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build the win-x64 release archive
+        run: node scripts/bundle-release.mjs --target win-x64 --out dist-release
+
+      # Same assembly as release.yml; bash so the file is written without a
+      # BOM regardless of the PowerShell version's Set-Content default.
+      - name: Assemble SHA256SUMS.txt
+        shell: bash
+        run: cat dist-release/*.sha256 > dist-release/SHA256SUMS.txt
+
+      - name: Point the installer at the local archive and a throwaway profile
+        shell: pwsh
+        run: |
+          $fakeHome = Join-Path $env:RUNNER_TEMP "archive-home"
+          New-Item -ItemType Directory -Force -Path (Join-Path $fakeHome "AppData\Local") | Out-Null
+          $zip = (Get-ChildItem dist-release\exxperts-*-win-x64.zip | Select-Object -First 1).FullName
+          $sums = (Resolve-Path dist-release\SHA256SUMS.txt).Path
+          Add-Content -Path $env:GITHUB_ENV -Value "FAKE_HOME=$fakeHome"
+          Add-Content -Path $env:GITHUB_ENV -Value "EXXPERTS_INSTALL_METHOD=archive"
+          Add-Content -Path $env:GITHUB_ENV -Value "EXXPERTS_ARCHIVE_URL=$zip"
+          Add-Content -Path $env:GITHUB_ENV -Value "EXXPERTS_SUMS_URL=$sums"
+
+      - name: Plant pre-existing user state in the profile's .exxperts
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path (Join-Path $env:FAKE_HOME ".exxperts") | Out-Null
+          Set-Content -Path (Join-Path $env:FAKE_HOME ".exxperts\marker") -Value "user state predates the install"
+
+      - name: Run install.ps1 (archive path forced, local archive, default execution policy)
+        shell: pwsh
+        run: |
+          $env:USERPROFILE = $env:FAKE_HOME
+          $env:HOME = $env:FAKE_HOME
+          $env:HOMEDRIVE = Split-Path -Qualifier $env:FAKE_HOME
+          $env:HOMEPATH = Split-Path -NoQualifier $env:FAKE_HOME
+          $env:LOCALAPPDATA = Join-Path $env:FAKE_HOME "AppData\Local"
+          powershell.exe -NoProfile -ExecutionPolicy Restricted -Command "Get-Content install.ps1 -Raw | Invoke-Expression"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      # Only --version below: it exits before the launcher touches any state,
+      # so the .exxperts assertions observe the installer alone. The installed
+      # tree is <Programs\exxperts>\exxperts, the archive's top-level dir.
+      - name: Verify the installed command, version, and user Path prepend
+        shell: pwsh
+        run: |
+          $installDir = Join-Path (Join-Path $env:FAKE_HOME "AppData\Local") "Programs\exxperts\exxperts"
+          $shim = Join-Path $installDir "exxperts.cmd"
+          if (-not (Test-Path $shim)) { Write-Error "no exxperts.cmd at $shim"; exit 1 }
+          $version = (node -p "require('./package.json').version").Trim()
+          $actual = (& $shim --version | Out-String).Trim()
+          if ($actual -ne "exxperts $version") { Write-Error "expected 'exxperts $version', got '$actual'"; exit 1 }
+          # Only <base>\bin goes on PATH (never the tree root), via a wrapper
+          # that must itself run, and it must sit at the FRONT of the user
+          # Path so a stale %APPDATA%\npm shim cannot shadow it.
+          $binShim = Join-Path (Join-Path $env:FAKE_HOME "AppData\Local") "Programs\exxperts\bin\exxperts.cmd"
+          if (-not (Test-Path $binShim)) { Write-Error "no bin wrapper at $binShim"; exit 1 }
+          $actualBin = (& $binShim --version | Out-String).Trim()
+          if ($actualBin -ne "exxperts $version") { Write-Error "bin wrapper: expected 'exxperts $version', got '$actualBin'"; exit 1 }
+          $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+          if ($userPath -notlike "*exxperts\bin*") { Write-Error "the user Path was not extended with the exxperts bin dir"; exit 1 }
+          if ($userPath -like "*exxperts\exxperts*") { Write-Error "the user Path must not expose the tree root"; exit 1 }
+          if (-not $userPath.StartsWith((Split-Path -Parent $binShim))) { Write-Error "the exxperts bin dir must be PREPENDED to the user Path, got: $userPath"; exit 1 }
+
+      - name: 'State preservation: the installer never writes ~/.exxperts'
+        shell: pwsh
+        run: |
+          $stateDir = Join-Path $env:FAKE_HOME ".exxperts"
+          $marker = (Get-Content (Join-Path $stateDir "marker") -Raw).Trim()
+          if ($marker -ne "user state predates the install") { Write-Error "the .exxperts marker was modified: '$marker'"; exit 1 }
+          $entries = @(Get-ChildItem -Force $stateDir)
+          if ($entries.Count -ne 1) { Write-Error "unexpected entries in .exxperts: $($entries.Name -join ', ')"; exit 1 }
+
+      # The canary proves the update actually replaced the tree: a no-op
+      # short-circuit would keep app\.env trivially and pass every other
+      # assertion here.
+      - name: 'State preservation: plant app/.env and a tree canary, re-run as an update'
+        shell: pwsh
+        run: |
+          $env:USERPROFILE = $env:FAKE_HOME
+          $env:HOME = $env:FAKE_HOME
+          $env:HOMEDRIVE = Split-Path -Qualifier $env:FAKE_HOME
+          $env:HOMEPATH = Split-Path -NoQualifier $env:FAKE_HOME
+          $env:LOCALAPPDATA = Join-Path $env:FAKE_HOME "AppData\Local"
+          $envFile = Join-Path $env:LOCALAPPDATA "Programs\exxperts\exxperts\app\.env"
+          Set-Content -Path $envFile -Value "PLANTED_SENTINEL=survives-the-update"
+          New-Item -ItemType File -Path (Join-Path $env:LOCALAPPDATA "Programs\exxperts\exxperts\canary-from-the-old-tree") | Out-Null
+          powershell.exe -NoProfile -ExecutionPolicy Restricted -Command "Get-Content install.ps1 -Raw | Invoke-Expression"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: 'State preservation: app/.env survives the update, the old tree does not'
+        shell: pwsh
+        run: |
+          $installDir = Join-Path (Join-Path $env:FAKE_HOME "AppData\Local") "Programs\exxperts\exxperts"
+          $envFile = Join-Path $installDir "app\.env"
+          if (-not (Select-String -Path $envFile -Pattern "PLANTED_SENTINEL=survives-the-update" -Quiet)) { Write-Error "app\.env did not survive the update"; exit 1 }
+          if (Test-Path (Join-Path $installDir "canary-from-the-old-tree")) { Write-Error "the old tree canary survived: the update did not replace the tree"; exit 1 }
+          $entries = @(Get-ChildItem -Force (Join-Path $env:FAKE_HOME ".exxperts"))
+          if ($entries.Count -ne 1) { Write-Error "unexpected entries in .exxperts: $($entries.Name -join ', ')"; exit 1 }
+          $version = (node -p "require('./package.json').version").Trim()
+          $actual = (& (Join-Path $installDir "exxperts.cmd") --version | Out-String).Trim()
           if ($actual -ne "exxperts $version") { Write-Error "expected 'exxperts $version', got '$actual'"; exit 1 }
 
   # Catches release-bundle-script rot on every push/PR instead of at tag

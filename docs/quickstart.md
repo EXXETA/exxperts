@@ -6,13 +6,13 @@ Exxperts is a local-first platform for persistent AI colleagues. Each "room" is 
 
 ## What you need
 
-- macOS, Windows, or Linux with a terminal, and [git](https://git-scm.com). **On Windows that means Git for Windows (Git Bash is required).**
-- Node.js 20.6+ and npm (check with `node --version`; if missing, install the LTS from [nodejs.org](https://nodejs.org)), and about 3 GB of free disk space.
+- macOS, Windows, or Linux with a terminal, and about 1 GB of free disk space (updates briefly peak at about 1.4 GB while the new version is unpacked next to the old one). On macOS with Apple Silicon, Windows x64, and Linux x64, the one-line install below needs nothing else preinstalled; other platforms automatically build from source, which needs the git and Node.js from the next bullet.
+- Only for shell access in rooms and for the build-from-source fallback: [git](https://git-scm.com) (on Windows, Git for Windows; rooms' optional shell tool runs through Git Bash) and Node.js 20.6+ with npm (check with `node --version`; if missing, install the LTS from [nodejs.org](https://nodejs.org)). Building from source takes about 3 GB of disk.
 - An AI subscription: **Claude** (Pro/Max) or **ChatGPT Plus/Pro**, or an OpenAI-compatible gateway if you or your org run one.
 
 ## 1. Install and run
 
-One command installs everything: it checks prerequisites, clones the repo into `~/exxperts`, and builds and installs the `exxperts` command. Re-run it anytime to update.
+One command installs everything: it downloads a prebuilt archive for your platform (no Node.js, npm, or Git needed) and installs the `exxperts` command. Prebuilt archives exist for macOS on Apple Silicon, Windows x64, and Linux x64; on any other platform, or when the download fails, the same command automatically falls back to building from source (that path needs git and Node.js 20.6+ and clones the repo into `~/exxperts`). Re-run it anytime to update. The archives and their checksums are published on [GitHub Releases](https://github.com/EXXETA/exxperts/releases); [release-pipeline.md](release-pipeline.md) describes how they are built.
 
 macOS / Linux:
 
@@ -63,7 +63,7 @@ source ~/.zshrc
 
 Prefer running straight from the clone without installing commands? `npm run build`, then `./scripts/exxperts-web` (macOS/Linux/Git Bash) or `node bin\exxperts-web.cjs` (Windows).
 
-**Updating later**: re-run the one-line install command, or from the repo folder: `git pull`, `npm install`, `npm run install:global`. Confirm with `exxperts --version`. If anything misbehaves, `npm run doctor` checks every layer and prints the fix.
+**Updating later**: re-run the one-line install command. On the platforms with prebuilt archives it performs an archive install even when you previously built from source: it migrates you to the archive install, carries `app/.env` over, and uninstalls the old npm-based global command (the clone stays in place); set `EXXPERTS_INSTALL_METHOD=source` to stay on a source install instead. Archive installs update in place and keep the install's `app/.env`; your rooms, memory, and provider logins in `~/.exxperts` are never touched by installs or updates. Updating a source install by hand: from the repo folder, `git pull`, `npm install`, `npm run install:global`. Confirm with `exxperts --version`. If anything misbehaves in a source install, `npm run doctor` from the repo folder checks every layer and prints the fix.
 
 ## 2. Connect your AI
 

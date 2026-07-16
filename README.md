@@ -62,7 +62,7 @@ The web app is the full product: AI setup, memory review and approvals, the wall
 
 ## Quick start
 
-Prerequisites: [git](https://git-scm.com), [Node.js](https://nodejs.org) 20.6+ with npm, and about 3 GB of free disk space (on Windows, [Git for Windows](https://gitforwindows.org) 2.40+). One command installs everything:
+No prerequisites for the standard path beyond about 1 GB of free disk space. One command installs everything:
 
 macOS / Linux:
 
@@ -76,7 +76,7 @@ Windows (PowerShell):
 irm https://raw.githubusercontent.com/EXXETA/exxperts/main/install.ps1 | iex
 ```
 
-The installer checks prerequisites, clones the repo into `~/exxperts` (pick another spot with the `EXXPERTS_DIR` environment variable), and builds and installs the `exxperts` command. Re-run the same command anytime to update; `exxperts --version` tells you which version you are on.
+The installer downloads a prebuilt archive for your platform (no Node.js, npm, or Git needed) and installs the `exxperts` command. Prebuilt archives exist for macOS on Apple Silicon, Windows x64, and Linux x64. Release archives and their checksums are published on [GitHub Releases](https://github.com/EXXETA/exxperts/releases); [`docs/release-pipeline.md`](docs/release-pipeline.md) describes how they are built. On any other platform, or when the download fails, the same command automatically falls back to building from source: that path needs [git](https://git-scm.com), [Node.js](https://nodejs.org) 20.6+ with npm, and about 3 GB of free disk space (on Windows, [Git for Windows](https://gitforwindows.org) 2.40+), and clones the repo into `~/exxperts`. Setting the `EXXPERTS_DIR` environment variable picks the clone location and also selects the source flow directly. Re-run the same command anytime to update; `exxperts --version` tells you which version you are on.
 
 Prefer to do it by hand? It is three commands. **On Windows, apply the two Git settings from the [Windows quickstart](#windows-quickstart) before cloning** (the one-line installer applies them to its clone for you):
 
@@ -98,13 +98,13 @@ cd /path/to/your/project
 exxperts cli   # the same rooms in your terminal, with this folder as the workspace
 ```
 
-First run: open **AI setup** in the web app and sign in to your provider (Claude and ChatGPT subscriptions sign in with one click; API keys and OpenAI-compatible gateways also work; see [Model/provider setup](#modelprovider-setup)). Something not working? `npm run doctor` from the repo root checks every layer and prints the fix.
+First run: open **AI setup** in the web app and sign in to your provider (Claude and ChatGPT subscriptions sign in with one click; API keys and OpenAI-compatible gateways also work; see [Model/provider setup](#modelprovider-setup)). Something not working in a source install? `npm run doctor` from the repo root checks every layer and prints the fix.
 
 New here? [`docs/quickstart.md`](docs/quickstart.md) walks the whole path in about five minutes: install, connect your AI, first room, first memory. For an orientation on what the product is and how the pieces fit, read [`docs/how-exxperts-works.md`](docs/how-exxperts-works.md).
 
 ### Updating
 
-Re-run the one-line install command from the quick start; it pulls the latest version and reinstalls. Or manually, same on every platform, from the repo folder:
+Re-run the one-line install command from the quick start. On the platforms with prebuilt archives (macOS Apple Silicon, Windows x64, Linux x64) that performs an archive install even when your current install was built from source: it migrates you to the archive install, carries your settings (`app/.env`) over, and uninstalls the old npm-based global command (the clone itself is left in place). Archive installs update in place and keep the install's `app/.env`, with a transient disk peak of about 1.4 GB while the new tree is unpacked next to the old one. Want to stay on a source install instead? Re-run the installer with `EXXPERTS_INSTALL_METHOD=source`, or update by hand. Either way, your rooms, memory, and provider logins live in `~/.exxperts`, which installs and updates never touch. Updating a source install by hand is the same on every platform, from the repo folder:
 
 ```bash
 git pull
@@ -116,10 +116,10 @@ The global `exxperts` commands then run the new version; confirm with `exxperts 
 
 ## Windows quickstart
 
-Windows is supported for both the web app and the CLI/TUI. Requirements:
+Windows is supported for both the web app and the CLI/TUI. The one-line installer from the quick start needs nothing preinstalled on Windows x64 (the platforms with prebuilt archives are macOS Apple Silicon, Windows x64, and Linux x64; other platforms automatically take the source path, which needs git and Node.js); the requirements below matter for two things only, shell access in rooms and installing from source (by hand or via the installer's fallback):
 
-1. **Git for Windows ≥ 2.40** (https://gitforwindows.org). **Git Bash is required**: the agent's shell tool runs commands through `bash.exe`, which is discovered automatically from your Git installation, whether machine-wide (`C:\Program Files\Git`) or per-user (`%LOCALAPPDATA%\Programs\Git`, the no-admin install), or on `PATH`.
-2. **Node.js 20.6+ (LTS recommended) and npm** (https://nodejs.org).
+1. **Git for Windows ≥ 2.40** (https://gitforwindows.org), needed for the source install path and for rooms' optional shell tool: that tool runs commands through Git Bash's `bash.exe`, which is discovered automatically from your Git installation, whether machine-wide (`C:\Program Files\Git`) or per-user (`%LOCALAPPDATA%\Programs\Git`, the no-admin install), or on `PATH`.
+2. **Node.js 20.6+ (LTS recommended) and npm** (https://nodejs.org), needed for the source install path only; the prebuilt archive bundles its own Node runtime.
 3. **Windows Terminal** recommended for the CLI/TUI (legacy conhost is untested).
 
 One-time Git settings before cloning (long paths matter because `node_modules` trees exceed the 260-character `MAX_PATH`):
@@ -160,12 +160,22 @@ Developing from the clone without a global install? Use the shell-independent fo
 
 Everything runs locally. Full functionality is four layers; only the first is required:
 
-1. **Core app**: Node.js 20.6+ and npm, then the quick-start steps above.
-2. **Headless Chromium (~150 MB, one-time)**: downloaded automatically during `npm install`; lets rooms visually review the HTML decks they author and read JavaScript-rendered pages. If the download couldn't run, enable it later with `npx playwright install chromium` (or skip it during install with `EXXETA_SKIP_BROWSER_INSTALL=1 npm install`).
+1. **Core app**: the one-line install from the quick start (Node.js 20.6+, npm, and Git are needed only when installing from source).
+2. **Headless Chromium (~150 MB, one-time)**: lets rooms visually review the HTML decks they author and read JavaScript-rendered pages. On source installs it is downloaded automatically during `npm install`; if that download couldn't run, enable it later with `npx playwright install chromium` (or skip it during install with `EXXETA_SKIP_BROWSER_INSTALL=1 npm install`). On archive installs, run the bundled Playwright with the bundled Node instead (it downloads into your per-user browser cache):
+
+   ```bash
+   # macOS / Linux
+   ~/.local/share/exxperts/exxperts/vendor/node/bin/node ~/.local/share/exxperts/exxperts/app/node_modules/playwright/cli.js install chromium
+   ```
+
+   ```powershell
+   # Windows
+   & "$env:LOCALAPPDATA\Programs\exxperts\exxperts\vendor\node\node.exe" "$env:LOCALAPPDATA\Programs\exxperts\exxperts\app\node_modules\playwright\cli.js" install chromium
+   ```
 3. **Web search**: a container engine plus a one-time setup command. See [Web search (optional)](#web-search-optional).
 4. **Model authentication**: provider sign-in or API keys. See [Model/provider setup](#modelprovider-setup).
 
-**Verify any setup with `npm run doctor`** from the repo root: it checks all of the above, plus npm/Node compatibility, disk space, that the clone and the global npm prefix are writable, MCP config, and that outbound web fetches decode cleanly (corporate TLS-inspection proxies can corrupt responses, and some block the SheetJS CDN that one dependency comes from), and prints the fix for anything missing.
+**Verify any source-install setup with `npm run doctor`** from the repo root (source installs only; archive installs have no repo to run it from): it checks all of the above, plus npm/Node compatibility, disk space, that the clone and the global npm prefix are writable, MCP config, and that outbound web fetches decode cleanly (corporate TLS-inspection proxies can corrupt responses, and some block the SheetJS CDN that one dependency comes from), and prints the fix for anything missing.
 
 `install:global` wraps `npm run build && npm pack && npm install -g <tarball>`; the manual steps and one-off runs via `npm exec` (no global install) are documented in [`docs/packaging-local.md`](docs/packaging-local.md). If macOS returns `EACCES`, use a user-level npm prefix instead of `sudo`; that is also covered there. npm 12 is supported out of the box: `package.json` carries the `allowScripts` approvals and a committed `.npmrc` allows the SheetJS CDN tarball dependency, so installs need no extra flags. On npm 11.11+ a harmless `Unknown project config` line may print during install. If the Chromium download was ever skipped, recover it anytime with `npx playwright install chromium`.
 
@@ -227,7 +237,7 @@ Packaging does not change normal development. Keep using the repo scripts while 
 
 ## Current limitations
 
-- Distributed as an npm package built from the repo; no native installer yet.
+- Distributed as prebuilt release archives (with a build-from-source fallback); no signed native installer yet.
 - No hosted multi-user/SSO/RBAC version yet; exxperts is a single-user, local product today.
 
 ## More docs

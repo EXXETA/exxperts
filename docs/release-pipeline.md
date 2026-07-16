@@ -17,6 +17,20 @@ The workflow then:
 
 Re-running the publish for a tag that already has a release requires deleting that release first: `gh release create` fails if the release already exists.
 
+## How the installers consume releases
+
+The one-line installers (`install.sh` / `install.ps1`) are archive-first: they look up the newest release on GitHub whose assets include the platform's archive, download it, check it against `SHA256SUMS.txt` (a corruption check, not a signature), and install it. While the archive channel is in beta, that lookup deliberately includes prereleases: a `v*-rc.*` prerelease with archives IS what the installers pick up, so cutting one ships it to everyone who runs the one-liner. Archive installs land in `~/.local/share/exxperts` with a `~/.local/bin/exxperts` launcher (macOS/Linux) or `%LOCALAPPDATA%\Programs\exxperts` with a `%LOCALAPPDATA%\Programs\exxperts\bin` entry prepended to the user `Path` (Windows). Re-running the installer updates in place, preserving the install's `app/.env`; user state in `~/.exxperts` is never written by the installer. When no archive is available for the platform or the download fails, the same command falls back to the legacy clone-and-build flow.
+
+The env-var contract for forcing either path:
+
+- `EXXPERTS_INSTALL_METHOD=archive` forces the archive path: a hard failure instead of a fallback (CI uses this).
+- `EXXPERTS_INSTALL_METHOD=source` forces the legacy clone-and-build flow.
+- `EXXPERTS_DIR` (the clone location) also selects the source flow; the archive path is only chosen by default when it is unset.
+- `EXXPERTS_ARCHIVE_URL` and `EXXPERTS_SUMS_URL` override the GitHub release lookup with a direct URL or a local file path (CI points them at archives built in the job). `EXXPERTS_SUMS_URL` only takes effect together with `EXXPERTS_ARCHIVE_URL`; on its own it is ignored.
+- Setting both `EXXPERTS_DIR` and `EXXPERTS_INSTALL_METHOD=archive` is a contradiction and a hard error.
+
+Per-push CI coverage of this path lives in `.github/workflows/ci.yml`: the `install-script-archive-linux` and `install-script-archive-windows` jobs install from a locally built archive and assert version, untouched `~/.exxperts`, and `app/.env` survival across a re-run.
+
 ## Dry runs without publishing
 
 Trigger the "Release" workflow manually (workflow_dispatch) to run the whole pipeline, including builds and bare-machine smokes, without creating a release. The publish job only runs on tag push events, never on manual runs (even a manual run aimed at a tag ref stays a dry run); the tag-version guard passes as a no-op on manual runs.
