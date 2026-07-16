@@ -276,11 +276,13 @@ if (leftoverLinks.length > 0) {
 }
 
 // Supply-chain guard: the npm files allowlist ships all of docs/ and
-// scripts/, so an archive built from the INTERNAL tree would stage internal
-// docs (docs/artifact-spec.md, docs/company-ai-setup.md, docs/archive, ...)
-// and scripts/cut-mirror.mjs into app/ and ship them to the public release.
-// The public mirror checkout has none of those files, so its builds are
-// unaffected; this strips them when building from the internal tree.
+// scripts/, so an archive built from the INTERNAL tree would stage
+// internal-only files into app/ and ship them to the public release. Which
+// files those are is defined in ONE place, the exclusion manifest in
+// scripts/cut-mirror.mjs — stripInternalPaths reads it from there. The
+// public mirror checkout has no cut-mirror.mjs (and none of those files),
+// so its builds no-op here; naming the files in this comment would itself
+// trip the mirror's forbidden-pattern scan, which is why it does not.
 stripInternalPaths(appDir);
 
 // Vendored Node runtime, verified against the pinned checksum.

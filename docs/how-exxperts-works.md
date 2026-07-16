@@ -137,7 +137,11 @@ Rooms get tools through a per-room policy rather than a global grant:
   appear as task cards in chat.
 - **`read_skill`**: rooms read the skills enabled for them through this
   tool; skills are the sanctioned way to give rooms new instructions
-  (extensions never load in rooms).
+  (extensions never load in rooms). The library lists skills from the
+  exxperts store and from the cross-tool `~/.agents/skills` directory
+  shared with other agent tools (read-only on our side); wherever a
+  skill lives, a room only uses it after you review and enable it
+  there, and an edited skill must be re-reviewed.
 - **Consult**: a room can ask another room a question via @-mention in
   chat; the consulted room answers read-only from its own memory and
   context.

@@ -128,7 +128,10 @@ export function skillDetailToCandidate(skill: SkillDetail): SkillCandidate {
 		name: skill.displayName || skill.name,
 		description: skill.description,
 		body: skill.body,
-		source: skill.provenance?.source ?? skill.source,
+		// A shared skill's origin is its cross-tool location: it lives in
+		// ~/.agents/skills and other tools manage it, which the review screen
+		// should say instead of the bare tier name.
+		source: skill.provenance?.source ?? (skill.source === "shared" ? "~/.agents/skills (shared with other agent tools, managed outside exxperts)" : skill.source),
 		license: skill.provenance?.license ?? null,
 		scanFindings: skill.scanFindings,
 		bundledScripts: skill.bundledScripts,

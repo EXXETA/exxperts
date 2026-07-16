@@ -4,6 +4,7 @@ User-visible changes per release. Historical private/internal development notes 
 
 ## Unreleased
 
+- Skills: the library now also lists skills from the cross-tool `~/.agents/skills` directory (the shared location used by other agent tools), read-only and including symlinked skills. Enabling one in a room still walks through the same review screen, and an edit made by another tool trips re-review.
 - Rooms: quick checkpoints can be set to stop at the review gate per room (Settings, Memory pane) instead of applying automatically. Contributed by [@blue-az](https://github.com/blue-az) in [#2](https://github.com/EXXETA/exxperts/pull/2).
 - Install: `exxperts --version` reports the product version, and the installers print it when they finish, so "did the update land?" is answerable.
 - Windows installer: when Git is installed but missing from PATH (installed without the "Git from the command line" option), the installer finds and uses it instead of asking for a reinstall.

@@ -229,41 +229,6 @@ jobs:
           test "$(cat "$FAKE_HOME/.exxperts/marker")" = "user state predates the install"
           test "$(ls -A "$FAKE_HOME/.exxperts")" = "marker"
 
-      # Reproduces a field-caught bug: updating while exxperts runs. A running
-      # app holds its vendored node.exe open for execution, which denies write
-      # access. The installer must detect that WITHOUT touching the live tree
-      # (Move-Item falls back to copy-then-delete on blocked renames and
-      # gutted a real user's install) and fail fast with the close-the-app
-      # message, leaving a fully working install behind.
-      - name: 'Locked update: fails fast and leaves the install fully intact'
-        shell: pwsh
-        run: |
-          $env:USERPROFILE = $env:FAKE_HOME
-          $env:HOME = $env:FAKE_HOME
-          $env:HOMEDRIVE = Split-Path -Qualifier $env:FAKE_HOME
-          $env:HOMEPATH = Split-Path -NoQualifier $env:FAKE_HOME
-          $env:LOCALAPPDATA = Join-Path $env:FAKE_HOME "AppData\Local"
-          $tree = Join-Path $env:LOCALAPPDATA "Programs\exxperts\exxperts"
-          $node = Join-Path $tree "vendor\node\node.exe"
-          if (-not (Test-Path $node)) { Write-Error "no vendored node at $node"; exit 1 }
-          # Hold the kind of lock a running app holds: readers allowed,
-          # writers denied. The installer's probe opens for write.
-          $holder = [System.IO.File]::Open($node, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)
-          try {
-            $out = powershell.exe -NoProfile -ExecutionPolicy Restricted -Command "Get-Content install.ps1 -Raw | Invoke-Expression" 2>&1 | Out-String
-            Write-Host $out
-            if ($LASTEXITCODE -eq 0) { Write-Error "the locked update must fail, but exited 0"; exit 1 }
-            if ($out -notmatch "is locked") { Write-Error "expected the locked-app message in the output"; exit 1 }
-          } finally { $holder.Close() }
-          $shim = Join-Path $tree "exxperts.cmd"
-          if (-not (Test-Path $shim)) { Write-Error "exxperts.cmd vanished from the live tree"; exit 1 }
-          $base = Split-Path -Parent $tree
-          $stray = @(Get-ChildItem -Force $base | Where-Object { $_.Name -notin @("exxperts", "bin") })
-          if ($stray.Count -gt 0) { Write-Error "locked update left debris in ${base}: $($stray.Name -join ', ')"; exit 1 }
-          $version = (node -p "require('./package.json').version").Trim()
-          $actual = (& $shim --version | Out-String).Trim()
-          if ($actual -ne "exxperts $version") { Write-Error "after the locked update: expected 'exxperts $version', got '$actual'"; exit 1 }
-
       # The canary proves the update actually replaced the tree: a no-op
       # short-circuit would keep app/.env trivially and pass every other
       # assertion here.
@@ -441,6 +406,41 @@ jobs:
           if ($marker -ne "user state predates the install") { Write-Error "the .exxperts marker was modified: '$marker'"; exit 1 }
           $entries = @(Get-ChildItem -Force $stateDir)
           if ($entries.Count -ne 1) { Write-Error "unexpected entries in .exxperts: $($entries.Name -join ', ')"; exit 1 }
+
+      # Reproduces a field-caught bug: updating while exxperts runs. A running
+      # app holds its vendored node.exe open for execution, which denies write
+      # access. The installer must detect that WITHOUT touching the live tree
+      # (Move-Item falls back to copy-then-delete on blocked renames and
+      # gutted a real user's install) and fail fast with the close-the-app
+      # message, leaving a fully working install behind.
+      - name: 'Locked update: fails fast and leaves the install fully intact'
+        shell: pwsh
+        run: |
+          $env:USERPROFILE = $env:FAKE_HOME
+          $env:HOME = $env:FAKE_HOME
+          $env:HOMEDRIVE = Split-Path -Qualifier $env:FAKE_HOME
+          $env:HOMEPATH = Split-Path -NoQualifier $env:FAKE_HOME
+          $env:LOCALAPPDATA = Join-Path $env:FAKE_HOME "AppData\Local"
+          $tree = Join-Path $env:LOCALAPPDATA "Programs\exxperts\exxperts"
+          $node = Join-Path $tree "vendor\node\node.exe"
+          if (-not (Test-Path $node)) { Write-Error "no vendored node at $node"; exit 1 }
+          # Hold the kind of lock a running app holds: readers allowed,
+          # writers denied. The installer's probe opens for write.
+          $holder = [System.IO.File]::Open($node, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)
+          try {
+            $out = powershell.exe -NoProfile -ExecutionPolicy Restricted -Command "Get-Content install.ps1 -Raw | Invoke-Expression" 2>&1 | Out-String
+            Write-Host $out
+            if ($LASTEXITCODE -eq 0) { Write-Error "the locked update must fail, but exited 0"; exit 1 }
+            if ($out -notmatch "is locked") { Write-Error "expected the locked-app message in the output"; exit 1 }
+          } finally { $holder.Close() }
+          $shim = Join-Path $tree "exxperts.cmd"
+          if (-not (Test-Path $shim)) { Write-Error "exxperts.cmd vanished from the live tree"; exit 1 }
+          $base = Split-Path -Parent $tree
+          $stray = @(Get-ChildItem -Force $base | Where-Object { $_.Name -notin @("exxperts", "bin") })
+          if ($stray.Count -gt 0) { Write-Error "locked update left debris in ${base}: $($stray.Name -join ', ')"; exit 1 }
+          $version = (node -p "require('./package.json').version").Trim()
+          $actual = (& $shim --version | Out-String).Trim()
+          if ($actual -ne "exxperts $version") { Write-Error "after the locked update: expected 'exxperts $version', got '$actual'"; exit 1 }
 
       # The canary proves the update actually replaced the tree: a no-op
       # short-circuit would keep app\.env trivially and pass every other

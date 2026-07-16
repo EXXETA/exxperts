@@ -30,12 +30,13 @@ function slugifySkillId(value: string): string {
 }
 
 /** Short origin label for the library row chip (MR-P2): "written" / "imported" for skills
- *  with provenance, else the store tier ("built in" / "project"). */
+ *  with provenance, else the store tier ("built in" / "shared" / "project"). "shared" is
+ *  the cross-tool ~/.agents/skills directory: listed here, managed by other tools. */
 function skillOrigin(skill: SkillListItem): string {
 	if (skill.provenance) {
 		return skill.provenance.source === "local" ? "written" : "imported";
 	}
-	return skill.source === "builtin" ? "built in" : skill.source === "project" ? "project" : skill.source;
+	return skill.source === "builtin" ? "built in" : skill.source === "project" ? "project" : skill.source === "shared" ? "shared" : skill.source;
 }
 
 /** Upload-skill modal (MR-P2): a drag-and-drop / click zone that routes the picked file

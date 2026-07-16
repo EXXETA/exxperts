@@ -22,6 +22,18 @@ export function agentSkillsDir(): string {
 }
 
 /**
+ * The cross-tool shared skills directory (`~/.agents/skills`), the ecosystem
+ * convention for skills every compliant agent on the machine can see. exxperts
+ * READS it (skills list in the library with a "shared" origin) but never writes
+ * into it: no edits, no deletes, no provenance sidecars — other tools own it.
+ * Trust is unaffected by the extra root: enablement still pins the manifest
+ * hash per room, so a shared skill changing on disk trips re-review.
+ */
+export function sharedAgentsSkillsDir(): string {
+	return path.join(os.homedir(), ".agents", "skills");
+}
+
+/**
  * The pre-unification web store (`~/.exxperts/app/skills`). It had no UI, so
  * real-world content is unlikely, but any skills there are migrated on boot into
  * the canonical store (see `migrateLegacyUserSkills`).

@@ -83,7 +83,7 @@ import fetchUrlExt from "../../../pi-package/extensions/fetch_url/index.js";
 import { addPersistentRoomScheduleJob, listPersistentRoomScheduleJobs, removePersistentRoomScheduleJob, summarizePersistentRoomScheduleJobs, updatePersistentRoomScheduleJob } from "../../../pi-package/extensions/schedule-prompt/index.js";
 import type { AddPersistentRoomScheduleJobInput, PersistentRoomScheduleJob, PersistentRoomScheduleSummary, PersistentRoomScheduleType, UpdatePersistentRoomScheduleJobInput } from "../../../pi-package/extensions/schedule-prompt/index.js";
 import { ensureProductAppUserDirs, productAppStatePath, productAppStateRoot } from "../../../pi-package/product-state-paths.js";
-import { agentSkillsDir, localSkillProvenance, migrateLegacyUserSkills, readSkillProvenance, removeManagedSkillDir, sha256, SKILL_PROVENANCE_FILENAME, writeSkillProvenance, type SkillProvenance } from "./skills-store.js";
+import { agentSkillsDir, localSkillProvenance, migrateLegacyUserSkills, readSkillProvenance, removeManagedSkillDir, sha256, sharedAgentsSkillsDir, SKILL_PROVENANCE_FILENAME, writeSkillProvenance, type SkillProvenance } from "./skills-store.js";
 import { filterRepoScanSkillFiles, scanInvisibleUnicode, type InvisibleUnicodeFinding } from "./skills-import.js";
 import { cloneRepoShallow, getCheckout, installCheckoutCleanup, loadFeaturedSource, parseSkillFrontmatter as parseFrontmatter, readRepoCandidate, registerCheckout, resolveFeaturedSources, resolveRepoSource, scanRepoSkills, vendorRepoSkill } from "./skills-repo-fetch.js";
 import JSZip from "jszip";
@@ -2546,6 +2546,12 @@ const SKILL_SCRIPT_EXTENSIONS = new Set([".py", ".sh", ".bash", ".zsh", ".js", "
 function skillDirs(): { dir: string; source: string }[] {
 	return [
 		{ dir: path.join(PKG, "skills"), source: "builtin" },
+		// The cross-tool shared directory (~/.agents/skills). Read-only from our
+		// side: skills there are listed but never edited, deleted, or given
+		// provenance sidecars — other tools own that directory. It sits BELOW the
+		// user store so a name the user explicitly put in the exxperts store wins
+		// over the ambient shared one.
+		{ dir: sharedAgentsSkillsDir(), source: "shared" },
 		// The canonical user store is the Pi loader's user dir (spec §1) — a skill
 		// written here is visible to the CLI and vice versa.
 		{ dir: agentSkillsDir(), source: "user" },
@@ -2617,11 +2623,14 @@ function resolveLibrarySkillManifest(name: string): { manifest: string; body: st
 		let entries: fs.Dirent[];
 		try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { continue; }
 		for (const entry of entries) {
-			if (!entry.isDirectory()) continue;
+			// Symlinked skill dirs and manifests fingerprint like regular ones (the
+			// shared ~/.agents/skills root is commonly populated by symlinks). The
+			// hash pin is content-based, so a retargeted link is just a changed
+			// manifest: the room flips to re-review, same as any edit.
+			if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
 			const file = path.join(dir, entry.name, "SKILL.md");
 			let manifest: string;
 			try {
-				if (fs.lstatSync(file).isSymbolicLink()) continue; // never fingerprint through a symlink
 				manifest = fs.readFileSync(file, "utf-8");
 			} catch { continue; }
 			const { fm, body } = parseFrontmatter(manifest);
