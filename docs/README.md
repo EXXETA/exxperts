@@ -37,6 +37,7 @@ If another active doc conflicts with this table, treat this table as the newer s
 - [Developer guide](developer.md): primary developer guide with current command and storage-root guidance.
 - [Operations](operations.md): support/troubleshooting notes with current repo/dev command and storage-root guidance.
 - [Local npm packaging](packaging-local.md): package and tarball validation.
+- [Release pipeline](release-pipeline.md): cutting tagged releases with prebuilt per-OS archives, the vendored Node pin, and the currency check.
 - [Architecture](architecture.md): small landing placeholder pointing at the current guides.
 - [L1a constitution upgrade](l1a-constitution-upgrade.md): how to upgrade existing rooms to a newer constitution template after pulling an update.
 

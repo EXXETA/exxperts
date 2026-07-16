@@ -1,0 +1,38 @@
+name: Node currency
+
+# Goes red when the vendored Node pin (scripts/release-node-version.json) is
+# behind a security release in its major line. Shipping a bundled runtime
+# means we own its patch cadence; this weekly check is the team's accepted
+# commitment to notice and cut a patched release promptly.
+on:
+  schedule:
+    # Monday 06:00 UTC, so a weekend security release is flagged at the start
+    # of the work week.
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+  push:
+    # The branches filter keeps this off tag pushes (path filters are ignored
+    # there), where release.yml already runs the same check.
+    branches: [main]
+    paths:
+      - scripts/release-node-version.json
+      - scripts/check-node-currency.mjs
+  pull_request:
+    paths:
+      - scripts/release-node-version.json
+      - scripts/check-node-currency.mjs
+
+# The check only reads the repo; keep the token read-only.
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      # The script is dependency-free; the runner's stock node is enough.
+      - name: Check the vendored Node pin against nodejs.org
+        run: node scripts/check-node-currency.mjs

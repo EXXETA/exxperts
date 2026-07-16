@@ -1,0 +1,268 @@
+name: Release
+
+# Builds the prebuilt per-OS archives (bundled Node runtime, no toolchain
+# needed on the target machine), smoke-tests them on bare runners, and
+# publishes a GitHub Release. workflow_dispatch runs everything except the
+# publish job, so the pipeline can be exercised without shipping anything.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+# Default read-only token for every job; only the publish job elevates to
+# contents: write at the job level.
+permissions:
+  contents: read
+
+jobs:
+  # A release must not ship a Node with known security holes. The script is
+  # dependency-free and only needs the runner's stock node.
+  node-currency:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check the vendored Node pin against nodejs.org
+        run: node scripts/check-node-currency.mjs
+
+  # Guards against tagging a commit whose package.json was never bumped: the
+  # tag must be v<version> or v<version>-<suffix> (prerelease). On non-tag
+  # runs (workflow_dispatch) this passes as a no-op rather than being skipped,
+  # so the build job's `needs` never sees a skipped dependency.
+  tag-version-guard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tag matches package.json version
+        run: |
+          if [ "$GITHUB_REF_TYPE" != "tag" ]; then
+            echo "Not a tag run; nothing to guard."
+            exit 0
+          fi
+          version="$(node -p "require('./package.json').version")"
+          case "$GITHUB_REF_NAME" in
+            "v$version" | "v$version-"*)
+              echo "Tag $GITHUB_REF_NAME matches package.json version $version."
+              ;;
+            *)
+              echo "Tag $GITHUB_REF_NAME does not match package.json version $version." >&2
+              echo "Expected v$version or v$version-<prerelease suffix>. Bump package.json (and re-tag) or fix the tag." >&2
+              exit 1
+              ;;
+          esac
+
+  build:
+    needs: [node-currency, tag-version-guard]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # bundle-release.mjs vendors the host platform's Node, so each
+          # target must build on its matching runner.
+          - os: ubuntu-latest
+            target: linux-x64
+          - os: macos-latest
+            target: darwin-arm64
+          - os: windows-latest
+            target: win-x64
+    runs-on: ${{ matrix.os }}
+    # Full build plus a ~30 MB Node download from nodejs.org.
+    timeout-minutes: 60
+    env:
+      # The archive build does not need the headless browser; skip the
+      # ~150 MB download.
+      EXXETA_SKIP_BROWSER_INSTALL: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build release archive
+        run: node scripts/bundle-release.mjs --target ${{ matrix.target }} --out dist-release
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.target }}
+          path: |
+            dist-release/exxperts-*
+          if-no-files-found: error
+
+  # Deliberately no setup-node here: the archive must run without any
+  # provisioned toolchain, so these jobs stay as close to a bare machine as a
+  # hosted runner allows. The runner's stock node only launches the smoke
+  # driver, which sanitizes the environment before exercising the archive.
+  bare-machine-smoke:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: linux-x64
+          - os: macos-latest
+            target: darwin-arm64
+          - os: windows-latest
+            target: win-x64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      # Checkout only to get scripts/smoke-release-archive.mjs; no install.
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-${{ matrix.target }}
+          path: dist-release
+
+      # Recompute the hash with node's crypto so the same step works on all
+      # three runners (no sha256sum/shasum/certutil divergence).
+      - name: Verify checksum file matches the archive
+        shell: bash
+        run: |
+          cd dist-release
+          shopt -s nullglob
+          set -- exxperts-*.tar.gz exxperts-*.zip
+          archive="${1:-}"
+          test -n "$archive" || { echo "no archive found in dist-release" >&2; exit 1; }
+          # shellcheck disable=SC2016 # single quotes are deliberate: the $ and backticks below are JS, not shell
+          node -e '
+            const { createHash } = require("crypto");
+            const { readFileSync } = require("fs");
+            const archive = process.argv[1];
+            const actual = createHash("sha256").update(readFileSync(archive)).digest("hex");
+            const line = readFileSync(archive + ".sha256", "utf8").trim();
+            const expected = line.split(/\s+/)[0];
+            if (actual !== expected) {
+              console.error(`checksum mismatch for ${archive}: expected ${expected}, got ${actual}`);
+              process.exit(1);
+            }
+            console.log(`checksum OK: ${actual}  ${archive}`);
+          ' "$archive"
+
+      - name: Smoke-test the archive on a bare machine
+        shell: bash
+        run: |
+          shopt -s nullglob
+          set -- dist-release/exxperts-*.tar.gz dist-release/exxperts-*.zip
+          test -n "${1:-}" || { echo "no archive found in dist-release" >&2; exit 1; }
+          node scripts/smoke-release-archive.mjs "$1"
+
+  # Only tag pushes publish. The event check matters: a workflow_dispatch can
+  # be aimed at a tag ref, which would satisfy ref_type == 'tag' alone and
+  # break the dry-run promise, so manual runs always stop after the smoke
+  # matrix regardless of the chosen ref.
+  publish:
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    needs: bare-machine-smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      # Creating the release and uploading assets needs write; scoped to this
+      # job so the build/smoke jobs keep the default read-only token.
+      contents: write
+    steps:
+      # Checkout only to read the tagged package.json version for the release
+      # notes; no install.
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: dist-release
+          merge-multiple: true
+
+      - name: Assemble SHA256SUMS.txt
+        run: |
+          cd dist-release
+          cat ./*.sha256 > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      # The archives sat in artifact storage between the smoke jobs and this
+      # one; recompute every hash against SHA256SUMS.txt (same node crypto
+      # recompute the smoke jobs use) so storage corruption in that window
+      # cannot ship a broken asset.
+      - name: Re-verify every archive against SHA256SUMS.txt
+        run: |
+          cd dist-release
+          # shellcheck disable=SC2016 # single quotes are deliberate: the $ and backticks below are JS, not shell
+          node -e '
+            const { createHash } = require("crypto");
+            const { readFileSync, readdirSync } = require("fs");
+            const sums = new Map(readFileSync("SHA256SUMS.txt", "utf8").trim().split("\n").map((line) => {
+              const [hash, name] = line.trim().split(/\s+/);
+              return [name, hash];
+            }));
+            const archives = readdirSync(".").filter((f) => f.endsWith(".tar.gz") || f.endsWith(".zip"));
+            for (const name of sums.keys()) {
+              if (!archives.includes(name)) {
+                console.error(`SHA256SUMS.txt lists ${name} but the archive is missing`);
+                process.exit(1);
+              }
+            }
+            if (archives.length === 0) {
+              console.error("no archives found to verify");
+              process.exit(1);
+            }
+            for (const archive of archives) {
+              const expected = sums.get(archive);
+              if (!expected) {
+                console.error(`SHA256SUMS.txt has no entry for ${archive}`);
+                process.exit(1);
+              }
+              const actual = createHash("sha256").update(readFileSync(archive)).digest("hex");
+              if (actual !== expected) {
+                console.error(`checksum mismatch for ${archive}: expected ${expected}, got ${actual}`);
+                process.exit(1);
+              }
+              console.log(`checksum OK: ${actual}  ${archive}`);
+            }
+          '
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          prerelease_flag=""
+          case "$GITHUB_REF_NAME" in
+            *-*) prerelease_flag="--prerelease" ;;
+          esac
+          # The heredoc stays quoted so nothing in the body is shell-expanded;
+          # the version is substituted afterwards from the checked-out
+          # package.json (never from workflow expression interpolation).
+          cat > release-notes.md <<'EOF'
+          Prebuilt Exxperts archives with a vendored Node runtime. No Node, npm, or Git needs to be installed on the target machine; unpack and run.
+
+          | Platform | Download |
+          | --- | --- |
+          | Windows x64 | `exxperts-__VERSION__-win-x64.zip` |
+          | macOS Apple Silicon | `exxperts-__VERSION__-darwin-arm64.tar.gz` |
+          | Linux x64 | `exxperts-__VERSION__-linux-x64.tar.gz` |
+
+          Verify your download (--ignore-missing checks only the file you downloaded):
+
+          ```
+          shasum -a 256 --ignore-missing -c SHA256SUMS.txt
+          ```
+
+          (On Windows PowerShell: `(Get-FileHash exxperts-__VERSION__-win-x64.zip -Algorithm SHA256).Hash` and compare against the archive's line in SHA256SUMS.txt.)
+
+          Checksums are computed in CI from the tagged commit; each archive also passed a bare-machine smoke test on its target OS before this release was published.
+          EOF
+          # A semver version has no sed replacement metacharacters (& / \).
+          sed -i "s/__VERSION__/$version/g" release-notes.md
+          gh release create "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$GITHUB_REF_NAME" \
+            --notes-file release-notes.md \
+            $prerelease_flag \
+            dist-release/exxperts-*.tar.gz dist-release/exxperts-*.zip dist-release/SHA256SUMS.txt

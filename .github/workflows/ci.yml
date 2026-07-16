@@ -5,6 +5,10 @@ on:
     branches: [main]
   pull_request:
 
+# No CI job writes to the repo; keep the token read-only.
+permissions:
+  contents: read
+
 jobs:
   build-and-smoke:
     strategy:
@@ -154,3 +158,28 @@ jobs:
           $version = (node -p "require('./package.json').version").Trim()
           $actual = (exxperts.cmd --version | Out-String).Trim()
           if ($actual -ne "exxperts $version") { Write-Error "expected 'exxperts $version', got '$actual'"; exit 1 }
+
+  # Catches release-bundle-script rot on every push/PR instead of at tag
+  # time. Linux only to keep CI lean; the full 3-OS matrix (plus checksum
+  # verification and publishing) runs in release.yml on tags.
+  release-archive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      EXXETA_SKIP_BROWSER_INSTALL: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build release archive
+        run: node scripts/bundle-release.mjs --target linux-x64 --out dist-release
+
+      - name: Smoke-test the archive
+        run: node scripts/smoke-release-archive.mjs dist-release/exxperts-*.tar.gz
