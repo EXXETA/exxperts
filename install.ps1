@@ -531,14 +531,16 @@ function Remove-OldNpmInstall([string]$NewTree, [bool]$PathReady) {
 # The whole archive path. Returns $false (with $script:ArchiveFailReason set)
 # to request the source fallback; only user-actionable states (a locked
 # install) fail hard, because falling back would not fix them.
-# Move-ItemWithRetry: a rename that retries briefly. Antivirus scanners open
-# short-lived handles on rename events, so a restore rename right after a
-# probe rename can fail transiently even though the path is otherwise free;
-# one field report on a real Windows machine hit exactly that window.
-function Move-ItemWithRetry {
+# Move-DirWithRetry: directory renames use [System.IO.Directory]::Move, never
+# Move-Item. Move-Item silently falls back to copy-then-delete when a rename
+# is blocked by open handles, which guts a live tree (field-caught: updating
+# while exxperts ran left a partial copy behind). Directory.Move is a pure
+# rename that fully succeeds or fully fails. The brief retries cover
+# antivirus scanners holding short-lived handles after rename events.
+function Move-DirWithRetry {
     param([string]$From, [string]$To, [int]$Attempts = 12)
     for ($i = 1; $i -le $Attempts; $i++) {
-        try { Move-Item -LiteralPath $From $To; return $true }
+        try { [System.IO.Directory]::Move($From, $To); return $true }
         catch { if ($i -lt $Attempts) { Start-Sleep -Milliseconds 500 } }
     }
     return $false
@@ -644,7 +646,7 @@ function Install-FromArchive {
                     Sort-Object LastWriteTime -Descending)
                 if ($aside.Count -gt 0) {
                     Say "restoring the previous install left aside by an interrupted update ($($aside[0].FullName)) ..."
-                    Move-ItemWithRetry $aside[0].FullName $tree | Out-Null
+                    Move-DirWithRetry $aside[0].FullName $tree | Out-Null
                 }
             }
             # Sweep only when a live tree exists: if the restore above failed,
@@ -665,23 +667,18 @@ function Install-FromArchive {
                 "If it keeps failing with exxperts closed, an antivirus may be scanning that folder;`n" +
                 "add an exclusion for $base and re-run.")
             if (Test-Path -LiteralPath $tree) {
-                $probeTarget = "$tree.update-probe"
-                $renamedAway = $false
-                try {
-                    Move-Item -LiteralPath $tree $probeTarget
-                    $renamedAway = $true
-                    Move-Item -LiteralPath $probeTarget $tree
-                    $renamedAway = $false
-                }
-                catch {
-                    if ($renamedAway) {
-                        if (Move-ItemWithRetry $probeTarget $tree) { $renamedAway = $false }
+                # Detect a running app WITHOUT ever moving the live tree: a
+                # running exxperts holds its vendored node.exe open for
+                # execution, which denies write access. Rename-based probes
+                # are unsafe here (see Move-DirWithRetry above), so this
+                # write-open is the whole probe.
+                $nodeExe = Join-Path $tree "vendor\node\node.exe"
+                if (Test-Path -LiteralPath $nodeExe) {
+                    try {
+                        $probeStream = [System.IO.File]::Open($nodeExe, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
+                        $probeStream.Close()
                     }
-                    if ($renamedAway) {
-                        Fail ("the installed app could not be restored after an update probe.`n" +
-                            "Rename `"$probeTarget`" back to `"$tree`" by hand, then re-run this command.")
-                    }
-                    Fail $lockedMessage
+                    catch { Fail $lockedMessage }
                 }
             }
 
@@ -712,10 +709,7 @@ function Install-FromArchive {
             if (Test-Path -LiteralPath $tree) {
                 Say "updating existing install in $tree ..."
                 $old = Join-Path $base (".old-" + [System.IO.Path]::GetRandomFileName())
-                try {
-                    Move-Item -LiteralPath $tree $old
-                }
-                catch {
+                if (-not (Move-DirWithRetry $tree $old)) {
                     Remove-Item -LiteralPath $staging -Recurse -Force -ErrorAction SilentlyContinue
                     Fail $lockedMessage
                 }
@@ -726,12 +720,9 @@ function Install-FromArchive {
                     try { Copy-Item -LiteralPath $envFile -Destination (Join-Path $newTree "app\.env") } catch {}
                 }
             }
-            try {
-                Move-Item -LiteralPath $newTree $tree
-            }
-            catch {
+            if (-not (Move-DirWithRetry $newTree $tree)) {
                 if ($old) {
-                    Move-ItemWithRetry $old $tree | Out-Null
+                    Move-DirWithRetry $old $tree | Out-Null
                     Remove-Item -LiteralPath $staging -Recurse -Force -ErrorAction SilentlyContinue
                     Fail $lockedMessage
                 }
@@ -754,7 +745,7 @@ function Install-FromArchive {
             catch { $wrapperOk = $false }
             if (-not $wrapperOk) {
                 Remove-Item -LiteralPath $tree -Recurse -Force -ErrorAction SilentlyContinue
-                if ($old) { Move-ItemWithRetry $old $tree | Out-Null }
+                if ($old) { Move-DirWithRetry $old $tree | Out-Null }
                 else { Remove-Item -LiteralPath $binDir -Recurse -Force -ErrorAction SilentlyContinue }
                 $script:ArchiveFailReason = "could not create the launcher in $binDir"
                 return $false
@@ -770,7 +761,7 @@ function Install-FromArchive {
             if (-not $selfCheckOk) {
                 Say "the installed app failed its self-check (expected 'exxperts $version', got '$reported')."
                 Remove-Item -LiteralPath $tree -Recurse -Force -ErrorAction SilentlyContinue
-                if ($old) { Move-ItemWithRetry $old $tree | Out-Null }
+                if ($old) { Move-DirWithRetry $old $tree | Out-Null }
                 else { Remove-Item -LiteralPath $binDir -Recurse -Force -ErrorAction SilentlyContinue }
                 $script:ArchiveFailReason = "the installed app failed its self-check"
                 return $false
