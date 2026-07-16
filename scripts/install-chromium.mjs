@@ -5,23 +5,37 @@
 // page fallback, and task artifact thumbnails. The Chromium binary is a separate ~150 MB download
 // that `npm install` does not pull on its own, so we fetch it here after install.
 //
-// This is intentionally NON-FATAL: if the download can't run (offline, corporate proxy, CI,
-// `--ignore-scripts`, Playwright not installed), we never fail `npm install`. Everything still works
-// without it — the visual-critique pass and browser fallbacks are just skipped — and the browser can
-// be fetched later with `npx playwright install chromium`.
+// As an npm postinstall this is intentionally NON-FATAL: if the download can't run (offline,
+// corporate proxy, CI, `--ignore-scripts`, Playwright not installed), we never fail `npm install`.
+// Everything still works without it (the visual-critique pass and browser fallbacks are just
+// skipped), and the browser can be fetched later with `exxperts setup chromium` (any install type)
+// or `npx playwright install chromium` (source installs).
+//
+// When invoked as `exxperts setup chromium`, bin/exxperts.cjs sets EXXPERTS_SETUP=1 in the child
+// env; that switches this script to STRICT mode: the user explicitly asked for the download, so a
+// resolution or download failure must exit 1 instead of pretending success.
 
 import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { existsSync } from "node:fs";
 
+const strict = process.env.EXXPERTS_SETUP === "1";
+
 function skip(reason) {
 	console.warn("");
 	console.warn(`[exxperts] ${reason}`);
+	if (strict) {
+		console.warn("[exxperts] Check your network/proxy (corporate proxies often block the download),");
+		console.warn("[exxperts] then re-run: exxperts setup chromium");
+		console.warn("");
+		process.exit(1); // the user explicitly asked for this download, so fail honestly
+	}
 	console.warn("[exxperts] HTML decks still work; the visual-critique pass is just skipped.");
-	console.warn("[exxperts] To enable it later, run:  npx playwright install chromium");
+	console.warn("[exxperts] To enable it later, run:  exxperts setup chromium");
+	console.warn("[exxperts] (or, from a source install:  npx playwright install chromium)");
 	console.warn("");
-	process.exit(0); // never block setup
+	process.exit(0); // postinstall mode: never block setup
 }
 
 // `npm install --ignore-scripts`, CI, or anyone who just wants a fast install can opt out.
@@ -46,7 +60,7 @@ console.log("[exxperts] Fetching headless Chromium for visual deck review and br
 const result = spawnSync(process.execPath, [cli, "install", "chromium"], { stdio: "inherit" });
 
 if (result.error || result.status !== 0) {
-	skip("Could not download Chromium right now — that's OK.");
+	skip(strict ? "Could not download Chromium." : "Could not download Chromium right now, and that's OK.");
 }
 
 process.exit(0);

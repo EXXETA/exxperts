@@ -2,7 +2,9 @@
 
 Web search ships **disabled**; agents say "not configured" until you turn it
 on. It then runs through a local SearXNG container: no API key and no
-third-party search SaaS.
+third-party search SaaS. The standard way to turn it on, on any install type,
+is `exxperts setup search`; the setup below walks through it, with the
+script-level detail for developers working from a clone.
 
 **Privacy note:** SearXNG forwards your search **queries** to public search
 engines (Google, DuckDuckGo, etc.), so search terms do leave the machine;
@@ -17,13 +19,15 @@ client/internal content.
    Open it so it's running, and set it to **start at login** so search keeps
    working after reboots.
 2. **Open a new terminal** (so the freshly installed `docker` is found), then
-   run the setup command from the repo directory. This starts SearXNG *and*
-   writes the config for you (to `~/.exxperts/app/web-search.json`, which both
-   the `exxperts` command and the repo scripts read):
+   run the setup command; it works on every install type. This starts SearXNG
+   *and* writes the config for you (to `~/.exxperts/app/web-search.json`,
+   which both the `exxperts` command and the repo scripts read):
    ```bash
-   ./scripts/searxng start        # macOS / Linux / Git Bash
-   node scripts\searxng.mjs start # Windows (PowerShell or cmd)
+   exxperts setup search
    ```
+   Developers working from a repo clone can call the underlying script
+   directly instead: `./scripts/searxng start` (macOS / Linux / Git Bash) or
+   `node scripts\searxng.mjs start` (Windows, PowerShell or cmd).
 3. **Restart the app** (`exxperts web`, `exxperts cli`, `./scripts/exxperts-web`,
    or `./scripts/exxperts-cli`).
 
@@ -51,17 +55,20 @@ it, or it isn't set to start at login). You'll see an error like *"SearXNG is
 not reachable at http://127.0.0.1:8888."* The fix:
 
 ```bash
-open -a OrbStack          # macOS (or open Docker Desktop, on any platform)
-./scripts/searxng status  # check state: running / stopped / docker unavailable
+open -a OrbStack              # macOS (or open Docker Desktop, on any platform)
+exxperts setup search status  # check state: running / stopped / docker unavailable
 ```
 
-Other commands: `./scripts/searxng stop` / `restart`. The setup command never
-overwrites an existing config, so re-running `start` is always safe.
-`npm run doctor` from the repo root also checks reachability.
+Other commands: `exxperts setup search stop` and `exxperts setup search start`
+(the default when no subcommand is given). The setup command never overwrites
+an existing config, so re-running `start` is always safe. `exxperts doctor`
+also checks reachability.
 
-**Windows.** The helper is cross-platform Node; run
-`node scripts\searxng.mjs <start|stop|restart|status>` from PowerShell, cmd, or
-Git Bash. (Docker Desktop with the WSL2 backend works well here.)
+**From a repo clone.** The underlying helper is cross-platform Node:
+`./scripts/searxng <start|stop|restart|status>` from macOS / Linux / Git Bash,
+or `node scripts\searxng.mjs <start|stop|restart|status>` from PowerShell,
+cmd, or Git Bash on Windows. (Docker Desktop with the WSL2 backend works well
+on Windows.)
 
 ## Configuration reference
 

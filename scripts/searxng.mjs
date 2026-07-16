@@ -24,7 +24,13 @@ const SETTINGS_FILE = path.join(CONFIG_DIR, "settings.yml");
 
 const isWindows = process.platform === "win32";
 // How to invoke this helper, for messages — shell-appropriate per platform.
-const SELF = isWindows ? "node scripts\\searxng.mjs" : "./scripts/searxng";
+// When bin/exxperts.cjs intercepts `exxperts setup search` it sets
+// EXXPERTS_SETUP=1 in this child's env; messages then name the product command
+// the user actually typed instead of repo-script paths that only exist in a
+// source checkout. Direct invocations keep the repo-script form.
+const SELF = process.env.EXXPERTS_SETUP === "1"
+	? "exxperts setup search"
+	: isWindows ? "node scripts\\searxng.mjs" : "./scripts/searxng";
 
 // If `docker` isn't on PATH yet (common right after installing OrbStack/Docker
 // Desktop in an already-open terminal), look in the standard install locations

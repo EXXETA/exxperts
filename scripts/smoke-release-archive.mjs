@@ -12,7 +12,10 @@
 // Steps (each prints pass/fail; exit 0 only if all pass):
 //   1. `exxperts --version` prints "exxperts <version>" (version read from
 //      the archive's app/package.json).
-//   2. `exxperts web --no-open --port <free port>` boots the real web server
+//   2. `exxperts doctor` exits 0 and reports the archive install type: doctor's
+//      exit-code contract (optional layers and network probes warn, never fail)
+//      must hold on a bare machine, and the archive detection must fire.
+//   3. `exxperts web --no-open --port <free port>` boots the real web server
 //      (tsx compiling the TS sources with the vendored node) and serves HTTP
 //      on /healthz and /; then the whole process tree is torn down.
 //
@@ -217,7 +220,30 @@ function runShim(args, opts = {}) {
 }
 
 // ---------------------------------------------------------------------------
-// Step 2: boot the web server through the product path, assert HTTP, tear
+// Step 2: doctor. Health diagnosis must work on a bare machine straight out
+// of the archive: exit 0 (missing optional layers are warnings by contract)
+// and the auto-detected install type must be the archive one.
+// ---------------------------------------------------------------------------
+
+{
+	const { cmd, cmdArgs, spawnOpts } = runShim(["doctor"]);
+	const res = spawnSync(cmd, cmdArgs, { ...spawnOpts, encoding: "utf8", timeout: 120_000 });
+	const output = `${res.stdout ?? ""}${res.stderr ?? ""}`;
+	const reportsArchive = output.includes("install type: archive");
+	step(
+		"doctor under sanitized env",
+		res.status === 0 && reportsArchive,
+		res.status === 0 ? (reportsArchive ? "reports archive install type" : "did not report the archive install type") : `exit ${res.status}`,
+	);
+	if (failed) {
+		console.error("\n[smoke-release] doctor output (tail):");
+		console.error(output.split("\n").slice(-40).join("\n"));
+		process.exit(1);
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Step 3: boot the web server through the product path, assert HTTP, tear
 // down. --no-open is the launcher's real browser-suppression flag (see
 // bin/lib/web-launcher.cjs), so CI never hangs on xdg-open/open.
 // ---------------------------------------------------------------------------

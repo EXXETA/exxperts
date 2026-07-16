@@ -10,6 +10,7 @@ User-visible changes per release. Historical private/internal development notes 
 - Windows installer: when Git is installed but missing from PATH (installed without the "Git from the command line" option), the installer finds and uses it instead of asking for a reinstall.
 - Installer messages now cover no-admin installs of Git and Node and corporate TLS-inspection networks (`NODE_EXTRA_CA_CERTS`, `git http.sslCAInfo`).
 - `npm run doctor` finds Git Bash for per-user Git installs (it previously reported it missing on machines where the install itself succeeded).
+- `exxperts doctor` now works on every install type (prebuilt archive, npm-global, or repo clone), detecting which one it is and printing the fix for anything missing; the optional layers get one-command setup with `exxperts setup chromium` (headless Chromium) and `exxperts setup search` (local web search).
 
 ## 0.6.7 (2026-07-13)
 
