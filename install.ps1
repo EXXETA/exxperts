@@ -531,6 +531,19 @@ function Remove-OldNpmInstall([string]$NewTree, [bool]$PathReady) {
 # The whole archive path. Returns $false (with $script:ArchiveFailReason set)
 # to request the source fallback; only user-actionable states (a locked
 # install) fail hard, because falling back would not fix them.
+# Move-ItemWithRetry: a rename that retries briefly. Antivirus scanners open
+# short-lived handles on rename events, so a restore rename right after a
+# probe rename can fail transiently even though the path is otherwise free;
+# one field report on a real Windows machine hit exactly that window.
+function Move-ItemWithRetry {
+    param([string]$From, [string]$To, [int]$Attempts = 12)
+    for ($i = 1; $i -le $Attempts; $i++) {
+        try { Move-Item -LiteralPath $From $To; return $true }
+        catch { if ($i -lt $Attempts) { Start-Sleep -Milliseconds 500 } }
+    }
+    return $false
+}
+
 function Install-FromArchive {
     if (-not $env:LOCALAPPDATA) {
         $script:ArchiveFailReason = "LOCALAPPDATA is not set"
@@ -631,7 +644,7 @@ function Install-FromArchive {
                     Sort-Object LastWriteTime -Descending)
                 if ($aside.Count -gt 0) {
                     Say "restoring the previous install left aside by an interrupted update ($($aside[0].FullName)) ..."
-                    try { Move-Item -LiteralPath $aside[0].FullName $tree } catch {}
+                    Move-ItemWithRetry $aside[0].FullName $tree | Out-Null
                 }
             }
             # Sweep only when a live tree exists: if the restore above failed,
@@ -662,7 +675,7 @@ function Install-FromArchive {
                 }
                 catch {
                     if ($renamedAway) {
-                        try { Move-Item -LiteralPath $probeTarget $tree; $renamedAway = $false } catch {}
+                        if (Move-ItemWithRetry $probeTarget $tree) { $renamedAway = $false }
                     }
                     if ($renamedAway) {
                         Fail ("the installed app could not be restored after an update probe.`n" +
@@ -718,7 +731,7 @@ function Install-FromArchive {
             }
             catch {
                 if ($old) {
-                    try { Move-Item -LiteralPath $old $tree } catch {}
+                    Move-ItemWithRetry $old $tree | Out-Null
                     Remove-Item -LiteralPath $staging -Recurse -Force -ErrorAction SilentlyContinue
                     Fail $lockedMessage
                 }
@@ -741,7 +754,7 @@ function Install-FromArchive {
             catch { $wrapperOk = $false }
             if (-not $wrapperOk) {
                 Remove-Item -LiteralPath $tree -Recurse -Force -ErrorAction SilentlyContinue
-                if ($old) { try { Move-Item -LiteralPath $old $tree } catch {} }
+                if ($old) { Move-ItemWithRetry $old $tree | Out-Null }
                 else { Remove-Item -LiteralPath $binDir -Recurse -Force -ErrorAction SilentlyContinue }
                 $script:ArchiveFailReason = "could not create the launcher in $binDir"
                 return $false
@@ -757,7 +770,7 @@ function Install-FromArchive {
             if (-not $selfCheckOk) {
                 Say "the installed app failed its self-check (expected 'exxperts $version', got '$reported')."
                 Remove-Item -LiteralPath $tree -Recurse -Force -ErrorAction SilentlyContinue
-                if ($old) { try { Move-Item -LiteralPath $old $tree } catch {} }
+                if ($old) { Move-ItemWithRetry $old $tree | Out-Null }
                 else { Remove-Item -LiteralPath $binDir -Recurse -Force -ErrorAction SilentlyContinue }
                 $script:ArchiveFailReason = "the installed app failed its self-check"
                 return $false
