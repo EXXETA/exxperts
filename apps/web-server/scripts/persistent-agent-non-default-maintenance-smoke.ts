@@ -228,6 +228,7 @@ try {
 	assert(afterAbsorbSelected.l1b !== selectedBaseline.l1b, "selected L1b/current.md should change after absorb approval");
 	assert(afterAbsorbSelected.archiveCount === selectedBaseline.archiveCount + 1, "selected archive count should increase after absorb approval");
 	assert(afterAbsorbSelected.absorbEventCount === selectedBaseline.absorbEventCount + 1, "selected absorb event count should increase");
+	assert(absorbResult.eventRelPath, "absorb approval response should carry eventRelPath");
 	assert(absorbResult.eventRecordPath === path.join(selectedRoot, absorbResult.eventRelPath), "absorb event response path should be selected-root relative");
 	const absorbEvent = readJson(absorbResult.eventRecordPath);
 	assert(absorbEvent.agentId === agentId, "selected absorb event should record selected room id");
@@ -264,6 +265,7 @@ try {
 	assert(afterStructuralSelected.l1b !== beforeStructuralSnapshot.l1b, "selected L1b/current.md should change after structural review approval");
 	assert(afterStructuralSelected.archiveCount === beforeStructuralSnapshot.archiveCount + 1, "selected archive count should increase after structural review approval");
 	assert(afterStructuralSelected.structuralReviewEventCount === beforeStructuralSnapshot.structuralReviewEventCount + 1, "selected structural-review event count should increase");
+	assert(structuralResult.eventRelPath, "structural-review approval response should carry eventRelPath");
 	assert(structuralResult.eventRecordPath === path.join(selectedRoot, structuralResult.eventRelPath), "structural-review event response path should be selected-root relative");
 	const structuralEvent = readJson(structuralResult.eventRecordPath);
 	assert(structuralEvent.agentId === agentId, "selected structural-review event should record selected room id");

@@ -5,7 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer } from "./smoke-server-process.js";
+import { authedFetch, type AuthedFetchInit, SMOKE_AUTH_HEADERS, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer } from "./smoke-server-process.js";
 
 // Consult MR-2 end-to-end: the consult_* WebSocket family against a real
 // spawned server, with a synthetic OpenAI-compatible SSE gateway standing in
@@ -110,8 +110,8 @@ async function waitForServer(server: ChildProcessWithoutNullStreams): Promise<vo
 	throw new Error(`server did not become ready: ${lastError}`);
 }
 
-async function requestJson(pathname: string, init?: RequestInit): Promise<{ status: number; body: any }> {
-	const response = await fetch(`${baseUrl}${pathname}`, init);
+async function requestJson(pathname: string, init?: AuthedFetchInit): Promise<{ status: number; body: any }> {
+	const response = await authedFetch(`${baseUrl}${pathname}`, init);
 	const text = await response.text();
 	return { status: response.status, body: text ? JSON.parse(text) : null };
 }
@@ -140,9 +140,10 @@ async function prepareThread(agentId: string, threadId: string): Promise<void> {
 
 type Frame = Record<string, any>;
 
-// CI runs Node 20, which has no global WebSocket client; fall back to the ws
-// package (already present as @fastify/websocket's client library).
-const WebSocketImpl: any = (globalThis as any).WebSocket ?? (await import("ws")).default;
+// The upgrade must carry the smoke auth header, which the browser-style global
+// WebSocket cannot set; always use the ws package client (already present as
+// @fastify/websocket's client library), whose constructor accepts headers.
+const WebSocketImpl: any = (await import("ws")).default;
 
 class WsHarness {
 	readonly frames: Frame[] = [];
@@ -150,13 +151,13 @@ class WsHarness {
 
 	private constructor(socket: any) {
 		this.socket = socket;
-		socket.addEventListener("message", (event) => {
+		socket.addEventListener("message", (event: { data: unknown }) => {
 			try { this.frames.push(JSON.parse(String(event.data))); } catch {}
 		});
 	}
 
 	static async connect(persistentAgentId: string, conversationId: string): Promise<WsHarness> {
-		const socket = new WebSocketImpl(`ws://127.0.0.1:${port}/ws?persistentAgentId=${persistentAgentId}&conversationId=${conversationId}&modelProvider=openai-compatible&model=room-model`);
+		const socket = new WebSocketImpl(`ws://127.0.0.1:${port}/ws?persistentAgentId=${persistentAgentId}&conversationId=${conversationId}&modelProvider=openai-compatible&model=room-model`, { headers: { ...SMOKE_AUTH_HEADERS } });
 		const harness = new WsHarness(socket);
 		await new Promise<void>((resolve, reject) => {
 			socket.addEventListener("open", () => resolve());
@@ -231,6 +232,7 @@ function smokeEnv(): NodeJS.ProcessEnv {
 	env.HOME = tempHome;
 	env.USERPROFILE = tempHome;
 	env.PORT = String(port);
+	Object.assign(env, SMOKE_SERVER_AUTH_ENV);
 	env.EXXETA_HOME = repoRoot;
 	env.EXXPERTS_CODING_AGENT_DIR = agentDir;
 	return env;

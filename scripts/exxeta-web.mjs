@@ -6,6 +6,7 @@
 import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -105,6 +106,21 @@ function waitForUrl(url, attempts = 20, delayMs = 500) {
   });
 }
 
+// The server mints its client auth token before it listens, so once /healthz
+// answers the token file exists. Opening the Vite origin through
+// /auth/session (proxied to the server) sets the cookie on localhost:5173.
+function readAuthToken() {
+  const fromEnv = (process.env.EXXPERTS_AUTH_TOKEN || "").trim();
+  if (fromEnv) return fromEnv;
+  try {
+    // Mirrors productAppStatePath("auth-token") in the web server; this dev
+    // script cannot import the TS helper, so the two must move together.
+    return fs.readFileSync(path.join(os.homedir(), ".exxperts", "app", "auth-token"), "utf8").trim() || null;
+  } catch {
+    return null;
+  }
+}
+
 function openBrowser(url) {
   const command = process.platform === "darwin" ? "open" : isWindows ? "cmd" : "xdg-open";
   const cmdArgs = isWindows ? ["/c", "start", "", url] : [url];
@@ -170,8 +186,10 @@ console.log(`
   ✓ web server  http://localhost:8787  (logs: ${serverLog})
   ✓ web UI      http://localhost:5173  (logs: ${uiLog})
 `);
+const authToken = readAuthToken();
+if (!authToken) console.log("No auth token at ~/.exxperts/app/auth-token; the browser will show the sign-in hint page.");
 console.log("Opening browser…");
-openBrowser("http://localhost:5173");
+openBrowser(authToken ? `http://localhost:5173/auth/session?token=${encodeURIComponent(authToken)}` : "http://localhost:5173");
 
 console.log("\nPress Ctrl+C to stop both.");
 await Promise.all([

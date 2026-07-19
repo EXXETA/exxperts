@@ -37,6 +37,9 @@ jobs:
       - name: Typecheck web UI (app + fixtures)
         run: npx tsc --noEmit -p apps/web-ui/tsconfig.json
 
+      - name: Typecheck web-server smoke scripts
+        run: npx tsc --noEmit -p apps/web-server/tsconfig.scripts.json
+
       - name: Smoke suite
         run: npm run smokes
 

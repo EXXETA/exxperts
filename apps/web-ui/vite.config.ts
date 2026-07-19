@@ -26,6 +26,9 @@ export default defineConfig({
 			"/ws": { target: "ws://localhost:8787", ws: true },
 			"/healthz": "http://localhost:8787",
 			"/api": "http://localhost:8787",
+			// The auth cookie exchange must reach the server through the dev
+			// origin so the cookie lands on localhost:5173.
+			"/auth": "http://localhost:8787",
 		},
 	},
 });

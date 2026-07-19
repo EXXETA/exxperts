@@ -20,6 +20,7 @@ import { readOrgIdentityState } from "./org-identity.js";
 import type { OrgIdentity } from "./org-identity.js";
 import { deletePersistentRoomCapabilityPolicy, ensurePersistentRoomThreadEffectiveWorkspacePolicySnapshot } from "./persistent-room-workspace-policy.js";
 import { readPersistentRoomMaintenanceSettings } from "./persistent-room-maintenance-settings.js";
+import { abortAllSpecialistTasks } from "./persistent-room-specialist-registry.js";
 import { listPersistentRoomScheduleJobs, summarizePersistentRoomScheduleJobs } from "../../../pi-package/extensions/schedule-prompt/index.js";
 import type { PersistentRoomScheduleSummary } from "../../../pi-package/extensions/schedule-prompt/index.js";
 import { productAppStatePath } from "../../../pi-package/product-state-paths.js";
@@ -1868,6 +1869,10 @@ export function archivePersistentAgent(agentIdRaw: string, options: PersistentAg
 		(error as any).statusCode = 409;
 		throw error;
 	}
+	// Option 4 lets specialist workers outlive their connection; an archived
+	// room has no panel, run view, or task_abort left to stop them from, so
+	// the archive itself is the last stop surface.
+	abortAllSpecialistTasks(instance.agentId);
 	const archivedAt = Date.now();
 	const archivedReason = typeof options.reason === "string" ? collapseHumanWhitespace(options.reason).slice(0, 500) : "";
 	const updatedMeta: AgentJson = {
@@ -3292,7 +3297,7 @@ The web UI and CLI render Markdown directly.
 - Output Markdown as plain text. Do not wrap your entire response in a markdown code fence or any outer fence.
 - Use fenced code blocks only for actual code snippets.
 - Tables, headings, bullet lists, and emphasis render natively; use them when they improve clarity.
-- When structure genuinely helps (flows, architectures, relationships), you may include a small Mermaid diagram in a \`\`\`mermaid fence — the web chat renders it inline. Keep diagrams small.
+- When structure genuinely helps the current discussion (flows, architectures, relationships), you may include a small Mermaid diagram in a \`\`\`mermaid fence — the web chat renders it inline. Keep diagrams small. A mermaid sketch is for understanding in the flow of conversation; anything the user will keep, share, or present is deliverable work — when specialist delegation is available, propose that instead.
 
 ## Tool Hygiene
 

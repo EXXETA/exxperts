@@ -1900,6 +1900,79 @@ assert.match(blockedExternalHtmlWrite.content[0].text, /Unsafe HTML is blocked/)
 assert.equal(confirmDetails.length, confirmCountBeforeBlockedExternal);
 assert.equal(fs.existsSync(path.join(desktop, "client-demo", "blocked-external.html")), false);
 
+const urlInTextHtmlWrite = await write!.execute("blocked-url-text-html", {
+	destination: "desktop",
+	folder: "client-demo",
+	filename: "blocked-url-text.html",
+	content: "<!doctype html><html><body><p>See https://example.com for details.</p></body></html>",
+	reason: "url as visible text is still blocked, with an instructive error",
+}, undefined, undefined, approvalTrue);
+assert.equal(urlInTextHtmlWrite.details.saved, false);
+assert.match(urlInTextHtmlWrite.content[0].text, /Unsafe HTML is blocked/);
+assert.match(urlInTextHtmlWrite.content[0].text, /even as visible text/);
+
+const safeSvgWrite = await write!.execute("safe-svg", {
+	destination: "desktop",
+	folder: "client-demo",
+	filename: "safe.svg",
+	content: [
+		'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">',
+		'<defs><linearGradient id="g"><stop offset="0" stop-color="#333"/></linearGradient><circle id="dot" r="4"/></defs>',
+		'<rect width="100" height="100" fill="url(#g)"/><use href="#dot" x="50" y="50"/>',
+		"<text x=\"10\" y=\"20\">Safe diagram</text></svg>",
+	].join("\n"),
+	reason: "safe svg with namespace, gradient, and fragment use",
+}, undefined, undefined, approvalTrue);
+assert.equal(safeSvgWrite.details.saved, true);
+assert.equal(fs.existsSync(path.join(desktop, "client-demo", "safe.svg")), true);
+
+const confirmCountBeforeBlockedSvg = confirmDetails.length;
+const blockedScriptSvgWrite = await write!.execute("blocked-script-svg", {
+	destination: "desktop",
+	folder: "client-demo",
+	filename: "blocked-script.svg",
+	content: '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>',
+	reason: "svg script is blocked at write",
+}, undefined, undefined, approvalTrue);
+assert.equal(blockedScriptSvgWrite.details.saved, false);
+assert.equal(blockedScriptSvgWrite.isError, true);
+assert.match(blockedScriptSvgWrite.content[0].text, /Unsafe SVG is blocked/);
+
+const blockedHandlerSvgWrite = await write!.execute("blocked-handler-svg", {
+	destination: "desktop",
+	folder: "client-demo",
+	filename: "blocked-handler.svg",
+	content: '<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"><rect width="1" height="1"/></svg>',
+	reason: "svg event handler is blocked at write",
+}, undefined, undefined, approvalTrue);
+assert.equal(blockedHandlerSvgWrite.details.saved, false);
+assert.match(blockedHandlerSvgWrite.content[0].text, /Unsafe SVG is blocked/);
+
+const blockedForeignObjectSvgWrite = await write!.execute("blocked-foreignobject-svg", {
+	destination: "desktop",
+	folder: "client-demo",
+	filename: "blocked-foreignobject.svg",
+	content: '<svg xmlns="http://www.w3.org/2000/svg"><foreignObject><div>html inside</div></foreignObject></svg>',
+	reason: "svg foreignObject is blocked at write",
+}, undefined, undefined, approvalTrue);
+assert.equal(blockedForeignObjectSvgWrite.details.saved, false);
+assert.match(blockedForeignObjectSvgWrite.content[0].text, /Unsafe SVG is blocked/);
+
+const blockedExternalSvgWrite = await write!.execute("blocked-external-svg", {
+	destination: "desktop",
+	folder: "client-demo",
+	filename: "blocked-external.svg",
+	content: '<svg xmlns="http://www.w3.org/2000/svg"><image href="https://evil.example/x.png"/></svg>',
+	reason: "svg external reference is blocked at write",
+}, undefined, undefined, approvalTrue);
+assert.equal(blockedExternalSvgWrite.details.saved, false);
+assert.match(blockedExternalSvgWrite.content[0].text, /Unsafe SVG is blocked/);
+// No approval prompt is ever shown for a rejected SVG write.
+assert.equal(confirmDetails.length, confirmCountBeforeBlockedSvg);
+for (const name of ["blocked-script.svg", "blocked-handler.svg", "blocked-foreignobject.svg", "blocked-external.svg"]) {
+	assert.equal(fs.existsSync(path.join(desktop, "client-demo", name)), false);
+}
+
 const markdownWithUrlWrite = await write!.execute("markdown-with-url", {
 	destination: "desktop",
 	folder: "client-demo",

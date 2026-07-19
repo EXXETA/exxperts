@@ -5,6 +5,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { ExtensionContext } from "@exxeta/exxperts-runtime";
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -28,6 +29,16 @@ const templates = await import("../src/specialist-templates.js");
 	}
 	assert(section.includes("must approve"), "index must state the approval requirement");
 	assert(section.includes("no memory"), "index must state the no-memory posture");
+	// Routing doctrine (prompt-hardening slice 3, battery-of-tests 2026-07-17):
+	// intent over wording, keep/share/present → specialist, offer on vague
+	// requests, deck ask-back. These lines are the fix for synonym-driven
+	// routing ("chart" delegated while "plot" stayed inline).
+	assert(section.includes("INTENT decides the path"), "index must carry the intent-over-wording routing rule");
+	assert(section.includes("keep, share, or present"), "index must carry the deliverable → specialist rule");
+	assert(section.includes("offer a specialist"), "index must carry the offer-on-vague rule");
+	assert(section.includes("never coin-flip"), "index must carry the diagram-boundary sketch-plus-offer rule");
+	assert(section.includes("ask audience, length, and style"), "index must carry the deck ask-back doctrine");
+	assert(section.includes("explicitly asked to save"), "index must scope artifact_write to explicit saves");
 	assert(delegate.buildSpecialistTemplatesIndexSection([]).length === 0, "empty registry must render nothing");
 }
 
@@ -54,7 +65,7 @@ function makeTool(input: { running?: number; confirmResult?: boolean; launchOk?:
 				return input.confirmResult ?? true;
 			},
 		},
-	};
+	} as unknown as ExtensionContext;
 	return { tool, ctx, calls };
 }
 
@@ -62,7 +73,7 @@ function makeTool(input: { running?: number; confirmResult?: boolean; launchOk?:
 	// Unknown template refuses BEFORE any approval prompt.
 	const { tool, ctx, calls } = makeTool({});
 	const result = await tool.execute("1", { template: "nope", brief: "x" }, undefined, undefined, ctx);
-	assert(String(result.content[0].text).includes("not a specialist template"), "unknown template must refuse");
+	assert(String((result.content[0] as { text?: string }).text).includes("not a specialist template"), "unknown template must refuse");
 	assert(calls.confirms.length === 0 && calls.launches.length === 0, "unknown template must not prompt or launch");
 }
 {
@@ -82,7 +93,7 @@ function makeTool(input: { running?: number; confirmResult?: boolean; launchOk?:
 {
 	// No UI = structural refusal (background/CLI contexts stay delegation-free).
 	const { tool, calls } = makeTool({});
-	const result = await tool.execute("1", { template: "deck", brief: "Make slides about X." }, undefined, undefined, { hasUI: false });
+	const result = await tool.execute("1", { template: "deck", brief: "Make slides about X." }, undefined, undefined, { hasUI: false } as unknown as ExtensionContext);
 	assert(result.details?.outcome === "no-ui", "headless context must refuse");
 	assert(calls.launches.length === 0, "headless refusal must not launch");
 }
@@ -116,7 +127,7 @@ function makeTool(input: { running?: number; confirmResult?: boolean; launchOk?:
 	assert(separatorAt >= 0, "approval text must label the model-written brief");
 	assert(detail.indexOf("Draw the architecture.") > separatorAt, "the brief must appear only after the separator");
 	assert(detail.lastIndexOf("write access") < separatorAt, "all app-drawn fact lines must precede the separator");
-	assert(String(result.content[0].text).includes(launched.taskFolder.split("/")[1]), "tool result must name the taskId");
+	assert(String((result.content[0] as { text?: string }).text).includes(launched.taskFolder.split("/")[1]), "tool result must name the taskId");
 }
 {
 	// Launch refusal surfaces to the model as a refusal, not a success.

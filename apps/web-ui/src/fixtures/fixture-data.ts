@@ -343,7 +343,6 @@ export interface InRoomChatFixtureState {
 	topbarActions?: InRoomChatActionItem[];
 	composerRightActions?: InRoomChatActionItem[];
 	/** Docks a running specialist task above the composer: the expanded card or the folded strip. */
-	taskDock?: "running-card" | "running-strip";
 }
 
 export interface TaskCardsFixtureState {
@@ -799,34 +798,6 @@ export const inRoomChatFixtureStates: InRoomChatFixtureState[] = [
 		composerRightActions: [{ label: "Memento" }, { label: "Checkpoint" }],
 	}),
 	chatFixture({
-		id: "in-room-task-dock-card",
-		label: "In-room / running task dock (card)",
-		description: "Expanded running specialist card docked above the composer; the messages fade at the dock boundary.",
-		activeDisplay: "Strategy Room",
-		ownerSecondary: "Persistent room · specialist running",
-		busy: false,
-		usage: activeChatUsage,
-		contextHealth: contextHealthGreen,
-		items: [...activeConversationItems, ...markdownStressItems],
-		inputValue: "",
-		composerRightActions: [{ label: "Memento" }, { label: "Checkpoint" }],
-		taskDock: "running-card",
-	}),
-	chatFixture({
-		id: "in-room-task-dock-strip",
-		label: "In-room / running task dock (strip)",
-		description: "Running specialist folded to the one-line strip above the composer: chip, latest status, spinner, Stop.",
-		activeDisplay: "Strategy Room",
-		ownerSecondary: "Persistent room · specialist running",
-		busy: false,
-		usage: activeChatUsage,
-		contextHealth: contextHealthGreen,
-		items: [...activeConversationItems, ...markdownStressItems],
-		inputValue: "",
-		composerRightActions: [{ label: "Memento" }, { label: "Checkpoint" }],
-		taskDock: "running-strip",
-	}),
-	chatFixture({
 		id: "in-room-context-health-yellow",
 		label: "In-room / context health yellow",
 		description: "Under-prompt context rail near the checkpoint threshold: 105K tokens · 84% checkpoint.",
@@ -1007,8 +978,8 @@ export const taskCardsFixtureStates: TaskCardsFixtureState[] = [
 	{
 		kind: "task-cards",
 		id: "task-cards",
-		label: "Specialist / task cards",
-		description: "The delegation family beside the chat: running, done, stopped, and the kept thread item.",
+		label: "Specialist / run view + thread item",
+		description: "The task surfaces after the done-card's retirement (status grammar, 2026-07-18): the run view's running and stopped states, and the kept thread item.",
 	},
 ];
 

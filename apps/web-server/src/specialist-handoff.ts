@@ -32,7 +32,7 @@ export const SPECIALIST_HANDOFF_SUMMARY_MAX_CHARS = 4_000;
 export const SPECIALIST_HANDOFF_TASK_TITLE_MAX_CHARS = 4_000;
 
 /** Appended when the summary is capped, so the block is honest about the trim (§2.2). */
-export const SPECIALIST_HANDOFF_TRIM_MARKER = "[summary trimmed at 4,000 characters; full text was visible in the task card]";
+export const SPECIALIST_HANDOFF_TRIM_MARKER = "[summary trimmed at 4,000 characters]";
 
 /** At most this many artifact paths are listed; the rest collapse to a `(+N more)` line. */
 export const SPECIALIST_HANDOFF_ARTIFACTS_MAX = 8;
@@ -166,7 +166,7 @@ export function buildSpecialistHandoffBlock(input: SpecialistHandoffInput): stri
 		`Artifacts:`,
 		...artifactLines,
 		`Source: ephemeral specialist session, no memory access; this room only knows this`,
-		`distilled result and the artifact paths. Full transcript viewable in the task card only.`,
+		`distilled result and the artifact paths.`,
 	];
 	const closing = `[/SPECIALIST RESULT: ${templateId}]`;
 

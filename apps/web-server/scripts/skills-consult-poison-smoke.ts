@@ -41,7 +41,10 @@ const resolveManifest = (name: string) => library.get(name)?.manifest ?? null;
 
 // Boundary 1 — skill → room (read_skill): the body is defanged before injection.
 assert(enablePersistentRoomSkill(agentId, "helper", resolveManifest, options).ok, "enable should succeed");
-const tool = createReadSkillTool({ agentId, lookupSkill });
+const tool = createReadSkillTool({ agentId, lookupSkill }) as unknown as {
+	name: string;
+	execute(toolCallId: string, params: { name: string }): Promise<{ content: Array<{ text?: string }>; details?: { outcome?: string } }>;
+};
 const read = await tool.execute("r1", { name: "helper" });
 const readText = read.content[0].text as string;
 assert(read.details?.outcome === "ok", "read_skill should serve the enabled skill");

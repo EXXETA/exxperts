@@ -1,4 +1,5 @@
 import { type FormEvent, useEffect, useState } from "react";
+import { apiFetch } from "../api";
 import type { PersistentAgentCreateRequest, PersistentAgentModeOption } from "../types";
 
 export interface CreateRoomFormValues {
@@ -109,7 +110,7 @@ export function CreateRoomPanel({ onCreate, initialOpen = false, variant = "card
 
 	useEffect(() => {
 		let cancelled = false;
-		fetch("/api/persistent-agent-modes")
+		apiFetch("/api/persistent-agent-modes")
 			.then(async (res) => (res.ok ? res.json() : null))
 			.then((data) => {
 				if (cancelled || !data || !Array.isArray(data.modes)) return;

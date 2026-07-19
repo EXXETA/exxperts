@@ -437,9 +437,9 @@ try {
 	assert(activeManifest.totals.activeToolCount === 5, "active workspace tools manifest should report active tool count");
 	assert(activeManifest.totals.providerToolSchemaBytes && activeManifest.totals.providerToolSchemaBytes > 0, "active workspace tools manifest should report provider schema bytes");
 	const activeToolComponent = activeManifest.components.find((component) => component.id === "persistent-room:active-tools-active");
-	assert(activeToolComponent?.metadata?.activeToolNames?.join(",") === "ls,find,read,write_markdown_file,read_spreadsheet", "active diagnostics should list workspace tools");
+	assert((activeToolComponent?.metadata?.activeToolNames as string[] | undefined)?.join(",") === "ls,find,read,write_markdown_file,read_spreadsheet", "active diagnostics should list workspace tools");
 	const registeredToolComponent = activeManifest.components.find((component) => component.id === "persistent-room:registered-tools-active");
-	assert(registeredToolComponent?.metadata?.registeredToolNames?.join(",") === "ls,find,read,write_markdown_file,read_spreadsheet", "registered diagnostics should list workspace tools");
+	assert((registeredToolComponent?.metadata?.registeredToolNames as string[] | undefined)?.join(",") === "ls,find,read,write_markdown_file,read_spreadsheet", "registered diagnostics should list workspace tools");
 	assert(activeManifest.components.filter((component) => component.type === "provider-tool-schema").length === 5, "active diagnostics should include provider schemas for workspace tools");
 	assert(activeCapabilityPolicy.included === false, "active capability-policy component should remain excluded from prompt totals");
 	const activeSerialized = JSON.stringify(activeManifest);

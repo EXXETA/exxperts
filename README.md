@@ -227,7 +227,7 @@ Packaging does not change normal development. Keep using the repo scripts while 
 ## Current limitations
 
 - Distributed as prebuilt release archives (with a build-from-source fallback); no signed native installer yet.
-- No hosted multi-user/SSO/RBAC version yet; exxperts is a single-user, local product today.
+- No hosted multi-user/SSO/RBAC version yet; exxperts is a single-user, local product today. [`SECURITY.md`](SECURITY.md) states the threat model and why reverse proxies, Docker port publishing, and other remote-exposure setups are unsupported and refused where detectable.
 
 ## More docs
 
@@ -238,6 +238,7 @@ Packaging does not change normal development. Keep using the repo scripts while 
 - [`docs/web-search.md`](docs/web-search.md): web search setup and operations.
 - [`docs/mcp.md`](docs/mcp.md): MCP connectors, with transports, config locations, and commands.
 - [`docs/packaging-local.md`](docs/packaging-local.md): local npm package validation.
+- [`SECURITY.md`](SECURITY.md): threat model, supported deployments, release integrity, and vulnerability reporting.
 - [`CHANGELOG.md`](CHANGELOG.md): public-facing changelog.
 
 ## Team

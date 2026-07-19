@@ -1,4 +1,5 @@
 import { useEffect, useState, type MouseEvent as ReactMouseEvent } from "react";
+import { apiFetch } from "../api";
 import { agentLabel } from "../types";
 import { modelDisplayName } from "../model-names";
 
@@ -155,7 +156,7 @@ export function Dashboard() {
 			// Sequence the polls: a slow older response must not overwrite a
 			// newer one after the server has answered again.
 			const seq = ++requestSeq;
-			fetch(`/api/usage?range=${range}&model=${encodeURIComponent(model)}&agent=${encodeURIComponent(agent)}`)
+			apiFetch(`/api/usage?range=${range}&model=${encodeURIComponent(model)}&agent=${encodeURIComponent(agent)}`)
 				.then((r) => r.json())
 				.then((d) => { if (!cancelled && seq === requestSeq) setData(d); })
 				.catch(() => {});

@@ -73,3 +73,5 @@ for (const agentId of targetIds) {
 console.log("");
 console.log(`${dryRun ? "Dry-run summary" : "Summary"}: ${upgraded} ${dryRun ? "would upgrade" : "upgraded"}, ${upToDate} already up to date, ${failed} failed.`);
 if (failed > 0) process.exitCode = 1;
+
+export {};

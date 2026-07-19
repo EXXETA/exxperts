@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { PersistentAgentPiSessionJsonlThreadRuntime } from "../src/persistent-agents.js";
 
 const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "checkpoint-approval-transaction-home-"));
 const root = path.join(tempHome, ".exxperts", "app", "personalized-agents");
@@ -194,7 +195,7 @@ try {
 	}, {
 		createRuntime: ({ model }) => createPersistentAgentPiSessionJsonlThreadRuntime({ agentId: healAgentId, threadId: healOldThreadId, model, cwd: tempCwd }),
 	});
-	const healSession = openPersistentAgentPiSessionManager(healAgentId, healWrite.thread.runtime, tempCwd);
+	const healSession = openPersistentAgentPiSessionManager(healAgentId, healWrite.thread.runtime as PersistentAgentPiSessionJsonlThreadRuntime, tempCwd);
 	healSession.appendMessage({ role: "user", content: "Synthetic half-applied transcript turn.", timestamp: Date.now() });
 	const healProposal = await buildCheckpointProposal({
 		agentId: healAgentId,

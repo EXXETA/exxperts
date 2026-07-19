@@ -62,7 +62,10 @@ const telemetry = { reads: 0, bodyChars: 0 };
 // The tool reads settings via the default store path; point it at the temp root
 // by wrapping: settings functions take options only in MR-2's API — the tool uses
 // the env-based default root (EXXETA_PERSISTENT_AGENTS_ROOT), set above.
-const tool = createReadSkillTool({ agentId, lookupSkill, telemetry });
+const tool = createReadSkillTool({ agentId, lookupSkill, telemetry }) as unknown as {
+	name: string;
+	execute(toolCallId: string, params: { name: string }): Promise<{ content: Array<{ text?: string }>; details?: { outcome?: string } }>;
+};
 assert(tool.name === READ_SKILL_TOOL_NAME && tool.name === "read_skill", "tool must be named read_skill");
 
 // Happy path: defanged body + provenance wrapper + telemetry.
@@ -115,7 +118,7 @@ library.delete("cite-sources");
 const missing = await tool.execute("t6", { name: "cite-sources" });
 assert(missing.details?.outcome === "missing", "deleted skill must refuse as missing");
 
-assert(telemetry.reads === 2, `telemetry must count only successful reads, got ${telemetry.reads}`);
+assert((telemetry.reads as number) === 2, `telemetry must count only successful reads, got ${telemetry.reads}`);
 
 fs.rmSync(tempHome, { recursive: true, force: true });
 fs.rmSync(tempAgentsRoot, { recursive: true, force: true });

@@ -1,12 +1,16 @@
 import { useEffect, useRef, useState } from "react";
 import { ThemeToggle, type ThemeMode } from "./product-shell";
 
+import type { ReactNode } from "react";
+
 interface Props {
 	onHome: () => void;
 	connected: boolean;
 	theme: ThemeMode;
 	onToggleTheme: () => void;
 	onHelp: () => void;
+	/** The Assets section (contract §2 rung 3) — the rail's first occupant below Home. */
+	assetsSlot?: ReactNode;
 }
 
 function InRoomSidebarConfigMenu({ theme, onToggleTheme, onHelp }: { theme: ThemeMode; onToggleTheme: () => void; onHelp: () => void }) {
@@ -62,7 +66,7 @@ function InRoomSidebarConfigMenu({ theme, onToggleTheme, onHelp }: { theme: Them
 	);
 }
 
-export function Sidebar({ connected, theme, onToggleTheme, onHelp, onHome }: Props) {
+export function Sidebar({ connected, theme, onToggleTheme, onHelp, onHome, assetsSlot }: Props) {
 	return (
 		<aside className="sidebar">
 			<div className="sidebar-header">
@@ -73,6 +77,7 @@ export function Sidebar({ connected, theme, onToggleTheme, onHelp, onHome }: Pro
 			<nav className="sidebar-primary-nav" aria-label="Room navigation">
 				<button className="list-btn sidebar-home-btn" onClick={onHome}>Home</button>
 			</nav>
+			{assetsSlot}
 
 			<div className="sidebar-footer">
 				<div className="sidebar-connection-status" title={connected ? "Connected" : "Offline"} aria-label={connected ? "Connected" : "Offline"}>

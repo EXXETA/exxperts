@@ -1,5 +1,8 @@
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Sidebar } from "./components/Sidebar";
+import { AssetsPanel } from "./components/assets-panel";
+import { AssetViewerFooter } from "./components/asset-viewer-footer";
+import { assetDisplayTitle, assetTemplateShortName, projectAssetRows, type AssetLedgerRowInput, type AssetRowView } from "./assets-panel";
 import { Dashboard } from "./components/Dashboard";
 import { Memory } from "./components/Memory";
 import { InRoomChatShellView } from "./components/in-room-chat";
@@ -15,7 +18,7 @@ import { MarkdownRenderer } from "./components/Markdown";
 import { RoomsGuide } from "./components/RoomsGuide";
 import { RoomSettingsModal } from "./components/RoomSettingsModal";
 import { AddProviderPanel, ApiKeyForm, ConfigureProfileModal, GatewayApproveModelsModal, GatewayConfigModal, useProviderLogin } from "./components/add-provider-panel";
-import { fetchJson } from "./api";
+import { apiFetch, fetchJson } from "./api";
 import { modelDisplayName as canonicalModelDisplayName } from "./model-names";
 import type { ApprovalPreviewData } from "./approval-preview";
 import type { AbsorbApprovalResponse, AbsorbAssessmentResponse, AbsorbAvailability, AbsorbDiscussionMessage, AbsorbDiscussionSignoffResponse, AbsorbDiscussionTokenBudget, AbsorbDiscussionTurnResponse, AbsorbProposalResponse, AbsorbProposalSourceMetadata, AbsorbReviewAction, AbsorbReviewEntryChange, AbsorbReviewSectionChange, AuthStatusResponse, ChatItem, CheckpointApprovalResponse, CheckpointProposalResponse, ContextHealthStatus, LoginProviderCatalogEntry, PersistentAgentAiProfileSelectionStatus, PersistentAgentAiProfileStatus, PersistentAgentArchiveResponse, PersistentAgentCreateRequest, PersistentAgentCreateResponse, PersistentAgentId, PersistentAgentMementoBoundaryResponse, PersistentAgentStatus, PersistentAgentThreadOrigin, PersistentAgentThreadRecord, StructuralReviewApprovalResponse, StructuralReviewAssessmentResponse, StructuralReviewAvailability, StructuralReviewDiscussionMessage, StructuralReviewDiscussionSignoffResponse, StructuralReviewDiscussionTokenBudget, StructuralReviewDiscussionTurnResponse, StructuralReviewMemoryMapRow, StructuralReviewProposalResponse, StructuralReviewSourceMetadata, WebChatModelOption, WebChatModelStatus } from "./types";
@@ -23,7 +26,8 @@ import { archivePersistentRoom, fetchPersistentRoomMaintenanceSettings } from ".
 import { createAssistantStreamState, DEFAULT_REVEAL_PACING, isAssistantStreamActive, reduceAssistantStream, type AssistantStreamAction, type AssistantStreamEffect, type AssistantStreamState, type RevealPacing } from "./assistant-stream";
 import { consultStack, createConsultState, reduceConsult, type ConsultAction, type ConsultExchange, type ConsultState } from "./consult-stream";
 import { createTaskState, reduceTask, type TaskAction, type TaskState } from "./task-stream";
-import { ConsultDock, TaskDock } from "./components/delegation-card";
+import { ConsultDock } from "./components/delegation-card";
+import { TaskRunView } from "./components/task-run-view";
 import { ArtifactViewer } from "./components/ArtifactViewer";
 // The handoff grammar + queue helpers are the ONE shared source of truth, imported
 // straight from the server workspace's pure module (no node/server deps; vite
@@ -1028,6 +1032,99 @@ function MaintainConfirmDialog({ confirm, onClose }: { confirm: MaintainConfirm;
 		</div>
 	);
 }
+
+// Export collision (assets contract §5): the three-button flow. Replace is the
+// destructive choice; Keep both auto-suffixes server-side; no filename typing.
+type ExportCollision = { fileName: string; onReplace: () => void; onKeepBoth: () => void };
+
+function ExportCollisionDialog({ collision, onClose }: { collision: ExportCollision; onClose: () => void }) {
+	useEscapeKey(onClose, true);
+	return (
+		<div className="checkpoint-preview-backdrop maintain-confirm-backdrop" role="dialog" aria-modal="true" aria-label="File already exists">
+			<section className="checkpoint-input-card maintain-confirm-card">
+				<h2>File already exists</h2>
+				<p>A file called “{collision.fileName}” is already in this room's workspace.</p>
+				<div className="checkpoint-preview-actions">
+					<button className="landing-action secondary" autoFocus onClick={onClose}>Cancel</button>
+					<button className="landing-action secondary" onClick={() => { onClose(); collision.onKeepBoth(); }}>Keep both</button>
+					<button className="rs-btn rs-btn-danger" onClick={() => { onClose(); collision.onReplace(); }}>Replace</button>
+				</div>
+			</section>
+		</div>
+	);
+}
+
+// Per-task delete confirm (assets contract §4): destructive-styled, names the
+// task, cancel is the safe default.
+function AssetDeleteDialog({ title, onDelete, onCancel }: { title: string; onDelete: () => void; onCancel: () => void }) {
+	useEscapeKey(onCancel, true);
+	return (
+		<div className="checkpoint-preview-backdrop maintain-confirm-backdrop" role="dialog" aria-modal="true" aria-label="Delete task files">
+			<section className="checkpoint-input-card maintain-confirm-card">
+				<h2>Delete “{title}”?</h2>
+				<p>This removes its files for good. Anything you saved to the workspace stays.</p>
+				<div className="checkpoint-preview-actions">
+					<button className="landing-action secondary" autoFocus onClick={onCancel}>Cancel</button>
+					<button className="rs-btn rs-btn-danger" onClick={onDelete}>Delete</button>
+				</div>
+			</section>
+		</div>
+	);
+}
+
+interface TaskStoreGcView {
+	totalBytes: number;
+	thresholdBytes: number;
+	proposal: { candidates: { taskId: string; title?: string; startedAt?: string; bytes: number }[]; reclaimBytes: number } | null;
+}
+
+function fmtMb(bytes: number): string {
+	return `${(bytes / 1_000_000).toFixed(bytes >= 100_000_000 ? 0 : 1)} MB`;
+}
+
+// Store-wide GC surfaces (assets contract §4): a quiet banner on Home once the
+// safety valve's threshold is crossed, and the approval dialog that names
+// exactly what would go. Nothing is deleted without the explicit confirm.
+function TaskStoreGcBanner({ assessment, onReview, onDismiss }: { assessment: TaskStoreGcView; onReview: () => void; onDismiss: () => void }) {
+	if (!assessment.proposal) return null;
+	return (
+		<div className="task-store-gc-banner" role="status">
+			<span>Old specialist files are taking up {fmtMb(assessment.totalBytes)} — {fmtMb(assessment.proposal.reclaimBytes)} can be freed safely.</span>
+			<button className="landing-action secondary" onClick={onReview}>Review</button>
+			<button className="icon-btn" aria-label="Dismiss" onClick={onDismiss}>✕</button>
+		</div>
+	);
+}
+
+function TaskStoreGcDialog({ assessment, busy, onConfirm, onClose }: { assessment: TaskStoreGcView; busy: boolean; onConfirm: () => void; onClose: () => void }) {
+	useEscapeKey(onClose, true);
+	const proposal = assessment.proposal;
+	if (!proposal) return null;
+	return (
+		<div className="checkpoint-preview-backdrop maintain-confirm-backdrop" role="dialog" aria-modal="true" aria-label="Review task-store cleanup">
+			<section className="checkpoint-input-card maintain-confirm-card task-store-gc-card">
+				<h2>Free up task storage</h2>
+				<p>These {proposal.candidates.length} are from old work no conversation refers to anymore. Deleting them frees {fmtMb(proposal.reclaimBytes)} — files in your workspace stay.</p>
+				<div className="task-store-gc-list">
+					{proposal.candidates.map((candidate) => (
+						<div key={candidate.taskId} className="task-store-gc-row">
+							<span className="task-store-gc-title">{candidate.title || candidate.taskId}</span>
+							<span className="task-store-gc-meta">{candidate.startedAt ? new Date(candidate.startedAt).toLocaleDateString() : "—"} · {fmtMb(candidate.bytes)}</span>
+						</div>
+					))}
+				</div>
+				<div className="checkpoint-preview-actions">
+					<button className="landing-action secondary" autoFocus disabled={busy} onClick={onClose}>Cancel</button>
+					<button className="rs-btn rs-btn-danger" disabled={busy} onClick={onConfirm}>{busy ? "Deleting…" : `Delete ${proposal.candidates.length} task folders`}</button>
+				</div>
+			</section>
+		</div>
+	);
+}
+
+// The leave-guard dialog and the native beforeunload prompt lived here until
+// option 4 (2026-07-19): both warned about the leave-abort, and the abort is
+// gone — a delegation belongs to the room, not to the tab that asked for it.
 
 function MaintainChooserShell({ target, memoryStatus, onAbsorb, onPrune, onReturn, returnLabel }: { target: MaintainTarget; memoryStatus: PersistentAgentStatus["memoryStatus"] | null; onAbsorb: () => void; onPrune: () => void; onReturn: () => void; returnLabel: string }) {
 	useEscapeKey(onReturn, true);
@@ -2254,13 +2351,63 @@ export function App() {
 	// by construction; the pane header always names the occupant.
 	type RightPaneOccupant =
 		| { kind: "preview"; data: ApprovalPreviewData }
-		| { kind: "artifactViewer"; taskId: string; templateLabel: string; artifact: { relativePath: string; extension: string } };
+		| { kind: "artifactViewer"; taskId: string; templateLabel: string; artifact: { relativePath: string; extension: string }; asset?: AssetRowView }
+		// The run view (status grammar, 2026-07-18): the live task's stream in the
+		// same pane slot; renders from taskState and swaps to the artifact viewer
+		// in place when the run ends.
+		| { kind: "taskRun"; taskId: string };
 	const [rightPane, setRightPane] = useState<RightPaneOccupant | null>(null);
+	// Synchronous mirror for the WS handlers (toast suppression / run-view swap
+	// read the pane at event time, not at closure-capture time).
+	const rightPaneRef = useRef<RightPaneOccupant | null>(null);
+	rightPaneRef.current = rightPane;
 	const [artifactMaximized, setArtifactMaximized] = useState(false);
 	const [exportNotice, setExportNotice] = useState<{ kind: "success" | "error"; text: string } | null>(null);
+	// The done-moment toast (status grammar, 2026-07-18): fires once when a task
+	// ends and nothing else is already showing the result; top-right, ~6 s,
+	// click opens the viewer. The rail's green dot is the durable signal.
+	const [taskDoneToast, setTaskDoneToast] = useState<{ taskId: string; title: string; kind: "done" | "error"; templateLabel: string; artifact: { relativePath: string; extension: string } | null } | null>(null);
+	const [exportCollision, setExportCollision] = useState<ExportCollision | null>(null);
+	// Assets panel (contract §2 rung 3): the thread's ledger rows, refetched on
+	// every event that can change them — server truth, no client cache.
+	const [assetLedgerRows, setAssetLedgerRows] = useState<AssetLedgerRowInput[]>([]);
+	const [assetDeleteConfirm, setAssetDeleteConfirm] = useState<AssetRowView | null>(null);
+	// Store-wide GC (contract §4): assessed once per app load; the safety valve
+	// stays silent below its threshold.
+	const [gcAssessment, setGcAssessment] = useState<TaskStoreGcView | null>(null);
+	const [gcReviewOpen, setGcReviewOpen] = useState(false);
+	const [gcBusy, setGcBusy] = useState(false);
+	useEffect(() => {
+		void (async () => {
+			try {
+				const res = await apiFetch("/api/task-store/gc");
+				if (!res.ok) return;
+				const data = await res.json().catch(() => null);
+				if (data?.proposal) setGcAssessment(data);
+			} catch {
+				// The valve is best-effort; the next app load re-assesses.
+			}
+		})();
+	}, []);
 	// Low-churn shim: the existing preview call sites keep working unchanged.
 	const preview = rightPane?.kind === "preview" ? rightPane.data : null;
 	const setPreview = (data: ApprovalPreviewData | null) => setRightPane(data ? { kind: "preview", data } : null);
+
+	// Escape closes the artifact/run pane, the keyboard twin of clicking its X
+	// or the selected rail row. A maximized pane restores first (one Escape per
+	// step), and any open dialog above the pane (delete confirm, export
+	// collision) owns Escape until dismissed — one Escape, one layer.
+	useEffect(() => {
+		const paneOpen = rightPane?.kind === "artifactViewer" || rightPane?.kind === "taskRun";
+		if (!paneOpen || assetDeleteConfirm || exportCollision) return;
+		function onKeyDown(event: KeyboardEvent) {
+			if (event.key !== "Escape") return;
+			if (artifactMaximized) setArtifactMaximized(false);
+			else setRightPane(null);
+		}
+		document.addEventListener("keydown", onKeyDown);
+		return () => document.removeEventListener("keydown", onKeyDown);
+	}, [rightPane, artifactMaximized, assetDeleteConfirm, exportCollision]);
 	const [conversationId, setConversationId] = useState<string>(() => newConversationId());
 	const [authStatus, setAuthStatus] = useState<AuthStatusResponse | null>(null);
 	const [modelStatus, setModelStatus] = useState<WebChatModelStatus | null>(null);
@@ -2365,6 +2512,54 @@ export function App() {
 	const streamErrorLineIdRef = useRef<string | null>(null);
 	const retryNoticeIdRef = useRef<string | null>(null);
 	const persistentChatRef = useRef<PersistentChatConfig>(persistentChat);
+	// The projected asset rows, mirrored for callbacks created before the memo
+	// (openArtifactViewer attaches the row to whatever entry path opened it).
+	const assetRowsRef = useRef<AssetRowView[]>([]);
+	// Assets panel data: fetch the room-wide REST list (room-scoped history,
+	// 2026-07-18 grill: rows survive Memento and checkpoint — both only mint a
+	// new conversation). The stale-guard is per-room; a thread switch within the
+	// same room keeps the rows it already has.
+	const refreshAssetRows = useCallback(async () => {
+		const chat = persistentChatRef.current;
+		if (!chat) {
+			setAssetLedgerRows([]);
+			return;
+		}
+		try {
+			const res = await apiFetch(`/api/persistent-agents/${encodeURIComponent(chat.agentId)}/tasks`);
+			if (!res.ok) return;
+			const data = await res.json().catch(() => null);
+			const current = persistentChatRef.current;
+			if (!current || current.agentId !== chat.agentId) return;
+			setAssetLedgerRows(Array.isArray(data?.tasks) ? data.tasks : []);
+		} catch {
+			// Panel data is best-effort; the next trigger refetches.
+		}
+	}, []);
+	// First-open stamp: the green unread dot decays exactly once. Optimistic —
+	// the local row flips immediately; the POST makes it durable. Idempotent on
+	// both sides, so every open/act path may call it unconditionally.
+	const markAssetRowViewed = useCallback((taskId: string) => {
+		const chat = persistentChatRef.current;
+		if (!chat || !taskId) return;
+		setAssetLedgerRows((rows) => rows.map((row: AssetLedgerRowInput) => (row.taskId === taskId && !row.viewedAt ? { ...row, viewedAt: new Date().toISOString() } : row)));
+		void apiFetch(`/api/persistent-agents/${encodeURIComponent(chat.agentId)}/tasks/${encodeURIComponent(taskId)}/viewed`, { method: "POST" }).catch(() => {
+			// Best-effort: an unreached stamp just means the dot returns next load.
+		});
+	}, []);
+	// Rows clear only when the ROOM changes — a Memento/checkpoint swaps the
+	// conversation but the room history stays put (no blank-and-refill flash).
+	const assetsPanelAgentRef = useRef<string | null>(null);
+	useEffect(() => {
+		if ((persistentChat?.agentId ?? null) !== assetsPanelAgentRef.current) {
+			assetsPanelAgentRef.current = persistentChat?.agentId ?? null;
+			setAssetLedgerRows([]);
+		}
+		// This effect is declared before the ref-sync effect below — sync the ref
+		// here too (idempotent) so the fetch sees the room we just switched to.
+		persistentChatRef.current = persistentChat;
+		if (persistentChat) void refreshAssetRows();
+	}, [persistentChat, refreshAssetRows]);
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
 	const workbenchRef = useRef<HTMLDivElement>(null);
 
@@ -2387,27 +2582,27 @@ export function App() {
 
 	async function refreshAuthStatus() {
 		try {
-			const status = await fetch("/api/auth/status").then((r) => r.json()) as AuthStatusResponse;
+			const status = await apiFetch("/api/auth/status").then((r) => r.json()) as AuthStatusResponse;
 			setAuthStatus(status);
 		} catch {}
 	}
 
 	async function refreshModelStatus() {
 		try {
-			const status = await fetch("/api/persistent-agent-room/model-status").then((r) => r.json()) as WebChatModelStatus;
+			const status = await apiFetch("/api/persistent-agent-room/model-status").then((r) => r.json()) as WebChatModelStatus;
 			setModelStatus(status);
 		} catch {}
 	}
 
 	async function refreshAiProfileStatus() {
 		try {
-			const status = await fetch("/api/persistent-agent-ai-profile").then((r) => r.json()) as PersistentAgentAiProfileSelectionStatus;
+			const status = await apiFetch("/api/persistent-agent-ai-profile").then((r) => r.json()) as PersistentAgentAiProfileSelectionStatus;
 			setAiProfileStatus(status);
 		} catch {}
 	}
 
 	async function selectAiProfile(profileId: string) {
-		const res = await fetch("/api/persistent-agent-ai-profile", {
+		const res = await apiFetch("/api/persistent-agent-ai-profile", {
 			method: "PUT",
 			headers: { "content-type": "application/json" },
 			body: JSON.stringify({ profileId }),
@@ -2434,7 +2629,7 @@ export function App() {
 	}
 
 	async function fetchPersistentAgentThread(agentId: PersistentAgentId, threadId: string): Promise<PersistentAgentThreadRecord> {
-		const res = await fetch(`/api/persistent-agents/${encodeURIComponent(agentId)}/threads/${encodeURIComponent(threadId)}`);
+		const res = await apiFetch(`/api/persistent-agents/${encodeURIComponent(agentId)}/threads/${encodeURIComponent(threadId)}`);
 		if (!res.ok) throw await persistentAgentResponseError(res, `Failed to load persistent-agent thread (${res.status})`);
 		const body = await res.json() as { thread: PersistentAgentThreadRecord };
 		return body.thread;
@@ -2445,7 +2640,7 @@ export function App() {
 		// the callers that own the current room's queue pass it (send/transfer via
 		// the debounced persist, the boundary carries/clears). Reconciliation saves
 		// for other threads omit it, so they never clobber a stored queue.
-		const res = await fetch(`/api/persistent-agents/${encodeURIComponent(thread.agentId)}/threads/${encodeURIComponent(thread.conversationId)}`, {
+		const res = await apiFetch(`/api/persistent-agents/${encodeURIComponent(thread.agentId)}/threads/${encodeURIComponent(thread.conversationId)}`, {
 			method: "PUT",
 			headers: { "content-type": "application/json" },
 			body: JSON.stringify({ state, origin, model: thread.model, items: nextItems, ...(pendingHandoffs !== undefined ? { pendingHandoffs } : {}) }),
@@ -2457,7 +2652,7 @@ export function App() {
 	}
 
 	async function setPersistentRuntimeIdle(agentId: PersistentAgentId): Promise<void> {
-		const res = await fetch(`/api/persistent-agents/${encodeURIComponent(agentId)}/runtime`, {
+		const res = await apiFetch(`/api/persistent-agents/${encodeURIComponent(agentId)}/runtime`, {
 			method: "PATCH",
 			headers: { "content-type": "application/json" },
 			body: JSON.stringify({ state: "idle" }),
@@ -2472,7 +2667,7 @@ export function App() {
 			window.clearTimeout(persistTimerRef.current);
 			persistTimerRef.current = null;
 		}
-		const res = await fetch(`/api/persistent-agents/${encodeURIComponent(agentId)}/threads/${encodeURIComponent(threadId)}`, { method: "DELETE" });
+		const res = await apiFetch(`/api/persistent-agents/${encodeURIComponent(agentId)}/threads/${encodeURIComponent(threadId)}`, { method: "DELETE" });
 		if (!res.ok) throw new Error(`Failed to discard persistent-agent thread (${res.status})`);
 		const body = await res.json() as { runtime: PersistentAgentStatus["runtime"] };
 		applyPersistentRuntime(agentId, body.runtime);
@@ -2483,7 +2678,7 @@ export function App() {
 			window.clearTimeout(persistTimerRef.current);
 			persistTimerRef.current = null;
 		}
-		const res = await fetch(`/api/persistent-agents/${encodeURIComponent(agentId)}/runtime/discard-empty-prepared-boundary`, {
+		const res = await apiFetch(`/api/persistent-agents/${encodeURIComponent(agentId)}/runtime/discard-empty-prepared-boundary`, {
 			method: "POST",
 			headers: { "content-type": "application/json" },
 			body: JSON.stringify({ threadId }),
@@ -2498,7 +2693,7 @@ export function App() {
 			window.clearTimeout(persistTimerRef.current);
 			persistTimerRef.current = null;
 		}
-		const res = await fetch(`/api/persistent-agents/${encodeURIComponent(agentId)}/memento`, {
+		const res = await apiFetch(`/api/persistent-agents/${encodeURIComponent(agentId)}/memento`, {
 			method: "POST",
 			headers: { "content-type": "application/json" },
 			body: JSON.stringify({ conversationId }),
@@ -2853,7 +3048,7 @@ export function App() {
 			const chat = persistentChatRef.current;
 			if (!chat) return;
 			try {
-				void fetch(`/api/persistent-agents/${encodeURIComponent(chat.agentId)}/threads/${encodeURIComponent(chat.conversationId)}`, {
+				void apiFetch(`/api/persistent-agents/${encodeURIComponent(chat.agentId)}/threads/${encodeURIComponent(chat.conversationId)}`, {
 					method: "PUT",
 					headers: { "content-type": "application/json" },
 					keepalive: true,
@@ -2986,7 +3181,16 @@ export function App() {
 				// ok:true needs no card action — the fresh task's task_started (next
 				// frame) supersedes the done card; ok:false surfaces the reason.
 				setTaskIteratePending(false);
-				if (!msg.ok) setTaskIterateNotice(String(msg.reason ?? "The iteration could not start."));
+				if (!msg.ok) {
+					const reason = String(msg.reason ?? "The iteration could not start.");
+					setTaskIterateNotice(reason);
+					// The viewer footer renders the refusal inline; whenever that
+					// footer isn't on screen, the toast keeps the failure from
+					// being silent.
+					const pane = rightPaneRef.current;
+					const inlineVisible = pane?.kind === "artifactViewer" && !!pane.asset;
+					if (!inlineVisible) setExportNotice({ kind: "error", text: reason });
+				}
 				return;
 			}
 			if (msg.type === "task_started") {
@@ -3008,9 +3212,10 @@ export function App() {
 				return;
 			}
 			if (msg.type === "task_end") {
-				dispatchTask({
+				const endTaskId = String(msg.taskId ?? "");
+				const next = dispatchTask({
 					type: "end",
-					taskId: String(msg.taskId ?? ""),
+					taskId: endTaskId,
 					template: String(msg.template ?? ""),
 					text: String(msg.text ?? ""),
 					artifacts: Array.isArray(msg.artifacts) ? msg.artifacts : [],
@@ -3018,15 +3223,72 @@ export function App() {
 					generatedAt: String(msg.generatedAt ?? ""),
 					...(msg.usage ? { usage: msg.usage } : {}),
 				});
+				void refreshAssetRows();
+				// Done-moment (status grammar, 2026-07-18): if the user is watching
+				// the run view, swap it for the artifact viewer in place — no toast
+				// needed. Otherwise the toast fires once; the green dot persists.
+				if (next.taskId === endTaskId && next.phase === "done") {
+					const first = next.artifacts[0] ?? null;
+					const pane = rightPaneRef.current;
+					if (pane?.kind === "taskRun" && pane.taskId === endTaskId) {
+						if (first) {
+							openArtifactViewer(endTaskId, next.templateLabel ?? "visual", { relativePath: first.relativePath, extension: first.extension });
+						} else {
+							setRightPane(null);
+						}
+					} else {
+						setTaskDoneToast({
+							taskId: endTaskId,
+							title: assetDisplayTitle(next.title || "Specialist task", next.artifacts),
+							kind: "done",
+							templateLabel: next.templateLabel ?? "visual",
+							artifact: first ? { relativePath: first.relativePath, extension: first.extension } : null,
+						});
+					}
+				}
 				return;
 			}
 			if (msg.type === "task_error") {
-				dispatchTask({
+				const errorTaskId = String(msg.taskId ?? "");
+				const next = dispatchTask({
 					type: "error",
-					taskId: String(msg.taskId ?? ""),
+					taskId: errorTaskId,
 					message: String(msg.message ?? "The task did not finish."),
 					...(Array.isArray(msg.artifacts) ? { artifacts: msg.artifacts } : {}),
 				});
+				void refreshAssetRows();
+				// A user-requested stop needs no announcement (they did it); a real
+				// failure gets the toast unless the run view is already showing it.
+				const pane = rightPaneRef.current;
+				const watching = pane?.kind === "taskRun" && pane.taskId === errorTaskId;
+				if (next.taskId === errorTaskId && next.phase === "error" && !next.stopRequested && !watching) {
+					setTaskDoneToast({
+						taskId: errorTaskId,
+						title: assetDisplayTitle(next.title || "Specialist task", next.artifacts),
+						kind: "error",
+						templateLabel: next.templateLabel ?? "visual",
+						artifact: next.artifacts[0] ? { relativePath: next.artifacts[0].relativePath, extension: next.artifacts[0].extension } : null,
+					});
+				}
+				return;
+			}
+			if (msg.type === "task_away_notice") {
+				// Rung-2 honesty: tasks that ended with nobody listening. Arrives
+				// right after ready, so it lands after resume's setItems.
+				const notices: Array<{ title?: string; outcome?: string }> = Array.isArray(msg.notices) ? msg.notices : [];
+				const lines = notices.map((notice) => {
+					const title = String(notice.title ?? "").trim() || "A specialist task";
+					switch (String(notice.outcome ?? "")) {
+						case "ok": return `While you were away: “${title}” finished — it's waiting in Artifacts.`;
+						case "aborted": return `While you were away: “${title}” was stopped. What it made so far is in Artifacts.`;
+						case "orphaned": return `While you were away: “${title}” was interrupted when the app closed. What it made so far is in Artifacts.`;
+						default: return `While you were away: “${title}” didn't finish.`;
+					}
+				});
+				const moreCount = Number(msg.moreCount ?? 0);
+				if (moreCount > 0) lines.push(`…and ${moreCount} earlier task${moreCount === 1 ? "" : "s"}.`);
+				if (lines.length > 0) setItems((s) => [...s, ...lines.map((text) => ({ kind: "system" as const, id: nid(), text }))]);
+				void refreshAssetRows();
 				return;
 			}
 			if (msg.type !== "event") return;
@@ -3041,7 +3303,9 @@ export function App() {
 			// Socket close kills the consult server-side (no re-attach; a lost
 			// answer is re-derivable) — drop the card/pill with the connection.
 			dispatchConsult({ type: "reset" });
-			// Same for a running task; its artifacts persist on disk either way.
+			// A running task SURVIVES server-side (option 4): reset only forgets
+			// this client's view — the reconnect replay rebuilds it from the
+			// room's registry (task_started + accumulated tail).
 			dispatchTask({ type: "reset" });
 			try { ws.close(); } catch {}
 		};
@@ -3454,63 +3718,140 @@ export function App() {
 		dispatchConsult({ type: "dismiss" });
 	}
 
-	// Visuals V6: transfer mirrors transferConsultToThread — one permanent thread
-	// item + one defanged block into the SAME pending-transfer queue (persistence,
-	// memento-clear, and prompt-prepend all ride the consult MR-5 machinery). The
-	// artifact bytes never move; the block carries paths + the distilled summary.
-	function transferTaskToThread() {
-		const task = taskStateRef.current;
-		if (task.phase !== "done" || !task.taskId) return;
+	// Visuals V6's card-transfer path retired with the done-card (status grammar,
+	// 2026-07-18): transferAssetRowToThread below is the one transfer door — the
+	// same block builder and pending queue, reached through the viewer footer.
+
+	// Assets panel (rung 3): open a ledger row in the right-pane viewer — the
+	// reconstituted done-card. The live running row opens the run view instead;
+	// other rows without artifacts are not clickable.
+	function openAssetRow(row: AssetRowView) {
+		// Clicking the already-selected row closes the pane (same as the header
+		// X); a running task keeps running server-side either way.
+		if (rightPane && (rightPane.kind === "artifactViewer" || rightPane.kind === "taskRun") && rightPane.taskId === row.taskId) {
+			setArtifactMaximized(false);
+			setRightPane(null);
+			return;
+		}
+		if (row.running) {
+			setArtifactMaximized(false);
+			setRightPane({ kind: "taskRun", taskId: row.taskId });
+			return;
+		}
+		if (row.artifacts.length === 0) return;
+		setArtifactMaximized(false);
+		markAssetRowViewed(row.taskId);
+		// A refusal notice belongs to the task it answered — never carry it
+		// into another row's footer.
+		setTaskIterateNotice(null);
+		setRightPane({
+			kind: "artifactViewer",
+			taskId: row.taskId,
+			templateLabel: assetTemplateShortName(row.templateId),
+			artifact: { relativePath: row.artifacts[0].relativePath, extension: row.artifacts[0].extension },
+			asset: row,
+		});
+	}
+
+	// Add-to-conversation / Re-attach from the panel: the ordinary transfer
+	// performed late — same block builder, same pending queue, same gate. The
+	// item simply carries no thumbnail (write-time thumbnails die with the
+	// card; the ledger stores none by design).
+	function transferAssetRowToThread(row: AssetRowView) {
+		if (itemsRef.current.some((it) => it.kind === "task" && it.taskId === row.taskId)) return;
+		markAssetRowViewed(row.taskId);
+		const generatedAt = row.generatedAt || new Date().toISOString();
 		const block = buildSpecialistHandoffBlock({
-			templateId: task.template ?? "",
-			// The real registry version rides task_started → TaskState; 1 is only
-			// the fallback for a state that predates the threading.
-			templateVersion: task.templateVersion ?? 1,
-			taskTitle: task.title ?? "",
-			ranAtIso: task.generatedAt ?? new Date().toISOString(),
-			artifactPaths: task.artifacts.map((artifact) => artifact.relativePath),
-			summary: task.summary,
+			templateId: row.templateId,
+			templateVersion: row.templateVersion,
+			taskTitle: row.title,
+			ranAtIso: generatedAt,
+			artifactPaths: row.artifacts.map((artifact) => artifact.relativePath),
+			summary: row.summary,
 		});
 		const item: ChatItem = {
 			kind: "task",
 			id: nid(),
-			taskId: task.taskId,
-			template: task.template ?? "",
-			templateVersion: task.templateVersion ?? 1,
-			templateLabel: task.templateLabel ?? "visual",
-			title: task.title ?? "",
-			summary: task.summary,
-			artifacts: task.artifacts.map((artifact) => ({ relativePath: artifact.relativePath, bytes: artifact.bytes, extension: artifact.extension })),
-			...(task.thumbnails[0]?.dataUri ? { thumbnailDataUri: task.thumbnails[0].dataUri } : {}),
-			generatedAt: task.generatedAt ?? new Date().toISOString(),
+			taskId: row.taskId,
+			template: row.templateId,
+			templateVersion: row.templateVersion,
+			templateLabel: assetTemplateShortName(row.templateId),
+			title: row.title,
+			summary: row.summary,
+			artifacts: row.artifacts.map((artifact) => ({ relativePath: artifact.relativePath, bytes: artifact.bytes, extension: artifact.extension })),
+			generatedAt,
 			transferred: true,
 		};
-		// itemsRef is the synchronous mirror room-exit paths persist from.
 		itemsRef.current = [...itemsRef.current, item];
 		setItems((s) => [...s, item]);
 		applyPendingHandoffs([...pendingHandoffsRef.current, block], pendingConsultItemIdsRef.current);
-		dispatchTask({ type: "dismiss" });
 	}
 
-	// Iterate chip-chat (contract §5 amendment, one-click 2026-07-13): the typed
-	// text is the brief of a FRESH delegation. The frame carries ONLY the source
-	// taskId and the brief — the server derives template and read scope from its
-	// own record of the finished task, which is what makes the click sufficient
-	// as the approval (D7 shape). The new task rides the normal task_* family
-	// (its task_started supersedes this done card).
-	// Returns whether the frame went out, so the card keeps the draft on failure.
-	function submitTaskIterate(brief: string): boolean {
-		const task = taskStateRef.current;
-		if (task.phase !== "done" || !task.taskId || task.artifacts.length === 0) return false;
-		const ws = wsRef.current;
-		if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+	// Per-task delete (contract §4): orphan rows only; the server re-verifies
+	// the row is unreferenced and not running before anything is removed.
+	async function deleteAssetRow(row: AssetRowView) {
+		const chat = persistentChatRef.current;
+		if (!chat) return;
 		try {
-			ws.send(JSON.stringify({ type: "task_iterate", taskId: task.taskId, brief }));
+			const res = await apiFetch(`/api/persistent-agents/${encodeURIComponent(chat.agentId)}/tasks/${encodeURIComponent(row.taskId)}`, { method: "DELETE" });
+			const data = await res.json().catch(() => null);
+			if (!res.ok) {
+				setExportNotice({ kind: "error", text: data?.error || "That didn't work — the files are unchanged." });
+				return;
+			}
+			setExportNotice({ kind: "success", text: "Deleted." });
+			if (rightPane?.kind === "artifactViewer" && rightPane.taskId === row.taskId) {
+				setArtifactMaximized(false);
+				setRightPane(null);
+			}
+			void refreshAssetRows();
 		} catch {
-			return false;
+			setExportNotice({ kind: "error", text: "That didn't work — the files are unchanged." });
 		}
+	}
+
+	// GC approval (contract §4): the POST names exactly the proposed ids; the
+	// server re-verifies each against a fresh reference scan before deleting.
+	async function confirmTaskStoreGc() {
+		const proposal = gcAssessment?.proposal;
+		if (!proposal || gcBusy) return;
+		setGcBusy(true);
+		try {
+			const res = await apiFetch("/api/task-store/gc", {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ taskIds: proposal.candidates.map((candidate) => candidate.taskId) }),
+			});
+			if (res.ok) {
+				let failedCount = 0;
+				try { failedCount = Number(((await res.json()) as { failed?: unknown[] }).failed?.length ?? 0) || 0; } catch {}
+				setGcAssessment(null);
+				setGcReviewOpen(false);
+				void refreshAssetRows();
+				if (failedCount > 0) {
+					setExportNotice({ kind: "error", text: failedCount === 1 ? "Cleanup finished, but one folder couldn't be deleted. It will be proposed again next time." : `Cleanup finished, but ${failedCount} folders couldn't be deleted. They will be proposed again next time.` });
+				}
+			} else {
+				// The server refuses before deleting anything, so this is honest.
+				setExportNotice({ kind: "error", text: "The cleanup didn't run — nothing was deleted. Try again in a moment." });
+			}
+		} catch {
+			// Leave the dialog open; the user can retry or cancel.
+		} finally {
+			setGcBusy(false);
+		}
+	}
+
+	// Panel iterate: the same user-authored one-click frame as the done card —
+	// the server derives template + read scope from its own records (D7; the
+	// ledger fallback covers rows older than the reseed window).
+	function submitAssetIterate(taskId: string, brief: string): boolean {
+		const payload = brief.trim();
+		const ws = wsRef.current;
+		if (!payload || !ws || ws.readyState !== WebSocket.OPEN) return false;
 		setTaskIteratePending(true);
 		setTaskIterateNotice(null);
+		ws.send(JSON.stringify({ type: "task_iterate", taskId, brief: payload }));
 		return true;
 	}
 
@@ -3524,7 +3865,7 @@ export function App() {
 				if (item.kind === "user" || item.kind === "assistant" || item.kind === "system") return { kind: item.kind, id: item.id, text: item.text };
 				return { kind: "tool", id: item.id, name: item.name, status: item.status };
 			});
-		const res = await fetch(`/api/persistent-agents/${encodeURIComponent(targetChat.agentId)}/checkpoint/propose`, {
+		const res = await apiFetch(`/api/persistent-agents/${encodeURIComponent(targetChat.agentId)}/checkpoint/propose`, {
 			method: "POST",
 			headers: { "content-type": "application/json" },
 			body: JSON.stringify({
@@ -3686,7 +4027,7 @@ export function App() {
 	}
 
 	async function requestCheckpointApproval(targetChat: NonNullable<PersistentChatConfig>, proposal: CheckpointProposalResponse, approvedRecentContext: string): Promise<CheckpointApprovalResponse> {
-		const res = await fetch(`/api/persistent-agents/${encodeURIComponent(targetChat.agentId)}/checkpoint/approve`, {
+		const res = await apiFetch(`/api/persistent-agents/${encodeURIComponent(targetChat.agentId)}/checkpoint/approve`, {
 			method: "POST",
 			headers: { "content-type": "application/json" },
 			body: JSON.stringify({
@@ -3742,7 +4083,7 @@ export function App() {
 			return;
 		}
 		if (!(await roomQuickCheckpointAutoApplyEnabled(targetChat.agentId))) {
-			setCheckpointQuickBlockedReasons(["automatic apply is turned off for this room"]);
+			setCheckpointQuickBlockedReasons(["Checkpoints now ask for your review first. You can turn automatic apply on in room settings."]);
 			return;
 		}
 		setCheckpointApprovalLoading(true);
@@ -4311,7 +4652,7 @@ export function App() {
 
 	async function roomQuickCheckpointAutoApplyEnabled(agentId: PersistentAgentId): Promise<boolean> {
 		try {
-			return (await fetchPersistentRoomMaintenanceSettings(agentId)).settings.quickCheckpointAutoApply !== false;
+			return (await fetchPersistentRoomMaintenanceSettings(agentId)).settings.quickCheckpointAutoApply === true;
 		} catch {
 			// When the preference cannot be read, fall back to manual review —
 			// the safe direction is showing the proposal, not silently applying it.
@@ -4592,48 +4933,148 @@ export function App() {
 
 	// V5: open a task artifact beside the chat (the pane's second occupant).
 	// Every fresh open starts un-maximized; opening over a preview (or vice
-	// versa) swaps the occupant — one slot, last click wins.
+	// versa) swaps the occupant — one slot, last click wins. Whatever the entry
+	// path (done card, thread item, Assets row), the viewer gets the SAME
+	// reconstituted done-card chrome (Borja, live test 2026-07-18): the asset
+	// row rides along when the ledger has it, with a card-state fallback for
+	// the beat between task_end and the panel refetch landing.
 	const openArtifactViewer = useCallback((taskId: string, templateLabel: string, artifact: { relativePath: string; extension: string }) => {
 		setArtifactMaximized(false);
-		setRightPane({ kind: "artifactViewer", taskId, templateLabel, artifact });
+		markAssetRowViewed(taskId);
+		let asset = assetRowsRef.current.find((candidate) => candidate.taskId === taskId && candidate.artifacts.length > 0);
+		if (!asset) {
+			const task = taskStateRef.current;
+			if (task.taskId === taskId && task.phase === "done" && task.artifacts.length > 0) {
+				asset = {
+					taskId,
+					title: assetDisplayTitle(task.title || "Specialist task", task.artifacts),
+					iconLabel: "",
+					running: false,
+					unread: false,
+					failed: false,
+					orphan: false,
+					subline: "",
+					inConversation: false,
+					originLine: "",
+					templateId: task.template ?? "",
+					templateVersion: task.templateVersion ?? 1,
+					summary: task.summary,
+					generatedAt: task.generatedAt ?? "",
+					artifacts: task.artifacts.map((a) => ({ relativePath: a.relativePath, bytes: a.bytes, extension: a.extension })),
+				};
+			}
+		}
+		if (!asset) {
+			// Transferred thread items from before the ledger existed still get
+			// the same chrome — the item carries everything the viewer needs.
+			const item = itemsRef.current.find((it): it is Extract<ChatItem, { kind: "task" }> => it.kind === "task" && it.taskId === taskId);
+			if (item && item.artifacts.length > 0) {
+				asset = {
+					taskId,
+					title: assetDisplayTitle(item.title || "Specialist task", item.artifacts),
+					iconLabel: "",
+					running: false,
+					unread: false,
+					failed: false,
+					orphan: false,
+					subline: "",
+					inConversation: true,
+					originLine: "",
+					templateId: item.template,
+					templateVersion: item.templateVersion ?? 1,
+					summary: item.summary,
+					generatedAt: item.generatedAt,
+					artifacts: item.artifacts.map((a) => ({ relativePath: a.relativePath, bytes: a.bytes, extension: a.extension })),
+				};
+			}
+		}
+		setTaskIterateNotice(null);
+		setRightPane({ kind: "artifactViewer", taskId, templateLabel, artifact, ...(asset ? { asset } : {}) });
 	}, []);
 
 	// V5 export (D7): the click IS the approval — no ui_request bridge. Server
-	// messages are already user-facing, so failures surface verbatim.
-	const saveArtifactToWorkspace = useCallback(async (occupant: { taskId: string; artifact: { relativePath: string; extension: string } }) => {
+	// messages are already user-facing, so failures surface verbatim. A name
+	// collision opens the three-button dialog; Replace/Keep both re-enter here
+	// with the matching explicit flag (assets contract §5).
+	const saveArtifactToWorkspace = useCallback(async (occupant: { taskId: string; artifact: { relativePath: string; extension: string } }, resolution?: "overwrite" | "rename") => {
 		const roomId = persistentChat?.agentId;
 		if (!roomId) {
 			setExportNotice({ kind: "error", text: "Open a room with a workspace to save this artifact." });
 			return;
 		}
 		try {
-			const res = await fetch(`/api/artifacts/${encodeURIComponent(occupant.taskId)}/export`, {
+			const res = await apiFetch(`/api/artifacts/${encodeURIComponent(occupant.taskId)}/export`, {
 				method: "POST",
 				headers: { "content-type": "application/json" },
 				// conversationId → the server resolves the THREAD-effective workspace
 				// policy (thread override → room default), not just the room default.
-				body: JSON.stringify({ relativePath: occupant.artifact.relativePath, roomId, conversationId: persistentChat?.conversationId ?? "" }),
+				body: JSON.stringify({
+					relativePath: occupant.artifact.relativePath,
+					roomId,
+					conversationId: persistentChat?.conversationId ?? "",
+					...(resolution === "overwrite" ? { overwrite: true } : {}),
+					...(resolution === "rename" ? { rename: true } : {}),
+				}),
 			});
 			const data = await res.json().catch(() => null);
 			if (!res.ok) {
+				if (res.status === 409 && data?.code === "exists") {
+					const fileName = occupant.artifact.relativePath.split("/").pop() ?? "this file";
+					setExportCollision({
+						fileName,
+						onReplace: () => void saveArtifactToWorkspace(occupant, "overwrite"),
+						onKeepBoth: () => void saveArtifactToWorkspace(occupant, "rename"),
+					});
+					return;
+				}
 				setExportNotice({ kind: "error", text: data?.error || "Could not save to the room workspace." });
 				return;
 			}
+			const savedTo = String(data?.savedTo ?? "");
+			const exportedName = savedTo ? (savedTo.split(/[\\/]/).pop() ?? "") : "";
 			const isHtml = occupant.artifact.extension.toLowerCase() === ".html";
 			setExportNotice({
 				kind: "success",
-				text: "Saved to the room workspace." + (isHtml ? " Heads up: an exported HTML file opens unsandboxed from disk." : ""),
+				// Filename, not the full path (Borja, live test 2026-07-18) — but the
+				// NAME must be the server's savedTo: with Keep both it was suffixed,
+				// and that is the one thing the user has to learn from this toast.
+				text: (exportedName ? `Saved “${exportedName}” to the room workspace.` : "Saved to the room workspace.") + (isHtml ? " Note: once saved, HTML files open outside the app's protections." : ""),
 			});
+			// G2-A awareness notice: rides the pending-handoff queue ahead of the
+			// next prompt, so the room learns the export happened. Zero new access
+			// — the workspace is already room-readable.
+			if (savedTo) {
+				applyPendingHandoffs([...pendingHandoffsRef.current, `[WORKSPACE EXPORT] Exported ${exportedName || savedTo} to the room workspace: ${savedTo}`], pendingConsultItemIdsRef.current);
+			}
+			// The row's subline may flip to "in workspace" — refetch the ledger view.
+			void refreshAssetRows();
 		} catch {
 			setExportNotice({ kind: "error", text: "Could not save to the room workspace." });
 		}
 	}, [persistentChat]);
 
 	useEffect(() => {
+		if (!taskDoneToast) return;
+		const timer = window.setTimeout(() => setTaskDoneToast(null), 6000);
+		return () => window.clearTimeout(timer);
+	}, [taskDoneToast]);
+	useEffect(() => {
 		if (!exportNotice) return;
 		const timer = window.setTimeout(() => setExportNotice(null), 6000);
 		return () => window.clearTimeout(timer);
 	}, [exportNotice]);
+
+	// Assets panel projection: ledger rows + the live task + the thread's
+	// transferred ids → the rail's row view-models (pure, smoke-tested).
+	const threadTaskIds = useMemo(() => new Set(items.filter((it): it is Extract<ChatItem, { kind: "task" }> => it.kind === "task").map((it) => it.taskId)), [items]);
+	const assetRows = useMemo(() => projectAssetRows(assetLedgerRows, {
+		liveTask: taskState.phase === "running" && taskState.taskId ? { taskId: taskState.taskId, title: taskState.title ?? "", templateId: taskState.template ?? "" } : null,
+		threadTaskIds,
+		liveConversationId: persistentChat?.conversationId,
+		now: new Date(),
+	}), [assetLedgerRows, taskState, threadTaskIds, persistentChat?.conversationId]);
+	assetRowsRef.current = assetRows;
+	const selectedAssetTaskId = rightPane?.kind === "artifactViewer" || rightPane?.kind === "taskRun" ? rightPane.taskId : null;
 
 	const empty = items.length === 0;
 	const currentThreadHasUserInput = hasUserInput(items);
@@ -4661,6 +5102,15 @@ export function App() {
 			setTurnInterruptedNote(null);
 			turnInterruptedNoteRef.current = null;
 		}
+		// Option 4 (2026-07-19): leaving no longer stops a running specialist —
+		// the worker survives in the room-scoped registry and the rail's pulsing
+		// row greets the user on return. No guard dialog; nothing to warn about.
+		await finishLeaveRoom();
+	}
+
+	// The tail of goHome, split out so the leave-guard dialog's "Leave anyway"
+	// can resume the exact same path.
+	async function finishLeaveRoom() {
 		// We're releasing our own lock on the room we're leaving; clear its
 		// active-lock badge locally so the home card doesn't show a stale
 		// "open in app" until the next refresh. (No immediate refetch — that
@@ -4729,7 +5179,13 @@ export function App() {
 		if (maintainChooserOpen && maintainTarget) {
 			return <MaintainChooserShell target={maintainTarget} memoryStatus={persistentAgentStatuses.find((status) => status.id === maintainTarget.agentId)?.memoryStatus ?? null} onAbsorb={startAbsorbWorkflow} onPrune={startPruneMemoryWorkflow} onReturn={closeMaintainChooser} returnLabel={maintainReturnLabel} />;
 		}
-		return <Landing onOpenAiSetup={() => setView("ai-setup")} onOpenDashboard={() => setView("dashboard")} onOpenConnectors={() => setView("connectors")} onOpenMemory={() => setView("memory")} onOpenSkills={() => setView("skills")} onOpenPersistentAgent={openPersistentAgent} onResumePersistentAgent={openPersistentAgentResume} onMaintainPersistentAgent={(target) => { if (!openMaintainChooser(target)) setPersistentResumeError(maintainBlockedReason(target.agentId) ?? "Maintain is not available for this room right now."); }} onCreatePersistentAgent={createPersistentAgentRoom} onArchiveRoom={archivePersistentAgentRoom} modelStatus={modelStatus} persistentAgentStatuses={persistentAgentStatuses} persistentThread={persistentThread} persistentLive={!!persistentChat} persistentResumeError={persistentResumeError} onRefreshPersistentAgent={refreshPersistentAgentStatus} theme={theme} onToggleTheme={() => setTheme((t) => (t === "dark" ? "light" : "dark"))} connected={connected} aiProfileStatus={aiProfileStatus} onSelectAiProfile={selectAiProfile} onRefreshAiProfile={refreshAiProfileStatus} standbyLockedModels={standbyLockedModels} />;
+		return (
+			<>
+				{gcAssessment && !gcReviewOpen && <TaskStoreGcBanner assessment={gcAssessment} onReview={() => setGcReviewOpen(true)} onDismiss={() => setGcAssessment(null)} />}
+				{gcReviewOpen && gcAssessment && <TaskStoreGcDialog assessment={gcAssessment} busy={gcBusy} onConfirm={() => void confirmTaskStoreGc()} onClose={() => setGcReviewOpen(false)} />}
+				<Landing onOpenAiSetup={() => setView("ai-setup")} onOpenDashboard={() => setView("dashboard")} onOpenConnectors={() => setView("connectors")} onOpenMemory={() => setView("memory")} onOpenSkills={() => setView("skills")} onOpenPersistentAgent={openPersistentAgent} onResumePersistentAgent={openPersistentAgentResume} onMaintainPersistentAgent={(target) => { if (!openMaintainChooser(target)) setPersistentResumeError(maintainBlockedReason(target.agentId) ?? "Maintain is not available for this room right now."); }} onCreatePersistentAgent={createPersistentAgentRoom} onArchiveRoom={archivePersistentAgentRoom} modelStatus={modelStatus} persistentAgentStatuses={persistentAgentStatuses} persistentThread={persistentThread} persistentLive={!!persistentChat} persistentResumeError={persistentResumeError} onRefreshPersistentAgent={refreshPersistentAgentStatus} theme={theme} onToggleTheme={() => setTheme((t) => (t === "dark" ? "light" : "dark"))} connected={connected} aiProfileStatus={aiProfileStatus} onSelectAiProfile={selectAiProfile} onRefreshAiProfile={refreshAiProfileStatus} standbyLockedModels={standbyLockedModels} />
+			</>
+		);
 	}
 
 	if (view === "ai-setup") {
@@ -4810,6 +5266,15 @@ export function App() {
 				/>
 			)}
 			{preview && <Preview content={preview.content} title={preview.title} type={preview.type} onClose={() => setPreview(null)} />}
+			{rightPane?.kind === "taskRun" && taskState.phase !== "none" && taskState.taskId === rightPane.taskId && (
+				<TaskRunView
+					state={taskState}
+					onStop={() => dispatchTask({ type: "abort_requested" })}
+					onClose={() => { setArtifactMaximized(false); setRightPane(null); }}
+					maximized={artifactMaximized}
+					onToggleMaximize={() => setArtifactMaximized((m) => !m)}
+				/>
+			)}
 			{rightPane?.kind === "artifactViewer" && (
 				<ArtifactViewer
 					taskId={rightPane.taskId}
@@ -4819,6 +5284,28 @@ export function App() {
 					onToggleMaximize={() => setArtifactMaximized((m) => !m)}
 					onClose={() => { setArtifactMaximized(false); setRightPane(null); }}
 					onSaveToWorkspace={() => void saveArtifactToWorkspace(rightPane)}
+					{...(rightPane.asset ? {
+						assetTitle: rightPane.asset.title,
+						originLine: rightPane.asset.originLine,
+						files: rightPane.asset.artifacts,
+						onSelectFile: (file: { relativePath: string; extension: string }) => setRightPane({ ...rightPane, artifact: { relativePath: file.relativePath, extension: file.extension } }),
+						footerSlot: (
+							<AssetViewerFooter
+								taskId={rightPane.taskId}
+								artifact={rightPane.artifact}
+								inConversation={threadTaskIds.has(rightPane.taskId)}
+								orphan={rightPane.asset.orphan}
+								canIterate={rightPane.asset.artifacts.length > 0}
+								summary={rightPane.asset.summary}
+								onAddToConversation={() => rightPane.asset && transferAssetRowToThread(rightPane.asset)}
+								onSaveToWorkspace={() => void saveArtifactToWorkspace(rightPane)}
+								onIterate={(brief) => submitAssetIterate(rightPane.taskId, brief)}
+								iteratePending={taskIteratePending}
+								iterateNotice={taskIterateNotice}
+								{...(rightPane.asset.orphan ? { onDelete: () => rightPane.asset && setAssetDeleteConfirm(rightPane.asset) } : {})}
+							/>
+						),
+					} : {})}
 				/>
 			)}
 		</>
@@ -4833,6 +5320,7 @@ export function App() {
 					theme={theme}
 					onToggleTheme={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}
 					onHelp={() => setHelpOpen(true)}
+					assetsSlot={persistentChat ? <AssetsPanel rows={assetRows} selectedTaskId={selectedAssetTaskId} onSelect={openAssetRow} onStopRunning={() => dispatchTask({ type: "abort_requested" })} /> : undefined}
 				/>
 			}
 			withPreview={false}
@@ -4900,35 +5388,36 @@ export function App() {
 						onTransfer={transferConsultToThread}
 						onFollowUp={handleConsultFollowUp}
 					/>
-					<TaskDock
-						state={taskState}
-						onMinimize={() => dispatchTask({ type: "minimize" })}
-						onOpen={() => dispatchTask({ type: "open" })}
-						onStop={() => dispatchTask({ type: "abort_requested" })}
-						onDismiss={() => dispatchTask({ type: "dismiss" })}
-						onTransfer={transferTaskToThread}
-						onOpenArtifact={(relativePath) => {
-							const state = taskStateRef.current;
-							if (!state.taskId) return;
-							const artifact = state.artifacts.find((a) => a.relativePath === relativePath);
-							if (!artifact) return;
-							openArtifactViewer(state.taskId, state.templateLabel ?? "visual", { relativePath: artifact.relativePath, extension: artifact.extension });
-						}}
-						onIterateSubmit={submitTaskIterate}
-						iteratePending={taskIteratePending}
-						iterateNotice={taskIterateNotice}
-					/>
 				</>
 			) : undefined}
 			previewSlot={rightPaneSlot}
-			checkpointPreviewSlot={checkpointPreviewOpen && persistentChat && <CheckpointPreviewShell chat={persistentChat} itemCount={items.length} rememberText={checkpointRememberText} density={checkpointDensity} proposal={checkpointProposal} loading={checkpointProposalLoading} error={checkpointProposalError} approvalLoading={checkpointApprovalLoading} approvalError={checkpointApprovalError} approvalResult={checkpointApprovalResult} quickRequested={checkpointQuickRequested} quickBlockedReasons={checkpointQuickBlockedReasons} consultRunning={consultState.phase === "streaming"} taskRunning={taskState.phase === "running"} pendingConsultHandoffCount={pendingHandoffs.filter((block) => !block.startsWith("[SPECIALIST RESULT")).length} pendingTaskHandoffCount={pendingHandoffs.filter((block) => block.startsWith("[SPECIALIST RESULT")).length} onRememberTextChange={(text) => { setCheckpointRememberText(text); setCheckpointProposal(null); setCheckpointProposalError(null); setCheckpointApprovalError(null); setCheckpointApprovalResult(null); }} onDensityChange={(next) => { setCheckpointDensity(next); setCheckpointProposal(null); setCheckpointProposalError(null); setCheckpointApprovalError(null); setCheckpointApprovalResult(null); }} onGenerate={generateCheckpointProposal} onApprove={approveCheckpointProposal} onDiscard={() => { setCheckpointProposal(null); setCheckpointProposalError(null); setCheckpointApprovalError(null); setCheckpointApprovalResult(null); setCheckpointQuickRequested(false); setCheckpointQuickBlockedReasons(null); setCheckpointPreviewOpen(false); }} onContinueAfterCheckpoint={continueAfterCheckpoint} onRestAfterCheckpoint={restAfterCheckpoint} onClose={() => setCheckpointPreviewOpen(false)} />}
+			checkpointPreviewSlot={checkpointPreviewOpen && persistentChat && <CheckpointPreviewShell chat={persistentChat} itemCount={items.length} rememberText={checkpointRememberText} density={checkpointDensity} proposal={checkpointProposal} loading={checkpointProposalLoading} error={checkpointProposalError} approvalLoading={checkpointApprovalLoading} approvalError={checkpointApprovalError} approvalResult={checkpointApprovalResult} quickRequested={checkpointQuickRequested} quickBlockedReasons={checkpointQuickBlockedReasons} consultRunning={consultState.phase === "streaming"} taskRunning={taskState.phase === "running"} pendingConsultHandoffCount={pendingHandoffs.filter((block) => !block.startsWith("[SPECIALIST RESULT") && !block.startsWith("[WORKSPACE EXPORT")).length} pendingTaskHandoffCount={pendingHandoffs.filter((block) => block.startsWith("[SPECIALIST RESULT")).length} onRememberTextChange={(text) => { setCheckpointRememberText(text); setCheckpointProposal(null); setCheckpointProposalError(null); setCheckpointApprovalError(null); setCheckpointApprovalResult(null); }} onDensityChange={(next) => { setCheckpointDensity(next); setCheckpointProposal(null); setCheckpointProposalError(null); setCheckpointApprovalError(null); setCheckpointApprovalResult(null); }} onGenerate={generateCheckpointProposal} onApprove={approveCheckpointProposal} onDiscard={() => { setCheckpointProposal(null); setCheckpointProposalError(null); setCheckpointApprovalError(null); setCheckpointApprovalResult(null); setCheckpointQuickRequested(false); setCheckpointQuickBlockedReasons(null); setCheckpointPreviewOpen(false); }} onContinueAfterCheckpoint={continueAfterCheckpoint} onRestAfterCheckpoint={restAfterCheckpoint} onClose={() => setCheckpointPreviewOpen(false)} />}
 			globalOverlaySlot={
 				<>
 					{helpOpen && <Help onClose={() => setHelpOpen(false)} />}
+					{assetDeleteConfirm && <AssetDeleteDialog title={assetDeleteConfirm.title} onDelete={() => { const row = assetDeleteConfirm; setAssetDeleteConfirm(null); if (row) void deleteAssetRow(row); }} onCancel={() => setAssetDeleteConfirm(null)} />}
+					{exportCollision && <ExportCollisionDialog collision={exportCollision} onClose={() => setExportCollision(null)} />}
 					{exportNotice && (
 						<div className={`artifact-export-toast ${exportNotice.kind}`} role="status" aria-live="polite">
 							{exportNotice.text}
 						</div>
+					)}
+					{taskDoneToast && (
+						<button
+							type="button"
+							className={`task-done-toast ${taskDoneToast.kind}`}
+							role="status"
+							aria-live="polite"
+							onClick={() => {
+								const toast = taskDoneToast;
+								setTaskDoneToast(null);
+								if (toast.artifact) openArtifactViewer(toast.taskId, toast.templateLabel, toast.artifact);
+							}}
+						>
+							{taskDoneToast.kind === "done"
+								? <>“{taskDoneToast.title}” is ready — click to open</>
+								: <>“{taskDoneToast.title}” didn't finish{taskDoneToast.artifact ? " — click to see what it made" : ""}</>}
+						</button>
 					)}
 				</>
 			}

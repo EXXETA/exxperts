@@ -6,7 +6,7 @@ import { ProductSidebar, type ProductSidebarActive, type ThemeMode } from "../co
 import { Sidebar } from "../components/Sidebar";
 import type { PersistentAgentAiProfileSelectionStatus, PersistentAgentStatus, WebChatModelOption, WebChatModelStatus } from "../types";
 import { FIXTURE_DEFAULT_AGENT_ID, fixtureStates, type CreateRoomFixtureState, type FixtureState, type HomeFixtureState, type InRoomChatActionItem, type InRoomChatFixtureState, type SidebarFixtureState, type TaskCardsFixtureState } from "./fixture-data";
-import { TaskDock } from "../components/delegation-card";
+import { TaskRunView } from "../components/task-run-view";
 import { TaskThreadItem } from "../components/Message";
 import type { TaskState } from "../task-stream";
 
@@ -173,20 +173,6 @@ function InRoomChatFixtureScreen({ fixture, theme }: { fixture: InRoomChatFixtur
 	const composerPlaceholder = fixture.composerPlaceholder ?? (fixture.busy ? "Working… Enter to queue" : `Ask ${fixture.activeDisplay}…`);
 	const onSend = (_text: string) => false;
 	const onResolveApproval = (_requestId: string, _value: any, _label: string) => {};
-	const taskDock = fixture.taskDock ? (
-		<TaskDock
-			state={{ ...TASK_FIXTURE_BASE, minimized: fixture.taskDock === "running-strip" }}
-			onMinimize={noop}
-			onOpen={noop}
-			onStop={noop}
-			onDismiss={noop}
-			onTransfer={noop}
-			onIterateSubmit={() => true}
-			iteratePending={false}
-			iterateNotice={null}
-		/>
-	) : undefined;
-
 	return (
 		<InRoomChatShellView
 			sidebar={
@@ -216,7 +202,6 @@ function InRoomChatFixtureScreen({ fixture, theme }: { fixture: InRoomChatFixtur
 			draftResetKey={fixture.id}
 			onResolveApproval={onResolveApproval}
 			onApprovalPreview={noop}
-			aboveComposerSlot={taskDock}
 		/>
 	);
 }
@@ -257,27 +242,19 @@ const TASK_FIXTURE_STOPPED: TaskState = {
 
 function TaskCardsFixtureScreen({ fixture }: { fixture: TaskCardsFixtureState }) {
 	void fixture;
+	// The done-card is retired (status grammar, 2026-07-18); its surviving
+	// surfaces are the run view (running / stopped) and the kept thread item.
+	// Done results live in the artifact viewer, exercised by the app itself.
 	const stack = [
-		{ key: "running-strip", state: { ...TASK_FIXTURE_BASE, minimized: true } },
 		{ key: "running", state: TASK_FIXTURE_BASE },
-		{ key: "done", state: TASK_FIXTURE_DONE },
 		{ key: "stopped", state: TASK_FIXTURE_STOPPED },
 	];
 	return (
 		<div className="fixture-frame" style={{ display: "flex", flexDirection: "column", gap: 18, padding: 24, maxWidth: 860 }}>
 			{stack.map(({ key, state }) => (
-				<TaskDock
-					key={key}
-					state={state}
-					onMinimize={noop}
-					onOpen={noop}
-					onStop={noop}
-					onDismiss={noop}
-					onTransfer={noop}
-					onIterateSubmit={() => true}
-					iteratePending={false}
-					iterateNotice={null}
-				/>
+				<div key={key} style={{ height: 320, display: "flex" }}>
+					<TaskRunView state={state} onStop={noop} onClose={noop} maximized={false} onToggleMaximize={noop} />
+				</div>
 			))}
 			<div className="messages" style={{ overflow: "visible" }}>
 				<TaskThreadItem

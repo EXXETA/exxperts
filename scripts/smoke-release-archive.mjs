@@ -272,8 +272,20 @@ const port = await freePort();
 	step("web server answers /healthz", healthy, healthy ? `port ${port}` : `server ${serverDead() ? `exited (${server.exitCode ?? server.signalCode})` : "never became healthy"}`);
 
 	if (healthy) {
-		const rootStatus = await httpStatus(`http://127.0.0.1:${port}/`);
-		step("web server serves / (UI)", rootStatus === 200, `HTTP ${rootStatus}`);
+		// Client auth through the product path: the server minted a token under
+		// the fake home before /healthz answered. Without it, / is the sign-in
+		// hint page (401); with the token in the auth header, the UI is served.
+		let token = "";
+		try {
+			token = fs.readFileSync(path.join(fakeHome, ".exxperts", "app", "auth-token"), "utf8").trim();
+		} catch {}
+		step("web server minted an auth token", token.length > 0, token ? "auth-token file present" : "auth-token file missing");
+
+		const unauthStatus = await httpStatus(`http://127.0.0.1:${port}/`);
+		step("web server refuses tokenless / (auth)", unauthStatus === 401, `HTTP ${unauthStatus}`);
+
+		const rootStatus = await httpStatus(`http://127.0.0.1:${port}/`, { "X-Exxperts-Auth": token });
+		step("web server serves / (UI, authed)", rootStatus === 200, `HTTP ${rootStatus}`);
 	}
 
 	await stopServer();
@@ -304,9 +316,9 @@ function freePort() {
 	});
 }
 
-function httpStatus(url) {
+function httpStatus(url, headers = {}) {
 	return new Promise((resolve) => {
-		const req = http.get(url, (res) => {
+		const req = http.get(url, { headers }, (res) => {
 			res.resume();
 			resolve(res.statusCode ?? 0);
 		});

@@ -130,7 +130,7 @@ try {
 	}
 	expectReject(() => normalizePersistentRoomWorkspaceToolSelectionInput({ kind: "custom", allowedToolNames: ["read", "read"] }, { workspaceAccessMode: "localFiles" }), "duplicate Full access tool");
 
-	const invalidStored = { ...standard, toolSelection: { kind: "custom", allowedToolNames: ["bash"] } };
+	const invalidStored = { ...standard, toolSelection: { kind: "custom" as const, allowedToolNames: ["bash"] } };
 	writePersistentRoomCapabilityPolicy(invalidStored, { persistentAgentsRoot });
 	assert(readPersistentRoomCapabilityPolicy(agentId, "tool_selection_thread", { persistentAgentsRoot }) === null, "invalid stored explicit custom selection should fail safe and not broaden tools");
 

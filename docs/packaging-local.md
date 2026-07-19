@@ -120,13 +120,14 @@ npm exec --package ./exxeta-exxperts-app-*.tgz -- exxperts web --no-open --port 
 
 `--port` and `--no-open` are test/debug flags for scripted web checks, port conflicts, and asset validation. For normal web launches, use `exxperts web`.
 
-While the web server is running, check assets:
+While the web server is running, check assets. Asset routes require the client auth token (see `SECURITY.md`), so send it as a header; without it every check returns HTTP 401 by design:
 
 ```bash
-curl -I http://localhost:8790/
-curl -I http://localhost:8790/brand/exxperts-logo.png
-curl -I http://localhost:8790/fonts/Sen-Regular.ttf
-curl -I http://localhost:8790/fonts/BandeinsStrange-Bold.otf
+AUTH="X-Exxperts-Auth: $(cat ~/.exxperts/app/auth-token)"
+curl -I -H "$AUTH" http://localhost:8790/
+curl -I -H "$AUTH" http://localhost:8790/brand/exxperts-logo.png
+curl -I -H "$AUTH" http://localhost:8790/fonts/Sen-Regular.ttf
+curl -I -H "$AUTH" http://localhost:8790/fonts/BandeinsStrange-Bold.otf
 ```
 
 Expected: HTTP 200 with `text/html`, `image/png`, `font/ttf`, and `font/otf` content types respectively.

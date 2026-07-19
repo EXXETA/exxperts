@@ -12,6 +12,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { PersistentAgentPiSessionJsonlThreadRuntime, PersistentAgentThreadWriteOptions } from "../src/persistent-agents.js";
 
 const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "consult-transfer-persistence-home-"));
 const root = path.join(tempHome, ".exxperts", "app", "personalized-agents");
@@ -140,7 +141,7 @@ try {
 
 	// ---- validation rejects junk -------------------------------------------
 	const junkThreadId = "pi_junk_0001";
-	const runtimeOpt = { createRuntime: ({ model }: { model: typeof model }) => createPersistentAgentPiSessionJsonlThreadRuntime({ agentId, threadId: junkThreadId, model, cwd: tempCwd }) };
+	const runtimeOpt: PersistentAgentThreadWriteOptions = { createRuntime: ({ model }) => createPersistentAgentPiSessionJsonlThreadRuntime({ agentId, threadId: junkThreadId, model, cwd: tempCwd }) };
 	expectThrows(() => writePersistentAgentThread(agentId, junkThreadId, { state: "active", origin: "home", model, items: [], pendingHandoffs: "nope" as unknown as string[] }, runtimeOpt), /must be an array/i, "non-array pendingHandoffs rejected");
 	expectThrows(() => writePersistentAgentThread(agentId, junkThreadId, { state: "active", origin: "home", model, items: [], pendingHandoffs: [q1, 7 as unknown as string] }, runtimeOpt), /must be a string/i, "non-string entry rejected");
 	expectThrows(() => writePersistentAgentThread(agentId, junkThreadId, { state: "active", origin: "home", model, items: [], pendingHandoffs: new Array(CONSULT_HANDOFF_MAX_PENDING + 1).fill(q1) }, runtimeOpt), /entry cap/i, "oversize count rejected");
@@ -158,7 +159,7 @@ try {
 	}, {
 		createRuntime: ({ model }) => createPersistentAgentPiSessionJsonlThreadRuntime({ agentId, threadId: cpOldThreadId, model, cwd: tempCwd }),
 	});
-	openPersistentAgentPiSessionManager(agentId, cpWrite.thread.runtime, tempCwd).appendMessage({ role: "user", content: "Source turn for the checkpoint.", timestamp: Date.now() });
+	openPersistentAgentPiSessionManager(agentId, cpWrite.thread.runtime as PersistentAgentPiSessionJsonlThreadRuntime, tempCwd).appendMessage({ role: "user", content: "Source turn for the checkpoint.", timestamp: Date.now() });
 	const cpProposal = await buildCheckpointProposal({
 		agentId,
 		conversationId: cpOldThreadId,
@@ -191,7 +192,7 @@ try {
 	}, {
 		createRuntime: ({ model }) => createPersistentAgentPiSessionJsonlThreadRuntime({ agentId, threadId: memOldThreadId, model, cwd: tempCwd }),
 	});
-	openPersistentAgentPiSessionManager(agentId, memWrite.thread.runtime, tempCwd).appendMessage({ role: "user", content: "Source turn for the Memento.", timestamp: Date.now() });
+	openPersistentAgentPiSessionManager(agentId, memWrite.thread.runtime as PersistentAgentPiSessionJsonlThreadRuntime, tempCwd).appendMessage({ role: "user", content: "Source turn for the Memento.", timestamp: Date.now() });
 	const memResult = writePersistentAgentMementoBoundary(agentId, memOldThreadId, new Date("2026-06-14T15:00:00.000Z"), { runtimeCwd: tempCwd });
 	const memFreshId = memResult.postMemento.activeThreadId;
 	const memFresh = getPersistentAgentThread(agentId, memFreshId);

@@ -37,7 +37,10 @@ import { MEMORY_BUDGET_DEFAULT_TOKENS, readPersistentRoomMaintenanceSettings, wr
 import { computeSkillStatuses, disablePersistentRoomSkill, effectiveEnabledSkills, enablePersistentRoomSkill, readPersistentRoomSkillSettings } from "./persistent-room-skill-settings.js";
 import { buildEnabledSkillsIndexSection, createReadSkillTool } from "./persistent-room-skill-tool.js";
 import { buildSpecialistTemplatesIndexSection, createDelegateTaskTool } from "./persistent-room-delegate-tool.js";
-import { buildSpecialistSessionPlan, runSpecialistWorker, listSpecialistTaskArtifacts, type SpecialistSessionPlan } from "./persistent-room-specialist-execution.js";
+import { buildSpecialistSessionPlan, ingestExportedInputs, runSpecialistWorker, listSpecialistTaskArtifacts, type SpecialistSessionPlan } from "./persistent-room-specialist-execution.js";
+import { appendTaskLedgerExport, createTaskLedgerRecord, finalizeTaskLedgerRecord, listTaskLedgerRecords, markTaskLedgerRecordDeleted, markTaskLedgerRecordViewed, markTaskLedgerRecordsAwayNoticed, planExportedInputIngest, resolveIterateSourceFromLedger, selectTaskLedgerAwayNotices, selectTaskLedgerReseedRows, sweepOrphanedTaskLedgerRecords } from "./persistent-room-task-ledger.js";
+import { abortSpecialistTask, bindSpecialistSink, emitSpecialistDelta, registerSpecialistTask, removeSpecialistTask, runningSpecialistCount, sendSpecialistFrame, unbindSpecialistSink } from "./persistent-room-specialist-registry.js";
+import { assessTaskStoreGc, collectProtectedTaskIds, executeTaskStoreGc } from "./specialist-task-store-gc.js";
 import { getSpecialistTemplate, SPECIALIST_TASK_CAPS } from "./specialist-templates.js";
 import { generateTaskArtifactThumbnails } from "./task-artifact-thumbnails.js";
 import { createPersistentRoomWorkspaceTools } from "./persistent-room-workspace-tools.js";
@@ -82,7 +85,7 @@ import webSearchExt from "../../../pi-package/extensions/web-search/index.js";
 import fetchUrlExt from "../../../pi-package/extensions/fetch_url/index.js";
 import { addPersistentRoomScheduleJob, listPersistentRoomScheduleJobs, removePersistentRoomScheduleJob, summarizePersistentRoomScheduleJobs, updatePersistentRoomScheduleJob } from "../../../pi-package/extensions/schedule-prompt/index.js";
 import type { AddPersistentRoomScheduleJobInput, PersistentRoomScheduleJob, PersistentRoomScheduleSummary, PersistentRoomScheduleType, UpdatePersistentRoomScheduleJobInput } from "../../../pi-package/extensions/schedule-prompt/index.js";
-import { ensureProductAppUserDirs, productAppStatePath, productAppStateRoot } from "../../../pi-package/product-state-paths.js";
+import { ensureProductAppStateRoot, ensureProductAppUserDirs, productAppStatePath, productAppStateRoot } from "../../../pi-package/product-state-paths.js";
 import { agentSkillsDir, localSkillProvenance, migrateLegacyUserSkills, readSkillProvenance, removeManagedSkillDir, sha256, sharedAgentsSkillsDir, SKILL_PROVENANCE_FILENAME, writeSkillProvenance, type SkillProvenance } from "./skills-store.js";
 import { filterRepoScanSkillFiles, scanInvisibleUnicode, type InvisibleUnicodeFinding } from "./skills-import.js";
 import { cloneRepoShallow, getCheckout, installCheckoutCleanup, loadFeaturedSource, parseSkillFrontmatter as parseFrontmatter, readRepoCandidate, registerCheckout, resolveFeaturedSources, resolveRepoSource, scanRepoSkills, vendorRepoSkill } from "./skills-repo-fetch.js";
@@ -159,11 +162,122 @@ if (!process.env.EXXETA_PERSONA) process.env.EXXETA_PERSONA = "business";
 
 const PORT = Number(process.env.PORT ?? 8787);
 
+// Client auth token (SECURITY.md "Client auth token"). Minted once per install
+// under the app state root; rotation = delete the file and restart. Test
+// callers may pin the token via EXXPERTS_AUTH_TOKEN instead of minting a
+// random one; the enforcement itself is identical and never disabled.
+const AUTH_COOKIE_NAME = "exxperts_auth";
+const AUTH_HEADER_NAME = "x-exxperts-auth";
+const AUTH_TOKEN_FILE = productAppStatePath("auth-token");
+const AUTH_TOKEN = resolveAuthToken();
+
+function resolveAuthToken(): string {
+	const fromEnv = String(process.env.EXXPERTS_AUTH_TOKEN ?? "").trim();
+	if (fromEnv) return fromEnv;
+	try {
+		const existing = fs.readFileSync(AUTH_TOKEN_FILE, "utf8").trim();
+		if (existing) return existing;
+	} catch {
+		// No token file yet: first run, mint below.
+	}
+	const minted = crypto.randomBytes(32).toString("hex");
+	try {
+		ensureProductAppStateRoot();
+		// 0600 like other server-side secrets. The mode is a POSIX concept and a
+		// no-op on win32, matching how the rest of the state root is created.
+		fs.writeFileSync(AUTH_TOKEN_FILE, `${minted}\n`, { mode: 0o600 });
+	} catch (error) {
+		// Fail closed with an actionable message: booting without a persisted
+		// token would strand every future launch behind an unknown secret.
+		console.error(`Cannot write the auth token at ${AUTH_TOKEN_FILE}: ${(error as Error).message}. Fix permissions on the .exxperts directory in your home folder and start Exxperts again.`);
+		process.exit(1);
+	}
+	return minted;
+}
+
+// Both comparison sites (cookie and header) go through this so a candidate is
+// never compared with an early-exit string equality. timingSafeEqual requires
+// equal lengths; a length mismatch is an immediate non-match by definition.
+function timingSafeTokenMatch(candidate: string): boolean {
+	if (!candidate) return false;
+	const candidateBuffer = Buffer.from(candidate);
+	const tokenBuffer = Buffer.from(AUTH_TOKEN);
+	if (candidateBuffer.length !== tokenBuffer.length) return false;
+	return crypto.timingSafeEqual(candidateBuffer, tokenBuffer);
+}
+
+// The token is a hex string, so no cookie-value decoding is needed; a single
+// hand-rolled Cookie header parse keeps this dependency-free.
+function cookieValue(cookieHeader: unknown, name: string): string {
+	for (const part of String(cookieHeader ?? "").split(";")) {
+		const separator = part.indexOf("=");
+		if (separator === -1) continue;
+		if (part.slice(0, separator).trim() === name) return part.slice(separator + 1).trim();
+	}
+	return "";
+}
+
+// Origins the app itself is served from: the packaged server's own port plus
+// the Vite dev server outside production. Browsers treat every localhost port
+// as same-site, so the session cookie rides along on requests started by ANY
+// locally served page; exact-origin pinning is what keeps another local
+// program's page from riding it (see the WS check in the onRequest hook).
+function isAppOrigin(origin: string): boolean {
+	const allowed = [`http://localhost:${PORT}`, `http://127.0.0.1:${PORT}`, `http://[::1]:${PORT}`];
+	if (process.env.NODE_ENV !== "production") allowed.push("http://localhost:5173", "http://127.0.0.1:5173", "http://[::1]:5173");
+	return allowed.includes(origin);
+}
+
+// Served to a browser navigation that arrives without the session cookie
+// (someone typed the URL, or a stale bookmark). Self-contained on purpose:
+// asset routes also require auth, so this page must not reference any.
+const UNAUTHENTICATED_PAGE = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Exxperts</title>
+<style>
+body { font-family: system-ui, sans-serif; background: #111; color: #eee; display: flex; min-height: 100vh; align-items: center; justify-content: center; margin: 0; }
+main { max-width: 34rem; padding: 2rem; }
+h1 { font-size: 1.3rem; }
+code { background: #222; border-radius: 4px; padding: 0.1rem 0.4rem; }
+p { line-height: 1.5; }
+</style>
+</head>
+<body>
+<main>
+<h1>Exxperts is running, but this tab is not signed in</h1>
+<p>Start the app with the <code>exxperts web</code> command. It opens a browser tab that signs itself in automatically.</p>
+<p>If no tab opens, run it again and use the link the command prints. If <code>exxperts web</code> says it is already running, stop it with Ctrl+C in its terminal first, or reuse the sign-in link that terminal printed. Signing in needs that link once; after that this browser stays signed in.</p>
+</main>
+</body>
+</html>
+`;
+
 // Request logs are pino JSON — useful when developing, noise in a user's
 // terminal. The launcher runs with NODE_ENV=production, so default to
 // warnings there; LOG_LEVEL overrides in either direction.
 const LOG_LEVEL = process.env.LOG_LEVEL ?? (process.env.NODE_ENV === "production" ? "warn" : "info");
-const app = Fastify({ logger: { level: LOG_LEVEL } });
+// The request serializer mirrors Fastify's default fields but redacts the
+// token query value, so the /auth/session exchange never lands a usable
+// token in dev logs (production logs at warn and skips request lines anyway).
+const app = Fastify({
+	logger: {
+		level: LOG_LEVEL,
+		serializers: {
+			req(request: any) {
+				return {
+					method: request.method,
+					url: String(request.url ?? "").replace(/([?&]token=)[^&#]*/g, "$1[redacted]"),
+					host: request.host,
+					remoteAddress: request.ip,
+					remotePort: request.socket?.remotePort,
+				};
+			},
+		},
+	},
+});
 await app.register(websocket);
 
 // This server is local-only by design. Binding to 127.0.0.1 (see listen())
@@ -172,6 +286,18 @@ await app.register(websocket);
 // foreign origin cannot drive the API/WS via DNS rebinding (such requests
 // arrive with the attacker's hostname in Host/Origin).
 app.addHook("onRequest", async (req, reply) => {
+	// A reverse proxy in front of this server would make every request arrive
+	// from loopback, silently defeating the checks below while exposing an
+	// unauthenticated API to whatever network the proxy listens on. Proxied
+	// requests are recognizable by the headers proxies attach, so refuse them
+	// outright with an error that names the unsupported deployment.
+	const proxyHeader = findProxyHeader(req.headers);
+	if (proxyHeader) {
+		return reply.code(403).send({
+			error: `Request carries the proxy header "${proxyHeader}". Reverse proxies are not supported: Exxperts is a local, single-user app and must be reached directly at its loopback address. See SECURITY.md in the repository.`,
+			code: "reverse_proxy_unsupported",
+		});
+	}
 	if (!requestRemoteAddresses(req).some(isLoopbackAddress)) {
 		return reply.code(403).send({ error: "This server only accepts local requests from the Exxperts app.", code: "local_request_required" });
 	}
@@ -182,9 +308,52 @@ app.addHook("onRequest", async (req, reply) => {
 	if (origin && !isLoopbackOrLocalhostOrigin(origin)) {
 		return reply.code(403).send({ error: "This server only accepts local requests from the Exxperts app.", code: "local_request_required" });
 	}
+	// Client auth, after the network-shape checks above: every route except the
+	// launcher's readiness probe and the token exchange itself requires the
+	// minted token, either as the session cookie set by /auth/session or as the
+	// X-Exxperts-Auth header (CLI/programmatic callers). The WS upgrade request
+	// runs through this same hook, so an unauthenticated upgrade is refused
+	// before any handshake.
+	const pathname = String(req.raw.url ?? "").split("?")[0];
+	if (pathname === "/healthz" || pathname === "/auth/session") return;
+	const headerAuthenticated = timingSafeTokenMatch(String(req.headers[AUTH_HEADER_NAME] ?? ""));
+	// Header auth takes precedence: a request that proves possession of the
+	// token itself is never classified as cookie-backed, so it is exempt from
+	// the WS origin pinning below even if a cookie also rides along. Do not
+	// "simplify" this into two independent checks.
+	const cookieAuthenticated = headerAuthenticated ? false : timingSafeTokenMatch(cookieValue(req.headers.cookie, AUTH_COOKIE_NAME));
+	if (!headerAuthenticated && !cookieAuthenticated) {
+		if (req.method === "GET" && (pathname === "/" || String(req.headers.accept ?? "").includes("text/html"))) {
+			// A browser navigation without the cookie gets a plain page saying how
+			// to open the app, instead of a JSON error nobody can act on.
+			return reply.code(401).headers(STATIC_SECURITY_HEADERS).type("text/html; charset=utf-8").send(UNAUTHENTICATED_PAGE);
+		}
+		return reply.code(401).send({ error: `This request is not authenticated. Open the app with the exxperts web command, or send the token from ${AUTH_TOKEN_FILE} in the X-Exxperts-Auth header.`, code: "auth_required" });
+	}
+	// The cookie rides along automatically on anything same-site, and browsers
+	// treat every localhost port as same-site, so a page served by any OTHER
+	// local program could open an authenticated WebSocket with it (WS has no
+	// CORS). Cookie-backed upgrades are therefore pinned to the app's own
+	// origins; header callers prove possession of the token itself.
+	if (cookieAuthenticated && String(req.headers.upgrade ?? "").toLowerCase() === "websocket" && !isAppOrigin(origin)) {
+		return reply.code(403).send({ error: "WebSocket connections using the browser session must come from the Exxperts app page itself.", code: "ws_origin_required" });
+	}
 });
 
 app.get("/healthz", async () => ({ ok: true, persona: process.env.EXXETA_PERSONA ?? "business" }));
+
+// Browser handoff: the launcher opens /auth/session?token=<token>; a matching
+// token becomes an HttpOnly session cookie and the browser is redirected to
+// "/", so the token never stays in the address bar or history. Deliberately
+// not Secure: the app is plain http on loopback by design (SECURITY.md).
+app.get("/auth/session", async (req, reply) => {
+	const token = String((req.query as Record<string, unknown> | undefined)?.token ?? "");
+	if (!timingSafeTokenMatch(token)) {
+		return reply.code(403).send({ error: "Invalid auth token. Start the app with the exxperts web command and use the link it opens.", code: "auth_invalid" });
+	}
+	reply.header("set-cookie", `${AUTH_COOKIE_NAME}=${AUTH_TOKEN}; HttpOnly; SameSite=Strict; Path=/; Max-Age=31536000`);
+	return reply.redirect("/", 302);
+});
 
 function isPromptDiagnosticsEnabled(): boolean {
 	return process.env.EXXETA_PROMPT_DIAGNOSTICS === "1";
@@ -196,10 +365,24 @@ function requestRemoteAddresses(req: any): string[] {
 		.filter(Boolean);
 }
 
+// Headers that only appear when a proxy relayed the request: the RFC 7239
+// Forwarded header, the de-facto X-Forwarded-* family (For/Host/Proto/Port/
+// Prefix and friends), nginx's X-Real-IP, and the RFC 9110 Via header that
+// intermediaries are required to append. A browser talking straight to
+// 127.0.0.1 sends none of these. Node lowercases incoming header names.
+function findProxyHeader(headers: Record<string, unknown>): string | undefined {
+	for (const name of Object.keys(headers)) {
+		if (name === "forwarded" || name === "via" || name === "x-real-ip" || name.startsWith("x-forwarded-")) return name;
+	}
+	return undefined;
+}
+
 function isLoopbackAddress(address: string): boolean {
 	return address === "127.0.0.1" || address === "::1" || address === "::ffff:127.0.0.1";
 }
 
+// ANY localhost port passes here (network-shape check for the DNS-rebinding
+// guard); contrast isAppOrigin, which pins to the app's own exact origins.
 function isLoopbackOrLocalhostOrigin(origin: string): boolean {
 	try {
 		const parsed = new URL(origin);
@@ -990,6 +1173,66 @@ app.post("/api/persistent-agents/:id/runtime/discard-empty-prepared-boundary", a
 	} catch (e) {
 		return persistentAgentNormalUseErrorReply(reply, e);
 	}
+});
+// Task-ledger list (assets contract §2, rung 2): the room's specialist-task
+// history, newest-first, optionally narrowed to one conversation. Read-only
+// projection of the per-task ledger files; the Assets panel consumes it.
+app.get("/api/persistent-agents/:id/tasks", async (req, reply) => {
+	const idRaw = String((req.params as any).id ?? "").trim();
+	const conversationId = String((req.query as any)?.conversationId ?? "").trim() || undefined;
+	try {
+		const status = getUsablePersistentAgentStatusForNormalUse(idRaw);
+		return { roomId: status.id, tasks: listTaskLedgerRecords(status.id, conversationId ? { conversationId } : {}) };
+	} catch (e) {
+		return persistentAgentNormalUseErrorReply(reply, e);
+	}
+});
+// First-open stamp (status grammar, 2026-07-18): the green unread dot decays
+// exactly once — the client posts when the user first opens or acts on a row.
+// Idempotent; a missing row is a 404, not an error worth surfacing.
+app.post("/api/persistent-agents/:id/tasks/:taskId/viewed", async (req, reply) => {
+	const idRaw = String((req.params as any).id ?? "").trim();
+	const taskId = String((req.params as any).taskId ?? "").trim();
+	try {
+		const status = getUsablePersistentAgentStatusForNormalUse(idRaw);
+		const row = markTaskLedgerRecordViewed(status.id, taskId);
+		if (!row) return reply.code(404).send({ error: "No such task in this room." });
+		return { viewedAt: row.viewedAt };
+	} catch (e) {
+		return persistentAgentNormalUseErrorReply(reply, e);
+	}
+});
+// Panel per-task delete (assets contract §4): allowed only for rows this room
+// owns that are not running and not referenced anywhere. Files go, the ledger
+// row stays with a deletedAt stamp (measurement record).
+app.delete("/api/persistent-agents/:id/tasks/:taskId", async (req, reply) => {
+	const idRaw = String((req.params as any).id ?? "").trim();
+	const taskId = String((req.params as any).taskId ?? "").trim();
+	try {
+		const status = getUsablePersistentAgentStatusForNormalUse(idRaw);
+		const row = listTaskLedgerRecords(status.id).find((record) => record.taskId === taskId);
+		if (!row) return reply.code(404).send({ error: "No such task in this room." });
+		if (row.outcome === "running") return reply.code(409).send({ error: "This task is still running.", code: "running" });
+		if (collectProtectedTaskIds().has(taskId)) return reply.code(409).send({ error: "This task is referenced by a conversation and cannot be deleted.", code: "referenced" });
+		const result = executeTaskStoreGc([taskId]);
+		if (result.deleted.includes(taskId)) return { deleted: true, reclaimedBytes: result.reclaimedBytes };
+		// The folder may already be gone (crash between rm and stamp) — stamp anyway.
+		markTaskLedgerRecordDeleted(status.id, taskId);
+		return { deleted: true, reclaimedBytes: 0 };
+	} catch (e) {
+		return persistentAgentNormalUseErrorReply(reply, e);
+	}
+});
+// Store-wide GC (assets contract §4): assessment is read-only; execution
+// deletes exactly the ids the client names, re-verified server-side.
+app.get("/api/task-store/gc", async () => {
+	return assessTaskStoreGc();
+});
+app.post("/api/task-store/gc", async (req, reply) => {
+	const body = (req.body ?? {}) as { taskIds?: unknown };
+	if (!Array.isArray(body.taskIds) || body.taskIds.length === 0) return reply.code(400).send({ error: "taskIds is required." });
+	if (body.taskIds.length > 500) return reply.code(400).send({ error: "Too many taskIds in one request." });
+	return executeTaskStoreGc(body.taskIds.map((value) => String(value ?? "")));
 });
 app.get("/api/persistent-agents/:id/threads/:threadId", async (req, reply) => {
 	const idRaw = String((req.params as any).id ?? "").trim();
@@ -3502,13 +3745,14 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 	// consult runs; starting a consult while a turn is in flight is rejected.
 	type ActiveWebConsult = { consultId: string; abortController: AbortController; stoppedByUser: boolean };
 	let activeWebConsult: ActiveWebConsult | null = null;
-	// Specialist tasks (visuals V2): run-free beside the turn like consults, but
-	// model-proposed (delegate_task) rather than socket-initiated, so the only
-	// inbound frame is task_abort. Cap 1 per connection for v1: the UI has a
-	// single card slot, so a second concurrent task would be invisible and
-	// uncancellable — the contract's cap-2 (D9) returns with the multi-card slice.
-	type ActiveWebTask = { taskId: string; templateId: string; abortController: AbortController; stoppedByUser: boolean };
-	const activeWebTasks = new Map<string, ActiveWebTask>();
+	// Specialist tasks (visuals V2; option 4 2026-07-19): run-free beside the
+	// turn like consults, but model-proposed (delegate_task) rather than
+	// socket-initiated, so the only inbound frame is task_abort. Bookkeeping
+	// lives in the ROOM-SCOPED registry (persistent-room-specialist-registry) —
+	// a delegation belongs to the room, not to the tab that asked for it: the
+	// worker survives this connection, and this connection is merely the
+	// registry's current sink. Cap 1 per ROOM for v1 (was per connection; the
+	// registry made it what it always morally was).
 	const WEB_TASK_CAP = 1;
 	// Server-owned record of tasks that finished on THIS connection, so the
 	// one-click iterate path (task_iterate) can derive template and read scope
@@ -3825,6 +4069,15 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 		streamTrace.frameOut(msg);
 		try { socket.send(JSON.stringify(msg)); } catch {}
 	};
+	// Delivery-honest variant for frames whose "was the user told?" answer is
+	// persisted (away-notice stamping, the specialist sink's `noticed` signal):
+	// a closed/closing socket reports false instead of silently swallowing.
+	const sendChecked = (msg: unknown): boolean => {
+		if (socket.readyState !== socket.OPEN) return false;
+		streamTrace.frameOut(msg);
+		try { socket.send(JSON.stringify(msg)); } catch { return false; }
+		return true;
+	};
 	const uiContext = createWebUiContext(send);
 
 	const bindSession = async () => {
@@ -3892,24 +4145,42 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 		// user-initiated task_iterate frame (§5 amendment) — same slot hygiene,
 		// same task_* event family, taskId always server-generated in the plan.
 		const launchSpecialistTaskForSession = (plan: SpecialistSessionPlan): { ok: true } | { ok: false; reason: string } => {
-			if (activeWebTasks.size >= WEB_TASK_CAP) return { ok: false, reason: `the specialist limit (${WEB_TASK_CAP}) is reached` };
+			if (runningSpecialistCount(persistentAgentIdForSession) >= WEB_TASK_CAP) return { ok: false, reason: `the specialist limit (${WEB_TASK_CAP}) is reached` };
 			// Resolve the model BEFORE claiming the slot: this closure's contract
 			// with the delegate tool is "must not throw", and a selection failure
-			// (profile/registry drift) after activeWebTasks.set would strand the
-			// cap slot for the rest of the connection.
+			// (profile/registry drift) after the registry claim would strand the
+			// room's cap slot.
 			let selection: ReturnType<typeof activeConsultModelSelection>;
 			try {
 				selection = activeConsultModelSelection();
 			} catch (e) {
 				return { ok: false, reason: `no usable specialist model: ${(e as Error).message}` };
 			}
-			const task: ActiveWebTask = { taskId: plan.taskId, templateId: plan.template.id, abortController: new AbortController(), stoppedByUser: false };
-			activeWebTasks.set(plan.taskId, task);
+			const task = registerSpecialistTask(persistentAgentIdForSession, {
+				taskId: plan.taskId,
+				templateId: plan.template.id,
+				templateVersion: plan.template.version,
+				templateLabel: plan.template.label,
+				title: plan.title,
+				model: selection.modelLock,
+				abortController: new AbortController(),
+			});
+			sendSpecialistFrame(persistentAgentIdForSession, { type: "task_started", taskId: plan.taskId, template: plan.template.id, templateVersion: plan.template.version, templateLabel: plan.template.label, title: plan.title, model: selection.modelLock });
+			// Ledger row (assets contract §2): created once the task is announced,
+			// finalized on every terminal path below. Best-effort throughout — the
+			// ledger must never break a task.
 			try {
-				send({ type: "task_started", taskId: plan.taskId, template: plan.template.id, templateVersion: plan.template.version, templateLabel: plan.template.label, title: plan.title, model: selection.modelLock });
+				createTaskLedgerRecord({
+					taskId: plan.taskId,
+					roomId: persistentAgentIdForSession,
+					conversationId: persistentConversationId,
+					templateId: plan.template.id,
+					templateVersion: plan.template.version,
+					title: plan.title,
+					...(plan.iterateParentTaskId ? { iterateParentTaskId: plan.iterateParentTaskId } : {}),
+				});
 			} catch (e) {
-				activeWebTasks.delete(plan.taskId);
-				return { ok: false, reason: `the task could not be announced to the client: ${(e as Error).message}` };
+				app.log.warn({ err: (e as Error).message, taskId: plan.taskId }, "task ledger create failed");
 			}
 			void (async () => {
 				try {
@@ -3922,20 +4193,29 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 						agentDir: getAgentDir(),
 						signal: task.abortController.signal,
 						onEvent: (event: any) => {
+							// Registry-routed: appends the replay tail and forwards to the
+							// room's CURRENT sink — which may be a later connection than the
+							// one that launched, or nobody (frames drop silently while away).
 							if (event?.type === "message_update") {
 								const update = event.assistantMessageEvent;
 								if (update?.type === "text_delta" && typeof update.delta === "string") {
-									send({ type: "task_delta", taskId: plan.taskId, delta: update.delta });
+									emitSpecialistDelta(persistentAgentIdForSession, plan.taskId, update.delta);
 								}
 							} else if (event?.type === "tool_execution_start" && typeof event?.toolName === "string") {
-								send({ type: "task_delta", taskId: plan.taskId, delta: `\n[${event.toolName}]\n` });
+								emitSpecialistDelta(persistentAgentIdForSession, plan.taskId, `\n[${event.toolName}]\n`);
 							}
 						},
 					});
 					// Task usage bills to this room (the requester), consult precedent.
 					recordWorkerUsage(persistentAgentIdForSession, "task", selection.modelLock, result.usage);
 					if (task.abortController.signal.aborted) {
-						send({ type: "task_error", taskId: plan.taskId, message: task.stoppedByUser ? "Task stopped by you. Artifacts already written are kept." : "The task was cancelled.", artifacts: result.artifacts });
+						const stopMessage = task.stoppedByUser ? "Task stopped by you. Artifacts already written are kept." : "The task was cancelled.";
+						const noticed = sendSpecialistFrame(persistentAgentIdForSession, { type: "task_error", taskId: plan.taskId, message: stopMessage, artifacts: result.artifacts });
+						try {
+							finalizeTaskLedgerRecord(persistentAgentIdForSession, plan.taskId, { outcome: "aborted", summary: stopMessage, artifacts: result.artifacts, usage: result.usage, noticed });
+						} catch (e) {
+							app.log.warn({ err: (e as Error).message, taskId: plan.taskId }, "task ledger finalize failed");
+						}
 					} else {
 						// Write-time thumbnails (contract D8): rendered once here, stored
 						// under .thumbs/, shipped as data: URIs. Best-effort — no
@@ -3945,7 +4225,7 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 						// cosmetic failure can never turn a finished task into
 						// task_error or strand the card in "running".
 						const thumbnails = await generateTaskArtifactThumbnails(plan.taskFolder, result.artifacts, (message) => app.log.warn(message)).catch(() => []);
-						send({
+						const noticed = sendSpecialistFrame(persistentAgentIdForSession, {
 							type: "task_end",
 							taskId: plan.taskId,
 							template: plan.template.id,
@@ -3965,6 +4245,11 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 							if (oldest === undefined) break;
 							completedWebTasks.delete(oldest);
 						}
+						try {
+							finalizeTaskLedgerRecord(persistentAgentIdForSession, plan.taskId, { outcome: "ok", summary: result.text, artifacts: result.artifacts, usage: result.usage, noticed });
+						} catch (e) {
+							app.log.warn({ err: (e as Error).message, taskId: plan.taskId }, "task ledger finalize failed");
+						}
 					}
 				} catch (e) {
 					const stopped = task.abortController.signal.aborted;
@@ -3975,9 +4260,15 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 					// degrades the card to no chips, never loses the error frame.
 					let writtenArtifacts: ReturnType<typeof listSpecialistTaskArtifacts> = [];
 					try { writtenArtifacts = listSpecialistTaskArtifacts(plan.taskFolder); } catch {}
-					send({ type: "task_error", taskId: plan.taskId, message: stopped ? (task.stoppedByUser ? "Task stopped by you. Artifacts already written are kept." : "The task was cancelled.") : (e as Error).message, artifacts: writtenArtifacts });
+					const errorMessage = stopped ? (task.stoppedByUser ? "Task stopped by you. Artifacts already written are kept." : "The task was cancelled.") : (e as Error).message;
+					const noticed = sendSpecialistFrame(persistentAgentIdForSession, { type: "task_error", taskId: plan.taskId, message: errorMessage, artifacts: writtenArtifacts });
+					try {
+						finalizeTaskLedgerRecord(persistentAgentIdForSession, plan.taskId, { outcome: stopped ? "aborted" : "error", summary: errorMessage, artifacts: writtenArtifacts, noticed });
+					} catch (ledgerError) {
+						app.log.warn({ err: (ledgerError as Error).message, taskId: plan.taskId }, "task ledger finalize failed");
+					}
 				} finally {
-					activeWebTasks.delete(plan.taskId);
+					removeSpecialistTask(persistentAgentIdForSession, plan.taskId);
 				}
 			})();
 			return { ok: true };
@@ -3986,7 +4277,7 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 		const persistentRoomDelegateTools = [createDelegateTaskTool({
 			agentId: persistentAgentId,
 			taskCap: WEB_TASK_CAP,
-			runningCount: () => activeWebTasks.size,
+			runningCount: () => runningSpecialistCount(persistentAgentId),
 			generateTaskId: () => `tsk-${crypto.randomBytes(6).toString("hex")}`,
 			launch: launchSpecialistTaskForSession,
 		})];
@@ -4276,6 +4567,42 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 		return;
 	}
 
+	// Rung 2 (assets contract §2): the connection inherits what the ledger knows
+	// about this ROOM — tasks are room-scoped (option 4) and Memento/checkpoint
+	// mint a new conversationId, so filtering to the current conversation would
+	// silently drop endings from earlier threads. Best-effort — a ledger problem
+	// must not block the session.
+	try {
+		const ledgerRows = listTaskLedgerRecords(persistentAgentIdForSession);
+		// Reseed the iterate memory: one-click iterate stays possible after a
+		// refresh, from the server's own record (D7 derivation unchanged).
+		for (const row of selectTaskLedgerReseedRows(ledgerRows, COMPLETED_WEB_TASK_MEMORY)) {
+			completedWebTasks.set(row.taskId, { templateId: row.templateId, artifacts: (row.artifacts ?? []).map((a) => a.relativePath) });
+		}
+		// Away-notice honesty: terminal rows the client was never told about.
+		// Stamp ONLY on confirmed delivery — a socket that died during connect
+		// setup must not permanently consume the notice.
+		const away = selectTaskLedgerAwayNotices(ledgerRows, 5);
+		if (away.allTaskIds.length > 0) {
+			const delivered = sendChecked({
+				type: "task_away_notice",
+				notices: away.notices.map((row) => ({ taskId: row.taskId, title: row.title, outcome: row.outcome, endedAt: row.endedAt ?? null })),
+				moreCount: away.moreCount,
+			});
+			if (delivered) markTaskLedgerRecordsAwayNoticed(persistentAgentIdForSession, away.allTaskIds);
+		}
+	} catch (e) {
+		app.log.warn({ err: (e as Error).message }, "task ledger connect reconcile failed");
+	}
+
+	// Option 4: become the room's sink. Binding replays task_started + the
+	// accumulated tail for every surviving task through the normal event
+	// family — the client reducer receives exactly what it would have live,
+	// so the rail pulses and the run view fills with zero client changes.
+	// The checked sender makes the registry's `noticed` signal honest: a
+	// terminal frame sent while this socket is closing reports undelivered.
+	bindSpecialistSink(persistentAgentIdForSession, sendChecked);
+
 	socket.on("message", async (raw: Buffer) => {
 		let msg: any;
 		try { msg = JSON.parse(raw.toString()); } catch { return; }
@@ -4413,12 +4740,11 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 			activeWebConsult.abortController.abort();
 		} else if (msg.type === "task_abort") {
 			// Same stale-id discipline. Artifacts already on disk are kept — only
-			// the running worker dies (boundary matrix, visuals contract §6).
+			// the running worker dies. Registry-resolved (option 4): this
+			// connection can stop a task an EARLIER connection launched.
 			const taskId = String(msg.taskId ?? "").trim();
-			const task = activeWebTasks.get(taskId);
-			if (!task) return;
-			task.stoppedByUser = true;
-			task.abortController.abort();
+			if (!taskId) return;
+			abortSpecialistTask(persistentAgentIdForSession, taskId);
 		} else if (msg.type === "task_iterate") {
 			// Iterate chip-chat (contract §5 amendment 2026-07-12, ONE-CLICK
 			// amendment 2026-07-13 — pending review): the ONE client-initiated
@@ -4441,9 +4767,23 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 						return;
 					}
 					const sourceTaskId = String(msg.taskId ?? "").trim();
-					const source = completedWebTasks.get(sourceTaskId);
+					// Connection memory first; the ledger fallback (rung 3) covers panel
+					// rows older than the reseed window. Same D7 shape either way: the
+					// template and read scope come from the server's own records.
+					// Room-wide lookup (room-scoped history, 2026-07-18): a row born in
+					// an earlier conversation is just as revisable — the B5 rule
+					// (ok+artifacts only) lives inside the resolver and still applies.
+					let source = completedWebTasks.get(sourceTaskId);
 					if (!source) {
-						send({ type: "task_iterate_result", ok: false, reason: "That task is no longer available to iterate on. Ask the room to delegate a fresh one instead." });
+						try {
+							const fallback = resolveIterateSourceFromLedger(listTaskLedgerRecords(persistentAgentIdForSession), sourceTaskId);
+							if (fallback) source = { templateId: fallback.templateId, artifacts: fallback.artifacts };
+						} catch {
+							// Fall through to the friendly refusal.
+						}
+					}
+					if (!source) {
+						send({ type: "task_iterate_result", ok: false, reason: "That task can no longer take change requests. Ask the room to delegate a fresh one instead." });
 						return;
 					}
 					const template = getSpecialistTemplate(source.templateId);
@@ -4451,25 +4791,46 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 						send({ type: "task_iterate_result", ok: false, reason: `"${source.templateId}" is not a specialist template.` });
 						return;
 					}
-					if (activeWebTasks.size >= WEB_TASK_CAP) {
+					if (runningSpecialistCount(persistentAgentIdForSession) >= WEB_TASK_CAP) {
 						send({ type: "task_iterate_result", ok: false, reason: "A specialist is already running. Wait for it to finish or stop it first." });
 						return;
 					}
 					const sinceLast = Date.now() - lastIterateLaunchAt;
 					if (sinceLast < ITERATE_COOLDOWN_MS) {
-						send({ type: "task_iterate_result", ok: false, reason: "Give it a few seconds between iterations." });
+						send({ type: "task_iterate_result", ok: false, reason: "Give it a few seconds between change requests." });
 						return;
+					}
+					const iterateTaskId = `tsk-${crypto.randomBytes(6).toString("hex")}`;
+					// Ingest-on-iterate (G2-B): inputs whose artifact was exported are
+					// re-read from the CURRENT workspace file — copied into the new
+					// task's inputs/ dir after re-running every write-time guard. A
+					// refused or missing file keeps the store original (honest, safe).
+					let iterateInputArtifacts = source.artifacts;
+					try {
+						const sourceRow = listTaskLedgerRecords(persistentAgentIdForSession).find((record) => record.taskId === sourceTaskId) ?? null;
+						const ingestPlan = planExportedInputIngest(sourceRow, source.artifacts, `tasks/${iterateTaskId}`);
+						if (ingestPlan.length > 0) {
+							const results = ingestExportedInputs(ingestPlan);
+							const substitutions = new Map(results.filter((result) => result.ingested).map((result) => [result.entry.sourceRelativePath, result.entry.ingestedRelativePath]));
+							for (const result of results) {
+								if (!result.ingested) app.log.warn({ taskId: iterateTaskId, source: result.entry.sourceRelativePath, reason: result.reason }, "iterate ingest fell back to the store original");
+							}
+							if (substitutions.size > 0) iterateInputArtifacts = source.artifacts.map((artifact) => substitutions.get(artifact) ?? artifact);
+						}
+					} catch (e) {
+						app.log.warn({ err: (e as Error).message, taskId: iterateTaskId }, "iterate ingest failed; using store originals");
 					}
 					let plan: SpecialistSessionPlan;
 					try {
 						plan = buildSpecialistSessionPlan({
-							taskId: `tsk-${crypto.randomBytes(6).toString("hex")}`,
+							taskId: iterateTaskId,
 							templateId: source.templateId,
 							brief: String(msg.brief ?? ""),
-							inputArtifacts: source.artifacts,
+							inputArtifacts: iterateInputArtifacts,
+							iterateParentTaskId: sourceTaskId,
 						});
 					} catch (e) {
-						send({ type: "task_iterate_result", ok: false, reason: `Iteration not possible: ${(e as Error).message}` });
+						send({ type: "task_iterate_result", ok: false, reason: `Change request not possible: ${(e as Error).message}` });
 						return;
 					}
 					const started = launch(plan);
@@ -4491,10 +4852,12 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 		// A consult answer that was never transferred is re-derivable: kill the
 		// worker and discard silently (boundary matrix, locked 2026-07-10).
 		activeWebConsult?.abortController.abort();
-		// Specialist tasks die with the connection too, but their artifacts are
-		// already on disk and persist (visuals contract §6 — leave = abort worker,
-		// keep files).
-		for (const task of activeWebTasks.values()) task.abortController.abort();
+		// Specialist tasks SURVIVE the connection (option 4, grill-locked
+		// 2026-07-19 — a delegation belongs to the room, not to the tab that
+		// asked for it). This connection merely stops being the room's sink;
+		// endings nobody hears finalize with noticed:false and arrive as
+		// away-notices on the next connect.
+		unbindSpecialistSink(persistentAgentIdForSession, sendChecked);
 		void disposeSessionAfterAbortIfNeeded("disconnect_cancelled").catch((error) => {
 			app.log.warn({ err: error }, "persistent-room disconnect cleanup failed");
 			if (!sessionDisposed && session) {
@@ -4505,9 +4868,9 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 	});
 });
 
-// Baseline security headers for everything the static path serves. The API
-// has no client auth (loopback + Host/Origin guard only), so the app origin
-// must never execute anything beyond the built bundle: no external scripts,
+// Baseline security headers for everything the static path serves. A script
+// running on the app origin carries the auth cookie on every request, so the
+// app origin must never execute anything beyond the built bundle: no external scripts,
 // no framing, no plugin content. style-src keeps 'unsafe-inline' (mermaid
 // injects style attributes into its rendered SVG); connect-src names loopback
 // websockets explicitly because CSP 'self' does not reliably match ws:;
@@ -4531,9 +4894,9 @@ const STATIC_SECURITY_HEADERS: Record<string, string> = {
 	"referrer-policy": "no-referrer",
 };
 
-// Artifact bytes are model-generated and potentially hostile, and the API has
-// no client auth (loopback + Host/Origin guard only), so a same-origin document
-// would own the whole instance. Every artifact response therefore carries a CSP
+// Artifact bytes are model-generated and potentially hostile, and a same-origin
+// document carries the auth cookie on its requests, so such a document would
+// own the whole instance. Every artifact response therefore carries a CSP
 // sandbox header, which hands even a directly-navigated top-level document an
 // opaque origin: no cookies/localStorage, and same-origin fetch to the API
 // fails. This header is load-bearing, not hygiene. Distinct from the static
@@ -4618,11 +4981,16 @@ app.get("/api/artifacts/:taskId/*", async (req, reply) => {
 app.post("/api/artifacts/:taskId/export", async (req, reply) => {
 	const taskId = String((req.params as any).taskId ?? "");
 	if (!SAFE_SEGMENT.test(taskId)) return reply.code(404).send({ error: "Artifact not found." });
-	const body = (req.body ?? {}) as { relativePath?: unknown; roomId?: unknown; conversationId?: unknown };
+	const body = (req.body ?? {}) as { relativePath?: unknown; roomId?: unknown; conversationId?: unknown; overwrite?: unknown; rename?: unknown };
 	const relativePath = String(body.relativePath ?? "");
 	const roomId = String(body.roomId ?? "").trim();
 	const conversationId = String(body.conversationId ?? "").trim();
 	if (!roomId) return reply.code(400).send({ error: "roomId is required." });
+	// Collision resolutions (assets contract §5): both must be EXPLICIT client
+	// choices from the three-button flow — never defaults, never combined.
+	const overwrite = body.overwrite === true;
+	const rename = body.rename === true;
+	if (overwrite && rename) return reply.code(400).send({ error: "overwrite and rename are mutually exclusive." });
 
 	// The UI passes the store-relative path (tasks/<taskId>/<rest>); the taskId in
 	// the URL must own it. A mismatched prefix is rejected without guessing a path.
@@ -4683,26 +5051,63 @@ app.post("/api/artifacts/:taskId/export", async (req, reply) => {
 	// strips any separators, and we re-check confinement so a resolved destination
 	// can never land outside the approved workspace folder.
 	const destName = path.basename(source.relativePath);
-	const destPath = path.resolve(workspaceRoot, destName);
-	if (destPath !== workspaceRoot && !destPath.startsWith(workspaceRoot + path.sep)) {
+	const confinedDestPath = (name: string): string | null => {
+		const candidate = path.resolve(workspaceRoot, name);
+		if (candidate !== workspaceRoot && !candidate.startsWith(workspaceRoot + path.sep)) return null;
+		return candidate;
+	};
+	const destPath = confinedDestPath(destName);
+	if (!destPath) {
 		return reply.code(400).send({ error: "Export destination escapes the room workspace folder." });
 	}
-	if (fs.existsSync(destPath)) {
-		return reply.code(409).send({ error: "A file with this name already exists in the room workspace." });
+	if (!overwrite && !rename && fs.existsSync(destPath)) {
+		return reply.code(409).send({ error: "A file with this name already exists in the room workspace.", code: "exists" });
 	}
+	let savedTo = destPath;
 	try {
 		const bytes = fs.readFileSync(source.fullPath);
-		// flag "wx" fails closed if a same-name file appears between the check above
-		// and the write (TOCTOU); 0o600 keeps the exported copy private like other
-		// server-side writes.
-		fs.writeFileSync(destPath, bytes, { flag: "wx", mode: 0o600 });
+		if (rename) {
+			// Keep both: first free suffixed name (deck-2.html, deck-3.html, …).
+			// Each attempt uses "wx", so a concurrent claim of the same name just
+			// moves us to the next suffix — race-safe without locks.
+			const parsed = path.parse(destName);
+			let written = false;
+			for (let suffix = fs.existsSync(destPath) ? 2 : 1; suffix <= 200; suffix += 1) {
+				const candidateName = suffix === 1 ? destName : `${parsed.name}-${suffix}${parsed.ext}`;
+				const candidate = confinedDestPath(candidateName);
+				if (!candidate) return reply.code(400).send({ error: "Export destination escapes the room workspace folder." });
+				try {
+					fs.writeFileSync(candidate, bytes, { flag: "wx", mode: 0o600 });
+					savedTo = candidate;
+					written = true;
+					break;
+				} catch (e) {
+					if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
+				}
+			}
+			if (!written) return reply.code(500).send({ error: "Could not find a free name for the exported file." });
+		} else {
+			// flag "wx" fails closed if a same-name file appears between the check
+			// above and the write (TOCTOU); it drops to "w" ONLY on the client's
+			// explicit Replace choice. 0o600 keeps the exported copy private like
+			// other server-side writes.
+			fs.writeFileSync(destPath, bytes, { flag: overwrite ? "w" : "wx", mode: 0o600 });
+		}
 	} catch (e) {
 		if ((e as NodeJS.ErrnoException).code === "EEXIST") {
-			return reply.code(409).send({ error: "A file with this name already exists in the room workspace." });
+			return reply.code(409).send({ error: "A file with this name already exists in the room workspace.", code: "exists" });
 		}
 		return reply.code(500).send({ error: "Failed to export the artifact to the room workspace." });
 	}
-	return reply.send({ savedTo: destPath });
+	// Ledger mapping (assets contract §3): ingest-on-iterate needs to know which
+	// workspace file came from which task artifact. Best-effort — pre-ledger
+	// tasks export fine without a row.
+	try {
+		appendTaskLedgerExport(roomId, taskId, { relativePath, savedTo, at: new Date().toISOString() });
+	} catch (e) {
+		app.log.warn({ err: (e as Error).message, taskId }, "task ledger export append failed");
+	}
+	return reply.send({ savedTo });
 });
 
 function contentType(file: string): string {
@@ -4771,6 +5176,15 @@ try {
 	}
 } catch (e) {
 	app.log.warn({ err: (e as Error).message }, "usage reconcile failed");
+}
+
+// Task-ledger boot sweep (assets contract §2): a row can only still be
+// `running` at boot if the process died before finalizing it.
+try {
+	const sweptTasks = sweepOrphanedTaskLedgerRecords();
+	if (sweptTasks > 0) app.log.info(`task ledger: marked ${sweptTasks} interrupted task(s) orphaned`);
+} catch (e) {
+	app.log.warn({ err: (e as Error).message }, "task ledger boot sweep failed");
 }
 
 let schedulerPreflightLoopHandle: ReturnType<typeof startPersistentRoomSchedulePreflightLoop> | null = null;

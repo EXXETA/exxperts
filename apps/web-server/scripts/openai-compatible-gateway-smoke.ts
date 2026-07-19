@@ -1,5 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer } from "./smoke-server-process.js";
+import { authedFetch, type AuthedFetchInit, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer } from "./smoke-server-process.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -42,8 +42,8 @@ async function waitForServer(server: ChildProcessWithoutNullStreams): Promise<vo
 	throw new Error(`server did not become ready: ${lastError}`);
 }
 
-async function requestJson(pathname: string, init?: RequestInit): Promise<{ status: number; body: any }> {
-	const response = await fetch(`${baseUrl}${pathname}`, init);
+async function requestJson(pathname: string, init?: AuthedFetchInit): Promise<{ status: number; body: any }> {
+	const response = await authedFetch(`${baseUrl}${pathname}`, init);
 	const text = await response.text();
 	return { status: response.status, body: text ? JSON.parse(text) : null };
 }
@@ -95,6 +95,7 @@ function smokeEnv(): NodeJS.ProcessEnv {
 	env.HOME = tempHome;
 	env.USERPROFILE = tempHome;
 	env.PORT = String(port);
+	env.EXXPERTS_AUTH_TOKEN = SMOKE_SERVER_AUTH_ENV.EXXPERTS_AUTH_TOKEN;
 	env.EXXETA_HOME = repoRoot;
 	env.EXXPERTS_CODING_AGENT_DIR = agentDir;
 	return env;

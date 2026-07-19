@@ -1,7 +1,8 @@
 const { spawn, spawnSync } = require("node:child_process");
+const fs = require("node:fs");
 const http = require("node:http");
 const path = require("node:path");
-const { ensureProductAppUserDirs } = require("./product-state-paths.cjs");
+const { ensureProductAppUserDirs, productAppStatePath } = require("./product-state-paths.cjs");
 
 function usage(command) {
   return `Usage: ${command} [--port <port>] [--no-open] [--help]\n\nStarts the local exxperts business/user web app, serves the built UI,\nand opens the browser unless --no-open is set.\n\nOptions:\n  --port <port>   Port for the local server (default: 8787 or PORT)\n  --no-open       Do not open a browser\n  --help          Show this help\n`;
@@ -47,6 +48,20 @@ function waitFor(url) {
       resolve(false);
     });
   });
+}
+
+// The server mints its client auth token (or honors EXXPERTS_AUTH_TOKEN)
+// before it starts listening, so once /healthz answers the token is readable.
+// The browser is opened at /auth/session?token=<token>, which exchanges the
+// token for an HttpOnly cookie and redirects to the app.
+function readAuthToken() {
+  const fromEnv = String(process.env.EXXPERTS_AUTH_TOKEN || "").trim();
+  if (fromEnv) return fromEnv;
+  try {
+    return fs.readFileSync(productAppStatePath("auth-token"), "utf8").trim() || null;
+  } catch {
+    return null;
+  }
 }
 
 function openBrowser(url) {
@@ -124,8 +139,11 @@ function main(argv = process.argv.slice(2), command = path.basename(process.argv
       await new Promise((r) => setTimeout(r, 250));
     }
     if (server.exitCode !== null) return;
+    const token = readAuthToken();
+    const signInUrl = token ? `${url}/auth/session?token=${encodeURIComponent(token)}` : url;
     console.error(`\nexxperts web running at ${url}\nPress Ctrl+C to stop.\n`);
-    if (opts.open) openBrowser(url);
+    if (opts.open) openBrowser(signInUrl);
+    else if (token) console.error(`Open this link once to sign the browser in:\n${signInUrl}\n`);
   })();
 }
 

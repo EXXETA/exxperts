@@ -1,6 +1,6 @@
-import { useMemo } from "react";
+import { useMemo, type ReactNode } from "react";
 
-interface ArtifactRef {
+export interface ArtifactRef {
 	relativePath: string;
 	extension: string;
 }
@@ -13,6 +13,24 @@ interface Props {
 	onSaveToWorkspace: () => void;
 	maximized: boolean;
 	onToggleMaximize: () => void;
+	/** Asset-panel mode (contract §2 rung 3): the asset's display title leads the header. */
+	assetTitle?: string;
+	/**
+	 * Room-scoped history (2026-07-18): "From an earlier thread · Jul 12" for
+	 * rows born in another conversation. One muted header line — the whole
+	 * disclosure; attaching stays gate-free.
+	 */
+	originLine?: string;
+	/** Multi-artifact tasks: sibling files, switchable from the header. */
+	files?: ArtifactRef[];
+	onSelectFile?: (file: ArtifactRef) => void;
+	/**
+	 * Asset-panel mode: the done-card action footer (Add to conversation ·
+	 * Save to workspace · Ask for changes · Open in new tab). When present, the header
+	 * keeps only chrome (maximize/close) — actions live in the footer, per
+	 * the approved mockup.
+	 */
+	footerSlot?: ReactNode;
 }
 
 type RouteResolution = { url: string; segments: string[] } | { error: string };
@@ -21,8 +39,9 @@ type RouteResolution = { url: string; segments: string[] } | { error: string };
 // route (/api/artifacts/<taskId>/<rest>). If the path is not owned by this
 // taskId we return an error rather than guessing a URL — a mismatched prefix
 // means the caller handed us something we cannot vouch for, and the viewer must
-// never point its sandbox at an unverified path.
-function resolveRouteUrl(taskId: string, relativePath: string): RouteResolution {
+// never point its sandbox at an unverified path. Exported for the asset-panel
+// footer, whose "Open in new tab" lives outside this component.
+export function resolveRouteUrl(taskId: string, relativePath: string): RouteResolution {
 	const prefix = `tasks/${taskId}/`;
 	if (!taskId || !relativePath.startsWith(prefix)) {
 		return { error: "This artifact could not be located for preview." };
@@ -38,7 +57,7 @@ function resolveRouteUrl(taskId: string, relativePath: string): RouteResolution 
 	return { url, segments };
 }
 
-export function ArtifactViewer({ taskId, templateLabel, artifact, onClose, onSaveToWorkspace, maximized, onToggleMaximize }: Props) {
+export function ArtifactViewer({ taskId, templateLabel, artifact, onClose, onSaveToWorkspace, maximized, onToggleMaximize, assetTitle, originLine, files, onSelectFile, footerSlot }: Props) {
 	const extension = artifact.extension.toLowerCase();
 	const resolved = useMemo(() => resolveRouteUrl(taskId, artifact.relativePath), [taskId, artifact.relativePath]);
 	const routeUrl = "url" in resolved ? resolved.url : null;
@@ -106,39 +125,50 @@ export function ArtifactViewer({ taskId, templateLabel, artifact, onClose, onSav
 			    ids appear here. */}
 			<header className="artifact-viewer-head">
 				<div className="artifact-viewer-provenance">
-					<div className="artifact-viewer-kicker">artifact</div>
-					<div className="artifact-viewer-template" title={templateLabel}>{templateLabel}</div>
+					{/* The sandbox assertion moved from a visible badge into this tooltip:
+					    it is provenance for the curious, not action-relevant status. The
+					    hidden span keeps it announced for assistive tech. */}
+					<div className="artifact-viewer-kicker" title="Rendered inside a locked-down sandbox">
+						{assetTitle ? templateLabel : "artifact"}
+						<span className="artifact-viewer-sr-note">, rendered inside a locked-down sandbox</span>
+					</div>
+					<div className="artifact-viewer-template" title={assetTitle ?? templateLabel}>{assetTitle ?? templateLabel}</div>
+					{originLine && <div className="artifact-viewer-origin">{originLine}</div>}
 				</div>
 				<div className="artifact-viewer-head-right">
-					<span className="artifact-viewer-badge" title="Rendered inside a locked-down sandbox">sandboxed</span>
 					<div className="artifact-viewer-actions">
 						<button
 							type="button"
-							className="artifact-viewer-action"
+							className="artifact-viewer-icon"
 							onClick={onToggleMaximize}
 							aria-pressed={maximized}
+							aria-label={maximized ? "Restore panel size" : "Maximize panel"}
 							title={maximized ? "Restore panel size" : "Maximize panel"}
 						>
-							{maximized ? "Restore" : "Maximize"}
+							{maximized ? "⤡" : "⤢"}
 						</button>
-						<button
-							type="button"
-							className="artifact-viewer-action"
-							onClick={openInTab}
-							disabled={!routeUrl}
-							title="Open this artifact in a new browser tab"
-						>
-							Open in tab
-						</button>
-						<button
-							type="button"
-							className="artifact-viewer-action artifact-viewer-action-primary"
-							onClick={onSaveToWorkspace}
-							disabled={!routeUrl}
-							title="Save a copy into this room's workspace folder"
-						>
-							Save to workspace
-						</button>
+						{!footerSlot && (
+							<>
+								<button
+									type="button"
+									className="artifact-viewer-quiet"
+									onClick={openInTab}
+									disabled={!routeUrl}
+									title="Open this artifact in a new browser tab"
+								>
+									Open in new tab
+								</button>
+								<button
+									type="button"
+									className="artifact-viewer-action artifact-viewer-action-primary"
+									onClick={onSaveToWorkspace}
+									disabled={!routeUrl}
+									title="Save a copy into this room's workspace folder"
+								>
+									Save to workspace
+								</button>
+							</>
+						)}
 						<button
 							type="button"
 							className="artifact-viewer-close"
@@ -150,7 +180,29 @@ export function ArtifactViewer({ taskId, templateLabel, artifact, onClose, onSav
 					</div>
 				</div>
 			</header>
+			{files && files.length > 1 && (
+				<div className="artifact-viewer-files" role="tablist" aria-label="Files in this task">
+					{files.map((file) => {
+						const name = file.relativePath.split("/").pop() ?? file.relativePath;
+						const active = file.relativePath === artifact.relativePath;
+						return (
+							<button
+								key={file.relativePath}
+								type="button"
+								role="tab"
+								aria-selected={active}
+								className={`artifact-viewer-file${active ? " active" : ""}`}
+								onClick={() => !active && onSelectFile?.(file)}
+								title={file.relativePath}
+							>
+								{name}
+							</button>
+						);
+					})}
+				</div>
+			)}
 			{renderBody()}
+			{footerSlot && <div className="artifact-viewer-foot">{footerSlot}</div>}
 		</aside>
 	);
 }

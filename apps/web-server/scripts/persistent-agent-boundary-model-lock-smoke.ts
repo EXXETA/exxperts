@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { PersistentAgentPiSessionJsonlThreadRuntime } from "../src/persistent-agents.js";
 
 const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "exxperts-boundary-model-lock-home-"));
 const root = path.join(tempHome, ".exxperts", "app", "personalized-agents");
@@ -121,15 +122,15 @@ try {
 	const memento = writePersistentAgentMementoBoundary(agentId, mementoOldThreadId, new Date("2026-06-27T10:00:00.000Z"), { runtimeCwd: tempCwd });
 	const postMementoThread = getPersistentAgentThread(agentId, memento.postMemento.activeThreadId);
 	assert(postMementoThread?.threadId.startsWith("postmem_"), "Memento should create postmem_ thread");
-	assert(postMementoThread.origin === "memento", "Memento fresh thread should start with memento origin");
-	const postMementoSessionPath = runtimeSessionRelPath(postMementoThread);
-	writePersistentAgentThread(agentId, postMementoThread.threadId, { state: "active", origin: "unknown", model: modelA, items: [] });
+	assert(postMementoThread!.origin === "memento", "Memento fresh thread should start with memento origin");
+	const postMementoSessionPath = runtimeSessionRelPath(postMementoThread!);
+	writePersistentAgentThread(agentId, postMementoThread!.threadId, { state: "active", origin: "unknown", model: modelA, items: [] });
 	const l1bBeforeMementoRetirementHash = sha256(readL1b());
-	const mementoRetirement = discardEmptyPreparedBoundaryThread(agentId, postMementoThread.threadId);
+	const mementoRetirement = discardEmptyPreparedBoundaryThread(agentId, postMementoThread!.threadId);
 	assert(mementoRetirement.boundary === "memento", "origin-clobbered postmem_ should retire as Memento boundary");
 	assert(mementoRetirement.runtime.state === "idle", "Memento empty-boundary retirement should set runtime idle");
 	assert(mementoRetirement.runtime.activeThreadId === null, "Memento empty-boundary retirement should clear activeThreadId");
-	assert(getPersistentAgentThread(agentId, postMementoThread.threadId) === null, "Memento empty-boundary thread should be deleted/retired");
+	assert(getPersistentAgentThread(agentId, postMementoThread!.threadId) === null, "Memento empty-boundary thread should be deleted/retired");
 	assert(sha256(readL1b()) === l1bBeforeMementoRetirementHash, "Memento empty-boundary retirement must not mutate L1b");
 	assert(sha256(readL1b()) === sha256(l1bBeforeMemento), "Memento flow should not mutate L1b");
 	const mementoFreshEnterId = "c_memento_model_b";
@@ -145,7 +146,7 @@ try {
 	const checkpointOldThreadId = "cp_boundary_old_a";
 	const checkpointOldWrite = writePiThread(checkpointOldThreadId, "active", "home", modelA, [{ kind: "user", id: "cp-display", text: "Synthetic checkpoint source turn." }]);
 	const checkpointOldSessionPath = runtimeSessionRelPath(checkpointOldWrite.thread);
-	const checkpointSession = openPersistentAgentPiSessionManager(agentId, checkpointOldWrite.thread.runtime, tempCwd);
+	const checkpointSession = openPersistentAgentPiSessionManager(agentId, checkpointOldWrite.thread.runtime as PersistentAgentPiSessionJsonlThreadRuntime, tempCwd);
 	checkpointSession.appendMessage({ role: "user", content: "Synthetic checkpointable source turn.", timestamp: Date.now() });
 	const proposal = await buildCheckpointProposal({
 		agentId,
@@ -168,16 +169,16 @@ try {
 	const checkpoint = writeApprovedCheckpoint(parsed.request, parsed.warnings, new Date("2026-06-27T10:05:00.000Z"), { runtimeCwd: tempCwd });
 	const postCheckpointThread = getPersistentAgentThread(agentId, checkpoint.postCheckpoint.activeThreadId);
 	assert(postCheckpointThread?.threadId.startsWith("postcp_"), "checkpoint should create postcp_ thread");
-	assert(postCheckpointThread.origin === "checkpoint", "checkpoint fresh thread should start with checkpoint origin");
-	assert(postCheckpointThread.items.length === 0, "checkpoint fresh thread should have no user-visible turns before retirement");
-	assert(getPersistentAgentRuntimeState(agentId).activeThreadId === postCheckpointThread.threadId, "checkpoint fresh thread should be the active runtime before retirement");
-	const postCheckpointSessionPath = runtimeSessionRelPath(postCheckpointThread);
+	assert(postCheckpointThread!.origin === "checkpoint", "checkpoint fresh thread should start with checkpoint origin");
+	assert(postCheckpointThread!.items.length === 0, "checkpoint fresh thread should have no user-visible turns before retirement");
+	assert(getPersistentAgentRuntimeState(agentId).activeThreadId === postCheckpointThread!.threadId, "checkpoint fresh thread should be the active runtime before retirement");
+	const postCheckpointSessionPath = runtimeSessionRelPath(postCheckpointThread!);
 	const l1bBeforeCheckpointRetirementHash = sha256(readL1b());
-	const checkpointRetirement = discardEmptyPreparedBoundaryThread(agentId, postCheckpointThread.threadId);
+	const checkpointRetirement = discardEmptyPreparedBoundaryThread(agentId, postCheckpointThread!.threadId);
 	assert(checkpointRetirement.boundary === "checkpoint", "origin-preserved postcp_ should retire as checkpoint boundary");
 	assert(checkpointRetirement.runtime.state === "idle", "checkpoint empty-boundary retirement should set runtime idle");
 	assert(checkpointRetirement.runtime.activeThreadId === null, "checkpoint empty-boundary retirement should clear activeThreadId");
-	assert(getPersistentAgentThread(agentId, postCheckpointThread.threadId) === null, "checkpoint empty-boundary thread should be deleted/retired");
+	assert(getPersistentAgentThread(agentId, postCheckpointThread!.threadId) === null, "checkpoint empty-boundary thread should be deleted/retired");
 	assert(sha256(readL1b()) === l1bBeforeCheckpointRetirementHash, "checkpoint empty-boundary retirement must not mutate L1b further");
 	const checkpointFreshEnterId = "c_checkpoint_model_b";
 	const checkpointFreshEnter = writePiThread(checkpointFreshEnterId, "active", "launcher", modelB, []);

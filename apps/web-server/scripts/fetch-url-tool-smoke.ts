@@ -63,3 +63,5 @@ assert(/disabled/i.test(toolText(disabledResult)), "refusal should mention disab
 delete process.env.EXXETA_FETCH_URL_DISABLED;
 
 console.log("fetch_url tool smoke passed");
+
+export {};

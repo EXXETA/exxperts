@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { apiFetch } from "../api";
 import { MarkdownRenderer } from "./Markdown";
 
 // Room memory telemetry, read from /api/memory (read-only). Rooms remember
@@ -663,7 +664,7 @@ export function Memory({ onMaintain, maintainBlocked }: { onMaintain?: (target: 
 			if (typeof content === "string") setPanel({ kind: "area", area: rowArea, content });
 			return;
 		}
-		fetch(`/api/memory/rooms/${encodeURIComponent(detail.id)}/area?name=${encodeURIComponent(rowArea)}`)
+		apiFetch(`/api/memory/rooms/${encodeURIComponent(detail.id)}/area?name=${encodeURIComponent(rowArea)}`)
 			.then((r) => (r.ok ? r.json() : null))
 			.then((d) => { if (req === panelReq.current && d && typeof d.content === "string") setPanel({ kind: "area", area: d.area, content: d.content }); })
 			.catch(() => {});
@@ -675,7 +676,7 @@ export function Memory({ onMaintain, maintainBlocked }: { onMaintain?: (target: 
 		if (!detail) return;
 		const req = ++panelReq.current;
 		if (past) { setPanel({ kind: "area", area: "Full memory", content: past.content }); return; }
-		fetch(`/api/memory/rooms/${encodeURIComponent(detail.id)}/snapshot?at=${Date.now()}`)
+		apiFetch(`/api/memory/rooms/${encodeURIComponent(detail.id)}/snapshot?at=${Date.now()}`)
 			.then((r) => (r.ok ? r.json() : null))
 			.then((d: Snapshot | null) => { if (req === panelReq.current && d && typeof d.content === "string") setPanel({ kind: "area", area: "Full memory", content: d.content }); })
 			.catch(() => {});
@@ -689,7 +690,7 @@ export function Memory({ onMaintain, maintainBlocked }: { onMaintain?: (target: 
 		panelReq.current++;
 		const cp = s.checkpointId;
 		setPanel({ kind: "transcript", cp, title: s.title, state: "loading" });
-		fetch(`/api/memory/rooms/${encodeURIComponent(detail.id)}/conversation?checkpoint=${encodeURIComponent(cp)}`)
+		apiFetch(`/api/memory/rooms/${encodeURIComponent(detail.id)}/conversation?checkpoint=${encodeURIComponent(cp)}`)
 			.then((r) => (r.ok ? r.json() : Promise.reject(new Error("bad status"))))
 			.then((d: TranscriptResult) => setPanel((p) => (p?.kind === "transcript" && p.cp === cp ? { kind: "transcript", cp, title: s.title, state: "ready", data: d } : p)))
 			.catch(() => setPanel((p) => (p?.kind === "transcript" && p.cp === cp ? { kind: "transcript", cp, title: s.title, state: "error" } : p)));
@@ -705,7 +706,7 @@ export function Memory({ onMaintain, maintainBlocked }: { onMaintain?: (target: 
 		// fetch instead of pinning "couldn't read" until the next room switch.
 		if (diffs[key] && diffs[key].state !== "error") return;
 		setDiffs((prev) => ({ ...prev, [key]: { state: "loading" } }));
-		fetch(`/api/memory/rooms/${encodeURIComponent(detail.id)}/event-diff?kind=${e.kind}&event=${encodeURIComponent(key)}`)
+		apiFetch(`/api/memory/rooms/${encodeURIComponent(detail.id)}/event-diff?kind=${e.kind}&event=${encodeURIComponent(key)}`)
 			.then((r) => (r.ok ? r.json() : Promise.reject(new Error("bad status"))))
 			.then((d: EventDiff) => setDiffs((prev) => ({ ...prev, [key]: { state: "ready", data: d } })))
 			.catch(() => setDiffs((prev) => ({ ...prev, [key]: { state: "error" } })));
@@ -760,7 +761,7 @@ export function Memory({ onMaintain, maintainBlocked }: { onMaintain?: (target: 
 		let stale = false;
 		setSnap((s) => (s?.state === "ready" ? s : { at, state: "loading" }));
 		const timer = setTimeout(() => {
-			fetch(`/api/memory/rooms/${encodeURIComponent(roomId)}/snapshot?at=${at}`)
+			apiFetch(`/api/memory/rooms/${encodeURIComponent(roomId)}/snapshot?at=${at}`)
 				.then((r) => (r.ok ? r.json() : Promise.reject(new Error("bad status"))))
 				.then((d: Snapshot) => { if (!stale) setSnap({ at, state: "ready", data: d }); })
 				.catch(() => { if (!stale) setSnap({ at, state: "error" }); });
@@ -781,7 +782,7 @@ export function Memory({ onMaintain, maintainBlocked }: { onMaintain?: (target: 
 			const raw = Number(localStorage.getItem(LAST_VISIT_KEY));
 			if (Number.isFinite(raw) && raw > 0) since = raw;
 		} catch { /* storage unavailable — fall back to 7-day window */ }
-		fetch(`/api/memory/digest?since=${since}`)
+		apiFetch(`/api/memory/digest?since=${since}`)
 			.then((r) => (r.ok ? r.json() : null))
 			.then((d) => {
 				if (cancelled || !d) return;
@@ -797,7 +798,7 @@ export function Memory({ onMaintain, maintainBlocked }: { onMaintain?: (target: 
 	useEffect(() => {
 		let cancelled = false;
 		const load = () =>
-			fetch("/api/memory/overview")
+			apiFetch("/api/memory/overview")
 				.then((r) => (r.ok ? r.json() : Promise.reject(new Error("bad status"))))
 				.then((d) => { if (!cancelled) { setData(d); setLoadError(false); } })
 				.catch(() => { if (!cancelled) setLoadError(true); });
@@ -811,7 +812,7 @@ export function Memory({ onMaintain, maintainBlocked }: { onMaintain?: (target: 
 	useEffect(() => {
 		let cancelled = false;
 		const load = () =>
-			fetch("/api/memory/room-memory")
+			apiFetch("/api/memory/room-memory")
 				.then((r) => (r.ok ? r.json() : null))
 				.then((d: { rooms?: RoomMemoryInfo[] } | null) => {
 					if (cancelled || !d || !Array.isArray(d.rooms)) return;
@@ -829,7 +830,7 @@ export function Memory({ onMaintain, maintainBlocked }: { onMaintain?: (target: 
 	useEffect(() => {
 		if (!selected) { setDetail(null); return; }
 		let cancelled = false;
-		fetch(`/api/memory/rooms/${encodeURIComponent(selected)}`)
+		apiFetch(`/api/memory/rooms/${encodeURIComponent(selected)}`)
 			.then((r) => (r.ok ? r.json() : null))
 			.then((d) => { if (!cancelled) setDetail(d); })
 			.catch(() => {});
@@ -850,7 +851,7 @@ export function Memory({ onMaintain, maintainBlocked }: { onMaintain?: (target: 
 		const rooms = scope.size > 0 ? [...scope] : undefined;
 		const ctrl = new AbortController();
 		const timer = setTimeout(() => ctrl.abort(), 65_000);
-		fetch("/api/memory/ask", {
+		apiFetch("/api/memory/ask", {
 			method: "POST",
 			headers: { "content-type": "application/json" },
 			body: JSON.stringify({ question: q, rooms, history }),
@@ -879,7 +880,7 @@ export function Memory({ onMaintain, maintainBlocked }: { onMaintain?: (target: 
 		if (!q) { setHits(null); return; }
 		const seq = ++searchSeq.current;
 		setSearching(true);
-		fetch(`/api/memory/search?q=${encodeURIComponent(q)}`)
+		apiFetch(`/api/memory/search?q=${encodeURIComponent(q)}`)
 			.then((r) => (r.ok ? r.json() : { hits: [] }))
 			.then((d) => { if (seq === searchSeq.current) setHits(d.hits ?? []); })
 			.catch(() => { if (seq === searchSeq.current) setHits([]); })

@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from "react";
+import { apiFetch } from "../api";
 import type { PersistentAgentMementoBoundaryResponse, PersistentAgentStatus } from "../types";
 import { modelDisplayName } from "../model-names";
 import { RsInfo } from "./rs-info";
 
 async function applyMemento(agentId: string, conversationId: string): Promise<PersistentAgentMementoBoundaryResponse> {
-	const response = await fetch(`/api/persistent-agents/${encodeURIComponent(agentId)}/memento`, {
+	const response = await apiFetch(`/api/persistent-agents/${encodeURIComponent(agentId)}/memento`, {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
 		body: JSON.stringify({ conversationId }),

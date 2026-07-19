@@ -1,3 +1,4 @@
+import { redirectToSignInOn401 } from "./api";
 import type { PersistentAgentArchiveRequest, PersistentAgentArchiveResponse, PersistentAgentId, PersistentAgentRenameResponse } from "./types";
 
 function parsePersistentRoomManagementError(payload: unknown, fallback = "Room management request failed."): string {
@@ -23,6 +24,7 @@ async function readJsonOrText(response: Response): Promise<unknown> {
 
 async function fetchJson<T>(input: RequestInfo | URL, init?: RequestInit, fallbackError?: string): Promise<T> {
 	const response = await fetch(input, init);
+	redirectToSignInOn401(response);
 	const payload = await readJsonOrText(response);
 	if (!response.ok) throw new Error(parsePersistentRoomManagementError(payload, fallbackError));
 	return payload as T;

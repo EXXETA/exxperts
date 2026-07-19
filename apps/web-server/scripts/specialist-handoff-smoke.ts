@@ -45,7 +45,7 @@ try {
 	assert(lines[4] === "tasks/tsk-abc/q3-review.html", `artifact path 1 on its own line; got "${lines[4]}"`);
 	assert(lines[5] === "tasks/tsk-abc/margin-split.svg", `artifact path 2 on its own line; got "${lines[5]}"`);
 	assert(lines[6] === "Source: ephemeral specialist session, no memory access; this room only knows this", `source line 1 verbatim; got "${lines[6]}"`);
-	assert(lines[7] === "distilled result and the artifact paths. Full transcript viewable in the task card only.", `source line 2 verbatim; got "${lines[7]}"`);
+	assert(lines[7] === "distilled result and the artifact paths.", `source line 2 verbatim; got "${lines[7]}"`);
 	assert(lines[8] === summary, `summary follows the source lines verbatim; got "${lines[8]}"`);
 	assert(block.includes(`${summary}\n[/SPECIALIST RESULT: deck]`), "summary sits directly above the close fence");
 	assert(!block.includes(SPECIALIST_HANDOFF_TRIM_MARKER), "a short summary is not marked trimmed");

@@ -40,9 +40,17 @@ export function buildSpecialistTemplatesIndexSection(templates: readonly Special
 
 ## Visual specialists
 
-You can propose delegating visual work to an ephemeral specialist with the delegate_task tool. The user must approve each delegation; approval spawns the specialist and grants it write access to one new task-private artifact folder. Specialists have no memory, no web access, and no knowledge of this conversation beyond the brief you write — put ALL needed data in the brief (or reference prior task artifacts via inputArtifacts). Results appear on a task card beside the chat, not in this conversation; never claim, invent, or wait for a specialist's results in your reply. Available templates:
+You can propose delegating visual work to an ephemeral specialist with the delegate_task tool. The user must approve each delegation; approval spawns the specialist and grants it write access to one new task-private artifact folder. Specialists have no memory, no web access, and no knowledge of this conversation beyond the brief you write — put ALL needed data in the brief (or reference prior task artifacts via inputArtifacts). Results appear in the room's Artifacts panel, not in this conversation; never claim, invent, or wait for a specialist's results in your reply. Available templates:
 
-${lines.join("\n")}`;
+${lines.join("\n")}
+
+Routing — the user's INTENT decides the path, never their exact wording ("chart", "plot", "graph", "diagram", "visualize" are synonyms here):
+- A quick sketch serving the current discussion → a small inline Mermaid diagram in the chat. It is ephemeral and that is fine.
+- Diagram requests sit on that line: when unsure whether a sketch or a deliverable is wanted, draw the Mermaid sketch AND offer the specialist upgrade in the same reply ("Want a specialist to turn this into a polished SVG you can keep?") — never coin-flip between the two paths.
+- Anything the user will keep, share, or present — a chart of their data, a standalone diagram, a deck, a one-pager — → propose the matching specialist, whatever words they used.
+- A vague but visualizable request ("make this easier to grasp") → answer briefly in text, then offer a specialist ("Want a specialist to turn this into a chart/one-pager you can keep?"). Never silently default to text-only when a kept visual would serve the user better.
+- Decks: unless the user already gave them, ask audience, length, and style once — with a stated default so they can just say "go ahead" — before delegating.
+- artifact_write is for content the user explicitly asked to save as a file; creating a designed visual deliverable is specialist work.`;
 }
 
 const delegateTaskSchema = Type.Object({
@@ -78,7 +86,7 @@ export function createDelegateTaskTool(options: CreateDelegateTaskToolOptions): 
 		name: DELEGATE_TASK_TOOL_NAME,
 		label: "delegate visual task",
 		description:
-			"Propose delegating a visual artifact (deck, diagram, chart, document) to an ephemeral specialist. The user must approve; approval spawns the specialist with write access to one new task-private folder. Results appear on a task card, never in this conversation.",
+			"Propose delegating a visual artifact (deck, diagram, chart, document) to an ephemeral specialist. The user must approve; approval spawns the specialist with write access to one new task-private folder. Results appear in the room's Artifacts panel, never in this conversation.",
 		promptSnippet: "Propose a user-approved visual-specialist delegation",
 		parameters: delegateTaskSchema,
 		execute: async (_toolCallId: string, params: { template: string; brief: string; expectedResult?: string; inputArtifacts?: string[] }, _signal: unknown, _onUpdate: unknown, ctx: any): Promise<TextToolResult> => {
@@ -131,7 +139,7 @@ export function createDelegateTaskTool(options: CreateDelegateTaskToolOptions): 
 					"",
 					`It can only write into one new folder made for this task: ${plan.taskFolder}/ (at most ${SPECIALIST_TASK_CAPS.maxArtifacts} files). Approving starts it and grants that folder write access.`,
 					"",
-					"The result lands on a task card. Keep it by adding it to the conversation or saving it to your workspace.",
+					"The result lands in Artifacts, on the left. Keep it by adding it to the conversation or saving it to your workspace.",
 					"",
 					// Anti-spoof separator: everything below is the room model's own text
 					// appended after the app-drawn facts above; a brief that mimics those
@@ -150,7 +158,7 @@ export function createDelegateTaskTool(options: CreateDelegateTaskToolOptions): 
 			return {
 				content: [{
 					type: "text",
-					text: `Specialist started (task ${plan.taskId}, template ${template.id}). The user sees a live task card; artifacts will appear there when ready. Tell the user it is underway — do not describe, invent, or wait for its results.`,
+					text: `Specialist started (task ${plan.taskId}, template ${template.id}). The user can follow it in the Artifacts panel; results appear there when ready. Tell the user it is underway — do not describe, invent, or wait for its results.`,
 				}],
 				details: { outcome: "started", taskId: plan.taskId, template: template.id },
 			};

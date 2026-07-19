@@ -1,5 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer } from "./smoke-server-process.js";
+import { authedFetch, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer } from "./smoke-server-process.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -72,11 +72,11 @@ async function waitForServer(server: ChildProcessWithoutNullStreams): Promise<vo
 	throw new Error(`server did not become ready: ${lastError}`);
 }
 
-async function exportArtifact(taskId: string, relativePath: string, roomId: string, conversationId?: string): Promise<{ status: number; body: any }> {
-	const response = await fetch(`${baseUrl}/api/artifacts/${taskId}/export`, {
+async function exportArtifact(taskId: string, relativePath: string, roomId: string, conversationId?: string, resolution?: { overwrite?: boolean; rename?: boolean }): Promise<{ status: number; body: any }> {
+	const response = await authedFetch(`${baseUrl}/api/artifacts/${taskId}/export`, {
 		method: "POST",
 		headers: { "content-type": "application/json" },
-		body: JSON.stringify({ relativePath, roomId, ...(conversationId ? { conversationId } : {}) }),
+		body: JSON.stringify({ relativePath, roomId, ...(conversationId ? { conversationId } : {}), ...(resolution ?? {}) }),
 	});
 	const text = await response.text();
 	return { status: response.status, body: text ? JSON.parse(text) : null };
@@ -110,6 +110,7 @@ try {
 			...process.env,
 			HOME: tempHome, USERPROFILE: tempHome,
 			PORT: String(port),
+			...SMOKE_SERVER_AUTH_ENV,
 			EXXETA_HOME: repoRoot,
 			EXXPERTS_CODING_AGENT_DIR: tempAgentRuntimeRoot,
 			EXXETA_PERSISTENT_AGENTS_ROOT: tempAgentsRoot,
@@ -134,11 +135,51 @@ try {
 		assert(mode === 0o600, `happy export: destination should be 0o600, got 0o${mode.toString(8)}`);
 	}
 
-	// 2. Second export of the same name → 409, and the existing file is untouched.
+	// 2. Second export of the same name → 409 with the machine key, file untouched.
 	const conflict = await exportArtifact("tsk-export1", "tasks/tsk-export1/page.html", ROOM_WITH_WORKSPACE);
 	assert(conflict.status === 409, `duplicate export: expected 409, got ${conflict.status}: ${JSON.stringify(conflict.body)}`);
 	assert(String(conflict.body?.error ?? "").includes("already exists"), `duplicate export: message should mention already exists, got ${JSON.stringify(conflict.body)}`);
+	assert(conflict.body?.code === "exists", `duplicate export: 409 must carry code "exists", got ${JSON.stringify(conflict.body)}`);
 	assert(fs.readFileSync(savedTo, "utf-8") === HTML_BODY, "duplicate export: existing file must be left intact");
+
+	// 2b. Collision resolutions (assets contract §5). Keep both → first free
+	// suffix, returned in savedTo; a second Keep both takes the next suffix.
+	const keepBoth = await exportArtifact("tsk-export1", "tasks/tsk-export1/page.html", ROOM_WITH_WORKSPACE, undefined, { rename: true });
+	assert(keepBoth.status === 200, `keep-both export: expected 200, got ${keepBoth.status}: ${JSON.stringify(keepBoth.body)}`);
+	assert(String(keepBoth.body?.savedTo ?? "") === path.join(workspaceRealRoot, "page-2.html"), `keep-both export: savedTo should be page-2.html, got "${keepBoth.body?.savedTo}"`);
+	assert(fs.readFileSync(path.join(workspaceRealRoot, "page-2.html"), "utf-8") === HTML_BODY, "keep-both export: suffixed copy must match source");
+	assert(fs.readFileSync(savedTo, "utf-8") === HTML_BODY, "keep-both export: original must be untouched");
+	const keepBothAgain = await exportArtifact("tsk-export1", "tasks/tsk-export1/page.html", ROOM_WITH_WORKSPACE, undefined, { rename: true });
+	assert(String(keepBothAgain.body?.savedTo ?? "") === path.join(workspaceRealRoot, "page-3.html"), `second keep-both should take the next suffix, got "${keepBothAgain.body?.savedTo}"`);
+	// Replace → drops wx→w only with the explicit flag; content is replaced.
+	fs.writeFileSync(savedTo, "stale contents", "utf-8");
+	const replace = await exportArtifact("tsk-export1", "tasks/tsk-export1/page.html", ROOM_WITH_WORKSPACE, undefined, { overwrite: true });
+	assert(replace.status === 200, `replace export: expected 200, got ${replace.status}: ${JSON.stringify(replace.body)}`);
+	assert(String(replace.body?.savedTo ?? "") === savedTo, `replace export: savedTo should stay the original name, got "${replace.body?.savedTo}"`);
+	assert(fs.readFileSync(savedTo, "utf-8") === HTML_BODY, "replace export: destination must carry the fresh bytes");
+	// Both flags at once is a client bug → 400, nothing written.
+	const bothFlags = await exportArtifact("tsk-export1", "tasks/tsk-export1/page.html", ROOM_WITH_WORKSPACE, undefined, { overwrite: true, rename: true });
+	assert(bothFlags.status === 400, `both-flags export: expected 400, got ${bothFlags.status}: ${JSON.stringify(bothFlags.body)}`);
+	assert(!fs.existsSync(path.join(workspaceRealRoot, "page-4.html")), "both-flags export: nothing new should be written");
+
+	// 2c. Ledger mapping (assets contract §3): a successful export appends
+	// {relativePath, savedTo} to the task's ledger row; a task without a row
+	// (pre-ledger) exports fine and stays recordless.
+	{
+		const { createTaskLedgerRecord, listTaskLedgerRecords } = await import("../src/persistent-room-task-ledger.js");
+		const ledgerTaskDir = path.join(store, "tasks", "tsk-export9");
+		fs.mkdirSync(ledgerTaskDir, { recursive: true });
+		fs.writeFileSync(path.join(ledgerTaskDir, "report.html"), HTML_BODY);
+		createTaskLedgerRecord({ taskId: "tsk-export9", roomId: ROOM_WITH_WORKSPACE, conversationId: "conv-x", templateId: "deck", templateVersion: 1, title: "Ledger export" });
+		const ledgered = await exportArtifact("tsk-export9", "tasks/tsk-export9/report.html", ROOM_WITH_WORKSPACE);
+		assert(ledgered.status === 200, `ledger export: expected 200, got ${ledgered.status}: ${JSON.stringify(ledgered.body)}`);
+		const ledgerRow = listTaskLedgerRecords(ROOM_WITH_WORKSPACE).find((r) => r.taskId === "tsk-export9");
+		assert(ledgerRow?.exports?.length === 1, "ledger export: exports[] must gain one entry");
+		assert(ledgerRow?.exports?.[0]?.relativePath === "tasks/tsk-export9/report.html" && ledgerRow?.exports?.[0]?.savedTo === String(ledgered.body?.savedTo), "ledger export: entry must map artifact to real savedTo");
+		assert(typeof ledgerRow?.exports?.[0]?.at === "string" && ledgerRow.exports[0].at.length > 0, "ledger export: entry must be timestamped");
+		// tsk-export1 predates the ledger — its exports above must not create a row.
+		assert(listTaskLedgerRecords(ROOM_WITH_WORKSPACE).find((r) => r.taskId === "tsk-export1") === undefined, "pre-ledger task must stay recordless after export");
+	}
 
 	// 3. Room without a configured workspace → 400 with the guidance message.
 	const noWorkspace = await exportArtifact("tsk-export1", "tasks/tsk-export1/notes.md", ROOM_WITHOUT_WORKSPACE);

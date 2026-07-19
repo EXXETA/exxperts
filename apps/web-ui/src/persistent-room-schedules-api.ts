@@ -1,3 +1,4 @@
+import { redirectToSignInOn401 } from "./api";
 import type {
 	PersistentAgentId,
 	PersistentRoomScheduleCreateRequest,
@@ -29,6 +30,7 @@ async function readJsonOrText(response: Response): Promise<unknown> {
 
 async function fetchJson<T>(input: RequestInfo | URL, init?: RequestInit, fallbackError?: string): Promise<T> {
 	const response = await fetch(input, init);
+	redirectToSignInOn401(response);
 	const payload = await readJsonOrText(response);
 	if (!response.ok) throw new Error(parsePersistentRoomSchedulesError(payload, fallbackError));
 	return payload as T;

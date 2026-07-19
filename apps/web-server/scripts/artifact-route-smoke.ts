@@ -1,5 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer } from "./smoke-server-process.js";
+import { authedFetch, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer } from "./smoke-server-process.js";
 import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
@@ -107,6 +107,7 @@ try {
 			...process.env,
 			HOME: tempHome, USERPROFILE: tempHome,
 			PORT: String(port),
+			...SMOKE_SERVER_AUTH_ENV,
 			EXXETA_HOME: repoRoot,
 			EXXPERTS_CODING_AGENT_DIR: tempAgentRuntimeRoot,
 			EXXETA_PERSISTENT_AGENTS_ROOT: tempAgentsRoot,
@@ -124,7 +125,7 @@ try {
 		{ rel: "sub/inner.html", type: "text/html; charset=utf-8", body: INNER_BODY },
 	];
 	for (const file of legit) {
-		const res = await fetch(`${baseUrl}/api/artifacts/tsk-route1/${file.rel}`);
+		const res = await authedFetch(`${baseUrl}/api/artifacts/tsk-route1/${file.rel}`);
 		assert(res.status === 200, `GET ${file.rel}: expected 200, got ${res.status}`);
 		assert(res.headers.get("content-type") === file.type, `GET ${file.rel}: content-type must be "${file.type}", got "${res.headers.get("content-type")}"`);
 		assertArtifactHeaders(res.headers, `GET ${file.rel}`);
@@ -135,7 +136,7 @@ try {
 	}
 
 	// 2. Server-internal dot-directory must never be servable.
-	const thumbs = await fetch(`${baseUrl}/api/artifacts/tsk-route1/.thumbs/preview.png`);
+	const thumbs = await authedFetch(`${baseUrl}/api/artifacts/tsk-route1/.thumbs/preview.png`);
 	assert(thumbs.status === 404, `.thumbs/preview.png: expected 404, got ${thumbs.status}`);
 	assertArtifactHeaders(thumbs.headers, ".thumbs 404");
 	assert(!(await thumbs.text()).includes("not-really-a-png"), ".thumbs/preview.png: body leaked file contents");
@@ -148,7 +149,7 @@ try {
 		"/api/artifacts/../private/secret.md",
 	];
 	for (const attempt of traversals) {
-		const res = await fetch(`${baseUrl}${attempt}`);
+		const res = await authedFetch(`${baseUrl}${attempt}`);
 		const text = await res.text();
 		assert(res.status === 404, `${attempt}: expected 404, got ${res.status}`);
 		assert(!text.includes(SECRET), `${attempt}: response body leaked secret`);
@@ -158,29 +159,29 @@ try {
 	}
 
 	// 4. Unknown and malformed taskIds → 404 (with headers when the route matches).
-	const unknown = await fetch(`${baseUrl}/api/artifacts/tsk-nonexistent/page.html`);
+	const unknown = await authedFetch(`${baseUrl}/api/artifacts/tsk-nonexistent/page.html`);
 	assert(unknown.status === 404, `unknown taskId: expected 404, got ${unknown.status}`);
 	assertArtifactHeaders(unknown.headers, "unknown taskId 404");
 
-	const hidden = await fetch(`${baseUrl}/api/artifacts/.hidden/page.html`);
+	const hidden = await authedFetch(`${baseUrl}/api/artifacts/.hidden/page.html`);
 	assert(hidden.status === 404, `.hidden taskId: expected 404, got ${hidden.status}`);
 	assertArtifactHeaders(hidden.headers, ".hidden taskId 404");
 
-	const dotdot = await fetch(`${baseUrl}/api/artifacts/../page.html`);
+	const dotdot = await authedFetch(`${baseUrl}/api/artifacts/../page.html`);
 	assert(dotdot.status === 404, `.. taskId: expected 404, got ${dotdot.status}`);
 
-	const slashEncoded = await fetch(`${baseUrl}/api/artifacts/a%2fb/page.html`);
+	const slashEncoded = await authedFetch(`${baseUrl}/api/artifacts/a%2fb/page.html`);
 	assert(slashEncoded.status === 404, `a/b taskId: expected 404, got ${slashEncoded.status}`);
 
 	// 5. ?download=1 → attachment disposition with the file's basename.
-	const download = await fetch(`${baseUrl}/api/artifacts/tsk-route1/page.html?download=1`);
+	const download = await authedFetch(`${baseUrl}/api/artifacts/tsk-route1/page.html?download=1`);
 	assert(download.status === 200, `download: expected 200, got ${download.status}`);
 	assert(download.headers.get("content-disposition") === 'attachment; filename="page.html"', `download: content-disposition wrong, got "${download.headers.get("content-disposition")}"`);
-	const nestedDownload = await fetch(`${baseUrl}/api/artifacts/tsk-route1/sub/inner.html?download=1`);
+	const nestedDownload = await authedFetch(`${baseUrl}/api/artifacts/tsk-route1/sub/inner.html?download=1`);
 	assert(nestedDownload.headers.get("content-disposition") === 'attachment; filename="inner.html"', `nested download: content-disposition wrong, got "${nestedDownload.headers.get("content-disposition")}"`);
 
 	// 6. Size cap.
-	const big = await fetch(`${baseUrl}/api/artifacts/tsk-route1/big.html`);
+	const big = await authedFetch(`${baseUrl}/api/artifacts/tsk-route1/big.html`);
 	assert(big.status === 413, `big.html: expected 413, got ${big.status}`);
 	assertArtifactHeaders(big.headers, "413 big.html");
 

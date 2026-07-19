@@ -43,6 +43,32 @@ export type SpecialistRenderProfile =
 	| "img" // consumed via <img> — non-scriptable (SVG)
 	| "iframe-static"; // consumed via sandboxed iframe with sandbox="" (no scripts)
 
+/**
+ * The output-constraint block for a render profile, single-sourced (prompt
+ * hardening slice 2): these lines state exactly what the write-time validators
+ * (`validateRawSvgArtifactContent` / `validateRawHtmlArtifactContent`) enforce,
+ * so the specialist prompt can never drift from enforcement again. Template
+ * `promptIntro`s carry task-shape guidance only — never constraint wording.
+ */
+export function specialistRenderProfileConstraints(profile: SpecialistRenderProfile): string {
+	if (profile === "img") {
+		return [
+			"Output constraints (validation-enforced at write time — a violating write is rejected):",
+			"- Fully static, self-contained SVG: no <script>, no event handlers (onclick=, onload=, …), no <foreignObject>, no iframe/object/embed.",
+			"- No external references and no embedded images: no src attributes (external, local, or data:), no CSS @import. Same-document references are fine and encouraged: <use href=\"#id\">, fill=\"url(#gradient)\".",
+			"- No URLs anywhere, not even as visible text — refer to sources by name instead. (The standard SVG xmlns declarations are allowed.)",
+			"- The file is displayed via <img>: anything script-dependent would not render even if it could be written.",
+		].join("\n");
+	}
+	return [
+		"Output constraints (validation-enforced at write time — a violating write is rejected):",
+		"- Fully static, self-contained HTML: no <script>, no inline event handlers (onclick=, onload=, …), no iframe/object/embed. The page is displayed in a no-scripts sandbox, so JavaScript would not run anyway.",
+		"- No external references and no images: no src attributes (external, local, or data:), no external stylesheets or fonts, no CSS @import. Express visuals with inline SVG and CSS; put all styling in an inline <style> block.",
+		"- No URLs anywhere, not even as visible text — refer to sources by name instead.",
+		"- Links only as same-document fragments (href=\"#some-id\").",
+	].join("\n");
+}
+
 export type SpecialistExportOption = "file" | "workspace" | "pptx";
 
 export interface SpecialistTemplate {
@@ -64,8 +90,11 @@ export interface SpecialistTemplate {
 const TEMPLATES: SpecialistTemplate[] = [
 	{
 		id: "diagram-svg",
-		label: "SVG diagram",
-		version: 1,
+		label: "Diagram",
+		// v2 (prompt hardening slice 2, 2026-07-17): constraint wording moved out
+		// of promptIntro into the profile-derived block; write-time SVG validation
+		// now enforces what the old intro only asked for.
+		version: 2,
 		outputExtensions: [".svg"],
 		toolNames: ["artifact_write", "artifact_read", "artifact_list"],
 		renderProfile: "img",
@@ -73,15 +102,15 @@ const TEMPLATES: SpecialistTemplate[] = [
 		doctrineLine: "diagram-svg — a standalone SVG diagram (architecture, flow, timeline); no scripts, no external references.",
 		promptIntro: [
 			"You produce ONE self-contained SVG diagram (plus optional variants) with `artifact_write`.",
-			"The SVG must be fully self-contained: no <script>, no event handlers, no external hrefs/images/fonts, no <foreignObject>.",
-			"It will be displayed via <img>, so anything script-dependent will simply not render.",
 			"Set an explicit viewBox and design for legibility at ~800px wide.",
 		].join("\n"),
 	},
 	{
 		id: "chart-html",
-		label: "HTML chart",
-		version: 1,
+		label: "Chart",
+		// v2 (prompt hardening slice 2, 2026-07-17): constraint wording single-
+		// sourced into the profile-derived block.
+		version: 2,
 		outputExtensions: [".html"],
 		toolNames: ["artifact_write", "artifact_read", "artifact_list"],
 		renderProfile: "iframe-static",
@@ -89,9 +118,8 @@ const TEMPLATES: SpecialistTemplate[] = [
 		doctrineLine: "chart-html — a static self-contained HTML chart page (SVG/CSS based, no JavaScript) from data supplied in the brief.",
 		promptIntro: [
 			"You produce ONE self-contained HTML page presenting the chart(s) with `artifact_write`.",
-			"Render charts as inline SVG or CSS — the page is displayed in a no-scripts sandbox, so JavaScript will not run.",
+			"Render charts as inline SVG or CSS.",
 			"All data comes from the brief or the listed input artifacts; you have no way to fetch anything, so never invent numbers.",
-			"Inline all styling; no external stylesheets, fonts, images, or scripts.",
 		].join("\n"),
 	},
 	{
@@ -104,7 +132,10 @@ const TEMPLATES: SpecialistTemplate[] = [
 		// Same write validation, sandbox, and scriptless CSP as document-html;
 		// the PPTX derivative is deferred until a structured path returns (§9).
 		// artifact_write_html_deck stays registered for main-room use.
-		version: 2,
+		// v3 (prompt hardening slice 2, 2026-07-17): constraint wording (static,
+		// no external refs, data:-URI line) single-sourced into the profile block;
+		// the old intro's data:-URI invitation contradicted the write validator.
+		version: 3,
 		outputExtensions: [".html"],
 		toolNames: ["artifact_write", "artifact_read", "artifact_list"],
 		renderProfile: "iframe-static",
@@ -115,14 +146,16 @@ const TEMPLATES: SpecialistTemplate[] = [
 		promptIntro: [
 			"You produce ONE self-contained HTML slide deck with `artifact_write` — you design the markup and CSS yourself.",
 			'Structure: exactly one `<section class="slide">` element per slide (this exact class drives slide thumbnails and the slide count); give every slide a consistent 16:9 frame.',
-			"Static HTML + inline CSS only — the deck is displayed in a no-scripts sandbox, so JavaScript will not run. No external references of any kind (stylesheets, fonts, images, scripts); embed small images as data: URIs if truly needed.",
 			"Aim for consulting-grade quality: one message per slide, an opening framing slide and a closing action slide — and design real layout for the content (card grids, chips, accent colors, strong typographic hierarchy), never walls of bullets.",
 		].join("\n"),
 	},
 	{
 		id: "document-html",
-		label: "Visual document",
-		version: 1,
+		label: "Document",
+		// v2 (prompt hardening slice 2, 2026-07-17): constraint wording single-
+		// sourced into the profile block; the old intro's data:-URI invitation
+		// contradicted the write validator.
+		version: 2,
 		outputExtensions: [".html"],
 		toolNames: ["artifact_write", "artifact_read", "artifact_list"],
 		renderProfile: "iframe-static",
@@ -130,8 +163,6 @@ const TEMPLATES: SpecialistTemplate[] = [
 		doctrineLine: "document-html — a free-form self-contained HTML document (visual digest, report, one-pager); static HTML+CSS only.",
 		promptIntro: [
 			"You produce ONE self-contained HTML document with `artifact_write` — a visually structured page, not a slide deck.",
-			"The page is displayed in a no-scripts sandbox: HTML + inline CSS only; JavaScript will not run.",
-			"No external references of any kind (stylesheets, fonts, images, scripts); embed small images as data: URIs if truly needed.",
 			"Use clear typographic hierarchy; the point of this format is to be easier to digest than markdown.",
 		].join("\n"),
 	},

@@ -74,7 +74,7 @@ async function main(): Promise<void> {
 	assert(linuxTimeout === 4321, `linux runner should receive timeout, got ${linuxTimeout}`);
 
 	const linuxCancelledRunner: LocalFolderPickerRunner = async () => {
-		const error = new Error("Command failed: zenity") as NodeJS.ErrnoException & { code: unknown };
+		const error = new Error("Command failed: zenity") as Error & { code: unknown };
 		error.code = 1;
 		throw Object.assign(error, { stdout: "", stderr: "" });
 	};

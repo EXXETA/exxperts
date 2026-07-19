@@ -129,7 +129,7 @@ try {
 			sentUserMessages += 1;
 		},
 	};
-	scheduleModule.default(fakePi, { roomId: agentId });
+	scheduleModule.default(fakePi as unknown as Parameters<typeof scheduleModule.default>[0], { roomId: agentId });
 	assert(registeredTool?.name === "schedule_prompt", "extension should register schedule_prompt tool");
 
 	const toolAdd = await registeredTool.execute("tool-call-1", {

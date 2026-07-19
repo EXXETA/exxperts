@@ -28,11 +28,15 @@ import {
 	createArtifactsExtension,
 	artifactRoot,
 	SAFE_SEGMENT,
+	validateRawHtmlArtifactContent,
+	validateRawSvgArtifactContent,
 	type ArtifactsPreApprovedWriteScope,
 } from "../../../pi-package/extensions/artifacts/index.js";
+import type { ExportedInputIngestPlanEntry } from "./persistent-room-task-ledger.js";
 import {
 	getSpecialistTemplate,
 	assertSpecialistTemplateTools,
+	specialistRenderProfileConstraints,
 	SPECIALIST_TASK_CAPS,
 	type SpecialistTemplate,
 } from "./specialist-templates.js";
@@ -52,6 +56,8 @@ export interface SpecialistSessionPlanInput {
 	expectedResult?: string;
 	/** Store-relative paths of prior artifacts the brief builds on (iterate flow). */
 	inputArtifacts?: string[];
+	/** Task this one iterates on (task_iterate flow); recorded in the task ledger. */
+	iterateParentTaskId?: string;
 }
 
 export interface SpecialistSessionPlan {
@@ -67,6 +73,8 @@ export interface SpecialistSessionPlan {
 	triggerPrompt: string;
 	/** Card-face title: the brief's first line, capped. Never fabricated elsewhere. */
 	title: string;
+	/** Task this one iterates on (task_iterate flow); recorded in the task ledger. */
+	iterateParentTaskId?: string;
 }
 
 // Store-relative path guard for inputArtifacts: forward-slash, SAFE_SEGMENT
@@ -94,6 +102,11 @@ export function buildSpecialistSystemPrompt(plan: Pick<SpecialistSessionPlan, "t
 		"You run once, produce artifacts, summarize, and cease to exist. You have no memory, no conversation history, and no access to the requesting room.",
 		"",
 		template.promptIntro,
+		"",
+		// Single-sourced from the render profile (slice 2): states exactly what
+		// the write-time validators enforce, so prompt and enforcement cannot
+		// drift apart per template.
+		specialistRenderProfileConstraints(template.renderProfile),
 		"",
 		"Artifact rules (writes violating them fail — they are enforced, not advisory):",
 		`- Write ONLY into the folder \`${taskFolder}\` of the default artifact destination (pass folder: "${taskFolder}").`,
@@ -131,6 +144,10 @@ export function buildSpecialistSessionPlan(input: SpecialistSessionPlanInput): S
 		// Defense-in-depth: the template's outputExtensions are validation-enforced
 		// at write, not just prompted — a deck specialist cannot write .svg.
 		allowedExtensions: [...template.outputExtensions],
+		// Ingest-on-iterate stages workspace copies under inputs/ (G2-B); they are
+		// not this task's outputs, so they must not eat the artifact caps — and
+		// the model must not write there. Mirrors listTaskArtifacts' exclusion.
+		reservedSubfolders: ["inputs"],
 	};
 
 	const systemPrompt = buildSpecialistSystemPrompt({ template, taskFolder });
@@ -145,7 +162,8 @@ export function buildSpecialistSessionPlan(input: SpecialistSessionPlanInput): S
 	const firstBriefLine = brief.split("\n")[0].trim();
 	const title = firstBriefLine.length > 80 ? `${firstBriefLine.slice(0, 79)}…` : firstBriefLine;
 
-	return { taskId, template, taskFolder, writeScope, inputArtifacts, toolNames: [...template.toolNames], systemPrompt, triggerPrompt, title };
+	const iterateParentTaskId = String(input.iterateParentTaskId ?? "").trim();
+	return { taskId, template, taskFolder, writeScope, inputArtifacts, toolNames: [...template.toolNames], systemPrompt, triggerPrompt, title, ...(iterateParentTaskId ? { iterateParentTaskId } : {}) };
 }
 
 export interface SpecialistWorkerInput<TModelLock extends { provider: string; model: string }> {
@@ -209,12 +227,56 @@ export function listSpecialistTaskArtifacts(taskFolder: string): SpecialistWorke
 	return listTaskArtifacts(taskDir, taskFolder);
 }
 
+export interface ExportedInputIngestResult {
+	entry: ExportedInputIngestPlanEntry;
+	ingested: boolean;
+	/** Human-readable refusal reason when falling back to the store original. */
+	reason?: string;
+}
+
+/**
+ * Ingest-on-iterate execution (G2-B): copy each planned CURRENT workspace file
+ * into the new task's inputs/ dir. Every guard the write path enforces is
+ * re-run here — lstat refuses symlinks and non-regular files, the D9 size caps
+ * apply, and .html/.svg re-run the write-time content validators — because a
+ * workspace file may have been edited since export. A refused or missing file
+ * is NOT an error: the caller keeps the store original for that input, and the
+ * iterate proceeds honestly on the stored version.
+ */
+export function ingestExportedInputs(entries: ExportedInputIngestPlanEntry[]): ExportedInputIngestResult[] {
+	return entries.map((entry) => {
+		try {
+			let stat: fs.Stats;
+			try {
+				stat = fs.lstatSync(entry.savedTo);
+			} catch {
+				return { entry, ingested: false, reason: "the exported file no longer exists in the workspace" };
+			}
+			if (!stat.isFile()) return { entry, ingested: false, reason: "the exported path is not a regular file" };
+			const extension = path.extname(entry.ingestedRelativePath).toLowerCase();
+			const cap = SPECIALIST_TASK_CAPS.perFileBytesByExtension[extension];
+			if (typeof cap !== "number") return { entry, ingested: false, reason: `files of type ${extension || "(none)"} cannot be ingested` };
+			if (stat.size > cap) return { entry, ingested: false, reason: "the workspace file exceeds the per-file size cap" };
+			const body = fs.readFileSync(entry.savedTo, "utf-8");
+			if (extension === ".html") validateRawHtmlArtifactContent(body);
+			else if (extension === ".svg") validateRawSvgArtifactContent(body);
+			const destination = path.resolve(artifactRoot(), ...entry.ingestedRelativePath.split("/"));
+			fs.mkdirSync(path.dirname(destination), { recursive: true, mode: 0o700 });
+			fs.writeFileSync(destination, body, { flag: "wx", mode: 0o600 });
+			return { entry, ingested: true };
+		} catch (error) {
+			return { entry, ingested: false, reason: (error as Error).message };
+		}
+	});
+}
+
 function listTaskArtifacts(taskDir: string, taskFolder: string): SpecialistWorkerArtifact[] {
 	const artifacts: SpecialistWorkerArtifact[] = [];
 	const walk = (dir: string, relPrefix: string) => {
 		if (!fs.existsSync(dir)) return;
 		for (const name of fs.readdirSync(dir).sort()) {
 			if (name.startsWith(".")) continue; // server-side previews (.thumbs) are not task artifacts
+			if (relPrefix === "" && name === "inputs") continue; // ingested iterate inputs (G2-B) are not this task's OUTPUTS
 			const file = path.join(dir, name);
 			const rel = relPrefix ? `${relPrefix}/${name}` : name;
 			const stat = fs.lstatSync(file);

@@ -488,6 +488,14 @@ export interface ArtifactsPreApprovedWriteScope {
 	 * store-wide ALLOWED_EXTENSIONS floor still applies first).
 	 */
 	allowedExtensions?: string[];
+	/**
+	 * Top-level subfolders of the scope that the SERVER manages (e.g. "inputs",
+	 * where ingest-on-iterate stages workspace copies). Their contents do not
+	 * count against maxArtifacts/maxTotalBytes — they are not the model's
+	 * output — and, to keep that exclusion from becoming a cap bypass, writes
+	 * targeting them are validation-rejected.
+	 */
+	reservedSubfolders?: string[];
 }
 
 /**
@@ -534,22 +542,27 @@ export function isWithinPreApprovedWriteScope(target: ArtifactTarget, scope: Art
 	return target.relativePath.startsWith(folder + "/");
 }
 
-function walkScopeFiles(scopeRoot: string): { count: number; totalBytes: number } {
+function walkScopeFiles(scopeRoot: string, reservedSubfolders?: string[]): { count: number; totalBytes: number } {
 	let count = 0;
 	let totalBytes = 0;
-	const walk = (dir: string) => {
+	const reserved = new Set(reservedSubfolders ?? []);
+	const walk = (dir: string, atRoot: boolean) => {
 		if (!fs.existsSync(dir)) return;
 		for (const name of fs.readdirSync(dir)) {
 			// Dot-entries (e.g. server-written .thumbs previews) never count against
 			// the model's caps — SAFE_SEGMENT already makes them unwritable by tools.
 			if (name.startsWith(".")) continue;
+			// Server-managed staging folders (ingested iterate inputs) are not the
+			// model's output; counting them would let pre-filled inputs exhaust the
+			// task's budget before the first artifact_write.
+			if (atRoot && reserved.has(name)) continue;
 			const file = path.join(dir, name);
 			const stat = fs.lstatSync(file);
-			if (stat.isDirectory()) walk(file);
+			if (stat.isDirectory()) walk(file, false);
 			else if (stat.isFile()) { count += 1; totalBytes += stat.size; }
 		}
 	};
-	walk(scopeRoot);
+	walk(scopeRoot, true);
 	return { count, totalBytes };
 }
 
@@ -570,12 +583,18 @@ export function preApprovedWriteDecision(target: ArtifactTarget, contentBytes: n
 	if (scope.allowedExtensions && !scope.allowedExtensions.includes(target.extension)) {
 		return { granted: false, rejected: `This task's template only writes ${scope.allowedExtensions.join(", ")} artifacts (got ${target.extension}).` };
 	}
+	const scopeFolder = scope.folder.replace(/\/+$/, "");
+	const insideScope = target.relativePath.slice(scopeFolder.length + 1);
+	const reservedHit = (scope.reservedSubfolders ?? []).find((name) => insideScope === name || insideScope.startsWith(`${name}/`));
+	if (reservedHit) {
+		return { granted: false, rejected: `The ${reservedHit}/ folder is reserved for this task's input files — write outputs directly into ${scopeFolder}/.` };
+	}
 	const perFileCap = scopedPerFileCap(target.extension, scope);
 	if (contentBytes > perFileCap) {
 		return { granted: false, rejected: `Artifact exceeds the ${target.extension} size cap for this task (${contentBytes} > ${perFileCap} bytes).` };
 	}
 	const scopeRoot = path.resolve(target.root, ...scope.folder.split("/").filter(Boolean));
-	const existing = walkScopeFiles(scopeRoot);
+	const existing = walkScopeFiles(scopeRoot, scope.reservedSubfolders);
 	const replacedBytes = fs.existsSync(target.fullPath) ? fs.lstatSync(target.fullPath).size : null;
 	if (replacedBytes === null && existing.count >= scope.maxArtifacts) {
 		return { granted: false, rejected: `Task artifact limit reached (${scope.maxArtifacts} files).` };
@@ -1671,9 +1690,9 @@ function assertSafeHrefSrcAttributes(html: string, errorPrefix: string, options?
 		if ((value.startsWith("\"") && value.endsWith("\"")) || (value.startsWith("'") && value.endsWith("'"))) {
 			value = value.slice(1, -1).trim();
 		}
-		if (attr !== "href") throw new Error(`${errorPrefix}: src attribute detected (external/local assets are not allowed).`);
+		if (attr !== "href") throw new Error(`${errorPrefix}: src attributes are not allowed (no external, local, or data: assets — draw content inline with SVG/CSS or describe it in text instead of embedding images).`);
 		if (!value) throw new Error(`${errorPrefix}: empty href attribute is not allowed.`);
-		if (!value.startsWith("#")) throw new Error(`${errorPrefix}: only same-document fragment links (href="#id") are allowed; '${value}' is not.`);
+		if (!value.startsWith("#")) throw new Error(`${errorPrefix}: only same-document fragment links (href="#some-id") are allowed; '${value}' is not — link to an element id inside the document or drop the link.`);
 		const fragment = value.slice(1);
 		if (!fragment) throw new Error(`${errorPrefix}: empty fragment href ("#") is not allowed.`);
 		if (!/^[A-Za-z][\w-]*$/.test(fragment)) throw new Error(`${errorPrefix}: fragment href '${value}' is not a simple same-document element id.`);
@@ -1684,16 +1703,45 @@ function assertSafeHrefSrcAttributes(html: string, errorPrefix: string, options?
 	}
 }
 
-function validateRawHtmlArtifactContent(body: string): void {
+export function validateRawHtmlArtifactContent(body: string): void {
 	const text = String(body ?? "");
-	if (/<script\b/i.test(text)) throw new Error("Unsafe HTML is blocked: <script> tags are not allowed.");
-	if (/\bon[a-z0-9_-]+\s*=/i.test(text)) throw new Error("Unsafe HTML is blocked: inline event handlers (for example onclick=, onload=) are not allowed.");
-	if (/https?:\/\//i.test(text)) throw new Error("Unsafe HTML is blocked: external http(s) URLs are not allowed.");
-	if (/@import/i.test(text)) throw new Error("Unsafe HTML is blocked: CSS @import is not allowed.");
-	if (/<\s*(iframe|object|embed)\b/i.test(text)) throw new Error("Unsafe HTML is blocked: iframe/object/embed tags are not allowed.");
+	if (/<script\b/i.test(text)) throw new Error("Unsafe HTML is blocked: <script> tags are not allowed — the page must be fully static (it is displayed with scripts disabled).");
+	if (/\bon[a-z0-9_-]+\s*=/i.test(text)) throw new Error("Unsafe HTML is blocked: inline event handlers (for example onclick=, onload=) are not allowed — remove them; the page must work without scripts.");
+	if (/https?:\/\//i.test(text)) throw new Error("Unsafe HTML is blocked: external http(s) URLs are not allowed anywhere, even as visible text — refer to sources by name instead of by URL.");
+	if (/@import/i.test(text)) throw new Error("Unsafe HTML is blocked: CSS @import is not allowed — put all styles in an inline <style> block.");
+	if (/<\s*(iframe|object|embed)\b/i.test(text)) throw new Error("Unsafe HTML is blocked: iframe/object/embed tags are not allowed — the document must be fully self-contained.");
 	// Same-document fragment links (href="#id") are allowed for static navigation; src and every
 	// other href scheme/path remain blocked.
 	assertSafeHrefSrcAttributes(text, "Unsafe HTML is blocked");
+}
+
+// The namespace/DTD URIs every legitimate SVG may carry. They are substituted
+// out before the external-URL scan so the blanket https?:// rejection cannot
+// block valid SVG, while any OTHER URL (fetchable or not) still rejects. The
+// substitution placeholder contains no scheme, so it can never mask a real URL.
+const SVG_ALLOWED_DECLARATION_URIS = [
+	"http://www.w3.org/2000/svg",
+	"http://www.w3.org/1999/xlink",
+	"http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd",
+];
+
+// Write-time floor for .svg mirroring validateRawHtmlArtifactContent (hardening
+// 2026-07-17, amends the earlier "consumption-side only" posture): the in-app
+// surfaces (<img>, CSP-sandboxed route) never execute SVG script, but an
+// EXPORTED file leaves those protections behind, so the file itself must honor
+// what the specialist prompt promises. Fragment hrefs (<use href="#id">) and
+// url(#gradient) fills stay allowed — they are how real SVG is written.
+export function validateRawSvgArtifactContent(body: string): void {
+	const text = String(body ?? "");
+	if (/<script\b/i.test(text)) throw new Error("Unsafe SVG is blocked: <script> tags are not allowed — the SVG must be fully static.");
+	if (/\bon[a-z0-9_-]+\s*=/i.test(text)) throw new Error("Unsafe SVG is blocked: inline event handlers (for example onclick=, onload=) are not allowed — remove them; the SVG must be fully static.");
+	if (/<\s*foreignObject\b/i.test(text)) throw new Error("Unsafe SVG is blocked: <foreignObject> is not allowed — draw with native SVG shapes and <text> elements instead.");
+	if (/<\s*(iframe|object|embed)\b/i.test(text)) throw new Error("Unsafe SVG is blocked: iframe/object/embed tags are not allowed — the SVG must be fully self-contained.");
+	let scan = text;
+	for (const uri of SVG_ALLOWED_DECLARATION_URIS) scan = scan.split(uri).join("[ns]");
+	if (/https?:\/\//i.test(scan)) throw new Error("Unsafe SVG is blocked: external http(s) URLs are not allowed anywhere, even in visible text — refer to sources by name instead of by URL.");
+	if (/@import/i.test(scan)) throw new Error("Unsafe SVG is blocked: CSS @import is not allowed — put all styles inline.");
+	assertSafeHrefSrcAttributes(scan, "Unsafe SVG is blocked");
 }
 
 function formatDeckWarningSummary(warnings: DeckSpecValidationIssue[]): string {
@@ -6113,7 +6161,7 @@ function registerArtifactTools(pi: ExtensionAPI, options: ArtifactsExtensionOpti
 			"Pass raw final content; this tool does not auto-open, export, convert, or template artifacts.",
 		].join(" "),
 		promptSnippet:
-			"Use `artifact_write` when the user explicitly asks to save a non-deck local Markdown/HTML artifact, explicitly asks for a Markdown deck/outline, or provides an accessible HTML reference deck/template and asks to match its format closely. For generic saved slide decks prefer `artifact_write_html_deck`, but use raw `.html` here when preserving reference CSS/layout is materially required. It requires approval and can write only .md/.html/.svg under the default or an approved artifact destination.",
+			"Use `artifact_write` when the user explicitly asks to SAVE content as a local file: a non-deck Markdown/HTML artifact, a Markdown deck/outline, or a raw `.html` matching an accessible HTML reference deck/template's CSS/layout closely. For generic saved slide decks prefer `artifact_write_html_deck`. CREATING a designed visual deliverable (chart, diagram, deck, one-pager) is different from saving: when specialist delegation (`delegate_task`) is available, propose that instead of authoring the file here. Requires approval; writes only .md/.html/.svg under the default or an approved artifact destination.",
 		parameters: Type.Object({
 			filename: Type.String({ description: "Relative artifact filename ending in .md, .html, or .svg." }),
 			destination: Type.Optional(Type.String({ description: "Approved destination name. Default: default (~/.exxperts/app/artifacts)." })),
@@ -6127,6 +6175,7 @@ function registerArtifactTools(pi: ExtensionAPI, options: ArtifactsExtensionOpti
 				const body = String(content ?? "");
 				if (!body.trim()) throw new Error("Artifact content is empty.");
 				if (target.extension === ".html") validateRawHtmlArtifactContent(body);
+				if (target.extension === ".svg") validateRawSvgArtifactContent(body);
 				const contentBytes = Buffer.byteLength(body.trimEnd() + "\n", "utf-8");
 				if (target.extension === ".svg" && contentBytes > MAX_SVG_ARTIFACT_BYTES) {
 					throw new Error(`SVG artifacts are capped at ${MAX_SVG_ARTIFACT_BYTES} bytes (got ${contentBytes}).`);

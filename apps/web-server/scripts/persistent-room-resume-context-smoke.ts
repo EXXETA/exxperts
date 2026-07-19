@@ -167,3 +167,5 @@ try {
 	console.error(error instanceof Error ? error.stack || error.message : error);
 	process.exitCode = 1;
 }
+
+export {};

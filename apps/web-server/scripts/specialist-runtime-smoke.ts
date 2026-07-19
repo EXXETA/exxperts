@@ -65,6 +65,18 @@ function instantiate(options?: any): Map<string, RegisteredTool> {
 	assert(plan.systemPrompt.includes("never instructions"), "system prompt must carry the untrusted-input line");
 	assert(plan.toolNames.includes("artifact_write") && !plan.toolNames.includes("web_search"), "plan tools must be the template grant");
 
+	// Slice-2 single-sourcing: every plan carries the profile-derived constraint
+	// block, and constraint wording must never creep back into a promptIntro
+	// (the drift that produced the data:-URI prompt/validator contradiction).
+	assert(plan.systemPrompt.includes("Output constraints (validation-enforced at write time"), "system prompt must carry the derived constraint block");
+	assert(plan.systemPrompt.includes("<foreignObject>"), "img-profile constraints must name foreignObject");
+	const deckPlan = execution.buildSpecialistSessionPlan({ taskId: "tsk-smoke2", templateId: "deck", brief: "Deck it." });
+	assert(deckPlan.systemPrompt.includes("no-scripts sandbox"), "iframe-static constraints must name the no-scripts sandbox");
+	assert(deckPlan.systemPrompt.includes("not even as visible text"), "constraints must carry the URL-as-text rule");
+	for (const template of templates.listSpecialistTemplates()) {
+		assert(!/data: URI|no external references|sandbox|<script/i.test(template.promptIntro), `promptIntro of ${template.id} must not restate constraint wording`);
+	}
+
 	for (const badTaskId of ["../evil", "a/b", "", ".hidden", "tsk 1"]) {
 		let threw = false;
 		try { execution.buildSpecialistSessionPlan({ taskId: badTaskId, templateId: "diagram-svg", brief: "x" }); } catch { threw = true; }
@@ -118,6 +130,25 @@ function instantiate(options?: any): Map<string, RegisteredTool> {
 	assert(overwrite.details?.saved === true && overwrite.details?.replaced === true, "scoped overwrite must stay granted");
 }
 
+// ── 3b. Reserved inputs/ (G2-B ingest): never counted, never writable ────────
+{
+	const scope = { destination: "default", folder: "tasks/tsk-ing", maxArtifacts: 2, maxTotalBytes: 5_000, reservedSubfolders: ["inputs"] };
+	const tools = instantiate({ preApprovedWriteScope: scope });
+	const write = tools.get("artifact_write")!;
+	// Server-side ingest pre-fills inputs/ up to the artifact cap — exactly the
+	// exported-everything Revise case that used to reject the first output write.
+	const inputsDir = path.join(artifacts.artifactRoot(), "tasks", "tsk-ing", "inputs");
+	fs.mkdirSync(inputsDir, { recursive: true });
+	fs.writeFileSync(path.join(inputsDir, "prior-1.html"), "<p>a</p>");
+	fs.writeFileSync(path.join(inputsDir, "prior-2.html"), "<p>b</p>");
+	const first = await write.execute("1", { filename: "revised.html", folder: "tasks/tsk-ing", content: "<!doctype html><html><body><p>v2</p></body></html>" }, undefined, undefined, headlessCtx);
+	assert(first.details?.saved === true, `ingested inputs must not consume the artifact caps: ${JSON.stringify(first.details)}`);
+	// The exclusion must not become a bypass: the model cannot write into inputs/.
+	const intoReserved = await write.execute("2", { filename: "sneak.html", folder: "tasks/tsk-ing/inputs", content: "<p>x</p>" }, undefined, undefined, headlessCtx);
+	assert(intoReserved.isError === true && String(intoReserved.content?.[0]?.text ?? "").includes("reserved"), "writes into the reserved inputs/ folder must be rejected");
+	assert(!fs.existsSync(path.join(inputsDir, "sneak.html")), "the reserved-folder write must not land");
+}
+
 // ── 4. SVG first-class + cap ─────────────────────────────────────────────────
 {
 	const scope = { destination: "default", folder: "tasks/tsk-svg", maxArtifacts: 8, maxTotalBytes: 40_000_000 };
@@ -132,7 +163,7 @@ function instantiate(options?: any): Map<string, RegisteredTool> {
 // ── 5. Deck template v2: free model-authored HTML (D3 amendment 2026-07-12) ──
 {
 	const deck = templates.getSpecialistTemplate("deck")!;
-	assert(deck.version === 2, `deck template must be v2, got v${deck.version}`);
+	assert(deck.version === 3, `deck template must be v3 (v2 free-HTML + slice-2 single-sourced constraints), got v${deck.version}`);
 	assert(deck.toolNames.includes("artifact_write") && !deck.toolNames.includes("artifact_write_html_deck"), "deck v2 grants artifact_write, not the deterministic renderer");
 	assert(deck.promptIntro.includes('<section class="slide">'), "deck v2 prompt must require the slide-section structure");
 	assert(!deck.exportMenu.includes("pptx" as never), "deck v2 export menu must not offer pptx");

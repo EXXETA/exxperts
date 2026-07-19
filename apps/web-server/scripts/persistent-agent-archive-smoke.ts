@@ -1,5 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer } from "./smoke-server-process.js";
+import { authedFetch, type AuthedFetchInit, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer } from "./smoke-server-process.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -56,8 +56,8 @@ async function waitForServer(server: ChildProcessWithoutNullStreams): Promise<vo
 	throw new Error(`server did not become ready: ${lastError}`);
 }
 
-async function requestJson(pathname: string, init: RequestInit = {}): Promise<{ status: number; body: any }> {
-	const response = await fetch(`${baseUrl}${pathname}`, {
+async function requestJson(pathname: string, init: AuthedFetchInit = {}): Promise<{ status: number; body: any }> {
+	const response = await authedFetch(`${baseUrl}${pathname}`, {
 		...init,
 		headers: {
 			...(init.body ? { "content-type": "application/json" } : {}),
@@ -87,6 +87,7 @@ try {
 			...process.env,
 			HOME: tempHome, USERPROFILE: tempHome,
 			PORT: String(port),
+			...SMOKE_SERVER_AUTH_ENV,
 			EXXETA_HOME: repoRoot,
 			EXXETA_PERSISTENT_AGENTS_ROOT: tempAgentsRoot,
 		},

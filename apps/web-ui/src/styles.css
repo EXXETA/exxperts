@@ -78,8 +78,13 @@
 	--exx-warning: #e8a838;
 	--exx-danger: #e85858;
 	--exx-danger-strong: #ff5555;
+	/* Status grammar (2026-07-18): the "thinker" blue — a live task working.
+	   Only a genuinely running task may pulse in it; green stays for done. */
+	--exx-working: #7da7e8;
 	/* Brand lila: plan-covered usage accent in the Wallet. */
 	--exx-plan: #8ca5ff;
+	/* Ink that keeps contrast on --exx-plan surfaces; themed with it. */
+	--exx-plan-ink: #101014;
 	/* Maintain action pills (drop/update/reorganize); darkened for light theme below. */
 	--exx-pill-drop: #f39b7f;
 	--exx-pill-update: #7aa7ff;
@@ -173,8 +178,11 @@
 	--exx-warning: #9a650f;
 	--exx-danger: #c93535;
 	--exx-danger-strong: #b42323;
+	/* The thinker blue, darkened for contrast on the light canvas. */
+	--exx-working: #4a72c4;
 	/* Brand lila, darkened for contrast on the light canvas. */
 	--exx-plan: #4a63c4;
+	--exx-plan-ink: #ffffff;
 	--exx-pill-drop: #a84e2e;
 	--exx-pill-update: #3d5fb8;
 	--exx-pill-reorganize: #7a4fb0;
@@ -9095,6 +9103,16 @@ label.rs-row {
 	display: flex;
 	flex-direction: column;
 	color: var(--fg);
+	/* A brief slide+fade so opening a row reads as the pane arriving, not
+	 * content blinking in; the rail toggle then feels like one object. */
+	animation: artifact-viewer-in 150ms ease-out;
+}
+@keyframes artifact-viewer-in {
+	from { opacity: 0; transform: translateX(10px); }
+	to { opacity: 1; transform: translateX(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+	.artifact-viewer { animation: none; }
 }
 .artifact-viewer-head {
 	min-height: 72px;
@@ -9125,6 +9143,16 @@ label.rs-row {
 	font-size: 15px;
 	font-weight: 700;
 	color: var(--fg);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	max-width: 100%;
+}
+/* Room-scoped history: the one-line origin disclosure for rows born in an
+   earlier conversation — muted, informative, not invasive. */
+.artifact-viewer-origin {
+	font-size: var(--exx-font-size-xs);
+	color: var(--dim);
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
@@ -9179,26 +9207,80 @@ label.rs-row {
 }
 .artifact-viewer-action-primary:hover:not(:disabled),
 .artifact-viewer-action-primary:focus-visible:not(:disabled) {
-	background: var(--exx-action-primary-hover-bg);
-	color: var(--exx-action-primary-fg);
-	border-color: var(--exx-action-primary-hover-bg);
+	/* Brand Lila on hover ties the pane's one primary to the accent; the ink
+	 * is themed with the accent since light mode darkens the Lila. */
+	background: var(--exx-plan);
+	color: var(--exx-plan-ink);
+	border-color: var(--exx-plan);
 }
 .artifact-viewer-action:disabled {
 	opacity: 0.5;
 	cursor: default;
 }
+/* Quiet footer/header actions (artifact-pane polish, 2026-07-19): one primary
+ * per state, everything else steps back until hover. Same affordance language
+ * as the room-settings rs-quiet controls. */
+.artifact-viewer-quiet {
+	background: transparent;
+	border: 1px solid transparent;
+	color: var(--muted);
+	border-radius: var(--exx-radius-sm);
+	padding: 5px 11px;
+	font-size: 12px;
+	font-weight: 600;
+	white-space: nowrap;
+	cursor: pointer;
+}
+.artifact-viewer-quiet:hover:not(:disabled),
+.artifact-viewer-quiet:focus-visible:not(:disabled) {
+	color: var(--fg);
+	border-color: var(--border);
+	background: var(--exx-surface, transparent);
+}
+.artifact-viewer-quiet:disabled {
+	opacity: 0.5;
+	cursor: default;
+}
+.asset-viewer-details {
+	margin-left: auto;
+}
+/* Screen-reader-only text: visually removed, still announced. */
+.artifact-viewer-sr-note {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	overflow: hidden;
+	clip-path: inset(50%);
+	white-space: nowrap;
+}
+/* Orphan rows render Delete then Details; only the first right-aligner keeps
+ * the auto margin, so the pair sits together at the edge. */
+.asset-viewer-delete:has(+ .asset-viewer-details) {
+	margin-left: 0;
+}
+.artifact-viewer-icon,
 .artifact-viewer-close {
-	background: var(--fg);
-	color: var(--bg);
-	border: 1px solid var(--fg);
-	border-radius: 999px;
-	width: 30px;
-	height: 30px;
-	font-size: 22px;
-	line-height: 24px;
-	font-weight: 700;
+	background: transparent;
+	border: 1px solid transparent;
+	color: var(--muted);
+	border-radius: var(--exx-radius-sm);
+	width: 28px;
+	height: 28px;
+	font-size: 16px;
+	line-height: 26px;
+	font-weight: 400;
+	text-align: center;
+	padding: 0;
 	flex: none;
 	cursor: pointer;
+}
+.artifact-viewer-icon:hover,
+.artifact-viewer-icon:focus-visible,
+.artifact-viewer-close:hover,
+.artifact-viewer-close:focus-visible {
+	color: var(--fg);
+	border-color: var(--border);
+	background: var(--exx-surface, transparent);
 }
 .artifact-viewer-body {
 	flex: 1;
@@ -9214,7 +9296,17 @@ label.rs-row {
 	align-items: center;
 	justify-content: center;
 	padding: var(--exx-sp-5);
-	background: var(--contrast-bg);
+	/* The letterbox mat: a barely-raised surface derived from the contrast
+	 * plate, so an artifact that does not fill the pane sits ON something
+	 * instead of floating in void. Full-bleed frames are unaffected. */
+	margin: 2px;
+	background: color-mix(in srgb, var(--contrast-fg) 5%, var(--contrast-bg));
+	border: 1px solid color-mix(in srgb, var(--contrast-fg) 10%, var(--contrast-bg));
+	border-radius: var(--exx-radius-sm);
+}
+.artifact-viewer-body-image .artifact-viewer-image {
+	/* A print lying on the mat, not a texture painted onto it. */
+	box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
 }
 .artifact-viewer-frame {
 	display: block;
@@ -9297,6 +9389,70 @@ label.rs-row {
 }
 .artifact-export-toast.success { border-color: color-mix(in srgb, var(--exx-success) 55%, transparent); }
 .artifact-export-toast.error { border-color: color-mix(in srgb, var(--exx-danger) 60%, transparent); }
+
+/* The done-moment toast (status grammar, 2026-07-18): top-right, under the
+   top bar — the one corner that never covers the composer (a typing user is
+   never interrupted), the rail, or an open viewer. Clickable; ~6 s. */
+.task-done-toast {
+	position: fixed;
+	top: 56px;
+	right: 20px;
+	z-index: 60;
+	max-width: min(420px, calc(100vw - 32px));
+	padding: 10px 16px;
+	border-radius: 8px;
+	font-size: 13px;
+	font-family: inherit;
+	text-align: left;
+	cursor: pointer;
+	background: var(--exx-surface-raised);
+	color: var(--fg);
+	border: 1px solid var(--border);
+	box-shadow: var(--exx-shadow-popover);
+}
+.task-done-toast.done { border-color: color-mix(in srgb, var(--exx-success) 55%, transparent); }
+.task-done-toast.error { border-color: color-mix(in srgb, var(--exx-danger) 60%, transparent); }
+.task-done-toast:hover { background: var(--exx-surface-hover); }
+
+/* The run view (the viewer chrome's RUNNING state): the live mono stream,
+   pinned to the newest line by the component. */
+.task-run-view-stream {
+	flex: 1;
+	min-height: 0;
+	overflow-y: auto;
+	margin: var(--exx-sp-3);
+	padding: var(--exx-sp-3);
+	background: var(--exx-surface-inset);
+	border: 1px solid var(--border-soft);
+	border-radius: var(--exx-radius-control);
+	font-family: var(--exx-font-mono);
+	font-size: 11.5px;
+	line-height: 1.6;
+	color: var(--muted);
+}
+.task-run-view-stream .task-line { white-space: pre-wrap; overflow-wrap: anywhere; }
+.task-run-view-stream .task-line.is-tool { color: var(--exx-plan); }
+.task-run-view-stream .task-line:last-child { color: var(--fg-soft); }
+.task-run-view-error { color: var(--exx-danger); margin-top: 6px; }
+.task-run-view-pulse { margin-right: 7px; }
+.artifact-viewer-template .task-run-view-pulse { display: inline-block; }
+
+/* The relocated done-card "Details": the specialist's summary, collapsed by
+   default behind the footer toggle. */
+.asset-viewer-summary {
+	margin-top: 8px;
+	padding: 8px 10px;
+	background: var(--exx-surface-inset);
+	border: 1px solid var(--border-soft);
+	border-radius: var(--exx-radius-control);
+	font-size: 12.5px;
+	line-height: 1.55;
+	color: var(--fg-soft);
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+	max-height: 180px;
+	overflow-y: auto;
+}
 
 /* --- Skills library (MR-3) ------------------------------------------------- */
 /* Same framing as the Connectors page: full width, no section hairlines. */
@@ -10027,3 +10183,261 @@ label.rs-row {
 .approval-message { overflow-wrap: anywhere; }
 .task-notes .task-summary { max-height: 300px; overflow: auto; }
 .consult-answer { max-height: 340px; overflow: auto; }
+
+/* ── Assets panel (contract §2 rung 3, mockup v2) ─────────────────────────── */
+.sidebar-assets {
+	margin: 2px 12px 0;
+	min-height: 0;
+	display: flex;
+	flex-direction: column;
+}
+.assets-head {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	width: 100%;
+	background: transparent;
+	border: none;
+	padding: 8px 4px 6px;
+	color: var(--muted);
+	font-size: 11px;
+	font-weight: 700;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+	cursor: pointer;
+	text-align: left;
+}
+.assets-head:hover { color: var(--fg-soft); }
+.assets-caret { font-size: 9px; width: 10px; }
+.assets-head-label { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.assets-count {
+	font-size: 10px;
+	font-weight: 700;
+	color: var(--fg-soft);
+	background: var(--exx-surface-raised);
+	border: 1px solid var(--border);
+	border-radius: var(--exx-radius-pill);
+	padding: 0 6px;
+	line-height: 16px;
+}
+.assets-rows { display: flex; flex-direction: column; gap: 2px; overflow-y: auto; min-height: 0; }
+.assets-row {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	width: 100%;
+	background: transparent;
+	border: 1px solid transparent;
+	border-radius: var(--exx-radius-control);
+	padding: 5px 6px;
+	cursor: pointer;
+	text-align: left;
+	position: relative;
+	transition: background 120ms ease, border-color 120ms ease;
+}
+.assets-row:hover:not(:disabled) { background: var(--exx-surface-raised); }
+.assets-row.sel { background: var(--exx-surface-raised); border-color: var(--border); }
+.assets-row:disabled { cursor: default; opacity: 0.85; }
+/* Hovering the already-selected row hints that a second click closes the pane
+ * (the running row already carries its own Stop control on the right). */
+.assets-row-wrap:not(.running) .assets-row.sel { padding-right: 24px; }
+.assets-row-wrap:not(.running) .assets-row.sel::after {
+	content: "\00d7";
+	position: absolute;
+	right: 8px;
+	top: 50%;
+	transform: translateY(-50%);
+	color: var(--muted);
+	font-size: 15px;
+	line-height: 1;
+	opacity: 0;
+	transition: opacity 120ms ease;
+}
+.assets-row-wrap:not(.running) .assets-row.sel:hover::after,
+.assets-row-wrap:not(.running) .assets-row.sel:focus-visible::after { opacity: 1; }
+.assets-icon {
+	flex: none;
+	width: 26px;
+	height: 26px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	background: var(--exx-surface-raised);
+	color: var(--muted);
+	font-size: 8px;
+	font-weight: 800;
+	letter-spacing: 0.04em;
+}
+.assets-icon.orphan { border-style: dashed; background: transparent; }
+.assets-pulse {
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+	background: var(--exx-working);
+	animation: task-pulse 1.6s ease-in-out infinite;
+}
+/* Status dots in the subline: green steady = done-unread (decays on first
+   open), danger steady = didn't finish. Never animated — oscillation is the
+   running row's alone. */
+.assets-dot {
+	display: inline-block;
+	width: 6px;
+	height: 6px;
+	border-radius: 50%;
+	margin-right: 5px;
+	vertical-align: 1px;
+}
+.assets-dot-ready { background: var(--success); }
+.assets-dot-failed { background: var(--exx-danger); }
+/* The running row's hover-reveal stop square: zero idle chrome, visible on
+   row hover or keyboard focus. */
+.assets-row-wrap { position: relative; display: block; }
+.assets-row-wrap.running .assets-row { padding-right: 28px; }
+.assets-row-stop {
+	position: absolute;
+	right: 8px;
+	top: 50%;
+	transform: translateY(-50%);
+	width: 18px;
+	height: 18px;
+	padding: 0;
+	border: 1px solid var(--border);
+	border-radius: 5px;
+	background: var(--exx-surface-raised);
+	cursor: pointer;
+	opacity: 0;
+	transition: opacity 120ms ease;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+}
+.assets-row-wrap:hover .assets-row-stop,
+.assets-row-stop:focus-visible,
+.assets-row-wrap:focus-within .assets-row-stop { opacity: 1; }
+.assets-row-stop::before {
+	content: "";
+	width: 7px;
+	height: 7px;
+	border-radius: 2px;
+	background: var(--exx-danger);
+}
+.assets-row-stop:hover { border-color: color-mix(in srgb, var(--exx-danger) 55%, var(--border)); }
+.assets-meta { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.assets-row-title {
+	font-size: 12.5px;
+	font-weight: 600;
+	color: var(--fg);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.assets-row.orphan .assets-row-title { color: var(--muted); }
+.assets-row-sub {
+	font-size: 10.5px;
+	color: var(--muted);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.assets-showall {
+	background: transparent;
+	border: none;
+	color: var(--muted);
+	font-size: 10.5px;
+	padding: 4px 6px 6px 40px;
+	cursor: pointer;
+	text-align: left;
+}
+.assets-showall:hover { color: var(--fg-soft); text-decoration: underline; }
+
+/* Reconstituted done-card viewer: header file list + action footer */
+.artifact-viewer-files {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	padding: 8px 14px 0;
+}
+.artifact-viewer-file {
+	background: transparent;
+	border: 1px solid var(--border);
+	border-radius: var(--exx-radius-pill);
+	color: var(--muted);
+	font-size: 11px;
+	padding: 2px 10px;
+	cursor: pointer;
+	max-width: 200px;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.artifact-viewer-file:hover { color: var(--fg); }
+.artifact-viewer-file.active { color: var(--fg); background: var(--exx-surface-raised); }
+.artifact-viewer-foot {
+	border-top: 1px solid var(--border);
+	padding: 10px 14px;
+	flex: none;
+}
+.asset-viewer-footer { display: flex; flex-direction: column; gap: 8px; }
+.asset-viewer-footer-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.asset-viewer-iterate { display: flex; gap: 8px; }
+.asset-viewer-iterate-input {
+	flex: 1;
+	min-width: 0;
+	background: var(--exx-surface-raised);
+	border: 1px solid var(--border);
+	border-radius: var(--exx-radius-control);
+	color: var(--fg);
+	font-size: 12.5px;
+	padding: 6px 10px;
+}
+.asset-viewer-iterate-input:focus { outline: none; border-color: var(--fg-soft); }
+.asset-viewer-iterate-notice { font-size: 12px; color: var(--exx-danger, #c0392b); }
+
+/* ── Task-store GC (contract §4) + panel delete ───────────────────────────── */
+.task-store-gc-banner {
+	position: fixed;
+	bottom: 24px;
+	left: 50%;
+	transform: translateX(-50%);
+	z-index: 60;
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	max-width: min(680px, calc(100vw - 32px));
+	padding: 10px 12px 10px 16px;
+	border-radius: 8px;
+	font-size: 13px;
+	background: var(--exx-surface-raised);
+	color: var(--fg);
+	border: 1px solid var(--border);
+	box-shadow: var(--exx-shadow-popover);
+}
+.task-store-gc-card { max-width: 560px; }
+.task-store-gc-list {
+	max-height: 260px;
+	overflow-y: auto;
+	border: 1px solid var(--border);
+	border-radius: var(--exx-radius-control);
+	margin: 10px 0;
+}
+.task-store-gc-row {
+	display: flex;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: 12px;
+	padding: 6px 10px;
+	font-size: 12.5px;
+	border-bottom: 1px solid var(--exx-divider);
+}
+.task-store-gc-row:last-child { border-bottom: none; }
+.task-store-gc-title {
+	min-width: 0;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	color: var(--fg);
+}
+.task-store-gc-meta { flex: none; color: var(--muted); font-size: 11px; }
+.asset-viewer-delete { color: var(--danger, #d33); margin-left: auto; }
