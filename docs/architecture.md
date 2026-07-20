@@ -8,6 +8,4 @@ For current architecture and development context, start with:
 - [Developer guide](developer.md)
 - [Documentation index](README.md)
 
-Historical architecture notes were archived under:
-
-- [Active docs surface cleanup archive](archive/2026-06-24-active-docs-surface-cleanup/README.md)
+Historical architecture notes live in the development repository's archive and are not part of public releases.

@@ -95,4 +95,4 @@ of both versions, so the transition stays auditable either way.
 - `room runtime state is "…"`: the room has an unfinished turn. Open the
   room once, let it settle, close it, and re-run.
 - `agent.json has no user.displayName`: that room predates user identity in
-  its metadata; ask on the dev channel before doing anything manual.
+  its metadata; open a GitHub issue before doing anything manual.

@@ -2368,6 +2368,8 @@ export function App() {
 	// click opens the viewer. The rail's green dot is the durable signal.
 	const [taskDoneToast, setTaskDoneToast] = useState<{ taskId: string; title: string; kind: "done" | "error"; templateLabel: string; artifact: { relativePath: string; extension: string } | null } | null>(null);
 	const [exportCollision, setExportCollision] = useState<ExportCollision | null>(null);
+	// Remove-from-list Undo window: one toast, one removable row at a time.
+	const [removeNotice, setRemoveNotice] = useState<{ taskId: string } | null>(null);
 	// Assets panel (contract §2 rung 3): the thread's ledger rows, refetched on
 	// every event that can change them — server truth, no client cache.
 	const [assetLedgerRows, setAssetLedgerRows] = useState<AssetLedgerRowInput[]>([]);
@@ -3810,6 +3812,42 @@ export function App() {
 		}
 	}
 
+	// Remove from list (user control, 2026-07-20): a list operation only — the
+	// ledger row gets a removedAt stamp and the panel hides it; files are kept.
+	// No dialog: nothing is destroyed, and the toast's Undo clears the stamp.
+	async function removeAssetRow(row: AssetRowView) {
+		const chat = persistentChatRef.current;
+		if (!chat) return;
+		try {
+			const res = await apiFetch(`/api/persistent-agents/${encodeURIComponent(chat.agentId)}/tasks/${encodeURIComponent(row.taskId)}/removed`, { method: "POST" });
+			const data = await res.json().catch(() => null);
+			if (!res.ok) {
+				setExportNotice({ kind: "error", text: data?.error || "That didn't work — the list is unchanged." });
+				return;
+			}
+			setRemoveNotice({ taskId: row.taskId });
+			if ((rightPane?.kind === "artifactViewer" || rightPane?.kind === "taskRun") && rightPane.taskId === row.taskId) {
+				setArtifactMaximized(false);
+				setRightPane(null);
+			}
+			void refreshAssetRows();
+		} catch {
+			setExportNotice({ kind: "error", text: "That didn't work — the list is unchanged." });
+		}
+	}
+
+	async function undoRemoveAssetRow(taskId: string) {
+		const chat = persistentChatRef.current;
+		setRemoveNotice(null);
+		if (!chat) return;
+		try {
+			await apiFetch(`/api/persistent-agents/${encodeURIComponent(chat.agentId)}/tasks/${encodeURIComponent(taskId)}/removed`, { method: "DELETE" });
+		} catch {
+			// The refetch below shows the truth either way.
+		}
+		void refreshAssetRows();
+	}
+
 	// GC approval (contract §4): the POST names exactly the proposed ids; the
 	// server re-verifies each against a fresh reference scan before deleting.
 	async function confirmTaskStoreGc() {
@@ -5063,6 +5101,16 @@ export function App() {
 		const timer = window.setTimeout(() => setExportNotice(null), 6000);
 		return () => window.clearTimeout(timer);
 	}, [exportNotice]);
+	useEffect(() => {
+		if (!removeNotice) return;
+		const timer = window.setTimeout(() => setRemoveNotice(null), 6000);
+		return () => window.clearTimeout(timer);
+	}, [removeNotice]);
+	// The Undo targets a row of the room it was shown in — a room switch inside
+	// the 6s window must drop it rather than aim at the new room.
+	useEffect(() => {
+		setRemoveNotice(null);
+	}, [persistentChat?.agentId]);
 
 	// Assets panel projection: ledger rows + the live task + the thread's
 	// transferred ids → the rail's row view-models (pure, smoke-tested).
@@ -5320,7 +5368,7 @@ export function App() {
 					theme={theme}
 					onToggleTheme={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}
 					onHelp={() => setHelpOpen(true)}
-					assetsSlot={persistentChat ? <AssetsPanel rows={assetRows} selectedTaskId={selectedAssetTaskId} onSelect={openAssetRow} onStopRunning={() => dispatchTask({ type: "abort_requested" })} /> : undefined}
+					assetsSlot={persistentChat ? <AssetsPanel rows={assetRows} selectedTaskId={selectedAssetTaskId} onSelect={openAssetRow} onStopRunning={() => dispatchTask({ type: "abort_requested" })} onRemove={(row) => void removeAssetRow(row)} /> : undefined}
 				/>
 			}
 			withPreview={false}
@@ -5400,6 +5448,15 @@ export function App() {
 					{exportNotice && (
 						<div className={`artifact-export-toast ${exportNotice.kind}`} role="status" aria-live="polite">
 							{exportNotice.text}
+						</div>
+					)}
+					{removeNotice && (
+						<div className="artifact-export-toast success asset-remove-toast" role="status" aria-live="polite">
+							<span className="asset-remove-text">
+								<span>Removed from the list.</span>
+								<span className="asset-remove-sub">Its files are kept.</span>
+							</span>
+							<button type="button" className="asset-remove-undo" onClick={() => void undoRemoveAssetRow(removeNotice.taskId)}>Undo</button>
 						</div>
 					)}
 					{taskDoneToast && (

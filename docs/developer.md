@@ -142,4 +142,4 @@ See [`packaging-local.md`](packaging-local.md) for packaging validation commands
 - [`l1a-constitution-upgrade.md`](l1a-constitution-upgrade.md): constitution versioning/migration.
 - [`provider-setup.md`](provider-setup.md): AI profiles and provider setup.
 - [`mcp.md`](mcp.md)
-- Historical extension and collaboration notes are in the [active docs surface cleanup archive](archive/2026-06-24-active-docs-surface-cleanup/README.md).
+- Historical extension and collaboration notes live in the development repository's archive and are not part of public releases.

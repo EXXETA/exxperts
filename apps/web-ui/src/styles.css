@@ -4040,6 +4040,71 @@ strong, b { font-weight: 700; }
 	font-weight: 500;
 }
 .bubble.user a { color: var(--user-fg); text-decoration: underline; }
+
+/* Column wrapper so the copy control sits UNDER its bubble, not inside it.
+ * Inherits the row's alignment: assistant fills the width (copy left), user
+ * hugs the right (copy right, under the bubble). */
+.bubble-col {
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+	max-width: 100%;
+}
+.bubble-col.user { align-items: flex-end; max-width: min(85%, 760px); }
+/* The column now carries the width cap; keep the inner bubble uncapped so the
+ * two do not nest and shrink long user messages. */
+.bubble-col.user > .bubble.user { max-width: 100%; }
+
+/* Message copy control. Quiet ghost affordance in the app's control language:
+ * transparent at rest, faint until hovered/focused. Assistant replies show it
+ * always (aligned under the text); user messages reveal it on row hover. */
+.message-copy {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	margin-top: 6px;
+	width: 22px;
+	height: 22px;
+	padding: 0;
+	background: transparent;
+	border: none;
+	color: var(--muted);
+	cursor: pointer;
+	transition: color 120ms ease, opacity 120ms ease;
+}
+.message-copy svg { display: block; }
+.message-copy:hover,
+.message-copy:focus-visible {
+	color: var(--fg);
+	outline: none;
+}
+.message-copy:focus-visible svg { outline: 2px solid var(--exx-focus); outline-offset: 3px; border-radius: 3px; }
+.message-copy.is-copied { color: var(--fg); }
+
+/* Assistant: always present but understated, so a read stays clean. */
+.message-copy-assistant { opacity: 0.55; }
+.message-copy-assistant:hover,
+.message-copy-assistant:focus-visible { opacity: 1; }
+
+/* User: hidden at rest, revealed when the row is hovered or the button is
+ * keyboard-focused; sits at the right edge under the right-aligned bubble. */
+.message-copy-user {
+	align-self: flex-end;
+	opacity: 0;
+	pointer-events: none;
+}
+.bubble-row.user:hover .message-copy-user,
+.message-copy-user:focus-visible,
+.message-copy-user.is-copied {
+	/* The confirmation tick stays visible after the cursor leaves, until the
+	 * copied state auto-reverts a moment later. */
+	opacity: 1;
+	pointer-events: auto;
+}
+@media (hover: none) {
+	/* Touch devices have no hover: keep the user-message control reachable. */
+	.message-copy-user { opacity: 0.55; pointer-events: auto; }
+}
 .user-message-content {
 	white-space: pre-wrap;
 	overflow-wrap: anywhere;
@@ -4801,7 +4866,9 @@ strong, b { font-weight: 700; }
 	cursor: default;
 }
 .composer textarea {
-	flex: 1;
+	/* NOT flex: 1 — a flex-basis of 0 in this column layout overrides the
+	 * height the auto-grow effect writes, collapsing the box to min-height. */
+	flex: none;
 	resize: none;
 	background: transparent;
 	color: var(--fg);
@@ -4811,7 +4878,8 @@ strong, b { font-weight: 700; }
 	font-family: inherit;
 	font-size: 14px;
 	line-height: 1.45;
-	max-height: 168px;
+	/* The grow cap: the draft expands to 40% of the viewport, then scrolls. */
+	max-height: 40vh;
 	min-height: 46px;
 	box-sizing: border-box;
 	overflow-x: hidden;
@@ -9389,6 +9457,44 @@ label.rs-row {
 }
 .artifact-export-toast.success { border-color: color-mix(in srgb, var(--exx-success) 55%, transparent); }
 .artifact-export-toast.error { border-color: color-mix(in srgb, var(--exx-danger) 60%, transparent); }
+/* Remove-from-list toast: the export toast's surface plus an inline Undo,
+ * anchored bottom-left over the rail — the feedback appears next to the list
+ * the row just left, and never overlaps the composer or the viewer. Sized to
+ * sit INSIDE the 260px sidebar column; the two lines are a deliberate
+ * hierarchy (fact, then the files nuance), not an accidental wrap. */
+.asset-remove-toast {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	left: 12px;
+	right: auto;
+	transform: none;
+	bottom: 56px;
+	width: 236px;
+	padding: 10px 12px;
+}
+.asset-remove-text {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	min-width: 0;
+	flex: 1;
+}
+.asset-remove-sub {
+	color: var(--muted);
+	font-size: 12px;
+}
+.asset-remove-undo {
+	border: none;
+	background: none;
+	padding: 2px 4px;
+	font: 600 13px/1 inherit;
+	color: var(--exx-plan);
+	cursor: pointer;
+	border-radius: 6px;
+}
+.asset-remove-undo:hover { text-decoration: underline; }
+.asset-remove-undo:focus-visible { outline: 2px solid var(--exx-plan); outline-offset: 2px; }
 
 /* The done-moment toast (status grammar, 2026-07-18): top-right, under the
    top bar — the one corner that never covers the composer (a typing user is
@@ -10238,23 +10344,36 @@ label.rs-row {
 .assets-row:hover:not(:disabled) { background: var(--exx-surface-raised); }
 .assets-row.sel { background: var(--exx-surface-raised); border-color: var(--border); }
 .assets-row:disabled { cursor: default; opacity: 0.85; }
-/* Hovering the already-selected row hints that a second click closes the pane
- * (the running row already carries its own Stop control on the right). */
-.assets-row-wrap:not(.running) .assets-row.sel { padding-right: 24px; }
-.assets-row-wrap:not(.running) .assets-row.sel::after {
-	content: "\00d7";
+/* Remove from list: the hover-reveal ✕ on every settled row (a ✕ on a list
+ * row reads as remove, so it IS remove — closing the pane stays with the
+ * row click, the viewer's own ✕, and Escape). Same reveal mechanics as the
+ * running row's Stop; rows reserve the right padding so titles never shift. */
+.assets-row-wrap:not(.running) .assets-row { padding-right: 26px; }
+.assets-row-remove {
 	position: absolute;
 	right: 8px;
 	top: 50%;
 	transform: translateY(-50%);
+	width: 18px;
+	height: 18px;
+	padding: 0;
+	border: none;
+	border-radius: 5px;
+	background: none;
 	color: var(--muted);
 	font-size: 15px;
 	line-height: 1;
+	cursor: pointer;
 	opacity: 0;
 	transition: opacity 120ms ease;
+	display: flex;
+	align-items: center;
+	justify-content: center;
 }
-.assets-row-wrap:not(.running) .assets-row.sel:hover::after,
-.assets-row-wrap:not(.running) .assets-row.sel:focus-visible::after { opacity: 1; }
+.assets-row-wrap:hover .assets-row-remove,
+.assets-row-remove:focus-visible,
+.assets-row-wrap:focus-within .assets-row-remove { opacity: 1; }
+.assets-row-remove:hover { color: var(--fg); background: var(--exx-surface-raised); }
 .assets-icon {
 	flex: none;
 	width: 26px;

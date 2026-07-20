@@ -10,6 +10,8 @@ const {
 	createTaskLedgerRecord,
 	finalizeTaskLedgerRecord,
 	listTaskLedgerRecords,
+	clearTaskLedgerRecordRemoved,
+	markTaskLedgerRecordRemoved,
 	markTaskLedgerRecordsAwayNoticed,
 	selectTaskLedgerAwayNotices,
 	selectTaskLedgerReseedRows,
@@ -147,6 +149,23 @@ try {
 	] as Parameters<typeof selectTaskLedgerReseedRows>[0];
 	const reseed = selectTaskLedgerReseedRows(reseedRows, 2);
 	assert(reseed.length === 2 && reseed[0].taskId === "tsk-r2" && reseed[1].taskId === "tsk-r3", "reseed must keep the newest ok rows, oldest-first for insertion order");
+
+	// Remove from list (user control, 2026-07-20): removedAt is a LIST stamp,
+	// separate from deletedAt (files gone). Listings keep returning removed
+	// rows — only the panel endpoint filters — and Undo clears the stamp.
+	const removeRoom = "task-ledger-smoke-remove";
+	createTaskLedgerRecord({ taskId: "tsk-rm1", roomId: removeRoom, conversationId: "conv-rm", templateId: "diagram-svg", templateVersion: 1, title: "Removable" }, {}, new Date("2026-07-18T19:00:00.000Z"));
+	finalizeTaskLedgerRecord(removeRoom, "tsk-rm1", { outcome: "ok" }, {}, new Date("2026-07-18T19:01:00.000Z"));
+	const removed = markTaskLedgerRecordRemoved(removeRoom, "tsk-rm1", {}, new Date("2026-07-18T19:05:00.000Z"));
+	assert(removed?.removedAt === "2026-07-18T19:05:00.000Z", "remove must stamp removedAt");
+	assert(removed?.awayNoticedAt === "2026-07-18T19:05:00.000Z", "removing an unnoticed row must also stamp awayNoticedAt (a dismissed task must not be announced later)");
+	assert(markTaskLedgerRecordRemoved(removeRoom, "tsk-rm1", {}, new Date("2026-07-18T19:09:00.000Z"))?.removedAt === "2026-07-18T19:05:00.000Z", "re-removing must keep the first stamp");
+	assert(listTaskLedgerRecords(removeRoom).length === 1, "default listings must still return removed rows (reseed/provenance readers)");
+	assert(selectTaskLedgerAwayNotices(listTaskLedgerRecords(removeRoom), 5).notices.length === 0, "a removed row must never surface as an away notice");
+	const restored = clearTaskLedgerRecordRemoved(removeRoom, "tsk-rm1");
+	assert(restored !== null && restored.removedAt === undefined, "undo must clear removedAt");
+	assert(JSON.parse(fs.readFileSync(taskLedgerRecordPath(removeRoom, "tsk-rm1"), "utf8")).removedAt === undefined, "undo must clear the stamp on disk, not just in the return value");
+	assert(markTaskLedgerRecordRemoved(removeRoom, "tsk-missing") === null && clearTaskLedgerRecordRemoved(removeRoom, "tsk-missing") === null, "missing rows must return null for both stamps");
 
 	// Path-escaping ids are rejected before any filesystem access.
 	for (const bad of [() => listTaskLedgerRecords("../escape"), () => createTaskLedgerRecord({ taskId: "../escape", roomId, conversationId: "c", templateId: "t", templateVersion: 1, title: "x" }), () => taskLedgerRecordPath(roomId, "a/b")]) {

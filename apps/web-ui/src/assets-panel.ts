@@ -29,11 +29,11 @@ export interface AssetLedgerRowInput {
 export interface AssetRowView {
 	taskId: string;
 	title: string;
-	/** Icon-box label, e.g. "SVG" / "HTM" — empty while running (the pulse is the icon). */
+	/** Icon-box label, e.g. "SVG" / "HTML" — empty while running (the pulse is the icon). */
 	iconLabel: string;
 	running: boolean;
 	orphan: boolean;
-	/** The single status channel: a status word alone, or `filetype · time` on plain done rows. */
+	/** The single status channel: a status word alone, or the time on plain done rows. */
 	subline: string;
 	/**
 	 * Status grammar (2026-07-18): done-and-never-opened — the steady green dot
@@ -88,8 +88,10 @@ export function assetDisplayTitle(taskTitle: string, artifacts: AssetLedgerRowIn
 
 function iconLabelForRow(artifacts: AssetLedgerRowInput["artifacts"]): string {
 	const extension = artifacts?.[0]?.extension ?? "";
+	// Four characters cover the real registry outputs (HTML, PPTX, XLSX, SVG);
+	// a 3-char cap rendered HTML as a truncated-looking "HTM".
 	const cleaned = extension.replace(/^\./, "").toUpperCase();
-	return cleaned.slice(0, 3) || "TXT";
+	return cleaned.slice(0, 4) || "TXT";
 }
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -116,13 +118,20 @@ function isUnreadRow(row: AssetLedgerRowInput, input: ProjectAssetRowsInput): bo
 	return true;
 }
 
+function withTime(word: string, row: AssetLedgerRowInput, input: ProjectAssetRowsInput): string {
+	const when = shortTime(row.endedAt ?? row.startedAt, input.now);
+	return when ? `${word} · ${when}` : word;
+}
+
 function sublineForRow(row: AssetLedgerRowInput, input: ProjectAssetRowsInput): string {
 	// Precedence: the most conversation-relevant fact wins; the subline stays a
 	// single channel by design (thumbnails/badges dissolved at the grill).
 	// Status words stand alone; only plain done rows carry the file type —
 	// "informative, not invasive" (language pass 2026-07-18).
-	if (input.threadTaskIds.has(row.taskId)) return "in conversation";
-	if ((row.exports?.length ?? 0) > 0) return "in workspace";
+	// Status words carry the row's time too: without it, "in workspace" was
+	// the one resting row with no date, and the panel read as inconsistent.
+	if (input.threadTaskIds.has(row.taskId)) return withTime("in conversation", row, input);
+	if ((row.exports?.length ?? 0) > 0) return withTime("in workspace", row, input);
 	// Plain "stopped": under option 4 the only way a task aborts is the user
 	// pressing Stop — leaving a room no longer kills tasks, so the old
 	// "stopped when you left" claim would be wrong for the normal case.
@@ -136,8 +145,11 @@ function sublineForRow(row: AssetLedgerRowInput, input: ProjectAssetRowsInput): 
 	// Unread rows lead with the ready word (status grammar, 2026-07-18): the
 	// green dot says "news", the subline says what kind. Decays on first open.
 	if (isUnreadRow(row, input)) return when ? `ready · ${when}` : "ready";
+	// Plain done rows carry the time alone: the icon box already states the
+	// filetype, and repeating it ("SVG" beside "svg · Jul 19") read as noise.
+	// The filetype only steps in when the row has no usable timestamp.
 	const fileType = (row.artifacts?.[0]?.extension ?? "").replace(/^\./, "").toLowerCase();
-	return fileType ? (when ? `${fileType} · ${when}` : fileType) : when;
+	return when || fileType;
 }
 
 /**

@@ -51,6 +51,8 @@ interface RecentSession {
 	title: string;
 	tokens: number;
 	ts: number | null;
+	/** ts is an exact instant; false = date-only (UTC midnight), render no finer than days */
+	tsPrecise: boolean;
 	/** approval time of the checkpoint that admitted this entry (ISO), when a record exists */
 	approvedAt: string | null;
 	/** the entry's full saved text, word for word */
@@ -338,6 +340,18 @@ function fmtAgo(ts: number | null): string {
 	if (s < 3600) return Math.round(s / 60) + "m ago";
 	if (s < 86400) return Math.round(s / 3600) + "h ago";
 	return Math.round(s / 86400) + "d ago";
+}
+
+// Day-granularity "ago" for entries whose timestamp is only a calendar date
+// (parsed as UTC midnight): hour wording from a date-only fact would be
+// invented precision, so these compare calendar days and never render finer.
+function fmtAgoDay(ts: number): string {
+	const d = new Date(ts);
+	const now = new Date();
+	const days = Math.round((Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()) - Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())) / 86400000);
+	if (days <= 0) return "today";
+	if (days === 1) return "yesterday";
+	return days + "d ago";
 }
 
 // Memory size over the event history (checkpoints + absorbs). Green dots mark
@@ -1438,7 +1452,7 @@ export function Memory({ onMaintain, maintainBlocked }: { onMaintain?: (target: 
 														<div key={i} className="mem-li">
 															<div className="mem-li-txt">{s.title}</div>
 															<div className="mem-li-src">
-																{fmtTok(s.tokens)} tok{s.ts ? ` · ${fmtAgo(s.ts)}` : ""}
+																{fmtTok(s.tokens)} tok{s.ts ? ` · ${s.tsPrecise ? fmtAgo(s.ts) : fmtAgoDay(s.ts)}` : ""}
 																{(s.content || s.approvedAt) && (
 																	<button
 																		type="button"

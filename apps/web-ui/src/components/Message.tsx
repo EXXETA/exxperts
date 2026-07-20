@@ -1,7 +1,50 @@
-import { memo, useId, useState } from "react";
+import { memo, useCallback, useEffect, useId, useRef, useState } from "react";
 import type { ChatItem } from "../types";
 import { MarkdownRenderer, looksLikeMarkdown, unwrapOuterMarkdownFence } from "./Markdown";
 import { artifactBasename, artifactKindLabel, isSvgArtifact, taskArtifactUrl } from "../task-stream";
+
+// Copy a message's text to the clipboard. The button flips to a checkmark for
+// a moment so the click is acknowledged without a toast. On assistant replies
+// it sits permanently below the text (the thing people quote); on the user's
+// own messages it is revealed on hover of the row (occasional need, quiet at
+// rest) via the .bubble-row:hover rule in styles.css.
+function CopyMessageButton({ text, className }: { text: string; className?: string }) {
+	const [copied, setCopied] = useState(false);
+	const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+	const onCopy = useCallback(() => {
+		// Optional chaining + catch: navigator.clipboard is undefined over plain
+		// http on a LAN IP (not localhost), and a write can be denied; degrade
+		// quietly (the button just does not flip) rather than throw.
+		void navigator.clipboard?.writeText(text).then(() => {
+			setCopied(true);
+			if (timer.current) clearTimeout(timer.current);
+			timer.current = setTimeout(() => setCopied(false), 2000);
+		}).catch(() => {});
+	}, [text]);
+	useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
+	return (
+		<button
+			type="button"
+			className={`message-copy${className ? ` ${className}` : ""}${copied ? " is-copied" : ""}`}
+			onClick={onCopy}
+			title={copied ? "Copied" : "Copy"}
+			aria-label={copied ? "Copied to clipboard" : "Copy message"}
+		>
+			{/* Inline SVG rather than a font glyph: the unicode clipboard/check
+			    characters render as empty boxes in fonts that lack them. */}
+			{copied ? (
+				<svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+					<path d="M3.5 8.5l3 3 6-6.5" />
+				</svg>
+			) : (
+				<svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+					<rect x="5.5" y="5.5" width="8" height="8" rx="1.5" />
+					<path d="M10.5 5.5V4a1.5 1.5 0 0 0-1.5-1.5H4A1.5 1.5 0 0 0 2.5 4v5A1.5 1.5 0 0 0 4 10.5h1.5" />
+				</svg>
+			)}
+		</button>
+	);
+}
 
 /**
  * Compact, single-line preview of a tool call's key argument. Used as
@@ -391,16 +434,24 @@ function MessageImpl({ item }: { item: ChatItem }) {
 	}
 
 	const isUser = item.kind === "user";
+	const assistantText = isUser ? "" : String((item as any).text ?? "");
+	const assistantStreaming = !isUser && Boolean((item as any).streaming);
 	return (
 		<div className={`bubble-row ${isUser ? "user" : ""}`}>
-			<div className={`bubble ${isUser ? "user" : ""}`}>
-				{isUser ? (
-					<UserMessageText text={item.text} />
-				) : (
-					<div className="md assistant-markdown">
-						<MarkdownRenderer renderMermaid={!(item as any).streaming}>{(item as any).text || ((item as any).streaming ? "…" : "")}</MarkdownRenderer>
-					</div>
-				)}
+			<div className={`bubble-col ${isUser ? "user" : ""}`}>
+				<div className={`bubble ${isUser ? "user" : ""}`}>
+					{isUser ? (
+						<UserMessageText text={item.text} />
+					) : (
+						<div className="md assistant-markdown">
+							<MarkdownRenderer renderMermaid={!assistantStreaming}>{assistantText || (assistantStreaming ? "…" : "")}</MarkdownRenderer>
+						</div>
+					)}
+				</div>
+				{isUser
+					? item.text && <CopyMessageButton text={item.text} className="message-copy-user" />
+					// Shown once the reply has settled, not mid-stream.
+					: assistantText && !assistantStreaming && <CopyMessageButton text={assistantText} className="message-copy-assistant" />}
 			</div>
 		</div>
 	);

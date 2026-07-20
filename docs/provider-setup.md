@@ -205,7 +205,7 @@ Then select:
 OpenAI-compatible gateway
 ```
 
-Paste the API key only into the CLI/TUI prompt. The key is stored in runtime auth state under `~/.exxperts/agent/auth.json`; do not paste it into docs, issues, merge requests, chat, screenshots, or `models.json`.
+Paste the API key only into the CLI/TUI prompt. The key is stored in runtime auth state under `~/.exxperts/agent/auth.json`; do not paste it into docs, issues, pull requests, chat, screenshots, or `models.json`.
 
 ### 3. Refresh web readiness and select the profile
 

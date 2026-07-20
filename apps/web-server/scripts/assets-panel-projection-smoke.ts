@@ -43,16 +43,16 @@ try {
 		{ liveTask: null, threadTaskIds: new Set(["tsk-conv"]), now: NOW },
 	);
 	const byId = new Map(projected.map((r) => [r.taskId, r]));
-	assert(byId.get("tsk-conv")?.subline === "in conversation", `in-conversation wins over in-workspace, got ${byId.get("tsk-conv")?.subline}`);
+	assert(byId.get("tsk-conv")?.subline === `in conversation · ${expectedShortTime("2026-07-18T13:41:00.000Z")}`, `in-conversation wins over in-workspace and carries the time, got ${byId.get("tsk-conv")?.subline}`);
 	assert(byId.get("tsk-conv")?.inConversation === true, "in-conversation flag should be set");
-	assert(byId.get("tsk-ws")?.subline === "in workspace", `exports should read in workspace, got ${byId.get("tsk-ws")?.subline}`);
+	assert(byId.get("tsk-ws")?.subline === `in workspace · ${expectedShortTime("2026-07-18T13:41:00.000Z")}`, `exports should read in workspace with the time, got ${byId.get("tsk-ws")?.subline}`);
 	assert(byId.get("tsk-stop")?.subline === "stopped", `aborted subline, got ${byId.get("tsk-stop")?.subline}`);
 	assert(byId.get("tsk-orphan")?.subline === `${expectedShortTime("2026-07-15T09:05:00.000Z")} · past session`, `orphan subline dated, got ${byId.get("tsk-orphan")?.subline}`);
 	assert(byId.get("tsk-orphan")?.orphan === true, "orphan flag should be set");
 	assert(byId.get("tsk-fail")?.subline === "didn't finish", `error subline, got ${byId.get("tsk-fail")?.subline}`);
-	assert(byId.get("tsk-plain")?.subline === `html · ${expectedShortTime("2026-07-18T13:41:00.000Z")}`, `same-day ok subline is HH:MM, got ${byId.get("tsk-plain")?.subline}`);
-	assert(byId.get("tsk-old")?.subline === `html · ${expectedShortTime("2026-07-15T10:00:00.000Z")}`, `other-day ok subline is dated, got ${byId.get("tsk-old")?.subline}`);
-	assert(byId.get("tsk-plain")?.iconLabel === "HTM" && byId.get("tsk-orphan")?.iconLabel === "SVG", "icon labels derive from the first artifact extension");
+	assert(byId.get("tsk-plain")?.subline === expectedShortTime("2026-07-18T13:41:00.000Z"), `same-day ok subline is HH:MM alone (the icon box already states the filetype), got ${byId.get("tsk-plain")?.subline}`);
+	assert(byId.get("tsk-old")?.subline === expectedShortTime("2026-07-15T10:00:00.000Z"), `other-day ok subline is the date alone, got ${byId.get("tsk-old")?.subline}`);
+	assert(byId.get("tsk-plain")?.iconLabel === "HTML" && byId.get("tsk-orphan")?.iconLabel === "SVG", "icon labels carry the full extension up to 4 chars (HTML, not a truncated HTM)");
 
 	// Ordering: newest-first by startedAt.
 	const idsInOrder = projected.map((r) => r.taskId);
@@ -96,7 +96,7 @@ try {
 	const originById = new Map(originRows.map((r) => [r.taskId, r]));
 	assert(originById.get("tsk-here")?.originLine === "", "live-conversation rows carry no origin line");
 	assert(originById.get("tsk-earlier")?.originLine === `From an earlier thread · ${expectedShortTime("2026-07-12T10:00:00.000Z")}`, `earlier-thread rows disclose origin, got ${originById.get("tsk-earlier")?.originLine}`);
-	assert(originById.get("tsk-earlier")?.subline === `html · ${expectedShortTime("2026-07-12T10:00:00.000Z")}`, "the rail subline stays origin-free (one thing per subline)");
+	assert(originById.get("tsk-earlier")?.subline === expectedShortTime("2026-07-12T10:00:00.000Z"), "the rail subline stays origin-free (one thing per subline)");
 	assert(originById.get("tsk-unknown")?.originLine === "", "rows without a recorded conversation make no origin claim");
 	const noLiveConv = projectAssetRows(
 		[row({ taskId: "tsk-earlier", outcome: "ok", conversationId: "conv-old", ...base })],
@@ -121,8 +121,8 @@ try {
 	assert(grammarById.get("tsk-fresh")?.unread === true, "a never-opened done row is unread");
 	assert(grammarById.get("tsk-fresh")?.subline === `ready · ${expectedShortTime("2026-07-18T13:41:00.000Z")}`, `unread subline leads with ready, got ${grammarById.get("tsk-fresh")?.subline}`);
 	assert(grammarById.get("tsk-seen")?.unread === false, "viewedAt decays the unread state");
-	assert(grammarById.get("tsk-seen")?.subline === `html · ${expectedShortTime("2026-07-18T13:41:00.000Z")}`, "a seen row is the plain filetype · time row");
-	assert(grammarById.get("tsk-acted")?.unread === false && grammarById.get("tsk-acted")?.subline === "in workspace", "export implies seen; the workspace subline stands");
+	assert(grammarById.get("tsk-seen")?.subline === expectedShortTime("2026-07-18T13:41:00.000Z"), "a seen row is the plain time-only row");
+	assert(grammarById.get("tsk-acted")?.unread === false && grammarById.get("tsk-acted")?.subline.startsWith("in workspace"), "export implies seen; the workspace subline stands");
 	assert(grammarById.get("tsk-broken")?.failed === true && grammarById.get("tsk-broken")?.subline === "didn't finish", "error rows carry the failed flag beside the shipped subline");
 	assert(grammarById.get("tsk-fresh")?.failed === false, "ok rows never carry the failed flag");
 

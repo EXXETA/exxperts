@@ -52,7 +52,7 @@ The web app is the full product: AI setup, memory review and approvals, the wall
 - Rooms-only CLI/TUI sharing the same room runtime and governance.
 - Skills page in the web app: write a skill, upload .md/.zip/.skill files, or import from a repo, review before accepting, then enable per room.
 - Room-to-room consult: @-mention another room in chat to ask it a question; it answers read-only from its own memory and context.
-- Delegated tasks shown as task cards in chat, with artifacts viewable in a sandboxed artifacts viewer.
+- Delegated tasks tracked in the room's Artifacts panel with live progress, and results viewable in a sandboxed artifacts viewer.
 - Approval-gated memory, KB writes, and Markdown/HTML artifacts.
 - Markdown/Obsidian KB tools and local web search.
 - MCP connectors on web and CLI through a single proxy tool. Bring your own servers; see [`docs/mcp.md`](docs/mcp.md).

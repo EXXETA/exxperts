@@ -92,10 +92,12 @@ try {
 	// the SAME batch still deletes, and the failure is reported by id.
 	// POSIX-only: Windows chmod cannot make a directory undeletable (it no-ops
 	// on dirs, and Node's rm force-clears read-only files via its EPERM retry),
-	// so a locked folder cannot be staged on a Windows CI runner. The per-item
-	// try/catch under test is platform-independent and stays covered by the
-	// macOS/Linux CI legs.
-	if (process.platform !== "win32") {
+	// so a locked folder cannot be staged on a Windows CI runner. Non-root
+	// only, for the same reason: root bypasses permission bits entirely, so
+	// inside a root container (the Linux Docker release gate) the 0o500 lock
+	// never takes hold either. The per-item try/catch under test is
+	// platform-independent and stays covered by the non-root macOS/Linux legs.
+	if (process.platform !== "win32" && process.getuid?.() !== 0) {
 		seedTaskDir("tsk-g6", 1000);
 		seedLedgerRow("tsk-g6", "2026-07-06T10:00:00.000Z");
 		const lockedDir = path.join(artifactsRoot, "tasks", "tsk-g5", "locked");

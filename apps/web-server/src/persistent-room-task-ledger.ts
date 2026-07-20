@@ -76,6 +76,14 @@ export interface TaskLedgerRecord {
 	 * means "you haven't seen this yet", so it must decay exactly once.
 	 */
 	viewedAt?: string;
+	/**
+	 * Stamped when the user took this row off the Artifacts panel ("Remove from
+	 * list"). A LIST operation only — files stay on disk and deletedAt keeps its
+	 * meaning ("files are gone"). Only the panel listing hides removed rows;
+	 * every other reader (reseed, GC measurement, iterate mapping) still sees
+	 * them, so chat items and provenance keep working. Cleared by Undo.
+	 */
+	removedAt?: string;
 }
 
 export interface TaskLedgerStorageOptions {
@@ -268,6 +276,33 @@ export function markTaskLedgerRecordDeleted(roomIdRaw: string, taskIdRaw: string
 	if (!current) return null;
 	writeTaskLedgerRecordFile(file, { ...current, deletedAt: now.toISOString() });
 	return { ...current, deletedAt: now.toISOString() };
+}
+
+/**
+ * Stamp removedAt: the user took this row off the Artifacts panel. Also stamps
+ * awayNoticedAt when unset — removing a row is acting on it, so a later connect
+ * must not announce a task the user already dismissed. Idempotent; returns the
+ * updated row, or null when the row is missing.
+ */
+export function markTaskLedgerRecordRemoved(roomIdRaw: string, taskIdRaw: string, options: TaskLedgerStorageOptions = {}, now = new Date()): TaskLedgerRecord | null {
+	const file = taskLedgerRecordPath(roomIdRaw, taskIdRaw, options);
+	const current = parseTaskLedgerRecord(file);
+	if (!current) return null;
+	if (current.removedAt) return current;
+	const record: TaskLedgerRecord = { ...current, removedAt: now.toISOString(), awayNoticedAt: current.awayNoticedAt ?? now.toISOString() };
+	writeTaskLedgerRecordFile(file, record);
+	return record;
+}
+
+/** Clear removedAt (the toast's Undo). Idempotent; returns the updated row, or null when the row is missing. */
+export function clearTaskLedgerRecordRemoved(roomIdRaw: string, taskIdRaw: string, options: TaskLedgerStorageOptions = {}): TaskLedgerRecord | null {
+	const file = taskLedgerRecordPath(roomIdRaw, taskIdRaw, options);
+	const current = parseTaskLedgerRecord(file);
+	if (!current) return null;
+	if (!current.removedAt) return current;
+	const { removedAt: _removed, ...rest } = current;
+	writeTaskLedgerRecordFile(file, rest);
+	return rest;
 }
 
 /** Stamp viewedAt on first open/act (idempotent — the first stamp wins; green decays once). Returns the updated row, or null when the row is missing. */

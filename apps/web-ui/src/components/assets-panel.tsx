@@ -11,19 +11,25 @@ interface Props {
 	 * view's footer action. Only the genuinely live row ever offers it.
 	 */
 	onStopRunning?: () => void;
+	/**
+	 * Remove from list (user control, 2026-07-20): the hover-reveal ✕ on every
+	 * settled row. A list operation only — files are kept; the caller shows the
+	 * Undo toast. Running rows never offer it (they must settle first).
+	 */
+	onRemove?: (row: AssetRowView) => void;
 }
 
 /**
  * The in-room rail's Artifacts section (assets contract §2 rung 3, mockup v2;
  * room-scoped 2026-07-18): compact rows — type icon, title, status subline
- * (a status word alone, or `filetype · time` on plain done rows) as the single
+ * (a status word alone, or the time on plain done rows) as the single
  * status channel. Room-wide, flat, newest-first — rows survive Memento and
  * checkpoint, so the header is just "Artifacts": the room is the ambient
  * container. Collapsible; the count survives collapse; 3 rows resting,
  * "Show all (N)" expands. Rendered only when the room has rows at all —
  * the rail below Home stays reserved space otherwise.
  */
-export function AssetsPanel({ rows, selectedTaskId, onSelect, onStopRunning }: Props) {
+export function AssetsPanel({ rows, selectedTaskId, onSelect, onStopRunning, onRemove }: Props) {
 	const [collapsed, setCollapsed] = useState(false);
 	const [showAll, setShowAll] = useState(false);
 	if (rows.length === 0) return null;
@@ -69,6 +75,17 @@ export function AssetsPanel({ rows, selectedTaskId, onSelect, onStopRunning }: P
 										title="Stop this task. Files it already wrote are kept."
 										aria-label={`Stop ${row.title}`}
 									/>
+								)}
+								{!row.running && onRemove && (
+									<button
+										type="button"
+										className="assets-row-remove"
+										onClick={(e) => { e.stopPropagation(); onRemove(row); }}
+										title="Remove from the list. Its files are kept."
+										aria-label={`Remove ${row.title} from the list`}
+									>
+										×
+									</button>
 								)}
 							</span>
 						);

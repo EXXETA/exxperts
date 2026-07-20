@@ -122,6 +122,14 @@ export interface RecentSession {
 	tokens: number;
 	ts: number | null;
 	/**
+	 * True when `ts` is the exact approval instant (from rc_metadata or the
+	 * checkpoint record). False when it is only the heading's YYYY-MM-DD date
+	 * (hand-edited or pre-schema entries) — a date parses to UTC midnight, so
+	 * hour-level "ago" wording from it would be invented precision; the UI must
+	 * not render finer than days for these.
+	 */
+	tsPrecise: boolean;
+	/**
 	 * When the checkpoint that admitted this entry was approved (ISO). Null when
 	 * no event record matches (hand-edited files, pre-schema rooms) — the UI
 	 * shows a receipt only for entries that truly have one.
@@ -393,9 +401,9 @@ function readRoomL1bInfo(id: string): RoomL1bInfo {
  * a `### RC-#### | STATUS | date | Title` subsection; we surface a human title
  * and the session's current token size (same unit as the memory map).
  */
-function recentContextSessions(recentContext: string): Array<{ id: string | null; checkpointId: string | null; title: string; tokens: number; ts: number | null; content: string }> {
+function recentContextSessions(recentContext: string): Array<{ id: string | null; checkpointId: string | null; title: string; tokens: number; ts: number | null; tsPrecise: boolean; content: string }> {
 	const headings = Array.from(recentContext.matchAll(/^###\s+(.+?)\s*$/gm));
-	const out: Array<{ id: string | null; checkpointId: string | null; title: string; tokens: number; ts: number | null; content: string }> = [];
+	const out: Array<{ id: string | null; checkpointId: string | null; title: string; tokens: number; ts: number | null; tsPrecise: boolean; content: string }> = [];
 	for (let i = 0; i < headings.length; i++) {
 		const start = headings[i].index ?? 0;
 		const end = i + 1 < headings.length ? (headings[i + 1].index ?? recentContext.length) : recentContext.length;
@@ -421,10 +429,22 @@ function recentContextSessions(recentContext: string): Array<{ id: string | null
 		const meta = rawBody.match(/<!--\s*rc_metadata:([\s\S]*?)-->/);
 		const cpMatch = meta ? meta[1].match(/checkpoint_id=([^;\s]+)/) : null;
 		const checkpointId = cpMatch ? cpMatch[1] : null;
+		// The gate also stamps the exact approval instant into rc_metadata.
+		// Prefer it over the heading's day: the heading date parses to UTC
+		// midnight, which turns a memory saved this afternoon into "15h ago".
+		let tsPrecise = false;
+		const approvedMatch = meta ? meta[1].match(/approved_at=([^;\s]+)/) : null;
+		if (approvedMatch) {
+			const parsed = Date.parse(approvedMatch[1]);
+			if (Number.isFinite(parsed)) {
+				ts = parsed;
+				tsPrecise = true;
+			}
+		}
 		// Strip the rc_metadata identity comment (and any other HTML comment)
 		// from the readable text, like cleanAreaBody does for the area reader.
 		const content = rawBody.replace(/<!--[\s\S]*?-->/g, "").trim();
-		out.push({ id, checkpointId, title, tokens: structuralReviewMetrics(body).estimatedTokens, ts, content });
+		out.push({ id, checkpointId, title, tokens: structuralReviewMetrics(body).estimatedTokens, ts, tsPrecise, content });
 	}
 	return out;
 }
@@ -460,7 +480,7 @@ function buildFullMemoryMap(l1b: string): StructuralReviewMemoryMapRow[] {
 }
 
 /** Read a room's L1b once and return its Recent Context sessions (doc order). */
-function readRoomSessions(id: string): Array<{ id: string | null; checkpointId: string | null; title: string; tokens: number; ts: number | null; content: string }> {
+function readRoomSessions(id: string): Array<{ id: string | null; checkpointId: string | null; title: string; tokens: number; ts: number | null; tsPrecise: boolean; content: string }> {
 	try {
 		const parts = extractStructuralReviewSourceParts(createPersistentAgentInstance(id).readL1b());
 		return recentContextSessions(parts.preservedRecentContext);
@@ -1354,7 +1374,7 @@ export function readMemorySnapshotAt(id: string, at: number): MemorySnapshot | n
  * The receipt offers "open the conversation" only while the closed-thread
  * file the record names is actually on disk. Returns newest first.
  */
-function sessionsWithReceipts(id: string, sessions: Array<{ id: string | null; checkpointId: string | null; title: string; tokens: number; ts: number | null; content: string }>): RecentSession[] {
+function sessionsWithReceipts(id: string, sessions: Array<{ id: string | null; checkpointId: string | null; title: string; tokens: number; ts: number | null; tsPrecise: boolean; content: string }>): RecentSession[] {
 	const receiptByCheckpoint = new Map<string, { approvedAt: string; conversation: boolean }>();
 	for (const record of readCheckpoints(id)) {
 		if (!record.checkpointId) continue;
@@ -1373,7 +1393,19 @@ function sessionsWithReceipts(id: string, sessions: Array<{ id: string | null; c
 		.reverse()
 		.map((s) => {
 			const receipt = s.checkpointId ? receiptByCheckpoint.get(s.checkpointId) : undefined;
-			return { title: s.title, tokens: s.tokens, ts: s.ts, approvedAt: receipt?.approvedAt ?? null, content: s.content, checkpointId: s.checkpointId, conversation: receipt?.conversation ?? false };
+			// An entry whose rc_metadata carries no approval instant can still
+			// borrow the receipt's: the checkpoint record's approvedAt is the
+			// same fact, recorded by the same gate.
+			let ts = s.ts;
+			let tsPrecise = s.tsPrecise;
+			if (!tsPrecise && receipt) {
+				const parsed = Date.parse(receipt.approvedAt);
+				if (Number.isFinite(parsed)) {
+					ts = parsed;
+					tsPrecise = true;
+				}
+			}
+			return { title: s.title, tokens: s.tokens, ts, tsPrecise, approvedAt: receipt?.approvedAt ?? null, content: s.content, checkpointId: s.checkpointId, conversation: receipt?.conversation ?? false };
 		});
 }
 

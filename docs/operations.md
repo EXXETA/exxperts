@@ -4,7 +4,7 @@
 
 ## Prerequisites
 
-- Node.js ≥ 20 (we test on 22).
+- Node.js 20.6+ (we test on 22).
 - A model provider configured; see [`provider-setup.md`](provider-setup.md)
   for AI profiles (Claude, ChatGPT Plus/Pro, OpenAI-compatible gateway).
   API keys via `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` in `.env` or shell
@@ -44,8 +44,9 @@ Behind the scenes:
   browser.
 - Trapped on `Ctrl+C` to stop both cleanly.
 
-The web server binds to `127.0.0.1` only and validates Host/Origin
-headers; it is not reachable from the LAN by design.
+The web server binds to `127.0.0.1` only, validates Host/Origin
+headers, and requires a client auth token on API and WebSocket
+requests (see `SECURITY.md`); it is not reachable from the LAN by design.
 
 ### CLI
 
@@ -94,9 +95,8 @@ All of these can go in `.env` (auto-loaded) or your shell.
 | `ANTHROPIC_API_KEY` | (none) | Set if not using subscription auth. |
 | `OPENAI_API_KEY` | (none) | Same. |
 | `EXXETA_KB_VAULTS` | (none) | Optional override/additional Markdown vault config for the knowledge tools. Primary persistent config is `~/.exxperts/app/kb-vaults.json`. |
-| `EXXETA_SEARCH_PROVIDER` | `disabled` | Web search provider: `disabled`, `searxng`, or `tavily`. |
+| `EXXETA_SEARCH_PROVIDER` | `disabled` | Web search provider: `disabled` or `searxng`. |
 | `EXXETA_SEARCH_BASE_URL` | (none) | Required when `EXXETA_SEARCH_PROVIDER=searxng`, for example `http://127.0.0.1:8888`. Start a local instance with `./scripts/searxng start`. |
-| `EXXETA_SEARCH_API_KEY` | (none) | Required when `EXXETA_SEARCH_PROVIDER=tavily`. |
 | `PORT` | `8787` | Web server port. |
 
 ## Local SearXNG

@@ -367,11 +367,16 @@ function ComposerInput({
 		setMentionIndex(0);
 	}, [mentionQuery?.query]);
 
+	// Auto-grow: the draft's own height drives the box, the stylesheet's
+	// max-height (40vh) is the single cap — past it the textarea scrolls
+	// internally, and a viewport resize re-clamps without any JS. The textarea
+	// must NOT be a flex-basis-0 item for this to work (a `flex: 1` in the
+	// column layout silently discarded this height for a month).
 	useLayoutEffect(() => {
 		const el = textareaNodeRef.current;
 		if (!el) return;
 		el.style.height = "auto";
-		el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
+		el.style.height = `${el.scrollHeight}px`;
 	}, [draft]);
 
 	// Restore the caret after a mention completion rewrote the draft.

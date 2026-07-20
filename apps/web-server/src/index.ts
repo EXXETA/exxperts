@@ -38,7 +38,7 @@ import { computeSkillStatuses, disablePersistentRoomSkill, effectiveEnabledSkill
 import { buildEnabledSkillsIndexSection, createReadSkillTool } from "./persistent-room-skill-tool.js";
 import { buildSpecialistTemplatesIndexSection, createDelegateTaskTool } from "./persistent-room-delegate-tool.js";
 import { buildSpecialistSessionPlan, ingestExportedInputs, runSpecialistWorker, listSpecialistTaskArtifacts, type SpecialistSessionPlan } from "./persistent-room-specialist-execution.js";
-import { appendTaskLedgerExport, createTaskLedgerRecord, finalizeTaskLedgerRecord, listTaskLedgerRecords, markTaskLedgerRecordDeleted, markTaskLedgerRecordViewed, markTaskLedgerRecordsAwayNoticed, planExportedInputIngest, resolveIterateSourceFromLedger, selectTaskLedgerAwayNotices, selectTaskLedgerReseedRows, sweepOrphanedTaskLedgerRecords } from "./persistent-room-task-ledger.js";
+import { appendTaskLedgerExport, clearTaskLedgerRecordRemoved, createTaskLedgerRecord, finalizeTaskLedgerRecord, listTaskLedgerRecords, markTaskLedgerRecordDeleted, markTaskLedgerRecordRemoved, markTaskLedgerRecordViewed, markTaskLedgerRecordsAwayNoticed, planExportedInputIngest, resolveIterateSourceFromLedger, selectTaskLedgerAwayNotices, selectTaskLedgerReseedRows, sweepOrphanedTaskLedgerRecords } from "./persistent-room-task-ledger.js";
 import { abortSpecialistTask, bindSpecialistSink, emitSpecialistDelta, registerSpecialistTask, removeSpecialistTask, runningSpecialistCount, sendSpecialistFrame, unbindSpecialistSink } from "./persistent-room-specialist-registry.js";
 import { assessTaskStoreGc, collectProtectedTaskIds, executeTaskStoreGc } from "./specialist-task-store-gc.js";
 import { getSpecialistTemplate, SPECIALIST_TASK_CAPS } from "./specialist-templates.js";
@@ -1182,7 +1182,9 @@ app.get("/api/persistent-agents/:id/tasks", async (req, reply) => {
 	const conversationId = String((req.query as any)?.conversationId ?? "").trim() || undefined;
 	try {
 		const status = getUsablePersistentAgentStatusForNormalUse(idRaw);
-		return { roomId: status.id, tasks: listTaskLedgerRecords(status.id, conversationId ? { conversationId } : {}) };
+		// removedAt hides a row from the PANEL only (user's "Remove from list");
+		// other ledger readers keep seeing it so chat items and provenance work.
+		return { roomId: status.id, tasks: listTaskLedgerRecords(status.id, conversationId ? { conversationId } : {}).filter((record) => !record.removedAt) };
 	} catch (e) {
 		return persistentAgentNormalUseErrorReply(reply, e);
 	}
@@ -1198,6 +1200,35 @@ app.post("/api/persistent-agents/:id/tasks/:taskId/viewed", async (req, reply) =
 		const row = markTaskLedgerRecordViewed(status.id, taskId);
 		if (!row) return reply.code(404).send({ error: "No such task in this room." });
 		return { viewedAt: row.viewedAt };
+	} catch (e) {
+		return persistentAgentNormalUseErrorReply(reply, e);
+	}
+});
+// Panel remove-from-list (user control, 2026-07-20): a list operation only —
+// the row gets a removedAt stamp, the panel listing hides it, files stay. The
+// toast's Undo clears the stamp. Running rows must settle first.
+app.post("/api/persistent-agents/:id/tasks/:taskId/removed", async (req, reply) => {
+	const idRaw = String((req.params as any).id ?? "").trim();
+	const taskId = String((req.params as any).taskId ?? "").trim();
+	try {
+		const status = getUsablePersistentAgentStatusForNormalUse(idRaw);
+		const row = listTaskLedgerRecords(status.id).find((record) => record.taskId === taskId);
+		if (!row) return reply.code(404).send({ error: "No such task in this room." });
+		if (row.outcome === "running") return reply.code(409).send({ error: "This task is still running.", code: "running" });
+		const marked = markTaskLedgerRecordRemoved(status.id, taskId);
+		return { removedAt: marked?.removedAt ?? null };
+	} catch (e) {
+		return persistentAgentNormalUseErrorReply(reply, e);
+	}
+});
+app.delete("/api/persistent-agents/:id/tasks/:taskId/removed", async (req, reply) => {
+	const idRaw = String((req.params as any).id ?? "").trim();
+	const taskId = String((req.params as any).taskId ?? "").trim();
+	try {
+		const status = getUsablePersistentAgentStatusForNormalUse(idRaw);
+		const row = clearTaskLedgerRecordRemoved(status.id, taskId);
+		if (!row) return reply.code(404).send({ error: "No such task in this room." });
+		return { removedAt: null };
 	} catch (e) {
 		return persistentAgentNormalUseErrorReply(reply, e);
 	}

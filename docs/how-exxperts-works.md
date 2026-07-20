@@ -134,7 +134,7 @@ Rooms get tools through a per-room policy rather than a global grant:
 - **Web search**: via a local SearXNG instance ([`web-search.md`](web-search.md)).
 - **Artifacts**: documents/outputs produced into the app state,
   viewable in a sandboxed artifacts viewer; delegated tasks a room runs
-  appear as task cards in chat.
+  live in the room's Artifacts panel, with a click-to-watch run view.
 - **`read_skill`**: rooms read the skills enabled for them through this
   tool; skills are the sanctioned way to give rooms new instructions
   (extensions never load in rooms). The library lists skills from the
@@ -155,8 +155,9 @@ and your approval gates, not process isolation.
 
 ## Security posture
 
-- The web server binds to `127.0.0.1` only (no LAN exposure) and
-  validates Host/Origin headers against DNS rebinding.
+- The web server binds to `127.0.0.1` only (no LAN exposure),
+  validates Host/Origin headers against DNS rebinding, and requires a
+  client auth token on API and WebSocket requests (see `SECURITY.md`).
 - Durable memory has no silent write path: every mutation goes through
   the proposal/approval workflow and a server-side fingerprint check.
   Warning-free proposals from an action you triggered can apply
