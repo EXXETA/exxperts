@@ -266,6 +266,54 @@ sha256_of() {
 # ~/.local/bin is NOT on PATH the old install is deliberately kept (removing
 # it would leave no resolvable 'exxperts' in new terminals); re-running the
 # installer after fixing PATH completes the migration.
+# PATH self-service: the one-liner promises a working `exxperts` command, so
+# when ~/.local/bin is missing from PATH the installer appends the export line
+# to the user's shell startup file itself, exactly once (a marker comment makes
+# re-runs a no-op, and a pre-existing .local/bin line is respected). Opt out
+# with EXXPERTS_NO_MODIFY_PATH=1. A child process can never fix the CURRENT
+# shell's PATH, so the closing message asks for a new terminal instead of
+# claiming "all set" beside a command that would not resolve.
+# PATH_STATE after the call: active (usable in this terminal), appended (usable
+# after a new terminal / source), manual (user must add it themselves).
+PATH_STATE="active"
+PATH_RC_FILE=""
+ensure_local_bin_on_path() {
+	case ":$PATH:" in
+		*":$HOME/.local/bin:"*) PATH_STATE="active"; return 0 ;;
+	esac
+	if [ "${EXXPERTS_NO_MODIFY_PATH:-}" = "1" ]; then
+		PATH_STATE="manual"
+		say "note: $HOME/.local/bin is not on your PATH, and EXXPERTS_NO_MODIFY_PATH=1 is set,"
+		say "so nothing was changed. Add it yourself, e.g. append this line to your ~/.zshrc or ~/.bashrc:"
+		say "  export PATH=\"\$HOME/.local/bin:\$PATH\""
+		return 0
+	fi
+	local rc
+	case "$(basename "${SHELL:-}")" in
+		zsh) rc="$HOME/.zshrc" ;;
+		bash) rc="$HOME/.bashrc" ;;
+		*) rc="$HOME/.profile" ;;
+	esac
+	if [ -f "$rc" ] && grep -qs -e 'added by the exxperts installer' -e '\.local/bin' "$rc"; then
+		# Already configured (by us or by hand); this terminal just predates it.
+		PATH_STATE="appended"
+		PATH_RC_FILE="$rc"
+		say "$rc already puts $HOME/.local/bin on your PATH; a new terminal will pick it up."
+		return 0
+	fi
+	if printf '\n%s\n' 'export PATH="$HOME/.local/bin:$PATH" # added by the exxperts installer' >> "$rc" 2>/dev/null; then
+		PATH_STATE="appended"
+		PATH_RC_FILE="$rc"
+		say "added $HOME/.local/bin to your PATH (one line appended to $rc)."
+	else
+		PATH_STATE="manual"
+		say "note: $HOME/.local/bin is not on your PATH yet, and $rc could not be written."
+		say "Add it yourself, e.g. append this line to your shell startup file:"
+		say "  export PATH=\"\$HOME/.local/bin:\$PATH\""
+	fi
+	return 0
+}
+
 migrate_from_source_install() {
 	local tree="$1"
 	local launcher_dir="$HOME/.local/bin"
@@ -311,13 +359,18 @@ migrate_from_source_install() {
 				fi
 				;;
 			*)
-				say "IMPORTANT: $launcher_dir is not on your PATH, so removing the old npm-based"
-				say "install now would leave you with NO working 'exxperts' command in new terminals."
+				say "IMPORTANT: this terminal does not have $launcher_dir on its PATH, so removing"
+				say "the old npm-based install now could leave you with no working 'exxperts' command."
 				say "The old npm-based install was kept for now. To finish migrating:"
-				say "  1. add this line to your ~/.zshrc or ~/.bashrc:"
-				say "     export PATH=\"\$HOME/.local/bin:\$PATH\""
-				say "  2. open a new terminal and re-run this install command;"
-				say "     it will then remove the old npm-based install."
+				if [ "$PATH_STATE" = "appended" ]; then
+					say "  open a new terminal and re-run this install command;"
+					say "  it will then remove the old npm-based install."
+				else
+					say "  1. add this line to your ~/.zshrc or ~/.bashrc:"
+					say "     export PATH=\"\$HOME/.local/bin:\$PATH\""
+					say "  2. open a new terminal and re-run this install command;"
+					say "     it will then remove the old npm-based install."
+				fi
 				;;
 		esac
 	fi
@@ -495,20 +548,22 @@ try_archive_install() {
 	[ -n "$old" ] && rm -rf "$old"
 	release_install_lock
 
-	case ":$PATH:" in
-		*":$HOME/.local/bin:"*) : ;;
-		*)
-			say "note: $HOME/.local/bin is not on your PATH yet. Add it, e.g. append this line"
-			say "to your ~/.zshrc or ~/.bashrc:"
-			say "  export PATH=\"\$HOME/.local/bin:\$PATH\""
-			say "then open a new terminal."
-			;;
-	esac
+	ensure_local_bin_on_path
 
 	migrate_from_source_install "$tree"
 
 	say ""
-	say "all set. Start exxperts with:"
+	case "$PATH_STATE" in
+		active)
+			say "all set. Start exxperts with:"
+			;;
+		appended)
+			say "one last step: open a new terminal (or run: source $PATH_RC_FILE), then start exxperts with:"
+			;;
+		*)
+			say "after adding it to your PATH (see the note above), open a new terminal and start exxperts with:"
+			;;
+	esac
 	say ""
 	say "  exxperts web"
 	say ""
