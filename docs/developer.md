@@ -104,6 +104,15 @@ as a repo-root `AGENTS.md` are auto-loaded, and extensions in
 `pi-package/extensions/*` register tools, gated by the
 permissions/content-policy extensions.
 
+### Room tool boundary
+
+Persistent rooms do not load arbitrary Pi extensions. This is deliberate: the
+room surface exposes a reviewed, product-owned tool set under explicit
+permission and workspace policies. The `exxperts install` command emits a
+warning because Pi extensions from any supported source will not be loaded in
+persistent rooms for security. Skills can still be installed.
+This boundary is part of exxperts' governance model.
+
 ## Local data
 
 Current product/app state lives under `~/.exxperts/app/`, including:
