@@ -23,6 +23,10 @@
     "apps/web-server",
     "apps/web-ui"
   ],
+  "overrides": {
+    "@hono/node-server": "^2.0.5",
+    "shell-quote": "^1.9.0"
+  },
   "bin": {
     "exxperts": "bin/exxperts.cjs"
   },
