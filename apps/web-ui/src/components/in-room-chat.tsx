@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import type { CSSProperties, KeyboardEvent, MutableRefObject, ReactNode, Ref } from "react";
 import { Approval } from "./Approval";
-import { ConsultThreadItem, Message, TaskThreadItem } from "./Message";
+import { ConsultThreadItem, Message, TaskThreadItem, ToolBundle, isBundleableToolItem } from "./Message";
 import { MentionConsultPopover, MentionConsultPopoverBusy, type MentionSupport } from "./mention-consult-popover";
 import { useEscapeKey } from "./use-escape-key";
 import type { ApprovalPreviewData } from "../approval-preview";
@@ -31,6 +31,10 @@ export interface InRoomChatShellViewProps {
 	topbarActions?: ReactNode;
 	composerRightActions?: ReactNode;
 	connected: boolean;
+	/** Room auto-reconnect: "reconnecting" while backoff attempts run, "failed" once capped. */
+	reconnectState?: "idle" | "reconnecting" | "failed";
+	/** Starts a fresh reconnect cycle immediately (the "Reconnect" affordance when failed). */
+	onReconnect?: () => void;
 	items: ChatItem[];
 	empty: boolean;
 	messagesRef?: Ref<HTMLDivElement>;
@@ -137,25 +141,30 @@ function ContextPill({
 	usage,
 	currentModelLabel,
 	connected,
+	reconnectState = "idle",
 }: {
 	status: ContextHealthStatus;
 	usage: InRoomChatUsage;
 	currentModelLabel?: string | null;
 	connected: boolean;
+	reconnectState?: "idle" | "reconnecting" | "failed";
 }) {
 	const [open, setOpen] = useState(false);
 	const anchorRef = useRef<HTMLDivElement | null>(null);
 	const popoverId = useId();
 	const known = status.tokens != null && status.checkpointPercent != null;
 	const zone = connected ? (status.zone ?? "unknown") : "offline";
+	const reconnecting = !connected && reconnectState === "reconnecting";
 	const label = !connected
-		? "Offline"
+		? (reconnecting ? "Reconnecting…" : "Offline")
 		: known
 			? `${Math.round(status.checkpointPercent!)}% of recommended checkpoint tokens`
 			: "Measuring tokens";
 	const title = connected
 		? "Context and model details"
-		: "Connection to the exxperts server was lost. Reconnecting.";
+		: reconnecting
+			? "Connection to the exxperts server was lost. Reconnecting… If the server isn't running, start it with: exxperts web"
+			: "Connection to the exxperts server was lost. If the server isn't running, start it with: exxperts web";
 
 	useEscapeKey(() => setOpen(false), open);
 
@@ -225,7 +234,7 @@ function ContextPill({
 					</div>
 					<div className="composer-context-popover-row">
 						<span>connection</span>
-						<strong>{connected ? "online" : "offline"}</strong>
+						<strong>{connected ? "online" : reconnecting ? "reconnecting…" : "offline"}</strong>
 					</div>
 					<p className="composer-context-popover-note">
 						{zone === "red"
@@ -254,6 +263,51 @@ interface TranscriptItemsProps {
 	showThinkingIndicator: boolean;
 }
 
+/**
+ * The default transcript render. Consecutive web_search / fetch_url calls of
+ * the SAME tool collapse into one ToolBundle line (interleavings split the
+ * run, in order); a single-call run renders exactly as today. Grouping is
+ * purely positional over the live items array, so a streaming turn grows its
+ * bundle in place as calls land.
+ */
+function renderTranscript(
+	items: ChatItem[],
+	onResolveApproval: TranscriptItemsProps["onResolveApproval"],
+	onApprovalPreview: TranscriptItemsProps["onApprovalPreview"],
+	pendingConsultIds: TranscriptItemsProps["pendingConsultIds"],
+	onOpenTaskArtifact: TranscriptItemsProps["onOpenTaskArtifact"],
+): ReactNode[] {
+	const rendered: ReactNode[] = [];
+	for (let index = 0; index < items.length; index++) {
+		const it = items[index];
+		if (isBundleableToolItem(it)) {
+			let end = index;
+			while (end + 1 < items.length) {
+				const next = items[end + 1];
+				if (next.kind === "tool" && next.name === it.name) end++;
+				else break;
+			}
+			if (end > index) {
+				rendered.push(<ToolBundle key={it.id} items={items.slice(index, end + 1).filter(isBundleableToolItem)} />);
+				index = end;
+				continue;
+			}
+		}
+		rendered.push(
+			it.kind === "approval" ? (
+				<Approval key={it.id} item={it} onResolve={onResolveApproval} onPreview={onApprovalPreview} />
+			) : it.kind === "consult" ? (
+				<ConsultThreadItem key={it.id} item={it} pending={pendingConsultIds?.has(it.id) ?? false} />
+			) : it.kind === "task" ? (
+				<TaskThreadItem key={it.id} item={it} onOpenTaskArtifact={onOpenTaskArtifact} />
+			) : (
+				<Message key={it.id} item={it} />
+			),
+		);
+	}
+	return rendered;
+}
+
 const TranscriptItems = memo(function TranscriptItems({
 	items,
 	empty,
@@ -272,17 +326,7 @@ const TranscriptItems = memo(function TranscriptItems({
 			) : renderItem ? (
 				items.map((it, idx) => renderItem(it, idx, items))
 			) : (
-				items.map((it) =>
-					it.kind === "approval" ? (
-						<Approval key={it.id} item={it} onResolve={onResolveApproval} onPreview={onApprovalPreview} />
-					) : it.kind === "consult" ? (
-						<ConsultThreadItem key={it.id} item={it} pending={pendingConsultIds?.has(it.id) ?? false} />
-					) : it.kind === "task" ? (
-						<TaskThreadItem key={it.id} item={it} onOpenTaskArtifact={onOpenTaskArtifact} />
-					) : (
-						<Message key={it.id} item={it} />
-					),
-				)
+				renderTranscript(items, onResolveApproval, onApprovalPreview, pendingConsultIds, onOpenTaskArtifact)
 			)}
 			{showThinkingIndicator && (
 				<div className="thinking-row" role="status" aria-label="thinking">
@@ -502,6 +546,8 @@ export function InRoomChatShellView({
 	topbarActions,
 	composerRightActions,
 	connected,
+	reconnectState = "idle",
+	onReconnect,
 	items,
 	empty,
 	messagesRef,
@@ -698,25 +744,31 @@ export function InRoomChatShellView({
 								initialDraftValue={initialDraftValue}
 								draftResetKey={draftResetKey}
 								mention={mention}
-								statusSlot={contextHealth ? (
-									<ContextPill
-										status={contextHealth}
-										usage={usage}
-										currentModelLabel={currentModelLabel}
-										connected={connected}
-									/>
-								) : (
-									<div className="composer-status" aria-label="Chat status">
-										{currentModelLabel && <span title={`current chat model: ${currentModelLabel}`}>model <strong>{compactModelLabel(currentModelLabel)}</strong></span>}
-										<span><strong>{usage.turns}</strong> turn{usage.turns === 1 ? "" : "s"}</span>
-										<span>↑ <strong>{fmtTok(usage.input)}</strong></span>
-										<span>↓ <strong>{fmtTok(usage.output)}</strong></span>
-										{usage.cacheRead > 0 && <span>cache <strong>{fmtTok(usage.cacheRead)}</strong></span>}
-										<span><strong>{fmtCost(usage.cost)}</strong></span>
-										{usage.totalTokens > 0 && <span title="last assistant context">ctx <strong>{fmtTok(usage.totalTokens)}</strong></span>}
-										<span className={`composer-connection ${connected ? "live" : ""}`}>{connected ? "online" : "offline"}</span>
-									</div>
-								)}
+								statusSlot={<>
+									{contextHealth ? (
+										<ContextPill
+											status={contextHealth}
+											usage={usage}
+											currentModelLabel={currentModelLabel}
+											connected={connected}
+											reconnectState={reconnectState}
+										/>
+									) : (
+										<div className="composer-status" aria-label="Chat status">
+											{currentModelLabel && <span title={`current chat model: ${currentModelLabel}`}>model <strong>{compactModelLabel(currentModelLabel)}</strong></span>}
+											<span><strong>{usage.turns}</strong> turn{usage.turns === 1 ? "" : "s"}</span>
+											<span>↑ <strong>{fmtTok(usage.input)}</strong></span>
+											<span>↓ <strong>{fmtTok(usage.output)}</strong></span>
+											{usage.cacheRead > 0 && <span>cache <strong>{fmtTok(usage.cacheRead)}</strong></span>}
+											<span><strong>{fmtCost(usage.cost)}</strong></span>
+											{usage.totalTokens > 0 && <span title="last assistant context">ctx <strong>{fmtTok(usage.totalTokens)}</strong></span>}
+											<span className={`composer-connection ${connected ? "live" : ""}`}>{connected ? "online" : reconnectState === "reconnecting" ? "reconnecting…" : "offline"}</span>
+										</div>
+									)}
+									{!connected && reconnectState === "failed" && onReconnect && (
+										<button type="button" className="icon-btn composer-reconnect-btn" title="The automatic reconnect gave up. Try again now. If the server isn't running, start it with: exxperts web" onClick={onReconnect}>Reconnect</button>
+									)}
+								</>}
 								rightActions={composerRightActions}
 							/>
 						</div>

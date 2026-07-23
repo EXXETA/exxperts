@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { SidebarToggleButton } from "../sidebar-collapse";
 import type { PersistentAgentAiProfileSelectionStatus, PersistentAgentAiProfileStatus } from "../types";
 import { Help } from "./Help";
 
@@ -240,11 +241,14 @@ export function ProductSidebar({ onHome, onAiSetup, onDashboard, onConnectors, o
 				</div>
 			</nav>
 			<div className="product-sidebar-footer">
-				<div className="sidebar-connection-status" title={connected ? "Connected" : "Offline"} aria-label={connected ? "Connected" : "Offline"}>
+				<div className="sidebar-connection-status" title={connected ? "Connected" : "Offline. If the server isn't running, start it with: exxperts web"} aria-label={connected ? "Connected" : "Offline"}>
 					<span className={`dot ${connected ? "ok" : "bad"}`} />
 					{connected ? "connected" : "offline"}
 				</div>
-				<SidebarConfigMenu onAiSetup={onAiSetup} theme={theme} onToggleTheme={onToggleTheme} active={active} aiProfileStatus={aiProfileStatus} onSelectAiProfile={onSelectAiProfile} onRefreshAiProfile={onRefreshAiProfile} standbyLockedModels={standbyLockedModels} />
+				<div className="sidebar-footer-controls">
+					<SidebarConfigMenu onAiSetup={onAiSetup} theme={theme} onToggleTheme={onToggleTheme} active={active} aiProfileStatus={aiProfileStatus} onSelectAiProfile={onSelectAiProfile} onRefreshAiProfile={onRefreshAiProfile} standbyLockedModels={standbyLockedModels} />
+					<SidebarToggleButton />
+				</div>
 			</div>
 		</aside>
 	);

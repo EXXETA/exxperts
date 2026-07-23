@@ -4,6 +4,16 @@ Get Exxperts running, connect your AI, and save your first memory, all in about 
 
 Exxperts is a local-first platform for persistent AI colleagues. Each "room" is an agent with durable, governed memory: everything it remembers lives in plain files on your machine, every memory write goes through an approval workflow you control, and the memory belongs to the room, not to any model vendor.
 
+## Ways to use exxperts
+
+Three doors into the same product, all sharing the same local data under `~/.exxperts` (rooms, memory, provider logins), one local server at a time:
+
+- **Desktop app** (macOS Apple Silicon, Windows x64): [download it from the README](../README.md#download-the-app) and open it, no terminal and no prerequisites. The app is self-contained and always runs its own version. Already installed via the terminal? The app uses the same data: download and open it.
+- **Terminal install**: the one-line command below; gives you the `exxperts` commands.
+- **Repo clone**: for contributors; the by-hand steps are [below](#1-install-and-run), the full guide is [CONTRIBUTING.md](../CONTRIBUTING.md).
+
+If you take the app door, skip to [step 2](#2-connect-your-ai) once it opens.
+
 ## What you need
 
 - macOS, Windows, or Linux with a terminal, and about 1 GB of free disk space (updates briefly peak at about 1.4 GB while the new version is unpacked next to the old one). On macOS with Apple Silicon, Windows x64, and Linux x64, the one-line install below needs nothing else preinstalled; other platforms automatically build from source, which needs the git and Node.js from the next bullet.
@@ -38,7 +48,7 @@ exxperts web
 Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 ```
 
-Prefer to do it by hand? The same commands work on every platform (on Windows, apply the two Git settings from the [README's Windows quickstart](../README.md#windows-quickstart) before cloning; the one-line installer does that for you):
+Prefer to do it by hand? The same commands work on every platform (on Windows, apply the two Git settings from [Windows notes](#windows-notes) below before cloning; the one-line installer does that for you):
 
 ```bash
 git clone https://github.com/EXXETA/exxperts.git
@@ -64,6 +74,23 @@ source ~/.zshrc
 Prefer running straight from the clone without installing commands? `npm run build`, then `./scripts/exxperts-web` (macOS/Linux/Git Bash) or `node bin\exxperts-web.cjs` (Windows).
 
 **Updating later**: re-run the one-line install command. On the platforms with prebuilt archives it performs an archive install even when you previously built from source: it migrates you to the archive install, carries `app/.env` over, and uninstalls the old npm-based global command (the clone stays in place); set `EXXPERTS_INSTALL_METHOD=source` to stay on a source install instead. Archive installs update in place and keep the install's `app/.env`; your rooms, memory, and provider logins in `~/.exxperts` are never touched by installs or updates. Updating a source install by hand: from the repo folder, `git pull`, `npm install`, `npm run install:global`. Confirm with `exxperts --version`. If anything misbehaves, `exxperts doctor` checks your install and the optional layers on any install type and prints the fix (contributors working from a clone can also use `npm run doctor`).
+
+### Windows notes
+
+Windows is supported for the desktop app, the web app, and the CLI/TUI; the desktop app and the one-line installer need nothing preinstalled on Windows x64. The requirements below matter for two things only, shell access in rooms and installing from source (by hand or via the installer's fallback):
+
+1. **Git for Windows ≥ 2.40** (https://gitforwindows.org), needed for the source install path and for rooms' optional shell tool: that tool runs commands through Git Bash's `bash.exe`, which is discovered automatically from your Git installation, whether machine-wide (`C:\Program Files\Git`) or per-user (`%LOCALAPPDATA%\Programs\Git`, the no-admin install), or on `PATH`. A WSL `bash` on `PATH` also works for rooms' shell tool; in that case commands run inside the WSL Linux environment (Windows drives under `/mnt/c`, the distro's own tools).
+2. **Node.js 20.6+ (LTS recommended) and npm** (https://nodejs.org), needed for the source install path only; the prebuilt archive bundles its own Node runtime.
+3. **Windows Terminal** recommended for the CLI/TUI (legacy conhost is untested).
+
+One-time Git settings before cloning (long paths matter because `node_modules` trees exceed the 260-character `MAX_PATH`); clone into a folder your user owns (for example under `%USERPROFILE%`), never into `C:\` or `C:\Program Files`:
+
+```powershell
+git config --global core.longpaths true
+git config --global core.autocrlf false   # the repo's .gitattributes manages line endings
+```
+
+Developing from a clone without a global install? Use the shell-independent forms: `node bin\exxperts-web.cjs`, `node bin\exxperts-cli.cjs`, and `node scripts\exxeta-web.mjs` (dev web app with server + Vite UI). The bash launchers in `scripts/` also work from Git Bash.
 
 ## 2. Connect your AI
 
@@ -120,7 +147,7 @@ The room appears on Home automatically; no import step. Copying all of `~/.exxpe
 
 ## Uninstall
 
-Stop the server with `Ctrl-C`. If you installed the package globally: `npm uninstall -g @exxeta/exxperts-app`. Your rooms and credentials stay in `~/.exxperts/`; delete that folder only if you want to erase all local product state.
+Desktop app: quit it from the tray, then delete the app (macOS: drag it out of Applications; Windows: uninstall from Settings, or just delete the portable folder). Terminal install: stop the server with `Ctrl-C`; if you installed the package globally, `npm uninstall -g @exxeta/exxperts-app`. Your rooms and credentials stay in `~/.exxperts/`; delete that folder only if you want to erase all local product state.
 
 ## Going further
 
@@ -128,5 +155,5 @@ Stop the server with `Ctrl-C`. If you installed the package globally: `npm unins
 - [Memory](memory.md): the full memory model and who approves what.
 - [Provider setup and AI profiles](provider-setup.md): all provider paths in detail.
 - [MCP client support](mcp.md): connect MCP tool servers.
-- [Web search](web-search.md): optional local SearXNG search.
+- [Web search](web-search.md): works out of the box via DuckDuckGo; optional local SearXNG for heavier use.
 - CLI/TUI: `exxperts cli` (or `./scripts/exxperts-cli`) opens the terminal experience, sharing the same rooms and credentials.

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { SidebarToggleButton } from "../sidebar-collapse";
 import { ThemeToggle, type ThemeMode } from "./product-shell";
 
 import type { ReactNode } from "react";
@@ -80,11 +81,14 @@ export function Sidebar({ connected, theme, onToggleTheme, onHelp, onHome, asset
 			{assetsSlot}
 
 			<div className="sidebar-footer">
-				<div className="sidebar-connection-status" title={connected ? "Connected" : "Offline"} aria-label={connected ? "Connected" : "Offline"}>
+				<div className="sidebar-connection-status" title={connected ? "Connected" : "Offline. If the server isn't running, start it with: exxperts web"} aria-label={connected ? "Connected" : "Offline"}>
 					<span className={`dot ${connected ? "ok" : "bad"}`} />
 					{connected ? "connected" : "offline"}
 				</div>
-				<InRoomSidebarConfigMenu theme={theme} onToggleTheme={onToggleTheme} onHelp={onHelp} />
+				<div className="sidebar-footer-controls">
+					<InRoomSidebarConfigMenu theme={theme} onToggleTheme={onToggleTheme} onHelp={onHelp} />
+					<SidebarToggleButton />
+				</div>
 			</div>
 		</aside>
 	);

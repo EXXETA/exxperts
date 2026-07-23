@@ -95,13 +95,13 @@ All of these can go in `.env` (auto-loaded) or your shell.
 | `ANTHROPIC_API_KEY` | (none) | Set if not using subscription auth. |
 | `OPENAI_API_KEY` | (none) | Same. |
 | `EXXETA_KB_VAULTS` | (none) | Optional override/additional Markdown vault config for the knowledge tools. Primary persistent config is `~/.exxperts/app/kb-vaults.json`. |
-| `EXXETA_SEARCH_PROVIDER` | `disabled` | Web search provider: `disabled` or `searxng`. |
+| `EXXETA_SEARCH_PROVIDER` | (unset = built-in DuckDuckGo) | Web search provider: unset for the built-in DuckDuckGo backend, `searxng` for a local SearXNG, `disabled` to turn web search off. |
 | `EXXETA_SEARCH_BASE_URL` | (none) | Required when `EXXETA_SEARCH_PROVIDER=searxng`, for example `http://127.0.0.1:8888`. Start a local instance with `./scripts/searxng start`. |
 | `PORT` | `8787` | Web server port. |
 
 ## Local SearXNG
 
-For CLI/web research without a paid search API, start Docker and run a local SearXNG container:
+Web search works out of the box through the built-in DuckDuckGo backend; SearXNG via Docker is the optional upgrade for heavier use (aggregates several engines, no DuckDuckGo rate limits). To set it up, start Docker and run:
 
 ```bash
 ./scripts/searxng start        # macOS / Linux / Git Bash

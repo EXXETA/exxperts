@@ -38,7 +38,7 @@ current template are skipped ("already up to date").
    ```
 
    Each room prints either `WOULD upgrade constitution v1 -> v2` or
-   `already at template v2 — nothing to do`.
+   `already at template v2, nothing to do`.
 
 4. **Run the upgrade:**
 

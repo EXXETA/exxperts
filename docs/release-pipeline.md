@@ -12,8 +12,9 @@ The workflow then:
 - checks the vendored Node pin for missed security releases (a release must not ship a Node with known holes),
 - asserts the tag matches the `package.json` version (prerelease suffixes allowed),
 - builds three archives via `scripts/bundle-release.mjs`, one per target on its native runner: `linux-x64` (tar.gz), `darwin-arm64` (tar.gz), `win-x64` (zip),
+- builds the desktop apps on a macOS runner from those CI-built archives as payloads (never a locally-built tree): the macOS dmg/zip natively, the Windows zip and NSIS installer cross-built, with the packaged macOS app passing its real end-to-end smoke before anything publishes,
 - smoke-tests each archive on a bare runner with no provisioned toolchain (`scripts/smoke-release-archive.mjs`), and verifies each archive against its `.sha256` file,
-- assembles `SHA256SUMS.txt`, re-verifies every downloaded archive against it (so artifact-storage corruption between the smoke jobs and publish cannot ship a broken asset), and creates the GitHub Release with the archives and checksums attached. Checksums are computed in CI from the tagged commit.
+- assembles `SHA256SUMS.txt`, re-verifies every downloaded archive against it (so artifact-storage corruption between the smoke jobs and publish cannot ship a broken asset), and creates the GitHub Release with the archives and checksums attached. Checksums are computed in CI from the tagged commit. The four app artifacts are additionally uploaded under versionless alias names (for example `exxperts-desktop-mac-arm64.dmg`) so `releases/latest/download` links in the README always point at the newest release; the aliases get their own `SHA256SUMS.txt` lines alongside the versioned names.
 
 Re-running the publish for a tag that already has a release requires deleting that release first: `gh release create` fails if the release already exists.
 

@@ -277,7 +277,9 @@ strong, b { font-weight: 700; }
 	border-right-color: var(--exx-divider);
 }
 .sidebar-header {
-	padding: 22px 18px 16px;
+	/* Top padding tuned so the wordmark sits on the same optical line as the
+	   landing headline; the mac app override below keeps its own clearance. */
+	padding: 30px 18px 16px;
 	display: flex;
 	flex-direction: column;
 	align-items: center;
@@ -561,6 +563,11 @@ strong, b { font-weight: 700; }
 .sidebar-connection-status {
 	display: inline-flex;
 	align-items: center;
+	line-height: 1;
+}
+.sidebar-connection-status .dot {
+	margin-right: 7px;
+	flex: none;
 }
 .sidebar .theme-toggle {
 	border-color: var(--border-soft);
@@ -580,7 +587,7 @@ strong, b { font-weight: 700; }
 	margin-right: 7px;
 	vertical-align: middle;
 }
-.dot.ok { background: var(--fg); }
+.dot.ok { background: var(--success); }
 .dot.bad { background: var(--error); }
 
 /* Main pane --------------------------------------------------------- */
@@ -813,7 +820,7 @@ strong, b { font-weight: 700; }
 	border-right-color: var(--exx-divider);
 }
 .product-sidebar-header {
-	padding: 22px 18px 16px;
+	padding: 30px 18px 16px;
 	display: flex;
 	flex-direction: column;
 	align-items: center;
@@ -887,7 +894,7 @@ strong, b { font-weight: 700; }
 	color: var(--muted);
 	gap: 0;
 }
-.product-sidebar .dot.ok { background: var(--muted); }
+.product-sidebar .dot.ok { background: var(--success); }
 .product-sidebar .dot.bad { background: var(--error); }
 .product-sidebar .theme-toggle {
 	border-color: var(--border-soft);
@@ -2758,9 +2765,9 @@ strong, b { font-weight: 700; }
 	cursor: pointer;
 }
 .checkpoint-density-option.selected {
-	border-color: color-mix(in srgb, var(--success) 72%, var(--border));
-	background: color-mix(in srgb, var(--success) 18%, var(--panel));
-	box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--success) 52%, transparent), 0 0 0 3px color-mix(in srgb, var(--success) 16%, transparent);
+	border-color: var(--fg);
+	background: color-mix(in srgb, var(--fg) 10%, var(--panel));
+	box-shadow: inset 0 0 0 1px var(--fg);
 }
 .checkpoint-density-option strong {
 	font-family: "Bandeins Strange", "Sen", sans-serif;
@@ -3900,7 +3907,7 @@ strong, b { font-weight: 700; }
 }
 
 :root[data-theme="light"] .sidebar .dot.ok {
-	background: #fff;
+	background: var(--success);
 }
 
 :root[data-theme="light"] .product-sidebar .sidebar-connection-status {
@@ -3913,7 +3920,7 @@ strong, b { font-weight: 700; }
 }
 
 :root[data-theme="light"] .product-sidebar .dot.ok {
-	background: var(--muted);
+	background: var(--success);
 }
 
 :root[data-theme="light"] .product-sidebar .dot.bad {
@@ -3984,7 +3991,7 @@ strong, b { font-weight: 700; }
 }
 
 :root[data-theme="light"] .sidebar .dot.ok {
-	background: var(--muted);
+	background: var(--success);
 }
 
 :root[data-theme="light"] .landing-card code {
@@ -4289,6 +4296,16 @@ strong, b { font-weight: 700; }
 	text-transform: uppercase;
 	color: var(--dim);
 }
+/* Bundled tool runs: consecutive web_search / fetch_url calls collapse into
+   one .tool-chip line (so resting/running/error/open visuals are inherited);
+   the nested per-call chips render unchanged inside .bundle-body. */
+.tool-bundle > summary .name { flex: none; }
+.tool-bundle > summary .bundle-failed { color: var(--dim); flex: none; }
+.tool-bundle .bundle-body { padding: 4px 8px 8px; display: flex; flex-direction: column; }
+.tool-bundle .bundle-body .tool-chip { max-width: none; }
+.tool-bundle .bundle-body .tool-chip + .tool-chip { border-top: 1px solid color-mix(in srgb, var(--border-soft) 45%, transparent); }
+.tool-chip > summary .chip-provider { margin-left: auto; flex: none; color: var(--dim); font-size: 11px; }
+
 .tool-chip pre {
 	margin: 0;
 	padding: 7px 9px;
@@ -4898,6 +4915,11 @@ strong, b { font-weight: 700; }
 	display: flex;
 	align-items: center;
 	min-width: 0;
+}
+/* Manual retry once the auto-reconnect gave up; sits beside the status pill. */
+.composer-reconnect-btn {
+	margin-left: 8px;
+	flex: 0 0 auto;
 }
 .composer-box-controls {
 	display: flex;
@@ -10560,3 +10582,248 @@ label.rs-row {
 }
 .task-store-gc-meta { flex: none; color: var(--muted); font-size: 11px; }
 .asset-viewer-delete { color: var(--danger, #d33); margin-left: auto; }
+
+/* Desktop app (Electron shell) -------------------------------------- */
+/* macOS hidden title bar: the sidebar header doubles as the window drag
+   region (interactive children opt back out) and gains top clearance so the
+   wordmark sits below the inset traffic lights. Gated by the shell's UA
+   token via the classes set in index.html; the browser app is untouched. */
+html.desktop-app-mac .sidebar-header,
+html.desktop-app-mac .product-sidebar-header {
+	-webkit-app-region: drag;
+	padding-top: 56px;
+}
+html.desktop-app-mac .sidebar-header a,
+html.desktop-app-mac .sidebar-header button,
+html.desktop-app-mac .sidebar-header input,
+html.desktop-app-mac .product-sidebar-header a,
+html.desktop-app-mac .product-sidebar-header button,
+html.desktop-app-mac .product-sidebar-header input {
+	-webkit-app-region: no-drag;
+}
+html.desktop-app-mac .sidebar-header img,
+html.desktop-app-mac .product-sidebar-header img {
+	-webkit-user-drag: none;
+}
+
+/* Desktop app, mac: draggable strip across the whole window top, doubling as
+   the browser-parity breathing room (browser chrome pushes content down; the
+   app has none). The strip overlays only padding: every content wrapper
+   below clears it, so nothing interactive can sit underneath. */
+.desktop-drag-strip { display: none; }
+html.desktop-app-mac .desktop-drag-strip {
+	display: block;
+	position: fixed;
+	top: 0;
+	left: 0;
+	right: 0;
+	height: 48px;
+	-webkit-app-region: drag;
+	z-index: 2000;
+}
+html.desktop-app-mac .landing { padding-top: 60px; }
+html.desktop-app-mac .main { padding-top: 48px; }
+
+/* Checkpoint modal format pass (2026-07-23): the proposal modal family reads
+   like the room-settings dialogs - compact left-aligned header, meta and the
+   full-entry affordance on one quiet row (chips left, control right), action
+   row left-aligned with the primary first. Scoped to the modal card so the
+   Maintain screens keep their deliberate big headlines. */
+.checkpoint-input-card .checkpoint-input-heading,
+.checkpoint-input-card .checkpoint-proposal-page {
+	text-align: left;
+	max-width: none;
+	margin: 0;
+}
+.checkpoint-input-card .checkpoint-input-heading h2 {
+	font-size: 24px;
+	line-height: 1.15;
+	margin: 6px 0 8px;
+}
+.checkpoint-input-card .checkpoint-input-heading p {
+	max-width: 640px;
+}
+.checkpoint-proposal-meta-row {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	gap: 10px;
+	flex-wrap: wrap;
+	margin-top: 4px;
+}
+.checkpoint-proposal-meta-row .checkpoint-input-meta {
+	justify-content: flex-start;
+}
+.checkpoint-proposal-meta-row .checkpoint-review-actions {
+	display: flex;
+	gap: 12px;
+}
+.checkpoint-input-card:not(.maintain-confirm-card) .checkpoint-preview-actions {
+	justify-content: flex-start;
+}
+.checkpoint-input-card .checkpoint-density-options {
+	justify-content: flex-start;
+}
+
+/* Round 2 (2026-07-23): the gate surfaces of the Learn/Review flows join the
+   compact modal language (the Maintain landing keeps its own big headlines -
+   different markup, untouched). Footnote pattern replaces explainer boxes:
+   one quiet line below the action row. */
+.absorb-workspace .checkpoint-proposal-page .checkpoint-input-heading {
+	text-align: left;
+	max-width: none;
+	margin: 0;
+}
+.absorb-workspace .checkpoint-proposal-page .checkpoint-input-heading h2 {
+	font-size: 24px;
+	line-height: 1.15;
+	margin: 6px 0 8px;
+}
+.checkpoint-footnote {
+	color: var(--muted);
+	font-size: 12px;
+	line-height: 1.45;
+	margin: 2px 0 0;
+	text-align: left;
+}
+.checkpoint-input-card .checkpoint-proposal-page {
+	gap: 14px;
+}
+.checkpoint-input-card .checkpoint-proposal-result.standalone {
+	margin-top: 4px;
+}
+
+/* Round 3 (2026-07-23): the disclosure rows carry the modal family's own
+   text-control pattern (the SHOW FULL ENTRY treatment): a quiet right-aligned
+   DETAILS control that reads HIDE when open. Purely visual - the whole summary
+   row stays the native disclosure (keyboard and screen-reader semantics
+   untouched, expanded state announced by details itself). */
+.absorb-candidate-disclosure > summary,
+.absorb-raw-markdown-disclosure > summary {
+	list-style: none;
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 10px;
+}
+.absorb-candidate-disclosure > summary::-webkit-details-marker,
+.absorb-raw-markdown-disclosure > summary::-webkit-details-marker {
+	display: none;
+}
+.absorb-candidate-disclosure > summary::after,
+.absorb-raw-markdown-disclosure > summary::after {
+	content: "Details";
+	background: var(--exx-action-secondary-bg);
+	border: 1px solid var(--exx-action-secondary-border);
+	border-radius: var(--exx-radius-control);
+	color: var(--exx-action-secondary-fg);
+	font-family: var(--exx-font-display);
+	font-size: 11px;
+	font-weight: 700;
+	letter-spacing: 0.08em;
+	line-height: 1;
+	padding: 8px 10px;
+	text-transform: uppercase;
+	transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+.absorb-candidate-disclosure[open] > summary::after,
+.absorb-raw-markdown-disclosure[open] > summary::after {
+	content: "Hide";
+}
+.absorb-candidate-disclosure > summary:hover::after,
+.absorb-raw-markdown-disclosure > summary:hover::after {
+	background: color-mix(in srgb, var(--fg) 8%, transparent);
+	border-color: var(--border);
+	color: var(--fg);
+}
+@media (prefers-reduced-motion: reduce) {
+	.absorb-candidate-disclosure > summary::after,
+	.absorb-raw-markdown-disclosure > summary::after {
+		transition: none;
+	}
+}
+
+.sidebar-toggle {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 28px;
+	height: 28px;
+	padding: 0;
+	background: transparent;
+	border: 0;
+	border-radius: 7px;
+	color: var(--muted);
+	cursor: pointer;
+}
+.sidebar-toggle:hover,
+.sidebar-toggle:focus-visible {
+	background: color-mix(in srgb, var(--fg) 8%, transparent);
+	color: var(--fg);
+}
+.sidebar-toggle-floating {
+	position: fixed;
+	bottom: 12px;
+	left: 12px;
+	z-index: 40;
+	background: color-mix(in srgb, var(--fg) 6%, transparent);
+}
+html:not(:has(.sidebar, .product-sidebar)) .sidebar-toggle-floating {
+	display: none;
+}
+html.sidebar-collapsed .app,
+html.sidebar-collapsed .landing-shell.with-product-sidebar {
+	/* Single column: display:none takes the sidebar out of grid flow, so a
+	   0-column template would slide the main content into the empty track. */
+	grid-template-columns: minmax(0, 1fr);
+}
+html.sidebar-collapsed .sidebar,
+html.sidebar-collapsed .product-sidebar {
+	display: none;
+}
+/* Collapsed in the browser, the content edge moves under the fixed toggle;
+   clear it (the desktop app's top strip already provides the clearance). */
+html.sidebar-collapsed:not(.desktop-app-mac) .topbar {
+	padding-left: 52px;
+}
+html.sidebar-collapsed:not(.desktop-app-mac) .landing {
+	padding-left: 56px;
+}
+
+
+/* S7 final (Fernando's placement): the toggle lives in the sidebar FOOTER
+   next to the settings gear, both borderless quiet icon controls - one
+   pattern across the mac app, Windows and the browser, far from every
+   macOS chrome trap. Collapsed, the floating affordance sits bottom-left
+   mirroring where the control lives. */
+.sidebar-footer-controls {
+	position: relative;
+	display: flex;
+	align-items: center;
+	gap: 2px;
+}
+/* The config menu anchors to the footer pair, not the gear, so the popup
+   keeps the geometry it had when the gear sat outermost. */
+.sidebar-footer-controls .sidebar-config {
+	position: static;
+}
+.sidebar-config-gear {
+	border: 0;
+	background: transparent;
+	width: 28px;
+	height: 28px;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	padding: 0;
+	color: var(--muted);
+	border-radius: 7px;
+	/* Glyph matched to the toggle's optical weight; the box stays 28px. */
+	font-size: 16px;
+}
+.sidebar-config-gear:hover,
+.sidebar-config-gear:focus-visible {
+	background: color-mix(in srgb, var(--fg) 8%, transparent);
+	color: var(--fg);
+	border-color: transparent;
+}

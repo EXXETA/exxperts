@@ -40,6 +40,18 @@ jobs:
       - name: Typecheck web-server smoke scripts
         run: npx tsc --noEmit -p apps/web-server/tsconfig.scripts.json
 
+      # The desktop app is deliberately NOT an npm workspace (its Electron
+      # devDependency would otherwise ride every source install), so it gets
+      # its own install here. Types only: the Electron binary download is
+      # skipped, app packaging runs in release tooling, not CI.
+      - name: Typecheck desktop app
+        working-directory: apps/desktop
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+        run: |
+          npm ci
+          npx tsc --noEmit -p tsconfig.json
+
       - name: Smoke suite
         run: npm run smokes
 

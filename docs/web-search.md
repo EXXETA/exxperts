@@ -1,17 +1,25 @@
-# Web search (SearXNG)
+# Web search
 
-Web search ships **disabled**; agents say "not configured" until you turn it
-on. It then runs through a local SearXNG container: no API key and no
-third-party search SaaS. The standard way to turn it on, on any install type,
-is `exxperts setup search`; the setup below walks through it, with the
-script-level detail for developers working from a clone.
+Web search works **out of the box**: with no setup, the `web_search` tool
+queries DuckDuckGo directly (its plain HTML endpoint; no API key, no
+account). For heavier use you can optionally run a **local SearXNG
+container** instead: it aggregates several engines and is not subject to
+DuckDuckGo's rate limits. When SearXNG is configured it is always preferred;
+if it stops answering, searches fall back to the built-in DuckDuckGo backend
+until it is back. Setting `EXXETA_SEARCH_PROVIDER=disabled` turns web search
+off entirely.
 
-**Privacy note:** SearXNG forwards your search **queries** to public search
-engines (Google, DuckDuckGo, etc.), so search terms do leave the machine;
-results and the rest of your data do not. Avoid searching confidential
-client/internal content.
+**Privacy note:** either backend sends your search **queries** to a public
+search engine (DuckDuckGo directly, or the engines SearXNG aggregates), so
+search terms do leave the machine; results and the rest of your data do not.
+Avoid searching confidential client/internal content.
 
-## Setup
+The rest of this page covers the optional SearXNG setup. The standard way to
+turn it on, on any install type, is `exxperts setup search`; the setup below
+walks through it, with the script-level detail for developers working from a
+clone.
+
+## Setup (optional SearXNG)
 
 1. **Install a container engine** (one-time, like installing Node; it can't
    be bundled). Get [Docker Desktop](https://www.docker.com/products/docker-desktop/)

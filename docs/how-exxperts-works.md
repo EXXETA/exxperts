@@ -131,7 +131,7 @@ Rooms get tools through a per-room policy rather than a global grant:
   chosen folder; workspace tools operate inside that grant.
 - **`fetch_url`**: HTTP fetching with SSRF defenses (private-range and
   redirect protection).
-- **Web search**: via a local SearXNG instance ([`web-search.md`](web-search.md)).
+- **Web search**: DuckDuckGo out of the box, or an optional local SearXNG instance ([`web-search.md`](web-search.md)).
 - **Artifacts**: documents/outputs produced into the app state,
   viewable in a sandboxed artifacts viewer; delegated tasks a room runs
   live in the room's Artifacts panel, with a click-to-watch run view.

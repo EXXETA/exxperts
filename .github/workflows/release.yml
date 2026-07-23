@@ -96,6 +96,84 @@ jobs:
             dist-release/exxperts-*
           if-no-files-found: error
 
+  # The desktop apps ride the same pipeline: payloads are the CI-built
+  # release archives (never a locally-built tree — the win-x64 payload rule),
+  # the mac app is built natively and the win app cross-built from the same
+  # macOS runner, exactly like the local scripts/package.mjs flow. The mac
+  # app then runs its real end-to-end smoke (GUI works on macOS runners).
+  desktop-apps:
+    needs: build
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # No EXXETA_SKIP_BROWSER_INSTALL here: generate-icon.mts renders the
+      # icons through the repo's Playwright Chromium.
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install desktop shell dependencies
+        working-directory: apps/desktop
+        run: npm ci
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-darwin-arm64
+          path: apps/desktop/build/payload
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-win-x64
+          path: apps/desktop/build/payload
+
+      - name: Build macOS app (dmg + zip)
+        working-directory: apps/desktop
+        run: node scripts/package.mjs --skip-bundle
+
+      - name: Smoke-test the packaged macOS app
+        working-directory: apps/desktop
+        run: npm run smoke:packaged
+
+      - name: Build Windows app (zip + setup exe)
+        working-directory: apps/desktop
+        run: node scripts/package.mjs --target win-x64
+
+      - name: Checksum the app artifacts
+        working-directory: apps/desktop
+        # shellcheck disable=SC2016 # single quotes are deliberate: JS, not shell
+        run: |
+          node -e '
+            const { createHash } = require("crypto");
+            const fs = require("fs");
+            const artifacts = fs.readdirSync("dist-app").filter((f) =>
+              /^exxperts-(desktop|setup)-.*\.(dmg|zip|exe)$/.test(f));
+            if (artifacts.length !== 4) {
+              console.error(`expected 4 app artifacts, found: ${artifacts.join(", ") || "none"}`);
+              process.exit(1);
+            }
+            for (const name of artifacts) {
+              const hash = createHash("sha256").update(fs.readFileSync(`dist-app/${name}`)).digest("hex");
+              fs.writeFileSync(`dist-app/${name}.sha256`, `${hash}  ${name}\n`);
+              console.log(`${hash}  ${name}`);
+            }
+          '
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-desktop-apps
+          path: |
+            apps/desktop/dist-app/exxperts-desktop-*.dmg
+            apps/desktop/dist-app/exxperts-desktop-*.zip
+            apps/desktop/dist-app/exxperts-setup-*.exe
+            apps/desktop/dist-app/*.sha256
+          if-no-files-found: error
+
   # Deliberately no setup-node here: the archive must run without any
   # provisioned toolchain, so these jobs stay as close to a bare machine as a
   # hosted runner allows. The runner's stock node only launches the smoke
@@ -162,7 +240,7 @@ jobs:
   # matrix regardless of the chosen ref.
   publish:
     if: github.event_name == 'push' && github.ref_type == 'tag'
-    needs: bare-machine-smoke
+    needs: [bare-machine-smoke, desktop-apps]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -201,7 +279,8 @@ jobs:
               const [hash, name] = line.trim().split(/\s+/);
               return [name, hash];
             }));
-            const archives = readdirSync(".").filter((f) => f.endsWith(".tar.gz") || f.endsWith(".zip"));
+            const archives = readdirSync(".").filter((f) =>
+              f.endsWith(".tar.gz") || f.endsWith(".zip") || f.endsWith(".dmg") || f.endsWith(".exe"));
             for (const name of sums.keys()) {
               if (!archives.includes(name)) {
                 console.error(`SHA256SUMS.txt lists ${name} but the archive is missing`);
@@ -227,6 +306,32 @@ jobs:
             }
           '
 
+      # Versionless copies of the app artifacts so the README's
+      # /releases/latest/download/ links never rot across releases. Created
+      # after the checksum re-verify: each alias is a byte copy of an
+      # already-verified file, and gets its own SHA256SUMS.txt line so a
+      # download via the stable link verifies by name too. The upload globs
+      # below match the alias names as well.
+      - name: Add stable-alias app downloads
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          cd dist-release
+          cp "exxperts-desktop-$version-mac-arm64.dmg" exxperts-desktop-mac-arm64.dmg
+          cp "exxperts-desktop-$version-mac-arm64.zip" exxperts-desktop-mac-arm64.zip
+          cp "exxperts-desktop-$version-win-x64.zip" exxperts-desktop-win-x64.zip
+          cp "exxperts-setup-$version.exe" exxperts-setup-win-x64.exe
+          # shellcheck disable=SC2016 # single quotes are deliberate: JS, not shell
+          node -e '
+            const { createHash } = require("crypto");
+            const fs = require("fs");
+            const aliases = ["exxperts-desktop-mac-arm64.dmg", "exxperts-desktop-mac-arm64.zip", "exxperts-desktop-win-x64.zip", "exxperts-setup-win-x64.exe"];
+            for (const name of aliases) {
+              const hash = createHash("sha256").update(fs.readFileSync(name)).digest("hex");
+              fs.appendFileSync("SHA256SUMS.txt", `${hash}  ${name}\n`);
+              console.log(`${hash}  ${name}`);
+            }
+          '
+
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -241,6 +346,18 @@ jobs:
           # package.json (never from workflow expression interpolation).
           cat > release-notes.md <<'EOF'
           Prebuilt Exxperts archives with a vendored Node runtime. No Node, npm, or Git needs to be installed on the target machine; unpack and run.
+
+          Desktop app (window + tray around the same local server; unsigned builds, so the OS shows its usual unknown-publisher prompt on first launch):
+
+          | Platform | Download |
+          | --- | --- |
+          | Windows x64 installer | `exxperts-setup-__VERSION__.exe` |
+          | Windows x64 portable | `exxperts-desktop-__VERSION__-win-x64.zip` |
+          | macOS Apple Silicon | `exxperts-desktop-__VERSION__-mac-arm64.dmg` (or the `-mac-arm64.zip`) |
+
+          The versionless copies of the same files (`exxperts-desktop-mac-arm64.dmg`, `exxperts-setup-win-x64.exe`, ...) exist so `releases/latest/download` links always point at the newest release; they have their own lines in `SHA256SUMS.txt`.
+
+          Server archives (the `exxperts` command, for terminal use or the one-line installers):
 
           | Platform | Download |
           | --- | --- |
@@ -265,4 +382,6 @@ jobs:
             --title "$GITHUB_REF_NAME" \
             --notes-file release-notes.md \
             $prerelease_flag \
-            dist-release/exxperts-*.tar.gz dist-release/exxperts-*.zip dist-release/SHA256SUMS.txt
+            dist-release/exxperts-*.tar.gz dist-release/exxperts-*.zip \
+            dist-release/exxperts-desktop-*.dmg dist-release/exxperts-setup-*.exe \
+            dist-release/SHA256SUMS.txt

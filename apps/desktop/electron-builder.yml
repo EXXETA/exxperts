@@ -1,0 +1,57 @@
+# Unsigned macOS arm64 build (signing/notarization is a v2 item pending the
+# organization certificate); electron-builder still ad-hoc signs so the arm64
+# binary launches. The server payload rides as an extraResource: the exact
+# release-archive tree (app/ + vendor/node/) staged by scripts/package.mjs.
+appId: com.exxeta.exxperts
+productName: exxperts
+directories:
+  output: dist-app
+  buildResources: build
+# The shell has no production dependencies, but electron-builder resolves the
+# npm WORKSPACE root via the lock file and would pack the repo's entire
+# hoisted node_modules into the asar (seen: a 1.3 GB app); the server payload
+# brings its own node_modules inside extraResources.
+files:
+  - dist/**
+  - assets/**
+  - package.json
+  - "!dist/*.png"
+  - "!**/node_modules/**"
+extraResources:
+  - from: build/server
+    to: server
+asar: true
+npmRebuild: false
+protocols:
+  - name: exxperts
+    schemes: [exxperts]
+# "desktop" in the name separates the app downloads from the server release
+# archives (exxperts-<v>-win-x64.zip) on the same release page; the NSIS
+# installer keeps its own short name below.
+artifactName: exxperts-desktop-${version}-${os}-${arch}.${ext}
+mac:
+  category: public.app-category.productivity
+  icon: build/icon.icns
+  identity: null
+  target:
+    - target: dmg
+      arch: [arm64]
+    - target: zip
+      arch: [arm64]
+# Cross-built from macOS, unsigned; the win-x64 payload comes from a real
+# release archive (see scripts/package.mjs). zip is the primary artifact
+# (terminal-run zips dodged SmartScreen in the archive field tests), NSIS
+# installer rides along while unsigned distribution lasts.
+win:
+  icon: build/icon.ico
+  target:
+    - target: zip
+      arch: [x64]
+    - target: nsis
+      arch: [x64]
+nsis:
+  oneClick: true
+  deleteAppDataOnUninstall: false
+  artifactName: exxperts-setup-${version}.${ext}
+  shortcutName: exxperts
+  uninstallDisplayName: exxperts

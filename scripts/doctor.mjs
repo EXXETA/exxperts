@@ -51,8 +51,8 @@ if (argv.includes("--help") || argv.includes("-h")) {
 	console.log(`Usage: exxperts doctor [--profile <clone|global|archive>]
 
 Health check for any exxperts install. Auto-detects the install type (git
-clone, npm-global package, or prebuilt archive) and runs the checks that
-apply: Node runtime, ~/.exxperts state dirs, disk space, install-type
+clone, global install from source via npm, or prebuilt archive) and runs the
+checks that apply: Node runtime, ~/.exxperts state dirs, disk space, install-type
 specifics, the optional layers (headless Chromium, web search, bash for the
 rooms shell tool, MCP connectors; warnings only), and outbound network.
 --profile overrides the auto-detected install type. Exit 0 when everything
@@ -109,7 +109,7 @@ const npmVersion = isClone
 		.map((name) => `${name}=${process.env[name]}`);
 	const profileLabel = {
 		clone: "clone (git checkout, source install)",
-		global: "global (npm package under an npm prefix)",
+		global: "global (installed from source via npm, under an npm prefix)",
 		archive: "archive (prebuilt release, vendored Node)",
 	}[profile];
 	console.log("exxperts doctor");
@@ -221,7 +221,7 @@ if (profile === "archive") {
 }
 
 if (profile === "global") {
-	section("Global npm install");
+	section("Global install from source (npm)");
 	ok("installed at", root);
 	ok("updates", "re-run the one-line installer (migrates to the prebuilt archive install), or from a clone: git pull && npm run install:global");
 }
@@ -433,6 +433,8 @@ section("Optional features");
 	const statusLine = (searxngProbe.stdout ?? "").trim();
 	const dockerFound = !searxngProbe.error && searxngProbe.status === 0 && statusLine !== "" && !statusLine.startsWith("docker unavailable");
 	const containerRunning = dockerFound && statusLine.startsWith("running");
+	// Built-in DuckDuckGo covers search with zero setup; SearXNG is the
+	// optional power path. Unconfigured is therefore healthy, not a warning.
 	if (provider === "searxng") {
 		let reachable = false;
 		let detail = "";
@@ -447,24 +449,24 @@ section("Optional features");
 			ok("web search (SearXNG) reachable", baseUrl);
 		} else {
 			warn(
-				`web search configured but SearXNG is not answering at ${baseUrl} (${detail})`,
+				`web search: SearXNG configured but not answering at ${baseUrl} (${detail}); the built-in DuckDuckGo backend covers searches meanwhile`,
 				"run `exxperts setup search` and make sure the container engine (Docker Desktop/OrbStack) is running",
 			);
 		}
-	} else if (!dockerFound) {
+	} else if (provider === "disabled") {
 		warn(
-			"web search not set up (rooms cannot search the web); no working docker (not installed, or the engine is not running)",
-			"optional: web search needs Docker Desktop or OrbStack installed and running, then run `exxperts setup search`",
+			"web search disabled by EXXETA_SEARCH_PROVIDER=disabled",
+			"remove that setting to re-enable the built-in DuckDuckGo backend",
 		);
 	} else if (containerRunning) {
 		warn(
-			`web search not configured although the ${containerName} container is running`,
-			"run `exxperts setup search` to write the config, then restart the app",
+			`web search: the ${containerName} container is running but not configured as the backend (built-in DuckDuckGo is active)`,
+			"run `exxperts setup search` to use your SearXNG instance, then restart the app",
 		);
 	} else {
-		warn(
-			"web search not set up (rooms cannot search the web)",
-			"optional: run `exxperts setup search` (one-time local SearXNG container via Docker)",
+		ok(
+			"web search built-in (DuckDuckGo)",
+			"optional: `exxperts setup search` runs a local SearXNG for heavier use",
 		);
 	}
 }

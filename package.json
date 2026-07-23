@@ -20,7 +20,8 @@
   "workspaces": [
     "runtime/packages/*",
     "pi-package",
-    "apps/*"
+    "apps/web-server",
+    "apps/web-ui"
   ],
   "bin": {
     "exxperts": "bin/exxperts.cjs"

@@ -15,16 +15,18 @@ What that means concretely:
 
 ## Supported deployments
 
-Supported: installing and running exxperts on your own machine, via any of the three install types (prebuilt archive one-liner, npm global install, repo clone). The app, its memory, artifacts, and credentials all stay on your disk.
+Supported: installing and running exxperts on your own machine, via any of the three install types (prebuilt archive one-liner, global install from source via npm, repo clone). exxperts is not published to the npm registry; the npm path installs a package built from this repository. The app, its memory, artifacts, and credentials all stay on your disk.
 
-Not supported, and actively refused where detectable:
+Officially not supported:
 
 - Putting a **reverse proxy** (nginx, Caddy, Traefik, an ingress controller) in front of exxperts.
 - Running exxperts in **Docker or any container** with the port published beyond the container.
 - **Port-forwarding, tunneling, or otherwise exposing** the server to other machines or users.
 - Hosting exxperts as a **shared or multi-user service**.
 
-These are not supported configurations that happen to work; they are unsafe, because they move the server outside the trust boundary it is designed for, and the client auth token is the only thing left protecting it there. The server refuses proxied requests so that a standard proxy setup fails loudly during configuration instead of silently exposing your machine. This detection is best-effort: a proxy configured to send no identifying headers cannot be recognized this way, which is why the loopback bind and the client auth token, not the header check, are the protections to rely on. Do not treat a proxy that happens to get through as a supported deployment.
+The deployments listed above are not merely unsupported configurations that happen to work; they are unsafe, because they move the server outside the trust boundary it is designed for, and the client auth token is the only thing left protecting it there. The server refuses proxied requests so that a standard proxy setup fails loudly during configuration instead of silently exposing your machine. This detection is best-effort: a proxy configured to send no identifying headers cannot be recognized this way, which is why the loopback bind and the client auth token, not the header check, are the protections to rely on. Do not treat a proxy that happens to get through as a supported deployment.
+
+Containerizing exxperts to sandbox it on your own machine is a different case, and a legitimate one: as long as nothing is published beyond the container, the trust boundary holds. On Linux, running the container with `--network=host` keeps everything loopback from the app's point of view, so it works without changes. The server still binds `127.0.0.1` inside the container, so bridge networking with a published port currently fails; an explicit opt-in for such setups may come later.
 
 A hosted or multi-user exxperts would need client authentication, TLS, a real multi-user permission model, isolation for tool execution, and a story for provider credentials. That is a separate product decision, not a configuration away.
 

@@ -51,7 +51,7 @@ for (const agentId of targetIds) {
 		const plan = planPersistentAgentConstitutionUpgrade(agentId);
 		if (plan.action === "up_to_date") {
 			upToDate += 1;
-			console.log(`- ${agentId}: already at template v${plan.toTemplateVersion} — nothing to do`);
+			console.log(`- ${agentId}: already at template v${plan.toTemplateVersion}, nothing to do`);
 			continue;
 		}
 		if (dryRun) {
@@ -66,7 +66,7 @@ for (const agentId of targetIds) {
 		console.log(`    event record: ${result.eventRecordRelPath}`);
 	} catch (error) {
 		failed += 1;
-		console.error(`- ${agentId}: FAILED — ${error instanceof Error ? error.message : String(error)}`);
+		console.error(`- ${agentId}: FAILED: ${error instanceof Error ? error.message : String(error)}`);
 	}
 }
 

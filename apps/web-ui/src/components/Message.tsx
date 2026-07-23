@@ -387,48 +387,121 @@ export function TaskThreadItem({ item, onOpenTaskArtifact }: { item: TaskChatIte
 	);
 }
 
+type ToolChatItem = Extract<ChatItem, { kind: "tool" }>;
+
+/**
+ * The single collapsed tool chip. Rendered standalone for every tool call, and
+ * nested (unchanged) inside a ToolBundle for consecutive web_search/fetch_url
+ * runs; `nested` only adds the muted right-aligned provider on search calls,
+ * because one run can mix providers (searxng can come back mid-run).
+ */
+function ToolChip({ item, nested }: { item: ToolChatItem; nested?: boolean }) {
+	const summary = summariseToolArgs(item.name, item.args);
+	const icon = item.status === "running" ? "…" : item.status === "error" ? "✗" : "✓";
+	// fetch_url reads as a source: show the page title + domain (from the
+	// result details) instead of the raw tool name and URL argument.
+	const isFetchUrl = item.name === "fetch_url";
+	const fetchUrl = isFetchUrl ? String(item.details?.finalUrl ?? item.args?.url ?? "") : "";
+	const fetchDomain = fetchUrl ? domainOf(fetchUrl) : "";
+	const mcpView = item.name === "mcp" ? mcpChipView(item.args) : null;
+	// web_search reads as a lookup: show the query itself, not the tool name.
+	const isWebSearch = item.name === "web_search";
+	const searchQuery = isWebSearch ? String(item.args?.query ?? "").slice(0, 160) : "";
+	const chipName = isFetchUrl
+		? `🌐 ${String(item.details?.title || "Fetch URL")}`
+		: isWebSearch
+			? `🔍 ${searchQuery || "Web search"}`
+			: mcpView ? mcpView.name : genericChipName(item.name, item.status);
+	const chipSummary = isFetchUrl ? fetchDomain || summary : isWebSearch ? "" : mcpView ? mcpView.summary : summary;
+	const provider = nested && isWebSearch ? String(item.details?.provider ?? "") : "";
+	return (
+		<details className={`tool-chip ${item.status}`}>
+			<summary>
+				<span className="icon">{icon}</span>
+				<span className="name">{chipName}</span>
+				{chipSummary && <span className="summary">{chipSummary}</span>}
+				{provider && <span className="chip-provider">{provider}</span>}
+				{item.status === "running" && <span className="spinner" />}
+			</summary>
+			<div className="chip-body">
+				{item.result && item.status !== "running" ? (
+					<div className="chip-result">
+						<span className="label">{item.status === "error" ? "error" : "result"}</span>
+						<ResultBody text={item.result} />
+					</div>
+				) : (
+					<div className="chip-empty">{item.status === "running" ? "Working…" : "No output."}</div>
+				)}
+			</div>
+		</details>
+	);
+}
+
+/**
+ * One transcript line for a run of consecutive web_search or fetch_url calls
+ * (the transcript groups runs of length ≥ 2; single calls render the plain
+ * chip). The line speaks in outcomes, not call counts: search rests as
+ * "Searched the web", fetches count the pages actually read. Failures stay
+ * quiet while anything succeeded (a muted "· N failed" footnote); the line
+ * only goes red when every call in the run failed. While a call is in flight
+ * the line shows the in-progress label plus the current query/domain as a
+ * muted swapping tail. Expanded, the individual chips nest unchanged — each
+ * still opens to its result body.
+ */
+export function ToolBundle({ items }: { items: ToolChatItem[] }) {
+	const isSearch = items[0]?.name === "web_search";
+	const succeeded = items.filter((call) => call.status === "done").length;
+	const failed = items.filter((call) => call.status === "error").length;
+	const active = items.find((call) => call.status === "running");
+	const allFailed = !active && succeeded === 0 && failed > 0;
+	const status = active ? "running" : allFailed ? "error" : "done";
+	const icon = active ? "…" : allFailed ? "✗" : "✓";
+	const label = active
+		? (isSearch ? "🔍 Searching the web" : "🌐 Reading pages")
+		: allFailed
+			? (isSearch ? "🔍 Web search failed" : "🌐 Couldn't read the pages")
+			: isSearch
+				? "🔍 Searched the web"
+				: `🌐 Read ${succeeded} ${succeeded === 1 ? "page" : "pages"}`;
+	// The swapping tail: whatever the in-flight call is looking at right now.
+	const tail = active
+		? isSearch
+			? String(active.args?.query ?? "").slice(0, 160)
+			: domainOf(String(active.args?.url ?? "")) || String(active.args?.url ?? "").slice(0, 160)
+		: "";
+	return (
+		<div className="bubble-row">
+			<details className={`tool-chip tool-bundle ${status}`}>
+				<summary>
+					<span className="icon">{icon}</span>
+					<span className="name">{label}</span>
+					{!active && !allFailed && failed > 0 && <span className="bundle-failed">· {failed} failed</span>}
+					{tail && <span className="summary">{tail}</span>}
+					{status === "running" && <span className="spinner" />}
+				</summary>
+				<div className="bundle-body">
+					{items.map((call) => (
+						<ToolChip key={call.id} item={call} nested />
+					))}
+				</div>
+			</details>
+		</div>
+	);
+}
+
+/** The two tools whose consecutive runs collapse into one bundle line. */
+export function isBundleableToolItem(item: ChatItem): item is ToolChatItem {
+	return item.kind === "tool" && (item.name === "web_search" || item.name === "fetch_url");
+}
+
 function MessageImpl({ item }: { item: ChatItem }) {
 	if (item.kind === "system") {
 		return <div className={`system-line ${item.level === "error" ? "error" : ""}`}>{item.text}</div>;
 	}
 	if (item.kind === "tool") {
-		const summary = summariseToolArgs(item.name, item.args);
-		const icon = item.status === "running" ? "…" : item.status === "error" ? "✗" : "✓";
-		// fetch_url reads as a source: show the page title + domain (from the
-		// result details) instead of the raw tool name and URL argument.
-		const isFetchUrl = item.name === "fetch_url";
-		const fetchUrl = isFetchUrl ? String(item.details?.finalUrl ?? item.args?.url ?? "") : "";
-		const fetchDomain = fetchUrl ? domainOf(fetchUrl) : "";
-		const mcpView = item.name === "mcp" ? mcpChipView(item.args) : null;
-		// web_search reads as a lookup: show the query itself, not the tool name.
-		const isWebSearch = item.name === "web_search";
-		const searchQuery = isWebSearch ? String(item.args?.query ?? "").slice(0, 160) : "";
-		const chipName = isFetchUrl
-			? `🌐 ${String(item.details?.title || "Fetch URL")}`
-			: isWebSearch
-				? `🔍 ${searchQuery || "Web search"}`
-				: mcpView ? mcpView.name : genericChipName(item.name, item.status);
-		const chipSummary = isFetchUrl ? fetchDomain || summary : isWebSearch ? "" : mcpView ? mcpView.summary : summary;
 		return (
 			<div className="bubble-row">
-				<details className={`tool-chip ${item.status}`}>
-					<summary>
-						<span className="icon">{icon}</span>
-						<span className="name">{chipName}</span>
-						{chipSummary && <span className="summary">{chipSummary}</span>}
-						{item.status === "running" && <span className="spinner" />}
-					</summary>
-					<div className="chip-body">
-						{item.result && item.status !== "running" ? (
-							<div className="chip-result">
-								<span className="label">{item.status === "error" ? "error" : "result"}</span>
-								<ResultBody text={item.result} />
-							</div>
-						) : (
-							<div className="chip-empty">{item.status === "running" ? "Working…" : "No output."}</div>
-						)}
-					</div>
-				</details>
+				<ToolChip item={item} />
 			</div>
 		);
 	}

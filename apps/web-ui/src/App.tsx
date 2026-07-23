@@ -1420,13 +1420,13 @@ function StructuralReviewWorkflowShell({ state, loadingMessage, waitingMessage, 
 									</details>
 								</details>
 							</div>
-							<div className="absorb-approval-note">Approve tightens Deep Memory and Active Items only and archives the current memory first. The timeline and Recent Sessions stay exactly as they are.</div>
 							<div className="checkpoint-preview-actions">
 								<button className="landing-action secondary" onClick={onAbort}>Cancel</button>
 								{(state.discussionMessages?.length ?? 0) > 0 && <button className="landing-action secondary" title="Return to the discussion; the transcript is kept and only this draft is dropped" onClick={onBackToDiscussion}>Back to discussion</button>}
 								<button className="landing-action secondary" title="Generate a fresh memory update from the same assessment" onClick={onGenerate}>Draft again</button>
 								<button className="landing-action" disabled={!validation?.valid || state.proposalStale} title={state.proposalStale ? "This draft can no longer be applied. Draft the update again to continue." : validation?.valid ? "Approve and update long-term memory" : "The candidate must pass validation before approval"} onClick={onApprove}>Approve and update memory</button>
 							</div>
+							<p className="checkpoint-footnote">Approve updates Deep Memory and Active Items only · the current memory is archived first</p>
 						</div>
 					) : assessment ? (
 						<div className="checkpoint-proposal-page absorb-assessment-page structural-review-assessment-page">
@@ -1451,12 +1451,12 @@ function StructuralReviewWorkflowShell({ state, loadingMessage, waitingMessage, 
 								</section>
 							</div>
 							{meaningfulMaintenanceWarnings(assessment.warnings).length > 0 && <div className="checkpoint-proposal-warnings">{meaningfulMaintenanceWarnings(assessment.warnings).map((warning) => <div key={warning}>{warning}</div>)}</div>}
-							{state.fastPathEnabled && <div className="absorb-help-note">Automatic memory maintenance is on for this room. If the draft passes all checks, it is applied without a second review.</div>}
 							<div className="checkpoint-preview-actions">
 								<button className="landing-action secondary" onClick={onAbort}>Cancel</button>
 								<button className="landing-action secondary" onClick={onDiscuss}>Discuss memory</button>
 								<button className="landing-action" onClick={onGenerate}>Draft memory update</button>
 							</div>
+							{state.fastPathEnabled && <p className="checkpoint-footnote">Automatic maintenance is on · a clean draft is applied without a second review</p>}
 						</div>
 					) : null}
 				</section>
@@ -1631,13 +1631,14 @@ function AbsorbWorkflowShell({ state, loadingMessage, waitingMessage, onAbort, o
 								</details>
 							</details>
 						</div>
-						<div className="absorb-approval-note">Approve writes the candidate memory update and archives the current memory first.</div>
+
 						<div className="checkpoint-preview-actions">
 							<button className="landing-action secondary" onClick={onAbort}>Cancel</button>
 							{(state.discussionMessages?.length ?? 0) > 0 && <button className="landing-action secondary" title="Return to the discussion; the transcript is kept and only this draft is dropped" onClick={onBackToDiscussion}>Back to discussion</button>}
 							<button className="landing-action secondary" title="Generate a fresh memory update from the same assessment" onClick={onGenerate}>Draft again</button>
 							<button className="landing-action" disabled={!validation?.valid || state.proposalStale} title={state.proposalStale ? "This draft can no longer be applied. Draft the update again to continue." : validation?.valid ? "Approve and update long-term memory" : "Candidate memory must pass validation before approval"} onClick={onApprove}>Approve and update memory</button>
 						</div>
+						<p className="checkpoint-footnote">Approve writes the candidate update · the current memory is archived first</p>
 					</div>
 				) : assessment ? (
 					<div className="checkpoint-proposal-page absorb-assessment-page">
@@ -1651,7 +1652,7 @@ function AbsorbWorkflowShell({ state, loadingMessage, waitingMessage, onAbort, o
 							<AssessmentSection title="What can be cleared from recent sessions" items={assessment.fields.whatToForget} wide />
 							<AssessmentSection title="What should be preserved" items={assessment.fields.whatToRemember} wide />
 							<section className="absorb-assessment-section wide">
-								<h3>Where it will go in deep memory</h3>
+								<h3>Where this will go in your exxperts memory</h3>
 								<div className="absorb-change-block"><strong>Deep Memory</strong><BulletList items={assessment.fields.stableMemoryChanges.deepMemory} /></div>
 								<div className="absorb-change-block"><strong>Active Items</strong><BulletList items={assessment.fields.stableMemoryChanges.activeItems} /></div>
 								<div className="absorb-change-block"><strong>Recent Sessions</strong><p>{assessment.fields.stableMemoryChanges.recentContext}</p></div>
@@ -1659,12 +1660,12 @@ function AbsorbWorkflowShell({ state, loadingMessage, waitingMessage, onAbort, o
 							{assessment.fields.needsJudgment.length > 0 && <AssessmentSection title="Needs your judgment" items={assessment.fields.needsJudgment} wide />}
 						</div>
 						{meaningfulMaintenanceWarnings(assessment.warnings).length > 0 && <div className="checkpoint-proposal-warnings">{meaningfulMaintenanceWarnings(assessment.warnings).map((warning) => <div key={warning}>{warning}</div>)}</div>}
-						{state.fastPathEnabled && <div className="absorb-help-note">Automatic memory maintenance is on for this room. If the draft passes all checks, it is applied without a second review.</div>}
 						<div className="checkpoint-preview-actions">
 							<button className="landing-action secondary" onClick={onAbort}>Cancel</button>
 							<button className="landing-action secondary" onClick={onDiscuss}>Discuss memory</button>
 							<button className="landing-action" onClick={onGenerate}>Draft memory update</button>
 						</div>
+						{state.fastPathEnabled && <p className="checkpoint-footnote">Automatic maintenance is on · a clean draft is applied without a second review</p>}
 					</div>
 				) : null}
 				</section>
@@ -2174,8 +2175,8 @@ function CheckpointPreviewShell({ chat, itemCount, rememberText, density, propos
 						</div>
 						{approvalResult.warnings.length > 0 && <div className="checkpoint-proposal-warnings">{approvalResult.warnings.map((warning) => <div key={warning}>{warning}</div>)}</div>}
 						<div className="checkpoint-preview-actions">
-							<button className="landing-action secondary" onClick={onRestAfterCheckpoint}>Return Home</button>
 							<button className="landing-action" onClick={onContinueAfterCheckpoint}>Continue working</button>
+							<button className="landing-action secondary" onClick={onRestAfterCheckpoint}>Return Home</button>
 						</div>
 					</div>
 				) : proposal ? (
@@ -2184,11 +2185,6 @@ function CheckpointPreviewShell({ chat, itemCount, rememberText, density, propos
 							<p className="card-kicker">Memory proposal · not saved</p>
 							<h2>Review what {chat.displayName} will remember</h2>
 						</div>
-						{(quickBlockedReasons?.length ?? 0) > 0 && (
-							<div className="absorb-help-note fast-path-blocked-note">
-								Not saved automatically. This proposal needs your review because {quickBlockedReasons!.join("; ")}. Review the entry below, then approve or discard it.
-							</div>
-						)}
 						<div className="checkpoint-proposal-result standalone">
 							{!editing && (
 								<div className="checkpoint-proposal-summary">
@@ -2201,10 +2197,22 @@ function CheckpointPreviewShell({ chat, itemCount, rememberText, density, propos
 									)}
 								</div>
 							)}
-							<div className="checkpoint-input-meta subtle">
-								{proposal.preview.hasParkedItems && <span>includes parked items</span>}
-								<span>~{proposal.estimatedTokens} tokens</span>
-							</div>
+							{!editing && (
+								<div className="checkpoint-proposal-meta-row">
+									<div className="checkpoint-input-meta subtle">
+										{proposal.preview.hasParkedItems && <span>includes parked items</span>}
+										<span>~{proposal.estimatedTokens} tokens</span>
+									</div>
+									{showFullEntry ? (
+										<div className="checkpoint-review-actions">
+											<button className="inline-action" onClick={() => setShowFullEntry(false)}>Hide full entry</button>
+											<button className="inline-action" onClick={() => setEditing(true)}>Edit</button>
+										</div>
+									) : (
+										<button className="inline-action checkpoint-full-entry-trigger" onClick={() => setShowFullEntry(true)}>Show full entry</button>
+									)}
+								</div>
+							)}
 							{editing ? (
 								<div className="checkpoint-edit-field checkpoint-structured-editor">
 									<span className="checkpoint-field-label">Edit the entry before saving</span>
@@ -2224,25 +2232,20 @@ function CheckpointPreviewShell({ chat, itemCount, rememberText, density, propos
 								</div>
 							) : showFullEntry ? (
 								<div className="checkpoint-full-review">
-									<div className="checkpoint-review-actions">
-										<button className="inline-action" onClick={() => setShowFullEntry(false)}>Hide full entry</button>
-										<button className="inline-action" onClick={() => setEditing(true)}>Edit</button>
-									</div>
 									<div className="checkpoint-full-entry checkpoint-full-entry-rendered">
 										<MarkdownRenderer>{renderedDraft}</MarkdownRenderer>
 									</div>
 								</div>
-							) : (
-								<button className="inline-action checkpoint-full-entry-trigger" onClick={() => setShowFullEntry(true)}>Show full entry</button>
-							)}
+							) : null}
 							{displayWarnings.length > 0 && <div className="checkpoint-proposal-warnings">{displayWarnings.map((warning) => <div key={warning}>{warning}</div>)}</div>}
 							{approvalError && <div className="checkpoint-proposal-error">{approvalError}</div>}
 						</div>
 						{honestyNoticesNode}
 						<div className="checkpoint-preview-actions">
-							<button className="landing-action secondary" disabled={approvalLoading} onClick={confirmDiscard}>Discard</button>
 							<button className="landing-action" disabled={approvalLoading || !approvalReady} onClick={() => onApprove(approvedDraft)}>{approvalLoading ? "Saving…" : "Save to memory"}</button>
+							<button className="landing-action secondary" disabled={approvalLoading} onClick={confirmDiscard}>Discard</button>
 						</div>
+						<p className="checkpoint-footnote">Saved only when you approve · automatic apply can be enabled in room settings</p>
 					</div>
 				) : (
 					<>
@@ -2339,6 +2342,11 @@ export function App() {
 	// never resurrects after send/reset.
 	const [composerPrefill, setComposerPrefill] = useState("");
 	const [connected, setConnected] = useState(false);
+	// Room WS auto-reconnect: "reconnecting" while backoff attempts run,
+	// "failed" once the attempt cap is reached (only the manual Reconnect
+	// affordance or a tab re-focus starts a new cycle). The pill copy follows
+	// this so it never claims "Reconnecting" while nothing is trying.
+	const [roomReconnectState, setRoomReconnectState] = useState<"idle" | "reconnecting" | "failed">("idle");
 	const [busy, setBusy] = useState(false);
 	const [turnCancelling, setTurnCancelling] = useState(false);
 	const [turnInterruptedNote, setTurnInterruptedNote] = useState<string | null>(null);
@@ -2367,6 +2375,28 @@ export function App() {
 	// ends and nothing else is already showing the result; top-right, ~6 s,
 	// click opens the viewer. The rail's green dot is the durable signal.
 	const [taskDoneToast, setTaskDoneToast] = useState<{ taskId: string; title: string; kind: "done" | "error"; templateLabel: string; artifact: { relativePath: string; extension: string } | null } | null>(null);
+	// Desktop app only: the done-moment also reaches the OS notification
+	// center when the window is hidden (close-to-tray) or unfocused, where the
+	// in-app toast cannot be seen. Clicking navigates to exxperts://focus, the
+	// sandboxed page's one channel for asking the shell to show the window;
+	// the notification comes from the open room, so the window is already
+	// showing the right place.
+	const notifyDesktop = (title: string, body: string) => {
+		if (!document.documentElement.classList.contains("desktop-app")) return;
+		if (!document.hidden && document.hasFocus()) return;
+		if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
+		const n = new Notification(title, { body });
+		n.onclick = () => {
+			window.focus();
+			window.location.href = "exxperts://focus";
+		};
+		// Badge signal: the shell marks the tray; intercepted navigation, the
+		// page never actually leaves.
+		window.location.href = "exxperts://task-done";
+	};
+	// Smoke hook for the desktop shell's end-to-end notification check; inert
+	// in the browser (the gate above no-ops without the desktop-app class).
+	(window as unknown as { __exxDesktopNotify?: typeof notifyDesktop }).__exxDesktopNotify = notifyDesktop;
 	const [exportCollision, setExportCollision] = useState<ExportCollision | null>(null);
 	// Remove-from-list Undo window: one toast, one removable row at a time.
 	const [removeNotice, setRemoveNotice] = useState<{ taskId: string } | null>(null);
@@ -2468,6 +2498,15 @@ export function App() {
 	const persistTimerRef = useRef<number | null>(null);
 
 	const wsRef = useRef<WebSocket | null>(null);
+	// Synchronous mirror of roomReconnectState for the WS handlers (the
+	// lock-bounce error frame is judged at event time, not render time).
+	const roomReconnectStateRef = useRef<"idle" | "reconnecting" | "failed">("idle");
+	const reconnectAttemptRef = useRef(0);
+	const reconnectTimerRef = useRef<number | null>(null);
+	// Deliberate socket closes (navigation resets, leaving the room) must not
+	// trigger the auto-reconnect; these paths arm the flag and the WS effect
+	// clears it when it builds the next socket.
+	const suppressReconnectRef = useRef(false);
 	const busyRef = useRef(busy);
 	const turnCancellingRef = useRef(turnCancelling);
 	const turnInterruptedNoteRef = useRef<string | null>(turnInterruptedNote);
@@ -2571,8 +2610,7 @@ export function App() {
 	}, [theme]);
 
 	useEffect(() => {
-		refreshAuthStatus();
-		refreshModelStatus();
+		refreshAuthStatus(); // includes the model-status refresh
 		refreshAiProfileStatus();
 		refreshPersistentAgentStatus();
 		// Refresh room statuses (incl. lock state) when returning to the window,
@@ -2587,6 +2625,12 @@ export function App() {
 			const status = await apiFetch("/api/auth/status").then((r) => r.json()) as AuthStatusResponse;
 			setAuthStatus(status);
 		} catch {}
+		// Model availability is derived from provider auth, so every auth
+		// transition must invalidate it too. Most importantly the fresh
+		// sign-in on the AI-setup screen: without this, the Rooms cards keep
+		// a stale "No model" with Enter disabled until a full page reload -
+		// the first-run path of every new user.
+		await refreshModelStatus();
 	}
 
 	async function refreshModelStatus() {
@@ -3066,8 +3110,105 @@ export function App() {
 		};
 	}, []);
 
+	// --- Room WS auto-reconnect (offline-forever fix, 2026-07-20) ------------
+	// A dropped room socket used to stay dead until a manual page refresh:
+	// onclose only flipped `connected`, and nothing ever rebuilt the socket.
+	// Reconnect = a programmatic Resume — the same steps as
+	// openPersistentAgentResume — because a bare sessionVersion bump leaves
+	// busy stuck, the truncated bubble looking complete, and live items
+	// diverging from the thread file.
+
+	const RECONNECT_MAX_ATTEMPTS = 8; // 1s..30s doubling backoff ≈ 2 minutes
+
+	function setRoomReconnect(state: "idle" | "reconnecting" | "failed") {
+		roomReconnectStateRef.current = state;
+		setRoomReconnectState(state);
+	}
+
+	function cancelScheduledReconnect() {
+		if (reconnectTimerRef.current !== null) {
+			window.clearTimeout(reconnectTimerRef.current);
+			reconnectTimerRef.current = null;
+		}
+	}
+
+	function scheduleRoomReconnect(delayMs?: number) {
+		cancelScheduledReconnect();
+		if (!persistentChatRef.current) {
+			setRoomReconnect("idle");
+			return;
+		}
+		if (reconnectAttemptRef.current >= RECONNECT_MAX_ATTEMPTS) {
+			setRoomReconnect("failed");
+			return;
+		}
+		setRoomReconnect("reconnecting");
+		const delay = delayMs ?? Math.min(30_000, 1000 * 2 ** reconnectAttemptRef.current);
+		reconnectTimerRef.current = window.setTimeout(() => {
+			reconnectTimerRef.current = null;
+			reconnectAttemptRef.current += 1;
+			void reconnectPersistentRoom();
+		}, delay);
+	}
+
+	// Manual Reconnect button + tab-becomes-visible: start a fresh attempt
+	// cycle right away instead of waiting out a long backoff.
+	function retryRoomReconnectNow() {
+		reconnectAttemptRef.current = 0;
+		scheduleRoomReconnect(0);
+	}
+
+	async function reconnectPersistentRoom() {
+		const chat = persistentChatRef.current;
+		if (!chat) {
+			setRoomReconnect("idle");
+			return;
+		}
+		try {
+			const record = await fetchPersistentAgentThread(chat.agentId, chat.conversationId);
+			// The user may have switched or left the room while the fetch ran.
+			if (persistentChatRef.current?.conversationId !== chat.conversationId) {
+				setRoomReconnect("idle");
+				return;
+			}
+			const fetched = threadRecordToLocalThread(record, chat.displayName);
+			// The debounced persist may not have landed before the drop (a hard
+			// server kill right after an exchange leaves the thread file behind
+			// the screen). Keep whichever transcript is richer and save it back,
+			// so the rebuilt session's context matches what is displayed. When the
+			// file is at least as fresh (another surface may have advanced the
+			// room while this tab was offline), the file wins — like Resume.
+			const localFresher = itemsRef.current.length > fetched.items.length;
+			const liveThread = { ...fetched, state: "live" as const, items: localFresher ? itemsRef.current : fetched.items };
+			const restoredQueue = localFresher ? pendingHandoffsRef.current : readConsultHandoffQueue(record.pendingHandoffs);
+			if (!localFresher) applyPendingHandoffs(restoredQueue, deriveTrailingConsultIds(liveThread.items, restoredQueue.length));
+			await savePersistentAgentThread(liveThread, "active", "unknown", liveThread.items, restoredQueue);
+			// resetLiveUiState clears the composer — carry a draft typed while
+			// offline across the rebind.
+			const draft = textareaRef.current?.value ?? "";
+			resetLiveUiState();
+			if (draft) setComposerPrefill(draft);
+			setItems(liveThread.items);
+			setPersistentThread(liveThread);
+			setPersistentChat({ agentId: liveThread.agentId, displayName: liveThread.displayName, conversationId: liveThread.conversationId, model: liveThread.model });
+			setCurrentModelLabel(modelDisplayName(liveThread.model));
+			setSessionVersion((v) => v + 1);
+			// Still "reconnecting": the new socket's ready frame is the true end
+			// of the cycle (the room lock can still bounce this session).
+		} catch {
+			scheduleRoomReconnect();
+		}
+	}
+
 	useEffect(() => {
 		try { wsRef.current?.close(); } catch {}
+		suppressReconnectRef.current = false;
+		if (!persistentChat) {
+			// Not in a room (or just left one): no reconnect business.
+			cancelScheduledReconnect();
+			reconnectAttemptRef.current = 0;
+			if (roomReconnectStateRef.current !== "idle") setRoomReconnect("idle");
+		}
 
 		// In dev (Vite on :5173) connect directly to the web server (:8787)
 		// instead of going through the Vite WS proxy — the proxy works but
@@ -3084,17 +3225,52 @@ export function App() {
 		const ws = new WebSocket(`ws://${wsHost}/ws?${wsParams.toString()}`);
 		wsRef.current = ws;
 		ws.onopen = () => setConnected(true);
-		ws.onclose = () => setConnected(false);
+		ws.onclose = () => {
+			setConnected(false);
+			// Auto-reconnect only unexpected drops of the CURRENT room socket:
+			// deliberate closes arm suppressReconnectRef, and a socket that was
+			// already replaced must not fight its replacement.
+			const droppedChat = persistentChatRef.current;
+			if (wsRef.current !== ws || suppressReconnectRef.current || !droppedChat) return;
+			// The server aborts the in-flight turn on disconnect — say so on the
+			// bubble and unstick the room instead of leaving a complete-looking
+			// truncated answer behind a stuck busy state. The debounced persist
+			// writes the note to the thread file whenever the server is reachable.
+			if (busyRef.current || turnCancellingRef.current || isAssistantStreamActive(streamStateRef.current)) {
+				markCurrentAssistantInterrupted(turnInterruptedNoteRef.current ?? "Response interrupted: the connection was lost.");
+				setBusy(false);
+				busyRef.current = false;
+				setTurnCancelling(false);
+				turnCancellingRef.current = false;
+				setTurnInterruptedNote(null);
+				turnInterruptedNoteRef.current = null;
+				// Push the note to the thread file now (best effort — the server may
+				// be the thing that just died) so the reconnect's thread refetch
+				// can't race the debounced persist and resurrect an unmarked bubble.
+				void savePersistentAgentThread(droppedChat, "active", "unknown", itemsRef.current, pendingHandoffsRef.current).catch(() => {});
+			}
+			scheduleRoomReconnect();
+		};
 		ws.onerror = () => setConnected(false);
 
 		ws.onmessage = (raw) => {
 			const msg = JSON.parse(raw.data);
 			if (msg.type === "ready") {
+				// The ready frame is the true end of a reconnect cycle: the room
+				// lock accepted this session.
+				cancelScheduledReconnect();
+				reconnectAttemptRef.current = 0;
+				if (roomReconnectStateRef.current !== "idle") setRoomReconnect("idle");
 				if (msg.model?.label) setCurrentModelLabel(canonicalModelDisplayName({ model: msg.model.model, modelLabel: String(msg.model.label), provider: msg.model.provider }));
 				setContextHealth(msg.contextHealth ?? null);
 				return;
 			}
 			if (msg.type === "error") {
+				// During a reconnect cycle the room-lock bounce ("This room is
+				// currently … " + close) is retryable — a redial can race the dead
+				// socket's lock release, and the next backoff attempt redials — so
+				// it is not a transcript-worthy failure.
+				if (roomReconnectStateRef.current === "reconnecting" && typeof msg.message === "string" && msg.message.startsWith("This room is currently ")) return;
 				// The turn is dead server-side; no message_end will follow. Land
 				// whatever streamed and drop the cursor before the error line.
 				flushAssistantStream();
@@ -3239,13 +3415,15 @@ export function App() {
 							setRightPane(null);
 						}
 					} else {
+						const doneTitle = assetDisplayTitle(next.title || "Specialist task", next.artifacts);
 						setTaskDoneToast({
 							taskId: endTaskId,
-							title: assetDisplayTitle(next.title || "Specialist task", next.artifacts),
+							title: doneTitle,
 							kind: "done",
 							templateLabel: next.templateLabel ?? "visual",
 							artifact: first ? { relativePath: first.relativePath, extension: first.extension } : null,
 						});
+						notifyDesktop(doneTitle, "Task finished.");
 					}
 				}
 				return;
@@ -3264,13 +3442,15 @@ export function App() {
 				const pane = rightPaneRef.current;
 				const watching = pane?.kind === "taskRun" && pane.taskId === errorTaskId;
 				if (next.taskId === errorTaskId && next.phase === "error" && !next.stopRequested && !watching) {
+					const errorTitle = assetDisplayTitle(next.title || "Specialist task", next.artifacts);
 					setTaskDoneToast({
 						taskId: errorTaskId,
-						title: assetDisplayTitle(next.title || "Specialist task", next.artifacts),
+						title: errorTitle,
 						kind: "error",
 						templateLabel: next.templateLabel ?? "visual",
 						artifact: next.artifacts[0] ? { relativePath: next.artifacts[0].relativePath, extension: next.artifacts[0].extension } : null,
 					});
+					notifyDesktop(errorTitle, "The task did not finish.");
 				}
 				return;
 			}
@@ -3297,7 +3477,18 @@ export function App() {
 			handleEvent(msg.event);
 		};
 
+		// Sleep/wake: backoff timers may not fire while the tab is hidden —
+		// retry the moment the user is back looking at a disconnected room.
+		const onReconnectVisibility = () => {
+			if (document.visibilityState === "visible" && roomReconnectStateRef.current !== "idle") retryRoomReconnectNow();
+		};
+		document.addEventListener("visibilitychange", onReconnectVisibility);
+
 		return () => {
+			document.removeEventListener("visibilitychange", onReconnectVisibility);
+			// A pending reconnect belongs to this room binding; a room switch or
+			// unmount must not let it fire into the next one.
+			cancelScheduledReconnect();
 			// Never lose a received tail to a teardown: reveal it, then forget.
 			flushAssistantStream();
 			clearTransientStreamNotes();
@@ -3957,6 +4148,8 @@ export function App() {
 		const record = await fetchPersistentAgentThread(targetChat.agentId, freshThreadId);
 		const thread = threadRecordToLocalThread(record, targetChat.displayName);
 		const liveThread = { ...thread, state: "live" as const };
+		// Deliberate boundary rebind: this close must not trigger auto-reconnect.
+		suppressReconnectRef.current = true;
 		try { wsRef.current?.close(); } catch {}
 		setUsage(ZERO_USAGE);
 		setContextHealth(null);
@@ -3993,6 +4186,9 @@ export function App() {
 		const record = await fetchPersistentAgentThread(targetChat.agentId, freshThreadId);
 		const thread = threadRecordToLocalThread(record, targetChat.displayName);
 		const liveThread = { ...thread, state: "live" as const };
+		// Deliberate boundary rebind (memento can land mid-stream): this close
+		// must not trigger auto-reconnect or the interrupted-note save.
+		suppressReconnectRef.current = true;
 		try { wsRef.current?.close(); } catch {}
 		setUsage(ZERO_USAGE);
 		setContextHealth(null);
@@ -4189,6 +4385,9 @@ export function App() {
 	}
 
 	function resetLiveUiState() {
+		// This close is deliberate (a navigation/rebind path owns what happens
+		// next) — it must not trigger the auto-reconnect.
+		suppressReconnectRef.current = true;
 		try { wsRef.current?.close(); } catch {}
 		setUsage(ZERO_USAGE);
 		setContextHealth(null);
@@ -5165,6 +5364,8 @@ export function App() {
 		// could race ahead of the async server-side release and re-add it.)
 		const releasingAgentId = persistentChat?.agentId ?? null;
 		if (persistentChat) {
+			// Leaving is deliberate — no auto-reconnect on this close.
+			suppressReconnectRef.current = true;
 			try { wsRef.current?.close(); } catch {}
 			const liveThread: PersistentAgentThread = { ...persistentChat, state: "live", items: itemsRef.current };
 			try {
@@ -5395,6 +5596,8 @@ export function App() {
 				) : null
 			}
 			connected={connected}
+			reconnectState={roomReconnectState}
+			onReconnect={retryRoomReconnectNow}
 			items={items}
 			pendingConsultIds={pendingConsultItemIds}
 			onOpenTaskArtifact={(taskId, relativePath) => {

@@ -1,0 +1,23 @@
+{
+  "name": "@exxeta/exxperts-desktop",
+  "version": "0.6.8",
+  "private": true,
+  "description": "Desktop app shell for exxperts: spawns the local web server and wraps the web UI in a window with a tray.",
+  "main": "dist/main.js",
+  "type": "commonjs",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "dev": "node scripts/dev.mjs",
+    "smoke": "node scripts/dev.mjs --smoke",
+    "smoke:update": "node scripts/dev.mjs --smoke --fake-update-feed",
+    "package": "node scripts/package.mjs",
+    "smoke:packaged": "node scripts/smoke-packaged.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "electron": "^43.2.0",
+    "electron-builder": "^26.15.3",
+    "typescript": "^5.5.0"
+  }
+}

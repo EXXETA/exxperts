@@ -696,6 +696,33 @@ const toolActivityItems: ChatItem[] = [
 	},
 ];
 
+const webToolBundleItems: ChatItem[] = [
+	{ kind: "user", id: "fixture-user-web-bundles", text: "Research the current local AI landscape and read the primary sources." },
+	// Resting search bundle: three consecutive searches collapse into one line
+	// ("Searched the web", no count); providers show per nested call.
+	{ kind: "tool", id: "fixture-web-search-1", name: "web_search", args: { query: "latest local AI news July 2026 on-device open-weight models" }, status: "done", result: "1. Ollama Blog — model roundup\n2. NVIDIA at SIGGRAPH 2026", details: { configured: true, provider: "duckduckgo" } },
+	{ kind: "tool", id: "fixture-web-search-2", name: "web_search", args: { query: "local AI Ollama llama.cpp MLX news July 2026" }, status: "done", result: "1. llama.cpp release notes\n2. MLX community update", details: { configured: true, provider: "duckduckgo" } },
+	{ kind: "tool", id: "fixture-web-search-3", name: "web_search", args: { query: "open weight model release local inference July 2026" }, status: "done", result: "1. Release announcement\n2. Benchmark thread", details: { configured: true, provider: "searxng" } },
+	// Fetch bundle with a partial failure: the line stays a success, counts only
+	// the pages actually read, and carries the muted "· 1 failed" footnote; the
+	// failed nested call keeps today's red chip.
+	{ kind: "tool", id: "fixture-fetch-1", name: "fetch_url", args: { url: "https://ollama.com/blog" }, status: "done", result: "Model roundup for July: …", details: { title: "Ollama Blog", finalUrl: "https://ollama.com/blog" } },
+	{ kind: "tool", id: "fixture-fetch-2", name: "fetch_url", args: { url: "https://blogs.nvidia.com/siggraph-2026" }, status: "done", result: "NVIDIA announced at SIGGRAPH 2026 …", details: { title: "NVIDIA at SIGGRAPH 2026", finalUrl: "https://blogs.nvidia.com/siggraph-2026" } },
+	{ kind: "tool", id: "fixture-fetch-3", name: "fetch_url", args: { url: "https://moonshot.ai/news" }, status: "error", result: "Request timed out after 30s." },
+	{ kind: "tool", id: "fixture-fetch-4", name: "fetch_url", args: { url: "https://huggingface.co/blog" }, status: "done", result: "Community highlights: …", details: { title: "Hugging Face Blog", finalUrl: "https://huggingface.co/blog" } },
+	{ kind: "assistant", id: "fixture-assistant-web-bundles-mid", text: "The first sweep covers the release news. Let me verify the benchmark claim before summarizing." },
+	// A single follow-up call renders exactly as today (no bundle line)…
+	{ kind: "tool", id: "fixture-web-search-single", name: "web_search", args: { query: "llama.cpp M4 Max tokens per second benchmark" }, status: "done", result: "1. Benchmark thread", details: { configured: true, provider: "duckduckgo" } },
+	{ kind: "assistant", id: "fixture-assistant-web-bundles-benchmark", text: "The benchmark holds up. One more angle: the paywalled suites." },
+	// …and a run where every call failed is the only state that goes red.
+	{ kind: "tool", id: "fixture-web-search-fail-1", name: "web_search", args: { query: "proprietary benchmark suite paywalled results" }, status: "error", result: "Search backend unavailable." },
+	{ kind: "tool", id: "fixture-web-search-fail-2", name: "web_search", args: { query: "paywalled benchmark mirror" }, status: "error", result: "Search backend unavailable." },
+	// A live bundle mid-turn: the in-flight label with the current query as the
+	// muted swapping tail plus the spinner.
+	{ kind: "tool", id: "fixture-fetch-live-1", name: "fetch_url", args: { url: "https://github.com/ggml-org/llama.cpp/releases" }, status: "done", result: "Release b4210: …", details: { title: "llama.cpp releases", finalUrl: "https://github.com/ggml-org/llama.cpp/releases" } },
+	{ kind: "tool", id: "fixture-fetch-live-2", name: "fetch_url", args: { url: "https://mlx-community.dev/updates" }, status: "running" },
+];
+
 const approvalItems: ChatItem[] = [
 	{ kind: "user", id: "fixture-user-approval", text: "Prepare the checkpoint summary and ask me before applying it." },
 	{
@@ -945,6 +972,18 @@ export const inRoomChatFixtureStates: InRoomChatFixtureState[] = [
 		busy: false,
 		usage: { ...activeChatUsage, turns: 6, input: 18200, output: 5200, totalTokens: 28100 },
 		items: toolActivityItems,
+		inputValue: "",
+		composerRightActions: [{ label: "Memento" }, { label: "Checkpoint" }],
+	}),
+	chatFixture({
+		id: "in-room-web-tool-bundles",
+		label: "In-room / web tool bundles",
+		description: "Consecutive web_search/fetch_url runs collapsed into bundle lines: resting, partial failure with the muted footnote, total failure in red, a single call unbundled, and a live bundle with the swapping tail.",
+		activeDisplay: "Strategy Room",
+		ownerSecondary: "Persistent room · web tool bundles",
+		busy: true,
+		usage: { ...activeChatUsage, turns: 4, input: 21500, output: 3900, totalTokens: 30800 },
+		items: webToolBundleItems,
 		inputValue: "",
 		composerRightActions: [{ label: "Memento" }, { label: "Checkpoint" }],
 	}),

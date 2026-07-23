@@ -10,7 +10,7 @@ Small fix already in hand? Feel free to skip the issue and open the pull request
 
 ## Setting up for development
 
-Prerequisites are the same as the [README quick start](README.md#quick-start): Node.js 20.6+ and npm. On Windows, apply the Git settings from the [Windows quickstart](README.md#windows-quickstart) first and clone into a folder your user owns.
+Prerequisites are the same as the [README install section](README.md#install): Node.js 20.6+ and npm. On Windows, apply the Git settings from the [quickstart Windows notes](docs/quickstart.md#windows-notes) first and clone into a folder your user owns.
 
 ```bash
 git clone https://github.com/EXXETA/exxperts.git
