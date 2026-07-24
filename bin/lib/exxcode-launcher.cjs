@@ -95,6 +95,13 @@ function usage(command) {
   return `Usage: ${command} [runtime options]\n\nOpens the exxperts rooms picker. Pick a room (your own persistent workspace,\nwith its own memory and exxpert) or create a new one. The package install\ndirectory is used as EXXETA_HOME.\n\nExplicit packaged commands:\n  exxperts web       Open the web app\n  exxperts cli       Open this rooms CLI/TUI\n  exxperts           Pick a surface interactively (web app recommended)\n\nPackage commands (routed to the runtime):\n  exxperts install|remove|update|list|config …\n\nOptions:\n  --help, -h      Show this launcher help\n\nOther arguments are passed through to the room runtime.\n`;
 }
 
+function warnAboutPiExtensionInstall(args) {
+  if (args[0] !== "install") return;
+  console.warn(
+    "WARNING: Rooms will not load Pi Extensions, unless explicitly approved in the source code.",
+  );
+}
+
 function ensureDirs() {
   ensureProductAppUserDirs();
 }
@@ -366,10 +373,10 @@ async function main(argv = process.argv.slice(2), command = path.basename(proces
   const root = path.resolve(__dirname, "..", "..");
 
   // Product setup and package-manager commands should not require an agent
-  // file, banner, theme, or extension wrapper. Route them directly to the
-  // runtime, before the --help check so `exxperts install --help` shows the
-  // runtime's install help rather than the launcher usage.
+  // file, banner, theme, or extension wrapper. Route supported commands
+  // directly to the runtime, warning when a Pi extension will not load in rooms.
   if (argv[0] === "setup" || PACKAGE_COMMANDS.includes(argv[0])) {
+    warnAboutPiExtensionInstall(argv);
     loadDotenv(root);
     const env = { ...process.env, EXXETA_HOME: root };
     const result = spawnCliRuntime(process.execPath, [path.join(root, "runtime", "packages", "coding-agent", "dist", "cli.js"), ...argv], {
