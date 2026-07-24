@@ -5,9 +5,11 @@
   </picture>
 </div>
 
-<p align="center"><b>Your AI's memory. On your machine, under your control.</b></p>
+<p align="center"><b>AI colleagues that learn and remember. On your machine, under your control.</b></p>
 
-<p align="center">exxperts is a local-first AI workspace where every room is a persistent AI colleague, and everything it remembers is approved by you, auditable to its source, and stored as plain files on your disk.</p>
+<p align="center">exxperts gives you rooms: persistent AI colleagues with real hands. A room searches the web, writes documents and decks, runs delegated work, and it grows the way you work with it.</p>
+
+<p align="center">A room remembers only what you approve: you steer every checkpoint, review everything it learns, and each memory traces back to the conversation it came from. You choose each room's tools; everything lives as plain files on your machine. Switch AI providers anytime, and you keep the colleague.</p>
 
 <p align="center">
   <a href="https://github.com/EXXETA/exxperts/actions/workflows/ci.yml"><img src="https://github.com/EXXETA/exxperts/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
@@ -19,6 +21,7 @@
 <p align="center">
 <a href="#download-the-app">Download</a> ·
 <a href="#see-it">See it</a> ·
+<a href="#how-a-room-grows">How it works</a> ·
 <a href="#why-exxperts">Why exxperts</a> ·
 <a href="#install">Install</a> ·
 <a href="#ways-to-use-exxperts">Ways to use it</a> ·
@@ -53,6 +56,14 @@ Every memory shows **where it came from**: click any remembered fact and the exa
 
 ![The memory page: composition by token weight, recent sessions, and a provenance receipt on the saved memory - open the conversation it was learned from](docs/assets/exxperts-memory.png)
 
+## How a room grows
+
+**Work.** A room is a full agent, not a chat: it searches the web, reads pages, writes documents, decks and web pages, runs background tasks, and uses your connectors and skills.
+
+**Checkpoint.** At the end of a session, the room proposes what is worth remembering. You steer it, edit it, or reject it; nothing enters memory without you.
+
+**Learn.** After several sessions, the room consolidates its notes into durable long-term memory, and you review the update before it is written. This is how a room stops being a tool and starts becoming a colleague: session by session, it knows more of your work.
+
 ## Why exxperts
 
 - **Memory is opt-in, not automatic.** The AI remembers only what you explicitly approve: every proposed memory passes a review gate before it's written.
@@ -62,7 +73,7 @@ Every memory shows **where it came from**: click any remembered fact and the exa
 - **Everything lives on your machine.** Memory, conversations, credentials: plain files on your disk. No cloud account, no telemetry; nothing leaves your machine unless you send it.
 - **No provider lock-in.** Claude, ChatGPT, Gemini, Mistral, or any OpenAI-compatible endpoint, including local models; switching keeps everything your AI has learned, and a provider outage never strands your work.
 
-Most local AI tools are chat interfaces with hidden state. exxperts is an agentic workspace built around governed memory: lean by design, and the more you work with it, the sharper it gets.
+Most local AI tools are chat interfaces with hidden state. exxperts is built around governed memory: lean by design, and the more you work with it, the sharper it gets.
 
 ## Install
 
