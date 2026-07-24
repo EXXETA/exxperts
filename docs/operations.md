@@ -101,7 +101,7 @@ All of these can go in `.env` (auto-loaded) or your shell.
 
 ## Local SearXNG
 
-Web search works out of the box through the built-in DuckDuckGo backend; SearXNG via Docker is the optional upgrade for heavier use (aggregates several engines, no DuckDuckGo rate limits). To set it up, start Docker and run:
+Web search needs no setup: the built-in DuckDuckGo backend is used by default, but DuckDuckGo rate-limits automated queries and blocks them on some networks. SearXNG via Docker is the reliable upgrade for heavier use or blocked networks (aggregates several engines, no DuckDuckGo limits). To set it up, start Docker and run:
 
 ```bash
 ./scripts/searxng start        # macOS / Linux / Git Bash

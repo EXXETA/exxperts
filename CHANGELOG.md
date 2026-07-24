@@ -2,6 +2,23 @@
 
 User-visible changes per release. Historical private/internal development notes are not part of this public-facing changelog.
 
+## 0.7.0 (2026-07-24)
+
+- Desktop app: exxperts is now a real app. A self-contained macOS app (Apple Silicon, dmg or zip) and Windows app (x64, zip or one-click installer) carry their own server and runtime: download, open, sign in. No terminal, Git, Node, or npm involved. It uses the same `~/.exxperts` data as a terminal install, so both doors open the same rooms.
+- Desktop app: lives in the menu bar / system tray. Closing the window keeps your rooms and scheduled work running; the tray icon shows a badge when a task finishes while the window is hidden, and Quit from the tray shuts everything down cleanly (a crash watchdog restarts the embedded server once if it ever dies unexpectedly).
+- Desktop app: native notifications when a task finishes in the background, click to jump back in. On macOS, notification banners require a signed build (signing is in progress); until then the tray badge is the reliable signal. Windows toasts work.
+- Desktop app: Open at Login (with a hidden start: boots into the tray, no window), remembered window size and position, right-click context menus with spellcheck suggestions, an About panel stating both app and server versions, and a Health Check window with the full doctor report.
+- Desktop app: Check for Updates lives in the app menu and tray. Nothing polls in the background: the update check and the Health Check contact the GitHub releases feed only when you use them.
+- Reconnect: a room tab that loses its server (laptop sleep, server restart, crash) now reconnects by itself and rebuilds the conversation, instead of sitting offline until a manual reload. This closes the longest-standing rough edge of 0.6.8.
+- Web search: built in via DuckDuckGo, no setup. When DuckDuckGo rate-limits or blocks automated queries (it does on some networks), the room says so honestly and points to the fix instead of suggesting a retry that will not help; a local SearXNG instance remains the preferred backend whenever configured, with automatic fallback while it is unreachable, timeouts so a dead SearXNG never hangs a search, and pacing so query bursts stop tripping DuckDuckGo's limits.
+- Chat: consecutive web searches and page reads collapse into one quiet line ("Searched the web", "Read 12 pages") that expands to the individual calls; a run with failures stays honest (counts successes, notes failures, goes red only when everything failed).
+- Chat: the sidebar collapses (the toggle sits by the settings gear; the preference is remembered), and the connected dot is now green with proper alignment.
+- Memory: the checkpoint review screens (Checkpoint, Learn, Review Memory) speak the current compact design language: smaller left-aligned headers, one-line status, actions where you expect them, and the fine print moved into footnotes.
+- Fixed: completing AI setup no longer requires a page refresh before entering a room; the model status follows every sign-in, sign-out, and provider change immediately (this was every new user's first-run path).
+- Docs: the README leads with what the product looks like (a real demo recording and product shots), download buttons for the apps, and a "ways to use exxperts" table that states the doors model plainly: the app is self-contained and always runs its own version, a terminal install updates separately, both share the same data, one server at a time.
+- Release: the release pipeline builds and publishes the desktop apps alongside the server archives, all checksummed in `SHA256SUMS.txt`, with stable versionless download links that never rot across releases.
+- Dependencies: all six security advisories flagged on the lockfile since 0.6.8 are resolved (fast-uri, find-my-way, shell-quote, dompurify, and `@hono/node-server` via an override).
+
 ## 0.6.8 (2026-07-20)
 
 - Artifacts: the in-room rail lists everything the room's specialists produced, across sessions; clicking a row opens it in the right pane (clicking again closes it) with one-click actions: Add to conversation, Save to workspace, Revise, Open in new tab.

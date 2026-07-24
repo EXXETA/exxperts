@@ -8,7 +8,7 @@ This is the canonical index for documentation in this repository. Treat this pag
 - [How Exxperts works](how-exxperts-works.md): what the product is and how the pieces fit; the right orientation read.
 - [Memory](memory.md): how room memory (checkpoint → Learn → Review Memory) and CLI memory work, what is stored where, and who approves it.
 - [Provider setup and AI profiles](provider-setup.md): connecting a provider: in-app sign-in for Claude / ChatGPT Plus/Pro, and the OpenAI-compatible gateway path.
-- [Web search](web-search.md): works out of the box via DuckDuckGo; optional SearXNG setup, keeping it running, and configuration reference.
+- [Web search](web-search.md): built-in DuckDuckGo backend and its limits; SearXNG setup for heavy use or blocked networks, keeping it running, and configuration reference.
 - [Security](../SECURITY.md): threat model, supported deployments, release integrity, and vulnerability reporting.
 - [MCP client support](mcp.md): MCP connectors: transports, config locations, and commands.
 

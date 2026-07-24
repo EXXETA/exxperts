@@ -100,3 +100,17 @@ import { createOutageCache, ddgDelayMs } from "../../../pi-package/extensions/we
 	if (ddgDelayMs(10_000, 12_000, 1_500) !== 0) fail("spaced request must not wait");
 	console.log("web-search-fallback-smoke: S6 OK (outage window holds/expires/clears, ddg pacing gaps computed)");
 }
+
+// Challenge-page detection and the honest block message, offline.
+import { DDG_BLOCKED_MESSAGE, isDdgChallenge } from "../../../pi-package/extensions/web-search/index.js";
+{
+	if (!isDdgChallenge("<html><body>anomaly detected, complete the challenge</body></html>", 0)) fail("challenge page with zero results must be detected");
+	if (!isDdgChallenge("<html><body>please solve this CAPTCHA</body></html>", 0)) fail("captcha page with zero results must be detected");
+	if (isDdgChallenge("<html><body>the daily challenge quiz</body></html>", 3)) fail("marker words with real results must not be treated as a block");
+	if (isDdgChallenge("<html><body>no results for this query</body></html>", 0)) fail("plain zero-result page must not be treated as a block");
+	const expected =
+		"DuckDuckGo is blocking automated searches from this network: it served its bot-challenge page instead of results. Retrying soon is unlikely to help. For reliable web search on this network, set up a local SearXNG instance; see docs/web-search.md.";
+	if (DDG_BLOCKED_MESSAGE !== expected) fail(`block message drifted from the pinned wording: ${JSON.stringify(DDG_BLOCKED_MESSAGE)}`);
+	if (/try again in a moment/i.test(DDG_BLOCKED_MESSAGE)) fail("block message must not promise that waiting helps");
+	console.log("web-search-fallback-smoke: challenge OK (detection edges pinned, honest block message pinned)");
+}

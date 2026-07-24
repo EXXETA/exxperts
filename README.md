@@ -78,7 +78,7 @@ curl -fsSL https://raw.githubusercontent.com/EXXETA/exxperts/main/install.sh | b
 irm https://raw.githubusercontent.com/EXXETA/exxperts/main/install.ps1 | iex
 ```
 
-Then run `exxperts web`: your browser opens, signed in. Web search works out of the box. Re-run the same command anytime to update.
+Then run `exxperts web`: your browser opens, signed in. Web search is built in via DuckDuckGo, no setup needed ([limits](docs/web-search.md)). Re-run the same command anytime to update.
 
 <details>
 <summary>Requirements, troubleshooting, and platform notes</summary>
@@ -105,7 +105,7 @@ The app is self-contained and always runs its own version; a terminal install up
 
 ### What's inside
 
-Persistent rooms with governed memory · artifacts (documents, decks, pages your rooms produce) · delegated background tasks · skills · MCP connectors · scheduled work · built-in web search (DuckDuckGo out of the box, [SearXNG](docs/web-search.md) for heavy use) · a health check (`exxperts doctor` / in-app) · multi-provider wallet.
+Persistent rooms with governed memory · artifacts (documents, decks, pages your rooms produce) · delegated background tasks · skills · MCP connectors · scheduled work · built-in web search (DuckDuckGo with no setup; [SearXNG](docs/web-search.md) for heavy use or networks where DuckDuckGo blocks automated queries) · a health check (`exxperts doctor` / in-app) · multi-provider wallet.
 
 ### Documentation
 

@@ -90,6 +90,18 @@ export function ddgDelayMs(lastRequestAt: number, now: number, minGapMs: number)
 	return Math.max(0, lastRequestAt + minGapMs - now);
 }
 
+// DDG answers bot-flagged clients with HTTP 200 and a challenge page instead
+// of results. That block is per-network and tends to persist, so the error
+// must not promise that waiting helps; it names the real cure instead. The
+// message is a soft tool error: the model reads it and can adapt (fetch_url,
+// telling the user about SearXNG) rather than retrying into the same wall.
+export const DDG_BLOCKED_MESSAGE =
+	"DuckDuckGo is blocking automated searches from this network: it served its bot-challenge page instead of results. Retrying soon is unlikely to help. For reliable web search on this network, set up a local SearXNG instance; see docs/web-search.md.";
+
+export function isDdgChallenge(html: string, resultCount: number): boolean {
+	return resultCount === 0 && /anomaly|captcha|challenge/i.test(html);
+}
+
 const SEARXNG_TIMEOUT_MS = 3_000;
 const SEARXNG_OUTAGE_WINDOW_MS = 5 * 60_000;
 const DDG_MIN_GAP_MS = 1_500;
@@ -233,12 +245,12 @@ async function searchDuckDuckGo(query: string, limit: number): Promise<SearchRes
 		throw new Error(`DuckDuckGo is not reachable. ${(e as Error).message}`);
 	}
 	if (!res.ok) {
-		throw new Error(`DuckDuckGo search failed (${res.status} ${res.statusText}).${res.status === 403 || res.status === 429 ? " The endpoint may be rate-limiting; try again in a moment." : ""}`);
+		throw new Error(`DuckDuckGo search failed (${res.status} ${res.statusText}).${res.status === 403 || res.status === 429 ? " DuckDuckGo rate-limits or blocks automated queries on some networks; if this persists, a local SearXNG instance is the reliable path; see docs/web-search.md." : ""}`);
 	}
 	const html = await res.text();
 	const results = parseDuckDuckGoHtml(html, limit);
-	if (results.length === 0 && /anomaly|captcha|challenge/i.test(html)) {
-		throw new Error("DuckDuckGo is rate-limiting automated queries right now; try again in a moment.");
+	if (isDdgChallenge(html, results.length)) {
+		throw new Error(DDG_BLOCKED_MESSAGE);
 	}
 	return results;
 }

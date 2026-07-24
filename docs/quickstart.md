@@ -155,5 +155,5 @@ Desktop app: quit it from the tray, then delete the app (macOS: drag it out of A
 - [Memory](memory.md): the full memory model and who approves what.
 - [Provider setup and AI profiles](provider-setup.md): all provider paths in detail.
 - [MCP client support](mcp.md): connect MCP tool servers.
-- [Web search](web-search.md): works out of the box via DuckDuckGo; optional local SearXNG for heavier use.
+- [Web search](web-search.md): built in via DuckDuckGo, no setup; SearXNG is the reliable path for heavy use or networks where DuckDuckGo blocks automated queries.
 - CLI/TUI: `exxperts cli` (or `./scripts/exxperts-cli`) opens the terminal experience, sharing the same rooms and credentials.

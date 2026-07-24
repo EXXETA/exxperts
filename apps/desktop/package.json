@@ -1,6 +1,6 @@
 {
   "name": "@exxeta/exxperts-desktop",
-  "version": "0.6.8",
+  "version": "0.7.0",
   "private": true,
   "description": "Desktop app shell for exxperts: spawns the local web server and wraps the web UI in a window with a tray.",
   "main": "dist/main.js",

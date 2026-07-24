@@ -1,10 +1,12 @@
 # Web search
 
-Web search works **out of the box**: with no setup, the `web_search` tool
-queries DuckDuckGo directly (its plain HTML endpoint; no API key, no
-account). For heavier use you can optionally run a **local SearXNG
-container** instead: it aggregates several engines and is not subject to
-DuckDuckGo's rate limits. When SearXNG is configured it is always preferred;
+Web search is **built in**: with no setup, the `web_search` tool queries
+DuckDuckGo directly (its plain HTML endpoint; no API key, no account).
+DuckDuckGo rate-limits automated queries, and on some networks it blocks
+them outright; when that happens the room shows an honest error naming the
+block. For heavy use, or on a network where DuckDuckGo blocks searches, a
+**local SearXNG container** is the reliable path: it aggregates several
+engines and is not subject to DuckDuckGo's limits. When SearXNG is configured it is always preferred;
 if it stops answering, searches fall back to the built-in DuckDuckGo backend
 until it is back. Setting `EXXETA_SEARCH_PROVIDER=disabled` turns web search
 off entirely.
