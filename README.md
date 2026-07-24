@@ -9,8 +9,6 @@
 
 <p align="center">exxperts gives you rooms: persistent AI colleagues with real hands. A room searches the web, writes documents and decks, runs delegated work, and it grows the way you work with it.</p>
 
-<p align="center">A room remembers only what you approve: you steer every checkpoint, review everything it learns, and each memory traces back to the conversation it came from. You choose each room's tools; everything lives as plain files on your machine. Switch AI providers anytime, and you keep the colleague.</p>
-
 <p align="center">
   <a href="https://github.com/EXXETA/exxperts/actions/workflows/ci.yml"><img src="https://github.com/EXXETA/exxperts/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-PolyForm%20Noncommercial-8CA5FF" alt="License: PolyForm Noncommercial" /></a>
@@ -58,11 +56,13 @@ Every memory shows **where it came from**: click any remembered fact and the exa
 
 ## How a room grows
 
-**Work.** A room is a full agent, not a chat: it searches the web, reads pages, writes documents, decks and web pages, runs background tasks, and uses your connectors and skills.
+**Work.** A room is a full agent, not a chat: it searches the web, reads pages, writes documents, decks and web pages, runs background tasks, and uses your connectors and skills. Which tools each room may use is your call.
 
 **Checkpoint.** At the end of a session, the room proposes what is worth remembering. You steer it, edit it, or reject it; nothing enters memory without you.
 
 **Learn.** After several sessions, the room consolidates its notes into durable long-term memory, and you review the update before it is written. This is how a room stops being a tool and starts becoming a colleague: session by session, it knows more of your work.
+
+Every memory traces back to the conversation it came from, and everything a room is lives as plain files on your machine. Switch AI providers anytime, and you keep the colleague.
 
 ## Why exxperts
 
