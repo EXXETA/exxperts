@@ -28,19 +28,9 @@
 
 ## Download the app
 
-The easiest way to run exxperts: a desktop app, no terminal, no setup.
+The desktop app (macOS Apple Silicon, Windows x64) returns shortly as a **code-signed build**: we are finishing macOS notarization and Windows publisher signing so that first launch works without any security prompt, and we chose not to offer unsigned binaries in the meantime.
 
-<p align="center">
-  <a href="https://github.com/EXXETA/exxperts/releases/latest/download/exxperts-desktop-mac-arm64.dmg"><img src="docs/assets/download-mac.png" alt="Download for Mac (Apple Silicon), dmg" width="320" /></a>
-  &nbsp;&nbsp;
-  <a href="https://github.com/EXXETA/exxperts/releases/latest/download/exxperts-setup-win-x64.exe"><img src="docs/assets/download-windows.png" alt="Download for Windows, installer exe" width="320" /></a>
-</p>
-
-<p align="center"><sub>Also available: <a href="https://github.com/EXXETA/exxperts/releases/latest/download/exxperts-desktop-win-x64.zip">Windows portable zip</a> · <a href="https://github.com/EXXETA/exxperts/releases/latest/download/exxperts-desktop-mac-arm64.zip">macOS zip</a> · checksums on <a href="https://github.com/EXXETA/exxperts/releases">Releases</a></sub></p>
-
-First launch: macOS asks you to confirm an unsigned app (open it once, then System Settings → Privacy & Security → *Open Anyway*); Windows shows a SmartScreen prompt (*More info → Run anyway*). One time only; signed builds are coming.
-
-Prefer a terminal? See [Install](#install).
+Until then, the [Install](#install) below gets you the full product in your browser with one command.
 
 ## See it
 
@@ -77,7 +67,7 @@ Most local AI tools are chat interfaces with hidden state. exxperts is built aro
 
 ## Install
 
-The app above needs nothing else. For the terminal experience:
+One command installs everything:
 
 **macOS / Linux**
 ```bash
@@ -107,7 +97,7 @@ One product, one shared brain (`~/.exxperts`), several doors; open whichever fit
 
 | Door | Get it | Updates | Terminal needed |
 |---|---|---|---|
-| **Desktop app** | [Download](#download-the-app) | In-app notice → download the new version | Never |
+| **Desktop app** | [Signed build coming](#download-the-app) | In-app notice → download the new version | Never |
 | **Browser** (`exxperts web`) | One-liner above · or *Open in Browser* from the app | Re-run the one-liner | To start it |
 | **Terminal** (`exxperts cli`) | Same install | Same | Yes |
 | **Clone & build** | `git clone` | `git pull` | Yes |
