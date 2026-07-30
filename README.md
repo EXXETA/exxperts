@@ -28,12 +28,17 @@
 
 ## Download the app
 
-The desktop app is back, and it is signed: the macOS app is notarized by Apple, the Windows installer is publisher-signed by Exxeta AG, and first launch works without security warnings on either platform.
+The easiest way to run exxperts: a desktop app. Download, open, connect your AI provider. No terminal involved.
 
-- **macOS** (Apple Silicon): [exxperts-desktop-mac-arm64.dmg](https://github.com/EXXETA/exxperts/releases/latest/download/exxperts-desktop-mac-arm64.dmg)
-- **Windows** (x64): [exxperts-setup-win-x64.exe](https://github.com/EXXETA/exxperts/releases/latest/download/exxperts-setup-win-x64.exe)
+<p align="center">
+  <a href="https://github.com/EXXETA/exxperts/releases/latest/download/exxperts-desktop-mac-arm64.dmg"><img src="docs/assets/download-mac.png" alt="Download for Mac (Apple Silicon .dmg)" width="300" /></a>
+  &nbsp;&nbsp;
+  <a href="https://github.com/EXXETA/exxperts/releases/latest/download/exxperts-setup-win-x64.exe"><img src="docs/assets/download-windows.png" alt="Download for Windows (installer .exe)" width="300" /></a>
+</p>
 
-All versions and checksums live on the [releases page](https://github.com/EXXETA/exxperts/releases). Prefer the browser? The [Install](#install) command below gets you the same product without the app.
+<p align="center">Also available: <a href="https://github.com/EXXETA/exxperts/releases/latest/download/exxperts-desktop-win-x64.zip">Windows portable zip</a> · <a href="https://github.com/EXXETA/exxperts/releases/latest/download/exxperts-desktop-mac-arm64.zip">macOS zip</a> · checksums on <a href="https://github.com/EXXETA/exxperts/releases">Releases</a></p>
+
+Both builds are signed. The macOS app is notarized by Apple and opens clean; the Windows installer is publisher-verified as Exxeta AG. While a release is new, Windows SmartScreen may show a one-time notice: *More info* shows the verified publisher, then *Run anyway*. Prefer a terminal? See [Install](#install).
 
 ## See it
 
