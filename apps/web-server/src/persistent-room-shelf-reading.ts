@@ -1,7 +1,8 @@
+import { fork } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { Worker } from "node:worker_threads";
+import { fileURLToPath } from "node:url";
 import {
 	PersistentRoomShelfError,
 	persistentRoomReadingCacheDirPath,
@@ -16,8 +17,12 @@ import {
  *
  * - Content is SNIFFED, never trusted by extension: `%PDF-` is a pdf whatever
  *   it is called; a zip is only a docx if it carries word/document.xml.
- * - pdf and docx are extracted in an isolated worker thread with a hard
- *   timeout — a hostile document's worst case is a failed parse.
+ * - pdf and docx are extracted in an isolated child process with a hard
+ *   timeout — a hostile document's worst case is a failed parse. A process,
+ *   not a worker thread: pdfjs loads a native addon, and a native crash in a
+ *   worker thread takes the whole server with it (on Windows even a CLEAN
+ *   worker exit does, nodejs/node#43122 — the addon unloads when the last
+ *   thread that loaded it exits).
  * - Extractions land in a reading cache under runtime/reading-cache/, keyed by
  *   filename + content hash, so re-reads and manifest page counts are free.
  *   The cache is regenerable: deleting it just means the next read re-parses.
@@ -184,44 +189,66 @@ interface ShelfWorkerMessage {
 	error?: string;
 }
 
-function runShelfWorker(workerData: Record<string, unknown>, timeoutMs: number): Promise<ShelfWorkerMessage> {
+const SHELF_PARSE_WORKER_MAX_HEAP_MB = 512;
+const TOO_COMPLEX_MESSAGE = "This document is too complex to process — it was given up on rather than allowed to exhaust memory. If it is a scanned document, exporting a smaller page range usually works.";
+
+function runShelfWorker(request: Record<string, unknown>, timeoutMs: number): Promise<ShelfWorkerMessage> {
 	return new Promise((resolve, reject) => {
-		const worker = new Worker(new URL("./shelf-parse-worker.mjs", import.meta.url), {
-			workerData,
-			resourceLimits: { maxOldGenerationSizeMb: 512 },
+		const child = fork(fileURLToPath(new URL("./shelf-parse-worker.mjs", import.meta.url)), [JSON.stringify(request)], {
+			// Bare node, no inherited loaders: the worker is plain .mjs and must
+			// start the same way under tsx dev and in the shipped payload.
+			execArgv: [`--max-old-space-size=${SHELF_PARSE_WORKER_MAX_HEAP_MB}`],
+			stdio: ["ignore", "ignore", "pipe", "ipc"],
+		});
+		// V8's OOM abort reports on stderr; keep a bounded tail so a heap-capped
+		// death maps to the honest too_complex refusal below.
+		let stderrTail = "";
+		child.stderr?.on("data", (chunk: Buffer) => {
+			stderrTail = (stderrTail + chunk.toString()).slice(-8192);
 		});
 		let settled = false;
 		const settle = (fn: () => void) => {
 			if (settled) return;
 			settled = true;
 			clearTimeout(timer);
-			void worker.terminate();
+			try {
+				child.kill("SIGKILL");
+			} catch {
+				// Already gone.
+			}
 			fn();
 		};
 		const timer = setTimeout(() => {
 			settle(() => reject(new PersistentRoomShelfError("parse_timeout", `The document could not be processed within ${timeoutMs / 1000}s and was given up on.`)));
 		}, timeoutMs);
-		worker.once("message", (message: ShelfWorkerMessage) => {
+		child.once("message", (message: ShelfWorkerMessage) => {
 			settle(() => {
 				if (message?.ok) resolve(message);
 				else reject(new PersistentRoomShelfError("parse_failed", `The document could not be processed: ${String(message?.error ?? "unknown parser error")}`));
 			});
 		});
-		worker.once("error", (error) => {
-			// A document that exhausts the worker's memory cap (a compression bomb
-			// inflating to hundreds of MB of drawing operations is the real case)
-			// arrives here as a V8 OOM. The fence held — say so in the room's
-			// language instead of relaying heap internals.
-			const outOfMemory = /memory limit|heap out of memory/i.test(error.message);
-			settle(() => reject(new PersistentRoomShelfError(
-				outOfMemory ? "too_complex" : "parse_failed",
-				outOfMemory
-					? "This document is too complex to process — it was given up on rather than allowed to exhaust memory. If it is a scanned document, exporting a smaller page range usually works."
-					: `The document could not be processed: ${error.message}`,
-			)));
+		child.once("error", (error) => {
+			// fork/spawn failure — nothing document-specific reaches this path.
+			settle(() => reject(new PersistentRoomShelfError("parse_failed", `The document could not be processed: ${error.message}`)));
 		});
-		worker.once("exit", (code) => {
-			settle(() => reject(new PersistentRoomShelfError("parse_failed", `The document parser exited unexpectedly (code ${code}).`)));
+		child.once("exit", (code, signal) => {
+			// The worker sends its result and exits at once, and unlike a worker
+			// thread's port the IPC channel is NOT drained before 'exit' — the
+			// result message can still be in flight. Give it a short grace window;
+			// a message that lands settles first and makes this a no-op.
+			setTimeout(() => {
+				// A document that exhausts the worker's heap cap (a compression bomb
+				// inflating to hundreds of MB of drawing operations is the real case)
+				// dies here with V8's OOM abort on stderr. The fence held — say so in
+				// the room's language instead of relaying heap internals. Any other
+				// death without a message (including a native crash in pdfjs's canvas
+				// addon) is an honest failed parse; the server never feels it.
+				const outOfMemory = /heap out of memory|Reached heap limit|memory limit/i.test(stderrTail);
+				settle(() => reject(new PersistentRoomShelfError(
+					outOfMemory ? "too_complex" : "parse_failed",
+					outOfMemory ? TOO_COMPLEX_MESSAGE : `The document parser exited unexpectedly (code ${code ?? signal}).`,
+				)));
+			}, 250);
 		});
 	});
 }

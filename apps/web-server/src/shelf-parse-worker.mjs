@@ -1,17 +1,27 @@
 // Shelf reading-copy parser worker (files core slice).
 //
-// Runs OUTSIDE the server thread on purpose: pdf is THE hostile format, so a
+// Runs OUTSIDE the server process on purpose: pdf is THE hostile format, so a
 // malicious or pathological document must at worst cost this worker its life
-// (the driver terminates it on timeout), never the event loop. Plain .mjs, not
-// TypeScript, so `new Worker(url)` works identically under tsx in dev and in
-// the shipped payload — the server has no build step. No tools, no network, no
-// state access: the worker receives one absolute path plus caps, extracts
-// text, and posts it back.
+// (the driver kills it on timeout), never the server. A CHILD PROCESS, not a
+// worker thread: pdfjs loads a native addon (@napi-rs/canvas) even for text
+// extraction, and a thread cannot fence native code — an access violation in
+// the addon kills the whole process, which on Windows happens deterministically
+// whenever the last thread that loaded the addon exits (nodejs/node#43122).
+// Only a process boundary makes the blast fence real. Plain .mjs, not
+// TypeScript, so `fork()` with a bare node works identically under tsx in dev
+// and in the shipped payload — the server has no build step. No tools, no
+// network, no state access: the worker receives one absolute path plus caps
+// as its single JSON argv, extracts text, and posts the result over IPC.
 import fs from "node:fs";
-import { parentPort, workerData } from "node:worker_threads";
 
 const post = (message) => {
-	if (parentPort) parentPort.postMessage(message);
+	if (typeof process.send !== "function") {
+		console.error("shelf parse worker was started without an IPC channel; the shelf reading driver must fork() it");
+		process.exit(1);
+	}
+	// Exit through the send callback so the message is fully flushed first —
+	// pdfjs can leave timers alive that would otherwise keep the process up.
+	process.send(message, () => process.exit(0));
 };
 
 function decodeXmlEntities(value) {
@@ -249,15 +259,16 @@ async function parseDocx(buffer) {
 
 (async () => {
 	try {
-		const { absolutePath, kind, maxPages, maxChars } = workerData;
+		const request = JSON.parse(process.argv[2] ?? "");
+		const { absolutePath, kind, maxPages, maxChars } = request;
 		const buffer = fs.readFileSync(absolutePath);
 		if (kind === "image") {
-			const image = await prepareImage(buffer, workerData.image);
+			const image = await prepareImage(buffer, request.image);
 			post({ ok: true, image });
 			return;
 		}
 		if (kind === "pdf-raster") {
-			const raster = await rasterizePdf(buffer, workerData.raster);
+			const raster = await rasterizePdf(buffer, request.raster);
 			post({ ok: true, raster });
 			return;
 		}
