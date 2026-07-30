@@ -10,9 +10,11 @@ import fs from "node:fs";
 import os from "node:os";
 import { app, BrowserWindow, dialog, Menu, nativeImage, shell, Tray } from "electron";
 import { payloadVersion, PORT, probePort, SERVER_ORIGIN, ServerHandle, serverRoot, takeOverPort } from "./server";
+import { bootWindowOpen, bootWindowWasShown, closeBootWindow, setBootStatus, showBootWindow } from "./boot-window";
 import { showHealthCheck, showTextWindow } from "./health";
 import { loadWindowState, trackWindowState } from "./window-state";
 import { checkForUpdate, getAvailableUpdate, isNewerVersion, onUpdateStateChanged, openUpdatePage } from "./update-check";
+import { checkViaUpdater, downloadUpdate, installPlan, quitAndInstallNow, smokeSetFeed, updaterAvailability } from "./updater";
 
 const SMOKE = process.env.EXXPERTS_DESKTOP_SMOKE === "1";
 
@@ -51,6 +53,10 @@ let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let authToken = "";
 let quitting = false;
+// Set right before the updater's quitAndInstall: the shell's quit
+// interception must step aside (windows really close, the quit event fires
+// for the installer hook) once the server child has been stopped.
+let updaterQuitting = false;
 
 let smokeFailed = false;
 
@@ -181,7 +187,7 @@ function wireNavigation(win: BrowserWindow): void {
   });
 }
 
-function createMainWindow(startHidden: boolean): BrowserWindow {
+function createMainWindow(): BrowserWindow {
   const saved = loadWindowState();
   const win = new BrowserWindow({
     width: saved.bounds?.width ?? 1440,
@@ -192,10 +198,12 @@ function createMainWindow(startHidden: boolean): BrowserWindow {
     minHeight: 600,
     title: "exxperts",
     backgroundColor: "#0d0d0f",
-    // Auto-started at login = tray only; the page still loads (hidden), so
-    // the server runs and notifications fire. The window appears on tray or
+    // Always created hidden: boot() reveals it only after the page has
+    // loaded (the boot window covers the gap), and an auto-started login
+    // boot never reveals it at all - the page still loads (hidden), so the
+    // server runs and notifications fire, and the window appears on tray or
     // Dock activation.
-    show: !startHidden,
+    show: false,
     // Real-app look on macOS: no title bar, traffic lights inset over the
     // sidebar; the web-ui provides the drag region (desktop-gated CSS).
     // Traffic lights pinned explicitly so the in-chrome toggle's CSS offsets
@@ -204,16 +212,16 @@ function createMainWindow(startHidden: boolean): BrowserWindow {
     webPreferences: { sandbox: true, spellcheck: true },
   });
   if (saved.maximized) {
-    // On a hidden boot, defer to the first reveal so the maximized flag is
-    // not lost (an early save would write false).
-    if (startHidden) win.once("show", () => win.maximize());
-    else win.maximize();
+    // The window is always created hidden now, so maximize is deferred to
+    // the first reveal in every case (maximizing a hidden window would show
+    // it on Windows, and an early save would write maximized=false).
+    win.once("show", () => win.maximize());
   }
   trackWindowState(win);
   wireNavigation(win);
   wireContextMenu(win);
   win.on("close", (event) => {
-    if (!quitting) {
+    if (!quitting && !updaterQuitting) {
       event.preventDefault();
       win.hide();
     }
@@ -260,7 +268,7 @@ function buildTrayMenu(): Electron.Menu {
   return Menu.buildFromTemplate([
     ...(update
       ? [
-          { label: `Update available: v${update.version}`, click: openUpdatePage },
+          { label: `Update available: v${update.version}`, click: () => { void manualUpdateCheck(); } },
           { type: "separator" as const },
         ]
       : []),
@@ -293,6 +301,74 @@ function refreshTrayMenu(): void {
   if (process.platform !== "darwin") tray.setContextMenu(trayMenu);
 }
 
+// Today's manual path, kept for install variants that cannot update in place
+// (Windows portable zip, unpackaged dev runs) and as the mandatory fallback
+// after any updater error: a broken updater must never strand a user.
+async function offerManualUpdate(version: string): Promise<void> {
+  const { response } = await dialog.showMessageBox({
+    type: "info",
+    title: "exxperts",
+    message: `exxperts v${version} is available.`,
+    detail: "The download opens in your browser; quit exxperts before installing over it.",
+    buttons: ["Download", "Later"],
+    defaultId: 0,
+    cancelId: 1,
+  });
+  if (response === 0) openUpdatePage();
+}
+
+// The one-click path: verified download (electron-updater checks the sha512
+// from the release metadata), then quit, install, relaunch. Honest progress
+// in a small window instead of a frozen dialog; closing it cancels the
+// download. Any failure lands on the manual fallback dialog.
+async function offerOneClickUpdate(version: string): Promise<void> {
+  const { response } = await dialog.showMessageBox({
+    type: "info",
+    title: "exxperts",
+    message: `exxperts v${version} is available.`,
+    detail: "exxperts downloads the update, then restarts to install it.",
+    buttons: ["Install and restart", "Later"],
+    defaultId: 0,
+    cancelId: 1,
+  });
+  if (response !== 0) return;
+  const progressWin = showTextWindow("exxperts update", `Downloading exxperts v${version}`, "Starting the download...", mainWindow ?? undefined);
+  let cancelDownload: (() => void) | null = null;
+  progressWin.on("closed", () => cancelDownload?.());
+  const setProgress = (text: string) => {
+    if (progressWin.isDestroyed()) return;
+    void progressWin.webContents.executeJavaScript(
+      `document.querySelector("pre").textContent = ${JSON.stringify(text)}; true`,
+    ).catch(() => undefined);
+  };
+  const outcome = await downloadUpdate(app.getVersion(), {
+    onProgress: (percent, transferred, total) => {
+      const mb = (n: number) => Math.max(1, Math.round(n / (1024 * 1024)));
+      setProgress(`${Math.floor(percent)}% (${mb(transferred)} of ${mb(total)} MB)`);
+    },
+    registerCancel: (cancel) => { cancelDownload = cancel; },
+  });
+  if (outcome === "ready") {
+    setProgress("Download complete. Restarting to install...");
+    updaterQuitting = true;
+    await server.stop();
+    quitAndInstallNow();
+    return;
+  }
+  if (!progressWin.isDestroyed()) progressWin.close();
+  if (outcome === "cancelled") return; // the user changed their mind; stay quiet
+  const { response: fallback } = await dialog.showMessageBox({
+    type: "warning",
+    title: "exxperts",
+    message: "The update could not be installed automatically.",
+    detail: `You can download exxperts v${version} from the releases page instead.`,
+    buttons: ["Open download page", "Later"],
+    defaultId: 0,
+    cancelId: 1,
+  });
+  if (fallback === 0) openUpdatePage();
+}
+
 // User-initiated check with visible feedback; the tray rebuild also
 // re-reads the login-item state, curing a stale checkbox in passing.
 async function manualUpdateCheck(): Promise<void> {
@@ -300,16 +376,12 @@ async function manualUpdateCheck(): Promise<void> {
   refreshTrayMenu();
   if (result === "update") {
     const update = getAvailableUpdate();
-    const { response } = await dialog.showMessageBox({
-      type: "info",
-      title: "exxperts",
-      message: `exxperts v${update?.version} is available.`,
-      detail: "The download opens in your browser; quit exxperts before installing over it.",
-      buttons: ["Download", "Later"],
-      defaultId: 0,
-      cancelId: 1,
-    });
-    if (response === 0) openUpdatePage();
+    if (!update) return;
+    if (installPlan(updaterAvailability()) === "one-click") {
+      await offerOneClickUpdate(update.version);
+    } else {
+      await offerManualUpdate(update.version);
+    }
   } else if (result === "none") {
     await dialog.showMessageBox({
       type: "info",
@@ -476,15 +548,69 @@ async function handleServerCrash(code: number | null, signal: string | null): Pr
   }
 }
 
+// After a failed startup there is no tray and no main window; once the user
+// closes the error and health windows nothing visible remains, so the app
+// must exit instead of lingering as a Task Manager ghost.
+let startupHasFailed = false;
+
 async function startupFailed(err: unknown): Promise<void> {
+  // A user-initiated quit mid-startup (closing the boot window) stops the
+  // server, which makes the readiness wait throw; that is a cancellation,
+  // not a failure, and must not flash error windows on the way out.
+  if (quitting) return;
   const message = err instanceof Error ? err.message : String(err);
   const tail = server.logTail();
   if (SMOKE) smokeFail(`${message}\n${tail}`);
+  startupHasFailed = true;
+  closeBootWindow();
   showTextWindow("exxperts could not start", message, tail || "(no server output)");
   void showHealthCheck();
 }
 
+// Startup readiness with patience: the plain 60s waitReady cap is right for
+// the watchdog (a warm restart) but wrong for a cold first launch, where the
+// TypeScript loader plus an antivirus sweep of a fresh install can genuinely
+// exceed it. A timeout with the child still alive means "slow", not "dead":
+// tell the user and keep waiting. A dead child means a real failure and
+// throws immediately with its log. The outer ceiling exists only so a server
+// that never answers cannot spin the boot window forever.
+const BOOT_WAIT_ROUND_MS = 60_000;
+const BOOT_WAIT_MAX_MS = 10 * 60_000;
+
+async function waitReadyPatiently(): Promise<void> {
+  const started = Date.now();
+  for (;;) {
+    try {
+      await server.waitReady(BOOT_WAIT_ROUND_MS);
+      return;
+    } catch (err) {
+      if (!server.running) throw err;
+      if (Date.now() - started >= BOOT_WAIT_MAX_MS) {
+        // The per-round error says "within 60s"; the give-up message must
+        // report the true total wait.
+        throw new Error(`The exxperts server did not become ready after ${Math.round((Date.now() - started) / 60_000)} minutes.`);
+      }
+      const waited = Math.round((Date.now() - started) / 1000);
+      console.error(`[boot] server not ready after ${waited}s; still waiting`);
+      setBootStatus(`Still starting after ${waited} seconds. The local server is taking longer than usual; exxperts will open as soon as it answers.`);
+    }
+  }
+}
+
 async function boot(): Promise<void> {
+  // --hidden = explicit (Windows login item, smoke); wasOpenedAtLogin = the
+  // macOS login-item signal.
+  const startHidden = process.argv.includes("--hidden")
+    || (!SMOKE && app.getLoginItemSettings().wasOpenedAtLogin);
+  // Feedback before anything slow can happen. An auto-started (hidden) boot
+  // stays invisible as before. Closing this window mid-startup is the user
+  // aborting the launch: quit (which also stops the server child).
+  if (!startHidden) {
+    showBootWindow(() => {
+      if (!quitting) app.quit();
+    });
+  }
+
   const state = await probePort();
   if (state.kind === "exxperts") {
     if (SMOKE) smokeFail(`port ${PORT} already has an exxperts server`);
@@ -507,19 +633,19 @@ async function boot(): Promise<void> {
   }
 
   server.start();
-  await server.waitReady();
+  await waitReadyPatiently();
   authToken = await server.authToken();
 
   buildTray();
   buildAppMenu();
-  // --hidden = explicit (Windows login item, smoke); wasOpenedAtLogin = the
-  // macOS login-item signal.
-  const startHidden = process.argv.includes("--hidden")
-    || (!SMOKE && app.getLoginItemSettings().wasOpenedAtLogin);
-  mainWindow = createMainWindow(startHidden);
+  mainWindow = createMainWindow();
   onUpdateStateChanged(refreshTrayMenu);
   server.onUnexpectedExit((code, signal) => { void handleServerCrash(code, signal); });
   await mainWindow.loadURL(`${SERVER_ORIGIN}/auth/session?token=${encodeURIComponent(authToken)}`);
+  // Hand off: reveal the loaded app window first, then retire the boot
+  // window, so there is never a moment with nothing on screen.
+  if (!startHidden) showMainWindow();
+  closeBootWindow();
 
   if (SMOKE) await smokeReport();
 }
@@ -536,6 +662,11 @@ async function smokeReport(): Promise<void> {
   const hiddenExpected = process.argv.includes("--hidden");
   const bootVisibleOk = hiddenExpected ? !win.isVisible() : win.isVisible();
   const bootWindow = win.isVisible() ? "visible" : "hidden";
+  // Boot feedback: a visible boot must have shown the loading window and
+  // retired it by now; a hidden (login-item) boot must never have shown it.
+  const bootFeedbackOk = hiddenExpected
+    ? !bootWindowWasShown()
+    : bootWindowWasShown() && !bootWindowOpen();
   const shot = process.env.EXXPERTS_DESKTOP_SMOKE_SHOT && !process.argv.includes("--hidden")
     ? process.env.EXXPERTS_DESKTOP_SMOKE_SHOT : undefined;
   await new Promise((r) => setTimeout(r, 3500)); // let the SPA render past the redirect
@@ -638,6 +769,29 @@ async function smokeReport(): Promise<void> {
   // Under the fake-feed smoke mode the positive outcome is REQUIRED, not
   // environmental.
   if (process.env.EXXPERTS_DESKTOP_EXPECT_UPDATE === "1" && updateCheck !== "update") updateConsistent = false;
+  // One-click updater state machine, exercised only under the fake-feed
+  // smoke (environmental runs leave it alone): electron-updater must see the
+  // fake feed's newer version through the generic-provider override (check
+  // -> available, the point where the install dialog would be offered), an
+  // unreachable feed must land on "error" (whose UI is the manual fallback
+  // dialog), and the variant policy table must hold. The real download +
+  // install cannot run against a dev build (Squirrel.Mac needs a signed
+  // packaged app); that stays a manual packaged-build test.
+  let updaterFlow = "not-exercised";
+  if (process.env.EXXPERTS_DESKTOP_EXPECT_UPDATE === "1") {
+    const availability = updaterAvailability();
+    const positive = await checkViaUpdater(app.getVersion());
+    smokeSetFeed("http://127.0.0.1:1/");
+    const negative = await checkViaUpdater(app.getVersion());
+    const policyOk = installPlan("ok") === "one-click" && installPlan("portable") === "manual" && installPlan("dev") === "manual";
+    updaterFlow = availability === "ok"
+      && positive.status === "available" && positive.version === "9.9.9"
+      && negative.status === "error"
+      && policyOk
+      ? "ok"
+      : `fail(availability=${availability},check=${positive.status}${positive.status === "available" ? `:${positive.version}` : ""},error-case=${negative.status},policy=${policyOk ? "ok" : "fail"})`;
+  }
+  const updaterFlowOk = updaterFlow === "ok" || updaterFlow === "not-exercised";
   // S5 acceptance evidence: EXXPERTS_DESKTOP_SHOT_MATRIX=<dir> captures the
   // sidebar states at 80/100/125% zoom in REAL Electron (zoom via the real
   // webContents zoom factor, clicks via the real input pipeline).
@@ -777,9 +931,9 @@ async function smokeReport(): Promise<void> {
     }
   }
   const ok = landedUrl.startsWith(SERVER_ORIGIN) && !landedUrl.includes("token=") && healthOk && trayIconOk && stateOk && dragOk
-    && contextOk && spellOk && deepLinkOk && notifOk && payload !== "unknown" && bootVisibleOk && loginItemPresent
-    && updateLogicOk && updateConsistent && notifyE2EOk && watchdogOk && appMenuOk && sidebarToggleOk && matrixFailure === null;
-  console.log(`DESKTOP_SMOKE ${ok ? "OK" : "FAIL"} url=${landedUrl} initialUrl=${url} title=${title} tray=${tray ? "yes" : "no"} trayIcon=${trayIconOk ? "ok" : "empty"} health=${healthOk ? "ok" : "fail"} windowState=${stateOk ? "ok" : "missing"} dragRegion=${dragRegion} contextMenu=${contextOk ? `ok(${smokeContextMenuItems})` : "none"} spellcheck=${spellOk ? "on" : "off"} deepLink=${deepLinkOk ? "ok" : "fail"} notifications=${String(notifPerm)} payload=${payload} bootWindow=${bootWindow}${hiddenExpected ? "(hidden expected)" : ""} loginItem=${loginItemPresent ? "present" : "missing"} appMenu=${appMenuOk ? "ok" : "fail"} updateLogic=${updateLogicOk ? "ok" : "fail"} updateCheck=${updateCheck}${updateConsistent ? "" : "(tray inconsistent)"} sidebarToggle=${sidebarToggleOk ? "ok" : "fail"}${matrixFailure ? ` matrix=fail(${matrixFailure})` : ""} notifyE2E=${notifyE2EOk ? "ok" : `fail(hook=${String(notifyHook)},badge=${badgeSet ? "set" : "unset"},cleared=${badgeCleared ? "yes" : "no"})`} watchdog=${watchdogOk ? "ok" : "fail"}`);
+    && contextOk && spellOk && deepLinkOk && notifOk && payload !== "unknown" && bootVisibleOk && bootFeedbackOk && loginItemPresent
+    && updateLogicOk && updateConsistent && updaterFlowOk && notifyE2EOk && watchdogOk && appMenuOk && sidebarToggleOk && matrixFailure === null;
+  console.log(`DESKTOP_SMOKE ${ok ? "OK" : "FAIL"} url=${landedUrl} initialUrl=${url} title=${title} tray=${tray ? "yes" : "no"} trayIcon=${trayIconOk ? "ok" : "empty"} health=${healthOk ? "ok" : "fail"} windowState=${stateOk ? "ok" : "missing"} dragRegion=${dragRegion} contextMenu=${contextOk ? `ok(${smokeContextMenuItems})` : "none"} spellcheck=${spellOk ? "on" : "off"} deepLink=${deepLinkOk ? "ok" : "fail"} notifications=${String(notifPerm)} payload=${payload} bootWindow=${bootWindow}${hiddenExpected ? "(hidden expected)" : ""} bootFeedback=${bootFeedbackOk ? "ok" : "fail"} loginItem=${loginItemPresent ? "present" : "missing"} appMenu=${appMenuOk ? "ok" : "fail"} updateLogic=${updateLogicOk ? "ok" : "fail"} updateCheck=${updateCheck}${updateConsistent ? "" : "(tray inconsistent)"} updaterFlow=${updaterFlow} sidebarToggle=${sidebarToggleOk ? "ok" : "fail"}${matrixFailure ? ` matrix=fail(${matrixFailure})` : ""} notifyE2E=${notifyE2EOk ? "ok" : `fail(hook=${String(notifyHook)},badge=${badgeSet ? "set" : "unset"},cleared=${badgeCleared ? "yes" : "no"})`} watchdog=${watchdogOk ? "ok" : "fail"}`);
   if (!ok) process.exitCode = 1;
   app.quit();
 }
@@ -804,11 +958,19 @@ if (!gotLock) {
   });
   app.on("activate", showMainWindow);
   app.on("window-all-closed", () => {
-    // Tray app: closing windows never quits; only Quit does.
+    // Tray app: closing windows never quits; only Quit does. Exception: a
+    // failed startup has no tray, so once its error/health windows are
+    // closed there is no surface left to quit from and the app must exit
+    // itself instead of surviving as an invisible process.
+    if (startupHasFailed) app.quit();
   });
   app.on("before-quit", (event) => {
     if (quitting) return;
     quitting = true;
+    // Updater-driven quit: the server child is already stopped, and the
+    // installer's hook rides the NORMAL quit sequence (app.exit would skip
+    // the quit event it needs), so this quit must proceed unintercepted.
+    if (updaterQuitting) return;
     event.preventDefault();
     void server.stop().finally(() => app.exit(typeof process.exitCode === "number" ? process.exitCode : 0));
   });

@@ -44,6 +44,13 @@ export interface CreateAgentSessionOptions {
 
 	/** Model to use. Default: from settings, else first available */
 	model?: Model<any>;
+	/**
+	 * Explicit per-response output-token cap forwarded to providers on every
+	 * request. When omitted, provider defaults apply (Anthropic requests a
+	 * third of the model's declared maxTokens; OpenAI-compatible sends no cap
+	 * and inherits the server's default).
+	 */
+	maxTokens?: number;
 	/** Thinking level. Default: from settings, else 'medium' (clamped to model capabilities) */
 	thinkingLevel?: ThinkingLevel;
 	/** Models available for cycling (Ctrl+P in interactive mode) */
@@ -336,6 +343,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			thinkingLevel,
 			tools: [],
 		},
+		maxTokens: options.maxTokens,
 		convertToLlm: convertToLlmWithBlockImages,
 		streamFn: async (model, context, options) => {
 			const auth = await modelRegistry.getApiKeyAndHeaders(model);

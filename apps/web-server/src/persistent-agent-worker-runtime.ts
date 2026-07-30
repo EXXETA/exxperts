@@ -38,6 +38,17 @@ export interface IsolatedPersistentAgentWorkerResult {
 		totalTokens?: number;
 		cost?: number;
 	};
+	/** Stop reason of the last assistant message ("stop", "length", "error", "aborted"). */
+	stopReason?: string;
+	/**
+	 * True when any assistant message in the turn stopped on "length": the
+	 * provider cut the response at its output-token ceiling and tail content
+	 * is silently missing. Callers must not treat truncated text as a
+	 * complete draft.
+	 */
+	truncated?: boolean;
+	/** The resolved model's declared output-token ceiling, when known. */
+	modelMaxOutputTokens?: number;
 }
 
 function textFromMessageParts(content: unknown): string {
@@ -84,12 +95,19 @@ export async function runIsolatedPersistentAgentWorker<TModelLock extends { prov
 	});
 	await loader.reload();
 
+	// Ask for the model's full declared output ceiling on every request.
+	// Without an explicit cap, providers fall back to defaults far below it
+	// (Anthropic requests a third of maxTokens; gateways apply their own
+	// server default), which is what silently truncated large Learn/Review
+	// rewrites in the field.
+	const workerMaxTokens = typeof model.maxTokens === "number" && model.maxTokens > 0 ? model.maxTokens : undefined;
 	const created = await createAgentSession({
 		cwd: input.cwd,
 		resourceLoader: loader,
 		sessionManager: SessionManager.inMemory(input.cwd),
 		modelRegistry: registry,
 		model,
+		...(workerMaxTokens ? { maxTokens: workerMaxTokens } : {}),
 		noTools: "all",
 		customTools: [],
 		rawSystemPrompt: input.workerSystemPrompt,
@@ -97,6 +115,8 @@ export async function runIsolatedPersistentAgentWorker<TModelLock extends { prov
 
 	let text = "";
 	let usage: IsolatedPersistentAgentWorkerResult["usage"];
+	let stopReason: string | undefined;
+	let truncated = false;
 	try {
 		if (created.session.systemPrompt !== input.workerSystemPrompt) {
 			throw new Error(`${workerLabel} isolated worker system prompt was not exact`);
@@ -116,6 +136,10 @@ export async function runIsolatedPersistentAgentWorker<TModelLock extends { prov
 				try { input.onEvent(event); } catch {}
 			}
 			if (event?.type !== "message_end" || event?.message?.role !== "assistant") return;
+			if (typeof event.message.stopReason === "string") {
+				stopReason = event.message.stopReason;
+				if (stopReason === "length") truncated = true;
+			}
 			const partText = textFromMessageParts(event.message.content);
 			if (partText) text = [text, partText].filter(Boolean).join("\n\n");
 			const messageUsage = workerUsageFromMessageUsage(event.message.usage);
@@ -152,5 +176,6 @@ export async function runIsolatedPersistentAgentWorker<TModelLock extends { prov
 	}
 
 	if (!text.trim()) throw new Error(input.emptyTextError);
-	return { text, usage };
+	const modelMaxOutputTokens = typeof model.maxTokens === "number" && model.maxTokens > 0 ? model.maxTokens : undefined;
+	return { text, usage, stopReason, truncated, ...(modelMaxOutputTokens ? { modelMaxOutputTokens } : {}) };
 }

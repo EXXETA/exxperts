@@ -36,6 +36,27 @@ Per-push CI coverage of this path lives in `.github/workflows/ci.yml`: the `inst
 
 Trigger the "Release" workflow manually (workflow_dispatch) to run the whole pipeline, including builds and bare-machine smokes, without creating a release. The publish job only runs on tag push events, never on manual runs (even a manual run aimed at a tag ref stays a dry run); the tag-version guard passes as a no-op on manual runs.
 
+## Native per-platform binaries (check this every release)
+
+Some dependencies ship a different prebuilt binary per platform, selected by npm through the `optionalDependencies` + `os`/`cpu` mechanism: installing resolves only the host's package and silently skips the rest. That is why each archive **must** be built on a native runner for its target — a cross-built archive would carry the builder's binary, not the target's — and why a missing binary degrades quietly instead of failing the build.
+
+The dependencies in this class today:
+
+| Dependency | Used for | If its binary is missing |
+| --- | --- | --- |
+| `esbuild` | transpiling the TypeScript sources at run time | the app does not start |
+| `@mariozechner/clipboard` | clipboard access | clipboard actions degrade |
+| `@napi-rs/canvas` | rendering images and PDF pages for visual reading | every vision read refuses with "image rendering is unavailable on this system" |
+
+`@napi-rs/canvas` is declared in the **root** `optionalDependencies`, and the root package is what a consumer install resolves — a global tarball install does not install `apps/web-server`'s own dependencies (there is no nested `node_modules` under `apps/` in a packaged tree, so the copy in `apps/web-server/package.json` documents the real importer for the dev tree but ships nothing). Removing the root declaration would therefore leave packaged builds without it. `pdfjs-dist` also declares it optionally, so today it would still arrive transitively — do not rely on that: it makes the version incidental rather than pinned.
+
+Per release, confirm for **each** published target that the vision paths actually run, not merely that the archive was produced:
+
+1. Unpack the target's archive and check that both `app/node_modules/@napi-rs/canvas` and the platform package `app/node_modules/@napi-rs/canvas-<platform>` exist (for example `canvas-darwin-arm64`, `canvas-win32-x64-msvc`, `canvas-linux-x64-gnu`).
+2. On the target OS, open a room, add a PNG and a scanned PDF, and read each one. A silent refusal naming "image rendering is unavailable" means the platform package is missing — the archive is broken for vision even though every other smoke passed.
+
+Record which targets were verified on real hardware and which were not. A target nobody could check is an unverified target, and saying so is the point of writing it down.
+
 ## The vendored Node pin
 
 The archives bundle their own Node runtime. Its version is pinned in `scripts/release-node-version.json` (single source of truth; `node scripts/bundle-release.mjs --print-node-version` prints it), together with the sha256 of each per-target nodejs.org archive. The pin file is the trust anchor: `bundle-release.mjs` verifies every downloaded Node archive against the pinned hash and hard-fails on mismatch, instead of trusting whatever checksum file nodejs.org serves at build time.

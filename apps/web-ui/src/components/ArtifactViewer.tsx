@@ -10,9 +10,10 @@ interface Props {
 	templateLabel: string;
 	artifact: ArtifactRef;
 	onClose: () => void;
-	onSaveToWorkspace: () => void;
 	maximized: boolean;
 	onToggleMaximize: () => void;
+	/** Files UI slice: the room — routes user-added rows (`file:<name>`) through the room-files endpoint. */
+	roomId?: string;
 	/** Asset-panel mode (contract §2 rung 3): the asset's display title leads the header. */
 	assetTitle?: string;
 	/**
@@ -25,12 +26,18 @@ interface Props {
 	files?: ArtifactRef[];
 	onSelectFile?: (file: ArtifactRef) => void;
 	/**
-	 * Asset-panel mode: the done-card action footer (Add to conversation ·
-	 * Save to workspace · Ask for changes · Open in new tab). When present, the header
-	 * keeps only chrome (maximize/close) — actions live in the footer, per
-	 * the approved mockup.
+	 * The action footer (files UI slice: Ask for changes primary left; the
+	 * quiet snapshot actions right). The header carries only view chrome —
+	 * open in new tab, maximize, close.
 	 */
 	footerSlot?: ReactNode;
+	/**
+	 * Bumped by the host when the bytes behind the CURRENT route change while
+	 * the viewer is open (a revise rewrote files/<name> in place) — the route
+	 * URL alone can't see that, so it folds into the frame key to force a
+	 * refetch (the routes are no-store, so a remount always gets fresh bytes).
+	 */
+	reloadNonce?: number;
 }
 
 type RouteResolution = { url: string; segments: string[] } | { error: string };
@@ -41,7 +48,26 @@ type RouteResolution = { url: string; segments: string[] } | { error: string };
 // means the caller handed us something we cannot vouch for, and the viewer must
 // never point its sandbox at an unverified path. Exported for the asset-panel
 // footer, whose "Open in new tab" lives outside this component.
-export function resolveRouteUrl(taskId: string, relativePath: string): RouteResolution {
+export function resolveRouteUrl(taskId: string, relativePath: string, roomId?: string): RouteResolution {
+	// User-added rows (files UI slice) carry the synthetic `file:<name>` task id
+	// and are served by the room-files endpoint — no task record exists for them.
+	if (taskId.startsWith("file:") && roomId && relativePath.startsWith("files/")) {
+		const name = relativePath.slice("files/".length);
+		if (!name || name.includes("/") || name === "." || name === ".." || name.startsWith(".")) {
+			return { error: "This file could not be located for preview." };
+		}
+		return { url: `/api/persistent-agents/${encodeURIComponent(roomId)}/files/${encodeURIComponent(name)}`, segments: [name] };
+	}
+	// Shelf-canonical rows (files core slice) carry `files/<name>` paths but
+	// keep the task-scoped route: the server resolves the name from the owning
+	// room's shelf, authorized by this task's ledger record.
+	if (taskId && !taskId.startsWith("file:") && relativePath.startsWith("files/")) {
+		const name = relativePath.slice("files/".length);
+		if (!name || name.includes("/") || name === "." || name === ".." || name.startsWith(".")) {
+			return { error: "This artifact could not be located for preview." };
+		}
+		return { url: `/api/artifacts/${encodeURIComponent(taskId)}/${encodeURIComponent(name)}`, segments: [name] };
+	}
 	const prefix = `tasks/${taskId}/`;
 	if (!taskId || !relativePath.startsWith(prefix)) {
 		return { error: "This artifact could not be located for preview." };
@@ -57,14 +83,19 @@ export function resolveRouteUrl(taskId: string, relativePath: string): RouteReso
 	return { url, segments };
 }
 
-export function ArtifactViewer({ taskId, templateLabel, artifact, onClose, onSaveToWorkspace, maximized, onToggleMaximize, assetTitle, originLine, files, onSelectFile, footerSlot }: Props) {
+export function ArtifactViewer({ taskId, templateLabel, artifact, onClose, maximized, onToggleMaximize, roomId, assetTitle, originLine, files, onSelectFile, footerSlot, reloadNonce }: Props) {
 	const extension = artifact.extension.toLowerCase();
-	const resolved = useMemo(() => resolveRouteUrl(taskId, artifact.relativePath), [taskId, artifact.relativePath]);
+	// Vocabulary: a user-added row is a "file" everywhere the chrome speaks —
+	// "artifact" stays reserved for room-made task outputs.
+	const isUserFile = taskId.startsWith("file:");
+	const noun = isUserFile ? "file" : "artifact";
+	const resolved = useMemo(() => resolveRouteUrl(taskId, artifact.relativePath, roomId), [taskId, artifact.relativePath, roomId]);
 	const routeUrl = "url" in resolved ? resolved.url : null;
 
 	// Remount the sandboxed frame whenever the artifact identity changes so a
 	// previous document can never linger in a reused iframe (Preview.tsx pattern).
-	const frameKey = routeUrl ?? "no-artifact";
+	// reloadNonce covers the other direction: same identity, new bytes.
+	const frameKey = `${routeUrl ?? "no-artifact"}#${reloadNonce ?? 0}`;
 
 	function openInTab() {
 		if (!routeUrl) return;
@@ -77,26 +108,47 @@ export function ArtifactViewer({ taskId, templateLabel, artifact, onClose, onSav
 		if (!routeUrl) {
 			return (
 				<div className="artifact-viewer-error" role="alert">
-					{"error" in resolved ? resolved.error : "This artifact could not be located for preview."}
+					{"error" in resolved ? resolved.error : `This ${noun} could not be located for preview.`}
 				</div>
 			);
 		}
-		if (extension === ".svg") {
+		if (extension === ".svg" || extension === ".png" || extension === ".jpg" || extension === ".jpeg" || extension === ".gif" || extension === ".webp") {
 			// SVG is served as image/svg+xml but rendered here through <img>, which is
 			// non-scriptable: script/foreignObject/event handlers in the SVG never run.
+			// Raster images (user-added files) share the same non-scriptable path.
 			return (
 				<div className="artifact-viewer-body artifact-viewer-body-image">
-					<img className="artifact-viewer-image" src={routeUrl} alt={`${templateLabel} preview`} />
+					<img key={frameKey} className="artifact-viewer-image" src={routeUrl} alt={`${templateLabel} preview`} />
 				</div>
 			);
 		}
-		if (extension === ".html" || extension === ".md") {
+		if (extension === ".pdf") {
+			// Inline PDF preview (vision slice): the browser's own PDF viewer. The
+			// frame is deliberately UNsandboxed — the sandbox attribute blocks the
+			// PDF viewer plugin — which is safe because the route serves .pdf only
+			// after sniffing %PDF- magic, as application/pdf with nosniff: the
+			// response can never become a scriptable HTML document.
+			return (
+				<div className="artifact-viewer-body artifact-viewer-body-frame">
+					<iframe
+						key={frameKey}
+						className="artifact-viewer-frame"
+						src={routeUrl}
+						title={`${templateLabel} document`}
+						loading="eager"
+						referrerPolicy="no-referrer"
+					/>
+				</div>
+			);
+		}
+		if (extension === ".html" || extension === ".md" || extension === ".txt" || extension === ".csv" || extension === ".json") {
 			// sandbox="" is DELIBERATE and intentionally stricter than the route's CSP
 			// (which allows scripts): every v1 template's HTML is static by construction
 			// (deterministic decks are script-free; charts/documents are declared no-JS),
 			// so no capability needs granting here. NEVER add allow-same-origin — that
 			// would hand the frame this origin's cookies/storage and same-origin fetch.
-			// .md is served as text/plain, so it renders as inert source in the frame.
+			// .md (and the plain-text user-file types .txt/.csv/.json) are served as
+			// text/plain, so they render as inert source in the frame.
 			return (
 				<div className="artifact-viewer-body artifact-viewer-body-frame">
 					<iframe
@@ -113,13 +165,13 @@ export function ArtifactViewer({ taskId, templateLabel, artifact, onClose, onSav
 		}
 		return (
 			<div className="artifact-viewer-error" role="alert">
-				This artifact type cannot be previewed.
+				This {noun} type cannot be previewed.
 			</div>
 		);
 	}
 
 	return (
-		<aside className={`artifact-viewer${maximized ? " artifact-viewer-maximized" : ""}`} aria-label="Artifact viewer">
+		<aside className={`artifact-viewer${maximized ? " artifact-viewer-maximized" : ""}`} aria-label={isUserFile ? "File viewer" : "Artifact viewer"}>
 			{/* Provenance chrome: app-drawn header the artifact cannot forge. It names
 			    the producing template and asserts the sandbox — deliberately NO task
 			    ids appear here. */}
@@ -129,7 +181,7 @@ export function ArtifactViewer({ taskId, templateLabel, artifact, onClose, onSav
 					    it is provenance for the curious, not action-relevant status. The
 					    hidden span keeps it announced for assistive tech. */}
 					<div className="artifact-viewer-kicker" title="Rendered inside a locked-down sandbox">
-						{assetTitle ? templateLabel : "artifact"}
+						{assetTitle ? templateLabel : noun}
 						<span className="artifact-viewer-sr-note">, rendered inside a locked-down sandbox</span>
 					</div>
 					<div className="artifact-viewer-template" title={assetTitle ?? templateLabel}>{assetTitle ?? templateLabel}</div>
@@ -137,6 +189,18 @@ export function ArtifactViewer({ taskId, templateLabel, artifact, onClose, onSav
 				</div>
 				<div className="artifact-viewer-head-right">
 					<div className="artifact-viewer-actions">
+						{/* View chrome only (files UI slice): open in a new tab beside
+						    maximize — file ACTIONS live in the footer. */}
+						<button
+							type="button"
+							className="artifact-viewer-icon"
+							onClick={openInTab}
+							disabled={!routeUrl}
+							aria-label="Open in a new tab"
+							title="Open in a new browser tab"
+						>
+							⧉
+						</button>
 						<button
 							type="button"
 							className="artifact-viewer-icon"
@@ -147,33 +211,11 @@ export function ArtifactViewer({ taskId, templateLabel, artifact, onClose, onSav
 						>
 							{maximized ? "⤡" : "⤢"}
 						</button>
-						{!footerSlot && (
-							<>
-								<button
-									type="button"
-									className="artifact-viewer-quiet"
-									onClick={openInTab}
-									disabled={!routeUrl}
-									title="Open this artifact in a new browser tab"
-								>
-									Open in new tab
-								</button>
-								<button
-									type="button"
-									className="artifact-viewer-action artifact-viewer-action-primary"
-									onClick={onSaveToWorkspace}
-									disabled={!routeUrl}
-									title="Save a copy into this room's workspace folder"
-								>
-									Save to workspace
-								</button>
-							</>
-						)}
 						<button
 							type="button"
 							className="artifact-viewer-close"
 							onClick={onClose}
-							aria-label="Close artifact viewer"
+							aria-label={isUserFile ? "Close file viewer" : "Close artifact viewer"}
 						>
 							✕
 						</button>

@@ -55,6 +55,25 @@ const baseUrl = `http://127.0.0.1:${port}`;
 // agents root, exactly as the spawned server will read it.
 process.env.EXXETA_PERSISTENT_AGENTS_ROOT = tempAgentsRoot;
 
+// The boot-time shelf migration (files core slice) would otherwise move or
+// sweep the seeded store files. This smoke pins the STORE export path, so the
+// fixture pins the one state that keeps store files in place: an
+// already-migrated room (marker present) whose row still references tasks/
+// paths — such folders are protected from the sweep.
+const exportRoomRuntime = path.join(tempAgentsRoot, ROOM_WITH_WORKSPACE, "runtime");
+fs.mkdirSync(path.join(exportRoomRuntime, "task-ledger"), { recursive: true, mode: 0o700 });
+fs.writeFileSync(path.join(exportRoomRuntime, "task-ledger", "tsk-export1.json"), `${JSON.stringify({
+	schemaVersion: 1, taskId: "tsk-export1", roomId: ROOM_WITH_WORKSPACE, conversationId: "conv-export", templateId: "deck", templateVersion: 1,
+	title: "export fixture", startedAt: "2026-07-20T10:00:00.000Z", endedAt: "2026-07-20T10:05:00.000Z", outcome: "ok",
+	artifacts: [
+		{ relativePath: "tasks/tsk-export1/diagram.svg", bytes: SVG_BODY.length, extension: ".svg" },
+		{ relativePath: "tasks/tsk-export1/page.html", bytes: HTML_BODY.length, extension: ".html" },
+		{ relativePath: "tasks/tsk-export1/notes.md", bytes: MD_BODY.length, extension: ".md" },
+		{ relativePath: "tasks/tsk-export1/sub/inner.html", bytes: INNER_BODY.length, extension: ".html" },
+	],
+}, null, 2)}\n`, { mode: 0o600 });
+fs.writeFileSync(path.join(exportRoomRuntime, "shelf-migration.json"), `${JSON.stringify({ schemaVersion: 1, migratedAt: "2026-07-20T10:00:00.000Z", filesMoved: 0 }, null, 2)}\n`, { mode: 0o600 });
+
 async function waitForServer(server: ChildProcessWithoutNullStreams): Promise<void> {
 	const deadline = Date.now() + 15000;
 	let lastError = "server did not respond";
@@ -177,8 +196,13 @@ try {
 		assert(ledgerRow?.exports?.length === 1, "ledger export: exports[] must gain one entry");
 		assert(ledgerRow?.exports?.[0]?.relativePath === "tasks/tsk-export9/report.html" && ledgerRow?.exports?.[0]?.savedTo === String(ledgered.body?.savedTo), "ledger export: entry must map artifact to real savedTo");
 		assert(typeof ledgerRow?.exports?.[0]?.at === "string" && ledgerRow.exports[0].at.length > 0, "ledger export: entry must be timestamped");
-		// tsk-export1 predates the ledger — its exports above must not create a row.
-		assert(listTaskLedgerRecords(ROOM_WITH_WORKSPACE).find((r) => r.taskId === "tsk-export1") === undefined, "pre-ledger task must stay recordless after export");
+		// The recordless "pre-ledger" scenario is extinct since the shelf
+		// migration (files core slice): a recordless store task is swept at boot,
+		// so every exportable task has a row. tsk-export1's fixture row must have
+		// collected the successful exports above — appended, never a second row.
+		const fixtureRows = listTaskLedgerRecords(ROOM_WITH_WORKSPACE).filter((r) => r.taskId === "tsk-export1");
+		assert(fixtureRows.length === 1, "exports must append to the existing row, never invent another");
+		assert((fixtureRows[0]?.exports?.length ?? 0) >= 4, `fixture row must have collected the successful exports (got ${fixtureRows[0]?.exports?.length})`);
 	}
 
 	// 3. Room without a configured workspace → 400 with the guidance message.

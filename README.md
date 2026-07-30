@@ -7,11 +7,11 @@
 
 <p align="center"><b>AI colleagues that learn and remember. On your machine, under your control.</b></p>
 
-<p align="center">exxperts gives you rooms: persistent AI colleagues with real hands. A room searches the web, writes documents and decks, runs delegated work, and it grows the way you work with it.</p>
+<p align="center">Local-first AI agents with governed, approval-gated memory. Works with any model provider; MCP tools and web search built in. Nothing remembered without your say-so, nothing leaves your machine.</p>
 
 <p align="center">
   <a href="https://github.com/EXXETA/exxperts/actions/workflows/ci.yml"><img src="https://github.com/EXXETA/exxperts/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-PolyForm%20Noncommercial-8CA5FF" alt="License: PolyForm Noncommercial" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-8CA5FF" alt="License: Apache 2.0" /></a>
   <a href="https://github.com/EXXETA/exxperts/releases"><img src="https://img.shields.io/github/v/release/EXXETA/exxperts?include_prereleases&color=EBFF59" alt="Latest release" /></a>
   <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-46DCFF" alt="macOS, Windows, Linux" />
 </p>
@@ -28,9 +28,12 @@
 
 ## Download the app
 
-The desktop app (macOS Apple Silicon, Windows x64) returns shortly as a **code-signed build**: we are finishing macOS notarization and Windows publisher signing so that first launch works without any security prompt, and we chose not to offer unsigned binaries in the meantime.
+The desktop app is back, and it is signed: the macOS app is notarized by Apple, the Windows installer is publisher-signed by Exxeta AG, and first launch works without security warnings on either platform.
 
-Until then, the [Install](#install) below gets you the full product in your browser with one command.
+- **macOS** (Apple Silicon): [exxperts-desktop-mac-arm64.dmg](https://github.com/EXXETA/exxperts/releases/latest/download/exxperts-desktop-mac-arm64.dmg)
+- **Windows** (x64): [exxperts-setup-win-x64.exe](https://github.com/EXXETA/exxperts/releases/latest/download/exxperts-setup-win-x64.exe)
+
+All versions and checksums live on the [releases page](https://github.com/EXXETA/exxperts/releases). Prefer the browser? The [Install](#install) command below gets you the same product without the app.
 
 ## See it
 
@@ -38,7 +41,7 @@ Until then, the [Install](#install) below gets you the full product in your brow
 
 Every memory shows **where it came from**: click any remembered fact and the exact conversation it was learned from opens. The growth chart is clickable time travel: pick a day, read everything your AI knew then.
 
-![The exxperts launcher: seven persistent rooms from Project: Atlas launch to Trip: Japan 2026 and Family admin, each with its own governed memory](docs/assets/exxperts-rooms.png)
+![The exxperts launcher: seven persistent rooms from Agent frameworks to Research: local AI and Trip: Japan 2026, each with its own governed memory](docs/assets/exxperts-rooms.png)
 
 ![The approval gate: a memory proposal shows exactly what the room will remember, and nothing is saved until you approve it](docs/assets/exxperts-checkpoint.png)
 
@@ -60,7 +63,7 @@ Every memory traces back to the conversation it came from, and everything a room
 - **Every memory has a receipt.** Each fact links back to the conversation it came from, and time travel shows exactly what your AI knew on any given day.
 - **You can see what the model saw.** The full context behind any answer is inspectable, so replies can be audited rather than taken on faith.
 - **Memory you can correct.** Inspect, maintain, and reset what's remembered; wrong facts don't fossilize.
-- **Everything lives on your machine.** Memory, conversations, credentials: plain files on your disk. No cloud account, no telemetry; nothing leaves your machine unless you send it.
+- **Everything lives on your machine.** Memory, conversations, credentials, and the files you attach or a room creates: plain files on your disk, under your control. No cloud account, no telemetry; nothing leaves your machine unless you send it.
 - **No provider lock-in.** Claude, ChatGPT, Gemini, Mistral, or any OpenAI-compatible endpoint, including local models; switching keeps everything your AI has learned, and a provider outage never strands your work.
 
 Most local AI tools are chat interfaces with hidden state. exxperts is built around governed memory: lean by design, and the more you work with it, the sharper it gets.
@@ -97,7 +100,7 @@ One product, one shared brain (`~/.exxperts`), several doors; open whichever fit
 
 | Door | Get it | Updates | Terminal needed |
 |---|---|---|---|
-| **Desktop app** | [Signed build coming](#download-the-app) | In-app notice → download the new version | Never |
+| **Desktop app** | [Download above](#download-the-app) | Check for Updates installs and restarts in one click (user-initiated; nothing polls in the background) | Never |
 | **Browser** (`exxperts web`) | One-liner above · or *Open in Browser* from the app | Re-run the one-liner | To start it |
 | **Terminal** (`exxperts cli`) | Same install | Same | Yes |
 | **Clone & build** | `git clone` | `git pull` | Yes |
@@ -114,6 +117,6 @@ Persistent rooms with governed memory · artifacts (documents, decks, pages your
 
 ### License
 
-[PolyForm Noncommercial](LICENSE). Free for personal and other noncommercial use; commercial licensing (including internal business use) via EXXETA. *Why this license: we want individuals and teams to use exxperts freely while we build; commercial terms fund exactly that.*
+[Apache 2.0](LICENSE). Free for personal and commercial use. This repository is the exxperts Community Edition; an Enterprise version is in the works.
 
 exxperts is designed and built by **Borja Odriozola Schick** ([@borcho23](https://github.com/borcho23)) and **Fernando Pastor Alonso** ([@ferpastoralonso](https://github.com/ferpastoralonso)) at [Exxeta](https://exxeta.com). It is built on [Pi](https://github.com/badlogic/pi-mono) by Mario Zechner; the bundled runtime under `runtime/` is derived from Pi (v0.70.5, MIT), with the upstream license preserved in [`runtime/LICENSE`](runtime/LICENSE) and the fork documented in [`runtime/NOTICE.md`](runtime/NOTICE.md). Third-party product names and logos in the connector directory are trademarks of their respective owners (glyphs from [Simple Icons](https://simpleicons.org), CC0), used for identification only. Contact: borja.odriozola.schick@exxeta.ch and fernando.pastor@exxeta.ch

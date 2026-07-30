@@ -41,6 +41,35 @@ fs.writeFileSync(path.join(taskDir, "big.html"), Buffer.alloc(41 * 1024 * 1024, 
 fs.mkdirSync(path.join(store, "private"), { recursive: true });
 fs.writeFileSync(path.join(store, "private", "secret.md"), SECRET);
 
+// The boot-time shelf migration (files core slice) moves ledger-referenced
+// outputs onto shelves and sweeps everything else out of the store. This smoke
+// pins the STORE serving path, so the fixture pins the one state that keeps
+// store files in place: an already-migrated room (marker present) whose row
+// still references tasks/ paths — the sweep must leave such folders alone.
+const ROOM_ID = "artifact-route-room";
+const roomRuntime = path.join(tempAgentsRoot, ROOM_ID, "runtime");
+fs.mkdirSync(path.join(roomRuntime, "task-ledger"), { recursive: true, mode: 0o700 });
+function writeLedgerRow(taskId: string, artifacts: Array<{ relativePath: string; bytes: number; extension: string }>): void {
+	fs.writeFileSync(path.join(roomRuntime, "task-ledger", `${taskId}.json`), `${JSON.stringify({
+		schemaVersion: 1, taskId, roomId: ROOM_ID, conversationId: "conv-route", templateId: "deck", templateVersion: 1,
+		title: taskId, startedAt: "2026-07-20T10:00:00.000Z", endedAt: "2026-07-20T10:05:00.000Z", outcome: "ok", artifacts,
+	}, null, 2)}\n`, { mode: 0o600 });
+}
+writeLedgerRow("tsk-route1", [
+	{ relativePath: "tasks/tsk-route1/diagram.svg", bytes: SVG_BODY.length, extension: ".svg" },
+	{ relativePath: "tasks/tsk-route1/page.html", bytes: HTML_BODY.length, extension: ".html" },
+	{ relativePath: "tasks/tsk-route1/notes.md", bytes: MD_BODY.length, extension: ".md" },
+	{ relativePath: "tasks/tsk-route1/sub/inner.html", bytes: INNER_BODY.length, extension: ".html" },
+]);
+fs.writeFileSync(path.join(roomRuntime, "shelf-migration.json"), `${JSON.stringify({ schemaVersion: 1, migratedAt: "2026-07-20T10:00:00.000Z", filesMoved: 0 }, null, 2)}\n`, { mode: 0o600 });
+
+// And the shelf-served shape: a row whose artifact is files/<name> on the shelf.
+const SHELF_BODY = "<!doctype html><title>shelf</title><p>from the shelf</p>";
+const shelfDir = path.join(tempAgentsRoot, ROOM_ID, "files");
+fs.mkdirSync(shelfDir, { recursive: true, mode: 0o700 });
+fs.writeFileSync(path.join(shelfDir, "report (2).html"), SHELF_BODY);
+writeLedgerRow("tsk-route2", [{ relativePath: "files/report (2).html", bytes: SHELF_BODY.length, extension: ".html" }]);
+
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const webServerDir = path.resolve(scriptDir, "..");
 const repoRoot = path.resolve(webServerDir, "..", "..");
@@ -134,6 +163,17 @@ try {
 		const text = await res.text();
 		assert(text === file.body, `GET ${file.rel}: body mismatch`);
 	}
+
+	// 1b. Shelf-served row (files core slice): files/<name> keeps the task-scoped
+	// URL; the server resolves it from the owning room's shelf via the ledger.
+	const shelfRes = await authedFetch(`${baseUrl}/api/artifacts/tsk-route2/${encodeURIComponent("report (2).html")}`);
+	assert(shelfRes.status === 200, `shelf-served file: expected 200, got ${shelfRes.status}`);
+	assert(shelfRes.headers.get("content-type") === "text/html; charset=utf-8", "shelf-served file: wrong content-type");
+	assertArtifactHeaders(shelfRes.headers, "shelf-served file");
+	assert((await shelfRes.text()) === SHELF_BODY, "shelf-served file: body mismatch");
+	// A shelf name NOT in the row's artifacts must stay unreachable through the route.
+	const shelfMiss = await authedFetch(`${baseUrl}/api/artifacts/tsk-route1/${encodeURIComponent("report (2).html")}`);
+	assert(shelfMiss.status === 404, `shelf file outside the task's record: expected 404, got ${shelfMiss.status}`);
 
 	// 2. Server-internal dot-directory must never be servable.
 	const thumbs = await authedFetch(`${baseUrl}/api/artifacts/tsk-route1/.thumbs/preview.png`);

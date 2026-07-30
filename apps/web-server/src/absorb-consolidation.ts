@@ -102,6 +102,12 @@ export interface AbsorbProposalPromptInput extends AbsorbAssessmentPromptInput {
 	assessmentMarkdown: string;
 	assessmentHandoff?: AbsorbAssessmentHandoffInput;
 	memoryBudgetTokens?: number;
+	/**
+	 * Validation reasons from a previous rejected draft ("Draft again").
+	 * When present, the prompt closes with a Retry Notice so the worker
+	 * corrects the named failures instead of re-rolling blind.
+	 */
+	retryFeedback?: string[];
 }
 
 export interface AbsorbDiscussionPromptInput extends AbsorbAssessmentPromptInput {
@@ -522,6 +528,9 @@ export function buildAbsorbProposalPrompt(input: AbsorbProposalPromptInput): Abs
 	const budgetSection = typeof input.memoryBudgetTokens === "number"
 		? `## Memory Budget\n\n- Advisory memory budget: the whole L1b should stay under ~${input.memoryBudgetTokens} estimated tokens (~${input.memoryBudgetTokens * 4} characters).\n- The budget is a ceiling, not a goal. Never add, expand, or pad content because headroom remains — at any size, the densest faithful memory wins.\n- This is advisory. Never drop must-keep content or violate the constitution to satisfy it.`
 		: null;
+	const retrySection = input.retryFeedback?.length
+		? `## Retry Notice\n\nA previous draft of this proposal was rejected by validation for these reasons:\n\n${input.retryFeedback.map((reason) => `- ${reason}`).join("\n")}\n\nProduce a complete, corrected proposal that resolves every reason above while following the Task structure exactly.`
+		: null;
 	const prompt = [
 		absorbConsolidationConstitution().trim(),
 		`## Process Metadata\n\n- Agent id: ${input.agentId}\n- Process type: ${ABSORB_CONSOLIDATION_WORKER_TYPE}\n- Mode: ${ABSORB_CONSOLIDATION_MODE}\n- Trigger time: ${now.toISOString()}\n- System-selected model: ${input.model.provider}/${input.model.model}\n- Writes memory: false\n- Recent Context entries: ${metrics.recentContextEntryCount}`,
@@ -531,6 +540,7 @@ export function buildAbsorbProposalPrompt(input: AbsorbProposalPromptInput): Abs
 		handoff,
 		...(budgetSection ? [budgetSection] : []),
 		`## Task: Memory Absorption Proposal\n\nProduce a parseable Memory Absorption Proposal plus complete Candidate L1b.\n\nThe Candidate L1b must preserve the exact top-level section topology and order from the source L1b. It must include Chronos, Deep Memory, Active Items, and Recent Context. It must clear all Recent Context entries: no headings starting with \`### RC-\` may remain under Recent Context. Preserve the Recent Context section with this placeholder unless a future system prompt says otherwise:\n\n${ABSORB_EMPTY_RECENT_CONTEXT_PLACEHOLDER}\n\nUse exactly this markdown structure:\n\n## Memory Absorption Proposal\n\n### Mode\nRC_CONSOLIDATION\n\n### Primacy Map\n[Concise summary of what the RC chain represented as a whole.]\n\n### Section-Level Change Log\n| Section | Prior Words | Candidate Words | Action | Rationale |\n|---|---:|---:|---|---|\n\n### Entry-Level Detail\n| Entry / Block | Operation | Target Section | Rationale |\n|---|---|---|---|\n\n### Compression Metrics\n- RC input words: [n]\n- RC removed words: [n]\n- RC removed percent: [x]%\n- Stable memory words before: [n]\n- Stable memory words after: [n]\n- Stable memory delta: [+/- n]\n- Compression ratio: [ratio]\n\n### Warnings\nNone, or concise uncertainty flags.\n\n### Candidate L1b\n[Complete rewritten L1b.]\n\nReturn only the proposal markdown. Do not claim anything has been saved.`,
+		...(retrySection ? [retrySection] : []),
 	].join("\n\n---\n\n") + "\n";
 	return {
 		prompt,

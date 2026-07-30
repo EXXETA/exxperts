@@ -132,9 +132,9 @@ Rooms get tools through a per-room policy rather than a global grant:
 - **`fetch_url`**: HTTP fetching with SSRF defenses (private-range and
   redirect protection).
 - **Web search**: built in via DuckDuckGo; local SearXNG is the reliable path for heavy use or networks where DuckDuckGo blocks automated queries ([`web-search.md`](web-search.md)).
-- **Artifacts**: documents/outputs produced into the app state,
-  viewable in a sandboxed artifacts viewer; delegated tasks a room runs
-  live in the room's Artifacts panel, with a click-to-watch run view.
+- **Files**: documents and outputs a room or its specialists produce,
+  viewable in a sandboxed file viewer; delegated tasks a room runs
+  live in the room's Files panel, with a click-to-watch run view.
 - **`read_skill`**: rooms read the skills enabled for them through this
   tool; skills are the sanctioned way to give rooms new instructions
   (extensions never load in rooms). The library lists skills from the
@@ -152,6 +152,12 @@ Rooms get tools through a per-room policy rather than a global grant:
 Tool permissions are an advisory gate (checked and explained per call),
 not an OS sandbox; the security boundary is the localhost-only server
 and your approval gates, not process isolation.
+
+Where your file goes: when you attach a file to a room, it is stored
+on your machine under that room's own folder; it is not uploaded
+anywhere. The room can read it, and files you attach or the room
+creates show up in the room's Files panel, where you can download or
+delete them.
 
 ## Security posture
 

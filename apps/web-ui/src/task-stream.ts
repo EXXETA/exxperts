@@ -118,6 +118,14 @@ export interface TaskState {
 	stopRequested: boolean;
 	/** The server's plain message for the error/stopped body. */
 	errorMessage: string | null;
+	/**
+	 * Shelf files this run is REVISING in place, named by the server on
+	 * `task_started` (taste pass). The Files panel shows the working state on
+	 * the target file's own row instead of adding a row for the run, so an
+	 * Ask-for-changes never looks like it produced a second file. Empty for
+	 * runs that make new files — those keep the working row.
+	 */
+	reviseTargetNames: string[];
 }
 
 export type TaskAction =
@@ -134,6 +142,7 @@ export type TaskAction =
 			templateLabel: string;
 			model?: TaskModel | null;
 			title?: string | null;
+			reviseTargetNames?: string[] | null;
 	  }
 	/** A text delta or a terse tool marker ("\n[artifact_write_html_deck]\n"). */
 	| { type: "delta"; taskId: string; delta: string }
@@ -190,6 +199,7 @@ export function createTaskState(): TaskState {
 		minimized: false,
 		stopRequested: false,
 		errorMessage: null,
+		reviseTargetNames: [],
 	};
 }
 
@@ -241,6 +251,7 @@ export function reduceTask(previous: TaskState, action: TaskAction): TaskResult 
 				templateLabel: action.templateLabel,
 				title: action.title ?? null,
 				model: action.model ?? null,
+				reviseTargetNames: (action.reviseTargetNames ?? []).filter((name): name is string => typeof name === "string" && name.length > 0),
 				// A same-id refresh keeps whatever the card has folded to. A NEW task
 				// starts as the pill (Borja, 2026-07-12): the run is run-free by
 				// design, so the default surface is the unobtrusive "working…" pill
@@ -339,6 +350,15 @@ export function reduceTask(previous: TaskState, action: TaskAction): TaskResult 
  */
 export function taskArtifactUrl(taskId: string, relativePath: string): string | null {
 	if (!taskId || !relativePath) return null;
+	// Shelf-canonical rows (files core slice) carry `files/<name>` paths but
+	// keep the same task-scoped route: the server resolves the name from the
+	// owning room's shelf, authorized by this task's ledger record.
+	if (relativePath.startsWith("files/")) {
+		const name = relativePath.slice("files/".length);
+		if (!name || name.includes("/") || name === "." || name === ".." || name.startsWith(".")) return null;
+		// Shelf names may carry spaces ("report (2).html") — encode the segment.
+		return `/api/artifacts/${taskId}/${encodeURIComponent(name)}`;
+	}
 	const prefix = `${TASK_FOLDER_PREFIX}/${taskId}/`;
 	if (!relativePath.startsWith(prefix)) return null;
 	const within = relativePath.slice(prefix.length);

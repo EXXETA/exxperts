@@ -1,8 +1,9 @@
-// Update notice (pre-auto-update bridge), USER-INITIATED ONLY: the check
-// runs when the user picks "Check for Updates..." or opens the Health Check
-// window - nothing polls in the background, so the no-telemetry story stays
-// true. When the feed's latest release is newer than this build, the tray
-// gains a Download entry and the health window a download line.
+// Update notice (the check layer; updater.ts does one-click installs),
+// USER-INITIATED ONLY: the check runs when the user picks "Check for
+// Updates..." or opens the Health Check window - nothing polls in the
+// background, so the no-telemetry story stays true. When the feed's latest
+// release is newer than this build, the tray gains an update entry and the
+// health window a download line.
 //
 // Trust boundary: the feed is input, not authority. Nothing from the feed is
 // ever rendered or opened directly - the version is parsed to a numeric

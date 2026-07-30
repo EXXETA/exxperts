@@ -131,7 +131,7 @@ try {
 	const resetOverride = await requestJson("/api/persistent-agent-ai-profiles/custom/custom-anthropic", { method: "DELETE" });
 	assert(resetOverride.status === 200, `override reset should succeed, got ${resetOverride.status}`);
 	const resetAnthropic = resetOverride.body.profiles.find((profile: any) => profile.id === "anthropic");
-	assert(resetAnthropic?.overridden === false && resetAnthropic?.processes?.persistentRoom?.models?.length === 6, "reset should restore the curated catalog");
+	assert(resetAnthropic?.overridden === false && resetAnthropic?.processes?.persistentRoom?.models?.length === 7, "reset should restore the curated catalog");
 	const badModel = await requestJson("/api/persistent-agent-ai-profiles/custom", {
 		method: "PUT",
 		body: JSON.stringify({ providerId: "groq", roomModels: ["definitely-not-a-model"], learnModel: suggested, reviewMemoryModel: suggested }),

@@ -15,7 +15,7 @@ them; nothing runs on a schedule. Room web searches query DuckDuckGo (or
 your local SearXNG instance when one is configured); search terms leave the
 machine only when a room actually searches.
 
-Known limit of the unsigned builds: macOS refuses notification-center
+Known limit of unsigned local builds: macOS refuses notification-center
 registration for ad-hoc-signed apps, so notification banners do not display
-until builds are signed (the tray dot is the working finished-task signal in
-the meantime).
+in locally packaged development builds (the tray dot is the finished-task
+signal there). The signed release builds notify normally.

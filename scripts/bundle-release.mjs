@@ -10,10 +10,13 @@
 // Output: <out>/exxperts-<version>-<target>.tar.gz (POSIX targets) or .zip
 // (win-x64), plus <archivename>.sha256 next to it (sha256sum format).
 //
-// The target MUST match the host platform/arch: esbuild and
-// @mariozechner/clipboard install only the host platform's native binary, so
-// cross-building would produce an archive whose native deps are for the
-// wrong OS. Each target is built on a native runner or container.
+// The target MUST match the host platform/arch: esbuild,
+// @mariozechner/clipboard and @napi-rs/canvas (the vision renderer) install
+// only the host platform's native binary, so cross-building would produce an
+// archive whose native deps are for the wrong OS. Each target is built on a
+// native runner or container. A missing canvas binary degrades QUIETLY (every
+// vision read refuses), so docs/release-pipeline.md carries a per-target
+// check that the vision paths actually run.
 //
 // Archive layout (top-level directory "exxperts/"):
 //   exxperts            POSIX sh shim (exxperts.cmd on win-x64)
@@ -108,7 +111,7 @@ if (!spec) {
 }
 if (spec.platform !== process.platform || spec.arch !== process.arch) {
 	console.error(`[bundle-release] target ${target} cannot be built on this host (${process.platform}-${process.arch}).`);
-	console.error("[bundle-release] Native deps (esbuild, clipboard) install only the host platform's binary, so each target must be built on a matching runner or container.");
+	console.error("[bundle-release] Native deps (esbuild, clipboard, @napi-rs/canvas) install only the host platform's binary, so each target must be built on a matching runner or container.");
 	process.exit(1);
 }
 

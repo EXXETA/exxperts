@@ -91,6 +91,36 @@ function instantiate(options?: any): Map<string, RegisteredTool> {
 	threw = false;
 	try { execution.buildSpecialistSessionPlan({ taskId: "tsk-x", templateId: "diagram-svg", brief: "x", inputArtifacts: ["/etc/passwd.md"] }); } catch { threw = true; }
 	assert(threw, "absolute input artifact must throw");
+
+	// Revise-in-place (the write fence): revise targets NEVER touch the write
+	// scope — the plan re-validates them (plain name + sha256 + must be among
+	// the staged inputs) and only the system prompt names them; the commit
+	// happens server-side after the session dies.
+	const hash = "a".repeat(64);
+	const revisePlan = execution.buildSpecialistSessionPlan({
+		taskId: "tsk-rev1", templateId: "deck", brief: "Tighten it.",
+		inputArtifacts: ["tasks/tsk-rev1/inputs/deck.html"],
+		reviseTargets: [{ name: "deck.html", baselineHash: hash, outputName: "deck.html" }],
+	});
+	assert(revisePlan.writeScope.folder === "tasks/tsk-rev1", "a revise plan's write scope is STILL only the task folder — never the shelf");
+	assert(JSON.stringify(revisePlan.reviseTargets) === JSON.stringify([{ name: "deck.html", baselineHash: hash, outputName: "deck.html" }]), "revise targets ride the plan for the commit gate");
+	assert(revisePlan.systemPrompt.includes("This run REVISES existing file: `deck.html`"), "the system prompt names the revised file");
+	assert(revisePlan.systemPrompt.includes("EXACTLY the staged filename"), "the system prompt states the name-matching commit contract");
+	for (const badTarget of [
+		{ name: "../deck.html", baselineHash: hash, outputName: "deck.html" },
+		{ name: "a/b.html", baselineHash: hash, outputName: "b.html" },
+		{ name: ".hidden.html", baselineHash: hash, outputName: "hidden.html" },
+		{ name: "deck.html", baselineHash: "nothex", outputName: "deck.html" },
+		{ name: "other.html", baselineHash: hash, outputName: "other.html" }, // not among the staged inputs
+		{ name: "deck.html", baselineHash: hash, outputName: "deck (2).html" }, // unsafe output alias
+		{ name: "deck.html", baselineHash: hash }, // missing output alias
+	] as any[]) {
+		threw = false;
+		try { execution.buildSpecialistSessionPlan({ taskId: "tsk-rev2", templateId: "deck", brief: "x", inputArtifacts: ["tasks/tsk-rev2/inputs/deck.html"], reviseTargets: [badTarget] }); } catch { threw = true; }
+		assert(threw, `invalid revise target must throw: ${JSON.stringify(badTarget)}`);
+	}
+	const plainPlan = execution.buildSpecialistSessionPlan({ taskId: "tsk-rev3", templateId: "deck", brief: "Fresh deck." });
+	assert(plainPlan.reviseTargets === undefined && !plainPlan.systemPrompt.includes("REVISES"), "a plain plan carries no revise wording");
 }
 
 // ── 3. Pre-approved write scope through the real artifact_write path ─────────

@@ -98,10 +98,14 @@ jobs:
 
   # The desktop apps ride the same pipeline: payloads are the CI-built
   # release archives (never a locally-built tree — the win-x64 payload rule),
-  # the mac app is built natively and the win app cross-built from the same
-  # macOS runner, exactly like the local scripts/package.mjs flow. The mac
-  # app then runs its real end-to-end smoke (GUI works on macOS runners).
-  desktop-apps:
+  # each app built natively on its own OS runner, exactly like the local
+  # scripts/package.mjs flow. The mac app then runs its real end-to-end smoke
+  # (GUI works on macOS runners). This mac job is a build-validity check
+  # only: its unsigned artifacts upload as a workflow artifact for
+  # inspection, but the publish job drops them — the shipped mac app is
+  # signed + notarized locally and attached to the release right after
+  # publish.
+  desktop-app-mac:
     needs: build
     runs-on: macos-latest
     timeout-minutes: 45
@@ -127,11 +131,6 @@ jobs:
           name: release-darwin-arm64
           path: apps/desktop/build/payload
 
-      - uses: actions/download-artifact@v4
-        with:
-          name: release-win-x64
-          path: apps/desktop/build/payload
-
       - name: Build macOS app (dmg + zip)
         working-directory: apps/desktop
         run: node scripts/package.mjs --skip-bundle
@@ -139,10 +138,6 @@ jobs:
       - name: Smoke-test the packaged macOS app
         working-directory: apps/desktop
         run: npm run smoke:packaged
-
-      - name: Build Windows app (zip + setup exe)
-        working-directory: apps/desktop
-        run: node scripts/package.mjs --target win-x64
 
       - name: Checksum the app artifacts
         working-directory: apps/desktop
@@ -152,9 +147,9 @@ jobs:
             const { createHash } = require("crypto");
             const fs = require("fs");
             const artifacts = fs.readdirSync("dist-app").filter((f) =>
-              /^exxperts-(desktop|setup)-.*\.(dmg|zip|exe)$/.test(f));
-            if (artifacts.length !== 4) {
-              console.error(`expected 4 app artifacts, found: ${artifacts.join(", ") || "none"}`);
+              /^exxperts-desktop-.*\.(dmg|zip)$/.test(f));
+            if (artifacts.length !== 2) {
+              console.error(`expected 2 mac app artifacts (dmg + zip), found: ${artifacts.join(", ") || "none"}`);
               process.exit(1);
             }
             for (const name of artifacts) {
@@ -164,14 +159,106 @@ jobs:
             }
           '
 
+      # latest-mac.yml + blockmap are the one-click updater's feed: the
+      # sha512 inside binds them to the exact zip built here. None of this
+      # reaches the public release (the publish job drops it); the signed
+      # local build brings its own dmg/zip/latest-mac.yml/blockmap set, which
+      # must always travel together — a feed from one build with a zip from
+      # another makes every installed app's updater fail checksum
+      # verification and fall back to the manual download.
       - uses: actions/upload-artifact@v4
         with:
-          name: release-desktop-apps
+          name: release-desktop-app-mac
           path: |
             apps/desktop/dist-app/exxperts-desktop-*.dmg
             apps/desktop/dist-app/exxperts-desktop-*.zip
+            apps/desktop/dist-app/*.sha256
+            apps/desktop/dist-app/latest-mac.yml
+            apps/desktop/dist-app/*.blockmap
+          if-no-files-found: error
+
+  # The Windows app builds on a Windows runner because Authenticode signing
+  # cannot run anywhere else: electron-builder signs every binary during
+  # packaging via Azure Trusted Signing (the electron-builder-win-signed.yml
+  # overlay that --sign-windows selects). Authentication is OIDC-only — the
+  # job's id-token plus azure/login against the production-signing
+  # environment's federated credential; no signing secret exists anywhere.
+  # package.mjs then verifies the Authenticode signatures on the packaged
+  # exes and fails the job if any is missing or invalid, so this job can
+  # never ship unsigned artifacts while claiming to sign.
+  desktop-app-windows:
+    needs: build
+    runs-on: windows-latest
+    timeout-minutes: 60
+    permissions:
+      id-token: write
+      contents: read
+    environment: production-signing
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # No EXXETA_SKIP_BROWSER_INSTALL here either: generate-icon.mts renders
+      # the icons through the repo's Playwright Chromium.
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install desktop shell dependencies
+        working-directory: apps/desktop
+        run: npm ci
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-win-x64
+          path: apps/desktop/build/payload
+
+      - name: Azure login (OIDC, for Trusted Signing)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Build and sign Windows app (zip + setup exe)
+        working-directory: apps/desktop
+        run: node scripts/package.mjs --target win-x64 --skip-bundle --sign-windows
+
+      - name: Checksum the app artifacts
+        working-directory: apps/desktop
+        shell: bash
+        # shellcheck disable=SC2016 # single quotes are deliberate: JS, not shell
+        run: |
+          node -e '
+            const { createHash } = require("crypto");
+            const fs = require("fs");
+            const artifacts = fs.readdirSync("dist-app").filter((f) =>
+              /^exxperts-(desktop-.*\.zip|setup-.*\.exe)$/.test(f));
+            if (artifacts.length !== 2) {
+              console.error(`expected 2 windows app artifacts (zip + setup exe), found: ${artifacts.join(", ") || "none"}`);
+              process.exit(1);
+            }
+            for (const name of artifacts) {
+              const hash = createHash("sha256").update(fs.readFileSync(`dist-app/${name}`)).digest("hex");
+              fs.writeFileSync(`dist-app/${name}.sha256`, `${hash}  ${name}\n`);
+              console.log(`${hash}  ${name}`);
+            }
+          '
+
+      # latest.yml + blockmap: the Windows one-click updater's feed, bound by
+      # sha512 to the setup exe built and signed here.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-desktop-app-windows
+          path: |
+            apps/desktop/dist-app/exxperts-desktop-*.zip
             apps/desktop/dist-app/exxperts-setup-*.exe
             apps/desktop/dist-app/*.sha256
+            apps/desktop/dist-app/latest.yml
+            apps/desktop/dist-app/*.blockmap
           if-no-files-found: error
 
   # Deliberately no setup-node here: the archive must run without any
@@ -240,7 +327,7 @@ jobs:
   # matrix regardless of the chosen ref.
   publish:
     if: github.event_name == 'push' && github.ref_type == 'tag'
-    needs: [bare-machine-smoke, desktop-apps]
+    needs: [bare-machine-smoke, desktop-app-mac, desktop-app-windows]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -257,6 +344,17 @@ jobs:
           pattern: release-*
           path: dist-release
           merge-multiple: true
+
+      # The desktop-app-mac job is build-validation only; its unsigned app
+      # must never reach the public release. Drop everything it produced
+      # before SHA256SUMS.txt is assembled, so no unsigned mac bytes and no
+      # mac checksum lines can ship from CI. The signed replacements arrive
+      # post-publish — see the loud comment at the release-create step.
+      - name: Exclude the unsigned CI mac app from the release
+        run: |
+          cd dist-release
+          rm -f exxperts-desktop-*-mac-arm64* latest-mac.yml
+          ls -la
 
       - name: Assemble SHA256SUMS.txt
         run: |
@@ -311,20 +409,21 @@ jobs:
       # after the checksum re-verify: each alias is a byte copy of an
       # already-verified file, and gets its own SHA256SUMS.txt line so a
       # download via the stable link verifies by name too. The upload globs
-      # below match the alias names as well.
+      # below match the alias names as well. The two mac aliases
+      # (exxperts-desktop-mac-arm64.dmg / .zip) are NOT created here — they
+      # are byte copies of the signed local mac build, added post-publish
+      # (see the loud comment at the release-create step).
       - name: Add stable-alias app downloads
         run: |
           version="$(node -p "require('./package.json').version")"
           cd dist-release
-          cp "exxperts-desktop-$version-mac-arm64.dmg" exxperts-desktop-mac-arm64.dmg
-          cp "exxperts-desktop-$version-mac-arm64.zip" exxperts-desktop-mac-arm64.zip
           cp "exxperts-desktop-$version-win-x64.zip" exxperts-desktop-win-x64.zip
           cp "exxperts-setup-$version.exe" exxperts-setup-win-x64.exe
           # shellcheck disable=SC2016 # single quotes are deliberate: JS, not shell
           node -e '
             const { createHash } = require("crypto");
             const fs = require("fs");
-            const aliases = ["exxperts-desktop-mac-arm64.dmg", "exxperts-desktop-mac-arm64.zip", "exxperts-desktop-win-x64.zip", "exxperts-setup-win-x64.exe"];
+            const aliases = ["exxperts-desktop-win-x64.zip", "exxperts-setup-win-x64.exe"];
             for (const name of aliases) {
               const hash = createHash("sha256").update(fs.readFileSync(name)).digest("hex");
               fs.appendFileSync("SHA256SUMS.txt", `${hash}  ${name}\n`);
@@ -347,13 +446,13 @@ jobs:
           cat > release-notes.md <<'EOF'
           Prebuilt Exxperts archives with a vendored Node runtime. No Node, npm, or Git needs to be installed on the target machine; unpack and run.
 
-          Desktop app (window + tray around the same local server; unsigned builds, so the OS shows its usual unknown-publisher prompt on first launch):
+          Desktop app (window + tray around the same local server). Both desktop builds are signed — the macOS app is notarized by Apple, the Windows binaries are publisher-signed by Exxeta AG — so neither platform shows an unknown-publisher prompt on first launch:
 
           | Platform | Download |
           | --- | --- |
           | Windows x64 installer | `exxperts-setup-__VERSION__.exe` |
           | Windows x64 portable | `exxperts-desktop-__VERSION__-win-x64.zip` |
-          | macOS Apple Silicon | `exxperts-desktop-__VERSION__-mac-arm64.dmg` (or the `-mac-arm64.zip`) |
+          | macOS Apple Silicon | `exxperts-desktop-__VERSION__-mac-arm64.dmg` (or the `-mac-arm64.zip`) — the macOS assets are attached within minutes of this release going live (they are uploaded from the signed build) |
 
           The versionless copies of the same files (`exxperts-desktop-mac-arm64.dmg`, `exxperts-setup-win-x64.exe`, ...) exist so `releases/latest/download` links always point at the newest release; they have their own lines in `SHA256SUMS.txt`.
 
@@ -373,15 +472,37 @@ jobs:
 
           (On Windows PowerShell: `(Get-FileHash exxperts-__VERSION__-win-x64.zip -Algorithm SHA256).Hash` and compare against the archive's line in SHA256SUMS.txt.)
 
-          Checksums are computed in CI from the tagged commit; each archive also passed a bare-machine smoke test on its target OS before this release was published.
+          Checksums are computed in CI from the tagged commit; each archive also passed a bare-machine smoke test on its target OS before this release was published. The macOS desktop lines are appended to `SHA256SUMS.txt` when the signed macOS assets are attached.
           EOF
           # A semver version has no sed replacement metacharacters (& / \).
           sed -i "s/__VERSION__/$version/g" release-notes.md
+          # latest.yml / *.blockmap feed the desktop apps' user-initiated
+          # one-click updater (electron-updater reads them from the latest
+          # release). nullglob keeps a missing blockmap from turning into a
+          # literal unmatched-glob argument.
+          #
+          # ============== NO MAC DESKTOP ASSETS ARE UPLOADED HERE ==========
+          # The macOS desktop assets are DELIBERATELY absent from this list.
+          # They come from the signed local build (Developer ID + notarized +
+          # stapled) and are uploaded to this release right after publish:
+          #   - the signed dmg + zip
+          #   - their .sha256 files, with their lines APPENDED to
+          #     SHA256SUMS.txt
+          #   - latest-mac.yml + the zip blockmap from that SAME signed build
+          #     (never mix builds — the updater verifies by sha512)
+          #   - the two mac stable-alias copies
+          #     (exxperts-desktop-mac-arm64.dmg / .zip), also byte copies of
+          #     the signed build, with their own SHA256SUMS.txt lines
+          # Never attach the CI mac build: it is unsigned and exists only as
+          # a build-validity check.
+          # =================================================================
+          shopt -s nullglob
           gh release create "$GITHUB_REF_NAME" \
             --repo "$GITHUB_REPOSITORY" \
             --title "$GITHUB_REF_NAME" \
             --notes-file release-notes.md \
             $prerelease_flag \
             dist-release/exxperts-*.tar.gz dist-release/exxperts-*.zip \
-            dist-release/exxperts-desktop-*.dmg dist-release/exxperts-setup-*.exe \
+            dist-release/exxperts-setup-*.exe \
+            dist-release/latest*.yml dist-release/*.blockmap \
             dist-release/SHA256SUMS.txt

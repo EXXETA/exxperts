@@ -16,6 +16,7 @@
 import "dotenv/config";
 import crypto from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
@@ -26,7 +27,7 @@ import { createWebUiContext } from "./web-ui-context.js";
 import { cancelProviderLogin, logoutProvider, ProviderAuthError, providerLoginState, saveProviderApiKey, startProviderLogin } from "./provider-auth.js";
 import { builtInProfileIdForProvider, deleteCustomAiProfile, isCustomAiProfileId, isReservedCustomProfileProvider, readCustomAiProfiles, writeCustomAiProfile } from "./custom-ai-profiles.js";
 import { ConsultPromptOverflowError } from "./consult.js";
-import { archivePersistentAgent, beginPersistentAgentTurn, buildAbsorbAssessment, buildAbsorbDiscussionSignoff, buildAbsorbDiscussionTurn, buildAbsorbProposal, buildCheckpointProposal, buildConsultAnswer, buildPersistentAgentBootContext, buildStructuralReviewAssessment, buildStructuralReviewDiscussionSignoff, buildStructuralReviewDiscussionTurn, buildStructuralReviewProposal, createPersistentAgentFromScaffoldInput, createPersistentAgentPiSessionJsonlThreadRuntime, clearPersistentAgentThreadPendingHandoffs, deletePersistentAgentThread, PERSISTENT_AGENT_L1A_DEFAULT_MODE_ID, PERSISTENT_AGENT_L1A_MODES, discardEmptyPreparedBoundaryThread, finishPersistentAgentTurn, getAbsorbAvailability, getPersistentAgentActiveTurnState, getPersistentAgentRuntimeState, getPersistentAgentStatus, getPersistentAgentThread, getStructuralReviewAvailability, isPersistentAgentArchived, listPersistentAgents, markPersistentAgentTurnCancelling, openPersistentAgentPiSessionManager, parseAbsorbApprovalRequest, parseCheckpointApprovalRequest, parseStructuralReviewApprovalRequest, readPersistentAgentBootPromptSnapshot, renamePersistentAgent, validatePersistentAgentId, writeApprovedAbsorb, writeApprovedCheckpoint, writeApprovedStructuralReview, writePersistentAgentMementoBoundary, writePersistentAgentRuntimeState, writePersistentAgentThread } from "./persistent-agents.js";
+import { appendPersistentAgentThreadPendingHandoff, archivePersistentAgent, beginPersistentAgentTurn, buildAbsorbAssessment, buildAbsorbDiscussionSignoff, buildAbsorbDiscussionTurn, buildAbsorbProposal, buildCheckpointProposal, buildConsultAnswer, buildPersistentAgentBootContext, buildStructuralReviewAssessment, buildStructuralReviewDiscussionSignoff, buildStructuralReviewDiscussionTurn, buildStructuralReviewProposal, createPersistentAgentFromScaffoldInput, createPersistentAgentPiSessionJsonlThreadRuntime, clearPersistentAgentThreadPendingHandoffs, deletePersistentAgentThread, PERSISTENT_AGENT_L1A_DEFAULT_MODE_ID, PERSISTENT_AGENT_L1A_MODES, discardEmptyPreparedBoundaryThread, finishPersistentAgentTurn, getAbsorbAvailability, getPersistentAgentActiveTurnState, getPersistentAgentRuntimeState, getPersistentAgentStatus, getPersistentAgentThread, getStructuralReviewAvailability, isPersistentAgentArchived, listPersistentAgents, markPersistentAgentTurnCancelling, openPersistentAgentPiSessionManager, parseAbsorbApprovalRequest, parseCheckpointApprovalRequest, parseStructuralReviewApprovalRequest, readPersistentAgentBootPromptSnapshot, renamePersistentAgent, validatePersistentAgentId, writeApprovedAbsorb, writeApprovedCheckpoint, writeApprovedStructuralReview, writePersistentAgentMementoBoundary, writePersistentAgentRuntimeState, writePersistentAgentThread } from "./persistent-agents.js";
 import { buildPersistentRoomRestoredLiveThreadContext } from "./persistent-room-resume-context.js";
 import {
 	getPersistentRoomToolPolicy,
@@ -36,9 +37,15 @@ import { createPersistentRoomCapabilityPolicy, createPersistentRoomDefaultCapabi
 import { MEMORY_BUDGET_DEFAULT_TOKENS, readPersistentRoomMaintenanceSettings, writePersistentRoomMaintenanceSettings } from "./persistent-room-maintenance-settings.js";
 import { computeSkillStatuses, disablePersistentRoomSkill, effectiveEnabledSkills, enablePersistentRoomSkill, readPersistentRoomSkillSettings } from "./persistent-room-skill-settings.js";
 import { buildEnabledSkillsIndexSection, createReadSkillTool } from "./persistent-room-skill-tool.js";
-import { buildSpecialistTemplatesIndexSection, createDelegateTaskTool } from "./persistent-room-delegate-tool.js";
-import { buildSpecialistSessionPlan, ingestExportedInputs, runSpecialistWorker, listSpecialistTaskArtifacts, type SpecialistSessionPlan } from "./persistent-room-specialist-execution.js";
-import { appendTaskLedgerExport, clearTaskLedgerRecordRemoved, createTaskLedgerRecord, finalizeTaskLedgerRecord, listTaskLedgerRecords, markTaskLedgerRecordDeleted, markTaskLedgerRecordRemoved, markTaskLedgerRecordViewed, markTaskLedgerRecordsAwayNoticed, planExportedInputIngest, resolveIterateSourceFromLedger, selectTaskLedgerAwayNotices, selectTaskLedgerReseedRows, sweepOrphanedTaskLedgerRecords } from "./persistent-room-task-ledger.js";
+import { buildSpecialistTemplatesIndexSection, createDelegateTaskTool, userAuthoredPromptText } from "./persistent-room-delegate-tool.js";
+import { buildSpecialistSessionPlan, ingestShelfInputs, runSpecialistWorker, listSpecialistTaskArtifacts, type SpecialistSessionPlan } from "./persistent-room-specialist-execution.js";
+import { PersistentRoomShelfError, absorbTaskArtifactsIntoShelf, allocateShelfFilename, buildShelfManifestSection, commitReviseArtifactsOntoShelf, commitShelfFileDelete, healShelfMaintenanceAtBoot, listShelfFiles, listShelfFilesWithOrigin, persistentRoomShelfDirPath, renameShelfFile, replayShelfRenameJournals, resolveShelfFilePath, sanitizeShelfFilename, stageShelfFileDelete, sweepExpiredShelfTrash, undoShelfFileDelete, validateShelfFilename, isShelfRelativePath, shelfFilenameFromRelativePath, type ShelfReviseConflict } from "./persistent-room-shelf.js";
+import { buildSpecialistHandoffBlock } from "./specialist-handoff.js";
+import { reviseConflictNotice } from "./revise-conflict-notice.js";
+import { SHELF_READ_MAX_FILE_BYTES, cachedShelfPageCount, readShelfFileText, sniffShelfFileBuffer } from "./persistent-room-shelf-reading.js";
+import { createPersistentRoomShelfTools } from "./persistent-room-shelf-tools.js";
+import { migrateTaskArtifactsToShelves } from "./persistent-room-shelf-migration.js";
+import { appendTaskLedgerExport, clearTaskLedgerRecordRemoved, createTaskLedgerRecord, finalizeTaskLedgerRecord, listTaskLedgerRecords, markTaskLedgerRecordDeleted, markTaskLedgerRecordRemoved, markTaskLedgerRecordViewed, markTaskLedgerRecordsAwayNoticed, resolveIterateSourceFromLedger, selectTaskLedgerAwayNotices, selectTaskLedgerReseedRows, sweepOrphanedTaskLedgerRecords } from "./persistent-room-task-ledger.js";
 import { abortSpecialistTask, bindSpecialistSink, emitSpecialistDelta, registerSpecialistTask, removeSpecialistTask, runningSpecialistCount, sendSpecialistFrame, unbindSpecialistSink } from "./persistent-room-specialist-registry.js";
 import { assessTaskStoreGc, collectProtectedTaskIds, executeTaskStoreGc } from "./specialist-task-store-gc.js";
 import { getSpecialistTemplate, SPECIALIST_TASK_CAPS } from "./specialist-templates.js";
@@ -79,7 +86,7 @@ import { chooseLocalFolder } from "./local-folder-picker.js";
 import contentPolicyExt from "../../../pi-package/extensions/content-policy/index.js";
 import permissionsExt from "../../../pi-package/extensions/permissions/index.js";
 import kbExt from "../../../pi-package/extensions/kb/index.js";
-import artifactsExt, { SAFE_SEGMENT, validateArtifactPath } from "../../../pi-package/extensions/artifacts/index.js";
+import artifactsExt, { SAFE_SEGMENT, artifactRoot, validateArtifactPath } from "../../../pi-package/extensions/artifacts/index.js";
 import mcpExt from "../../../pi-package/extensions/mcp/index.js";
 import webSearchExt from "../../../pi-package/extensions/web-search/index.js";
 import fetchUrlExt from "../../../pi-package/extensions/fetch_url/index.js";
@@ -1632,7 +1639,7 @@ app.post("/api/persistent-agents/:id/absorb/assess", async (req, reply) => {
 		const status = getPersistentAgentStatusForMaintenance(idRaw);
 		const id = status.id;
 		const selection = activeAbsorbModelSelection();
-		return await buildAbsorbAssessment(id, selection.modelLock, async (prompt, modelLock) => runIsolatedLifecycleWorker(prompt, modelLock, resolveAbsorbModel, "absorb worker", "Produce the compact absorb assessment now.", "absorb assessment worker produced no text", { agent: id, kind: "upkeep" }));
+		return await buildAbsorbAssessment(id, selection.modelLock, async (prompt, modelLock) => runIsolatedLifecycleWorker(prompt, modelLock, resolveAbsorbModel, "absorb worker", "Produce the compact absorb assessment now.", "absorb assessment worker produced no text", { agent: id, kind: "upkeep" }), { resolveModelWindow: consultModelWindow });
 	} catch (e) {
 		return persistentAgentNormalUseErrorReply(reply, e);
 	}
@@ -1665,7 +1672,7 @@ app.post("/api/persistent-agents/:id/absorb/propose", async (req, reply) => {
 		const status = getPersistentAgentStatusForMaintenance(idRaw);
 		const id = status.id;
 		const selection = activeAbsorbModelSelection();
-		return await buildAbsorbProposal({ ...(req.body ?? {} as any), agentId: id }, selection.modelLock, async (prompt, modelLock) => runIsolatedLifecycleWorker(prompt, modelLock, resolveAbsorbModel, "absorb worker", "Produce the Memory Absorption Proposal now.", "absorb proposal worker produced no text", { agent: id, kind: "upkeep" }));
+		return await buildAbsorbProposal({ ...(req.body ?? {} as any), agentId: id }, selection.modelLock, async (prompt, modelLock) => runIsolatedLifecycleWorker(prompt, modelLock, resolveAbsorbModel, "absorb worker", "Produce the Memory Absorption Proposal now.", "absorb proposal worker produced no text", { agent: id, kind: "upkeep" }), { resolveModelWindow: consultModelWindow });
 	} catch (e) {
 		return persistentAgentNormalUseErrorReply(reply, e);
 	}
@@ -1706,7 +1713,7 @@ app.post("/api/persistent-agents/:id/structural-review/assess", async (req, repl
 		const status = getPersistentAgentStatusForMaintenance(idRaw);
 		const id = status.id;
 		const selection = activeStructuralReviewModelSelection();
-		return await buildStructuralReviewAssessment(id, selection.modelLock, async (prompt, modelLock) => runIsolatedLifecycleWorker(prompt, modelLock, resolveStructuralReviewModel, "structural review worker", "Produce the Prune memory assessment now.", "structural review assessment worker produced no text", { agent: id, kind: "upkeep" }));
+		return await buildStructuralReviewAssessment(id, selection.modelLock, async (prompt, modelLock) => runIsolatedLifecycleWorker(prompt, modelLock, resolveStructuralReviewModel, "structural review worker", "Produce the Prune memory assessment now.", "structural review assessment worker produced no text", { agent: id, kind: "upkeep" }), { resolveModelWindow: consultModelWindow });
 	} catch (e) {
 		return persistentAgentNormalUseErrorReply(reply, e);
 	}
@@ -1739,7 +1746,7 @@ app.post("/api/persistent-agents/:id/structural-review/propose", async (req, rep
 		const status = getPersistentAgentStatusForMaintenance(idRaw);
 		const id = status.id;
 		const selection = activeStructuralReviewModelSelection();
-		return await buildStructuralReviewProposal({ ...(req.body ?? {} as any), agentId: id }, selection.modelLock, async (prompt, modelLock) => runIsolatedLifecycleWorker(prompt, modelLock, resolveStructuralReviewModel, "structural review worker", "Produce the Prune memory proposal now.", "structural review proposal worker produced no text", { agent: id, kind: "upkeep" }));
+		return await buildStructuralReviewProposal({ ...(req.body ?? {} as any), agentId: id }, selection.modelLock, async (prompt, modelLock) => runIsolatedLifecycleWorker(prompt, modelLock, resolveStructuralReviewModel, "structural review worker", "Produce the Prune memory proposal now.", "structural review proposal worker produced no text", { agent: id, kind: "upkeep" }), { resolveModelWindow: consultModelWindow });
 	} catch (e) {
 		return persistentAgentNormalUseErrorReply(reply, e);
 	}
@@ -1985,6 +1992,7 @@ const WEB_CHAT_PROVIDER_LABELS: Record<string, string> = {
 };
 const WEB_CHAT_MODEL_LABELS: Record<string, Record<string, string>> = {
 	anthropic: {
+		"claude-opus-5": "Opus 5",
 		"claude-opus-4-8": "Opus 4.8",
 		"claude-sonnet-5": "Sonnet 5",
 		"claude-fable-5": "Fable 5",
@@ -2455,9 +2463,10 @@ function resolveSpecialistModel(registry: ModelRegistry, modelLock: { provider: 
 // prompt, so the trigger carries no user content.
 const CONSULT_TRIGGER_PROMPT = "Answer the consult question now, from your memory only.";
 
-// Arms the consult prompt's overflow guard: the consulted room's memory is the
-// prompt material and cannot be elided honestly, so oversize consults refuse
-// with guidance instead of running against a truncated memory.
+// Arms the prompt overflow guards (consult + Learn/Review Memory workers):
+// the room's memory is the prompt material and cannot be elided honestly, so
+// oversize prompts refuse with guidance instead of running against a
+// truncated memory or a provider error.
 function consultModelWindow(modelLock: { provider: string; model: string }) {
 	const registry = getWebChatModelRegistry();
 	const model = registry.find(modelLock.provider, modelLock.model);
@@ -3801,6 +3810,17 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 	// the session's model-selection plumbing); the task_iterate frame handler
 	// refuses cleanly while it is still null.
 	let launchSpecialistTask: ((plan: SpecialistSessionPlan) => { ok: true } | { ok: false; reason: string }) | null = null;
+	// The user-authored text of the in-flight prompt turn (wire text minus the
+	// client-prepended handoff blocks / attachment notes), null between turns.
+	// The delegate tool verifies `userRequest` consent quotes against exactly
+	// this — set by the prompt handler, cleared the moment the model's answer
+	// settles (not merely when the turn's bookkeeping ends, so the auto-
+	// summarize recovery prompt can never dispatch on it). The budget bounds
+	// how many no-card launches one turn's consent can mint; exhaustion falls
+	// back to the approval card.
+	let activeTurnUserAuthoredText: string | null = null;
+	const AUTO_DISPATCH_BUDGET_PER_TURN = 3;
+	let autoDispatchBudgetRemaining = 0;
 	let sessionDisposed = false;
 	let autoSummaryRunning = false;
 	type PromptDiagnosticsPendingTurn = {
@@ -4187,6 +4207,12 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 			} catch (e) {
 				return { ok: false, reason: `no usable specialist model: ${(e as Error).message}` };
 			}
+			// A revise run names the shelf files it is rewriting, on the registry
+			// entry and on the frame (taste pass): the panel puts the working state
+			// on the target file's OWN row rather than adding a second row for the
+			// run, and the reconnect replay carries the same names so a reload
+			// mid-run does not fall back to a stray working row.
+			const reviseTargetNames = plan.reviseTargets?.map((target) => target.name).filter((name) => typeof name === "string" && name.length > 0) ?? [];
 			const task = registerSpecialistTask(persistentAgentIdForSession, {
 				taskId: plan.taskId,
 				templateId: plan.template.id,
@@ -4195,8 +4221,9 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 				title: plan.title,
 				model: selection.modelLock,
 				abortController: new AbortController(),
+				...(reviseTargetNames.length > 0 ? { reviseTargetNames } : {}),
 			});
-			sendSpecialistFrame(persistentAgentIdForSession, { type: "task_started", taskId: plan.taskId, template: plan.template.id, templateVersion: plan.template.version, templateLabel: plan.template.label, title: plan.title, model: selection.modelLock });
+			sendSpecialistFrame(persistentAgentIdForSession, { type: "task_started", taskId: plan.taskId, template: plan.template.id, templateVersion: plan.template.version, templateLabel: plan.template.label, title: plan.title, model: selection.modelLock, ...(reviseTargetNames.length > 0 ? { reviseTargetNames } : {}) });
 			// Ledger row (assets contract §2): created once the task is announced,
 			// finalized on every terminal path below. Best-effort throughout — the
 			// ledger must never break a task.
@@ -4213,6 +4240,40 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 			} catch (e) {
 				app.log.warn({ err: (e as Error).message, taskId: plan.taskId }, "task ledger create failed");
 			}
+			// The handoff flip (revise-in-place slice): every terminal path enqueues
+			// the slimmed §2.2 block on the pending-transfer queue of the room's
+			// CURRENT active thread (a checkpoint may have minted a new conversation
+			// while the task ran), where it rides the user's next prompt — the same
+			// delivery transferred consults always used, just triggered by
+			// completion instead of a click. Returns the block only when it is
+			// truly persisted, so the frame mirrors it to a live client exactly
+			// when a reconnecting client would restore it too. Best-effort: a
+			// refusal (queue full, thread closed) degrades honestly — the manifest
+			// still lists the files on the very next request either way.
+			const enqueueTaskHandoff = (summary: string, artifactCount: number): string | undefined => {
+				try {
+					const block = buildSpecialistHandoffBlock({
+						templateId: plan.template.id,
+						templateVersion: plan.template.version,
+						taskTitle: plan.title,
+						ranAtIso: new Date().toISOString(),
+						artifactCount,
+						summary,
+					});
+					const threadId = getPersistentAgentRuntimeState(persistentAgentIdForSession).activeThreadId ?? persistentConversationId;
+					return appendPersistentAgentThreadPendingHandoff(persistentAgentIdForSession, threadId, block) ? block : undefined;
+				} catch (e) {
+					app.log.warn({ err: (e as Error).message, taskId: plan.taskId }, "task handoff enqueue failed");
+					return undefined;
+				}
+			};
+			// The two-writers guard's visible report: one sentence per refused
+			// overwrite, appended to the summary every consumer sees (frame, ledger,
+			// handoff) — the room and the user both learn what happened and where
+			// the work went instead. The sentence comes from the shared builder the
+			// CLIENT also renders, so the line in the conversation and the line in
+			// the room's context can never drift apart again.
+			const reviseConflictNote = (conflicts: ShelfReviseConflict[]): string => reviseConflictNotice(conflicts);
 			void (async () => {
 				try {
 					const result = await runSpecialistWorker({
@@ -4240,10 +4301,17 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 					// Task usage bills to this room (the requester), consult precedent.
 					recordWorkerUsage(persistentAgentIdForSession, "task", selection.modelLock, result.usage);
 					if (task.abortController.signal.aborted) {
-						const stopMessage = task.stoppedByUser ? "Task stopped by you. Artifacts already written are kept." : "The task was cancelled.";
-						const noticed = sendSpecialistFrame(persistentAgentIdForSession, { type: "task_error", taskId: plan.taskId, message: stopMessage, artifacts: result.artifacts });
+						// "Files already written are kept" — kept on the shelf, where
+						// every kept file lives (files core slice).
+						const stopMessage = task.stoppedByUser ? "Task stopped by you. Files already written are kept." : "The task was cancelled.";
+						// A stopped revise run's partial outputs NEVER commit over the
+						// canonical file (a half-finished revision must not replace a
+						// whole document) — they absorb as new files like any task's.
+						const abortedArtifacts = absorbTaskArtifactsIntoShelf(persistentAgentIdForSession, artifactRoot(), result.artifacts);
+						const abortedHandoff = enqueueTaskHandoff(stopMessage, abortedArtifacts.length);
+						const noticed = sendSpecialistFrame(persistentAgentIdForSession, { type: "task_error", taskId: plan.taskId, message: stopMessage, artifacts: abortedArtifacts, ...(abortedHandoff ? { handoff: abortedHandoff } : {}) });
 						try {
-							finalizeTaskLedgerRecord(persistentAgentIdForSession, plan.taskId, { outcome: "aborted", summary: stopMessage, artifacts: result.artifacts, usage: result.usage, noticed });
+							finalizeTaskLedgerRecord(persistentAgentIdForSession, plan.taskId, { outcome: "aborted", summary: stopMessage, artifacts: abortedArtifacts, usage: result.usage, noticed });
 						} catch (e) {
 							app.log.warn({ err: (e as Error).message, taskId: plan.taskId }, "task ledger finalize failed");
 						}
@@ -4256,20 +4324,36 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 						// cosmetic failure can never turn a finished task into
 						// task_error or strand the card in "running".
 						const thumbnails = await generateTaskArtifactThumbnails(plan.taskFolder, result.artifacts, (message) => app.log.warn(message)).catch(() => []);
+						// Canonical from birth (files core slice): outputs move onto the
+						// room's shelf the moment the task ends, so the manifest lists them
+						// on the very next request. Thumbnails rendered first — they read
+						// the task folder. Every consumer below (frame, iterate memory,
+						// ledger) sees the shelf paths. A revise run goes through the
+						// commit gate instead: outputs named like a hash-pinned target
+						// replace the canonical file in place (same row, no new file), and
+						// a target that changed mid-run refuses the overwrite honestly.
+						const committed = plan.reviseTargets?.length
+							? commitReviseArtifactsOntoShelf(persistentAgentIdForSession, artifactRoot(), result.artifacts, plan.reviseTargets)
+							: { artifacts: absorbTaskArtifactsIntoShelf(persistentAgentIdForSession, artifactRoot(), result.artifacts), conflicts: [] };
+						const shelfArtifacts = committed.artifacts;
+						const summaryText = committed.conflicts.length > 0 ? `${result.text}\n\n${reviseConflictNote(committed.conflicts)}` : result.text;
+						const endHandoff = enqueueTaskHandoff(summaryText, shelfArtifacts.length);
 						const noticed = sendSpecialistFrame(persistentAgentIdForSession, {
 							type: "task_end",
 							taskId: plan.taskId,
 							template: plan.template.id,
-							text: result.text,
-							artifacts: result.artifacts,
+							text: summaryText,
+							artifacts: shelfArtifacts,
 							...(thumbnails.length > 0 ? { thumbnails } : {}),
+							...(committed.conflicts.length > 0 ? { reviseConflicts: committed.conflicts } : {}),
+							...(endHandoff ? { handoff: endHandoff } : {}),
 							generatedAt: new Date().toISOString(),
 							...(result.usage ? { usage: result.usage } : {}),
 						});
 						// Remember the finished task so Iterate can re-derive it server-side.
 						completedWebTasks.set(plan.taskId, {
 							templateId: plan.template.id,
-							artifacts: result.artifacts.map((artifact: { relativePath: string }) => artifact.relativePath),
+							artifacts: shelfArtifacts.map((artifact: { relativePath: string }) => artifact.relativePath),
 						});
 						while (completedWebTasks.size > COMPLETED_WEB_TASK_MEMORY) {
 							const oldest = completedWebTasks.keys().next().value;
@@ -4277,7 +4361,7 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 							completedWebTasks.delete(oldest);
 						}
 						try {
-							finalizeTaskLedgerRecord(persistentAgentIdForSession, plan.taskId, { outcome: "ok", summary: result.text, artifacts: result.artifacts, usage: result.usage, noticed });
+							finalizeTaskLedgerRecord(persistentAgentIdForSession, plan.taskId, { outcome: "ok", summary: summaryText, artifacts: shelfArtifacts, usage: result.usage, noticed, ...(committed.conflicts.length > 0 ? { reviseConflicts: committed.conflicts } : {}) });
 						} catch (e) {
 							app.log.warn({ err: (e as Error).message, taskId: plan.taskId }, "task ledger finalize failed");
 						}
@@ -4291,8 +4375,12 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 					// degrades the card to no chips, never loses the error frame.
 					let writtenArtifacts: ReturnType<typeof listSpecialistTaskArtifacts> = [];
 					try { writtenArtifacts = listSpecialistTaskArtifacts(plan.taskFolder); } catch {}
-					const errorMessage = stopped ? (task.stoppedByUser ? "Task stopped by you. Artifacts already written are kept." : "The task was cancelled.") : (e as Error).message;
-					const noticed = sendSpecialistFrame(persistentAgentIdForSession, { type: "task_error", taskId: plan.taskId, message: errorMessage, artifacts: writtenArtifacts });
+					// Files already on disk are kept on the shelf (files core slice) —
+					// absorb never throws per-file, so task_error still always fires.
+					try { writtenArtifacts = absorbTaskArtifactsIntoShelf(persistentAgentIdForSession, artifactRoot(), writtenArtifacts); } catch {}
+					const errorMessage = stopped ? (task.stoppedByUser ? "Task stopped by you. Files already written are kept." : "The task was cancelled.") : (e as Error).message;
+					const errorHandoff = enqueueTaskHandoff(errorMessage, writtenArtifacts.length);
+					const noticed = sendSpecialistFrame(persistentAgentIdForSession, { type: "task_error", taskId: plan.taskId, message: errorMessage, artifacts: writtenArtifacts, ...(errorHandoff ? { handoff: errorHandoff } : {}) });
 					try {
 						finalizeTaskLedgerRecord(persistentAgentIdForSession, plan.taskId, { outcome: stopped ? "aborted" : "error", summary: errorMessage, artifacts: writtenArtifacts, noticed });
 					} catch (ledgerError) {
@@ -4310,6 +4398,16 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 			taskCap: WEB_TASK_CAP,
 			runningCount: () => runningSpecialistCount(persistentAgentId),
 			generateTaskId: () => `tsk-${crypto.randomBytes(6).toString("hex")}`,
+			// Consent source for auto-dispatch (delegation-flow slice): the user-
+			// authored text of the turn being answered, set by the prompt handler
+			// below and cleared when the turn settles — a delegate call outside a
+			// user turn can never see stale consent.
+			currentUserMessage: () => activeTurnUserAuthoredText,
+			consumeAutoDispatch: () => {
+				if (autoDispatchBudgetRemaining <= 0) return false;
+				autoDispatchBudgetRemaining -= 1;
+				return true;
+			},
 			launch: launchSpecialistTaskForSession,
 		})];
 		const persistentRoomSkillTools = persistentRoomEnabledSkillEntries.length > 0
@@ -4325,6 +4423,25 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 				telemetry: persistentRoomSkillTelemetry,
 			})]
 			: [];
+		// The shelf pair (files core slice): default-on for every room, fenced to
+		// the room's own files/ folder by the tools themselves — deliberately
+		// OUTSIDE the workspace grant plumbing and its mismatch check above.
+		const persistentRoomShelfTools = createPersistentRoomShelfTools({ roomId: persistentAgentId });
+		// The shelf manifest is STATE, not an event: regenerated from the folder
+		// for every request via before_agent_start (which replaces the system
+		// prompt per turn), so a file created or deleted mid-session is reflected
+		// on the very next request — never stale, never accumulated.
+		const shelfManifestExtForSession = async (pi: any) => {
+			pi.on("before_agent_start", async (event: { systemPrompt: string }) => {
+				try {
+					const section = buildShelfManifestSection(persistentAgentId, {}, (name, entry) => cachedShelfPageCount(persistentAgentId, name, entry));
+					if (section) return { systemPrompt: `${event.systemPrompt}${section}` };
+				} catch (error) {
+					app.log.warn({ err: (error as Error).message }, "shelf manifest build failed");
+				}
+				return undefined;
+			});
+		};
 		const persistentRoomBootContext = persistentRoomThreadRuntime?.kind !== "pi-session-jsonl"
 			? buildPersistentAgentBootContext({
 				agentId: persistentAgentId,
@@ -4403,6 +4520,7 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 			mcpExt as any,
 			webSearchExt as any,
 			fetchUrlExt as any,
+			shelfManifestExtForSession as any,
 			...(promptDiagnosticsEnabledForConnection && persistentRoomModel ? [persistentRoomPromptDiagnosticsExt(persistentRoomModel) as any] : []),
 		];
 		const sessionRuntimeCwd = persistentRoomRuntimeCwd;
@@ -4430,7 +4548,10 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 			// tools) and added to the allowlist explicitly, since customTools are
 			// allowlist-filtered.
 			...(persistentRoomToolPolicy ? { tools: [...persistentRoomToolPolicy.allowedToolNames, ...persistentRoomSkillTools.map((tool) => tool.name), ...persistentRoomDelegateTools.map((tool) => tool.name)] } : {}),
-			...(persistentRoomCustomTools.length + persistentRoomSkillTools.length + persistentRoomDelegateTools.length > 0 ? { customTools: [...persistentRoomCustomTools, ...persistentRoomSkillTools, ...persistentRoomDelegateTools] } : {}),
+			// Shelf tools ride beside skills/delegation: appended AFTER the
+			// workspace-policy mismatch check (they are not workspace tools); their
+			// names are already in the policy allowlist (default-on lane).
+			...(persistentRoomCustomTools.length + persistentRoomSkillTools.length + persistentRoomDelegateTools.length + persistentRoomShelfTools.length > 0 ? { customTools: [...persistentRoomCustomTools, ...persistentRoomSkillTools, ...persistentRoomDelegateTools, ...persistentRoomShelfTools] } : {}),
 		});
 		session = created.session;
 		sessionDisposed = false;
@@ -4617,7 +4738,11 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 		if (away.allTaskIds.length > 0) {
 			const delivered = sendChecked({
 				type: "task_away_notice",
-				notices: away.notices.map((row) => ({ taskId: row.taskId, title: row.title, outcome: row.outcome, endedAt: row.endedAt ?? null })),
+				// A refused overwrite that happened while the tab was closed reaches
+				// the user ONLY here (taste pass): task frames never replay, so
+				// without the conflicts on this notice the user would just find an
+				// unexplained collision-named file in Files.
+				notices: away.notices.map((row) => ({ taskId: row.taskId, title: row.title, outcome: row.outcome, endedAt: row.endedAt ?? null, ...(row.reviseConflicts?.length ? { reviseConflicts: row.reviseConflicts } : {}) })),
 				moreCount: away.moreCount,
 			});
 			if (delivered) markTaskLedgerRecordsAwayNoticed(persistentAgentIdForSession, away.allTaskIds);
@@ -4653,6 +4778,11 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 				resetTurnTrace();
 				const sessionAtPromptStart = session;
 				const userText = String(msg.text ?? "");
+				// Consent scope for delegate auto-dispatch: only what the USER typed
+				// this turn — never the model-written handoff blocks or app-written
+				// attachment notes the client prepends to the wire text.
+				activeTurnUserAuthoredText = userAuthoredPromptText(userText);
+				autoDispatchBudgetRemaining = AUTO_DISPATCH_BUDGET_PER_TURN;
 				// Consult MR-5 hardening: this prompt has consumed any queued handoff
 				// blocks (the client prepended them to userText). Clear the persisted
 				// queue now, atomically with the consume, so a crash or a reordered
@@ -4661,6 +4791,12 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 				try { clearPersistentAgentThreadPendingHandoffs(persistentAgentIdForSession, persistentConversationId); } catch (error) { app.log.warn({ err: error }, "failed to clear consult pending-transfer queue on prompt"); }
 				preparePromptDiagnosticsTurn("user");
 				await session!.prompt(withPersistentRoomRestoredLiveThreadContext(userText));
+				// Consent dies with the answer: everything after this line (event
+				// flush, auto-summarize recovery prompt) runs tools in the same
+				// session and must never be able to auto-dispatch on this turn's
+				// message. The finally below is the error-path backstop.
+				activeTurnUserAuthoredText = null;
+				autoDispatchBudgetRemaining = 0;
 				if (!activePersistentWebTurn?.terminalReason) setActivePersistentWebTurnTerminalReason("completed");
 				await flushSessionEvents();
 				if (session === sessionAtPromptStart) {
@@ -4671,7 +4807,12 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 				if (!activePersistentWebTurn?.terminalReason) setActivePersistentWebTurnTerminalReason("failed");
 				send({ type: "error", message: (e as Error).message });
 			} finally {
+				// Clear the consent text only for a turn that actually began: a
+				// CONCURRENT prompt frame that 409s at beginPersistentAgentTurn never
+				// set it, and must not strip the running turn's consent mid-flight.
 				if (persistentTurnId) {
+					activeTurnUserAuthoredText = null;
+					autoDispatchBudgetRemaining = 0;
 					const turn = activePersistentWebTurn?.turnId === persistentTurnId ? activePersistentWebTurn : null;
 					if (turn) turn.promptSettled = true;
 					try { finishPersistentAgentTurn(persistentAgentIdForSession, persistentConversationId, { turnId: persistentTurnId, terminalReason: turn?.terminalReason ?? "failed" }); } catch {}
@@ -4832,24 +4973,27 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 						return;
 					}
 					const iterateTaskId = `tsk-${crypto.randomBytes(6).toString("hex")}`;
-					// Ingest-on-iterate (G2-B): inputs whose artifact was exported are
-					// re-read from the CURRENT workspace file — copied into the new
-					// task's inputs/ dir after re-running every write-time guard. A
-					// refused or missing file keeps the store original (honest, safe).
+					// Shelf-canonical inputs (files core slice): a specialist reads only
+					// inside the artifact store, so `files/<name>` inputs are staged as
+					// copies of the CURRENT shelf bytes into the new task's inputs/ —
+					// which is also how hand-edits reach a revise run (the shelf is a
+					// real folder; staging always reads current bytes). This replaced
+					// the ingest-on-iterate workspace detour (G2-B) per the files spec:
+					// exports are snapshots now, never a revise source. Each staged file
+					// is hash-pinned as a revise target — the run REVISES the canonical
+					// file, committed by the server-side gate at completion.
 					let iterateInputArtifacts = source.artifacts;
+					let iterateReviseTargets: { name: string; baselineHash: string; outputName: string }[] = [];
 					try {
-						const sourceRow = listTaskLedgerRecords(persistentAgentIdForSession).find((record) => record.taskId === sourceTaskId) ?? null;
-						const ingestPlan = planExportedInputIngest(sourceRow, source.artifacts, `tasks/${iterateTaskId}`);
-						if (ingestPlan.length > 0) {
-							const results = ingestExportedInputs(ingestPlan);
-							const substitutions = new Map(results.filter((result) => result.ingested).map((result) => [result.entry.sourceRelativePath, result.entry.ingestedRelativePath]));
-							for (const result of results) {
-								if (!result.ingested) app.log.warn({ taskId: iterateTaskId, source: result.entry.sourceRelativePath, reason: result.reason }, "iterate ingest fell back to the store original");
-							}
-							if (substitutions.size > 0) iterateInputArtifacts = source.artifacts.map((artifact) => substitutions.get(artifact) ?? artifact);
+						const shelfIngest = ingestShelfInputs(iterateInputArtifacts, `tasks/${iterateTaskId}`, (name) => resolveShelfFilePath(persistentAgentIdForSession, name).absolutePath);
+						for (const drop of shelfIngest.dropped) {
+							app.log.warn({ taskId: iterateTaskId, source: drop.sourceRelativePath, reason: drop.reason }, "iterate shelf ingest dropped an input");
 						}
+						iterateInputArtifacts = shelfIngest.inputArtifacts;
+						iterateReviseTargets = shelfIngest.reviseTargets;
 					} catch (e) {
-						app.log.warn({ err: (e as Error).message, taskId: iterateTaskId }, "iterate ingest failed; using store originals");
+						app.log.warn({ err: (e as Error).message, taskId: iterateTaskId }, "iterate shelf ingest failed; proceeding without shelf inputs");
+						iterateInputArtifacts = iterateInputArtifacts.filter((artifact) => !artifact.startsWith("files/"));
 					}
 					let plan: SpecialistSessionPlan;
 					try {
@@ -4859,6 +5003,7 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 							brief: String(msg.brief ?? ""),
 							inputArtifacts: iterateInputArtifacts,
 							iterateParentTaskId: sourceTaskId,
+							...(iterateReviseTargets.length > 0 ? { reviseTargets: iterateReviseTargets } : {}),
 						});
 					} catch (e) {
 						send({ type: "task_iterate_result", ok: false, reason: `Change request not possible: ${(e as Error).message}` });
@@ -4952,12 +5097,69 @@ const ARTIFACT_SECURITY_HEADERS: Record<string, string> = {
 // may be WRITTEN (e.g. .pptx derivatives) never silently widens what this
 // route SERVES with these headers.
 const ARTIFACT_SERVABLE_EXTENSIONS: ReadonlySet<string> = new Set([".md", ".html", ".svg"]);
+// Plain-text types preview inline the way .md does: text/plain under the full
+// artifact CSP, so the bytes render as inert source in the sandboxed frame —
+// .json/.csv never become a scriptable or styled document. Honored by the
+// SHELF resolvers only (room-files route + shelf-canonical rows, where users
+// upload and rename these types); the task-STORE path keeps the narrow
+// write-side set above.
+const SHELF_PLAIN_TEXT_EXTENSIONS: ReadonlySet<string> = new Set([".txt", ".csv", ".json"]);
 
 function artifactContentType(extension: string): string | null {
 	if (extension === ".svg") return "image/svg+xml; charset=utf-8";
 	if (extension === ".html") return "text/html; charset=utf-8";
 	if (extension === ".md") return "text/plain; charset=utf-8";
+	if (SHELF_PLAIN_TEXT_EXTENSIONS.has(extension)) return "text/plain; charset=utf-8";
 	return null;
+}
+
+// The room that owns a task, resolved by probing each room's ledger for the
+// record file (rooms are few; this is a handful of existence checks). Shelf
+// continuity (files core slice) needs it because the artifact routes are
+// task-scoped while migrated/absorbed files live under the owning room.
+function findRoomIdForTask(taskId: string): string | null {
+	let entries: fs.Dirent[];
+	try {
+		entries = fs.readdirSync(PERSISTENT_AGENTS_ROOT, { withFileTypes: true });
+	} catch {
+		return null;
+	}
+	for (const entry of entries) {
+		if (!entry.isDirectory() || !/^[a-zA-Z0-9_-]{1,160}$/.test(entry.name)) continue;
+		try {
+			if (fs.existsSync(path.join(PERSISTENT_AGENTS_ROOT, entry.name, "runtime", "task-ledger", `${taskId}.json`))) return entry.name;
+		} catch {
+			// keep probing
+		}
+	}
+	return null;
+}
+
+// A task's shelf file, served/exported through the task-scoped routes below:
+// membership of `files/<name>` in THIS task's ledger record is the
+// authorization, and the bytes come from the owning room's shelf. Returns null
+// (route falls through to 404) for anything that is not exactly that.
+function resolveTaskShelfFile(taskId: string, name: string): { roomId: string; absolutePath: string; stat: fs.Stats; extension: string } | null {
+	if (!name || name.includes("/") || name.startsWith(".")) return null;
+	const roomId = findRoomIdForTask(taskId);
+	if (!roomId) return null;
+	let record;
+	try {
+		record = listTaskLedgerRecords(roomId).find((row) => row.taskId === taskId);
+	} catch {
+		return null;
+	}
+	if (!record?.artifacts?.some((artifact) => artifact.relativePath === `files/${name}`)) return null;
+	const extension = path.extname(name).toLowerCase();
+	// Shelf files also serve the plain-text preview set: a rename can point a
+	// row's files/<name> at a .txt/.csv/.json, and those preview like .md.
+	if (!ARTIFACT_SERVABLE_EXTENSIONS.has(extension) && !SHELF_PLAIN_TEXT_EXTENSIONS.has(extension)) return null;
+	try {
+		const resolved = resolveShelfFilePath(roomId, name);
+		return { roomId, absolutePath: resolved.absolutePath, stat: resolved.stat, extension };
+	} catch {
+		return null;
+	}
 }
 
 app.get("/api/artifacts/:taskId/*", async (req, reply) => {
@@ -4973,39 +5175,54 @@ app.get("/api/artifacts/:taskId/*", async (req, reply) => {
 	// already rejects these, but assert it here so server-internal dot-dirs
 	// (e.g. .thumbs) can never be served even if that validation ever loosens.
 	if (rest.split("/").some((segment) => segment.startsWith("."))) return reply.code(404).send({ error: "Artifact not found." });
-	let target: ReturnType<typeof validateArtifactPath>;
+	// Store path first (pre-absorb tasks and in-flight runs), then the shelf
+	// (files core slice: migrated/absorbed rows carry files/<name> paths but keep
+	// their task-scoped URLs, so the client's URL derivation never changes).
+	let servePath: string | null = null;
+	let serveName = "";
+	let serveExtension = "";
+	let stat: fs.Stats | null = null;
 	try {
-		target = validateArtifactPath(rest, "default", `tasks/${taskId}`, ARTIFACT_SERVABLE_EXTENSIONS);
-	} catch {
-		return reply.code(404).send({ error: "Artifact not found." });
-	}
-	const type = artifactContentType(target.extension);
-	// Unreachable (validateArtifactPath rejects other extensions) but fail closed.
-	if (!type) return reply.code(404).send({ error: "Artifact not found." });
-	let stat: fs.Stats;
-	try {
+		const target = validateArtifactPath(rest, "default", `tasks/${taskId}`, ARTIFACT_SERVABLE_EXTENSIONS);
 		// lstat, not stat: a symlink under the task folder must not be followed
 		// out of the store, so refuse anything that is not a real regular file.
-		stat = fs.lstatSync(target.fullPath);
+		const lstat = fs.lstatSync(target.fullPath);
+		if (lstat.isFile()) {
+			servePath = target.fullPath;
+			serveName = path.basename(target.relativePath);
+			serveExtension = target.extension;
+			stat = lstat;
+		}
 	} catch {
-		return reply.code(404).send({ error: "Artifact not found." });
+		// fall through to the shelf
 	}
-	if (!stat.isFile()) return reply.code(404).send({ error: "Artifact not found." });
+	if (!servePath || !stat) {
+		const shelf = resolveTaskShelfFile(taskId, rest);
+		if (!shelf) return reply.code(404).send({ error: "Artifact not found." });
+		servePath = shelf.absolutePath;
+		serveName = rest;
+		serveExtension = shelf.extension;
+		stat = shelf.stat;
+	}
+	const type = artifactContentType(serveExtension);
+	// Unreachable (both resolvers enforce the servable-extension set) but fail closed.
+	if (!type) return reply.code(404).send({ error: "Artifact not found." });
 	if (stat.size > 40_000_000) return reply.code(413).send({ error: "Artifact is too large to serve." });
 	if (String((req.query as any)?.download ?? "") === "1") {
 		// Strip quotes/backslashes/control chars so the basename cannot break out
 		// of the quoted filename or inject additional header directives.
-		const basename = path.basename(target.relativePath).replace(/["\\\r\n]/g, "").replace(/[\x00-\x1f\x7f]/g, "");
+		const basename = serveName.replace(/["\\\r\n]/g, "").replace(/[\x00-\x1f\x7f]/g, "");
 		reply.header("content-disposition", `attachment; filename="${basename}"`);
 	}
 	reply.header("content-length", String(stat.size));
-	return reply.type(type).send(fs.createReadStream(target.fullPath));
+	return reply.type(type).send(fs.createReadStream(servePath));
 });
 
 // V5 — export a task artifact into a room's workspace folder. Self-contained
-// sibling to the GET route above. The UI "Save to workspace" click IS the human
+// sibling to the GET route above. The export click in the UI IS the human
 // approval (locked decision D7): there is no ui_request bridge and no interactive
-// confirm here. The route therefore applies the SAME source path discipline as
+// confirm here. (The "Save to workspace" viewer button that fired this is retired
+// in favor of snapshot Save…; the route remains for callers with a workspace folder.) The route therefore applies the SAME source path discipline as
 // the GET route (SAFE_SEGMENT taskId, validateArtifactPath, dot-segment refusal)
 // and additionally confines the DESTINATION to the room's approved workspace
 // root. The global loopback guard (onRequest) is inherited automatically.
@@ -5023,30 +5240,43 @@ app.post("/api/artifacts/:taskId/export", async (req, reply) => {
 	const rename = body.rename === true;
 	if (overwrite && rename) return reply.code(400).send({ error: "overwrite and rename are mutually exclusive." });
 
-	// The UI passes the store-relative path (tasks/<taskId>/<rest>); the taskId in
-	// the URL must own it. A mismatched prefix is rejected without guessing a path.
-	const prefix = `tasks/${taskId}/`;
-	if (!relativePath.startsWith(prefix)) return reply.code(400).send({ error: "relativePath must be inside this task." });
-	const rest = relativePath.slice(prefix.length);
-	// Mirror the GET route: never copy server-internal dot-dirs (e.g. .thumbs) even
-	// if validateArtifactPath's segment check ever loosens.
-	if (!rest || rest.split("/").some((segment) => segment.startsWith("."))) return reply.code(404).send({ error: "Artifact not found." });
-
-	let source: ReturnType<typeof validateArtifactPath>;
-	try {
-		source = validateArtifactPath(rest, "default", `tasks/${taskId}`, ARTIFACT_SERVABLE_EXTENSIONS);
-	} catch {
-		return reply.code(404).send({ error: "Artifact not found." });
-	}
+	// The UI passes the row's store-relative path. Two shapes exist: legacy
+	// tasks/<taskId>/<rest> (the taskId in the URL must own it), and — files
+	// core slice — files/<name> for rows whose artifact lives on the owning
+	// room's shelf, authorized by membership in this task's ledger record.
+	let sourceFullPath: string;
+	let sourceBasename: string;
 	let sourceStat: fs.Stats;
-	try {
-		// lstat, not stat: a symlink under the task folder must not be followed out
-		// of the store, so refuse anything that is not a real regular file.
-		sourceStat = fs.lstatSync(source.fullPath);
-	} catch {
-		return reply.code(404).send({ error: "Artifact not found." });
+	if (relativePath.startsWith("files/")) {
+		const shelf = resolveTaskShelfFile(taskId, relativePath.slice("files/".length));
+		if (!shelf || shelf.roomId !== roomId) return reply.code(404).send({ error: "Artifact not found." });
+		sourceFullPath = shelf.absolutePath;
+		sourceBasename = path.basename(shelf.absolutePath);
+		sourceStat = shelf.stat;
+	} else {
+		const prefix = `tasks/${taskId}/`;
+		if (!relativePath.startsWith(prefix)) return reply.code(400).send({ error: "relativePath must be inside this task." });
+		const rest = relativePath.slice(prefix.length);
+		// Mirror the GET route: never copy server-internal dot-dirs (e.g. .thumbs) even
+		// if validateArtifactPath's segment check ever loosens.
+		if (!rest || rest.split("/").some((segment) => segment.startsWith("."))) return reply.code(404).send({ error: "Artifact not found." });
+		let source: ReturnType<typeof validateArtifactPath>;
+		try {
+			source = validateArtifactPath(rest, "default", `tasks/${taskId}`, ARTIFACT_SERVABLE_EXTENSIONS);
+		} catch {
+			return reply.code(404).send({ error: "Artifact not found." });
+		}
+		try {
+			// lstat, not stat: a symlink under the task folder must not be followed out
+			// of the store, so refuse anything that is not a real regular file.
+			sourceStat = fs.lstatSync(source.fullPath);
+		} catch {
+			return reply.code(404).send({ error: "Artifact not found." });
+		}
+		if (!sourceStat.isFile()) return reply.code(404).send({ error: "Artifact not found." });
+		sourceFullPath = source.fullPath;
+		sourceBasename = path.basename(source.relativePath);
 	}
-	if (!sourceStat.isFile()) return reply.code(404).send({ error: "Artifact not found." });
 	if (sourceStat.size > 40_000_000) return reply.code(413).send({ error: "Artifact is too large to export." });
 
 	// Resolve the room's THREAD-EFFECTIVE workspace policy when the UI names the
@@ -5081,7 +5311,7 @@ app.post("/api/artifacts/:taskId/export", async (req, reply) => {
 	// Destination = source basename directly inside the workspace root. basename()
 	// strips any separators, and we re-check confinement so a resolved destination
 	// can never land outside the approved workspace folder.
-	const destName = path.basename(source.relativePath);
+	const destName = sourceBasename;
 	const confinedDestPath = (name: string): string | null => {
 		const candidate = path.resolve(workspaceRoot, name);
 		if (candidate !== workspaceRoot && !candidate.startsWith(workspaceRoot + path.sep)) return null;
@@ -5096,7 +5326,7 @@ app.post("/api/artifacts/:taskId/export", async (req, reply) => {
 	}
 	let savedTo = destPath;
 	try {
-		const bytes = fs.readFileSync(source.fullPath);
+		const bytes = fs.readFileSync(sourceFullPath);
 		if (rename) {
 			// Keep both: first free suffixed name (deck-2.html, deck-3.html, …).
 			// Each attempt uses "wx", so a concurrent claim of the same name just
@@ -5139,6 +5369,333 @@ app.post("/api/artifacts/:taskId/export", async (req, reply) => {
 		app.log.warn({ err: (e as Error).message, taskId }, "task ledger export append failed");
 	}
 	return reply.send({ savedTo });
+});
+
+// ── Room files routes (files UI slice) ─────────────────────────────────────
+// The shelf's HTTP face: list rows for the Files panel, take uploads onto the
+// shelf, serve/preview user-added files, undo a staged upload, and export a
+// snapshot to a user-picked folder. Room-made files keep flowing through the
+// task-scoped /api/artifacts routes; these routes exist for what has no task.
+
+const ROOM_FILES_PREVIEW_IMAGE_TYPES: Record<string, string> = {
+	".png": "image/png",
+	".jpg": "image/jpeg",
+	".jpeg": "image/jpeg",
+	".gif": "image/gif",
+	".webp": "image/webp",
+};
+
+// Inline PDF preview (vision slice): served with the browser's own PDF viewer.
+// The CSP keeps default-src 'none' but drops `sandbox` for THIS type only —
+// the sandbox directive blocks the PDF viewer plugin outright, and a PDF
+// response with nosniff cannot become a scriptable document. Everything else
+// keeps the full artifact headers.
+const ROOM_FILES_PDF_TYPE = "application/pdf";
+
+function readFileHead(absolutePath: string): Buffer {
+	try {
+		const fd = fs.openSync(absolutePath, "r");
+		try {
+			const head = Buffer.alloc(8192);
+			const read = fs.readSync(fd, head, 0, 8192, 0);
+			return head.subarray(0, read);
+		} finally {
+			fs.closeSync(fd);
+		}
+	} catch {
+		return Buffer.alloc(0);
+	}
+}
+const ROOM_FILES_PDF_SECURITY_HEADERS: Record<string, string> = {
+	"content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; img-src data:",
+	"x-content-type-options": "nosniff",
+	"referrer-policy": "no-referrer",
+	"cache-control": "no-store",
+};
+
+const SAFE_ROOM_ID = /^[a-zA-Z0-9_-]{1,160}$/;
+
+function roomFilesRoomId(req: any): string | null {
+	const roomId = String((req.params as any).id ?? "").trim();
+	return SAFE_ROOM_ID.test(roomId) && fs.existsSync(path.join(PERSISTENT_AGENTS_ROOT, roomId)) ? roomId : null;
+}
+
+function isLocalSaveFileRequest(req: any): boolean {
+	const actionHeader = String(req.headers?.["x-exxperts-local-action"] ?? "").trim();
+	if (actionHeader !== "save-file") return false;
+	if (!requestRemoteAddresses(req).some(isLoopbackAddress)) return false;
+	const origin = req.headers?.origin;
+	if (typeof origin === "string" && origin.trim() && !isLoopbackOrLocalhostOrigin(origin.trim())) return false;
+	return true;
+}
+
+app.get("/api/persistent-agents/:id/files", async (req, reply) => {
+	const roomId = roomFilesRoomId(req);
+	if (!roomId) return reply.code(404).send({ error: "Room not found." });
+	// Housekeeping rides the listing (the panel's entry point): finish staged
+	// deletes whose undo window expired without a commit (closed tab, crash) and
+	// heal any rename whose crash window left a journal. Both best-effort.
+	try { sweepExpiredShelfTrash(roomId); } catch {}
+	try { replayShelfRenameJournals(roomId); } catch {}
+	const files = listShelfFilesWithOrigin(roomId).map((entry) => ({
+		name: entry.name,
+		bytes: entry.bytes,
+		mtimeMs: entry.mtimeMs,
+		origin: entry.origin,
+		...(entry.madeAt ? { madeAt: entry.madeAt } : {}),
+		pages: cachedShelfPageCount(roomId, entry.name, entry),
+		extension: path.posix.extname(entry.name).toLowerCase(),
+	}));
+	return { files };
+});
+
+// Upload: base64 JSON like /api/skills/upload (no multipart anywhere in the
+// app). 40 MB body limit covers the 25 MB shelf cap plus base64 inflation.
+// The file is sniffed BEFORE landing: tier-3 formats refuse honestly with the
+// named safe path; accepted bytes take a collision-rule name on the shelf and
+// are parsed once (pdf/docx through the isolated worker) so the response can
+// state the parse result honestly — the staging chip shows exactly this.
+app.post("/api/persistent-agents/:id/files", { bodyLimit: 40 * 1024 * 1024 }, async (req, reply) => {
+	const roomId = roomFilesRoomId(req);
+	if (!roomId) return reply.code(404).send({ error: "Room not found." });
+	const body = (req.body ?? {}) as { filename?: unknown; contentBase64?: unknown };
+	const desiredName = String(body.filename ?? "").trim();
+	if (!desiredName) return reply.code(400).send({ error: "filename is required." });
+	if (typeof body.contentBase64 !== "string" || !body.contentBase64) return reply.code(400).send({ error: "contentBase64 is required." });
+	let bytes: Buffer;
+	try {
+		bytes = Buffer.from(body.contentBase64, "base64");
+	} catch {
+		return reply.code(400).send({ error: "contentBase64 is not valid base64." });
+	}
+	if (bytes.byteLength === 0) return reply.code(400).send({ error: "The file is empty." });
+	if (bytes.byteLength > SHELF_READ_MAX_FILE_BYTES) {
+		return reply.code(413).send({ error: `Files up to ${SHELF_READ_MAX_FILE_BYTES / (1024 * 1024)} MB can be added to this room's Files.` });
+	}
+	const sniff = sniffShelfFileBuffer(bytes.subarray(0, 8192), desiredName);
+	if (sniff.kind === "refused") {
+		return reply.code(415).send({ error: sniff.refusalReason ?? "This file type cannot be added.", code: "unsupported_format" });
+	}
+	const shelfDir = persistentRoomShelfDirPath(roomId);
+	fs.mkdirSync(shelfDir, { recursive: true, mode: 0o700 });
+	let name: string;
+	try {
+		name = allocateShelfFilename(desiredName, (candidate) => fs.existsSync(path.join(shelfDir, candidate)));
+		fs.writeFileSync(path.join(shelfDir, name), bytes, { flag: "wx", mode: 0o600 });
+	} catch (e) {
+		app.log.warn({ err: (e as Error).message, roomId }, "shelf upload write failed");
+		return reply.code(500).send({ error: "The file could not be saved to this room's Files." });
+	}
+	// Parse once, honestly. A parse failure is reported, not hidden — the file
+	// stays on the shelf (read_file will state the same failure) and the chip
+	// carries the truth before the user commits the message.
+	let pages: number | null = null;
+	let parseNote: string | null = null;
+	if (sniff.kind === "pdf" || sniff.kind === "docx") {
+		try {
+			const parsed = await readShelfFileText(roomId, name);
+			pages = parsed.pages;
+			parseNote = parsed.pages !== null ? `${parsed.pages} page${parsed.pages === 1 ? "" : "s"}` : "text extracted";
+		} catch (e) {
+			parseNote = e instanceof PersistentRoomShelfError ? e.message : "could not be parsed";
+		}
+	} else if (sniff.kind === "image") {
+		parseNote = "image · the room reads it visually";
+	}
+	return {
+		name,
+		bytes: bytes.byteLength,
+		kind: sniff.kind,
+		extension: path.posix.extname(name).toLowerCase(),
+		...(pages !== null ? { pages } : {}),
+		...(parseNote ? { parseNote } : {}),
+	};
+});
+
+// Serve a shelf file. Inline preview only for the sandbox-safe set (the
+// artifact CSP rides every response) plus images; everything else downloads
+// with ?download=1 or is refused — never sniffed into an inline document.
+app.get("/api/persistent-agents/:id/files/:name", async (req, reply) => {
+	const roomId = roomFilesRoomId(req);
+	if (!roomId) {
+		reply.headers(ARTIFACT_SECURITY_HEADERS);
+		return reply.code(404).send({ error: "File not found." });
+	}
+	let resolved: ReturnType<typeof resolveShelfFilePath>;
+	try {
+		resolved = resolveShelfFilePath(roomId, String((req.params as any).name ?? ""));
+	} catch {
+		reply.headers(ARTIFACT_SECURITY_HEADERS);
+		return reply.code(404).send({ error: "File not found." });
+	}
+	const extension = path.posix.extname(resolved.name).toLowerCase();
+	// PDFs sniff before they get the plugin-permitting header set: a non-PDF
+	// byte stream named .pdf keeps the full sandboxed headers.
+	const isPdf = extension === ".pdf" && sniffShelfFileBuffer(readFileHead(resolved.absolutePath), resolved.name).kind === "pdf";
+	reply.headers(isPdf ? ROOM_FILES_PDF_SECURITY_HEADERS : ARTIFACT_SECURITY_HEADERS);
+	if (resolved.stat.size > 40_000_000) return reply.code(413).send({ error: "File is too large to serve." });
+	const download = String((req.query as any)?.download ?? "") === "1";
+	const inlineType = (isPdf ? ROOM_FILES_PDF_TYPE : null) ?? artifactContentType(extension) ?? ROOM_FILES_PREVIEW_IMAGE_TYPES[extension] ?? null;
+	if (!download && !inlineType) return reply.code(415).send({ error: "This file type has no inline preview. Use download." });
+	if (download) {
+		const basename = resolved.name.replace(/["\\\r\n]/g, "").replace(/[\x00-\x1f\x7f]/g, "");
+		reply.header("content-disposition", `attachment; filename="${basename}"`);
+	}
+	reply.header("content-length", String(resolved.stat.size));
+	return reply.type(inlineType ?? "application/octet-stream").send(fs.createReadStream(resolved.absolutePath));
+});
+
+// Unified delete (files-management slice): the ONE delete path with one
+// semantics — Delete really deletes (bytes + reading cache), with an undo
+// window. Stage moves the file into the hidden holding dir, so panel, folder
+// and manifest agree the instant the user acts; undo brings it back; commit
+// (toast expiry, or immediately for the staging chip's ✕) makes the bytes go.
+// The old direct DELETE route retired with this: it could delete
+// ledger-referenced room-made files with no undo and no confirm.
+app.post("/api/persistent-agents/:id/files/:name/delete", async (req, reply) => {
+	const roomId = roomFilesRoomId(req);
+	if (!roomId) return reply.code(404).send({ error: "File not found." });
+	try {
+		// The token names THIS delete's holding slot: undo/commit reference it, so
+		// two windows on the same name never collide or eat each other's bytes.
+		return { ok: true, token: stageShelfFileDelete(roomId, String((req.params as any).name ?? "")) };
+	} catch (e) {
+		if (e instanceof PersistentRoomShelfError && e.code === "file_not_found") return reply.code(404).send({ error: "File not found." });
+		return reply.code(400).send({ error: "The file could not be deleted." });
+	}
+});
+app.post("/api/persistent-agents/:id/files/:name/delete/undo", async (req, reply) => {
+	const roomId = roomFilesRoomId(req);
+	if (!roomId) return reply.code(404).send({ error: "File not found." });
+	const token = String(((req.body ?? {}) as { token?: unknown }).token ?? "");
+	try {
+		return { name: undoShelfFileDelete(roomId, token) };
+	} catch (e) {
+		if (e instanceof PersistentRoomShelfError && e.code === "file_not_found") return reply.code(404).send({ error: "There is nothing to restore — the undo window has passed." });
+		return reply.code(400).send({ error: "The file could not be restored." });
+	}
+});
+app.post("/api/persistent-agents/:id/files/:name/delete/commit", async (req, reply) => {
+	const roomId = roomFilesRoomId(req);
+	if (!roomId) return reply.code(404).send({ error: "File not found." });
+	const token = String(((req.body ?? {}) as { token?: unknown }).token ?? "");
+	try {
+		commitShelfFileDelete(roomId, token);
+	} catch {
+		// Commit is idempotent housekeeping; the expiry sweep retries anything stuck.
+	}
+	return { ok: true };
+});
+
+// Inline rename (files-management slice): fs rename under the collision rule
+// plus the journal-guarded ledger rewrite, so room-made origin stories and
+// viewer links survive; the manifest picks the new name up next turn.
+app.post("/api/persistent-agents/:id/files/:name/rename", async (req, reply) => {
+	const roomId = roomFilesRoomId(req);
+	if (!roomId) return reply.code(404).send({ error: "File not found." });
+	const newName = String(((req.body ?? {}) as { newName?: unknown }).newName ?? "").trim();
+	if (!newName) return reply.code(400).send({ error: "newName is required." });
+	try {
+		const result = renameShelfFile(roomId, String((req.params as any).name ?? ""), newName);
+		return { name: result.name, collided: result.collided, unchanged: result.unchanged };
+	} catch (e) {
+		if (e instanceof PersistentRoomShelfError && e.code === "file_not_found") return reply.code(404).send({ error: "File not found." });
+		if (e instanceof PersistentRoomShelfError) return reply.code(400).send({ error: e.message });
+		return reply.code(400).send({ error: "The file could not be renamed." });
+	}
+});
+
+// 💾 Save… — export a snapshot of a shelf file into a folder the user picked
+// with the native chooser. Local-action guarded like the chooser itself; the
+// destination must be an existing directory outside the app's own state.
+app.post("/api/persistent-agents/:id/files/:name/save", async (req, reply) => {
+	if (!isLocalSaveFileRequest(req)) {
+		return reply.code(403).send({ error: "Saving to a folder is only available from the local Exxperts app.", code: "local_request_required" });
+	}
+	const roomId = roomFilesRoomId(req);
+	if (!roomId) return reply.code(404).send({ error: "File not found." });
+	let resolved: ReturnType<typeof resolveShelfFilePath>;
+	try {
+		resolved = resolveShelfFilePath(roomId, String((req.params as any).name ?? ""));
+	} catch {
+		return reply.code(404).send({ error: "File not found." });
+	}
+	const body = (req.body ?? {}) as { targetDir?: unknown; overwrite?: unknown; rename?: unknown; saveAs?: unknown };
+	const targetDirRaw = String(body.targetDir ?? "").trim();
+	if (!targetDirRaw || !path.isAbsolute(targetDirRaw)) return reply.code(400).send({ error: "targetDir must be an absolute folder path." });
+	// Save… ships a filename field pre-filled with the shelf name; the export
+	// (and its collision flow below) keys off the chosen name. Coerced to one
+	// plain segment — the folder choice stays the only place a path is picked.
+	let exportName = resolved.name;
+	if (body.saveAs !== undefined) {
+		try {
+			exportName = validateShelfFilename(sanitizeShelfFilename(String(body.saveAs ?? "")));
+		} catch {
+			return reply.code(400).send({ error: "The chosen file name is not valid." });
+		}
+	}
+	const overwrite = body.overwrite === true;
+	const rename = body.rename === true;
+	if (overwrite && rename) return reply.code(400).send({ error: "overwrite and rename are mutually exclusive." });
+	let targetDir: string;
+	try {
+		targetDir = fs.realpathSync.native(targetDirRaw);
+		if (!fs.statSync(targetDir).isDirectory()) throw new Error("not a directory");
+	} catch {
+		return reply.code(400).send({ error: "The chosen folder no longer exists." });
+	}
+	// Never export INTO the app's own state — snapshots leave the app, they do
+	// not silently create second truths inside it. Compare realpaths: targetDir
+	// was resolved above, so the state root must be resolved the same way
+	// (macOS /var vs /private/var would otherwise defeat the prefix check).
+	let stateRoot = path.join(os.homedir(), ".exxperts");
+	try {
+		stateRoot = fs.realpathSync.native(stateRoot);
+	} catch {
+		// State root missing entirely — nothing to protect.
+	}
+	if (targetDir === stateRoot || targetDir.startsWith(stateRoot + path.sep)) {
+		return reply.code(400).send({ error: "Pick a folder outside the app's own storage." });
+	}
+	const confined = (candidateName: string): string | null => {
+		const candidate = path.resolve(targetDir, candidateName);
+		return candidate !== targetDir && candidate.startsWith(targetDir + path.sep) ? candidate : null;
+	};
+	const destPath = confined(exportName);
+	if (!destPath) return reply.code(400).send({ error: "The file name cannot land in the chosen folder." });
+	if (!overwrite && !rename && fs.existsSync(destPath)) {
+		return reply.code(409).send({ error: "A file with this name already exists in the chosen folder.", code: "exists" });
+	}
+	let savedTo = destPath;
+	try {
+		const content = fs.readFileSync(resolved.absolutePath);
+		if (rename) {
+			const parsed = path.parse(exportName);
+			let written = false;
+			for (let suffix = fs.existsSync(destPath) ? 2 : 1; suffix <= 200; suffix += 1) {
+				const candidateName = suffix === 1 ? exportName : `${parsed.name}-${suffix}${parsed.ext}`;
+				const candidate = confined(candidateName);
+				if (!candidate) return reply.code(400).send({ error: "The file name cannot land in the chosen folder." });
+				try {
+					fs.writeFileSync(candidate, content, { flag: "wx", mode: 0o644 });
+					savedTo = candidate;
+					written = true;
+					break;
+				} catch (e) {
+					if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
+				}
+			}
+			if (!written) return reply.code(500).send({ error: "Could not find a free name in the chosen folder." });
+		} else {
+			fs.writeFileSync(destPath, content, { flag: overwrite ? "w" : "wx", mode: 0o644 });
+		}
+	} catch (e) {
+		if ((e as NodeJS.ErrnoException).code === "EEXIST") {
+			return reply.code(409).send({ error: "A file with this name already exists in the chosen folder.", code: "exists" });
+		}
+		return reply.code(500).send({ error: "The file could not be saved to the chosen folder." });
+	}
+	return { savedTo };
 });
 
 function contentType(file: string): string {
@@ -5216,6 +5773,36 @@ try {
 	if (sweptTasks > 0) app.log.info(`task ledger: marked ${sweptTasks} interrupted task(s) orphaned`);
 } catch (e) {
 	app.log.warn({ err: (e as Error).message }, "task ledger boot sweep failed");
+}
+
+// Boot heal FIRST: replay any rename journal a crash left mid-rewrite and
+// finish any staged delete whose undo window outlived its process. It must run
+// BEFORE the migration mutates the shelf namespace: the rename-journal replay
+// keys on "oldName gone = the move happened", and the migration allocates
+// shelf names by what exists on disk — run after it, a crash-freed oldName
+// could already hold an unrelated migrated output, the replay would read the
+// name as reclaimed and skip the rewrite, and the renamed file's ledger rows
+// would resolve to the wrong bytes forever. Heal reads nothing the migration
+// produces (rename journals and trash tokens are shelf-only state), so this
+// order is safe — and it is the only order that keeps the replay predicate
+// unambiguous.
+try { healShelfMaintenanceAtBoot(); } catch (e) { app.log.warn({ err: (e as Error).message }, "shelf boot heal failed; the files listing retries per room"); }
+// Shelf migration (files core slice): task-store artifacts move in with their
+// room, once, before the server accepts traffic. Idempotent per room (marker)
+// and per record (rename + rewrite each heal independently); the orphan sweep
+// inside runs only after every room migrated cleanly and logs every removal to
+// migration-removed.log next to the store. Runs AFTER the ledger boot sweep so
+// interrupted `running` rows are terminal before their folders are walked, and
+// AFTER the shelf boot heal (see above) so the shelf namespace it allocates
+// into is fully healed.
+try {
+	const shelfMigration = migrateTaskArtifactsToShelves({ artifactsRoot: artifactRoot(), log: (message) => app.log.info(message) });
+	if (shelfMigration.filesMoved > 0 || shelfMigration.orphanEntriesDeleted > 0 || shelfMigration.entriesMovedAside > 0) {
+		app.log.info(`shelf migration: ${shelfMigration.roomsMigrated} room(s), ${shelfMigration.filesMoved} file(s) moved, ${shelfMigration.orphanEntriesDeleted} store entr${shelfMigration.orphanEntriesDeleted === 1 ? "y" : "ies"} removed, ${shelfMigration.entriesMovedAside} moved aside`);
+	}
+	for (const migrationError of shelfMigration.errors) app.log.warn(`shelf migration: ${migrationError}`);
+} catch (e) {
+	app.log.warn({ err: (e as Error).message }, "shelf migration failed; task-store artifacts stay in place until the next boot");
 }
 
 let schedulerPreflightLoopHandle: ReturnType<typeof startPersistentRoomSchedulePreflightLoop> | null = null;

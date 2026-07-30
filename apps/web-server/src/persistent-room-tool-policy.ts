@@ -26,6 +26,10 @@ export const PERSISTENT_ROOM_LOCAL_FILES_TOOL_NAMES = [
 	PERSISTENT_ROOM_SPREADSHEET_READ_TOOL_NAME,
 ] as const;
 export const PERSISTENT_ROOM_WEB_RESEARCH_TOOL_NAMES = ["web_search", "fetch_url"] as const;
+// The room's eyes on its own shelf (files core slice): read-only, fenced to
+// personalized-agents/<roomId>/files/, default-on for every room — a dropped
+// or room-made file is vouched-for content, the fetch_url trust class.
+export const PERSISTENT_ROOM_SHELF_TOOL_NAMES = ["read_file", "search_file"] as const;
 // Single proxy tool from pi-mcp-adapter; which servers it can reach is
 // governed by the user's mcp.json config, not by tool names.
 export const PERSISTENT_ROOM_MCP_TOOL_NAMES = ["mcp"] as const;
@@ -223,6 +227,7 @@ export function getPersistentRoomToolPolicy(agentId: string, input: { workspaceT
 	const bashToolNames = workspaceAccessMode === "localFiles" && input.bashEnabled === true && input.bashRuntimeAllowed === true ? [PERSISTENT_ROOM_BASH_TOOL_NAME] : [];
 	const allowedToolNames = [
 		...PERSISTENT_ROOM_WEB_RESEARCH_TOOL_NAMES,
+		...PERSISTENT_ROOM_SHELF_TOOL_NAMES,
 		...PERSISTENT_ROOM_MCP_TOOL_NAMES,
 		...workspaceToolNames,
 		...bashToolNames,

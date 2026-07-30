@@ -89,7 +89,7 @@ try {
 	assert(overridden.processes.absorb.model === "claude-haiku-4-5", "override replaces the absorb lock");
 	assert(!profiles.isPersistentAgentAiProfileId("custom-anthropic"), "override ids must not become selectable profiles");
 	assert(custom.deleteCustomAiProfile("custom-anthropic", filePath), "override delete should succeed");
-	assert(profiles.getPersistentAgentAiProfile("anthropic").processes.persistentRoom.length === 6, "deleting the override restores the curated catalog");
+	assert(profiles.getPersistentAgentAiProfile("anthropic").processes.persistentRoom.length === 7, "deleting the override restores the curated catalog");
 
 	// Hand-crafted bad entries: skipped with errors, good entries survive.
 	fs.writeFileSync(
@@ -108,7 +108,7 @@ try {
 	const mixed = custom.readCustomAiProfiles(filePath);
 	assert(mixed.profiles.length === 1 && mixed.profiles[0].id === "custom-groq", "only the valid entry should survive");
 	assert(mixed.errors.length === 4, `each invalid entry should produce an error, got ${mixed.errors.length}`);
-	assert(profiles.getPersistentAgentAiProfile("anthropic").processes.persistentRoom.length === 6, "built-in anthropic profile must be unaffected by file contents");
+	assert(profiles.getPersistentAgentAiProfile("anthropic").processes.persistentRoom.length === 7, "built-in anthropic profile must be unaffected by file contents");
 
 	// Corrupt JSON: no throw, surfaced as error, built-ins unaffected.
 	fs.writeFileSync(filePath, "{not json");

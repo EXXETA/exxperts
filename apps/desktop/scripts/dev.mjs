@@ -24,7 +24,7 @@ const argv = process.argv.slice(2);
 const smoke = argv.includes("--smoke");
 const realState = argv.includes("--real-state");
 
-const build = spawnSync("npx", ["tsc", "-p", "tsconfig.json"], { cwd: pkgRoot, stdio: "inherit" });
+const build = spawnSync("node", [path.join(here, "build.mjs")], { cwd: pkgRoot, stdio: "inherit" });
 if (build.status !== 0) process.exit(build.status ?? 1);
 
 const env = { ...process.env };
@@ -41,10 +41,35 @@ if (smoke) {
 }
 
 // --fake-update-feed: serve a v9.9.9 release locally and require the smoke
-// to detect it (the update-notice positive path, scripted).
+// to detect it (the update-notice positive path, scripted). The same server
+// answers electron-updater's generic-provider requests (latest-mac.yml /
+// latest.yml) so the one-click updater's check stage is exercised too.
 let fakeFeed = null;
 if (argv.includes("--fake-update-feed")) {
-  fakeFeed = http.createServer((_req, res) => {
+  const fakeYml = (file) => [
+    "version: 9.9.9",
+    "files:",
+    `  - url: ${file}`,
+    "    sha512: aGVsbG8=",
+    "    size: 1",
+    `path: ${file}`,
+    "sha512: aGVsbG8=",
+    "releaseDate: '2026-01-01T00:00:00.000Z'",
+    "",
+  ].join("\n");
+  fakeFeed = http.createServer((req, res) => {
+    // electron-updater appends a ?noCache=... query; match the path only.
+    const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
+    if (pathname.endsWith("latest-mac.yml")) {
+      res.setHeader("content-type", "text/yaml");
+      res.end(fakeYml("exxperts-desktop-9.9.9-mac-arm64.zip"));
+      return;
+    }
+    if (pathname.endsWith("latest.yml")) {
+      res.setHeader("content-type", "text/yaml");
+      res.end(fakeYml("exxperts-setup-9.9.9.exe"));
+      return;
+    }
     res.setHeader("content-type", "application/json");
     res.end(JSON.stringify({ tag_name: "v9.9.9", prerelease: false, draft: false }));
   });

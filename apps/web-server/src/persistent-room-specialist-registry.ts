@@ -46,6 +46,16 @@ export interface SpecialistRegistryEntry {
 	stoppedByUser: boolean;
 	/** Accumulated delta tail, capped — the reconnect replay's payload. */
 	tail: string;
+	/**
+	 * Shelf filenames this run is REVISING in place (taste pass). The panel
+	 * shows the working state on the target file's own row instead of adding a
+	 * second row for the run, so it has to know the targets while the run is
+	 * live — and it must still know them after a reload, which is why this
+	 * lives on the registry entry (the reconnect replay's source of truth) and
+	 * not only in the launching connection's memory. Empty/absent = a run that
+	 * makes new files, which keeps the working row it always had.
+	 */
+	reviseTargetNames?: string[];
 }
 
 export interface SpecialistRegistryEntryInput {
@@ -56,6 +66,7 @@ export interface SpecialistRegistryEntryInput {
 	title: string;
 	model: unknown;
 	abortController: AbortController;
+	reviseTargetNames?: string[];
 }
 
 /** Mirrors the client reducer's TASK_TAIL_CAP: replaying more would be dropped there anyway. */
@@ -169,6 +180,7 @@ export function bindSpecialistSink(roomId: string, sink: SpecialistSink): void {
 			templateLabel: entry.templateLabel,
 			title: entry.title,
 			model: entry.model,
+			...(entry.reviseTargetNames?.length ? { reviseTargetNames: entry.reviseTargetNames } : {}),
 		});
 		if (entry.tail) sink({ type: "task_delta", taskId: entry.taskId, delta: entry.tail });
 	}

@@ -210,7 +210,10 @@ try {
 		assert(text.startsWith("[SPECIALIST RESULT: deck]"), "folded task must open with the §2.2 fence");
 		assert(text.endsWith("[/SPECIALIST RESULT: deck]"), "folded task must close with the §2.2 fence");
 		assert(text.includes("Template: deck v3 · ran 2026-07-12T10:00:00.000Z"), "folded task must carry the real template version");
-		assert(text.includes("tasks/tsk-legacy1/deck.html"), "folded task must list the artifact path");
+		// The slim block (revise-in-place slice) carries a file COUNT, never a
+		// path list — the manifest owns "what exists and where".
+		assert(text.includes("· 1 file"), "folded task must carry the artifact count");
+		assert(!text.includes("tasks/tsk-legacy1/deck.html"), "folded task must NOT list artifact paths (slim block)");
 		assert(text.includes("ephemeral specialist session, no memory access"), "folded task must carry the provenance source line");
 		const fenceLines = text.split("\n").filter((line) => line === "[/SPECIALIST RESULT: deck]");
 		assert(fenceLines.length === 1, "a forged close fence inside the summary must be defanged");

@@ -51,8 +51,19 @@ export const CONSULT_HANDOFF_RESERVED_TOKEN = "**must-keep**";
  *
  * Plain-prose manipulation ("please keep this forever") is inherent LLM risk and
  * out of scope here; this closes the STRUCTURAL forge, which is the code's job.
+ *
+ * BOTH envelope families are defanged in EVERY untrusted block, not just the
+ * family the block belongs to (critical-fixes hardening). The consent parser's
+ * fence recognisers (userAuthoredPromptText) match both families, so a consult
+ * answer carrying a literal `[/SPECIALIST RESULT: x]` would close the consult
+ * block early and launder the rest of the model-written block into
+ * "user-authored" consent scope — the same laundering the delegation slice
+ * closed for specialist summaries. The invariant is symmetric: any marker a
+ * fence recogniser anywhere can match must be un-reproducible in ANY
+ * neutralised content.
  */
 const HANDOFF_MARKER_LIKE = /\[\s*\/?\s*CONSULT\s+HANDOFF\b[^\]\n]*\]/gi;
+const SPECIALIST_MARKER_LIKE = /\[\s*\/?\s*SPECIALIST\s+RESULT\b[^\]\n]*\]/gi;
 const MUST_KEEP_EMPHASIS = /[*_]{1,3}\s*must[\s‐-―_-]*keep\s*[*_]{1,3}/gi;
 
 export function neutralizeBlockContent(text: string): string {
@@ -60,6 +71,7 @@ export function neutralizeBlockContent(text: string): string {
 		// Keep the words, remove the fence: a marker-like token can no longer
 		// terminate or open an envelope once its brackets are gone.
 		.replace(HANDOFF_MARKER_LIKE, (marker) => marker.replace(/[[\]]/g, ""))
+		.replace(SPECIALIST_MARKER_LIKE, (marker) => marker.replace(/[[\]]/g, ""))
 		// Collapse emphasized must-keep variants to plain text — no durability signal.
 		.replace(MUST_KEEP_EMPHASIS, "must-keep");
 }

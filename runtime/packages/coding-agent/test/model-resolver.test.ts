@@ -373,6 +373,11 @@ describe("resolveCliModel", () => {
 });
 
 describe("default model selection", () => {
+	test("anthropic and bedrock defaults track current models", () => {
+		expect(defaultModelPerProvider.anthropic).toBe("claude-opus-5");
+		expect(defaultModelPerProvider["amazon-bedrock"]).toBe("us.anthropic.claude-opus-5");
+	});
+
 	test("openai defaults track current models", () => {
 		expect(defaultModelPerProvider.openai).toBe("gpt-5.4");
 		expect(defaultModelPerProvider["openai-codex"]).toBe("gpt-5.5");

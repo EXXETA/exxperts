@@ -131,6 +131,23 @@ describe("Agent", () => {
 		expect(agent.state.errorMessage).toBe("provider exploded");
 	});
 
+	it("forwards an explicit maxTokens to the stream function and omits it by default", async () => {
+		let seenMaxTokens: number | undefined | null = null;
+		const capture = (options?: { maxTokens?: number }) => {
+			seenMaxTokens = options?.maxTokens;
+			throw new Error("capture only");
+		};
+
+		const capped = new Agent({ maxTokens: 128000, streamFn: (_model, _context, options) => capture(options) });
+		await capped.prompt("hello");
+		expect(seenMaxTokens).toBe(128000);
+
+		seenMaxTokens = null;
+		const uncapped = new Agent({ streamFn: (_model, _context, options) => capture(options) });
+		await uncapped.prompt("hello");
+		expect(seenMaxTokens).toBeUndefined();
+	});
+
 	it("should await async subscribers before prompt resolves", async () => {
 		const barrier = createDeferred();
 		const agent = new Agent({

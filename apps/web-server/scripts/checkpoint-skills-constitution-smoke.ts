@@ -19,8 +19,8 @@ function assert(condition: unknown, message: string): asserts condition {
 
 const constitution = checkpointCompressionConstitution();
 
-// The skills rule exists, in the Recoverable-vs-Ephemeral provenance section,
-// with its load-bearing elements: the tool name, re-derivability, the
+// The skills rule exists, in the Ephemeral Signal provenance section, with
+// its load-bearing elements: the tool name, re-derivability, the
 // reference-with-provenance shape (sha256), the never-retain rule, and the
 // anti-laundering rule.
 assert(constitution.includes("read_skill"), "constitution must name the read_skill tool");
@@ -29,9 +29,15 @@ assert(constitution.includes("used skill cite-sources (sha256:"), "constitution 
 assert(/never retain the instruction text/i.test(constitution), "constitution must forbid retaining the body text");
 assert(/do not launder them into the room's own voice or memory/i.test(constitution), "constitution must carry the anti-laundering rule");
 const skillsRuleIndex = constitution.indexOf("read_skill");
-const recoverableIndex = constitution.indexOf("## Recoverable vs. Ephemeral Signal");
+const ephemeralIndex = constitution.indexOf("## Ephemeral Signal");
 const nextSectionIndex = constitution.indexOf("## Fidelity Marking");
-assert(recoverableIndex !== -1 && nextSectionIndex !== -1 && skillsRuleIndex > recoverableIndex && skillsRuleIndex < nextSectionIndex, "the skills rule must live in the Recoverable vs. Ephemeral provenance section");
+assert(ephemeralIndex !== -1 && nextSectionIndex !== -1 && skillsRuleIndex > ephemeralIndex && skillsRuleIndex < nextSectionIndex, "the skills rule must live in the Ephemeral Signal provenance section");
+// The handoff flip retired the artifact-preservation guidance: compressing
+// events must no longer be asked to safeguard file inventory (the manifest
+// owns it, regenerated every request) — only conclusions and provenance.
+assert(!constitution.includes("Recoverable vs. Ephemeral Signal"), "the retired recoverable-artifacts section must not resurface");
+assert(!/reference the artifact by name\/path/i.test(constitution), "the compressor is no longer begged to preserve artifact mentions");
+assert(/never spend density cataloguing which files exist/i.test(constitution), "the constitution states the manifest owns file inventory");
 
 // The rule reaches the real compression prompt (what the worker actually sees),
 // including when a skill body sits in the transcript being compressed.

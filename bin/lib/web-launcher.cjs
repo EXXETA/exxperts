@@ -36,6 +36,46 @@ function loadDotenv(root) {
   } catch {}
 }
 
+// One-shot pre-flight before spawning the server: is something already on the
+// chosen port? "responding" (an earlier exxperts web server, or another app,
+// answers HTTP there) and "unresponsive" (the port is held but nothing ever
+// replies — a wedged process) both mean the fresh server child would only die
+// with EADDRINUSE after its slow TypeScript startup, while the readiness poll
+// gets answered by the OLD server — an instant false "running" banner, a
+// browser opened at stale code, and an unexplained exit up to a minute later.
+// ECONNREFUSED means the port is free; any other socket error stays
+// inconclusive and the launch proceeds — the server's own EADDRINUSE message
+// is the backstop for those.
+function probePort(port) {
+  return new Promise((resolve) => {
+    const req = http.get(`http://127.0.0.1:${port}/healthz`, (res) => {
+      res.resume();
+      resolve("responding");
+    });
+    req.on("error", (err) => resolve(err && err.code === "ECONNREFUSED" ? "free" : "inconclusive"));
+    req.setTimeout(1500, () => {
+      req.destroy();
+      resolve("unresponsive");
+    });
+  });
+}
+
+function portHeldMessage(command, port, portState) {
+  const cause = portState === "responding"
+    ? `Port ${port} is already in use. Most likely an exxperts web server from an earlier launch is still running (this can happen after an update, or when a previous session did not shut down).`
+    : `Port ${port} is held by a process that is not responding; most likely an earlier exxperts web server that got stuck.`;
+  const reuse = portState === "responding"
+    ? `\n  - Or, to keep using the already-running server, open http://localhost:${port} in your browser.`
+    : "";
+  return `${cause}
+
+What you can do:
+  - Stop the other process: close its terminal window, or end the stray
+    exxperts/node process (Windows: Task Manager, macOS: Activity Monitor),
+    then run \`${command}\` again.
+  - Or start on a different port: ${command} --port ${Number(port) + 1}${reuse}`;
+}
+
 function waitFor(url) {
   return new Promise((resolve) => {
     const req = http.get(url, (res) => {
@@ -107,36 +147,58 @@ function main(argv = process.argv.slice(2), command = path.basename(process.argv
   ensureDirs();
   loadDotenv(root);
 
-  const tsxCli = require.resolve("tsx/cli");
-  const serverEntry = path.join(root, "apps", "web-server", "src", "index.ts");
-  const env = {
-    ...process.env,
-    EXXETA_HOME: root,
-    NODE_ENV: process.env.NODE_ENV || "production",
-    PORT: String(opts.port),
-  };
-
-  const server = spawn(process.execPath, [tsxCli, serverEntry], {
-    cwd: root,
-    stdio: "inherit",
-    env,
-  });
-
-  function stop() {
-    if (!server.killed) server.kill("SIGTERM");
-  }
-  process.on("SIGINT", stop);
-  process.on("SIGTERM", stop);
-  server.on("exit", (code, signal) => process.exit(code ?? (signal ? 1 : 0)));
-
   (async () => {
+    const portState = await probePort(opts.port);
+    if (portState === "responding" || portState === "unresponsive") {
+      console.error(portHeldMessage(command, opts.port, portState));
+      process.exit(1);
+    }
+
+    const tsxCli = require.resolve("tsx/cli");
+    const serverEntry = path.join(root, "apps", "web-server", "src", "index.ts");
+    const env = {
+      ...process.env,
+      EXXETA_HOME: root,
+      NODE_ENV: process.env.NODE_ENV || "production",
+      PORT: String(opts.port),
+    };
+
+    const server = spawn(process.execPath, [tsxCli, serverEntry], {
+      cwd: root,
+      stdio: "inherit",
+      env,
+    });
+
+    function stop() {
+      if (!server.killed) server.kill("SIGTERM");
+    }
+    process.on("SIGINT", stop);
+    process.on("SIGTERM", stop);
+    server.on("error", (err) => {
+      console.error(`Could not start the exxperts web server: ${err.message}`);
+      process.exit(1);
+    });
+    server.on("exit", (code, signal) => process.exit(code ?? (signal ? 1 : 0)));
+
     const url = `http://localhost:${opts.port}`;
-    for (let i = 0; i < 40; i++) {
+    let ready = false;
+    for (let i = 0; i < 40 && !ready; i++) {
       // If the server child already died (e.g. port in use), it printed why —
       // don't claim the app is running just because something answers on the port.
       if (server.exitCode !== null) return;
-      if (await waitFor(`${url}/healthz`)) break;
-      await new Promise((r) => setTimeout(r, 250));
+      ready = await waitFor(`${url}/healthz`);
+      if (!ready) await new Promise((r) => setTimeout(r, 250));
+    }
+    if (!ready) {
+      // Say so and keep waiting instead of claiming success: the first start
+      // after an install or update pays a cold TypeScript startup that can
+      // outlast the poll window, especially on Windows.
+      console.error(`\nThe web server is not answering on ${url} yet. The first start after an install or update can be slow; still waiting. Press Ctrl+C to stop.`);
+      while (!ready) {
+        if (server.exitCode !== null) return;
+        ready = await waitFor(`${url}/healthz`);
+        if (!ready) await new Promise((r) => setTimeout(r, 1000));
+      }
     }
     if (server.exitCode !== null) return;
     const token = readAuthToken();
@@ -144,7 +206,10 @@ function main(argv = process.argv.slice(2), command = path.basename(process.argv
     console.error(`\nexxperts web running at ${url}\nPress Ctrl+C to stop.\n`);
     if (opts.open) openBrowser(signInUrl);
     else if (token) console.error(`Open this link once to sign the browser in:\n${signInUrl}\n`);
-  })();
+  })().catch((err) => {
+    console.error(`Could not start exxperts web: ${err && err.message ? err.message : err}`);
+    process.exit(1);
+  });
 }
 
 module.exports = { main, usage };

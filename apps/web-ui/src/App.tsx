@@ -2,7 +2,11 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties }
 import { Sidebar } from "./components/Sidebar";
 import { AssetsPanel } from "./components/assets-panel";
 import { AssetViewerFooter } from "./components/asset-viewer-footer";
-import { assetDisplayTitle, assetTemplateShortName, projectAssetRows, type AssetLedgerRowInput, type AssetRowView } from "./assets-panel";
+import { ToastStack, type ToastView } from "./components/toast-stack";
+import { readReviseConflicts, reviseConflictSentence } from "../../web-server/src/revise-conflict-notice";
+import { assetDisplayTitle, assetTemplateShortName, projectAssetRows, rowShelfFileName, shelfTruthForRoom, type AssetLedgerRowInput, type AssetRowView, type ShelfFileRowInput } from "./assets-panel";
+import { commitRoomFileDelete, fileToBase64, listRoomFiles, renameRoomFile, saveRoomFileToFolder, stageRoomFileDelete, undoRoomFileDelete, uploadRoomFile, type RoomShelfFile } from "./room-files-api";
+import { chooseSystemFolder } from "./persistent-room-workspace-api";
 import { Dashboard } from "./components/Dashboard";
 import { Memory } from "./components/Memory";
 import { InRoomChatShellView } from "./components/in-room-chat";
@@ -33,7 +37,7 @@ import { ArtifactViewer } from "./components/ArtifactViewer";
 // straight from the server workspace's pure module (no node/server deps; vite
 // bundles it) so transfer here and the checkpoint formatter there agree exactly.
 import { buildConsultHandoffBlockFromStack, composeOutgoingPromptWithHandoffs, readConsultHandoffQueue, type ConsultHandoffExchange } from "../../web-server/src/consult-handoff";
-import { buildSpecialistHandoffBlock } from "../../web-server/src/specialist-handoff";
+import { isSpecialistHandoffBlock } from "../../web-server/src/specialist-handoff";
 import type { MentionCandidateRoom } from "./mention-popover";
 
 type MainView = "home" | "chat" | "dashboard" | "ai-setup" | "connectors" | "memory" | "skills";
@@ -123,6 +127,16 @@ function maintenanceWorkerNotes(warningsField: string): string {
 		|| normalized === "none noted"
 		|| normalized === "none, or concise uncertainty flags";
 	return noneLike ? "" : warningsField.trim();
+}
+
+// Draft again stops being blind: when the previous draft failed validation,
+// its reasons ride the redraft request so the worker corrects the named
+// failures. Only validator errors and structural parse warnings qualify —
+// informational warnings ("no memory has been written") are not feedback.
+function proposalRetryFeedback(prior: { candidateValidation: { valid: boolean; errors: string[] }; warnings: string[] } | null | undefined): string[] | undefined {
+	if (!prior || prior.candidateValidation.valid) return undefined;
+	const feedback = [...prior.candidateValidation.errors, ...prior.warnings.filter((warning) => warning.startsWith("proposal "))];
+	return feedback.length ? feedback : undefined;
 }
 
 // Fast-path gate: structural/deterministic problems block, and so does any
@@ -434,11 +448,11 @@ function requestAbsorbAssessment(agentId: PersistentAgentId): Promise<AbsorbAsse
 	return fetchJson<AbsorbAssessmentResponse>(`${absorbBaseUrl(agentId)}/assess`, { method: "POST" });
 }
 
-function requestAbsorbProposal(agentId: PersistentAgentId, assessmentMarkdown: string, options?: { assessmentHandoff?: AbsorbDiscussionSignoffResponse["assessmentHandoff"]; source?: AbsorbProposalSourceMetadata }): Promise<AbsorbProposalResponse> {
+function requestAbsorbProposal(agentId: PersistentAgentId, assessmentMarkdown: string, options?: { assessmentHandoff?: AbsorbDiscussionSignoffResponse["assessmentHandoff"]; source?: AbsorbProposalSourceMetadata; retryFeedback?: string[] }): Promise<AbsorbProposalResponse> {
 	return fetchJson<AbsorbProposalResponse>(`${absorbBaseUrl(agentId)}/propose`, {
 		method: "POST",
 		headers: { "content-type": "application/json" },
-		body: JSON.stringify({ assessmentMarkdown, ...(options?.assessmentHandoff ? { assessmentHandoff: options.assessmentHandoff } : {}), ...(options?.source ? { source: options.source } : {}) }),
+		body: JSON.stringify({ assessmentMarkdown, ...(options?.assessmentHandoff ? { assessmentHandoff: options.assessmentHandoff } : {}), ...(options?.source ? { source: options.source } : {}), ...(options?.retryFeedback?.length ? { retryFeedback: options.retryFeedback } : {}) }),
 	});
 }
 
@@ -478,11 +492,11 @@ function requestStructuralReviewAssessment(agentId: PersistentAgentId): Promise<
 	return fetchJson<StructuralReviewAssessmentResponse>(`${structuralReviewBaseUrl(agentId)}/assess`, { method: "POST" });
 }
 
-function requestStructuralReviewProposal(agentId: PersistentAgentId, assessmentMarkdown: string, options?: { assessmentHandoff?: StructuralReviewDiscussionSignoffResponse["assessmentHandoff"]; source?: StructuralReviewSourceMetadata }): Promise<StructuralReviewProposalResponse> {
+function requestStructuralReviewProposal(agentId: PersistentAgentId, assessmentMarkdown: string, options?: { assessmentHandoff?: StructuralReviewDiscussionSignoffResponse["assessmentHandoff"]; source?: StructuralReviewSourceMetadata; retryFeedback?: string[] }): Promise<StructuralReviewProposalResponse> {
 	return fetchJson<StructuralReviewProposalResponse>(`${structuralReviewBaseUrl(agentId)}/propose`, {
 		method: "POST",
 		headers: { "content-type": "application/json" },
-		body: JSON.stringify({ assessmentMarkdown, ...(options?.assessmentHandoff ? { assessmentHandoff: options.assessmentHandoff } : {}), ...(options?.source ? { source: options.source } : {}) }),
+		body: JSON.stringify({ assessmentMarkdown, ...(options?.assessmentHandoff ? { assessmentHandoff: options.assessmentHandoff } : {}), ...(options?.source ? { source: options.source } : {}), ...(options?.retryFeedback?.length ? { retryFeedback: options.retryFeedback } : {}) }),
 	});
 }
 
@@ -1033,9 +1047,25 @@ function MaintainConfirmDialog({ confirm, onClose }: { confirm: MaintainConfirm;
 	);
 }
 
+// A composer-staged attachment (files UI slice): already uploaded to the shelf
+// and parsed, waiting to ride the next message. The chip is the visible proof
+// the drop worked and carries the HONEST parse state before the user commits.
+type StagedAttachment = {
+	/** The allocated shelf name (collision rule already applied). Empty while uploading. */
+	name: string;
+	/** Chip key while the upload is in flight (the name is not known yet). */
+	stageId: string;
+	bytes: number;
+	extension: string;
+	status: "uploading" | "ready" | "failed";
+	/** "34 pages" · "image · stored…" · a parse-failure reason. */
+	parseNote: string;
+	pages?: number;
+};
+
 // Export collision (assets contract §5): the three-button flow. Replace is the
 // destructive choice; Keep both auto-suffixes server-side; no filename typing.
-type ExportCollision = { fileName: string; onReplace: () => void; onKeepBoth: () => void };
+type ExportCollision = { fileName: string; place?: string; onReplace: () => void; onKeepBoth: () => void };
 
 function ExportCollisionDialog({ collision, onClose }: { collision: ExportCollision; onClose: () => void }) {
 	useEscapeKey(onClose, true);
@@ -1043,7 +1073,7 @@ function ExportCollisionDialog({ collision, onClose }: { collision: ExportCollis
 		<div className="checkpoint-preview-backdrop maintain-confirm-backdrop" role="dialog" aria-modal="true" aria-label="File already exists">
 			<section className="checkpoint-input-card maintain-confirm-card">
 				<h2>File already exists</h2>
-				<p>A file called “{collision.fileName}” is already in this room's workspace.</p>
+				<p>A file called “{collision.fileName}” is already in {collision.place ?? "the chosen folder"}.</p>
 				<div className="checkpoint-preview-actions">
 					<button className="landing-action secondary" autoFocus onClick={onClose}>Cancel</button>
 					<button className="landing-action secondary" onClick={() => { onClose(); collision.onKeepBoth(); }}>Keep both</button>
@@ -1062,10 +1092,65 @@ function AssetDeleteDialog({ title, onDelete, onCancel }: { title: string; onDel
 		<div className="checkpoint-preview-backdrop maintain-confirm-backdrop" role="dialog" aria-modal="true" aria-label="Delete task files">
 			<section className="checkpoint-input-card maintain-confirm-card">
 				<h2>Delete “{title}”?</h2>
-				<p>This removes its files for good. Anything you saved to the workspace stays.</p>
+				<p>This removes its files for good. Snapshots you downloaded or saved to a folder stay.</p>
 				<div className="checkpoint-preview-actions">
 					<button className="landing-action secondary" autoFocus onClick={onCancel}>Cancel</button>
 					<button className="rs-btn rs-btn-danger" onClick={onDelete}>Delete</button>
+				</div>
+			</section>
+		</div>
+	);
+}
+
+// Unified delete (files-management slice): the informed confirm for files
+// whose loss costs more than a re-upload — room-made files (the room's work)
+// and files the room already read this session. Cancel is the safe default.
+function FileDeleteDialog({ fileName, reason, onDelete, onCancel }: { fileName: string; reason: string; onDelete: () => void; onCancel: () => void }) {
+	useEscapeKey(onCancel, true);
+	return (
+		<div className="checkpoint-preview-backdrop maintain-confirm-backdrop" role="dialog" aria-modal="true" aria-label="Delete file">
+			<section className="checkpoint-input-card maintain-confirm-card">
+				<h2>Delete “{fileName}”?</h2>
+				<p>{reason} Snapshots you downloaded or saved to a folder stay.</p>
+				<div className="checkpoint-preview-actions">
+					<button className="landing-action secondary" autoFocus onClick={onCancel}>Cancel</button>
+					<button className="rs-btn rs-btn-danger" onClick={onDelete}>Delete</button>
+				</div>
+			</section>
+		</div>
+	);
+}
+
+// 💾 Save… filename step (files-management slice): pre-filled with the shelf
+// name, editable before the folder picker opens; the export and its collision
+// flow key off the chosen name.
+function SaveAsDialog({ shelfName, onSave, onCancel }: { shelfName: string; onSave: (name: string) => void; onCancel: () => void }) {
+	const [draft, setDraft] = useState(shelfName);
+	useEscapeKey(onCancel, true);
+	const commit = () => {
+		const name = draft.trim();
+		if (name) onSave(name);
+	};
+	return (
+		<div className="checkpoint-preview-backdrop maintain-confirm-backdrop" role="dialog" aria-modal="true" aria-label="Save file as">
+			<section className="checkpoint-input-card maintain-confirm-card">
+				<h2>Save a snapshot</h2>
+				<p>Pick the file name; you choose the folder next.</p>
+				<input
+					className="save-as-input"
+					value={draft}
+					autoFocus
+					aria-label="File name"
+					onFocus={(e) => {
+						const dot = draft.lastIndexOf(".");
+						e.currentTarget.setSelectionRange(0, dot > 0 ? dot : draft.length);
+					}}
+					onChange={(e) => setDraft(e.target.value)}
+					onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); commit(); } }}
+				/>
+				<div className="checkpoint-preview-actions">
+					<button className="landing-action secondary" onClick={onCancel}>Cancel</button>
+					<button className="landing-action" disabled={!draft.trim()} onClick={commit}>Choose folder…</button>
 				</div>
 			</section>
 		</div>
@@ -1104,7 +1189,7 @@ function TaskStoreGcDialog({ assessment, busy, onConfirm, onClose }: { assessmen
 		<div className="checkpoint-preview-backdrop maintain-confirm-backdrop" role="dialog" aria-modal="true" aria-label="Review task-store cleanup">
 			<section className="checkpoint-input-card maintain-confirm-card task-store-gc-card">
 				<h2>Free up task storage</h2>
-				<p>These {proposal.candidates.length} are from old work no conversation refers to anymore. Deleting them frees {fmtMb(proposal.reclaimBytes)} — files in your workspace stay.</p>
+				<p>These {proposal.candidates.length} are from old work no conversation refers to anymore. Deleting them frees {fmtMb(proposal.reclaimBytes)} — your Files and saved snapshots stay.</p>
 				<div className="task-store-gc-list">
 					{proposal.candidates.map((candidate) => (
 						<div key={candidate.taskId} className="task-store-gc-row">
@@ -1251,6 +1336,17 @@ function StructuralReviewMemoryMapDiff({ current, proposed }: { current: Structu
 			</table>
 		</div>
 	);
+}
+
+// The full error list lives at the top of the proposal page; the approve
+// button lives at the bottom, below long proposal sections. This line keeps
+// the blocking reason next to the button the user is staring at, so a
+// disabled approve never needs a scroll (or a hover) to explain itself.
+function ProposalApproveBlockedReason({ validation, stale }: { validation?: { valid: boolean; errors: string[] } | null; stale?: boolean }) {
+	if (!validation || validation.valid || stale) return null;
+	const [first] = validation.errors;
+	const more = validation.errors.length - 1;
+	return <span className="proposal-approve-blocked-reason">{`Can't approve yet: ${first ?? "the candidate memory failed validation"}${more > 0 ? ` · ${more} more issue${more === 1 ? "" : "s"} listed above` : ""}`}</span>;
 }
 
 function StructuralReviewWorkflowShell({ state, loadingMessage, waitingMessage, onAbort, onDiscuss, onSendDiscussionMessage, onGenerateFromDiscussion, onGenerate, onApprove, onBackToDiscussion, onBackToAssessment, onRestart, returnLabel }: { state: StructuralReviewWorkflowState; loadingMessage: string; waitingMessage: string; onAbort: () => void; onDiscuss: () => void; onSendDiscussionMessage: (message: string) => void; onGenerateFromDiscussion: () => void; onGenerate: () => void; onApprove: () => void; onBackToDiscussion: () => void; onBackToAssessment: () => void; onRestart: () => void; returnLabel: string }) {
@@ -1421,6 +1517,7 @@ function StructuralReviewWorkflowShell({ state, loadingMessage, waitingMessage, 
 								</details>
 							</div>
 							<div className="checkpoint-preview-actions">
+								<ProposalApproveBlockedReason validation={validation} stale={state.proposalStale} />
 								<button className="landing-action secondary" onClick={onAbort}>Cancel</button>
 								{(state.discussionMessages?.length ?? 0) > 0 && <button className="landing-action secondary" title="Return to the discussion; the transcript is kept and only this draft is dropped" onClick={onBackToDiscussion}>Back to discussion</button>}
 								<button className="landing-action secondary" title="Generate a fresh memory update from the same assessment" onClick={onGenerate}>Draft again</button>
@@ -1633,6 +1730,7 @@ function AbsorbWorkflowShell({ state, loadingMessage, waitingMessage, onAbort, o
 						</div>
 
 						<div className="checkpoint-preview-actions">
+							<ProposalApproveBlockedReason validation={validation} stale={state.proposalStale} />
 							<button className="landing-action secondary" onClick={onAbort}>Cancel</button>
 							{(state.discussionMessages?.length ?? 0) > 0 && <button className="landing-action secondary" title="Return to the discussion; the transcript is kept and only this draft is dropped" onClick={onBackToDiscussion}>Back to discussion</button>}
 							<button className="landing-action secondary" title="Generate a fresh memory update from the same assessment" onClick={onGenerate}>Draft again</button>
@@ -2125,6 +2223,10 @@ function CheckpointPreviewShell({ chat, itemCount, rememberText, density, propos
 	// line is engine framing; the saved entry (approvedDraft) keeps it.
 	const renderedDraft = approvedDraft.split(/\r?\n/).slice(1).join("\n").trim();
 	const displayWarnings = proposal ? meaningfulMaintenanceWarnings(proposal.warnings) : [];
+	// Why the one-click path landed on the preview instead of saving: blockers
+	// already listed as warnings above are not repeated, so what remains is the
+	// review-first notice and the gate's own reasons (e.g. incomplete draft).
+	const quickFallbackNotices = quickRequested && quickBlockedReasons ? quickBlockedReasons.filter((reason) => !displayWarnings.includes(reason)) : [];
 	const approvalReady = Boolean(approvedFields.sessionArc.trim() && approvedFields.body.trim() && approvedFields.parked.trim());
 	function updateApprovedField(field: keyof CheckpointApprovalEditFields, value: string) {
 		setApprovedFields((current) => ({ ...current, [field]: value }));
@@ -2237,7 +2339,7 @@ function CheckpointPreviewShell({ chat, itemCount, rememberText, density, propos
 									</div>
 								</div>
 							) : null}
-							{displayWarnings.length > 0 && <div className="checkpoint-proposal-warnings">{displayWarnings.map((warning) => <div key={warning}>{warning}</div>)}</div>}
+							{(displayWarnings.length > 0 || quickFallbackNotices.length > 0) && <div className="checkpoint-proposal-warnings">{[...displayWarnings, ...quickFallbackNotices].map((warning) => <div key={warning}>{warning}</div>)}</div>}
 							{approvalError && <div className="checkpoint-proposal-error">{approvalError}</div>}
 						</div>
 						{honestyNoticesNode}
@@ -2245,7 +2347,7 @@ function CheckpointPreviewShell({ chat, itemCount, rememberText, density, propos
 							<button className="landing-action" disabled={approvalLoading || !approvalReady} onClick={() => onApprove(approvedDraft)}>{approvalLoading ? "Saving…" : "Save to memory"}</button>
 							<button className="landing-action secondary" disabled={approvalLoading} onClick={confirmDiscard}>Discard</button>
 						</div>
-						<p className="checkpoint-footnote">Saved only when you approve · automatic apply can be enabled in room settings</p>
+						<p className="checkpoint-footnote">Saved only when you approve · automatic apply can be turned on in room settings</p>
 					</div>
 				) : (
 					<>
@@ -2370,6 +2472,9 @@ export function App() {
 	const rightPaneRef = useRef<RightPaneOccupant | null>(null);
 	rightPaneRef.current = rightPane;
 	const [artifactMaximized, setArtifactMaximized] = useState(false);
+	// Bumped when a finished revise rewrote the bytes behind the OPEN viewer's
+	// files/<name> route — the URL doesn't change, so the frame key must.
+	const [viewerReloadNonce, setViewerReloadNonce] = useState(0);
 	const [exportNotice, setExportNotice] = useState<{ kind: "success" | "error"; text: string } | null>(null);
 	// The done-moment toast (status grammar, 2026-07-18): fires once when a task
 	// ends and nothing else is already showing the result; top-right, ~6 s,
@@ -2400,10 +2505,26 @@ export function App() {
 	const [exportCollision, setExportCollision] = useState<ExportCollision | null>(null);
 	// Remove-from-list Undo window: one toast, one removable row at a time.
 	const [removeNotice, setRemoveNotice] = useState<{ taskId: string } | null>(null);
+	// Unified delete (files-management slice): the informed-confirm prompt, the
+	// undo-window toast (bytes go when it does), and the Save… filename step.
+	// The toast carries its room so a room switch can still commit honestly.
+	const [fileDeleteConfirm, setFileDeleteConfirm] = useState<{ fileName: string; reason: string } | null>(null);
+	const [fileDeleteNotice, setFileDeleteNotice] = useState<{ agentId: string; name: string; token: string } | null>(null);
+	const [saveAsPrompt, setSaveAsPrompt] = useState<{ shelfName: string } | null>(null);
+	// Which room's shelf listing has actually loaded — the projection treats the
+	// shelf as truth (deleted files drop their rows) only once it knows it.
+	const [roomFilesKnownFor, setRoomFilesKnownFor] = useState<string | null>(null);
 	// Assets panel (contract §2 rung 3): the thread's ledger rows, refetched on
 	// every event that can change them — server truth, no client cache.
 	const [assetLedgerRows, setAssetLedgerRows] = useState<AssetLedgerRowInput[]>([]);
 	const [assetDeleteConfirm, setAssetDeleteConfirm] = useState<AssetRowView | null>(null);
+	// Files UI slice: the room's shelf listing (user-added rows + composer truth)
+	// and the composer's staged attachments — files already uploaded and parsed,
+	// waiting to ride the next message. The chip shows the honest parse state.
+	const [roomShelfFiles, setRoomShelfFiles] = useState<RoomShelfFile[]>([]);
+	const [stagedAttachments, setStagedAttachments] = useState<StagedAttachment[]>([]);
+	const stagedAttachmentsRef = useRef<StagedAttachment[]>([]);
+	useEffect(() => { stagedAttachmentsRef.current = stagedAttachments; }, [stagedAttachments]);
 	// Store-wide GC (contract §4): assessed once per app load; the safety valve
 	// stays silent below its threshold.
 	const [gcAssessment, setGcAssessment] = useState<TaskStoreGcView | null>(null);
@@ -2428,10 +2549,11 @@ export function App() {
 	// Escape closes the artifact/run pane, the keyboard twin of clicking its X
 	// or the selected rail row. A maximized pane restores first (one Escape per
 	// step), and any open dialog above the pane (delete confirm, export
-	// collision) owns Escape until dismissed — one Escape, one layer.
+	// collision, file-delete confirm, Save-as prompt) owns Escape until
+	// dismissed — one Escape, one layer.
 	useEffect(() => {
 		const paneOpen = rightPane?.kind === "artifactViewer" || rightPane?.kind === "taskRun";
-		if (!paneOpen || assetDeleteConfirm || exportCollision) return;
+		if (!paneOpen || assetDeleteConfirm || exportCollision || fileDeleteConfirm || saveAsPrompt) return;
 		function onKeyDown(event: KeyboardEvent) {
 			if (event.key !== "Escape") return;
 			if (artifactMaximized) setArtifactMaximized(false);
@@ -2439,7 +2561,7 @@ export function App() {
 		}
 		document.addEventListener("keydown", onKeyDown);
 		return () => document.removeEventListener("keydown", onKeyDown);
-	}, [rightPane, artifactMaximized, assetDeleteConfirm, exportCollision]);
+	}, [rightPane, artifactMaximized, assetDeleteConfirm, exportCollision, fileDeleteConfirm, saveAsPrompt]);
 	const [conversationId, setConversationId] = useState<string>(() => newConversationId());
 	const [authStatus, setAuthStatus] = useState<AuthStatusResponse | null>(null);
 	const [modelStatus, setModelStatus] = useState<WebChatModelStatus | null>(null);
@@ -2556,6 +2678,7 @@ export function App() {
 	// The projected asset rows, mirrored for callbacks created before the memo
 	// (openArtifactViewer attaches the row to whatever entry path opened it).
 	const assetRowsRef = useRef<AssetRowView[]>([]);
+	const openAssetRowRef = useRef<((row: AssetRowView) => void) | null>(null);
 	// Assets panel data: fetch the room-wide REST list (room-scoped history,
 	// 2026-07-18 grill: rows survive Memento and checkpoint — both only mint a
 	// new conversation). The stale-guard is per-room; a thread switch within the
@@ -2577,6 +2700,115 @@ export function App() {
 			// Panel data is best-effort; the next trigger refetches.
 		}
 	}, []);
+	// The room's shelf files (files UI slice) — the panel's second row source
+	// (user-added rows) and the composer's staging ground truth. Same
+	// per-room stale-guard discipline as the ledger rows.
+	const refreshRoomFiles = useCallback(async () => {
+		const chat = persistentChatRef.current;
+		if (!chat) {
+			setRoomShelfFiles([]);
+			setRoomFilesKnownFor(null);
+			return;
+		}
+		try {
+			const files = await listRoomFiles(chat.agentId);
+			const current = persistentChatRef.current;
+			if (!current || current.agentId !== chat.agentId) return;
+			setRoomShelfFiles(files);
+			setRoomFilesKnownFor(chat.agentId);
+		} catch {
+			// Best-effort; the next trigger refetches.
+		}
+	}, []);
+	// Stage a file for the next message (📎 or a composer drop): upload to the
+	// shelf now — attaching copies the file onto the desk and parses it once —
+	// and show the chip with the honest parse result. A refused file (tier 3)
+	// never lands; the refusal names the safe path in the toast.
+	const stageAttachment = useCallback(async (file: File) => {
+		const chat = persistentChatRef.current;
+		if (!chat) return;
+		const stageId = nid();
+		setStagedAttachments((s) => [...s, { name: "", stageId, bytes: file.size, extension: file.name.includes(".") ? file.name.slice(file.name.lastIndexOf(".")).toLowerCase() : "", status: "uploading", parseNote: file.name }]);
+		try {
+			const uploaded = await uploadRoomFile(chat.agentId, file.name, await fileToBase64(file));
+			setStagedAttachments((s) => s.map((entry) => (entry.stageId === stageId ? {
+				name: uploaded.name,
+				stageId,
+				bytes: uploaded.bytes,
+				extension: uploaded.extension,
+				status: "ready" as const,
+				parseNote: uploaded.parseNote ?? (uploaded.kind === "text" ? "" : uploaded.kind),
+				...(typeof uploaded.pages === "number" ? { pages: uploaded.pages } : {}),
+			} : entry)));
+			void refreshRoomFiles();
+		} catch (e) {
+			setStagedAttachments((s) => s.filter((entry) => entry.stageId !== stageId));
+			setExportNotice({ kind: "error", text: (e as Error).message || "The file could not be added." });
+		}
+	}, [refreshRoomFiles]);
+	// The chip's ✕ — change your mind before the file rides with the message.
+	// The upload already happened, so this really removes the bytes again,
+	// through the ONE delete path (stage + immediate commit: undoing an upload
+	// just made needs no undo window of its own).
+	const unstageAttachment = useCallback(async (staged: StagedAttachment) => {
+		setStagedAttachments((s) => s.filter((entry) => entry.stageId !== staged.stageId));
+		const chat = persistentChatRef.current;
+		if (!chat || !staged.name) return;
+		try {
+			const token = await stageRoomFileDelete(chat.agentId, staged.name);
+			await commitRoomFileDelete(chat.agentId, staged.name, token);
+		} catch {
+			// If the delete fails the file simply stays on the shelf — visible in
+			// Files, never silently lost.
+		}
+		void refreshRoomFiles();
+	}, [refreshRoomFiles]);
+	// A drop outside the composer lands on the shelf quietly: no chip, no
+	// message pairing — the manifest lists it on the room's next request.
+	const addFileToShelfQuietly = useCallback(async (file: File) => {
+		const chat = persistentChatRef.current;
+		if (!chat) return;
+		try {
+			const uploaded = await uploadRoomFile(chat.agentId, file.name, await fileToBase64(file));
+			setExportNotice({ kind: "success", text: `${uploaded.name} is in this room's Files.` });
+			void refreshRoomFiles();
+		} catch (e) {
+			setExportNotice({ kind: "error", text: (e as Error).message || "The file could not be added." });
+		}
+	}, [refreshRoomFiles]);
+	// Whole-window drag-and-drop (files UI slice): dropped on the composer it
+	// attaches to the next message; dropped anywhere else in the room it lands
+	// on the shelf quietly. Window-level so the browser's default open-the-file
+	// navigation can never fire in a room; the skills modal's own drop zone
+	// keeps priority (its handlers stopPropagation before this one runs on
+	// window, and we skip its subtree explicitly).
+	useEffect(() => {
+		if (!persistentChat) return;
+		const isInside = (target: EventTarget | null, selector: string): boolean =>
+			target instanceof Element && target.closest(selector) !== null;
+		const onDragOver = (event: DragEvent) => {
+			if (!event.dataTransfer?.types.includes("Files")) return;
+			event.preventDefault();
+		};
+		const onDrop = (event: DragEvent) => {
+			if (!event.dataTransfer?.types.includes("Files")) return;
+			event.preventDefault();
+			if (isInside(event.target, ".skill-upload-drop")) return;
+			const files = Array.from(event.dataTransfer.files ?? []);
+			if (files.length === 0) return;
+			const toComposer = isInside(event.target, ".composer-box");
+			for (const file of files) {
+				if (toComposer) void stageAttachment(file);
+				else void addFileToShelfQuietly(file);
+			}
+		};
+		window.addEventListener("dragover", onDragOver);
+		window.addEventListener("drop", onDrop);
+		return () => {
+			window.removeEventListener("dragover", onDragOver);
+			window.removeEventListener("drop", onDrop);
+		};
+	}, [persistentChat, stageAttachment, addFileToShelfQuietly]);
 	// First-open stamp: the green unread dot decays exactly once. Optimistic —
 	// the local row flips immediately; the POST makes it durable. Idempotent on
 	// both sides, so every open/act path may call it unconditionally.
@@ -2595,13 +2827,24 @@ export function App() {
 		if ((persistentChat?.agentId ?? null) !== assetsPanelAgentRef.current) {
 			assetsPanelAgentRef.current = persistentChat?.agentId ?? null;
 			setAssetLedgerRows([]);
+			setRoomShelfFiles([]);
+			// knownFor must reset WITH the listing: left standing, a re-entered
+			// room sees knownFor === agentId over an empty listing — an
+			// authoritative "the shelf is empty" claim that filters every file
+			// row until (unless) the refetch lands.
+			setRoomFilesKnownFor(null);
+			setStagedAttachments([]);
 		}
 		// This effect is declared before the ref-sync effect below — sync the ref
 		// here too (idempotent) so the fetch sees the room we just switched to.
 		persistentChatRef.current = persistentChat;
-		if (persistentChat) void refreshAssetRows();
-	}, [persistentChat, refreshAssetRows]);
+		if (persistentChat) {
+			void refreshAssetRows();
+			void refreshRoomFiles();
+		}
+	}, [persistentChat, refreshAssetRows, refreshRoomFiles]);
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
+	const attachFileInputRef = useRef<HTMLInputElement>(null);
 	const workbenchRef = useRef<HTMLDivElement>(null);
 
 	useEffect(() => {
@@ -3382,6 +3625,10 @@ export function App() {
 					templateLabel: String(msg.templateLabel ?? msg.template ?? ""),
 					...(msg.title ? { title: String(msg.title) } : {}),
 					model: msg.model ?? null,
+					// Named by the server for a revise run (taste pass) and replayed on
+					// reconnect, so the target file's row shows "updating…" even for a
+					// client that joined mid-run.
+					...(Array.isArray(msg.reviseTargetNames) ? { reviseTargetNames: msg.reviseTargetNames.map((name: unknown) => String(name)) } : {}),
 				});
 				return;
 			}
@@ -3391,6 +3638,22 @@ export function App() {
 			}
 			if (msg.type === "task_end") {
 				const endTaskId = String(msg.taskId ?? "");
+				// The handoff flip (revise-in-place slice): the server already
+				// persisted the slimmed block on the thread's pending queue; the
+				// frame mirrors it so THIS tab's send path composes it onto the
+				// next prompt without a reload. Sent once per task (task frames
+				// never replay), so no dedupe is needed.
+				if (typeof msg.handoff === "string" && msg.handoff) {
+					applyPendingHandoffs([...pendingHandoffsRef.current, msg.handoff], pendingConsultItemIdsRef.current);
+				}
+				// Two-writers guard (revise-in-place): a refused overwrite is
+				// narrated as a visible system line — same voice as away notices,
+				// and now the SAME sentence the server puts in the room's context
+				// (one shared builder, so the two can no longer drift).
+				const reviseConflicts = readReviseConflicts(msg.reviseConflicts);
+				if (reviseConflicts.length > 0) {
+					setItems((s) => [...s, ...reviseConflicts.map((conflict) => ({ kind: "system" as const, id: nid(), text: reviseConflictSentence(conflict) }))]);
+				}
 				const next = dispatchTask({
 					type: "end",
 					taskId: endTaskId,
@@ -3402,12 +3665,23 @@ export function App() {
 					...(msg.usage ? { usage: msg.usage } : {}),
 				});
 				void refreshAssetRows();
+				void refreshRoomFiles();
 				// Done-moment (status grammar, 2026-07-18): if the user is watching
 				// the run view, swap it for the artifact viewer in place — no toast
 				// needed. Otherwise the toast fires once; the green dot persists.
 				if (next.taskId === endTaskId && next.phase === "done") {
 					const first = next.artifacts[0] ?? null;
 					const pane = rightPaneRef.current;
+					// Revise-in-place: an open viewer on files/<name> keeps its URL when
+					// the run rewrites that name's bytes — bump the reload nonce so the
+					// frame remounts and refetches instead of showing pre-revision bytes.
+					const rewrittenShelfNames = new Set<string>([
+						...next.reviseTargetNames,
+						...next.artifacts.filter((a) => a.relativePath.startsWith("files/")).map((a) => a.relativePath.slice("files/".length)),
+					]);
+					if (pane?.kind === "artifactViewer" && pane.artifact.relativePath.startsWith("files/") && rewrittenShelfNames.has(pane.artifact.relativePath.slice("files/".length))) {
+						setViewerReloadNonce((n) => n + 1);
+					}
 					if (pane?.kind === "taskRun" && pane.taskId === endTaskId) {
 						if (first) {
 							openArtifactViewer(endTaskId, next.templateLabel ?? "visual", { relativePath: first.relativePath, extension: first.extension });
@@ -3430,6 +3704,12 @@ export function App() {
 			}
 			if (msg.type === "task_error") {
 				const errorTaskId = String(msg.taskId ?? "");
+				// Same flip as task_end: even an ending that didn't finish announces
+				// itself on the next prompt — the room must not keep promising a
+				// file that never arrived.
+				if (typeof msg.handoff === "string" && msg.handoff) {
+					applyPendingHandoffs([...pendingHandoffsRef.current, msg.handoff], pendingConsultItemIdsRef.current);
+				}
 				const next = dispatchTask({
 					type: "error",
 					taskId: errorTaskId,
@@ -3437,6 +3717,7 @@ export function App() {
 					...(Array.isArray(msg.artifacts) ? { artifacts: msg.artifacts } : {}),
 				});
 				void refreshAssetRows();
+				void refreshRoomFiles();
 				// A user-requested stop needs no announcement (they did it); a real
 				// failure gets the toast unless the run view is already showing it.
 				const pane = rightPaneRef.current;
@@ -3457,20 +3738,28 @@ export function App() {
 			if (msg.type === "task_away_notice") {
 				// Rung-2 honesty: tasks that ended with nobody listening. Arrives
 				// right after ready, so it lands after resume's setItems.
-				const notices: Array<{ title?: string; outcome?: string }> = Array.isArray(msg.notices) ? msg.notices : [];
-				const lines = notices.map((notice) => {
+				const notices: Array<{ title?: string; outcome?: string; reviseConflicts?: unknown }> = Array.isArray(msg.notices) ? msg.notices : [];
+				const lines = notices.flatMap((notice) => {
 					const title = String(notice.title ?? "").trim() || "A specialist task";
-					switch (String(notice.outcome ?? "")) {
-						case "ok": return `While you were away: “${title}” finished — it's waiting in Artifacts.`;
-						case "aborted": return `While you were away: “${title}” was stopped. What it made so far is in Artifacts.`;
-						case "orphaned": return `While you were away: “${title}” was interrupted when the app closed. What it made so far is in Artifacts.`;
-						default: return `While you were away: “${title}” didn't finish.`;
-					}
+					const outcome = (() => {
+						switch (String(notice.outcome ?? "")) {
+							case "ok": return `While you were away: “${title}” finished — it's waiting in Files.`;
+							case "aborted": return `While you were away: “${title}” was stopped. What it made so far is in Files.`;
+							case "orphaned": return `While you were away: “${title}” was interrupted when the app closed. What it made so far is in Files.`;
+							default: return `While you were away: “${title}” didn't finish.`;
+						}
+					})();
+					// A refused overwrite is the one away outcome the generic line
+					// would misreport: "it's waiting in Files" is true, but not that
+					// it is waiting under a DIFFERENT name because the original
+					// changed. Same sentence as the live path.
+					return [outcome, ...readReviseConflicts(notice.reviseConflicts).map(reviseConflictSentence)];
 				});
 				const moreCount = Number(msg.moreCount ?? 0);
 				if (moreCount > 0) lines.push(`…and ${moreCount} earlier task${moreCount === 1 ? "" : "s"}.`);
 				if (lines.length > 0) setItems((s) => [...s, ...lines.map((text) => ({ kind: "system" as const, id: nid(), text }))]);
 				void refreshAssetRows();
+				void refreshRoomFiles();
 				return;
 			}
 			if (msg.type !== "event") return;
@@ -3752,14 +4041,28 @@ export function App() {
 	const send = (text: string): boolean => {
 		if (busyRef.current || turnCancellingRef.current) return false;
 		const payload = text.trim();
-		if (!payload) return false;
+		// Ready staged attachments ride THIS message (files UI slice): their
+		// notes join the wire text, their chips join the bubble. A message may
+		// be attachments-only — the note alone is then the prompt.
+		const readyAttachments = stagedAttachmentsRef.current.filter((entry) => entry.status === "ready" && entry.name);
+		if (!payload && readyAttachments.length === 0) return false;
+		if (stagedAttachmentsRef.current.some((entry) => entry.status === "uploading")) return false;
 		const ws = wsRef.current;
 		if (!ws || ws.readyState !== WebSocket.OPEN) return false;
 		// Consult MR-5 (§2): any queued handoff blocks ride ahead of the user's text
 		// on the wire (entering the session JSONL, where a checkpoint can compress
 		// them), then the queue clears. The chat bubble shows only the user's text.
 		const pending = pendingHandoffsRef.current;
-		const wireText = composeOutgoingPromptWithHandoffs(pending, payload);
+		// Attachment notes (files UI slice): the pairing "this file arrives with
+		// this message" enters the transcript as a note on the WIRE only — the
+		// bubble shows the chip instead. Zero file content rides along; the room
+		// reads on demand via its shelf tools.
+		const attachmentNotes = readyAttachments.map((entry) => {
+			const measure = typeof entry.pages === "number" ? `${entry.pages} page${entry.pages === 1 ? "" : "s"}` : entry.parseNote || entry.extension.replace(/^\./, "") || "file";
+			return `[FILE ATTACHED: ${entry.name} · ${measure} · now in this room's Files; read it with read_file when relevant]`;
+		});
+		const wireBody = attachmentNotes.length > 0 ? [attachmentNotes.join("\n"), payload].filter(Boolean).join("\n\n") : payload;
+		const wireText = composeOutgoingPromptWithHandoffs(pending, wireBody);
 		if (pending.length) {
 			applyPendingHandoffs([], new Set());
 			// The block is consumed exactly once: the SERVER clears the persisted
@@ -3769,7 +4072,13 @@ export function App() {
 			// before the setItems below reschedules an empty-queue persist.
 			if (persistTimerRef.current) { window.clearTimeout(persistTimerRef.current); persistTimerRef.current = null; }
 		}
-		setItems((s) => [...s, { kind: "user", id: nid(), text: payload }]);
+		setItems((s) => [...s, {
+			kind: "user",
+			id: nid(),
+			text: payload,
+			...(readyAttachments.length > 0 ? { attachments: readyAttachments.map((entry) => ({ name: entry.name, bytes: entry.bytes, extension: entry.extension })) } : {}),
+		}]);
+		if (readyAttachments.length > 0) setStagedAttachments([]);
 		ws.send(JSON.stringify({ type: "prompt", text: wireText }));
 		dispatchStream({ type: "new_turn", now: performance.now() });
 		retrievalActivityIdRef.current = null;
@@ -3912,8 +4221,10 @@ export function App() {
 	}
 
 	// Visuals V6's card-transfer path retired with the done-card (status grammar,
-	// 2026-07-18): transferAssetRowToThread below is the one transfer door — the
-	// same block builder and pending queue, reached through the viewer footer.
+	// 2026-07-18), and the viewer-footer transfer door retired with the files UI
+	// slice: the room has eyes on its shelf now (manifest + read tools), so no
+	// manual re-injection remains — completion announcement goes automatic with
+	// the revise slice (slimmed handoff on the pending queue).
 
 	// Assets panel (rung 3): open a ledger row in the right-pane viewer — the
 	// reconstituted done-card. The live running row opens the run view instead;
@@ -3933,51 +4244,18 @@ export function App() {
 		}
 		if (row.artifacts.length === 0) return;
 		setArtifactMaximized(false);
-		markAssetRowViewed(row.taskId);
+		// User-added rows (files UI slice) have no ledger record to stamp.
+		if (!row.userFileName) markAssetRowViewed(row.taskId);
 		// A refusal notice belongs to the task it answered — never carry it
 		// into another row's footer.
 		setTaskIterateNotice(null);
 		setRightPane({
 			kind: "artifactViewer",
 			taskId: row.taskId,
-			templateLabel: assetTemplateShortName(row.templateId),
+			templateLabel: row.userFileName ? "file" : assetTemplateShortName(row.templateId),
 			artifact: { relativePath: row.artifacts[0].relativePath, extension: row.artifacts[0].extension },
 			asset: row,
 		});
-	}
-
-	// Add-to-conversation / Re-attach from the panel: the ordinary transfer
-	// performed late — same block builder, same pending queue, same gate. The
-	// item simply carries no thumbnail (write-time thumbnails die with the
-	// card; the ledger stores none by design).
-	function transferAssetRowToThread(row: AssetRowView) {
-		if (itemsRef.current.some((it) => it.kind === "task" && it.taskId === row.taskId)) return;
-		markAssetRowViewed(row.taskId);
-		const generatedAt = row.generatedAt || new Date().toISOString();
-		const block = buildSpecialistHandoffBlock({
-			templateId: row.templateId,
-			templateVersion: row.templateVersion,
-			taskTitle: row.title,
-			ranAtIso: generatedAt,
-			artifactPaths: row.artifacts.map((artifact) => artifact.relativePath),
-			summary: row.summary,
-		});
-		const item: ChatItem = {
-			kind: "task",
-			id: nid(),
-			taskId: row.taskId,
-			template: row.templateId,
-			templateVersion: row.templateVersion,
-			templateLabel: assetTemplateShortName(row.templateId),
-			title: row.title,
-			summary: row.summary,
-			artifacts: row.artifacts.map((artifact) => ({ relativePath: artifact.relativePath, bytes: artifact.bytes, extension: artifact.extension })),
-			generatedAt,
-			transferred: true,
-		};
-		itemsRef.current = [...itemsRef.current, item];
-		setItems((s) => [...s, item]);
-		applyPendingHandoffs([...pendingHandoffsRef.current, block], pendingConsultItemIdsRef.current);
 	}
 
 	// Per-task delete (contract §4): orphan rows only; the server re-verifies
@@ -3998,6 +4276,7 @@ export function App() {
 				setRightPane(null);
 			}
 			void refreshAssetRows();
+			void refreshRoomFiles();
 		} catch {
 			setExportNotice({ kind: "error", text: "That didn't work — the files are unchanged." });
 		}
@@ -4039,6 +4318,97 @@ export function App() {
 		void refreshAssetRows();
 	}
 
+	// Unified delete (files-management slice): the Files row ✕ on file rows.
+	// Stage opens the undo window (the file leaves shelf, panel and manifest at
+	// once); the toast's expiry commits (bytes + reading cache go); Undo brings
+	// it back. Room-made files and files the room read this session get the
+	// informed confirm first — their loss costs more than a re-upload.
+	async function performFileDelete(fileName: string) {
+		const chat = persistentChatRef.current;
+		if (!chat) return;
+		let token: string;
+		try {
+			token = await stageRoomFileDelete(chat.agentId, fileName);
+		} catch (e) {
+			setExportNotice({ kind: "error", text: (e as Error).message || "That didn't work — the file is unchanged." });
+			return;
+		}
+		// A second delete inside the first one's window: the older staged delete
+		// commits now (its own token, its own held bytes) — one visible toast, no
+		// lost promise; each window's bytes are independent server-side.
+		setFileDeleteNotice((prev) => {
+			if (prev) void commitRoomFileDelete(prev.agentId, prev.name, prev.token);
+			return { agentId: chat.agentId, name: fileName, token };
+		});
+		// A chip staged in the composer names this file; keeping it would make
+		// the next Send ask the room to read a file that no longer exists.
+		setStagedAttachments((s) => s.filter((entry) => entry.name !== fileName));
+		const pane = rightPaneRef.current;
+		if (pane?.kind === "artifactViewer" && pane.artifact?.relativePath === `files/${fileName}`) {
+			setArtifactMaximized(false);
+			setRightPane(null);
+		}
+		void refreshRoomFiles();
+		void refreshAssetRows();
+	}
+
+	function requestFileDelete(row: AssetRowView, fileName: string) {
+		const roomMade = !row.userFileName;
+		const readThisSession = itemsRef.current.some((it) => it.kind === "tool" && it.name === "read_file" && String((it.args as { name?: unknown } | undefined)?.name ?? "") === fileName);
+		if (roomMade || readThisSession) {
+			setFileDeleteConfirm({
+				fileName,
+				reason: roomMade
+					? "The room made this file; deleting removes its only copy."
+					: "The room read this file earlier in this conversation; deleting removes its copy.",
+			});
+			return;
+		}
+		void performFileDelete(fileName);
+	}
+
+	async function undoFileDelete() {
+		const notice = fileDeleteNotice;
+		setFileDeleteNotice(null);
+		if (!notice) return;
+		try {
+			const restored = await undoRoomFileDelete(notice.agentId, notice.name, notice.token);
+			if (restored !== notice.name) setExportNotice({ kind: "success", text: `Restored as “${restored}” — the old name was taken meanwhile.` });
+		} catch (e) {
+			setExportNotice({ kind: "error", text: (e as Error).message || "The file could not be restored." });
+		}
+		void refreshRoomFiles();
+		void refreshAssetRows();
+	}
+
+	// Inline rename (files-management slice): fs rename under the collision
+	// rule; the server rewrites ledger references so origin stories and viewer
+	// links survive, and the manifest picks the new name up next turn.
+	async function renameFileRow(_row: AssetRowView, fileName: string, newName: string) {
+		const chat = persistentChatRef.current;
+		if (!chat) return;
+		try {
+			const result = await renameRoomFile(chat.agentId, fileName, newName);
+			if (!result.unchanged && result.collided) {
+				setExportNotice({ kind: "success", text: `Renamed to “${result.name}” — that name was taken.` });
+			}
+			// A staged composer chip still carries the old name; patch it so the
+			// next Send names the file the shelf actually holds.
+			if (!result.unchanged) {
+				setStagedAttachments((s) => s.map((entry) => (entry.name === fileName ? { ...entry, name: result.name, extension: result.name.includes(".") ? result.name.slice(result.name.lastIndexOf(".")).toLowerCase() : "" } : entry)));
+			}
+			const pane = rightPaneRef.current;
+			if (pane?.kind === "artifactViewer" && pane.artifact?.relativePath === `files/${fileName}`) {
+				setArtifactMaximized(false);
+				setRightPane(null);
+			}
+		} catch (e) {
+			setExportNotice({ kind: "error", text: (e as Error).message || "The file could not be renamed." });
+		}
+		void refreshRoomFiles();
+		void refreshAssetRows();
+	}
+
 	// GC approval (contract §4): the POST names exactly the proposed ids; the
 	// server re-verifies each against a fresh reference scan before deleting.
 	async function confirmTaskStoreGc() {
@@ -4057,6 +4427,7 @@ export function App() {
 				setGcAssessment(null);
 				setGcReviewOpen(false);
 				void refreshAssetRows();
+				void refreshRoomFiles();
 				if (failedCount > 0) {
 					setExportNotice({ kind: "error", text: failedCount === 1 ? "Cleanup finished, but one folder couldn't be deleted. It will be proposed again next time." : `Cleanup finished, but ${failedCount} folders couldn't be deleted. They will be proposed again next time.` });
 				}
@@ -4316,8 +4687,11 @@ export function App() {
 			setCheckpointQuickBlockedReasons(blockers);
 			return;
 		}
-		if (!(await roomQuickCheckpointAutoApplyEnabled(targetChat.agentId))) {
-			setCheckpointQuickBlockedReasons(["Checkpoints now ask for your review first. You can turn automatic apply on in room settings."]);
+		// The room decides whether a blocker-free proposal may skip the preview.
+		// Off (or unreadable) means review-first: the safe direction is showing
+		// the proposal, never silently applying it.
+		if (!(await fetchQuickCheckpointPreference(targetChat.agentId))) {
+			setCheckpointQuickBlockedReasons(["Checkpoints now ask for review first. You can turn on automatic apply in this room's settings."]);
 			return;
 		}
 		setCheckpointApprovalLoading(true);
@@ -4333,8 +4707,11 @@ export function App() {
 			resetCheckpointInput();
 			// Disclose what the gate no longer blocks on: elision notices from the
 			// propose step ride the saved line together with approval warnings.
+			// "automatically" is deliberate: the saved line must disclose that no
+			// human reviewed this entry before it was written.
+			let savedNote = "Checkpoint saved to memory automatically.";
 			const disclosedNotes = [...proposal.warnings.filter(isTranscriptElisionWarning), ...approval.warnings];
-			const savedNote = disclosedNotes.length > 0 ? `Checkpoint saved to memory automatically. ${disclosedNotes.join(" ")}` : "Checkpoint saved to memory automatically.";
+			if (disclosedNotes.length > 0) savedNote += ` ${disclosedNotes.join(" ")}`;
 			setItems((s) => [...s, { kind: "system", id: nid(), text: savedNote }]);
 		} catch (e) {
 			setCheckpointApprovalError(`The checkpoint could not save automatically. Review and approve it manually. ${(e as Error).message}`);
@@ -4628,7 +5005,8 @@ export function App() {
 		try {
 			// Redrafts keep honoring a discussion the user already had.
 			const handoff = structuralReviewWorkflow.assessmentHandoff;
-			const proposal = await requestStructuralReviewProposal(target.agentId, assessment.assessmentMarkdown, handoff ? { assessmentHandoff: handoff, source: assessment.source } : undefined);
+			const retryFeedback = proposalRetryFeedback(priorProposal);
+			const proposal = await requestStructuralReviewProposal(target.agentId, assessment.assessmentMarkdown, { ...(handoff ? { assessmentHandoff: handoff, source: assessment.source } : {}), ...(retryFeedback ? { retryFeedback } : {}) });
 			if (run !== maintainRunRef.current) return;
 			const proposalState: StructuralReviewWorkflowState = { step: "proposal", target, availability: proposal.availability, assessment, proposal, approvalResult: null, discussionMessages: structuralReviewWorkflow.discussionMessages, discussionTokenBudget: structuralReviewWorkflow.discussionTokenBudget, assessmentHandoff: handoff, fastPathEnabled: structuralReviewWorkflow.fastPathEnabled, error: null };
 			if (await maybeFastPathStructuralReviewApproval(target, proposal, proposalState, run)) return;
@@ -4863,7 +5241,8 @@ export function App() {
 		try {
 			// Redrafts keep honoring a discussion the user already had.
 			const handoff = absorbWorkflow.assessmentHandoff;
-			const proposal = await requestAbsorbProposal(target.agentId, assessment.assessmentMarkdown, handoff ? { assessmentHandoff: handoff, source: assessment.source } : undefined);
+			const retryFeedback = proposalRetryFeedback(priorProposal);
+			const proposal = await requestAbsorbProposal(target.agentId, assessment.assessmentMarkdown, { ...(handoff ? { assessmentHandoff: handoff, source: assessment.source } : {}), ...(retryFeedback ? { retryFeedback } : {}) });
 			if (run !== maintainRunRef.current) return;
 			const proposalState: AbsorbWorkflowState = { step: "proposal", target, availability: proposal.availability, assessment, proposal, approvalResult: null, discussionMessages: absorbWorkflow.discussionMessages, discussionTokenBudget: absorbWorkflow.discussionTokenBudget, assessmentHandoff: handoff, fastPathEnabled: absorbWorkflow.fastPathEnabled, error: null };
 			if (await maybeFastPathAbsorbApproval(target, proposal, proposalState, run)) return;
@@ -4887,12 +5266,13 @@ export function App() {
 		}
 	}
 
-	async function roomQuickCheckpointAutoApplyEnabled(agentId: PersistentAgentId): Promise<boolean> {
+	// Whether this room lets the quick Checkpoint bridge propose and approve on
+	// its own. A failed lookup reads as "no": review-first is the safe answer.
+	async function fetchQuickCheckpointPreference(agentId: PersistentAgentId): Promise<boolean> {
 		try {
-			return (await fetchPersistentRoomMaintenanceSettings(agentId)).settings.quickCheckpointAutoApply === true;
+			const { settings } = await fetchPersistentRoomMaintenanceSettings(agentId);
+			return settings.quickCheckpointAutoApply === true;
 		} catch {
-			// When the preference cannot be read, fall back to manual review —
-			// the safe direction is showing the proposal, not silently applying it.
 			return false;
 		}
 	}
@@ -5233,62 +5613,55 @@ export function App() {
 	// messages are already user-facing, so failures surface verbatim. A name
 	// collision opens the three-button dialog; Replace/Keep both re-enter here
 	// with the matching explicit flag (assets contract §5).
-	const saveArtifactToWorkspace = useCallback(async (occupant: { taskId: string; artifact: { relativePath: string; extension: string } }, resolution?: "overwrite" | "rename") => {
-		const roomId = persistentChat?.agentId;
-		if (!roomId) {
-			setExportNotice({ kind: "error", text: "Open a room with a workspace to save this artifact." });
-			return;
-		}
-		try {
-			const res = await apiFetch(`/api/artifacts/${encodeURIComponent(occupant.taskId)}/export`, {
-				method: "POST",
-				headers: { "content-type": "application/json" },
-				// conversationId → the server resolves the THREAD-effective workspace
-				// policy (thread override → room default), not just the room default.
-				body: JSON.stringify({
-					relativePath: occupant.artifact.relativePath,
-					roomId,
-					conversationId: persistentChat?.conversationId ?? "",
-					...(resolution === "overwrite" ? { overwrite: true } : {}),
-					...(resolution === "rename" ? { rename: true } : {}),
-				}),
-			});
-			const data = await res.json().catch(() => null);
-			if (!res.ok) {
-				if (res.status === 409 && data?.code === "exists") {
-					const fileName = occupant.artifact.relativePath.split("/").pop() ?? "this file";
-					setExportCollision({
-						fileName,
-						onReplace: () => void saveArtifactToWorkspace(occupant, "overwrite"),
-						onKeepBoth: () => void saveArtifactToWorkspace(occupant, "rename"),
-					});
+	// 💾 Save… (files UI slice): a SNAPSHOT into a folder the user picks with the
+	// native chooser — the Google-Docs export rule; nothing syncs back and the
+	// shelf copy stays canonical. Replaces the workspace-export button (the old
+	// server route stays for iterate's exported-input mapping). The chosen
+	// folder is kept for the collision retry so Replace/Keep both re-target the
+	// SAME folder without re-opening the picker.
+	const lastSaveFolderRef = useRef<string | null>(null);
+	const saveViewerFileToFolder = useCallback(async (name: string, resolution?: "overwrite" | "rename", saveAs?: string) => {
+		const roomId = persistentChatRef.current?.agentId;
+		if (!roomId || !name) return;
+		// The name the export lands under — the Save… dialog's choice; the
+		// collision flow keys off it, not the shelf name.
+		const exportName = (saveAs ?? name).trim() || name;
+		let targetDir = resolution ? lastSaveFolderRef.current : null;
+		if (!targetDir) {
+			try {
+				const chosen = await chooseSystemFolder();
+				if (!chosen.supported) {
+					setExportNotice({ kind: "error", text: "Folder picking isn't available here — use Download instead." });
 					return;
 				}
-				setExportNotice({ kind: "error", text: data?.error || "Could not save to the room workspace." });
+				if (chosen.cancelled || !chosen.path) return;
+				targetDir = chosen.path;
+			} catch {
+				setExportNotice({ kind: "error", text: "Folder picking isn't available here — use Download instead." });
 				return;
 			}
-			const savedTo = String(data?.savedTo ?? "");
-			const exportedName = savedTo ? (savedTo.split(/[\\/]/).pop() ?? "") : "";
-			const isHtml = occupant.artifact.extension.toLowerCase() === ".html";
-			setExportNotice({
-				kind: "success",
-				// Filename, not the full path (Borja, live test 2026-07-18) — but the
-				// NAME must be the server's savedTo: with Keep both it was suffixed,
-				// and that is the one thing the user has to learn from this toast.
-				text: (exportedName ? `Saved “${exportedName}” to the room workspace.` : "Saved to the room workspace.") + (isHtml ? " Note: once saved, HTML files open outside the app's protections." : ""),
-			});
-			// G2-A awareness notice: rides the pending-handoff queue ahead of the
-			// next prompt, so the room learns the export happened. Zero new access
-			// — the workspace is already room-readable.
-			if (savedTo) {
-				applyPendingHandoffs([...pendingHandoffsRef.current, `[WORKSPACE EXPORT] Exported ${exportedName || savedTo} to the room workspace: ${savedTo}`], pendingConsultItemIdsRef.current);
-			}
-			// The row's subline may flip to "in workspace" — refetch the ledger view.
-			void refreshAssetRows();
-		} catch {
-			setExportNotice({ kind: "error", text: "Could not save to the room workspace." });
 		}
-	}, [persistentChat]);
+		lastSaveFolderRef.current = targetDir;
+		try {
+			const result = await saveRoomFileToFolder(roomId, name, targetDir, resolution, exportName !== name ? exportName : undefined);
+			if ("conflict" in result) {
+				setExportCollision({
+					fileName: exportName,
+					place: "the chosen folder",
+					onReplace: () => void saveViewerFileToFolder(name, "overwrite", exportName),
+					onKeepBoth: () => void saveViewerFileToFolder(name, "rename", exportName),
+				});
+				return;
+			}
+			const savedName = result.savedTo.split(/[\\/]/).pop() ?? exportName;
+			const isHtml = exportName.toLowerCase().endsWith(".html");
+			// Filename, not the full path (Borja, live test 2026-07-18) — with Keep
+			// both it was suffixed, and that is what the user has to learn here.
+			setExportNotice({ kind: "success", text: `Saved “${savedName}”.` + (isHtml ? " Note: once saved, HTML files open outside the app's protections." : "") });
+		} catch (e) {
+			setExportNotice({ kind: "error", text: (e as Error).message || "Could not save the file." });
+		}
+	}, []);
 
 	useEffect(() => {
 		if (!taskDoneToast) return;
@@ -5310,17 +5683,123 @@ export function App() {
 	useEffect(() => {
 		setRemoveNotice(null);
 	}, [persistentChat?.agentId]);
+	// Unified delete: the toast IS the undo window — its expiry commits the
+	// staged delete (bytes + reading cache go), exactly as the toast promised.
+	useEffect(() => {
+		if (!fileDeleteNotice) return;
+		const notice = fileDeleteNotice;
+		const timer = window.setTimeout(() => {
+			setFileDeleteNotice((current) => (current === notice ? null : current));
+			void commitRoomFileDelete(notice.agentId, notice.name, notice.token).catch(() => {
+				// The expiry sweep on the next files listing finishes a failed commit.
+			});
+		}, 6000);
+		return () => window.clearTimeout(timer);
+	}, [fileDeleteNotice]);
+	// A room switch inside the window keeps the promise: the delete commits in
+	// the room it was made in (the notice carries its agentId).
+	useEffect(() => {
+		setFileDeleteConfirm(null);
+		setSaveAsPrompt(null);
+		setFileDeleteNotice((current) => {
+			if (current && current.agentId !== persistentChat?.agentId) {
+				void commitRoomFileDelete(current.agentId, current.name, current.token).catch(() => {});
+				return null;
+			}
+			return current;
+		});
+	}, [persistentChat?.agentId]);
 
 	// Assets panel projection: ledger rows + the live task + the thread's
 	// transferred ids → the rail's row view-models (pure, smoke-tested).
 	const threadTaskIds = useMemo(() => new Set(items.filter((it): it is Extract<ChatItem, { kind: "task" }> => it.kind === "task").map((it) => it.taskId)), [items]);
-	const assetRows = useMemo(() => projectAssetRows(assetLedgerRows, {
-		liveTask: taskState.phase === "running" && taskState.taskId ? { taskId: taskState.taskId, title: taskState.title ?? "", templateId: taskState.template ?? "" } : null,
-		threadTaskIds,
-		liveConversationId: persistentChat?.conversationId,
-		now: new Date(),
-	}), [assetLedgerRows, taskState, threadTaskIds, persistentChat?.conversationId]);
+	const shelfFileRows = useMemo<ShelfFileRowInput[]>(() => roomShelfFiles.map((file) => ({
+		name: file.name,
+		bytes: file.bytes,
+		mtimeMs: file.mtimeMs,
+		origin: file.origin,
+		...(file.madeAt ? { madeAt: file.madeAt } : {}),
+		extension: file.extension,
+	})), [roomShelfFiles]);
+	const assetRows = useMemo(() => {
+		// The shelf listing is the panel's truth once loaded for THIS room
+		// (unified delete: a deleted file's row disappears instantly); before
+		// that the projection makes no shelf claims (shelfTruthForRoom).
+		const shelfTruth = shelfTruthForRoom(persistentChat?.agentId, roomFilesKnownFor, roomShelfFiles.map((file) => file.name));
+		return projectAssetRows(assetLedgerRows, {
+			liveTask: taskState.phase === "running" && taskState.taskId ? { taskId: taskState.taskId, title: taskState.title ?? "", templateId: taskState.template ?? "", reviseTargetNames: taskState.reviseTargetNames } : null,
+			threadTaskIds,
+			liveConversationId: persistentChat?.conversationId,
+			...(shelfTruth ? { shelfTruth } : {}),
+			now: new Date(),
+		}, shelfFileRows);
+	}, [assetLedgerRows, taskState, threadTaskIds, persistentChat?.agentId, persistentChat?.conversationId, shelfFileRows, roomShelfFiles, roomFilesKnownFor]);
 	assetRowsRef.current = assetRows;
+	// One toast home (taste pass): every transient notice becomes an entry in
+	// ONE stack above the composer, oldest first so a newer notice pushes the
+	// older ones upward. Each keeps its own timer and its own meaning — this
+	// composes where they are shown, never when they appear or expire.
+	const roomToasts = useMemo<ToastView[]>(() => {
+		const list: ToastView[] = [];
+		if (exportNotice) list.push({ id: "export", tone: exportNotice.kind, text: exportNotice.text });
+		if (removeNotice) {
+			list.push({
+				id: `remove:${removeNotice.taskId}`,
+				tone: "success",
+				text: "Removed from the list.",
+				sub: "Its files are kept.",
+				action: { label: "Undo", onClick: () => void undoRemoveAssetRow(removeNotice.taskId) },
+			});
+		}
+		if (fileDeleteNotice) {
+			list.push({
+				id: `delete:${fileDeleteNotice.token}`,
+				tone: "success",
+				text: `Deleted “${fileDeleteNotice.name}”.`,
+				sub: "Gone for good when this notice goes.",
+				action: { label: "Undo", onClick: () => void undoFileDelete() },
+			});
+		}
+		if (taskDoneToast) {
+			// The whole card used to be the click target ("click to open"); under
+			// one grammar the verb becomes the action button, so every toast is
+			// read the same way: what happened, then what you can do about it.
+			const toast = taskDoneToast;
+			list.push({
+				id: `task:${toast.taskId}`,
+				tone: toast.kind === "done" ? "success" : "error",
+				text: toast.kind === "done" ? `“${toast.title}” is ready.` : `“${toast.title}” didn't finish.`,
+				...(toast.artifact
+					? {
+						action: {
+							label: toast.kind === "done" ? "Open" : "See what it made",
+							onClick: () => {
+								setTaskDoneToast(null);
+								if (toast.artifact) openArtifactViewer(toast.taskId, toast.templateLabel, toast.artifact);
+							},
+						},
+					}
+					: {}),
+			});
+		}
+		return list;
+	}, [exportNotice, removeNotice, fileDeleteNotice, taskDoneToast]);
+	// The chip in a message opens the file exactly as its Files row does (taste
+	// pass), so the two entry points can never drift: find the row that stands
+	// for that shelf file and take the row's own path. A ref keeps the handler
+	// identity stable for the memoised transcript while still calling the
+	// CURRENT openAssetRow (which closes over live right-pane state).
+	openAssetRowRef.current = openAssetRow;
+	const attachmentAccess = useMemo(() => ({
+		onOpen: (name: string) => {
+			const row = assetRowsRef.current.find((candidate) => rowShelfFileName(candidate) === name);
+			if (row) openAssetRowRef.current?.(row);
+		},
+		// Only claim a file is gone once the room's listing has actually loaded.
+		...(persistentChat && roomFilesKnownFor === persistentChat.agentId
+			? { existingNames: new Set(roomShelfFiles.map((file) => file.name)) }
+			: {}),
+	}), [persistentChat?.agentId, roomFilesKnownFor, roomShelfFiles]);
 	const selectedAssetTaskId = rightPane?.kind === "artifactViewer" || rightPane?.kind === "taskRun" ? rightPane.taskId : null;
 
 	const empty = items.length === 0;
@@ -5532,7 +6011,8 @@ export function App() {
 					maximized={artifactMaximized}
 					onToggleMaximize={() => setArtifactMaximized((m) => !m)}
 					onClose={() => { setArtifactMaximized(false); setRightPane(null); }}
-					onSaveToWorkspace={() => void saveArtifactToWorkspace(rightPane)}
+					roomId={persistentChat?.agentId}
+					reloadNonce={viewerReloadNonce}
 					{...(rightPane.asset ? {
 						assetTitle: rightPane.asset.title,
 						originLine: rightPane.asset.originLine,
@@ -5542,15 +6022,14 @@ export function App() {
 							<AssetViewerFooter
 								taskId={rightPane.taskId}
 								artifact={rightPane.artifact}
-								inConversation={threadTaskIds.has(rightPane.taskId)}
-								orphan={rightPane.asset.orphan}
-								canIterate={rightPane.asset.artifacts.length > 0}
+								userFileName={rightPane.asset.userFileName}
+								roomId={persistentChat?.agentId}
+								canIterate={!rightPane.asset.userFileName && rightPane.asset.artifacts.length > 0}
 								summary={rightPane.asset.summary}
-								onAddToConversation={() => rightPane.asset && transferAssetRowToThread(rightPane.asset)}
-								onSaveToWorkspace={() => void saveArtifactToWorkspace(rightPane)}
 								onIterate={(brief) => submitAssetIterate(rightPane.taskId, brief)}
 								iteratePending={taskIteratePending}
 								iterateNotice={taskIterateNotice}
+								{...(rightPane.artifact.relativePath.startsWith("files/") ? { onSaveTo: () => setSaveAsPrompt({ shelfName: rightPane.artifact.relativePath.slice("files/".length) }) } : {})}
 								{...(rightPane.asset.orphan ? { onDelete: () => rightPane.asset && setAssetDeleteConfirm(rightPane.asset) } : {})}
 							/>
 						),
@@ -5569,7 +6048,7 @@ export function App() {
 					theme={theme}
 					onToggleTheme={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}
 					onHelp={() => setHelpOpen(true)}
-					assetsSlot={persistentChat ? <AssetsPanel rows={assetRows} selectedTaskId={selectedAssetTaskId} onSelect={openAssetRow} onStopRunning={() => dispatchTask({ type: "abort_requested" })} onRemove={(row) => void removeAssetRow(row)} /> : undefined}
+					assetsSlot={persistentChat ? <AssetsPanel rows={assetRows} selectedTaskId={selectedAssetTaskId} onSelect={openAssetRow} onStopRunning={() => dispatchTask({ type: "abort_requested" })} onRemove={(row) => void removeAssetRow(row)} onDeleteFile={(row, fileName) => requestFileDelete(row, fileName)} onRenameFile={(row, fileName, newName) => void renameFileRow(row, fileName, newName)} /> : undefined}
 				/>
 			}
 			withPreview={false}
@@ -5585,6 +6064,22 @@ export function App() {
 			composerRightActions={
 				persistentChat ? (
 					<>
+						<button
+							className="icon-btn composer-attach-btn"
+							title="Add a file to this room's Files and attach it to your next message"
+							aria-label="Attach a file"
+							onClick={() => attachFileInputRef.current?.click()}
+						>📎</button>
+						<input
+							ref={attachFileInputRef}
+							type="file"
+							multiple
+							className="composer-attach-input"
+							onChange={(e) => {
+								for (const file of Array.from(e.target.files ?? [])) void stageAttachment(file);
+								e.target.value = "";
+							}}
+						/>
 						<button className="icon-btn" title="Forget this conversation and start fresh. Nothing is checkpointed" onClick={() => void mementoPersistentThread()}>Memento</button>
 						<CheckpointSplitButton
 							hasUserInput={currentThreadHasUserInput}
@@ -5600,6 +6095,8 @@ export function App() {
 			onReconnect={retryRoomReconnectNow}
 			items={items}
 			pendingConsultIds={pendingConsultItemIds}
+			attachmentAccess={attachmentAccess}
+			composerOverlaySlot={<ToastStack toasts={roomToasts} />}
 			onOpenTaskArtifact={(taskId, relativePath) => {
 				const extension = relativePath.includes(".") ? relativePath.slice(relativePath.lastIndexOf(".")).toLowerCase() : "";
 				const item = itemsRef.current.find((it): it is Extract<ChatItem, { kind: "task" }> => it.kind === "task" && it.taskId === taskId);
@@ -5616,6 +6113,28 @@ export function App() {
 			sendUnavailable={!connected || persistentRoomInFlight}
 			initialDraftValue={composerPrefill || undefined}
 			draftResetKey={composerResetNonce}
+			composerAllowEmptySend={stagedAttachments.some((entry) => entry.status === "ready")}
+			composerStagingSlot={persistentChat && stagedAttachments.length > 0 ? (
+				<div className="composer-staged" role="status" aria-label="Files attached to your next message">
+					{stagedAttachments.map((staged) => (
+						<span key={staged.stageId} className={`composer-staged-chip${staged.status === "failed" ? " failed" : ""}`}>
+							<span className="composer-staged-name">{staged.name || staged.parseNote}</span>
+							<span className="composer-staged-note">
+								{staged.status === "uploading" ? "adding…" : staged.parseNote || `${Math.max(1, Math.round(staged.bytes / 1024))} KB`}
+							</span>
+							{staged.status !== "uploading" && (
+								<button
+									type="button"
+									className="composer-staged-remove"
+									title="Remove this file before sending"
+									aria-label={`Remove ${staged.name}`}
+									onClick={() => void unstageAttachment(staged)}
+								>✕</button>
+							)}
+						</span>
+					))}
+				</div>
+			) : undefined}
 			mention={persistentChat ? {
 				candidates: mentionCandidates,
 				currentRoomId: persistentChat.agentId,
@@ -5642,43 +6161,14 @@ export function App() {
 				</>
 			) : undefined}
 			previewSlot={rightPaneSlot}
-			checkpointPreviewSlot={checkpointPreviewOpen && persistentChat && <CheckpointPreviewShell chat={persistentChat} itemCount={items.length} rememberText={checkpointRememberText} density={checkpointDensity} proposal={checkpointProposal} loading={checkpointProposalLoading} error={checkpointProposalError} approvalLoading={checkpointApprovalLoading} approvalError={checkpointApprovalError} approvalResult={checkpointApprovalResult} quickRequested={checkpointQuickRequested} quickBlockedReasons={checkpointQuickBlockedReasons} consultRunning={consultState.phase === "streaming"} taskRunning={taskState.phase === "running"} pendingConsultHandoffCount={pendingHandoffs.filter((block) => !block.startsWith("[SPECIALIST RESULT") && !block.startsWith("[WORKSPACE EXPORT")).length} pendingTaskHandoffCount={pendingHandoffs.filter((block) => block.startsWith("[SPECIALIST RESULT")).length} onRememberTextChange={(text) => { setCheckpointRememberText(text); setCheckpointProposal(null); setCheckpointProposalError(null); setCheckpointApprovalError(null); setCheckpointApprovalResult(null); }} onDensityChange={(next) => { setCheckpointDensity(next); setCheckpointProposal(null); setCheckpointProposalError(null); setCheckpointApprovalError(null); setCheckpointApprovalResult(null); }} onGenerate={generateCheckpointProposal} onApprove={approveCheckpointProposal} onDiscard={() => { setCheckpointProposal(null); setCheckpointProposalError(null); setCheckpointApprovalError(null); setCheckpointApprovalResult(null); setCheckpointQuickRequested(false); setCheckpointQuickBlockedReasons(null); setCheckpointPreviewOpen(false); }} onContinueAfterCheckpoint={continueAfterCheckpoint} onRestAfterCheckpoint={restAfterCheckpoint} onClose={() => setCheckpointPreviewOpen(false)} />}
+			checkpointPreviewSlot={checkpointPreviewOpen && persistentChat && <CheckpointPreviewShell chat={persistentChat} itemCount={items.length} rememberText={checkpointRememberText} density={checkpointDensity} proposal={checkpointProposal} loading={checkpointProposalLoading} error={checkpointProposalError} approvalLoading={checkpointApprovalLoading} approvalError={checkpointApprovalError} approvalResult={checkpointApprovalResult} quickRequested={checkpointQuickRequested} quickBlockedReasons={checkpointQuickBlockedReasons} consultRunning={consultState.phase === "streaming"} taskRunning={taskState.phase === "running"} pendingConsultHandoffCount={pendingHandoffs.filter((block) => !isSpecialistHandoffBlock(block)).length} pendingTaskHandoffCount={pendingHandoffs.filter(isSpecialistHandoffBlock).length} onRememberTextChange={(text) => { setCheckpointRememberText(text); setCheckpointProposal(null); setCheckpointProposalError(null); setCheckpointApprovalError(null); setCheckpointApprovalResult(null); }} onDensityChange={(next) => { setCheckpointDensity(next); setCheckpointProposal(null); setCheckpointProposalError(null); setCheckpointApprovalError(null); setCheckpointApprovalResult(null); }} onGenerate={generateCheckpointProposal} onApprove={approveCheckpointProposal} onDiscard={() => { setCheckpointProposal(null); setCheckpointProposalError(null); setCheckpointApprovalError(null); setCheckpointApprovalResult(null); setCheckpointQuickRequested(false); setCheckpointQuickBlockedReasons(null); setCheckpointPreviewOpen(false); }} onContinueAfterCheckpoint={continueAfterCheckpoint} onRestAfterCheckpoint={restAfterCheckpoint} onClose={() => setCheckpointPreviewOpen(false)} />}
 			globalOverlaySlot={
 				<>
 					{helpOpen && <Help onClose={() => setHelpOpen(false)} />}
 					{assetDeleteConfirm && <AssetDeleteDialog title={assetDeleteConfirm.title} onDelete={() => { const row = assetDeleteConfirm; setAssetDeleteConfirm(null); if (row) void deleteAssetRow(row); }} onCancel={() => setAssetDeleteConfirm(null)} />}
+					{fileDeleteConfirm && <FileDeleteDialog fileName={fileDeleteConfirm.fileName} reason={fileDeleteConfirm.reason} onDelete={() => { const confirm = fileDeleteConfirm; setFileDeleteConfirm(null); if (confirm) void performFileDelete(confirm.fileName); }} onCancel={() => setFileDeleteConfirm(null)} />}
+					{saveAsPrompt && <SaveAsDialog shelfName={saveAsPrompt.shelfName} onSave={(chosenName) => { const prompt = saveAsPrompt; setSaveAsPrompt(null); if (prompt) void saveViewerFileToFolder(prompt.shelfName, undefined, chosenName); }} onCancel={() => setSaveAsPrompt(null)} />}
 					{exportCollision && <ExportCollisionDialog collision={exportCollision} onClose={() => setExportCollision(null)} />}
-					{exportNotice && (
-						<div className={`artifact-export-toast ${exportNotice.kind}`} role="status" aria-live="polite">
-							{exportNotice.text}
-						</div>
-					)}
-					{removeNotice && (
-						<div className="artifact-export-toast success asset-remove-toast" role="status" aria-live="polite">
-							<span className="asset-remove-text">
-								<span>Removed from the list.</span>
-								<span className="asset-remove-sub">Its files are kept.</span>
-							</span>
-							<button type="button" className="asset-remove-undo" onClick={() => void undoRemoveAssetRow(removeNotice.taskId)}>Undo</button>
-						</div>
-					)}
-					{taskDoneToast && (
-						<button
-							type="button"
-							className={`task-done-toast ${taskDoneToast.kind}`}
-							role="status"
-							aria-live="polite"
-							onClick={() => {
-								const toast = taskDoneToast;
-								setTaskDoneToast(null);
-								if (toast.artifact) openArtifactViewer(toast.taskId, toast.templateLabel, toast.artifact);
-							}}
-						>
-							{taskDoneToast.kind === "done"
-								? <>“{taskDoneToast.title}” is ready — click to open</>
-								: <>“{taskDoneToast.title}” didn't finish{taskDoneToast.artifact ? " — click to see what it made" : ""}</>}
-						</button>
-					)}
 				</>
 			}
 		/>

@@ -213,6 +213,7 @@ try {
 	assert(roomModelStatus.body?.activeProfileLabel === "Claude", `room model status active profile label should be Claude, got ${roomModelStatus.body?.activeProfileLabel}`);
 	assert(
 		JSON.stringify(roomModelKeys(roomModelStatus.body)) === JSON.stringify([
+			"anthropic/claude-opus-5",
 			"anthropic/claude-opus-4-8",
 			"anthropic/claude-sonnet-5",
 			"anthropic/claude-fable-5",
@@ -224,6 +225,7 @@ try {
 	);
 	assert(
 		JSON.stringify(compactRoomModelLabels(roomModelStatus.body)) === JSON.stringify([
+			"Opus 5",
 			"Opus 4.8",
 			"Sonnet 5",
 			"Fable 5",

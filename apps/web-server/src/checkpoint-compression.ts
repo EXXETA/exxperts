@@ -187,17 +187,9 @@ The current L1b memory state is provided so you can compress differentially.
 
 Do not restate stable memory unless the session changed it, contradicted it, refined it, or made it newly relevant. Prefer capturing the delta: what this session adds, changes, closes, opens, or sharpens.
 
-## Recoverable vs. Ephemeral Signal
+## Ephemeral Signal
 
-Some material may be recoverable outside the transcript, such as files, artifacts, documents, code, or records that persist elsewhere. When recoverable artifacts are mentioned:
-
-- reference the artifact by name/path and its role;
-- preserve decisions, interpretations, tensions, and open loops caused by the artifact;
-- do not spend density reproducing content that can be re-read elsewhere.
-
-Ephemeral signal is the primary compression target: decisions, interpretations, rationale, tensions, commitments, preferences, and parked context that exist only in the conversation.
-
-If no explicit provenance is provided, apply this principle only when the transcript itself clearly identifies recoverable artifacts.
+Ephemeral signal is the primary compression target: decisions, interpretations, rationale, tensions, commitments, preferences, and parked context that exist only in the conversation. The room's files are inventory the room re-learns fresh every request from its 'Files in this room' list — never spend density cataloguing which files exist or reproducing content that can be re-read; compress the conclusions the session drew from them.
 
 When a decision or recorded fact rests on something a tool, file, or external source revealed, preserve the distilled finding together with its provenance — what was learned and where it came from — because a future session can only trust or re-verify a claim that carries its source. One sourced line beats a raw excerpt, and beats an unsourced claim.
 

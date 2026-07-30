@@ -12,12 +12,14 @@ import { DEFAULT_PERSISTENT_ROOM_AGENTS_ROOT, persistentAgentRootPath } from "./
  * and the server-side propose/approve split is unchanged — this file only
  * stores the preference.
  *
- * `quickCheckpointAutoApply` governs the default Checkpoint button: when
- * false (the default) the quick button still generates the proposal but
- * always falls back to the manual preview for approval; when true a
- * blocker-free proposal is approved immediately without showing the preview.
- * Proposals with blockers fall back to the preview either way, and the
- * server-side propose/approve split is unchanged.
+ * `quickCheckpointAutoApply` lets the web UI approve a blocker-free quick
+ * Checkpoint proposal immediately instead of showing the preview. Proposals
+ * carrying deterministic blockers always fall back to the preview, every save
+ * still archives the previous memory and writes an audit record, and the
+ * server-side propose/approve split is unchanged — this file only stores the
+ * preference. Default off: a room saves nothing without review until it
+ * explicitly opts in, and records written before the field existed read as
+ * off too.
  *
  * `memoryBudgetTokens` is the room's advisory memory budget: the size the
  * whole L1b should stay near. It never gates anything — it drives the
@@ -74,8 +76,8 @@ export function readPersistentRoomMaintenanceSettings(agentIdRaw: string, option
 		return {
 			schemaVersion: 1,
 			fastPathSecondApproval: raw.fastPathSecondApproval === true,
-			// Absent means off: only an explicit true enables auto-apply, so
-			// settings files written before this field existed get review-first.
+			// Absent means off: records written before the field existed stay
+			// review-first until the room explicitly opts in.
 			quickCheckpointAutoApply: raw.quickCheckpointAutoApply === true,
 			memoryBudgetTokens: clampMemoryBudgetTokens(raw.memoryBudgetTokens),
 			updatedAt: typeof raw.updatedAt === "string" ? raw.updatedAt : "",

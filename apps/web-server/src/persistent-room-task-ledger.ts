@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { DEFAULT_PERSISTENT_ROOM_AGENTS_ROOT, persistentAgentRootPath } from "./persistent-room-workspace-policy.js";
+import { readReviseConflicts, type ReviseConflictNotice } from "./revise-conflict-notice.js";
 
 /**
  * Durable per-task ledger for specialist tasks (assets contract §2, rung 1).
@@ -58,6 +59,14 @@ export interface TaskLedgerRecord {
 	iterateParentTaskId?: string;
 	exports?: TaskLedgerExport[];
 	/**
+	 * Refused overwrites from this run's revise commit gate (taste pass). Kept
+	 * STRUCTURED, not only inside `summary`, because the notice the user reads
+	 * is rendered from these fields — and a conflict that happened while the
+	 * tab was closed reaches them only through the away notice, which reads
+	 * this row.
+	 */
+	reviseConflicts?: ReviseConflictNotice[];
+	/**
 	 * Stamped once the client has been told how this task ended — either the
 	 * terminal frame went out on a live socket, or an away-notice was delivered
 	 * on a later connect. Terminal rows without it owe the user a notice.
@@ -72,12 +81,12 @@ export interface TaskLedgerRecord {
 	/**
 	 * Stamped the first time the user opens this task's result (viewer, from
 	 * any entry path) or acts on it (attach). Unset on a done row = the green
-	 * unread dot in the Artifacts rail (status grammar, 2026-07-18) — green
+	 * unread dot in the Files rail (status grammar, 2026-07-18) — green
 	 * means "you haven't seen this yet", so it must decay exactly once.
 	 */
 	viewedAt?: string;
 	/**
-	 * Stamped when the user took this row off the Artifacts panel ("Remove from
+	 * Stamped when the user took this row off the Files panel ("Remove from
 	 * list"). A LIST operation only — files stay on disk and deletedAt keeps its
 	 * meaning ("files are gone"). Only the panel listing hides removed rows;
 	 * every other reader (reseed, GC measurement, iterate mapping) still sees
@@ -179,6 +188,8 @@ export interface FinalizeTaskLedgerRecordInput {
 	usage?: TaskLedgerUsage;
 	/** True when the terminal frame was sent on a live socket — the client already knows. */
 	noticed?: boolean;
+	/** Refused overwrites, so an away user still gets the two-writers notice. */
+	reviseConflicts?: ReviseConflictNotice[];
 }
 
 /** Finalize a task's row. Returns null (no throw) when the row is missing or unreadable — the ledger must never break a task. */
@@ -196,48 +207,11 @@ export function finalizeTaskLedgerRecord(roomIdRaw: string, taskIdRaw: string, i
 			? { artifacts: input.artifacts.map((a) => ({ relativePath: String(a.relativePath), bytes: Number(a.bytes) || 0, extension: String(a.extension ?? "") })) }
 			: {}),
 		...(input.usage ? { usage: { ...input.usage } } : {}),
+		...(readReviseConflicts(input.reviseConflicts).length > 0 ? { reviseConflicts: readReviseConflicts(input.reviseConflicts) } : {}),
 		...(input.noticed ? { awayNoticedAt: now.toISOString() } : {}),
 	};
 	writeTaskLedgerRecordFile(file, record);
 	return record;
-}
-
-export interface ExportedInputIngestPlanEntry {
-	/** The source task's store-relative artifact path the iterate builds on. */
-	sourceRelativePath: string;
-	/** Absolute workspace path of the CURRENT file (latest export's savedTo). */
-	savedTo: string;
-	/** Store-relative destination inside the new task: tasks/<id>/inputs/<name>. */
-	ingestedRelativePath: string;
-}
-
-/**
- * Ingest-on-iterate planning (G2-B, pure): map each input artifact that was
- * exported (per the ledger row's exports[] — latest entry per artifact wins)
- * to an ingest copy under the NEW task's inputs/ dir. Inputs never exported
- * produce no entry — the iterate reads their store originals as before.
- * Basename collisions between different source dirs get -2/-3 suffixes.
- */
-export function planExportedInputIngest(row: TaskLedgerRecord | null, inputArtifacts: string[], newTaskFolder: string): ExportedInputIngestPlanEntry[] {
-	if (!row || !row.exports || row.exports.length === 0) return [];
-	const entries: ExportedInputIngestPlanEntry[] = [];
-	const usedNames = new Set<string>();
-	for (const sourceRelativePath of inputArtifacts) {
-		// Latest export of this artifact wins — it names the file the user has
-		// been living with in the workspace.
-		const exportEntry = [...row.exports].reverse().find((candidate) => candidate.relativePath === sourceRelativePath);
-		if (!exportEntry) continue;
-		const rawName = exportEntry.savedTo.split(/[\\/]/).pop() ?? "";
-		if (!rawName) continue;
-		const dot = rawName.lastIndexOf(".");
-		const stem = dot > 0 ? rawName.slice(0, dot) : rawName;
-		const extension = dot > 0 ? rawName.slice(dot) : "";
-		let name = rawName;
-		for (let suffix = 2; usedNames.has(name); suffix += 1) name = `${stem}-${suffix}${extension}`;
-		usedNames.add(name);
-		entries.push({ sourceRelativePath, savedTo: exportEntry.savedTo, ingestedRelativePath: `${newTaskFolder}/inputs/${name}` });
-	}
-	return entries;
 }
 
 /**
@@ -254,6 +228,22 @@ export function resolveIterateSourceFromLedger(records: TaskLedgerRecord[], task
 	const artifacts = (row.artifacts ?? []).map((artifact) => artifact.relativePath);
 	if (artifacts.length === 0) return null;
 	return { templateId: row.templateId, artifacts };
+}
+
+/**
+ * Guarded read-modify-write for one row (shelf migration): the updater receives
+ * the parsed record and returns the replacement, written atomically. Returns
+ * null (no throw) when the row is missing or unreadable. Returning the input
+ * unchanged skips the write.
+ */
+export function rewriteTaskLedgerRecord(roomIdRaw: string, taskIdRaw: string, updater: (record: TaskLedgerRecord) => TaskLedgerRecord, options: TaskLedgerStorageOptions = {}): TaskLedgerRecord | null {
+	const file = taskLedgerRecordPath(roomIdRaw, taskIdRaw, options);
+	const current = parseTaskLedgerRecord(file);
+	if (!current) return null;
+	const next = updater(current);
+	if (next === current) return current;
+	writeTaskLedgerRecordFile(file, next);
+	return next;
 }
 
 /** Append a workspace export to a task's row (slice D; the mapping ingest-on-iterate consumes). Returns null (no throw) when the row is missing — pre-ledger tasks export fine without a record. */
@@ -279,7 +269,7 @@ export function markTaskLedgerRecordDeleted(roomIdRaw: string, taskIdRaw: string
 }
 
 /**
- * Stamp removedAt: the user took this row off the Artifacts panel. Also stamps
+ * Stamp removedAt: the user took this row off the Files panel. Also stamps
  * awayNoticedAt when unset — removing a row is acting on it, so a later connect
  * must not announce a task the user already dismissed. Idempotent; returns the
  * updated row, or null when the row is missing.

@@ -1145,7 +1145,7 @@ export interface PersistentAgentArchiveResponse {
 }
 
 export type ChatItem =
-	| { kind: "user"; id: string; text: string }
+	| { kind: "user"; id: string; text: string; attachments?: { name: string; bytes: number; extension: string }[] }
 	| { kind: "assistant"; id: string; text: string; streaming?: boolean }
 	| {
 			kind: "tool";

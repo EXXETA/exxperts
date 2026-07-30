@@ -1,0 +1,28 @@
+# Windows build with Azure Trusted Signing. CI-only overlay selected by
+# scripts/package.mjs --sign-windows; every other build path keeps using the
+# unsigned electron-builder.yml, so local packaging never needs Azure
+# credentials. Nothing here is a secret: authentication happens out of band
+# (azure/login OIDC in the release workflow — the TrustedSigning PowerShell
+# module electron-builder invokes resolves credentials via the standard Azure
+# identity chain, which picks up the logged-in Azure CLI).
+extends: electron-builder.yml
+win:
+  # Sign only our own binaries (exxperts.exe, the NSIS installer and its
+  # uninstaller). The server payload rides third-party executables that are
+  # already Authenticode-signed by their publishers (the vendored OpenJS
+  # node.exe, esbuild.exe, recheck.exe); Azure Trusted Signing rejects
+  # re-signing them (SignerSign() 0x80004005), so each is excluded via a
+  # signExts negative pattern (str.endsWith semantics) and keeps its original
+  # signature. package.mjs --sign-windows preflights the staged payload and
+  # fails with an actionable message if it ever carries an exe not listed
+  # here, so a new payload dependency surfaces before the build instead of as
+  # an opaque Azure error mid-signing.
+  signExts:
+    - "!node.exe"
+    - "!esbuild.exe"
+    - "!recheck.exe"
+  azureSignOptions:
+    publisherName: Exxeta AG
+    endpoint: https://weu.codesigning.azure.net/
+    certificateProfileName: ghcr-exxperts-signing-profile
+    codeSigningAccountName: exxeta-ag-cs

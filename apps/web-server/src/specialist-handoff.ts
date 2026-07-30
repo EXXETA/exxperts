@@ -34,15 +34,6 @@ export const SPECIALIST_HANDOFF_TASK_TITLE_MAX_CHARS = 4_000;
 /** Appended when the summary is capped, so the block is honest about the trim (§2.2). */
 export const SPECIALIST_HANDOFF_TRIM_MARKER = "[summary trimmed at 4,000 characters]";
 
-/** At most this many artifact paths are listed; the rest collapse to a `(+N more)` line. */
-export const SPECIALIST_HANDOFF_ARTIFACTS_MAX = 8;
-
-/** A path that is absolute / traversing / not store-relative is replaced with this literal. */
-export const SPECIALIST_HANDOFF_INVALID_PATH = "(invalid path omitted)";
-
-/** Shown in the Artifacts section when a task reported no artifact paths. */
-export const SPECIALIST_HANDOFF_NO_ARTIFACTS = "(none)";
-
 /**
  * The block MUST never exceed this — it rides the SAME pending-transfer queue as
  * consult blocks, and validateConsultHandoffQueue rejects any entry over
@@ -55,23 +46,28 @@ export const SPECIALIST_HANDOFF_NO_ARTIFACTS = "(none)";
 export const SPECIALIST_HANDOFF_BLOCK_MAX_CHARS = 12_000;
 
 /**
- * The specialist envelope's own markers — the §2.2 sibling of consult-handoff's
- * HANDOFF_MARKER_LIKE. A distilled summary (specialist-authored, the real forge
- * vector) could emit a literal `[/SPECIALIST RESULT: deck]` to close the real
- * envelope early and open forged text that escapes the provenance framing into
- * room A's voice. We strip the brackets off any marker-like token so the words
- * survive but the fence cannot be reproduced — exactly consult-handoff's defang.
- */
-const SPECIALIST_MARKER_LIKE = /\[\s*\/?\s*SPECIALIST\s+RESULT\b[^\]\n]*\]/gi;
-
-/**
- * Neutralise untrusted (specialist-authored) content: first the consult defang
- * (CONSULT-HANDOFF envelope markers + the `**must-keep**` durability signal, all
- * variants) via the shared neutralizeBlockContent, then this envelope's own
- * SPECIALIST-RESULT markers. Both defangs keep the words, remove the fence.
+ * Neutralise untrusted (specialist-authored) content. The shared
+ * neutralizeBlockContent now defangs BOTH envelope families (CONSULT HANDOFF
+ * and SPECIALIST RESULT markers) plus the `**must-keep**` durability signal —
+ * the symmetry is the point (critical-fixes hardening): any marker a fence
+ * recogniser can match must be un-reproducible in ANY neutralised content,
+ * whichever family of block it rides in. Kept as its own export so call sites
+ * keep naming which envelope they build.
  */
 export function neutralizeSpecialistBlockContent(text: string): string {
-	return neutralizeBlockContent(text).replace(SPECIALIST_MARKER_LIKE, (marker) => marker.replace(/[[\]]/g, ""));
+	return neutralizeBlockContent(text);
+}
+
+/**
+ * The pending-handoff queue's taxonomy, in ONE place: a queued block is either
+ * a specialist result or a consult handoff — exactly the two families the
+ * consent stripper's fence recognisers know (userAuthoredPromptText). The
+ * client's checkpoint counts classify with THIS predicate so the queue
+ * taxonomy and the stripper can never drift apart again (a retired third
+ * family once lingered in the client filter alone).
+ */
+export function isSpecialistHandoffBlock(block: string): boolean {
+	return String(block ?? "").startsWith("[SPECIALIST RESULT");
 }
 
 export interface SpecialistHandoffInput {
@@ -83,8 +79,8 @@ export interface SpecialistHandoffInput {
 	taskTitle: string;
 	/** ISO-8601 time the specialist ran → the Template line's `ran <ISO>`. */
 	ranAtIso: string;
-	/** Artifact-store-relative paths (`tasks/<taskId>/…`); each validated + neutralised. */
-	artifactPaths: string[];
+	/** How many files the task produced → the Template line's `· N files`. The block carries no path list — the shelf manifest owns "what exists and where". */
+	artifactCount: number;
 	/** The distilled result summary; capped at 4,000 chars, neutralised. */
 	summary: string;
 }
@@ -92,32 +88,6 @@ export interface SpecialistHandoffInput {
 /** Flatten to a single physical line so authored newlines can't inject grammar lines. */
 function flattenToLine(text: string): string {
 	return String(text ?? "").replace(/[\r\n]+/g, " ");
-}
-
-/**
- * Validate ONE artifact path to store-relative form. A path that is absolute,
- * contains a `..` traversal segment, carries a newline, or does not start with
- * the `tasks/` store prefix is REPLACED with the literal invalid-path marker —
- * never emitted, so a poisoned path can neither point outside the store nor
- * inject a grammar line. A valid path is still defensively neutralised.
- */
-function sanitizeArtifactPath(raw: string): string {
-	const path = String(raw ?? "");
-	if (!path) return SPECIALIST_HANDOFF_INVALID_PATH;
-	if (/[\r\n]/.test(path)) return SPECIALIST_HANDOFF_INVALID_PATH;
-	if (path.startsWith("/")) return SPECIALIST_HANDOFF_INVALID_PATH; // absolute
-	if (path.includes("..")) return SPECIALIST_HANDOFF_INVALID_PATH; // traversal
-	if (!path.startsWith("tasks/")) return SPECIALIST_HANDOFF_INVALID_PATH; // not store-relative
-	return neutralizeSpecialistBlockContent(path);
-}
-
-/** The artifact path lines: first ARTIFACTS_MAX sanitized paths, then a `(+N more)` overflow line. */
-function buildArtifactLines(paths: string[]): string[] {
-	const sanitized = (paths ?? []).map(sanitizeArtifactPath);
-	if (sanitized.length === 0) return [SPECIALIST_HANDOFF_NO_ARTIFACTS];
-	const shown = sanitized.slice(0, SPECIALIST_HANDOFF_ARTIFACTS_MAX);
-	const overflow = sanitized.length - SPECIALIST_HANDOFF_ARTIFACTS_MAX;
-	return overflow > 0 ? [...shown, `(+${overflow} more)`] : shown;
 }
 
 /**
@@ -144,29 +114,30 @@ function fitSummary(summary: string, budget: number): string {
 }
 
 /**
- * Build the canonical specialist handoff block (§2.2). The line structure — the
- * two Source lines especially — is the spec grammar verbatim; do not restyle.
- * The templateId is the trusted registry slug (parity with consult-handoff's
- * raw slug on the markers); every other string is neutralised. The block is
- * guaranteed ≤ SPECIALIST_HANDOFF_BLOCK_MAX_CHARS.
+ * Build the canonical specialist handoff block (§2.2, slimmed with the
+ * revise-in-place slice): title + capped summary + honesty line. The block
+ * carries NO artifact path list — the shelf manifest owns "what exists and
+ * where" and is regenerated every request, so a path list here could only ever
+ * go stale. The filename lives in the summary the specialist wrote. The line
+ * structure — the two Source lines especially — is the spec grammar verbatim;
+ * do not restyle. The templateId is the trusted registry slug (parity with
+ * consult-handoff's raw slug on the markers); every other string is
+ * neutralised. The block is guaranteed ≤ SPECIALIST_HANDOFF_BLOCK_MAX_CHARS.
  */
 export function buildSpecialistHandoffBlock(input: SpecialistHandoffInput): string {
 	const templateId = String(input.templateId ?? "");
 	const version = Number(input.templateVersion);
 	const ranAt = String(input.ranAtIso ?? "");
-	const count = Array.isArray(input.artifactPaths) ? input.artifactPaths.length : 0;
+	const count = Number.isFinite(Number(input.artifactCount)) && Number(input.artifactCount) > 0 ? Math.floor(Number(input.artifactCount)) : 0;
 	const task = neutralizeSpecialistBlockContent(flattenToLine(input.taskTitle)).slice(0, SPECIALIST_HANDOFF_TASK_TITLE_MAX_CHARS);
-	const artifactLines = buildArtifactLines(input.artifactPaths);
 
 	// The fixed skeleton (everything but the summary) and the closing fence.
 	const skeleton: string[] = [
 		`[SPECIALIST RESULT: ${templateId}]`,
 		`Task: ${task}`,
-		`Template: ${templateId} v${version} · ran ${ranAt} · ${count} artifacts`,
-		`Artifacts:`,
-		...artifactLines,
+		`Template: ${templateId} v${version} · ran ${ranAt} · ${count} file${count === 1 ? "" : "s"}`,
 		`Source: ephemeral specialist session, no memory access; this room only knows this`,
-		`distilled result and the artifact paths.`,
+		`distilled result; the room's current files are listed in the 'Files in this room' list.`,
 	];
 	const closing = `[/SPECIALIST RESULT: ${templateId}]`;
 

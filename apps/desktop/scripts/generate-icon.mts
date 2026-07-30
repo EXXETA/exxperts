@@ -15,6 +15,10 @@ import { fileURLToPath } from "node:url";
 const desktopRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const repoRoot = path.resolve(desktopRoot, "..", "..");
 const fontPath = path.join(repoRoot, "apps", "web-ui", "public", "fonts", "BandeinsStrange-Bold.otf");
+// Embedded as a data URL: a file:// src breaks on Windows (the backslash
+// path makes a malformed URL Chromium won't load) and is cross-origin from
+// about:blank anyway; base64 works identically on every host.
+const fontDataUrl = `data:font/otf;base64,${fs.readFileSync(fontPath).toString("base64")}`;
 const iconsetDir = path.join(desktopRoot, "build", "icon.iconset");
 const icnsPath = path.join(desktopRoot, "build", "icon.icns");
 
@@ -53,7 +57,7 @@ function iconHtml(size: number, opts: RenderOpts = {}): string {
              border-radius: 50%; background: ${opts.flatGlyph ? "#000000" : "#8CA5FF"}; }`
     : "";
   return `<!doctype html><html><head><style>
-    @font-face { font-family: Bandeins; src: url("file://${fontPath}") format("opentype"); }
+    @font-face { font-family: Bandeins; src: url("${fontDataUrl}") format("opentype"); }
     html, body { margin: 0; background: transparent; }
     .canvas { width: ${size}px; height: ${size}px; display: flex; align-items: center; justify-content: center; position: relative; }
     ${glyphBox}
@@ -85,18 +89,15 @@ const ICO_SIZES = [16, 32, 48, 64, 128, 256];
 
 const browser = await chromium.launch();
 async function render(size: number, opts: RenderOpts = {}): Promise<Buffer> {
-  // Loaded via a real file:// navigation: from about:blank (setContent) the
-  // file:// @font-face is cross-origin and silently falls back to a serif.
-  const htmlFile = path.join(iconsetDir, `render-${size}${opts.flatGlyph ? "-flat" : ""}${opts.noGlow ? "-noglow" : ""}.html`);
-  fs.writeFileSync(htmlFile, iconHtml(size, opts));
+  // setContent suffices: the font is a same-document data URL, so no file://
+  // navigation (and no temp html file) is needed for it to load.
   const page = await browser.newPage({ viewport: { width: size, height: size }, deviceScaleFactor: 1 });
-  await page.goto(`file://${htmlFile}`);
+  await page.setContent(iconHtml(size, opts));
   await page.evaluate(() => (document as unknown as { fonts: { ready: Promise<unknown> } }).fonts.ready);
   const fontLoaded = await page.evaluate(() => (document as unknown as { fonts: { check(f: string): boolean } }).fonts.check("16px Bandeins"));
   if (!fontLoaded) throw new Error(`BandeinsStrange did not load for size ${size}; refusing to render a fallback face.`);
   const shot = await page.screenshot({ omitBackground: true });
   await page.close();
-  fs.rmSync(htmlFile);
   return shot;
 }
 const rendered = new Map<number, Buffer>();
@@ -129,8 +130,14 @@ for (const [name, size] of ICONSET) {
   fs.writeFileSync(path.join(iconsetDir, name), rendered.get(size)!);
 }
 fs.writeFileSync(path.join(desktopRoot, "build", "icon-1024-preview.png"), rendered.get(1024)!);
-execFileSync("iconutil", ["-c", "icns", iconsetDir, "-o", icnsPath]);
-console.log(`[generate-icon] wrote ${icnsPath}`);
+// iconutil exists only on macOS; the icns is only consumed by the mac build,
+// so on other hosts (the Windows runner needs just icon.ico) it is skipped.
+if (process.platform === "darwin") {
+  execFileSync("iconutil", ["-c", "icns", iconsetDir, "-o", icnsPath]);
+  console.log(`[generate-icon] wrote ${icnsPath}`);
+} else {
+  console.log(`[generate-icon] skipped ${icnsPath} (iconutil is macOS-only; not needed off-mac)`);
+}
 
 // ICO container with PNG-compressed entries: 6-byte header, 16-byte directory
 // entry per image, then the raw PNG payloads.

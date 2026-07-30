@@ -25,6 +25,15 @@ npmRebuild: false
 protocols:
   - name: exxperts
     schemes: [exxperts]
+# The publish config exists ONLY so electron-builder generates the one-click
+# update metadata: latest.yml / latest-mac.yml next to the artifacts and
+# app-update.yml inside resources (electron-updater reads the GitHub releases
+# from it at runtime, user-initiated only). No build ever uploads anywhere:
+# scripts/package.mjs always passes --publish never.
+publish:
+  provider: github
+  owner: EXXETA
+  repo: exxperts
 # "desktop" in the name separates the app downloads from the server release
 # archives (exxperts-<v>-win-x64.zip) on the same release page; the NSIS
 # installer keeps its own short name below.
@@ -38,10 +47,12 @@ mac:
       arch: [arm64]
     - target: zip
       arch: [arm64]
-# Cross-built from macOS, unsigned; the win-x64 payload comes from a real
-# release archive (see scripts/package.mjs). zip is the primary artifact
-# (terminal-run zips dodged SmartScreen in the archive field tests), NSIS
-# installer rides along while unsigned distribution lasts.
+# Unsigned by default (local builds, incl. cross-builds from macOS, need no
+# credentials); CI builds natively on a Windows runner and signs via the
+# electron-builder-win-signed.yml overlay (Azure Trusted Signing). The
+# win-x64 payload comes from a real release archive (see scripts/package.mjs).
+# zip is the primary artifact (terminal-run zips dodged SmartScreen in the
+# archive field tests), NSIS installer rides along.
 win:
   icon: build/icon.ico
   target:

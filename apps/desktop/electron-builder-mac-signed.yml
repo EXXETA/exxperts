@@ -1,0 +1,27 @@
+# macOS build signed with the organization's Developer ID and notarized
+# through an App Store Connect API key. Selected by scripts/package.mjs
+# --sign-mac; every other build path keeps using the unsigned
+# electron-builder.yml, so plain local packaging never needs the certificate.
+# Nothing here is a secret: the identity names a certificate that must exist
+# in the login keychain, and notarization credentials arrive as environment
+# variables (APPLE_API_KEY = path to the .p8 key file, APPLE_API_KEY_ID,
+# APPLE_API_ISSUER — set by package.mjs) that electron-builder hands to
+# @electron/notarize, which also staples the ticket onto the .app before the
+# dmg/zip targets pack it.
+extends: electron-builder.yml
+mac:
+  # No "Developer ID Application:" prefix — electron-builder rejects it and
+  # picks the certificate type itself from the name + team id.
+  identity: "EXXETA AG (CCE5M3A54F)"
+  # Notarization requires the hardened runtime (electron-builder's default,
+  # pinned here because signing is pointless without it) and the entitlements
+  # that keep a JIT-ing, addon-loading runtime launchable under it.
+  hardenedRuntime: true
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  notarize: true
+# The dmg container itself gets a Developer ID signature too (electron-builder
+# skips it by default); together with the notarize+staple pass in package.mjs
+# this makes the dmg itself Gatekeeper-assessable, not just the app inside.
+dmg:
+  sign: true

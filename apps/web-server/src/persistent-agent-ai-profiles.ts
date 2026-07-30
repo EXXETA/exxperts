@@ -90,6 +90,7 @@ export const PERSISTENT_AGENT_AI_PROFILES = {
 		description: "Claude subscription profile for persistent-agent room and maintenance workflows.",
 		processes: {
 			persistentRoom: [
+				{ provider: "anthropic", model: "claude-opus-5" },
 				{ provider: "anthropic", model: "claude-opus-4-8" },
 				{ provider: "anthropic", model: "claude-sonnet-5" },
 				{ provider: "anthropic", model: "claude-fable-5" },
@@ -98,8 +99,8 @@ export const PERSISTENT_AGENT_AI_PROFILES = {
 				{ provider: "anthropic", model: "claude-sonnet-4-6" },
 			],
 			checkpoint: { kind: "inheritPersistentRoom" },
-			absorb: { provider: "anthropic", model: "claude-opus-4-8" },
-			structuralReview: { provider: "anthropic", model: "claude-opus-4-8" },
+			absorb: { provider: "anthropic", model: "claude-opus-5" },
+			structuralReview: { provider: "anthropic", model: "claude-opus-5" },
 		},
 	},
 } as const satisfies Record<BuiltInPersistentAgentAiProfileId, PersistentAgentAiProfile>;

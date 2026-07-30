@@ -207,6 +207,43 @@ function runShim(args, opts = {}) {
 }
 
 // ---------------------------------------------------------------------------
+// Step 0: the native per-platform binaries this target needs.
+//
+// @napi-rs/canvas ships a DIFFERENT prebuilt per platform, resolved by npm's
+// optionalDependencies + os/cpu gate, so a cross-built or partially-installed
+// archive can lack the target's binary. That failure is QUIET — the app boots,
+// every other smoke passes, and only the vision paths refuse at read time — so
+// it is asserted here, per target, rather than left to a human to remember.
+// ---------------------------------------------------------------------------
+
+{
+	const nodeModules = path.join(top, "app", "node_modules");
+	const canvasLoader = path.join(nodeModules, "@napi-rs", "canvas");
+	// The platform package name npm resolves for this host (see @napi-rs/canvas's
+	// own optionalDependencies); libc-specific variants are accepted by prefix.
+	const platformPrefix = {
+		darwin: `canvas-darwin-${process.arch}`,
+		win32: `canvas-win32-${process.arch}-msvc`,
+		linux: `canvas-linux-${process.arch}`,
+	}[process.platform];
+	let platformPackage = null;
+	try {
+		platformPackage = fs.readdirSync(path.join(nodeModules, "@napi-rs"))
+			.find((entry) => platformPrefix && entry.startsWith(platformPrefix)) ?? null;
+	} catch {
+		// The @napi-rs scope is missing entirely; reported as a failure below.
+	}
+	step(
+		"vision renderer binary for this platform",
+		fs.existsSync(canvasLoader) && platformPackage !== null,
+		platformPackage
+			? `@napi-rs/${platformPackage}`
+			: `expected @napi-rs/${platformPrefix ?? `canvas-${process.platform}-${process.arch}`}; without it every vision read refuses`,
+	);
+	if (failed) process.exit(1);
+}
+
+// ---------------------------------------------------------------------------
 // Step 1: --version.
 // ---------------------------------------------------------------------------
 

@@ -494,7 +494,19 @@ export function isBundleableToolItem(item: ChatItem): item is ToolChatItem {
 	return item.kind === "tool" && (item.name === "web_search" || item.name === "fetch_url");
 }
 
-function MessageImpl({ item }: { item: ChatItem }) {
+export interface MessageAttachmentAccess {
+	/** Open this shelf file in the right-pane viewer — the same act as clicking its Files row. */
+	onOpen: (name: string) => void;
+	/**
+	 * Names still on the room's shelf. A chip whose file is gone must not look
+	 * clickable and lead nowhere: it renders muted and inert instead. Undefined
+	 * while the listing has not loaded — the chip stays clickable rather than
+	 * accusing a file of being deleted on the strength of a pending fetch.
+	 */
+	existingNames?: ReadonlySet<string>;
+}
+
+function MessageImpl({ item, attachmentAccess }: { item: ChatItem; attachmentAccess?: MessageAttachmentAccess }) {
 	if (item.kind === "system") {
 		return <div className={`system-line ${item.level === "error" ? "error" : ""}`}>{item.text}</div>;
 	}
@@ -514,7 +526,49 @@ function MessageImpl({ item }: { item: ChatItem }) {
 			<div className={`bubble-col ${isUser ? "user" : ""}`}>
 				<div className={`bubble ${isUser ? "user" : ""}`}>
 					{isUser ? (
-						<UserMessageText text={item.text} />
+						<>
+							{item.text && <UserMessageText text={item.text} />}
+							{/* Attachment chips (files UI slice): the file rode with THIS
+							    message — same chip grammar as task artifacts. The chip
+							    opens the file in the viewer (taste pass), exactly as its
+							    Files row does: a chip that names a file the room can read
+							    but the user cannot click was the odd one out. A file since
+							    deleted renders muted and inert — the chip stays as the
+							    honest record that it rode with this message. */}
+							{item.attachments && item.attachments.length > 0 && (
+								<div className="task-artifact-strip user-attachment-strip">
+									{item.attachments.map((attachment) => {
+										const gone = attachmentAccess?.existingNames ? !attachmentAccess.existingNames.has(attachment.name) : false;
+										const openable = Boolean(attachmentAccess) && !gone;
+										const kind = attachment.extension.replace(/^\./, "").toUpperCase() || "FILE";
+										if (!openable) {
+											return (
+												<span
+													key={attachment.name}
+													className={`task-file-chip user-attachment-chip${gone ? " gone" : ""}`}
+													title={gone ? `${attachment.name} — no longer in Files` : attachment.name}
+												>
+													<span className="task-kind">{kind}</span>
+													<span className="task-file-name">{attachment.name}</span>
+												</span>
+											);
+										}
+										return (
+											<button
+												key={attachment.name}
+												type="button"
+												className="task-file-chip user-attachment-chip openable"
+												title={`${attachment.name} — open`}
+												onClick={() => attachmentAccess!.onOpen(attachment.name)}
+											>
+												<span className="task-kind">{kind}</span>
+												<span className="task-file-name">{attachment.name}</span>
+											</button>
+										);
+									})}
+								</div>
+							)}
+						</>
 					) : (
 						<div className="md assistant-markdown">
 							<MarkdownRenderer renderMermaid={!assistantStreaming}>{assistantText || (assistantStreaming ? "…" : "")}</MarkdownRenderer>

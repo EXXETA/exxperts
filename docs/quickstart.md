@@ -8,7 +8,7 @@ Exxperts is a local-first platform for persistent AI colleagues. Each "room" is 
 
 Three doors into the same product, all sharing the same local data under `~/.exxperts` (rooms, memory, provider logins), one local server at a time:
 
-- **Desktop app** (macOS Apple Silicon, Windows x64): returns shortly as a code-signed build; see [the README](../README.md#download-the-app). The app is self-contained and always runs its own version, and it uses the same data as a terminal install.
+- **Desktop app** (macOS Apple Silicon, Windows x64): signed builds, download links in [the README](../README.md#download-the-app). The app is self-contained and always runs its own version, and it uses the same data as a terminal install.
 - **Terminal install**: the one-line command below; gives you the `exxperts` commands.
 - **Repo clone**: for contributors; the by-hand steps are [below](#1-install-and-run), the full guide is [CONTRIBUTING.md](../CONTRIBUTING.md).
 

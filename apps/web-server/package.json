@@ -1,7 +1,7 @@
 {
   "name": "@exxeta/pi-web-server",
   "version": "0.1.0",
-  "license": "SEE LICENSE IN LICENSE",
+  "license": "Apache-2.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -72,7 +72,12 @@
     "smoke:specialist-runtime": "tsx scripts/specialist-runtime-smoke.ts",
     "smoke:static-security-headers": "tsx scripts/static-security-headers-smoke.ts",
     "smoke:task-card": "tsx scripts/task-card-smoke.ts",
-    "smoke:usage-ledger": "tsx scripts/usage-ledger-smoke.ts"
+    "smoke:usage-ledger": "tsx scripts/usage-ledger-smoke.ts",
+    "smoke:room-shelf": "tsx scripts/room-shelf-smoke.ts",
+    "smoke:room-files-routes": "tsx scripts/room-files-routes-smoke.ts",
+    "smoke:room-shelf-migration": "tsx scripts/room-shelf-migration-smoke.ts",
+    "smoke:shelf-vision": "tsx scripts/shelf-vision-smoke.ts",
+    "smoke:revise-conflict-notice": "tsx scripts/revise-conflict-notice-smoke.ts"
   },
   "dependencies": {
     "@fastify/websocket": "^11.2.0",
@@ -80,7 +85,11 @@
     "dotenv": "^16.4.5",
     "fastify": "^5.8.5",
     "jszip": "^3.10.1",
+    "pdfjs-dist": "5.4.394",
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
+  },
+  "optionalDependencies": {
+    "@napi-rs/canvas": "^0.1.81"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

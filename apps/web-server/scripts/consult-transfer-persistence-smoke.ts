@@ -30,6 +30,7 @@ process.env.EXXPERTS_CODING_AGENT_DIR = path.join(tempHome, ".exxperts", "agent"
 process.env.EXXETA_PERSISTENT_AGENTS_ROOT = root;
 
 const {
+	appendPersistentAgentThreadPendingHandoff,
 	createPersistentAgentFromScaffoldInput,
 	buildCheckpointProposal,
 	clearPersistentAgentThreadPendingHandoffs,
@@ -44,6 +45,7 @@ const {
 } = await import("../src/persistent-agents.js");
 
 const { CONSULT_HANDOFF_BLOCK_MAX_CHARS, CONSULT_HANDOFF_MAX_PENDING, buildConsultHandoffBlock } = await import("../src/consult-handoff.js");
+const { buildSpecialistHandoffBlock } = await import("../src/specialist-handoff.js");
 const { writePersistentAgentAiProfileState } = await import("../src/persistent-agent-ai-profile-state.js");
 writePersistentAgentAiProfileState("openai-compatible");
 
@@ -139,6 +141,27 @@ try {
 	assert(getPersistentAgentThread(agentId, consumeThreadId)?.pendingHandoffs === undefined, "second clear is a no-op");
 	clearPersistentAgentThreadPendingHandoffs(agentId, "pi_does_not_exist");
 
+	// ---- the handoff flip: server-side append on task completion -----------
+	// appendPersistentAgentThreadPendingHandoff is how a finished specialist
+	// enqueues its slimmed block: append-one, validated by the queue's own
+	// rules, refusing (never evicting) when full — a refused announcement
+	// degrades honestly because the manifest still lists the file.
+	const taskBlock = buildSpecialistHandoffBlock({ templateId: "deck", templateVersion: 1, taskTitle: "Q3 deck", ranAtIso: "2026-07-11T09:11:00.000Z", artifactCount: 1, summary: "Made q3.html." });
+	assert(appendPersistentAgentThreadPendingHandoff(agentId, consumeThreadId, taskBlock) === true, "append onto an empty queue succeeds");
+	assert(appendPersistentAgentThreadPendingHandoff(agentId, consumeThreadId, taskBlock) === true, "a second completion appends behind the first");
+	const appended = getPersistentAgentThread(agentId, consumeThreadId);
+	assert(JSON.stringify(appended?.pendingHandoffs) === JSON.stringify([taskBlock, taskBlock]), "appended blocks persist in arrival order");
+	assert((appended?.items.length ?? 0) === 2, "append touches only the queue — items survive verbatim");
+	assert(appendPersistentAgentThreadPendingHandoff(agentId, "pi_does_not_exist", taskBlock) === false, "append to a missing thread refuses");
+	assert(appendPersistentAgentThreadPendingHandoff(agentId, consumeThreadId, "z".repeat(CONSULT_HANDOFF_BLOCK_MAX_CHARS + 1)) === false, "an over-cap block refuses without corrupting the queue");
+	assert(JSON.stringify(getPersistentAgentThread(agentId, consumeThreadId)?.pendingHandoffs) === JSON.stringify([taskBlock, taskBlock]), "a refused append leaves the queue untouched");
+	for (let i = 2; i < CONSULT_HANDOFF_MAX_PENDING; i += 1) {
+		assert(appendPersistentAgentThreadPendingHandoff(agentId, consumeThreadId, taskBlock) === true, `append ${i + 1}/${CONSULT_HANDOFF_MAX_PENDING} succeeds`);
+	}
+	assert(appendPersistentAgentThreadPendingHandoff(agentId, consumeThreadId, taskBlock) === false, "a full queue refuses the append instead of evicting");
+	assert((getPersistentAgentThread(agentId, consumeThreadId)?.pendingHandoffs?.length ?? 0) === CONSULT_HANDOFF_MAX_PENDING, "the queue holds exactly the cap after the refusal");
+	clearPersistentAgentThreadPendingHandoffs(agentId, consumeThreadId);
+
 	// ---- validation rejects junk -------------------------------------------
 	const junkThreadId = "pi_junk_0001";
 	const runtimeOpt: PersistentAgentThreadWriteOptions = { createRuntime: ({ model }) => createPersistentAgentPiSessionJsonlThreadRuntime({ agentId, threadId: junkThreadId, model, cwd: tempCwd }) };
@@ -176,6 +199,7 @@ try {
 	const cpFreshRaw = getPersistentAgentThread(agentId, cpFreshId);
 	assert(cpFreshRaw?.pendingHandoffs === undefined, "server-created post-checkpoint thread starts with no queue");
 	assert(JSON.stringify(getPersistentAgentThread(agentId, cpOldThreadId)?.pendingHandoffs) === JSON.stringify([q1, q2]), "closed old thread retains its queue (not lost by the boundary)");
+	assert(appendPersistentAgentThreadPendingHandoff(agentId, cpOldThreadId, block("euler", "late arrival")) === false, "append to a CLOSED thread refuses (closed threads are immutable history)");
 	// The client carry (bindToApprovedCheckpointRuntime): first save of the fresh
 	// thread re-queues the pending blocks onto it.
 	writePersistentAgentThread(agentId, cpFreshId, { state: "active", origin: "checkpoint", model, items: [], pendingHandoffs: [q1, q2] });

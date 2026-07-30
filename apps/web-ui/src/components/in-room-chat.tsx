@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import type { CSSProperties, KeyboardEvent, MutableRefObject, ReactNode, Ref } from "react";
 import { Approval } from "./Approval";
-import { ConsultThreadItem, Message, TaskThreadItem, ToolBundle, isBundleableToolItem } from "./Message";
+import { ConsultThreadItem, Message, TaskThreadItem, ToolBundle, isBundleableToolItem, type MessageAttachmentAccess } from "./Message";
 import { MentionConsultPopover, MentionConsultPopoverBusy, type MentionSupport } from "./mention-consult-popover";
 import { useEscapeKey } from "./use-escape-key";
 import type { ApprovalPreviewData } from "../approval-preview";
@@ -30,6 +30,10 @@ export interface InRoomChatShellViewProps {
 	currentModelLabel?: string | null;
 	topbarActions?: ReactNode;
 	composerRightActions?: ReactNode;
+	/** Files UI slice: staged-attachment chips above the composer textarea. */
+	composerStagingSlot?: ReactNode;
+	/** Files UI slice: staged attachments make an attachments-only send legal. */
+	composerAllowEmptySend?: boolean;
 	connected: boolean;
 	/** Room auto-reconnect: "reconnecting" while backoff attempts run, "failed" once capped. */
 	reconnectState?: "idle" | "reconnecting" | "failed";
@@ -54,6 +58,13 @@ export interface InRoomChatShellViewProps {
 	previewSlot?: ReactNode;
 	checkpointPreviewSlot?: ReactNode;
 	globalOverlaySlot?: ReactNode;
+	/**
+	 * The room's transient notices (taste pass): floats directly above the
+	 * composer, anchored to the composer COLUMN — a viewport-centred overlay
+	 * drifts off it as soon as the viewer pane opens. Overlay, not in flow, so
+	 * a toast never pushes the transcript the way the dock does.
+	 */
+	composerOverlaySlot?: ReactNode;
 	// Optional hooks for the resizable right pane (e.g. approval preview).
 	// All absent in fixtures, so default behaviour is unchanged.
 	workbenchRef?: Ref<HTMLDivElement>;
@@ -66,6 +77,8 @@ export interface InRoomChatShellViewProps {
 	pendingConsultIds?: ReadonlySet<string>;
 	/** Visuals V6: opens a transferred task item's artifact in the right-pane viewer. */
 	onOpenTaskArtifact?: (taskId: string, relativePath: string) => void;
+	/** Taste pass: a message's attachment chip opens that file in the viewer, like its Files row. */
+	attachmentAccess?: MessageAttachmentAccess;
 	aboveComposerSlot?: ReactNode;
 }
 
@@ -260,6 +273,8 @@ interface TranscriptItemsProps {
 	pendingConsultIds?: ReadonlySet<string>;
 	/** Visuals V6: opens a transferred task item's artifact in the right-pane viewer. */
 	onOpenTaskArtifact?: (taskId: string, relativePath: string) => void;
+	/** Taste pass: a message's attachment chip opens that file in the viewer, like its Files row. */
+	attachmentAccess?: MessageAttachmentAccess;
 	showThinkingIndicator: boolean;
 }
 
@@ -276,6 +291,7 @@ function renderTranscript(
 	onApprovalPreview: TranscriptItemsProps["onApprovalPreview"],
 	pendingConsultIds: TranscriptItemsProps["pendingConsultIds"],
 	onOpenTaskArtifact: TranscriptItemsProps["onOpenTaskArtifact"],
+	attachmentAccess: TranscriptItemsProps["attachmentAccess"],
 ): ReactNode[] {
 	const rendered: ReactNode[] = [];
 	for (let index = 0; index < items.length; index++) {
@@ -301,7 +317,7 @@ function renderTranscript(
 			) : it.kind === "task" ? (
 				<TaskThreadItem key={it.id} item={it} onOpenTaskArtifact={onOpenTaskArtifact} />
 			) : (
-				<Message key={it.id} item={it} />
+				<Message key={it.id} item={it} attachmentAccess={attachmentAccess} />
 			),
 		);
 	}
@@ -317,6 +333,7 @@ const TranscriptItems = memo(function TranscriptItems({
 	onApprovalPreview,
 	pendingConsultIds,
 	onOpenTaskArtifact,
+	attachmentAccess,
 	showThinkingIndicator,
 }: TranscriptItemsProps) {
 	return (
@@ -326,7 +343,7 @@ const TranscriptItems = memo(function TranscriptItems({
 			) : renderItem ? (
 				items.map((it, idx) => renderItem(it, idx, items))
 			) : (
-				renderTranscript(items, onResolveApproval, onApprovalPreview, pendingConsultIds, onOpenTaskArtifact)
+				renderTranscript(items, onResolveApproval, onApprovalPreview, pendingConsultIds, onOpenTaskArtifact, attachmentAccess)
 			)}
 			{showThinkingIndicator && (
 				<div className="thinking-row" role="status" aria-label="thinking">
@@ -351,6 +368,10 @@ interface ComposerInputProps {
 	mention?: MentionSupport;
 	statusSlot?: ReactNode;
 	rightActions?: ReactNode;
+	/** Files UI slice: the staged-attachment chip row, rendered above the textarea. */
+	stagingSlot?: ReactNode;
+	/** Files UI slice: ready attachments make an empty-text send legal (the note alone rides). */
+	allowEmptySend?: boolean;
 }
 
 function ComposerInput({
@@ -367,6 +388,8 @@ function ComposerInput({
 	mention,
 	statusSlot,
 	rightActions,
+	stagingSlot,
+	allowEmptySend = false,
 }: ComposerInputProps) {
 	const [draft, setDraft] = useState(() => initialDraftValue ?? "");
 	const [caret, setCaret] = useState(0);
@@ -380,7 +403,7 @@ function ComposerInput({
 	const textareaNodeRef = useRef<HTMLTextAreaElement | null>(null);
 	// Caret to restore after a programmatic draft edit (mention completion).
 	const pendingCaretRef = useRef<number | null>(null);
-	const sendDisabled = sendUnavailable || !draft.trim();
+	const sendDisabled = sendUnavailable || (!draft.trim() && !allowEmptySend);
 
 	// Mention popover state. The interactive picker opens only when a trigger is
 	// active, the room is not busy, it has not been dismissed, and at least one
@@ -507,6 +530,7 @@ function ComposerInput({
 			)}
 			{mentionBusyActive && mention && <MentionConsultPopoverBusy title={mention.busyTitle} />}
 			{consultGateNotice && <div className="composer-consult-gate" role="status">{consultGateNotice}</div>}
+			{stagingSlot}
 			<textarea
 				ref={setTextareaNode}
 				value={draft}
@@ -545,6 +569,8 @@ export function InRoomChatShellView({
 	currentModelLabel,
 	topbarActions,
 	composerRightActions,
+	composerStagingSlot,
+	composerAllowEmptySend,
 	connected,
 	reconnectState = "idle",
 	onReconnect,
@@ -567,6 +593,7 @@ export function InRoomChatShellView({
 	previewSlot,
 	checkpointPreviewSlot,
 	globalOverlaySlot,
+	composerOverlaySlot,
 	workbenchRef,
 	workbenchClassName,
 	workbenchStyle,
@@ -575,6 +602,7 @@ export function InRoomChatShellView({
 	renderItem,
 	pendingConsultIds,
 	onOpenTaskArtifact,
+	attachmentAccess,
 	aboveComposerSlot,
 }: InRoomChatShellViewProps) {
 	const messagesElRef = useRef<HTMLDivElement | null>(null);
@@ -715,6 +743,7 @@ export function InRoomChatShellView({
 								onApprovalPreview={onApprovalPreview}
 								pendingConsultIds={pendingConsultIds}
 								onOpenTaskArtifact={onOpenTaskArtifact}
+								attachmentAccess={attachmentAccess}
 								showThinkingIndicator={showThinkingIndicator}
 							/>
 						</div>
@@ -731,6 +760,7 @@ export function InRoomChatShellView({
 					)}
 
 					<div className="composer">
+						{composerOverlaySlot}
 						<div className={composerLayoutClass}>
 							<ComposerInput
 								onSend={onSend}
@@ -770,6 +800,8 @@ export function InRoomChatShellView({
 									)}
 								</>}
 								rightActions={composerRightActions}
+								stagingSlot={composerStagingSlot}
+								allowEmptySend={composerAllowEmptySend}
 							/>
 						</div>
 					</div>

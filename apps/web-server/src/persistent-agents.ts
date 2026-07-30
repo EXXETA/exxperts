@@ -246,6 +246,10 @@ export interface CheckpointCompressionGenerateResult {
 		totalTokens?: number;
 		cost?: number;
 	};
+	/** True when the provider cut the response at its output-token ceiling. */
+	truncated?: boolean;
+	/** The worker model's declared output-token ceiling, when known. */
+	modelMaxOutputTokens?: number;
 }
 
 export interface AbsorbGenerateResult {
@@ -258,6 +262,10 @@ export interface AbsorbGenerateResult {
 		totalTokens?: number;
 		cost?: number;
 	};
+	/** True when the provider cut the response at its output-token ceiling. */
+	truncated?: boolean;
+	/** The worker model's declared output-token ceiling, when known. */
+	modelMaxOutputTokens?: number;
 }
 
 export interface AbsorbAssessmentResponse {
@@ -360,6 +368,10 @@ export interface StructuralReviewSourceMetadata {
 export interface StructuralReviewGenerateResult {
 	text: string;
 	usage?: AbsorbGenerateResult["usage"];
+	/** True when the provider cut the response at its output-token ceiling. */
+	truncated?: boolean;
+	/** The worker model's declared output-token ceiling, when known. */
+	modelMaxOutputTokens?: number;
 }
 
 export interface StructuralReviewDiscussionSourceMetadata extends StructuralReviewSourceMetadata {
@@ -1674,7 +1686,7 @@ function normalizeLegacyCheckpointTranscriptItems(rawItems: unknown[]): Checkpoi
 					templateVersion: Number.isFinite(templateVersion) && templateVersion >= 1 ? Math.floor(templateVersion) : 1,
 					taskTitle: String(item?.title ?? ""),
 					ranAtIso: String(item?.generatedAt ?? "").trim() || new Date().toISOString(),
-					artifactPaths: Array.isArray(item?.artifacts) ? item.artifacts.map((artifact: any) => String(artifact?.relativePath ?? "")) : [],
+					artifactCount: Array.isArray(item?.artifacts) ? item.artifacts.length : 0,
 					summary: String(item?.summary ?? ""),
 				});
 				const text = boundedCheckpointTranscriptText(block);
@@ -2399,6 +2411,37 @@ export function clearPersistentAgentThreadPendingHandoffs(agentIdRaw: string, th
 	const file = instance.runtimeThreadPath(threadId);
 	ensureDir(path.dirname(file));
 	fs.writeFileSync(file, JSON.stringify(cleared, null, 2) + "\n", { mode: 0o600, flag: "w" });
+}
+
+/**
+ * The handoff flip (revise-in-place slice): a finished specialist task
+ * announces itself by enqueuing its slimmed §2.2 block on the pending-transfer
+ * queue, where it rides the user's NEXT prompt — no click, no interruption
+ * (exactly how transferred consults are delivered; the click was the only
+ * part that retired). Append-one with the queue's own validation as the gate:
+ * a full queue (or an over-cap block) refuses rather than evicting a block the
+ * user explicitly transferred — honest degradation, because the manifest still
+ * lists the file either way. Returns whether the block is now queued, so the
+ * caller only mirrors it to a live client when it is truly persisted. A
+ * missing or closed thread refuses: closed threads are immutable history.
+ */
+export function appendPersistentAgentThreadPendingHandoff(agentIdRaw: string, threadIdRaw: string, block: string): boolean {
+	const instance = createPersistentAgentInstance(agentIdRaw);
+	const threadId = safeRuntimeThreadId(threadIdRaw);
+	if (!threadId) return false;
+	const existing = getPersistentAgentThread(instance.agentId, threadId);
+	if (!existing || existing.state === "closed") return false;
+	let pendingHandoffs: string[];
+	try {
+		pendingHandoffs = validateConsultHandoffQueue([...(existing.pendingHandoffs ?? []), block]);
+	} catch {
+		return false;
+	}
+	const next: PersistentAgentThreadRecord = { ...existing, pendingHandoffs, updatedAt: Date.now() };
+	const file = instance.runtimeThreadPath(threadId);
+	ensureDir(path.dirname(file));
+	fs.writeFileSync(file, JSON.stringify(next, null, 2) + "\n", { mode: 0o600, flag: "w" });
+	return true;
 }
 
 export function closePersistentAgentThreadForCheckpoint(agentIdRaw: string, threadIdRaw: string, checkpointIdRaw: string, closedAtRaw: number = Date.now()): PersistentAgentThreadRecord {
@@ -5069,7 +5112,105 @@ export function getStructuralReviewAvailability(agentId: string): StructuralRevi
 	return structuralReviewAvailabilityFromL1b(l1b, true);
 }
 
-export async function buildStructuralReviewAssessment(agentId: string, model: StructuralReviewModelLock, generate: (prompt: string, model: StructuralReviewModelLock) => Promise<StructuralReviewGenerateResult>): Promise<StructuralReviewAssessmentResponse> {
+export class MaintenancePromptOverflowError extends Error {
+	readonly statusCode = 413;
+	readonly promptEstimatedTokens: number;
+	readonly promptTokenBudget: number;
+	constructor(message: string, promptEstimatedTokens: number, promptTokenBudget: number) {
+		super(message);
+		this.promptEstimatedTokens = promptEstimatedTokens;
+		this.promptTokenBudget = promptTokenBudget;
+	}
+}
+
+export interface MaintenanceWorkerOptions {
+	/**
+	 * When provided, the assembled worker prompt is checked against the locked
+	 * model's window (same budget formula as the checkpoint/consult workers)
+	 * and overflow refuses with guidance instead of running against a provider
+	 * error. Custom gateway models may omit window metadata — the guard only
+	 * arms on finite numbers; otherwise the worker runs unguarded.
+	 */
+	resolveModelWindow?: (model: { provider: string; model: string; label?: string }) => CheckpointModelWindow;
+}
+
+// Input-side twin of the truncation guard: the room's memory IS the prompt
+// material and cannot be elided honestly, so an oversized maintenance prompt
+// refuses with guidance instead of erroring at the provider or running
+// against a silently degraded read.
+function refuseOversizedMaintenancePrompt(input: {
+	agentId: string;
+	processLabel: string;
+	model: { provider: string; model: string };
+	promptEstimatedTokens: number;
+	window?: CheckpointModelWindow;
+	guidance: string;
+}): void {
+	const window = input.window;
+	if (window == null || !Number.isFinite(window.contextWindow) || !Number.isFinite(window.maxOutputTokens)) return;
+	const budget = checkpointPromptTokenBudget(window);
+	if (input.promptEstimatedTokens <= budget) return;
+	throw new MaintenancePromptOverflowError(
+		`the ${input.processLabel} prompt for ${input.agentId} is too large for the locked model ${input.model.provider}/${input.model.model}: ` +
+			`~${input.promptEstimatedTokens} estimated tokens exceeds the ~${budget}-token prompt budget. ${input.guidance} No memory has been written.`,
+		input.promptEstimatedTokens,
+		budget,
+	);
+}
+
+const ABSORB_OVERFLOW_GUIDANCE =
+	"This room's memory is the prompt material and cannot be elided honestly — run Review Memory to shrink stable memory, or switch the maintenance profile to a larger-context model, then Learn again.";
+const STRUCTURAL_REVIEW_OVERFLOW_GUIDANCE =
+	"Deep Memory and Active Items are the prompt material and cannot be elided honestly — switch the maintenance profile to a larger-context model, then run Review Memory again.";
+
+// Draft-again feedback is client input bound for a worker prompt: it should
+// only ever carry the validator's own reasons, so flatten to short plain
+// lines and cap hard — anything beyond that is not validation feedback.
+function parseProposalRetryFeedback(raw: unknown): string[] | undefined {
+	if (!Array.isArray(raw)) return undefined;
+	const items = raw
+		.filter((value): value is string => typeof value === "string")
+		.map((value) => value.replace(/\s+/g, " ").trim())
+		.filter(Boolean)
+		.slice(0, 8)
+		.map((value) => (value.length > 300 ? `${value.slice(0, 300)}…` : value));
+	return items.length ? items : undefined;
+}
+
+// A worker response cut at the provider's output-token ceiling is not a
+// draft with flaws — its tail is simply gone, and the candidate validator
+// would blame the document structure for what is a size limit. Refuse before
+// parsing, with the truth, so the user sees a limit instead of a loop of
+// unwinnable "Draft again" retries.
+function refuseTruncatedWorkerOutput(input: {
+	agentId: string;
+	processLabel: string;
+	model: { provider: string; model: string };
+	generated: { truncated?: boolean; usage?: { output?: number }; modelMaxOutputTokens?: number };
+	/**
+	 * Set for the whole-document rewrites (Learn and Review Memory): their
+	 * output scales with the room's memory, so truncation there means the
+	 * memory has outgrown what the model can rewrite in a single response —
+	 * the refusal says that instead of the generic cut-off line.
+	 */
+	wholeDocumentRewriteLabel?: string;
+}): void {
+	if (!input.generated.truncated) return;
+	const produced = input.generated.usage?.output;
+	const ceiling = input.generated.modelMaxOutputTokens;
+	const numbers = produced
+		? ` (the model returned ${produced}${ceiling ? ` of a maximum ${ceiling}` : ""} output tokens)`
+		: "";
+	console.warn(
+		`[worker-truncated] agent=${input.agentId} process=${input.processLabel} model=${input.model.provider}/${input.model.model} outputTokens=${produced ?? "unknown"} maxOutputTokens=${ceiling ?? "unknown"}`,
+	);
+	const lead = input.wholeDocumentRewriteLabel
+		? `This room's memory is too large to rewrite in one response: the ${input.wholeDocumentRewriteLabel} draft was cut off at the model's output limit${numbers}. The current memory is untouched and the room keeps working; a model with a larger output limit can complete this.`
+		: `The ${input.processLabel} response was cut off at the model's output limit${numbers}.`;
+	throw new Error(`${lead} No memory has been written.`);
+}
+
+export async function buildStructuralReviewAssessment(agentId: string, model: StructuralReviewModelLock, generate: (prompt: string, model: StructuralReviewModelLock) => Promise<StructuralReviewGenerateResult>, options?: MaintenanceWorkerOptions): Promise<StructuralReviewAssessmentResponse> {
 	const instance = createPersistentAgentInstance(agentId);
 	const loaded = ensureStructuralReviewReady(instance);
 	if (!loaded.availability.available || !loaded.parts) throw new Error(loaded.availability.message);
@@ -5078,7 +5219,9 @@ export async function buildStructuralReviewAssessment(agentId: string, model: St
 		sourceReviewTargetL1b: loaded.parts.sourceReviewTargetL1b,
 		model,
 	});
+	refuseOversizedMaintenancePrompt({ agentId: instance.agentId, processLabel: "Review Memory assessment", model, promptEstimatedTokens: assembly.telemetry.promptEstimatedTokens, window: options?.resolveModelWindow?.(model), guidance: STRUCTURAL_REVIEW_OVERFLOW_GUIDANCE });
 	const generated = await generate(assembly.prompt, model);
+	refuseTruncatedWorkerOutput({ agentId: instance.agentId, processLabel: "Review Memory assessment", model, generated });
 	const parsed = parseStructuralReviewAssessment(generated.text);
 	return {
 		agentId: instance.agentId,
@@ -5112,6 +5255,7 @@ export async function buildStructuralReviewDiscussionTurn(raw: any, model: Struc
 	});
 	if (!assembly.tokenBudget.canContinue) throw new Error("structural review discussion token budget exceeded");
 	const generated = await generate(assembly.prompt, model);
+	refuseTruncatedWorkerOutput({ agentId: request.agentId, processLabel: "Review Memory discussion", model, generated });
 	return {
 		agentId: request.agentId,
 		writesMemory: false,
@@ -5144,6 +5288,7 @@ export async function buildStructuralReviewDiscussionSignoff(raw: any, model: St
 	});
 	if (!assembly.tokenBudget.canSignOff) throw new Error("structural review discussion token budget exceeded before signoff");
 	const generated = await generate(assembly.prompt, model);
+	refuseTruncatedWorkerOutput({ agentId: request.agentId, processLabel: "Review Memory discussion signoff", model, generated });
 	const handoffText = generated.text.trim();
 	if (!handoffText) throw new Error("structural review discussion signoff worker produced no text");
 	return {
@@ -5160,7 +5305,7 @@ export async function buildStructuralReviewDiscussionSignoff(raw: any, model: St
 	};
 }
 
-export async function buildStructuralReviewProposal(raw: any, model: StructuralReviewModelLock, generate: (prompt: string, model: StructuralReviewModelLock) => Promise<StructuralReviewGenerateResult>): Promise<StructuralReviewProposalResponse> {
+export async function buildStructuralReviewProposal(raw: any, model: StructuralReviewModelLock, generate: (prompt: string, model: StructuralReviewModelLock) => Promise<StructuralReviewGenerateResult>, options?: MaintenanceWorkerOptions): Promise<StructuralReviewProposalResponse> {
 	const agentId = validatePersistentAgentId(raw?.agentId);
 	const assessmentMarkdown = String(raw?.assessmentMarkdown ?? "").trim();
 	if (!assessmentMarkdown) throw new Error("assessmentMarkdown is required");
@@ -5185,8 +5330,11 @@ export async function buildStructuralReviewProposal(raw: any, model: StructuralR
 		assessmentMarkdown,
 		assessmentHandoff,
 		memoryBudgetTokens: readPersistentRoomMaintenanceSettings(agentId).memoryBudgetTokens,
+		retryFeedback: parseProposalRetryFeedback(raw?.retryFeedback),
 	});
+	refuseOversizedMaintenancePrompt({ agentId, processLabel: "Review Memory proposal", model, promptEstimatedTokens: assembly.telemetry.promptEstimatedTokens, window: options?.resolveModelWindow?.(model), guidance: STRUCTURAL_REVIEW_OVERFLOW_GUIDANCE });
 	const generated = await generate(assembly.prompt, model);
+	refuseTruncatedWorkerOutput({ agentId, processLabel: "Review Memory proposal", model, generated, wholeDocumentRewriteLabel: "Review Memory" });
 	const parsed = parseStructuralReviewProposal(generated.text);
 	const candidateValidation = validateStructuralReviewCandidateReviewTarget(loaded.parts.sourceReviewTargetL1b, parsed.fields.candidateReviewTargetL1b);
 	const review = structuralReviewProposalReview(loaded.parts.sourceReviewTargetL1b, parsed.fields.candidateReviewTargetL1b, parsed.fields.summary);
@@ -5205,7 +5353,7 @@ export async function buildStructuralReviewProposal(raw: any, model: StructuralR
 	};
 }
 
-export async function buildAbsorbAssessment(agentId: string, model: AbsorbModelLock, generate: (prompt: string, model: AbsorbModelLock) => Promise<AbsorbGenerateResult>): Promise<AbsorbAssessmentResponse> {
+export async function buildAbsorbAssessment(agentId: string, model: AbsorbModelLock, generate: (prompt: string, model: AbsorbModelLock) => Promise<AbsorbGenerateResult>, options?: MaintenanceWorkerOptions): Promise<AbsorbAssessmentResponse> {
 	const instance = createPersistentAgentInstance(agentId);
 	const loaded = ensureAbsorbReady(instance);
 	if (!loaded.availability.available) throw new Error(loaded.availability.message);
@@ -5215,7 +5363,9 @@ export async function buildAbsorbAssessment(agentId: string, model: AbsorbModelL
 		model,
 		sectionPurposeMap: buildSectionPurposeMap(loaded.sectionRegistry),
 	});
+	refuseOversizedMaintenancePrompt({ agentId: instance.agentId, processLabel: "Learn assessment", model, promptEstimatedTokens: assembly.telemetry.promptEstimatedTokens, window: options?.resolveModelWindow?.(model), guidance: ABSORB_OVERFLOW_GUIDANCE });
 	const generated = await generate(assembly.prompt, model);
+	refuseTruncatedWorkerOutput({ agentId: instance.agentId, processLabel: "Learn assessment", model, generated });
 	const parsed = parseAbsorbAssessment(generated.text);
 	return {
 		agentId: instance.agentId,
@@ -5252,6 +5402,7 @@ export async function buildAbsorbDiscussionTurn(raw: any, model: AbsorbModelLock
 	});
 	if (!assembly.tokenBudget.canContinue) throw new Error("absorb discussion token budget exceeded");
 	const generated = await generate(assembly.prompt, model);
+	refuseTruncatedWorkerOutput({ agentId: request.agentId, processLabel: "Learn discussion", model, generated });
 	return {
 		agentId: request.agentId,
 		writesMemory: false,
@@ -5284,6 +5435,7 @@ export async function buildAbsorbDiscussionSignoff(raw: any, model: AbsorbModelL
 	});
 	if (!assembly.tokenBudget.canSignOff) throw new Error("absorb discussion token budget exceeded before signoff");
 	const generated = await generate(assembly.prompt, model);
+	refuseTruncatedWorkerOutput({ agentId: request.agentId, processLabel: "Learn discussion signoff", model, generated });
 	const handoffText = generated.text.trim();
 	if (!handoffText) throw new Error("absorb discussion signoff worker produced no text");
 	return {
@@ -5300,7 +5452,7 @@ export async function buildAbsorbDiscussionSignoff(raw: any, model: AbsorbModelL
 	};
 }
 
-export async function buildAbsorbProposal(raw: any, model: AbsorbModelLock, generate: (prompt: string, model: AbsorbModelLock) => Promise<AbsorbGenerateResult>): Promise<AbsorbProposalResponse> {
+export async function buildAbsorbProposal(raw: any, model: AbsorbModelLock, generate: (prompt: string, model: AbsorbModelLock) => Promise<AbsorbGenerateResult>, options?: MaintenanceWorkerOptions): Promise<AbsorbProposalResponse> {
 	const agentId = validatePersistentAgentId(raw?.agentId);
 	const assessmentMarkdown = String(raw?.assessmentMarkdown ?? "").trim();
 	if (!assessmentMarkdown) throw new Error("assessmentMarkdown is required");
@@ -5319,8 +5471,11 @@ export async function buildAbsorbProposal(raw: any, model: AbsorbModelLock, gene
 		assessmentMarkdown,
 		assessmentHandoff,
 		memoryBudgetTokens: readPersistentRoomMaintenanceSettings(agentId).memoryBudgetTokens,
+		retryFeedback: parseProposalRetryFeedback(raw?.retryFeedback),
 	});
+	refuseOversizedMaintenancePrompt({ agentId, processLabel: "Learn proposal", model, promptEstimatedTokens: assembly.telemetry.promptEstimatedTokens, window: options?.resolveModelWindow?.(model), guidance: ABSORB_OVERFLOW_GUIDANCE });
 	const generated = await generate(assembly.prompt, model);
+	refuseTruncatedWorkerOutput({ agentId, processLabel: "Learn proposal", model, generated, wholeDocumentRewriteLabel: "Learn" });
 	const parsed = parseAbsorbProposal(generated.text);
 	const review = buildAbsorbProposalReview(loaded.l1b, parsed.fields);
 	const candidateValidation = validateAbsorbCandidateL1b(loaded.l1b, parsed.fields.candidateL1b);
@@ -5345,6 +5500,10 @@ export async function buildAbsorbProposal(raw: any, model: AbsorbModelLock, gene
 export interface ConsultGenerateResult {
 	text: string;
 	usage?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; totalTokens?: number; cost?: number };
+	/** True when the provider cut the response at its output-token ceiling. */
+	truncated?: boolean;
+	/** The worker model's declared output-token ceiling, when known. */
+	modelMaxOutputTokens?: number;
 }
 
 export type ConsultModelLock = { provider: string; model: string; label?: string };
@@ -5454,6 +5613,7 @@ export async function buildConsultAnswer(raw: any, model: ConsultModelLock, gene
 		...(windowArmed ? { promptTokenBudget: checkpointPromptTokenBudget(window) } : {}),
 	});
 	const generated = await generate(assembly.prompt, model);
+	refuseTruncatedWorkerOutput({ agentId: instance.agentId, processLabel: "consult", model, generated });
 	const answerMarkdown = generated.text.trim();
 	if (!answerMarkdown) throw new Error("consult worker produced no text");
 
@@ -5545,6 +5705,10 @@ export async function buildCheckpointProposal(raw: any, generate: (prompt: strin
 		...(options?.resolveModelWindow ? { promptTokenBudget: checkpointPromptTokenBudget(options.resolveModelWindow(model)) } : {}),
 	});
 	const generated = await generate(assembly.prompt, model);
+	// Truncation is checked before the missing-fields retry: a draft cut at
+	// the output ceiling is missing its tail for size reasons, and a retry
+	// re-rolls the same dice at full cost.
+	refuseTruncatedWorkerOutput({ agentId: instance.agentId, processLabel: "checkpoint", model, generated });
 	let parsed = parseCheckpointCompressionFields(generated.text);
 	let usage = generated.usage;
 	let attempts = 1;
@@ -5554,6 +5718,7 @@ export async function buildCheckpointProposal(raw: any, generate: (prompt: strin
 		const retried = await generate(buildCheckpointCompressionRetryPrompt(assembly.prompt, missingBeforeRetry), model);
 		attempts = 2;
 		usage = mergeCheckpointCompressionUsage(usage, retried.usage);
+		refuseTruncatedWorkerOutput({ agentId: instance.agentId, processLabel: "checkpoint", model, generated: retried });
 		const retriedParsed = parseCheckpointCompressionFields(retried.text);
 		if (retriedParsed.missingFields.length <= parsed.missingFields.length) parsed = retriedParsed;
 		retryWarnings.push(`compression worker output was regenerated once (first attempt was missing ${missingBeforeRetry.join(", ")})`);

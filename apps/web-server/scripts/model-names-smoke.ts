@@ -27,6 +27,7 @@ const NAME_CASES: Array<{ model?: string; modelLabel?: string; provider?: string
 	// Newer rows: raw id + provider label.
 	{ model: "gpt-5.5", modelLabel: "ChatGPT Plus/Pro — GPT-5.5", name: "GPT-5.5", providerName: "ChatGPT Plus/Pro" },
 	{ model: "gpt-5.4", modelLabel: "GitHub Copilot — GPT-5.4", name: "GPT-5.4", providerName: "GitHub Copilot" },
+	{ model: "claude-opus-5", modelLabel: "Anthropic / Claude — Opus 5", name: "Claude Opus 5", providerName: "Anthropic / Claude" },
 	{ model: "claude-opus-4-8", modelLabel: "Anthropic / Claude — Opus 4.8", name: "Claude Opus 4.8", providerName: "Anthropic / Claude" },
 	{ model: "claude-sonnet-5", modelLabel: "Anthropic / Claude — Sonnet 5", name: "Claude Sonnet 5", providerName: "Anthropic / Claude" },
 	{ model: "claude-sonnet-4-6", modelLabel: "Anthropic / Claude — Sonnet 4.6", name: "Claude Sonnet 4.6", providerName: "Anthropic / Claude" },
@@ -47,6 +48,7 @@ const NAME_CASES: Array<{ model?: string; modelLabel?: string; provider?: string
 	// Raw ids alone (thread locks written before labels existed).
 	{ model: "moonshotai.kimi-k2.5", name: "Kimi K2.5" },
 	{ model: "claude-haiku-4.5", name: "Claude Haiku 4.5" },
+	{ model: "claude-opus-5", name: "Claude Opus 5" },
 	{ model: "claude-fable-5", name: "Claude Fable 5" },
 	{ model: "all-team-models", name: "All Team Models" },
 	// Provider id supplies the provider display name when there is no label.

@@ -143,17 +143,22 @@ function ApprovalImpl({ item, onResolve, onPreview }: Props) {
 
 				{item.uiKind === "confirm" && (
 					<div className="approval-buttons">
+						{/* A delegate card is a PROPOSAL (the room inferred the task —
+						    delegation-flow slice), so its verbs say what the click does:
+						    Approve starts the specialist, Decline sends it away. Generic
+						    confirms keep Yes/No. Both label pairs map onto the resolved
+						    line's verdict regexes above. */}
 						<button
 							className="btn-primary"
-							onClick={() => onResolve(item.requestId, true, "Yes")}
+							onClick={() => onResolve(item.requestId, true, fenced ? "Approve" : "Yes")}
 						>
-							Yes
+							{fenced ? "Approve" : "Yes"}
 						</button>
 						<button
 							className="btn-secondary"
-							onClick={() => onResolve(item.requestId, false, "No")}
+							onClick={() => onResolve(item.requestId, false, fenced ? "Decline" : "No")}
 						>
-							No
+							{fenced ? "Decline" : "No"}
 						</button>
 						{fenced && (
 							<button type="button" className="approval-details-toggle" aria-expanded={detailsOpen} onClick={() => setDetailsOpen((open) => !open)}>

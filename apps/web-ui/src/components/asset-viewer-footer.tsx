@@ -4,38 +4,45 @@ import { resolveRouteUrl, type ArtifactRef } from "./ArtifactViewer";
 interface Props {
 	taskId: string;
 	artifact: ArtifactRef;
-	/** True while the row's task is already a thread item — the transfer door was used. */
-	inConversation: boolean;
-	/** Orphan rows get the same transfer under its honest name. */
-	orphan: boolean;
+	/** Set for user-added rows (files UI slice): the shelf filename, routing downloads through the room-files endpoint. */
+	userFileName?: string;
+	/** The room — needed to compose room-files URLs for user-added rows. */
+	roomId?: string;
 	canIterate: boolean;
 	/** The specialist's summary — the done-card's "Details" disclosure, relocated
 	 * here when the card was retired (status grammar, 2026-07-18). */
 	summary?: string;
-	onAddToConversation: () => void;
-	onSaveToWorkspace: () => void;
 	onIterate: (brief: string) => boolean;
 	iteratePending: boolean;
 	/** Server-side refusal for the last change request — rendered inline here. */
 	iterateNotice?: string | null;
+	/** 💾 Save… — export a snapshot to a folder the user picks. Absent = not saveable (legacy store rows). */
+	onSaveTo?: () => void;
 	/** Orphan rows only (contract §4): manual per-task delete of the files. */
 	onDelete?: () => void;
 }
 
 /**
- * The reconstituted done-card's action footer (mockup v2 frame 2/3):
- * Add to conversation (or Re-attach to thread for orphans) · Save to
- * workspace · Ask for changes · Open in new tab. Ask for changes reveals an inline brief input —
- * the same user-authored one-click shape as the done card (D7).
+ * The viewer's action footer, split by weight (files UI slice, mockup):
+ * on the LEFT the one primary verb — Ask for changes, room-made files only
+ * (a user's own file is reference material; derivation happens in chat);
+ * on the RIGHT the quiet take-away actions — ⬇ Download and 💾 Save… are
+ * SNAPSHOTS (the Google-Docs export rule: nothing syncs back), then Details.
+ * Add to conversation and Save to workspace are gone: the room has eyes on
+ * its shelf now (manifest + read tools), and snapshots replaced the
+ * workspace copy. View chrome (open in new tab, maximize) lives in the
+ * header, where chrome belongs.
  */
-export function AssetViewerFooter({ taskId, artifact, inConversation, orphan, canIterate, summary, onAddToConversation, onSaveToWorkspace, onIterate, iteratePending, iterateNotice, onDelete }: Props) {
+export function AssetViewerFooter({ taskId, artifact, userFileName, roomId, canIterate, summary, onIterate, iteratePending, iterateNotice, onSaveTo, onDelete }: Props) {
 	const [iterateOpen, setIterateOpen] = useState(false);
 	const [brief, setBrief] = useState("");
 	const [detailsOpen, setDetailsOpen] = useState(false);
 	const [localNotice, setLocalNotice] = useState<string | null>(null);
 	const [sendInFlight, setSendInFlight] = useState(false);
-	const resolved = resolveRouteUrl(taskId, artifact.relativePath);
+	const resolved = resolveRouteUrl(taskId, artifact.relativePath, roomId);
 	const routeUrl = "url" in resolved ? resolved.url : null;
+	const downloadUrl = routeUrl ? `${routeUrl}${routeUrl.includes("?") ? "&" : "?"}download=1` : null;
+	const showIterate = canIterate && !userFileName;
 
 	// Never clear the draft at send time: a decline resolves AFTER the frame
 	// goes out and must not eat the user's typed brief (the retired done-card's
@@ -62,33 +69,35 @@ export function AssetViewerFooter({ taskId, artifact, inConversation, orphan, ca
 		}
 	}
 
+	function downloadSnapshot() {
+		if (!downloadUrl) return;
+		const anchor = document.createElement("a");
+		anchor.href = downloadUrl;
+		anchor.rel = "noopener";
+		document.body.appendChild(anchor);
+		anchor.click();
+		anchor.remove();
+	}
+
 	const notice = localNotice ?? iterateNotice ?? null;
 
 	return (
 		<div className="asset-viewer-footer">
 			<div className="asset-viewer-footer-row">
-				{!inConversation && (
-					<button type="button" className="artifact-viewer-action artifact-viewer-action-primary" onClick={onAddToConversation} title="Add this result to the conversation — the room can reference it from then on">
-						{orphan ? "Re-attach to thread" : "Add to conversation"}
-					</button>
-				)}
-				<button type="button" className={inConversation ? "artifact-viewer-action artifact-viewer-action-primary" : "artifact-viewer-quiet"} onClick={onSaveToWorkspace} title="Save a copy into this room's workspace folder">
-					Save to workspace
-				</button>
-				{canIterate && (
-					<button type="button" className="artifact-viewer-quiet" aria-expanded={iterateOpen} onClick={() => setIterateOpen((v) => !v)} title="Ask the same specialist to change this result">
+				{showIterate && (
+					<button type="button" className="artifact-viewer-action artifact-viewer-action-primary" aria-expanded={iterateOpen} onClick={() => setIterateOpen((v) => !v)} title="Ask the room to change this file — it revises this same file">
 						Ask for changes
 					</button>
 				)}
-				<button
-					type="button"
-					className="artifact-viewer-quiet"
-					disabled={!routeUrl}
-					onClick={() => routeUrl && window.open(routeUrl, "_blank", "noopener,noreferrer")}
-					title="Open this artifact in a new browser tab"
-				>
-					Open in new tab
+				<span className="asset-viewer-footer-spacer" aria-hidden="true" />
+				<button type="button" className="artifact-viewer-quiet" disabled={!downloadUrl} onClick={downloadSnapshot} title="Download a snapshot of this file to your Downloads folder">
+					⬇ Download
 				</button>
+				{onSaveTo && (
+					<button type="button" className="artifact-viewer-quiet" onClick={onSaveTo} title="Save a snapshot of this file into a folder you pick">
+						💾 Save…
+					</button>
+				)}
 				{onDelete && (
 					<button type="button" className="artifact-viewer-quiet asset-viewer-delete" onClick={onDelete} title="Delete this task's files from the store">
 						Delete
@@ -101,7 +110,7 @@ export function AssetViewerFooter({ taskId, artifact, inConversation, orphan, ca
 				)}
 			</div>
 			{detailsOpen && summary && <div className="asset-viewer-summary">{summary}</div>}
-			{iterateOpen && canIterate && (
+			{iterateOpen && showIterate && (
 				<div className="asset-viewer-iterate">
 					<input
 						className="asset-viewer-iterate-input"
@@ -125,7 +134,7 @@ export function AssetViewerFooter({ taskId, artifact, inConversation, orphan, ca
 					</button>
 				</div>
 			)}
-			{iterateOpen && canIterate && notice && !iteratePending && <div className="asset-viewer-iterate-notice">{notice}</div>}
+			{iterateOpen && showIterate && notice && !iteratePending && <div className="asset-viewer-iterate-notice">{notice}</div>}
 		</div>
 	);
 }

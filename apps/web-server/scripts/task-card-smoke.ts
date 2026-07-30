@@ -139,12 +139,12 @@ try {
 	const stopped = run(afterStart.state, [
 		{ type: "delta", taskId: "tsk-abc", delta: "partial progress" },
 		{ type: "abort_requested" },
-		{ type: "error", taskId: "tsk-abc", message: "Task stopped by you. Artifacts already written are kept.", artifacts: [SVG] },
+		{ type: "error", taskId: "tsk-abc", message: "Task stopped by you. Files already written are kept.", artifacts: [SVG] },
 	]);
 	assert(stopped.state.phase === "error", "user abort lands the task_error in error phase");
 	assert(stopped.state.stopRequested === true, "abort_requested arms stopRequested (stopped vs failed wording)");
 	assert(stopped.state.artifacts.length === 1 && stopped.state.artifacts[0].relativePath === SVG.relativePath, "partial artifacts are kept on stop");
-	assert(stopped.state.errorMessage === "Task stopped by you. Artifacts already written are kept.", "error message captured for the body");
+	assert(stopped.state.errorMessage === "Task stopped by you. Files already written are kept.", "error message captured for the body");
 	const abortEffect = stopped.effects.find((e) => e.kind === "send_abort");
 	assert(abortEffect && abortEffect.kind === "send_abort" && abortEffect.taskId === "tsk-abc", "abort_requested emits send_abort with the live id");
 	assert(isTaskActive(stopped.state), "a stopped (undismissed) task is still active");

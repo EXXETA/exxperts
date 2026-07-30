@@ -1,2 +1,5 @@
-build/
+# build/* rather than build/ so the tracked entitlements plist below can be
+# re-included (git cannot re-include inside an excluded directory).
+build/*
+!build/entitlements.mac.plist
 dist-app/

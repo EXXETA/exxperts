@@ -1,0 +1,5 @@
+exxperts
+Copyright 2026 EXXETA AG
+
+The bundled runtime under runtime/ is derived from Pi by Mario Zechner,
+licensed under the MIT License. See runtime/LICENSE and runtime/NOTICE.md.

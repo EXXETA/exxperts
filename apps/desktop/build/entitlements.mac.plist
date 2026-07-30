@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <!-- Applied to every Mach-O in the bundle (entitlements + entitlementsInherit
+         in electron-builder-mac-signed.yml), including the vendored Node in
+         Resources/server/vendor/node, which osx-sign discovers and signs with
+         the hardened runtime: V8 (Electron's and Node's) needs JIT pages, and
+         Electron loads the payload's native .node addons, which library
+         validation would reject as differently-signed code. -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+  </dict>
+</plist>

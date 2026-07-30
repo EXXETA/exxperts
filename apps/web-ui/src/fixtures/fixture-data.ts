@@ -774,7 +774,7 @@ const approvalItems: ChatItem[] = [
 			"",
 			"It can only write into one new folder made for this task: tasks/tsk-fixture01/ (at most 8 files). Approving starts it and grants that folder write access.",
 			"",
-			"The result lands on a task card. Keep it by adding it to the conversation or saving it to your workspace.",
+			"The result appears in Files, on the left, where the room can read it. Download or save a copy anytime.",
 			"",
 			"─── Brief it will receive (written by the room's model; the app has not verified anything below this line) ───",
 			"Task brief: Turn the Q3 roadmap notes into a six-slide deck for the steering meeting. Lead with the two decisions we need, keep one message per slide.",

@@ -163,6 +163,54 @@ try {
 	assert(proposalResponse.candidateValidation.valid, "proposal response should include candidate validation");
 	assert(readL1b() === l1b, "buildAbsorbProposal must not mutate L1b");
 
+	// Draft again carries the previous validator reasons into the redraft
+	// prompt as a Retry Notice; first drafts stay byte-free of it, and the
+	// client input is capped and flattened.
+	assert(!proposalPrompt.prompt.includes("## Retry Notice"), "proposal prompt without feedback must not carry a Retry Notice");
+	const oversizedReason = `Candidate L1b top-level section topology/order differs from source L1b ${"x".repeat(400)}`;
+	const manyReasons = [oversizedReason, "Candidate L1b is empty", ...Array.from({ length: 10 }, (_, i) => `filler reason ${i + 1}`)];
+	let retryPrompt = "";
+	await buildAbsorbProposal({ agentId, assessmentMarkdown: assessmentFixture, retryFeedback: manyReasons }, ABSORB_MODEL, async (prompt) => {
+		retryPrompt = prompt;
+		return { text: proposalFixture() };
+	});
+	assert(retryPrompt.includes("## Retry Notice"), "redraft prompt should carry the Retry Notice");
+	assert(retryPrompt.includes("- Candidate L1b is empty"), "redraft prompt should list the validator reasons");
+	assert(!retryPrompt.includes("filler reason 9"), "retry feedback should be capped at 8 reasons");
+	assert(!retryPrompt.includes("x".repeat(301)), "oversized reasons should be truncated");
+	assert(/## Retry Notice[\s\S]*following the Task structure exactly\./.test(retryPrompt.slice(retryPrompt.indexOf("## Retry Notice"))), "retry notice should close with the correction instruction");
+	const junkFeedbackPrompt = await (async () => {
+		let captured = "";
+		await buildAbsorbProposal({ agentId, assessmentMarkdown: assessmentFixture, retryFeedback: [42, "", "   "] as unknown as string[] }, ABSORB_MODEL, async (prompt) => {
+			captured = prompt;
+			return { text: proposalFixture() };
+		});
+		return captured;
+	})();
+	assert(!junkFeedbackPrompt.includes("## Retry Notice"), "non-string/empty feedback must not produce a Retry Notice");
+
+	// Input-side overflow guard: a window too small for the assembled prompt
+	// refuses with 413 guidance BEFORE the worker runs; without window
+	// metadata the worker runs unguarded (the pre-guard behavior).
+	const tinyWindow = () => ({ contextWindow: 2000, maxOutputTokens: 1000 });
+	let overflowWorkerRan = false;
+	try {
+		await buildAbsorbProposal({ agentId, assessmentMarkdown: assessmentFixture }, ABSORB_MODEL, async () => {
+			overflowWorkerRan = true;
+			return { text: proposalFixture() };
+		}, { resolveModelWindow: tinyWindow });
+		throw new Error("tiny window should refuse the absorb proposal prompt");
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		assert(/too large for the locked model/.test(message), `overflow refusal should name the size problem: ${message}`);
+		assert(/run Review Memory|larger-context/.test(message), "overflow refusal should carry guidance");
+		assert(/No memory has been written/.test(message), "overflow refusal should state memory is untouched");
+		assert((error as any).statusCode === 413, "overflow refusal should carry HTTP 413");
+	}
+	assert(!overflowWorkerRan, "overflow refusal must fire before the worker runs");
+	await buildAbsorbAssessment(agentId, ABSORB_MODEL, async () => ({ text: assessmentFixture }), { resolveModelWindow: () => ({ contextWindow: Number.NaN, maxOutputTokens: Number.NaN }) });
+	// Non-finite window metadata → guard stays unarmed and the call succeeds.
+
 	fs.rmSync(root, { recursive: true, force: true });
 	console.log("absorb consolidation smoke passed");
 } catch (error) {

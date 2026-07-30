@@ -169,11 +169,11 @@ try {
 	assert(registeredToolNames(localFilesPolicy) === "read_spreadsheet", "Local files standard custom tool registration should avoid native tool collisions");
 	assert(persistentRoomCapabilityPolicyView(localFilesPolicy).toolSelection.kind === "standard", "Local files standard view should expose standard selection");
 	const localFilesToolPolicy = getPersistentRoomToolPolicy(agentId, { workspaceToolsEnabled: true, workspaceToolNames: persistentRoomWorkspaceToolNamesForPolicy(localFilesPolicy), workspaceAccessMode: "localFiles" });
-	assert(localFilesToolPolicy.allowedToolNames.join(",") === "web_search,fetch_url,mcp,read,ls,find,grep,write,edit,read_spreadsheet", "Local files room tool policy should allow web_search plus selected native files and spreadsheet read");
+	assert(localFilesToolPolicy.allowedToolNames.join(",") === "web_search,fetch_url,read_file,search_file,mcp,read,ls,find,grep,write,edit,read_spreadsheet", "Local files room tool policy should allow web_search plus selected native files and spreadsheet read");
 	assert(!localFilesToolPolicy.allowedToolNames.includes("bash"), "Local files room tool policy must not allow bash by default");
 	assert(localFilesToolPolicy.blockedToolNames.includes("bash"), "Local files room tool policy should keep bash blocked by default");
 	const localFilesManualBashToolPolicy = getPersistentRoomToolPolicy(agentId, { workspaceToolsEnabled: true, workspaceToolNames: persistentRoomWorkspaceToolNamesForPolicy(localFilesPolicy), workspaceAccessMode: "localFiles", bashEnabled: true, bashRuntimeAllowed: true });
-	assert(localFilesManualBashToolPolicy.allowedToolNames.join(",") === "web_search,fetch_url,mcp,read,ls,find,grep,write,edit,read_spreadsheet,bash", "manual Local files room tool policy should allow bash only when explicitly enabled");
+	assert(localFilesManualBashToolPolicy.allowedToolNames.join(",") === "web_search,fetch_url,read_file,search_file,mcp,read,ls,find,grep,write,edit,read_spreadsheet,bash", "manual Local files room tool policy should allow bash only when explicitly enabled");
 	const localFilesBackgroundBashToolPolicy = getPersistentRoomToolPolicy(agentId, { workspaceToolsEnabled: true, workspaceToolNames: persistentRoomWorkspaceToolNamesForPolicy(localFilesPolicy), workspaceAccessMode: "localFiles", bashEnabled: true, bashRuntimeAllowed: false });
 	assert(!localFilesBackgroundBashToolPolicy.allowedToolNames.includes("bash"), "background Local files room tool policy should not allow bash even when room default enables it");
 
@@ -186,7 +186,7 @@ try {
 	assert(toolNames(localFilesCustomNoSpreadsheet) === "read,ls,grep,write", "Local files custom selection should preserve exact selected native subset");
 	assert(registeredToolNames(localFilesCustomNoSpreadsheet) === "", "Local files custom selection without spreadsheet read should register no custom tools");
 	const localFilesCustomToolPolicy = getPersistentRoomToolPolicy(agentId, { workspaceToolsEnabled: true, workspaceToolNames: persistentRoomWorkspaceToolNamesForPolicy(localFilesCustomNoSpreadsheet), workspaceAccessMode: "localFiles" });
-	assert(localFilesCustomToolPolicy.allowedToolNames.join(",") === "web_search,fetch_url,mcp,read,ls,grep,write", "Local files custom allowlist should omit disabled native tools");
+	assert(localFilesCustomToolPolicy.allowedToolNames.join(",") === "web_search,fetch_url,read_file,search_file,mcp,read,ls,grep,write", "Local files custom allowlist should omit disabled native tools");
 	assert(localFilesCustomToolPolicy.blockedToolNames.includes("find") && localFilesCustomToolPolicy.blockedToolNames.includes("edit") && localFilesCustomToolPolicy.blockedToolNames.includes("read_spreadsheet"), "Local files disabled tools should be blocked by tool policy");
 
 	const localFilesAllOff = createPersistentRoomCapabilityPolicy({
@@ -199,10 +199,10 @@ try {
 	assert(!isPersistentRoomWorkspaceToolPolicyEnabled(localFilesAllOff), "Local files all-off custom policy should not activate ordinary workspace tools");
 	assert(registeredToolNames(localFilesAllOff) === "", "Local files all-off custom policy should register no custom tools");
 	const localFilesBashOnlyToolPolicy = getPersistentRoomToolPolicy(agentId, { workspaceToolsEnabled: true, workspaceToolNames: persistentRoomWorkspaceToolNamesForPolicy(localFilesAllOff), workspaceAccessMode: "localFiles", bashEnabled: true, bashRuntimeAllowed: true });
-	assert(localFilesBashOnlyToolPolicy.allowedToolNames.join(",") === "web_search,fetch_url,mcp,bash", "manual Local files room can expose bash independently of ordinary file tools");
+	assert(localFilesBashOnlyToolPolicy.allowedToolNames.join(",") === "web_search,fetch_url,read_file,search_file,mcp,bash", "manual Local files room can expose bash independently of ordinary file tools");
 
 	const invalidLocalFilesToolPolicy = getPersistentRoomToolPolicy(agentId, { workspaceToolsEnabled: true, workspaceToolNames: ["read", "bash"], workspaceAccessMode: "localFiles" });
-	assert(invalidLocalFilesToolPolicy.allowedToolNames.join(",") === "web_search,fetch_url,mcp", "invalid Local files workspace tool bundle should fail closed to web_search only");
+	assert(invalidLocalFilesToolPolicy.allowedToolNames.join(",") === "web_search,fetch_url,read_file,search_file,mcp", "invalid Local files workspace tool bundle should fail closed to web_search only");
 
 	console.log("persistent-room workspace tool selection smoke passed");
 } catch (error) {

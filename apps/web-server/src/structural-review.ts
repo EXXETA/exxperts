@@ -113,6 +113,12 @@ export interface StructuralReviewProposalPromptInput extends StructuralReviewAss
 	assessmentMarkdown: string;
 	assessmentHandoff?: StructuralReviewAssessmentHandoffInput;
 	memoryBudgetTokens?: number;
+	/**
+	 * Validation reasons from a previous rejected draft ("Draft again").
+	 * When present, the prompt closes with a Retry Notice so the worker
+	 * corrects the named failures instead of re-rolling blind.
+	 */
+	retryFeedback?: string[];
 }
 
 export interface StructuralReviewDiscussionPromptInput extends StructuralReviewAssessmentPromptInput {
@@ -471,6 +477,9 @@ export function buildStructuralReviewProposalPrompt(input: StructuralReviewPropo
 	const budgetSection = typeof input.memoryBudgetTokens === "number"
 		? `## Memory Budget\n\n- Advisory memory budget: the whole L1b file should stay under ~${input.memoryBudgetTokens} estimated tokens; the review target (Deep Memory + Active Items) is the main lever.\n- The budget is a ceiling, not a goal. Never add, expand, or pad content because headroom remains — at any size, the densest faithful memory wins.\n- This is advisory. Never remove must-keep entries without explicit user direction, and never violate the constitution to satisfy it.`
 		: null;
+	const retrySection = input.retryFeedback?.length
+		? `## Retry Notice\n\nA previous draft of this proposal was rejected by validation for these reasons:\n\n${input.retryFeedback.map((reason) => `- ${reason}`).join("\n")}\n\nProduce a complete, corrected proposal that resolves every reason above while following the Task structure exactly.`
+		: null;
 	const prompt = [
 		structuralReviewConstitution().trim(),
 		`## Process Metadata\n\n- Agent id: ${input.agentId}\n- Process type: ${STRUCTURAL_REVIEW_WORKER_TYPE}\n- Operation: structural_review\n- Mode: ${STRUCTURAL_REVIEW_MODE}\n- currentTime: ${now.toISOString()}\n- System-selected model: ${input.model.provider}/${input.model.model}\n- Writes memory: false`,
@@ -481,6 +490,7 @@ export function buildStructuralReviewProposalPrompt(input: StructuralReviewPropo
 		handoff,
 		...(budgetSection ? [budgetSection] : []),
 		`## Task: Prune memory proposal\n\nProduce a parseable Prune memory proposal plus complete candidate review target L1b.\n\nThe candidate review target must contain exactly these top-level sections in this order:\n\n## Deep Memory\n## Active Items\n\nDo not output ## Chronos, ## Recent Context, or any other top-level section. The backend will graft preserved Chronos and Recent Context back exactly.\n\nUse exactly this markdown structure:\n\n## Prune Memory Proposal\n\n### Mode\nSTC_DIAGNOSTIC\n\n### Summary\n[Concise summary of the stable-memory pruning direction.]\n\n### Section-Level Change Log\n| Section | Prior Tokens | Candidate Tokens | Disposition | Rationale |\n|---|---:|---:|---|---|\n\n### Subsection / Entry Detail\n| Area | Operation | Rationale |\n|---|---|---|\n\n### Staleness Flags\n[Specific stale or contradictory claims, or "None detected."]\n\n### Proposed Memory Map\n| Area | Words | Estimated tokens |\n|---|---:|---:|\n\n### Review Target Metrics\n- Review target words before: ${metrics.words}\n- Review target words after: [n]\n- Review target estimated tokens before: ${metrics.estimatedTokens}\n- Review target estimated tokens after: [n]\n- Estimated token delta: [+/- n]\n\n### Warnings\nNone, or concise uncertainty flags.\n\n### Candidate review target L1b\n[Complete rewritten Deep Memory and Active Items content only.]\n\nReturn only the proposal markdown. Do not claim anything has been saved.`,
+		...(retrySection ? [retrySection] : []),
 	].join("\n\n---\n\n") + "\n";
 	return {
 		prompt,

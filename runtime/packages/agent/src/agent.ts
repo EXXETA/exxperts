@@ -109,6 +109,13 @@ export interface AgentOptions {
 	transport?: Transport;
 	maxRetryDelayMs?: number;
 	toolExecution?: ToolExecutionMode;
+	/**
+	 * Explicit per-response output-token cap forwarded to the stream function.
+	 * When omitted, each provider applies its own default (Anthropic requests a
+	 * third of the model's declared maxTokens; OpenAI-compatible sends no cap
+	 * and inherits the server's default).
+	 */
+	maxTokens?: number;
 }
 
 class PendingMessageQueue {
@@ -185,6 +192,8 @@ export class Agent {
 	public transport: Transport;
 	/** Optional cap for provider-requested retry delays. */
 	public maxRetryDelayMs?: number;
+	/** Optional explicit per-response output-token cap forwarded to the stream function. */
+	public maxTokens?: number;
 	/** Tool execution strategy for assistant messages that contain multiple tool calls. */
 	public toolExecution: ToolExecutionMode;
 	/**
@@ -210,6 +219,7 @@ export class Agent {
 		this.transport = options.transport ?? "auto";
 		this.maxRetryDelayMs = options.maxRetryDelayMs;
 		this.toolExecution = options.toolExecution ?? "parallel";
+		this.maxTokens = options.maxTokens;
 	}
 
 	/**
@@ -417,6 +427,7 @@ export class Agent {
 		let skipInitialSteeringPoll = options.skipInitialSteeringPoll === true;
 		return {
 			model: this._state.model,
+			maxTokens: this.maxTokens,
 			reasoning: this._state.thinkingLevel === "off" ? undefined : this._state.thinkingLevel,
 			sessionId: this.sessionId,
 			onPayload: this.onPayload,

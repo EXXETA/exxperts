@@ -52,7 +52,7 @@ try {
 
 	const expectedBuiltInModels: Record<BuiltInPersistentAgentAiProfileId, PersistentAgentModelLock> = {
 		"chatgpt-codex": { provider: "openai-codex", model: "gpt-5.6-sol" },
-		anthropic: { provider: "anthropic", model: "claude-opus-4-8" },
+		anthropic: { provider: "anthropic", model: "claude-opus-5" },
 	};
 
 	for (const [profileId, expected] of Object.entries(expectedBuiltInModels) as Array<[BuiltInPersistentAgentAiProfileId, PersistentAgentModelLock]>) {

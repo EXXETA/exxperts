@@ -223,6 +223,16 @@ export class ServerHandle {
       this.exited = { code, signal };
       if (!this.stopping) this.unexpectedExit?.(code, signal);
     });
+    // A spawn failure fires "error" and never "exit"; without a listener it
+    // is an uncaught exception that kills the whole app with no window.
+    // Recording it as an exit makes waitReady bail immediately with the
+    // message in the log tail instead of polling to its timeout.
+    child.on("error", (err) => {
+      this.logLines.push(`Could not start the server process: ${err.message}`);
+      if (this.exited) return;
+      this.exited = { code: null, signal: null };
+      if (!this.stopping) this.unexpectedExit?.(null, null);
+    });
     this.child = child;
     this.exited = null;
     this.stopping = false;

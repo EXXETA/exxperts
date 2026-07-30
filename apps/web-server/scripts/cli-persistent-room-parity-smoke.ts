@@ -253,7 +253,7 @@ try {
 	const localFilesBoot = requireBootstrap({ agentId, threadId: localFilesThreadId, model });
 	assert(localFilesBoot.workspaceAccessMode === "localFiles", "CLI bootstrap should expose Local files workspace mode");
 	assert(localFilesBoot.runtimeCwd === fs.realpathSync.native(localFilesWorkspace), "CLI bootstrap local-files runtime cwd should be workspace root realpath");
-	assert(localFilesBoot.allowedToolNames.join(",") === "web_search,fetch_url,mcp,read,ls,find,grep,write,edit,read_spreadsheet", "CLI bootstrap local-files allowed tools should include native files and no bash");
+	assert(localFilesBoot.allowedToolNames.join(",") === "web_search,fetch_url,read_file,search_file,mcp,read,ls,find,grep,write,edit,read_spreadsheet", "CLI bootstrap local-files allowed tools should include native files and no bash");
 	assert(!localFilesBoot.allowedToolNames.includes("bash"), "CLI bootstrap local-files allowed tools must not include bash");
 	const localFilesThread = getPersistentAgentThread(agentId, localFilesThreadId);
 	assert(localFilesThread?.runtime.kind === "pi-session-jsonl", "local-files CLI thread should be Pi-backed");
@@ -273,7 +273,7 @@ try {
 	}), { persistentAgentsRoot: tempAgentsRoot });
 	const localFilesBashThreadId = "local_files_bash_cli_0001";
 	const localFilesBashBoot = requireBootstrap({ agentId, threadId: localFilesBashThreadId, model });
-	assert(localFilesBashBoot.allowedToolNames.join(",") === "web_search,fetch_url,mcp,read,ls,find,grep,write,edit,read_spreadsheet,bash", "CLI bootstrap should include bash for explicit manual Local files bash policy");
+	assert(localFilesBashBoot.allowedToolNames.join(",") === "web_search,fetch_url,read_file,search_file,mcp,read,ls,find,grep,write,edit,read_spreadsheet,bash", "CLI bootstrap should include bash for explicit manual Local files bash policy");
 	assert(localFilesBashBoot.workspaceCapability?.bashEnabled === true, "CLI bootstrap capability should expose explicit bash enabled");
 
 	const sanitized = sanitizeRoomPassthroughArgs(["--model=bad", "--provider", "bad", "--no-session", "--session", "/tmp/x.jsonl", "--raw-system-prompt", "bad", "-p", "benign"]);

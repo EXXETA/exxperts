@@ -290,6 +290,39 @@ try {
 	assert(proposalResponse.review.metrics.candidateMemoryMap.some((row) => row.area === "Deep Memory / Collaboration and Workflow"), "proposal review should include candidate memory map");
 	assert(readL1b() === originalL1b, "assessment/proposal must not mutate L1b/current.md");
 
+	// Draft again carries the previous validator reasons into the redraft
+	// prompt as a Retry Notice; first drafts stay byte-free of it.
+	let retryPrompt = "";
+	await buildStructuralReviewProposal({ agentId, assessmentMarkdown: assessmentFixture, retryFeedback: ["Candidate review target is empty"] }, STRUCTURAL_REVIEW_MODEL, async (prompt) => {
+		retryPrompt = prompt;
+		return { text: proposalFixture };
+	});
+	assert(retryPrompt.includes("## Retry Notice"), "redraft prompt should carry the Retry Notice");
+	assert(retryPrompt.includes("- Candidate review target is empty"), "redraft prompt should list the validator reasons");
+	let cleanPrompt = "";
+	await buildStructuralReviewProposal({ agentId, assessmentMarkdown: assessmentFixture }, STRUCTURAL_REVIEW_MODEL, async (prompt) => {
+		cleanPrompt = prompt;
+		return { text: proposalFixture };
+	});
+	assert(!cleanPrompt.includes("## Retry Notice"), "proposal prompt without feedback must not carry a Retry Notice");
+
+	// Input-side overflow guard: a window too small for the assembled prompt
+	// refuses with 413 guidance BEFORE the worker runs.
+	let overflowWorkerRan = false;
+	try {
+		await buildStructuralReviewProposal({ agentId, assessmentMarkdown: assessmentFixture }, STRUCTURAL_REVIEW_MODEL, async () => {
+			overflowWorkerRan = true;
+			return { text: proposalFixture };
+		}, { resolveModelWindow: () => ({ contextWindow: 2000, maxOutputTokens: 1000 }) });
+		throw new Error("tiny window should refuse the structural review proposal prompt");
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		assert(/too large for the locked model/.test(message), `overflow refusal should name the size problem: ${message}`);
+		assert(/larger-context/.test(message), "overflow refusal should carry guidance");
+		assert((error as any).statusCode === 413, "overflow refusal should carry HTTP 413");
+	}
+	assert(!overflowWorkerRan, "overflow refusal must fire before the worker runs");
+
 	fs.rmSync(root, { recursive: true, force: true });
 	console.log("structural review smoke passed");
 } catch (error) {

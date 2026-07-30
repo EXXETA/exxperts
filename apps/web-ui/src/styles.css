@@ -3003,6 +3003,16 @@ strong, b { font-weight: 700; }
 	gap: 10px;
 	flex-wrap: wrap;
 }
+/* Sits in the action row, left of the buttons (the proposal rows are
+   flex-end), so the disabled approve explains itself without a scroll. */
+.proposal-approve-blocked-reason {
+	margin-right: auto;
+	align-self: center;
+	color: var(--danger);
+	font-size: 13px;
+	text-align: left;
+	max-width: 46ch;
+}
 .absorb-workspace {
 	height: 100%;
 	min-height: 100vh;
@@ -4774,6 +4784,7 @@ strong, b { font-weight: 700; }
 	border-top: none;
 	padding: 4px 18px 18px;
 	background: transparent;
+	position: relative; /* anchor for the toast stack floating above it */
 }
 .composer-layout {
 	display: flex;
@@ -8880,6 +8891,90 @@ label.rs-row {
 	background: color-mix(in srgb, var(--exx-plan) 6%, transparent);
 	border-radius: 0 6px 6px 0;
 }
+/* ── Composer attachment staging (files UI slice) ──────────────────────────
+   The chip row above the textarea: visible proof the drop worked, the honest
+   parse state before the message commits, and ✕ to change your mind. */
+.composer-staged {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	margin: 0 0 8px;
+}
+.composer-staged-chip {
+	display: inline-flex;
+	align-items: center;
+	gap: 7px;
+	max-width: 100%;
+	padding: 4px 8px;
+	border: 1px solid var(--exx-border);
+	border-radius: 8px;
+	font-size: 12px;
+	background: var(--exx-surface-2, transparent);
+}
+.composer-staged-chip.failed {
+	border-color: var(--danger, #d33);
+}
+.composer-staged-name {
+	font-weight: 600;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	max-width: 220px;
+}
+.composer-staged-note {
+	color: var(--exx-text-muted);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	max-width: 260px;
+}
+.composer-staged-chip.failed .composer-staged-note {
+	color: var(--danger, #d33);
+}
+.composer-staged-remove {
+	border: none;
+	background: none;
+	color: var(--exx-text-muted);
+	cursor: pointer;
+	font-size: 12px;
+	padding: 0 2px;
+	line-height: 1;
+}
+.composer-staged-remove:hover {
+	color: var(--exx-text);
+}
+.composer-attach-input {
+	display: none;
+}
+/* Attachment chips inside a sent user bubble — same grammar as task chips. */
+.user-attachment-strip {
+	margin-top: 6px;
+}
+/* The attachment chip in a message (taste pass): it opens the file in the
+   viewer, exactly as its Files row does, so it carries the same affordance as
+   any other chip. `openable` is the button form; the plain span stays for a
+   file that is gone — kept visible as the honest record that it rode with this
+   message, but muted and inert so it never promises a click it cannot keep. */
+.user-attachment-chip {
+	cursor: pointer;
+	font: inherit;
+	text-align: left;
+}
+.user-attachment-chip.gone,
+.user-attachment-chip:not(.openable) {
+	cursor: default;
+}
+.user-attachment-chip.gone {
+	opacity: .55;
+	border-style: dashed;
+}
+.user-attachment-chip.gone:hover { border-color: var(--exx-border-soft); }
+.user-attachment-chip.openable:focus-visible { outline: 2px solid var(--exx-plan); outline-offset: 2px; }
+/* Footer split (files UI slice): the spacer pushes the quiet snapshot actions
+   to the right of the one primary verb. */
+.asset-viewer-footer-spacer {
+	flex: 1;
+}
 /* Checkpoint honesty notices (§2.3) — never a gate, just the truth about a
    running or un-entered consult. */
 .checkpoint-consult-notices {
@@ -9460,15 +9555,32 @@ label.rs-row {
 .task-item-foot { margin-top: 8px; }
 .task-item-foot .meta { font-size: 11.5px; color: var(--exx-text-muted); font-family: var(--exx-font-mono); }
 
-/* V5: the save-to-workspace result toast (also reused for the V6-pending
-   transfer notice). Transient, auto-dismissed by the App. */
-.artifact-export-toast {
-	position: fixed;
-	bottom: 24px;
-	left: 50%;
-	transform: translateX(-50%);
+/* One toast home (taste pass): every transient notice lands in this stack,
+   floating directly above the composer and anchored to the COMPOSER COLUMN —
+   a viewport-centred overlay drifts off the composer the moment the viewer
+   pane opens. `bottom: 100%` puts the stack's floor on the composer's ceiling,
+   so appending a newer toast pushes the older ones upward on their own.
+   Replaces three separate anchors (bottom-centre export, bottom-left remove,
+   top-right done) that gave "something happened" three places to look. */
+.composer-toasts {
+	position: absolute;
+	bottom: 100%;
+	left: 0;
+	right: 0;
 	z-index: 60;
-	max-width: min(560px, calc(100vw - 32px));
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 8px;
+	padding-bottom: 10px;
+	pointer-events: none; /* the gaps stay click-through; the toasts re-enable it */
+}
+.room-toast {
+	pointer-events: auto;
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	max-width: min(560px, calc(100% - 32px));
 	padding: 10px 16px;
 	border-radius: 8px;
 	font-size: 13px;
@@ -9477,36 +9589,22 @@ label.rs-row {
 	border: 1px solid var(--border);
 	box-shadow: var(--exx-shadow-popover);
 }
-.artifact-export-toast.success { border-color: color-mix(in srgb, var(--exx-success) 55%, transparent); }
-.artifact-export-toast.error { border-color: color-mix(in srgb, var(--exx-danger) 60%, transparent); }
-/* Remove-from-list toast: the export toast's surface plus an inline Undo,
- * anchored bottom-left over the rail — the feedback appears next to the list
- * the row just left, and never overlaps the composer or the viewer. Sized to
- * sit INSIDE the 260px sidebar column; the two lines are a deliberate
- * hierarchy (fact, then the files nuance), not an accidental wrap. */
-.asset-remove-toast {
-	display: flex;
-	align-items: center;
-	gap: 10px;
-	left: 12px;
-	right: auto;
-	transform: none;
-	bottom: 56px;
-	width: 236px;
-	padding: 10px 12px;
-}
-.asset-remove-text {
+.room-toast.success { border-color: color-mix(in srgb, var(--exx-success) 55%, transparent); }
+.room-toast.error { border-color: color-mix(in srgb, var(--exx-danger) 60%, transparent); }
+/* The two lines are a deliberate hierarchy (fact, then the nuance the fact
+   must not carry), not an accidental wrap. */
+.room-toast-text {
 	display: flex;
 	flex-direction: column;
 	gap: 2px;
 	min-width: 0;
 	flex: 1;
 }
-.asset-remove-sub {
+.room-toast-sub {
 	color: var(--muted);
 	font-size: 12px;
 }
-.asset-remove-undo {
+.room-toast-action {
 	border: none;
 	background: none;
 	padding: 2px 4px;
@@ -9514,33 +9612,10 @@ label.rs-row {
 	color: var(--exx-plan);
 	cursor: pointer;
 	border-radius: 6px;
+	white-space: nowrap;
 }
-.asset-remove-undo:hover { text-decoration: underline; }
-.asset-remove-undo:focus-visible { outline: 2px solid var(--exx-plan); outline-offset: 2px; }
-
-/* The done-moment toast (status grammar, 2026-07-18): top-right, under the
-   top bar — the one corner that never covers the composer (a typing user is
-   never interrupted), the rail, or an open viewer. Clickable; ~6 s. */
-.task-done-toast {
-	position: fixed;
-	top: 56px;
-	right: 20px;
-	z-index: 60;
-	max-width: min(420px, calc(100vw - 32px));
-	padding: 10px 16px;
-	border-radius: 8px;
-	font-size: 13px;
-	font-family: inherit;
-	text-align: left;
-	cursor: pointer;
-	background: var(--exx-surface-raised);
-	color: var(--fg);
-	border: 1px solid var(--border);
-	box-shadow: var(--exx-shadow-popover);
-}
-.task-done-toast.done { border-color: color-mix(in srgb, var(--exx-success) 55%, transparent); }
-.task-done-toast.error { border-color: color-mix(in srgb, var(--exx-danger) 60%, transparent); }
-.task-done-toast:hover { background: var(--exx-surface-hover); }
+.room-toast-action:hover { text-decoration: underline; }
+.room-toast-action:focus-visible { outline: 2px solid var(--exx-plan); outline-offset: 2px; }
 
 /* The run view (the viewer chrome's RUNNING state): the live mono stream,
    pinned to the newest line by the component. */
@@ -10396,6 +10471,60 @@ label.rs-row {
 .assets-row-remove:focus-visible,
 .assets-row-wrap:focus-within .assets-row-remove { opacity: 1; }
 .assets-row-remove:hover { color: var(--fg); background: var(--exx-surface-raised); }
+/* Inline rename (files-management slice): the hover-reveal ✎ sits left of the
+ * ✕ with the same reveal mechanics; file rows reserve wider right padding so
+ * titles never shift under the second control. */
+.assets-row-wrap:has(.assets-row-rename) .assets-row { padding-right: 46px; }
+.assets-row-rename {
+	position: absolute;
+	right: 28px;
+	top: 50%;
+	transform: translateY(-50%);
+	width: 18px;
+	height: 18px;
+	padding: 0;
+	border: none;
+	border-radius: 5px;
+	background: none;
+	color: var(--muted);
+	font-size: 11px;
+	line-height: 1;
+	cursor: pointer;
+	opacity: 0;
+	transition: opacity 120ms ease;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+}
+.assets-row-wrap:hover .assets-row-rename,
+.assets-row-rename:focus-visible,
+.assets-row-wrap:focus-within .assets-row-rename { opacity: 1; }
+.assets-row-rename:hover { color: var(--fg); background: var(--exx-surface-raised); }
+/* Save… filename step (files-management slice). */
+.save-as-input {
+	width: 100%;
+	min-width: 0;
+	font: inherit;
+	font-size: 13px;
+	color: var(--fg);
+	background: var(--exx-surface-raised);
+	border: 1px solid var(--border);
+	border-radius: var(--exx-radius-control);
+	padding: 7px 9px;
+	margin: 10px 0 4px;
+}
+.save-as-input:focus { outline: none; border-color: var(--fg); }
+.assets-rename-input {
+	width: 100%;
+	min-width: 0;
+	font: inherit;
+	font-size: 12px;
+	color: var(--fg);
+	background: var(--exx-surface-raised);
+	border: 1px solid var(--border);
+	border-radius: 5px;
+	padding: 1px 4px;
+}
 .assets-icon {
 	flex: none;
 	width: 26px;

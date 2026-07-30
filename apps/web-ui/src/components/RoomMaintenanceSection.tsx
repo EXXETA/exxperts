@@ -15,7 +15,7 @@ function fmtTokensK(value: number): string {
 
 export function RoomMaintenanceSection({ status }: { status: PersistentAgentStatus }) {
 	const [fastPath, setFastPath] = useState<boolean | null>(null);
-	const [quickAutoApply, setQuickAutoApply] = useState<boolean | null>(null);
+	const [quickApply, setQuickApply] = useState<boolean | null>(null);
 	const [budget, setBudget] = useState<number | null>(null);
 	const [savedBudget, setSavedBudget] = useState<number | null>(null);
 	const [saving, setSaving] = useState(false);
@@ -25,7 +25,7 @@ export function RoomMaintenanceSection({ status }: { status: PersistentAgentStat
 	useEffect(() => {
 		let cancelled = false;
 		setFastPath(null);
-		setQuickAutoApply(null);
+		setQuickApply(null);
 		setBudget(null);
 		setSavedBudget(null);
 		setError(null);
@@ -33,7 +33,7 @@ export function RoomMaintenanceSection({ status }: { status: PersistentAgentStat
 			.then((response) => {
 				if (cancelled) return;
 				setFastPath(response.settings.fastPathSecondApproval);
-				setQuickAutoApply(response.settings.quickCheckpointAutoApply);
+				setQuickApply(response.settings.quickCheckpointAutoApply);
 				setBudget(response.settings.memoryBudgetTokens);
 				setSavedBudget(response.settings.memoryBudgetTokens);
 			})
@@ -82,17 +82,17 @@ export function RoomMaintenanceSection({ status }: { status: PersistentAgentStat
 		}
 	}
 
-	async function toggleQuickAutoApply(next: boolean) {
-		if (saving || quickAutoApply === null) return;
+	async function toggleQuickApply(next: boolean) {
+		if (saving || quickApply === null) return;
 		setSaving(true);
 		setError(null);
-		const previous = quickAutoApply;
-		setQuickAutoApply(next);
+		const previous = quickApply;
+		setQuickApply(next);
 		try {
 			const response = await updatePersistentRoomMaintenanceSettings(status.id, { quickCheckpointAutoApply: next });
-			setQuickAutoApply(response.settings.quickCheckpointAutoApply);
+			setQuickApply(response.settings.quickCheckpointAutoApply);
 		} catch (e) {
-			setQuickAutoApply(previous);
+			setQuickApply(previous);
 			setError((e as Error).message);
 		} finally {
 			setSaving(false);
@@ -126,30 +126,53 @@ export function RoomMaintenanceSection({ status }: { status: PersistentAgentStat
 					aria-label="Automatic memory maintenance"
 				/>
 			</label>
+			<p className="room-maintenance-hint">Apply signed-off memory updates without a second review screen.</p>
+			<details className="room-settings-details">
+				<summary>How it works</summary>
+				<p>
+					After you sign off a Learn or Review Memory assessment, the final proposal is
+					applied without the second review screen. Proposals that touch must-keep memory
+					or fail validation always come back for manual review, and the worker's notes are
+					shown after applying. Every change still archives the previous memory and writes
+					an audit record.
+				</p>
+			</details>
 			<label className="rs-row">
 				<div className="rs-row-main">
 					<span className="rs-row-label">
 						Quick checkpoint applies automatically
-						<RsInfo text="When nothing deterministic blocks a Checkpoint proposal, it saves without showing the content first. Proposals with blockers (trimmed transcripts, incomplete drafts) always come back for review. Every save still archives the previous memory and writes an audit record." />
+						<RsInfo text="When nothing deterministic blocks a Checkpoint proposal, it is saved without showing you the content first. Proposals with blockers (trimmed transcripts, incomplete drafts) always come back for review. Every save still archives the previous memory and writes an audit record." />
 					</span>
 					<span className="rs-row-hint">Save blocker-free Checkpoint proposals without showing the preview.</span>
 				</div>
 				<input
 					className="workspaces-tool-switch"
 					type="checkbox"
-					checked={quickAutoApply === true}
-					disabled={quickAutoApply === null || saving}
-					onChange={(e) => void toggleQuickAutoApply(e.target.checked)}
+					checked={quickApply === true}
+					disabled={quickApply === null || saving}
+					onChange={(e) => void toggleQuickApply(e.target.checked)}
 					aria-label="Quick checkpoint applies automatically"
 				/>
 			</label>
-			<div className="rs-row memory-budget-block">
-				<div className="memory-budget-head">
-					<span className="rs-row-label">
-						Memory budget
-						<RsInfo text="Learn and Review Memory treat this as a target when rewriting memory: bigger keeps more detail, smaller keeps the room sharper and cheaper. Nothing is blocked when the room runs over; you are nudged to review instead." />
-					</span>
-					<strong className="memory-budget-value">{budget !== null ? `${fmtTokensK(budget)} tokens` : "…"}</strong>
+			<div className="memory-budget-block">
+				<div className="workspaces-tool-row memory-budget-row">
+					<span>Memory budget</span>
+					<strong>{budget !== null ? `${fmtTokensK(budget)} tokens` : "…"}</strong>
+				</div>
+				<p className="room-maintenance-hint">How much memory this room aims to keep.</p>
+				<div className="memory-budget-bar-row">
+					<span className="memory-budget-bar-label">Target</span>
+					<input
+						className="memory-budget-slider"
+						type="range"
+						min={MEMORY_BUDGET_MIN_TOKENS}
+						max={MEMORY_BUDGET_MAX_TOKENS}
+						step={1000}
+						value={budget ?? MEMORY_BUDGET_MIN_TOKENS}
+						disabled={budget === null}
+						onChange={(e) => setBudget(Number(e.target.value))}
+						aria-label="Memory budget in tokens"
+					/>
 				</div>
 				<input
 					className="memory-budget-slider"

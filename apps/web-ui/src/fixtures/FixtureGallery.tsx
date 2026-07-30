@@ -223,6 +223,7 @@ const TASK_FIXTURE_BASE: TaskState = {
 	minimized: false,
 	stopRequested: false,
 	errorMessage: null,
+	reviseTargetNames: [],
 };
 
 const TASK_FIXTURE_DONE: TaskState = {
