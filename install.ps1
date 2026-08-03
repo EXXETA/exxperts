@@ -169,11 +169,30 @@ function Test-DiskSpace([string]$Dir) {
     }
 }
 
+# Runs git purely for its exit code, immune to the two ways PowerShell turns an
+# ordinary native-command failure into a TERMINATING error under
+# $ErrorActionPreference = "Stop":
+#   - stderr that is redirected (anywhere, including $null) comes back as a
+#     NativeCommandError record instead of plain text, and
+#   - PowerShell 7.3+ rethrows a non-zero exit code when
+#     $PSNativeCommandUseErrorActionPreference is enabled.
+# Both assignments below are function-scoped: they shadow the script values for
+# this call only and vanish when it returns. On Windows PowerShell 5.1 the
+# second name simply does not exist, and assigning it is harmless.
+# Without this, probing a detached HEAD for an upstream branch killed the
+# installer on the very line meant to tolerate it (git says "fatal: HEAD does
+# not point to a branch" on stderr) — which is exactly what a CI checkout is.
+function Test-GitSucceeds([string[]]$GitArgs) {
+    $ErrorActionPreference = "Continue"
+    $PSNativeCommandUseErrorActionPreference = $false
+    & git @GitArgs 2>&1 | Out-Null
+    return $LASTEXITCODE -eq 0
+}
+
 # Bring an existing clone up to date. Skips quietly when the clone has no
 # upstream branch to pull from (e.g. a CI checkout on a detached commit).
 function Update-Clone([string]$Dir) {
-    & git -C $Dir rev-parse --abbrev-ref --symbolic-full-name "@{u}" *> $null
-    if ($LASTEXITCODE -ne 0) {
+    if (-not (Test-GitSucceeds @("-C", $Dir, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"))) {
         Say "no upstream branch configured in $Dir; skipping the update pull."
         return
     }
