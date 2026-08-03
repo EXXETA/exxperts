@@ -2546,14 +2546,19 @@ export function App() {
 	const preview = rightPane?.kind === "preview" ? rightPane.data : null;
 	const setPreview = (data: ApprovalPreviewData | null) => setRightPane(data ? { kind: "preview", data } : null);
 
+	// The room settings wheel in the topbar opens the same modal the launcher
+	// card's wheel opens. Declared here because the Escape handler below has to
+	// yield to it.
+	const [roomSettingsOpen, setRoomSettingsOpen] = useState(false);
+
 	// Escape closes the artifact/run pane, the keyboard twin of clicking its X
 	// or the selected rail row. A maximized pane restores first (one Escape per
 	// step), and any open dialog above the pane (delete confirm, export
-	// collision, file-delete confirm, Save-as prompt) owns Escape until
-	// dismissed — one Escape, one layer.
+	// collision, file-delete confirm, Save-as prompt, room settings) owns Escape
+	// until dismissed — one Escape, one layer.
 	useEffect(() => {
 		const paneOpen = rightPane?.kind === "artifactViewer" || rightPane?.kind === "taskRun";
-		if (!paneOpen || assetDeleteConfirm || exportCollision || fileDeleteConfirm || saveAsPrompt) return;
+		if (!paneOpen || assetDeleteConfirm || exportCollision || fileDeleteConfirm || saveAsPrompt || roomSettingsOpen) return;
 		function onKeyDown(event: KeyboardEvent) {
 			if (event.key !== "Escape") return;
 			if (artifactMaximized) setArtifactMaximized(false);
@@ -2561,7 +2566,7 @@ export function App() {
 		}
 		document.addEventListener("keydown", onKeyDown);
 		return () => document.removeEventListener("keydown", onKeyDown);
-	}, [rightPane, artifactMaximized, assetDeleteConfirm, exportCollision, fileDeleteConfirm, saveAsPrompt]);
+	}, [rightPane, artifactMaximized, assetDeleteConfirm, exportCollision, fileDeleteConfirm, saveAsPrompt, roomSettingsOpen]);
 	const [conversationId, setConversationId] = useState<string>(() => newConversationId());
 	const [authStatus, setAuthStatus] = useState<AuthStatusResponse | null>(null);
 	const [modelStatus, setModelStatus] = useState<WebChatModelStatus | null>(null);
@@ -2843,6 +2848,10 @@ export function App() {
 			void refreshRoomFiles();
 		}
 	}, [persistentChat, refreshAssetRows, refreshRoomFiles]);
+	// Leaving the room (or having it deleted underneath us) closes the wheel.
+	useEffect(() => {
+		if (!persistentChat) setRoomSettingsOpen(false);
+	}, [persistentChat]);
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
 	const attachFileInputRef = useRef<HTMLInputElement>(null);
 	const workbenchRef = useRef<HTMLDivElement>(null);
@@ -5863,7 +5872,33 @@ export function App() {
 		setView("home");
 	}
 
-	const activeDisplay = persistentChat?.displayName ?? "";
+	// The room's own record wins over the name the thread was opened with, so a
+	// rename from the in-room settings wheel lands on the header and the
+	// composer placeholder right away. (persistentChat itself is left alone —
+	// changing it re-binds the room websocket.)
+	const activeDisplay = currentPersistentStatus?.displayName || persistentChat?.displayName || "";
+	// The modal tracks the LIVE status for this room the same way the launcher's
+	// does — it renders off persistentAgentStatuses, and opening refetches so it
+	// starts from what the server says right now.
+	function openRoomSettings(): void {
+		setRoomSettingsOpen(true);
+		void refreshPersistentAgentStatus();
+	}
+	// Memento applied from inside the open room: the server has already closed
+	// the conversation, so staying bound to the thread would leave the user
+	// typing into a dead one (refreshPersistentAgentStatus deliberately stands
+	// down while a room is open). Leave the room the way archiving does.
+	function leaveRoomAfterMemento(): void {
+		if (persistTimerRef.current) {
+			window.clearTimeout(persistTimerRef.current);
+			persistTimerRef.current = null;
+		}
+		setRoomSettingsOpen(false);
+		setPersistentChat(null);
+		setPersistentThread(null);
+		setView("home");
+		void refreshPersistentAgentStatus();
+	}
 	const absorbWorkflowOpen = absorbWorkflow.step !== "closed";
 	const structuralReviewWorkflowOpen = structuralReviewWorkflow.step !== "closed";
 	const standbyLockedModels = persistentAgentStatuses
@@ -6061,6 +6096,11 @@ export function App() {
 			usage={usage}
 			contextHealth={persistentChat ? contextHealth : null}
 			currentModelLabel={currentModelLabel}
+			topbarActions={
+				persistentChat && currentPersistentStatus?.exists
+					? <button className="icon-btn" aria-label="Room settings" title="Room settings" onClick={openRoomSettings}>⚙</button>
+					: undefined
+			}
 			composerRightActions={
 				persistentChat ? (
 					<>
@@ -6164,6 +6204,9 @@ export function App() {
 			checkpointPreviewSlot={checkpointPreviewOpen && persistentChat && <CheckpointPreviewShell chat={persistentChat} itemCount={items.length} rememberText={checkpointRememberText} density={checkpointDensity} proposal={checkpointProposal} loading={checkpointProposalLoading} error={checkpointProposalError} approvalLoading={checkpointApprovalLoading} approvalError={checkpointApprovalError} approvalResult={checkpointApprovalResult} quickRequested={checkpointQuickRequested} quickBlockedReasons={checkpointQuickBlockedReasons} consultRunning={consultState.phase === "streaming"} taskRunning={taskState.phase === "running"} pendingConsultHandoffCount={pendingHandoffs.filter((block) => !isSpecialistHandoffBlock(block)).length} pendingTaskHandoffCount={pendingHandoffs.filter(isSpecialistHandoffBlock).length} onRememberTextChange={(text) => { setCheckpointRememberText(text); setCheckpointProposal(null); setCheckpointProposalError(null); setCheckpointApprovalError(null); setCheckpointApprovalResult(null); }} onDensityChange={(next) => { setCheckpointDensity(next); setCheckpointProposal(null); setCheckpointProposalError(null); setCheckpointApprovalError(null); setCheckpointApprovalResult(null); }} onGenerate={generateCheckpointProposal} onApprove={approveCheckpointProposal} onDiscard={() => { setCheckpointProposal(null); setCheckpointProposalError(null); setCheckpointApprovalError(null); setCheckpointApprovalResult(null); setCheckpointQuickRequested(false); setCheckpointQuickBlockedReasons(null); setCheckpointPreviewOpen(false); }} onContinueAfterCheckpoint={continueAfterCheckpoint} onRestAfterCheckpoint={restAfterCheckpoint} onClose={() => setCheckpointPreviewOpen(false)} />}
 			globalOverlaySlot={
 				<>
+					{roomSettingsOpen && currentPersistentStatus && (
+						<RoomSettingsModal status={currentPersistentStatus} onClose={() => setRoomSettingsOpen(false)} onArchive={archivePersistentAgentRoom} onRefresh={refreshPersistentAgentStatus} onMementoApplied={leaveRoomAfterMemento} />
+					)}
 					{helpOpen && <Help onClose={() => setHelpOpen(false)} />}
 					{assetDeleteConfirm && <AssetDeleteDialog title={assetDeleteConfirm.title} onDelete={() => { const row = assetDeleteConfirm; setAssetDeleteConfirm(null); if (row) void deleteAssetRow(row); }} onCancel={() => setAssetDeleteConfirm(null)} />}
 					{fileDeleteConfirm && <FileDeleteDialog fileName={fileDeleteConfirm.fileName} reason={fileDeleteConfirm.reason} onDelete={() => { const confirm = fileDeleteConfirm; setFileDeleteConfirm(null); if (confirm) void performFileDelete(confirm.fileName); }} onCancel={() => setFileDeleteConfirm(null)} />}

@@ -96,7 +96,7 @@ export function RoomSkillsSection({ status }: { status: PersistentAgentStatus })
 			</header>
 			<p className="rs-pane-sub">
 				{okCount > 0 ? `${okCount} enabled, ~${okCount * 100} tokens per turn.` : "Abilities this room can use in its turns."}
-				<RsInfo text="Each enabled skill adds a ~100-token index entry to every turn of this room. Bodies load on demand and are never memorized. Enabling or disabling takes effect the next time you open this room; a changed or removed skill stops being injected immediately." />
+				<RsInfo text="Each enabled skill adds a ~100-token index entry to every turn of this room. Enabling or disabling takes effect right away, from the room's next reply on; a changed or removed skill stops being injected immediately. A skill's full instructions load only when the room reads it and are never memorized." />
 			</p>
 			{error && library === null && <div className="checkpoint-proposal-error">{error}</div>}
 			{!loaded && error === null && <p className="ai-setup-copy">Loading skills…</p>}

@@ -27,7 +27,7 @@ import { createWebUiContext } from "./web-ui-context.js";
 import { cancelProviderLogin, logoutProvider, ProviderAuthError, providerLoginState, saveProviderApiKey, startProviderLogin } from "./provider-auth.js";
 import { builtInProfileIdForProvider, deleteCustomAiProfile, isCustomAiProfileId, isReservedCustomProfileProvider, readCustomAiProfiles, writeCustomAiProfile } from "./custom-ai-profiles.js";
 import { ConsultPromptOverflowError } from "./consult.js";
-import { appendPersistentAgentThreadPendingHandoff, archivePersistentAgent, beginPersistentAgentTurn, buildAbsorbAssessment, buildAbsorbDiscussionSignoff, buildAbsorbDiscussionTurn, buildAbsorbProposal, buildCheckpointProposal, buildConsultAnswer, buildPersistentAgentBootContext, buildStructuralReviewAssessment, buildStructuralReviewDiscussionSignoff, buildStructuralReviewDiscussionTurn, buildStructuralReviewProposal, createPersistentAgentFromScaffoldInput, createPersistentAgentPiSessionJsonlThreadRuntime, clearPersistentAgentThreadPendingHandoffs, deletePersistentAgentThread, PERSISTENT_AGENT_L1A_DEFAULT_MODE_ID, PERSISTENT_AGENT_L1A_MODES, discardEmptyPreparedBoundaryThread, finishPersistentAgentTurn, getAbsorbAvailability, getPersistentAgentActiveTurnState, getPersistentAgentRuntimeState, getPersistentAgentStatus, getPersistentAgentThread, getStructuralReviewAvailability, isPersistentAgentArchived, listPersistentAgents, markPersistentAgentTurnCancelling, openPersistentAgentPiSessionManager, parseAbsorbApprovalRequest, parseCheckpointApprovalRequest, parseStructuralReviewApprovalRequest, readPersistentAgentBootPromptSnapshot, renamePersistentAgent, validatePersistentAgentId, writeApprovedAbsorb, writeApprovedCheckpoint, writeApprovedStructuralReview, writePersistentAgentMementoBoundary, writePersistentAgentRuntimeState, writePersistentAgentThread } from "./persistent-agents.js";
+import { appendPersistentAgentThreadPendingHandoff, archivePersistentAgent, beginPersistentAgentTurn, buildAbsorbAssessment, buildAbsorbDiscussionSignoff, buildAbsorbDiscussionTurn, buildAbsorbProposal, buildCheckpointProposal, buildConsultAnswer, buildPersistentAgentBootContext, buildPersistentAgentCurrentIdentitySection, buildStructuralReviewAssessment, buildStructuralReviewDiscussionSignoff, buildStructuralReviewDiscussionTurn, buildStructuralReviewProposal, createPersistentAgentFromScaffoldInput, createPersistentAgentPiSessionJsonlThreadRuntime, clearPersistentAgentThreadPendingHandoffs, deletePersistentAgentThread, PERSISTENT_AGENT_L1A_DEFAULT_MODE_ID, PERSISTENT_AGENT_L1A_MODES, discardEmptyPreparedBoundaryThread, finishPersistentAgentTurn, getAbsorbAvailability, getPersistentAgentActiveTurnState, getPersistentAgentRuntimeState, getPersistentAgentStatus, getPersistentAgentThread, getStructuralReviewAvailability, isPersistentAgentArchived, listPersistentAgents, markPersistentAgentTurnCancelling, openPersistentAgentPiSessionManager, parseAbsorbApprovalRequest, parseCheckpointApprovalRequest, parseStructuralReviewApprovalRequest, readPersistentAgentBootPromptSnapshot, renamePersistentAgent, validatePersistentAgentId, writeApprovedAbsorb, writeApprovedCheckpoint, writeApprovedStructuralReview, writePersistentAgentMementoBoundary, writePersistentAgentRuntimeState, writePersistentAgentThread } from "./persistent-agents.js";
 import { buildPersistentRoomRestoredLiveThreadContext } from "./persistent-room-resume-context.js";
 import {
 	getPersistentRoomToolPolicy,
@@ -4173,10 +4173,11 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 		const persistentRoomThreadRuntime = persistentAgentThreadForSession?.runtime;
 		// Skills MR-5 (spec §5): the room's EFFECTIVE enabled set — hash-pinned and
 		// verified by effectiveEnabledSkills, so drifted/deleted skills never reach
-		// the session. The index (name + description) rides the L2 envelope at
-		// thread boot (thread-snapshot semantics, like the workspace policy); the
-		// read_skill tool re-verifies the live set + hash pin on every call.
-		const persistentRoomEnabledSkillEntries: { name: string; description: string }[] = (() => {
+		// the session. Resolved FRESH for every turn (the per-turn prompt assembly
+		// below calls this), so enabling a skill mid-session lands on the very
+		// next message; the read_skill tool re-verifies the live set + hash pin
+		// on every call regardless.
+		const resolvePersistentRoomEnabledSkillEntries = (): { name: string; description: string }[] => {
 			try {
 				const skillSettings = readPersistentRoomSkillSettings(persistentAgentId);
 				const effective = effectiveEnabledSkills(skillSettings.enabledSkills, skillLibraryFingerprint);
@@ -4188,7 +4189,7 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 				app.log.warn({ err: error }, "failed to resolve enabled skills for room session");
 				return [];
 			}
-		})();
+		};
 		// Visuals V2 (contract §5): the specialist launch, created per connection so
 		// it owns this socket's send + slot map. The worker itself is fire-and-forget
 		// — run-free beside the turn, exactly like a consult. Shared by BOTH
@@ -4410,36 +4411,51 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 			},
 			launch: launchSpecialistTaskForSession,
 		})];
-		const persistentRoomSkillTools = persistentRoomEnabledSkillEntries.length > 0
-			? [createReadSkillTool({
-				agentId: persistentAgentId,
-				// The tool verifies the pinned manifest hash and returns the defanged
-				// body; both come from one manifest read, so verified and served bytes
-				// can never diverge.
-				lookupSkill: (name) => {
-					const resolved = resolveLibrarySkillManifest(name);
-					return resolved ? { manifest: resolved.manifest, body: resolved.body, description: resolved.description } : null;
-				},
-				telemetry: persistentRoomSkillTelemetry,
-			})]
-			: [];
+		// read_skill is registered unconditionally: gating registration on the
+		// connect-time enabled set meant a room that connected with zero skills
+		// had no tool for a skill enabled mid-session — the index now reaches it
+		// per turn, so the tool must be there to follow through. The security
+		// floor was never registration: the tool itself refuses anything outside
+		// the room's LIVE enabled set (hash-verified) on every call.
+		const persistentRoomSkillTools = [createReadSkillTool({
+			agentId: persistentAgentId,
+			// The tool verifies the pinned manifest hash and returns the defanged
+			// body; both come from one manifest read, so verified and served bytes
+			// can never diverge.
+			lookupSkill: (name) => {
+				const resolved = resolveLibrarySkillManifest(name);
+				return resolved ? { manifest: resolved.manifest, body: resolved.body, description: resolved.description } : null;
+			},
+			telemetry: persistentRoomSkillTelemetry,
+		})];
 		// The shelf pair (files core slice): default-on for every room, fenced to
 		// the room's own files/ folder by the tools themselves — deliberately
 		// OUTSIDE the workspace grant plumbing and its mismatch check above.
 		const persistentRoomShelfTools = createPersistentRoomShelfTools({ roomId: persistentAgentId });
-		// The shelf manifest is STATE, not an event: regenerated from the folder
-		// for every request via before_agent_start (which replaces the system
-		// prompt per turn), so a file created or deleted mid-session is reflected
-		// on the very next request — never stale, never accumulated.
-		const shelfManifestExtForSession = async (pi: any) => {
+		// Live room state is STATE, not an event: regenerated for every request
+		// via before_agent_start (which replaces the system prompt per turn), so
+		// something that changed mid-session is reflected on the very next
+		// request — never stale, never accumulated. Three sections ride here: the
+		// current-identity stanza (agent.json is the live name authority; the
+		// frozen boot snapshot cannot learn about a rename), the enabled-skills
+		// index (skills MR-5, spec §5 — recomputed per turn so a skill enabled
+		// mid-session is listed on the very next message, matching read_skill's
+		// per-call enforcement of the live set), and the shelf manifest (a file
+		// created or deleted mid-session shows up immediately).
+		// Each section is best-effort on its own: a build failure drops that
+		// section for the turn, never the turn itself.
+		const liveRoomStateExtForSession = async (pi: any) => {
 			pi.on("before_agent_start", async (event: { systemPrompt: string }) => {
+				let systemPrompt = event.systemPrompt;
+				systemPrompt += buildPersistentAgentCurrentIdentitySection(persistentAgentId);
+				systemPrompt += buildEnabledSkillsIndexSection(resolvePersistentRoomEnabledSkillEntries());
 				try {
 					const section = buildShelfManifestSection(persistentAgentId, {}, (name, entry) => cachedShelfPageCount(persistentAgentId, name, entry));
-					if (section) return { systemPrompt: `${event.systemPrompt}${section}` };
+					if (section) systemPrompt += section;
 				} catch (error) {
 					app.log.warn({ err: (error as Error).message }, "shelf manifest build failed");
 				}
-				return undefined;
+				return systemPrompt !== event.systemPrompt ? { systemPrompt } : undefined;
 			});
 		};
 		const persistentRoomBootContext = persistentRoomThreadRuntime?.kind !== "pi-session-jsonl"
@@ -4451,23 +4467,18 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 				...(persistentRoomWorkspaceCapability ? { workspaceCapability: persistentRoomWorkspaceCapability } : {}),
 			})
 			: undefined;
-		// The enabled-skills index (skills MR-5, spec §5) is appended to the system
-		// prompt at CONNECT for BOTH runtimes. The default pi-session-jsonl runtime
-		// serves a frozen, hash-pinned boot snapshot that predates enablement, so
-		// baking the index into the snapshot (as buildPersistentAgentBootContext
-		// would) never reaches it; appending here instead makes the index reflect
-		// the room's CURRENT effective enabled set every time the room is opened —
-		// consistent with read_skill, which enforces the live set per call.
-		const persistentRoomEnabledSkillsIndex = buildEnabledSkillsIndexSection(persistentRoomEnabledSkillEntries);
-		// The specialist-templates index (visuals V2, contract §5) rides the same
-		// connect-time append as the skills index: static registry content, so it
-		// is identical for every room and every connect.
+		// The enabled-skills index (skills MR-5, spec §5) used to be appended here
+		// at connect; it now rides the per-turn assembly above, so a skill enabled
+		// mid-session is listed on the very next message instead of the next open.
+		// The specialist-templates index (visuals V2, contract §5) stays a
+		// connect-time append: static registry content, identical for every room
+		// and every connect, so there is nothing for a turn to refresh.
 		const persistentRoomSpecialistIndex = buildSpecialistTemplatesIndexSection();
 		const persistentRoomRawBootPrompt = persistentRoomThreadRuntime?.kind === "pi-session-jsonl"
 			? readPersistentAgentBootPromptSnapshot(persistentAgentId, persistentRoomThreadRuntime)
 			: persistentRoomBootContext?.systemPrompt;
 		const persistentRoomRawSystemPrompt = persistentRoomRawBootPrompt != null
-			? `${persistentRoomRawBootPrompt}${persistentRoomEnabledSkillsIndex}${persistentRoomSpecialistIndex}`
+			? `${persistentRoomRawBootPrompt}${persistentRoomSpecialistIndex}`
 			: persistentRoomRawBootPrompt;
 		const persistentRoomRuntimeCwd = persistentRoomRuntimeCwdForEffectiveWorkspacePolicy(persistentRoomEffectiveWorkspacePolicy, REPO_ROOT);
 		const persistentRoomSessionManager = persistentRoomThreadRuntime?.kind === "pi-session-jsonl"
@@ -4520,7 +4531,7 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 			mcpExt as any,
 			webSearchExt as any,
 			fetchUrlExt as any,
-			shelfManifestExtForSession as any,
+			liveRoomStateExtForSession as any,
 			...(promptDiagnosticsEnabledForConnection && persistentRoomModel ? [persistentRoomPromptDiagnosticsExt(persistentRoomModel) as any] : []),
 		];
 		const sessionRuntimeCwd = persistentRoomRuntimeCwd;

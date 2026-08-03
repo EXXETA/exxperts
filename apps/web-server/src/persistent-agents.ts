@@ -2025,8 +2025,9 @@ export function renamePersistentAgent(agentIdRaw: string, displayNameRaw: unknow
 	}
 	// A scheduled background run or a CLI session is actively reading and writing this room's
 	// files from another process; renaming mid-run risks clobbering their L1a/L1b writes. A plain
-	// open-in-app web lock is fine: a display rename is harmless mid-session (the live session's
-	// system prompt keeps the old name until the room is reopened) and web writers share this
+	// open-in-app web lock is fine: a display rename is harmless mid-session (the frozen boot
+	// snapshot keeps the old name, but the per-turn current-identity stanza reads agent.json
+	// fresh, so the very next message already carries the new one) and web writers share this
 	// process, so they cannot interleave with the synchronous apply below.
 	const lock = activePersistentRoomLock(instance.agentId);
 	if (lock?.surface === "scheduler" || lock?.surface === "cli") {
@@ -3724,6 +3725,33 @@ export function buildPersistentAgentBootContext(contract: PersistentAgentBootCon
 	];
 	const systemPrompt = layers.map((layer) => layer.content.trim()).join("\n\n---\n\n") + "\n";
 	return { contract: normalizedContract, layers, systemPrompt, promptBudget: buildPromptBudget(l0, l1a, l1b, l2) };
+}
+
+/**
+ * The per-turn current-identity stanza. The boot prompt a pi-session-jsonl
+ * thread serves is a frozen, hash-pinned snapshot, so a rename mid-session
+ * never reaches the constitution heading or the Identity section the model is
+ * reading — this stanza rides the same before_agent_start assembly as the
+ * shelf manifest and re-reads agent.json every turn, so the very next message
+ * after a rename carries the room's current name. Kept to a few lines (the
+ * frozen layers stay untouched; only this correction is live) and worded to
+ * outrank them, the way the kernel outranks the layers below it. Returns ""
+ * when the room's metadata is unreadable: a missing stanza degrades to the
+ * old frozen-name behavior instead of failing the turn.
+ */
+export function buildPersistentAgentCurrentIdentitySection(agentIdRaw: string): string {
+	try {
+		const instance = createPersistentAgentInstance(agentIdRaw);
+		const meta = instance.readAgentJson();
+		const displayName = String(meta?.displayName ?? "").trim() || instance.agentId;
+		return `
+
+## Current identity
+
+Your name is now **${displayName}**. This line is live runtime state and wins over the layers above: if the constitution or memory still call you by another name, the user has renamed you since they were written — introduce yourself and refer to yourself as **${displayName}**.`;
+	} catch {
+		return "";
+	}
 }
 
 export interface PersistentAgentPiSessionJsonlPaths {

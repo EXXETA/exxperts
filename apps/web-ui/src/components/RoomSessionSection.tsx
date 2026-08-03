@@ -26,7 +26,7 @@ function sessionModelLabel(status: PersistentAgentStatus): string | null {
 	return modelDisplayName({ model: model.model, modelLabel: model.label, provider: model.provider }) || model.model;
 }
 
-export function RoomSessionSection({ status, onRefresh }: { status: PersistentAgentStatus; onRefresh: () => void }) {
+export function RoomSessionSection({ status, onRefresh, onMementoApplied }: { status: PersistentAgentStatus; onRefresh: () => void; onMementoApplied?: () => void }) {
 	const [confirming, setConfirming] = useState(false);
 	const [submitting, setSubmitting] = useState(false);
 	const [message, setMessage] = useState<string | null>(null);
@@ -48,6 +48,13 @@ export function RoomSessionSection({ status, onRefresh }: { status: PersistentAg
 		try {
 			await applyMemento(status.id, activeThread.threadId);
 			setConfirming(false);
+			// From inside the open room the caller leaves the room instead: the
+			// conversation this view is bound to no longer exists server-side, so
+			// there is nothing here to keep showing a success note over.
+			if (onMementoApplied) {
+				onMementoApplied();
+				return;
+			}
 			setMessage("Memento applied. The room starts a fresh conversation on next open.");
 			onRefresh();
 		} catch (e) {

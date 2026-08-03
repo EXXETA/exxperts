@@ -6900,6 +6900,12 @@ strong, b { font-weight: 700; }
 	padding: 18px 22px;
 	border-bottom: 1px solid var(--border);
 }
+/* The title block is the head's growing side: stretched so the rename editor
+   spans the full content width up to the Close button, not just its intrinsic size. */
+.room-settings-title-block {
+	flex: 1 1 auto;
+	min-width: 0;
+}
 .room-settings-title-row {
 	display: flex;
 	align-items: center;
@@ -6924,7 +6930,6 @@ strong, b { font-weight: 700; }
 .room-settings-rename-input {
 	flex: 1 1 auto;
 	min-width: 0;
-	max-width: 420px;
 	font-size: 16px;
 	font-weight: 600;
 }
@@ -6933,13 +6938,10 @@ strong, b { font-weight: 700; }
 	font-size: 12px;
 }
 .room-settings-rename-preview {
-	margin-top: 10px;
-	padding-top: 10px;
-	border-top: 1px solid var(--border-soft);
+	margin-top: 12px;
 	display: flex;
 	flex-direction: column;
 	gap: 8px;
-	max-width: 640px;
 }
 .room-settings-rename-preview-lead {
 	margin: 0;

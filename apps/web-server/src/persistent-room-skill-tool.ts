@@ -16,12 +16,12 @@ import { sha256 } from "./skills-store.js";
  *   verifies the enablement hash pin at CALL time, and returns the body defanged
  *   and provenance-wrapped. There is no filesystem handle and no path argument —
  *   name lookup only.
- * - Index freshness is CONNECT-scoped: the enabled-skills index is appended to
- *   the system prompt each time the room is opened (index.ts), reflecting the
- *   room's current effective enabled set at connect. Enabling a skill then
- *   reopening the room surfaces it. The tool, in turn, enforces the LIVE
- *   effective set on every call — a skill disabled or drifted after connect
- *   refuses immediately, tighter than the index it was listed in.
+ * - Index freshness is TURN-scoped: the enabled-skills index rides the per-turn
+ *   prompt assembly (index.ts), recomputed from the room's current effective
+ *   enabled set for every request — enabling a skill mid-session lists it on
+ *   the very next message. The tool enforces the same LIVE effective set on
+ *   every call, so index and enforcement can never disagree for longer than
+ *   the turn in flight.
  */
 
 /** Resolve a library skill by name (injected — this module never reaches into the

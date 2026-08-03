@@ -1,7 +1,6 @@
 import { type FormEvent, useEffect, useState } from "react";
 import type { PersistentAgentStatus, PersistentRoomCapabilityPolicyView, PersistentRoomWorkspaceAccessMode } from "../types";
 import { chooseSystemFolder, clearPersistentRoomWorkspaceDefault, fetchPersistentRoomWorkspaceDefault, savePersistentRoomWorkspaceDefault } from "../persistent-room-workspace-api";
-import { RsInfo } from "./rs-info";
 
 const BOUNDED_WORKSPACE_TOOL_OPTIONS = [
 	{ name: "ls", label: "List" },
@@ -105,8 +104,8 @@ function WorkspaceDefaultPolicySummary({ policy, warnings }: { policy: Persisten
 				</dl>
 				<p className="workspace-summary-note">
 					The full local path stays on this machine and is not shown here.{showFolderClue ? ` Folder: ${folderName}.` : ""}
-					<RsInfo text="Changing the workspace applies to new conversations. Existing thread workspaces remain unchanged." />
 				</p>
+				<p className="workspace-summary-note">Workspace changes apply to new conversations. A conversation that is already running keeps the workspace it started with.</p>
 			</div>
 			{warnings.length > 0 && (
 				<ul className="workspaces-warnings">
