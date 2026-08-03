@@ -95,6 +95,15 @@ function usage(command) {
   return `Usage: ${command} [runtime options]\n\nOpens the exxperts rooms picker. Pick a room (your own persistent workspace,\nwith its own memory and exxpert) or create a new one. The package install\ndirectory is used as EXXETA_HOME.\n\nExplicit packaged commands:\n  exxperts web       Open the web app\n  exxperts cli       Open this rooms CLI/TUI\n  exxperts           Pick a surface interactively (web app recommended)\n\nPackage commands (routed to the runtime):\n  exxperts install|remove|update|list|config …\n\nOptions:\n  --help, -h      Show this launcher help\n\nOther arguments are passed through to the room runtime.\n`;
 }
 
+function noteRoomExtensionBoundaryOnInstall(args) {
+  if (args[0] !== "install") return;
+  if (args.includes("--help") || args.includes("-h")) return;
+  if (!args.slice(1).some((arg) => !arg.startsWith("-"))) return;
+  console.warn(
+    "Note: if this package provides Pi extensions, rooms will not load them - rooms run a fixed, product-owned tool set. Skills reach rooms through the skill library in the web app.",
+  );
+}
+
 function ensureDirs() {
   ensureProductAppUserDirs();
 }
@@ -368,8 +377,10 @@ async function main(argv = process.argv.slice(2), command = path.basename(proces
   // Product setup and package-manager commands should not require an agent
   // file, banner, theme, or extension wrapper. Route them directly to the
   // runtime, before the --help check so `exxperts install --help` shows the
-  // runtime's install help rather than the launcher usage.
+  // runtime's install help rather than the launcher usage. On an actual
+  // install, note that rooms will not load Pi extensions from the package.
   if (argv[0] === "setup" || PACKAGE_COMMANDS.includes(argv[0])) {
+    noteRoomExtensionBoundaryOnInstall(argv);
     loadDotenv(root);
     const env = { ...process.env, EXXETA_HOME: root };
     const result = spawnCliRuntime(process.execPath, [path.join(root, "runtime", "packages", "coding-agent", "dist", "cli.js"), ...argv], {

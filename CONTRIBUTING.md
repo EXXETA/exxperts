@@ -45,7 +45,7 @@ The maintainers develop on an internal repository and publish to this one. When 
 
 ## License
 
-exxperts is released under the [Apache License 2.0](LICENSE). Contributions are accepted under the same license: by submitting a contribution you license it under Apache 2.0, inbound equals outbound, as described in section 5 of the license. Commits must also carry a DCO `Signed-off-by` line; add it with `git commit -s`.
+exxperts is released under the [Apache License 2.0](LICENSE). Contributions are accepted under the same license: by submitting a contribution you license it under Apache 2.0, inbound equals outbound, as described in section 5 of the license. Commits must also carry a DCO `Signed-off-by` line; add it with `git commit -s`. Commits are authored and signed off by people; please do not add AI co-author trailers.
 
 ## Questions
 
