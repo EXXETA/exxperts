@@ -54,7 +54,7 @@ Every memory shows **where it came from**: click any remembered fact and the exa
 
 ## How a room grows
 
-**Work.** A room is a full agent, not a chat: it searches the web, reads pages, writes documents, decks and web pages, runs background tasks, and uses your connectors and skills. Which tools each room may use is your call.
+**Work.** A room replaces a chat thread: it is the durable place where you set up your exxpert's tools, folders, connections, and skills - and the exxpert in it searches the web, reads pages, writes documents, decks and web pages, and runs background tasks. Which tools each room may use is your call.
 
 **Checkpoint.** At the end of a session, the room proposes what is worth remembering. You steer it, edit it, or reject it; nothing enters memory without you.
 

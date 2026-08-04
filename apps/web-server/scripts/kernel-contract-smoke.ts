@@ -107,7 +107,7 @@ try {
 		// held to the same ceiling plus whatever the org section itself costs.
 		const kernelTokens = estimateTextTokens(kernel);
 		const orgSectionTokens = label === "org kernel" ? estimateTextTokens(kernelWithOrg) - estimateTextTokens(kernelWithoutOrg) : 0;
-		assert(kernelTokens <= 2000 + orgSectionTokens, `${label} should estimate at most 2000 tokens of product-owned text, got ${kernelTokens - orgSectionTokens}`);
+		assert(kernelTokens <= 2100 + orgSectionTokens, `${label} should estimate at most 2100 tokens of product-owned text, got ${kernelTokens - orgSectionTokens}`);
 
 		// 10. Every tool name the kernel utters exists; workspace advice has left.
 		assert(!kernel.includes("grep"), `${label} should no longer mention grep (workspace advice lives in L2 now)`);

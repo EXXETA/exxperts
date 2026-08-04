@@ -6,9 +6,12 @@
 
 ## The product in one paragraph
 
-exxperts is a local-first platform for **persistent AI colleagues**. You
-create a *room* (a named agent with durable, human-governed memory)
-and work with it over weeks, not sessions. The core of the product is
+exxperts is a local-first platform for **persistent AI colleagues**. Rooms
+are where you work with them, and they replace traditional chats: a room is
+a durable place where you set up the tools, folders, connections, and skills
+for your interactions, and the *exxpert* living in it is the colleague you
+talk to, with its own identity and durable, human-governed memory. You work
+with it over weeks, not sessions. The core of the product is
 not chat; it is the **memory engine**: an approval-gated lifecycle
 (checkpoint → Learn → Review Memory) that turns conversations into durable,
 auditable memory the agent boots from next time. Chat orbits the memory

@@ -2,7 +2,7 @@
 
 Get Exxperts running, connect your AI, and save your first memory, all in about five minutes.
 
-Exxperts is a local-first platform for persistent AI colleagues. Each "room" is an agent with durable, governed memory: everything it remembers lives in plain files on your machine, every memory write goes through an approval workflow you control, and the memory belongs to the room, not to any model vendor.
+Exxperts is a local-first platform for persistent AI colleagues. Each room houses an exxpert - an agent with durable, governed memory: everything it remembers lives in plain files on your machine, every memory write goes through an approval workflow you control, and the memory belongs to the room, not to any model vendor.
 
 ## Ways to use exxperts
 
