@@ -16,6 +16,7 @@
     "smoke:local-guard": "tsx scripts/local-guard-smoke.ts",
     "smoke:memento-runtime-boundary": "tsx scripts/memento-runtime-boundary-smoke.ts",
     "smoke:prompt-diagnostics": "tsx scripts/prompt-diagnostics-smoke.ts",
+    "smoke:kernel-contract": "tsx scripts/kernel-contract-smoke.ts",
     "smoke:scheduled-room-model-policy": "tsx scripts/scheduled-room-model-policy-smoke.ts",
     "smoke:persistent-room-maintenance-settings": "tsx scripts/persistent-room-maintenance-settings-smoke.ts",
     "smoke:assets-panel-projection": "tsx scripts/assets-panel-projection-smoke.ts",
