@@ -27,7 +27,7 @@ import { createWebUiContext } from "./web-ui-context.js";
 import { cancelProviderLogin, logoutProvider, ProviderAuthError, providerLoginState, saveProviderApiKey, startProviderLogin } from "./provider-auth.js";
 import { builtInProfileIdForProvider, deleteCustomAiProfile, isCustomAiProfileId, isReservedCustomProfileProvider, readCustomAiProfiles, writeCustomAiProfile } from "./custom-ai-profiles.js";
 import { ConsultPromptOverflowError } from "./consult.js";
-import { appendPersistentAgentThreadPendingHandoff, archivePersistentAgent, beginPersistentAgentTurn, buildAbsorbAssessment, buildAbsorbDiscussionSignoff, buildAbsorbDiscussionTurn, buildAbsorbProposal, buildCheckpointProposal, buildConsultAnswer, buildPersistentAgentBootContext, buildPersistentAgentCurrentIdentitySection, buildStructuralReviewAssessment, buildStructuralReviewDiscussionSignoff, buildStructuralReviewDiscussionTurn, buildStructuralReviewProposal, createPersistentAgentFromScaffoldInput, createPersistentAgentPiSessionJsonlThreadRuntime, clearPersistentAgentThreadPendingHandoffs, deletePersistentAgentThread, PERSISTENT_AGENT_L1A_DEFAULT_MODE_ID, PERSISTENT_AGENT_L1A_MODES, discardEmptyPreparedBoundaryThread, finishPersistentAgentTurn, getAbsorbAvailability, getPersistentAgentActiveTurnState, getPersistentAgentRuntimeState, getPersistentAgentStatus, getPersistentAgentThread, getStructuralReviewAvailability, isPersistentAgentArchived, listPersistentAgents, markPersistentAgentTurnCancelling, openPersistentAgentPiSessionManager, parseAbsorbApprovalRequest, parseCheckpointApprovalRequest, parseStructuralReviewApprovalRequest, readPersistentAgentBootPromptSnapshot, renamePersistentAgent, validatePersistentAgentId, writeApprovedAbsorb, writeApprovedCheckpoint, writeApprovedStructuralReview, writePersistentAgentMementoBoundary, writePersistentAgentRuntimeState, writePersistentAgentThread } from "./persistent-agents.js";
+import { appendPersistentAgentThreadPendingHandoff, archivePersistentAgent, beginPersistentAgentTurn, buildAbsorbAssessment, buildAbsorbDiscussionSignoff, buildAbsorbDiscussionTurn, buildAbsorbProposal, buildCheckpointProposal, buildConsultAnswer, buildPersistentAgentBootContext, buildPersistentAgentCurrentIdentitySection, buildStructuralReviewAssessment, buildStructuralReviewDiscussionSignoff, buildStructuralReviewDiscussionTurn, buildStructuralReviewProposal, createPersistentAgentFromScaffoldInput, createPersistentAgentPiSessionJsonlThreadRuntime, clearPersistentAgentThreadPendingHandoffs, clearPersistentAgentUnseenLandedAnswer, deletePersistentAgentThread, PERSISTENT_AGENT_L1A_DEFAULT_MODE_ID, PERSISTENT_AGENT_L1A_MODES, discardEmptyPreparedBoundaryThread, finishPersistentAgentTurn, getAbsorbAvailability, getPersistentAgentActiveTurnState, getPersistentAgentRuntimeState, getPersistentAgentStatus, getPersistentAgentThread, getStructuralReviewAvailability, isPersistentAgentArchived, listPersistentAgents, markPersistentAgentTurnCancelling, openPersistentAgentPiSessionManager, parseAbsorbApprovalRequest, parseCheckpointApprovalRequest, parseStructuralReviewApprovalRequest, readPersistentAgentBootPromptSnapshot, recordPersistentAgentUnseenLandedAnswer, renamePersistentAgent, validatePersistentAgentId, writeApprovedAbsorb, writeApprovedCheckpoint, writeApprovedStructuralReview, writePersistentAgentMementoBoundary, writePersistentAgentRuntimeState, writePersistentAgentThread } from "./persistent-agents.js";
 import { buildPersistentRoomRestoredLiveThreadContext } from "./persistent-room-resume-context.js";
 import {
 	getPersistentRoomToolPolicy,
@@ -158,6 +158,21 @@ type PersistentRoomLiveSession = {
 	closeSocket: () => void;
 };
 const persistentRoomLiveSessions = new Map<string, PersistentRoomLiveSession>();
+// Rooms whose web client disconnected while a turn was in flight and whose
+// turn keeps cooking detached (community #14). The room lock stays held until
+// the finished answer lands in the thread file; this set only makes the
+// refusal message honest for a connection attempt that bounces off that lock
+// ("finishing a response" rather than "open in another browser session").
+const detachedCookingRooms = new Set<string>();
+// Watchdog for a detached turn (community #14): a hung provider stream would
+// otherwise cook forever — the lock heartbeat renews indefinitely,
+// detachedCookingRooms refuses every new web connection, and no user-reachable
+// stop exists short of a server restart. When a turn detaches, a deadline this
+// long is armed; on expiry the turn is aborted the same way a user stop aborts
+// it, and the landing write parks whatever partial exists with its honest
+// note. 12 minutes is deliberately far above any legitimate single turn while
+// still bounded. Env override exists for tests only.
+const DETACHED_TURN_DEADLINE_MS = Number(process.env.EXXETA_DETACHED_TURN_DEADLINE_MS ?? "") || 12 * 60_000;
 const WEB_UI_DIST = path.join(REPO_ROOT, "apps", "web-ui", "dist");
 
 // Default persona for new web connections is `business`. Each WS
@@ -3749,7 +3764,27 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 	// is already active elsewhere, refuse this connection with a clear message.
 	const roomLockOwner = { surface: "web", connectionId, pid: process.pid, label: persistentAgentIdForSession };
 	let roomLockHeartbeat: ReturnType<typeof setInterval> | null = null;
+	const releaseRoomLockNow = () => {
+		if (roomLockHeartbeat) { clearInterval(roomLockHeartbeat); roomLockHeartbeat = null; }
+		try { roomLock.release(persistentAgentIdForSession, roomLockOwner); } catch {}
+	};
 	{
+		// A detached turn is still cooking for this room (community #14): the
+		// web lock would normally allow web-over-web takeover (reconnect
+		// blips), but taking over here would put a second live session on the
+		// thread the landing write is about to finish. Refuse with the honest
+		// message; the client's reconnect loop simply retries until it lands.
+		if (detachedCookingRooms.has(persistentAgentIdForSession)) {
+			// `code` is the client's only way to tell detach from death: the
+			// original drop delivers nothing (the network is gone), so the
+			// signal rides on this reconnect bounce. The client uses it to
+			// rewrite the "connection was lost" bubble note honestly and to
+			// stop burning reconnect attempts against a lock that will keep
+			// bouncing until the answer lands.
+			try { socket.send(JSON.stringify({ type: "error", code: "room_cooking", message: "This room is currently finishing a response in the background. The answer is saved into the conversation when it is done; open the room again then." })); } catch {}
+			try { socket.close(); } catch {}
+			return;
+		}
 		const acquired = roomLock.tryAcquire(persistentAgentIdForSession, roomLockOwner);
 		if (!acquired.ok) {
 			const busyStatus = roomLockBusyStatus(acquired.heldBy);
@@ -3760,11 +3795,18 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 			return;
 		}
 		roomLockHeartbeat = setInterval(() => roomLock.heartbeat(persistentAgentIdForSession, roomLockOwner), 30_000);
+		// A session is binding to this room: whatever landed unseen is about to
+		// be seen in the transcript, so the marker's job is done (community #14
+		// slice 3, the away-notice clear).
+		try { clearPersistentAgentUnseenLandedAnswer(persistentAgentIdForSession); } catch {}
 		// Register release immediately so the lock is freed even if later session
 		// setup throws or the connection drops before the main close handler.
+		// A turn detached by the disconnect (community #14) keeps the lock — the
+		// heartbeat keeps running and the prompt handler releases after the
+		// finished answer lands in the thread file.
 		socket.on("close", () => {
-			if (roomLockHeartbeat) { clearInterval(roomLockHeartbeat); roomLockHeartbeat = null; }
-			try { roomLock.release(persistentAgentIdForSession, roomLockOwner); } catch {}
+			if (turnKeepsCookingOnClose()) return;
+			releaseRoomLockNow();
 		});
 	}
 
@@ -3780,6 +3822,24 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 		promptSettled: boolean;
 	};
 	let activePersistentWebTurn: ActivePersistentWebTurn | null = null;
+	// Community #14 (detach instead of abort): a disconnect while a turn is in
+	// flight no longer cancels it. All close handlers consult this predicate in
+	// the same tick, so the lock listener, the live-session listener and the
+	// main close handler agree on the same answer. A turn the user already
+	// stopped (terminalReason set by the abort frame) is NOT detached — the
+	// user asked for cancellation, the disconnect merely raced it.
+	const turnKeepsCookingOnClose = (): boolean => !!(activePersistentWebTurn && !activePersistentWebTurn.promptSettled && !activePersistentWebTurn.terminalReason);
+	// Set once the close handler decides to detach; from then on the prompt
+	// handler owns landing the finished answer, releasing the room lock and
+	// disposing the session.
+	let detachedFromClient = false;
+	// Armed by the close handler when the turn detaches; cleared when the turn
+	// settles. One timer per connection, and a room cooks on exactly one
+	// connection, so several cooking rooms each carry their own deadline.
+	let detachedTurnDeadlineTimer: ReturnType<typeof setTimeout> | null = null;
+	const clearDetachedTurnDeadline = (): void => {
+		if (detachedTurnDeadlineTimer) { clearTimeout(detachedTurnDeadlineTimer); detachedTurnDeadlineTimer = null; }
+	};
 	// One consult at a time per connection (v1). The consult worker is
 	// independent of the room's turn machinery: prompts stay allowed while a
 	// consult runs; starting a consult while a turn is in flight is rejected.
@@ -3910,7 +3970,7 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 		if (!turn || turn.terminalReason) return;
 		turn.terminalReason = reason;
 	};
-	const abortActivePersistentWebTurn = (reason: "cancelled" | "disconnect_cancelled" = "cancelled"): Promise<void> => {
+	const abortActivePersistentWebTurn = (reason: "cancelled" | "disconnect_cancelled" | "failed" = "cancelled"): Promise<void> => {
 		const turn = activePersistentWebTurn;
 		const sessionToAbort = session;
 		if (!sessionToAbort) return Promise.resolve();
@@ -3943,6 +4003,61 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 		try { (sessionToDispose as any).dispose?.(); } catch {}
 	};
 
+	// Community #14 slice 1: the client is gone but the turn ran to its end —
+	// land the outcome into the thread file server-side, the same write shape
+	// scheduled background execution uses. The client may have persisted a
+	// partial tail of this very answer before the drop (debounced persist /
+	// leave save); the landed text carries the WHOLE turn, so trailing
+	// assistant items after the last user item are superseded, not additional.
+	// Parked as standby so the launcher offers Resume, like a scheduled run.
+	const landDetachedTurnOutcome = (turnId: string, terminalReason: PersistentWebTurnTerminalReason): void => {
+		const current = getPersistentAgentThread(persistentAgentIdForSession, persistentConversationId);
+		if (!current || current.state === "closed") return;
+		const finalText = turnTrace.finalAssistantText.trim();
+		const safeTurnId = turnId.replace(/[^a-zA-Z0-9_-]+/g, "_").slice(0, 96);
+		let items = [...(current.items ?? [])];
+		if (finalText) {
+			let lastUserIndex = -1;
+			for (let i = items.length - 1; i >= 0; i--) {
+				if ((items[i] as any)?.kind === "user") { lastUserIndex = i; break; }
+			}
+			items = items.filter((item, index) => !(index > lastUserIndex && (item as any)?.kind === "assistant"));
+			items.push({ kind: "assistant", id: `detached-assistant-${safeTurnId}`, text: finalText, streaming: false });
+			// A partial that landed because the turn FAILED (provider error, or
+			// the detach watchdog hit its deadline) must not read as a finished
+			// answer to someone opening the room later.
+			if (terminalReason === "failed") {
+				items.push({ kind: "system", id: `detached-partial-${safeTurnId}`, text: "This response could not be fully finished after you left the room. Send the message again if something is missing.", level: "error" });
+			}
+		} else if (terminalReason === "failed") {
+			items.push({ kind: "system", id: `detached-failure-${safeTurnId}`, text: "The response could not be finished after you left the room. Send the message again to retry.", level: "error" });
+		}
+		writePersistentAgentThread(persistentAgentIdForSession, persistentConversationId, {
+			state: "standby",
+			origin: current.origin,
+			model: current.model,
+			items,
+		}, {
+			// The model already ran and its tokens are spent; this write only
+			// lands the paid answer under the thread's existing lock (same
+			// reasoning as the scheduled-background landing write).
+			allowInactiveProfileModel: true,
+		});
+		// Slice 3: nobody was connected to see this landing — record the unseen
+		// marker (away-notice shape) so a fresh session's Home can still badge
+		// the room. Cleared when a session next binds to the room. Best-effort:
+		// the landed answer above must never be lost to marker bookkeeping.
+		try {
+			recordPersistentAgentUnseenLandedAnswer(persistentAgentIdForSession, {
+				threadId: persistentConversationId,
+				turnId: safeTurnId,
+				terminalReason: terminalReason === "completed" ? "completed" : "failed",
+			});
+		} catch (error) {
+			app.log.warn({ err: error }, "failed to record unseen landed-answer marker");
+		}
+	};
+
 	// Expose this live session to lifecycle endpoints (Memento force-close).
 	const liveSessionHandle: PersistentRoomLiveSession = {
 		connectionId,
@@ -3953,6 +4068,9 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 	};
 	persistentRoomLiveSessions.set(persistentAgentIdForSession, liveSessionHandle);
 	socket.on("close", () => {
+		// A detached cooking turn keeps its handle registered so Memento can
+		// still quiesce it; the prompt handler unregisters after landing.
+		if (turnKeepsCookingOnClose()) return;
 		if (persistentRoomLiveSessions.get(persistentAgentIdForSession) === liveSessionHandle) persistentRoomLiveSessions.delete(persistentAgentIdForSession);
 	});
 	const nextPromptDiagnosticsTurnId = (conversationId: string): string => {
@@ -4810,7 +4928,9 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 				autoDispatchBudgetRemaining = 0;
 				if (!activePersistentWebTurn?.terminalReason) setActivePersistentWebTurnTerminalReason("completed");
 				await flushSessionEvents();
-				if (session === sessionAtPromptStart) {
+				// A detached turn skips the auto-summarize recovery prompt: it is a
+				// rescue for a user watching a thin answer, and nobody is watching.
+				if (!detachedFromClient && session === sessionAtPromptStart) {
 					await maybeAutoSummarizeToolTurn();
 				}
 			} catch (e) {
@@ -4827,7 +4947,28 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 					const turn = activePersistentWebTurn?.turnId === persistentTurnId ? activePersistentWebTurn : null;
 					if (turn) turn.promptSettled = true;
 					try { finishPersistentAgentTurn(persistentAgentIdForSession, persistentConversationId, { turnId: persistentTurnId, terminalReason: turn?.terminalReason ?? "failed" }); } catch {}
+					// Land the detached outcome right after the turn-state finish:
+					// writePersistentAgentThread asserts no turn is in flight (the
+					// same order scheduled background execution uses). New
+					// connections still cannot slip in between — the acquire path
+					// refuses while this room is in detachedCookingRooms.
+					if (detachedFromClient) {
+						try { landDetachedTurnOutcome(persistentTurnId, turn?.terminalReason ?? "failed"); } catch (error) { app.log.warn({ err: error }, "failed to land detached persistent-room turn outcome"); }
+					}
 					if (activePersistentWebTurn?.turnId === persistentTurnId) activePersistentWebTurn = null;
+					// Detached settle: nobody owns this connection anymore — release
+					// the room lock the close handler deliberately kept, unregister
+					// the live-session handle and dispose the session.
+					if (detachedFromClient) {
+						clearDetachedTurnDeadline();
+						detachedCookingRooms.delete(persistentAgentIdForSession);
+						if (persistentRoomLiveSessions.get(persistentAgentIdForSession) === liveSessionHandle) persistentRoomLiveSessions.delete(persistentAgentIdForSession);
+						releaseRoomLockNow();
+						if (!sessionDisposed) {
+							sessionDisposed = true;
+							try { (session as any)?.dispose?.(); } catch {}
+						}
+					}
 				}
 			}
 		} else if (msg.type === "abort") {
@@ -5045,6 +5186,37 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 		// endings nobody hears finalize with noticed:false and arrive as
 		// away-notices on the next connect.
 		unbindSpecialistSink(persistentAgentIdForSession, sendChecked);
+		// Community #14 slice 1: a disconnect no longer cancels an in-flight
+		// turn. The session keeps cooking with the room lock held; pending and
+		// future interactive dialogs reject the way scheduled background work
+		// does, and the prompt handler lands the finished answer into the
+		// thread file, then releases the lock and disposes the session.
+		if (turnKeepsCookingOnClose()) {
+			detachedFromClient = true;
+			detachedCookingRooms.add(persistentAgentIdForSession);
+			uiContext.detach("The user left the room while this response was being written, so interactive questions cannot be answered right now. Proceed with your best judgment and finish the task; anything that strictly needs the user's approval must be left undone and mentioned in your answer.");
+			// Watchdog: nobody is watching this turn anymore, so a hung
+			// provider stream would hold the room lock and refuse every new
+			// connection forever. Past the deadline the turn is aborted the
+			// way a user stop aborts it — with terminal reason `failed`, so
+			// the landing write parks the partial (or the failure note) and
+			// the settle path releases the lock and disposes the session. The
+			// callback re-checks the live turn state so a timer that lost the
+			// race against a normal settle does nothing.
+			const detachedTurnId = activePersistentWebTurn?.turnId;
+			clearDetachedTurnDeadline();
+			detachedTurnDeadlineTimer = setTimeout(() => {
+				detachedTurnDeadlineTimer = null;
+				const turn = activePersistentWebTurn;
+				if (!turn || turn.turnId !== detachedTurnId || turn.promptSettled || turn.terminalReason) return;
+				app.log.warn({ agentId: persistentAgentIdForSession, turnId: detachedTurnId, deadlineMs: DETACHED_TURN_DEADLINE_MS }, "detached turn exceeded its deadline; aborting");
+				void abortActivePersistentWebTurn("failed").catch((error) => {
+					app.log.warn({ err: error }, "detached-turn deadline abort failed");
+				});
+			}, DETACHED_TURN_DEADLINE_MS);
+			app.log.info({ agentId: persistentAgentIdForSession }, "ws client disconnected mid-turn; finishing the response in the background");
+			return;
+		}
 		void disposeSessionAfterAbortIfNeeded("disconnect_cancelled").catch((error) => {
 			app.log.warn({ err: error }, "persistent-room disconnect cleanup failed");
 			if (!sessionDisposed && session) {

@@ -50,7 +50,7 @@ function highlightMention(text: string, name: string): ReactNode {
 	return parts.length > 0 ? parts : text;
 }
 
-export function RoomSettingsModal({ status, onClose, onArchive, onRefresh, onMementoApplied }: { status: PersistentAgentStatus; onClose: () => void; onArchive: (agentId: PersistentAgentId, confirmation: string) => Promise<PersistentAgentArchiveResponse>; onRefresh: () => void; onMementoApplied?: () => void }) {
+export function RoomSettingsModal({ status, onClose, onArchive, onRefresh, onMementoApplied, onMementoForget }: { status: PersistentAgentStatus; onClose: () => void; onArchive: (agentId: PersistentAgentId, confirmation: string) => Promise<PersistentAgentArchiveResponse>; onRefresh: () => void; onMementoApplied?: () => void; onMementoForget?: () => void }) {
 	const workspaceDirtyRef = useRef(false);
 	const handleWorkspaceDirtyChange = useCallback((dirty: boolean) => { workspaceDirtyRef.current = dirty; }, []);
 	const [pane, setPane] = useState<SettingsPane>("workspace");
@@ -216,7 +216,7 @@ export function RoomSettingsModal({ status, onClose, onArchive, onRefresh, onMem
 							<RoomScheduledTasksSection status={status} />
 						</section>
 						<section className="room-settings-section" hidden={pane !== "session"}>
-							<RoomSessionSection status={status} onRefresh={onRefresh} onMementoApplied={onMementoApplied} />
+							<RoomSessionSection status={status} onRefresh={onRefresh} onMementoApplied={onMementoApplied} onMementoForget={onMementoForget} />
 						</section>
 						<section className="room-settings-section" hidden={pane !== "danger"}>
 							<RoomDangerZone status={status} onArchive={archiveAndClose} />

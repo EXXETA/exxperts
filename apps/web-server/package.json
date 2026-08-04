@@ -37,6 +37,7 @@
     "smoke:cli-persistent-room-parity": "tsx scripts/cli-persistent-room-parity-smoke.ts",
     "smoke:persistent-agent-instance": "tsx scripts/persistent-agent-instance-smoke.ts",
     "smoke:persistent-agent-active-turn-guard": "tsx scripts/persistent-agent-active-turn-guard-smoke.ts",
+    "smoke:persistent-room-detached-turn": "tsx scripts/persistent-room-detached-turn-smoke.ts",
     "smoke:persistent-agent-boundary-model-lock": "tsx scripts/persistent-agent-boundary-model-lock-smoke.ts",
     "smoke:persistent-room-schedule-registry": "tsx scripts/persistent-room-schedule-registry-smoke.ts",
     "smoke:persistent-room-schedule-status": "tsx scripts/persistent-room-schedule-status-smoke.ts",

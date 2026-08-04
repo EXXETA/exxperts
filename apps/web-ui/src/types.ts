@@ -1046,6 +1046,8 @@ export interface PersistentAgentStatus {
 	root: string;
 	runtime: PersistentAgentRuntimeState;
 	activeThread: PersistentAgentActiveThreadSummary | null;
+	/** Community #14 slice 3: a detached turn landed its answer while no session was connected; the server clears it when a session next binds to the room. */
+	unseenLandedAnswer?: { threadId: string; turnId: string; terminalReason: "completed" | "failed"; landedAt: number };
 	/** Set when this room is currently open or busy in another surface (CLI, browser, or scheduled background work). */
 	activeLock?: { surface: "cli" | "web" | "scheduler" | string; acquiredAt: number } | null;
 	displayName?: string;

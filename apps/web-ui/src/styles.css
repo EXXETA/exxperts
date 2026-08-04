@@ -2378,6 +2378,7 @@ strong, b { font-weight: 700; }
 .persistent-agent-badge.error,
 .persistent-agent-badge.mem-hard { color: var(--error); background: color-mix(in srgb, var(--error) 10%, transparent); border-color: color-mix(in srgb, var(--error) 24%, transparent); }
 .persistent-agent-badge.locked { color: var(--warning); background: color-mix(in srgb, var(--warning) 10%, transparent); border-color: color-mix(in srgb, var(--warning) 22%, transparent); }
+.persistent-agent-badge.bg-working { color: var(--fg-soft); background: color-mix(in srgb, var(--fg-soft) 9%, transparent); }
 .persistent-agent-error-summary {
 	border: 1px solid color-mix(in srgb, var(--warning) 30%, var(--border-soft));
 	border-radius: var(--exx-radius-control);
@@ -9577,6 +9578,22 @@ label.rs-row {
 	padding-bottom: 10px;
 	pointer-events: none; /* the gaps stay click-through; the toasts re-enable it */
 }
+/* Home surface for the background-answer toast (community #14 slice 3): the
+   launcher has no composer to anchor the stack to, so it floats at the
+   viewport's bottom centre instead. z 30 keeps it with the popover family,
+   above in-flow content and the desktop shell's drag strip (z 20). */
+.launcher-toasts {
+	position: fixed;
+	bottom: 24px;
+	left: 50%;
+	transform: translateX(-50%);
+	width: min(560px, calc(100vw - 32px));
+	z-index: 30;
+}
+.launcher-toasts .composer-toasts {
+	position: static;
+	padding-bottom: 0;
+}
 .room-toast {
 	pointer-events: auto;
 	display: flex;
@@ -10737,10 +10754,15 @@ html.desktop-app-mac .product-sidebar-header img {
 	-webkit-user-drag: none;
 }
 
-/* Desktop app, mac: draggable strip across the whole window top, doubling as
-   the browser-parity breathing room (browser chrome pushes content down; the
-   app has none). The strip overlays only padding: every content wrapper
-   below clears it, so nothing interactive can sit underneath. */
+/* Desktop app, mac: draggable strip across the whole window top. The landing
+   pages clear it with padding (below, their heroes breathe anyway), but the
+   chat column, the right pane and the overlays sit flush at the top — those
+   surfaces layer ABOVE the strip instead, and their interactive pieces punch
+   precise no-drag holes (drag regions follow paint order: whatever paints
+   last at a point decides). z 20 slots into the deliberate gap in the app's
+   scale: in-flow content tops out at 6, composer-anchored popovers start at
+   30, overlays run 40-85 — so the strip covers plain page background yet
+   stays under everything that must stay clickable. */
 .desktop-drag-strip { display: none; }
 html.desktop-app-mac .desktop-drag-strip {
 	display: block;
@@ -10750,10 +10772,96 @@ html.desktop-app-mac .desktop-drag-strip {
 	right: 0;
 	height: 48px;
 	-webkit-app-region: drag;
-	z-index: 2000;
+	z-index: 20;
 }
 html.desktop-app-mac .landing { padding-top: 60px; }
-html.desktop-app-mac .main { padding-top: 48px; }
+/* Chat column: the topbar sits flush like the pane header beside it — same
+   lift over the strip, same bar-drags/controls-click split. Only the bar is
+   lifted (not the whole column): .main must not become a stacking context,
+   its fixed overlays and popovers keep their place on the app scale. */
+html.desktop-app-mac .topbar {
+	position: relative;
+	z-index: 21;
+	-webkit-app-region: drag;
+	/* The topbar's one text line sits level with the pane header's TITLE
+	   line (the filename row, the dominant one) — not its small kicker.
+	   The pane head keeps the shared 14px breath; on top of it the topbar
+	   adds the pane head's kicker-to-title drop (kicker line + 2px gap +
+	   half the line-height difference ≈ 22px), so with align-items:center
+	   the "TALKING TO <room>" row lands on the filename's center. */
+	padding-top: calc(8px + 14px + 22px);
+}
+html.desktop-app-mac .topbar a,
+html.desktop-app-mac .topbar button,
+html.desktop-app-mac .topbar input {
+	-webkit-app-region: no-drag;
+}
+/* Collapsed sidebar: the chat column becomes the window's left edge and the
+   inset traffic lights (x 18, ~52px wide) would sit on the TALKING TO label;
+   step the topbar's content past them. The browser's collapsed clearance for
+   the floating toggle stays a separate :not(.desktop-app-mac) rule below. */
+html.desktop-app-mac.sidebar-collapsed .topbar {
+	padding-left: 84px;
+}
+/* Maintain workspaces (chooser, Learn, Review Memory) are full-page
+   takeovers with no sidebar: their header carries the exit button in the top
+   48px, so without the lift the strip eats its clicks. Same pattern: header
+   above the strip, bar drags, controls opt out; content steps past the
+   traffic lights, which otherwise sit on the kicker line. */
+html.desktop-app-mac .absorb-workspace-header {
+	position: relative;
+	z-index: 21;
+	-webkit-app-region: drag;
+	padding-left: 84px;
+	/* Level with the topbar's breathing inset (additive over base). */
+	padding-top: calc(18px + 14px);
+}
+html.desktop-app-mac .absorb-workspace-header a,
+html.desktop-app-mac .absorb-workspace-header button,
+html.desktop-app-mac .absorb-workspace-header input {
+	-webkit-app-region: no-drag;
+}
+/* Right pane (artifact/file viewer, task run view, approval preview): lift
+   the pane above the strip so its header paints last, then mirror the
+   sidebar-header pattern — the header bar itself drags the window, its
+   controls opt back out. Empty header stretches stay grabbable. */
+html.desktop-app-mac .workbench > .artifact-viewer,
+html.desktop-app-mac .workbench > .preview-pane {
+	position: relative;
+	z-index: 21;
+}
+html.desktop-app-mac .artifact-viewer-head,
+html.desktop-app-mac .preview-head {
+	-webkit-app-region: drag;
+	/* Level with the topbar's breathing inset (additive over base). */
+	padding-top: calc(var(--exx-sp-3) + 14px);
+}
+html.desktop-app-mac .artifact-viewer-head a,
+html.desktop-app-mac .artifact-viewer-head button,
+html.desktop-app-mac .artifact-viewer-head input,
+html.desktop-app-mac .preview-head a,
+html.desktop-app-mac .preview-head button,
+html.desktop-app-mac .preview-head input {
+	-webkit-app-region: no-drag;
+}
+/* Full-screen overlays already paint above the strip (z 40-85), but paint
+   order alone does not clear a drag region — only an explicit no-drag does.
+   Without it, a modal head or a close button inside the top 48px would move
+   the window instead of clicking (bites on short windows with tall modals).
+   The whole overlay goes no-drag: while one is open the window drags by its
+   title-bar inset only, and the backdrop stays a click-to-dismiss surface. */
+html.desktop-app-mac .checkpoint-preview-backdrop,
+html.desktop-app-mac .mermaid-viewer-overlay,
+html.desktop-app-mac .creator-overlay,
+html.desktop-app-mac .agent-details-overlay,
+html.desktop-app-mac .room-settings-overlay,
+html.desktop-app-mac .help-overlay,
+html.desktop-app-mac .rooms-guide-overlay,
+html.desktop-app-mac .skill-upload-overlay,
+html.desktop-app-mac .ai-profile-menu-backdrop,
+html.desktop-app-mac .mem-fullscreen {
+	-webkit-app-region: no-drag;
+}
 
 /* Checkpoint modal format pass (2026-07-23): the proposal modal family reads
    like the room-settings dialogs - compact left-aligned header, meta and the
@@ -10913,7 +11021,8 @@ html.sidebar-collapsed .product-sidebar {
 	display: none;
 }
 /* Collapsed in the browser, the content edge moves under the fixed toggle;
-   clear it (the desktop app's top strip already provides the clearance). */
+   clear it (the desktop app gets its own traffic-light clearance in the
+   drag-strip block above). */
 html.sidebar-collapsed:not(.desktop-app-mac) .topbar {
 	padding-left: 52px;
 }

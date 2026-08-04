@@ -26,7 +26,7 @@ function sessionModelLabel(status: PersistentAgentStatus): string | null {
 	return modelDisplayName({ model: model.model, modelLabel: model.label, provider: model.provider }) || model.model;
 }
 
-export function RoomSessionSection({ status, onRefresh, onMementoApplied }: { status: PersistentAgentStatus; onRefresh: () => void; onMementoApplied?: () => void }) {
+export function RoomSessionSection({ status, onRefresh, onMementoApplied, onMementoForget }: { status: PersistentAgentStatus; onRefresh: () => void; onMementoApplied?: () => void; onMementoForget?: () => void }) {
 	const [confirming, setConfirming] = useState(false);
 	const [submitting, setSubmitting] = useState(false);
 	const [message, setMessage] = useState<string | null>(null);
@@ -47,6 +47,9 @@ export function RoomSessionSection({ status, onRefresh, onMementoApplied }: { st
 		setMessage(null);
 		try {
 			await applyMemento(status.id, activeThread.threadId);
+			// A memento is a forget flow wherever it is applied from: any parked
+			// draft for this room dies with the conversation.
+			onMementoForget?.();
 			setConfirming(false);
 			// From inside the open room the caller leaves the room instead: the
 			// conversation this view is bound to no longer exists server-side, so

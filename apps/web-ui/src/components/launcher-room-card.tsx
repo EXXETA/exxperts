@@ -58,9 +58,11 @@ export type PersistentAgentCardProps = {
 	onResume: (status: PersistentAgentStatus) => Promise<void> | void;
 	onMaintain: (target: LauncherRoomMaintainTarget) => void;
 	onOpenSettings?: () => void;
+	/** A response finished in this room after the user left it (community #14). */
+	backgroundReady?: boolean;
 };
 
-export function PersistentAgentCard({ status, modelStatus, aiProfileStatus, thread, live, duplicateDisplayName = false, onEnter, onResume, onMaintain, onOpenSettings }: PersistentAgentCardProps) {
+export function PersistentAgentCard({ status, modelStatus, aiProfileStatus, thread, live, duplicateDisplayName = false, onEnter, onResume, onMaintain, onOpenSettings, backgroundReady = false }: PersistentAgentCardProps) {
 	const [entering, setEntering] = useState(false);
 	const [expanded, setExpanded] = useState(false);
 	const [draftModel, setDraftModel] = useState("");
@@ -130,9 +132,16 @@ export function PersistentAgentCard({ status, modelStatus, aiProfileStatus, thre
 	const lockedByScheduler = lockSurface === "scheduler";
 	const lockWhere = lockedByScheduler ? "scheduled background work" : lockSurface === "cli" ? "the CLI" : "another window";
 	const lockShort = lockedByScheduler ? "working" : lockSurface === "cli" ? "in CLI" : "in app";
-	const lockNote = lockedByScheduler
-		? "This room is working on a scheduled background task. Wait for it to finish before opening it. A room can only be active in one place at a time."
-		: `This room is open in ${lockWhere}. Close it there to use it here. A room can only be active in one place at a time.`;
+	// A web lock plus a running turn means the response is still being written
+	// (left mid-generation, or live in another window) — either way it lands in
+	// the conversation, so the badge and note say that instead of "open in
+	// another browser session".
+	const answeringInBackground = lockedElsewhere && lockSurface === "web" && !!status?.activeThread?.working;
+	const lockNote = answeringInBackground
+		? "This room is still writing a response. It is saved into the conversation when finished; open the room again then. A room can only be active in one place at a time."
+		: lockedByScheduler
+			? "This room is working on a scheduled background task. Wait for it to finish before opening it. A room can only be active in one place at a time."
+			: `This room is open in ${lockWhere}. Close it there to use it here. A room can only be active in one place at a time.`;
 	const canEnter = !!status && state === "ready" && !preparedBoundaryThread && roomModels.length > 0 && !!draftModel && !lockedElsewhere;
 	const canMaintain = !!status && status.exists && !hasActiveThread && !lockedElsewhere && (status.status === "ready" || status.status === "needs_absorb");
 	// Disabled tooltips name the actual blocker and the way out; "resting" is
@@ -168,9 +177,13 @@ export function PersistentAgentCard({ status, modelStatus, aiProfileStatus, thre
 						</div>
 					</div>
 					<div className="persistent-agent-header-end">
-						{lockedElsewhere
-							? <span className="persistent-agent-badge locked" title={lockNote}>🔒 {lockShort}</span>
-							: showBadge && <span className={`persistent-agent-badge ${badgeClass}`}>{badgeLabel}</span>}
+						{answeringInBackground
+							? <span className="persistent-agent-badge bg-working" title={lockNote}>answering</span>
+							: lockedElsewhere
+								? <span className="persistent-agent-badge locked" title={lockNote}>🔒 {lockShort}</span>
+								: backgroundReady
+									? <span className="persistent-agent-badge ready" title="A response finished after you left this room. Resume to read it.">response ready</span>
+									: showBadge && <span className={`persistent-agent-badge ${badgeClass}`}>{badgeLabel}</span>}
 						{status?.exists && onOpenSettings && <button className="card-gear-btn" aria-label="Room settings" title="Room settings" onClick={onOpenSettings}>⚙</button>}
 					</div>
 				</div>

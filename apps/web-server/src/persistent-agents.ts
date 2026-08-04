@@ -974,6 +974,8 @@ export interface PersistentAgentStatus {
 	root: string;
 	runtime: PersistentAgentRuntimeState;
 	activeThread: PersistentAgentActiveThreadSummary | null;
+	/** Community #14 slice 3: a detached turn landed while nobody was connected; cleared when a session next binds to the room. */
+	unseenLandedAnswer?: PersistentAgentUnseenLandedAnswer;
 	displayName?: string;
 	description?: string;
 	role?: string;
@@ -1253,6 +1255,10 @@ export class PersistentAgentInstance {
 
 	runtimeThreadsDir(): string {
 		return path.join(this.runtimeDir(), "threads");
+	}
+
+	runtimeUnseenLandedAnswerPath(): string {
+		return path.join(this.runtimeDir(), "unseen-landed-answer.json");
 	}
 
 	runtimePiSessionsDir(): string {
@@ -1834,6 +1840,48 @@ export function getPersistentAgentRuntimeState(agentIdRaw: string): PersistentAg
 	return normalizeRuntimeState(readJson(file), instance.agentId);
 }
 
+// Community #14 slice 3: a detached turn landed its answer while no client was
+// watching. Same shape as the specialist away-notice — an unnoticed ending
+// recorded at landing time, surfaced on the room status, and cleared when a
+// session next binds to the room (the user is about to see the landed answer
+// in the transcript). File-backed so a fresh app load still badges the room.
+export interface PersistentAgentUnseenLandedAnswer {
+	threadId: string;
+	turnId: string;
+	terminalReason: "completed" | "failed";
+	landedAt: number;
+}
+
+export function recordPersistentAgentUnseenLandedAnswer(agentIdRaw: string, marker: { threadId: string; turnId: string; terminalReason: "completed" | "failed" }): void {
+	const instance = createPersistentAgentInstance(agentIdRaw);
+	const threadId = safeRuntimeThreadId(marker.threadId);
+	if (!threadId) throw new Error("invalid persistent-agent thread id");
+	const turnId = String(marker.turnId ?? "").trim();
+	if (!turnId) throw new Error("invalid persistent-agent turn id");
+	const file = instance.runtimeUnseenLandedAnswerPath();
+	ensureDir(path.dirname(file));
+	const record: PersistentAgentUnseenLandedAnswer = { threadId, turnId, terminalReason: marker.terminalReason, landedAt: Date.now() };
+	writeFileAtomic(file, JSON.stringify(record, null, 2) + "\n");
+}
+
+export function clearPersistentAgentUnseenLandedAnswer(agentIdRaw: string): void {
+	const instance = createPersistentAgentInstance(agentIdRaw);
+	try { fs.rmSync(instance.runtimeUnseenLandedAnswerPath(), { force: true }); } catch {}
+}
+
+export function getPersistentAgentUnseenLandedAnswer(agentIdRaw: string): PersistentAgentUnseenLandedAnswer | null {
+	const instance = createPersistentAgentInstance(agentIdRaw);
+	const file = instance.runtimeUnseenLandedAnswerPath();
+	if (!fs.existsSync(file)) return null;
+	const raw = readJson(file) as Partial<PersistentAgentUnseenLandedAnswer> | null;
+	const threadId = safeRuntimeThreadId(raw?.threadId);
+	const turnId = typeof raw?.turnId === "string" && raw.turnId.trim() ? raw.turnId.trim() : null;
+	const terminalReason = raw?.terminalReason === "completed" || raw?.terminalReason === "failed" ? raw.terminalReason : null;
+	if (!threadId || !turnId || !terminalReason) return null;
+	const landedAt = Number.isFinite(raw?.landedAt) && Number(raw?.landedAt) > 0 ? Math.floor(Number(raw?.landedAt)) : 0;
+	return { threadId, turnId, terminalReason, landedAt };
+}
+
 export function isPersistentAgentArchived(value: Partial<AgentJson> | PersistentAgentStatus | null | undefined): boolean {
 	const archivedAt = Number((value as any)?.archivedAt ?? 0);
 	return Number.isFinite(archivedAt) && archivedAt > 0;
@@ -1897,6 +1945,7 @@ export function archivePersistentAgent(agentIdRaw: string, options: PersistentAg
 	};
 	ensureDir(path.dirname(instance.runtimeStatePath()));
 	writePersistentAgentRuntimeState(instance.agentId, { state: "idle" });
+	clearPersistentAgentUnseenLandedAnswer(instance.agentId);
 	writeFileAtomic(agentJsonPath, JSON.stringify(updatedMeta, null, 2) + "\n");
 	return { agentId: instance.agentId, archivedAt, status: "archived" };
 }
@@ -4025,6 +4074,16 @@ export function getPersistentAgentStatus(agentIdRaw: string): PersistentAgentSta
 	const archivedBy = typeof meta?.archivedBy === "string" ? meta.archivedBy : undefined;
 	const archivedReason = typeof meta?.archivedReason === "string" ? meta.archivedReason : undefined;
 	const runtime = getPersistentAgentRuntimeState(instance.agentId);
+	let unseenLandedAnswer = getPersistentAgentUnseenLandedAnswer(instance.agentId);
+	// Self-heal: the marker is cleared by a web bind, but other surfaces read
+	// the answer without one (CLI bind, a thread retired by checkpoint from
+	// another door). A marker whose thread is no longer the room's active
+	// thread points at a conversation nobody can be "about to see" — drop it
+	// here so a file-backed note cannot badge a room forever.
+	if (unseenLandedAnswer && unseenLandedAnswer.threadId !== (runtime.activeThreadId ?? "")) {
+		clearPersistentAgentUnseenLandedAnswer(instance.agentId);
+		unseenLandedAnswer = null;
+	}
 	return {
 		id: instance.agentId,
 		exists: true,
@@ -4032,6 +4091,7 @@ export function getPersistentAgentStatus(agentIdRaw: string): PersistentAgentSta
 		root,
 		runtime,
 		activeThread: activeThreadSummaryForRuntime(instance.agentId, runtime),
+		...(unseenLandedAnswer ? { unseenLandedAnswer } : {}),
 		displayName: meta?.displayName,
 		description: meta?.description,
 		role: meta?.role,
@@ -4806,6 +4866,9 @@ export function writePersistentAgentMementoBoundary(agentIdRaw: string, conversa
 			closedThread = closePersistentAgentThreadForMemento(instance.agentId, oldThread.threadId, mementoId, now.getTime());
 		}
 	}
+	// The forgotten conversation takes its unseen-landed-answer marker with it:
+	// a fresh-session badge must not point at a transcript Memento just closed.
+	clearPersistentAgentUnseenLandedAnswer(instance.agentId);
 	const runtimeBoundary: PersistentAgentMementoRuntimeBoundary = {
 		closedThreadId: closedThread.threadId,
 		closedReason: "memento",

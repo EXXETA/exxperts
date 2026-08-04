@@ -24,6 +24,15 @@ type Sender = (msg: unknown) => void;
 export interface WebUiContext extends ExtensionUIContext {
 	/** Resolve a pending UI request when the client responds. */
 	resolveResponse(id: string, value: any): void;
+	/**
+	 * Flip the bridge into headless mode: nobody is on the other end anymore
+	 * (the client disconnected while a turn keeps running). Every pending
+	 * dialog rejects with `message` and every future dialog rejects
+	 * immediately, the same contract as the scheduled-background headless UI
+	 * context — an unanswerable question must fail the asking tool, not hang
+	 * the turn forever.
+	 */
+	detach(message: string): void;
 }
 
 // Extensions style status/notification text via `ctx.ui.theme` (a required
@@ -42,14 +51,19 @@ const passthroughTheme = {
 };
 
 export function createWebUiContext(send: Sender): WebUiContext {
-	const pending = new Map<string, (v: any) => void>();
+	const pending = new Map<string, { resolve: (v: any) => void; reject: (e: Error) => void }>();
+	let detachedMessage: string | null = null;
 	let nextId = 1;
 	const newId = () => `ui_${Date.now()}_${nextId++}`;
 
 	const ask = <T>(payload: Record<string, unknown>): Promise<T> =>
-		new Promise<T>((resolve) => {
+		new Promise<T>((resolve, reject) => {
+			if (detachedMessage !== null) {
+				reject(new Error(detachedMessage));
+				return;
+			}
 			const id = newId();
-			pending.set(id, resolve as any);
+			pending.set(id, { resolve: resolve as any, reject });
 			send({ type: "ui_request", id, ...payload });
 		});
 
@@ -99,7 +113,16 @@ export function createWebUiContext(send: Sender): WebUiContext {
 			const r = pending.get(id);
 			if (!r) return;
 			pending.delete(id);
-			r(value);
+			r.resolve(value);
+		},
+
+		// Internal — called by the WS close handler when a turn detaches.
+		detach(message: string) {
+			detachedMessage = message;
+			for (const [id, r] of pending) {
+				pending.delete(id);
+				r.reject(new Error(message));
+			}
 		},
 	};
 

@@ -885,7 +885,7 @@ function AiProfileSwitcherSection({ status, onSelect, onRefresh, onRefreshAuth, 
 	);
 }
 
-function Landing({ onOpenAiSetup, onOpenDashboard, onOpenConnectors, onOpenMemory, onOpenSkills, onOpenPersistentAgent, onResumePersistentAgent, onMaintainPersistentAgent, onCreatePersistentAgent, onArchiveRoom, modelStatus, persistentAgentStatuses, persistentThread, persistentLive, persistentResumeError, onRefreshPersistentAgent, theme, onToggleTheme, connected, aiProfileStatus: aiProfileSelection, onSelectAiProfile, onRefreshAiProfile, standbyLockedModels }: { onOpenAiSetup: () => void; onOpenDashboard: () => void; onOpenConnectors: () => void; onOpenMemory: () => void; onOpenSkills: () => void; onOpenPersistentAgent: (status: PersistentAgentStatus, model: WebChatModelOption) => Promise<void> | void; onResumePersistentAgent: (status: PersistentAgentStatus) => Promise<void> | void; onMaintainPersistentAgent: (target: MaintainTarget) => void; onCreatePersistentAgent: (request: PersistentAgentCreateRequest) => Promise<void>; onArchiveRoom: (agentId: PersistentAgentId, confirmation: string) => Promise<PersistentAgentArchiveResponse>; modelStatus: WebChatModelStatus | null; persistentAgentStatuses: PersistentAgentStatus[]; persistentThread: PersistentAgentThread | null; persistentLive: boolean; persistentResumeError: string | null; onRefreshPersistentAgent: () => void; theme: ThemeMode; onToggleTheme: () => void; connected: boolean; aiProfileStatus: PersistentAgentAiProfileSelectionStatus | null; onSelectAiProfile: (profileId: string) => Promise<void>; onRefreshAiProfile: () => void; standbyLockedModels?: Array<{ provider: string; model: string }> }) {
+function Landing({ onOpenAiSetup, onOpenDashboard, onOpenConnectors, onOpenMemory, onOpenSkills, onOpenPersistentAgent, onResumePersistentAgent, onMaintainPersistentAgent, onCreatePersistentAgent, onArchiveRoom, onMementoForget, modelStatus, persistentAgentStatuses, persistentThread, persistentLive, persistentResumeError, onRefreshPersistentAgent, theme, onToggleTheme, connected, aiProfileStatus: aiProfileSelection, onSelectAiProfile, onRefreshAiProfile, standbyLockedModels, backgroundReadyRooms }: { onOpenAiSetup: () => void; onOpenDashboard: () => void; onOpenConnectors: () => void; onOpenMemory: () => void; onOpenSkills: () => void; onOpenPersistentAgent: (status: PersistentAgentStatus, model: WebChatModelOption) => Promise<void> | void; onResumePersistentAgent: (status: PersistentAgentStatus) => Promise<void> | void; onMaintainPersistentAgent: (target: MaintainTarget) => void; onCreatePersistentAgent: (request: PersistentAgentCreateRequest) => Promise<void>; onArchiveRoom: (agentId: PersistentAgentId, confirmation: string) => Promise<PersistentAgentArchiveResponse>; onMementoForget: (agentId: PersistentAgentId) => void; modelStatus: WebChatModelStatus | null; persistentAgentStatuses: PersistentAgentStatus[]; persistentThread: PersistentAgentThread | null; persistentLive: boolean; persistentResumeError: string | null; onRefreshPersistentAgent: () => void; theme: ThemeMode; onToggleTheme: () => void; connected: boolean; aiProfileStatus: PersistentAgentAiProfileSelectionStatus | null; onSelectAiProfile: (profileId: string) => Promise<void>; onRefreshAiProfile: () => void; standbyLockedModels?: Array<{ provider: string; model: string }>; backgroundReadyRooms?: ReadonlySet<PersistentAgentId> }) {
 	const [createOpen, setCreateOpen] = useState(false);
 	useEscapeKey(() => setCreateOpen(false), createOpen);
 	const [settingsRoomId, setSettingsRoomId] = useState<PersistentAgentId | null>(null);
@@ -940,10 +940,10 @@ function Landing({ onOpenAiSetup, onOpenDashboard, onOpenConnectors, onOpenMemor
 			</section>
 			<section className={`landing-grid${roomStatuses.length === 0 ? " landing-grid--empty" : ""}`} aria-label="exxperts entry points">
 				{firstRoomStatus && (
-					<PersistentAgentCard key={firstRoomStatus.id} status={firstRoomStatus} modelStatus={modelStatus} aiProfileStatus={aiProfileSelection} thread={persistentThread?.agentId === firstRoomStatus.id ? persistentThread : null} live={persistentLive && persistentThread?.agentId === firstRoomStatus.id} duplicateDisplayName={hasDuplicateDisplayName(firstRoomStatus)} onEnter={onOpenPersistentAgent} onResume={onResumePersistentAgent} onMaintain={onMaintainPersistentAgent} onOpenSettings={() => openRoomSettings(firstRoomStatus)} />
+					<PersistentAgentCard key={firstRoomStatus.id} status={firstRoomStatus} modelStatus={modelStatus} aiProfileStatus={aiProfileSelection} thread={persistentThread?.agentId === firstRoomStatus.id ? persistentThread : null} live={persistentLive && persistentThread?.agentId === firstRoomStatus.id} duplicateDisplayName={hasDuplicateDisplayName(firstRoomStatus)} backgroundReady={backgroundReadyRooms?.has(firstRoomStatus.id) ?? false} onEnter={onOpenPersistentAgent} onResume={onResumePersistentAgent} onMaintain={onMaintainPersistentAgent} onOpenSettings={() => openRoomSettings(firstRoomStatus)} />
 				)}
 				{additionalRoomStatuses.map((status) => (
-					<PersistentAgentCard key={status.id} status={status} modelStatus={modelStatus} aiProfileStatus={aiProfileSelection} thread={persistentThread?.agentId === status.id ? persistentThread : null} live={persistentLive && persistentThread?.agentId === status.id} duplicateDisplayName={hasDuplicateDisplayName(status)} onEnter={onOpenPersistentAgent} onResume={onResumePersistentAgent} onMaintain={onMaintainPersistentAgent} onOpenSettings={() => openRoomSettings(status)} />
+					<PersistentAgentCard key={status.id} status={status} modelStatus={modelStatus} aiProfileStatus={aiProfileSelection} thread={persistentThread?.agentId === status.id ? persistentThread : null} live={persistentLive && persistentThread?.agentId === status.id} duplicateDisplayName={hasDuplicateDisplayName(status)} backgroundReady={backgroundReadyRooms?.has(status.id) ?? false} onEnter={onOpenPersistentAgent} onResume={onResumePersistentAgent} onMaintain={onMaintainPersistentAgent} onOpenSettings={() => openRoomSettings(status)} />
 				))}
 				<button type="button" className="landing-card add-room-card" onClick={() => setCreateOpen(true)} aria-label="Create a new room">
 					<span className="add-room-plus" aria-hidden="true">+</span>
@@ -969,7 +969,7 @@ function Landing({ onOpenAiSetup, onOpenDashboard, onOpenConnectors, onOpenMemor
 				</div>
 			)}
 			{settingsRoom && (
-				<RoomSettingsModal status={settingsRoom} onClose={() => setSettingsRoomId(null)} onArchive={onArchiveRoom} onRefresh={onRefreshPersistentAgent} />
+				<RoomSettingsModal status={settingsRoom} onClose={() => setSettingsRoomId(null)} onArchive={onArchiveRoom} onRefresh={onRefreshPersistentAgent} onMementoForget={() => onMementoForget(settingsRoom.id)} />
 			)}
 			{helpOpen && <RoomsGuide onClose={() => setHelpOpen(false)} />}
 		</div>
@@ -2443,6 +2443,12 @@ export function App() {
 	// nonce change); cleared by every OTHER nonce bump site so a stale prefill
 	// never resurrects after send/reset.
 	const [composerPrefill, setComposerPrefill] = useState("");
+	// A draft typed in a room survives leaving and coming back (community #13).
+	// In-memory and text-only by design: staged attachments already persist on
+	// the room shelf, and nothing about an unsent message belongs on disk.
+	// Captured on a plain leave, restored on the next open/resume; forget flows
+	// (Memento, rest) deliberately drop it, and archiving clears the entry.
+	const roomDraftsRef = useRef(new Map<PersistentAgentId, string>());
 	const [connected, setConnected] = useState(false);
 	// Room WS auto-reconnect: "reconnecting" while backoff attempts run,
 	// "failed" once the attempt cap is reached (only the manual Reconnect
@@ -2573,6 +2579,18 @@ export function App() {
 	const [aiProfileStatus, setAiProfileStatus] = useState<PersistentAgentAiProfileSelectionStatus | null>(null);
 	const [persistentAgentStatuses, setPersistentAgentStatuses] = useState<PersistentAgentStatus[]>([]);
 	const [persistentAgentStatus, setPersistentAgentStatus] = useState<PersistentAgentStatus | null>(null);
+	// Community #14 slice 2: rooms observed finishing a response WITHOUT us
+	// inside (left mid-generation, or found in flight from outside). When a
+	// status refresh later shows such a room settled with a completed turn,
+	// its card gets a "response ready" badge until the room is opened. Session-
+	// local by design, like the transcript itself before a checkpoint.
+	const backgroundCookingRoomsRef = useRef(new Set<PersistentAgentId>());
+	const [backgroundReadyRooms, setBackgroundReadyRooms] = useState<ReadonlySet<PersistentAgentId>>(new Set());
+	// Slice 3: the done-moment toast for a landing THIS session watched cook —
+	// shown on Home or from inside another room, named after the finished room,
+	// Open navigates there. A marker replayed into a fresh session is old news
+	// and only badges the card; it never toasts.
+	const [backgroundDoneToast, setBackgroundDoneToast] = useState<{ agentId: PersistentAgentId; displayName: string } | null>(null);
 	const [persistentThread, setPersistentThread] = useState<PersistentAgentThread | null>(null);
 	const [persistentChat, setPersistentChat] = useState<PersistentChatConfig>(null);
 	const [persistentResumeError, setPersistentResumeError] = useState<string | null>(null);
@@ -3031,6 +3049,34 @@ export function App() {
 			const statuses = await fetchPersistentAgentStatuses();
 			const activeStatuses = Array.isArray(statuses) ? statuses : [];
 			setPersistentAgentStatuses(activeStatuses);
+			// Background-generation bookkeeping (community #14): note rooms
+			// cooking without us inside; when one settles with a completed turn,
+			// promote it to the "response ready" badge.
+			for (const status of activeStatuses) {
+				if (persistentChat?.agentId === status.id) continue;
+				if (status.activeThread?.inFlight) {
+					backgroundCookingRoomsRef.current.add(status.id);
+					continue;
+				}
+				const watchedCooking = backgroundCookingRoomsRef.current.has(status.id);
+				if (watchedCooking) backgroundCookingRoomsRef.current.delete(status.id);
+				const settledCompleted = watchedCooking && status.activeThread?.activeTurn?.lastTerminalReason === "completed";
+				// Slice 3: the server-side unseen marker badges rooms that finished
+				// while NO session was watching — a fresh app load included, which
+				// the session-local memory above cannot cover.
+				const landedUnseen = status.unseenLandedAnswer?.terminalReason === "completed";
+				if (settledCompleted || landedUnseen) {
+					setBackgroundReadyRooms((prev) => (prev.has(status.id) ? prev : new Set(prev).add(status.id)));
+				}
+				if (settledCompleted) {
+					// The done moment, observed live: toast in the app, and in the
+					// desktop shell the same event reaches the OS notification
+					// center and tray badge when the window is hidden or unfocused.
+					const displayName = status.displayName?.trim() || "This room";
+					setBackgroundDoneToast({ agentId: status.id, displayName });
+					notifyDesktop(`${displayName} finished a response`, "The answer is saved in the room's conversation.");
+				}
+			}
 			const primaryStatus = activeStatuses[0] ?? null;
 			setPersistentAgentStatus(primaryStatus);
 			if (persistentChat) return;
@@ -3040,6 +3086,10 @@ export function App() {
 				if (persistentThread) setPersistentThread(null);
 				return;
 			}
+			// A room finishing a detached response (community #14) is NOT an
+			// abandoned active thread: reconciling it back to standby here would
+			// race the server-side landing write. Leave it alone until it settles.
+			if (resumableStatus.activeThread?.inFlight) return;
 			if ((resumableStatus.runtime.state === "standby" || resumableStatus.runtime.state === "active") && resumableStatus.runtime.activeThreadId && (!persistentThread || persistentThread.agentId === resumableStatus.id)) {
 				const record = await fetchPersistentAgentThread(resumableStatus.id, resumableStatus.runtime.activeThreadId);
 				const localThread = { ...threadRecordToLocalThread(record, resumableStatus.displayName || resumableStatus.id), state: "standby" as const };
@@ -3064,6 +3114,8 @@ export function App() {
 
 	async function archivePersistentAgentRoom(agentId: PersistentAgentId, confirmation: string): Promise<PersistentAgentArchiveResponse> {
 		const response = await archivePersistentRoom(agentId, { confirmation });
+		roomDraftsRef.current.delete(agentId);
+		clearBackgroundActivityBadge(agentId);
 		setPersistentAgentStatuses((statuses) => statuses.filter((status) => status.id !== agentId));
 		setPersistentAgentStatus((status) => status?.id === agentId ? null : status);
 		if (persistentChat?.agentId === agentId || persistentThread?.agentId === agentId) {
@@ -3102,6 +3154,19 @@ export function App() {
 			if (persistentChat) await savePersistentAgentThread(persistentChat, "active", "unknown", items, pendingHandoffsRef.current);
 		} catch {}
 	}
+
+	// While some room is finishing a response with nobody inside (community
+	// #14), keep the statuses fresh so the card flips from working to
+	// "response ready" without waiting for a window refocus. Scoped: only
+	// polls while such a room exists. Being inside a DIFFERENT room no longer
+	// stands the poll down (slice 3) — the done-moment toast has to fire there
+	// too; the refresh itself skips the open room and never reconciles while a
+	// room is bound, so the landing write stays unraced.
+	useEffect(() => {
+		if (!persistentAgentStatuses.some((status) => status.activeThread?.inFlight && status.id !== persistentChat?.agentId)) return;
+		const id = window.setInterval(() => { void refreshPersistentAgentStatus(); }, 5_000);
+		return () => window.clearInterval(id);
+	}, [persistentAgentStatuses, persistentChat]);
 
 	useEffect(() => { itemsRef.current = items; }, [items]);
 	useEffect(() => { persistentChatRef.current = persistentChat; }, [persistentChat]);
@@ -3372,6 +3437,13 @@ export function App() {
 
 	const RECONNECT_MAX_ATTEMPTS = 8; // 1s..30s doubling backoff ≈ 2 minutes
 
+	// Stamped on the streaming bubble when the socket drops mid-turn. If the
+	// reconnect then learns the server is actually finishing the response in
+	// the background (community #14: error frame code `room_cooking`), the
+	// note was a lie and is rewritten to this honest one.
+	const CONNECTION_LOST_NOTE = "Response interrupted: the connection was lost.";
+	const CONNECTION_LOST_COOKING_NOTE = "Connection lost - the response continues in the background and will be here when you return.";
+
 	function setRoomReconnect(state: "idle" | "reconnecting" | "failed") {
 		roomReconnectStateRef.current = state;
 		setRoomReconnectState(state);
@@ -3430,7 +3502,17 @@ export function App() {
 			// so the rebuilt session's context matches what is displayed. When the
 			// file is at least as fresh (another surface may have advanced the
 			// room while this tab was offline), the file wins — like Resume.
-			const localFresher = itemsRef.current.length > fetched.items.length;
+			// One case beats the length heuristic outright: the server-side
+			// landing of a detached turn (community #14) CONSOLIDATES — it strips
+			// the trailing partial assistant debris after the last user message
+			// and appends one `detached-*` item — so the landed file has FEWER
+			// items than the stale local transcript while being strictly newer.
+			// Whenever the file carries a landing item this transcript has never
+			// seen, the file wins unconditionally; length only referees the
+			// ordinary debounced-persist races.
+			const localItemIds = new Set(itemsRef.current.map((item) => item.id));
+			const fetchedHasNewLanding = fetched.items.some((item) => typeof item.id === "string" && item.id.startsWith("detached-") && !localItemIds.has(item.id));
+			const localFresher = !fetchedHasNewLanding && itemsRef.current.length > fetched.items.length;
 			const liveThread = { ...fetched, state: "live" as const, items: localFresher ? itemsRef.current : fetched.items };
 			const restoredQueue = localFresher ? pendingHandoffsRef.current : readConsultHandoffQueue(record.pendingHandoffs);
 			if (!localFresher) applyPendingHandoffs(restoredQueue, deriveTrailingConsultIds(liveThread.items, restoredQueue.length));
@@ -3489,7 +3571,7 @@ export function App() {
 			// truncated answer behind a stuck busy state. The debounced persist
 			// writes the note to the thread file whenever the server is reachable.
 			if (busyRef.current || turnCancellingRef.current || isAssistantStreamActive(streamStateRef.current)) {
-				markCurrentAssistantInterrupted(turnInterruptedNoteRef.current ?? "Response interrupted: the connection was lost.");
+				markCurrentAssistantInterrupted(turnInterruptedNoteRef.current ?? CONNECTION_LOST_NOTE);
 				setBusy(false);
 				busyRef.current = false;
 				setTurnCancelling(false);
@@ -3518,6 +3600,20 @@ export function App() {
 				return;
 			}
 			if (msg.type === "error") {
+				// Detach-vs-death (community #14): the original drop delivers no
+				// signal (the network is gone), so the server tells us HERE, on the
+				// reconnect bounce, that the room is still finishing the response in
+				// the background. Make the bubble note honest, then stand the
+				// reconnect loop down after this one bounce instead of burning the
+				// remaining attempts against a lock held until the answer lands —
+				// the launcher's answering badge and status polling carry it from
+				// here, and the manual Reconnect button (failed state) covers the
+				// user who stays in the room until the answer has landed.
+				if (roomReconnectStateRef.current === "reconnecting" && msg.code === "room_cooking") {
+					rewriteConnectionLostNoteForCookingRoom();
+					reconnectAttemptRef.current = RECONNECT_MAX_ATTEMPTS;
+					return;
+				}
 				// During a reconnect cycle the room-lock bounce ("This room is
 				// currently … " + close) is retryable — a redial can race the dead
 				// socket's lock release, and the next backoff attempt redials — so
@@ -4017,6 +4113,21 @@ export function App() {
 			}
 			return next;
 		};
+		itemsRef.current = update(itemsRef.current);
+		setItems(update);
+	}
+
+	// The blip note said the response was killed; the reconnect bounce just
+	// proved it is still being written server-side (community #14). Rewrite the
+	// note in place — UI only, deliberately not persisted: the server-side
+	// landing supersedes this whole partial bubble anyway.
+	function rewriteConnectionLostNoteForCookingRoom() {
+		const staleNote = `_${CONNECTION_LOST_NOTE}_`;
+		const update = (s: ChatItem[]) => s.map((it) => {
+			if (it.kind === "assistant" && typeof it.text === "string" && it.text.includes(staleNote)) return { ...it, text: it.text.replace(staleNote, `_${CONNECTION_LOST_COOKING_NOTE}_`) };
+			if (it.kind === "system" && it.text === CONNECTION_LOST_NOTE) return { ...it, text: CONNECTION_LOST_COOKING_NOTE };
+			return it;
+		});
 		itemsRef.current = update(itemsRef.current);
 		setItems(update);
 	}
@@ -4562,6 +4673,10 @@ export function App() {
 	}
 
 	async function bindToMementoRuntime(result: PersistentAgentMementoBoundaryResponse, targetChat: NonNullable<PersistentChatConfig>): Promise<void> {
+		// A memento boundary is a forget flow: the parked draft dies with the
+		// conversation it was written for (dropping it up front also covers the
+		// park-on-launcher failure branch below).
+		roomDraftsRef.current.delete(targetChat.agentId);
 		const freshThreadId = result.postMemento.activeThreadId || result.runtimeBoundary.newThreadId;
 		const record = await fetchPersistentAgentThread(targetChat.agentId, freshThreadId);
 		const thread = threadRecordToLocalThread(record, targetChat.displayName);
@@ -4577,6 +4692,10 @@ export function App() {
 		flushAssistantStream();
 		clearTransientStreamNotes();
 		dispatchStream({ type: "reset" });
+		// Forget flow: the live composer text dies with the conversation too —
+		// this rebind resets everything else but never touched the textarea.
+		setComposerPrefill("");
+		setComposerResetNonce((value) => value + 1);
 		toolByIdRef.current.clear();
 		hiddenRoutineToolByIdRef.current.clear();
 		retrievalActivityIdRef.current = null;
@@ -5416,7 +5535,12 @@ export function App() {
 		}
 		const nextConversationId = newConversationId();
 		setPersistentResumeError(null);
+		clearBackgroundActivityBadge(target.id);
 		resetLiveUiState();
+		// Same carry pattern as the offline-rebind rescue: resetLiveUiState just
+		// cleared the composer, so re-seed it with this room's parked draft.
+		const savedDraft = roomDraftsRef.current.get(target.id);
+		if (savedDraft) setComposerPrefill(savedDraft);
 		setPersistentThread(null);
 		setPersistentChat(null);
 		const nextThread: PersistentAgentThread = { state: "live", agentId: target.id, displayName: label, conversationId: nextConversationId, model, items: [] };
@@ -5445,8 +5569,23 @@ export function App() {
 		setSessionVersion((v) => v + 1);
 	}
 
+	// Opening a room consumes its background-generation badge (community #14):
+	// the user is about to see the landed response in the transcript.
+	function clearBackgroundActivityBadge(agentId: PersistentAgentId): void {
+		backgroundCookingRoomsRef.current.delete(agentId);
+		setBackgroundReadyRooms((prev) => {
+			if (!prev.has(agentId)) return prev;
+			const next = new Set(prev);
+			next.delete(agentId);
+			return next;
+		});
+		// The toast points where the user is already going; keep the pair honest.
+		setBackgroundDoneToast((current) => (current?.agentId === agentId ? null : current));
+	}
+
 	async function openPersistentAgentResume(status: PersistentAgentStatus) {
 		setPersistentResumeError(null);
+		clearBackgroundActivityBadge(status.id);
 		const runtimeThreadId = status.runtime.state === "standby" || status.runtime.state === "active" ? status.runtime.activeThreadId : null;
 		const localThreadId = persistentThread?.agentId === status.id && (persistentThread.state === "standby" || persistentThread.state === "live") ? persistentThread.conversationId : null;
 		const threadId = runtimeThreadId || localThreadId;
@@ -5465,6 +5604,8 @@ export function App() {
 			applyPendingHandoffs(restoredQueue, deriveTrailingConsultIds(liveThread.items, restoredQueue.length));
 			await savePersistentAgentThread(liveThread, "active", "launcher", liveThread.items, restoredQueue);
 			resetLiveUiState();
+			const savedDraft = roomDraftsRef.current.get(status.id);
+			if (savedDraft) setComposerPrefill(savedDraft);
 			setPersistentThread(null);
 			setPersistentChat(null);
 			setConversationId(liveThread.conversationId);
@@ -5477,6 +5618,26 @@ export function App() {
 		} catch (e) {
 			setPersistentResumeError(formatDirectResumeError(e));
 			setView("home");
+			await refreshPersistentAgentStatus();
+		}
+	}
+
+	// The background-answer toast's Open (slice 3): from Home a plain resume;
+	// from inside another room the full leave grammar first — goHome owns the
+	// leave-and-let-it-finish confirm, and a declined confirm stays put.
+	async function openRoomFromBackgroundToast(agentId: PersistentAgentId): Promise<void> {
+		setBackgroundDoneToast(null);
+		if (persistentChatRef.current) {
+			const left = await goHome();
+			if (!left) return;
+		}
+		try {
+			const statuses = await fetchPersistentAgentStatuses();
+			const status = statuses.find((candidate) => candidate.id === agentId) ?? null;
+			if (!status) throw new Error("This room is no longer available. Refresh Home and try again.");
+			await openPersistentAgentResume(status);
+		} catch (e) {
+			setPersistentResumeError((e as Error).message);
 			await refreshPersistentAgentStatus();
 		}
 	}
@@ -5526,6 +5687,9 @@ export function App() {
 		} else if (!approval && persistentChat) {
 			void setPersistentRuntimeIdle(persistentChat.agentId);
 		}
+		// Forget flow: the parked draft dies with the checkpointed conversation.
+		const restingAgentId = persistentChat?.agentId ?? approval?.agentId;
+		if (restingAgentId) roomDraftsRef.current.delete(restingAgentId);
 		setPersistentThread(null);
 		setPersistentChat(null);
 		resetLiveUiState();
@@ -5678,6 +5842,11 @@ export function App() {
 		return () => window.clearTimeout(timer);
 	}, [taskDoneToast]);
 	useEffect(() => {
+		if (!backgroundDoneToast) return;
+		const timer = window.setTimeout(() => setBackgroundDoneToast(null), 8000);
+		return () => window.clearTimeout(timer);
+	}, [backgroundDoneToast]);
+	useEffect(() => {
 		if (!exportNotice) return;
 		const timer = window.setTimeout(() => setExportNotice(null), 6000);
 		return () => window.clearTimeout(timer);
@@ -5748,8 +5917,19 @@ export function App() {
 	// ONE stack above the composer, oldest first so a newer notice pushes the
 	// older ones upward. Each keeps its own timer and its own meaning — this
 	// composes where they are shown, never when they appear or expire.
+	// The background-answer done moment (slice 3) shows on two surfaces — the
+	// launcher has no composer stack to join — so it is one view-model with two
+	// homes rather than two toasts that could drift.
+	const backgroundDoneToastView = useMemo<ToastView | null>(() => backgroundDoneToast ? {
+		id: `background:${backgroundDoneToast.agentId}`,
+		tone: "success",
+		text: `${backgroundDoneToast.displayName} finished a response.`,
+		sub: "The answer is saved in the room's conversation.",
+		action: { label: "Open", onClick: () => void openRoomFromBackgroundToast(backgroundDoneToast.agentId) },
+	} : null, [backgroundDoneToast]);
 	const roomToasts = useMemo<ToastView[]>(() => {
 		const list: ToastView[] = [];
+		if (backgroundDoneToastView) list.push(backgroundDoneToastView);
 		if (exportNotice) list.push({ id: "export", tone: exportNotice.kind, text: exportNotice.text });
 		if (removeNotice) {
 			list.push({
@@ -5792,7 +5972,7 @@ export function App() {
 			});
 		}
 		return list;
-	}, [exportNotice, removeNotice, fileDeleteNotice, taskDoneToast]);
+	}, [backgroundDoneToastView, exportNotice, removeNotice, fileDeleteNotice, taskDoneToast]);
 	// The chip in a message opens the file exactly as its Files row does (taste
 	// pass), so the two entry points can never drift: find the row that stands
 	// for that shelf file and take the row's own path. A ref keeps the handler
@@ -5823,13 +6003,36 @@ export function App() {
 	const persistentRoomRunning = Boolean(persistentChat && (busy || (serverInFlightRelevant && currentActiveThreadStatus?.working)));
 	const persistentRoomCancelling = Boolean(persistentChat && (turnCancelling || (serverInFlightRelevant && currentActiveThreadStatus?.cancelling)));
 	const persistentRoomInFlight = Boolean(persistentChat && (persistentRoomRunning || persistentRoomCancelling || serverInFlightRelevant));
-	async function goHome() {
+	// Resolves true when the leave actually happened (or nothing needed
+	// leaving) — a declined leave-and-let-it-finish confirm resolves false, so
+	// a caller chaining a navigation (the background-answer toast's Open) can
+	// stand down without reading state that only settles on the next render.
+	async function goHome(): Promise<boolean> {
 		// A fully-received answer may still be revealing at reading speed
 		// (busy already false) — leaving must not persist a truncated tail.
 		flushAssistantStream();
+		if (persistentChat && persistentRoomInFlight && !turnCancelling) {
+			// Community #14 slice 2: leaving no longer kills the response — the
+			// server keeps writing it and lands it in the conversation; the room
+			// card announces when it is ready.
+			const ok = window.confirm("The assistant is still responding. Leave and let it finish in the background? The answer will be waiting in this room.");
+			if (!ok) return false;
+			// Make sure the prompt that started this turn is on disk before the
+			// socket closes: the server lands the answer by appending to the
+			// saved thread file (the landing supersedes any partial tail saved
+			// here, so what is persisted now only needs the user's message).
+			try { await savePersistentAgentThread(persistentChat, "active", "home", itemsRef.current, pendingHandoffsRef.current); } catch {}
+			backgroundCookingRoomsRef.current.add(persistentChat.agentId);
+			await finishLeaveRoom({ detachInFlight: true });
+			// Prime the launcher: statuses are normally not refetched on leave,
+			// but the cards need the still-held lock and in-flight turn to show
+			// the answering badge (and to start the settle polling) right away.
+			void refreshPersistentAgentStatus();
+			return true;
+		}
 		if (persistentChat && persistentRoomInFlight) {
-			const ok = window.confirm("The assistant is still responding. Stop the response and leave?\n\nChoose Cancel to stay in the room.");
-			if (!ok) return;
+			// A turn the user already stopped is genuinely cancelling — leaving
+			// now keeps the stop semantics instead of detaching a doomed turn.
 			await abortCurrentTurn({ leaveAfter: true });
 			if (turnCancellingRef.current || isAssistantStreamActive(streamStateRef.current)) markCurrentAssistantInterrupted(turnInterruptedNoteRef.current ?? "Response interrupted because you left the room.");
 			setTurnCancelling(false);
@@ -5841,32 +6044,48 @@ export function App() {
 		// the worker survives in the room-scoped registry and the rail's pulsing
 		// row greets the user on return. No guard dialog; nothing to warn about.
 		await finishLeaveRoom();
+		return true;
 	}
 
 	// The tail of goHome, split out so the leave-guard dialog's "Leave anyway"
-	// can resume the exact same path.
-	async function finishLeaveRoom() {
+	// can resume the exact same path. `detachInFlight` (community #14) leaves a
+	// still-running turn cooking on the server: the standby save is the
+	// server's job then (the landing write parks the thread), and the room's
+	// active-lock badge is deliberately kept — the lock really is still held
+	// while the response finishes.
+	async function finishLeaveRoom(options: { detachInFlight?: boolean } = {}) {
 		// We're releasing our own lock on the room we're leaving; clear its
 		// active-lock badge locally so the home card doesn't show a stale
 		// "open in app" until the next refresh. (No immediate refetch — that
 		// could race ahead of the async server-side release and re-add it.)
 		const releasingAgentId = persistentChat?.agentId ?? null;
+		if (releasingAgentId) {
+			const draft = textareaRef.current?.value ?? "";
+			if (draft.trim()) roomDraftsRef.current.set(releasingAgentId, draft);
+			else roomDraftsRef.current.delete(releasingAgentId);
+		}
 		if (persistentChat) {
 			// Leaving is deliberate — no auto-reconnect on this close.
 			suppressReconnectRef.current = true;
 			try { wsRef.current?.close(); } catch {}
-			const liveThread: PersistentAgentThread = { ...persistentChat, state: "live", items: itemsRef.current };
-			try {
-				await closePersistentAgentRoom(liveThread, "home");
-			} catch (e) {
-				setItems((s) => [...s, { kind: "system", id: nid(), text: (e as Error).message, level: "error" }]);
+			if (options.detachInFlight) {
+				// The server's landing write parks the thread; a fresh status
+				// refresh rebinds it as standby once the response has settled.
+				setPersistentThread(null);
+			} else {
+				const liveThread: PersistentAgentThread = { ...persistentChat, state: "live", items: itemsRef.current };
+				try {
+					await closePersistentAgentRoom(liveThread, "home");
+				} catch (e) {
+					setItems((s) => [...s, { kind: "system", id: nid(), text: (e as Error).message, level: "error" }]);
+				}
 			}
 			setPersistentChat(null);
 			setCheckpointPreviewOpen(false);
 			resetMaintainWorkflows();
 			setBusy(false);
 		}
-		if (releasingAgentId) {
+		if (releasingAgentId && !options.detachInFlight) {
 			setPersistentAgentStatuses((statuses) => statuses.map((s) => (s.id === releasingAgentId ? { ...s, activeLock: null } : s)));
 		}
 		setView("home");
@@ -5894,6 +6113,8 @@ export function App() {
 			persistTimerRef.current = null;
 		}
 		setRoomSettingsOpen(false);
+		// Forget flow: the parked draft dies with the conversation.
+		if (persistentChat) roomDraftsRef.current.delete(persistentChat.agentId);
 		setPersistentChat(null);
 		setPersistentThread(null);
 		setView("home");
@@ -5946,7 +6167,8 @@ export function App() {
 			<>
 				{gcAssessment && !gcReviewOpen && <TaskStoreGcBanner assessment={gcAssessment} onReview={() => setGcReviewOpen(true)} onDismiss={() => setGcAssessment(null)} />}
 				{gcReviewOpen && gcAssessment && <TaskStoreGcDialog assessment={gcAssessment} busy={gcBusy} onConfirm={() => void confirmTaskStoreGc()} onClose={() => setGcReviewOpen(false)} />}
-				<Landing onOpenAiSetup={() => setView("ai-setup")} onOpenDashboard={() => setView("dashboard")} onOpenConnectors={() => setView("connectors")} onOpenMemory={() => setView("memory")} onOpenSkills={() => setView("skills")} onOpenPersistentAgent={openPersistentAgent} onResumePersistentAgent={openPersistentAgentResume} onMaintainPersistentAgent={(target) => { if (!openMaintainChooser(target)) setPersistentResumeError(maintainBlockedReason(target.agentId) ?? "Maintain is not available for this room right now."); }} onCreatePersistentAgent={createPersistentAgentRoom} onArchiveRoom={archivePersistentAgentRoom} modelStatus={modelStatus} persistentAgentStatuses={persistentAgentStatuses} persistentThread={persistentThread} persistentLive={!!persistentChat} persistentResumeError={persistentResumeError} onRefreshPersistentAgent={refreshPersistentAgentStatus} theme={theme} onToggleTheme={() => setTheme((t) => (t === "dark" ? "light" : "dark"))} connected={connected} aiProfileStatus={aiProfileStatus} onSelectAiProfile={selectAiProfile} onRefreshAiProfile={refreshAiProfileStatus} standbyLockedModels={standbyLockedModels} />
+				{backgroundDoneToastView && <div className="launcher-toasts"><ToastStack toasts={[backgroundDoneToastView]} /></div>}
+				<Landing onOpenAiSetup={() => setView("ai-setup")} onOpenDashboard={() => setView("dashboard")} onOpenConnectors={() => setView("connectors")} onOpenMemory={() => setView("memory")} onOpenSkills={() => setView("skills")} onOpenPersistentAgent={openPersistentAgent} onResumePersistentAgent={openPersistentAgentResume} onMaintainPersistentAgent={(target) => { if (!openMaintainChooser(target)) setPersistentResumeError(maintainBlockedReason(target.agentId) ?? "Maintain is not available for this room right now."); }} onCreatePersistentAgent={createPersistentAgentRoom} onArchiveRoom={archivePersistentAgentRoom} onMementoForget={(agentId) => { roomDraftsRef.current.delete(agentId); }} modelStatus={modelStatus} persistentAgentStatuses={persistentAgentStatuses} persistentThread={persistentThread} persistentLive={!!persistentChat} persistentResumeError={persistentResumeError} onRefreshPersistentAgent={refreshPersistentAgentStatus} theme={theme} onToggleTheme={() => setTheme((t) => (t === "dark" ? "light" : "dark"))} connected={connected} aiProfileStatus={aiProfileStatus} onSelectAiProfile={selectAiProfile} onRefreshAiProfile={refreshAiProfileStatus} standbyLockedModels={standbyLockedModels} backgroundReadyRooms={backgroundReadyRooms} />
 			</>
 		);
 	}
