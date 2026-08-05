@@ -25,8 +25,8 @@ import { AddProviderPanel, ApiKeyForm, ConfigureProfileModal, GatewayApproveMode
 import { apiFetch, fetchJson } from "./api";
 import { modelDisplayName as canonicalModelDisplayName } from "./model-names";
 import type { ApprovalPreviewData } from "./approval-preview";
-import type { AbsorbApprovalResponse, AbsorbAssessmentResponse, AbsorbAvailability, AbsorbDiscussionMessage, AbsorbDiscussionSignoffResponse, AbsorbDiscussionTokenBudget, AbsorbDiscussionTurnResponse, AbsorbProposalResponse, AbsorbProposalSourceMetadata, AbsorbReviewAction, AbsorbReviewEntryChange, AbsorbReviewSectionChange, AuthStatusResponse, ChatItem, CheckpointApprovalResponse, CheckpointProposalResponse, ContextHealthStatus, LoginProviderCatalogEntry, PersistentAgentAiProfileSelectionStatus, PersistentAgentAiProfileStatus, PersistentAgentArchiveResponse, PersistentAgentCreateRequest, PersistentAgentCreateResponse, PersistentAgentId, PersistentAgentMementoBoundaryResponse, PersistentAgentStatus, PersistentAgentThreadOrigin, PersistentAgentThreadRecord, StructuralReviewApprovalResponse, StructuralReviewAssessmentResponse, StructuralReviewAvailability, StructuralReviewDiscussionMessage, StructuralReviewDiscussionSignoffResponse, StructuralReviewDiscussionTokenBudget, StructuralReviewDiscussionTurnResponse, StructuralReviewMemoryMapRow, StructuralReviewProposalResponse, StructuralReviewSourceMetadata, WebChatModelOption, WebChatModelStatus } from "./types";
-import { archivePersistentRoom, fetchPersistentRoomMaintenanceSettings } from "./persistent-room-management-api";
+import type { AbsorbApprovalResponse, AbsorbAssessmentResponse, AbsorbAvailability, AbsorbDiscussionMessage, AbsorbDiscussionSignoffResponse, AbsorbDiscussionTokenBudget, AbsorbDiscussionTurnResponse, AbsorbProposalResponse, AbsorbProposalSourceMetadata, AbsorbReviewAction, AbsorbReviewEntryChange, AbsorbReviewSectionChange, AuthStatusResponse, ChatItem, CheckpointApprovalResponse, CheckpointProposalResponse, ContextHealthStatus, LoginProviderCatalogEntry, PersistentAgentAiProfileSelectionStatus, PersistentAgentAiProfileStatus, ArchivedPersistentAgentSummary, PersistentAgentArchiveResponse, PersistentAgentCreateRequest, PersistentAgentCreateResponse, PersistentAgentId, PersistentAgentMementoBoundaryResponse, PersistentAgentPurgeResponse, PersistentAgentStatus, PersistentAgentThreadOrigin, PersistentAgentThreadRecord, StructuralReviewApprovalResponse, StructuralReviewAssessmentResponse, StructuralReviewAvailability, StructuralReviewDiscussionMessage, StructuralReviewDiscussionSignoffResponse, StructuralReviewDiscussionTokenBudget, StructuralReviewDiscussionTurnResponse, StructuralReviewMemoryMapRow, StructuralReviewProposalResponse, StructuralReviewSourceMetadata, WebChatModelOption, WebChatModelStatus } from "./types";
+import { archivePersistentRoom, fetchArchivedPersistentRooms, fetchPersistentRoomMaintenanceSettings, purgePersistentRoom, restorePersistentRoom, type PersistentRoomPurgeError } from "./persistent-room-management-api";
 import { createAssistantStreamState, DEFAULT_REVEAL_PACING, isAssistantStreamActive, reduceAssistantStream, type AssistantStreamAction, type AssistantStreamEffect, type AssistantStreamState, type RevealPacing } from "./assistant-stream";
 import { consultStack, createConsultState, reduceConsult, type ConsultAction, type ConsultExchange, type ConsultState } from "./consult-stream";
 import { createTaskState, reduceTask, type TaskAction, type TaskState } from "./task-stream";
@@ -885,7 +885,7 @@ function AiProfileSwitcherSection({ status, onSelect, onRefresh, onRefreshAuth, 
 	);
 }
 
-function Landing({ onOpenAiSetup, onOpenDashboard, onOpenConnectors, onOpenMemory, onOpenSkills, onOpenPersistentAgent, onResumePersistentAgent, onMaintainPersistentAgent, onCreatePersistentAgent, onArchiveRoom, onMementoForget, modelStatus, persistentAgentStatuses, persistentThread, persistentLive, persistentResumeError, onRefreshPersistentAgent, theme, onToggleTheme, connected, aiProfileStatus: aiProfileSelection, onSelectAiProfile, onRefreshAiProfile, standbyLockedModels, backgroundReadyRooms }: { onOpenAiSetup: () => void; onOpenDashboard: () => void; onOpenConnectors: () => void; onOpenMemory: () => void; onOpenSkills: () => void; onOpenPersistentAgent: (status: PersistentAgentStatus, model: WebChatModelOption) => Promise<void> | void; onResumePersistentAgent: (status: PersistentAgentStatus) => Promise<void> | void; onMaintainPersistentAgent: (target: MaintainTarget) => void; onCreatePersistentAgent: (request: PersistentAgentCreateRequest) => Promise<void>; onArchiveRoom: (agentId: PersistentAgentId, confirmation: string) => Promise<PersistentAgentArchiveResponse>; onMementoForget: (agentId: PersistentAgentId) => void; modelStatus: WebChatModelStatus | null; persistentAgentStatuses: PersistentAgentStatus[]; persistentThread: PersistentAgentThread | null; persistentLive: boolean; persistentResumeError: string | null; onRefreshPersistentAgent: () => void; theme: ThemeMode; onToggleTheme: () => void; connected: boolean; aiProfileStatus: PersistentAgentAiProfileSelectionStatus | null; onSelectAiProfile: (profileId: string) => Promise<void>; onRefreshAiProfile: () => void; standbyLockedModels?: Array<{ provider: string; model: string }>; backgroundReadyRooms?: ReadonlySet<PersistentAgentId> }) {
+function Landing({ onOpenAiSetup, onOpenDashboard, onOpenConnectors, onOpenMemory, onOpenSkills, onOpenPersistentAgent, onResumePersistentAgent, onMaintainPersistentAgent, onCreatePersistentAgent, onArchiveRoom, onPurgeRoom, onMementoForget, modelStatus, persistentAgentStatuses, persistentThread, persistentLive, persistentResumeError, onRefreshPersistentAgent, theme, onToggleTheme, connected, aiProfileStatus: aiProfileSelection, onSelectAiProfile, onRefreshAiProfile, standbyLockedModels, backgroundReadyRooms, purgingRooms }: { onOpenAiSetup: () => void; onOpenDashboard: () => void; onOpenConnectors: () => void; onOpenMemory: () => void; onOpenSkills: () => void; onOpenPersistentAgent: (status: PersistentAgentStatus, model: WebChatModelOption) => Promise<void> | void; onResumePersistentAgent: (status: PersistentAgentStatus) => Promise<void> | void; onMaintainPersistentAgent: (target: MaintainTarget) => void; onCreatePersistentAgent: (request: PersistentAgentCreateRequest) => Promise<void>; onArchiveRoom: (agentId: PersistentAgentId, confirmation: string) => Promise<PersistentAgentArchiveResponse>; onPurgeRoom: (agentId: PersistentAgentId, confirmation: string) => Promise<PersistentAgentPurgeResponse>; onMementoForget: (agentId: PersistentAgentId) => void; modelStatus: WebChatModelStatus | null; persistentAgentStatuses: PersistentAgentStatus[]; persistentThread: PersistentAgentThread | null; persistentLive: boolean; persistentResumeError: string | null; onRefreshPersistentAgent: () => void; theme: ThemeMode; onToggleTheme: () => void; connected: boolean; aiProfileStatus: PersistentAgentAiProfileSelectionStatus | null; onSelectAiProfile: (profileId: string) => Promise<void>; onRefreshAiProfile: () => void; standbyLockedModels?: Array<{ provider: string; model: string }>; backgroundReadyRooms?: ReadonlySet<PersistentAgentId>; purgingRooms?: ReadonlySet<PersistentAgentId> }) {
 	const [createOpen, setCreateOpen] = useState(false);
 	useEscapeKey(() => setCreateOpen(false), createOpen);
 	const [settingsRoomId, setSettingsRoomId] = useState<PersistentAgentId | null>(null);
@@ -940,16 +940,17 @@ function Landing({ onOpenAiSetup, onOpenDashboard, onOpenConnectors, onOpenMemor
 			</section>
 			<section className={`landing-grid${roomStatuses.length === 0 ? " landing-grid--empty" : ""}`} aria-label="exxperts entry points">
 				{firstRoomStatus && (
-					<PersistentAgentCard key={firstRoomStatus.id} status={firstRoomStatus} modelStatus={modelStatus} aiProfileStatus={aiProfileSelection} thread={persistentThread?.agentId === firstRoomStatus.id ? persistentThread : null} live={persistentLive && persistentThread?.agentId === firstRoomStatus.id} duplicateDisplayName={hasDuplicateDisplayName(firstRoomStatus)} backgroundReady={backgroundReadyRooms?.has(firstRoomStatus.id) ?? false} onEnter={onOpenPersistentAgent} onResume={onResumePersistentAgent} onMaintain={onMaintainPersistentAgent} onOpenSettings={() => openRoomSettings(firstRoomStatus)} />
+					<PersistentAgentCard key={firstRoomStatus.id} status={firstRoomStatus} modelStatus={modelStatus} aiProfileStatus={aiProfileSelection} thread={persistentThread?.agentId === firstRoomStatus.id ? persistentThread : null} live={persistentLive && persistentThread?.agentId === firstRoomStatus.id} duplicateDisplayName={hasDuplicateDisplayName(firstRoomStatus)} backgroundReady={backgroundReadyRooms?.has(firstRoomStatus.id) ?? false} purging={purgingRooms?.has(firstRoomStatus.id) ?? false} onEnter={onOpenPersistentAgent} onResume={onResumePersistentAgent} onMaintain={onMaintainPersistentAgent} onOpenSettings={() => openRoomSettings(firstRoomStatus)} />
 				)}
 				{additionalRoomStatuses.map((status) => (
-					<PersistentAgentCard key={status.id} status={status} modelStatus={modelStatus} aiProfileStatus={aiProfileSelection} thread={persistentThread?.agentId === status.id ? persistentThread : null} live={persistentLive && persistentThread?.agentId === status.id} duplicateDisplayName={hasDuplicateDisplayName(status)} backgroundReady={backgroundReadyRooms?.has(status.id) ?? false} onEnter={onOpenPersistentAgent} onResume={onResumePersistentAgent} onMaintain={onMaintainPersistentAgent} onOpenSettings={() => openRoomSettings(status)} />
+					<PersistentAgentCard key={status.id} status={status} modelStatus={modelStatus} aiProfileStatus={aiProfileSelection} thread={persistentThread?.agentId === status.id ? persistentThread : null} live={persistentLive && persistentThread?.agentId === status.id} duplicateDisplayName={hasDuplicateDisplayName(status)} backgroundReady={backgroundReadyRooms?.has(status.id) ?? false} purging={purgingRooms?.has(status.id) ?? false} onEnter={onOpenPersistentAgent} onResume={onResumePersistentAgent} onMaintain={onMaintainPersistentAgent} onOpenSettings={() => openRoomSettings(status)} />
 				))}
 				<button type="button" className="landing-card add-room-card" onClick={() => setCreateOpen(true)} aria-label="Create a new room">
 					<span className="add-room-plus" aria-hidden="true">+</span>
 					<span className="add-room-label">New room</span>
 				</button>
 			</section>
+			<ArchivedRoomsSection activeRoomCount={roomStatuses.length} onRestored={onRefreshPersistentAgent} />
 			</div>
 			{createOpen && (
 				<div className="room-settings-overlay create-room-overlay" role="dialog" aria-modal="true" aria-label="Create room" onClick={() => setCreateOpen(false)}>
@@ -969,10 +970,158 @@ function Landing({ onOpenAiSetup, onOpenDashboard, onOpenConnectors, onOpenMemor
 				</div>
 			)}
 			{settingsRoom && (
-				<RoomSettingsModal status={settingsRoom} onClose={() => setSettingsRoomId(null)} onArchive={onArchiveRoom} onRefresh={onRefreshPersistentAgent} onMementoForget={() => onMementoForget(settingsRoom.id)} />
+				<RoomSettingsModal status={settingsRoom} onClose={() => setSettingsRoomId(null)} onArchive={onArchiveRoom} onPurge={onPurgeRoom} onRefresh={onRefreshPersistentAgent} onMementoForget={() => onMementoForget(settingsRoom.id)} />
 			)}
 			{helpOpen && <RoomsGuide onClose={() => setHelpOpen(false)} />}
 		</div>
+	);
+}
+
+// Archived rooms live below the grid, folded away: they left Home on purpose,
+// so they only take up one line until asked. Hidden entirely when empty —
+// but a FAILED load is not "empty": this section is the only way back to an
+// archived room, so a fetch failure shows itself with a retry.
+function ArchivedRoomsSection({ activeRoomCount, onRestored }: { activeRoomCount: number; onRestored: () => void }) {
+	const [rooms, setRooms] = useState<ArchivedPersistentAgentSummary[] | null>(null);
+	const [loadFailed, setLoadFailed] = useState(false);
+	const [retryNonce, setRetryNonce] = useState(0);
+	const [open, setOpen] = useState(false);
+	const [armedId, setArmedId] = useState<PersistentAgentId | null>(null);
+	const [busy, setBusy] = useState<{ id: PersistentAgentId; action: "restore" | "purge" } | null>(null);
+	const [error, setError] = useState<string | null>(null);
+	const [note, setNote] = useState<string | null>(null);
+	// Set by this section's own restore/delete right before they trigger a
+	// refetch: their status note must survive that one refetch, while any
+	// OTHER cause (a room archived elsewhere, a retry) clears stale notes.
+	const keepNoteThroughRefetchRef = useRef(false);
+	useEscapeKey(() => setArmedId(null), armedId !== null);
+
+	// The active-room count changing means a room was archived, restored, or
+	// created somewhere — refetch so this section and the grid never disagree.
+	useEffect(() => {
+		if (keepNoteThroughRefetchRef.current) {
+			keepNoteThroughRefetchRef.current = false;
+		} else {
+			setNote(null);
+			setError(null);
+		}
+		let cancelled = false;
+		fetchArchivedPersistentRooms()
+			.then((rows) => {
+				if (cancelled) return;
+				setRooms(rows);
+				setLoadFailed(false);
+			})
+			.catch(() => { if (!cancelled) setLoadFailed(true); });
+		return () => { cancelled = true; };
+	}, [activeRoomCount, retryNonce]);
+
+	async function restoreRoom(room: ArchivedPersistentAgentSummary): Promise<void> {
+		setBusy({ id: room.id, action: "restore" });
+		setArmedId(null);
+		setError(null);
+		setNote(null);
+		const name = room.displayName || room.id;
+		try {
+			const response = await restorePersistentRoom(room.id);
+			setRooms((rows) => (rows ?? []).filter((row) => row.id !== room.id));
+			const parts = [`${name} is back on Home.`];
+			if (response.enabledSchedules > 0) parts.push(`Its ${response.enabledSchedules} scheduled task${response.enabledSchedules === 1 ? "" : "s"} resume${response.enabledSchedules === 1 ? "s" : ""} at the usual time${response.enabledSchedules === 1 ? "" : "s"}.`);
+			if (response.missedOnceSchedules > 0) parts.push(`${response.missedOnceSchedules} one-time task${response.missedOnceSchedules === 1 ? "" : "s"} missed ${response.missedOnceSchedules === 1 ? "its" : "their"} time while archived and need${response.missedOnceSchedules === 1 ? "s" : ""} a new one.`);
+			if (response.scheduleNotice) parts.push(response.scheduleNotice);
+			setNote(parts.join(" "));
+			keepNoteThroughRefetchRef.current = true;
+			onRestored();
+		} catch (e) {
+			setError((e as Error).message || "Failed to restore room.");
+		} finally {
+			setBusy(null);
+		}
+	}
+
+	async function deleteForever(room: ArchivedPersistentAgentSummary): Promise<void> {
+		if (armedId !== room.id) {
+			setArmedId(room.id);
+			setError(null);
+			setNote(null);
+			return;
+		}
+		setBusy({ id: room.id, action: "purge" });
+		setError(null);
+		try {
+			// Direct call: an archived room has no card, draft, badge, or bound
+			// session for the App-level purge handler to clean up.
+			const response = await purgePersistentRoom(room.id, `DELETE ${room.id} FOREVER`);
+			setRooms((rows) => (rows ?? []).filter((row) => row.id !== room.id));
+			setNote(
+				response.failed.length > 0
+					? `${room.displayName || room.id} was deleted, but ${response.failed.length} item${response.failed.length === 1 ? "" : "s"} on this machine could not be removed.`
+					: `${room.displayName || room.id} was deleted from this machine.`,
+			);
+		} catch (e) {
+			setError((e as Error).message || "Failed to delete room.");
+		} finally {
+			setBusy(null);
+			setArmedId(null);
+		}
+	}
+
+	// A failed load with nothing cached must not read as "no archived rooms".
+	if (loadFailed && (!rooms || rooms.length === 0)) {
+		return (
+			<section className="archived-rooms" aria-label="Archived rooms">
+				<div className="archived-rooms-note" role="alert">
+					Archived rooms could not be loaded.
+					<button type="button" className="rs-quiet archived-rooms-retry" onClick={() => setRetryNonce((n) => n + 1)}>Try again</button>
+				</div>
+			</section>
+		);
+	}
+	// The note must survive the last row disappearing, so the section only
+	// hides once the list is empty AND there is nothing left to say.
+	if (!rooms || (rooms.length === 0 && !note && !error)) return null;
+
+	const archivedDate = (archivedAt: number): string => new Date(archivedAt).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
+
+	return (
+		<section className="archived-rooms" aria-label="Archived rooms">
+			{rooms.length > 0 && (
+				<button type="button" className="archived-rooms-summary" aria-expanded={open} onClick={() => { setOpen((v) => !v); setArmedId(null); }}>
+					<span className="archived-rooms-title">Archived rooms ({rooms.length})</span>
+					<span className="archived-rooms-toggle" aria-hidden="true">{open ? "▾" : "▸"}</span>
+				</button>
+			)}
+			{open && rooms.length > 0 && (
+				<div className="archived-rooms-panel">
+					{rooms.map((room) => (
+						<div key={room.id} className="archived-room-row">
+							<div className="archived-room-main">
+								<span className="archived-room-name" {...(room.archivedReason ? { title: room.archivedReason } : {})}>{room.displayName || room.id}</span>
+								<span className="archived-room-meta">
+									archived {archivedDate(room.archivedAt)} · {room.counts.memories} {room.counts.memories === 1 ? "memory" : "memories"} · {room.counts.files} file{room.counts.files === 1 ? "" : "s"}
+								</span>
+								{armedId === room.id && (
+									<span className="archived-room-meta archived-room-armed" role="alert">
+										Delete {room.displayName || room.id} forever? Its {room.counts.files} file{room.counts.files === 1 ? "" : "s"} include {room.counts.documents} document{room.counts.documents === 1 ? "" : "s"} the room created. Everything is removed from this machine.
+									</span>
+								)}
+							</div>
+							<div className="archived-room-actions">
+								{armedId === room.id && <button type="button" className="rs-quiet" disabled={busy?.id === room.id} onClick={() => setArmedId(null)}>Keep it</button>}
+								<button type="button" className="rs-btn" disabled={busy?.id === room.id} onClick={() => void restoreRoom(room)}>
+									{busy?.id === room.id && busy.action === "restore" ? "Restoring…" : "Restore"}
+								</button>
+								<button type="button" className="rs-btn rs-btn-danger" disabled={busy?.id === room.id} onClick={() => void deleteForever(room)}>
+									{busy?.id === room.id && busy.action === "purge" ? "Deleting…" : "Delete forever"}
+								</button>
+							</div>
+						</div>
+					))}
+				</div>
+			)}
+			{note && <p className="archived-rooms-note" role="status">{note}</p>}
+			{error && <div className="workspaces-error archived-rooms-note">{error}</div>}
+		</section>
 	);
 }
 
@@ -2586,6 +2735,10 @@ export function App() {
 	// local by design, like the transcript itself before a checkpoint.
 	const backgroundCookingRoomsRef = useRef(new Set<PersistentAgentId>());
 	const [backgroundReadyRooms, setBackgroundReadyRooms] = useState<ReadonlySet<PersistentAgentId>>(new Set());
+	// Rooms with a purge in flight (community #10): the delete endpoint may be
+	// retrying for a few seconds after an in-room delete, and the card must not
+	// offer a door into a room that is about to stop existing.
+	const [purgingRooms, setPurgingRooms] = useState<ReadonlySet<PersistentAgentId>>(new Set());
 	// Slice 3: the done-moment toast for a landing THIS session watched cook —
 	// shown on Home or from inside another room, named after the finished room,
 	// Open navigates there. A marker replayed into a fresh session is old news
@@ -3126,6 +3279,89 @@ export function App() {
 			setPersistentChat(null);
 			setPersistentThread(null);
 			if (view === "chat") setView("home");
+		}
+		await refreshPersistentAgentStatus();
+		return response;
+	}
+
+	// Purge mirrors archive's local cleanup — the room is gone either way from
+	// this session's point of view; only the disk outcome differs. From INSIDE
+	// the room there is one extra step: this session's own socket holds the
+	// room lock the purge endpoint (rightly) refuses on, so the room is left
+	// first — the Memento-from-inside pattern — and the endpoint is retried
+	// briefly while the server's async lock release catches up. Having left,
+	// the pane that would show a failure is unmounted, so a failed purge
+	// reports on the Home banner, refreshes the card's stale lock, and keeps
+	// the draft it parked, instead of failing into silence.
+	async function purgePersistentAgentRoom(agentId: PersistentAgentId, confirmation: string): Promise<PersistentAgentPurgeResponse> {
+		const roomName = persistentAgentStatuses.find((status) => status.id === agentId)?.displayName || agentId;
+		const leavingBoundRoom = persistentChat?.agentId === agentId;
+		if (leavingBoundRoom && persistentRoomInFlight) {
+			// Leaving now would detach the turn into background cooking, and the
+			// purge would then refuse on that — say it while the pane can show it.
+			throw new Error("The assistant is still responding in this room. Stop it or let it finish before deleting.");
+		}
+		if (leavingBoundRoom) {
+			if (persistTimerRef.current) {
+				window.clearTimeout(persistTimerRef.current);
+				persistTimerRef.current = null;
+			}
+			// Park the draft the way finishLeaveRoom does: if the purge fails,
+			// the room survives — and so should what was typed into it.
+			const draft = textareaRef.current?.value ?? "";
+			if (draft.trim()) roomDraftsRef.current.set(agentId, draft);
+			else roomDraftsRef.current.delete(agentId);
+			// Deliberate close — no auto-reconnect, no standby save for a room
+			// that is about to stop existing.
+			suppressReconnectRef.current = true;
+			try { wsRef.current?.close(); } catch {}
+			setRoomSettingsOpen(false);
+			setPersistentChat(null);
+			setPersistentThread(null);
+			setCheckpointPreviewOpen(false);
+			resetMaintainWorkflows();
+			setBusy(false);
+			setView("home");
+		}
+		setPurgingRooms((rooms) => new Set(rooms).add(agentId));
+		let response: PersistentAgentPurgeResponse;
+		try {
+			for (let attempt = 0; ; attempt++) {
+				try {
+					response = await purgePersistentRoom(agentId, confirmation);
+					break;
+				} catch (e) {
+					const stillOurLock = leavingBoundRoom && (e as PersistentRoomPurgeError).reason === "room_lock" && attempt < 20;
+					if (!stillOurLock) throw e;
+					await new Promise((resolve) => setTimeout(resolve, 250));
+				}
+			}
+		} catch (e) {
+			if (leavingBoundRoom) {
+				// The danger pane died with the room view; the Home banner is the
+				// surface that survives. The refresh also clears the card's stale
+				// activeLock so Maintain does not stay wrongly blocked.
+				setPersistentResumeError(`${roomName} was NOT deleted: ${(e as Error).message}`);
+				void refreshPersistentAgentStatus();
+			}
+			throw e;
+		} finally {
+			setPurgingRooms((rooms) => {
+				const next = new Set(rooms);
+				next.delete(agentId);
+				return next;
+			});
+		}
+		roomDraftsRef.current.delete(agentId);
+		clearBackgroundActivityBadge(agentId);
+		setPersistentAgentStatuses((statuses) => statuses.filter((status) => status.id !== agentId));
+		setPersistentAgentStatus((status) => status?.id === agentId ? null : status);
+		if (persistentThread?.agentId === agentId) setPersistentThread(null);
+		if (response.failed.length > 0) {
+			// The danger pane closes (or is already gone) on success, so refused
+			// leftovers report on the Home banner; the archived rows have their
+			// own note and call the endpoint directly, never through here.
+			setPersistentResumeError(`${roomName} was deleted, but ${response.failed.length} item${response.failed.length === 1 ? "" : "s"} on this machine could not be removed.`);
 		}
 		await refreshPersistentAgentStatus();
 		return response;
@@ -6168,7 +6404,7 @@ export function App() {
 				{gcAssessment && !gcReviewOpen && <TaskStoreGcBanner assessment={gcAssessment} onReview={() => setGcReviewOpen(true)} onDismiss={() => setGcAssessment(null)} />}
 				{gcReviewOpen && gcAssessment && <TaskStoreGcDialog assessment={gcAssessment} busy={gcBusy} onConfirm={() => void confirmTaskStoreGc()} onClose={() => setGcReviewOpen(false)} />}
 				{backgroundDoneToastView && <div className="launcher-toasts"><ToastStack toasts={[backgroundDoneToastView]} /></div>}
-				<Landing onOpenAiSetup={() => setView("ai-setup")} onOpenDashboard={() => setView("dashboard")} onOpenConnectors={() => setView("connectors")} onOpenMemory={() => setView("memory")} onOpenSkills={() => setView("skills")} onOpenPersistentAgent={openPersistentAgent} onResumePersistentAgent={openPersistentAgentResume} onMaintainPersistentAgent={(target) => { if (!openMaintainChooser(target)) setPersistentResumeError(maintainBlockedReason(target.agentId) ?? "Maintain is not available for this room right now."); }} onCreatePersistentAgent={createPersistentAgentRoom} onArchiveRoom={archivePersistentAgentRoom} onMementoForget={(agentId) => { roomDraftsRef.current.delete(agentId); }} modelStatus={modelStatus} persistentAgentStatuses={persistentAgentStatuses} persistentThread={persistentThread} persistentLive={!!persistentChat} persistentResumeError={persistentResumeError} onRefreshPersistentAgent={refreshPersistentAgentStatus} theme={theme} onToggleTheme={() => setTheme((t) => (t === "dark" ? "light" : "dark"))} connected={connected} aiProfileStatus={aiProfileStatus} onSelectAiProfile={selectAiProfile} onRefreshAiProfile={refreshAiProfileStatus} standbyLockedModels={standbyLockedModels} backgroundReadyRooms={backgroundReadyRooms} />
+				<Landing onOpenAiSetup={() => setView("ai-setup")} onOpenDashboard={() => setView("dashboard")} onOpenConnectors={() => setView("connectors")} onOpenMemory={() => setView("memory")} onOpenSkills={() => setView("skills")} onOpenPersistentAgent={openPersistentAgent} onResumePersistentAgent={openPersistentAgentResume} onMaintainPersistentAgent={(target) => { if (!openMaintainChooser(target)) setPersistentResumeError(maintainBlockedReason(target.agentId) ?? "Maintain is not available for this room right now."); }} onCreatePersistentAgent={createPersistentAgentRoom} onArchiveRoom={archivePersistentAgentRoom} onPurgeRoom={purgePersistentAgentRoom} onMementoForget={(agentId) => { roomDraftsRef.current.delete(agentId); }} modelStatus={modelStatus} persistentAgentStatuses={persistentAgentStatuses} persistentThread={persistentThread} persistentLive={!!persistentChat} persistentResumeError={persistentResumeError} onRefreshPersistentAgent={refreshPersistentAgentStatus} theme={theme} onToggleTheme={() => setTheme((t) => (t === "dark" ? "light" : "dark"))} connected={connected} aiProfileStatus={aiProfileStatus} onSelectAiProfile={selectAiProfile} onRefreshAiProfile={refreshAiProfileStatus} standbyLockedModels={standbyLockedModels} backgroundReadyRooms={backgroundReadyRooms} purgingRooms={purgingRooms} />
 			</>
 		);
 	}
@@ -6427,7 +6663,7 @@ export function App() {
 			globalOverlaySlot={
 				<>
 					{roomSettingsOpen && currentPersistentStatus && (
-						<RoomSettingsModal status={currentPersistentStatus} onClose={() => setRoomSettingsOpen(false)} onArchive={archivePersistentAgentRoom} onRefresh={refreshPersistentAgentStatus} onMementoApplied={leaveRoomAfterMemento} />
+						<RoomSettingsModal status={currentPersistentStatus} onClose={() => setRoomSettingsOpen(false)} onArchive={archivePersistentAgentRoom} onPurge={purgePersistentAgentRoom} onRefresh={refreshPersistentAgentStatus} onMementoApplied={leaveRoomAfterMemento} />
 					)}
 					{helpOpen && <Help onClose={() => setHelpOpen(false)} />}
 					{assetDeleteConfirm && <AssetDeleteDialog title={assetDeleteConfirm.title} onDelete={() => { const row = assetDeleteConfirm; setAssetDeleteConfirm(null); if (row) void deleteAssetRow(row); }} onCancel={() => setAssetDeleteConfirm(null)} />}

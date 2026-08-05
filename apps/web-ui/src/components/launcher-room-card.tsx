@@ -60,9 +60,11 @@ export type PersistentAgentCardProps = {
 	onOpenSettings?: () => void;
 	/** A response finished in this room after the user left it (community #14). */
 	backgroundReady?: boolean;
+	/** A purge for this room is in flight (community #10): every door into the room closes until it resolves. */
+	purging?: boolean;
 };
 
-export function PersistentAgentCard({ status, modelStatus, aiProfileStatus, thread, live, duplicateDisplayName = false, onEnter, onResume, onMaintain, onOpenSettings, backgroundReady = false }: PersistentAgentCardProps) {
+export function PersistentAgentCard({ status, modelStatus, aiProfileStatus, thread, live, duplicateDisplayName = false, onEnter, onResume, onMaintain, onOpenSettings, backgroundReady = false, purging = false }: PersistentAgentCardProps) {
 	const [entering, setEntering] = useState(false);
 	const [expanded, setExpanded] = useState(false);
 	const [draftModel, setDraftModel] = useState("");
@@ -142,15 +144,23 @@ export function PersistentAgentCard({ status, modelStatus, aiProfileStatus, thre
 		: lockedByScheduler
 			? "This room is working on a scheduled background task. Wait for it to finish before opening it. A room can only be active in one place at a time."
 			: `This room is open in ${lockWhere}. Close it there to use it here. A room can only be active in one place at a time.`;
-	const canEnter = !!status && state === "ready" && !preparedBoundaryThread && roomModels.length > 0 && !!draftModel && !lockedElsewhere;
-	const canMaintain = !!status && status.exists && !hasActiveThread && !lockedElsewhere && (status.status === "ready" || status.status === "needs_absorb");
+	// Mid-purge the room may sit on Home for a few seconds while the delete
+	// endpoint retries; entering it then would either doom the delete or get
+	// the room removed underneath the new session.
+	const purgeNote = "This room is being deleted.";
+	const canEnter = !!status && state === "ready" && !preparedBoundaryThread && roomModels.length > 0 && !!draftModel && !lockedElsewhere && !purging;
+	const canMaintain = !!status && status.exists && !hasActiveThread && !lockedElsewhere && !purging && (status.status === "ready" || status.status === "needs_absorb");
 	// Disabled tooltips name the actual blocker and the way out; "resting" is
 	// not a state shown anywhere else on the card.
-	const enterDisabledReason = state === "needs_absorb"
+	const enterDisabledReason = purging
+		? purgeNote
+		: state === "needs_absorb"
 		? "This room needs to learn its recent sessions first. Use Maintain, then enter."
 		: state === "ready" ? "Enter persistent chat" : "This room is not ready to enter yet.";
-	const maintainDisabledReason = lockedElsewhere
-		? lockNote
+	const maintainDisabledReason = purging
+		? purgeNote
+		: lockedElsewhere
+			? lockNote
 		: hasActiveThread
 			? "This room has a session in progress. Resume it and save a checkpoint, then Maintain becomes available."
 			: !status || !status.exists
@@ -184,7 +194,7 @@ export function PersistentAgentCard({ status, modelStatus, aiProfileStatus, thre
 								: backgroundReady
 									? <span className="persistent-agent-badge ready" title="A response finished after you left this room. Resume to read it.">response ready</span>
 									: showBadge && <span className={`persistent-agent-badge ${badgeClass}`}>{badgeLabel}</span>}
-						{status?.exists && onOpenSettings && <button className="card-gear-btn" aria-label="Room settings" title="Room settings" onClick={onOpenSettings}>⚙</button>}
+						{status?.exists && onOpenSettings && <button className="card-gear-btn" aria-label="Room settings" title={purging ? purgeNote : "Room settings"} disabled={purging} onClick={onOpenSettings}>⚙</button>}
 					</div>
 				</div>
 				{status && status.errors.length > 0 && <div className="persistent-agent-error-summary">This room needs attention before it can be used.</div>}
@@ -222,12 +232,12 @@ export function PersistentAgentCard({ status, modelStatus, aiProfileStatus, thre
 					{state === "missing" ? (
 						<button className="landing-action" disabled>Unavailable</button>
 					) : hasStandbyThread ? (
-						<button className="landing-action" title={lockedElsewhere ? lockNote : standbyActionTitle} disabled={!status || lockedElsewhere || !standbyModelAllowed} onClick={() => status && onResume(status)}>Resume →</button>
+						<button className="landing-action" title={purging ? purgeNote : lockedElsewhere ? lockNote : standbyActionTitle} disabled={!status || lockedElsewhere || !standbyModelAllowed || purging} onClick={() => status && onResume(status)}>Resume →</button>
 					) : preparedBoundaryThread ? (
 						<button
 							className="landing-action"
-							title={lockedElsewhere ? lockNote : preparedSelectionMatchesLock || !roomModels.length ? "Enter the prepared room runtime" : "Enter with the selected model"}
-							disabled={!status || lockedElsewhere || entering || (roomModels.length > 0 && !draftModel)}
+							title={purging ? purgeNote : lockedElsewhere ? lockNote : preparedSelectionMatchesLock || !roomModels.length ? "Enter the prepared room runtime" : "Enter with the selected model"}
+							disabled={!status || lockedElsewhere || entering || purging || (roomModels.length > 0 && !draftModel)}
 							onClick={() => {
 								if (!status) return;
 								// With no room models to offer, entering the prepared runtime on

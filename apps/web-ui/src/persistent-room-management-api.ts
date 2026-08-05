@@ -1,5 +1,12 @@
 import { redirectToSignInOn401 } from "./api";
-import type { PersistentAgentArchiveRequest, PersistentAgentArchiveResponse, PersistentAgentId, PersistentAgentRenameResponse } from "./types";
+import type { ArchivedPersistentAgentSummary, PersistentAgentArchiveRequest, PersistentAgentArchiveResponse, PersistentAgentId, PersistentAgentLifecycleCounts, PersistentAgentPurgeBusyReason, PersistentAgentPurgeResponse, PersistentAgentRenameResponse, PersistentAgentRestoreResponse } from "./types";
+
+const PURGE_BUSY_REASONS: readonly PersistentAgentPurgeBusyReason[] = ["room_lock", "turn_in_flight", "detached_cooking", "specialist_running"];
+
+/** Error thrown by purgePersistentRoom, carrying the server's machine-readable busy reason when it sent one. */
+export interface PersistentRoomPurgeError extends Error {
+	reason?: PersistentAgentPurgeBusyReason;
+}
 
 function parsePersistentRoomManagementError(payload: unknown, fallback = "Room management request failed."): string {
 	if (payload && typeof payload === "object") {
@@ -39,6 +46,46 @@ export function archivePersistentRoom(agentId: PersistentAgentId, request: Persi
 			body: JSON.stringify(request),
 		},
 		"Failed to delete room."
+	);
+}
+
+export function restorePersistentRoom(agentId: PersistentAgentId): Promise<PersistentAgentRestoreResponse> {
+	return fetchJson<PersistentAgentRestoreResponse>(
+		`/api/persistent-agents/${encodeURIComponent(agentId)}/restore`,
+		{ method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) },
+		"Failed to restore room."
+	);
+}
+
+// Not fetchJson: the purge error carries a machine-readable busy reason the
+// caller needs — its own just-released lock is worth a short retry, a room
+// genuinely busy elsewhere is not.
+export async function purgePersistentRoom(agentId: PersistentAgentId, confirmation: string): Promise<PersistentAgentPurgeResponse> {
+	const response = await fetch(`/api/persistent-agents/${encodeURIComponent(agentId)}/purge`, {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({ confirmation }),
+	});
+	redirectToSignInOn401(response);
+	const payload = await readJsonOrText(response);
+	if (!response.ok) {
+		const error: PersistentRoomPurgeError = new Error(parsePersistentRoomManagementError(payload, "Failed to delete room."));
+		const reason = payload && typeof payload === "object" ? (payload as { reason?: unknown }).reason : undefined;
+		if (typeof reason === "string" && (PURGE_BUSY_REASONS as readonly string[]).includes(reason)) error.reason = reason as PersistentAgentPurgeBusyReason;
+		throw error;
+	}
+	return payload as PersistentAgentPurgeResponse;
+}
+
+export function fetchArchivedPersistentRooms(): Promise<ArchivedPersistentAgentSummary[]> {
+	return fetchJson<ArchivedPersistentAgentSummary[]>("/api/persistent-agents/archived", undefined, "Failed to load archived rooms.");
+}
+
+export function fetchPersistentRoomLifecycleCounts(agentId: PersistentAgentId): Promise<{ agentId: PersistentAgentId; counts: PersistentAgentLifecycleCounts }> {
+	return fetchJson<{ agentId: PersistentAgentId; counts: PersistentAgentLifecycleCounts }>(
+		`/api/persistent-agents/${encodeURIComponent(agentId)}/lifecycle-counts`,
+		undefined,
+		"Failed to load room contents."
 	);
 }
 

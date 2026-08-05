@@ -2625,6 +2625,98 @@ strong, b { font-weight: 700; }
 .landing-grid--empty .add-room-card {
 	min-height: 140px;
 }
+/* Archived rooms: one folded line below the grid; rows borrow the rs-row
+   language from Room settings so both delete surfaces read the same. */
+.archived-rooms {
+	width: 100%;
+	max-width: 1120px;
+	margin: 8px auto 0;
+}
+.archived-rooms-summary {
+	display: inline-flex;
+	align-items: baseline;
+	gap: 8px;
+	background: none;
+	border: none;
+	padding: 6px 0;
+	font: inherit;
+	color: var(--muted);
+	cursor: pointer;
+}
+.archived-rooms-summary:hover .archived-rooms-title,
+.archived-rooms-summary:focus-visible .archived-rooms-title {
+	color: var(--fg);
+}
+.archived-rooms-title {
+	font-size: 13px;
+	font-weight: 600;
+	letter-spacing: 0.02em;
+}
+.archived-rooms-toggle {
+	font-size: 11px;
+	line-height: 1;
+}
+/* No container and no rules: the archive is a small left-anchored block of
+   one-line rows, with the actions sitting right after the text instead of
+   stretching the row across the grid. Nothing here draws a shape. */
+.archived-rooms-panel {
+	margin-top: 4px;
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+}
+.archived-room-row {
+	display: flex;
+	align-items: center;
+	justify-content: flex-start;
+	gap: 18px;
+	padding: 5px 0;
+}
+.archived-room-main {
+	min-width: 0;
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	column-gap: 10px;
+	row-gap: 2px;
+}
+/* The armed confirm adds a second button to the row; a zero flex-basis on the
+   text column keeps the buttons at natural width instead of overflowing. */
+.room-danger-zone .rs-row-main {
+	flex: 1 1 0;
+}
+.archived-room-name {
+	font-weight: 600;
+	font-size: 14px;
+	white-space: nowrap;
+}
+.archived-room-meta {
+	color: var(--muted);
+	font-size: 12.5px;
+	line-height: 1.45;
+}
+.archived-room-armed {
+	color: var(--error);
+	flex-basis: 100%;
+}
+.archived-room-actions {
+	display: flex;
+	gap: 12px;
+	align-items: center;
+	flex-shrink: 0;
+}
+.archived-rooms-note {
+	margin: 8px 0 0;
+	color: var(--muted);
+	font-size: 12.5px;
+}
+.archived-rooms-retry {
+	margin-left: 8px;
+}
+.room-danger-armed {
+	color: var(--error);
+	margin-top: 4px;
+}
 :root[data-theme="light"] .persistent-agent-card .persistent-agent-id,
 :root[data-theme="light"] .persistent-agent-card .persistent-agent-meta,
 :root[data-theme="light"] .persistent-agent-card .persistent-agent-details {

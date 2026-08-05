@@ -27,7 +27,7 @@ import { createWebUiContext } from "./web-ui-context.js";
 import { cancelProviderLogin, logoutProvider, ProviderAuthError, providerLoginState, saveProviderApiKey, startProviderLogin } from "./provider-auth.js";
 import { builtInProfileIdForProvider, deleteCustomAiProfile, isCustomAiProfileId, isReservedCustomProfileProvider, readCustomAiProfiles, writeCustomAiProfile } from "./custom-ai-profiles.js";
 import { ConsultPromptOverflowError } from "./consult.js";
-import { appendPersistentAgentThreadPendingHandoff, archivePersistentAgent, beginPersistentAgentTurn, buildAbsorbAssessment, buildAbsorbDiscussionSignoff, buildAbsorbDiscussionTurn, buildAbsorbProposal, buildCheckpointProposal, buildConsultAnswer, buildPersistentAgentBootContext, buildPersistentAgentCurrentIdentitySection, buildStructuralReviewAssessment, buildStructuralReviewDiscussionSignoff, buildStructuralReviewDiscussionTurn, buildStructuralReviewProposal, createPersistentAgentFromScaffoldInput, createPersistentAgentPiSessionJsonlThreadRuntime, clearPersistentAgentThreadPendingHandoffs, clearPersistentAgentUnseenLandedAnswer, deletePersistentAgentThread, PERSISTENT_AGENT_L1A_DEFAULT_MODE_ID, PERSISTENT_AGENT_L1A_MODES, discardEmptyPreparedBoundaryThread, finishPersistentAgentTurn, getAbsorbAvailability, getPersistentAgentActiveTurnState, getPersistentAgentRuntimeState, getPersistentAgentStatus, getPersistentAgentThread, getStructuralReviewAvailability, isPersistentAgentArchived, listPersistentAgents, markPersistentAgentTurnCancelling, openPersistentAgentPiSessionManager, parseAbsorbApprovalRequest, parseCheckpointApprovalRequest, parseStructuralReviewApprovalRequest, readPersistentAgentBootPromptSnapshot, recordPersistentAgentUnseenLandedAnswer, renamePersistentAgent, validatePersistentAgentId, writeApprovedAbsorb, writeApprovedCheckpoint, writeApprovedStructuralReview, writePersistentAgentMementoBoundary, writePersistentAgentRuntimeState, writePersistentAgentThread } from "./persistent-agents.js";
+import { appendPersistentAgentThreadPendingHandoff, archivePersistentAgent, getPersistentAgentLifecycleCounts, listArchivedPersistentAgents, purgePersistentAgent, restorePersistentAgent, sweepPersistentAgentPurgeTombstones, beginPersistentAgentTurn, buildAbsorbAssessment, buildAbsorbDiscussionSignoff, buildAbsorbDiscussionTurn, buildAbsorbProposal, buildCheckpointProposal, buildConsultAnswer, buildPersistentAgentBootContext, buildPersistentAgentCurrentIdentitySection, buildStructuralReviewAssessment, buildStructuralReviewDiscussionSignoff, buildStructuralReviewDiscussionTurn, buildStructuralReviewProposal, createPersistentAgentFromScaffoldInput, createPersistentAgentPiSessionJsonlThreadRuntime, clearPersistentAgentThreadPendingHandoffs, clearPersistentAgentUnseenLandedAnswer, deletePersistentAgentThread, PERSISTENT_AGENT_L1A_DEFAULT_MODE_ID, PERSISTENT_AGENT_L1A_MODES, discardEmptyPreparedBoundaryThread, finishPersistentAgentTurn, getAbsorbAvailability, getPersistentAgentActiveTurnState, getPersistentAgentRuntimeState, getPersistentAgentStatus, getPersistentAgentThread, getStructuralReviewAvailability, isPersistentAgentArchived, listPersistentAgents, markPersistentAgentTurnCancelling, openPersistentAgentPiSessionManager, parseAbsorbApprovalRequest, parseCheckpointApprovalRequest, parseStructuralReviewApprovalRequest, readPersistentAgentBootPromptSnapshot, recordPersistentAgentUnseenLandedAnswer, renamePersistentAgent, validatePersistentAgentId, writeApprovedAbsorb, writeApprovedCheckpoint, writeApprovedStructuralReview, writePersistentAgentMementoBoundary, writePersistentAgentRuntimeState, writePersistentAgentThread } from "./persistent-agents.js";
 import { buildPersistentRoomRestoredLiveThreadContext } from "./persistent-room-resume-context.js";
 import {
 	getPersistentRoomToolPolicy,
@@ -744,6 +744,60 @@ app.post("/api/persistent-agents/:id/archive", async (req, reply) => {
 		const message = (e as Error).message;
 		const statusCode = (e as any).statusCode ?? (/invalid persistent agent id/i.test(message) ? 400 : 400);
 		return reply.code(statusCode).send({ error: message });
+	}
+});
+// The archived shadow of the room list: everything GET /api/persistent-agents
+// hides. Counts only, no filesystem paths — the browser never learns roots.
+app.get("/api/persistent-agents/archived", async () => listArchivedPersistentAgents());
+app.get("/api/persistent-agents/:id/lifecycle-counts", async (req, reply) => {
+	const idRaw = String((req.params as any).id ?? "").trim();
+	try {
+		return { agentId: idRaw, counts: getPersistentAgentLifecycleCounts(idRaw) };
+	} catch (e) {
+		const message = (e as Error).message;
+		const statusCode = (e as any).statusCode ?? (/invalid persistent agent id/i.test(message) ? 400 : 500);
+		if (statusCode >= 500) {
+			app.log.error({ err: e }, "persistent-agent lifecycle-counts failed");
+			return reply.code(statusCode).send({ error: "Counting the room's contents failed because of a server error. Check the server logs for details." });
+		}
+		return reply.code(statusCode).send({ error: message });
+	}
+});
+app.post("/api/persistent-agents/:id/restore", async (req, reply) => {
+	const idRaw = String((req.params as any).id ?? "").trim();
+	try {
+		return restorePersistentAgent(idRaw);
+	} catch (e) {
+		const message = (e as Error).message;
+		const statusCode = (e as any).statusCode ?? (/invalid persistent agent id/i.test(message) ? 400 : 500);
+		if (statusCode >= 500) {
+			app.log.error({ err: e }, "persistent-agent restore failed");
+			return reply.code(statusCode).send({ error: "Restoring failed because of a server error. Check the server logs for details." });
+		}
+		return reply.code(statusCode).send({ error: message });
+	}
+});
+app.post("/api/persistent-agents/:id/purge", async (req, reply) => {
+	const idRaw = String((req.params as any).id ?? "").trim();
+	try {
+		const body = (req.body ?? {}) as any;
+		return purgePersistentAgent(idRaw, {
+			confirmation: String(body.confirmation ?? ""),
+			// The detached-cooking set lives in this process; the purge guard has
+			// to see it or a background answer could land into a deleted room.
+			detachedCooking: detachedCookingRooms.has(idRaw),
+		});
+	} catch (e) {
+		const message = (e as Error).message;
+		const statusCode = (e as any).statusCode ?? (/invalid persistent agent id/i.test(message) ? 400 : 500);
+		if (statusCode >= 500) {
+			app.log.error({ err: e }, "persistent-agent purge failed");
+			return reply.code(statusCode).send({ error: "Deleting failed because of a server error. Check the server logs for details." });
+		}
+		// The machine-readable busy reason lets the client distinguish its own
+		// just-released lock (worth a short retry) from a genuinely busy room.
+		const reason = (e as any).purgeBusyReason;
+		return reply.code(statusCode).send({ error: message, ...(reason ? { reason } : {}) });
 	}
 });
 
@@ -5956,6 +6010,16 @@ try {
 	if (sweptTasks > 0) app.log.info(`task ledger: marked ${sweptTasks} interrupted task(s) orphaned`);
 } catch (e) {
 	app.log.warn({ err: (e as Error).message }, "task ledger boot sweep failed");
+}
+
+// Purge-tombstone sweep: a room purge detaches the room dir by rename before
+// removing it, so a crash or a refusing OS can leave a <id>.purging-<ts>
+// tombstone — invisible to every listing, reclaimed here.
+try {
+	const sweptTombstones = sweepPersistentAgentPurgeTombstones();
+	if (sweptTombstones > 0) app.log.info(`purge tombstones: removed ${sweptTombstones} leftover room remainder(s)`);
+} catch (e) {
+	app.log.warn({ err: (e as Error).message }, "purge tombstone boot sweep failed");
 }
 
 // Boot heal FIRST: replay any rename journal a crash left mid-rewrite and

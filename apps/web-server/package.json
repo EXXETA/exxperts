@@ -52,6 +52,7 @@
     "smoke:persistent-agent-scaffold": "tsx scripts/persistent-agent-scaffold-smoke.ts",
     "smoke:persistent-agent-scaffold-shape": "tsx scripts/persistent-agent-scaffold-smoke.ts",
     "smoke:persistent-agent-archive": "tsx scripts/persistent-agent-archive-smoke.ts",
+    "smoke:persistent-agent-lifecycle": "tsx scripts/persistent-agent-lifecycle-smoke.ts",
     "smoke:persistent-agent-non-default-room": "tsx scripts/persistent-agent-non-default-room-smoke.ts",
     "smoke:persistent-agent-non-default-checkpoint-workspace": "tsx scripts/persistent-agent-non-default-checkpoint-workspace-smoke.ts",
     "smoke:persistent-agent-non-default-maintenance": "tsx scripts/persistent-agent-non-default-maintenance-smoke.ts",

@@ -1146,6 +1146,47 @@ export interface PersistentAgentArchiveResponse {
 	status: "archived";
 }
 
+/** Real numbers for the danger zone and the archived-rooms list: conversations = threads, memories = Recent Context entries, files = the shelf, documents = shelf files the room itself produced. */
+export interface PersistentAgentLifecycleCounts {
+	conversations: number;
+	memories: number;
+	files: number;
+	documents: number;
+}
+
+export interface ArchivedPersistentAgentSummary {
+	id: PersistentAgentId;
+	displayName?: string;
+	archivedAt: number;
+	archivedReason?: string;
+	counts: PersistentAgentLifecycleCounts;
+}
+
+export interface PersistentAgentRestoreResponse {
+	agentId: PersistentAgentId;
+	restoredAt: number;
+	status: "ready";
+	/** Enabled schedule jobs that resume with the room — at their next natural time, never immediately. */
+	enabledSchedules: number;
+	/** One-shot jobs whose time passed while archived: disabled and marked missed, they need a new time. */
+	missedOnceSchedules: number;
+	/** Set when the schedule store could not be re-anchored — overdue jobs may still fire once. */
+	scheduleNotice?: string;
+}
+
+/** Why a purge was refused with 409 — the wire contract for the danger flows' retry/decline logic. */
+export type PersistentAgentPurgeBusyReason = "room_lock" | "turn_in_flight" | "detached_cooking" | "specialist_running";
+
+export interface PersistentAgentPurgeResponse {
+	agentId: PersistentAgentId;
+	purgedAt: number;
+	status: "purged";
+	removedTaskFolders: number;
+	removedBackgroundRuns: number;
+	/** Targets the OS refused to remove after the room dir was gone; reasons are error codes, never paths. */
+	failed: { target: string; reason: string }[];
+}
+
 export type ChatItem =
 	| { kind: "user"; id: string; text: string; attachments?: { name: string; bytes: number; extension: string }[] }
 	| { kind: "assistant"; id: string; text: string; streaming?: boolean }

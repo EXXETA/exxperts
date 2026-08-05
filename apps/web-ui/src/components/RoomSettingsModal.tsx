@@ -1,5 +1,5 @@
 import { type ReactNode, useCallback, useRef, useState } from "react";
-import type { PersistentAgentArchiveResponse, PersistentAgentId, PersistentAgentRenameMemoryMention, PersistentAgentRenameResponse, PersistentAgentStatus } from "../types";
+import type { PersistentAgentArchiveResponse, PersistentAgentId, PersistentAgentPurgeResponse, PersistentAgentRenameMemoryMention, PersistentAgentRenameResponse, PersistentAgentStatus } from "../types";
 import { renamePersistentRoom } from "../persistent-room-management-api";
 import { RoomSessionSection } from "./RoomSessionSection";
 import { RoomWorkspaceSection } from "./RoomWorkspaceSection";
@@ -50,7 +50,7 @@ function highlightMention(text: string, name: string): ReactNode {
 	return parts.length > 0 ? parts : text;
 }
 
-export function RoomSettingsModal({ status, onClose, onArchive, onRefresh, onMementoApplied, onMementoForget }: { status: PersistentAgentStatus; onClose: () => void; onArchive: (agentId: PersistentAgentId, confirmation: string) => Promise<PersistentAgentArchiveResponse>; onRefresh: () => void; onMementoApplied?: () => void; onMementoForget?: () => void }) {
+export function RoomSettingsModal({ status, onClose, onArchive, onPurge, onRefresh, onMementoApplied, onMementoForget }: { status: PersistentAgentStatus; onClose: () => void; onArchive: (agentId: PersistentAgentId, confirmation: string) => Promise<PersistentAgentArchiveResponse>; onPurge: (agentId: PersistentAgentId, confirmation: string) => Promise<PersistentAgentPurgeResponse>; onRefresh: () => void; onMementoApplied?: () => void; onMementoForget?: () => void }) {
 	const workspaceDirtyRef = useRef(false);
 	const handleWorkspaceDirtyChange = useCallback((dirty: boolean) => { workspaceDirtyRef.current = dirty; }, []);
 	const [pane, setPane] = useState<SettingsPane>("workspace");
@@ -131,6 +131,12 @@ export function RoomSettingsModal({ status, onClose, onArchive, onRefresh, onMem
 	useEscapeKey(requestClose);
 	async function archiveAndClose(agentId: PersistentAgentId, confirmation: string): Promise<PersistentAgentArchiveResponse> {
 		const response = await onArchive(agentId, confirmation);
+		onRefresh();
+		onClose();
+		return response;
+	}
+	async function purgeAndClose(agentId: PersistentAgentId, confirmation: string): Promise<PersistentAgentPurgeResponse> {
+		const response = await onPurge(agentId, confirmation);
 		onRefresh();
 		onClose();
 		return response;
@@ -219,7 +225,7 @@ export function RoomSettingsModal({ status, onClose, onArchive, onRefresh, onMem
 							<RoomSessionSection status={status} onRefresh={onRefresh} onMementoApplied={onMementoApplied} onMementoForget={onMementoForget} />
 						</section>
 						<section className="room-settings-section" hidden={pane !== "danger"}>
-							<RoomDangerZone status={status} onArchive={archiveAndClose} />
+							<RoomDangerZone status={status} visible={pane === "danger"} onArchive={archiveAndClose} onPurge={purgeAndClose} />
 						</section>
 					</div>
 				</div>
