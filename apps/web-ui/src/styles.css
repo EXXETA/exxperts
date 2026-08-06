@@ -1367,13 +1367,23 @@ strong, b { font-weight: 700; }
 /* Unready rows are inert; the Sign in button carries the action. */
 .ai-profile-row.notready { cursor: default; }
 .ai-profile-row:hover,
-.ai-profile-row:focus-visible {
+.ai-profile-row:has(.ai-profile-main:focus-visible) {
 	background: var(--panel-2);
 	outline: none;
 }
 .ai-profile-row.notready:hover,
-.ai-profile-row.notready:focus-visible {
+.ai-profile-row.notready:has(.ai-profile-main:focus-visible) {
 	background: transparent;
+}
+/* The radio semantics live on the label area only (buttons must stay outside
+   the radio role); it carries the row's focus and inherits the row layout. */
+.ai-profile-main {
+	display: flex;
+	align-items: center;
+	gap: 14px;
+	flex: 1;
+	min-width: 0;
+	outline: none;
 }
 .ai-profile-radio {
 	width: 16px;
@@ -1411,9 +1421,9 @@ strong, b { font-weight: 700; }
    quiet subline only while the row is hovered or focused. */
 .ai-profile-sub.sub-strand { display: none; }
 .ai-profile-row.has-strand:hover .ai-profile-sub.sub-default,
-.ai-profile-row.has-strand:focus-visible .ai-profile-sub.sub-default { display: none; }
+.ai-profile-row.has-strand:has(.ai-profile-main:focus-visible) .ai-profile-sub.sub-default { display: none; }
 .ai-profile-row.has-strand:hover .ai-profile-sub.sub-strand,
-.ai-profile-row.has-strand:focus-visible .ai-profile-sub.sub-strand { display: block; }
+.ai-profile-row.has-strand:has(.ai-profile-main:focus-visible) .ai-profile-sub.sub-strand { display: block; }
 .ai-profile-side {
 	margin-left: auto;
 	display: flex;

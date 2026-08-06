@@ -731,27 +731,48 @@ function AiProfileSwitcherSection({ status, onSelect, onRefresh, onRefreshAuth, 
 								<div key={profile.id} className={`ai-profile-row-group${modelsOpen ? " open" : ""}`}>
 									<div
 										className={`ai-profile-row${presentedActive ? " active" : ""}${profile.ready ? "" : " notready"}${strandWarning ? " has-strand" : ""}`}
-										role="radio"
-										aria-checked={presentedActive}
-										aria-disabled={!profile.ready || undefined}
-										tabIndex={profile.ready ? 0 : -1}
-										title={title}
 										onClick={() => {
 											// Unready rows are inert; only the Sign in button starts a sign-in.
 											if (!profile.ready || switchingId !== null || login.signingInProvider !== null) return;
 											if (!profile.active) void selectProfile(profile.id);
 										}}
-										onKeyDown={(e) => {
-											if (e.key !== "Enter" && e.key !== " ") return;
-											e.preventDefault();
-											(e.currentTarget as HTMLElement).click();
-										}}
 									>
-										<span className="ai-profile-radio" aria-hidden="true" />
-										<span className="ai-profile-text">
-											<span className="ai-profile-name">{profile.label}</span>
-											<span className={`ai-profile-sub sub-default${sublineWarn ? " warn" : ""}`}>{subline}</span>
-											{strandWarning && <span className="ai-profile-sub sub-strand warn">{strandWarning}</span>}
+										{/* The radio role covers only the label area: a radio's children are
+										    presentational, so Sign in and the manage menu must live outside it
+										    or assistive tech treats them as decoration — and the unready row's
+										    aria-disabled would wrongly disable them too. */}
+										<span
+											className="ai-profile-main"
+											role="radio"
+											aria-checked={presentedActive}
+											aria-disabled={!profile.ready || undefined}
+											tabIndex={profile.ready ? 0 : -1}
+											title={title}
+											onKeyDown={(e) => {
+												// Arrows move focus only (unready rows included, so their state is
+												// hearable); selection stays on Enter/Space because switching the
+												// active profile is a heavyweight action that must not ride along
+												// with browsing, as radiogroup selection-follows-focus would.
+												if (e.key === "ArrowDown" || e.key === "ArrowRight" || e.key === "ArrowUp" || e.key === "ArrowLeft") {
+													e.preventDefault();
+													const radios = Array.from(e.currentTarget.closest(".ai-profile-card")?.querySelectorAll<HTMLElement>(".ai-profile-main") ?? []);
+													const index = radios.indexOf(e.currentTarget as HTMLElement);
+													if (index < 0 || radios.length < 2) return;
+													const delta = e.key === "ArrowDown" || e.key === "ArrowRight" ? 1 : -1;
+													radios[(index + delta + radios.length) % radios.length].focus();
+													return;
+												}
+												if (e.key !== "Enter" && e.key !== " ") return;
+												e.preventDefault();
+												(e.currentTarget as HTMLElement).click();
+											}}
+										>
+											<span className="ai-profile-radio" aria-hidden="true" />
+											<span className="ai-profile-text">
+												<span className="ai-profile-name">{profile.label}</span>
+												<span className={`ai-profile-sub sub-default${sublineWarn ? " warn" : ""}`}>{subline}</span>
+												{strandWarning && <span className="ai-profile-sub sub-strand warn">{strandWarning}</span>}
+											</span>
 										</span>
 										<span className="ai-profile-side" onClick={(e) => e.stopPropagation()}>
 											{roomModelCount > 0 && (
@@ -776,10 +797,10 @@ function AiProfileSwitcherSection({ status, onSelect, onRefresh, onRefreshAuth, 
 															</button>
 														)
 													)}
-													{/* Management stays reachable while a signed-in profile is broken
-													    (expired token, missing model) — Sign out/Remove must not
-													    disappear behind the re-sign-in button. */}
-													{(profile.ready || profile.provider.configured) && (
+													{/* Management stays reachable in every state — broken (expired
+													    token, missing model) AND fully signed out. A signed-out custom
+													    profile must still offer Remove, or the row becomes a dead end;
+													    items that need a credential gate themselves below. */}
 												<span className="ai-profile-menu-anchor">
 													<button
 														className="ai-profile-menu-btn"
@@ -794,13 +815,16 @@ function AiProfileSwitcherSection({ status, onSelect, onRefresh, onRefreshAuth, 
 															<span className="ai-profile-menu" role="menu">
 																{confirmRemoveId === profile.id ? (
 																	<>
-																		<span className="ai-profile-menu-confirm">Remove {profile.label}? This signs out and deletes its approved models.</span>
+																		<span className="ai-profile-menu-confirm">Remove {profile.label}? This {profile.provider.configured ? "signs out and deletes" : "deletes"} its approved models.</span>
 																		<button className="ai-profile-menu-item danger" role="menuitem" disabled={removing} onClick={() => void removeProfile(profile)}>{removing ? "Removing…" : "Remove"}</button>
 																		<button className="ai-profile-menu-item" role="menuitem" disabled={removing} onClick={() => setConfirmRemoveId(null)}>Keep it</button>
 																	</>
 																) : (
 																	<>
-																		<button className="ai-profile-menu-item" role="menuitem" onClick={() => { setModelsOpenId(profile.id); closeMenu(); }}>View models</button>
+																		{/* A toggle, not an opener: a 0-room-model profile renders no
+																		    "N room models" collapse control, so without the Hide branch
+																		    the opened panel would be uncloseable. */}
+																		<button className="ai-profile-menu-item" role="menuitem" onClick={() => { setModelsOpenId(modelsOpen ? null : profile.id); closeMenu(); }}>{modelsOpen ? "Hide models" : "View models"}</button>
 																		{profile.kind !== "gateway" && (
 																			<button className="ai-profile-menu-item" role="menuitem" onClick={() => { setEditProfile(profile); closeMenu(); }}>Approve models</button>
 																		)}
@@ -818,7 +842,10 @@ function AiProfileSwitcherSection({ status, onSelect, onRefresh, onRefreshAuth, 
 																		{providerAcceptsApiKey(profile.provider.id) && profile.provider.configured && (
 																			<button className="ai-profile-menu-item" role="menuitem" onClick={() => { setKeyProfileId(profile.id); closeMenu(); }}>Replace API key</button>
 																		)}
-																		<button className="ai-profile-menu-item" role="menuitem" onClick={() => { closeMenu(); void signOut(profile); }}>Sign out</button>
+																		{/* No credential stored → nothing to sign out of. */}
+																		{profile.provider.configured && (
+																			<button className="ai-profile-menu-item" role="menuitem" onClick={() => { closeMenu(); void signOut(profile); }}>Sign out</button>
+																		)}
 																		{profile.kind !== "builtin" && (
 																			<button className="ai-profile-menu-item danger" role="menuitem" onClick={() => setConfirmRemoveId(profile.id)}>
 																				{profile.kind === "gateway" ? "Remove gateway…" : "Remove provider…"}
@@ -830,7 +857,6 @@ function AiProfileSwitcherSection({ status, onSelect, onRefresh, onRefreshAuth, 
 														</>
 													)}
 												</span>
-													)}
 												</>
 											)}
 										</span>
