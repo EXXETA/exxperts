@@ -1371,6 +1371,13 @@ strong, b { font-weight: 700; }
 	background: var(--panel-2);
 	outline: none;
 }
+/* The keyboard cursor must stay visible on every row the arrow keys can
+   reach — notready rows keep a transparent background, so without this ring
+   focusing them changes nothing on screen. */
+.ai-profile-row:has(.ai-profile-main:focus-visible) {
+	outline: 2px solid var(--exx-focus);
+	outline-offset: -2px;
+}
 .ai-profile-row.notready:hover,
 .ai-profile-row.notready:has(.ai-profile-main:focus-visible) {
 	background: transparent;
