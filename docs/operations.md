@@ -95,8 +95,9 @@ All of these can go in `.env` (auto-loaded) or your shell.
 | `ANTHROPIC_API_KEY` | (none) | Set if not using subscription auth. |
 | `OPENAI_API_KEY` | (none) | Same. |
 | `EXXETA_KB_VAULTS` | (none) | Optional override/additional Markdown vault config for the knowledge tools. Primary persistent config is `~/.exxperts/app/kb-vaults.json`. |
-| `EXXETA_SEARCH_PROVIDER` | (unset = built-in DuckDuckGo) | Web search provider: unset for the built-in DuckDuckGo backend, `searxng` for a local SearXNG, `disabled` to turn web search off. |
+| `EXXETA_SEARCH_PROVIDER` | (unset = built-in DuckDuckGo) | Web search provider: unset for the built-in DuckDuckGo backend, `searxng` for a local SearXNG, `youcom` for You.com search, `disabled` to turn web search off. |
 | `EXXETA_SEARCH_BASE_URL` | (none) | Required when `EXXETA_SEARCH_PROVIDER=searxng`, for example `http://127.0.0.1:8888`. Start a local instance with `./scripts/searxng start`. |
+| `YOU_API_KEY` or `YDC_API_KEY` | (none) | Required when `EXXETA_SEARCH_PROVIDER=youcom`. Get your API key at [you.com/platform/api-keys](https://you.com/platform/api-keys). |
 | `PORT` | `8787` | Web server port. |
 
 ## Local SearXNG
@@ -110,9 +111,16 @@ node scripts\searxng.mjs start # Windows (PowerShell or cmd)
 
 The helper writes `~/.exxperts/app/web-search.json` if no web-search config exists yet. Equivalent `.env` overrides are:
 
+**For SearXNG:**
 ```bash
 EXXETA_SEARCH_PROVIDER=searxng
 EXXETA_SEARCH_BASE_URL=http://127.0.0.1:8888
+```
+
+**For You.com:**
+```bash
+EXXETA_SEARCH_PROVIDER=youcom
+YOU_API_KEY=your_api_key_here
 ```
 
 The helper writes generated SearXNG settings to `~/.exxperts/app/searxng/settings.yml` with SearXNG JSON output enabled because `web_search` calls `/search?format=json`. Full reference: [`web-search.md`](web-search.md).
