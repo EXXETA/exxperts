@@ -89,7 +89,7 @@ jobs:
       - name: Build release archive
         run: node scripts/bundle-release.mjs --target ${{ matrix.target }} --out dist-release
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: release-${{ matrix.target }}
           path: |
@@ -126,7 +126,7 @@ jobs:
         working-directory: apps/desktop
         run: npm ci
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: release-darwin-arm64
           path: apps/desktop/build/payload
@@ -166,7 +166,7 @@ jobs:
       # must always travel together — a feed from one build with a zip from
       # another makes every installed app's updater fail checksum
       # verification and fall back to the manual download.
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: release-desktop-app-mac
           path: |
@@ -211,7 +211,7 @@ jobs:
         working-directory: apps/desktop
         run: npm ci
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: release-win-x64
           path: apps/desktop/build/payload
@@ -250,7 +250,7 @@ jobs:
 
       # latest.yml + blockmap: the Windows one-click updater's feed, bound by
       # sha512 to the setup exe built and signed here.
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: release-desktop-app-windows
           path: |
@@ -283,7 +283,7 @@ jobs:
       # Checkout only to get scripts/smoke-release-archive.mjs; no install.
       - uses: actions/checkout@v4
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: release-${{ matrix.target }}
           path: dist-release
@@ -339,7 +339,7 @@ jobs:
       # notes; no install.
       - uses: actions/checkout@v4
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: release-*
           path: dist-release
