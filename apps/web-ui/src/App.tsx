@@ -940,10 +940,10 @@ function Landing({ onOpenAiSetup, onOpenDashboard, onOpenConnectors, onOpenMemor
 			</section>
 			<section className={`landing-grid${roomStatuses.length === 0 ? " landing-grid--empty" : ""}`} aria-label="exxperts entry points">
 				{firstRoomStatus && (
-					<PersistentAgentCard key={firstRoomStatus.id} status={firstRoomStatus} modelStatus={modelStatus} aiProfileStatus={aiProfileSelection} thread={persistentThread?.agentId === firstRoomStatus.id ? persistentThread : null} live={persistentLive && persistentThread?.agentId === firstRoomStatus.id} duplicateDisplayName={hasDuplicateDisplayName(firstRoomStatus)} backgroundReady={backgroundReadyRooms?.has(firstRoomStatus.id) ?? false} purging={purgingRooms?.has(firstRoomStatus.id) ?? false} onEnter={onOpenPersistentAgent} onResume={onResumePersistentAgent} onMaintain={onMaintainPersistentAgent} onOpenSettings={() => openRoomSettings(firstRoomStatus)} />
+					<PersistentAgentCard key={firstRoomStatus.id} status={firstRoomStatus} modelStatus={modelStatus} aiProfileStatus={aiProfileSelection} thread={persistentThread?.agentId === firstRoomStatus.id ? persistentThread : null} live={persistentLive && persistentThread?.agentId === firstRoomStatus.id} duplicateDisplayName={hasDuplicateDisplayName(firstRoomStatus)} backgroundReady={backgroundReadyRooms?.has(firstRoomStatus.id) ?? false} purging={purgingRooms?.has(firstRoomStatus.id) ?? false} onEnter={onOpenPersistentAgent} onResume={onResumePersistentAgent} onMaintain={onMaintainPersistentAgent} onOpenSettings={() => openRoomSettings(firstRoomStatus)} standbyLockedModels={standbyLockedModels} onSelectAiProfile={onSelectAiProfile} />
 				)}
 				{additionalRoomStatuses.map((status) => (
-					<PersistentAgentCard key={status.id} status={status} modelStatus={modelStatus} aiProfileStatus={aiProfileSelection} thread={persistentThread?.agentId === status.id ? persistentThread : null} live={persistentLive && persistentThread?.agentId === status.id} duplicateDisplayName={hasDuplicateDisplayName(status)} backgroundReady={backgroundReadyRooms?.has(status.id) ?? false} purging={purgingRooms?.has(status.id) ?? false} onEnter={onOpenPersistentAgent} onResume={onResumePersistentAgent} onMaintain={onMaintainPersistentAgent} onOpenSettings={() => openRoomSettings(status)} />
+					<PersistentAgentCard key={status.id} status={status} modelStatus={modelStatus} aiProfileStatus={aiProfileSelection} thread={persistentThread?.agentId === status.id ? persistentThread : null} live={persistentLive && persistentThread?.agentId === status.id} duplicateDisplayName={hasDuplicateDisplayName(status)} backgroundReady={backgroundReadyRooms?.has(status.id) ?? false} purging={purgingRooms?.has(status.id) ?? false} onEnter={onOpenPersistentAgent} onResume={onResumePersistentAgent} onMaintain={onMaintainPersistentAgent} onOpenSettings={() => openRoomSettings(status)} standbyLockedModels={standbyLockedModels} onSelectAiProfile={onSelectAiProfile} />
 				))}
 				<button type="button" className="landing-card add-room-card" onClick={() => setCreateOpen(true)} aria-label="Create a new room">
 					<span className="add-room-plus" aria-hidden="true">+</span>
@@ -3056,11 +3056,15 @@ export function App() {
 		await refreshModelStatus();
 	}
 
-	async function refreshModelStatus() {
+	async function refreshModelStatus(options?: { rethrow?: boolean }) {
 		try {
 			const status = await apiFetch("/api/persistent-agent-room/model-status").then((r) => r.json()) as WebChatModelStatus;
 			setModelStatus(status);
-		} catch {}
+		} catch (e) {
+			// Background refreshes stay quiet; a caller that just changed what
+			// the model list depends on must not report success over stale data.
+			if (options?.rethrow) throw e;
+		}
 	}
 
 	async function refreshAiProfileStatus() {
@@ -3085,7 +3089,12 @@ export function App() {
 			throw new Error(message);
 		}
 		setAiProfileStatus(await res.json() as PersistentAgentAiProfileSelectionStatus);
-		await refreshModelStatus();
+		try {
+			await refreshModelStatus({ rethrow: true });
+		} catch {
+			// The switch itself landed — say so, and say what did not.
+			throw new Error("The AI profile was switched, but the model list could not be refreshed. Reload the page if models look stale.");
+		}
 	}
 
 	async function persistentAgentResponseError(res: Response, fallback: string): Promise<Error> {

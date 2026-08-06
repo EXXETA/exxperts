@@ -11159,3 +11159,233 @@ html.sidebar-collapsed:not(.desktop-app-mac) .landing {
 	color: var(--fg);
 	border-color: transparent;
 }
+
+/* ---------------------------------------------------------------------------
+   Grouped room-model picker (community #9): the room card's model control is
+   a popover grouped by AI profile. The trigger wears the old select's clothes
+   so the card reads unchanged; the menu borrows the sidebar config menu's
+   surface. Everything below is scoped under .model-picker* so the feature
+   lifts out cleanly. */
+.persistent-agent-card .persistent-agent-model .model-picker {
+	display: inline-flex;
+	min-width: 0;
+	position: relative;
+}
+.persistent-agent-card .persistent-agent-model .model-picker-trigger {
+	appearance: none;
+	border: 1px solid color-mix(in srgb, var(--fg-soft) 18%, var(--border-soft));
+	border-radius: var(--exx-radius-control);
+	background: color-mix(in srgb, var(--bg-2) 82%, var(--panel) 18%);
+	box-shadow: inset 0 1px 0 color-mix(in srgb, var(--fg-soft) 5%, transparent);
+	color: color-mix(in srgb, var(--fg-soft) 88%, var(--muted));
+	cursor: pointer;
+	display: inline-flex;
+	align-items: center;
+	font: inherit;
+	font-size: 11px;
+	line-height: 1.35;
+	max-width: 164px;
+	min-height: 30px;
+	min-width: 96px;
+	overflow: hidden;
+	padding: 6px 25px 6px 10px;
+	text-align: left;
+	transition: background 120ms ease, border-color 120ms ease, box-shadow 120ms ease, color 120ms ease;
+	white-space: nowrap;
+}
+.persistent-agent-card .persistent-agent-model .model-picker-trigger-name {
+	display: block;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.persistent-agent-card .persistent-agent-model .model-picker-trigger:hover,
+.persistent-agent-card .persistent-agent-model .model-picker-trigger:focus,
+.persistent-agent-card .persistent-agent-model .model-picker-trigger[aria-expanded="true"] {
+	background: color-mix(in srgb, var(--panel) 58%, var(--bg-2));
+	border-color: color-mix(in srgb, var(--fg-soft) 42%, var(--border));
+	box-shadow: inset 0 1px 0 color-mix(in srgb, var(--fg-soft) 8%, transparent), 0 0 0 1px color-mix(in srgb, var(--fg-soft) 8%, transparent);
+	color: var(--fg);
+	outline: none;
+}
+.persistent-agent-card .persistent-agent-model .model-picker-trigger:focus-visible {
+	outline: 2px solid var(--exx-focus);
+	outline-offset: 2px;
+}
+.model-picker-menu {
+	position: absolute;
+	right: 0;
+	top: calc(100% + 6px);
+	width: 296px;
+	max-height: 348px;
+	overflow-y: auto;
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	padding: 6px;
+	background: var(--panel);
+	border: 1px solid var(--border);
+	border-radius: var(--exx-radius-card);
+	box-shadow: var(--exx-shadow-popover);
+	z-index: 50;
+	font-size: var(--exx-font-size-xs);
+}
+.model-picker-filter {
+	width: 100%;
+	background: var(--bg-2);
+	border: 1px solid var(--border-soft);
+	border-radius: 6px;
+	color: var(--fg);
+	font: inherit;
+	font-size: var(--exx-font-size-xs);
+	padding: 6px 8px;
+	margin-bottom: 4px;
+}
+.model-picker-filter:focus {
+	border-color: var(--border);
+	outline: none;
+}
+.model-picker-filter:focus-visible {
+	outline: 2px solid var(--exx-focus);
+	outline-offset: 1px;
+}
+.model-picker-group {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+}
+.model-picker-group + .model-picker-group {
+	border-top: 1px solid var(--border-soft);
+	margin-top: 4px;
+	padding-top: 6px;
+}
+.model-picker-group-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	padding: 4px 8px 2px;
+	color: var(--muted);
+	font-size: 10px;
+	letter-spacing: 0.02em;
+}
+.model-picker-group-text {
+	display: flex;
+	flex-direction: column;
+	gap: 1px;
+	min-width: 0;
+}
+.model-picker-group-name {
+	color: var(--fg-soft);
+	font-weight: 600;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.model-picker-group-meta {
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+button.model-picker-group-head {
+	background: transparent;
+	border: 1px solid transparent;
+	border-radius: 6px;
+	cursor: pointer;
+	font: inherit;
+	font-size: 10px;
+	text-align: left;
+	width: 100%;
+}
+button.model-picker-group-head:hover,
+button.model-picker-group-head:focus {
+	background: var(--panel-2);
+	outline: none;
+}
+button.model-picker-group-head:focus-visible {
+	outline: 2px solid var(--exx-focus);
+	outline-offset: -2px;
+}
+.model-picker-group-chevron {
+	color: var(--muted);
+	flex-shrink: 0;
+}
+.model-picker-option {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	width: 100%;
+	background: transparent;
+	border: 1px solid transparent;
+	border-radius: 6px;
+	color: var(--fg);
+	cursor: pointer;
+	font: inherit;
+	font-size: var(--exx-font-size-xs);
+	padding: 6px 8px;
+	text-align: left;
+}
+.model-picker-option:hover,
+.model-picker-option:focus {
+	background: var(--panel-2);
+	outline: none;
+}
+.model-picker-option:focus-visible {
+	outline: 2px solid var(--exx-focus);
+	outline-offset: -2px;
+}
+.model-picker-option.selected {
+	background: var(--panel-2);
+	border-color: var(--border);
+}
+.model-picker-option-name {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.model-picker-option-check {
+	color: var(--fg);
+	flex-shrink: 0;
+}
+.model-picker-group.inert {
+	opacity: 0.6;
+}
+.model-picker-confirm-error {
+	color: var(--error);
+	font-size: var(--exx-font-size-xs);
+}
+:root[data-theme="light"] .persistent-agent-card .persistent-agent-model .model-picker-trigger {
+	background: color-mix(in srgb, var(--bg-2) 86%, var(--panel) 14%);
+	border-color: var(--border-soft);
+	color: var(--fg-soft);
+}
+:root[data-theme="light"] .persistent-agent-card .persistent-agent-model .model-picker-trigger:hover,
+:root[data-theme="light"] .persistent-agent-card .persistent-agent-model .model-picker-trigger:focus,
+:root[data-theme="light"] .persistent-agent-card .persistent-agent-model .model-picker-trigger[aria-expanded="true"] {
+	background: var(--panel);
+	border-color: var(--border);
+	box-shadow: 0 0 0 1px color-mix(in srgb, var(--fg) 8%, transparent);
+	color: var(--fg);
+}
+:root[data-theme="light"] .persistent-agent-card .persistent-agent-model .model-picker-trigger:focus-visible {
+	outline-color: var(--exx-focus);
+}
+/* The switch confirm must cover the open picker menu (menu is z-50). */
+.model-picker .checkpoint-preview-backdrop {
+	z-index: 60;
+}
+/* Measured placement: a bottom-row card opens its picker upward. */
+.model-picker-menu.drop-up {
+	top: auto;
+	bottom: calc(100% + 6px);
+}
+/* Combobox highlight while focus stays in the filter input. */
+.model-picker-option.kb-active,
+button.model-picker-group-head.kb-active {
+	background: var(--panel-2);
+	outline: 2px solid var(--exx-focus);
+	outline-offset: -2px;
+}
