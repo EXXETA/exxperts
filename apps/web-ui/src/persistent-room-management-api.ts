@@ -37,16 +37,23 @@ async function fetchJson<T>(input: RequestInfo | URL, init?: RequestInit, fallba
 	return payload as T;
 }
 
-export function archivePersistentRoom(agentId: PersistentAgentId, request: PersistentAgentArchiveRequest): Promise<PersistentAgentArchiveResponse> {
-	return fetchJson<PersistentAgentArchiveResponse>(
-		`/api/persistent-agents/${encodeURIComponent(agentId)}/archive`,
-		{
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify(request),
-		},
-		"Failed to delete room."
-	);
+// Not fetchJson: like purge, the archive error carries a machine-readable busy
+// reason — the caller retries briefly on its own just-released room lock.
+export async function archivePersistentRoom(agentId: PersistentAgentId, request: PersistentAgentArchiveRequest): Promise<PersistentAgentArchiveResponse> {
+	const response = await fetch(`/api/persistent-agents/${encodeURIComponent(agentId)}/archive`, {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify(request),
+	});
+	redirectToSignInOn401(response);
+	const payload = await readJsonOrText(response);
+	if (!response.ok) {
+		const error: PersistentRoomPurgeError = new Error(parsePersistentRoomManagementError(payload, "Failed to delete room."));
+		const reason = payload && typeof payload === "object" ? (payload as { reason?: unknown }).reason : undefined;
+		if (typeof reason === "string" && (PURGE_BUSY_REASONS as readonly string[]).includes(reason)) error.reason = reason as PersistentAgentPurgeBusyReason;
+		throw error;
+	}
+	return payload as PersistentAgentArchiveResponse;
 }
 
 export function restorePersistentRoom(agentId: PersistentAgentId): Promise<PersistentAgentRestoreResponse> {

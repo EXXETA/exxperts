@@ -50,7 +50,7 @@ function highlightMention(text: string, name: string): ReactNode {
 	return parts.length > 0 ? parts : text;
 }
 
-export function RoomSettingsModal({ status, onClose, onArchive, onPurge, onRefresh, onMementoApplied, onMementoForget }: { status: PersistentAgentStatus; onClose: () => void; onArchive: (agentId: PersistentAgentId, confirmation: string) => Promise<PersistentAgentArchiveResponse>; onPurge: (agentId: PersistentAgentId, confirmation: string) => Promise<PersistentAgentPurgeResponse>; onRefresh: () => void; onMementoApplied?: () => void; onMementoForget?: () => void }) {
+export function RoomSettingsModal({ status, onClose, onArchive, onPurge, onRefresh, onMementoApplied, onMementoForget, onOpenSkillsLibrary }: { status: PersistentAgentStatus; onClose: () => void; onArchive: (agentId: PersistentAgentId, confirmation: string) => Promise<PersistentAgentArchiveResponse>; onPurge: (agentId: PersistentAgentId, confirmation: string) => Promise<PersistentAgentPurgeResponse>; onRefresh: () => void; onMementoApplied?: () => void; onMementoForget?: () => void; onOpenSkillsLibrary?: () => void }) {
 	const workspaceDirtyRef = useRef(false);
 	const handleWorkspaceDirtyChange = useCallback((dirty: boolean) => { workspaceDirtyRef.current = dirty; }, []);
 	const [pane, setPane] = useState<SettingsPane>("workspace");
@@ -129,6 +129,14 @@ export function RoomSettingsModal({ status, onClose, onArchive, onPurge, onRefre
 		onClose();
 	}
 	useEscapeKey(requestClose);
+	// The skills-library jump closes this modal too, so it passes the same
+	// unsaved-workspace gate as any other close: the modal owns the closing,
+	// the parent callback only navigates afterwards.
+	function openSkillsLibraryThroughClose(): void {
+		if (workspaceDirtyRef.current && !window.confirm("The workspace section has unsaved changes. Close without saving them?")) return;
+		onClose();
+		onOpenSkillsLibrary?.();
+	}
 	async function archiveAndClose(agentId: PersistentAgentId, confirmation: string): Promise<PersistentAgentArchiveResponse> {
 		const response = await onArchive(agentId, confirmation);
 		onRefresh();
@@ -216,7 +224,7 @@ export function RoomSettingsModal({ status, onClose, onArchive, onPurge, onRefre
 							<RoomMaintenanceSection status={status} />
 						</section>
 						<section className="room-settings-section" hidden={pane !== "skills"}>
-							<RoomSkillsSection status={status} />
+							<RoomSkillsSection status={status} onOpenSkillsLibrary={onOpenSkillsLibrary ? openSkillsLibraryThroughClose : undefined} />
 						</section>
 						<section className="room-settings-section" hidden={pane !== "schedules"}>
 							<RoomScheduledTasksSection status={status} />

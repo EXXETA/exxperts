@@ -7,7 +7,7 @@ function plural(count: number, noun: string, pluralNoun = `${noun}s`): string {
 }
 
 function lifecycleCountsLine(counts: PersistentAgentLifecycleCounts): string {
-	return `${plural(counts.conversations, "conversation")}, ${plural(counts.memories, "memory", "memories")} and ${plural(counts.files, "file")}`;
+	return `${plural(counts.conversations, "conversation")}, ${plural(counts.memories, "recent memory entry", "recent memory entries")} and ${plural(counts.files, "file")}`;
 }
 
 // Deleting is the one action the room cannot come back from, so the pane
@@ -94,7 +94,7 @@ export function RoomDangerZone({ status, visible, onArchive, onPurge }: {
 			<div className="rs-row">
 				<div className="rs-row-main">
 					<span className="rs-row-label">Delete {roomName} permanently</span>
-					<span className="rs-row-hint">Removes everything from this machine, including documents created in this room. This cannot be undone.</span>
+					<span className="rs-row-hint">Removes everything from this machine: the room's memory, its conversations, and any documents not saved outside the room. Files you saved to your own folders stay where they are. This cannot be undone.</span>
 					{armed && (
 						<span className="rs-row-hint room-danger-armed" role="alert">
 							Delete {roomName} forever?

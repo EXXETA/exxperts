@@ -10,6 +10,7 @@ import {
 	applyRecurrenceToCreateRequest,
 	applyRecurrenceToUpdateRequest,
 	createDefaultScheduleRecurrenceDraft,
+	formatAdvancedScheduleSummary,
 	formatFriendlyWhenForJob,
 	formatNativeTimeSummary,
 	formatScheduleRecurrenceDraftSummary,
@@ -37,6 +38,16 @@ import type {
 } from "../types";
 
 const PROMPT_PREVIEW_LIMIT = 220;
+// Monday-first display order over cron day numbers (0 = Sunday).
+const WEEKLY_DAY_CHIPS: Array<{ day: number; short: string; full: string }> = [
+	{ day: 1, short: "Mon", full: "Monday" },
+	{ day: 2, short: "Tue", full: "Tuesday" },
+	{ day: 3, short: "Wed", full: "Wednesday" },
+	{ day: 4, short: "Thu", full: "Thursday" },
+	{ day: 5, short: "Fri", full: "Friday" },
+	{ day: 6, short: "Sat", full: "Saturday" },
+	{ day: 0, short: "Sun", full: "Sunday" },
+];
 const RECENT_RUN_HISTORY_LIMIT = 50;
 const RECENT_RUN_DISPLAY_LIMIT = 3;
 const ONE_TIME_TERMINAL_STATUSES = new Set<PersistentRoomBackgroundRunView["status"]>(["blocked", "succeeded", "failed", "cancelled"]);
@@ -323,9 +334,9 @@ function ScheduleForm({
 					className="launcher-path-input"
 					value={draft.prompt}
 					onChange={(event) => updateDraft((current) => ({ ...current, prompt: event.target.value }))}
-					placeholder="Check the World Cup results and summarize them for me."
+					placeholder="Summarize new files in the workspace since yesterday and flag anything that needs my attention."
 					required
-					rows={6}
+					rows={4}
 					maxLength={20000}
 					disabled={saving}
 				/>
@@ -337,13 +348,15 @@ function ScheduleForm({
 				onChange={(recurrence) => updateDraft((current) => ({ ...current, recurrence }))}
 			/>
 			<label className="room-schedules-checkbox">
+				<span>Enabled</span>
 				<input
+					className="workspaces-tool-switch"
 					type="checkbox"
 					checked={draft.enabled}
 					onChange={(event) => updateDraft((current) => ({ ...current, enabled: event.target.checked }))}
 					disabled={saving}
+					aria-label="Enabled"
 				/>
-				<span>Enabled</span>
 			</label>
 			<div className="room-schedules-save-summary" aria-live="polite">
 				<span>Summary</span>
@@ -375,6 +388,17 @@ function ScheduleRecurrenceEditor({
 
 	function setDailyTime(time: string) {
 		onChange({ ...recurrence, daily: { ...recurrence.daily, time } });
+	}
+
+	function toggleWeeklyDay(day: number) {
+		const days = recurrence.weekly.days.includes(day)
+			? recurrence.weekly.days.filter((value) => value !== day)
+			: [...recurrence.weekly.days, day].sort((a, b) => a - b);
+		onChange({ ...recurrence, weekly: { ...recurrence.weekly, days } });
+	}
+
+	function setWeeklyTime(time: string) {
+		onChange({ ...recurrence, weekly: { ...recurrence.weekly, time } });
 	}
 
 	function setOneTimeMode(mode: ScheduleOneTimeMode) {
@@ -418,6 +442,7 @@ function ScheduleRecurrenceEditor({
 	}
 
 	const dailyTimeSummary = formatNativeTimeSummary(recurrence.daily.time);
+	const weeklySummary = recurrence.mode === "weekly" ? formatScheduleRecurrenceDraftSummary(recurrence) : null;
 	const oneTimeAtSummary = formatNativeTimeSummary(recurrence.oneTime.at.time);
 
 	return (
@@ -425,6 +450,7 @@ function ScheduleRecurrenceEditor({
 			<legend>When / recurrence</legend>
 			<div className="room-schedules-mode-buttons" role="radiogroup" aria-label="Schedule recurrence mode">
 				<ScheduleModeButton active={recurrence.mode === "daily"} disabled={disabled} onClick={() => setMode("daily")}>Daily</ScheduleModeButton>
+				<ScheduleModeButton active={recurrence.mode === "weekly"} disabled={disabled} onClick={() => setMode("weekly")}>Weekly</ScheduleModeButton>
 				<ScheduleModeButton active={recurrence.mode === "oneTime"} disabled={disabled} onClick={() => setMode("oneTime")}>One time</ScheduleModeButton>
 				<ScheduleModeButton active={recurrence.mode === "advanced"} disabled={disabled} onClick={() => setMode("advanced")}>Advanced</ScheduleModeButton>
 			</div>
@@ -442,6 +468,37 @@ function ScheduleRecurrenceEditor({
 						/>
 					</label>
 					<p className="room-schedules-help">Runs every day at {dailyTimeSummary ?? "the selected time"}. Times use this app's local runtime.</p>
+				</div>
+			)}
+			{recurrence.mode === "weekly" && (
+				<div className="room-schedules-preset-panel">
+					<div className="room-schedules-day-row" role="group" aria-label="Weekly schedule days">
+						{WEEKLY_DAY_CHIPS.map(({ day, short, full }) => (
+							<button
+								key={day}
+								className={recurrence.weekly.days.includes(day) ? "room-schedules-day-chip active" : "room-schedules-day-chip"}
+								type="button"
+								aria-pressed={recurrence.weekly.days.includes(day)}
+								aria-label={full}
+								disabled={disabled}
+								onClick={() => toggleWeeklyDay(day)}
+							>
+								{short}
+							</button>
+						))}
+					</div>
+					<label className="room-schedules-field room-schedules-time-field">
+						<span>At</span>
+						<input
+							className="launcher-path-input"
+							type="time"
+							value={recurrence.weekly.time}
+							onChange={(event) => setWeeklyTime(event.target.value)}
+							required
+							disabled={disabled}
+						/>
+					</label>
+					<p className="room-schedules-help">{weeklySummary ?? "Choose the days this task should run."} Times use this app's local runtime.</p>
 				</div>
 			)}
 			{recurrence.mode === "oneTime" && (
@@ -660,6 +717,9 @@ function ScheduleJobCard({
 }) {
 	const promptPreview = previewPrompt(job.prompt);
 	const whenSummary = formatFriendlyWhenForJob(job);
+	// A friendly When sentence and the raw expression must never both state the
+	// same timing: the raw line only shows when no nicer sentence exists.
+	const hasFriendlyWhen = whenSummary !== formatAdvancedScheduleSummary(job.type, job.schedule);
 	const savingEdit = mutation?.kind === "edit" && mutation.jobId === job.id;
 	const toggling = mutation?.kind === "toggle" && mutation.jobId === job.id;
 	const deleting = mutation?.kind === "delete" && mutation.jobId === job.id;
@@ -674,11 +734,11 @@ function ScheduleJobCard({
 				<strong>{job.name || job.id}</strong>
 				<span className={rowStateClass}>{rowState.label}</span>
 			</div>
-			<p className="room-schedules-when-summary"><span>When:</span> {whenSummary}</p>
+			{hasFriendlyWhen && <p className="room-schedules-when-summary"><span>When:</span> {whenSummary}</p>}
 			<div className="room-schedules-job-meta">
 				{job.nextRunAt && <span>Next due {formatTimestamp(job.nextRunAt)}</span>}
 				{latestAttempt && <span>Last attempt: {latestAttempt}</span>}
-				<span className="room-schedules-raw" title="Raw schedule expression">{formatScheduleType(job.type)} · <code>{job.schedule}</code></span>
+				{!hasFriendlyWhen && <span className="room-schedules-raw" title="Raw schedule expression">{formatScheduleType(job.type)} · <code>{job.schedule}</code></span>}
 			</div>
 			{latestReason && latestRun?.status !== "succeeded" && <p className="room-schedules-row-reason">{latestReason}</p>}
 			{editing ? (

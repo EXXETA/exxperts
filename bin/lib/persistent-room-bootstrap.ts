@@ -23,7 +23,7 @@ import {
 	getPersistentRoomToolPolicy,
 } from "../../apps/web-server/src/persistent-room-tool-policy.js";
 import {
-	ensurePersistentRoomThreadEffectiveWorkspacePolicySnapshot,
+	resolvePersistentRoomEffectiveWorkspacePolicy,
 	persistentRoomRuntimeCwdForEffectiveWorkspacePolicy,
 } from "../../apps/web-server/src/persistent-room-workspace-policy.js";
 import { productAppStatePath } from "../../pi-package/product-state-paths.js";
@@ -104,7 +104,7 @@ function main() {
 	const { model, source: modelSource } = selectedRoomModel(existingThread?.model ?? null, inputModelLock(input?.model));
 	const fallbackRuntimeCwd = String(input?.cwd || process.cwd()).trim() || process.cwd();
 
-	const effectiveWorkspacePolicy = ensurePersistentRoomThreadEffectiveWorkspacePolicySnapshot(status.id, threadId);
+	const effectiveWorkspacePolicy = resolvePersistentRoomEffectiveWorkspacePolicy(status.id, threadId);
 	const runtimeCwd = persistentRoomRuntimeCwdForEffectiveWorkspacePolicy(effectiveWorkspacePolicy, fallbackRuntimeCwd);
 	const workspaceToolsEnabled = effectiveWorkspacePolicy.workspaceToolsEnabled;
 	const toolPolicy = getPersistentRoomToolPolicy(status.id, {

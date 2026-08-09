@@ -31,10 +31,12 @@ import {
 	writePersistentAgentThread,
 } from "../../../apps/web-server/src/persistent-agents.js";
 import {
+	assertPersistentRoomWorkspaceDefaultMutable,
 	createPersistentRoomDefaultCapabilityPolicy,
 	deletePersistentRoomDefaultCapabilityPolicy,
 	persistentRoomCapabilityPolicyView,
 	readPersistentRoomDefaultCapabilityPolicy,
+	releasePersistentRoomThreadWorkspaceMirror,
 	resolvePersistentRoomCapabilityPolicy,
 	updatePersistentRoomCapabilityPolicyWorkspaceSettings,
 	writePersistentRoomDefaultCapabilityPolicy,
@@ -837,7 +839,7 @@ export default function (pi: ExtensionAPI) {
 		const cwdName = path.basename(cwd) || cwd;
 		const useHere = `Use this directory as the workspace (${cwdName})`;
 		const clearWs = wsLabel ? "Clear saved workspace" : null;
-		const toggleBash = defaultPolicy?.workspaceAccessMode === "localFiles" ? `${defaultPolicy.bashEnabled ? "Turn Bash off" : "Turn Bash on"} (applies to a fresh thread)` : null;
+		const toggleBash = defaultPolicy?.workspaceAccessMode === "localFiles" ? `${defaultPolicy.bashEnabled ? "Turn Bash off" : "Turn Bash on"} (applies the next time you open this room)` : null;
 		const changeModel = "Change model (applies to a fresh thread)";
 		const del = "Delete this room…";
 		const options = [useHere, ...(clearWs ? [clearWs] : []), ...(toggleBash ? [toggleBash] : []), changeModel, del, "Cancel"];
@@ -845,8 +847,18 @@ export default function (pi: ExtensionAPI) {
 		const pick = await ctx.ui.select("Room settings", options);
 		if (!pick || pick === "Cancel") return;
 
+		// Same boundary as the web mutation doors: a turn finishes under the
+		// rules it started with. The shared assert covers the tracked active
+		// thread; ctx.isIdle() covers this process's own streaming turn, which
+		// the in-memory turn registry cannot see from the CLI.
+		const assertWorkspaceDefaultMutableHere = (): void => {
+			if (!ctx.isIdle()) throw new Error("Workspace default cannot change while the room has an active turn in flight. Wait for the running turn to finish, then try again.");
+			assertPersistentRoomWorkspaceDefaultMutable(getPersistentAgentStatus(env.agentId).activeThread);
+		};
+
 		if (pick === useHere) {
 			try {
+				assertWorkspaceDefaultMutableHere();
 				const localFilesOption = "Full access (native file tools, bash off)";
 				const boundedOption = "Bounded workspace";
 				const modePick = await ctx.ui.select("Workspace access mode", [localFilesOption, boundedOption, "Cancel"]);
@@ -861,6 +873,10 @@ export default function (pi: ExtensionAPI) {
 					source: "manual",
 					writeEnabled: true,
 				});
+				// Live-default healing (same rule as the web mutation path): a thread
+				// sidecar that merely mirrors the current default is dropped so this
+				// thread follows the live default from its next open.
+				releasePersistentRoomThreadWorkspaceMirror(env.agentId, env.threadId);
 				writePersistentRoomDefaultCapabilityPolicy(policy);
 				ctx.ui.notify(`Workspace set to "${cwdName}" (${workspaceAccessMode === "localFiles" ? "Full access" : "Bounded workspace"}). It applies the next time you open this room.`, "info");
 			} catch (error) {
@@ -870,6 +886,8 @@ export default function (pi: ExtensionAPI) {
 		}
 		if (clearWs && pick === clearWs) {
 			try {
+				assertWorkspaceDefaultMutableHere();
+				releasePersistentRoomThreadWorkspaceMirror(env.agentId, env.threadId);
 				deletePersistentRoomDefaultCapabilityPolicy(env.agentId);
 				ctx.ui.notify("Saved workspace cleared. Applies the next time you open this room.", "info");
 			} catch (error) {
@@ -879,7 +897,9 @@ export default function (pi: ExtensionAPI) {
 		}
 		if (toggleBash && pick === toggleBash && defaultPolicy) {
 			try {
+				assertWorkspaceDefaultMutableHere();
 				const next = updatePersistentRoomCapabilityPolicyWorkspaceSettings(defaultPolicy, { bashEnabled: defaultPolicy.bashEnabled !== true });
+				releasePersistentRoomThreadWorkspaceMirror(env.agentId, env.threadId);
 				writePersistentRoomDefaultCapabilityPolicy(next);
 				ctx.ui.notify(`Bash ${next.bashEnabled ? "enabled" : "disabled"} for Full access. Applies the next time you open this room.`, "info");
 			} catch (error) {

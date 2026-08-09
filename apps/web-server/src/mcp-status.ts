@@ -80,9 +80,14 @@ function authModeFor(entry: {
 	auth?: "oauth" | "bearer" | false;
 	bearerToken?: string;
 	bearerTokenEnv?: string;
+	headers?: Record<string, string>;
 	oauth?: unknown;
 }): McpConnectorAuthStatus["mode"] {
 	if (entry.auth === "bearer" || entry.bearerToken || entry.bearerTokenEnv) return "bearer";
+	// Static credential headers (Figma's X-Figma-Token, API keys) come with
+	// auth: false to switch off OAuth auto-detect, but to the UI they are
+	// token auth, not "no login needed".
+	if (entry.auth === false && Object.keys(entry.headers ?? {}).some((h) => /token|key|secret|authorization/i.test(h))) return "bearer";
 	// Mirrors the adapter's supportsOAuth: HTTP servers auto-detect OAuth
 	// unless auth/oauth is explicitly disabled.
 	if (entry.url && entry.auth !== false && entry.oauth !== false) return "oauth";
@@ -110,6 +115,7 @@ export async function getMcpConnectorsStatus(): Promise<McpConnectorsStatusRespo
 			auth?: "oauth" | "bearer" | false;
 			bearerToken?: string;
 			bearerTokenEnv?: string;
+			headers?: Record<string, string>;
 			oauth?: unknown;
 		};
 		const mode = authModeFor(entry);

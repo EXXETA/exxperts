@@ -169,12 +169,22 @@ try {
 	assert(tom.status.status === "ready", "Tom status should be ready");
 	const tomAgentBeforeDuplicate = readText(path.join(tempAgentsRoot, "tom", "agent.json"));
 
-	const tomDuplicate = createPersistentAgentFromScaffoldInput({
-		displayName: "Tom",
-		user: { displayName: "Alice Example", preferredAddress: "Alice" },
-	});
-	assert(tomDuplicate.agent.agentId === "tom-2", "duplicate Tom should produce agentId tom-2");
-	assert(readText(path.join(tempAgentsRoot, "tom", "agent.json")) === tomAgentBeforeDuplicate, "duplicate Tom must not overwrite original tom");
+	// Room names are unique now: a duplicate (even case-shifted) is refused
+	// with a 409 before any scaffold directory is reserved.
+	for (const duplicateName of ["Tom", "  toM "]) {
+		let duplicateRefused = false;
+		try {
+			createPersistentAgentFromScaffoldInput({
+				displayName: duplicateName,
+				user: { displayName: "Alice Example", preferredAddress: "Alice" },
+			});
+		} catch (error) {
+			duplicateRefused = /already exists/.test((error as Error).message) && (error as any).statusCode === 409;
+		}
+		assert(duplicateRefused, `duplicate room name ${JSON.stringify(duplicateName)} should be refused with a 409`);
+	}
+	assert(!fs.existsSync(path.join(tempAgentsRoot, "tom-2")), "refused duplicate must not leave a scaffold root behind");
+	assert(readText(path.join(tempAgentsRoot, "tom", "agent.json")) === tomAgentBeforeDuplicate, "refused duplicate must not touch original tom");
 
 	const wolfgang = createPersistentAgentFromScaffoldInput({
 		displayName: "Wolfgang",
@@ -190,6 +200,28 @@ try {
 		role: "personal-coordinator",
 	});
 	assert(accented.agent.agentId === "tom-smith", "accented/punctuated name should produce safe slug tom-smith");
+
+	// NFC/NFD twins are the same name: macOS paste can deliver the decomposed
+	// spelling, which must refuse as a duplicate instead of slipping past the
+	// uniqueness check as a byte-different twin.
+	let nfdDuplicateRefused = false;
+	try {
+		createPersistentAgentFromScaffoldInput({
+			displayName: "Tóm! Smith".normalize("NFD"),
+			userName: "Alice Example",
+			preferredUserAddress: "Alice",
+		});
+	} catch (error) {
+		nfdDuplicateRefused = /already exists/.test((error as Error).message) && (error as any).statusCode === 409;
+	}
+	assert(nfdDuplicateRefused, "an NFD spelling of an existing room name should be refused with a 409");
+	// Intake canonicalizes to NFC, so stored names are composed going forward.
+	const nfdIntake = createPersistentAgentFromScaffoldInput({
+		displayName: "Café Nord".normalize("NFD"),
+		userName: "Alice Example",
+		preferredUserAddress: "Alice",
+	});
+	assert(nfdIntake.agent.displayName === "Café Nord".normalize("NFC"), "display-name intake should store the NFC form");
 
 	const mentor = createPersistentAgentFromScaffoldInput({
 		displayName: "Mentor Max",
@@ -214,7 +246,6 @@ try {
 		preferredAddress: "Alice",
 		description: "Friendly planning companion",
 	});
-	assertGenericAgent("tom-2", { displayName: "Tom", userName: "Alice Example", preferredAddress: "Alice" });
 	assertGenericAgent("wolfgang", { displayName: "Wolfgang", userName: "Alice Example", preferredAddress: "Alice" });
 	assertGenericAgent("tom-smith", { displayName: "Tóm! Smith", userName: "Alice Example", preferredAddress: "Alice" });
 	assertGenericAgent("mentor-max", { displayName: "Mentor Max", userName: "Alice Example", preferredAddress: "Alice", mode: "learning" });
@@ -225,7 +256,7 @@ try {
 	const listedIds = listed.map((status: any) => status.id);
 	const sortedListedIds = [...listedIds].sort((a, b) => a.localeCompare(b));
 	assert(JSON.stringify(listedIds) === JSON.stringify(sortedListedIds), "listPersistentAgents should be sorted deterministically");
-	for (const id of ["tom", "tom-2", "tom-smith", "wolfgang"]) {
+	for (const id of ["tom", "tom-smith", "wolfgang"]) {
 		assert(listedIds.includes(id), `listPersistentAgents should include ${id}`);
 	}
 	assert(!listedIds.includes("borja-coordinator"), "listPersistentAgents should not inject borja-coordinator");

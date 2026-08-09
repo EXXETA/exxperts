@@ -96,7 +96,7 @@ export function RoomSessionSection({ status, onRefresh, onMementoApplied, onMeme
 							Open conversation{modelLabel ? <> on <strong>{modelLabel}</strong></> : null}{busy ? " (in use)" : ""}
 						</span>
 						<span className="rs-row-hint">
-							Memento closes it and the room starts fresh. Memory stays, nothing is checkpointed.
+							Memento ends this conversation and starts a fresh one. The room keeps everything already in its memory, and nothing new is saved from this conversation.
 							<RsInfo text="Useful when the conversation is stuck on a model or provider you no longer have access to." />
 						</span>
 					</div>

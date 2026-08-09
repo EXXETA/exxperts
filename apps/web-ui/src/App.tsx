@@ -6,7 +6,7 @@ import { ToastStack, type ToastView } from "./components/toast-stack";
 import { readReviseConflicts, reviseConflictSentence } from "../../web-server/src/revise-conflict-notice";
 import { assetDisplayTitle, assetTemplateShortName, projectAssetRows, rowShelfFileName, shelfTruthForRoom, type AssetLedgerRowInput, type AssetRowView, type ShelfFileRowInput } from "./assets-panel";
 import { commitRoomFileDelete, fileToBase64, listRoomFiles, renameRoomFile, saveRoomFileToFolder, stageRoomFileDelete, undoRoomFileDelete, uploadRoomFile, type RoomShelfFile } from "./room-files-api";
-import { chooseSystemFolder } from "./persistent-room-workspace-api";
+import { chooseSystemFolder, fetchPersistentRoomWorkspaceDefault } from "./persistent-room-workspace-api";
 import { Dashboard } from "./components/Dashboard";
 import { Memory } from "./components/Memory";
 import { InRoomChatShellView } from "./components/in-room-chat";
@@ -324,6 +324,7 @@ function hasUserVisibleTurn(items: ChatItem[]): boolean {
 // auto-persisted defaults, which would mask the equal-split open size forever,
 // so the key is bumped once instead of migrating those values.
 const KNOWLEDGE_PANE_WIDTH_STORAGE_KEY = "exxperts.rightPane.width";
+const WORKSPACE_NUDGE_STORAGE_PREFIX = "exxperts.workspaceNudgeDismissed.";
 const RIGHT_PANE_MIN_WIDTH = 360;
 // Keep at least this much of the workbench for the chat column when the pane
 // grows; without it a wide pane can squeeze the chat (a 1fr track) to zero.
@@ -996,7 +997,7 @@ function Landing({ onOpenAiSetup, onOpenDashboard, onOpenConnectors, onOpenMemor
 				</div>
 			)}
 			{settingsRoom && (
-				<RoomSettingsModal status={settingsRoom} onClose={() => setSettingsRoomId(null)} onArchive={onArchiveRoom} onPurge={onPurgeRoom} onRefresh={onRefreshPersistentAgent} onMementoForget={() => onMementoForget(settingsRoom.id)} />
+				<RoomSettingsModal status={settingsRoom} onClose={() => setSettingsRoomId(null)} onArchive={onArchiveRoom} onPurge={onPurgeRoom} onRefresh={onRefreshPersistentAgent} onMementoForget={() => onMementoForget(settingsRoom.id)} onOpenSkillsLibrary={onOpenSkills} />
 			)}
 			{helpOpen && <RoomsGuide onClose={() => setHelpOpen(false)} />}
 		</div>
@@ -2731,6 +2732,10 @@ export function App() {
 	// card's wheel opens. Declared here because the Escape handler below has to
 	// yield to it.
 	const [roomSettingsOpen, setRoomSettingsOpen] = useState(false);
+	// First-open workspace nudge: a room with no workspace configured gets one
+	// dismissible in-room notice pointing at workspace settings. The dismissal
+	// is remembered per room in localStorage, so it never comes back.
+	const [workspaceNudgeRoomId, setWorkspaceNudgeRoomId] = useState<PersistentAgentId | null>(null);
 
 	// Escape closes the artifact/run pane, the keyboard twin of clicking its X
 	// or the selected rail row. A maximized pane restores first (one Escape per
@@ -2773,6 +2778,32 @@ export function App() {
 	const [persistentThread, setPersistentThread] = useState<PersistentAgentThread | null>(null);
 	const [persistentChat, setPersistentChat] = useState<PersistentChatConfig>(null);
 	const [persistentResumeError, setPersistentResumeError] = useState<string | null>(null);
+	// Entering a room checks whether the workspace nudge is due there: only for
+	// rooms with NO workspace default, and only until it was dismissed once.
+	const workspaceNudgeAgentId = persistentChat?.agentId ?? null;
+	useEffect(() => {
+		setWorkspaceNudgeRoomId(null);
+		if (!workspaceNudgeAgentId) return;
+		let dismissed = false;
+		try { dismissed = localStorage.getItem(WORKSPACE_NUDGE_STORAGE_PREFIX + workspaceNudgeAgentId) !== null; } catch {}
+		if (dismissed) return;
+		let cancelled = false;
+		void fetchPersistentRoomWorkspaceDefault(workspaceNudgeAgentId)
+			.then((response) => {
+				if (!cancelled && response.policy === null) setWorkspaceNudgeRoomId(workspaceNudgeAgentId);
+			})
+			// The nudge is a nicety: a failed lookup just means no nudge.
+			.catch(() => {});
+		return () => { cancelled = true; };
+		// roomSettingsOpen: closing the settings modal re-checks, so a workspace
+		// set through the gear icon retires a nudge that was never dismissed.
+	}, [workspaceNudgeAgentId, roomSettingsOpen]);
+	function dismissWorkspaceNudge(): void {
+		if (workspaceNudgeRoomId) {
+			try { localStorage.setItem(WORKSPACE_NUDGE_STORAGE_PREFIX + workspaceNudgeRoomId, "1"); } catch {}
+		}
+		setWorkspaceNudgeRoomId(null);
+	}
 	const [currentModelLabel, setCurrentModelLabel] = useState<string>("");
 	const [checkpointPreviewOpen, setCheckpointPreviewOpen] = useState(false);
 	const [checkpointRememberText, setCheckpointRememberText] = useState("");
@@ -3240,6 +3271,7 @@ export function App() {
 			// Background-generation bookkeeping (community #14): note rooms
 			// cooking without us inside; when one settles with a completed turn,
 			// promote it to the "response ready" badge.
+			const badgeReadyNow = new Set<PersistentAgentId>();
 			for (const status of activeStatuses) {
 				if (persistentChat?.agentId === status.id) continue;
 				if (status.activeThread?.inFlight) {
@@ -3253,9 +3285,7 @@ export function App() {
 				// while NO session was watching — a fresh app load included, which
 				// the session-local memory above cannot cover.
 				const landedUnseen = status.unseenLandedAnswer?.terminalReason === "completed";
-				if (settledCompleted || landedUnseen) {
-					setBackgroundReadyRooms((prev) => (prev.has(status.id) ? prev : new Set(prev).add(status.id)));
-				}
+				if (settledCompleted || landedUnseen) badgeReadyNow.add(status.id);
 				if (settledCompleted) {
 					// The done moment, observed live: toast in the app, and in the
 					// desktop shell the same event reaches the OS notification
@@ -3265,6 +3295,21 @@ export function App() {
 					notifyDesktop(`${displayName} finished a response`, "The answer is saved in the room's conversation.");
 				}
 			}
+			// The badge must not outlive the answer: a marker cleared through a
+			// door this session never opened (CLI bind, checkpoint retiring the
+			// thread) drops the card badge on this refresh. A badge earned THIS
+			// pass stays even while its marker write settles, and the open room's
+			// badge state is left alone — the loop above never inspects it.
+			setBackgroundReadyRooms((prev) => {
+				const next = new Set(prev);
+				for (const id of badgeReadyNow) next.add(id);
+				for (const id of prev) {
+					if (badgeReadyNow.has(id) || persistentChat?.agentId === id) continue;
+					const status = activeStatuses.find((candidate) => candidate.id === id);
+					if (!status || status.unseenLandedAnswer?.terminalReason !== "completed") next.delete(id);
+				}
+				return next.size === prev.size && [...next].every((id) => prev.has(id)) ? prev : next;
+			});
 			const primaryStatus = activeStatuses[0] ?? null;
 			setPersistentAgentStatus(primaryStatus);
 			if (persistentChat) return;
@@ -3300,21 +3345,69 @@ export function App() {
 		await refreshPersistentAgentStatus();
 	}
 
+	// Archive shares purge's busy guards server-side, so from INSIDE the room it
+	// shares purge's shape too: this session's own socket holds the room lock the
+	// archive endpoint (rightly) refuses on, so the room is left first and the
+	// endpoint retried briefly while the server's async lock release catches up.
+	// Having left, a failed archive reports on the Home banner and keeps the
+	// draft it parked, instead of failing into silence.
 	async function archivePersistentAgentRoom(agentId: PersistentAgentId, confirmation: string): Promise<PersistentAgentArchiveResponse> {
-		const response = await archivePersistentRoom(agentId, { confirmation });
-		roomDraftsRef.current.delete(agentId);
-		clearBackgroundActivityBadge(agentId);
-		setPersistentAgentStatuses((statuses) => statuses.filter((status) => status.id !== agentId));
-		setPersistentAgentStatus((status) => status?.id === agentId ? null : status);
-		if (persistentChat?.agentId === agentId || persistentThread?.agentId === agentId) {
+		const roomName = persistentAgentStatuses.find((status) => status.id === agentId)?.displayName || agentId;
+		const leavingBoundRoom = persistentChat?.agentId === agentId;
+		if (leavingBoundRoom && persistentRoomInFlight) {
+			// Leaving now would detach the turn into background cooking, and the
+			// archive would then refuse on that — say it while the pane can show it.
+			throw new Error("The assistant is still responding in this room. Stop it or let it finish before deleting.");
+		}
+		if (leavingBoundRoom) {
 			if (persistTimerRef.current) {
 				window.clearTimeout(persistTimerRef.current);
 				persistTimerRef.current = null;
 			}
+			// Park the draft the way finishLeaveRoom does: if the archive fails,
+			// the room survives — and so should what was typed into it.
+			const draft = textareaRef.current?.value ?? "";
+			if (draft.trim()) roomDraftsRef.current.set(agentId, draft);
+			else roomDraftsRef.current.delete(agentId);
+			// Deliberate close — no auto-reconnect, no standby save for a room
+			// that is about to be archived.
+			suppressReconnectRef.current = true;
+			try { wsRef.current?.close(); } catch {}
+			setRoomSettingsOpen(false);
 			setPersistentChat(null);
 			setPersistentThread(null);
-			if (view === "chat") setView("home");
+			setCheckpointPreviewOpen(false);
+			resetMaintainWorkflows();
+			setBusy(false);
+			setView("home");
 		}
+		let response: PersistentAgentArchiveResponse;
+		try {
+			for (let attempt = 0; ; attempt++) {
+				try {
+					response = await archivePersistentRoom(agentId, { confirmation });
+					break;
+				} catch (e) {
+					const stillOurLock = leavingBoundRoom && (e as PersistentRoomPurgeError).reason === "room_lock" && attempt < 20;
+					if (!stillOurLock) throw e;
+					await new Promise((resolve) => setTimeout(resolve, 250));
+				}
+			}
+		} catch (e) {
+			if (leavingBoundRoom) {
+				// The danger pane died with the room view; the Home banner is the
+				// surface that survives. The refresh also clears the card's stale
+				// activeLock so Maintain does not stay wrongly blocked.
+				setPersistentResumeError(`${roomName} was NOT deleted: ${(e as Error).message}`);
+				void refreshPersistentAgentStatus();
+			}
+			throw e;
+		}
+		roomDraftsRef.current.delete(agentId);
+		clearBackgroundActivityBadge(agentId);
+		setPersistentAgentStatuses((statuses) => statuses.filter((status) => status.id !== agentId));
+		setPersistentAgentStatus((status) => status?.id === agentId ? null : status);
+		if (persistentThread?.agentId === agentId) setPersistentThread(null);
 		await refreshPersistentAgentStatus();
 		return response;
 	}
@@ -6191,12 +6284,18 @@ export function App() {
 	// The background-answer done moment (slice 3) shows on two surfaces — the
 	// launcher has no composer stack to join — so it is one view-model with two
 	// homes rather than two toasts that could drift.
+	// The memoized view survives renders the handler's dependencies do not:
+	// Open must run the CURRENT leave grammar (goHome, finishLeaveRoom,
+	// persistentChat), not the one from the render that raised the toast — the
+	// ref indirection is the same live-handler pattern persistentChatRef uses.
+	const openRoomFromBackgroundToastRef = useRef(openRoomFromBackgroundToast);
+	openRoomFromBackgroundToastRef.current = openRoomFromBackgroundToast;
 	const backgroundDoneToastView = useMemo<ToastView | null>(() => backgroundDoneToast ? {
 		id: `background:${backgroundDoneToast.agentId}`,
 		tone: "success",
 		text: `${backgroundDoneToast.displayName} finished a response.`,
 		sub: "The answer is saved in the room's conversation.",
-		action: { label: "Open", onClick: () => void openRoomFromBackgroundToast(backgroundDoneToast.agentId) },
+		action: { label: "Open", onClick: () => void openRoomFromBackgroundToastRef.current(backgroundDoneToast.agentId) },
 	} : null, [backgroundDoneToast]);
 	const roomToasts = useMemo<ToastView[]>(() => {
 		const list: ToastView[] = [];
@@ -6682,6 +6781,18 @@ export function App() {
 			onApprovalPreview={openApprovalPreview}
 			aboveComposerSlot={persistentChat ? (
 				<>
+					{workspaceNudgeRoomId === persistentChat.agentId && (
+						<div className="room-workspace-nudge" role="note">
+							<span className="room-workspace-nudge-text">Connect a folder so this room can read and write files.</span>
+							<div className="room-workspace-nudge-actions">
+								{/* Hide only for the moment, never write the dismissed flag:
+								    the close-modal re-check re-shows the nudge if the user
+								    cancelled without setting a workspace. Only Dismiss burns it. */}
+								<button className="rs-btn" type="button" onClick={() => { setWorkspaceNudgeRoomId(null); openRoomSettings(); }}>Set workspace</button>
+								<button className="rs-quiet" type="button" onClick={dismissWorkspaceNudge}>Dismiss</button>
+							</div>
+						</div>
+					)}
 					<ConsultDock
 						state={consultState}
 						onMinimize={() => dispatchConsult({ type: "minimize" })}
@@ -6698,7 +6809,7 @@ export function App() {
 			globalOverlaySlot={
 				<>
 					{roomSettingsOpen && currentPersistentStatus && (
-						<RoomSettingsModal status={currentPersistentStatus} onClose={() => setRoomSettingsOpen(false)} onArchive={archivePersistentAgentRoom} onPurge={purgePersistentAgentRoom} onRefresh={refreshPersistentAgentStatus} onMementoApplied={leaveRoomAfterMemento} />
+						<RoomSettingsModal status={currentPersistentStatus} onClose={() => setRoomSettingsOpen(false)} onArchive={archivePersistentAgentRoom} onPurge={purgePersistentAgentRoom} onRefresh={refreshPersistentAgentStatus} onMementoApplied={leaveRoomAfterMemento} onOpenSkillsLibrary={() => { void goHome().then((left) => { if (left) setView("skills"); }); }} />
 					)}
 					{helpOpen && <Help onClose={() => setHelpOpen(false)} />}
 					{assetDeleteConfirm && <AssetDeleteDialog title={assetDeleteConfirm.title} onDelete={() => { const row = assetDeleteConfirm; setAssetDeleteConfirm(null); if (row) void deleteAssetRow(row); }} onCancel={() => setAssetDeleteConfirm(null)} />}

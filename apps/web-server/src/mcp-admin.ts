@@ -56,9 +56,25 @@ interface ServerEntryShape {
 	url?: string;
 	command?: string;
 	args?: string[];
-	auth?: "bearer" | "oauth";
+	auth?: "bearer" | "oauth" | false;
 	bearerToken?: string;
+	headers?: Record<string, string>;
 	oauth?: { clientId: string; clientSecret?: string; scope?: string };
+}
+
+/**
+ * Figma personal access tokens (figd_…) are rejected when sent as a standard
+ * Authorization header — mcp.figma.com answers "figd_ tokens must be passed
+ * via X-Figma-Token header, not Authorization". Persist them as that header
+ * instead. auth: false also switches off the adapter's OAuth auto-detect, so
+ * a bad token reports as a plain rejection instead of a login prompt (Figma's
+ * OAuth login only admits allowlisted partner apps anyway).
+ */
+function remoteTokenEntry(url: string, token: string): ServerEntryShape {
+	if (token.startsWith("figd_")) {
+		return { url, auth: false, headers: { "X-Figma-Token": token } };
+	}
+	return { url, auth: "bearer", bearerToken: token };
 }
 
 function validateAddInput(input: AddMcpServerInput): { name: string; entry: ServerEntryShape } {
@@ -89,7 +105,7 @@ function validateAddInput(input: AddMcpServerInput): { name: string; entry: Serv
 		if (bearerToken && clientId) {
 			throw new McpAdminError("Provide either an API token or a custom OAuth client, not both.");
 		}
-		if (bearerToken) return { name, entry: { url, auth: "bearer", bearerToken } };
+		if (bearerToken) return { name, entry: remoteTokenEntry(url, bearerToken) };
 		if (clientId) {
 			// Pre-registered client: the adapter's OAuth provider uses it directly
 			// and skips dynamic client registration, which providers like HubSpot
@@ -211,7 +227,17 @@ function friendlyLoginError(message: string): string {
 	if (/does not support dynamic client registration/i.test(message)) {
 		return "This provider needs a pre-registered OAuth app: create one in the provider's developer settings with redirect URL http://localhost:19876/callback, then re-add the connector with its client ID and secret under Custom OAuth client.";
 	}
-	if (/invalid oauth error response|404|not found|no authorization server/i.test(message)) {
+	// A 403 mid-flow is a refusal, not a missing login: providers like Figma
+	// answer registration with a bare 403 for any app not on their partner
+	// allowlist (observed live: "HTTP 403: Invalid OAuth error response: …
+	// Raw body: Forbidden").
+	if (/HTTP 403/i.test(message)) {
+		return "The provider refused this app's login request (HTTP 403). Some providers only let approved apps log in. Check whether the provider offers an API token instead, then remove this connector and add it again with the token (the custom connector form takes one).";
+	}
+	// Only OAuth *discovery* coming up empty means the server has no login.
+	// (Matching any "404"/"not found" here mislabeled every downstream OAuth
+	// failure — including bodies that merely contain those words.)
+	if (/does not implement OAuth|trying to load well-known OAuth|no authorization server/i.test(message)) {
 		return "This connector doesn't offer a login. It likely works without one. Use Test connection to check.";
 	}
 	if (/timed? ?out/i.test(message)) {
@@ -318,6 +344,55 @@ export async function logoutMcpServer(name: string): Promise<void> {
 	await dropMetadataCacheEntry(name);
 }
 
+/**
+ * One direct streamable-HTTP initialize POST, with the entry's static
+ * credentials attached, to recover the server's real verdict after the
+ * adapter's SSE fallback obscured it. Returns null when the probe can't
+ * improve on the original error (network failure, or the POST succeeds and
+ * the failure lies elsewhere).
+ */
+async function explainSseFallback(entry: {
+	url?: string;
+	headers?: Record<string, string>;
+	auth?: "bearer" | "oauth" | false;
+	bearerToken?: string;
+	bearerTokenEnv?: string;
+}): Promise<{ message: string; needsAuth: boolean } | null> {
+	const headers: Record<string, string> = { ...(entry.headers ?? {}) };
+	const token = entry.auth === "bearer" ? (entry.bearerToken ?? (entry.bearerTokenEnv ? process.env[entry.bearerTokenEnv] : undefined)) : undefined;
+	if (token) headers.Authorization = `Bearer ${token}`;
+	const hasStaticCredentials = Boolean(token) || Object.keys(entry.headers ?? {}).length > 0;
+	try {
+		const response = await fetch(String(entry.url), {
+			method: "POST",
+			headers: {
+				"Content-Type": "application/json",
+				Accept: "application/json, text/event-stream",
+				...headers,
+			},
+			body: JSON.stringify({
+				jsonrpc: "2.0",
+				id: 0,
+				method: "initialize",
+				params: { protocolVersion: "2025-03-26", capabilities: {}, clientInfo: { name: "exxperts-connection-test", version: "1.0" } },
+			}),
+			signal: AbortSignal.timeout(5000),
+		});
+		const body = (await response.text()).trim();
+		if (response.status === 401 || response.status === 403) {
+			return hasStaticCredentials
+				? { message: `The server rejected the configured token (HTTP ${response.status}${body ? `: ${body}` : ""}). Check that the token is valid.`, needsAuth: false }
+				: { message: `This server requires authentication (HTTP ${response.status}${body ? `: ${body}` : ""}).`, needsAuth: true };
+		}
+		if (!response.ok) {
+			return { message: `The server rejected the connection: HTTP ${response.status}${body ? `: ${body}` : ""}`, needsAuth: false };
+		}
+		return null;
+	} catch {
+		return null;
+	}
+}
+
 export interface McpServerTestResult {
 	ok: boolean;
 	toolCount?: number;
@@ -359,8 +434,18 @@ export async function testMcpServer(name: string): Promise<McpServerTestResult> 
 		}
 		return { ok: true, toolCount: toolNames.length, toolNames };
 	} catch (e) {
-		const message = (e as Error).message ?? String(e);
-		const needsAuth = /unauthorized|401|needs-auth|oauth|authentication required/i.test(message);
+		let message = (e as Error).message ?? String(e);
+		let needsAuth = /unauthorized|401|needs-auth|oauth|authentication required/i.test(message);
+		// The adapter probes streamable HTTP first and, when that probe dies
+		// mid-OAuth (Figma refusing client registration, for example), silently
+		// falls back to legacy SSE — whose GET then fails with a status code
+		// that has nothing to do with the real problem ("SSE error: Non-200
+		// status code (405)"). Ask the server directly what it thinks of a
+		// plain streamable POST and report that answer instead.
+		if (/SSE error: Non-200 status code/i.test(message) && typeof entry.url === "string") {
+			const explained = await explainSseFallback(entry);
+			if (explained) ({ message, needsAuth } = explained);
+		}
 		if (needsAuth) {
 			// A stale tool cache would keep the UI claiming "no login needed";
 			// this connection attempt just proved otherwise.

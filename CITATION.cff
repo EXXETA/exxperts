@@ -7,5 +7,5 @@ authors:
     given-names: "Borja"
   - family-names: "Pastor Alonso"
     given-names: "Fernando"
-abstract: "Persistent AI rooms with governed, approval-gated memory — a local-first agent platform where memory lives as plain files on the user's machine, every memory write goes through an approval workflow the user controls, and memory belongs to the room rather than any model vendor."
+abstract: "AI colleagues that learn and remember: local-first AI agents with governed, approval-gated memory. Memory lives as plain files on the user's machine, every write to it goes through an approval workflow the user controls, and it belongs to the room rather than any model vendor. Works with any model provider; MCP tools and web search built in."
 repository-code: "https://github.com/EXXETA/exxperts"

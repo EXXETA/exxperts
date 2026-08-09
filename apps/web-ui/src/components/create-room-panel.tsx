@@ -4,9 +4,7 @@ import type { PersistentAgentCreateRequest, PersistentAgentModeOption } from "..
 
 export interface CreateRoomFormValues {
 	personalAgentName: string;
-	confirmPersonalAgentName: string;
 	userName: string;
-	preferredAddress: string;
 	mode?: string;
 }
 
@@ -15,6 +13,7 @@ export interface CreateRoomPanelViewProps {
 	open: boolean;
 	values: CreateRoomFormValues;
 	modes?: PersistentAgentModeOption[];
+	defaultModeId?: string;
 	submitting?: boolean;
 	error?: string | null;
 	successName?: string | null;
@@ -24,25 +23,17 @@ export interface CreateRoomPanelViewProps {
 	onChange: (field: keyof CreateRoomFormValues, value: string) => void;
 }
 
-export function CreateRoomPanelView({ variant = "card", open, values, modes = [], submitting = false, error = null, successName = null, onOpen, onClose, onSubmit, onChange }: CreateRoomPanelViewProps) {
+export function CreateRoomPanelView({ variant = "card", open, values, modes = [], defaultModeId, submitting = false, error = null, successName = null, onOpen, onClose, onSubmit, onChange }: CreateRoomPanelViewProps) {
 	const form = (
 		<form className="create-room-form" onSubmit={onSubmit}>
 			<div className="create-room-fields">
 				<label className="create-room-field">
-					<strong>Exxpert name</strong>
+					<strong>Room name</strong>
 					<input className="launcher-path-input create-room-input" type="text" value={values.personalAgentName} onChange={(e) => onChange("personalAgentName", e.target.value)} />
-				</label>
-				<label className="create-room-field">
-					<strong>Confirm exxpert name</strong>
-					<input className="launcher-path-input create-room-input" type="text" value={values.confirmPersonalAgentName} onChange={(e) => onChange("confirmPersonalAgentName", e.target.value)} />
 				</label>
 				<label className="create-room-field">
 					<strong>Your name</strong>
 					<input className="launcher-path-input create-room-input" type="text" value={values.userName} onChange={(e) => onChange("userName", e.target.value)} />
-				</label>
-				<label className="create-room-field">
-					<strong>Preferred address</strong>
-					<input className="launcher-path-input create-room-input" type="text" placeholder="Optional" value={values.preferredAddress} onChange={(e) => onChange("preferredAddress", e.target.value)} />
 				</label>
 				{modes.length > 1 && (
 					<div className="create-room-field create-room-mode-field" role="radiogroup" aria-label="Working style">
@@ -50,7 +41,7 @@ export function CreateRoomPanelView({ variant = "card", open, values, modes = []
 						<div className="create-room-mode-options">
 							{modes.map((mode) => (
 								<label key={mode.id} className="create-room-mode-option">
-									<input type="radio" name="create-room-mode" value={mode.id} checked={(values.mode ?? modes[0]?.id) === mode.id} disabled={submitting} onChange={() => onChange("mode", mode.id)} />
+									<input type="radio" name="create-room-mode" value={mode.id} checked={(values.mode ?? defaultModeId ?? modes[0]?.id) === mode.id} disabled={submitting} onChange={() => onChange("mode", mode.id)} />
 									<span className="create-room-mode-copy"><strong>{mode.label}</strong> · {mode.description}</span>
 								</label>
 							))}
@@ -74,7 +65,7 @@ export function CreateRoomPanelView({ variant = "card", open, values, modes = []
 	if (variant === "section") {
 		return (
 			<div className="create-room-section create-room-body">
-				<p className="create-room-copy">Name the exxpert for this room and tell it how to address you. Confirm the name to avoid a typo.</p>
+				<p className="create-room-copy">Name the room and tell its exxpert who you are. You can rename the room later in its settings.</p>
 				{successMessage}
 				{body}
 			</div>
@@ -98,11 +89,10 @@ export function CreateRoomPanelView({ variant = "card", open, values, modes = []
 export function CreateRoomPanel({ onCreate, initialOpen = false, variant = "card", onCreated, onCancel }: { onCreate: (request: PersistentAgentCreateRequest) => Promise<void>; initialOpen?: boolean; variant?: "card" | "section"; onCreated?: () => void; onCancel?: () => void }) {
 	const [open, setOpen] = useState(initialOpen);
 	const [modes, setModes] = useState<PersistentAgentModeOption[]>([]);
+	const [defaultModeId, setDefaultModeId] = useState<string | undefined>(undefined);
 	const [values, setValues] = useState<CreateRoomFormValues>({
 		personalAgentName: "",
-		confirmPersonalAgentName: "",
 		userName: "",
-		preferredAddress: "",
 	});
 	const [submitting, setSubmitting] = useState(false);
 	const [error, setError] = useState<string | null>(null);
@@ -115,8 +105,11 @@ export function CreateRoomPanel({ onCreate, initialOpen = false, variant = "card
 			.then((data) => {
 				if (cancelled || !data || !Array.isArray(data.modes)) return;
 				setModes(data.modes);
-				const defaultModeId = typeof data.defaultModeId === "string" ? data.defaultModeId : data.modes[0]?.id;
-				if (defaultModeId) setValues((current) => (current.mode ? current : { ...current, mode: defaultModeId }));
+				const serverDefaultModeId = typeof data.defaultModeId === "string" ? data.defaultModeId : data.modes[0]?.id;
+				if (serverDefaultModeId) {
+					setDefaultModeId(serverDefaultModeId);
+					setValues((current) => (current.mode ? current : { ...current, mode: serverDefaultModeId }));
+				}
 			})
 			.catch(() => {
 				// Without the mode list the picker stays hidden and the server default applies.
@@ -129,15 +122,9 @@ export function CreateRoomPanel({ onCreate, initialOpen = false, variant = "card
 	async function submit(e: FormEvent<HTMLFormElement>) {
 		e.preventDefault();
 		const displayName = values.personalAgentName.trim();
-		const confirmation = values.confirmPersonalAgentName.trim();
 		const trimmedUserName = values.userName.trim();
-		const trimmedPreferredAddress = values.preferredAddress.trim();
 		if (!displayName) {
-			setError("Exxpert name is required.");
-			return;
-		}
-		if (displayName !== confirmation) {
-			setError("Exxpert name confirmation must match.");
+			setError("Room name is required.");
 			return;
 		}
 		if (!trimmedUserName) {
@@ -150,16 +137,13 @@ export function CreateRoomPanel({ onCreate, initialOpen = false, variant = "card
 			await onCreate({
 				displayName,
 				userName: trimmedUserName,
-				...(trimmedPreferredAddress ? { preferredUserAddress: trimmedPreferredAddress } : {}),
 				...(values.mode ? { mode: values.mode } : {}),
 			});
 			setSuccessName(displayName);
 			setValues((current) => ({
 				personalAgentName: "",
-				confirmPersonalAgentName: "",
 				userName: "",
-				preferredAddress: "",
-				...(current.mode ? { mode: modes[0]?.id ?? current.mode } : {}),
+				...(current.mode ? { mode: defaultModeId ?? current.mode } : {}),
 			}));
 			setOpen(false);
 			onCreated?.();
@@ -176,6 +160,7 @@ export function CreateRoomPanel({ onCreate, initialOpen = false, variant = "card
 			open={open}
 			values={values}
 			modes={modes}
+			defaultModeId={defaultModeId}
 			submitting={submitting}
 			error={error}
 			successName={successName}

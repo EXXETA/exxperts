@@ -15,7 +15,7 @@ import { RsInfo } from "./rs-info";
  * re-enabled after review. The resident-cost line keeps the
  * ~100-tokens-per-skill index price visible.
  */
-export function RoomSkillsSection({ status }: { status: PersistentAgentStatus }) {
+export function RoomSkillsSection({ status, onOpenSkillsLibrary }: { status: PersistentAgentStatus; onOpenSkillsLibrary?: () => void }) {
 	const [library, setLibrary] = useState<SkillListItem[] | null>(null);
 	const [enabled, setEnabled] = useState<PersistentRoomEnabledSkillStatus[] | null>(null);
 	const [busyName, setBusyName] = useState<string | null>(null);
@@ -101,7 +101,10 @@ export function RoomSkillsSection({ status }: { status: PersistentAgentStatus })
 			{error && library === null && <div className="checkpoint-proposal-error">{error}</div>}
 			{!loaded && error === null && <p className="ai-setup-copy">Loading skills…</p>}
 			{loaded && library.length === 0 && enabled.length === 0 && (
-				<p className="ai-setup-copy">No skills in your library yet. Add them under Skills in the sidebar. Every skill passes a review before it can be enabled here.</p>
+				<div className="room-skills-library-empty">
+					<p className="ai-setup-copy">No skills in your library yet. Add them under Skills in the sidebar. Every skill passes a review before it can be enabled here.</p>
+					{onOpenSkillsLibrary && <button className="rs-btn" type="button" onClick={onOpenSkillsLibrary}>Open skills library</button>}
+				</div>
 			)}
 			{loaded && (library.length > 0 || enabled.length > 0) && (
 				<>
