@@ -5,7 +5,6 @@ import path from "node:path";
 const {
 	createPersistentRoomCapabilityPolicy,
 	createPersistentRoomDefaultCapabilityPolicy,
-	ensurePersistentRoomThreadEffectiveWorkspacePolicySnapshot,
 	persistentRoomCapabilityPolicyView,
 	persistentRoomWorkspacePolicyPath,
 	readPersistentRoomCapabilityPolicy,
@@ -141,19 +140,33 @@ try {
 		toolSelection: { kind: "custom", allowedToolNames: ["ls", "read_spreadsheet"] },
 	});
 	writePersistentRoomDefaultCapabilityPolicy(defaultCustom, { persistentAgentsRoot });
-	const snapshot = ensurePersistentRoomThreadEffectiveWorkspacePolicySnapshot(agentId, "snapshot_custom_tools", { persistentAgentsRoot });
-	assert(snapshot.source === "thread-snapshot-from-room-default", "fresh thread should snapshot room default");
-	assert(snapshot.workspaceAccessMode === "bounded", "snapshot effective policy should preserve bounded workspace access mode");
-	assert(snapshot.allowedToolNames.join(",") === "ls,read_spreadsheet", "snapshot effective tools should preserve custom subset");
+	// Live defaults: a fresh thread resolves the room default directly — the
+	// custom selection carries through with no mirror sidecar written.
+	const liveDefault = resolvePersistentRoomEffectiveWorkspacePolicy(agentId, "snapshot_custom_tools", { persistentAgentsRoot });
+	assert(liveDefault.source === "room-default", "fresh thread should resolve the live room default");
+	assert(liveDefault.workspaceAccessMode === "bounded", "live default effective policy should preserve bounded workspace access mode");
+	assert(liveDefault.allowedToolNames.join(",") === "ls,read_spreadsheet", "live default effective tools should preserve custom subset");
 	const sidecarPath = persistentRoomWorkspacePolicyPath(agentId, "snapshot_custom_tools", { persistentAgentsRoot });
+	assert(!fs.existsSync(sidecarPath), "resolving the live default must not write a thread sidecar");
+	// A deliberate per-conversation policy round-trips the custom marker through
+	// its sidecar and wins over the room default.
+	const threadCustom = createPersistentRoomCapabilityPolicy({
+		...baseInput,
+		conversationId: "snapshot_custom_tools",
+		root: workspaceB,
+		displayLabel: "Workspace B",
+		toolSelection: { kind: "custom", allowedToolNames: ["ls", "read_spreadsheet"] },
+	});
+	writePersistentRoomCapabilityPolicy(threadCustom, { persistentAgentsRoot });
 	const sidecar = JSON.parse(fs.readFileSync(sidecarPath, "utf-8"));
-	assert(sidecar.workspaceAccessMode === "bounded", "thread sidecar should copy bounded workspace access mode");
-	assert(sidecar.toolSelection?.kind === "custom", "thread sidecar should copy custom selection marker");
-	assert(sidecar.toolSelection?.allowedToolNames?.join(",") === "ls,read_spreadsheet", "thread sidecar should copy exact custom selected tools");
+	assert(sidecar.workspaceAccessMode === "bounded", "thread sidecar should store bounded workspace access mode");
+	assert(sidecar.toolSelection?.kind === "custom", "thread sidecar should store custom selection marker");
+	assert(sidecar.toolSelection?.allowedToolNames?.join(",") === "ls,read_spreadsheet", "thread sidecar should store exact custom selected tools");
 	const readSidecar = readPersistentRoomCapabilityPolicy(agentId, "snapshot_custom_tools", { persistentAgentsRoot });
 	assert(readSidecar?.toolSelection?.kind === "custom", "stored sidecar should round-trip custom marker");
 
 	const effective = resolvePersistentRoomEffectiveWorkspacePolicy(agentId, "snapshot_custom_tools", { persistentAgentsRoot });
+	assert(effective.source === "thread", "deliberate thread policy should win over the room default");
 	const toolPolicy = getPersistentRoomToolPolicy(agentId, { workspaceToolsEnabled: effective.workspaceToolsEnabled, workspaceToolNames: effective.allowedToolNames });
 	assert(toolPolicy.allowedToolNames.includes("web_search"), "persistent-room tool policy should retain web_search");
 	assert(toolPolicy.allowedToolNames.includes("ls") && toolPolicy.allowedToolNames.includes("read_spreadsheet"), "persistent-room tool policy should include selected custom workspace tools");

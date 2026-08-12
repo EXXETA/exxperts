@@ -109,13 +109,13 @@ export function RoomMaintenanceSection({ status }: { status: PersistentAgentStat
 				<h3>Memory</h3>
 			</header>
 			<p className="rs-pane-sub">How this room saves and maintains what it learns.</p>
+			<p className="rs-row-footnote">The two toggles below are off by default. Seeing what gets saved is how you decide what your room remembers.</p>
 			<label className="rs-row">
 				<div className="rs-row-main">
 					<span className="rs-row-label">
-						Automatic memory maintenance
-						<RsInfo text="After you sign off a Learn or Review Memory assessment, the final proposal is applied without the second review screen. Proposals that touch must-keep memory or fail validation always come back for manual review. Every change still archives the previous memory and writes an audit record." />
+						Apply Maintain results without final review
+						<RsInfo text="When you finish a Learn or Review Memory session and approve its plan, the changes are written straight to memory instead of being shown one last time. Changes to memory marked as must-keep are always shown first, and you can always see what changed afterwards in the room's Memory view." />
 					</span>
-					<span className="rs-row-hint">Apply signed-off memory updates without a second review screen.</span>
 				</div>
 				<input
 					className="workspaces-tool-switch"
@@ -123,27 +123,15 @@ export function RoomMaintenanceSection({ status }: { status: PersistentAgentStat
 					checked={fastPath === true}
 					disabled={fastPath === null || saving}
 					onChange={(e) => void toggleFastPath(e.target.checked)}
-					aria-label="Automatic memory maintenance"
+					aria-label="Apply Maintain results without final review"
 				/>
 			</label>
-			<p className="room-maintenance-hint">Apply signed-off memory updates without a second review screen.</p>
-			<details className="room-settings-details">
-				<summary>How it works</summary>
-				<p>
-					After you sign off a Learn or Review Memory assessment, the final proposal is
-					applied without the second review screen. Proposals that touch must-keep memory
-					or fail validation always come back for manual review, and the worker's notes are
-					shown after applying. Every change still archives the previous memory and writes
-					an audit record.
-				</p>
-			</details>
 			<label className="rs-row">
 				<div className="rs-row-main">
 					<span className="rs-row-label">
-						Quick checkpoint applies automatically
-						<RsInfo text="When nothing deterministic blocks a Checkpoint proposal, it is saved without showing you the content first. Proposals with blockers (trimmed transcripts, incomplete drafts) always come back for review. Every save still archives the previous memory and writes an audit record." />
+						Save Checkpoints without preview
+						<RsInfo text="Checkpoint normally shows you what it is about to save from the conversation. With this on, the save happens without that preview. If a save looks incomplete, the preview comes back and you decide." />
 					</span>
-					<span className="rs-row-hint">Save blocker-free Checkpoint proposals without showing the preview.</span>
 				</div>
 				<input
 					className="workspaces-tool-switch"
@@ -151,17 +139,16 @@ export function RoomMaintenanceSection({ status }: { status: PersistentAgentStat
 					checked={quickApply === true}
 					disabled={quickApply === null || saving}
 					onChange={(e) => void toggleQuickApply(e.target.checked)}
-					aria-label="Quick checkpoint applies automatically"
+					aria-label="Save Checkpoints without preview"
 				/>
 			</label>
-			<div className="memory-budget-block">
-				<div className="workspaces-tool-row memory-budget-row">
-					<span>Memory budget</span>
-					<strong>{budget !== null ? `${fmtTokensK(budget)} tokens` : "…"}</strong>
-				</div>
-				<p className="room-maintenance-hint">How much memory this room aims to keep.</p>
-				<div className="memory-budget-bar-row">
-					<span className="memory-budget-bar-label">Target</span>
+			<div className="rs-row memory-budget-row">
+				<div className="rs-row-main">
+					<span className="rs-row-label">
+						Memory budget
+						<span className="memory-budget-value">{budget !== null ? `${fmtTokensK(budget)} tokens` : "…"}</span>
+					</span>
+					<span className="rs-row-hint">How much memory this room aims to keep.</span>
 					<input
 						className="memory-budget-slider"
 						type="range"
@@ -173,23 +160,12 @@ export function RoomMaintenanceSection({ status }: { status: PersistentAgentStat
 						onChange={(e) => setBudget(Number(e.target.value))}
 						aria-label="Memory budget in tokens"
 					/>
+					{usagePercent !== null && (
+						<p className={`memory-budget-usage${overBudget ? " over" : ""}`}>
+							~{fmtTokensK(currentMemoryTokens!)} tokens in use, {usagePercent}% of the target.{overBudget ? " Consider running Review Memory." : ""}
+						</p>
+					)}
 				</div>
-				<input
-					className="memory-budget-slider"
-					type="range"
-					min={MEMORY_BUDGET_MIN_TOKENS}
-					max={MEMORY_BUDGET_MAX_TOKENS}
-					step={1000}
-					value={budget ?? MEMORY_BUDGET_MIN_TOKENS}
-					disabled={budget === null}
-					onChange={(e) => setBudget(Number(e.target.value))}
-					aria-label="Memory budget in tokens"
-				/>
-				{usagePercent !== null && (
-					<p className={`memory-budget-usage${overBudget ? " over" : ""}`}>
-						~{fmtTokensK(currentMemoryTokens!)} tokens in use, {usagePercent}% of the target.{overBudget ? " Consider running Review Memory." : ""}
-					</p>
-				)}
 			</div>
 			{error && <div className="room-maintenance-error">{error}</div>}
 		</div>

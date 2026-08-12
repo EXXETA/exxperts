@@ -27,13 +27,13 @@ import { createWebUiContext } from "./web-ui-context.js";
 import { cancelProviderLogin, logoutProvider, ProviderAuthError, providerLoginState, saveProviderApiKey, startProviderLogin } from "./provider-auth.js";
 import { builtInProfileIdForProvider, deleteCustomAiProfile, isCustomAiProfileId, isReservedCustomProfileProvider, readCustomAiProfiles, writeCustomAiProfile } from "./custom-ai-profiles.js";
 import { ConsultPromptOverflowError } from "./consult.js";
-import { appendPersistentAgentThreadPendingHandoff, archivePersistentAgent, getPersistentAgentLifecycleCounts, listArchivedPersistentAgents, purgePersistentAgent, restorePersistentAgent, sweepPersistentAgentPurgeTombstones, beginPersistentAgentTurn, buildAbsorbAssessment, buildAbsorbDiscussionSignoff, buildAbsorbDiscussionTurn, buildAbsorbProposal, buildCheckpointProposal, buildConsultAnswer, buildPersistentAgentBootContext, buildPersistentAgentCurrentIdentitySection, buildStructuralReviewAssessment, buildStructuralReviewDiscussionSignoff, buildStructuralReviewDiscussionTurn, buildStructuralReviewProposal, createPersistentAgentFromScaffoldInput, createPersistentAgentPiSessionJsonlThreadRuntime, clearPersistentAgentThreadPendingHandoffs, clearPersistentAgentUnseenLandedAnswer, deletePersistentAgentThread, PERSISTENT_AGENT_L1A_DEFAULT_MODE_ID, PERSISTENT_AGENT_L1A_MODES, discardEmptyPreparedBoundaryThread, finishPersistentAgentTurn, getAbsorbAvailability, getPersistentAgentActiveTurnState, getPersistentAgentRuntimeState, getPersistentAgentStatus, getPersistentAgentThread, getStructuralReviewAvailability, isPersistentAgentArchived, listPersistentAgents, markPersistentAgentTurnCancelling, openPersistentAgentPiSessionManager, parseAbsorbApprovalRequest, parseCheckpointApprovalRequest, parseStructuralReviewApprovalRequest, readPersistentAgentBootPromptSnapshot, recordPersistentAgentUnseenLandedAnswer, renamePersistentAgent, validatePersistentAgentId, writeApprovedAbsorb, writeApprovedCheckpoint, writeApprovedStructuralReview, writePersistentAgentMementoBoundary, writePersistentAgentRuntimeState, writePersistentAgentThread } from "./persistent-agents.js";
+import { appendPersistentAgentThreadPendingHandoff, archivePersistentAgent, getPersistentAgentLifecycleCounts, listArchivedPersistentAgents, purgePersistentAgent, restorePersistentAgent, sweepPersistentAgentPurgeTombstones, beginPersistentAgentTurn, buildAbsorbAssessment, buildAbsorbDiscussionSignoff, buildAbsorbDiscussionTurn, buildAbsorbProposal, buildCheckpointProposal, buildConsultAnswer, buildPersistentAgentBootContext, buildPersistentAgentCurrentIdentitySection, buildPersistentRoomCurrentWorkspaceSection, buildStructuralReviewAssessment, buildStructuralReviewDiscussionSignoff, buildStructuralReviewDiscussionTurn, buildStructuralReviewProposal, createPersistentAgentFromScaffoldInput, createPersistentAgentPiSessionJsonlThreadRuntime, clearPersistentAgentThreadPendingHandoffs, clearPersistentAgentUnseenLandedAnswer, deletePersistentAgentThread, PERSISTENT_AGENT_L1A_DEFAULT_MODE_ID, PERSISTENT_AGENT_L1A_MODES, discardEmptyPreparedBoundaryThread, finishPersistentAgentTurn, getAbsorbAvailability, getPersistentAgentActiveTurnState, getPersistentAgentRuntimeState, getPersistentAgentStatus, getPersistentAgentThread, getStructuralReviewAvailability, isPersistentAgentArchived, listPersistentAgents, markPersistentAgentTurnCancelling, openPersistentAgentPiSessionManager, parseAbsorbApprovalRequest, parseCheckpointApprovalRequest, parseStructuralReviewApprovalRequest, readPersistentAgentBootPromptSnapshot, recordPersistentAgentUnseenLandedAnswer, renamePersistentAgent, validatePersistentAgentId, writeApprovedAbsorb, writeApprovedCheckpoint, writeApprovedStructuralReview, writePersistentAgentMementoBoundary, writePersistentAgentRuntimeState, writePersistentAgentThread } from "./persistent-agents.js";
 import { buildPersistentRoomRestoredLiveThreadContext } from "./persistent-room-resume-context.js";
 import {
 	getPersistentRoomToolPolicy,
 	normalizePersistentRoomWorkspaceToolSelectionInput,
 } from "./persistent-room-tool-policy.js";
-import { createPersistentRoomCapabilityPolicy, createPersistentRoomDefaultCapabilityPolicy, deletePersistentRoomCapabilityPolicy, deletePersistentRoomDefaultCapabilityPolicy, ensurePersistentRoomThreadEffectiveWorkspacePolicySnapshot, missingPersistentRoomWorkspaceRootWarnings, normalizePersistentRoomWorkspaceAccessModeInput, persistentRoomCapabilityPolicyView, persistentRoomRuntimeCwdForEffectiveWorkspacePolicy, PersistentRoomWorkspacePolicyError, PERSISTENT_ROOM_WORKSPACE_DEFAULT_STORAGE_SOURCE, PERSISTENT_ROOM_WORKSPACE_POLICY_STORAGE_SOURCE, readPersistentRoomCapabilityPolicy, readPersistentRoomDefaultCapabilityPolicy, resolvePersistentRoomCapabilityPolicy, snapshotPersistentRoomDefaultCapabilityPolicyForThread, updatePersistentRoomCapabilityPolicyWorkspaceSettings, writePersistentRoomCapabilityPolicy, writePersistentRoomDefaultCapabilityPolicy } from "./persistent-room-workspace-policy.js";
+import { assertPersistentRoomWorkspaceDefaultMutable, createPersistentRoomCapabilityPolicy, createPersistentRoomDefaultCapabilityPolicy, deletePersistentRoomCapabilityPolicy, deletePersistentRoomDefaultCapabilityPolicy, missingPersistentRoomWorkspaceRootWarnings, normalizePersistentRoomWorkspaceAccessModeInput, persistentRoomCapabilityPolicyView, persistentRoomRuntimeCwdForEffectiveWorkspacePolicy, PersistentRoomWorkspacePolicyError, PERSISTENT_ROOM_WORKSPACE_DEFAULT_STORAGE_SOURCE, PERSISTENT_ROOM_WORKSPACE_POLICY_STORAGE_SOURCE, readPersistentRoomCapabilityPolicy, readPersistentRoomDefaultCapabilityPolicy, releasePersistentRoomThreadWorkspaceMirror, resolvePersistentRoomCapabilityPolicy, resolvePersistentRoomEffectiveWorkspacePolicy, updatePersistentRoomCapabilityPolicyWorkspaceSettings, writePersistentRoomCapabilityPolicy, writePersistentRoomDefaultCapabilityPolicy } from "./persistent-room-workspace-policy.js";
 import { MEMORY_BUDGET_DEFAULT_TOKENS, readPersistentRoomMaintenanceSettings, writePersistentRoomMaintenanceSettings } from "./persistent-room-maintenance-settings.js";
 import { computeSkillStatuses, disablePersistentRoomSkill, effectiveEnabledSkills, enablePersistentRoomSkill, readPersistentRoomSkillSettings } from "./persistent-room-skill-settings.js";
 import { buildEnabledSkillsIndexSection, createReadSkillTool } from "./persistent-room-skill-tool.js";
@@ -497,37 +497,18 @@ function persistentRoomWorkspaceErrorPayload(error: unknown): { statusCode: numb
 	return { statusCode, body: { error: error instanceof Error ? error.message : String(error), ...((error as any)?.code ? { code: (error as any).code } : {}) } };
 }
 
-function persistentRoomWorkspaceConflict(message: string, code: string): Error {
-	const error = new Error(message);
-	(error as any).statusCode = 409;
-	(error as any).code = code;
-	return error;
-}
-
-function preserveActiveThreadWorkspaceDefaultBeforeMutation(status: ReturnType<typeof getUsablePersistentAgentStatusForNormalUse>, operation: "set" | "delete"): string[] {
+// Workspace defaults apply live: the only boundary a mutation must respect is
+// a turn actually in flight (a turn finishes under the rules it started with).
+// Before the mutation, the active thread sheds a sidecar that merely mirrors
+// the current default (the old snapshot regime pinned every thread this way),
+// so the running conversation follows the live default from its next message;
+// a sidecar that differs from the default is a deliberate per-conversation
+// override and stays authoritative.
+function guardActiveThreadBeforeWorkspaceDefaultMutation(status: ReturnType<typeof getUsablePersistentAgentStatusForNormalUse>): void {
 	const activeThread = status.activeThread;
-	if (!activeThread) return [];
-	if (activeThread.inFlight) {
-		throw persistentRoomWorkspaceConflict(
-			activeThread.cancelling
-				? "Workspace default cannot change while the room has a cancelling turn in flight. Wait for it to finish, then try again."
-				: "Workspace default cannot change while the room has an active turn in flight. Wait for it to finish, then try again.",
-			"active_turn_in_flight",
-		);
-	}
-	if (readPersistentRoomCapabilityPolicy(status.id, activeThread.threadId)) return [];
-	const currentDefault = readPersistentRoomDefaultCapabilityPolicy(status.id);
-	if (currentDefault) {
-		snapshotPersistentRoomDefaultCapabilityPolicyForThread(status.id, activeThread.threadId);
-		return ["Existing active thread workspace policy was preserved before changing the room default."];
-	}
-	if (operation === "set" && activeThread.hasUserVisibleTurns) {
-		throw persistentRoomWorkspaceConflict(
-			"Workspace default applies to new room sessions. The current active thread already has conversation history and no workspace snapshot, so changing from no default to a workspace now would silently change its tool policy. Start a fresh room session with checkpoint/Memento or clear the active thread before setting the workspace default.",
-			"active_thread_requires_workspace_boundary",
-		);
-	}
-	return [];
+	if (!activeThread) return;
+	assertPersistentRoomWorkspaceDefaultMutable(activeThread);
+	releasePersistentRoomThreadWorkspaceMirror(status.id, activeThread.threadId);
 }
 
 type PromptDiagnosticsSession = Awaited<ReturnType<typeof createAgentSession>>["session"];
@@ -712,6 +693,8 @@ app.post("/api/persistent-agents", async (req, reply) => {
 		return reply.code(201).send(result);
 	} catch (e) {
 		const message = (e as Error).message;
+		const explicitStatus = (e as any)?.statusCode;
+		if (typeof explicitStatus === "number") return reply.code(explicitStatus).send({ error: message });
 		const isClientError = /required|must be|invalid persistent agent id|could not allocate unique persistent agent id/i.test(message);
 		return reply.code(isClientError ? 400 : 500).send({ error: message });
 	}
@@ -739,11 +722,24 @@ app.post("/api/persistent-agents/:id/archive", async (req, reply) => {
 	const idRaw = String((req.params as any).id ?? "").trim();
 	try {
 		const body = (req.body ?? {}) as any;
-		return archivePersistentAgent(idRaw, { confirmation: String(body.confirmation ?? ""), reason: typeof body.reason === "string" ? body.reason : undefined });
+		return archivePersistentAgent(idRaw, {
+			confirmation: String(body.confirmation ?? ""),
+			reason: typeof body.reason === "string" ? body.reason : undefined,
+			// The detached-cooking set lives in this process; the archive guard has
+			// to see it or a background answer could land into an archived room.
+			detachedCooking: detachedCookingRooms.has(idRaw),
+		});
 	} catch (e) {
 		const message = (e as Error).message;
-		const statusCode = (e as any).statusCode ?? (/invalid persistent agent id/i.test(message) ? 400 : 400);
-		return reply.code(statusCode).send({ error: message });
+		const statusCode = (e as any).statusCode ?? (/invalid persistent agent id/i.test(message) ? 400 : 500);
+		if (statusCode >= 500) {
+			app.log.error({ err: e }, "persistent-agent archive failed");
+			return reply.code(statusCode).send({ error: "Archiving failed because of a server error. Check the server logs for details." });
+		}
+		// The machine-readable busy reason lets the client distinguish its own
+		// just-released lock (worth a short retry) from a genuinely busy room.
+		const reason = (e as any).purgeBusyReason;
+		return reply.code(statusCode).send({ error: message, ...(reason ? { reason } : {}) });
 	}
 });
 // The archived shadow of the room list: everything GET /api/persistent-agents
@@ -1359,7 +1355,7 @@ app.put("/api/persistent-agents/:id/threads/:threadId", async (req, reply) => {
 	try {
 		const status = getUsablePersistentAgentStatusForNormalUse(idRaw);
 		const body = (req.body ?? {}) as any;
-		const effectiveWorkspacePolicy = ensurePersistentRoomThreadEffectiveWorkspacePolicySnapshot(status.id, threadId);
+		const effectiveWorkspacePolicy = resolvePersistentRoomEffectiveWorkspacePolicy(status.id, threadId);
 		const runtimeCwd = persistentRoomRuntimeCwdForEffectiveWorkspacePolicy(effectiveWorkspacePolicy, REPO_ROOT);
 		return writePersistentAgentThread(status.id, threadId, { state: body.state, origin: body.origin, model: body.model, items: body.items, pendingHandoffs: body.pendingHandoffs }, {
 			createRuntime: ({ model }) => createPersistentAgentPiSessionJsonlThreadRuntime({
@@ -1435,7 +1431,7 @@ app.post("/api/persistent-agents/:id/memento", async (req, reply) => {
 		} catch (error) {
 			app.log.warn({ err: error }, "memento: failed to clear dangling turn state");
 		}
-		const effectiveWorkspacePolicy = ensurePersistentRoomThreadEffectiveWorkspacePolicySnapshot(status.id, conversationId);
+		const effectiveWorkspacePolicy = resolvePersistentRoomEffectiveWorkspacePolicy(status.id, conversationId);
 		const runtimeCwd = persistentRoomRuntimeCwdForEffectiveWorkspacePolicy(effectiveWorkspacePolicy, REPO_ROOT);
 		// After a Memento the room must be usable again. When the old thread's
 		// model lock is no longer provided by the active AI profile, start the
@@ -1613,13 +1609,13 @@ app.put("/api/persistent-agents/:id/workspace-default", async (req, reply) => {
 				: undefined;
 			policy = updatePersistentRoomCapabilityPolicyWorkspaceSettings(existingDefault, { workspaceAccessMode, ...(toolSelection ? { toolSelection } : {}), ...(Object.prototype.hasOwnProperty.call(body, "bashEnabled") ? { bashEnabled: body.bashEnabled === true } : {}) });
 		}
-		const warnings = preserveActiveThreadWorkspaceDefaultBeforeMutation(status, "set");
+		guardActiveThreadBeforeWorkspaceDefaultMutation(status);
 		writePersistentRoomDefaultCapabilityPolicy(policy);
 		return {
 			agentId: id,
 			storage: { kind: PERSISTENT_ROOM_WORKSPACE_DEFAULT_STORAGE_SOURCE },
 			policy: persistentRoomCapabilityPolicyView(policy),
-			warnings,
+			warnings: [],
 		};
 	} catch (e) {
 		const payload = persistentRoomWorkspaceErrorPayload(e);
@@ -1631,14 +1627,14 @@ app.delete("/api/persistent-agents/:id/workspace-default", async (req, reply) =>
 	try {
 		const status = getUsablePersistentAgentStatusForNormalUse(idRaw);
 		const id = status.id;
-		const warnings = preserveActiveThreadWorkspaceDefaultBeforeMutation(status, "delete");
+		guardActiveThreadBeforeWorkspaceDefaultMutation(status);
 		const result = deletePersistentRoomDefaultCapabilityPolicy(id);
 		return {
 			agentId: id,
 			storage: { kind: PERSISTENT_ROOM_WORKSPACE_DEFAULT_STORAGE_SOURCE },
 			policy: null,
 			deleted: result.deleted,
-			warnings,
+			warnings: [],
 		};
 	} catch (e) {
 		const payload = persistentRoomWorkspaceErrorPayload(e);
@@ -1839,7 +1835,7 @@ app.post("/api/persistent-agents/:id/checkpoint/propose", async (req, reply) => 
 		const id = status.id;
 		const body = (req.body ?? {}) as any;
 		const conversationId = String(body.conversationId ?? "").trim();
-		const effectiveWorkspacePolicy = conversationId ? ensurePersistentRoomThreadEffectiveWorkspacePolicySnapshot(id, conversationId) : null;
+		const effectiveWorkspacePolicy = conversationId ? resolvePersistentRoomEffectiveWorkspacePolicy(id, conversationId) : null;
 		const runtimeCwd = persistentRoomRuntimeCwdForEffectiveWorkspacePolicy(effectiveWorkspacePolicy, REPO_ROOT);
 		return await buildCheckpointProposal({ ...body, agentId: id, runtimeCwd }, async (prompt, modelLock) => {
 			const registry = getWebChatModelRegistry();
@@ -1878,7 +1874,7 @@ app.post("/api/persistent-agents/:id/checkpoint/approve", async (req, reply) => 
 	try {
 		const status = getReadyPersistentAgentStatusForLifecycle(idRaw);
 		const parsed = parseCheckpointApprovalRequest(req.body ?? {}, status.id);
-		const effectiveWorkspacePolicy = ensurePersistentRoomThreadEffectiveWorkspacePolicySnapshot(status.id, parsed.request.conversationId);
+		const effectiveWorkspacePolicy = resolvePersistentRoomEffectiveWorkspacePolicy(status.id, parsed.request.conversationId);
 		const runtimeCwd = persistentRoomRuntimeCwdForEffectiveWorkspacePolicy(effectiveWorkspacePolicy, REPO_ROOT);
 		const result = writeApprovedCheckpoint(parsed.request, parsed.warnings, new Date(), { runtimeCwd });
 		return browserSafeCheckpointApprovalResponse(result);
@@ -3937,6 +3933,16 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 	let autoDispatchBudgetRemaining = 0;
 	let sessionDisposed = false;
 	let autoSummaryRunning = false;
+	// The workspace policy this connection's session was built against. The
+	// prompt handler compares it to the LIVE effective policy before starting a
+	// turn: a mismatch (workspace default changed since bind) rebinds the
+	// session, so the next message runs with the current tools instead of the
+	// tool set frozen at connect.
+	let boundWorkspaceFingerprint: string | null = null;
+	// The single in-flight rebind: while a rebind runs, `session` is null and
+	// every frame that needs the session awaits THIS promise instead of racing
+	// past the guards onto the disposed session with the old toolset.
+	let workspaceRebindInFlight: Promise<void> | null = null;
 	type PromptDiagnosticsPendingTurn = {
 		turnId: string;
 		turnOrdinal: number;
@@ -4313,7 +4319,7 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 		if (!webChatModel) throw new Error("persistent-agent model could not be resolved");
 		const persistentRoomModel = { provider: webChatModel.provider, model: webChatModel.id, label: webChatModelLabel(webChatModel.provider, webChatModel) };
 		promptDiagnosticsCurrentModel = persistentRoomModel;
-		const persistentRoomEffectiveWorkspacePolicy = ensurePersistentRoomThreadEffectiveWorkspacePolicySnapshot(persistentAgentId, persistentConversationId);
+		const persistentRoomEffectiveWorkspacePolicy = resolvePersistentRoomEffectiveWorkspacePolicy(persistentAgentId, persistentConversationId);
 		const persistentRoomCapabilityPolicy = persistentRoomEffectiveWorkspacePolicy?.policy ?? null;
 		const persistentRoomWorkspaceToolsEnabled = persistentRoomEffectiveWorkspacePolicy?.workspaceToolsEnabled === true;
 		const persistentRoomToolPolicy = getPersistentRoomToolPolicy(persistentAgentId, {
@@ -4612,14 +4618,23 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 		// frozen boot snapshot cannot learn about a rename), the enabled-skills
 		// index (skills MR-5, spec §5 — recomputed per turn so a skill enabled
 		// mid-session is listed on the very next message, matching read_skill's
-		// per-call enforcement of the live set), and the shelf manifest (a file
-		// created or deleted mid-session shows up immediately).
+		// per-call enforcement of the live set), the current-workspace stanza
+		// (the boot snapshot froze the workspace facts at thread creation; the
+		// default applies live now, so the model is told the CURRENT workspace
+		// every turn and can never claim a stale one mid-conversation), and the
+		// shelf manifest (a file created or deleted mid-session shows up
+		// immediately).
 		// Each section is best-effort on its own: a build failure drops that
 		// section for the turn, never the turn itself.
 		const liveRoomStateExtForSession = async (pi: any) => {
 			pi.on("before_agent_start", async (event: { systemPrompt: string }) => {
 				let systemPrompt = event.systemPrompt;
 				systemPrompt += buildPersistentAgentCurrentIdentitySection(persistentAgentId);
+				try {
+					systemPrompt += buildPersistentRoomCurrentWorkspaceSection(resolvePersistentRoomEffectiveWorkspacePolicy(persistentAgentId, persistentConversationId));
+				} catch (error) {
+					app.log.warn({ err: (error as Error).message }, "current workspace section build failed");
+				}
 				systemPrompt += buildEnabledSkillsIndexSection(resolvePersistentRoomEnabledSkillEntries());
 				try {
 					const section = buildShelfManifestSection(persistentAgentId, {}, (name, entry) => cachedShelfPageCount(persistentAgentId, name, entry));
@@ -4738,6 +4753,10 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 		});
 		session = created.session;
 		sessionDisposed = false;
+		// Recorded only once the session EXISTS: a rebind that throws above must
+		// leave the old fingerprint in place, so the next prompt frame still sees
+		// the mismatch and retries instead of prompting a disposed session forever.
+		boundWorkspaceFingerprint = persistentRoomEffectiveWorkspacePolicy.fingerprint.value;
 		await session.bindExtensions({ uiContext });
 		if (persistentRoomBootContext && persistentRoomModel && promptDiagnosticsEnabledForConnection) {
 			try {
@@ -4950,8 +4969,51 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 			uiContext.resolveResponse(msg.id, msg.value);
 			return;
 		}
-		if (!session) return;
+		// A frame that lands while a workspace rebind is in flight waits for that
+		// SAME rebind before touching `session`: the old session is disposed and
+		// `session` is null for the whole window, so racing past here would drop
+		// the frame or, before the null, run it on the disposed session.
+		if (workspaceRebindInFlight) {
+			try { await workspaceRebindInFlight; } catch {}
+		}
+		if (!session && msg.type !== "prompt") return;
 		if (msg.type === "prompt") {
+			// Workspace settings apply from the next message: when the room's
+			// effective workspace policy changed since this session was built
+			// (default set/changed/cleared mid-conversation), rebuild the session
+			// against the live policy BEFORE the turn begins — tool registry, env
+			// gating and runtime cwd are all bind-time, so only a rebind can make
+			// them match. Never while a turn or its recovery prompt is running:
+			// a turn finishes under the rules it started with (the mutation
+			// endpoints refuse in-flight anyway; this guard covers frame races).
+			if (!activePersistentWebTurn && !autoSummaryRunning && boundWorkspaceFingerprint !== null) {
+				try {
+					const liveWorkspacePolicy = resolvePersistentRoomEffectiveWorkspacePolicy(persistentAgentIdForSession, persistentConversationId);
+					// `!session` here means an earlier rebind failed after disposing
+					// the old session; retry rather than bricking the connection.
+					if (!session || liveWorkspacePolicy.fingerprint.value !== boundWorkspaceFingerprint) {
+						if (!workspaceRebindInFlight) {
+							const rebind = (async () => {
+								if (!sessionDisposed) {
+									sessionDisposed = true;
+									try { (session as any)?.dispose?.(); } catch {}
+								}
+								session = null;
+								await bindSession();
+							})();
+							workspaceRebindInFlight = rebind;
+							rebind.catch(() => {}).finally(() => {
+								if (workspaceRebindInFlight === rebind) workspaceRebindInFlight = null;
+							});
+						}
+						await workspaceRebindInFlight;
+					}
+				} catch (e) {
+					send({ type: "error", message: `failed to apply updated workspace settings: ${(e as Error).message}` });
+					return;
+				}
+			}
+			if (!session) return;
 			let persistentTurnId: string | undefined;
 			try {
 				const startedTurn = beginPersistentAgentTurn(persistentAgentIdForSession, persistentConversationId, { connectionId });

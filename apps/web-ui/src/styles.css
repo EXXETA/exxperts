@@ -2026,25 +2026,18 @@ strong, b { font-weight: 700; }
 .create-room-input::placeholder {
 	color: var(--dim);
 }
+/* Plain colored sentences, no card: the boxed treatment read heavier than the
+ * form itself and the color already carries the meaning. */
 .create-room-message {
-	border: 1px solid var(--border-soft);
-	border-radius: var(--exx-radius-control);
 	font-size: 13px;
 	font-weight: 700;
 	line-height: 1.35;
-	padding: 9px 11px 9px 12px;
 	width: fit-content;
 }
 .create-room-message.error {
-	background: color-mix(in srgb, var(--error) 9%, transparent);
-	border-color: color-mix(in srgb, var(--error) 36%, var(--border-soft));
-	box-shadow: inset 3px 0 0 color-mix(in srgb, var(--error) 70%, transparent);
 	color: var(--error);
 }
 .create-room-message.success {
-	background: color-mix(in srgb, var(--success) 10%, transparent);
-	border-color: color-mix(in srgb, var(--success) 34%, var(--border-soft));
-	box-shadow: inset 3px 0 0 color-mix(in srgb, var(--success) 68%, transparent);
 	color: var(--success);
 }
 .create-room-actions {
@@ -7144,26 +7137,59 @@ strong, b { font-weight: 700; }
 	color: var(--muted);
 	font-size: 12.5px;
 }
+.rs-info-anchor {
+	position: relative;
+	display: inline-flex;
+	vertical-align: 1px;
+	margin-left: 6px;
+}
 .rs-info {
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
 	width: 15px;
 	height: 15px;
+	padding: 0;
+	background: none;
 	border: 1px solid var(--border);
 	border-radius: 50%;
+	font: inherit;
 	font-size: 10px;
 	font-style: normal;
 	font-weight: 400;
+	letter-spacing: normal;
+	text-transform: none;
 	color: var(--muted);
 	cursor: help;
-	vertical-align: 1px;
-	margin-left: 6px;
 	flex-shrink: 0;
 }
 .rs-info:focus-visible {
 	outline: 2px solid var(--exx-focus);
 	outline-offset: 2px;
+}
+/* The info mark's tooltip opens BELOW the mark: the pane body is a scroll
+   container that clips overflow, and the marks sit near the top of panes. */
+.rs-info-tip {
+	position: absolute;
+	top: calc(100% + 6px);
+	left: 50%;
+	transform: translateX(-50%);
+	width: max-content;
+	max-width: min(280px, 60vw);
+	background: var(--panel);
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
+	padding: 8px 10px;
+	color: var(--fg);
+	font-size: 11.5px;
+	font-weight: 400;
+	line-height: 1.5;
+	letter-spacing: normal;
+	text-transform: none;
+	text-align: left;
+	white-space: normal;
+	z-index: 40;
 }
 .rs-row {
 	display: flex;
@@ -7175,7 +7201,9 @@ strong, b { font-weight: 700; }
 label.rs-row {
 	cursor: pointer;
 }
-.rs-row + .rs-row {
+/* General-sibling, not adjacent: an explanatory <details> or note between two
+   rows must not eat the divider rhythm of the later row. */
+.rs-row ~ .rs-row {
 	border-top: 1px solid var(--border-soft);
 }
 .rs-row-main {
@@ -7192,6 +7220,14 @@ label.rs-row {
 	color: var(--muted);
 	font-size: 12.5px;
 	line-height: 1.45;
+}
+/* Shared note under a group of rs-rows (e.g. the two memory speed toggles). */
+.rs-row-footnote {
+	color: var(--muted);
+	font-size: 12.5px;
+	line-height: 1.45;
+	font-style: italic;
+	margin: 0;
 }
 .rs-btn {
 	background: none;
@@ -7253,6 +7289,7 @@ label.rs-row {
 }
 .room-workspace-section,
 .room-schedules-section,
+.room-skills-section,
 .room-danger-zone {
 	display: flex;
 	flex-direction: column;
@@ -7275,7 +7312,7 @@ label.rs-row {
 	border-radius: 12px;
 	display: flex;
 	flex-direction: column;
-	gap: 12px;
+	gap: 10px;
 	padding: 12px;
 }
 .room-schedules-form-grid {
@@ -7294,7 +7331,7 @@ label.rs-row {
 	line-height: 1.35;
 }
 .room-schedules-field textarea.launcher-path-input {
-	min-height: 132px;
+	min-height: 84px;
 	resize: vertical;
 }
 .room-schedules-help {
@@ -7318,13 +7355,15 @@ label.rs-row {
 	padding: 0 4px;
 }
 .room-schedules-mode-buttons,
-.room-schedules-submode-row {
+.room-schedules-submode-row,
+.room-schedules-day-row {
 	display: flex;
 	flex-wrap: wrap;
 	gap: 8px;
 }
 .room-schedules-mode-button,
-.room-schedules-submode-button {
+.room-schedules-submode-button,
+.room-schedules-day-chip {
 	background: color-mix(in srgb, var(--panel-2) 78%, transparent);
 	border: 1px solid var(--border-soft);
 	border-radius: 999px;
@@ -7338,20 +7377,28 @@ label.rs-row {
 .room-schedules-mode-button:hover:not(:disabled),
 .room-schedules-mode-button:focus-visible,
 .room-schedules-submode-button:hover:not(:disabled),
-.room-schedules-submode-button:focus-visible {
+.room-schedules-submode-button:focus-visible,
+.room-schedules-day-chip:hover:not(:disabled),
+.room-schedules-day-chip:focus-visible {
 	border-color: var(--fg);
 	outline: none;
 }
 .room-schedules-mode-button.active,
-.room-schedules-submode-button.active {
+.room-schedules-submode-button.active,
+.room-schedules-day-chip.active {
 	background: var(--fg);
 	border-color: var(--fg);
 	color: var(--bg);
 }
 .room-schedules-mode-button:disabled,
-.room-schedules-submode-button:disabled {
+.room-schedules-submode-button:disabled,
+.room-schedules-day-chip:disabled {
 	cursor: default;
 	opacity: 0.6;
+}
+.room-schedules-day-chip {
+	min-width: 48px;
+	text-align: center;
 }
 .room-schedules-preset-panel {
 	background: color-mix(in srgb, var(--panel-2) 70%, transparent);
@@ -7398,12 +7445,10 @@ label.rs-row {
 }
 .room-schedules-checkbox {
 	display: flex;
-	align-items: flex-start;
-	gap: 8px;
+	align-items: center;
+	gap: 12px;
 	color: var(--muted);
-}
-.room-schedules-checkbox input {
-	margin-top: 2px;
+	cursor: pointer;
 }
 .room-schedules-form-actions {
 	justify-content: flex-start;
@@ -8007,26 +8052,21 @@ label.rs-row {
 	color: var(--danger, #c0392b);
 	font-size: 12px;
 }
-.memory-budget-block {
-	flex-direction: column;
-	align-items: stretch;
-	gap: 8px;
-}
-.memory-budget-head {
-	display: flex;
-	align-items: baseline;
-	justify-content: space-between;
-	gap: 16px;
+.memory-budget-row .rs-row-main {
+	flex: 1;
 }
 .memory-budget-value {
+	margin-left: 8px;
+	color: var(--muted);
 	font-size: 13px;
+	font-weight: 400;
 	font-variant-numeric: tabular-nums;
 }
 .memory-budget-slider {
 	width: 100%;
 	accent-color: var(--exx-plan);
 	cursor: pointer;
-	margin: 0;
+	margin: 8px 0 2px;
 }
 .memory-budget-slider:disabled {
 	opacity: 0.45;
@@ -8040,6 +8080,44 @@ label.rs-row {
 }
 .memory-budget-usage.over {
 	color: var(--warning);
+}
+
+/* Room settings: workspace empty state — names what stays locked without a folder. */
+.workspaces-no-workspace {
+	border: 1px dashed var(--border-soft);
+	border-radius: 10px;
+	padding: 14px;
+	display: grid;
+	gap: 8px;
+	justify-items: start;
+}
+.workspaces-no-workspace-lead {
+	margin: 0;
+	font-size: 14px;
+	font-weight: 600;
+}
+.workspaces-no-workspace-copy {
+	margin: 0;
+	color: var(--muted);
+	font-size: 12.5px;
+	line-height: 1.5;
+}
+/* Room settings: edit mode shows the currently saved folder as a real value,
+   so an empty input reads as "keep this", not as an empty field. */
+.workspace-saved-folder {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	font-size: 13px;
+}
+.workspace-saved-folder-name {
+	font-weight: 600;
+}
+.workspace-saved-folder-tag {
+	color: var(--muted);
+	font-size: 11px;
+	text-transform: uppercase;
+	letter-spacing: 0.08em;
 }
 
 /* Room settings: workspace summary card ------------------------------ */
@@ -8712,6 +8790,31 @@ label.rs-row {
 	border-radius: 999px;
 }
 .mem-budget-fill.over { background: var(--warning); }
+
+/* First-open workspace nudge: one dismissible line above the composer for a
+   room without a workspace. Sized and centred like the consult dock so it sits
+   in the same column as the composer without covering it. */
+.room-workspace-nudge {
+	margin: 0 26px 10px;
+	max-width: 780px;
+	align-self: center;
+	width: calc(100% - 52px);
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	flex-wrap: wrap;
+	gap: 10px 16px;
+	border: 1px solid var(--border-soft);
+	border-radius: 10px;
+	background: color-mix(in srgb, var(--panel-2) 78%, transparent);
+	padding: 10px 14px;
+	font-size: 12.5px;
+}
+.room-workspace-nudge-actions {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+}
 
 /* Consult MR-4 — the DelegationCard family: the docked consult card and the
    folded pill (variant A). Ported from the mockup (consult-ui-mockups.html)
@@ -10465,6 +10568,11 @@ label.rs-row {
 }
 .room-skills-empty {
 	color: var(--muted);
+}
+.room-skills-library-empty {
+	display: grid;
+	gap: 10px;
+	justify-items: start;
 }
 .room-skills-live {
 	font-size: 10px;

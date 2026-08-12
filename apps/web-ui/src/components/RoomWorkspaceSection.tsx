@@ -1,4 +1,4 @@
-import { type FormEvent, useEffect, useState } from "react";
+import { type FormEvent, useEffect, useRef, useState } from "react";
 import type { PersistentAgentStatus, PersistentRoomCapabilityPolicyView, PersistentRoomWorkspaceAccessMode } from "../types";
 import { chooseSystemFolder, clearPersistentRoomWorkspaceDefault, fetchPersistentRoomWorkspaceDefault, savePersistentRoomWorkspaceDefault } from "../persistent-room-workspace-api";
 
@@ -67,14 +67,20 @@ function accessModeLabel(mode: PersistentRoomWorkspaceAccessMode): string {
 
 function accessModeHint(mode: PersistentRoomWorkspaceAccessMode): string {
 	return mode === "localFiles"
-		? "The room works directly in the chosen folder."
-		: "The room works in a managed copy inside the folder, so the originals stay untouched.";
+		? "The room works with files like you do, in this folder and beyond it, and can create, edit and overwrite. Bash is available in this mode."
+		: "The room stays inside this folder. It can read everything here but only add new Markdown files, so your existing documents cannot be changed.";
 }
 
-function WorkspaceDefaultPolicySummary({ policy, warnings }: { policy: PersistentRoomCapabilityPolicyView | null; warnings: string[] }) {
+function WorkspaceDefaultPolicySummary({ policy, warnings, setupDisabled, onSetWorkspace }: { policy: PersistentRoomCapabilityPolicyView | null; warnings: string[]; setupDisabled: boolean; onSetWorkspace: () => void }) {
 	const currentRoot = policy?.roots[0] ?? null;
 	if (!policy || !currentRoot) {
-		return <p className="workspaces-empty-state">No workspace saved yet. Set a project folder for this room.</p>;
+		return (
+			<div className="workspaces-no-workspace">
+				<p className="workspaces-no-workspace-lead">No workspace yet.</p>
+				<p className="workspaces-no-workspace-copy">Without a folder, this room can't read or write files, export documents, or use Bash. Set a project folder to unlock file work.</p>
+				<button className="rs-btn" type="button" disabled={setupDisabled} onClick={onSetWorkspace}>Set workspace</button>
+			</div>
+		);
 	}
 	const savedLabel = currentRoot.displayLabel || currentRoot.basename;
 	const folderName = currentRoot.basename;
@@ -105,7 +111,7 @@ function WorkspaceDefaultPolicySummary({ policy, warnings }: { policy: Persisten
 				<p className="workspace-summary-note">
 					The full local path stays on this machine and is not shown here.{showFolderClue ? ` Folder: ${folderName}.` : ""}
 				</p>
-				<p className="workspace-summary-note">Workspace changes apply to new conversations. A conversation that is already running keeps the workspace it started with.</p>
+				<p className="workspace-summary-note">Workspace changes apply from your next message, also in a conversation that is already running.</p>
 			</div>
 			{warnings.length > 0 && (
 				<ul className="workspaces-warnings">
@@ -129,6 +135,13 @@ export function RoomWorkspaceSection({ status, onDirtyChange }: { status: Persis
 	const [draftBashEnabled, setDraftBashEnabled] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [message, setMessage] = useState<string | null>(null);
+	// The outcome line renders below the (tall) edit form inside a scrolling
+	// pane: without this, a refusal can land off-screen and look like nothing
+	// happened until the user scrolls.
+	const outcomeRef = useRef<HTMLDivElement>(null);
+	useEffect(() => {
+		if (error || message) outcomeRef.current?.scrollIntoView({ block: "nearest" });
+	}, [error, message]);
 	const canManageWorkspace = status.exists && status.status !== "error";
 	const trimmedDraftRoot = draftRoot.trim();
 	const baselineAccessMode = policy?.workspaceAccessMode ?? "localFiles";
@@ -209,7 +222,7 @@ export function RoomWorkspaceSection({ status, onDirtyChange }: { status: Persis
 			setDraftToolNames(draftToolNamesForPolicy(response.policy));
 			setDraftBashEnabled(response.policy?.workspaceAccessMode === "localFiles" && response.policy?.bashEnabled === true);
 			setEditing(false);
-			setMessage("Workspace default saved.");
+			setMessage("Saved. Applies from your next message.");
 		} catch (e) {
 			setError((e as Error).message || "Failed to save workspace default.");
 		} finally {
@@ -298,20 +311,27 @@ export function RoomWorkspaceSection({ status, onDirtyChange }: { status: Persis
 		<div className="room-workspace-section">
 			<header className="rs-pane-head">
 				<h3>Workspace</h3>
-				{!editing && (
+				{!editing && policy && (
 					<div className="rs-pane-actions">
-						{policy && <button className="rs-quiet" disabled={!canManageWorkspace || loading || saving} onClick={() => void clearWorkspaceDefault()}>{saving ? "Updating…" : "Clear"}</button>}
-						<button className="rs-btn" disabled={!canManageWorkspace || loading || saving} onClick={startOrCancelEditing}>{policy ? "Edit workspace" : "Set workspace"}</button>
+						<button className="rs-btn" disabled={!canManageWorkspace || loading || saving} onClick={startOrCancelEditing}>Edit workspace</button>
+						<button className="rs-quiet" disabled={!canManageWorkspace || loading || saving} onClick={() => void clearWorkspaceDefault()}>{saving ? "Updating…" : "Clear"}</button>
 					</div>
 				)}
 			</header>
 			<p className="rs-pane-sub">The folder this room works in, and what it may do there.</p>
 			<div className="workspaces-room-body">
-				{loading ? <p className="workspaces-empty-state">Loading workspace default…</p> : !editing && <WorkspaceDefaultPolicySummary policy={policy} warnings={warnings} />}
+				{loading ? <p className="workspaces-empty-state">Loading workspace default…</p> : !editing && <WorkspaceDefaultPolicySummary policy={policy} warnings={warnings} setupDisabled={!canManageWorkspace || saving} onSetWorkspace={startOrCancelEditing} />}
 				{editing && (
 					<form className="workspaces-default-form" onSubmit={(event) => void submitWorkspaceDefault(event)}>
 						<div className="workspaces-field">
 							<strong>Workspace folder</strong>
+							{savedFolderLabel && (
+								<div className="workspace-saved-folder">
+									<svg className="workspace-folder-icon" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M1.5 2.5A1.5 1.5 0 0 1 3 1h3.2c.4 0 .78.16 1.06.44L8.6 2.78c.1.1.22.15.35.15H13a1.5 1.5 0 0 1 1.5 1.5v8.07A1.5 1.5 0 0 1 13 14H3a1.5 1.5 0 0 1-1.5-1.5v-10Z" /></svg>
+									<span className="workspace-saved-folder-name">{savedFolderLabel}</span>
+									<span className="workspace-saved-folder-tag">saved</span>
+								</div>
+							)}
 							<div className="workspace-folder-row">
 								<button className="inline-action workspace-folder-choice-action" type="button" disabled={saving || choosingFolder} onClick={() => void chooseWorkspaceRootFolder()}>
 									<svg className="workspace-folder-icon" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M1.5 2.5A1.5 1.5 0 0 1 3 1h3.2c.4 0 .78.16 1.06.44L8.6 2.78c.1.1.22.15.35.15H13a1.5 1.5 0 0 1 1.5 1.5v8.07A1.5 1.5 0 0 1 13 14H3a1.5 1.5 0 0 1-1.5-1.5v-10Z" /></svg>
@@ -321,7 +341,7 @@ export function RoomWorkspaceSection({ status, onDirtyChange }: { status: Persis
 									className="launcher-path-input workspace-folder-path-input"
 									type="text"
 									value={draftRoot}
-									placeholder={savedFolderLabel ? `Keeping the saved folder: ${savedFolderLabel}` : "Type a folder path, or choose one"}
+									placeholder={savedFolderLabel ? "Change to a different folder (empty keeps the saved one)" : "Type a folder path, or choose one"}
 									aria-label="Workspace folder path"
 									disabled={saving || choosingFolder}
 									onChange={(event) => { setDraftRoot(event.target.value); setError(null); setMessage(null); }}
@@ -359,6 +379,7 @@ export function RoomWorkspaceSection({ status, onDirtyChange }: { status: Persis
 									</div>
 								))}
 							</div>
+							{draftAccessMode === "bounded" && <p className="workspaces-session-note">Bash is available in Full access mode.</p>}
 						</div>
 						{draftAccessMode === "localFiles" && (
 							<div className="workspace-power-user">
@@ -371,13 +392,15 @@ export function RoomWorkspaceSection({ status, onDirtyChange }: { status: Persis
 						)}
 						<div className="workspace-form-actions">
 							{dirty && <span className="workspace-unsaved-hint">Unsaved changes</span>}
-							<button className="rs-btn" disabled={saving}>{saving ? "Saving…" : policy ? "Save change" : "Save workspace"}</button>
+							<button className="rs-btn" disabled={saving}>{saving ? "Saving…" : policy ? "Save changes" : "Save workspace"}</button>
 							<button className="rs-quiet" type="button" disabled={saving} onClick={startOrCancelEditing}>Cancel</button>
 						</div>
 					</form>
 				)}
-				{message && <div className="workspaces-success">{message}</div>}
-				{error && <div className="workspaces-error">{error}</div>}
+				<div ref={outcomeRef}>
+					{message && <div className="workspaces-success">{message}</div>}
+					{error && <div className="workspaces-error">{error}</div>}
+				</div>
 			</div>
 		</div>
 	);

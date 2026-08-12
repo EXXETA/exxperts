@@ -65,6 +65,15 @@ export function connectorConfigKey(config: { mcpServers?: Record<string, { url?:
 	);
 }
 
+// Figma personal access tokens (figd_…) must travel in Figma's own
+// X-Figma-Token header — mcp.figma.com rejects them in Authorization
+// ("figd_ tokens must be passed via X-Figma-Token header"). auth: false
+// also switches off OAuth auto-detect for the entry.
+function tokenServerEntry(url: string, token: string): Record<string, unknown> {
+	if (token.startsWith("figd_")) return { url, auth: false, headers: { "X-Figma-Token": token } };
+	return { url, auth: "bearer", bearerToken: token };
+}
+
 async function loadRows(): Promise<{ rows: ConnectorRow[]; configKey: string }> {
 	const [configMod, authMod, cacheMod] = await Promise.all([
 		import(ADAPTER_CONFIG),
@@ -74,9 +83,18 @@ async function loadRows(): Promise<{ rows: ConnectorRow[]; configKey: string }> 
 	const config = configMod.loadMcpConfig();
 	const cache = cacheMod.loadMetadataCache();
 	const rows: ConnectorRow[] = Object.entries(config.mcpServers ?? {}).map(([name, rawEntry]) => {
-		const entry = rawEntry as ConnectorRow["entry"] & { auth?: "oauth" | "bearer" | false; bearerToken?: string; bearerTokenEnv?: string; oauth?: unknown };
+		const entry = rawEntry as ConnectorRow["entry"] & {
+			auth?: "oauth" | "bearer" | false;
+			bearerToken?: string;
+			bearerTokenEnv?: string;
+			headers?: Record<string, string>;
+			oauth?: unknown;
+		};
+		// Static credential headers (Figma's X-Figma-Token) come with auth:
+		// false to switch off OAuth auto-detect, but they are still token auth.
+		const headerToken = entry.auth === false && Object.keys(entry.headers ?? {}).some((h) => /token|key|secret|authorization/i.test(h));
 		const mode: ConnectorRow["mode"] =
-			entry.auth === "bearer" || entry.bearerToken || entry.bearerTokenEnv
+			entry.auth === "bearer" || entry.bearerToken || entry.bearerTokenEnv || headerToken
 				? "bearer"
 				: entry.url && entry.auth !== false && entry.oauth !== false
 					? "oauth"
@@ -292,9 +310,14 @@ class ConnectorsPanel {
 				// authenticate() promise should not overwrite it.
 				if (this.cancelledLogin === row.name) return;
 				const message = (e as Error).message ?? String(e);
-				const friendly = /404|not found/i.test(message)
-					? "This connector doesn't offer a login. It likely works without one."
-					: message;
+				// Mirrors the web server's friendlyLoginError: a 403 mid-flow is
+				// a refusal (Figma allowlists partner apps), and only failed
+				// OAuth *discovery* means the server has no login.
+				const friendly = /HTTP 403/i.test(message)
+					? "The provider refused the login (HTTP 403). Some providers only let approved apps log in. Remove this connector and add it again with an API token."
+					: /does not implement OAuth|trying to load well-known OAuth|no authorization server/i.test(message)
+						? "This connector doesn't offer a login. It likely works without one."
+						: message;
 				this.setNotice(friendly, "error");
 			}
 		})();
@@ -431,7 +454,7 @@ class ConnectorsPanel {
 						this.setNotice("Cancelled. No token entered.", "warn");
 						return;
 					}
-					void this.writeServer(entry.id, { url: entry.url, auth: "bearer", bearerToken: value.trim() });
+					void this.writeServer(entry.id, tokenServerEntry(entry.url, value.trim()));
 				},
 				cancel: () => {
 					this.input = null;
@@ -554,7 +577,7 @@ class ConnectorsPanel {
 				submit: (token) => {
 					this.input = null;
 					if (token.trim()) {
-						void this.writeServer(name, { url, auth: "bearer", bearerToken: token.trim() });
+						void this.writeServer(name, tokenServerEntry(url, token.trim()));
 						return;
 					}
 					askOAuthClientId(name, url);

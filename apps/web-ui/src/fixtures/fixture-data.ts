@@ -431,16 +431,12 @@ export const homeFixtureStates: HomeFixtureState[] = [
 
 const emptyCreateRoomValues: CreateRoomFormValues = {
 	personalAgentName: "",
-	confirmPersonalAgentName: "",
 	userName: "",
-	preferredAddress: "",
 };
 
 const strategyRoomValues: CreateRoomFormValues = {
 	personalAgentName: "Strategy Room",
-	confirmPersonalAgentName: "Strategy Room",
 	userName: "Alex Example",
-	preferredAddress: "Alex",
 };
 
 export const createRoomFixtureStates: CreateRoomFixtureState[] = [
@@ -467,9 +463,7 @@ export const createRoomFixtureStates: CreateRoomFixtureState[] = [
 		description: "Partially entered synthetic room details before validation.",
 		values: {
 			personalAgentName: "Strategy Room",
-			confirmPersonalAgentName: "Strategy",
 			userName: "Alex Example",
-			preferredAddress: "Alex",
 		},
 		open: true,
 	},
@@ -477,15 +471,13 @@ export const createRoomFixtureStates: CreateRoomFixtureState[] = [
 		kind: "create-room",
 		id: "create-room-validation-error",
 		label: "Create room / validation error",
-		description: "Client-side confirmation mismatch using synthetic values.",
+		description: "Client-side required-field error using synthetic values.",
 		values: {
-			personalAgentName: "Strategy Room",
-			confirmPersonalAgentName: "Research Room",
+			personalAgentName: "",
 			userName: "Alex Example",
-			preferredAddress: "Alex",
 		},
 		open: true,
-		error: "Personal agent name confirmation must match.",
+		error: "Room name is required.",
 	},
 	{
 		kind: "create-room",

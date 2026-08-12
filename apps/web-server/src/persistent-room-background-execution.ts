@@ -28,7 +28,7 @@ import {
 	getPersistentRoomToolPolicy,
 } from "./persistent-room-tool-policy.js";
 import {
-	ensurePersistentRoomThreadEffectiveWorkspacePolicySnapshot,
+	resolvePersistentRoomEffectiveWorkspacePolicy,
 	persistentRoomRuntimeCwdForEffectiveWorkspacePolicy,
 } from "./persistent-room-workspace-policy.js";
 import {
@@ -217,7 +217,7 @@ function backgroundBashUnavailablePromptPrefix(bashEnabled: boolean): string | u
 	return bashEnabled ? "Background scheduled execution does not have Bash/shell access in this release. Do not use shell commands for this run." : undefined;
 }
 
-function backgroundWorkspaceCapability(effectiveWorkspacePolicy: ReturnType<typeof ensurePersistentRoomThreadEffectiveWorkspacePolicySnapshot>) {
+function backgroundWorkspaceCapability(effectiveWorkspacePolicy: ReturnType<typeof resolvePersistentRoomEffectiveWorkspacePolicy>) {
 	const capability = effectiveWorkspacePolicy.capability;
 	if (!capability || capability.availableToolNames.length === 0) return undefined;
 	return { ...capability, bashEnabled: false };
@@ -229,7 +229,7 @@ function preparePersistentRoomBackgroundExecution(input: PersistentRoomBackgroun
 	const fallbackCwd = input.cwd ?? REPO_ROOT;
 	if (input.target.kind === "fresh-thread") {
 		const threadId = scheduledPromptBackgroundThreadId(input.executionId);
-		const effectiveWorkspacePolicy = ensurePersistentRoomThreadEffectiveWorkspacePolicySnapshot(roomId, threadId);
+		const effectiveWorkspacePolicy = resolvePersistentRoomEffectiveWorkspacePolicy(roomId, threadId);
 		const runtimeCwd = persistentRoomRuntimeCwdForEffectiveWorkspacePolicy(effectiveWorkspacePolicy, fallbackCwd);
 		const workspaceCapability = backgroundWorkspaceCapability(effectiveWorkspacePolicy);
 		const promptPrefix = backgroundBashUnavailablePromptPrefix(effectiveWorkspacePolicy.bashEnabled);
@@ -270,7 +270,7 @@ function preparePersistentRoomBackgroundExecution(input: PersistentRoomBackgroun
 	if (!modelLocksEqual(thread.model, modelLock)) {
 		throw new Error(`scheduled persistent-room target model mismatch: expected ${thread.model.provider}/${thread.model.model}, got ${modelLock.provider}/${modelLock.model}`);
 	}
-	const effectiveWorkspacePolicy = ensurePersistentRoomThreadEffectiveWorkspacePolicySnapshot(roomId, threadId);
+	const effectiveWorkspacePolicy = resolvePersistentRoomEffectiveWorkspacePolicy(roomId, threadId);
 	const runtimeCwd = persistentRoomRuntimeCwdForEffectiveWorkspacePolicy(effectiveWorkspacePolicy, fallbackCwd);
 	const workspaceCapability = backgroundWorkspaceCapability(effectiveWorkspacePolicy);
 	const promptPrefix = backgroundBashUnavailablePromptPrefix(effectiveWorkspacePolicy.bashEnabled);
@@ -368,7 +368,7 @@ async function createPersistentRoomBackgroundSession(input: {
 	agentDir: string;
 	modelRegistry: ModelRegistry;
 }) {
-	const effectiveWorkspacePolicy = ensurePersistentRoomThreadEffectiveWorkspacePolicySnapshot(input.roomId, input.threadId);
+	const effectiveWorkspacePolicy = resolvePersistentRoomEffectiveWorkspacePolicy(input.roomId, input.threadId);
 	const workspaceToolNames = effectiveWorkspacePolicy.allowedToolNames;
 	const workspaceToolsEnabled = effectiveWorkspacePolicy.workspaceToolsEnabled;
 	const toolPolicy = getPersistentRoomToolPolicy(input.roomId, { workspaceToolsEnabled, workspaceToolNames, workspaceAccessMode: effectiveWorkspacePolicy.workspaceAccessMode, bashEnabled: false, bashRuntimeAllowed: false });

@@ -204,6 +204,21 @@ try {
 	assert(fs.existsSync(path.join(tempAgentsRoot, recreatedId, "agent.json")), "recreated suffixed room folder should exist separately");
 	assert(!fs.existsSync(path.join(tempAgentsRoot, "borja-coordinator")), "archive smoke must not create borja-coordinator");
 
+	// Active room names are unique: a second active room under the recreated
+	// name is refused, and restoring the archived original — whose name the
+	// recreation just re-took — is refused with the rename-first message.
+	const duplicateActive = await requestJson("/api/persistent-agents", {
+		method: "POST",
+		body: JSON.stringify({ displayName: "Archive Smoke Room", userName: "Synthetic User" }),
+	});
+	assert(duplicateActive.status === 409, `duplicate active room name should be refused with 409, got ${duplicateActive.status}`);
+	assert(/already exists/.test(String(duplicateActive.body?.error ?? "")), "duplicate refusal should say the name already exists");
+	const restoreCollision = await requestJson(`/api/persistent-agents/${agentId}/restore`, { method: "POST", body: JSON.stringify({}) });
+	assert(restoreCollision.status === 409, `restore into a taken name should be refused with 409, got ${restoreCollision.status}`);
+	assert(/Rename that room first/.test(String(restoreCollision.body?.error ?? "")), "restore refusal should point at renaming the active room");
+	listedIds = await listAgentIds();
+	assert(!listedIds.includes(agentId), "refused restore must leave the original archived");
+
 	// Rename: displayName + anchored constitution rewrite + word-boundary memory
 	// mention replacement (previewable, archived); the id never changes.
 	const renameRoot = path.join(tempAgentsRoot, recreatedId);
@@ -338,8 +353,17 @@ try {
 			body: JSON.stringify({ displayName: "Locked Name" }),
 		});
 		assert(busy.status === 409, `${surface}-locked rename should return 409, got ${busy.status}: ${JSON.stringify(busy.body)}`);
+		// Archive shares purge's busy guards: a room held by another surface
+		// refuses with the machine-readable room_lock reason.
+		const busyArchive = await requestJson(`/api/persistent-agents/${encodeURIComponent(accentedId)}/archive`, {
+			method: "POST",
+			body: JSON.stringify({ confirmation: `DELETE ${accentedId}` }),
+		});
+		assert(busyArchive.status === 409, `${surface}-locked archive should return 409, got ${busyArchive.status}: ${JSON.stringify(busyArchive.body)}`);
+		assert(busyArchive.body?.reason === "room_lock", `${surface}-locked archive should carry the room_lock reason, got ${JSON.stringify(busyArchive.body)}`);
 	}
 	fs.rmSync(accentedLockPath, { force: true });
+	assert(readJson(path.join(tempAgentsRoot, accentedId, "agent.json")).archivedAt == null, "locked archives must not write archive metadata");
 	assert(readJson(path.join(tempAgentsRoot, accentedId, "agent.json")).displayName === "Salon Ost", "locked renames must not change the stored name");
 
 	// A memory write landing between the preview scan and the apply must be renamed too, never
@@ -374,6 +398,62 @@ try {
 	assert(retryRename.body?.constitutionUpdated === true, "retry after partial apply should report the constitution as current, not 'not updated'");
 	assert(retryRename.body?.memoryMentions?.count === 0 && retryRename.body?.memoryUpdated === false, "retry should truthfully report no remaining memory mentions");
 	assert(readJson(accentedAgentJsonPath).displayName === "Studio West", "retry should complete the partially-applied rename");
+
+	// ── In-process busy guards: archive shares purge's refusals ──────────────
+	// Turn-in-flight and detached-cooking live in the server process's memory,
+	// so they are pinned at module level: same env contract as the server had,
+	// then the module directly (the lifecycle smoke's pattern).
+	await stopSmokeServer(server);
+	server = null;
+	process.env.HOME = tempHome;
+	process.env.USERPROFILE = tempHome;
+	process.env.EXXETA_HOME = repoRoot;
+	process.env.EXXETA_PERSISTENT_AGENTS_ROOT = tempAgentsRoot;
+	const agents = await import("../src/persistent-agents.js");
+	const guardRoom = agents.createPersistentAgentFromScaffoldInput({ displayName: "Archive Guard Room", userName: "Synthetic User" } as any);
+	const guardId = guardRoom.agent.agentId;
+	const guardRoot = path.join(tempAgentsRoot, guardId);
+	const guardThreadId = "archive_guard_thread";
+	writeJson(path.join(guardRoot, "runtime", "threads", `${guardThreadId}.json`), {
+		schemaVersion: 1,
+		threadId: guardThreadId,
+		agentId: guardId,
+		state: "standby",
+		origin: "home",
+		model: { provider: "synthetic", model: "archive-smoke", label: "Archive Smoke" },
+		items: [{ kind: "user", id: "u1", text: "synthetic thread" }],
+		createdAt: Date.now(),
+		updatedAt: Date.now(),
+	});
+	writeJson(path.join(guardRoot, "runtime", "state.json"), {
+		schemaVersion: 1,
+		agentId: guardId,
+		state: "active",
+		activeThreadId: guardThreadId,
+		model: { provider: "synthetic", model: "archive-smoke", label: "Archive Smoke" },
+		updatedAt: Date.now(),
+	});
+	agents.beginPersistentAgentTurn(guardId, guardThreadId, { turnId: "turn_archive_guard" });
+	try {
+		agents.archivePersistentAgent(guardId, { confirmation: `DELETE ${guardId}` });
+		assert(false, "archive must refuse while a turn is in flight");
+	} catch (error) {
+		assert((error as any).statusCode === 409, `in-flight archive should be 409, got ${(error as any).statusCode}: ${(error as Error).message}`);
+		assert(/in flight/.test((error as Error).message), `in-flight archive should say so, got: ${(error as Error).message}`);
+	}
+	assert(readJson(path.join(guardRoot, "agent.json")).archivedAt == null, "an in-flight room must survive the refused archive");
+	agents.finishPersistentAgentTurn(guardId, guardThreadId, { turnId: "turn_archive_guard", terminalReason: "completed" });
+	try {
+		agents.archivePersistentAgent(guardId, { confirmation: `DELETE ${guardId}`, detachedCooking: true });
+		assert(false, "archive must refuse while the room is detached-cooking");
+	} catch (error) {
+		assert((error as any).statusCode === 409, `detached-cooking archive should be 409, got ${(error as any).statusCode}: ${(error as Error).message}`);
+		assert(/background answer/.test((error as Error).message), `detached-cooking archive should say so, got: ${(error as Error).message}`);
+	}
+	assert(readJson(path.join(guardRoot, "agent.json")).archivedAt == null, "a detached-cooking room must survive the refused archive");
+	const quietArchive = agents.archivePersistentAgent(guardId, { confirmation: `DELETE ${guardId}` });
+	assert(quietArchive.status === "archived", "archive should succeed once the room is quiet");
+	assert(readJson(path.join(guardRoot, "agent.json")).status === "archived", "the quiet archive must persist the archived status");
 
 	console.log("persistent-agent archive smoke passed");
 } catch (error) {

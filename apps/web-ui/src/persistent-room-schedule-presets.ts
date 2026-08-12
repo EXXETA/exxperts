@@ -14,12 +14,17 @@ export const SCHEDULE_DEFAULT_ONE_TIME_AT_DAY: ScheduleOneTimeAtDay = "today";
 const MAX_DELAY_SECONDS = 366 * 24 * 60 * 60;
 
 export type ScheduleAdvancedType = PersistentRoomScheduleType | typeof SCHEDULE_CREATE_TYPE_AUTO;
-export type ScheduleRecurrenceMode = "daily" | "oneTime" | "advanced";
+export type ScheduleRecurrenceMode = "daily" | "weekly" | "oneTime" | "advanced";
 export type ScheduleOneTimeMode = "in" | "at";
 export type ScheduleOneTimeDelayUnit = "minutes" | "hours" | "days";
 export type ScheduleOneTimeAtDay = "today" | "tomorrow";
 
 export interface ScheduleDailyRecurrenceDraft {
+	time: string;
+}
+
+export interface ScheduleWeeklyRecurrenceDraft {
+	days: number[];
 	time: string;
 }
 
@@ -47,6 +52,7 @@ export interface ScheduleAdvancedRecurrenceDraft {
 export interface ScheduleRecurrenceDraft {
 	mode: ScheduleRecurrenceMode;
 	daily: ScheduleDailyRecurrenceDraft;
+	weekly: ScheduleWeeklyRecurrenceDraft;
 	oneTime: ScheduleOneTimeRecurrenceDraft;
 	advanced: ScheduleAdvancedRecurrenceDraft;
 }
@@ -70,6 +76,10 @@ export function createDefaultScheduleRecurrenceDraft(overrides: Partial<Schedule
 		mode: overrides.mode ?? "daily",
 		daily: {
 			time: overrides.daily?.time ?? SCHEDULE_DEFAULT_DAILY_TIME,
+		},
+		weekly: {
+			days: overrides.weekly?.days ?? [],
+			time: overrides.weekly?.time ?? SCHEDULE_DEFAULT_DAILY_TIME,
 		},
 		oneTime: {
 			mode: overrides.oneTime?.mode ?? "in",
@@ -135,6 +145,31 @@ export function detectSimpleDailyCronSchedule(type: PersistentRoomScheduleType, 
 	return toNativeTimeValue(hour, minute);
 }
 
+export function generateWeeklyCronSchedule(days: number[], time: string): string | null {
+	const parsed = parseNativeTimeValue(time);
+	if (!parsed) return null;
+	const normalized = normalizeWeeklyDays(days);
+	if (!normalized) return null;
+	const dayField = normalized.length === 7 ? "*" : normalized.join(",");
+	return `0 ${parsed.minute} ${parsed.hour} * * ${dayField}`;
+}
+
+export function detectWeeklyCronSchedule(type: PersistentRoomScheduleType, schedule: string): ScheduleWeeklyRecurrenceDraft | null {
+	if (type !== "cron") return null;
+	const parts = schedule.trim().split(/\s+/);
+	if (parts.length !== 6) return null;
+	const [seconds, minuteValue, hourValue, dayOfMonth, month, dayOfWeek] = parts;
+	if (seconds !== "0" || dayOfMonth !== "*" || month !== "*" || dayOfWeek === "*") return null;
+	if (!/^\d+$/.test(minuteValue) || !/^\d+$/.test(hourValue)) return null;
+	const minute = Number(minuteValue);
+	const hour = Number(hourValue);
+	if (hour > 23 || minute > 59) return null;
+	const days = parseCronDayOfWeekList(dayOfWeek);
+	// A full seven-day list keeps its current reading (every day, not weekly).
+	if (!days || days.length === 7) return null;
+	return { days, time: toNativeTimeValue(hour, minute) };
+}
+
 export function generateOneTimeInSchedule(countValue: string, unit: ScheduleOneTimeDelayUnit): string | null {
 	const count = parsePositiveInteger(countValue);
 	if (count === null || !isSupportedDelayUnit(unit)) return null;
@@ -156,6 +191,12 @@ export function validateScheduleRecurrenceDraft(
 		case "daily": {
 			if (!draft.daily.time) return "Choose a daily time.";
 			if (!parseNativeTimeValue(draft.daily.time)) return "Daily time must be a valid hour and minute.";
+			return null;
+		}
+		case "weekly": {
+			if (!normalizeWeeklyDays(draft.weekly.days)) return "Choose at least one day.";
+			if (!draft.weekly.time) return "Choose a weekly time.";
+			if (!parseNativeTimeValue(draft.weekly.time)) return "Weekly time must be a valid hour and minute.";
 			return null;
 		}
 		case "oneTime": {
@@ -193,6 +234,12 @@ export function recurrenceDraftToScheduleFields(
 			const schedule = generateDailyCronSchedule(draft.daily.time);
 			const summary = formatScheduleRecurrenceDraftSummary(draft, options.now) ?? "Runs every day.";
 			if (!schedule) return { ok: false, error: "Daily time must be a valid hour and minute." };
+			return { ok: true, fields: { type: "cron", schedule }, summary };
+		}
+		case "weekly": {
+			const schedule = generateWeeklyCronSchedule(draft.weekly.days, draft.weekly.time);
+			const summary = formatScheduleRecurrenceDraftSummary(draft, options.now) ?? "Runs weekly.";
+			if (!schedule) return { ok: false, error: "Weekly time must be a valid hour and minute." };
 			return { ok: true, fields: { type: "cron", schedule }, summary };
 		}
 		case "oneTime": {
@@ -258,6 +305,14 @@ export function inferScheduleRecurrenceDraftFromJob(job: PersistentRoomScheduleJ
 			advanced,
 		});
 	}
+	const weekly = detectWeeklyCronSchedule(job.type, job.schedule);
+	if (weekly) {
+		return createDefaultScheduleRecurrenceDraft({
+			mode: "weekly",
+			weekly,
+			advanced,
+		});
+	}
 	const oneTimeAt = inferOneTimeAtDraft(job, now);
 	if (oneTimeAt) {
 		return createDefaultScheduleRecurrenceDraft({
@@ -285,6 +340,12 @@ export function formatScheduleRecurrenceDraftSummary(draft: ScheduleRecurrenceDr
 			const time = formatNativeTimeSummary(draft.daily.time);
 			return time ? `Runs every day at ${time}.` : null;
 		}
+		case "weekly": {
+			const days = normalizeWeeklyDays(draft.weekly.days);
+			const time = formatNativeTimeSummary(draft.weekly.time);
+			if (!days || !time) return null;
+			return `Runs ${describeDaySelection(days)} at ${time}.`;
+		}
 		case "oneTime": {
 			if (draft.oneTime.mode === "in") {
 				const count = parsePositiveInteger(draft.oneTime.in.count);
@@ -301,16 +362,109 @@ export function formatScheduleRecurrenceDraftSummary(draft: ScheduleRecurrenceDr
 	}
 }
 
+const CRON_DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+function normalizeWeeklyDays(days: number[]): number[] | null {
+	const unique = [...new Set(days)].sort((a, b) => a - b);
+	if (unique.length === 0) return null;
+	if (unique.some((day) => !Number.isInteger(day) || day < 0 || day > 6)) return null;
+	return unique;
+}
+
+// The one day-list reading shared by the weekly summary and the card sentence:
+// full weeks, weekdays and weekends collapse to their names so both always agree.
+function describeDaySelection(days: number[]): string {
+	if (days.length === 7) return "every day";
+	if (days.length === 5 && days.every((day) => day >= 1 && day <= 5)) return "every weekday";
+	if (days.length === 2 && days[0] === 0 && days[1] === 6) return "every weekend";
+	return `every ${formatDayList(days.map((day) => CRON_DAY_NAMES[day]))}`;
+}
+
+function parseCronDayOfWeekList(field: string): number[] | null {
+	const days = new Set<number>();
+	for (const part of field.split(",")) {
+		const range = part.match(/^(\d+)-(\d+)$/);
+		if (range) {
+			const from = Number(range[1]);
+			const to = Number(range[2]);
+			if (from > to || from < 0 || to > 7) return null;
+			for (let day = from; day <= to; day += 1) days.add(day % 7);
+			continue;
+		}
+		if (!/^\d+$/.test(part)) return null;
+		const day = Number(part);
+		if (day > 7) return null;
+		days.add(day % 7); // cron allows 7 for Sunday
+	}
+	// A full seven-day set is returned too: the caller reads it as every day.
+	return days.size > 0 ? [...days].sort((a, b) => a - b) : null;
+}
+
+function formatDayList(names: string[]): string {
+	if (names.length === 1) return names[0];
+	return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
+
+function ordinal(day: number): string {
+	const tail = day % 100;
+	if (tail >= 11 && tail <= 13) return `${day}th`;
+	switch (day % 10) {
+		case 1: return `${day}st`;
+		case 2: return `${day}nd`;
+		case 3: return `${day}rd`;
+		default: return `${day}th`;
+	}
+}
+
+// Weekly and monthly cron shapes get a sentence too, so the raw expression is
+// left only for schedules that genuinely have no friendly reading.
+function describeCronSchedule(type: PersistentRoomScheduleType, schedule: string): string | null {
+	if (type !== "cron") return null;
+	const parts = schedule.trim().split(/\s+/);
+	if (parts.length !== 6) return null;
+	const [seconds, minuteValue, hourValue, dayOfMonth, month, dayOfWeek] = parts;
+	if (seconds !== "0" || month !== "*") return null;
+	if (!/^\d+$/.test(minuteValue) || !/^\d+$/.test(hourValue)) return null;
+	const minute = Number(minuteValue);
+	const hour = Number(hourValue);
+	if (hour > 23 || minute > 59) return null;
+	const time = formatNativeTimeSummary(toNativeTimeValue(hour, minute));
+	if (!time) return null;
+	if (dayOfMonth === "*" && dayOfWeek !== "*") {
+		const days = parseCronDayOfWeekList(dayOfWeek);
+		if (!days) return null;
+		const phrase = describeDaySelection(days);
+		return `${phrase.charAt(0).toUpperCase()}${phrase.slice(1)} at ${time}.`;
+	}
+	if (dayOfWeek === "*" && /^\d+$/.test(dayOfMonth)) {
+		const day = Number(dayOfMonth);
+		if (day < 1 || day > 31) return null;
+		return `On the ${ordinal(day)} of each month at ${time}.`;
+	}
+	return null;
+}
+
 export function formatFriendlyWhenForJob(job: PersistentRoomScheduleJob, now = new Date()): string {
 	const dailyTime = detectSimpleDailyCronSchedule(job.type, job.schedule);
 	if (dailyTime) {
 		const summary = formatNativeTimeSummary(dailyTime);
 		if (summary) return `Every day at ${summary}.`;
 	}
+	const cronSentence = describeCronSchedule(job.type, job.schedule);
+	if (cronSentence) return cronSentence;
 	const oneTimeAt = inferOneTimeAtDraft(job, now);
 	if (oneTimeAt) {
 		const summary = formatNativeTimeSummary(oneTimeAt.time);
 		if (summary) return `Once ${oneTimeAt.day} at ${summary}.`;
+	}
+	// A one-time schedule outside the today-or-tomorrow window (a past run
+	// especially) still reads as a date, never as the raw ISO string.
+	if (job.type === "once") {
+		const date = new Date(job.schedule);
+		if (!Number.isNaN(date.getTime())) {
+			const summary = formatNativeTimeSummary(toNativeTimeValue(date.getHours(), date.getMinutes()));
+			if (summary) return `Once on ${date.toLocaleDateString()} at ${summary}.`;
+		}
 	}
 	return formatAdvancedScheduleSummary(job.type, job.schedule);
 }

@@ -93,7 +93,7 @@ try {
 	assert(fs.existsSync(path.join(productAppStateRoot, "agents")), "web-server startup should create product app agents dir");
 	assert(fs.existsSync(path.join(productAppStateRoot, "skills")), "web-server startup should create product app skills dir");
 	const { writePersistentAgentThread } = await import("../src/persistent-agents.js");
-	const { persistentRoomWorkspacePolicyPath } = await import("../src/persistent-room-workspace-policy.js");
+	const { persistentRoomWorkspacePolicyPath, resolvePersistentRoomCapabilityPolicy } = await import("../src/persistent-room-workspace-policy.js");
 	const model = { provider: "openai-compatible", model: "gpt-5.5", label: "GPT 5.5" };
 
 	const created = await requestJson("/api/persistent-agents", {
@@ -192,35 +192,55 @@ try {
 	assert(invalidBoundedToolSelection.status === 400, `bounded grep tool selection should reject, got ${invalidBoundedToolSelection.status}: ${JSON.stringify(invalidBoundedToolSelection.body)}`);
 	assertNoPathLeak(invalidBoundedToolSelection.body, "invalid bounded grep tool selection", [tempHome, tempAgentsRoot, repoRoot, workspaceRoot, agentRoot]);
 
+	// Live workspace defaults: a mutation applies to the RUNNING conversation
+	// from its next message. A thread sidecar that merely mirrors the current
+	// default (the old snapshot regime pinned every thread this way) is
+	// released by the mutation; a deliberate per-conversation override stays.
 	const legacyThreadId = "legacy_active_workspace_default";
 	writePersistentAgentThread(agentId, legacyThreadId, {
 		state: "standby",
 		origin: "home",
 		model,
-		items: [{ kind: "user", text: "legacy visible turn before workspace snapshots existed" }],
+		items: [{ kind: "user", text: "legacy visible turn from the snapshot regime" }],
 	});
 	const legacySidecarPath = persistentRoomWorkspacePolicyPath(agentId, legacyThreadId, { persistentAgentsRoot: tempAgentsRoot });
 	assert(!fs.existsSync(legacySidecarPath), "legacy active thread fixture should start without a workspace sidecar");
+	// Plant an old-regime mirror: a sidecar cloned byte-for-byte in content from
+	// the current default (fresh policyId/conversationId, same grants).
+	const currentDefaultRaw = JSON.parse(fs.readFileSync(defaultPath, "utf-8"));
+	fs.mkdirSync(path.dirname(legacySidecarPath), { recursive: true });
+	fs.writeFileSync(legacySidecarPath, JSON.stringify({ ...currentDefaultRaw, policyId: "prcp_legacy_mirror_fixture", conversationId: legacyThreadId }, null, 2) + "\n");
 	const changedWorkspaceRoot = path.join(tempHome, "workspace-default-api-changed");
 	fs.mkdirSync(changedWorkspaceRoot, { recursive: true });
 	const changedDefault = await requestJson(`/api/persistent-agents/${encodedAgentId}/workspace-default`, {
 		method: "PUT",
 		body: JSON.stringify({ root: changedWorkspaceRoot, displayLabel: "Changed Workspace", workspaceAccessMode: "bounded", mode: "read-only", bashEnabled: true }),
 	});
-	assert(changedDefault.status === 200, `PUT changed default should preserve legacy active thread and succeed, got ${changedDefault.status}: ${JSON.stringify(changedDefault.body)}`);
+	assert(changedDefault.status === 200, `PUT changed default should succeed with a message-bearing active thread, got ${changedDefault.status}: ${JSON.stringify(changedDefault.body)}`);
 	assert(changedDefault.body?.policy?.workspaceAccessMode === "bounded", "explicit changed default should save bounded workspace mode");
 	assert(changedDefault.body?.policy?.pathAccess === "workspace-only", "explicit bounded default should expose workspace-only path access");
 	assert(changedDefault.body?.policy?.bashEnabled === false, "explicit bounded default should force bash disabled even when requested");
 	assert(changedDefault.body?.policy?.writeEnabled === true, "bounded default should enable bounded Markdown workspace write");
-	assert(Array.isArray(changedDefault.body?.warnings) && changedDefault.body.warnings.length === 1, "changed default should report preservation warning");
-	assert(fs.existsSync(legacySidecarPath), "changing default should snapshot current default into legacy active thread sidecar before mutation");
-	const legacySidecarJson = fs.readFileSync(legacySidecarPath, "utf-8");
-	assert(legacySidecarJson.includes(JSON.stringify(workspaceRoot).slice(1, -1)), "legacy active thread sidecar should preserve original default root");
-	assert(legacySidecarJson.includes('"bashEnabled": true'), "legacy active thread sidecar should preserve original default bash setting before mutation");
-	assert(!legacySidecarJson.includes(JSON.stringify(changedWorkspaceRoot).slice(1, -1)), "legacy active thread sidecar must not be rewritten to changed default root");
+	assert(Array.isArray(changedDefault.body?.warnings) && changedDefault.body.warnings.length === 0, "live default change should report no warnings");
+	assert(!fs.existsSync(legacySidecarPath), "changing the default should release the active thread's mirror sidecar so the thread follows the live default");
+	const liveResolution = resolvePersistentRoomCapabilityPolicy(agentId, legacyThreadId, { persistentAgentsRoot: tempAgentsRoot });
+	assert(liveResolution.source === "room-default", `active thread should resolve the live room default after the change, got ${liveResolution.source}`);
+	assert(liveResolution.policy?.roots?.[0]?.realpath === fs.realpathSync.native(changedWorkspaceRoot), "active thread should resolve the CHANGED default root");
 	const changedDefaultJson = fs.readFileSync(defaultPath, "utf-8");
 	assert(changedDefaultJson.includes(JSON.stringify(changedWorkspaceRoot).slice(1, -1)), "room default should be updated to changed workspace root");
 	assertNoPathLeak(changedDefault.body, "PUT changed default", [tempHome, tempAgentsRoot, repoRoot, workspaceRoot, changedWorkspaceRoot, agentRoot]);
+	// A deliberate per-conversation override (differing content) survives the
+	// next default change and keeps winning for its thread.
+	const overrideRaw = { ...currentDefaultRaw, policyId: "prcp_deliberate_override_fixture", conversationId: legacyThreadId, bashEnabled: false, workspaceAccessMode: "bounded", toolSelection: { kind: "custom", allowedToolNames: ["ls", "read"] }, allowedToolNames: ["ls", "read"] };
+	fs.writeFileSync(legacySidecarPath, JSON.stringify(overrideRaw, null, 2) + "\n");
+	const changedAgain = await requestJson(`/api/persistent-agents/${encodedAgentId}/workspace-default`, {
+		method: "PUT",
+		body: JSON.stringify({ workspaceAccessMode: "bounded", mode: "read-only" }),
+	});
+	assert(changedAgain.status === 200, `second default change should succeed, got ${changedAgain.status}: ${JSON.stringify(changedAgain.body)}`);
+	assert(fs.existsSync(legacySidecarPath), "a deliberate per-conversation override must survive a default change");
+	assert(resolvePersistentRoomCapabilityPolicy(agentId, legacyThreadId, { persistentAgentsRoot: tempAgentsRoot }).source === "thread", "a deliberate override should keep winning over the room default");
+	fs.rmSync(legacySidecarPath, { force: true });
 
 	const invalidRepo = await requestJson(`/api/persistent-agents/${encodedAgentId}/workspace-default`, {
 		method: "PUT",
@@ -253,23 +273,31 @@ try {
 	assert(!fs.existsSync(defaultPath), "DELETE should remove runtime/workspace-default.json");
 	assert(!fs.existsSync(sentinelSidecarPath), "DELETE must not create room_default thread sidecar");
 
+	// Setting a first-ever default while a conversation with history is running
+	// succeeds under the live model: the running thread picks it up from its
+	// next message instead of requiring a checkpoint/Memento boundary first.
 	const noDefaultThreadId = "legacy_no_default_thread";
 	writePersistentAgentThread(agentId, noDefaultThreadId, {
 		state: "standby",
 		origin: "home",
 		model,
-		items: [{ kind: "user", text: "legacy visible turn with no workspace default" }],
+		items: [{ kind: "user", text: "visible turn with no workspace default yet" }],
 	});
 	const noDefaultSidecarPath = persistentRoomWorkspacePolicyPath(agentId, noDefaultThreadId, { persistentAgentsRoot: tempAgentsRoot });
 	assert(!fs.existsSync(noDefaultSidecarPath), "no-default active thread fixture should not have a workspace sidecar");
-	const blockedNoDefaultSet = await requestJson(`/api/persistent-agents/${encodedAgentId}/workspace-default`, {
+	const firstDefaultSet = await requestJson(`/api/persistent-agents/${encodedAgentId}/workspace-default`, {
 		method: "PUT",
-		body: JSON.stringify({ root: workspaceRoot, displayLabel: "Blocked Workspace", workspaceAccessMode: "localFiles", mode: "read-only" }),
+		body: JSON.stringify({ root: workspaceRoot, displayLabel: "First Live Workspace", workspaceAccessMode: "localFiles", mode: "read-only" }),
 	});
-	assert(blockedNoDefaultSet.status === 409, `setting default from none with message-bearing active thread should block, got ${blockedNoDefaultSet.status}: ${JSON.stringify(blockedNoDefaultSet.body)}`);
-	assert(blockedNoDefaultSet.body?.code === "active_thread_requires_workspace_boundary", `blocked no-default set should return boundary code, got ${JSON.stringify(blockedNoDefaultSet.body)}`);
-	assert(!fs.existsSync(noDefaultSidecarPath), "blocked no-default set should not create a sidecar");
-	assertNoPathLeak(blockedNoDefaultSet.body, "blocked no-default set", [tempHome, tempAgentsRoot, repoRoot, workspaceRoot, changedWorkspaceRoot, agentRoot]);
+	assert(firstDefaultSet.status === 200, `setting default from none with message-bearing active thread should succeed live, got ${firstDefaultSet.status}: ${JSON.stringify(firstDefaultSet.body)}`);
+	assert(firstDefaultSet.body?.policy?.roots?.[0]?.displayLabel === "First Live Workspace", "first live default should save the new workspace");
+	assert(!fs.existsSync(noDefaultSidecarPath), "live default set must not create a thread sidecar");
+	const firstLiveResolution = resolvePersistentRoomCapabilityPolicy(agentId, noDefaultThreadId, { persistentAgentsRoot: tempAgentsRoot });
+	assert(firstLiveResolution.source === "room-default", "running thread should resolve the newly set default from its next message");
+	assertNoPathLeak(firstDefaultSet.body, "first live default set", [tempHome, tempAgentsRoot, repoRoot, workspaceRoot, changedWorkspaceRoot, agentRoot]);
+	const clearedLive = await requestJson(`/api/persistent-agents/${encodedAgentId}/workspace-default`, { method: "DELETE" });
+	assert(clearedLive.status === 200 && clearedLive.body?.deleted === true, "clearing the live default should succeed");
+	assert(resolvePersistentRoomCapabilityPolicy(agentId, noDefaultThreadId, { persistentAgentsRoot: tempAgentsRoot }).source === "none", "running thread should resolve to no workspace after the clear");
 
 	const deletedAgain = await requestJson(`/api/persistent-agents/${encodedAgentId}/workspace-default`, { method: "DELETE" });
 	assert(deletedAgain.status === 200, `second DELETE default should succeed, got ${deletedAgain.status}`);

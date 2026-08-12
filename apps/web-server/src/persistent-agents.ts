@@ -18,7 +18,7 @@ import { assertPersistentRoomModelForActiveProfile, persistentAgentModelLocksEqu
 import { readPersistentAgentAiProfileState } from "./persistent-agent-ai-profile-state.js";
 import { readOrgIdentityState } from "./org-identity.js";
 import type { OrgIdentity } from "./org-identity.js";
-import { deletePersistentRoomCapabilityPolicy, ensurePersistentRoomThreadEffectiveWorkspacePolicySnapshot } from "./persistent-room-workspace-policy.js";
+import { resolvePersistentRoomEffectiveWorkspacePolicy, type PersistentRoomEffectiveWorkspacePolicy } from "./persistent-room-workspace-policy.js";
 import { listShelfFilesWithOrigin } from "./persistent-room-shelf.js";
 import { listTaskLedgerRecords } from "./persistent-room-task-ledger.js";
 import { backgroundRunsDirectoryPath, isValidBackgroundRunId } from "./background-runs.js";
@@ -1106,9 +1106,51 @@ function collapseHumanWhitespace(value: string): string {
 }
 
 function normalizeRequiredHumanName(value: unknown, label: string): string {
-	const normalized = typeof value === "string" ? collapseHumanWhitespace(value) : "";
+	// NFC at intake: macOS paste can deliver NFD ("Café" as e + combining
+	// accent), which would otherwise store as a byte-different twin of the
+	// composed name and slip past the uniqueness check.
+	const normalized = typeof value === "string" ? collapseHumanWhitespace(value).normalize("NFC") : "";
 	if (!normalized) throw new Error(`${label} is required`);
 	return normalized;
+}
+
+/**
+ * Room names are unique among ACTIVE rooms (case-insensitive): two cards
+ * called "test" in one flat list are only distinguishable by a hover tooltip.
+ * Archived rooms deliberately do not block the name — archiving a room and
+ * starting a fresh one under the same name is a supported flow — so the
+ * collision check runs again at restore time instead. The caller excludes the
+ * room being renamed so a case-only rename still works.
+ */
+export function assertPersistentAgentDisplayNameAvailable(displayName: string, options: { excludeAgentId?: string } = {}): void {
+	// NFC on BOTH sides of the comparison: stored names from before intake
+	// normalization may still be NFD on disk.
+	const wanted = collapseHumanWhitespace(displayName).normalize("NFC").toLowerCase();
+	if (!wanted) return;
+	let entries: fs.Dirent[] = [];
+	try {
+		if (fs.existsSync(PERSISTENT_AGENTS_ROOT)) entries = fs.readdirSync(PERSISTENT_AGENTS_ROOT, { withFileTypes: true });
+	} catch {
+		// An unscannable store must not block creation; id reservation still guarantees id uniqueness.
+		return;
+	}
+	for (const entry of entries) {
+		if (!entry.isDirectory() || !isValidPersistentAgentId(entry.name)) continue;
+		if (options.excludeAgentId && entry.name === options.excludeAgentId) continue;
+		let meta: Partial<AgentJson> | null = null;
+		try {
+			meta = createPersistentAgentInstance(entry.name).readAgentJson();
+		} catch {
+			continue;
+		}
+		const existing = typeof meta?.displayName === "string" ? collapseHumanWhitespace(meta.displayName).normalize("NFC").toLowerCase() : "";
+		if (existing !== wanted) continue;
+		if (isPersistentAgentArchived(meta)) continue;
+		const error = new Error(`A room named ${collapseHumanWhitespace(displayName)} already exists. Choose a different name.`);
+		(error as any).statusCode = 409;
+		(error as any).code = "display_name_taken";
+		throw error;
+	}
 }
 
 function normalizeOptionalHumanText(value: unknown): string | undefined {
@@ -1897,6 +1939,8 @@ export interface PersistentAgentArchiveOptions {
 	confirmation: string;
 	reason?: string;
 	archivedBy?: string;
+	/** In-process signal from the web server: a detached turn is still cooking for this room. */
+	detachedCooking?: boolean;
 }
 
 export interface PersistentAgentArchiveResult {
@@ -1934,6 +1978,22 @@ export function archivePersistentAgent(agentIdRaw: string, options: PersistentAg
 		const error = new Error(`persistent agent is already archived: ${instance.agentId}`);
 		(error as any).statusCode = 409;
 		throw error;
+	}
+	// Same busy guards as purge: an archive mid-answer would rip the room out
+	// from under a running turn (or another surface holding it) exactly like a
+	// purge would, just recoverably — refuse with the same honest reasons.
+	const lock = activePersistentRoomLock(instance.agentId);
+	if (lock) {
+		const where = lock.surface === "web"
+			? "is still open in a browser session; leave the room (or close the other session) and try again"
+			: `is open or busy in another surface (${lock.surface ?? "unknown"}); close it there before deleting`;
+		throw purgeBusyError(`persistent room ${where}: ${instance.agentId}`, "room_lock");
+	}
+	if (hasPersistentAgentTurnInFlight(instance.agentId)) {
+		throw purgeBusyError(`persistent room has a response in flight; stop it or wait for it to finish before deleting: ${instance.agentId}`, "turn_in_flight");
+	}
+	if (options.detachedCooking) {
+		throw purgeBusyError(`persistent room is still finishing a background answer; wait for it to land before deleting: ${instance.agentId}`, "detached_cooking");
 	}
 	// Option 4 lets specialist workers outlive their connection; an archived
 	// room has no panel, run view, or task_abort left to stop them from, so
@@ -2121,7 +2181,7 @@ function reanchorPersistentRoomSchedulesOnRestore(agentId: PersistentAgentId, re
 		return {
 			enabledSchedules: 0,
 			missedOnceSchedules: 0,
-			scheduleNotice: "The room's schedule list could not be updated. Overdue scheduled tasks may still run once — check Scheduled tasks in the room settings.",
+			scheduleNotice: "The room's schedule list could not be updated. Overdue scheduled tasks may still run once. Check Scheduled tasks in the room settings.",
 		};
 	}
 	return { enabledSchedules, missedOnceSchedules };
@@ -2149,6 +2209,19 @@ export function restorePersistentAgent(agentIdRaw: string): PersistentAgentResto
 		const error = new Error(`persistent agent is not archived: ${instance.agentId}`);
 		(error as any).statusCode = 409;
 		throw error;
+	}
+	// Creation only guards against ACTIVE names, so an archived room's name can
+	// have been re-taken since — restoring then would put two identical names
+	// on Home, exactly what the uniqueness rule exists to prevent.
+	if (typeof meta.displayName === "string") {
+		try {
+			assertPersistentAgentDisplayNameAvailable(meta.displayName, { excludeAgentId: instance.agentId });
+		} catch {
+			const error = new Error(`An active room is already named ${collapseHumanWhitespace(meta.displayName)}. Rename that room first, then restore this one.`);
+			(error as any).statusCode = 409;
+			(error as any).code = "display_name_taken";
+			throw error;
+		}
 	}
 	const restoredAt = Date.now();
 	// The agent.json write goes FIRST: mutating the schedule store and then
@@ -2539,6 +2612,7 @@ export function renamePersistentAgent(agentIdRaw: string, displayNameRaw: unknow
 		(error as any).statusCode = 400;
 		throw error;
 	}
+	assertPersistentAgentDisplayNameAvailable(displayName, { excludeAgentId: instance.agentId });
 	// A scheduled background run or a CLI session is actively reading and writing this room's
 	// files from another process; renaming mid-run risks clobbering their L1a/L1b writes. A plain
 	// open-in-app web lock is fine: a display rename is harmless mid-session (the frozen boot
@@ -4016,6 +4090,7 @@ function removeReservedScaffoldRootOnFailure(rootDir: string): void {
 
 export function createPersistentAgentFromScaffoldInput(input: PersistentAgentScaffoldInput): PersistentAgentScaffoldResult {
 	const normalized = normalizePersistentAgentScaffoldInput(input);
+	assertPersistentAgentDisplayNameAvailable(normalized.displayName);
 	const reserved = reserveUniquePersistentAgentRoot(normalized.baseAgentId);
 	const instance = createPersistentAgentInstance(reserved.agentId);
 	const now = Date.now();
@@ -4284,6 +4359,41 @@ Your name is now **${displayName}**. This line is live runtime state and wins ov
 	}
 }
 
+/**
+ * The per-turn current-workspace stanza, the identity stanza's sibling: the
+ * boot prompt froze the workspace facts at thread creation, but the room's
+ * workspace default now applies live — this stanza re-resolves the effective
+ * policy every turn so the model always states the workspace the tools
+ * actually enforce, including "none" after the user cleared it.
+ */
+export function buildPersistentRoomCurrentWorkspaceSection(effectivePolicy: PersistentRoomEffectiveWorkspacePolicy): string {
+	const heading = `
+
+## Current workspace
+
+This is live runtime state and wins over any "Active workspace capability" section above: the user can change the room workspace at any time, and this stanza reflects the setting in force for THIS turn.`;
+	const capability = effectivePolicy.workspaceToolsEnabled ? effectivePolicy.capability : undefined;
+	if (!capability) {
+		return `${heading}
+
+No workspace is configured for this room right now. Workspace file tools and Bash are unavailable this turn; if earlier context claims a workspace, the user has removed or changed it since. The room can still use its other tools.`;
+	}
+	const modeLabel = capability.workspaceAccessMode === "localFiles" ? "Full access" : "Bounded workspace";
+	const toolNames = capability.availableToolNames.join(", ") || "none";
+	const writeLine = capability.workspaceAccessMode === "localFiles"
+		? (capability.writeEnabled ? "- Write/edit access: enabled" : "- Write/edit access: disabled")
+		: (capability.writeEnabled ? "- Write scope: Markdown files only via write_markdown_file" : "- Write access: disabled");
+	return `${heading}
+
+- Workspace label: ${safeWorkspaceCapabilityLabel(capability.workspaceLabel)}
+- Workspace mode: ${modeLabel}
+- Workspace tools: ${toolNames}
+${writeLine}
+- Bash/shell access: ${capability.bashEnabled ? "enabled" : "disabled"}
+
+If these facts differ from a workspace described earlier in this conversation, the user changed the workspace mid-conversation; follow these facts and the usage rules of this mode from the boot context.`;
+}
+
 export interface PersistentAgentPiSessionJsonlPaths {
 	sessionFilePath: string;
 	sessionFileRelPath: string;
@@ -4372,10 +4482,8 @@ export function createPersistentAgentPiSessionJsonlThreadRuntime(input: CreatePe
 	const paths = persistentAgentPiSessionJsonlPaths(instance.agentId, threadId);
 	let wroteBootPromptSnapshot = false;
 	let wroteSessionFile = false;
-	let createdWorkspacePolicySnapshot = false;
 	try {
-		const effectiveWorkspacePolicy = input.workspaceCapability ? null : ensurePersistentRoomThreadEffectiveWorkspacePolicySnapshot(instance.agentId, threadId);
-		createdWorkspacePolicySnapshot = effectiveWorkspacePolicy?.source === "thread-snapshot-from-room-default";
+		const effectiveWorkspacePolicy = input.workspaceCapability ? null : resolvePersistentRoomEffectiveWorkspacePolicy(instance.agentId, threadId);
 		const workspaceCapability = input.workspaceCapability ?? effectiveWorkspacePolicy?.capability;
 		const bootContext = buildPersistentAgentBootContext({
 			agentId: instance.agentId,
@@ -4403,9 +4511,6 @@ export function createPersistentAgentPiSessionJsonlThreadRuntime(input: CreatePe
 	} catch (error) {
 		if (wroteSessionFile && fs.existsSync(paths.sessionFilePath)) fs.rmSync(paths.sessionFilePath, { force: true });
 		if (wroteBootPromptSnapshot && fs.existsSync(paths.bootPromptSnapshotPath)) fs.rmSync(paths.bootPromptSnapshotPath, { force: true });
-		if (createdWorkspacePolicySnapshot) {
-			try { deletePersistentRoomCapabilityPolicy(instance.agentId, threadId); } catch {}
-		}
 		throw new Error(`failed to create persistent-agent Pi session runtime: ${(error as Error).message}`);
 	}
 }

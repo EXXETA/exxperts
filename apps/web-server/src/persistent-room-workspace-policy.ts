@@ -145,7 +145,7 @@ export interface CreatePersistentRoomCapabilityPolicyInput extends PersistentRoo
 
 export type CreatePersistentRoomDefaultCapabilityPolicyInput = Omit<CreatePersistentRoomCapabilityPolicyInput, "conversationId">;
 export type PersistentRoomCapabilityPolicyResolutionSource = "thread" | "room-default" | "none";
-export type PersistentRoomEffectiveWorkspacePolicySource = "thread" | "room-default" | "thread-snapshot-from-room-default" | "none";
+export type PersistentRoomEffectiveWorkspacePolicySource = "thread" | "room-default" | "none";
 
 export interface PersistentRoomCapabilityPolicyResolution {
 	policy: PersistentRoomCapabilityPolicy | null;
@@ -784,34 +784,6 @@ function effectiveWorkspacePolicyFromResolution(input: {
 	};
 }
 
-function cloneRoomDefaultPolicyForThread(policy: PersistentRoomCapabilityPolicy, conversationId: string, now = new Date()): PersistentRoomCapabilityPolicy {
-	const timestamp = now.toISOString();
-	return {
-		...policy,
-		policyId: `prcp_${crypto.randomUUID()}`,
-		conversationId,
-		roots: policy.roots.map((root) => ({ ...root, pathHash: { ...root.pathHash } })),
-		modes: { ...policy.modes },
-		allowedToolNames: [...policy.allowedToolNames],
-		...(policy.toolSelection ? { toolSelection: policy.toolSelection.kind === "custom" ? { kind: "custom" as const, allowedToolNames: [...policy.toolSelection.allowedToolNames] } : { kind: "standard" as const } } : {}),
-		deniedRoots: policy.deniedRoots.map((root) => ({ ...root, pathHash: { ...root.pathHash } })),
-		denySegments: [...policy.denySegments],
-		denyFilenameGlobs: [...policy.denyFilenameGlobs],
-		createdAt: timestamp,
-		updatedAt: timestamp,
-	};
-}
-
-export function snapshotPersistentRoomDefaultCapabilityPolicyForThread(agentIdRaw: string, conversationIdRaw: string, options: PersistentRoomWorkspacePolicyStorageOptions = {}): PersistentRoomCapabilityPolicy | null {
-	const agentId = safePolicyFileId(agentIdRaw, "agent id");
-	const conversationId = safePolicyFileId(conversationIdRaw, "conversation id");
-	const existingThreadPolicy = readPersistentRoomCapabilityPolicy(agentId, conversationId, options);
-	if (existingThreadPolicy) return existingThreadPolicy;
-	const defaultPolicy = readPersistentRoomDefaultCapabilityPolicy(agentId, options);
-	if (!defaultPolicy) return null;
-	return writePersistentRoomCapabilityPolicy(cloneRoomDefaultPolicyForThread(defaultPolicy, conversationId), options);
-}
-
 export function resolvePersistentRoomEffectiveWorkspacePolicy(agentIdRaw: string, conversationIdRaw: string, options: PersistentRoomWorkspacePolicyStorageOptions = {}): PersistentRoomEffectiveWorkspacePolicy {
 	const agentId = safePolicyFileId(agentIdRaw, "agent id");
 	const conversationId = safePolicyFileId(conversationIdRaw, "conversation id");
@@ -819,14 +791,49 @@ export function resolvePersistentRoomEffectiveWorkspacePolicy(agentIdRaw: string
 	return effectiveWorkspacePolicyFromResolution({ agentId, conversationId, source: resolution.source, policy: resolution.policy });
 }
 
-export function ensurePersistentRoomThreadEffectiveWorkspacePolicySnapshot(agentIdRaw: string, conversationIdRaw: string, options: PersistentRoomWorkspacePolicyStorageOptions = {}): PersistentRoomEffectiveWorkspacePolicy {
+/** Content identity for workspace policies: everything that decides what the
+ * room may touch and with which tools, ignoring per-copy bookkeeping (policyId,
+ * conversationId, timestamps). Two policies that agree here grant exactly the
+ * same capability. */
+export function persistentRoomCapabilityPoliciesShareContent(a: PersistentRoomCapabilityPolicy, b: PersistentRoomCapabilityPolicy): boolean {
+	const contentKey = (policy: PersistentRoomCapabilityPolicy): string => JSON.stringify({
+		workspaceAccessMode: policy.workspaceAccessMode,
+		rootHashes: policy.roots.map((root) => root.pathHash.value),
+		modes: { read: policy.modes.read === true, write: policy.modes.write === true },
+		allowedToolNames: policy.allowedToolNames,
+		toolSelection: persistentRoomWorkspaceToolSelectionViewForPolicy(policy),
+		bashEnabled: normalizePersistentRoomBashEnabled(policy.bashEnabled, policy.workspaceAccessMode),
+		denySegments: policy.denySegments,
+		denyFilenameGlobs: policy.denyFilenameGlobs,
+	});
+	return contentKey(a) === contentKey(b);
+}
+
+/** The one boundary a live workspace-default mutation still respects: a turn
+ * actually in flight finishes under the rules it started with. */
+export function assertPersistentRoomWorkspaceDefaultMutable(activeThread: { inFlight: boolean; cancelling: boolean } | null | undefined): void {
+	if (!activeThread?.inFlight) return;
+	const error = new Error(activeThread.cancelling
+		? "Workspace default cannot change while the room has a cancelling turn in flight. Wait for it to finish, then try again."
+		: "Workspace default cannot change while the room has an active turn in flight. Wait for it to finish, then try again.");
+	(error as any).statusCode = 409;
+	(error as any).code = "active_turn_in_flight";
+	throw error;
+}
+
+/** Live-workspace healing for threads born under the old snapshot regime: a
+ * thread sidecar that grants exactly what the room default grants is an
+ * automatic mirror, not a deliberate per-conversation choice — dropping it
+ * lets the thread follow the live default from now on. A sidecar that differs
+ * from the default is honored as a deliberate override and kept. */
+export function releasePersistentRoomThreadWorkspaceMirror(agentIdRaw: string, conversationIdRaw: string, options: PersistentRoomWorkspacePolicyStorageOptions = {}): { released: boolean } {
 	const agentId = safePolicyFileId(agentIdRaw, "agent id");
 	const conversationId = safePolicyFileId(conversationIdRaw, "conversation id");
 	const threadPolicy = readPersistentRoomCapabilityPolicy(agentId, conversationId, options);
-	if (threadPolicy) return effectiveWorkspacePolicyFromResolution({ agentId, conversationId, source: "thread", policy: threadPolicy });
-	const snapshotPolicy = snapshotPersistentRoomDefaultCapabilityPolicyForThread(agentId, conversationId, options);
-	if (snapshotPolicy) return effectiveWorkspacePolicyFromResolution({ agentId, conversationId, source: "thread-snapshot-from-room-default", policy: snapshotPolicy });
-	return effectiveWorkspacePolicyFromResolution({ agentId, conversationId, source: "none", policy: null });
+	if (!threadPolicy) return { released: false };
+	const defaultPolicy = readPersistentRoomDefaultCapabilityPolicy(agentId, options);
+	if (!defaultPolicy || !persistentRoomCapabilityPoliciesShareContent(threadPolicy, defaultPolicy)) return { released: false };
+	return { released: deletePersistentRoomCapabilityPolicy(agentId, conversationId, options).deleted };
 }
 
 export function persistentRoomRuntimeCwdForEffectiveWorkspacePolicy(effectivePolicy: PersistentRoomEffectiveWorkspacePolicy | null | undefined, fallbackCwd: string): string {
