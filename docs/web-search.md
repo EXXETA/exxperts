@@ -6,7 +6,9 @@ DuckDuckGo rate-limits automated queries, and on some networks it blocks
 them outright; when that happens the room shows an honest error naming the
 block. For heavy use, or on a network where DuckDuckGo blocks searches, a
 **local SearXNG container** is the reliable path: it aggregates several
-engines and is not subject to DuckDuckGo's limits. When SearXNG is configured it is always preferred;
+engines and is not subject to DuckDuckGo's limits. **You.com** provides
+enhanced web search with an optional API key for improved results and
+higher quotas. When SearXNG is configured it is always preferred;
 if it stops answering, searches fall back to the built-in DuckDuckGo backend
 until it is back. Setting `EXXETA_SEARCH_PROVIDER=disabled` turns web search
 off entirely.
@@ -15,6 +17,30 @@ off entirely.
 search engine (DuckDuckGo directly, or the engines SearXNG aggregates), so
 search terms do leave the machine; results and the rest of your data do not.
 Avoid searching confidential client/internal content.
+
+The following sections cover optional search provider setup. For SearXNG,
+the standard way to turn it on is `exxperts setup search`; for You.com,
+set the environment variables described below.
+
+## Setup (optional You.com)
+
+You.com provides enhanced web search with better result quality and higher
+quotas compared to the default DuckDuckGo backend.
+
+1. **Get an API key** (one-time): Visit [you.com/platform/api-keys](https://you.com/platform/api-keys)
+   to create a free account and generate your API key.
+2. **Set environment variables** before starting exxperts:
+   ```bash
+   export EXXETA_SEARCH_PROVIDER=youcom
+   export YOU_API_KEY=your_api_key_here
+   # OR alternatively:
+   # export YDC_API_KEY=your_api_key_here
+   ```
+3. **Start exxperts** as usual (`exxperts web`, `exxperts cli`, or the desktop app).
+
+That's it: web search now uses You.com for all queries. You.com does not
+require any additional setup like Docker containers, and provides consistent
+results without rate limiting issues.
 
 The rest of this page covers the optional SearXNG setup. The standard way to
 turn it on, on any install type, is `exxperts setup search`; the setup below
@@ -87,3 +113,7 @@ exists yet, plus generated SearXNG settings to
 `~/.exxperts/app/searxng/settings.yml` (JSON output enabled, because
 `web_search` calls `/search?format=json`). Environment variables override the
 shared config; see [`operations.md`](operations.md) for `EXXETA_SEARCH_*`.
+
+**You.com configuration:**
+- `EXXETA_SEARCH_PROVIDER=youcom` - Enable You.com search provider
+- `YOU_API_KEY` or `YDC_API_KEY` - Your You.com API key from [you.com/platform/api-keys](https://you.com/platform/api-keys)
