@@ -23,11 +23,15 @@ export function Help({ onClose }: Props) {
 						<p>
 							Each room is a persistent workspace with its own exxpert, memory, threads, and
 							workspace files. Use Checkpoint to save what matters from a conversation into
-							the room's memory. Maintain, on the room card, opens Learn and Review Memory,
-							which turn checkpoints into lasting memory and tidy it; you sign off every
-							rewrite. Room Settings holds the rest: workspace access, memory budget,
-							schedules, Memento (close the current conversation without remembering it),
-							and delete.
+							the room's memory. Beside it in the composer, the effort pill sets how hard the
+							room thinks: open it and slide between Faster and Smarter. The choice sticks
+							for the room and takes effect from your next message, and the pill only appears
+							when the room's model can actually reason. Forget, the bin icon at the top of
+							the room, closes the current conversation without remembering it and is also
+							available in Room Settings. Maintain, on the room card, opens Learn and Review
+							Memory, which turn checkpoints into lasting memory and tidy it; you sign off
+							every rewrite. Room Settings holds the rest: workspace access, memory budget,
+							schedules, and delete.
 						</p>
 					</section>
 

@@ -15,7 +15,7 @@ async function applyMemento(agentId: string, conversationId: string): Promise<Pe
 	try { payload = text.trim() ? JSON.parse(text) : null; } catch { payload = text; }
 	if (!response.ok) {
 		const error = payload && typeof payload === "object" ? (payload as { error?: unknown }).error : null;
-		throw new Error(typeof error === "string" && error.trim() ? error.trim() : `Failed to apply Memento (${response.status}).`);
+		throw new Error(typeof error === "string" && error.trim() ? error.trim() : `Failed to forget this conversation (${response.status}).`);
 	}
 	return payload as PersistentAgentMementoBoundaryResponse;
 }
@@ -58,10 +58,10 @@ export function RoomSessionSection({ status, onRefresh, onMementoApplied, onMeme
 				onMementoApplied();
 				return;
 			}
-			setMessage("Memento applied. The room starts a fresh conversation on next open.");
+			setMessage("This conversation is forgotten. The room starts a fresh one on next open.");
 			onRefresh();
 		} catch (e) {
-			setError((e as Error).message || "Failed to apply Memento.");
+			setError((e as Error).message || "Failed to forget this conversation.");
 		} finally {
 			setSubmitting(false);
 		}
@@ -80,7 +80,7 @@ export function RoomSessionSection({ status, onRefresh, onMementoApplied, onMeme
 		return (
 			<div className="room-session-section">
 				{head}
-				<p className="workspaces-empty-state">No open conversation yet. Memento becomes available once the room has one.</p>
+				<p className="workspaces-empty-state">No open conversation yet. Forget becomes available once the room has one.</p>
 				{message && <div className="workspaces-success">{message}</div>}
 			</div>
 		);
@@ -96,18 +96,18 @@ export function RoomSessionSection({ status, onRefresh, onMementoApplied, onMeme
 							Open conversation{modelLabel ? <> on <strong>{modelLabel}</strong></> : null}{busy ? " (in use)" : ""}
 						</span>
 						<span className="rs-row-hint">
-							Memento ends this conversation and starts a fresh one. The room keeps everything already in its memory, and nothing new is saved from this conversation.
+							Forget ends this conversation and starts a fresh one. The room keeps everything already in its memory, and nothing new is saved from this conversation.
 							<RsInfo text="Useful when the conversation is stuck on a model or provider you no longer have access to." />
 						</span>
 					</div>
-					<button className="rs-btn" disabled={submitting} onClick={() => { setConfirming(true); setError(null); setMessage(null); }}>Memento…</button>
+					<button className="rs-btn" disabled={submitting} onClick={() => { setConfirming(true); setError(null); setMessage(null); }}>Forget…</button>
 				</div>
 			)}
 			{confirming && (
 				<div className="room-session-confirm" ref={confirmRef}>
-					<p className="room-danger-note"><strong>Apply Memento?</strong> The current conversation is forgotten and the room starts fresh. Memory stays and nothing is checkpointed.{busy ? " The room is in use right now: any response being written will be stopped and a live session will be closed." : ""}</p>
+					<p className="room-danger-note"><strong>Forget this conversation?</strong> It is discarded and the room starts fresh. Memory stays and nothing is checkpointed.{busy ? " The room is in use right now: any response being written will be stopped and a live session will be closed." : ""}</p>
 					<div className="room-danger-confirm-actions">
-						<button className="rs-btn" disabled={submitting} onClick={() => void submitMemento()}>{submitting ? "Applying…" : "Apply Memento"}</button>
+						<button className="rs-btn" disabled={submitting} onClick={() => void submitMemento()}>{submitting ? "Forgetting…" : "Forget conversation"}</button>
 						<button className="rs-quiet" type="button" disabled={submitting} onClick={() => { setConfirming(false); setError(null); }}>Cancel</button>
 					</div>
 				</div>

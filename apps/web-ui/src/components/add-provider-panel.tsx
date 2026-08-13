@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { LoginProviderCatalogEntry, PersistentAgentAiProfileStatus, ProviderModelCatalog } from "../types";
 import { useEscapeKey } from "./use-escape-key";
-import { fetchJson } from "../api";
+import { apiFetch, fetchJson } from "../api";
 import { modelDisplayName } from "../model-names";
 
 // Catalog entries carry a bare name ("Opus 4.8") or none; canonicalise so the
@@ -290,34 +290,230 @@ export function ConfigureProfileModal({ providerId, providerName, existingProfil
 	);
 }
 
-type GatewayConfig = {
-	configured: boolean;
-	displayName?: string;
-	baseUrl?: string;
-	roomModels?: string[];
-	maintenanceModel?: string;
+/** One saved gateway's approved model, as the server describes it. */
+export type GatewayModelConfig = {
+	modelId: string;
+	label?: string;
+	vision: boolean;
+	/** Null when nobody chose one, which means the default window applies. */
+	contextWindow: number | null;
 };
 
-// OpenAI-compatible gateway (LiteLLM, vLLM, company proxies): the same setup
-// the `exxperts setup openai-compatible` wizard performs, as a form. The
-// gateway's models are fetched with the person's token so they approve from a
-// picker; manual id entry stays as the fallback for gateways without /models.
-export function GatewayConfigModal({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
-	const [loaded, setLoaded] = useState(false);
-	const [configured, setConfigured] = useState(false);
-	const [displayName, setDisplayName] = useState("OpenAI-compatible gateway");
+export type GatewayConfig = {
+	id: string;
+	providerId: string;
+	label: string;
+	baseUrl: string;
+	roomModels: GatewayModelConfig[];
+	maintenanceModel: string;
+	/** The gateway that existed before the app could hold several. Its ids are frozen. */
+	isDefault: boolean;
+};
+
+type GatewayListResponse = { gateways: GatewayConfig[]; errors: string[]; unreadable?: boolean; defaultContextWindow: number };
+type GatewayDetection = { id: string; vision: boolean | null; contextWindow: number | null };
+type GatewayDiscoverResponse = { models: string[]; detected?: GatewayDetection[] };
+type GatewaySaveResponse = { gateway?: GatewayConfig | null; error?: string };
+
+// What the runtime falls back to when a gateway model declares no window. Shown
+// in the field rather than left blank, so the number driving the context chip
+// and auto-compaction is never a secret.
+const DEFAULT_CONTEXT_WINDOW = 128000;
+// The same bounds the server enforces, so a slip is caught under the field that
+// caused it instead of coming back as a refused save.
+const MIN_CONTEXT_WINDOW = 4096;
+const MAX_CONTEXT_WINDOW = 20000000;
+
+/**
+ * A typed context window, read strictly. parseInt would take "1e9" as 1 and
+ * "128000abc" as 128000, and either would quietly become the number the room's
+ * context chip reads and auto-compaction fires on.
+ */
+function contextWindowError(value: string): string | null {
+	const text = value.trim();
+	if (!text) return "Enter a context window in tokens.";
+	if (!/^\d+$/.test(text)) return "Context window must be a whole number of tokens, digits only.";
+	const parsed = Number(text);
+	if (!Number.isSafeInteger(parsed) || parsed < MIN_CONTEXT_WINDOW || parsed > MAX_CONTEXT_WINDOW) {
+		return `Context window must be between ${MIN_CONTEXT_WINDOW} and ${MAX_CONTEXT_WINDOW} tokens.`;
+	}
+	return null;
+}
+
+/** The first complaint any approved model's window has, or null when they are all fine. */
+function approvedContextWindowError(drafts: ModelDraft[]): string | null {
+	for (const draft of drafts) {
+		if (!draft.approved) continue;
+		const error = contextWindowError(draft.contextWindow);
+		if (error) return `${draft.id}: ${error}`;
+	}
+	return null;
+}
+
+export function gatewaysUrl(gatewayId: string | null, suffix = ""): string {
+	return gatewayId
+		? `/api/persistent-agent-ai-profiles/gateways/${encodeURIComponent(gatewayId)}${suffix}`
+		: `/api/persistent-agent-ai-profiles/gateways${suffix}`;
+}
+
+/**
+ * One row of the approve step: whether the model is approved, whether it can
+ * look at images, and how much context it really has. Detection fills these in
+ * where a gateway publishes them; the person editing them has the last word,
+ * which is why every field stays enabled either way.
+ */
+type ModelDraft = {
+	id: string;
+	approved: boolean;
+	vision: boolean;
+	contextWindow: string;
+	/**
+	 * The display name a gateway's model was saved under. Carried through the
+	 * form untouched: it is nobody's job here to edit it, but dropping it would
+	 * quietly collapse a migrated gateway's model names to raw ids, and there is
+	 * no getting them back.
+	 */
+	label?: string;
+};
+
+function draftFromParts(id: string, approved: boolean, saved: GatewayModelConfig | undefined, detected: GatewayDetection | undefined): ModelDraft {
+	return {
+		id,
+		approved,
+		vision: saved?.vision ?? detected?.vision ?? false,
+		contextWindow: String(saved?.contextWindow ?? detected?.contextWindow ?? DEFAULT_CONTEXT_WINDOW),
+		...(saved?.label && saved.label !== id ? { label: saved.label } : {}),
+	};
+}
+
+function draftsToPayload(drafts: ModelDraft[]): Array<{ modelId: string; vision: boolean; contextWindow: number; label?: string }> {
+	return drafts
+		.filter((draft) => draft.approved)
+		.map((draft) => ({
+			modelId: draft.id,
+			vision: draft.vision,
+			// Validated before we get here, so the fallback is only ever reached
+			// by a caller that skipped the check.
+			contextWindow: contextWindowError(draft.contextWindow) ? DEFAULT_CONTEXT_WINDOW : Number(draft.contextWindow.trim()),
+			...(draft.label ? { label: draft.label } : {}),
+		}));
+}
+
+/**
+ * Merge what the gateway just said with what is already on screen. Anything the
+ * person touched survives a reload; a model the gateway stopped listing stays
+ * visible so saving never drops it behind their back.
+ */
+function mergeDrafts(current: ModelDraft[], discovered: string[], detections: GatewayDetection[], saved: GatewayModelConfig[]): ModelDraft[] {
+	const byId = new Map(current.map((draft) => [draft.id, draft]));
+	const detectedById = new Map(detections.map((detection) => [detection.id, detection]));
+	const savedById = new Map(saved.map((model) => [model.modelId, model]));
+	const ids = [...new Set([...discovered, ...saved.map((model) => model.modelId), ...current.map((draft) => draft.id)])].sort();
+	return ids.map((id) => byId.get(id) ?? draftFromParts(id, savedById.has(id), savedById.get(id), detectedById.get(id)));
+}
+
+export function GatewayModelApprovalList({ drafts, onChange, ariaLabel }: {
+	drafts: ModelDraft[];
+	onChange: (next: ModelDraft[]) => void;
+	ariaLabel: string;
+}) {
+	function update(id: string, patch: Partial<ModelDraft>) {
+		onChange(drafts.map((draft) => (draft.id === id ? { ...draft, ...patch } : draft)));
+	}
+	return (
+		<div className="configure-profile-model-list gateway-model-list" role="group" aria-label={ariaLabel}>
+			{drafts.map((draft) => {
+				// An unapproved model's window is not going anywhere, so it is not
+				// worth complaining about; the row people are actually saving is.
+				const windowError = draft.approved ? contextWindowError(draft.contextWindow) : null;
+				return (
+					<div key={draft.id} className="configure-profile-model-option gateway-model-row">
+						<label className="gateway-model-approve" title={draft.id}>
+							<input type="checkbox" checked={draft.approved} onChange={() => update(draft.id, { approved: !draft.approved })} />
+							<span className="configure-profile-model-name">{draft.id}</span>
+						</label>
+						<label className="gateway-model-vision" title="Send attached images to this model instead of a placeholder">
+							<input type="checkbox" checked={draft.vision} onChange={() => update(draft.id, { vision: !draft.vision })} />
+							<span>supports images</span>
+						</label>
+						<label className="gateway-model-window">
+							<span className="gateway-model-window-label">context</span>
+							<input
+								className={`launcher-path-input gateway-model-window-input${windowError ? " invalid" : ""}`}
+								type="text"
+								inputMode="numeric"
+								value={draft.contextWindow}
+								aria-label={`Context window for ${draft.id}`}
+								aria-invalid={windowError ? true : undefined}
+								onChange={(e) => update(draft.id, { contextWindow: e.target.value })}
+							/>
+						</label>
+						{windowError && <span className="gateway-model-window-error">{windowError}</span>}
+					</div>
+				);
+			})}
+		</div>
+	);
+}
+
+/**
+ * Add or edit one gateway: name, address, key, then the models it may run with
+ * their image support and context size. `gatewayId` is null when a new gateway
+ * is being added; an existing gateway keeps its ids untouched, because every
+ * room already locked to it stores them.
+ */
+export function GatewayConfigModal({ gatewayId, knownLabel, onClose, onSaved }: { gatewayId: string | null; knownLabel?: string; onClose: () => void; onSaved: (gatewayLabel: string) => void }) {
+	const [loaded, setLoaded] = useState(gatewayId === null);
+	const [saved, setSaved] = useState<GatewayConfig | null>(null);
+	// Seeded from the name the row already showed, never from a guess. Seeding
+	// "OpenAI-compatible gateway" here used to flash the wrong name at anyone
+	// editing a gateway called something else.
+	const [label, setLabel] = useState(gatewayId === null ? "" : knownLabel ?? "");
 	const [baseUrl, setBaseUrl] = useState("");
 	const [token, setToken] = useState("");
-	const [discovered, setDiscovered] = useState<string[] | null>(null);
-	const [selected, setSelected] = useState<Set<string>>(new Set());
-	const [existingRoomModels, setExistingRoomModels] = useState<string[]>([]);
+	const [drafts, setDrafts] = useState<ModelDraft[]>([]);
+	const [discoveredOnce, setDiscoveredOnce] = useState(false);
 	const [manualMode, setManualMode] = useState(false);
 	const [modelsText, setModelsText] = useState("");
 	const [maintenanceModel, setMaintenanceModel] = useState("");
 	const [discovering, setDiscovering] = useState(false);
 	const [saving, setSaving] = useState(false);
 	const [error, setError] = useState<string | null>(null);
+	// A create that succeeded (or failed after the gateway was already written)
+	// hands back its id. Keeping it means a second attempt edits that gateway
+	// instead of adding a twin beside it with the same name and address.
+	const [createdId, setCreatedId] = useState<string | null>(null);
+	// Fields the person has touched are never overwritten by the load that was
+	// already in flight when they started typing.
+	const dirtyRef = useRef<{ label: boolean; baseUrl: boolean }>({ label: false, baseUrl: false });
 	useEscapeKey(onClose, true);
+
+	const targetGatewayId = gatewayId ?? createdId;
+	const configured = saved !== null;
+
+	useEffect(() => {
+		if (gatewayId === null) return;
+		let stopped = false;
+		fetchJson<GatewayConfig>(gatewaysUrl(gatewayId))
+			.then((config) => {
+				if (stopped) return;
+				setSaved(config);
+				if (!dirtyRef.current.label) setLabel(config.label);
+				if (!dirtyRef.current.baseUrl) setBaseUrl(config.baseUrl ?? "");
+				setMaintenanceModel(config.maintenanceModel ?? "");
+				setDrafts(config.roomModels.map((model) => draftFromParts(model.modelId, true, model, undefined)));
+				setModelsText(config.roomModels.map((model) => model.modelId).join("\n"));
+			})
+			.catch((e) => {
+				if (!stopped) setError((e as Error).message);
+			})
+			.finally(() => {
+				if (!stopped) setLoaded(true);
+			});
+		return () => {
+			stopped = true;
+		};
+	}, [gatewayId]);
 
 	const manualIds = useMemo(() => {
 		const seen = new Set<string>();
@@ -331,39 +527,18 @@ export function GatewayConfigModal({ onClose, onSaved }: { onClose: () => void; 
 			});
 	}, [modelsText]);
 
-	const chosenIds = manualMode ? manualIds : [...selected];
-	// One derivation for both the dropdown and the save payload.
-	const effectiveMaintenanceModel = maintenanceModel && chosenIds.includes(maintenanceModel) ? maintenanceModel : chosenIds[0] ?? "";
-
-	useEffect(() => {
-		fetchJson<GatewayConfig>("/api/persistent-agent-ai-profiles/openai-compatible")
-			.then((config) => {
-				if (config.configured) {
-					setConfigured(true);
-					if (config.displayName) setDisplayName(config.displayName);
-					setBaseUrl(config.baseUrl ?? "");
-					setExistingRoomModels(config.roomModels ?? []);
-					setModelsText((config.roomModels ?? []).join("\n"));
-					setMaintenanceModel(config.maintenanceModel ?? "");
-				}
-			})
-			.catch(() => {})
-			.finally(() => setLoaded(true));
-	}, []);
-
 	async function discover() {
 		setDiscovering(true);
 		setError(null);
 		try {
-			const result = await fetchJson<{ models: string[] }>("/api/persistent-agent-ai-profiles/openai-compatible/discover", {
+			const result = await fetchJson<GatewayDiscoverResponse>(gatewaysUrl(targetGatewayId, "/discover"), {
 				method: "POST",
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify({ baseUrl, key: token }),
 			});
-			setDiscovered(result.models);
+			setDrafts((current) => mergeDrafts(current, result.models, result.detected ?? [], saved?.roomModels ?? []));
+			setDiscoveredOnce(true);
 			setManualMode(false);
-			// On edit, keep the already-approved models selected; new ids start unchecked.
-			setSelected(new Set(existingRoomModels.filter((id) => result.models.includes(id))));
 		} catch (e) {
 			setError((e as Error).message);
 		} finally {
@@ -371,39 +546,49 @@ export function GatewayConfigModal({ onClose, onSaved }: { onClose: () => void; 
 		}
 	}
 
-	function toggleModel(modelId: string) {
-		setSelected((current) => {
-			const next = new Set(current);
-			if (next.has(modelId)) next.delete(modelId);
-			else next.add(modelId);
-			return next;
-		});
-	}
+	// Manual entry is the fallback for a gateway with no model list of its own;
+	// the ids typed here get the same two capability fields as discovered ones.
+	const effectiveDrafts = manualMode
+		? manualIds.map((id) => drafts.find((draft) => draft.id === id) ?? draftFromParts(id, true, undefined, undefined))
+		: drafts;
+	const approvedIds = effectiveDrafts.filter((draft) => draft.approved).map((draft) => draft.id);
+	const effectiveMaintenanceModel = maintenanceModel && approvedIds.includes(maintenanceModel) ? maintenanceModel : approvedIds[0] ?? "";
 
 	async function save() {
+		const windowError = approvedContextWindowError(effectiveDrafts);
+		if (windowError) {
+			setError(windowError);
+			return;
+		}
 		setSaving(true);
 		setError(null);
 		try {
-			await fetchJson("/api/persistent-agent-ai-profiles/openai-compatible", {
-				method: "PUT",
+			const payload = {
+				label,
+				baseUrl,
+				roomModels: draftsToPayload(effectiveDrafts),
+				maintenanceModel: effectiveMaintenanceModel,
+				// Sent with the gateway so the key is filed the moment its provider
+				// exists; a blank key on an edit leaves the stored one alone.
+				...(token.trim() ? { key: token.trim() } : {}),
+			};
+			// apiFetch rather than fetchJson: the id the server returns matters
+			// even on a failure, because it is what turns a retry into an edit of
+			// the gateway just created instead of a second one beside it.
+			const response = await apiFetch(gatewaysUrl(targetGatewayId), {
+				method: targetGatewayId === null ? "POST" : "PUT",
 				headers: { "content-type": "application/json" },
-				body: JSON.stringify({
-					displayName,
-					baseUrl,
-					roomModels: chosenIds,
-					maintenanceModel: effectiveMaintenanceModel,
-				}),
+				body: JSON.stringify(payload),
 			});
-			// The gateway provider exists in the runtime catalog once the config
-			// is written; only then can its key be stored.
-			if (token.trim()) {
-				await fetchJson("/api/auth/api-key", {
-					method: "POST",
-					headers: { "content-type": "application/json" },
-					body: JSON.stringify({ provider: "openai-compatible", key: token }),
-				});
+			let body: GatewaySaveResponse = {};
+			try {
+				body = (await response.json()) as GatewaySaveResponse;
+			} catch {
+				// A body we cannot read changes nothing about the status below.
 			}
-			onSaved();
+			if (body.gateway?.id) setCreatedId(body.gateway.id);
+			if (!response.ok) throw new Error(body.error || `Request failed (${response.status})`);
+			onSaved(label.trim() || "Your gateway");
 			onClose();
 		} catch (e) {
 			setError((e as Error).message);
@@ -413,30 +598,31 @@ export function GatewayConfigModal({ onClose, onSaved }: { onClose: () => void; 
 	}
 
 	const canDiscover = Boolean(baseUrl.trim()) && (Boolean(token.trim()) || configured) && !discovering && !saving;
-	const canSave = loaded && Boolean(baseUrl.trim()) && chosenIds.length > 0 && (Boolean(token.trim()) || configured) && !saving;
+	const canSave = loaded && Boolean(label.trim()) && Boolean(baseUrl.trim()) && approvedIds.length > 0 && (Boolean(token.trim()) || configured) && !saving && !approvedContextWindowError(effectiveDrafts);
+	const title = gatewayId === null ? "Add a gateway" : `Edit ${saved?.label ?? knownLabel ?? "gateway"}`;
 
 	return (
-		<div className="room-settings-overlay configure-profile-overlay" role="dialog" aria-modal="true" aria-label="Set up OpenAI-compatible gateway" onClick={onClose}>
+		<div className="room-settings-overlay configure-profile-overlay" role="dialog" aria-modal="true" aria-label={title} onClick={onClose}>
 			<div className="room-settings-modal configure-profile-modal" onClick={(e) => e.stopPropagation()}>
 				<div className="room-settings-head">
 					<div className="room-settings-title-block">
 						<div className="room-settings-title-row">
-							<h2>Custom gateway</h2>
+							<h2>{title}</h2>
 						</div>
 					</div>
 					<button className="icon-btn" onClick={onClose} aria-label="Close">Close</button>
 				</div>
 				<div className="room-settings-body configure-profile-body">
 					<p className="ai-setup-copy">
-						Connect an OpenAI-compatible endpoint such as a company LiteLLM or vLLM gateway. Enter the address and your API key, load the models it routes, and approve the ones your rooms may use.
+						Connect an OpenAI-compatible endpoint such as a company LiteLLM or vLLM gateway. Give it a name, enter the address and your API key, load the models it routes, and approve the ones your rooms may use. You can save as many gateways as you like and switch between them in the profile list.
 					</p>
 					<div className="configure-profile-field">
-						<h3>Display name</h3>
-						<input className="launcher-path-input create-room-input" type="text" value={displayName} onChange={(e) => setDisplayName(e.target.value)} />
+						<h3>Name</h3>
+						<input className="launcher-path-input create-room-input" type="text" placeholder="Company gateway" value={label} onChange={(e) => { dirtyRef.current.label = true; setLabel(e.target.value); }} />
 					</div>
 					<div className="configure-profile-field">
 						<h3>Base URL</h3>
-						<input className="launcher-path-input create-room-input" type="text" placeholder="https://litellm.example.com/v1" value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} />
+						<input className="launcher-path-input create-room-input" type="text" placeholder="https://litellm.example.com/v1" value={baseUrl} onChange={(e) => { dirtyRef.current.baseUrl = true; setBaseUrl(e.target.value); }} />
 					</div>
 					<div className="configure-profile-field">
 						<h3>API key</h3>
@@ -450,22 +636,17 @@ export function GatewayConfigModal({ onClose, onSaved }: { onClose: () => void; 
 					</div>
 					<div className="configure-profile-field">
 						<h3>Room models</h3>
-						{!manualMode && discovered === null && (
+						{!manualMode && !discoveredOnce && drafts.length === 0 && (
 							<div className="gateway-discover-row">
 								<button className="landing-action" disabled={!canDiscover} onClick={() => void discover()}>{discovering ? "Loading…" : "Load models from gateway"}</button>
 								<button className="ai-profile-foot-link" disabled={saving} onClick={() => setManualMode(true)}>enter ids manually</button>
 							</div>
 						)}
-						{!manualMode && discovered !== null && (
+						{!manualMode && (discoveredOnce || drafts.length > 0) && (
 							<>
-								<ModelCheckboxList
-									options={discovered.map((modelId) => ({ id: modelId }))}
-									selected={selected}
-									onToggle={toggleModel}
-									ariaLabel="Room models"
-								/>
+								<GatewayModelApprovalList drafts={drafts} onChange={setDrafts} ariaLabel="Room models" />
 								<div className="gateway-discover-row">
-									<button className="ai-profile-foot-link" disabled={discovering || saving} onClick={() => void discover()}>{discovering ? "reloading…" : "reload"}</button>
+									<button className="ai-profile-foot-link" disabled={!canDiscover} onClick={() => void discover()}>{discovering ? "reloading…" : "reload from gateway"}</button>
 									<button className="ai-profile-foot-link" disabled={saving} onClick={() => setManualMode(true)}>enter ids manually</button>
 								</div>
 							</>
@@ -479,16 +660,23 @@ export function GatewayConfigModal({ onClose, onSaved }: { onClose: () => void; 
 									onChange={(e) => setModelsText(e.target.value)}
 									rows={4}
 								/>
+								{effectiveDrafts.length > 0 && (
+									<GatewayModelApprovalList
+										drafts={effectiveDrafts}
+										onChange={(next) => setDrafts((current) => [...current.filter((draft) => !next.some((entry) => entry.id === draft.id)), ...next])}
+										ariaLabel="Room models"
+									/>
+								)}
 								<div className="gateway-discover-row">
-									<button className="ai-profile-foot-link" disabled={!canDiscover} onClick={() => void discover()}>load from gateway instead</button>
+									<button className="ai-profile-foot-link" disabled={!canDiscover} onClick={() => { setManualMode(false); void discover(); }}>load from gateway instead</button>
 								</div>
 							</>
 						)}
 					</div>
 					<div className="configure-profile-field">
 						<h3>Learn &amp; Review Memory</h3>
-						<select className="configure-profile-select" value={effectiveMaintenanceModel} onChange={(e) => setMaintenanceModel(e.target.value)} aria-label="Maintenance model" disabled={chosenIds.length === 0}>
-							{chosenIds.map((id) => (
+						<select className="configure-profile-select" value={effectiveMaintenanceModel} onChange={(e) => setMaintenanceModel(e.target.value)} aria-label="Maintenance model" disabled={approvedIds.length === 0}>
+							{approvedIds.map((id) => (
 								<option key={id} value={id}>{catalogModelName({ id })}</option>
 							))}
 						</select>
@@ -504,18 +692,19 @@ export function GatewayConfigModal({ onClose, onSaved }: { onClose: () => void; 
 	);
 }
 
-// Approve-models for the OpenAI-compatible gateway: the same suggest-then-
-// approve step custom providers get, scoped to the model set only. Base URL
-// and API key are untouched here; Edit gateway owns those. The gateway policy
-// file has one maintenance model that runs both Learn and Review Memory, so
-// the modal shows a single picker for it instead of pretending there are two.
-export function GatewayApproveModelsModal({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
+/**
+ * Approve-models for one saved gateway: the same suggest-then-approve step
+ * custom providers get, scoped to the model set and its two capability fields.
+ * Name, base URL and API key are untouched here; Edit gateway owns those. A
+ * gateway policy has one maintenance model that runs both Learn and Review
+ * Memory, so the modal shows a single picker instead of pretending there are two.
+ */
+export function GatewayApproveModelsModal({ gatewayId, onClose, onSaved }: { gatewayId: string; onClose: () => void; onSaved: () => void }) {
 	const [config, setConfig] = useState<GatewayConfig | null>(null);
 	const [loadError, setLoadError] = useState<string | null>(null);
-	const [discovered, setDiscovered] = useState<string[] | null>(null);
+	const [drafts, setDrafts] = useState<ModelDraft[]>([]);
 	const [discovering, setDiscovering] = useState(false);
 	const [discoverError, setDiscoverError] = useState<string | null>(null);
-	const [selected, setSelected] = useState<Set<string>>(new Set());
 	const [manualMode, setManualMode] = useState(false);
 	const [modelsText, setModelsText] = useState("");
 	const [maintenanceModel, setMaintenanceModel] = useState("");
@@ -523,31 +712,22 @@ export function GatewayApproveModelsModal({ onClose, onSaved }: { onClose: () =>
 	const [saveError, setSaveError] = useState<string | null>(null);
 	useEscapeKey(onClose, true);
 
-	const approvedModels = config?.roomModels ?? [];
-
-	// `keepSelection` carries the user's in-session checkbox state through a
-	// reload; without it the initial load selects the saved approved set.
-	async function discover(baseUrl: string, approved: string[], keepSelection?: Set<string>) {
+	async function discover(gateway: GatewayConfig, keepDrafts: ModelDraft[]) {
 		setDiscovering(true);
 		setDiscoverError(null);
 		try {
-			// No key in the body: the server uses the stored gateway key.
-			const result = await fetchJson<{ models: string[] }>("/api/persistent-agent-ai-profiles/openai-compatible/discover", {
+			// No key in the body: the server uses the gateway's stored key.
+			const result = await fetchJson<GatewayDiscoverResponse>(gatewaysUrl(gateway.id, "/discover"), {
 				method: "POST",
 				headers: { "content-type": "application/json" },
-				body: JSON.stringify({ baseUrl }),
+				body: JSON.stringify({ baseUrl: gateway.baseUrl }),
 			});
-			// Approved models the gateway no longer lists stay visible (and
-			// checked) so saving without changes never silently drops them.
-			const merged = [...new Set([...result.models, ...approved, ...(keepSelection ?? [])])].sort();
-			setDiscovered(merged);
-			setSelected(keepSelection ?? new Set(approved));
+			setDrafts(mergeDrafts(keepDrafts, result.models, result.detected ?? [], gateway.roomModels));
 			setManualMode(false);
 		} catch (e) {
 			setDiscoverError((e as Error).message);
-			// Graceful fallback: offer the currently approved set as the list.
-			setDiscovered(null);
-			setSelected(keepSelection ?? new Set(approved));
+			// Graceful fallback: the currently approved set is the list.
+			setDrafts(keepDrafts);
 		} finally {
 			setDiscovering(false);
 		}
@@ -555,19 +735,15 @@ export function GatewayApproveModelsModal({ onClose, onSaved }: { onClose: () =>
 
 	useEffect(() => {
 		let stopped = false;
-		fetchJson<GatewayConfig>("/api/persistent-agent-ai-profiles/openai-compatible")
+		fetchJson<GatewayConfig>(gatewaysUrl(gatewayId))
 			.then((result) => {
 				if (stopped) return;
-				if (!result.configured) {
-					setLoadError("No gateway is configured yet. Set it up from Add another provider first.");
-					return;
-				}
 				setConfig(result);
-				const approved = result.roomModels ?? [];
-				setSelected(new Set(approved));
-				setModelsText(approved.join("\n"));
+				const initial = result.roomModels.map((model) => draftFromParts(model.modelId, true, model, undefined));
+				setDrafts(initial);
+				setModelsText(result.roomModels.map((model) => model.modelId).join("\n"));
 				setMaintenanceModel(result.maintenanceModel ?? "");
-				void discover(result.baseUrl ?? "", approved);
+				void discover(result, initial);
 			})
 			.catch((e) => {
 				if (!stopped) setLoadError((e as Error).message);
@@ -575,7 +751,7 @@ export function GatewayApproveModelsModal({ onClose, onSaved }: { onClose: () =>
 		return () => {
 			stopped = true;
 		};
-	}, []);
+	}, [gatewayId]);
 
 	const manualIds = useMemo(() => {
 		const seen = new Set<string>();
@@ -589,32 +765,32 @@ export function GatewayApproveModelsModal({ onClose, onSaved }: { onClose: () =>
 			});
 	}, [modelsText]);
 
-	// When discovery failed, the currently approved set is the checkbox list.
-	const options = discovered ?? approvedModels;
-	const chosenIds = manualMode ? manualIds : [...selected];
-	const effectiveMaintenanceModel = maintenanceModel && chosenIds.includes(maintenanceModel) ? maintenanceModel : chosenIds[0] ?? "";
-
-	function toggleModel(modelId: string) {
-		setSelected((current) => {
-			const next = new Set(current);
-			if (next.has(modelId)) next.delete(modelId);
-			else next.add(modelId);
-			return next;
-		});
-	}
+	const effectiveDrafts = manualMode
+		? manualIds.map((id) => drafts.find((draft) => draft.id === id) ?? draftFromParts(id, true, undefined, undefined))
+		: drafts;
+	const approvedIds = effectiveDrafts.filter((draft) => draft.approved).map((draft) => draft.id);
+	const effectiveMaintenanceModel = maintenanceModel && approvedIds.includes(maintenanceModel) ? maintenanceModel : approvedIds[0] ?? "";
 
 	async function save() {
 		if (!config) return;
+		const windowError = approvedContextWindowError(effectiveDrafts);
+		if (windowError) {
+			setSaveError(windowError);
+			return;
+		}
 		setSaving(true);
 		setSaveError(null);
 		try {
-			await fetchJson("/api/persistent-agent-ai-profiles/openai-compatible", {
+			await fetchJson(gatewaysUrl(config.id), {
 				method: "PUT",
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify({
-					displayName: config.displayName ?? "OpenAI-compatible gateway",
-					baseUrl: config.baseUrl ?? "",
-					roomModels: chosenIds,
+					label: config.label,
+					// Only sent when the gateway actually has one. A gateway carried
+					// over from the legacy file may have no address recorded
+					// anywhere, and this screen is not the one that asks for it.
+					...(config.baseUrl ? { baseUrl: config.baseUrl } : {}),
+					roomModels: draftsToPayload(effectiveDrafts),
 					maintenanceModel: effectiveMaintenanceModel,
 				}),
 			});
@@ -628,8 +804,8 @@ export function GatewayApproveModelsModal({ onClose, onSaved }: { onClose: () =>
 	}
 
 	const loading = !config && !loadError;
-	const canSave = Boolean(config) && chosenIds.length > 0 && !saving && !discovering;
-	const gatewayName = config?.displayName || "gateway";
+	const canSave = Boolean(config) && approvedIds.length > 0 && !saving && !discovering && !approvedContextWindowError(effectiveDrafts);
+	const gatewayName = config?.label || "gateway";
 
 	return (
 		<div className="room-settings-overlay configure-profile-overlay" role="dialog" aria-modal="true" aria-label="Approve gateway models" onClick={onClose}>
@@ -644,7 +820,7 @@ export function GatewayApproveModelsModal({ onClose, onSaved }: { onClose: () =>
 				</div>
 				<div className="room-settings-body configure-profile-body">
 					<p className="ai-setup-copy">
-						Choose the models your rooms may run on, and which model handles Learn and Review Memory. The gateway address and API key stay as they are; use Edit gateway to change those.
+						Choose the models your rooms may run on, whether each one can look at images, and how much context it has. The gateway address and API key stay as they are; use Edit gateway to change those.
 					</p>
 					{loadError && <div className="checkpoint-proposal-error">{loadError}</div>}
 					{loading && <p className="cli-note">Loading gateway configuration…</p>}
@@ -661,14 +837,9 @@ export function GatewayApproveModelsModal({ onClose, onSaved }: { onClose: () =>
 								)}
 								{!discovering && !manualMode && (
 									<>
-										<ModelCheckboxList
-											options={options.map((modelId) => ({ id: modelId }))}
-											selected={selected}
-											onToggle={toggleModel}
-											ariaLabel="Room models"
-										/>
+										<GatewayModelApprovalList drafts={drafts} onChange={setDrafts} ariaLabel="Room models" />
 										<div className="gateway-discover-row">
-											<button className="ai-profile-foot-link" disabled={saving} onClick={() => void discover(config.baseUrl ?? "", approvedModels, new Set(selected))}>reload from gateway</button>
+											<button className="ai-profile-foot-link" disabled={saving} onClick={() => void discover(config, drafts)}>reload from gateway</button>
 											<button className="ai-profile-foot-link" disabled={saving} onClick={() => setManualMode(true)}>enter ids manually</button>
 										</div>
 									</>
@@ -682,6 +853,13 @@ export function GatewayApproveModelsModal({ onClose, onSaved }: { onClose: () =>
 											onChange={(e) => setModelsText(e.target.value)}
 											rows={4}
 										/>
+										{effectiveDrafts.length > 0 && (
+											<GatewayModelApprovalList
+												drafts={effectiveDrafts}
+												onChange={(next) => setDrafts((current) => [...current.filter((draft) => !next.some((entry) => entry.id === draft.id)), ...next])}
+												ariaLabel="Room models"
+											/>
+										)}
 										<div className="gateway-discover-row">
 											<button className="ai-profile-foot-link" disabled={saving} onClick={() => setManualMode(false)}>back to the model list</button>
 										</div>
@@ -690,8 +868,8 @@ export function GatewayApproveModelsModal({ onClose, onSaved }: { onClose: () =>
 							</div>
 							<div className="configure-profile-field">
 								<h3>Learn and Review Memory</h3>
-								<select className="configure-profile-select" value={effectiveMaintenanceModel} onChange={(e) => setMaintenanceModel(e.target.value)} aria-label="Maintenance model" disabled={chosenIds.length === 0}>
-									{chosenIds.map((id) => (
+								<select className="configure-profile-select" value={effectiveMaintenanceModel} onChange={(e) => setMaintenanceModel(e.target.value)} aria-label="Maintenance model" disabled={approvedIds.length === 0}>
+									{approvedIds.map((id) => (
 										<option key={id} value={id}>{catalogModelName({ id })}</option>
 									))}
 								</select>
@@ -726,8 +904,12 @@ export function AddProviderPanel({ onProfilesChanged }: { onProfilesChanged: () 
 	const [loadError, setLoadError] = useState<string | null>(null);
 	const [apiKeyProvider, setApiKeyProvider] = useState<LoginProviderCatalogEntry | null>(null);
 	const [configureProvider, setConfigureProvider] = useState<{ id: string; name: string } | null>(null);
-	const [gatewayOpen, setGatewayOpen] = useState(false);
-	const [gatewayConfigured, setGatewayConfigured] = useState(false);
+	// null id means "adding a new one"; the modal is closed when the whole slot is null.
+	const [gatewayEdit, setGatewayEdit] = useState<{ id: string | null; label?: string } | null>(null);
+	const [gateways, setGateways] = useState<GatewayConfig[]>([]);
+	// A gateways file that cannot be read is not an empty one, and the panel must
+	// not quietly offer to add a first gateway on top of a list it cannot see.
+	const [gatewayNotice, setGatewayNotice] = useState<string | null>(null);
 	const [filter, setFilter] = useState("");
 	const [addedNote, setAddedNote] = useState<string | null>(null);
 
@@ -756,12 +938,21 @@ export function AddProviderPanel({ onProfilesChanged }: { onProfilesChanged: () 
 		}
 	}
 
+	async function refreshGateways() {
+		try {
+			const result = await fetchJson<GatewayListResponse>(gatewaysUrl(null));
+			setGateways(result.gateways);
+			setGatewayNotice(result.unreadable ? result.errors[0] ?? "Saved gateways could not be read." : null);
+		} catch {
+			// Leave whatever the panel is already showing rather than replacing it
+			// with a claim that there are no gateways.
+		}
+	}
+
 	useEffect(() => {
 		if (!open) return;
 		void refreshProviders();
-		fetchJson<{ configured: boolean }>("/api/persistent-agent-ai-profiles/openai-compatible")
-			.then((config) => setGatewayConfigured(config.configured))
-			.catch(() => {});
+		void refreshGateways();
 	}, [open]);
 
 	async function removeKey(provider: LoginProviderCatalogEntry) {
@@ -874,13 +1065,22 @@ export function AddProviderPanel({ onProfilesChanged }: { onProfilesChanged: () 
 						</div>
 					)}
 					<div className="add-provider-group">
-						<h3>Custom gateway</h3>
+						<h3>Custom gateways</h3>
+						{gatewayNotice && <div className="checkpoint-proposal-error">{gatewayNotice}</div>}
 						<div className="add-provider-rows">
+							{gateways.map((gateway) => (
+								<div key={gateway.id} className="add-provider-row">
+									<span className="add-provider-name">{gateway.label}</span>
+									<span className="add-provider-side">
+										<span className="add-provider-configured">configured</span>
+										<button className="ai-profile-foot-link" onClick={() => setGatewayEdit({ id: gateway.id, label: gateway.label })}>Edit gateway</button>
+									</span>
+								</div>
+							))}
 							<div className="add-provider-row">
-								<span className="add-provider-name">OpenAI-compatible gateway · LiteLLM, vLLM, company proxies</span>
+								<span className="add-provider-name">OpenAI-compatible endpoint · LiteLLM, vLLM, OpenRouter, company proxies</span>
 								<span className="add-provider-side">
-									{gatewayConfigured && <span className="add-provider-configured">configured</span>}
-									<button className="ai-profile-foot-link" onClick={() => setGatewayOpen(true)}>{gatewayConfigured ? "Edit gateway" : "Set up gateway"}</button>
+									<button className="ai-profile-foot-link" onClick={() => setGatewayEdit({ id: null })}>Add gateway</button>
 								</span>
 							</div>
 						</div>
@@ -924,15 +1124,17 @@ export function AddProviderPanel({ onProfilesChanged }: { onProfilesChanged: () 
 					)}
 				</div>
 			)}
-			{gatewayOpen && (
+			{gatewayEdit && (
 				<GatewayConfigModal
-					onClose={() => setGatewayOpen(false)}
-					onSaved={() => {
-						const firstSetup = !gatewayConfigured;
-						setGatewayConfigured(true);
-						if (firstSetup) announceAdded("Your gateway");
+					gatewayId={gatewayEdit.id}
+					knownLabel={gatewayEdit.label}
+					onClose={() => setGatewayEdit(null)}
+					onSaved={(gatewayLabel) => {
+						const wasNew = gatewayEdit.id === null;
+						if (wasNew) announceAdded(gatewayLabel);
 						onProfilesChanged();
 						void refreshProviders();
+						void refreshGateways();
 					}}
 				/>
 			)}

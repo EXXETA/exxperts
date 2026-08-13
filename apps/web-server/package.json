@@ -38,6 +38,7 @@
     "smoke:persistent-agent-instance": "tsx scripts/persistent-agent-instance-smoke.ts",
     "smoke:persistent-agent-active-turn-guard": "tsx scripts/persistent-agent-active-turn-guard-smoke.ts",
     "smoke:persistent-room-detached-turn": "tsx scripts/persistent-room-detached-turn-smoke.ts",
+    "smoke:persistent-room-away-visibility": "tsx scripts/persistent-room-away-visibility-smoke.ts",
     "smoke:persistent-agent-boundary-model-lock": "tsx scripts/persistent-agent-boundary-model-lock-smoke.ts",
     "smoke:persistent-room-schedule-registry": "tsx scripts/persistent-room-schedule-registry-smoke.ts",
     "smoke:persistent-room-schedule-status": "tsx scripts/persistent-room-schedule-status-smoke.ts",
@@ -80,7 +81,8 @@
     "smoke:room-files-routes": "tsx scripts/room-files-routes-smoke.ts",
     "smoke:room-shelf-migration": "tsx scripts/room-shelf-migration-smoke.ts",
     "smoke:shelf-vision": "tsx scripts/shelf-vision-smoke.ts",
-    "smoke:revise-conflict-notice": "tsx scripts/revise-conflict-notice-smoke.ts"
+    "smoke:revise-conflict-notice": "tsx scripts/revise-conflict-notice-smoke.ts",
+    "smoke:persistent-room-effort": "tsx scripts/persistent-room-effort-smoke.ts"
   },
   "dependencies": {
     "@fastify/websocket": "^11.2.0",

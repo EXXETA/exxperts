@@ -7,7 +7,7 @@ import type {
 	RawMessageStreamEvent,
 } from "@anthropic-ai/sdk/resources/messages.js";
 import { getEnvApiKey } from "../env-api-keys.js";
-import { calculateCost } from "../models.js";
+import { calculateCost, clampThinkingLevel, hasExplicitTopTierEffort } from "../models.js";
 import type {
 	AnthropicMessagesCompat,
 	Api,
@@ -23,6 +23,7 @@ import type {
 	StreamOptions,
 	TextContent,
 	ThinkingContent,
+	ThinkingLevel,
 	Tool,
 	ToolCall,
 	ToolResultMessage,
@@ -676,10 +677,20 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 };
 
 /**
- * Check if a model supports adaptive thinking (Opus 4.6+, Sonnet 4.6)
+ * Check if a model supports adaptive thinking (effort-based rather than
+ * budget-based).
+ *
+ * The real test is the model's own metadata: a model that names an effort for
+ * a tier above "high" is a model that takes efforts. Matching on ids alone is
+ * what left every Claude 5 model on budget thinking, where the tiers above
+ * "medium" all spend the same budget and "max" was indistinguishable from
+ * "high". The id list stays as a belt for entries whose map shape predates
+ * this rule and never named a top tier.
  */
-function supportsAdaptiveThinking(modelId: string): boolean {
+function supportsAdaptiveThinking(model: Model<"anthropic-messages">): boolean {
+	if (hasExplicitTopTierEffort(model)) return true;
 	// Adaptive-thinking model IDs (with or without date suffix)
+	const modelId = model.id;
 	return (
 		modelId.includes("opus-4-6") ||
 		modelId.includes("opus-4.6") ||
@@ -731,8 +742,14 @@ export const streamSimpleAnthropic: StreamFunction<"anthropic-messages", SimpleS
 
 	// For Opus 4.6 and Sonnet 4.6: use adaptive thinking with effort level
 	// For older models: use budget-based thinking
-	if (supportsAdaptiveThinking(model.id)) {
-		const effort = mapThinkingLevelToEffort(model, options.reasoning);
+	if (supportsAdaptiveThinking(model)) {
+		// Clamp first, like every other adapter: an unmapped level would
+		// otherwise fall through the switch below to "high", which on a model
+		// with tiers above high is a downgrade rather than a fallback.
+		// Safe cast: the clamp only returns "off" for a request that WAS "off",
+		// and this branch is unreachable unless reasoning is set.
+		const clamped = clampThinkingLevel(model, options.reasoning) as ThinkingLevel;
+		const effort = mapThinkingLevelToEffort(model, clamped);
 		return streamAnthropic(model, context, {
 			...base,
 			thinkingEnabled: true,
@@ -769,7 +786,7 @@ function createClient(
 ): { client: Anthropic; isOAuthToken: boolean } {
 	// Adaptive thinking models (Opus 4.6, Sonnet 4.6) have interleaved thinking built-in.
 	// The beta header is deprecated on Opus 4.6 and redundant on Sonnet 4.6, so skip it.
-	const needsInterleavedBeta = interleavedThinking && !supportsAdaptiveThinking(model.id);
+	const needsInterleavedBeta = interleavedThinking && !supportsAdaptiveThinking(model);
 	const betaFeatures: string[] = [];
 	if (useFineGrainedToolStreamingBeta) {
 		betaFeatures.push(FINE_GRAINED_TOOL_STREAMING_BETA);
@@ -927,13 +944,14 @@ function buildParams(
 			// Default to "summarized" so Opus 4.7 and Mythos Preview behave like
 			// older Claude 4 models (whose API default is also "summarized").
 			const display: AnthropicThinkingDisplay = options.thinkingDisplay ?? "summarized";
-			if (supportsAdaptiveThinking(model.id)) {
+			if (supportsAdaptiveThinking(model)) {
 				// Adaptive thinking: Claude decides when and how much to think.
 				params.thinking = { type: "adaptive", display };
 				if (options.effort) {
-					// The Anthropic SDK types can lag newly supported effort values such as "xhigh".
+					// The Anthropic SDK types can lag newly supported effort values such
+					// as "xhigh" and "max".
 					params.output_config =
-						options.effort === "xhigh"
+						options.effort === "xhigh" || options.effort === "max"
 							? ({ effort: options.effort } as unknown as NonNullable<
 									MessageCreateParamsStreaming["output_config"]
 								>)

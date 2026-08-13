@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { Sidebar } from "./components/Sidebar";
 import { AssetsPanel } from "./components/assets-panel";
 import { AssetViewerFooter } from "./components/asset-viewer-footer";
@@ -18,6 +18,8 @@ import { ConnectorsPage } from "./components/ConnectorsPage";
 import { SkillsPage } from "./components/SkillsPage";
 import { Preview } from "./components/Preview";
 import { Help } from "./components/Help";
+import { ConnectionLostBanner } from "./components/connection-lost-banner";
+import { CONNECT_DEADLINE_MS, createConnectionHealthState, msUntilWarn, OPEN_DWELL_MS, reduceConnectionHealth, type ConnectionHealthAction, type ConnectionHealthState } from "./connection-health";
 import { MarkdownRenderer } from "./components/Markdown";
 import { RoomsGuide } from "./components/RoomsGuide";
 import { RoomSettingsModal } from "./components/RoomSettingsModal";
@@ -33,6 +35,8 @@ import { createTaskState, reduceTask, type TaskAction, type TaskState } from "./
 import { ConsultDock } from "./components/delegation-card";
 import { TaskRunView } from "./components/task-run-view";
 import { ArtifactViewer } from "./components/ArtifactViewer";
+import { EffortControl } from "./components/EffortControl";
+import { ChevronDownIcon, GearIcon, PaperclipIcon, TrashIcon } from "./components/icons";
 // The handoff grammar + queue helpers are the ONE shared source of truth, imported
 // straight from the server workspace's pure module (no node/server deps; vite
 // bundles it) so transfer here and the checkpoint formatter there agree exactly.
@@ -553,8 +557,10 @@ function AiProfileSwitcherSection({ status, onSelect, onRefresh, onRefreshAuth, 
 	const [error, setError] = useState<string | null>(null);
 	const [modelsOpenId, setModelsOpenId] = useState<string | null>(null);
 	const [editProfile, setEditProfile] = useState<PersistentAgentAiProfileStatus | null>(null);
-	const [gatewayEditOpen, setGatewayEditOpen] = useState(false);
-	const [gatewayApproveOpen, setGatewayApproveOpen] = useState(false);
+	// Which gateway the modal is for: gateways are plural now, so "open" is not
+	// enough to know whose base URL or model set is being edited.
+	const [gatewayEdit, setGatewayEdit] = useState<{ id: string; label: string } | null>(null);
+	const [gatewayApproveId, setGatewayApproveId] = useState<string | null>(null);
 	const [menuOpenId, setMenuOpenId] = useState<string | null>(null);
 	const [confirmRemoveId, setConfirmRemoveId] = useState<string | null>(null);
 	const [removing, setRemoving] = useState(false);
@@ -678,8 +684,9 @@ function AiProfileSwitcherSection({ status, onSelect, onRefresh, onRefreshAuth, 
 		setRemoving(true);
 		setError(null);
 		try {
+			// Removing one gateway leaves every other gateway's models and key alone.
 			const url = profile.kind === "gateway"
-				? "/api/persistent-agent-ai-profiles/openai-compatible"
+				? `/api/persistent-agent-ai-profiles/gateways/${encodeURIComponent(profile.id)}`
 				: `/api/persistent-agent-ai-profiles/custom/${encodeURIComponent(profile.id)}`;
 			await fetchJson(url, { method: "DELETE" });
 			closeMenu();
@@ -833,8 +840,8 @@ function AiProfileSwitcherSection({ status, onSelect, onRefresh, onRefreshAuth, 
 																			<>
 																				{/* Approve models edits the model set only; Edit gateway
 																				    owns the base URL and API key. */}
-																				<button className="ai-profile-menu-item" role="menuitem" onClick={() => { setGatewayApproveOpen(true); closeMenu(); }}>Approve models</button>
-																				<button className="ai-profile-menu-item" role="menuitem" onClick={() => { setGatewayEditOpen(true); closeMenu(); }}>Edit gateway</button>
+																				<button className="ai-profile-menu-item" role="menuitem" onClick={() => { setGatewayApproveId(profile.id); closeMenu(); }}>Approve models</button>
+																				<button className="ai-profile-menu-item" role="menuitem" onClick={() => { setGatewayEdit({ id: profile.id, label: profile.label }); closeMenu(); }}>Edit gateway</button>
 																			</>
 																		)}
 																		{profile.kind === "builtin" && profile.overridden && (
@@ -893,15 +900,18 @@ function AiProfileSwitcherSection({ status, onSelect, onRefresh, onRefreshAuth, 
 					onSaved={() => { onRefresh(); onRefreshAuth(); }}
 				/>
 			)}
-			{gatewayEditOpen && (
+			{gatewayEdit && (
 				<GatewayConfigModal
-					onClose={() => setGatewayEditOpen(false)}
+					gatewayId={gatewayEdit.id}
+					knownLabel={gatewayEdit.label}
+					onClose={() => setGatewayEdit(null)}
 					onSaved={() => { onRefresh(); onRefreshAuth(); }}
 				/>
 			)}
-			{gatewayApproveOpen && (
+			{gatewayApproveId && (
 				<GatewayApproveModelsModal
-					onClose={() => setGatewayApproveOpen(false)}
+					gatewayId={gatewayApproveId}
+					onClose={() => setGatewayApproveId(null)}
 					onSaved={() => { onRefresh(); onRefreshAuth(); }}
 				/>
 			)}
@@ -912,7 +922,7 @@ function AiProfileSwitcherSection({ status, onSelect, onRefresh, onRefreshAuth, 
 	);
 }
 
-function Landing({ onOpenAiSetup, onOpenDashboard, onOpenConnectors, onOpenMemory, onOpenSkills, onOpenPersistentAgent, onResumePersistentAgent, onMaintainPersistentAgent, onCreatePersistentAgent, onArchiveRoom, onPurgeRoom, onMementoForget, modelStatus, persistentAgentStatuses, persistentThread, persistentLive, persistentResumeError, onRefreshPersistentAgent, theme, onToggleTheme, connected, aiProfileStatus: aiProfileSelection, onSelectAiProfile, onRefreshAiProfile, standbyLockedModels, backgroundReadyRooms, purgingRooms }: { onOpenAiSetup: () => void; onOpenDashboard: () => void; onOpenConnectors: () => void; onOpenMemory: () => void; onOpenSkills: () => void; onOpenPersistentAgent: (status: PersistentAgentStatus, model: WebChatModelOption) => Promise<void> | void; onResumePersistentAgent: (status: PersistentAgentStatus) => Promise<void> | void; onMaintainPersistentAgent: (target: MaintainTarget) => void; onCreatePersistentAgent: (request: PersistentAgentCreateRequest) => Promise<void>; onArchiveRoom: (agentId: PersistentAgentId, confirmation: string) => Promise<PersistentAgentArchiveResponse>; onPurgeRoom: (agentId: PersistentAgentId, confirmation: string) => Promise<PersistentAgentPurgeResponse>; onMementoForget: (agentId: PersistentAgentId) => void; modelStatus: WebChatModelStatus | null; persistentAgentStatuses: PersistentAgentStatus[]; persistentThread: PersistentAgentThread | null; persistentLive: boolean; persistentResumeError: string | null; onRefreshPersistentAgent: () => void; theme: ThemeMode; onToggleTheme: () => void; connected: boolean; aiProfileStatus: PersistentAgentAiProfileSelectionStatus | null; onSelectAiProfile: (profileId: string) => Promise<void>; onRefreshAiProfile: () => void; standbyLockedModels?: Array<{ provider: string; model: string }>; backgroundReadyRooms?: ReadonlySet<PersistentAgentId>; purgingRooms?: ReadonlySet<PersistentAgentId> }) {
+function Landing({ onOpenAiSetup, onOpenDashboard, onOpenConnectors, onOpenMemory, onOpenSkills, onOpenPersistentAgent, onResumePersistentAgent, onMaintainPersistentAgent, onCreatePersistentAgent, onArchiveRoom, onPurgeRoom, onMementoForget, modelStatus, persistentAgentStatuses, persistentThread, persistentLive, persistentResumeError, onRefreshPersistentAgent, theme, onToggleTheme, aiProfileStatus: aiProfileSelection, onSelectAiProfile, onRefreshAiProfile, standbyLockedModels, backgroundReadyRooms, purgingRooms }: { onOpenAiSetup: () => void; onOpenDashboard: () => void; onOpenConnectors: () => void; onOpenMemory: () => void; onOpenSkills: () => void; onOpenPersistentAgent: (status: PersistentAgentStatus, model: WebChatModelOption) => Promise<void> | void; onResumePersistentAgent: (status: PersistentAgentStatus) => Promise<void> | void; onMaintainPersistentAgent: (target: MaintainTarget) => void; onCreatePersistentAgent: (request: PersistentAgentCreateRequest) => Promise<void>; onArchiveRoom: (agentId: PersistentAgentId, confirmation: string) => Promise<PersistentAgentArchiveResponse>; onPurgeRoom: (agentId: PersistentAgentId, confirmation: string) => Promise<PersistentAgentPurgeResponse>; onMementoForget: (agentId: PersistentAgentId) => void; modelStatus: WebChatModelStatus | null; persistentAgentStatuses: PersistentAgentStatus[]; persistentThread: PersistentAgentThread | null; persistentLive: boolean; persistentResumeError: string | null; onRefreshPersistentAgent: () => void; theme: ThemeMode; onToggleTheme: () => void; aiProfileStatus: PersistentAgentAiProfileSelectionStatus | null; onSelectAiProfile: (profileId: string) => Promise<void>; onRefreshAiProfile: () => void; standbyLockedModels?: Array<{ provider: string; model: string }>; backgroundReadyRooms?: ReadonlySet<PersistentAgentId>; purgingRooms?: ReadonlySet<PersistentAgentId> }) {
 	const [createOpen, setCreateOpen] = useState(false);
 	useEscapeKey(() => setCreateOpen(false), createOpen);
 	const [settingsRoomId, setSettingsRoomId] = useState<PersistentAgentId | null>(null);
@@ -946,7 +956,7 @@ function Landing({ onOpenAiSetup, onOpenDashboard, onOpenConnectors, onOpenMemor
 
 	return (
 		<div className="landing-shell with-product-sidebar">
-			<ProductSidebar onHome={() => {}} onAiSetup={onOpenAiSetup} onDashboard={onOpenDashboard} onConnectors={onOpenConnectors} onMemory={onOpenMemory} onSkills={onOpenSkills} connected={connected} theme={theme} onToggleTheme={onToggleTheme} active="home" aiProfileStatus={aiProfileSelection} onSelectAiProfile={onSelectAiProfile} onRefreshAiProfile={onRefreshAiProfile} standbyLockedModels={standbyLockedModels} />
+			<ProductSidebar onHome={() => {}} onAiSetup={onOpenAiSetup} onDashboard={onOpenDashboard} onConnectors={onOpenConnectors} onMemory={onOpenMemory} onSkills={onOpenSkills} theme={theme} onToggleTheme={onToggleTheme} active="home" aiProfileStatus={aiProfileSelection} onSelectAiProfile={onSelectAiProfile} onRefreshAiProfile={onRefreshAiProfile} standbyLockedModels={standbyLockedModels} />
 			<div className="landing home-page">
 			<section className="landing-hero">
 				<div className="landing-hero-head">
@@ -1152,10 +1162,10 @@ function ArchivedRoomsSection({ activeRoomCount, onRestored }: { activeRoomCount
 	);
 }
 
-function AiSetupShell({ onHome, onDashboard, onConnectors, onMemory, onSkills, onRefreshAuth, aiProfileStatus, onRefreshAiProfile, onSelectAiProfile, connected, theme, onToggleTheme, standbyLockedModels }: { onHome: () => void; onDashboard: () => void; onConnectors: () => void; onMemory: () => void; onSkills: () => void; onRefreshAuth: () => void; aiProfileStatus: PersistentAgentAiProfileSelectionStatus | null; onRefreshAiProfile: () => void; onSelectAiProfile: (profileId: string) => Promise<void>; connected: boolean; theme: ThemeMode; onToggleTheme: () => void; standbyLockedModels?: Array<{ provider: string; model: string }> }) {
+function AiSetupShell({ onHome, onDashboard, onConnectors, onMemory, onSkills, onRefreshAuth, aiProfileStatus, onRefreshAiProfile, onSelectAiProfile, theme, onToggleTheme, standbyLockedModels }: { onHome: () => void; onDashboard: () => void; onConnectors: () => void; onMemory: () => void; onSkills: () => void; onRefreshAuth: () => void; aiProfileStatus: PersistentAgentAiProfileSelectionStatus | null; onRefreshAiProfile: () => void; onSelectAiProfile: (profileId: string) => Promise<void>; theme: ThemeMode; onToggleTheme: () => void; standbyLockedModels?: Array<{ provider: string; model: string }> }) {
 	return (
 		<div className="landing-shell with-product-sidebar">
-			<ProductSidebar onHome={onHome} onAiSetup={() => {}} onDashboard={onDashboard} onConnectors={onConnectors} onMemory={onMemory} onSkills={onSkills} connected={connected} theme={theme} onToggleTheme={onToggleTheme} active="ai-setup" aiProfileStatus={aiProfileStatus} onSelectAiProfile={onSelectAiProfile} onRefreshAiProfile={onRefreshAiProfile} standbyLockedModels={standbyLockedModels} />
+			<ProductSidebar onHome={onHome} onAiSetup={() => {}} onDashboard={onDashboard} onConnectors={onConnectors} onMemory={onMemory} onSkills={onSkills} theme={theme} onToggleTheme={onToggleTheme} active="ai-setup" aiProfileStatus={aiProfileStatus} onSelectAiProfile={onSelectAiProfile} onRefreshAiProfile={onRefreshAiProfile} standbyLockedModels={standbyLockedModels} />
 			<div className="landing ai-setup-page">
 				<section className="landing-hero ai-setup-hero">
 					<h1>AI setup.</h1>
@@ -1168,10 +1178,10 @@ function AiSetupShell({ onHome, onDashboard, onConnectors, onMemory, onSkills, o
 	);
 }
 
-function ConnectorsShell({ onHome, onAiSetup, onDashboard, onMemory, onSkills, connected, theme, onToggleTheme, aiProfileStatus, onSelectAiProfile, onRefreshAiProfile, standbyLockedModels }: { onHome: () => void; onAiSetup: () => void; onDashboard: () => void; onMemory: () => void; onSkills: () => void; connected: boolean; theme: ThemeMode; onToggleTheme: () => void; aiProfileStatus: PersistentAgentAiProfileSelectionStatus | null; onSelectAiProfile: (profileId: string) => Promise<void>; onRefreshAiProfile: () => void; standbyLockedModels?: Array<{ provider: string; model: string }> }) {
+function ConnectorsShell({ onHome, onAiSetup, onDashboard, onMemory, onSkills, theme, onToggleTheme, aiProfileStatus, onSelectAiProfile, onRefreshAiProfile, standbyLockedModels }: { onHome: () => void; onAiSetup: () => void; onDashboard: () => void; onMemory: () => void; onSkills: () => void; theme: ThemeMode; onToggleTheme: () => void; aiProfileStatus: PersistentAgentAiProfileSelectionStatus | null; onSelectAiProfile: (profileId: string) => Promise<void>; onRefreshAiProfile: () => void; standbyLockedModels?: Array<{ provider: string; model: string }> }) {
 	return (
 		<div className="landing-shell with-product-sidebar">
-			<ProductSidebar onHome={onHome} onAiSetup={onAiSetup} onDashboard={onDashboard} onConnectors={() => {}} onMemory={onMemory} onSkills={onSkills} connected={connected} theme={theme} onToggleTheme={onToggleTheme} active="connectors" aiProfileStatus={aiProfileStatus} onSelectAiProfile={onSelectAiProfile} onRefreshAiProfile={onRefreshAiProfile} standbyLockedModels={standbyLockedModels} />
+			<ProductSidebar onHome={onHome} onAiSetup={onAiSetup} onDashboard={onDashboard} onConnectors={() => {}} onMemory={onMemory} onSkills={onSkills} theme={theme} onToggleTheme={onToggleTheme} active="connectors" aiProfileStatus={aiProfileStatus} onSelectAiProfile={onSelectAiProfile} onRefreshAiProfile={onRefreshAiProfile} standbyLockedModels={standbyLockedModels} />
 			<div className="landing ai-setup-page connectors-page">
 				<ConnectorsPage />
 			</div>
@@ -1179,19 +1189,19 @@ function ConnectorsShell({ onHome, onAiSetup, onDashboard, onMemory, onSkills, c
 	);
 }
 
-function SkillsShell({ onHome, onAiSetup, onDashboard, onConnectors, onMemory, connected, theme, onToggleTheme, aiProfileStatus, onSelectAiProfile, onRefreshAiProfile, standbyLockedModels }: { onHome: () => void; onAiSetup: () => void; onDashboard: () => void; onConnectors: () => void; onMemory: () => void; connected: boolean; theme: ThemeMode; onToggleTheme: () => void; aiProfileStatus: PersistentAgentAiProfileSelectionStatus | null; onSelectAiProfile: (profileId: string) => Promise<void>; onRefreshAiProfile: () => void; standbyLockedModels?: Array<{ provider: string; model: string }> }) {
+function SkillsShell({ onHome, onAiSetup, onDashboard, onConnectors, onMemory, theme, onToggleTheme, aiProfileStatus, onSelectAiProfile, onRefreshAiProfile, standbyLockedModels }: { onHome: () => void; onAiSetup: () => void; onDashboard: () => void; onConnectors: () => void; onMemory: () => void; theme: ThemeMode; onToggleTheme: () => void; aiProfileStatus: PersistentAgentAiProfileSelectionStatus | null; onSelectAiProfile: (profileId: string) => Promise<void>; onRefreshAiProfile: () => void; standbyLockedModels?: Array<{ provider: string; model: string }> }) {
 	return (
 		<div className="landing-shell with-product-sidebar">
-			<ProductSidebar onHome={onHome} onAiSetup={onAiSetup} onDashboard={onDashboard} onConnectors={onConnectors} onMemory={onMemory} onSkills={() => {}} connected={connected} theme={theme} onToggleTheme={onToggleTheme} active="skills" aiProfileStatus={aiProfileStatus} onSelectAiProfile={onSelectAiProfile} onRefreshAiProfile={onRefreshAiProfile} standbyLockedModels={standbyLockedModels} />
+			<ProductSidebar onHome={onHome} onAiSetup={onAiSetup} onDashboard={onDashboard} onConnectors={onConnectors} onMemory={onMemory} onSkills={() => {}} theme={theme} onToggleTheme={onToggleTheme} active="skills" aiProfileStatus={aiProfileStatus} onSelectAiProfile={onSelectAiProfile} onRefreshAiProfile={onRefreshAiProfile} standbyLockedModels={standbyLockedModels} />
 			<SkillsPage />
 		</div>
 	);
 }
 
-function MemoryShell({ onHome, onAiSetup, onDashboard, onConnectors, onSkills, onMaintain, maintainBlocked, connected, theme, onToggleTheme, aiProfileStatus, onSelectAiProfile, onRefreshAiProfile, standbyLockedModels }: { onHome: () => void; onAiSetup: () => void; onDashboard: () => void; onConnectors: () => void; onSkills: () => void; onMaintain: (target: MaintainTarget) => void; maintainBlocked?: (agentId: PersistentAgentId) => string | null; connected: boolean; theme: ThemeMode; onToggleTheme: () => void; aiProfileStatus: PersistentAgentAiProfileSelectionStatus | null; onSelectAiProfile: (profileId: string) => Promise<void>; onRefreshAiProfile: () => void; standbyLockedModels?: Array<{ provider: string; model: string }> }) {
+function MemoryShell({ onHome, onAiSetup, onDashboard, onConnectors, onSkills, onMaintain, maintainBlocked, theme, onToggleTheme, aiProfileStatus, onSelectAiProfile, onRefreshAiProfile, standbyLockedModels }: { onHome: () => void; onAiSetup: () => void; onDashboard: () => void; onConnectors: () => void; onSkills: () => void; onMaintain: (target: MaintainTarget) => void; maintainBlocked?: (agentId: PersistentAgentId) => string | null; theme: ThemeMode; onToggleTheme: () => void; aiProfileStatus: PersistentAgentAiProfileSelectionStatus | null; onSelectAiProfile: (profileId: string) => Promise<void>; onRefreshAiProfile: () => void; standbyLockedModels?: Array<{ provider: string; model: string }> }) {
 	return (
 		<div className="landing-shell with-product-sidebar">
-			<ProductSidebar onHome={onHome} onAiSetup={onAiSetup} onDashboard={onDashboard} onConnectors={onConnectors} onMemory={() => {}} onSkills={onSkills} connected={connected} theme={theme} onToggleTheme={onToggleTheme} active="memory" aiProfileStatus={aiProfileStatus} onSelectAiProfile={onSelectAiProfile} onRefreshAiProfile={onRefreshAiProfile} standbyLockedModels={standbyLockedModels} />
+			<ProductSidebar onHome={onHome} onAiSetup={onAiSetup} onDashboard={onDashboard} onConnectors={onConnectors} onMemory={() => {}} onSkills={onSkills} theme={theme} onToggleTheme={onToggleTheme} active="memory" aiProfileStatus={aiProfileStatus} onSelectAiProfile={onSelectAiProfile} onRefreshAiProfile={onRefreshAiProfile} standbyLockedModels={standbyLockedModels} />
 			<div className="landing dashboard-page">
 				<section className="landing-hero">
 					<h1>Memory.</h1>
@@ -2570,6 +2580,27 @@ function CheckpointPreviewShell({ chat, itemCount, rememberText, density, propos
 }
 
 
+// Reasoning-effort capability as the server reports it. A server that predates
+// the control simply omits it, and the composer then shows no pill at all.
+//
+// `ladder` is the model's own dial: one rung per distinct effort, each carrying
+// the provider's name for it. A server that predates the ladder sends only the
+// token list, so one is built from it where every rung is its own label.
+function readEffortPayload(raw: any): { level: string; ladder: Array<{ level: string; label: string }> } | null {
+	if (typeof raw?.level !== "string" || !raw.level) return null;
+	const ladder = Array.isArray(raw?.ladder)
+		? raw.ladder
+				.filter((rung: any) => typeof rung?.level === "string" && rung.level && typeof rung?.label === "string" && rung.label)
+				.map((rung: any) => ({ level: String(rung.level), label: String(rung.label) }))
+		: Array.isArray(raw?.supported)
+			? raw.supported
+					.filter((entry: unknown) => typeof entry === "string" && entry)
+					.map((entry: string) => ({ level: entry, label: entry }))
+			: [];
+	if (ladder.length === 0) return null;
+	return { level: raw.level, ladder };
+}
+
 function CheckpointSplitButton({ hasUserInput, inFlight, onQuickCheckpoint, onOpenFullCheckpoint }: { hasUserInput: boolean; inFlight: boolean; onQuickCheckpoint: () => void; onOpenFullCheckpoint: () => void }) {
 	const [menuOpen, setMenuOpen] = useState(false);
 	const rootRef = useRef<HTMLDivElement | null>(null);
@@ -2592,10 +2623,10 @@ function CheckpointSplitButton({ hasUserInput, inFlight, onQuickCheckpoint, onOp
 	return (
 		<div className="checkpoint-split" ref={rootRef}>
 			<button className="icon-btn checkpoint-split-main" title={checkpointTitle} disabled={!hasUserInput || inFlight} onClick={() => { setMenuOpen(false); onQuickCheckpoint(); }}>Checkpoint</button>
-			<button className="icon-btn checkpoint-split-toggle" title="More memory actions" aria-haspopup="menu" aria-expanded={menuOpen} aria-label="More memory actions" disabled={inFlight} onClick={() => setMenuOpen((open) => !open)}>▾</button>
+			<button className="icon-btn checkpoint-split-toggle" title="More checkpoint options" aria-haspopup="menu" aria-expanded={menuOpen} aria-label="More checkpoint options" disabled={inFlight} onClick={() => setMenuOpen((open) => !open)}><ChevronDownIcon /></button>
 			{menuOpen && (
 				<div className="checkpoint-split-menu" role="menu">
-					<button role="menuitem" title={hasUserInput ? "Choose summary density and add a steering note, then review before saving" : "Send a message before checkpointing"} disabled={!hasUserInput} onClick={() => { setMenuOpen(false); onOpenFullCheckpoint(); }}>Checkpoint with options…</button>
+					<button role="menuitem" title={hasUserInput ? "Choose summary density and add a steering note, then review before saving" : "Send a message before checkpointing"} disabled={!hasUserInput} onClick={() => { setMenuOpen(false); onOpenFullCheckpoint(); }}>Custom checkpoint…</button>
 				</div>
 			)}
 		</div>
@@ -2625,7 +2656,24 @@ export function App() {
 	// Captured on a plain leave, restored on the next open/resume; forget flows
 	// (Memento, rest) deliberately drop it, and archiving clears the entry.
 	const roomDraftsRef = useRef(new Map<PersistentAgentId, string>());
+	// Is a socket open at this instant, and nothing more. It follows the real
+	// readyState, including down through a swap, because everything that GATES
+	// an action has to be right: a Send that looks available but drops the
+	// message, or a level pick that never reaches the wire, is worse than a
+	// control that is briefly unavailable. What the user is TOLD is a different
+	// question entirely: see connectionWarning below and connection-health.ts.
 	const [connected, setConnected] = useState(false);
+	// True for the blink between closing one socket and opening its
+	// replacement. Room chrome that only DESCRIBES the connection (the context
+	// pill's label, the effort dial's dimming) reads `connected || swapping`,
+	// so an ordinary rebind does not flash the word "Offline" at anyone, while
+	// everything that gates an action keeps reading `connected` alone.
+	const [socketSwapping, setSocketSwapping] = useState(false);
+	const socketSwapTimerRef = useRef<number | null>(null);
+	// The only connection state the user is ever shown: a sustained, confirmed
+	// inability to reach the engine, past a grace window, after retries that
+	// really failed. False through boot and through every ordinary swap.
+	const [connectionWarning, setConnectionWarning] = useState(false);
 	// Room WS auto-reconnect: "reconnecting" while backoff attempts run,
 	// "failed" once the attempt cap is reached (only the manual Reconnect
 	// affordance or a tab re-focus starts a new cycle). The pill copy follows
@@ -2637,6 +2685,11 @@ export function App() {
 	const [sessionVersion, setSessionVersion] = useState(0);
 	const [usage, setUsage] = useState<SessionUsage>(ZERO_USAGE);
 	const [contextHealth, setContextHealth] = useState<ContextHealthStatus | null>(null);
+	// Reasoning effort for the open room, as the server reported it on ready:
+	// the sticky level plus the levels the room's locked model can actually do.
+	// Null until a room says so, and while a server predating the control runs.
+	const [roomEffort, setRoomEffort] = useState<{ level: string; ladder: Array<{ level: string; label: string }> } | null>(null);
+	const roomEffortRef = useRef<{ level: string; ladder: Array<{ level: string; label: string }> } | null>(null);
 	const [helpOpen, setHelpOpen] = useState(false);
 	// V5: the right pane is a single slot with two possible occupants — the
 	// approval preview and the artifact viewer. One state value = last-click-wins
@@ -2765,6 +2818,12 @@ export function App() {
 	// its card gets a "response ready" badge until the room is opened. Session-
 	// local by design, like the transcript itself before a checkpoint.
 	const backgroundCookingRoomsRef = useRef(new Set<PersistentAgentId>());
+	// Long-lived callers (the mount-scoped window-focus listener) must invoke
+	// the CURRENT render's refreshPersistentAgentStatus: a pinned first-render
+	// closure reads persistentChat as forever-null, which made the refresh
+	// treat the open room as "cooking with nobody inside" and fire the
+	// done-moment toast at the user sitting in front of the answer.
+	const refreshPersistentAgentStatusRef = useRef<() => Promise<void>>(async () => {});
 	const [backgroundReadyRooms, setBackgroundReadyRooms] = useState<ReadonlySet<PersistentAgentId>>(new Set());
 	// Rooms with a purge in flight (community #10): the delete endpoint may be
 	// retrying for a few seconds after an in-room delete, and the card must not
@@ -2862,6 +2921,32 @@ export function App() {
 	// trigger the auto-reconnect; these paths arm the flag and the WS effect
 	// clears it when it builds the next socket.
 	const suppressReconnectRef = useRef(false);
+	// Connection health (what the user is told), kept in a ref because every
+	// writer is a socket event handler living outside the render cycle.
+	const connectionHealthRef = useRef<ConnectionHealthState>(createConnectionHealthState());
+	const connectionHealthTimerRef = useRef<number | null>(null);
+	// A socket wedged in CONNECTING never fires close on its own, so nothing
+	// would ever count it as a failure, retry it, or warn about it. This
+	// deadline is what turns "listening but never completing the upgrade" into
+	// an ordinary failed attempt.
+	const connectDeadlineTimerRef = useRef<number | null>(null);
+	// An open socket only counts as a recovery once it has carried a frame or
+	// simply lasted; this timer is the "simply lasted" half.
+	const openDwellTimerRef = useRef<number | null>(null);
+	// The non-room socket (Home and the other product screens) used to have no
+	// retry at all: a drop there left the app saying "offline" until a page
+	// reload, while everything on those screens kept working over HTTP. It now
+	// rebuilds itself with the same shape of backoff the room socket uses.
+	const homeReconnectTimerRef = useRef<number | null>(null);
+	const homeReconnectAttemptRef = useRef(0);
+	// When the page last went hidden, so waking up can tell a laptop that slept
+	// through an outage from a user flicking between tabs. Only the former may
+	// reset the backoff ladder; the latter would pin it at one second.
+	const pageHiddenAtRef = useRef<number | null>(null);
+	// A level chosen while the socket was not OPEN. Kept with its room so a
+	// choice made in one room can never be delivered to the next, and flushed
+	// when that room binds again, so the pick is never silently lost.
+	const pendingEffortRef = useRef<{ agentId: PersistentAgentId; level: string } | null>(null);
 	const busyRef = useRef(busy);
 	const turnCancellingRef = useRef(turnCancelling);
 	const turnInterruptedNoteRef = useRef<string | null>(turnInterruptedNote);
@@ -2905,6 +2990,10 @@ export function App() {
 	}
 	const streamTickRafRef = useRef<number | null>(null);
 	const streamTickTimerRef = useRef<number | null>(null);
+	// True between turn_reattach and turn_reattach_replay_done: the frames in
+	// that window are catch-up for text the user already generated while away,
+	// so the reveal drains instantly instead of re-animating it at reading pace.
+	const reattachReplayDrainRef = useRef(false);
 	const streamErrorLineIdRef = useRef<string | null>(null);
 	const retryNoticeIdRef = useRef<string | null>(null);
 	const persistentChatRef = useRef<PersistentChatConfig>(persistentChat);
@@ -3095,7 +3184,9 @@ export function App() {
 		refreshPersistentAgentStatus();
 		// Refresh room statuses (incl. lock state) when returning to the window,
 		// so a room locked/freed from the CLI reflects without a manual reload.
-		const onFocus = () => { void refreshPersistentAgentStatus(); };
+		// Via the ref: this listener outlives every render, and the refresh must
+		// know which room is open NOW, not at mount.
+		const onFocus = () => { void refreshPersistentAgentStatusRef.current(); };
 		window.addEventListener("focus", onFocus);
 		return () => window.removeEventListener("focus", onFocus);
 	}, []);
@@ -3233,7 +3324,7 @@ export function App() {
 			headers: { "content-type": "application/json" },
 			body: JSON.stringify({ conversationId }),
 		});
-		if (!res.ok) throw await persistentAgentResponseError(res, `Failed to apply Memento (${res.status})`);
+		if (!res.ok) throw await persistentAgentResponseError(res, `Failed to forget this conversation (${res.status})`);
 		return await res.json() as PersistentAgentMementoBoundaryResponse;
 	}
 
@@ -3533,10 +3624,14 @@ export function App() {
 	}, [persistentAgentStatuses, persistentChat]);
 
 	useEffect(() => { itemsRef.current = items; }, [items]);
+	// No deps on purpose: the function closes over most of the room state, so
+	// only the newest render's instance is safe to call from stale contexts.
+	useEffect(() => { refreshPersistentAgentStatusRef.current = refreshPersistentAgentStatus; });
 	useEffect(() => { persistentChatRef.current = persistentChat; }, [persistentChat]);
 	useEffect(() => { busyRef.current = busy; }, [busy]);
 	useEffect(() => { turnCancellingRef.current = turnCancelling; }, [turnCancelling]);
 	useEffect(() => { turnInterruptedNoteRef.current = turnInterruptedNote; }, [turnInterruptedNote]);
+	useEffect(() => { roomEffortRef.current = roomEffort; }, [roomEffort]);
 
 	useEffect(() => {
 		if (absorbWorkflow.step !== "proposing") return;
@@ -3734,6 +3829,23 @@ export function App() {
 	// buffer whole (background tabs throttle timers to ~1/s — fine, nothing
 	// is being watched).
 	function scheduleStreamTick() {
+		// Reattach catch-up: everything buffered so far is text that already
+		// exists server-side — drain it on a 0ms timer (same transport as the
+		// hidden-tab path, which keeps the dispatch out of the reducer's own
+		// effect loop) instead of pacing it like fresh tokens.
+		if (reattachReplayDrainRef.current) {
+			if (streamTickRafRef.current !== null) {
+				window.cancelAnimationFrame(streamTickRafRef.current);
+				streamTickRafRef.current = null;
+			}
+			if (streamTickTimerRef.current === null) {
+				streamTickTimerRef.current = window.setTimeout(() => {
+					streamTickTimerRef.current = null;
+					dispatchStream({ type: "tick", now: performance.now(), mode: "drain" });
+				}, 0);
+			}
+			return;
+		}
 		if (document.visibilityState === "hidden") {
 			if (streamTickRafRef.current !== null) {
 				window.cancelAnimationFrame(streamTickRafRef.current);
@@ -3801,6 +3913,11 @@ export function App() {
 
 	const RECONNECT_MAX_ATTEMPTS = 8; // 1s..30s doubling backoff ≈ 2 minutes
 
+	/** How long room chrome keeps quiet about a socket being replaced. */
+	const SWAP_QUIET_MS = 800;
+	/** Hidden for at least this long counts as sleep, not as tab flicking. */
+	const SLEPT_LONG_ENOUGH_MS = 30_000;
+
 	// Stamped on the streaming bubble when the socket drops mid-turn. If the
 	// reconnect then learns the server is actually finishing the response in
 	// the background (community #14: error frame code `room_cooking`), the
@@ -3811,6 +3928,121 @@ export function App() {
 	function setRoomReconnect(state: "idle" | "reconnecting" | "failed") {
 		roomReconnectStateRef.current = state;
 		setRoomReconnectState(state);
+	}
+
+	// --- Honest connection health -------------------------------------------
+	// Every socket lifecycle event goes through here, and only this decides
+	// whether the app is allowed to tell the user something is wrong.
+
+	function applyConnectionHealth(action: ConnectionHealthAction) {
+		const next = reduceConnectionHealth(connectionHealthRef.current, action);
+		connectionHealthRef.current = next;
+		setConnectionWarning(next.warn);
+		if (connectionHealthTimerRef.current !== null) {
+			window.clearTimeout(connectionHealthTimerRef.current);
+			connectionHealthTimerRef.current = null;
+		}
+		// Failing attempts alone never cross the grace window; something has to
+		// re-ask once it has elapsed, or a connection that dies and stays dead
+		// between retries would never surface.
+		const wait = msUntilWarn(next, action.now);
+		if (wait !== null) {
+			connectionHealthTimerRef.current = window.setTimeout(() => {
+				connectionHealthTimerRef.current = null;
+				applyConnectionHealth({ type: "tick", now: Date.now() });
+			}, wait + 50);
+		}
+	}
+
+	function noteConnectionOpen() {
+		applyConnectionHealth({ type: "opened", now: Date.now() });
+	}
+
+	/**
+	 * An open socket proved itself: it carried a frame, or it simply lasted.
+	 * Called on every inbound frame, so a connection with nothing left to prove
+	 * costs nothing: a streaming turn must not run the reducer per delta.
+	 */
+	function noteConnectionSettled() {
+		const health = connectionHealthRef.current;
+		if (health.open && health.unhealthySince === null && health.failedAttempts === 0 && !health.warn) return;
+		if (openDwellTimerRef.current !== null) {
+			window.clearTimeout(openDwellTimerRef.current);
+			openDwellTimerRef.current = null;
+		}
+		applyConnectionHealth({ type: "settled", now: Date.now() });
+	}
+
+	/**
+	 * A socket closed. `deliberate` means we replaced it ourselves (entering or
+	 * leaving a room, a resume, a rebind after a checkpoint) — the gap between
+	 * the two sockets is navigation, not a fault, and must never accumulate
+	 * toward a warning.
+	 */
+	function noteConnectionClosed(deliberate: boolean) {
+		applyConnectionHealth({ type: deliberate ? "swapped" : "attempt_failed", now: Date.now() });
+	}
+
+	function clearSocketTimers() {
+		if (connectDeadlineTimerRef.current !== null) {
+			window.clearTimeout(connectDeadlineTimerRef.current);
+			connectDeadlineTimerRef.current = null;
+		}
+		if (openDwellTimerRef.current !== null) {
+			window.clearTimeout(openDwellTimerRef.current);
+			openDwellTimerRef.current = null;
+		}
+	}
+
+	/**
+	 * The blink between one socket closing and its replacement opening. Only the
+	 * chrome that describes the connection reads this; nothing that gates an
+	 * action does.
+	 */
+	function beginSocketSwap() {
+		setSocketSwapping(true);
+		if (socketSwapTimerRef.current !== null) window.clearTimeout(socketSwapTimerRef.current);
+		socketSwapTimerRef.current = window.setTimeout(() => {
+			socketSwapTimerRef.current = null;
+			// The replacement did not arrive quickly. Past this point the room
+			// chrome should say what is true, so it stops being covered for.
+			setSocketSwapping(false);
+		}, SWAP_QUIET_MS);
+	}
+
+	function endSocketSwap() {
+		if (socketSwapTimerRef.current !== null) {
+			window.clearTimeout(socketSwapTimerRef.current);
+			socketSwapTimerRef.current = null;
+		}
+		setSocketSwapping(false);
+	}
+
+	// --- Non-room socket retry ----------------------------------------------
+
+	function cancelScheduledHomeReconnect() {
+		if (homeReconnectTimerRef.current !== null) {
+			window.clearTimeout(homeReconnectTimerRef.current);
+			homeReconnectTimerRef.current = null;
+		}
+	}
+
+	function scheduleHomeReconnect(delayMs?: number) {
+		cancelScheduledHomeReconnect();
+		if (persistentChatRef.current) return; // the room ladder owns this socket
+		// No attempt cap: outside a room there is no transcript to protect and
+		// nothing for a manual affordance to hang off, so the app just keeps
+		// quietly trying and the banner does the talking if it stays broken.
+		const delay = delayMs ?? Math.min(15_000, 1000 * 2 ** homeReconnectAttemptRef.current);
+		homeReconnectTimerRef.current = window.setTimeout(() => {
+			homeReconnectTimerRef.current = null;
+			if (persistentChatRef.current) return;
+			homeReconnectAttemptRef.current += 1;
+			// Outside a room a bare version bump IS the reconnect: the socket
+			// carries no turn, no busy state and no transcript, so rebuilding it
+			// is the whole of the work a room's programmatic Resume has to do.
+			setSessionVersion((v) => v + 1);
+		}, delay);
 	}
 
 	function cancelScheduledReconnect() {
@@ -3845,6 +4077,15 @@ export function App() {
 		reconnectAttemptRef.current = 0;
 		scheduleRoomReconnect(0);
 	}
+
+	// The health re-check timer outlives individual sockets by design, so it is
+	// the one thing the socket effect's cleanup cannot own.
+	useEffect(() => () => {
+		if (connectionHealthTimerRef.current !== null) window.clearTimeout(connectionHealthTimerRef.current);
+		if (homeReconnectTimerRef.current !== null) window.clearTimeout(homeReconnectTimerRef.current);
+		if (socketSwapTimerRef.current !== null) window.clearTimeout(socketSwapTimerRef.current);
+		clearSocketTimers();
+	}, []);
 
 	async function reconnectPersistentRoom() {
 		const chat = persistentChatRef.current;
@@ -3899,13 +4140,31 @@ export function App() {
 	}
 
 	useEffect(() => {
+		// Replacing a socket: the old one's timers die with it, the gating flag
+		// tells the truth from this instant (nothing is open), and the chrome is
+		// covered for the blink so it does not narrate the swap.
+		const replacing = wsRef.current !== null;
+		clearSocketTimers();
 		try { wsRef.current?.close(); } catch {}
+		if (replacing) {
+			setConnected(false);
+			beginSocketSwap();
+		}
 		suppressReconnectRef.current = false;
+		// Catch-up drain is per-connection state: a socket that died between
+		// turn_reattach and its replay_done marker must not leave the NEXT
+		// connection's live tokens rendering instantly.
+		reattachReplayDrainRef.current = false;
 		if (!persistentChat) {
 			// Not in a room (or just left one): no reconnect business.
 			cancelScheduledReconnect();
 			reconnectAttemptRef.current = 0;
 			if (roomReconnectStateRef.current !== "idle") setRoomReconnect("idle");
+		} else {
+			// Inside a room the room ladder owns the socket; a pending non-room
+			// retry must not fire a version bump into it.
+			cancelScheduledHomeReconnect();
+			homeReconnectAttemptRef.current = 0;
 		}
 
 		// In dev (Vite on :5173) connect directly to the web server (:8787)
@@ -3919,17 +4178,75 @@ export function App() {
 			wsParams.set("persistentAgentId", persistentChat.agentId);
 			wsParams.set("modelProvider", persistentChat.model.provider);
 			wsParams.set("model", persistentChat.model.model);
+			// Community #33: this client understands turn_reattach (supersede,
+			// replay, restored prompt). The server only adopts a cooking turn
+			// onto connections that declare it; older bundles keep the
+			// room_cooking bounce they understand.
+			wsParams.set("reattach", "1");
 		}
 		const ws = new WebSocket(`ws://${wsHost}/ws?${wsParams.toString()}`);
 		wsRef.current = ws;
-		ws.onopen = () => setConnected(true);
+		// A port that accepts TCP and never finishes the upgrade leaves this
+		// socket in CONNECTING with no event ever coming: no failure, no retry,
+		// no warning, and a UI that looks usable. Closing it on the deadline
+		// turns that silence into an ordinary failed attempt, and the close
+		// handler below does the rest exactly as if the server had refused.
+		connectDeadlineTimerRef.current = window.setTimeout(() => {
+			connectDeadlineTimerRef.current = null;
+			if (wsRef.current !== ws || ws.readyState !== WebSocket.CONNECTING) return;
+			try { ws.close(); } catch {}
+		}, CONNECT_DEADLINE_MS);
+		ws.onopen = () => {
+			if (wsRef.current !== ws) return;
+			if (connectDeadlineTimerRef.current !== null) {
+				window.clearTimeout(connectDeadlineTimerRef.current);
+				connectDeadlineTimerRef.current = null;
+			}
+			endSocketSwap();
+			setConnected(true);
+			noteConnectionOpen();
+			// Reaching OPEN is not yet a recovery: a server can accept and drop
+			// in the same breath, forever. The first frame settles it, and this
+			// timer settles a connection that is merely quiet.
+			if (openDwellTimerRef.current !== null) window.clearTimeout(openDwellTimerRef.current);
+			openDwellTimerRef.current = window.setTimeout(() => {
+				openDwellTimerRef.current = null;
+				if (wsRef.current === ws && ws.readyState === WebSocket.OPEN) noteConnectionSettled();
+			}, OPEN_DWELL_MS);
+			if (!persistentChatRef.current) {
+				// The non-room ladder has done its job; reset it for the next
+				// outage rather than carrying this one's delay forward.
+				homeReconnectAttemptRef.current = 0;
+				cancelScheduledHomeReconnect();
+				// Coming back from an outage, the room list on screen may have
+				// been stale for as long as the outage lasted.
+				if (connectionHealthRef.current.unhealthySince !== null) refreshPersistentAgentStatus();
+			}
+		};
 		ws.onclose = () => {
+			if (wsRef.current === ws) clearSocketTimers();
+			// A socket we replaced ourselves is not news: by the time its close
+			// event arrives, wsRef already points at its successor, and the
+			// successor's own events are the truth about the connection. Letting
+			// a stale socket write `connected = false` was the flash of "offline"
+			// on every room enter, room leave, resume and checkpoint rebind.
+			const stale = wsRef.current !== ws;
+			const deliberate = stale || suppressReconnectRef.current;
+			noteConnectionClosed(deliberate);
+			if (stale) return;
 			setConnected(false);
+			reattachReplayDrainRef.current = false;
 			// Auto-reconnect only unexpected drops of the CURRENT room socket:
 			// deliberate closes arm suppressReconnectRef, and a socket that was
 			// already replaced must not fight its replacement.
 			const droppedChat = persistentChatRef.current;
-			if (wsRef.current !== ws || suppressReconnectRef.current || !droppedChat) return;
+			if (suppressReconnectRef.current) return;
+			if (!droppedChat) {
+				// Outside a room, keep the socket alive on its own ladder rather
+				// than leaving it dead until a page reload.
+				scheduleHomeReconnect();
+				return;
+			}
 			// The server aborts the in-flight turn on disconnect — say so on the
 			// bubble and unstick the room instead of leaving a complete-looking
 			// truncated answer behind a stuck busy state. The debounced persist
@@ -3949,9 +4266,15 @@ export function App() {
 			}
 			scheduleRoomReconnect();
 		};
-		ws.onerror = () => setConnected(false);
+		// An error on a socket that is already being replaced says nothing about
+		// the live one, and a failed connect always follows with a close, which
+		// is where the health accounting lives.
+		ws.onerror = () => { if (wsRef.current === ws) setConnected(false); };
 
 		ws.onmessage = (raw) => {
+			// A frame is the strongest possible proof the connection is real, so
+			// it settles the health run without waiting out the dwell timer.
+			if (wsRef.current === ws) noteConnectionSettled();
 			const msg = JSON.parse(raw.data);
 			if (msg.type === "ready") {
 				// The ready frame is the true end of a reconnect cycle: the room
@@ -3961,6 +4284,109 @@ export function App() {
 				if (roomReconnectStateRef.current !== "idle") setRoomReconnect("idle");
 				if (msg.model?.label) setCurrentModelLabel(canonicalModelDisplayName({ model: msg.model.model, modelLabel: String(msg.model.label), provider: msg.model.provider }));
 				setContextHealth(msg.contextHealth ?? null);
+				setRoomEffort(readEffortPayload(msg.effort));
+				// A level picked while the socket was down waits here, not in the
+				// void: the room is bound now, so the choice can finally travel.
+				// Sent after the server's own level has been applied, so this
+				// overrides it rather than being overwritten by it.
+				flushPendingEffort(ws);
+				return;
+			}
+			if (msg.type === "effort") {
+				// What the server actually settled on, which can differ from what
+				// was clicked when the locked model cannot reach that level.
+				const settled = readEffortPayload(msg);
+				if (settled) setRoomEffort(settled);
+				return;
+			}
+			if (msg.type === "turn_reattach") {
+				// Stepping back into a room whose answer is still being written
+				// (community #33): the server adopted this session onto the
+				// in-flight turn and replays the WHOLE turn's event frames right
+				// after this frame; live frames continue seamlessly behind them.
+				// Drop the persisted partial assistant tail first (the replay
+				// rebuilds the whole bubble, so keeping it would duplicate the
+				// text at the seam) and make sure the prompt that started the
+				// turn is in the transcript. The replayed agent_start then flips
+				// busy on and the deltas stream exactly as if we never left; a
+				// turn that settled while this session was binding replays
+				// through its terminal frames the same way and ends quiet.
+				dispatchStream({ type: "reset" });
+				clearTransientStreamNotes();
+				// Open the catch-up window: the replayed frames that follow carry
+				// text the user already generated while away — render them
+				// instantly (the replay_done marker closes the window and hands
+				// the reveal back to reading pace for live tokens).
+				reattachReplayDrainRef.current = true;
+				setTurnCancelling(false);
+				turnCancellingRef.current = false;
+				setTurnInterruptedNote(null);
+				turnInterruptedNoteRef.current = null;
+				const reattachUserText = typeof msg.userText === "string" ? msg.userText.trim() : "";
+				// The supersede anchors on TURN IDENTITY, not text: anchorItemId
+				// names the last persisted item at turn start, so only what the
+				// cooking turn itself produced counts as debris. Anchoring on the
+				// last user item, as this used to, deleted the PREVIOUS turn's
+				// completed answer whenever the leave never persisted this turn's
+				// prompt (crash before the debounced persist), and the debounced
+				// persist then made that loss durable server-side.
+				const hasAnchor = Object.prototype.hasOwnProperty.call(msg, "anchorItemId");
+				const anchorItemId = typeof msg.anchorItemId === "string" && msg.anchorItemId ? msg.anchorItemId : null;
+				const update = (s: ChatItem[]) => {
+					// cut = index of the last item belonging to completed prior
+					// turns; everything after it is this turn's debris the replay
+					// rebuilds. Assistant AND tool items go (a persisted tool chip
+					// could never resolve anyway: its toolCallId map died with the
+					// old session); user and system items are never dropped.
+					let cut: number;
+					if (hasAnchor && msg.anchorItemId === null) {
+						// The thread was empty when the turn began: everything
+						// persisted since is this turn's.
+						cut = -1;
+					} else if (anchorItemId) {
+						let found = -1;
+						for (let i = s.length - 1; i >= 0; i--) {
+							if (String(s[i].id) === anchorItemId) { found = i; break; }
+						}
+						// A set-but-missing anchor deletes nothing: losing a stale
+						// partial to a duplicate is recoverable, losing a completed
+						// answer is not.
+						cut = found >= 0 ? found : s.length - 1;
+					} else {
+						// No anchor on the wire (unknown at the server): only an
+						// EXACT match on this turn's prompt text may mark where the
+						// cooking turn begins; otherwise keep everything.
+						cut = s.length - 1;
+						if (reattachUserText) {
+							for (let i = s.length - 1; i >= 0; i--) {
+								const it = s[i];
+								if (it.kind === "user" && String(it.text ?? "").trim() === reattachUserText) { cut = i - 1; break; }
+							}
+						}
+					}
+					let next = s.filter((it, i) => !(i > cut && (it.kind === "assistant" || it.kind === "tool")));
+					// Restore the prompt that started the cooking turn when the
+					// persisted tail does not carry it (the leave-save missed it):
+					// presence is judged by position after the anchor, never by
+					// text equality, so a repeated prompt cannot fool it.
+					const tailHasUser = s.some((it, i) => i > cut && it.kind === "user");
+					if (reattachUserText && !tailHasUser) {
+						next = [...next, { kind: "user" as const, id: nid(), text: reattachUserText }];
+					}
+					return next;
+				};
+				itemsRef.current = update(itemsRef.current);
+				setItems(update);
+				return;
+			}
+			if (msg.type === "turn_reattach_replay_done") {
+				// End of the catch-up window: land whatever the replay buffered
+				// in one go, then let live frames reveal at reading pace again.
+				reattachReplayDrainRef.current = false;
+				cancelStreamTick();
+				if (isAssistantStreamActive(streamStateRef.current)) {
+					dispatchStream({ type: "tick", now: performance.now(), mode: "drain" });
+				}
 				return;
 			}
 			if (msg.type === "error") {
@@ -4238,7 +4664,27 @@ export function App() {
 		// Sleep/wake: backoff timers may not fire while the tab is hidden —
 		// retry the moment the user is back looking at a disconnected room.
 		const onReconnectVisibility = () => {
-			if (document.visibilityState === "visible" && roomReconnectStateRef.current !== "idle") retryRoomReconnectNow();
+			if (document.visibilityState !== "visible") {
+				pageHiddenAtRef.current = Date.now();
+				return;
+			}
+			const hiddenFor = pageHiddenAtRef.current === null ? 0 : Date.now() - pageHiddenAtRef.current;
+			pageHiddenAtRef.current = null;
+			if (roomReconnectStateRef.current !== "idle") { retryRoomReconnectNow(); return; }
+			// The same sleep/wake problem outside a room: a laptop that slept with
+			// Home open comes back to a dead socket and a timer that never fired.
+			if (persistentChatRef.current || ws.readyState === WebSocket.OPEN) return;
+			// Only a real sleep earns a fresh ladder. Flicking between tabs during
+			// an outage used to reset the backoff on every flip, pinning it at one
+			// second and hammering a server that is plainly not there.
+			if (hiddenFor >= SLEPT_LONG_ENOUGH_MS) {
+				homeReconnectAttemptRef.current = 0;
+				scheduleHomeReconnect(0);
+				return;
+			}
+			// Otherwise let whatever is already scheduled run its course, and only
+			// step in when nothing is.
+			if (homeReconnectTimerRef.current === null) scheduleHomeReconnect();
 		};
 		document.addEventListener("visibilitychange", onReconnectVisibility);
 
@@ -4247,6 +4693,8 @@ export function App() {
 			// A pending reconnect belongs to this room binding; a room switch or
 			// unmount must not let it fire into the next one.
 			cancelScheduledReconnect();
+			cancelScheduledHomeReconnect();
+			clearSocketTimers();
 			// Never lose a received tail to a teardown: reveal it, then forget.
 			flushAssistantStream();
 			clearTransientStreamNotes();
@@ -4563,6 +5011,13 @@ export function App() {
 			...(readyAttachments.length > 0 ? { attachments: readyAttachments.map((entry) => ({ name: entry.name, bytes: entry.bytes, extension: entry.extension })) } : {}),
 		}]);
 		if (readyAttachments.length > 0) setStagedAttachments([]);
+		// No effort on the wire here. The level this client holds came from the
+		// server already CLAMPED to the locked model, so echoing it back would
+		// overwrite the room's raw stored preference with a clamped one and
+		// quietly destroy a choice the model cannot currently reach. The server
+		// is sticky on its own and applies the room's level at bind and before
+		// every turn; the composer's only job is to say when the user CHOOSES,
+		// which the effort frame does.
 		ws.send(JSON.stringify({ type: "prompt", text: wireText }));
 		dispatchStream({ type: "new_turn", now: performance.now() });
 		retrievalActivityIdRef.current = null;
@@ -5260,6 +5715,9 @@ export function App() {
 		try { wsRef.current?.close(); } catch {}
 		setUsage(ZERO_USAGE);
 		setContextHealth(null);
+		// The effort pill belongs to the room being left: the next room's ready
+		// frame brings its own sticky level and its own model's capability.
+		setRoomEffort(null);
 		setPreview(null);
 		setBusy(false);
 		setCurrentModelLabel("");
@@ -5979,6 +6437,12 @@ export function App() {
 			setCurrentModelLabel(modelDisplayName(liveThread.model));
 			setView("chat");
 			setSessionVersion((v) => v + 1);
+			// Community #33: entering a still-cooking room takes two awaited
+			// round trips between the clear at the top and the room binding
+			// here; a status poll in that gap re-enrolls the room as "cooking
+			// with nobody inside", which would toast an answer the user is about
+			// to watch land. Clear again now that the room is committed.
+			clearBackgroundActivityBadge(status.id);
 		} catch (e) {
 			setPersistentResumeError(formatDirectResumeError(e));
 			setView("home");
@@ -6006,6 +6470,49 @@ export function App() {
 		}
 	}
 
+	// Picking a level is optimistic: the pill moves at once, and the server's
+	// echo corrects it if the locked model could not reach that far. The ref is
+	// updated here rather than waiting for its passive sync effect, so two
+	// picks inside one frame (drag right, drag back) compare against what was
+	// actually just chosen instead of a stale render's value.
+	function selectRoomEffort(level: string): void {
+		const current = roomEffortRef.current;
+		if (!current || level === current.level) return;
+		const next = { ...current, level };
+		roomEffortRef.current = next;
+		setRoomEffort(next);
+		const ws = wsRef.current;
+		if (ws && ws.readyState === WebSocket.OPEN) {
+			pendingEffortRef.current = null;
+			ws.send(JSON.stringify({ type: "effort", level }));
+			return;
+		}
+		// The socket is between lives (a rebind, a reconnect). The pill has
+		// already moved, so dropping the frame here would leave the screen
+		// claiming a level the room never heard about. Hold it against this
+		// room and send it the moment the room binds again.
+		const room = persistentChatRef.current;
+		if (room) pendingEffortRef.current = { agentId: room.agentId, level };
+	}
+
+	/** Delivers a level picked while the socket was down, once it is back. */
+	function flushPendingEffort(ws: WebSocket): void {
+		const pending = pendingEffortRef.current;
+		if (!pending) return;
+		const room = persistentChatRef.current;
+		// A choice belongs to the room it was made in and travels nowhere else.
+		if (!room || room.agentId !== pending.agentId) { pendingEffortRef.current = null; return; }
+		if (ws.readyState !== WebSocket.OPEN) return;
+		pendingEffortRef.current = null;
+		const current = roomEffortRef.current;
+		if (current) {
+			const next = { ...current, level: pending.level };
+			roomEffortRef.current = next;
+			setRoomEffort(next);
+		}
+		ws.send(JSON.stringify({ type: "effort", level: pending.level }));
+	}
+
 	async function mementoPersistentThread() {
 		const targetChat = persistentChat;
 		if (!targetChat) return;
@@ -6018,8 +6525,8 @@ export function App() {
 			setBusy(true);
 			const result = await applyPersistentAgentMemento(targetChat.agentId, targetChat.conversationId);
 			const currentChat = persistentChatRef.current;
-			if (!currentChat || currentChat.agentId !== targetChat.agentId) throw new Error("Memento target changed. Please reopen the room and try again.");
-			if (result.agentId !== targetChat.agentId) throw new Error("Memento response does not match the current room.");
+			if (!currentChat || currentChat.agentId !== targetChat.agentId) throw new Error("The room moved on before this could be forgotten. Please reopen the room and try again.");
+			if (result.agentId !== targetChat.agentId) throw new Error("The forget response does not match the current room.");
 			await bindToMementoRuntime(result, targetChat);
 			void refreshPersistentAgentStatus();
 		} catch (e) {
@@ -6369,6 +6876,10 @@ export function App() {
 	const currentActiveThreadStatus = persistentChat && currentPersistentStatus?.activeThread?.threadId === persistentChat.conversationId
 		? currentPersistentStatus.activeThread
 		: null;
+	// What the room chrome may SAY about the connection. During the blink of a
+	// socket swap it says nothing has changed, because nothing meaningfully has;
+	// everything that GATES an action keeps reading `connected` itself.
+	const connectedForChrome = connected || socketSwapping;
 	const serverInFlightRelevant = Boolean(persistentChat && currentActiveThreadStatus?.inFlight && (busy || turnCancelling || !connected));
 	const persistentRoomRunning = Boolean(persistentChat && (busy || (serverInFlightRelevant && currentActiveThreadStatus?.working)));
 	const persistentRoomCancelling = Boolean(persistentChat && (turnCancelling || (serverInFlightRelevant && currentActiveThreadStatus?.cancelling)));
@@ -6492,6 +7003,15 @@ export function App() {
 	}
 	const absorbWorkflowOpen = absorbWorkflow.step !== "closed";
 	const structuralReviewWorkflowOpen = structuralReviewWorkflow.step !== "closed";
+	// One banner per screen, and never inside a room: a room carries its own
+	// reconnect affordance on the composer, which is both more specific and
+	// actionable, so the two must not stack.
+	const withConnectionBanner = (content: ReactNode): ReactNode => (
+		<>
+			{connectionWarning && <ConnectionLostBanner />}
+			{content}
+		</>
+	);
 	const standbyLockedModels = persistentAgentStatuses
 		.filter((status) => {
 			if (status.runtime.state === "idle" || !status.runtime.activeThreadId || !status.runtime.model) return false;
@@ -6515,7 +7035,7 @@ export function App() {
 
 	if (view === "home") {
 		if (absorbWorkflowOpen) {
-			return (
+			return withConnectionBanner(
 				<>
 					{maintainConfirm && <MaintainConfirmDialog confirm={maintainConfirm} onClose={() => setMaintainConfirm(null)} />}
 					<AbsorbWorkflowShell state={absorbWorkflow} loadingMessage={ABSORB_LOADING_MESSAGES[absorbLoadingIndex]} waitingMessage={ABSORB_WAITING_MESSAGES[absorbWaitingIndex]} onAbort={abortAbsorbWorkflow} onDiscuss={startAbsorbDiscussion} onSendDiscussionMessage={sendAbsorbDiscussionMessage} onGenerateFromDiscussion={generateAbsorbProposalFromDiscussion} onGenerate={generateAbsorbProposal} onApprove={approveAbsorbProposal} onBackToDiscussion={backToAbsorbDiscussion} onBackToAssessment={backToAbsorbAssessment} onRestart={restartMaintain} returnLabel={maintainReturnLabel} />
@@ -6523,7 +7043,7 @@ export function App() {
 			);
 		}
 		if (structuralReviewWorkflowOpen) {
-			return (
+			return withConnectionBanner(
 				<>
 					{maintainConfirm && <MaintainConfirmDialog confirm={maintainConfirm} onClose={() => setMaintainConfirm(null)} />}
 					<StructuralReviewWorkflowShell state={structuralReviewWorkflow} loadingMessage={STRUCTURAL_REVIEW_LOADING_MESSAGES[structuralReviewLoadingIndex]} waitingMessage={STRUCTURAL_REVIEW_WAITING_MESSAGES[structuralReviewWaitingIndex]} onAbort={abortStructuralReviewWorkflow} onDiscuss={startStructuralReviewDiscussion} onSendDiscussionMessage={sendStructuralReviewDiscussionMessage} onGenerateFromDiscussion={generateStructuralReviewProposalFromDiscussion} onGenerate={generateStructuralReviewProposal} onApprove={approveStructuralReviewProposal} onBackToDiscussion={backToStructuralReviewDiscussion} onBackToAssessment={backToStructuralReviewAssessment} onRestart={restartMaintain} returnLabel={maintainReturnLabel} />
@@ -6531,36 +7051,36 @@ export function App() {
 			);
 		}
 		if (maintainChooserOpen && maintainTarget) {
-			return <MaintainChooserShell target={maintainTarget} memoryStatus={persistentAgentStatuses.find((status) => status.id === maintainTarget.agentId)?.memoryStatus ?? null} onAbsorb={startAbsorbWorkflow} onPrune={startPruneMemoryWorkflow} onReturn={closeMaintainChooser} returnLabel={maintainReturnLabel} />;
+			return withConnectionBanner(<MaintainChooserShell target={maintainTarget} memoryStatus={persistentAgentStatuses.find((status) => status.id === maintainTarget.agentId)?.memoryStatus ?? null} onAbsorb={startAbsorbWorkflow} onPrune={startPruneMemoryWorkflow} onReturn={closeMaintainChooser} returnLabel={maintainReturnLabel} />);
 		}
-		return (
+		return withConnectionBanner(
 			<>
 				{gcAssessment && !gcReviewOpen && <TaskStoreGcBanner assessment={gcAssessment} onReview={() => setGcReviewOpen(true)} onDismiss={() => setGcAssessment(null)} />}
 				{gcReviewOpen && gcAssessment && <TaskStoreGcDialog assessment={gcAssessment} busy={gcBusy} onConfirm={() => void confirmTaskStoreGc()} onClose={() => setGcReviewOpen(false)} />}
 				{backgroundDoneToastView && <div className="launcher-toasts"><ToastStack toasts={[backgroundDoneToastView]} /></div>}
-				<Landing onOpenAiSetup={() => setView("ai-setup")} onOpenDashboard={() => setView("dashboard")} onOpenConnectors={() => setView("connectors")} onOpenMemory={() => setView("memory")} onOpenSkills={() => setView("skills")} onOpenPersistentAgent={openPersistentAgent} onResumePersistentAgent={openPersistentAgentResume} onMaintainPersistentAgent={(target) => { if (!openMaintainChooser(target)) setPersistentResumeError(maintainBlockedReason(target.agentId) ?? "Maintain is not available for this room right now."); }} onCreatePersistentAgent={createPersistentAgentRoom} onArchiveRoom={archivePersistentAgentRoom} onPurgeRoom={purgePersistentAgentRoom} onMementoForget={(agentId) => { roomDraftsRef.current.delete(agentId); }} modelStatus={modelStatus} persistentAgentStatuses={persistentAgentStatuses} persistentThread={persistentThread} persistentLive={!!persistentChat} persistentResumeError={persistentResumeError} onRefreshPersistentAgent={refreshPersistentAgentStatus} theme={theme} onToggleTheme={() => setTheme((t) => (t === "dark" ? "light" : "dark"))} connected={connected} aiProfileStatus={aiProfileStatus} onSelectAiProfile={selectAiProfile} onRefreshAiProfile={refreshAiProfileStatus} standbyLockedModels={standbyLockedModels} backgroundReadyRooms={backgroundReadyRooms} purgingRooms={purgingRooms} />
+				<Landing onOpenAiSetup={() => setView("ai-setup")} onOpenDashboard={() => setView("dashboard")} onOpenConnectors={() => setView("connectors")} onOpenMemory={() => setView("memory")} onOpenSkills={() => setView("skills")} onOpenPersistentAgent={openPersistentAgent} onResumePersistentAgent={openPersistentAgentResume} onMaintainPersistentAgent={(target) => { if (!openMaintainChooser(target)) setPersistentResumeError(maintainBlockedReason(target.agentId) ?? "Maintain is not available for this room right now."); }} onCreatePersistentAgent={createPersistentAgentRoom} onArchiveRoom={archivePersistentAgentRoom} onPurgeRoom={purgePersistentAgentRoom} onMementoForget={(agentId) => { roomDraftsRef.current.delete(agentId); }} modelStatus={modelStatus} persistentAgentStatuses={persistentAgentStatuses} persistentThread={persistentThread} persistentLive={!!persistentChat} persistentResumeError={persistentResumeError} onRefreshPersistentAgent={refreshPersistentAgentStatus} theme={theme} onToggleTheme={() => setTheme((t) => (t === "dark" ? "light" : "dark"))} aiProfileStatus={aiProfileStatus} onSelectAiProfile={selectAiProfile} onRefreshAiProfile={refreshAiProfileStatus} standbyLockedModels={standbyLockedModels} backgroundReadyRooms={backgroundReadyRooms} purgingRooms={purgingRooms} />
 			</>
 		);
 	}
 
 	if (view === "ai-setup") {
-		return <AiSetupShell onHome={goHome} onDashboard={() => setView("dashboard")} onConnectors={() => setView("connectors")} onMemory={() => setView("memory")} onSkills={() => setView("skills")} onRefreshAuth={refreshAuthStatus} aiProfileStatus={aiProfileStatus} onRefreshAiProfile={refreshAiProfileStatus} onSelectAiProfile={selectAiProfile} connected={connected} theme={theme} onToggleTheme={() => setTheme((t) => (t === "dark" ? "light" : "dark"))} standbyLockedModels={standbyLockedModels} />;
+		return withConnectionBanner(<AiSetupShell onHome={goHome} onDashboard={() => setView("dashboard")} onConnectors={() => setView("connectors")} onMemory={() => setView("memory")} onSkills={() => setView("skills")} onRefreshAuth={refreshAuthStatus} aiProfileStatus={aiProfileStatus} onRefreshAiProfile={refreshAiProfileStatus} onSelectAiProfile={selectAiProfile} theme={theme} onToggleTheme={() => setTheme((t) => (t === "dark" ? "light" : "dark"))} standbyLockedModels={standbyLockedModels} />);
 	}
 
 	if (view === "connectors") {
-		return <ConnectorsShell onHome={goHome} onAiSetup={() => setView("ai-setup")} onDashboard={() => setView("dashboard")} onMemory={() => setView("memory")} onSkills={() => setView("skills")} connected={connected} theme={theme} onToggleTheme={() => setTheme((t) => (t === "dark" ? "light" : "dark"))} aiProfileStatus={aiProfileStatus} onSelectAiProfile={selectAiProfile} onRefreshAiProfile={refreshAiProfileStatus} standbyLockedModels={standbyLockedModels} />;
+		return withConnectionBanner(<ConnectorsShell onHome={goHome} onAiSetup={() => setView("ai-setup")} onDashboard={() => setView("dashboard")} onMemory={() => setView("memory")} onSkills={() => setView("skills")} theme={theme} onToggleTheme={() => setTheme((t) => (t === "dark" ? "light" : "dark"))} aiProfileStatus={aiProfileStatus} onSelectAiProfile={selectAiProfile} onRefreshAiProfile={refreshAiProfileStatus} standbyLockedModels={standbyLockedModels} />);
 	}
 
 	if (view === "memory") {
-		return <MemoryShell onHome={goHome} onAiSetup={() => setView("ai-setup")} onDashboard={() => setView("dashboard")} onConnectors={() => setView("connectors")} onSkills={() => setView("skills")} onMaintain={(target) => { if (openMaintainChooser(target, "memory")) setView("home"); }} maintainBlocked={maintainBlockedReason} connected={connected} theme={theme} onToggleTheme={() => setTheme((t) => (t === "dark" ? "light" : "dark"))} aiProfileStatus={aiProfileStatus} onSelectAiProfile={selectAiProfile} onRefreshAiProfile={refreshAiProfileStatus} standbyLockedModels={standbyLockedModels} />;
+		return withConnectionBanner(<MemoryShell onHome={goHome} onAiSetup={() => setView("ai-setup")} onDashboard={() => setView("dashboard")} onConnectors={() => setView("connectors")} onSkills={() => setView("skills")} onMaintain={(target) => { if (openMaintainChooser(target, "memory")) setView("home"); }} maintainBlocked={maintainBlockedReason} theme={theme} onToggleTheme={() => setTheme((t) => (t === "dark" ? "light" : "dark"))} aiProfileStatus={aiProfileStatus} onSelectAiProfile={selectAiProfile} onRefreshAiProfile={refreshAiProfileStatus} standbyLockedModels={standbyLockedModels} />);
 	}
 
 	if (view === "skills") {
-		return <SkillsShell onHome={goHome} onAiSetup={() => setView("ai-setup")} onDashboard={() => setView("dashboard")} onConnectors={() => setView("connectors")} onMemory={() => setView("memory")} connected={connected} theme={theme} onToggleTheme={() => setTheme((t) => (t === "dark" ? "light" : "dark"))} aiProfileStatus={aiProfileStatus} onSelectAiProfile={selectAiProfile} onRefreshAiProfile={refreshAiProfileStatus} standbyLockedModels={standbyLockedModels} />;
+		return withConnectionBanner(<SkillsShell onHome={goHome} onAiSetup={() => setView("ai-setup")} onDashboard={() => setView("dashboard")} onConnectors={() => setView("connectors")} onMemory={() => setView("memory")} theme={theme} onToggleTheme={() => setTheme((t) => (t === "dark" ? "light" : "dark"))} aiProfileStatus={aiProfileStatus} onSelectAiProfile={selectAiProfile} onRefreshAiProfile={refreshAiProfileStatus} standbyLockedModels={standbyLockedModels} />);
 	}
 
 	if (view === "dashboard") {
-		return (
+		return withConnectionBanner(
 			<div className="landing-shell with-product-sidebar">
 				<ProductSidebar
 					onHome={goHome}
@@ -6569,7 +7089,6 @@ export function App() {
 					onConnectors={() => setView("connectors")}
 					onMemory={() => setView("memory")}
 					onSkills={() => setView("skills")}
-					connected={connected}
 					theme={theme}
 					onToggleTheme={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}
 					active="dashboard"
@@ -6671,7 +7190,6 @@ export function App() {
 			sidebar={
 				<Sidebar
 					onHome={goHome}
-					connected={connected}
 					theme={theme}
 					onToggleTheme={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}
 					onHelp={() => setHelpOpen(true)}
@@ -6689,19 +7207,28 @@ export function App() {
 			contextHealth={persistentChat ? contextHealth : null}
 			currentModelLabel={currentModelLabel}
 			topbarActions={
-				persistentChat && currentPersistentStatus?.exists
-					? <button className="icon-btn" aria-label="Room settings" title="Room settings" onClick={openRoomSettings}>⚙</button>
+				persistentChat
+					? (
+						<>
+							{/* Gated on being IN a room, not on the polled status list:
+							    a stale or empty list is exactly the stuck-room case
+							    Forget exists to rescue, and the button vanishing then
+							    would be the worst possible moment to lose it. */}
+							<button className="icon-btn icon-btn-square icon-btn-danger" aria-label="Forget" title="Forget this conversation and start fresh. Nothing is checkpointed" onClick={() => void mementoPersistentThread()}><TrashIcon /></button>
+							{currentPersistentStatus?.exists && <button className="icon-btn icon-btn-square" aria-label="Room settings" title="Room settings" onClick={openRoomSettings}><GearIcon /></button>}
+						</>
+					)
 					: undefined
 			}
 			composerRightActions={
 				persistentChat ? (
 					<>
 						<button
-							className="icon-btn composer-attach-btn"
+							className="icon-btn icon-btn-square composer-attach-btn"
 							title="Add a file to this room's Files and attach it to your next message"
 							aria-label="Attach a file"
 							onClick={() => attachFileInputRef.current?.click()}
-						>📎</button>
+						><PaperclipIcon /></button>
 						<input
 							ref={attachFileInputRef}
 							type="file"
@@ -6712,7 +7239,15 @@ export function App() {
 								e.target.value = "";
 							}}
 						/>
-						<button className="icon-btn" title="Forget this conversation and start fresh. Nothing is checkpointed" onClick={() => void mementoPersistentThread()}>Memento</button>
+						{/* No pill unless there is something to choose between: a
+						    model that cannot reason reports one rung, and so does a
+						    model whose levels all collapse onto one effort. It stays
+						    live across the blink of a socket swap, because a pick
+						    made in that window is queued and delivered when the room
+						    binds; only a genuine outage dims it. */}
+						{roomEffort && roomEffort.ladder.length >= 2 && (
+							<EffortControl level={roomEffort.level} ladder={roomEffort.ladder} disabled={!connectedForChrome} onSelect={selectRoomEffort} />
+						)}
 						<CheckpointSplitButton
 							hasUserInput={currentThreadHasUserInput}
 							inFlight={persistentRoomInFlight}
@@ -6722,7 +7257,7 @@ export function App() {
 					</>
 				) : null
 			}
-			connected={connected}
+			connected={connectedForChrome}
 			reconnectState={roomReconnectState}
 			onReconnect={retryRoomReconnectNow}
 			items={items}

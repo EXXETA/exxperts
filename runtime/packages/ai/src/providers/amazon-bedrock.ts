@@ -21,7 +21,7 @@ import {
 	ToolResultStatus,
 } from "@aws-sdk/client-bedrock-runtime";
 import type { DocumentType } from "@smithy/types";
-import { calculateCost } from "../models.js";
+import { calculateCost, clampThinkingLevel, hasExplicitTopTierEffort } from "../models.js";
 import type {
 	Api,
 	AssistantMessage,
@@ -319,7 +319,7 @@ export const streamSimpleBedrock: StreamFunction<"bedrock-converse-stream", Simp
 	}
 
 	if (isAnthropicClaudeModel(model)) {
-		if (supportsAdaptiveThinking(model.id, model.name)) {
+		if (supportsAdaptiveThinking(model)) {
 			return streamBedrock(model, context, {
 				...base,
 				reasoning: options.reasoning,
@@ -489,8 +489,18 @@ function getModelMatchCandidates(modelId: string, modelName?: string): string[] 
 	});
 }
 
-function supportsAdaptiveThinking(modelId: string, modelName?: string): boolean {
-	const candidates = getModelMatchCandidates(modelId, modelName);
+/**
+ * Whether this model takes an effort rather than a token budget.
+ *
+ * Model metadata answers this, not an id list: a model that names an effort
+ * for a tier above "high" is a model that takes efforts. Matching on ids alone
+ * left every Claude 5 model on budget thinking, where the tiers above
+ * "medium" all spend the same budget. The id list stays as a belt for entries
+ * whose map shape predates this rule.
+ */
+function supportsAdaptiveThinking(model: Model<"bedrock-converse-stream">): boolean {
+	if (hasExplicitTopTierEffort(model)) return true;
+	const candidates = getModelMatchCandidates(model.id, model.name);
 	return candidates.some((s) => s.includes("opus-4-6") || s.includes("opus-4-7") || s.includes("sonnet-4-6"));
 }
 
@@ -889,10 +899,13 @@ function buildAdditionalModelRequestFields(
 		// GovCloud Bedrock currently rejects the Claude thinking.display field.
 		// Omit it there until the GovCloud Converse schema catches up.
 		const display = isGovCloudBedrockTarget(model, options) ? undefined : (options.thinkingDisplay ?? "summarized");
-		const result: Record<string, any> = supportsAdaptiveThinking(model.id, model.name)
+		const result: Record<string, any> = supportsAdaptiveThinking(model)
 			? {
 					thinking: { type: "adaptive", ...(display !== undefined ? { display } : {}) },
-					output_config: { effort: mapThinkingLevelToEffort(model, options.reasoning) },
+					// Clamped first, like every other adapter: an unmapped level would
+					// otherwise fall through the switch to "high", which on a model
+					// with tiers above high is a downgrade rather than a fallback.
+					output_config: { effort: mapThinkingLevelToEffort(model, clampThinkingLevel(model, options.reasoning) as ThinkingLevel) },
 				}
 			: (() => {
 					const defaultBudgets: Record<ThinkingLevel, number> = {
@@ -900,11 +913,15 @@ function buildAdditionalModelRequestFields(
 						low: 2048,
 						medium: 8192,
 						high: 16384,
-						xhigh: 16384, // Claude doesn't support xhigh, clamp to high
+						// Budget-based thinking has no tier above high: a model on this
+						// path never negotiated one, so both top tiers spend high's budget.
+						xhigh: 16384,
+						max: 16384,
 					};
 
-					// Custom budgets override defaults (xhigh not in ThinkingBudgets, use high)
-					const level = options.reasoning === "xhigh" ? "high" : options.reasoning;
+					// Custom budgets override defaults (the top tiers are not in
+					// ThinkingBudgets, so they borrow high's entry)
+					const level = options.reasoning === "xhigh" || options.reasoning === "max" ? "high" : options.reasoning;
 					const budget = options.thinkingBudgets?.[level] ?? defaultBudgets[options.reasoning];
 
 					return {
@@ -916,7 +933,7 @@ function buildAdditionalModelRequestFields(
 					};
 				})();
 
-		if (!supportsAdaptiveThinking(model.id, model.name) && (options.interleavedThinking ?? true)) {
+		if (!supportsAdaptiveThinking(model) && (options.interleavedThinking ?? true)) {
 			result.anthropic_beta = ["interleaved-thinking-2025-05-14"];
 		}
 

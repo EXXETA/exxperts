@@ -173,11 +173,15 @@ function ContextPill({
 		: known
 			? `${Math.round(status.checkpointPercent!)}% of recommended checkpoint tokens`
 			: "Measuring tokens";
+	// Nothing here names plumbing the user did not install and cannot restart.
+	// While a retry is running, say so; once it has given up, the Reconnect
+	// button beside this pill is the next move, and restarting the app is the
+	// one after that.
 	const title = connected
 		? "Context and model details"
 		: reconnecting
-			? "Connection to the exxperts server was lost. Reconnecting… If the server isn't running, start it with: exxperts web"
-			: "Connection to the exxperts server was lost. If the server isn't running, start it with: exxperts web";
+			? "This room lost its connection. Trying to pick it up again…"
+			: "This room lost its connection. Use Reconnect to try again, or restart the app if it keeps happening.";
 
 	useEscapeKey(() => setOpen(false), open);
 

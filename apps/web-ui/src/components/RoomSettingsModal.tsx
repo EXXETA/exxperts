@@ -5,6 +5,7 @@ import { RoomSessionSection } from "./RoomSessionSection";
 import { RoomWorkspaceSection } from "./RoomWorkspaceSection";
 import { RoomMaintenanceSection } from "./RoomMaintenanceSection";
 import { RoomSkillsSection } from "./RoomSkillsSection";
+import { RoomConnectorsSection } from "./RoomConnectorsSection";
 import { RoomScheduledTasksSection } from "./RoomScheduledTasksSection";
 import { RoomDangerZone } from "./RoomDangerZone";
 import { useEscapeKey } from "./use-escape-key";
@@ -13,12 +14,13 @@ function roomStatusLabel(status: PersistentAgentStatus["status"]): string {
 	return status === "needs_absorb" ? "ready to learn" : status;
 }
 
-type SettingsPane = "workspace" | "memory" | "skills" | "schedules" | "session" | "danger";
+type SettingsPane = "workspace" | "memory" | "skills" | "connectors" | "schedules" | "session" | "danger";
 
 const PANES: { id: SettingsPane; label: string }[] = [
 	{ id: "workspace", label: "Workspace" },
 	{ id: "memory", label: "Memory" },
 	{ id: "skills", label: "Skills" },
+	{ id: "connectors", label: "Connectors" },
 	{ id: "schedules", label: "Scheduled tasks" },
 	{ id: "session", label: "Session" },
 ];
@@ -225,6 +227,9 @@ export function RoomSettingsModal({ status, onClose, onArchive, onPurge, onRefre
 						</section>
 						<section className="room-settings-section" hidden={pane !== "skills"}>
 							<RoomSkillsSection status={status} onOpenSkillsLibrary={onOpenSkillsLibrary ? openSkillsLibraryThroughClose : undefined} />
+						</section>
+						<section className="room-settings-section" hidden={pane !== "connectors"}>
+							<RoomConnectorsSection status={status} />
 						</section>
 						<section className="room-settings-section" hidden={pane !== "schedules"}>
 							<RoomScheduledTasksSection status={status} />

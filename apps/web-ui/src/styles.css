@@ -560,15 +560,6 @@ strong, b { font-weight: 700; }
 	justify-content: space-between;
 	gap: 8px;
 }
-.sidebar-connection-status {
-	display: inline-flex;
-	align-items: center;
-	line-height: 1;
-}
-.sidebar-connection-status .dot {
-	margin-right: 7px;
-	flex: none;
-}
 .sidebar .theme-toggle {
 	border-color: var(--border-soft);
 	color: var(--fg-soft);
@@ -580,16 +571,6 @@ strong, b { font-weight: 700; }
 	border-color: var(--fg);
 	color: var(--bg);
 }
-.dot {
-	display: inline-block;
-	width: 8px; height: 8px;
-	border-radius: 50%;
-	margin-right: 7px;
-	vertical-align: middle;
-}
-.dot.ok { background: var(--success); }
-.dot.bad { background: var(--error); }
-
 /* Main pane --------------------------------------------------------- */
 .workbench {
 	min-width: 0;
@@ -634,7 +615,12 @@ strong, b { font-weight: 700; }
 
 .topbar {
 	min-height: 46px;
-	padding: 8px 16px;
+	/* Left inset matches the composer's gutter directly below it, so the one
+	   flush-left row in this column lines up with the column's own rhythm.
+	   Top padding is left alone: the mac shell overrides it to land this row
+	   on the pane header's title line, and the collapsed-sidebar rule
+	   overrides the left inset to clear the traffic lights. */
+	padding: 8px 16px 8px 18px;
 	display: flex;
 	align-items: center;
 	justify-content: space-between;
@@ -672,9 +658,34 @@ strong, b { font-weight: 700; }
 	margin-left: auto;
 	flex-shrink: 0;
 }
+/* Ghost: no resting border or fill, just the glyph. The 1px border box stays
+   so nothing shifts when hover paints it. */
 .topbar-actions .icon-btn {
-	border-color: var(--border-soft);
+	background: transparent;
+	border-color: transparent;
 	color: var(--fg-soft);
+}
+.topbar-actions .icon-btn:hover:not(:disabled),
+.topbar-actions .icon-btn:focus-visible {
+	background: color-mix(in srgb, var(--fg) 12%, transparent);
+	border-color: transparent;
+	color: var(--fg);
+	outline: none;
+}
+/* Keyboard focus still needs an edge: a wash alone is not a ring. */
+.topbar-actions .icon-btn:focus-visible {
+	box-shadow: 0 0 0 1px color-mix(in srgb, var(--fg) 35%, transparent);
+}
+/* Forget is the one destructive action up here, so it warms red rather than
+   neutral: red glyph on a faint red wash, no red outline. */
+.topbar-actions .icon-btn-danger:hover:not(:disabled),
+.topbar-actions .icon-btn-danger:focus-visible {
+	background: color-mix(in srgb, var(--exx-danger) 14%, transparent);
+	border-color: transparent;
+	color: var(--exx-danger);
+}
+.topbar-actions .icon-btn-danger:focus-visible {
+	box-shadow: 0 0 0 1px color-mix(in srgb, var(--exx-danger) 40%, transparent);
 }
 .theme-toggle {
 	background: transparent;
@@ -890,12 +901,6 @@ strong, b { font-weight: 700; }
 	justify-content: space-between;
 	gap: 8px;
 }
-.product-sidebar .sidebar-connection-status {
-	color: var(--muted);
-	gap: 0;
-}
-.product-sidebar .dot.ok { background: var(--success); }
-.product-sidebar .dot.bad { background: var(--error); }
 .product-sidebar .theme-toggle {
 	border-color: var(--border-soft);
 	color: var(--fg-soft);
@@ -1668,6 +1673,57 @@ strong, b { font-weight: 700; }
 	font-size: 13.5px;
 }
 .configure-profile-remove { margin-left: auto; color: var(--danger, #d33); }
+/* A gateway model row asks three quiet questions at once: approve it, can it
+   see images, how much context does it have. Kept on one line so the list still
+   scans like a checkbox list rather than a form. */
+.gateway-model-row {
+	cursor: default;
+	gap: 12px;
+	flex-wrap: wrap;
+}
+.gateway-model-approve {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	min-width: 0;
+	flex: 1 1 200px;
+	cursor: pointer;
+}
+.gateway-model-approve .configure-profile-model-name {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.gateway-model-vision {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	font-size: 12.5px;
+	color: var(--muted);
+	cursor: pointer;
+	white-space: nowrap;
+}
+.gateway-model-window {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	font-size: 12.5px;
+	color: var(--muted);
+}
+.gateway-model-window-label { white-space: nowrap; }
+.gateway-model-window-input {
+	width: 100px;
+	padding: 4px 6px;
+	font-size: 12.5px;
+}
+.gateway-model-window-input.invalid { border-color: var(--danger, #d33); }
+/* The complaint sits under the row that caused it, on its own line, so a wide
+   value never pushes the three controls out of alignment. */
+.gateway-model-window-error {
+	flex: 1 0 100%;
+	font-size: 12px;
+	color: var(--danger, #d33);
+}
 .gateway-models-input {
 	min-height: 84px;
 	resize: vertical;
@@ -4014,30 +4070,13 @@ strong, b { font-weight: 700; }
 }
 
 :root[data-theme="light"] .sidebar .conversation-inline-action,
-:root[data-theme="light"] .sidebar .conversation-action-sep,
-:root[data-theme="light"] .sidebar .sidebar-connection-status {
+:root[data-theme="light"] .sidebar .conversation-action-sep {
 	color: #fff;
-}
-
-:root[data-theme="light"] .sidebar .dot.ok {
-	background: var(--success);
-}
-
-:root[data-theme="light"] .product-sidebar .sidebar-connection-status {
-	color: var(--muted);
 }
 
 :root[data-theme="light"] .landing-card .cli-note,
 :root[data-theme="light"] .landing-card code {
 	color: var(--fg-soft);
-}
-
-:root[data-theme="light"] .product-sidebar .dot.ok {
-	background: var(--success);
-}
-
-:root[data-theme="light"] .product-sidebar .dot.bad {
-	background: var(--error);
 }
 
 :root[data-theme="light"] .sidebar .sidebar-title,
@@ -4048,8 +4087,7 @@ strong, b { font-weight: 700; }
 :root[data-theme="light"] .sidebar .section-toggle,
 :root[data-theme="light"] .sidebar-footer,
 :root[data-theme="light"] .sidebar .conversation-inline-action,
-:root[data-theme="light"] .sidebar .conversation-action-sep,
-:root[data-theme="light"] .sidebar .sidebar-connection-status {
+:root[data-theme="light"] .sidebar .conversation-action-sep {
 	color: var(--muted);
 }
 
@@ -4101,10 +4139,6 @@ strong, b { font-weight: 700; }
 :root[data-theme="light"] .sidebar .list-btn.active .row-action {
 	color: var(--fg);
 	border-color: var(--border-soft);
-}
-
-:root[data-theme="light"] .sidebar .dot.ok {
-	background: var(--success);
 }
 
 :root[data-theme="light"] .landing-card code {
@@ -4910,8 +4944,11 @@ strong, b { font-weight: 700; }
 	box-sizing: border-box;
 	position: relative; /* anchor for the @-mention consult popover */
 }
+/* Focus reads as a firmer edge, deliberately neutral: the prompt box borrows
+   no accent colour from the brand palette. */
 .composer-box:focus-within {
 	border-color: var(--fg);
+	box-shadow: 0 0 0 1px color-mix(in srgb, var(--fg) 30%, transparent);
 }
 
 /* Consult MR-3 — composer @-mention popover. Styling follows the mockup
@@ -5046,32 +5083,37 @@ strong, b { font-weight: 700; }
 	min-width: 0;
 	display: flex;
 }
+/* Context health is a footnote, not an action: no border, no fill, smaller and
+   dimmer than the buttons opposite it. The coloured dot still carries the
+   zone, so nothing is lost by quieting the frame around it. */
 .composer-context-pill {
 	--context-health-color: var(--muted);
 	display: inline-flex;
 	align-items: center;
 	gap: 6px;
 	max-width: 100%;
-	border: 1px solid color-mix(in srgb, var(--context-health-color) 34%, transparent);
+	border: none;
 	border-radius: 999px;
-	padding: 4px 11px;
-	color: var(--fg-soft);
-	background: color-mix(in srgb, var(--context-health-color) 7%, transparent);
+	padding: 3px 6px;
+	color: var(--dim);
+	background: transparent;
 	font-family: var(--exx-font-mono);
-	font-size: 11px;
-	font-weight: 650;
+	font-size: 10.5px;
+	font-weight: 600;
 	line-height: 1.2;
 	cursor: pointer;
 }
 .composer-context-pill:hover,
 .composer-context-pill:focus-visible {
-	background: color-mix(in srgb, var(--context-health-color) 14%, transparent);
+	color: var(--muted);
+	background: color-mix(in srgb, var(--context-health-color) 10%, transparent);
+	outline: none;
 }
 .composer-context-pill.green { --context-health-color: var(--success); }
 .composer-context-pill.yellow { --context-health-color: var(--warning); }
 .composer-context-pill.red { --context-health-color: var(--error); }
-.composer-context-pill.unknown { --context-health-color: var(--muted); color: var(--muted); }
-.composer-context-pill.offline { --context-health-color: var(--error); color: var(--muted); }
+.composer-context-pill.unknown { --context-health-color: var(--muted); color: var(--dim); }
+.composer-context-pill.offline { --context-health-color: var(--error); color: var(--dim); }
 .composer-context-pill-label {
 	overflow: hidden;
 	text-overflow: ellipsis;
@@ -5118,10 +5160,16 @@ strong, b { font-weight: 700; }
 .composer textarea::-webkit-scrollbar-thumb:hover { background: var(--fg-soft); }
 .composer textarea::-webkit-scrollbar-track { background: transparent; }
 .composer textarea:focus { outline: none; }
+/* One height for every control on the composer's bottom row: attach, the
+   effort pill, Checkpoint and Send. Set on the row so a single number moves
+   all of them together. */
+.composer-box-controls {
+	--composer-control-size: 34px;
+}
 .send-btn {
 	flex: 0 0 auto;
-	width: 34px;
-	height: 34px;
+	width: var(--composer-control-size, 34px);
+	height: var(--composer-control-size, 34px);
 	background: var(--fg);
 	color: var(--bg);
 	border: none;
@@ -5138,39 +5186,139 @@ strong, b { font-weight: 700; }
 	gap: 6px;
 	flex: 0 0 auto;
 }
-/* Memento and Checkpoint sit quietly next to the send button. */
+/* The effort pill and Checkpoint sit quietly next to the send button, on the
+   same height and the same radius family. */
 .composer-actions .icon-btn {
-	padding: 6px 11px;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	gap: 6px;
+	height: var(--composer-control-size, 34px);
+	padding: 0 11px;
 	font-size: 12px;
-	line-height: 1.2;
+	line-height: 1;
 	text-align: center;
 	background: transparent;
-	border-color: var(--border-soft);
+	/* Ghost: the border box is kept so hover cannot shift the row, but nothing
+	   is drawn on it at rest. Send is the one solid control here, on purpose. */
+	border-color: transparent;
 	color: var(--fg-soft);
-	border-radius: 9px;
+	border-radius: 10px;
+}
+/* Icon-only buttons are squares, so a glyph never sits in a wider slot than
+   its neighbours. */
+.icon-btn-square {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	padding: 0;
+	width: 30px;
+	height: 30px;
+}
+.composer-actions .icon-btn-square {
+	width: var(--composer-control-size, 34px);
+	padding: 0;
+}
+.ui-icon {
+	display: block;
+	flex: 0 0 auto;
 }
 .composer-actions .icon-btn:hover:not(:disabled),
 .composer-actions .icon-btn:focus-visible {
-	background: var(--fg);
-	border-color: var(--fg);
-	color: var(--bg);
+	background: color-mix(in srgb, var(--fg) 12%, transparent);
+	border-color: transparent;
+	color: var(--fg);
+	outline: none;
 }
+.composer-actions .icon-btn:focus-visible {
+	box-shadow: 0 0 0 1px color-mix(in srgb, var(--fg) 35%, transparent);
+}
+/* One control with two segments, not two buttons pushed together. The halves
+   are transparent inside the container and carry only their own wash, so the
+   caret can never light up as a detached box.
+   Deliberately NOT overflow:hidden, which would clip the menu below.
+   The three custom properties below are what keep this coherent: they are set
+   ONCE on the container and read by both segments, so a state that belongs to
+   the whole control (dimmed, or showing its divider) is expressed in one place
+   and cannot leave one half disagreeing with the other. They also inherit,
+   which keeps every theme and every state out of the specificity war that the
+   theme-level button rules would otherwise start. */
 .checkpoint-split {
+	--split-ink: var(--fg-soft);
+	--split-ink-hover: var(--fg);
+	--split-wash: color-mix(in srgb, var(--fg) 12%, transparent);
+	--split-divider: transparent;
 	position: relative;
 	display: inline-flex;
 	align-items: stretch;
+	height: var(--composer-control-size, 34px);
+	border: 1px solid transparent;
+	border-radius: 10px;
+	background: transparent;
 }
-.checkpoint-split .checkpoint-split-main {
-	flex: 1;
-	border-top-right-radius: 0;
-	border-bottom-right-radius: 0;
+/* The divider is a seam between two things being used, so it appears when the
+   control is in play and stays out of sight when it is only sitting there: a
+   hairline floating with no container around it reads as a stray mark. */
+.checkpoint-split:hover,
+.checkpoint-split:focus-within,
+.checkpoint-split:has(.checkpoint-split-toggle[aria-expanded="true"]) {
+	--split-divider: var(--border-soft);
+}
+/* One control, one dimmed state. When the main action cannot run, the label,
+   the divider and the chevron all dim together. The caret stays CLICKABLE,
+   because its menu is where the reason lives, but a bright caret inside a
+   greyed control looks like a bug rather than an invitation. */
+.checkpoint-split:has(.checkpoint-split-main:disabled) {
+	--split-ink: var(--dim);
+	--split-ink-hover: var(--fg-soft);
+	--split-wash: color-mix(in srgb, var(--fg) 7%, transparent);
+	--split-divider: transparent;
+}
+.checkpoint-split:has(.checkpoint-split-main:disabled):hover,
+.checkpoint-split:has(.checkpoint-split-main:disabled):focus-within {
+	--split-divider: color-mix(in srgb, var(--border-soft) 60%, transparent);
+}
+.checkpoint-split:has(:focus-visible) {
+	border-color: color-mix(in srgb, var(--fg) 35%, transparent);
+}
+.composer-actions .checkpoint-split .icon-btn {
+	height: 100%;
+	border: none;
+	background: transparent;
+	color: var(--split-ink);
+}
+/* Inner corners sit one border inside the container's. */
+.composer-actions .checkpoint-split .checkpoint-split-main {
+	flex: 1 1 auto;
+	border-radius: 9px 0 0 9px;
+	/* Ghost rest shows no divider, so the label-to-chevron air IS the seam:
+	   keep it tight enough to read as one compound control, wide enough that
+	   the hover wash still shows two targets. */
+	padding-right: 7px;
 }
 .composer-actions .checkpoint-split .checkpoint-split-toggle {
+	flex: 0 0 auto;
+	width: 23px;
 	min-width: 0;
-	padding: 7px 9px;
-	border-top-left-radius: 0;
-	border-bottom-left-radius: 0;
-	margin-left: -1px;
+	padding: 0;
+	border-radius: 0 9px 9px 0;
+	/* The seam, and the only border left inside the control. */
+	border-left: 1px solid var(--split-divider);
+}
+/* A segment answers for itself with a wash, at whatever strength the control
+   as a whole is currently allowed. */
+.composer-actions .checkpoint-split .icon-btn:hover:not(:disabled),
+.composer-actions .checkpoint-split .icon-btn:focus-visible {
+	background: var(--split-wash);
+	border-color: transparent;
+	color: var(--split-ink-hover);
+	outline: none;
+}
+.composer-actions .checkpoint-split .icon-btn:disabled,
+.composer-actions .checkpoint-split .icon-btn:disabled:hover {
+	background: transparent;
+	color: var(--split-ink);
+	cursor: not-allowed;
 }
 .checkpoint-split-menu {
 	position: absolute;
@@ -5207,6 +5355,115 @@ strong, b { font-weight: 700; }
 .checkpoint-split-menu button:disabled {
 	color: var(--dim);
 	cursor: not-allowed;
+}
+/* Reasoning effort: a quiet pill in the composer, a slider above it. --------- */
+.effort-control {
+	position: relative;
+	display: inline-flex;
+}
+/* No min-width: the pill takes the shared horizontal padding and sizes to its
+   label, so it and the Checkpoint label read as the same kind of control
+   whether the word is "off" or "medium". */
+.composer-actions .effort-pill {
+	gap: 5px;
+	font-variant-numeric: tabular-nums;
+	letter-spacing: 0.01em;
+}
+.effort-pill-level {
+	line-height: 1;
+}
+.composer-actions .effort-pill:disabled,
+.composer-actions .effort-pill:disabled:hover,
+.composer-actions .effort-pill:disabled:focus-visible {
+	color: var(--dim);
+	border-color: transparent;
+	background: transparent;
+	box-shadow: none;
+	cursor: not-allowed;
+}
+.effort-popover {
+	position: absolute;
+	right: 0;
+	bottom: calc(100% + 6px);
+	/* Width is set inline from the level count: six mono labels need real
+	   room, and a fixed width would overlap them. */
+	min-width: 272px;
+	background: var(--bg);
+	border: 1px solid var(--border);
+	border-radius: 10px;
+	padding: 10px 14px 8px;
+	box-shadow: var(--exx-shadow-popover);
+	z-index: 30;
+}
+.effort-ends {
+	display: flex;
+	justify-content: space-between;
+	font-size: 10.5px;
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+	color: var(--muted);
+}
+.effort-scale {
+	position: relative;
+	height: 16px;
+	/* The inset is set inline with the width: it has to clear half of the widest
+	   tick label, which depends on the model's own vocabulary. */
+	margin: 4px var(--effort-inset, 30px) 0;
+	cursor: pointer;
+	touch-action: none;
+}
+.effort-scale:focus-visible {
+	outline: 1px solid var(--exx-focus);
+	outline-offset: 4px;
+	border-radius: 3px;
+}
+.effort-line {
+	position: absolute;
+	top: 5px;
+	left: 0;
+	right: 0;
+	height: 1px;
+	background: var(--border);
+}
+/* The marker is the reference look: a small caret sitting under the line. */
+.effort-marker {
+	position: absolute;
+	top: 8px;
+	width: 0;
+	height: 0;
+	transform: translateX(-50%);
+	border-left: 5px solid transparent;
+	border-right: 5px solid transparent;
+	border-bottom: 6px solid var(--exx-plan);
+	transition: left 120ms ease-out;
+}
+.effort-ticks {
+	position: relative;
+	height: 18px;
+	margin: 0 var(--effort-inset, 30px);
+}
+.effort-tick {
+	position: absolute;
+	top: 0;
+	transform: translateX(-50%);
+	background: transparent;
+	border: none;
+	padding: 2px 3px;
+	font-family: var(--exx-font-mono);
+	font-size: 10.5px;
+	line-height: 1.2;
+	color: var(--dim);
+	cursor: pointer;
+	white-space: nowrap;
+}
+.effort-tick:hover,
+.effort-tick:focus-visible {
+	color: var(--fg-soft);
+	outline: none;
+}
+.effort-tick.is-active {
+	color: var(--exx-plan);
+	font-weight: 700;
 }
 .composer-status {
 	display: flex;
@@ -5255,8 +5512,11 @@ strong, b { font-weight: 700; }
 	background: var(--bg-2);
 	border-color: var(--border-soft);
 }
-:root[data-theme="light"] .composer-box:focus-within {
+:root[data-theme="light"] /* Focus reads as a firmer edge, deliberately neutral: the prompt box borrows
+   no accent colour from the brand palette. */
+.composer-box:focus-within {
 	border-color: var(--fg);
+	box-shadow: 0 0 0 1px color-mix(in srgb, var(--fg) 30%, transparent);
 }
 :root[data-theme="light"] .composer textarea {
 	background: transparent;
@@ -5280,14 +5540,16 @@ strong, b { font-weight: 700; }
 	color: var(--fg);
 	border-color: var(--border);
 }
-:root[data-theme="light"] .composer-context-pill {
-	color: var(--fg-soft);
-	background: color-mix(in srgb, var(--context-health-color) 10%, var(--bg) 90%);
-	border-color: color-mix(in srgb, var(--context-health-color) 34%, var(--border-soft));
-}
+:root[data-theme="light"] .composer-context-pill,
 :root[data-theme="light"] .composer-context-pill.unknown,
 :root[data-theme="light"] .composer-context-pill.offline {
+	color: var(--dim);
+	background: transparent;
+}
+:root[data-theme="light"] .composer-context-pill:hover,
+:root[data-theme="light"] .composer-context-pill:focus-visible {
 	color: var(--muted);
+	background: color-mix(in srgb, var(--context-health-color) 12%, transparent);
 }
 :root[data-theme="light"] .composer-context-popover {
 	box-shadow: 0 8px 24px rgba(0, 0, 0, 0.14);
@@ -5296,17 +5558,13 @@ strong, b { font-weight: 700; }
 	background: var(--fg);
 	color: var(--bg);
 }
-:root[data-theme="light"] .composer-actions .icon-btn {
-	background: transparent;
-	border-color: var(--border-soft);
-	color: var(--fg-soft);
-}
-:root[data-theme="light"] .composer-actions .icon-btn:hover:not(:disabled),
-:root[data-theme="light"] .composer-actions .icon-btn:focus-visible {
-	background: var(--fg);
-	border-color: var(--fg);
-	color: var(--bg);
-}
+/* The light theme used to restate these buttons because it wanted a different
+   answer: a bordered rest and a full inversion on hover, which then had to be
+   fought off again for the split's segments. Ghost needs no such split. Both
+   themes now want the same recipe, and it is already written in tokens that
+   resolve per theme, so the overrides are gone rather than duplicated. Removing
+   them is also what removes the specificity trap: nothing theme-level outranks
+   the shared button rules any more. */
 
 .standalone-shell {
 	height: 100%;
@@ -6568,7 +6826,9 @@ strong, b { font-weight: 700; }
 	.composer-box { padding: 10px 10px 8px; }
 	.composer-box-bottom { flex-wrap: wrap; }
 	.composer-actions { gap: 5px; }
-	.composer-actions .icon-btn { padding: 5px 9px; font-size: 11.5px; }
+	.composer-box-controls { --composer-control-size: 30px; }
+	.composer-actions .icon-btn { padding: 0 9px; font-size: 11.5px; }
+	.composer-actions .checkpoint-split .checkpoint-split-toggle { width: 21px; padding: 0; }
 	.landing-brand { padding: 16px 16px 12px; }
 	.standalone-header { padding: 12px 16px; align-items: flex-start; }
 	.standalone-actions { width: 100%; justify-content: flex-start; flex-wrap: wrap; }
@@ -10535,6 +10795,14 @@ label.rs-row {
 	gap: 10px;
 	flex-shrink: 0;
 }
+/* Room settings Connectors panel: skills-row layout plus the global page's
+   connector avatar as a leading column, so the main column fills the middle. */
+.room-connectors-section .room-skills-row-main {
+	flex: 1;
+}
+.room-connectors-section .connector-avatar {
+	font-size: 13px;
+}
 .room-skills-toggle {
 	display: inline-flex;
 	align-items: center;
@@ -10948,6 +11216,48 @@ label.rs-row {
 .task-store-gc-meta { flex: none; color: var(--muted); font-size: 11px; }
 .asset-viewer-delete { color: var(--danger, #d33); margin-left: auto; }
 
+/* ── Connection lost (exception only) ─────────────────────────────────────
+   Anchored to the window, not to a screen: the condition belongs to the whole
+   app and every screen shows the same one. Bottom centre is where this app
+   already floats a banner (task-store GC), and unlike the top it covers no
+   page heading. When both are up the older, quieter one steps aside. */
+.connection-lost-banner {
+	position: fixed;
+	bottom: 24px;
+	left: 50%;
+	transform: translateX(-50%);
+	z-index: 70;
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	max-width: min(560px, calc(100vw - 32px));
+	padding: 10px 16px;
+	border-radius: 8px;
+	font-size: 13px;
+	line-height: 1.35;
+	background: var(--exx-surface-raised);
+	color: var(--fg);
+	border: 1px solid var(--error);
+	box-shadow: var(--exx-shadow-popover);
+}
+.connection-lost-dot {
+	flex: none;
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+	background: var(--error);
+}
+/* Three things want the bottom centre: this banner, the task-store banner and
+   the launcher toasts. They are rendered in that order, so later siblings step
+   up one slot for each earlier one that is on screen. The pitch clears the
+   tallest of the three even when its text wraps to two lines. Without this the
+   connection banner simply sat on top of the toasts and hid them, and the
+   task-store banner and the toasts had been sharing one slot all along. */
+.connection-lost-banner ~ .task-store-gc-banner { bottom: 120px; }
+.connection-lost-banner ~ .launcher-toasts,
+.task-store-gc-banner ~ .launcher-toasts { bottom: 120px; }
+.connection-lost-banner ~ .task-store-gc-banner ~ .launcher-toasts { bottom: 216px; }
+
 /* Desktop app (Electron shell) -------------------------------------- */
 /* macOS hidden title bar: the sidebar header doubles as the window drag
    region (interactive children opt back out) and gains top clearance so the
@@ -11258,6 +11568,14 @@ html.sidebar-collapsed:not(.desktop-app-mac) .landing {
 	display: flex;
 	align-items: center;
 	gap: 2px;
+	/* Both footers are space-between rows that used to hold a connection label
+	   on the left and this pair on the right. With the label gone this pair
+	   became the only child, and space-between put it flush LEFT: the gear and
+	   the collapse control jumped across the sidebar, and the config menu that
+	   anchors to them opened off the left edge of the window. Pinning the pair
+	   to the right keeps it exactly where it has always sat, whatever else the
+	   row does or does not contain. */
+	margin-left: auto;
 }
 /* The config menu anchors to the footer pair, not the gear, so the popup
    keeps the geometry it had when the gear sat outermost. */

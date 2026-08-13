@@ -93,7 +93,7 @@ Then run `exxperts web`: your browser opens, signed in. Web search is built in v
 <summary>Requirements, troubleshooting, and platform notes</summary>
 
 - Prebuilt archives (bundled runtime, checksum-verified) for macOS Apple Silicon, Windows x64, Linux x64; everything else builds from source automatically (needs Git + Node.js ≥ 20.6).
-- An AI subscription (Claude or ChatGPT) or any API key / OpenAI-compatible gateway; sign in via **AI setup** in the app. All provider paths: [docs/provider-setup.md](docs/provider-setup.md).
+- An AI subscription (Claude or ChatGPT) or any API key / OpenAI-compatible gateways (save several and switch); sign in via **AI setup** in the app. All provider paths: [docs/provider-setup.md](docs/provider-setup.md).
 - `exxperts doctor` checks any install and prints the fix for whatever's missing.
 - Windows notes, corporate networks, per-user Git installs, PowerShell policies, proxy/TLS: see [docs/quickstart.md](docs/quickstart.md).
 - Contributors: `git clone` + `npm install` + `npm run install:global` builds and installs the commands from source; [CONTRIBUTING.md](CONTRIBUTING.md) has the full setup.

@@ -6,7 +6,6 @@ import type { ReactNode } from "react";
 
 interface Props {
 	onHome: () => void;
-	connected: boolean;
 	theme: ThemeMode;
 	onToggleTheme: () => void;
 	onHelp: () => void;
@@ -67,7 +66,7 @@ function InRoomSidebarConfigMenu({ theme, onToggleTheme, onHelp }: { theme: Them
 	);
 }
 
-export function Sidebar({ connected, theme, onToggleTheme, onHelp, onHome, assetsSlot }: Props) {
+export function Sidebar({ theme, onToggleTheme, onHelp, onHome, assetsSlot }: Props) {
 	return (
 		<aside className="sidebar">
 			<div className="sidebar-header">
@@ -80,11 +79,9 @@ export function Sidebar({ connected, theme, onToggleTheme, onHelp, onHome, asset
 			</nav>
 			{assetsSlot}
 
+			{/* No connection status here on purpose: the room's own reconnect
+			    affordance sits on the composer, where it can actually act. */}
 			<div className="sidebar-footer">
-				<div className="sidebar-connection-status" title={connected ? "Connected" : "Offline. If the server isn't running, start it with: exxperts web"} aria-label={connected ? "Connected" : "Offline"}>
-					<span className={`dot ${connected ? "ok" : "bad"}`} />
-					{connected ? "connected" : "offline"}
-				</div>
 				<div className="sidebar-footer-controls">
 					<InRoomSidebarConfigMenu theme={theme} onToggleTheme={onToggleTheme} onHelp={onHelp} />
 					<SidebarToggleButton />

@@ -80,6 +80,7 @@ export const MODELS = {
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"xhigh","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 10,
@@ -184,6 +185,7 @@ export const MODELS = {
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"xhigh","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 5,
@@ -201,6 +203,7 @@ export const MODELS = {
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"xhigh","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 5,
@@ -235,6 +238,7 @@ export const MODELS = {
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
 			reasoning: true,
+			thinkingLevelMap: {"max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 3,
@@ -252,6 +256,7 @@ export const MODELS = {
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"xhigh","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 2,
@@ -304,6 +309,7 @@ export const MODELS = {
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"xhigh","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 5,
@@ -321,6 +327,7 @@ export const MODELS = {
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"xhigh","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 5,
@@ -355,6 +362,7 @@ export const MODELS = {
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
 			reasoning: true,
+			thinkingLevelMap: {"max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 3.3,
@@ -372,6 +380,7 @@ export const MODELS = {
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"xhigh","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 2,
@@ -440,6 +449,7 @@ export const MODELS = {
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.eu-central-1.amazonaws.com",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"xhigh","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 11,
@@ -527,6 +537,7 @@ export const MODELS = {
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.eu-central-1.amazonaws.com",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"xhigh","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 5.5,
@@ -544,6 +555,7 @@ export const MODELS = {
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.eu-central-1.amazonaws.com",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"xhigh","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 5.5,
@@ -578,6 +590,7 @@ export const MODELS = {
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.eu-central-1.amazonaws.com",
 			reasoning: true,
+			thinkingLevelMap: {"max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 3.3,
@@ -595,6 +608,7 @@ export const MODELS = {
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.eu-central-1.amazonaws.com",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"xhigh","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 2.2,
@@ -612,6 +626,7 @@ export const MODELS = {
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"xhigh","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 10,
@@ -699,6 +714,7 @@ export const MODELS = {
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"xhigh","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 5,
@@ -716,6 +732,7 @@ export const MODELS = {
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"xhigh","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 5,
@@ -750,6 +767,7 @@ export const MODELS = {
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
 			reasoning: true,
+			thinkingLevelMap: {"max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 3,
@@ -767,6 +785,7 @@ export const MODELS = {
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"xhigh","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 2,
@@ -853,6 +872,7 @@ export const MODELS = {
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"xhigh","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 5,
@@ -870,6 +890,7 @@ export const MODELS = {
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"xhigh","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 5,
@@ -904,6 +925,7 @@ export const MODELS = {
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
 			reasoning: true,
+			thinkingLevelMap: {"max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 3,
@@ -921,6 +943,7 @@ export const MODELS = {
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"xhigh","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 2,
@@ -1372,7 +1395,7 @@ export const MODELS = {
 				cacheRead: 0.022,
 				cacheWrite: 0.275,
 			},
-			contextWindow: 272000,
+			contextWindow: 1050000,
 			maxTokens: 128000,
 		} satisfies Model<"bedrock-converse-stream">,
 		"openai.gpt-5.6-sol": {
@@ -1387,9 +1410,9 @@ export const MODELS = {
 				input: 5.5,
 				output: 33,
 				cacheRead: 0.55,
-				cacheWrite: 6.88,
+				cacheWrite: 6.875,
 			},
-			contextWindow: 272000,
+			contextWindow: 1050000,
 			maxTokens: 128000,
 		} satisfies Model<"bedrock-converse-stream">,
 		"openai.gpt-5.6-terra": {
@@ -1406,7 +1429,7 @@ export const MODELS = {
 				cacheRead: 0.22,
 				cacheWrite: 2.75,
 			},
-			contextWindow: 272000,
+			contextWindow: 1050000,
 			maxTokens: 128000,
 		} satisfies Model<"bedrock-converse-stream">,
 		"openai.gpt-oss-120b": {
@@ -1637,6 +1660,7 @@ export const MODELS = {
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"xhigh","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 10,
@@ -1741,6 +1765,7 @@ export const MODELS = {
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"xhigh","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 5,
@@ -1758,6 +1783,7 @@ export const MODELS = {
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"xhigh","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 5,
@@ -1792,6 +1818,7 @@ export const MODELS = {
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
 			reasoning: true,
+			thinkingLevelMap: {"max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 3,
@@ -1809,6 +1836,7 @@ export const MODELS = {
 			provider: "amazon-bedrock",
 			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"xhigh","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 2,
@@ -1981,6 +2009,7 @@ export const MODELS = {
 			provider: "anthropic",
 			baseUrl: "https://api.anthropic.com",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"xhigh","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 10,
@@ -2102,6 +2131,7 @@ export const MODELS = {
 			provider: "anthropic",
 			baseUrl: "https://api.anthropic.com",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"xhigh","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 5,
@@ -2119,6 +2149,7 @@ export const MODELS = {
 			provider: "anthropic",
 			baseUrl: "https://api.anthropic.com",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"xhigh","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 5,
@@ -2170,6 +2201,7 @@ export const MODELS = {
 			provider: "anthropic",
 			baseUrl: "https://api.anthropic.com",
 			reasoning: true,
+			thinkingLevelMap: {"max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 3,
@@ -2187,6 +2219,7 @@ export const MODELS = {
 			provider: "anthropic",
 			baseUrl: "https://api.anthropic.com",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"xhigh","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 2,
@@ -3084,6 +3117,7 @@ export const MODELS = {
 			provider: "cloudflare-ai-gateway",
 			baseUrl: "https://gateway.ai.cloudflare.com/v1/{CLOUDFLARE_ACCOUNT_ID}/{CLOUDFLARE_GATEWAY_ID}/anthropic",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"xhigh","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 10,
@@ -3205,6 +3239,7 @@ export const MODELS = {
 			provider: "cloudflare-ai-gateway",
 			baseUrl: "https://gateway.ai.cloudflare.com/v1/{CLOUDFLARE_ACCOUNT_ID}/{CLOUDFLARE_GATEWAY_ID}/anthropic",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"xhigh","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 5,
@@ -3222,6 +3257,7 @@ export const MODELS = {
 			provider: "cloudflare-ai-gateway",
 			baseUrl: "https://gateway.ai.cloudflare.com/v1/{CLOUDFLARE_ACCOUNT_ID}/{CLOUDFLARE_GATEWAY_ID}/anthropic",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"xhigh","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 5,
@@ -3273,6 +3309,7 @@ export const MODELS = {
 			provider: "cloudflare-ai-gateway",
 			baseUrl: "https://gateway.ai.cloudflare.com/v1/{CLOUDFLARE_ACCOUNT_ID}/{CLOUDFLARE_GATEWAY_ID}/anthropic",
 			reasoning: true,
+			thinkingLevelMap: {"max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 3,
@@ -3290,6 +3327,7 @@ export const MODELS = {
 			provider: "cloudflare-ai-gateway",
 			baseUrl: "https://gateway.ai.cloudflare.com/v1/{CLOUDFLARE_ACCOUNT_ID}/{CLOUDFLARE_GATEWAY_ID}/anthropic",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"xhigh","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 2,
@@ -3957,7 +3995,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 262144,
-			maxTokens: 262144,
+			maxTokens: 256000,
 		} satisfies Model<"openai-completions">,
 	},
 	"deepseek": {
@@ -4301,6 +4339,7 @@ export const MODELS = {
 			headers: {"User-Agent":"GitHubCopilotChat/0.35.0","Editor-Version":"vscode/1.107.0","Editor-Plugin-Version":"copilot-chat/0.35.0","Copilot-Integration-Id":"vscode-chat"},
 			compat: {"supportsStore":false,"supportsDeveloperRole":false,"supportsReasoningEffort":false},
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"xhigh","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 10,
@@ -4394,6 +4433,7 @@ export const MODELS = {
 			baseUrl: "https://api.individual.githubcopilot.com",
 			headers: {"User-Agent":"GitHubCopilotChat/0.35.0","Editor-Version":"vscode/1.107.0","Editor-Plugin-Version":"copilot-chat/0.35.0","Copilot-Integration-Id":"vscode-chat"},
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"xhigh","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 5,
@@ -4413,6 +4453,7 @@ export const MODELS = {
 			headers: {"User-Agent":"GitHubCopilotChat/0.35.0","Editor-Version":"vscode/1.107.0","Editor-Plugin-Version":"copilot-chat/0.35.0","Copilot-Integration-Id":"vscode-chat"},
 			compat: {"supportsStore":false,"supportsDeveloperRole":false,"supportsReasoningEffort":false},
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"xhigh","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 5,
@@ -4469,6 +4510,7 @@ export const MODELS = {
 			baseUrl: "https://api.individual.githubcopilot.com",
 			headers: {"User-Agent":"GitHubCopilotChat/0.35.0","Editor-Version":"vscode/1.107.0","Editor-Plugin-Version":"copilot-chat/0.35.0","Copilot-Integration-Id":"vscode-chat"},
 			reasoning: true,
+			thinkingLevelMap: {"max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 3,
@@ -4488,6 +4530,7 @@ export const MODELS = {
 			headers: {"User-Agent":"GitHubCopilotChat/0.35.0","Editor-Version":"vscode/1.107.0","Editor-Plugin-Version":"copilot-chat/0.35.0","Copilot-Integration-Id":"vscode-chat"},
 			compat: {"supportsStore":false,"supportsDeveloperRole":false,"supportsReasoningEffort":false},
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"xhigh","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 2,
@@ -4895,40 +4938,6 @@ export const MODELS = {
 			contextWindow: 131072,
 			maxTokens: 65536,
 		} satisfies Model<"google-generative-ai">,
-		"gemini-2.0-flash": {
-			id: "gemini-2.0-flash",
-			name: "Gemini 2.0 Flash",
-			api: "google-generative-ai",
-			provider: "google",
-			baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-			reasoning: false,
-			input: ["text", "image"],
-			cost: {
-				input: 0.1,
-				output: 0.4,
-				cacheRead: 0.025,
-				cacheWrite: 0,
-			},
-			contextWindow: 1048576,
-			maxTokens: 8192,
-		} satisfies Model<"google-generative-ai">,
-		"gemini-2.0-flash-lite": {
-			id: "gemini-2.0-flash-lite",
-			name: "Gemini 2.0 Flash-Lite",
-			api: "google-generative-ai",
-			provider: "google",
-			baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-			reasoning: false,
-			input: ["text", "image"],
-			cost: {
-				input: 0.075,
-				output: 0.3,
-				cacheRead: 0,
-				cacheWrite: 0,
-			},
-			contextWindow: 1048576,
-			maxTokens: 8192,
-		} satisfies Model<"google-generative-ai">,
 		"gemini-2.5-computer-use-preview-10-2025": {
 			id: "gemini-2.5-computer-use-preview-10-2025",
 			name: "Gemini 2.5 Computer Use Preview 10-2025",
@@ -5010,24 +5019,6 @@ export const MODELS = {
 				input: 0.5,
 				output: 3,
 				cacheRead: 0.05,
-				cacheWrite: 0,
-			},
-			contextWindow: 1048576,
-			maxTokens: 65536,
-		} satisfies Model<"google-generative-ai">,
-		"gemini-3-pro-preview": {
-			id: "gemini-3-pro-preview",
-			name: "Gemini 3 Pro Preview",
-			api: "google-generative-ai",
-			provider: "google",
-			baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-			reasoning: true,
-			thinkingLevelMap: {"off":null,"minimal":null,"low":"LOW","medium":null,"high":"HIGH"},
-			input: ["text", "image"],
-			cost: {
-				input: 2,
-				output: 12,
-				cacheRead: 0.2,
 				cacheWrite: 0,
 			},
 			contextWindow: 1048576,
@@ -8678,6 +8669,7 @@ export const MODELS = {
 			provider: "opencode",
 			baseUrl: "https://opencode.ai/zen",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"xhigh","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 10,
@@ -8765,6 +8757,7 @@ export const MODELS = {
 			provider: "opencode",
 			baseUrl: "https://opencode.ai/zen",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"xhigh","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 5,
@@ -8782,6 +8775,7 @@ export const MODELS = {
 			provider: "opencode",
 			baseUrl: "https://opencode.ai/zen",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"xhigh","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 5,
@@ -8833,6 +8827,7 @@ export const MODELS = {
 			provider: "opencode",
 			baseUrl: "https://opencode.ai/zen",
 			reasoning: true,
+			thinkingLevelMap: {"max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 3,
@@ -8850,6 +8845,7 @@ export const MODELS = {
 			provider: "opencode",
 			baseUrl: "https://opencode.ai/zen",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"xhigh","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 2,
@@ -9434,6 +9430,23 @@ export const MODELS = {
 			contextWindow: 256000,
 			maxTokens: 256000,
 		} satisfies Model<"openai-responses">,
+		"hy3-free": {
+			id: "hy3-free",
+			name: "Hy3 Free",
+			api: "openai-completions",
+			provider: "opencode",
+			baseUrl: "https://opencode.ai/zen/v1",
+			reasoning: true,
+			input: ["text"],
+			cost: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+			},
+			contextWindow: 190000,
+			maxTokens: 64000,
+		} satisfies Model<"openai-completions">,
 		"kimi-k2.5": {
 			id: "kimi-k2.5",
 			name: "Kimi K2.5",
@@ -9638,9 +9651,9 @@ export const MODELS = {
 			contextWindow: 1000000,
 			maxTokens: 128000,
 		} satisfies Model<"openai-completions">,
-		"north-mini-code-free": {
-			id: "north-mini-code-free",
-			name: "North Mini Code Free",
+		"nemotron-3.5-lightning-free": {
+			id: "nemotron-3.5-lightning-free",
+			name: "Nemotron 3.5 Lightning Free",
 			api: "openai-completions",
 			provider: "opencode",
 			baseUrl: "https://opencode.ai/zen/v1",
@@ -9652,8 +9665,8 @@ export const MODELS = {
 				cacheRead: 0,
 				cacheWrite: 0,
 			},
-			contextWindow: 256000,
-			maxTokens: 64000,
+			contextWindow: 262144,
+			maxTokens: 262144,
 		} satisfies Model<"openai-completions">,
 		"qwen3.5-plus": {
 			id: "qwen3.5-plus",
@@ -10182,6 +10195,7 @@ export const MODELS = {
 			provider: "openrouter",
 			baseUrl: "https://openrouter.ai/api/v1",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"xhigh","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 10,
@@ -10199,6 +10213,7 @@ export const MODELS = {
 			provider: "openrouter",
 			baseUrl: "https://openrouter.ai/api/v1",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"xhigh","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 5,
@@ -10425,6 +10440,7 @@ export const MODELS = {
 			provider: "openrouter",
 			baseUrl: "https://openrouter.ai/api/v1",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"xhigh","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 5,
@@ -10442,6 +10458,7 @@ export const MODELS = {
 			provider: "openrouter",
 			baseUrl: "https://openrouter.ai/api/v1",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"xhigh","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 10,
@@ -10459,6 +10476,7 @@ export const MODELS = {
 			provider: "openrouter",
 			baseUrl: "https://openrouter.ai/api/v1",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"xhigh","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 2.5,
@@ -10476,6 +10494,7 @@ export const MODELS = {
 			provider: "openrouter",
 			baseUrl: "https://openrouter.ai/api/v1",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"xhigh","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 5,
@@ -10493,6 +10512,7 @@ export const MODELS = {
 			provider: "openrouter",
 			baseUrl: "https://openrouter.ai/api/v1",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"xhigh","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 10,
@@ -10510,6 +10530,7 @@ export const MODELS = {
 			provider: "openrouter",
 			baseUrl: "https://openrouter.ai/api/v1",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"xhigh","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 2.5,
@@ -10578,6 +10599,7 @@ export const MODELS = {
 			provider: "openrouter",
 			baseUrl: "https://openrouter.ai/api/v1",
 			reasoning: true,
+			thinkingLevelMap: {"max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 3,
@@ -10595,6 +10617,7 @@ export const MODELS = {
 			provider: "openrouter",
 			baseUrl: "https://openrouter.ai/api/v1",
 			reasoning: true,
+			thinkingLevelMap: {"max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 1.5,
@@ -10612,6 +10635,7 @@ export const MODELS = {
 			provider: "openrouter",
 			baseUrl: "https://openrouter.ai/api/v1",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"xhigh","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 2,
@@ -10629,6 +10653,7 @@ export const MODELS = {
 			provider: "openrouter",
 			baseUrl: "https://openrouter.ai/api/v1",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"xhigh","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 1,
@@ -10723,6 +10748,23 @@ export const MODELS = {
 			},
 			contextWindow: 262144,
 			maxTokens: 32768,
+		} satisfies Model<"openai-completions">,
+		"bytedance-seed/seed-2.0-code": {
+			id: "bytedance-seed/seed-2.0-code",
+			name: "ByteDance Seed: Seed-2.0-Code",
+			api: "openai-completions",
+			provider: "openrouter",
+			baseUrl: "https://openrouter.ai/api/v1",
+			reasoning: true,
+			input: ["text", "image"],
+			cost: {
+				input: 0.5,
+				output: 3,
+				cacheRead: 0,
+				cacheWrite: 0,
+			},
+			contextWindow: 262144,
+			maxTokens: 131072,
 		} satisfies Model<"openai-completions">,
 		"bytedance-seed/seed-2.0-lite": {
 			id: "bytedance-seed/seed-2.0-lite",
@@ -10904,8 +10946,8 @@ export const MODELS = {
 			input: ["text"],
 			cost: {
 				input: 0.27,
-				output: 1,
-				cacheRead: 0.135,
+				output: 0.95,
+				cacheRead: 0.13,
 				cacheWrite: 0,
 			},
 			contextWindow: 163840,
@@ -10975,9 +11017,9 @@ export const MODELS = {
 			thinkingLevelMap: {"minimal":null,"low":null,"medium":null,"high":"high","xhigh":"max"},
 			input: ["text"],
 			cost: {
-				input: 0.09,
+				input: 0.08,
 				output: 0.18,
-				cacheRead: 0.018,
+				cacheRead: 0.016,
 				cacheWrite: 0,
 			},
 			contextWindow: 1048576,
@@ -10994,13 +11036,13 @@ export const MODELS = {
 			thinkingLevelMap: {"minimal":null,"low":null,"medium":null,"high":"high","xhigh":"max"},
 			input: ["text"],
 			cost: {
-				input: 0.435,
-				output: 0.87,
-				cacheRead: 0.003625,
+				input: 0.63168,
+				output: 1.26336,
+				cacheRead: 0.053298,
 				cacheWrite: 0,
 			},
 			contextWindow: 1048576,
-			maxTokens: 384000,
+			maxTokens: 393216,
 		} satisfies Model<"openai-completions">,
 		"google/gemini-2.5-flash": {
 			id: "google/gemini-2.5-flash",
@@ -11436,13 +11478,13 @@ export const MODELS = {
 			reasoning: true,
 			input: ["text", "image"],
 			cost: {
-				input: 0.07,
-				output: 0.33999999999999997,
-				cacheRead: 0,
+				input: 0.12,
+				output: 0.39999999999999997,
+				cacheRead: 0.049999999999999996,
 				cacheWrite: 0,
 			},
 			contextWindow: 262144,
-			maxTokens: 16384,
+			maxTokens: 262144,
 		} satisfies Model<"openai-completions">,
 		"google/gemma-4-26b-a4b-it:free": {
 			id: "google/gemma-4-26b-a4b-it:free",
@@ -11665,6 +11707,23 @@ export const MODELS = {
 			contextWindow: 256000,
 			maxTokens: 80000,
 		} satisfies Model<"openai-completions">,
+		"liquid/lfm-2.5-2.6b:free": {
+			id: "liquid/lfm-2.5-2.6b:free",
+			name: "LiquidAI: LFM2.5-2.6B (free)",
+			api: "openai-completions",
+			provider: "openrouter",
+			baseUrl: "https://openrouter.ai/api/v1",
+			reasoning: true,
+			input: ["text"],
+			cost: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+			},
+			contextWindow: 128000,
+			maxTokens: 32768,
+		} satisfies Model<"openai-completions">,
 		"meituan/longcat-2.0": {
 			id: "meituan/longcat-2.0",
 			name: "Meituan: LongCat 2.0",
@@ -11743,12 +11802,12 @@ export const MODELS = {
 			input: ["text", "image"],
 			cost: {
 				input: 0.19999999999999998,
-				output: 0.7999999999999999,
+				output: 0.696,
 				cacheRead: 0,
 				cacheWrite: 0,
 			},
 			contextWindow: 1048576,
-			maxTokens: 16384,
+			maxTokens: 4096,
 		} satisfies Model<"openai-completions">,
 		"meta-llama/llama-4-scout": {
 			id: "meta-llama/llama-4-scout",
@@ -11766,6 +11825,23 @@ export const MODELS = {
 			},
 			contextWindow: 1310720,
 			maxTokens: 16384,
+		} satisfies Model<"openai-completions">,
+		"meta/muse-glimmer-30b": {
+			id: "meta/muse-glimmer-30b",
+			name: "Meta: Muse Glimmer 30B",
+			api: "openai-completions",
+			provider: "openrouter",
+			baseUrl: "https://openrouter.ai/api/v1",
+			reasoning: true,
+			input: ["text", "image"],
+			cost: {
+				input: 0.35,
+				output: 1.5,
+				cacheRead: 0.04,
+				cacheWrite: 0,
+			},
+			contextWindow: 131072,
+			maxTokens: 4096,
 		} satisfies Model<"openai-completions">,
 		"meta/muse-spark-1.1": {
 			id: "meta/muse-spark-1.1",
@@ -12269,9 +12345,9 @@ export const MODELS = {
 			reasoning: true,
 			input: ["text", "image"],
 			cost: {
-				input: 0.5795,
-				output: 2.44,
-				cacheRead: 0.0976,
+				input: 0.95,
+				output: 4,
+				cacheRead: 0.16,
 				cacheWrite: 0,
 			},
 			contextWindow: 262144,
@@ -12373,11 +12449,11 @@ export const MODELS = {
 			cost: {
 				input: 0.049999999999999996,
 				output: 0.19999999999999998,
-				cacheRead: 0.03,
+				cacheRead: 0.024999999999999998,
 				cacheWrite: 0,
 			},
 			contextWindow: 262144,
-			maxTokens: 262144,
+			maxTokens: 228000,
 		} satisfies Model<"openai-completions">,
 		"nvidia/nemotron-3-nano-30b-a3b:free": {
 			id: "nvidia/nemotron-3-nano-30b-a3b:free",
@@ -12422,13 +12498,13 @@ export const MODELS = {
 			reasoning: true,
 			input: ["text"],
 			cost: {
-				input: 0.3,
-				output: 0.8999999999999999,
+				input: 0.08499999999999999,
+				output: 0.39999999999999997,
 				cacheRead: 0,
 				cacheWrite: 0,
 			},
 			contextWindow: 1000000,
-			maxTokens: 4096,
+			maxTokens: 16384,
 		} satisfies Model<"openai-completions">,
 		"nvidia/nemotron-3-super-120b-a12b:free": {
 			id: "nvidia/nemotron-3-super-120b-a12b:free",
@@ -12484,6 +12560,23 @@ export const MODELS = {
 		"nvidia/nemotron-3-ultra-550b-a55b:free": {
 			id: "nvidia/nemotron-3-ultra-550b-a55b:free",
 			name: "NVIDIA: Nemotron 3 Ultra (free)",
+			api: "openai-completions",
+			provider: "openrouter",
+			baseUrl: "https://openrouter.ai/api/v1",
+			reasoning: true,
+			input: ["text"],
+			cost: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+			},
+			contextWindow: 1000000,
+			maxTokens: 65536,
+		} satisfies Model<"openai-completions">,
+		"nvidia/nemotron-3.5-lightning:free": {
+			id: "nvidia/nemotron-3.5-lightning:free",
+			name: "NVIDIA: Nemotron 3.5 Lightning (free)",
 			api: "openai-completions",
 			provider: "openrouter",
 			baseUrl: "https://openrouter.ai/api/v1",
@@ -13161,7 +13254,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 128000,
-			maxTokens: 16384,
+			maxTokens: 32000,
 		} satisfies Model<"openai-completions">,
 		"openai/gpt-5.2-codex": {
 			id: "openai/gpt-5.2-codex",
@@ -13234,24 +13327,6 @@ export const MODELS = {
 			},
 			contextWindow: 400000,
 			maxTokens: 128000,
-		} satisfies Model<"openai-completions">,
-		"openai/gpt-5.3-chat": {
-			id: "openai/gpt-5.3-chat",
-			name: "OpenAI: GPT-5.3 Chat",
-			api: "openai-completions",
-			provider: "openrouter",
-			baseUrl: "https://openrouter.ai/api/v1",
-			reasoning: false,
-			thinkingLevelMap: {"xhigh":"xhigh"},
-			input: ["text", "image"],
-			cost: {
-				input: 1.75,
-				output: 14,
-				cacheRead: 0.175,
-				cacheWrite: 0,
-			},
-			contextWindow: 128000,
-			maxTokens: 16384,
 		} satisfies Model<"openai-completions">,
 		"openai/gpt-5.3-codex": {
 			id: "openai/gpt-5.3-codex",
@@ -13768,9 +13843,9 @@ export const MODELS = {
 			reasoning: true,
 			input: ["text"],
 			cost: {
-				input: 0.037,
+				input: 0.03,
 				output: 0.16999999999999998,
-				cacheRead: 0,
+				cacheRead: 0.03,
 				cacheWrite: 0,
 			},
 			contextWindow: 131072,
@@ -14278,13 +14353,13 @@ export const MODELS = {
 			reasoning: true,
 			input: ["text"],
 			cost: {
-				input: 0.22749999999999998,
-				output: 0.9099999999999999,
+				input: 0.12,
+				output: 0.24,
 				cacheRead: 0,
 				cacheWrite: 0,
 			},
 			contextWindow: 131072,
-			maxTokens: 8192,
+			maxTokens: 16384,
 		} satisfies Model<"openai-completions">,
 		"qwen/qwen3-235b-a22b": {
 			id: "qwen/qwen3-235b-a22b",
@@ -14449,12 +14524,12 @@ export const MODELS = {
 			input: ["text"],
 			cost: {
 				input: 0.07,
-				output: 0.27,
+				output: 0.28,
 				cacheRead: 0,
 				cacheWrite: 0,
 			},
 			contextWindow: 262144,
-			maxTokens: 32768,
+			maxTokens: 262144,
 		} satisfies Model<"openai-completions">,
 		"qwen/qwen3-coder-flash": {
 			id: "qwen/qwen3-coder-flash",
@@ -14584,9 +14659,9 @@ export const MODELS = {
 			reasoning: false,
 			input: ["text", "image"],
 			cost: {
-				input: 0.21,
-				output: 1.9,
-				cacheRead: 0.09999999999999999,
+				input: 0.26,
+				output: 1.04,
+				cacheRead: 0,
 				cacheWrite: 0,
 			},
 			contextWindow: 262144,
@@ -14754,13 +14829,13 @@ export const MODELS = {
 			reasoning: true,
 			input: ["text", "image"],
 			cost: {
-				input: 0.39,
-				output: 2.34,
-				cacheRead: 0,
+				input: 0.5,
+				output: 3.5999999999999996,
+				cacheRead: 0.3,
 				cacheWrite: 0,
 			},
 			contextWindow: 262144,
-			maxTokens: 65536,
+			maxTokens: 262144,
 		} satisfies Model<"openai-completions">,
 		"qwen/qwen3.5-9b": {
 			id: "qwen/qwen3.5-9b",
@@ -15034,6 +15109,23 @@ export const MODELS = {
 			contextWindow: 1000000,
 			maxTokens: 128000,
 		} satisfies Model<"openai-completions">,
+		"sakana/sakana-namazu": {
+			id: "sakana/sakana-namazu",
+			name: "Sakana: Sakana Namazu",
+			api: "openai-completions",
+			provider: "openrouter",
+			baseUrl: "https://openrouter.ai/api/v1",
+			reasoning: true,
+			input: ["text", "image"],
+			cost: {
+				input: 0.95,
+				output: 4,
+				cacheRead: 0.15,
+				cacheWrite: 0,
+			},
+			contextWindow: 262144,
+			maxTokens: 65536,
+		} satisfies Model<"openai-completions">,
 		"sao10k/l3.1-euryale-70b": {
 			id: "sao10k/l3.1-euryale-70b",
 			name: "Sao10K: Llama 3.1 Euryale 70B v2.2",
@@ -15204,6 +15296,23 @@ export const MODELS = {
 			contextWindow: 131072,
 			maxTokens: 131072,
 		} satisfies Model<"openai-completions">,
+		"upstage/solar-pro4": {
+			id: "upstage/solar-pro4",
+			name: "Upstage: Solar Pro 4",
+			api: "openai-completions",
+			provider: "openrouter",
+			baseUrl: "https://openrouter.ai/api/v1",
+			reasoning: true,
+			input: ["text"],
+			cost: {
+				input: 0.03,
+				output: 0.12,
+				cacheRead: 0.006,
+				cacheWrite: 0,
+			},
+			contextWindow: 524288,
+			maxTokens: 131072,
+		} satisfies Model<"openai-completions">,
 		"x-ai/grok-4.20": {
 			id: "x-ai/grok-4.20",
 			name: "SpaceXAI: Grok 4.20",
@@ -15366,9 +15475,9 @@ export const MODELS = {
 			reasoning: true,
 			input: ["text"],
 			cost: {
-				input: 0.5,
-				output: 2,
-				cacheRead: 0.09999999999999999,
+				input: 0.55,
+				output: 2.2,
+				cacheRead: 0.11,
 				cacheWrite: 0,
 			},
 			contextWindow: 204800,
@@ -15468,9 +15577,9 @@ export const MODELS = {
 			reasoning: true,
 			input: ["text"],
 			cost: {
-				input: 0.952,
-				output: 2.992,
-				cacheRead: 0.17679999999999998,
+				input: 1.4,
+				output: 4.4,
+				cacheRead: 0.26,
 				cacheWrite: 0,
 			},
 			contextWindow: 204800,
@@ -15485,13 +15594,13 @@ export const MODELS = {
 			reasoning: true,
 			input: ["text"],
 			cost: {
-				input: 0.07,
-				output: 0.22,
-				cacheRead: 0.013000000000000001,
+				input: 0.5586,
+				output: 1.7556,
+				cacheRead: 0.10374,
 				cacheWrite: 0,
 			},
 			contextWindow: 1048576,
-			maxTokens: 128000,
+			maxTokens: 131072,
 		} satisfies Model<"openai-completions">,
 		"z-ai/glm-5.2:batch": {
 			id: "z-ai/glm-5.2:batch",
@@ -15606,13 +15715,13 @@ export const MODELS = {
 			thinkingLevelMap: {"minimal":null,"low":null,"medium":null,"high":"high","xhigh":"max"},
 			input: ["text"],
 			cost: {
-				input: 0.079996,
-				output: 0.252,
-				cacheRead: 0.0252,
+				input: 0.072,
+				output: 0.144,
+				cacheRead: 0.0144,
 				cacheWrite: 0,
 			},
 			contextWindow: 1048576,
-			maxTokens: 4096,
+			maxTokens: 262144,
 		} satisfies Model<"openai-completions">,
 		"~google/gemini-flash-latest": {
 			id: "~google/gemini-flash-latest",
@@ -16054,7 +16163,7 @@ export const MODELS = {
 				cacheRead: 0.26,
 				cacheWrite: 0,
 			},
-			contextWindow: 262144,
+			contextWindow: 512000,
 			maxTokens: 164000,
 		} satisfies Model<"openai-completions">,
 	},
@@ -16593,6 +16702,7 @@ export const MODELS = {
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"xhigh","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 10,
@@ -16697,6 +16807,7 @@ export const MODELS = {
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"xhigh","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 5,
@@ -16714,6 +16825,7 @@ export const MODELS = {
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"xhigh","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 10,
@@ -16731,12 +16843,31 @@ export const MODELS = {
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"xhigh","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 5,
 				output: 25,
 				cacheRead: 0.5,
 				cacheWrite: 6.25,
+			},
+			contextWindow: 1000000,
+			maxTokens: 128000,
+		} satisfies Model<"anthropic-messages">,
+		"anthropic/claude-opus-5-fast": {
+			id: "anthropic/claude-opus-5-fast",
+			name: "Claude Opus 5 (Fast)",
+			api: "anthropic-messages",
+			provider: "vercel-ai-gateway",
+			baseUrl: "https://ai-gateway.vercel.sh",
+			reasoning: true,
+			thinkingLevelMap: {"xhigh":"xhigh","max":"max"},
+			input: ["text", "image"],
+			cost: {
+				input: 10,
+				output: 50,
+				cacheRead: 1,
+				cacheWrite: 12.5,
 			},
 			contextWindow: 1000000,
 			maxTokens: 128000,
@@ -16782,6 +16913,7 @@ export const MODELS = {
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
+			thinkingLevelMap: {"max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 3,
@@ -16799,6 +16931,7 @@ export const MODELS = {
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
+			thinkingLevelMap: {"xhigh":"xhigh","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 2,
@@ -17202,7 +17335,7 @@ export const MODELS = {
 		} satisfies Model<"anthropic-messages">,
 		"google/gemma-4-26b-a4b-it": {
 			id: "google/gemma-4-26b-a4b-it",
-			name: "Gemma 4 26B A4B IT",
+			name: "Google Gemma 4 26B A4B",
 			api: "anthropic-messages",
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
@@ -17471,6 +17604,23 @@ export const MODELS = {
 			},
 			contextWindow: 128000,
 			maxTokens: 8192,
+		} satisfies Model<"anthropic-messages">,
+		"meta/muse-glimmer-30b": {
+			id: "meta/muse-glimmer-30b",
+			name: "Muse Glimmer 30B",
+			api: "anthropic-messages",
+			provider: "vercel-ai-gateway",
+			baseUrl: "https://ai-gateway.vercel.sh",
+			reasoning: true,
+			input: ["text", "image"],
+			cost: {
+				input: 0.35,
+				output: 1.5,
+				cacheRead: 0.04,
+				cacheWrite: 0,
+			},
+			contextWindow: 131072,
+			maxTokens: 131072,
 		} satisfies Model<"anthropic-messages">,
 		"meta/muse-spark-1.1": {
 			id: "meta/muse-spark-1.1",
@@ -18444,24 +18594,6 @@ export const MODELS = {
 			contextWindow: 400000,
 			maxTokens: 128000,
 		} satisfies Model<"anthropic-messages">,
-		"openai/gpt-5.3-chat": {
-			id: "openai/gpt-5.3-chat",
-			name: "GPT-5.3 Chat",
-			api: "anthropic-messages",
-			provider: "vercel-ai-gateway",
-			baseUrl: "https://ai-gateway.vercel.sh",
-			reasoning: false,
-			thinkingLevelMap: {"xhigh":"xhigh"},
-			input: ["text", "image"],
-			cost: {
-				input: 1.75,
-				output: 14,
-				cacheRead: 0.175,
-				cacheWrite: 0,
-			},
-			contextWindow: 128000,
-			maxTokens: 16384,
-		} satisfies Model<"anthropic-messages">,
 		"openai/gpt-5.3-codex": {
 			id: "openai/gpt-5.3-codex",
 			name: "GPT 5.3 Codex",
@@ -18842,6 +18974,23 @@ export const MODELS = {
 			},
 			contextWindow: 1000000,
 			maxTokens: 1000000,
+		} satisfies Model<"anthropic-messages">,
+		"sakana/namazu": {
+			id: "sakana/namazu",
+			name: "Sakana Namazu",
+			api: "anthropic-messages",
+			provider: "vercel-ai-gateway",
+			baseUrl: "https://ai-gateway.vercel.sh",
+			reasoning: true,
+			input: ["text", "image"],
+			cost: {
+				input: 0.95,
+				output: 4,
+				cacheRead: 0.15,
+				cacheWrite: 0,
+			},
+			contextWindow: 256000,
+			maxTokens: 256000,
 		} satisfies Model<"anthropic-messages">,
 		"stepfun/step-3.5-flash": {
 			id: "stepfun/step-3.5-flash",

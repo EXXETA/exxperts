@@ -21,6 +21,12 @@ import type { ExtensionUIContext } from "@exxeta/exxperts-runtime";
 
 type Sender = (msg: unknown) => void;
 
+/** A dialog that was answered for the user because nobody was on the other end. */
+export interface WebUiAutoDeclinedQuestion {
+	kind: "confirm" | "select" | "input";
+	title: string;
+}
+
 export interface WebUiContext extends ExtensionUIContext {
 	/** Resolve a pending UI request when the client responds. */
 	resolveResponse(id: string, value: any): void;
@@ -50,20 +56,30 @@ const passthroughTheme = {
 	getBgAnsi: () => "",
 };
 
-export function createWebUiContext(send: Sender): WebUiContext {
-	const pending = new Map<string, { resolve: (v: any) => void; reject: (e: Error) => void }>();
+export function createWebUiContext(send: Sender, onAutoDecline?: (question: WebUiAutoDeclinedQuestion) => void): WebUiContext {
+	const pending = new Map<string, { kind: WebUiAutoDeclinedQuestion["kind"]; title: string; resolve: (v: any) => void; reject: (e: Error) => void }>();
 	let detachedMessage: string | null = null;
 	let nextId = 1;
 	const newId = () => `ui_${Date.now()}_${nextId++}`;
+	// Every dialog the detached bridge answers for the user is reported once so
+	// the turn's landing can say so in the transcript. Bookkeeping must never
+	// change the rejection itself, so a throwing listener is swallowed.
+	const noteAutoDecline = (kind: WebUiAutoDeclinedQuestion["kind"], title: string) => {
+		if (!onAutoDecline) return;
+		try { onAutoDecline({ kind, title }); } catch {}
+	};
 
 	const ask = <T>(payload: Record<string, unknown>): Promise<T> =>
 		new Promise<T>((resolve, reject) => {
+			const kind = payload.kind as WebUiAutoDeclinedQuestion["kind"];
+			const title = String(payload.title ?? "");
 			if (detachedMessage !== null) {
+				noteAutoDecline(kind, title);
 				reject(new Error(detachedMessage));
 				return;
 			}
 			const id = newId();
-			pending.set(id, { resolve: resolve as any, reject });
+			pending.set(id, { kind, title, resolve: resolve as any, reject });
 			send({ type: "ui_request", id, ...payload });
 		});
 
@@ -121,6 +137,7 @@ export function createWebUiContext(send: Sender): WebUiContext {
 			detachedMessage = message;
 			for (const [id, r] of pending) {
 				pending.delete(id);
+				noteAutoDecline(r.kind, r.title);
 				r.reject(new Error(message));
 			}
 		},

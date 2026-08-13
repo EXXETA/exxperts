@@ -1,4 +1,6 @@
+import type { ReactNode } from "react";
 import type { CreateRoomFormValues } from "../components/create-room-panel";
+import { GaugeIcon, GearIcon, PaperclipIcon, TrashIcon } from "../components/icons";
 import type { InRoomChatUsage } from "../components/in-room-chat";
 import type { LauncherRoomThread } from "../components/launcher-room-card";
 import type { ProductSidebarActive } from "../components/product-shell";
@@ -304,7 +306,8 @@ export interface SidebarFixtureState {
 	label: string;
 	description: string;
 	active: ProductSidebarActive;
-	connected: boolean;
+	/** Shows the exception-only connection banner above the shell. */
+	connectionLost?: boolean;
 }
 
 export interface CreateRoomFixtureState {
@@ -323,6 +326,10 @@ export interface InRoomChatActionItem {
 	label: string;
 	title?: string;
 	disabled?: boolean;
+	/** Line icon rendered before the label, or alone when the label is empty. */
+	glyph?: () => ReactNode;
+	/** Required when the button is icon-only, so the gallery button is named. */
+	ariaLabel?: string;
 }
 
 export interface InRoomChatFixtureState {
@@ -355,9 +362,10 @@ export interface TaskCardsFixtureState {
 export type FixtureState = HomeFixtureState | SidebarFixtureState | CreateRoomFixtureState | InRoomChatFixtureState | TaskCardsFixtureState;
 
 export const sidebarFixtureStates: SidebarFixtureState[] = [
-	{ kind: "sidebar", id: "sidebar-home", label: "ProductSidebar / Home active", description: "Product navigation with Home selected.", active: "home", connected: true },
-	{ kind: "sidebar", id: "sidebar-ai-setup", label: "ProductSidebar / AI setup active", description: "Product navigation with AI setup selected.", active: "ai-setup", connected: true },
-	{ kind: "sidebar", id: "sidebar-dashboard", label: "ProductSidebar / Dashboard active", description: "Product navigation with Dashboard selected.", active: "dashboard", connected: true },
+	{ kind: "sidebar", id: "sidebar-home", label: "ProductSidebar / Home active", description: "Product navigation with Home selected.", active: "home" },
+	{ kind: "sidebar", id: "sidebar-ai-setup", label: "ProductSidebar / AI setup active", description: "Product navigation with AI setup selected.", active: "ai-setup" },
+	{ kind: "sidebar", id: "sidebar-dashboard", label: "ProductSidebar / Dashboard active", description: "Product navigation with Dashboard selected.", active: "dashboard" },
+	{ kind: "sidebar", id: "sidebar-connection-lost", label: "Connection lost banner", description: "The only connectivity surface the app has: shown after a sustained, confirmed failure, never during boot or an ordinary screen change.", active: "home", connectionLost: true },
 ];
 
 export const homeFixtureStates: HomeFixtureState[] = [
@@ -566,11 +574,19 @@ const contextHealthUnknown: ContextHealthStatus = {
 	source: "unknown",
 };
 
+// Every open room carries the same two top-bar actions: Forget (the bin) and
+// Room settings (the gear).
+const roomTopbarActions: InRoomChatActionItem[] = [
+	{ label: "", ariaLabel: "Forget", title: "Forget this conversation and start fresh. Nothing is checkpointed", glyph: TrashIcon },
+	{ label: "", ariaLabel: "Room settings", title: "Room settings", glyph: GearIcon },
+];
+
 function chatFixture(overrides: Omit<InRoomChatFixtureState, "kind" | "connected" | "currentModelLabel"> & Partial<Pick<InRoomChatFixtureState, "connected" | "currentModelLabel">>): InRoomChatFixtureState {
 	return {
 		kind: "in-room-chat",
 		connected: true,
 		currentModelLabel: fixtureModelOptions[0].label,
+		topbarActions: roomTopbarActions,
 		...overrides,
 	};
 }
@@ -786,7 +802,8 @@ export const inRoomChatFixtureStates: InRoomChatFixtureState[] = [
 		items: [],
 		inputValue: "",
 		composerRightActions: [
-			{ label: "Memento", title: "Forget this conversation and start fresh" },
+			{ label: "", ariaLabel: "Attach a file", title: "Add a file to this room's Files and attach it to your next message", glyph: PaperclipIcon },
+			{ label: "medium", title: "How hard this room thinks. Takes effect from your next message and stays until you change it", glyph: GaugeIcon },
 			{ label: "Checkpoint", title: "Send a message before checkpointing", disabled: true },
 		],
 	}),
@@ -801,7 +818,7 @@ export const inRoomChatFixtureStates: InRoomChatFixtureState[] = [
 		items: thinkingAfterSendItems,
 		inputValue: "",
 		composerPlaceholder: "Working… Enter to queue",
-		composerRightActions: [{ label: "Memento" }, { label: "Checkpoint" }],
+		composerRightActions: [{ label: "", ariaLabel: "Attach a file", glyph: PaperclipIcon }, { label: "medium", glyph: GaugeIcon }, { label: "Checkpoint" }],
 	}),
 	chatFixture({
 		id: "in-room-active-conversation",
@@ -814,7 +831,7 @@ export const inRoomChatFixtureStates: InRoomChatFixtureState[] = [
 		contextHealth: contextHealthGreen,
 		items: activeConversationItems,
 		inputValue: "",
-		composerRightActions: [{ label: "Memento" }, { label: "Checkpoint" }],
+		composerRightActions: [{ label: "", ariaLabel: "Attach a file", glyph: PaperclipIcon }, { label: "medium", glyph: GaugeIcon }, { label: "Checkpoint" }],
 	}),
 	chatFixture({
 		id: "in-room-context-health-yellow",
@@ -827,7 +844,7 @@ export const inRoomChatFixtureStates: InRoomChatFixtureState[] = [
 		contextHealth: contextHealthYellow,
 		items: activeConversationItems,
 		inputValue: "",
-		composerRightActions: [{ label: "Memento" }, { label: "Checkpoint" }],
+		composerRightActions: [{ label: "", ariaLabel: "Attach a file", glyph: PaperclipIcon }, { label: "medium", glyph: GaugeIcon }, { label: "Checkpoint" }],
 	}),
 	chatFixture({
 		id: "in-room-context-health-red",
@@ -840,7 +857,7 @@ export const inRoomChatFixtureStates: InRoomChatFixtureState[] = [
 		contextHealth: contextHealthRed,
 		items: activeConversationItems,
 		inputValue: "",
-		composerRightActions: [{ label: "Memento" }, { label: "Checkpoint" }],
+		composerRightActions: [{ label: "", ariaLabel: "Attach a file", glyph: PaperclipIcon }, { label: "medium", glyph: GaugeIcon }, { label: "Checkpoint" }],
 	}),
 	chatFixture({
 		id: "in-room-context-health-measuring",
@@ -854,7 +871,8 @@ export const inRoomChatFixtureStates: InRoomChatFixtureState[] = [
 		items: [],
 		inputValue: "",
 		composerRightActions: [
-			{ label: "Memento", title: "Forget this conversation and start fresh" },
+			{ label: "", ariaLabel: "Attach a file", title: "Add a file to this room's Files and attach it to your next message", glyph: PaperclipIcon },
+			{ label: "medium", title: "How hard this room thinks. Takes effect from your next message and stays until you change it", glyph: GaugeIcon },
 			{ label: "Checkpoint", title: "Send a message before checkpointing", disabled: true },
 		],
 	}),
@@ -868,7 +886,7 @@ export const inRoomChatFixtureStates: InRoomChatFixtureState[] = [
 		usage: { ...activeChatUsage, turns: 2, input: 9800, output: 2100, totalTokens: 15400 },
 		items: markdownStressItems,
 		inputValue: "",
-		composerRightActions: [{ label: "Memento" }, { label: "Checkpoint" }],
+		composerRightActions: [{ label: "", ariaLabel: "Attach a file", glyph: PaperclipIcon }, { label: "medium", glyph: GaugeIcon }, { label: "Checkpoint" }],
 	}),
 	chatFixture({
 		id: "in-room-mermaid-diagram",
@@ -880,7 +898,7 @@ export const inRoomChatFixtureStates: InRoomChatFixtureState[] = [
 		usage: { ...activeChatUsage, turns: 2, input: 7600, output: 1600, totalTokens: 12800 },
 		items: mermaidDiagramItems,
 		inputValue: "",
-		composerRightActions: [{ label: "Memento" }, { label: "Checkpoint" }],
+		composerRightActions: [{ label: "", ariaLabel: "Attach a file", glyph: PaperclipIcon }, { label: "medium", glyph: GaugeIcon }, { label: "Checkpoint" }],
 	}),
 	chatFixture({
 		id: "in-room-mermaid-repair",
@@ -892,7 +910,7 @@ export const inRoomChatFixtureStates: InRoomChatFixtureState[] = [
 		usage: { ...activeChatUsage, turns: 2, input: 7600, output: 1600, totalTokens: 12800 },
 		items: mermaidRepairItems,
 		inputValue: "",
-		composerRightActions: [{ label: "Memento" }, { label: "Checkpoint" }],
+		composerRightActions: [{ label: "", ariaLabel: "Attach a file", glyph: PaperclipIcon }, { label: "medium", glyph: GaugeIcon }, { label: "Checkpoint" }],
 	}),
 	chatFixture({
 		id: "in-room-mermaid-broken",
@@ -904,7 +922,7 @@ export const inRoomChatFixtureStates: InRoomChatFixtureState[] = [
 		usage: { ...activeChatUsage, turns: 2, input: 7600, output: 1600, totalTokens: 12800 },
 		items: mermaidBrokenItems,
 		inputValue: "",
-		composerRightActions: [{ label: "Memento" }, { label: "Checkpoint" }],
+		composerRightActions: [{ label: "", ariaLabel: "Attach a file", glyph: PaperclipIcon }, { label: "medium", glyph: GaugeIcon }, { label: "Checkpoint" }],
 	}),
 	chatFixture({
 		id: "in-room-mermaid-streaming",
@@ -916,7 +934,7 @@ export const inRoomChatFixtureStates: InRoomChatFixtureState[] = [
 		usage: { ...activeChatUsage, turns: 2, input: 7600, output: 1600, totalTokens: 12800 },
 		items: mermaidStreamingItems,
 		inputValue: "",
-		composerRightActions: [{ label: "Memento" }, { label: "Checkpoint" }],
+		composerRightActions: [{ label: "", ariaLabel: "Attach a file", glyph: PaperclipIcon }, { label: "medium", glyph: GaugeIcon }, { label: "Checkpoint" }],
 	}),
 	chatFixture({
 		id: "in-room-folded-user-prompt",
@@ -928,7 +946,7 @@ export const inRoomChatFixtureStates: InRoomChatFixtureState[] = [
 		usage: { ...activeChatUsage, turns: 2, input: 11200, output: 900, totalTokens: 13400 },
 		items: foldedUserPromptItems,
 		inputValue: "",
-		composerRightActions: [{ label: "Memento" }, { label: "Checkpoint" }],
+		composerRightActions: [{ label: "", ariaLabel: "Attach a file", glyph: PaperclipIcon }, { label: "medium", glyph: GaugeIcon }, { label: "Checkpoint" }],
 	}),
 	chatFixture({
 		id: "in-room-streaming-busy",
@@ -941,7 +959,7 @@ export const inRoomChatFixtureStates: InRoomChatFixtureState[] = [
 		items: streamingItems,
 		inputValue: "Follow-up while it works",
 		composerPlaceholder: "Working… Enter to queue",
-		composerRightActions: [{ label: "Memento" }, { label: "Checkpoint" }],
+		composerRightActions: [{ label: "", ariaLabel: "Attach a file", glyph: PaperclipIcon }, { label: "medium", glyph: GaugeIcon }, { label: "Checkpoint" }],
 	}),
 	chatFixture({
 		id: "in-room-workspace-tool-stack",
@@ -953,7 +971,7 @@ export const inRoomChatFixtureStates: InRoomChatFixtureState[] = [
 		usage: { ...activeChatUsage, turns: 3, input: 16200, output: 2400, totalTokens: 21100 },
 		items: workspaceToolStackItems,
 		inputValue: "",
-		composerRightActions: [{ label: "Memento" }, { label: "Checkpoint" }],
+		composerRightActions: [{ label: "", ariaLabel: "Attach a file", glyph: PaperclipIcon }, { label: "medium", glyph: GaugeIcon }, { label: "Checkpoint" }],
 	}),
 	chatFixture({
 		id: "in-room-tool-activity",
@@ -965,7 +983,7 @@ export const inRoomChatFixtureStates: InRoomChatFixtureState[] = [
 		usage: { ...activeChatUsage, turns: 6, input: 18200, output: 5200, totalTokens: 28100 },
 		items: toolActivityItems,
 		inputValue: "",
-		composerRightActions: [{ label: "Memento" }, { label: "Checkpoint" }],
+		composerRightActions: [{ label: "", ariaLabel: "Attach a file", glyph: PaperclipIcon }, { label: "medium", glyph: GaugeIcon }, { label: "Checkpoint" }],
 	}),
 	chatFixture({
 		id: "in-room-web-tool-bundles",
@@ -977,7 +995,7 @@ export const inRoomChatFixtureStates: InRoomChatFixtureState[] = [
 		usage: { ...activeChatUsage, turns: 4, input: 21500, output: 3900, totalTokens: 30800 },
 		items: webToolBundleItems,
 		inputValue: "",
-		composerRightActions: [{ label: "Memento" }, { label: "Checkpoint" }],
+		composerRightActions: [{ label: "", ariaLabel: "Attach a file", glyph: PaperclipIcon }, { label: "medium", glyph: GaugeIcon }, { label: "Checkpoint" }],
 	}),
 	chatFixture({
 		id: "in-room-approval-request",
@@ -989,7 +1007,7 @@ export const inRoomChatFixtureStates: InRoomChatFixtureState[] = [
 		usage: { ...activeChatUsage, turns: 3, input: 8700, output: 1800, totalTokens: 12600 },
 		items: approvalItems,
 		inputValue: "",
-		composerRightActions: [{ label: "Memento" }, { label: "Checkpoint" }],
+		composerRightActions: [{ label: "", ariaLabel: "Attach a file", glyph: PaperclipIcon }, { label: "medium", glyph: GaugeIcon }, { label: "Checkpoint" }],
 	}),
 	chatFixture({
 		id: "in-room-sidebar-context",
@@ -1001,7 +1019,7 @@ export const inRoomChatFixtureStates: InRoomChatFixtureState[] = [
 		usage: activeChatUsage,
 		items: activeConversationItems,
 		inputValue: "",
-		composerRightActions: [{ label: "Memento" }, { label: "Checkpoint" }],
+		composerRightActions: [{ label: "", ariaLabel: "Attach a file", glyph: PaperclipIcon }, { label: "medium", glyph: GaugeIcon }, { label: "Checkpoint" }],
 	}),
 ];
 

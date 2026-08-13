@@ -134,6 +134,26 @@ try {
 	assert(/shown to you visually/.test(textOf(imageRead)), "image read says it is a visual read");
 	assert(imagesOf(imageRead).length === 1 && imagesOf(imageRead)[0].mimeType === "image/png", "image read carries exactly one image block");
 
+	// ---- tools: a model that cannot see is told so ---------------------------
+	// The image blocks are still returned; the provider layer replaces them with
+	// a placeholder for a text-only model. Without a word about that in the
+	// framing text the model is left free to describe a picture it never saw.
+	//
+	// Honest limit of this check: the context is hand-built here, so what is
+	// proven is the decision the tool makes given a model, not that the real
+	// session hands it one. That second half is the runtime's own contract
+	// (ExtensionContext.model, the same field the runtime read tool reads for
+	// exactly this purpose) and is not exercised by any smoke in this file.
+	const blindCtx = { model: { input: ["text"] } } as any;
+	const seeingCtx = { model: { input: ["text", "image"] } } as any;
+	const blindImageRead = await readFileTool!.execute("v1b", { name: "small.png" }, undefined as any, undefined as any, blindCtx);
+	assert(/current model cannot see images/.test(textOf(blindImageRead)), "a text-only model is told plainly that the image is omitted");
+	assert(!/shown to you visually/.test(textOf(blindImageRead)), "a text-only model is not told the image is shown to it");
+	const seeingImageRead = await readFileTool!.execute("v1c", { name: "small.png" }, undefined as any, undefined as any, seeingCtx);
+	assert(/shown to you visually/.test(textOf(seeingImageRead)) && !/cannot see images/.test(textOf(seeingImageRead)), "an image-capable model keeps the plain visual framing");
+	const blindScanRead = await readFileTool!.execute("v2b", { name: "scan.pdf" }, undefined as any, undefined as any, blindCtx);
+	assert(/current model cannot see images/.test(textOf(blindScanRead)), "rendered pdf pages carry the same honesty as a plain image");
+
 	const scanRead = await readFileTool!.execute("v2", { name: "scan.pdf" }, undefined as any, undefined as any, undefined as any);
 	assert(/Scanned document \(no text layer\)/.test(textOf(scanRead)), "scanned read names the no-text-layer condition");
 	assert(imagesOf(scanRead).length === SHELF_RASTER_PAGES_PER_READ, "scanned read carries one image per rendered page");

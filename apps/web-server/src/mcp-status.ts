@@ -94,6 +94,18 @@ function authModeFor(entry: {
 	return "none";
 }
 
+/**
+ * The current globally configured connector names (merged across the config
+ * files, exactly what a session's adapter would load). This is the universe
+ * per-room grants are validated against and intersected with.
+ */
+export async function listConfiguredMcpConnectorNames(): Promise<string[]> {
+	ensureAgentDirEnv();
+	const configMod = await import(ADAPTER_CONFIG);
+	const config = configMod.loadMcpConfig();
+	return Object.keys(config.mcpServers ?? {}).sort((a, b) => a.localeCompare(b));
+}
+
 export async function getMcpConnectorsStatus(): Promise<McpConnectorsStatusResponse> {
 	ensureAgentDirEnv();
 	const [configMod, authMod, cacheMod] = await Promise.all([

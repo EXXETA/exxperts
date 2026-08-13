@@ -164,7 +164,13 @@ export function PersistentAgentCard({ status, modelStatus, aiProfileStatus, thre
 	// the conversation, so the badge and note say that instead of "open in
 	// another browser session".
 	const answeringInBackground = lockedElsewhere && lockSurface === "web" && !!status?.activeThread?.working;
-	const lockNote = answeringInBackground
+	// Issue #33: a response cooking with NO client attached is a room the user
+	// may step back into; the server adopts the session onto the live stream.
+	// A room genuinely open in another window keeps its lock-and-stay-out.
+	const canStepBackIn = answeringInBackground && status?.answeringDetached === true;
+	const lockNote = canStepBackIn
+		? "This room is still writing a response. You can step back in and watch it finish; it is saved into the conversation either way."
+		: answeringInBackground
 		? "This room is still writing a response. It is saved into the conversation when finished; open the room again then. A room can only be active in one place at a time."
 		: lockedByScheduler
 			? "This room is working on a scheduled background task. Wait for it to finish before opening it. A room can only be active in one place at a time."
@@ -313,7 +319,7 @@ export function PersistentAgentCard({ status, modelStatus, aiProfileStatus, thre
 								}}
 							>Resume →</button>
 						) : (
-							<button className="landing-action" title={purging ? purgeNote : lockedElsewhere ? lockNote : standbyActionTitle} disabled={!status || lockedElsewhere || !standbyModelAllowed || purging} onClick={() => status && onResume(status)}>Resume →</button>
+							<button className="landing-action" title={purging ? purgeNote : lockedElsewhere ? lockNote : standbyActionTitle} disabled={!status || (lockedElsewhere && !canStepBackIn) || !standbyModelAllowed || purging} onClick={() => status && onResume(status)}>Resume →</button>
 						)
 					) : preparedBoundaryThread ? (
 						<button

@@ -39,6 +39,13 @@ export interface CanonicalModelName {
 	provider?: string;
 }
 
+/**
+ * Provider ids the app mints for saved gateways all start with this. Shared so
+ * nothing has to spell it out again: a gateway's id is a slug of the name its
+ * owner chose, which is never a name to show anybody.
+ */
+export const GATEWAY_PROVIDER_ID_PREFIX = "gateway-";
+
 // Mirrors the server's WEB_CHAT_PROVIDER_LABELS so client-side fallbacks agree
 // with labels minted by the server for new rows.
 const PROVIDER_DISPLAY_NAMES: Record<string, string> = {

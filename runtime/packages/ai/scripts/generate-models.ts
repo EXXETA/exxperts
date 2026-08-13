@@ -26,6 +26,7 @@ interface ModelsDevModel {
 	name: string;
 	tool_call?: boolean;
 	reasoning?: boolean;
+	reasoning_options?: Array<{ type?: string; values?: string[] }>;
 	limit?: {
 		context?: number;
 		output?: number;
@@ -152,6 +153,79 @@ function mergeThinkingLevelMap(model: Model<any>, map: NonNullable<Model<any>["t
 	model.thinkingLevelMap = { ...model.thinkingLevelMap, ...map };
 }
 
+/**
+ * The effort ladders models.dev reports, keyed by a normalized model name.
+ *
+ * models.dev states each model's reasoning_options, including the exact effort
+ * values a provider accepts. That is the authority for which tiers above
+ * "high" exist, so this is filled from it rather than from a list maintained
+ * by hand here.
+ */
+const upstreamEffortLadders = new Map<string, string[]>();
+
+/**
+ * Reduce the many spellings of one model to a single key: regional Bedrock
+ * prefixes, provider namespaces, deployment suffixes and the dot/dash split
+ * between "4.6" and "4-6" all name the same thing upstream.
+ */
+function normalizeUpstreamModelKey(id: string): string {
+	return id
+		.toLowerCase()
+		.replace(/^(?:[a-z]{2}|global)\.anthropic\./, "")
+		.replace(/^anthropic[./]/, "")
+		.replace(/[@:].*$/, "")
+		.replace(/-fast$/, "")
+		.replace(/-v\d+$/, "")
+		.replace(/\./g, "-");
+}
+
+/**
+ * Where a Claude model's effort ladder may be read from.
+ *
+ * Deliberately first-party only. Resellers list the same model with ladders
+ * that disagree with each other (one lists a single tier, the next lists
+ * seven), so taking whichever one happened to be read first would make the
+ * generated registry depend on key order in a remote JSON file. These four are
+ * the surfaces this registry actually mirrors Claude from.
+ */
+const CLAUDE_EFFORT_LADDER_SOURCES = ["anthropic", "amazon-bedrock", "google-vertex-anthropic", "github-copilot"];
+
+function recordUpstreamEffortLadders(data: any): void {
+	for (const providerKey of CLAUDE_EFFORT_LADDER_SOURCES) {
+		for (const model of Object.values(data?.[providerKey]?.models ?? {}) as ModelsDevModel[]) {
+			const effort = model?.reasoning_options?.find((option) => option?.type === "effort");
+			if (!effort?.values?.length || !model.id) continue;
+			const key = normalizeUpstreamModelKey(model.id);
+			const known = upstreamEffortLadders.get(key);
+			if (known && known.join() !== effort.values.join()) {
+				console.warn(`  effort ladder disagreement for ${key}: ${known.join("/")} vs ${effort.values.join("/")}`);
+				continue;
+			}
+			upstreamEffortLadders.set(key, effort.values);
+		}
+	}
+}
+
+/**
+ * A model whose top tiers were already decided by one of the explicit rules
+ * above keeps that decision.
+ *
+ * Two reasons. Those rules encode judgements the upstream ladder does not
+ * carry, such as Opus 4.6 exposing its top tier as "max" with no xhigh, Opus
+ * 4.7 as "xhigh", and DeepSeek V4 reaching "max" through the xhigh rung. And
+ * adding a tier beside one of those would produce two rungs that send the very
+ * same effort value, which is exactly the duplicate the dial is meant not to
+ * have. Where upstream and a pinned map disagree (upstream now also lists
+ * "max" for Opus 4.7), the pinned map wins until somebody decides otherwise.
+ */
+function hasPinnedTopTier(model: Model<any>): boolean {
+	return model.thinkingLevelMap?.xhigh !== undefined || model.thinkingLevelMap?.max !== undefined;
+}
+
+function isClaudeModelId(id: string): boolean {
+	return id.toLowerCase().includes("claude-");
+}
+
 function getTogetherCompat(modelId: string, reasoning: boolean): OpenAICompletionsCompat {
 	if (!reasoning) return TOGETHER_BASE_COMPAT;
 	if (TOGETHER_REASONING_EFFORT_MODELS.has(modelId)) return TOGETHER_REASONING_EFFORT_COMPAT;
@@ -197,6 +271,10 @@ function isGemma4Model(modelId: string): boolean {
 }
 
 function applyThinkingLevelMetadata(model: Model<any>): void {
+	// A map that already exists here was shaped where the model was built, by a
+	// provider that knows its own reasoning surface (Together's toggle, for
+	// instance, where tiers mean nothing). Upstream tiers do not get to argue.
+	const shapedAtConstruction = model.thinkingLevelMap !== undefined;
 	if (
 		(model.api === "openai-responses" || model.api === "azure-openai-responses") &&
 		model.id.startsWith("gpt-5")
@@ -218,6 +296,21 @@ function applyThinkingLevelMetadata(model: Model<any>): void {
 	}
 	if (model.id.includes("opus-4-7") || model.id.includes("opus-4.7")) {
 		mergeThinkingLevelMap(model, { xhigh: "xhigh" });
+	}
+	// Tiers above "high" are opt-in per model, so the Claude family takes them
+	// from the upstream effort ladder rather than from a list kept here. Only
+	// the top tiers are read: everything at or below "high" is already
+	// available by default. Scoped to Claude on purpose, because the sources
+	// consulted are the four surfaces this registry mirrors Claude from, and
+	// those surfaces also resell other vendors' models with ladders that are
+	// not theirs to state.
+	if (isClaudeModelId(model.id) && !shapedAtConstruction && !hasPinnedTopTier(model)) {
+		const upstreamLadder = upstreamEffortLadders.get(normalizeUpstreamModelKey(model.id));
+		if (upstreamLadder) {
+			for (const tier of ["xhigh", "max"] as const) {
+				if (upstreamLadder.includes(tier)) mergeThinkingLevelMap(model, { [tier]: tier });
+			}
+		}
 	}
 	if (model.api === "openai-completions" && model.id.includes("deepseek-v4")) {
 		mergeThinkingLevelMap(model, DEEPSEEK_V4_THINKING_LEVEL_MAP);
@@ -375,6 +468,7 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 		console.log("Fetching models from models.dev API...");
 		const response = await fetch("https://models.dev/api.json");
 		const data = await response.json();
+		recordUpstreamEffortLadders(data);
 
 		const models: Model<any>[] = [];
 

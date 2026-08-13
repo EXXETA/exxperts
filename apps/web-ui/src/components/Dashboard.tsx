@@ -1,7 +1,7 @@
 import { useEffect, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { apiFetch } from "../api";
 import { agentLabel } from "../types";
-import { modelDisplayName } from "../model-names";
+import { GATEWAY_PROVIDER_ID_PREFIX, modelDisplayName } from "../model-names";
 
 // The Wallet never blends real and estimated dollars: the server splits every
 // aggregate by source (billed API spend, plan-covered subscription usage,
@@ -129,9 +129,19 @@ function modelCell(row: UsageRow): string {
 // Mirrors the server's sourceOfRow: authType is exact; without it only the
 // OAuth-only channels (ChatGPT, Copilot) may be called plans — anything else
 // stays a bare provider name so the table never contradicts the KPIs.
+// A saved gateway's provider id is a slug nobody chose to read ("gateway-
+// project-gateway"); the row's label already carries the name they did choose,
+// so that wins for gateways and the curated table speaks for everything else.
+function shortSourceName(row: UsageRow): string | undefined {
+	const fromLabel = row.modelLabel?.split(" — ")[0];
+	if (!row.provider) return fromLabel;
+	if (row.provider.startsWith(GATEWAY_PROVIDER_ID_PREFIX)) return fromLabel ?? "gateway";
+	return PROVIDER_SHORT[row.provider] ?? row.provider;
+}
+
 function sourceCell(row: UsageRow): string {
 	if (row.authType === "api_key") return "API key";
-	const short = row.provider ? PROVIDER_SHORT[row.provider] ?? row.provider : row.modelLabel?.split(" — ")[0];
+	const short = shortSourceName(row);
 	if (row.authType === "oauth") return short ? short + " plan" : "plan";
 	if (row.modelLabel?.startsWith("ChatGPT Plus/Pro") || row.provider === "openai-codex") return "ChatGPT plan";
 	if (row.modelLabel?.startsWith("GitHub Copilot") || row.provider === "github-copilot") return "Copilot plan";

@@ -15,6 +15,7 @@ import {
 	beginPersistentAgentTurn,
 	buildPersistentAgentBootContext,
 	createPersistentAgentPiSessionJsonlThreadRuntime,
+	createPersistentRoomAutoDeclinedQuestionLog,
 	finishPersistentAgentTurn,
 	getPersistentAgentThread,
 	openPersistentAgentPiSessionManager,
@@ -39,7 +40,7 @@ import contentPolicyExt from "../../../pi-package/extensions/content-policy/inde
 import permissionsExt from "../../../pi-package/extensions/permissions/index.js";
 import kbExt from "../../../pi-package/extensions/kb/index.js";
 import artifactsExt from "../../../pi-package/extensions/artifacts/index.js";
-import mcpExt from "../../../pi-package/extensions/mcp/index.js";
+import { createRoomScopedMcpExtension } from "../../../pi-package/extensions/mcp/index.js";
 import webSearchExt from "../../../pi-package/extensions/web-search/index.js";
 import fetchUrlExt from "../../../pi-package/extensions/fetch_url/index.js";
 
@@ -81,6 +82,8 @@ export interface PersistentRoomBackgroundExecutionResult {
 		userItemId: string;
 		assistantItemId: string;
 	};
+	/** Titles of the dialogs the headless context answered for the user, deduplicated, in the order they came up. */
+	declinedQuestions?: string[];
 	thread: PersistentAgentThreadRecord;
 }
 
@@ -168,14 +171,29 @@ function usageFromMessageUsage(usage: any): PersistentRoomBackgroundExecutionRes
 	};
 }
 
-export function createHeadlessUiContext(rejectMessage = "scheduled background room work cannot answer interactive UI requests"): ExtensionUIContext {
-	const rejectInteractive = async () => {
+/** A dialog that was answered for the user because the run had nobody watching it. */
+export interface HeadlessUiAutoDeclinedQuestion {
+	kind: "confirm" | "select" | "input";
+	title: string;
+}
+
+export function createHeadlessUiContext(
+	rejectMessage = "scheduled background room work cannot answer interactive UI requests",
+	onAutoDecline?: (question: HeadlessUiAutoDeclinedQuestion) => void,
+): ExtensionUIContext {
+	// Every dialog kind takes the question title first. Report it before the
+	// rejection so the run can write the note into the thread; bookkeeping must
+	// never change what the asking tool sees, so a throwing listener is swallowed.
+	const rejectInteractive = (kind: HeadlessUiAutoDeclinedQuestion["kind"]) => async (title?: string) => {
+		if (onAutoDecline) {
+			try { onAutoDecline({ kind, title: String(title ?? "") }); } catch {}
+		}
 		throw new Error(rejectMessage);
 	};
 	return {
-		select: rejectInteractive,
-		confirm: rejectInteractive,
-		input: rejectInteractive,
+		select: rejectInteractive("select"),
+		confirm: rejectInteractive("confirm"),
+		input: rejectInteractive("input"),
 		notify() {},
 		setStatus() {},
 		setWorkingMessage() {},
@@ -196,6 +214,13 @@ function upsertItem(items: unknown[], item: Record<string, unknown>): unknown[] 
 		return { ...existing, ...item };
 	});
 	return replaced ? next : [...next, item];
+}
+
+// A background run has nobody to answer a dialog, so the headless context
+// declines it and the asking tool fails. The run itself must say so in the
+// transcript, deterministically, instead of hoping the answer mentions it.
+export function scheduledPromptBackgroundDeclinedQuestionItemIdPrefix(executionId: string): string {
+	return `scheduled-declined-${safeExecutionId(executionId)}`;
 }
 
 function appendFailureItem(items: unknown[], executionId: string, message: string): unknown[] {
@@ -367,6 +392,7 @@ async function createPersistentRoomBackgroundSession(input: {
 	cwd: string;
 	agentDir: string;
 	modelRegistry: ModelRegistry;
+	onAutoDecline?: (question: HeadlessUiAutoDeclinedQuestion) => void;
 }) {
 	const effectiveWorkspacePolicy = resolvePersistentRoomEffectiveWorkspacePolicy(input.roomId, input.threadId);
 	const workspaceToolNames = effectiveWorkspacePolicy.allowedToolNames;
@@ -380,7 +406,9 @@ async function createPersistentRoomBackgroundSession(input: {
 		createPersistentRoomPermissionsExtension(input.roomId, workspaceToolNames, workspaceToolsEnabled, effectiveWorkspacePolicy.workspaceAccessMode) as any,
 		kbExt as any,
 		artifactsExt as any,
-		mcpExt as any,
+		// Per-room MCP: scheduled and detached background runs inherit the
+		// room's connector grants through the same shared wrapper as live turns.
+		createRoomScopedMcpExtension(input.roomId) as any,
 		webSearchExt as any,
 		fetchUrlExt as any,
 	];
@@ -406,7 +434,7 @@ async function createPersistentRoomBackgroundSession(input: {
 		tools: toolPolicy.allowedToolNames,
 		...(customTools.length > 0 ? { customTools } : {}),
 	});
-	await created.session.bindExtensions({ uiContext: createHeadlessUiContext() });
+	await created.session.bindExtensions({ uiContext: createHeadlessUiContext(undefined, input.onAutoDecline) });
 	return created.session;
 }
 
@@ -429,6 +457,19 @@ export async function executePersistentRoomBackgroundPrompt(input: PersistentRoo
 	let assistantText = "";
 	let usage: PersistentRoomBackgroundExecutionResult["usage"];
 	let terminalReason: "completed" | "failed" = "failed";
+	const autoDeclinedQuestions = createPersistentRoomAutoDeclinedQuestionLog();
+	const declinedQuestionItemIdPrefix = scheduledPromptBackgroundDeclinedQuestionItemIdPrefix(executionId);
+	// Bookkeeping must never cost the answer (or the honest failure note): the
+	// landed text is the paid result of this run, the away-notes sit on top of
+	// it. A throw in the note pass gives back the items it was handed.
+	const noteItemsOrJustTheItems = (items: unknown[]): unknown[] => {
+		try {
+			return autoDeclinedQuestions.appendItems(items, declinedQuestionItemIdPrefix);
+		} catch (error) {
+			console.warn(`failed to append auto-declined question notes for scheduled execution ${executionId}: ${(error as Error)?.message ?? error}`);
+			return items;
+		}
+	};
 	const session = await createPersistentRoomBackgroundSession({
 		roomId: prepared.roomId,
 		threadId: prepared.threadId,
@@ -437,6 +478,7 @@ export async function executePersistentRoomBackgroundPrompt(input: PersistentRoo
 		cwd: prepared.runtimeCwd,
 		agentDir,
 		modelRegistry,
+		onAutoDecline: (question) => autoDeclinedQuestions.note(question),
 	});
 	const turnId = input.turnId ?? `scheduled_${executionId}`.slice(0, 120);
 	const connectionId = input.connectionId ?? `scheduler:${executionId}`.slice(0, 120);
@@ -482,7 +524,7 @@ export async function executePersistentRoomBackgroundPrompt(input: PersistentRoo
 					state: current.state === "active" ? "active" : "standby",
 					origin: current.origin,
 					model: current.model,
-					items: appendFailureItem(current.items ?? [], executionId, "Scheduled background task failed before an assistant response was saved."),
+					items: appendFailureItem(noteItemsOrJustTheItems(current.items ?? []), executionId, "Scheduled background task failed before an assistant response was saved."),
 				}).thread;
 			} catch {
 				// Preserve the original execution error. Worker finalization records status.
@@ -501,7 +543,7 @@ export async function executePersistentRoomBackgroundPrompt(input: PersistentRoo
 		state: "standby",
 		origin: current.origin,
 		model: current.model,
-		items: upsertItem(current.items ?? [], { kind: "assistant", id: assistantItemId, text: assistantText.trim(), streaming: false }),
+		items: noteItemsOrJustTheItems(upsertItem(current.items ?? [], { kind: "assistant", id: assistantItemId, text: assistantText.trim(), streaming: false })),
 	}, {
 		// The model already ran and its tokens are already spent; this write only lands the paid
 		// answer under the thread's existing lock. A profile switch mid-generation must not turn
@@ -516,6 +558,7 @@ export async function executePersistentRoomBackgroundPrompt(input: PersistentRoo
 		assistantText: assistantText.trim(),
 		...(usage ? { usage } : {}),
 		items: { userItemId, assistantItemId },
+		...(autoDeclinedQuestions.titles().length > 0 ? { declinedQuestions: autoDeclinedQuestions.titles() } : {}),
 		thread,
 	};
 }

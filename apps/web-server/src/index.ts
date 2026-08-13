@@ -3,11 +3,46 @@
  * WebSocket connection.
  *
  * Wire protocol (JSON over WS):
- *   client -> server:  { type: "prompt", text: string }
+ *   client -> server:  { type: "prompt", text: string, effort?: ThinkingLevel }
+ *                        (`effort` is an EXPLICIT choice, stored raw exactly
+ *                        like the effort frame; omit it to keep whatever the
+ *                        room already chose. This app's composer always omits
+ *                        it: echoing back the clamped level it was shown would
+ *                        overwrite the raw stored preference)
  *                      { type: "abort" }
+ *                      { type: "effort", level: ThinkingLevel }
+ *                        (the room's sticky reasoning effort, chosen between
+ *                        turns)
  *   server -> client:  { type: "event", event: <session event> }
- *                      { type: "ready", model: string }
+ *                      { type: "ready", model: string, effort: { level, supported, ladder } }
+ *                        (ladder = the model's OWN dial, one {level,label} per
+ *                        distinct effort it can produce, so tokens that come
+ *                        out identical are one rung and each rung carries the
+ *                        provider's own name for it. `supported` is the older,
+ *                        unfolded token list, kept for clients that predate
+ *                        the ladder. level is CLAMPED for display and must
+ *                        never be sent back as a choice. A room that never
+ *                        chose reports the level its session resolved on its
+ *                        own)
+ *                      { type: "effort", level, supported }
+ *                        (what an effort frame actually took hold as)
  *                      { type: "error", message: string }
+ *                      { type: "turn_reattach", turnId, conversationId, settled, userText?, anchorItemId? }
+ *                        (issue #33: sent right after "ready" when this session
+ *                        stepped back into a room whose detached turn is still
+ *                        cooking or just landed; the whole turn's event frames
+ *                        replay immediately after it, then live frames continue.
+ *                        anchorItemId names the last persisted item at TURN
+ *                        START: everything after it is this turn's debris, null
+ *                        means the thread was empty then, absent means unknown)
+ *                      { type: "turn_reattach_replay_done", turnId }
+ *                        (closes the replay window opened by turn_reattach —
+ *                        every frame between the two is catch-up the client
+ *                        should render instantly; frames after it are live
+ *                        and reveal at reading pace)
+ *                      { type: "error", code: "room_displaced", ... }
+ *                        (issue #33: this session's adopted turn was taken over
+ *                        by a newer connection for the same room)
  *
  * Persona is forced to "business" here — that is who the web UI is for.
  * For coder access, use the CLI.
@@ -22,12 +57,12 @@ import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import Fastify from "fastify";
 import websocket from "@fastify/websocket";
-import { createAgentSession, DefaultResourceLoader, getAgentDir, getModelsPath, SessionManager, CoordinationManager, AuthStorage, ModelRegistry, defaultModelPerProvider, isApiKeyLoginProvider, buildOpenAiCompatibleSetupPlan, listGitHubCopilotModels, writeOpenAiCompatibleSetupFiles } from "@exxeta/exxperts-runtime";
+import { createAgentSession, clampThinkingLevel, getThinkingLevelLadder, resolveThinkingLevelRung, DefaultResourceLoader, getAgentDir, SessionManager, CoordinationManager, AuthStorage, ModelRegistry, defaultModelPerProvider, isApiKeyLoginProvider, listGitHubCopilotModels } from "@exxeta/exxperts-runtime";
 import { createWebUiContext } from "./web-ui-context.js";
 import { cancelProviderLogin, logoutProvider, ProviderAuthError, providerLoginState, saveProviderApiKey, startProviderLogin } from "./provider-auth.js";
 import { builtInProfileIdForProvider, deleteCustomAiProfile, isCustomAiProfileId, isReservedCustomProfileProvider, readCustomAiProfiles, writeCustomAiProfile } from "./custom-ai-profiles.js";
 import { ConsultPromptOverflowError } from "./consult.js";
-import { appendPersistentAgentThreadPendingHandoff, archivePersistentAgent, getPersistentAgentLifecycleCounts, listArchivedPersistentAgents, purgePersistentAgent, restorePersistentAgent, sweepPersistentAgentPurgeTombstones, beginPersistentAgentTurn, buildAbsorbAssessment, buildAbsorbDiscussionSignoff, buildAbsorbDiscussionTurn, buildAbsorbProposal, buildCheckpointProposal, buildConsultAnswer, buildPersistentAgentBootContext, buildPersistentAgentCurrentIdentitySection, buildPersistentRoomCurrentWorkspaceSection, buildStructuralReviewAssessment, buildStructuralReviewDiscussionSignoff, buildStructuralReviewDiscussionTurn, buildStructuralReviewProposal, createPersistentAgentFromScaffoldInput, createPersistentAgentPiSessionJsonlThreadRuntime, clearPersistentAgentThreadPendingHandoffs, clearPersistentAgentUnseenLandedAnswer, deletePersistentAgentThread, PERSISTENT_AGENT_L1A_DEFAULT_MODE_ID, PERSISTENT_AGENT_L1A_MODES, discardEmptyPreparedBoundaryThread, finishPersistentAgentTurn, getAbsorbAvailability, getPersistentAgentActiveTurnState, getPersistentAgentRuntimeState, getPersistentAgentStatus, getPersistentAgentThread, getStructuralReviewAvailability, isPersistentAgentArchived, listPersistentAgents, markPersistentAgentTurnCancelling, openPersistentAgentPiSessionManager, parseAbsorbApprovalRequest, parseCheckpointApprovalRequest, parseStructuralReviewApprovalRequest, readPersistentAgentBootPromptSnapshot, recordPersistentAgentUnseenLandedAnswer, renamePersistentAgent, validatePersistentAgentId, writeApprovedAbsorb, writeApprovedCheckpoint, writeApprovedStructuralReview, writePersistentAgentMementoBoundary, writePersistentAgentRuntimeState, writePersistentAgentThread } from "./persistent-agents.js";
+import { appendPersistentAgentThreadPendingHandoff, archivePersistentAgent, getPersistentAgentLifecycleCounts, listArchivedPersistentAgents, purgePersistentAgent, restorePersistentAgent, sweepPersistentAgentPurgeTombstones, beginPersistentAgentTurn, buildAbsorbAssessment, buildAbsorbDiscussionSignoff, buildAbsorbDiscussionTurn, buildAbsorbProposal, buildCheckpointProposal, buildConsultAnswer, buildPersistentAgentBootContext, buildPersistentAgentCurrentIdentitySection, buildPersistentRoomCurrentWorkspaceSection, buildStructuralReviewAssessment, buildStructuralReviewDiscussionSignoff, buildStructuralReviewDiscussionTurn, buildStructuralReviewProposal, createPersistentAgentFromScaffoldInput, createPersistentAgentPiSessionJsonlThreadRuntime, createPersistentRoomAutoDeclinedQuestionLog, clearPersistentAgentThreadPendingHandoffs, clearPersistentAgentUnseenLandedAnswerForBind, deletePersistentAgentThread, PERSISTENT_AGENT_L1A_DEFAULT_MODE_ID, PERSISTENT_AGENT_L1A_MODES, discardEmptyPreparedBoundaryThread, finishPersistentAgentTurn, getAbsorbAvailability, getPersistentAgentActiveTurnState, getPersistentAgentRuntimeState, getPersistentAgentStatus, getPersistentAgentThread, getStructuralReviewAvailability, isPersistentAgentArchived, listPersistentAgents, markPersistentAgentTurnCancelling, openPersistentAgentPiSessionManager, parseAbsorbApprovalRequest, parseCheckpointApprovalRequest, parseStructuralReviewApprovalRequest, readPersistentAgentBootPromptSnapshot, recordPersistentAgentUnseenLandedAnswer, renamePersistentAgent, validatePersistentAgentId, writeApprovedAbsorb, writeApprovedCheckpoint, writeApprovedStructuralReview, writePersistentAgentMementoBoundary, writePersistentAgentRuntimeState, writePersistentAgentThread } from "./persistent-agents.js";
 import { buildPersistentRoomRestoredLiveThreadContext } from "./persistent-room-resume-context.js";
 import {
 	getPersistentRoomToolPolicy,
@@ -35,6 +70,7 @@ import {
 } from "./persistent-room-tool-policy.js";
 import { assertPersistentRoomWorkspaceDefaultMutable, createPersistentRoomCapabilityPolicy, createPersistentRoomDefaultCapabilityPolicy, deletePersistentRoomCapabilityPolicy, deletePersistentRoomDefaultCapabilityPolicy, missingPersistentRoomWorkspaceRootWarnings, normalizePersistentRoomWorkspaceAccessModeInput, persistentRoomCapabilityPolicyView, persistentRoomRuntimeCwdForEffectiveWorkspacePolicy, PersistentRoomWorkspacePolicyError, PERSISTENT_ROOM_WORKSPACE_DEFAULT_STORAGE_SOURCE, PERSISTENT_ROOM_WORKSPACE_POLICY_STORAGE_SOURCE, readPersistentRoomCapabilityPolicy, readPersistentRoomDefaultCapabilityPolicy, releasePersistentRoomThreadWorkspaceMirror, resolvePersistentRoomCapabilityPolicy, resolvePersistentRoomEffectiveWorkspacePolicy, updatePersistentRoomCapabilityPolicyWorkspaceSettings, writePersistentRoomCapabilityPolicy, writePersistentRoomDefaultCapabilityPolicy } from "./persistent-room-workspace-policy.js";
 import { MEMORY_BUDGET_DEFAULT_TOKENS, readPersistentRoomMaintenanceSettings, writePersistentRoomMaintenanceSettings } from "./persistent-room-maintenance-settings.js";
+import { isRoomEffortLevel, readPersistentRoomEffortChoice, writePersistentRoomEffortChoice, type RoomEffortLevel } from "./persistent-room-effort-settings.js";
 import { computeSkillStatuses, disablePersistentRoomSkill, effectiveEnabledSkills, enablePersistentRoomSkill, readPersistentRoomSkillSettings } from "./persistent-room-skill-settings.js";
 import { buildEnabledSkillsIndexSection, createReadSkillTool } from "./persistent-room-skill-tool.js";
 import { buildSpecialistTemplatesIndexSection, createDelegateTaskTool, userAuthoredPromptText } from "./persistent-room-delegate-tool.js";
@@ -51,7 +87,10 @@ import { assessTaskStoreGc, collectProtectedTaskIds, executeTaskStoreGc } from "
 import { getSpecialistTemplate, SPECIALIST_TASK_CAPS } from "./specialist-templates.js";
 import { generateTaskArtifactThumbnails } from "./task-artifact-thumbnails.js";
 import { createPersistentRoomWorkspaceTools } from "./persistent-room-workspace-tools.js";
-import { assertPersistentRoomModelForActiveProfile, DEFAULT_PERSISTENT_AGENT_AI_PROFILE_ID, getAbsorbModelLock, getAvailablePersistentAgentAiProfiles, getConsultModelLock, getPersistentAgentAiProfile, getPersistentRoomModelLocks, getStructuralReviewModelLock, isPersistentAgentAiProfileId, isPersistentRoomModelForProfile, OPENAI_COMPATIBLE_AI_PROFILE_ID, OPENAI_COMPATIBLE_PROVIDER_ID, readLocalOpenAiCompatibleAiProfile } from "./persistent-agent-ai-profiles.js";
+import { assertPersistentRoomModelForActiveProfile, DEFAULT_PERSISTENT_AGENT_AI_PROFILE_ID, getAbsorbModelLock, getAvailablePersistentAgentAiProfiles, getConsultModelLock, getPersistentAgentAiProfile, getPersistentRoomModelLocks, getStructuralReviewModelLock, isPersistentAgentAiProfileId, isPersistentRoomModelForProfile, OPENAI_COMPATIBLE_AI_PROFILE_ID, OPENAI_COMPATIBLE_PROVIDER_ID } from "./persistent-agent-ai-profiles.js";
+import { deleteOpenAiCompatibleGateway, findOpenAiCompatibleGateway, GATEWAY_DEFAULT_CONTEXT_WINDOW, GATEWAY_MAX_CONTEXT_WINDOW, GATEWAY_MIN_CONTEXT_WINDOW, GATEWAY_PROVIDER_ID_PREFIX, GatewayStoreUnreadableError, mintGatewayProviderId, parseGatewayContextWindow, readOpenAiCompatibleGateways, writeOpenAiCompatibleGateway, type GatewayRoomModel, type OpenAiCompatibleGateway } from "./openai-compatible-gateways.js";
+import { ModelCatalogUnreadableError, readCatalogProviderIds, readGatewayProviderBaseUrl, removeGatewayProviderEntry, writeGatewayProviderEntry } from "./openai-compatible-gateway-catalog.js";
+import { discoverGatewayModels, GatewayDiscoveryError, normalizeGatewayBaseUrl } from "./openai-compatible-gateway-detect.js";
 import { runIsolatedPersistentAgentWorker } from "./persistent-agent-worker-runtime.js";
 import { PERSISTENT_AGENTS_ROOT } from "./persistent-agents.js";
 import { registerUsageApi } from "./usage-api.js";
@@ -64,7 +103,8 @@ import type { PersistentAgentAiProfileStateSource } from "./persistent-agent-ai-
 import { registerKnowledgeApi } from "./knowledge-api.js";
 import { projectAgentEventForWebClient } from "./web-client-event-projection.js";
 import { createStreamTrace } from "./stream-trace.js";
-import { getMcpConnectorsStatus } from "./mcp-status.js";
+import { getMcpConnectorsStatus, listConfiguredMcpConnectorNames } from "./mcp-status.js";
+import { computeGrantedConnectorStatuses, grantPersistentRoomMcpConnector, persistentRoomMcpGrantsFingerprint, readPersistentRoomMcpSettings, revokeMcpConnectorFromAllRooms, revokePersistentRoomMcpConnector } from "./persistent-room-mcp-settings.js";
 import { addMcpServer, cancelMcpServerLogin, getMcpServerLoginState, logoutMcpServer, McpAdminError, removeMcpServer, startMcpServerLogin, testMcpServer } from "./mcp-admin.js";
 import type { AddMcpServerInput } from "./mcp-admin.js";
 import { browserSafeDiagnosticText, browserSafeLocalPath } from "./status-diagnostics.js";
@@ -87,7 +127,8 @@ import contentPolicyExt from "../../../pi-package/extensions/content-policy/inde
 import permissionsExt from "../../../pi-package/extensions/permissions/index.js";
 import kbExt from "../../../pi-package/extensions/kb/index.js";
 import artifactsExt, { SAFE_SEGMENT, artifactRoot, validateArtifactPath } from "../../../pi-package/extensions/artifacts/index.js";
-import mcpExt from "../../../pi-package/extensions/mcp/index.js";
+import { createRoomScopedMcpExtension } from "../../../pi-package/extensions/mcp/index.js";
+import { ensureRoomScopedMcpGrantsMigration } from "../../../pi-package/extensions/mcp/room-scope.js";
 import webSearchExt from "../../../pi-package/extensions/web-search/index.js";
 import fetchUrlExt from "../../../pi-package/extensions/fetch_url/index.js";
 import { addPersistentRoomScheduleJob, listPersistentRoomScheduleJobs, removePersistentRoomScheduleJob, summarizePersistentRoomScheduleJobs, updatePersistentRoomScheduleJob } from "../../../pi-package/extensions/schedule-prompt/index.js";
@@ -164,6 +205,42 @@ const persistentRoomLiveSessions = new Map<string, PersistentRoomLiveSession>();
 // refusal message honest for a connection attempt that bounces off that lock
 // ("finishing a response" rather than "open in another browser session").
 const detachedCookingRooms = new Set<string>();
+// Issue #33 (stepping back into a room): the handle a NEW connection uses to
+// adopt a room's detached cooking turn instead of bouncing off it. Registered
+// by the detaching connection's close handler, removed the moment the turn
+// settles, and implemented entirely inside the detaching connection's closure
+// so adoption never reaches into that closure's internals directly. The claim
+// happens synchronously at connect time; the adopt (sink attach + buffered
+// replay) happens after the new session is bound, in one synchronous block, so
+// no frame can slip between the replay snapshot and the live sink.
+type DetachedCookingTurnHandle = {
+	readonly conversationId: string;
+	readonly turnId: string;
+	/** The user-authored text of the cooking turn's prompt, so the adopting client can restore the bubble when its persisted transcript lacks it. */
+	readonly userText: string;
+	settled: boolean;
+	/** The connection that took over the room lock for this cooking turn (set at claim, before the adopt). */
+	claimantConnectionId: string | null;
+	/** The connection currently receiving the live stream (null while nobody is inside). */
+	adopterConnectionId: string | null;
+	/** Snapshot of every frame the turn has produced so far, from turn start. */
+	bufferedTurnFrames: () => unknown[];
+	/** True once the turn overflowed the replay byte cap: adoption must degrade to the honest bounce, never a truncated replay. */
+	replayUnavailable: () => boolean;
+	/** Free the replay buffer once the last possible replay has happened (the mid-bind claimant's settled replay). */
+	releaseReplayBuffer: () => void;
+	/** The last persisted thread item at TURN START: the supersede anchor a reattach hands the client, so completed prior turns can never be mistaken for this turn's debris. `null` means the thread was empty at turn start; `undefined` means unknown (the read failed), which clients treat conservatively. */
+	readonly anchorItemId: string | null | undefined;
+	/** Record who now owns the room-lock record (an ordinary web-over-web takeover) and how to release it; a previous claimant's release is invoked owner-checked, which only stops its now-pointless heartbeat, and the previous holder, ADOPTER or still-binding CLAIMANT, is told it was displaced through the hook it registered here (an adopter upgrades the hook at adopt time), so no window is ever left silently lock-less. */
+	claim: (connectionId: string, releaseLock: () => void, onDisplaced: () => void) => void;
+	/** Route future turn frames to `sink` and stand the hung-stream watchdog down (somebody is watching again). Returns false for a stale claimant or a settled turn. */
+	adopt: (connectionId: string, sink: (frame: unknown) => void, hooks: { onSettled: () => void; onDisplaced: () => void }) => boolean;
+	/** The adopter left (or died) mid-cook: back to detached cooking with the watchdog re-armed and frames buffer-only. No-op for a stale claimant. */
+	redetach: (connectionId: string) => void;
+	/** Stop the cooking turn through the same cancelling machinery the abort frame uses. Claimant-checked like adopt/redetach: a displaced connection's Stop must never abort the stream the current adopter is watching. */
+	stop: (connectionId: string) => Promise<void>;
+};
+const detachedCookingTurnHandles = new Map<string, DetachedCookingTurnHandle>();
 // Watchdog for a detached turn (community #14): a hung provider stream would
 // otherwise cook forever — the lock heartbeat renews indefinitely,
 // detachedCookingRooms refuses every new web connection, and no user-reachable
@@ -173,6 +250,19 @@ const detachedCookingRooms = new Set<string>();
 // note. 12 minutes is deliberately far above any legitimate single turn while
 // still bounded. Env override exists for tests only.
 const DETACHED_TURN_DEADLINE_MS = Number(process.env.EXXETA_DETACHED_TURN_DEADLINE_MS ?? "") || 12 * 60_000;
+// Issue #33 (review): the reattach replay buffer is byte-capped. A turn whose
+// frames exceed this stops buffering, frees what it held, and marks itself
+// replay-unavailable: a reattach then gets the honest room_cooking bounce (the
+// landing still carries the full answer) instead of a truncated replay whose
+// persist could clobber the clean landing. 8MB covers any turn a room can
+// realistically stream while bounding tool-heavy monsters. Env override for
+// tests only.
+const REATTACH_REPLAY_CAP_BYTES = Number(process.env.EXXETA_REATTACH_REPLAY_CAP_BYTES ?? "") || 8 * 1024 * 1024;
+// Test-only introspection (EXXPERTS_TEST_INTROSPECTION=1): per-room replay
+// buffer stats, so tests can pin the buffer lifecycle (released at settle,
+// overflow marked) from the outside. Never populated in normal operation.
+const TEST_INTROSPECTION_ENABLED = process.env.EXXPERTS_TEST_INTROSPECTION === "1";
+const reattachBufferProbe = new Map<string, { frames: number; bytes: number; overflowed: boolean }>();
 const WEB_UI_DIST = path.join(REPO_ROOT, "apps", "web-ui", "dist");
 
 // Default persona for new web connections is `business`. Each WS
@@ -682,7 +772,20 @@ function recordPersistentRoomPromptDiagnostics(input: {
 	}));
 }
 
-app.get("/api/persistent-agents", async () => listPersistentAgents().map((agent) => ({ ...agent, activeLock: activeRoomLock(agent.id) })));
+// `answeringDetached` (issue #33): the web lock is held by a detached cooking
+// turn with NO client attached, so the launcher card can offer stepping back
+// in; a room genuinely open in another window keeps its lock-and-stay-out.
+app.get("/api/persistent-agents", async () => listPersistentAgents().map((agent) => ({ ...agent, activeLock: activeRoomLock(agent.id), answeringDetached: detachedCookingRooms.has(agent.id) })));
+
+// Test-only (EXXPERTS_TEST_INTROSPECTION=1): the replay-buffer probe, so the
+// smoke can assert the buffer's lifecycle (released at settle, overflow
+// marked) from outside the process. Not registered in normal operation.
+if (TEST_INTROSPECTION_ENABLED) {
+	app.get("/api/persistent-agents/:id/reattach-buffer-stats", async (req) => {
+		const id = String((req.params as { id: string }).id ?? "");
+		return reattachBufferProbe.get(id) ?? { frames: 0, bytes: 0, overflowed: false };
+	});
+}
 app.get("/api/persistent-agent-modes", async () => ({
 	defaultModeId: PERSISTENT_AGENT_L1A_DEFAULT_MODE_ID,
 	modes: PERSISTENT_AGENT_L1A_MODES.map((mode) => ({ id: mode.id, label: mode.label, description: mode.description })),
@@ -1391,7 +1494,7 @@ app.post("/api/persistent-agents/:id/memento", async (req, reply) => {
 		// The room's own live web session is fine: it is quiesced below.
 		const roomLockState = activeRoomLock(status.id);
 		if (roomLockState?.surface === "scheduler" || roomLockState?.surface === "cli") {
-			const error = new Error(`the room is ${roomLockBusyStatus(roomLockState)}; apply Memento when that finishes`);
+			const error = new Error(`the room is ${roomLockBusyStatus(roomLockState)}; forget this conversation when that finishes`);
 			(error as any).statusCode = 409;
 			throw error;
 		}
@@ -1406,7 +1509,7 @@ app.post("/api/persistent-agents/:id/memento", async (req, reply) => {
 		// with real turns that the requester never looked at must not be
 		// discarded off a stale snapshot.
 		if (requestedConversationId && conversationId !== requestedConversationId && status.activeThread?.hasUserVisibleTurns) {
-			const error = new Error("Memento target is stale: the room has moved to a newer conversation. Refresh and try again.");
+			const error = new Error("This conversation is stale: the room has moved to a newer one. Refresh and try again.");
 			(error as any).statusCode = 409;
 			throw error;
 		}
@@ -1447,7 +1550,7 @@ app.post("/api/persistent-agents/:id/memento", async (req, reply) => {
 			// The live session was already disposed by the quiesce above; a client
 			// left holding the socket would silently dead-end on its next prompt.
 			if (live && persistentRoomLiveSessions.get(status.id) === live) {
-				live.notify("Memento could not be applied and this session was interrupted. Reopen the room to continue.");
+				live.notify("This conversation could not be forgotten and the session was interrupted. Reopen the room to continue.");
 				live.closeSocket();
 			}
 			throw error;
@@ -1456,7 +1559,7 @@ app.post("/api/persistent-agents/:id/memento", async (req, reply) => {
 		// socket so it stops writing to the closed thread and the room lock is
 		// released. The client lands in its normal disconnected state.
 		if (live && persistentRoomLiveSessions.get(status.id) === live) {
-			live.notify("Memento was applied to this room. This conversation is closed and the room starts fresh on next open.");
+			live.notify("This conversation was forgotten. It is closed and the room starts fresh on next open.");
 			live.closeSocket();
 		}
 		return browserSafeMementoBoundaryResponse(result);
@@ -1555,6 +1658,42 @@ app.put("/api/persistent-agents/:id/skill-settings", async (req, reply) => {
 			return reply.code(400).send({ error: result.reason === "unknown-skill" ? `unknown skill: ${name}` : "invalid skill name" });
 		}
 		return { agentId: status.id, settings: result.settings, skills: computeSkillStatuses(result.settings.enabledSkills, skillLibraryFingerprint) };
+	} catch (e) {
+		return persistentAgentNormalUseErrorReply(reply, e);
+	}
+});
+app.get("/api/persistent-agents/:id/mcp-connectors", async (req, reply) => {
+	const idRaw = String((req.params as any).id ?? "").trim();
+	try {
+		const status = getUsablePersistentAgentStatusForNormalUse(idRaw);
+		const settings = readPersistentRoomMcpSettings(status.id);
+		const configuredNames = await listConfiguredMcpConnectorNames();
+		// `granted` is the per-grant configured/missing view the room settings
+		// panel renders next to the full configured list.
+		return { agentId: status.id, settings, configuredConnectors: configuredNames, granted: computeGrantedConnectorStatuses(settings.grantedConnectors, configuredNames) };
+	} catch (e) {
+		return persistentAgentNormalUseErrorReply(reply, e);
+	}
+});
+app.put("/api/persistent-agents/:id/mcp-connectors", async (req, reply) => {
+	const idRaw = String((req.params as any).id ?? "").trim();
+	try {
+		const status = getUsablePersistentAgentStatusForNormalUse(idRaw);
+		const body = (req.body ?? {}) as any;
+		const action = String(body.action ?? "");
+		const name = String(body.name ?? "");
+		if (action !== "grant" && action !== "revoke") return reply.code(400).send({ error: "action must be 'grant' or 'revoke'" });
+		const configuredNames = await listConfiguredMcpConnectorNames();
+		// Grant validates against the CURRENT configured list server-side, so a
+		// grant can never name a connector that does not exist; revoke stays
+		// permissive so dangling grants can always be cleaned up.
+		const result = action === "grant"
+			? grantPersistentRoomMcpConnector(status.id, name, configuredNames)
+			: revokePersistentRoomMcpConnector(status.id, name);
+		if (!result.ok) {
+			return reply.code(400).send({ error: result.reason === "unknown-connector" ? `unknown connector: ${name}` : "invalid connector name" });
+		}
+		return { agentId: status.id, settings: result.settings, configuredConnectors: configuredNames, granted: computeGrantedConnectorStatuses(result.settings.grantedConnectors, configuredNames) };
 	} catch (e) {
 		return persistentAgentNormalUseErrorReply(reply, e);
 	}
@@ -2163,9 +2302,16 @@ function writePersistentRoomModelSelection(selection: WebChatModelSelection): vo
 	fs.writeFileSync(PERSISTENT_ROOM_MODEL_SELECTION_FILE, JSON.stringify(selection, null, 2), { mode: 0o600 });
 }
 
+function isGatewayProviderId(provider: string): boolean {
+	return provider === OPENAI_COMPATIBLE_PROVIDER_ID || provider.startsWith(GATEWAY_PROVIDER_ID_PREFIX);
+}
+
 const providerDisplayNameCache = new Map<string, string>();
 function webChatProviderLabel(provider: string): string {
-	const curated = WEB_CHAT_PROVIDER_LABELS[provider];
+	// A gateway carries the name the person gave it, so the registered name
+	// wins for gateway providers; the curated table only speaks for them when
+	// the gateway is gone and nothing is registered under the id any more.
+	const curated = isGatewayProviderId(provider) ? undefined : WEB_CHAT_PROVIDER_LABELS[provider];
 	if (curated) return curated;
 	let displayName = providerDisplayNameCache.get(provider);
 	if (!displayName) {
@@ -2174,7 +2320,7 @@ function webChatProviderLabel(provider: string): string {
 		// pin it, so a name set by a later gateway/custom setup is picked up.
 		if (displayName !== provider) providerDisplayNameCache.set(provider, displayName);
 	}
-	return displayName;
+	return displayName === provider ? WEB_CHAT_PROVIDER_LABELS[provider] ?? displayName : displayName;
 }
 
 function webChatModelLabel(provider: string, model: any): string {
@@ -2191,6 +2337,78 @@ function modelStatusPayload(model: any) {
 	if (!model) return null;
 	const contextWindow = modelContextWindow(model);
 	return { provider: model.provider, model: model.id, label: webChatModelLabel(model.provider, model), ...(contextWindow ? { contextWindow } : {}) };
+}
+
+/**
+ * Apply a room's reasoning effort to a bound session, clamped to what the
+ * room's locked model can actually do, and report the level that took effect.
+ *
+ * Deliberately NOT session.setThinkingLevel: that setter clamps the same way
+ * but also writes the chosen level into the shared settings file as the
+ * machine-wide default, so a room picking "low" for one question would quietly
+ * move the CLI's default for every other session. A room's choice is the
+ * room's alone, so the clamped level goes straight onto the bound agent state.
+ *
+ * Only ever called with a level the room EXPLICITLY chose. A room that never
+ * chose is left exactly as the session resolved itself, which is the point of
+ * having no stored record rather than a stored default.
+ */
+function applyRoomEffortToSession(session: any, level: RoomEffortLevel): RoomEffortLevel {
+	const model = session?.model;
+	const effective = (model ? clampThinkingLevel(model, level) : level) as RoomEffortLevel;
+	if (session?.agent?.state) session.agent.state.thinkingLevel = effective;
+	return effective;
+}
+
+/**
+ * Record a room's explicitly chosen effort, unless the incoming level is
+ * exactly the clamp of what the room already chose.
+ *
+ * Every level this server reports is clamped for display, so a client that
+ * hands one back is indistinguishable from a client stating a choice. Writing
+ * it would flatten the stored preference to its own clamp and lose, forever,
+ * a level the room picked and its current model merely cannot reach. Skipping
+ * the write costs nothing: the two levels behave identically on this model.
+ *
+ * A failed write is logged and swallowed. The caller still applies the level
+ * to the live session, so the room does what the user just asked for; only
+ * its survival past this connection is lost.
+ */
+function recordRoomEffortChoice(agentId: string, session: any, level: RoomEffortLevel): void {
+	const stored = readPersistentRoomEffortChoice(agentId);
+	const model = session?.model;
+	if (stored && level === (model ? clampThinkingLevel(model, stored) : stored)) return;
+	try { writePersistentRoomEffortChoice(agentId, level); } catch (error) { app.log.warn({ err: error }, "failed to persist room reasoning effort"); }
+}
+
+/**
+ * What the composer should show: the level in force, clamped for display, plus
+ * the levels the room's LOCKED model can actually do.
+ *
+ * The level shown is the room's own choice when it made one, and otherwise
+ * whatever the session is already running at. The clamp here is for the eye
+ * only and must never travel back into storage.
+ */
+function roomEffortStatusPayload(agentId: string, session: any, chosenLevel?: RoomEffortLevel): { level: RoomEffortLevel; supported: RoomEffortLevel[]; ladder: Array<{ level: RoomEffortLevel; label: string }> } {
+	const model = session?.model;
+	// The dial the model itself describes: one rung per DISTINCT effort it can
+	// produce, each labelled with the provider's own name for that effort. On
+	// Anthropic this is what removes the second rung that behaved exactly like
+	// the first, since "minimal" and "low" both come out as effort "low".
+	const ladder = (model ? getThinkingLevelLadder(model) : []) as Array<{ level: RoomEffortLevel; label: string }>;
+	// `supported` stays for clients that predate the ladder: same tokens, same
+	// order, just without the labels or the folding.
+	const supported = (session?.getAvailableThinkingLevels?.() ?? []) as RoomEffortLevel[];
+	const current = chosenLevel ?? readPersistentRoomEffortChoice(agentId) ?? (session?.thinkingLevel as RoomEffortLevel | undefined) ?? "off";
+	const clamped = (model ? clampThinkingLevel(model, current) : current) as RoomEffortLevel;
+	// A folded-away token has to land on the rung that replaced it, and the
+	// runtime is the only thing that knows which one that is: the fold is often
+	// IMPLICIT, decided by the adapter rather than by a map entry, so matching
+	// the stored token against the map would miss it and fall to the bottom of
+	// the dial. A room thinking at "low" would then read "off", and a user
+	// confirming what the pill said would genuinely stop the thinking.
+	const shown = (model ? (resolveThinkingLevelRung(model, clamped)?.level ?? clamped) : clamped) as RoomEffortLevel;
+	return { level: shown, supported, ladder };
 }
 
 function contextHealthZone(checkpointPercent: number | null): ContextHealthZone {
@@ -2220,7 +2438,33 @@ function contextHealthForSession(session: any): ContextHealthStatus {
 	return contextHealthFromUsage({ tokens: null, contextWindow: modelContextWindow(session?.model) ?? null }, "unknown");
 }
 
+/**
+ * What the chip says the moment a room opens.
+ *
+ * This used to report an unconditional null, on the belief that a freshly
+ * bound session has nothing to measure. It does not: a room's session manager
+ * is opened over the thread's own session file AT BIND, so the room's history
+ * is in the session's message list before a single frame is sent, and the
+ * runtime can size it right there. The chip read "Measuring tokens" purely
+ * because nobody asked. Asking is the whole fix.
+ *
+ * The runtime says two different things with two different values here, and
+ * the difference is the whole guard. A room with no history sizes an empty
+ * message list and comes back with 0 tokens, which is not a shrug, it is a
+ * measurement, and it happens to be the truth: an empty conversation really
+ * does hold nothing, and the user pays for the system prompt and the tool
+ * definitions only once they send the first message. Showing 0% and letting it
+ * jump to the first real reading tells that story honestly.
+ *
+ * A null is the runtime declining to guess, and the room that has just
+ * auto-compacted is why. The only usage it could reuse describes the
+ * conversation as it stood BEFORE the compaction, so it offers no count at all
+ * until an answer lands on the far side. Passing that silence on as silence is
+ * the point: the alternative is a red chip on a room that was just emptied.
+ */
 function initialContextHealthForSession(session: any): ContextHealthStatus {
+	const live = contextHealthForSession(session);
+	if (live.tokens != null) return live;
 	return contextHealthFromUsage({ tokens: null, contextWindow: modelContextWindow(session?.model) ?? null }, "unknown");
 }
 
@@ -2308,7 +2552,11 @@ function profileDiagnosticForModel(models: ProfileModelDiagnostic[], lock: { pro
 	};
 }
 
-function buildPersistentAgentAiProfileDiagnostic(registry: ModelRegistry, profileId: PersistentAgentAiProfileId, activeProfileId: PersistentAgentAiProfileId = DEFAULT_PERSISTENT_AGENT_AI_PROFILE_ID, resolvedProfile?: PersistentAgentAiProfile, overridden = false): PersistentAgentAiProfileDiagnostic {
+function savedGatewayIds(): Set<string> {
+	return new Set(readOpenAiCompatibleGateways().gateways.map((gateway) => gateway.id));
+}
+
+function buildPersistentAgentAiProfileDiagnostic(registry: ModelRegistry, profileId: PersistentAgentAiProfileId, activeProfileId: PersistentAgentAiProfileId = DEFAULT_PERSISTENT_AGENT_AI_PROFILE_ID, resolvedProfile?: PersistentAgentAiProfile, overridden = false, gatewayIds?: ReadonlySet<string>): PersistentAgentAiProfileDiagnostic {
 	// Resolve once and thread through: profile resolution hits the profile
 	// files on disk, and this builder runs for every profile per status call.
 	const profile: PersistentAgentAiProfile = resolvedProfile ?? getPersistentAgentAiProfile(profileId);
@@ -2341,7 +2589,10 @@ function buildPersistentAgentAiProfileDiagnostic(registry: ModelRegistry, profil
 	return {
 		id: profile.id,
 		label: profile.label,
-		kind: isCustomAiProfileId(profile.id) ? "custom" : profile.id === OPENAI_COMPATIBLE_AI_PROFILE_ID ? "gateway" : "builtin",
+		// Gateway-ness is a fact of the store now, not of one reserved id: any
+		// saved gateway is a gateway, and the row menu offers the gateway actions
+		// for whichever one it belongs to.
+		kind: isCustomAiProfileId(profile.id) ? "custom" : (gatewayIds ?? savedGatewayIds()).has(profile.id) ? "gateway" : "builtin",
 		overridden,
 		provider: {
 			id: profile.providerId,
@@ -2368,10 +2619,12 @@ function buildPersistentAgentAiProfileDiagnostic(registry: ModelRegistry, profil
 function buildPersistentAgentAiProfileSelectionStatus(registry = getWebChatModelRegistry()): PersistentAgentAiProfileSelectionStatus {
 	const state = readPersistentAgentAiProfileState();
 	const customProfileRead = readCustomAiProfiles();
+	// One gateway-store read for the whole status, not one per profile row.
+	const gatewayIds = savedGatewayIds();
 	const profiles = getAvailablePersistentAgentAiProfiles().map((profile) =>
-		buildPersistentAgentAiProfileDiagnostic(registry, profile.id, state.profileId, profile, Boolean(customProfileRead.overridesByBuiltInProfileId[profile.id])),
+		buildPersistentAgentAiProfileDiagnostic(registry, profile.id, state.profileId, profile, Boolean(customProfileRead.overridesByBuiltInProfileId[profile.id]), gatewayIds),
 	);
-	const activeProfile = profiles.find((profile) => profile.id === state.profileId) ?? buildPersistentAgentAiProfileDiagnostic(registry, DEFAULT_PERSISTENT_AGENT_AI_PROFILE_ID, state.profileId);
+	const activeProfile = profiles.find((profile) => profile.id === state.profileId) ?? buildPersistentAgentAiProfileDiagnostic(registry, DEFAULT_PERSISTENT_AGENT_AI_PROFILE_ID, state.profileId, undefined, false, gatewayIds);
 	return {
 		activeProfileId: state.profileId,
 		activeProfile,
@@ -2725,76 +2978,266 @@ app.put("/api/persistent-agent-ai-profiles/custom", async (req, reply) => {
 	}
 	return buildPersistentAgentAiProfileSelectionStatus(registry);
 });
-// OpenAI-compatible gateway (LiteLLM, vLLM, company proxies): same writes as
-// the `exxperts setup openai-compatible` wizard, driven from the web UI.
-app.get("/api/persistent-agent-ai-profiles/openai-compatible", async () => {
-	const profileRead = readLocalOpenAiCompatibleAiProfile();
-	if (!profileRead.ok) return { configured: false };
-	const registry = getWebChatModelRegistry();
-	const gatewayModel = registry.getAll().find((model) => model.provider === OPENAI_COMPATIBLE_PROVIDER_ID);
-	const profile = profileRead.profile;
+// Saved OpenAI-compatible gateways (LiteLLM, vLLM, OpenRouter, company
+// proxies), plural: each one is its own AI profile with its own base URL, key
+// and approved models, and switches like any other profile. The first gateway
+// keeps the profile and provider ids it has always had, so rooms already locked
+// to it never notice that the store learned to hold more than one.
+function gatewayModelPayload(model: GatewayRoomModel) {
 	return {
-		configured: true,
-		displayName: profile.label,
-		baseUrl: (gatewayModel as any)?.baseUrl ?? "",
-		roomModels: profile.processes.persistentRoom.map((lock) => lock.model),
-		maintenanceModel: profile.processes.absorb.model,
+		modelId: model.modelId,
+		label: model.label ?? model.modelId,
+		vision: model.vision === true,
+		// Null, not the default, so the form can tell "nobody chose" from "someone
+		// chose 128000" while still showing the same number either way.
+		contextWindow: model.contextWindow ?? null,
 	};
-});
-// List the models a gateway routes, so the person approves from a picker
-// instead of copying ids by hand. Uses the submitted token, or the stored
-// gateway key when editing an already-connected gateway.
-app.post("/api/persistent-agent-ai-profiles/openai-compatible/discover", async (req, reply) => {
+}
+
+function gatewayPayload(gateway: OpenAiCompatibleGateway) {
+	return {
+		id: gateway.id,
+		providerId: gateway.providerId,
+		label: gateway.label,
+		// Gateways carried over from the legacy policy file never stored a base
+		// URL; models.json has been holding it for them all along.
+		baseUrl: gateway.baseUrl || readGatewayProviderBaseUrl(gateway.providerId),
+		roomModels: gateway.roomModels.map(gatewayModelPayload),
+		maintenanceModel: gateway.maintenanceModel,
+		isDefault: gateway.id === OPENAI_COMPATIBLE_AI_PROFILE_ID,
+	};
+}
+
+/**
+ * Room models as the approve step sends them: an id, optionally the two facts
+ * the person just confirmed. Plain string ids are still accepted so anything
+ * scripted against the single-gateway route keeps working.
+ */
+function parseGatewayRoomModels(raw: unknown): { models: GatewayRoomModel[]; error?: string } {
+	if (!Array.isArray(raw)) return { models: [] };
+	const models: GatewayRoomModel[] = [];
+	const seen = new Set<string>();
+	for (const entry of raw) {
+		const source = typeof entry === "string" ? { modelId: entry } : (entry ?? {}) as Record<string, unknown>;
+		const modelId = String(source.modelId ?? "").trim();
+		if (!modelId || seen.has(modelId)) continue;
+		seen.add(modelId);
+		const model: GatewayRoomModel = { modelId };
+		const label = String(source.label ?? "").trim();
+		if (label && label !== modelId) model.label = label;
+		if (source.vision === true) model.vision = true;
+		// Validated rather than coerced. A window is not a cosmetic field: it
+		// decides what the room's context chip reads and when the conversation
+		// compacts itself, so a value nobody could have meant is refused out
+		// loud instead of being rounded into something plausible.
+		const { contextWindow, error } = parseGatewayContextWindow(source.contextWindow);
+		if (error) return { models: [], error: `${modelId}: ${error}` };
+		// The default is not worth storing: leaving it out keeps the file honest
+		// about what somebody actually decided.
+		if (contextWindow && contextWindow !== GATEWAY_DEFAULT_CONTEXT_WINDOW) model.contextWindow = contextWindow;
+		models.push(model);
+	}
+	return { models };
+}
+
+/**
+ * A gateway's name is cached per provider id for the label lookups that run on
+ * every model row; renaming one is a routine edit now, so the cache entry goes
+ * the moment its gateway is saved or removed rather than at the next restart.
+ */
+function forgetGatewayProviderLabel(providerId: string): void {
+	providerDisplayNameCache.delete(providerId);
+}
+
+/**
+ * Write order carries the failure story.
+ *
+ * The runtime catalog has to know a provider before a key can be filed under
+ * it, so the catalog entry always goes first. For a gateway that did not exist
+ * a moment ago, a key that cannot be stored means the whole thing is rolled
+ * back: half a gateway, registered but keyless and invisible in the store, is
+ * worse than no gateway, and it would leave the client retrying into a second
+ * gateway with the same name. For a gateway that already exists the model
+ * changes are kept and the key failure is reported on its own, because the
+ * gateway had a working key before this save and still does.
+ */
+function saveGatewayEverywhere(gateway: OpenAiCompatibleGateway, key: string, isNew: boolean): void {
+	writeGatewayProviderEntry(gateway);
+	if (isNew && key) {
+		try {
+			saveProviderApiKey(gateway.providerId, key);
+		} catch (e) {
+			try {
+				removeGatewayProviderEntry(gateway.providerId);
+			} catch {
+				// The rollback is best effort; the store write below never happened,
+				// so nothing is offered to the user either way.
+			}
+			throw e;
+		}
+	}
+	writeOpenAiCompatibleGateway(gateway);
+	if (!isNew && key) saveProviderApiKey(gateway.providerId, key);
+	forgetGatewayProviderLabel(gateway.providerId);
+}
+
+async function gatewayDiscoverHandler(req: any, reply: any, gatewayIdFromRoute = "") {
 	const body = (req.body ?? {}) as any;
-	const baseUrl = String(body.baseUrl ?? "").trim().replace(/\/+$/, "");
+	const gatewayId = (gatewayIdFromRoute || String((req.params as any)?.gatewayId ?? body.gatewayId ?? "")).trim();
+	const gateway = gatewayId ? findOpenAiCompatibleGateway(gatewayId) : undefined;
+	const baseUrl = normalizeGatewayBaseUrl(String(body.baseUrl ?? "").trim() || gateway?.baseUrl || (gateway ? readGatewayProviderBaseUrl(gateway.providerId) : ""));
 	if (!/^https?:\/\//.test(baseUrl)) return reply.code(400).send({ error: "baseUrl must start with http:// or https://" });
 	let key = typeof body.key === "string" ? body.key.trim() : "";
-	if (!key) key = (await AuthStorage.create().getApiKey(OPENAI_COMPATIBLE_PROVIDER_ID)) ?? "";
+	// Editing an already-connected gateway means the person should not have to
+	// retype a key the machine already has.
+	if (!key && gateway) key = (await AuthStorage.create().getApiKey(gateway.providerId)) ?? "";
 	if (!key) return reply.code(400).send({ error: "Enter the gateway API key to load its models." });
-	const abort = new AbortController();
-	const timeout = setTimeout(() => abort.abort(), 10_000);
-	let response: Response;
 	try {
-		response = await fetch(`${baseUrl}/models`, { headers: { authorization: `Bearer ${key}` }, signal: abort.signal });
+		const discovery = await discoverGatewayModels(baseUrl, key);
+		return {
+			// The bare id list the single-gateway route always returned, kept so
+			// nothing that reads `models` has to change.
+			models: discovery.models.map((model) => model.id),
+			detected: discovery.models.map((model) => ({
+				id: model.id,
+				vision: model.vision ?? null,
+				contextWindow: model.contextWindow ?? null,
+			})),
+		};
 	} catch (e) {
-		return reply.code(502).send({ error: `Could not reach ${baseUrl}/models: ${abort.signal.aborted ? "timed out" : (e as Error).message}` });
-	} finally {
-		clearTimeout(timeout);
+		if (e instanceof GatewayDiscoveryError) return reply.code(502).send({ error: e.message });
+		return reply.code(502).send({ error: `Could not load models from ${baseUrl}: ${(e as Error).message}` });
 	}
-	if (response.status === 401 || response.status === 403) return reply.code(502).send({ error: "The gateway rejected the API key." });
-	if (!response.ok) return reply.code(502).send({ error: `The gateway answered ${response.status} for ${baseUrl}/models.` });
-	let payload: unknown;
-	try {
-		payload = await response.json();
-	} catch {
-		return reply.code(502).send({ error: "The gateway did not return JSON; check the base URL (it usually ends in /v1)." });
-	}
-	const rows = Array.isArray((payload as any)?.data) ? (payload as any).data : Array.isArray(payload) ? payload : null;
-	if (!rows) return reply.code(502).send({ error: "The gateway response is not an OpenAI-style model list; check the base URL." });
-	const models = [...new Set(rows.map((row: any) => String(row?.id ?? "").trim()).filter(Boolean))].sort() as string[];
-	if (models.length === 0) return reply.code(502).send({ error: "The gateway lists no models for this key." });
-	return { models };
-});
-app.put("/api/persistent-agent-ai-profiles/openai-compatible", async (req, reply) => {
+}
+
+/** Create or update one gateway. `gatewayId` is empty when a new one is being added. */
+async function gatewaySaveHandler(req: any, reply: any, gatewayIdFromRoute: string | null) {
 	const body = (req.body ?? {}) as any;
-	const displayName = String(body.displayName ?? "").trim();
-	const baseUrl = String(body.baseUrl ?? "").trim();
-	const roomModels: string[] = Array.isArray(body.roomModels) ? body.roomModels.map((value: unknown) => String(value ?? "").trim()).filter(Boolean) : [];
-	const maintenanceModel = String(body.maintenanceModel ?? "").trim() || roomModels[0] || "";
-	if (!baseUrl) return reply.code(400).send({ error: "baseUrl is required" });
-	if (!/^https?:\/\//.test(baseUrl)) return reply.code(400).send({ error: "baseUrl must start with http:// or https://" });
+	const label = String(body.label ?? body.displayName ?? "").trim();
+	const submittedBaseUrl = String(body.baseUrl ?? "").trim();
+	const { models: roomModels, error: roomModelsError } = parseGatewayRoomModels(body.roomModels);
+	if (roomModelsError) return reply.code(400).send({ error: roomModelsError });
+	const maintenanceModel = String(body.maintenanceModel ?? "").trim() || roomModels[0]?.modelId || "";
+	const key = typeof body.key === "string" ? body.key.trim() : "";
 	if (roomModels.length === 0) return reply.code(400).send({ error: "at least one room model id is required" });
-	const plan = buildOpenAiCompatibleSetupPlan({
-		displayName,
-		baseUrl,
-		primaryRoomModelId: roomModels[0],
-		additionalRoomModelIds: roomModels.slice(1),
-		maintenanceModelId: maintenanceModel,
-	});
-	if (plan.conflicts.length > 0) return reply.code(400).send({ error: plan.conflicts.join(" ") });
-	writeOpenAiCompatibleSetupFiles(plan);
+	if (submittedBaseUrl && !/^https?:\/\//.test(submittedBaseUrl)) return reply.code(400).send({ error: "baseUrl must start with http:// or https://" });
+
+	const gatewayId = gatewayIdFromRoute?.trim() || "";
+	const existing = gatewayId ? findOpenAiCompatibleGateway(gatewayId) : undefined;
+	if (gatewayId && !existing && gatewayId !== OPENAI_COMPATIBLE_AI_PROFILE_ID) {
+		return reply.code(404).send({ error: `gateway not found: ${gatewayId}` });
+	}
+	// Approve-models edits the model set and nothing else, so it sends no base
+	// URL. Demanding one there would refuse the save over a field that screen
+	// does not even show; the address the gateway already has is the answer.
+	const knownBaseUrl = existing ? existing.baseUrl || readGatewayProviderBaseUrl(existing.providerId) : "";
+	const baseUrl = submittedBaseUrl || knownBaseUrl;
+	if (!existing && !baseUrl) return reply.code(400).send({ error: "baseUrl is required" });
+
+	let gateway: OpenAiCompatibleGateway;
+	if (existing) {
+		// Ids never move under an existing gateway: every room thread locked to
+		// it stores the provider id, and renaming it would strand them all.
+		gateway = { ...existing, label: label || existing.label, ...(baseUrl ? { baseUrl } : {}), roomModels, maintenanceModel };
+	} else if (gatewayId === OPENAI_COMPATIBLE_AI_PROFILE_ID) {
+		gateway = { id: OPENAI_COMPATIBLE_AI_PROFILE_ID, providerId: OPENAI_COMPATIBLE_PROVIDER_ID, label: label || "OpenAI-compatible gateway", baseUrl, roomModels, maintenanceModel };
+	} else {
+		let providerId: string;
+		try {
+			// Everything already spoken for: provider keys straight out of
+			// models.json (a provider configured with no models yet is invisible
+			// to the registry but very much taken), every saved gateway, and every
+			// id a deletion retired.
+			const read = readOpenAiCompatibleGateways();
+			const takenProviderIds = new Set<string>(readCatalogProviderIds());
+			for (const candidate of read.gateways) takenProviderIds.add(candidate.providerId);
+			for (const retired of read.retiredProviderIds) takenProviderIds.add(retired);
+			providerId = mintGatewayProviderId(label || "gateway", takenProviderIds);
+		} catch (e) {
+			return reply.code(400).send({ error: (e as Error).message });
+		}
+		gateway = { id: providerId, providerId, label: label || providerId, baseUrl, roomModels, maintenanceModel };
+	}
+	try {
+		saveGatewayEverywhere(gateway, key, !existing);
+	} catch (e) {
+		const status = e instanceof ModelCatalogUnreadableError || e instanceof GatewayStoreUnreadableError ? 500 : 400;
+		// The id travels with the failure so a client that retries edits the
+		// gateway it just made instead of minting a second one beside it.
+		return reply.code(status).send({ error: (e as Error).message, gateway: findOpenAiCompatibleGateway(gateway.id) ? gatewayPayload(gateway) : null });
+	}
+	return { ...buildPersistentAgentAiProfileSelectionStatus(), gateway: gatewayPayload(gateway) };
+}
+
+/**
+ * Removal order is the reverse of the save's, for the same reason: the store
+ * entry is what makes the gateway exist, so it goes LAST. A catalog write that
+ * fails halfway through therefore leaves a gateway that is still listed and can
+ * simply be deleted again, instead of a vanished gateway whose provider entry
+ * and key nothing can reach any more.
+ */
+function gatewayDeleteHandler(gatewayId: string, reply: any) {
+	const gateway = findOpenAiCompatibleGateway(gatewayId);
+	if (!gateway) return reply.code(404).send({ error: `gateway not found: ${gatewayId}` });
+	try {
+		removeGatewayProviderEntry(gateway.providerId);
+	} catch (e) {
+		return reply.code(500).send({ error: `Could not remove the gateway from the model catalog: ${(e as Error).message}` });
+	}
+	try {
+		AuthStorage.create().logout(gateway.providerId);
+	} catch {
+		// No stored credential to drop; the gateway goes either way.
+	}
+	try {
+		deleteOpenAiCompatibleGateway(gatewayId);
+	} catch (e) {
+		return reply.code(500).send({ error: (e as Error).message });
+	}
+	forgetGatewayProviderLabel(gateway.providerId);
 	return buildPersistentAgentAiProfileSelectionStatus();
+}
+app.get("/api/persistent-agent-ai-profiles/gateways", async () => {
+	const read = readOpenAiCompatibleGateways();
+	return {
+		gateways: read.gateways.map(gatewayPayload),
+		errors: read.errors,
+		// A store nobody can read is not an empty one, and the client must not
+		// draw it as "no gateways yet".
+		unreadable: read.unreadable,
+		defaultContextWindow: GATEWAY_DEFAULT_CONTEXT_WINDOW,
+		minContextWindow: GATEWAY_MIN_CONTEXT_WINDOW,
+		maxContextWindow: GATEWAY_MAX_CONTEXT_WINDOW,
+	};
 });
+app.get("/api/persistent-agent-ai-profiles/gateways/:gatewayId", async (req, reply) => {
+	const gatewayId = String((req.params as any).gatewayId ?? "").trim();
+	const gateway = findOpenAiCompatibleGateway(gatewayId);
+	if (!gateway) return reply.code(404).send({ error: `gateway not found: ${gatewayId}` });
+	return { configured: true, ...gatewayPayload(gateway) };
+});
+app.post("/api/persistent-agent-ai-profiles/gateways/discover", async (req, reply) => gatewayDiscoverHandler(req, reply));
+app.post("/api/persistent-agent-ai-profiles/gateways/:gatewayId/discover", async (req, reply) => gatewayDiscoverHandler(req, reply, String((req.params as any).gatewayId ?? "")));
+app.post("/api/persistent-agent-ai-profiles/gateways", async (req, reply) => gatewaySaveHandler(req, reply, null));
+app.put("/api/persistent-agent-ai-profiles/gateways/:gatewayId", async (req, reply) => gatewaySaveHandler(req, reply, String((req.params as any).gatewayId ?? "")));
+app.delete("/api/persistent-agent-ai-profiles/gateways/:gatewayId", async (req, reply) => gatewayDeleteHandler(String((req.params as any).gatewayId ?? "").trim(), reply));
+
+// The single-gateway routes, kept pointing at the first gateway. Anything
+// scripted against them still describes the gateway it always described.
+app.get("/api/persistent-agent-ai-profiles/openai-compatible", async () => {
+	const gateway = findOpenAiCompatibleGateway(OPENAI_COMPATIBLE_AI_PROFILE_ID);
+	if (!gateway) return { configured: false };
+	const payload = gatewayPayload(gateway);
+	return {
+		configured: true,
+		displayName: payload.label,
+		baseUrl: payload.baseUrl,
+		roomModels: gateway.roomModels.map((model) => model.modelId),
+		maintenanceModel: payload.maintenanceModel,
+	};
+});
+app.post("/api/persistent-agent-ai-profiles/openai-compatible/discover", async (req, reply) => gatewayDiscoverHandler(req, reply, OPENAI_COMPATIBLE_AI_PROFILE_ID));
+app.put("/api/persistent-agent-ai-profiles/openai-compatible", async (req, reply) => gatewaySaveHandler(req, reply, OPENAI_COMPATIBLE_AI_PROFILE_ID));
 app.delete("/api/persistent-agent-ai-profiles/custom/:profileId", async (req, reply) => {
 	const profileId = String((req.params as any).profileId ?? "").trim();
 	if (!isCustomAiProfileId(profileId)) return reply.code(400).send({ error: `not a custom profile: ${profileId}` });
@@ -2814,31 +3257,7 @@ app.delete("/api/persistent-agent-ai-profiles/custom/:profileId", async (req, re
 });
 // Remove the OpenAI-compatible gateway: reverses the setup writes (app policy
 // file + models.json provider entry) and drops the stored key.
-app.delete("/api/persistent-agent-ai-profiles/openai-compatible", async (_req, reply) => {
-	const profileRead = readLocalOpenAiCompatibleAiProfile();
-	if (!profileRead.ok) return reply.code(404).send({ error: "No OpenAI-compatible gateway is configured." });
-	try {
-		fs.rmSync(profileRead.path, { force: true });
-	} catch (e) {
-		return reply.code(500).send({ error: `Could not remove the gateway policy file: ${(e as Error).message}` });
-	}
-	try {
-		const modelsPath = getModelsPath();
-		if (fs.existsSync(modelsPath)) {
-			const root = JSON.parse(fs.readFileSync(modelsPath, "utf-8"));
-			if (root && typeof root === "object" && root.providers && typeof root.providers === "object") {
-				delete root.providers[OPENAI_COMPATIBLE_PROVIDER_ID];
-				const tmpPath = `${modelsPath}.tmp`;
-				fs.writeFileSync(tmpPath, `${JSON.stringify(root, null, "\t")}\n`, { mode: 0o600 });
-				fs.renameSync(tmpPath, modelsPath);
-			}
-		}
-	} catch {}
-	try {
-		AuthStorage.create().logout(OPENAI_COMPATIBLE_PROVIDER_ID);
-	} catch {}
-	return buildPersistentAgentAiProfileSelectionStatus();
-});
+app.delete("/api/persistent-agent-ai-profiles/openai-compatible", async (_req, reply) => gatewayDeleteHandler(OPENAI_COMPATIBLE_AI_PROFILE_ID, reply));
 app.post("/api/web-chat/model-selection", postPersistentAgentRoomModelSelectionHandler);
 
 // --- discovery endpoints used by the UI sidebar -------------------------
@@ -3433,7 +3852,20 @@ app.post("/api/mcp/servers", async (req, reply) => {
 
 app.delete("/api/mcp/servers/:name", async (req, reply) => {
 	try {
-		return await removeMcpServer(String((req.params as { name: string }).name));
+		const name = String((req.params as { name: string }).name);
+		// Grant identity rule: deleting a connector revokes it from every room,
+		// so a later re-created connector with the same name starts ungranted.
+		// The sweep runs BEFORE the config mutation: a crash between the two
+		// then leaves the connector configured with its grants gone
+		// (fail-closed, user re-deletes), never a deleted connector whose
+		// grants linger for a namesake to inherit. Sweep failures are reported,
+		// not swallowed.
+		const revokeSweep = revokeMcpConnectorFromAllRooms(name);
+		for (const failure of revokeSweep.failures) {
+			app.log.warn({ agentId: failure.agentId, err: failure.error }, "connector delete: revoking the grant in a room failed");
+		}
+		const removed = await removeMcpServer(name);
+		return { ...removed, revokedFromRooms: revokeSweep.revokedFrom, ...(revokeSweep.failures.length > 0 ? { revokeFailures: revokeSweep.failures } : {}) };
 	} catch (e) {
 		return sendMcpAdminError(reply, e, "Failed to remove the connector.");
 	}
@@ -3818,25 +4250,44 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 		if (roomLockHeartbeat) { clearInterval(roomLockHeartbeat); roomLockHeartbeat = null; }
 		try { roomLock.release(persistentAgentIdForSession, roomLockOwner); } catch {}
 	};
+	// Issue #33: the detached cooking turn this connection stepped back into.
+	// Claimed synchronously below (before any await), adopted once the session
+	// is bound. Null on the ordinary connect path.
+	let claimedCookingTurn: DetachedCookingTurnHandle | null = null;
+	// Reattach is OPT-IN, declared by the client on the connect URL. A client
+	// that does not declare it (a pre-#33 bundle in a stale tab) would ignore
+	// turn_reattach, double-render the replay under its persisted partial and
+	// then PERSIST the duplicated transcript over the clean landing write; such
+	// clients keep the pre-#33 room_cooking bounce they understand.
+	const clientSupportsReattach = params.get("reattach") === "1";
 	{
-		// A detached turn is still cooking for this room (community #14): the
-		// web lock would normally allow web-over-web takeover (reconnect
-		// blips), but taking over here would put a second live session on the
-		// thread the landing write is about to finish. Refuse with the honest
-		// message; the client's reconnect loop simply retries until it lands.
-		if (detachedCookingRooms.has(persistentAgentIdForSession)) {
-			// `code` is the client's only way to tell detach from death: the
-			// original drop delivers nothing (the network is gone), so the
-			// signal rides on this reconnect bounce. The client uses it to
-			// rewrite the "connection was lost" bubble note honestly and to
-			// stop burning reconnect attempts against a lock that will keep
-			// bouncing until the answer lands.
+		// A detached turn still cooking for THIS conversation no longer bounces
+		// the connection (issue #33): the session claims it here and adopts it
+		// after binding, so the user steps back into the answer being written.
+		// The lock acquire below is then the ordinary web-over-web takeover;
+		// the detaching connection's release and heartbeat are owner-checked,
+		// so they go inert the moment the lock record changes hands.
+		const cookingHandle = detachedCookingTurnHandles.get(persistentAgentIdForSession) ?? null;
+		const roomHasCookingTurn = !!(cookingHandle && !cookingHandle.settled);
+		if (roomHasCookingTurn && cookingHandle.conversationId === persistentConversationId && clientSupportsReattach && !cookingHandle.replayUnavailable()) {
+			claimedCookingTurn = cookingHandle;
+		} else if (roomHasCookingTurn || detachedCookingRooms.has(persistentAgentIdForSession)) {
+			// A cooking room asked for under a DIFFERENT conversation id (stale
+			// client state): reattach cannot bind that thread, so the honest
+			// refusal stays. Keyed on the HANDLE, not only the cooking set:
+			// adopt() clears the set while an adopter watches, and without this
+			// room-level key a stale-conversation connection would sail past the
+			// bounce into a web-over-web lock takeover, stealing the cooking
+			// turn's lock mid-stream. `code` is the client's detach-vs-death
+			// signal: the original drop delivers nothing (the network is gone),
+			// so the signal rides on this reconnect bounce.
 			try { socket.send(JSON.stringify({ type: "error", code: "room_cooking", message: "This room is currently finishing a response in the background. The answer is saved into the conversation when it is done; open the room again then." })); } catch {}
 			try { socket.close(); } catch {}
 			return;
 		}
 		const acquired = roomLock.tryAcquire(persistentAgentIdForSession, roomLockOwner);
 		if (!acquired.ok) {
+			claimedCookingTurn = null;
 			const busyStatus = roomLockBusyStatus(acquired.heldBy);
 			const instruction = roomLockBusyInstruction(acquired.heldBy);
 			const since = acquired.heldBy ? new Date(acquired.heldBy.acquiredAt).toLocaleTimeString() : "";
@@ -3844,11 +4295,26 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 			try { socket.close(); } catch {}
 			return;
 		}
+		// The cooking turn's lock record is this connection's now: register who
+		// releases it, so the settle path can free it even if this connection
+		// dies before the adopt, and how to tell this connection if a NEWER
+		// claim displaces it while it is still binding (the adopt upgrades the
+		// hook to the adopter flavor). A displaced mid-bind claimant has no
+		// lock, no heartbeat and a pre-landing thread snapshot, so the only
+		// coherent outcome is the honest frame and a close; raw socket.send
+		// because the closure's `send` is declared later in this scope.
+		claimedCookingTurn?.claim(connectionId, releaseRoomLockNow, () => {
+			claimedCookingTurn = null;
+			try { socket.send(JSON.stringify({ type: "error", code: "room_displaced", message: "This room is now open in another window." })); } catch {}
+			try { socket.close(); } catch {}
+		});
 		roomLockHeartbeat = setInterval(() => roomLock.heartbeat(persistentAgentIdForSession, roomLockOwner), 30_000);
-		// A session is binding to this room: whatever landed unseen is about to
-		// be seen in the transcript, so the marker's job is done (community #14
-		// slice 3, the away-notice clear).
-		try { clearPersistentAgentUnseenLandedAnswer(persistentAgentIdForSession); } catch {}
+		// A session is binding to this room: whatever landed unseen in THIS
+		// conversation is about to be seen in the transcript, so its marker's
+		// job is done (community #14 slice 3, the away-notice clear). A badge
+		// for an answer waiting in another conversation of this room survives a
+		// bind that never opens it.
+		try { clearPersistentAgentUnseenLandedAnswerForBind(persistentAgentIdForSession, persistentConversationId); } catch {}
 		// Register release immediately so the lock is freed even if later session
 		// setup throws or the connection drops before the main close handler.
 		// A turn detached by the disconnect (community #14) keeps the lock — the
@@ -3856,6 +4322,15 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 		// finished answer lands in the thread file.
 		socket.on("close", () => {
 			if (turnKeepsCookingOnClose()) return;
+			// #33: leaving (or dying) while a claimed cooking turn is still in
+			// flight re-detaches it. The lock this connection took over stays
+			// held for the cooking turn (this closure's heartbeat keeps it
+			// fresh); the settle path releases it through the handle's claim.
+			const cooking = claimedCookingTurn;
+			if (cooking && !cooking.settled && cooking.claimantConnectionId === connectionId) {
+				cooking.redetach(connectionId);
+				return;
+			}
 			releaseRoomLockNow();
 		});
 	}
@@ -3883,12 +4358,68 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 	// handler owns landing the finished answer, releasing the room lock and
 	// disposing the session.
 	let detachedFromClient = false;
+	// Issue #33: the reattach handle THIS connection registered when its turn
+	// detached, plus the hooks the adopting connection registered on it. All
+	// null until a detach happens; the handle methods run in this closure.
+	let detachedCookingHandle: DetachedCookingTurnHandle | null = null;
+	let adopterReleaseLock: (() => void) | null = null;
+	let adopterOnSettled: (() => void) | null = null;
+	let adopterOnDisplaced: (() => void) | null = null;
+	// The last persisted thread item when the CURRENT turn began: everything the
+	// thread file gains after this id belongs to the cooking turn, so a reattach
+	// supersede anchored here can never delete a completed prior answer. Null
+	// means the thread was empty at turn start; undefined means the read failed.
+	let turnStartAnchorItemId: string | null | undefined = undefined;
+	// While the turn cooks detached and a NEW connection adopted it, turn
+	// frames are forwarded there instead of this (closed) socket.
+	let cookingTurnSink: ((frame: unknown) => void) | null = null;
+	// Every frame belonging to the CURRENT turn, recorded from turn start, so a
+	// session that steps back in mid-turn replays the whole stream and then
+	// continues live with no gap and no duplicated text at the seam. Reset when
+	// a prompt begins and CLEARED at settle (review: an idle tab must not
+	// retain its last turn's stream) with one exception: a claimant mid-bind
+	// still needs it for the settled replay, and releases it after replaying.
+	// Byte-capped: overflow frees the buffer and marks the turn
+	// replay-unavailable, so a reattach degrades to the honest bounce instead
+	// of a truncated replay.
+	let turnFrameBuffer: unknown[] = [];
+	let turnFrameBufferBytes = 0;
+	let turnReplayOverflowed = false;
+	const updateReattachBufferProbe = (): void => {
+		if (TEST_INTROSPECTION_ENABLED) reattachBufferProbe.set(persistentAgentIdForSession, { frames: turnFrameBuffer.length, bytes: turnFrameBufferBytes, overflowed: turnReplayOverflowed });
+	};
+	const releaseTurnFrameBuffer = (): void => {
+		turnFrameBuffer = [];
+		turnFrameBufferBytes = 0;
+		updateReattachBufferProbe();
+	};
 	// Armed by the close handler when the turn detaches; cleared when the turn
 	// settles. One timer per connection, and a room cooks on exactly one
 	// connection, so several cooking rooms each carry their own deadline.
 	let detachedTurnDeadlineTimer: ReturnType<typeof setTimeout> | null = null;
 	const clearDetachedTurnDeadline = (): void => {
 		if (detachedTurnDeadlineTimer) { clearTimeout(detachedTurnDeadlineTimer); detachedTurnDeadlineTimer = null; }
+	};
+	// Watchdog arm (community #14; factored for #33 so a reattach that leaves
+	// again can re-arm it): nobody is watching this turn anymore, so a hung
+	// provider stream would hold the room lock and refuse every new connection
+	// forever. Past the deadline the turn is aborted the way a user stop aborts
+	// it, with terminal reason `failed`, so the landing write parks the partial
+	// (or the failure note) and the settle path releases the lock and disposes
+	// the session. The callback re-checks the live turn state so a timer that
+	// lost the race against a normal settle does nothing.
+	const armDetachedTurnDeadline = (): void => {
+		const detachedTurnId = activePersistentWebTurn?.turnId;
+		clearDetachedTurnDeadline();
+		detachedTurnDeadlineTimer = setTimeout(() => {
+			detachedTurnDeadlineTimer = null;
+			const turn = activePersistentWebTurn;
+			if (!turn || turn.turnId !== detachedTurnId || turn.promptSettled || turn.terminalReason) return;
+			app.log.warn({ agentId: persistentAgentIdForSession, turnId: detachedTurnId, deadlineMs: DETACHED_TURN_DEADLINE_MS }, "detached turn exceeded its deadline; aborting");
+			void abortActivePersistentWebTurn("failed").catch((error) => {
+				app.log.warn({ err: error }, "detached-turn deadline abort failed");
+			});
+		}, DETACHED_TURN_DEADLINE_MS);
 	};
 	// One consult at a time per connection (v1). The consult worker is
 	// independent of the room's turn machinery: prompts stay allowed while a
@@ -3939,6 +4470,11 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 	// session, so the next message runs with the current tools instead of the
 	// tool set frozen at connect.
 	let boundWorkspaceFingerprint: string | null = null;
+	// Same discipline for per-room MCP grants: enforcement is per-call inside
+	// the room-scope wrapper (always live), but the proxy tool's DESCRIPTION is
+	// built at bind time - a grant change rebinds before the next turn so what
+	// the model sees in its manifest matches what it may call.
+	let boundMcpGrantsFingerprint: string | null = null;
 	// The single in-flight rebind: while a rebind runs, `session` is null and
 	// every frame that needs the session awaits THIS promise instead of racing
 	// past the guards onto the disposed session with the old toolset.
@@ -4070,30 +4606,85 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 	// leave save); the landed text carries the WHOLE turn, so trailing
 	// assistant items after the last user item are superseded, not additional.
 	// Parked as standby so the launcher offers Resume, like a scheduled run.
-	const landDetachedTurnOutcome = (turnId: string, terminalReason: PersistentWebTurnTerminalReason): void => {
+	const landDetachedTurnOutcome = (turnId: string, terminalReason: PersistentWebTurnTerminalReason, options: { watchedByAdopter?: boolean } = {}): void => {
 		const current = getPersistentAgentThread(persistentAgentIdForSession, persistentConversationId);
 		if (!current || current.state === "closed") return;
+		// Issue #33: `watchedByAdopter` means a session stepped back in and
+		// watched this turn land live. The write itself stays (it is the
+		// crash-safe record of the paid answer, and the adopter's own persist
+		// supersedes it with equivalent content), but everything that assumes
+		// nobody saw the landing does not: no "after you left the room" notes
+		// (the adopter watched the live error), no standby parking (the room is
+		// open), no unseen marker (the answer was seen landing).
+		const watched = options.watchedByAdopter === true;
 		const finalText = turnTrace.finalAssistantText.trim();
 		const safeTurnId = turnId.replace(/[^a-zA-Z0-9_-]+/g, "_").slice(0, 96);
 		let items = [...(current.items ?? [])];
 		if (finalText) {
-			let lastUserIndex = -1;
-			for (let i = items.length - 1; i >= 0; i--) {
-				if ((items[i] as any)?.kind === "user") { lastUserIndex = i; break; }
+			// Supersede anchored on the last item the file held at TURN START
+			// (same fix as the client's reattach supersede): only items the
+			// cooking turn itself produced are debris. Anchoring on the last
+			// USER item, as this used to, deleted the PREVIOUS turn's completed
+			// answer whenever the crash-leave never persisted this turn's
+			// prompt. Null anchor means the thread was empty at turn start
+			// (everything is this turn's); a set-but-missing anchor deletes
+			// nothing; an unknown anchor falls back to the old rule.
+			const anchorItemId = detachedCookingHandle?.anchorItemId;
+			let cutIndex: number;
+			if (anchorItemId === null) {
+				cutIndex = -1;
+			} else if (typeof anchorItemId === "string") {
+				let found = -1;
+				for (let i = items.length - 1; i >= 0; i--) {
+					if (String((items[i] as any)?.id ?? "") === anchorItemId) { found = i; break; }
+				}
+				cutIndex = found >= 0 ? found : items.length - 1;
+			} else {
+				let lastUserIndex = -1;
+				for (let i = items.length - 1; i >= 0; i--) {
+					if ((items[i] as any)?.kind === "user") { lastUserIndex = i; break; }
+				}
+				cutIndex = lastUserIndex;
 			}
-			items = items.filter((item, index) => !(index > lastUserIndex && (item as any)?.kind === "assistant"));
+			const tailHasUser = items.some((item, index) => index > cutIndex && (item as any)?.kind === "user");
+			// Assistant AND tool items go, the same predicate as the client's
+			// reattach supersede: a persisted tool chip's toolCallId died with
+			// the connection that ran it, so leaving it would strand a
+			// permanent running spinner in the landed transcript.
+			// The turn's own away-notes are stripped alongside the superseded
+			// tail and re-appended below, so a landing that runs twice keeps
+			// the transcript in the order it happened instead of leaving its
+			// notes stranded in front of the answer.
+			items = items.filter((item, index) => !((index > cutIndex && ((item as any)?.kind === "assistant" || (item as any)?.kind === "tool")) || String((item as any)?.id ?? "").startsWith(`detached-declined-${safeTurnId}-`)));
+			// The crash-leave that lost the partial can lose the PROMPT too:
+			// land it alongside the answer, so the transcript never shows an
+			// answer to a question that is not there.
+			const anchorUserText = (detachedCookingHandle?.userText ?? "").trim();
+			if (!tailHasUser && anchorUserText) {
+				items.push({ kind: "user", id: `detached-user-${safeTurnId}`, text: anchorUserText });
+			}
 			items.push({ kind: "assistant", id: `detached-assistant-${safeTurnId}`, text: finalText, streaming: false });
 			// A partial that landed because the turn FAILED (provider error, or
 			// the detach watchdog hit its deadline) must not read as a finished
 			// answer to someone opening the room later.
-			if (terminalReason === "failed") {
+			if (terminalReason === "failed" && !watched) {
 				items.push({ kind: "system", id: `detached-partial-${safeTurnId}`, text: "This response could not be fully finished after you left the room. Send the message again if something is missing.", level: "error" });
 			}
-		} else if (terminalReason === "failed") {
+		} else if (terminalReason === "failed" && !watched) {
 			items.push({ kind: "system", id: `detached-failure-${safeTurnId}`, text: "The response could not be finished after you left the room. Send the message again to retry.", level: "error" });
 		}
+		// A dialog that came up with nobody in the room was answered with a safe
+		// default so the turn could keep going. Say that in the transcript
+		// itself, deterministically, instead of hoping the answer mentions it.
+		// Bookkeeping must never cost the answer: the landed text is the paid
+		// result of this turn, the notes are an adornment on top of it.
+		try {
+			items = autoDeclinedQuestions.appendItems(items, `detached-declined-${safeTurnId}`);
+		} catch (error) {
+			app.log.warn({ err: error }, "failed to append auto-declined question notes to the detached landing");
+		}
 		writePersistentAgentThread(persistentAgentIdForSession, persistentConversationId, {
-			state: "standby",
+			state: watched ? current.state : "standby",
 			origin: current.origin,
 			model: current.model,
 			items,
@@ -4103,6 +4694,7 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 			// reasoning as the scheduled-background landing write).
 			allowInactiveProfileModel: true,
 		});
+		if (watched) return;
 		// Slice 3: nobody was connected to see this landing — record the unseen
 		// marker (away-notice shape) so a fresh session's Home can still badge
 		// the room. Cleared when a session next binds to the room. Best-effort:
@@ -4122,7 +4714,14 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 	const liveSessionHandle: PersistentRoomLiveSession = {
 		connectionId,
 		conversationId: persistentConversationId,
-		quiesceForBoundary: () => disposeSessionAfterAbortIfNeeded("cancelled"),
+		// #33: an adopted cooking turn runs in the DETACHING connection's
+		// closure; quiescing this session must stop that turn too, or Memento
+		// would dispose an idle session while the room keeps cooking.
+		quiesceForBoundary: async () => {
+			const cooking = claimedCookingTurn;
+			if (cooking && !cooking.settled) { try { await cooking.stop(connectionId); } catch {} }
+			await disposeSessionAfterAbortIfNeeded("cancelled");
+		},
 		notify: (message: string) => { try { socket.send(JSON.stringify({ type: "ui_request", kind: "notify", id: `memento_${Date.now().toString(36)}`, message, level: "info" })); } catch {} },
 		closeSocket: () => { try { socket.close(); } catch {} },
 	};
@@ -4307,7 +4906,38 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 		try { socket.send(JSON.stringify(msg)); } catch { return false; }
 		return true;
 	};
-	const uiContext = createWebUiContext(send);
+	// Issue #33: turn-scoped frames (the event family, usage, the turn's error
+	// frame) go through here so they are recorded for a reattach replay and,
+	// while an adopter is inside, forwarded to its socket instead of this one.
+	const sendTurnFrame = (msg: unknown) => {
+		if (activePersistentWebTurn && !turnReplayOverflowed) {
+			let frameBytes = 0;
+			try { frameBytes = JSON.stringify(msg).length; } catch {}
+			turnFrameBufferBytes += frameBytes;
+			if (turnFrameBufferBytes > REATTACH_REPLAY_CAP_BYTES) {
+				// Replay is off the table for this turn: free what was held and
+				// remember why, so a reattach bounces honestly instead of
+				// replaying a truncated stream.
+				turnReplayOverflowed = true;
+				turnFrameBuffer = [];
+				app.log.warn({ agentId: persistentAgentIdForSession, capBytes: REATTACH_REPLAY_CAP_BYTES }, "turn exceeded the reattach replay cap; replay disabled for this turn");
+			} else {
+				turnFrameBuffer.push(msg);
+			}
+			updateReattachBufferProbe();
+		}
+		const sink = cookingTurnSink;
+		if (sink) {
+			try { sink(msg); } catch {}
+			return;
+		}
+		send(msg);
+	};
+	// Questions the detached bridge answered for the user. The landing writes
+	// them into the transcript: a decline the user never saw must not depend on
+	// the answer mentioning it.
+	const autoDeclinedQuestions = createPersistentRoomAutoDeclinedQuestionLog();
+	const uiContext = createWebUiContext(send, (question) => autoDeclinedQuestions.note(question));
 
 	const bindSession = async () => {
 		// Rooms set the active-agent marker to the room id; the permissions
@@ -4710,12 +5340,21 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 				else process.env.EXXETA_PERSISTENT_ROOM_EXECUTION_CONTEXT = previousPersistentRoomExecutionContext;
 			}
 		};
+		// Per-room MCP: the wrapper reports the grants fingerprint its manifest
+		// description was ACTUALLY built from. Recording that same read (rather
+		// than reading again after the bind) closes the race where a grant edit
+		// between the two reads would leave the manifest stale for the whole
+		// connection: any such edit now differs from the captured fingerprint
+		// and rebinds before the next turn.
+		let mcpGrantsFingerprintAtBind: string | null = null;
 		const extensionFactories = [
 			contentPolicyExt as any,
 			permissionsExtForSession as any,
 			kbExt as any,
 			artifactsExt as any,
-			mcpExt as any,
+			// Per-room MCP: the session's connector surface goes through the shared
+			// room-scope wrapper, keyed to this room.
+			createRoomScopedMcpExtension(persistentAgentId, { onBoundGrants: (fingerprint) => { mcpGrantsFingerprintAtBind = fingerprint; } }) as any,
 			webSearchExt as any,
 			fetchUrlExt as any,
 			liveRoomStateExtForSession as any,
@@ -4757,7 +5396,17 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 		// leave the old fingerprint in place, so the next prompt frame still sees
 		// the mismatch and retries instead of prompting a disposed session forever.
 		boundWorkspaceFingerprint = persistentRoomEffectiveWorkspacePolicy.fingerprint.value;
+		// Prefer the fingerprint of the read the manifest description used; the
+		// fresh-read fallback only covers configs where no proxy tool registered.
+		boundMcpGrantsFingerprint = mcpGrantsFingerprintAtBind ?? persistentRoomMcpGrantsFingerprint(persistentAgentId);
 		await session.bindExtensions({ uiContext });
+		// The room's sticky effort outlives the connection AND the session: a
+		// rebind (workspace/MCP settings, adopted turn) rebuilds the session at
+		// the runtime default, so the room's choice is re-applied here rather
+		// than only on the prompt path. A room that never chose is left alone,
+		// keeping the level the session resolved for itself.
+		const boundRoomEffortChoice = readPersistentRoomEffortChoice(persistentAgentId);
+		if (boundRoomEffortChoice) applyRoomEffortToSession(session, boundRoomEffortChoice);
 		if (persistentRoomBootContext && persistentRoomModel && promptDiagnosticsEnabledForConnection) {
 			try {
 				recordPersistentRoomPromptDiagnostics({
@@ -4773,7 +5422,9 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 			}
 		}
 		session.subscribe((event) => {
-			send({ type: "event", event: projectAgentEventForWebClient(event) });
+			// #33: turn frames route through the reattach-aware sender, so a
+			// session stepping back in can replay them and then receive the rest.
+			sendTurnFrame({ type: "event", event: projectAgentEventForWebClient(event) });
 			if (event.type === "message_end" && (event as any).message?.role === "assistant") {
 				const msg = (event as any).message;
 				const text = textFromParts(msg.content);
@@ -4799,7 +5450,7 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 					const modelLabel = currentModel ? webChatModelLabel(currentModel.provider, currentModel) : undefined;
 					const turnProvider: string | undefined = currentModel?.provider ?? msg.provider ?? undefined;
 					recordUsage({ ts: Date.now(), agent: activeOwner, persona, model: msg.model, modelLabel, provider: turnProvider, authType: resolveUsageAuthType(turnProvider, true), kind: "chat", input: u.input ?? 0, output: u.output ?? 0, cacheRead: u.cacheRead ?? 0, cacheWrite: u.cacheWrite ?? 0, cost: u.cost?.total ?? 0, tools: toolsUsed.length ? toolsUsed : undefined });
-					send({ type: "usage_turn", agent: activeOwner, model: msg.model, modelProvider: msg.provider, modelLabel, input: u.input ?? 0, output: u.output ?? 0, cacheRead: u.cacheRead ?? 0, cacheWrite: u.cacheWrite ?? 0, cost: u.cost?.total ?? 0, totalTokens: u.totalTokens ?? 0, contextHealth: contextHealthForSession(session) });
+					sendTurnFrame({ type: "usage_turn", agent: activeOwner, model: msg.model, modelProvider: msg.provider, modelLabel, input: u.input ?? 0, output: u.output ?? 0, cacheRead: u.cacheRead ?? 0, cacheWrite: u.cacheWrite ?? 0, cost: u.cost?.total ?? 0, totalTokens: u.totalTokens ?? 0, contextHealth: contextHealthForSession(session) });
 				}
 			}
 			if (event.type === "message_end" && (event as any).message?.role === "toolResult") {
@@ -4914,11 +5565,123 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 
 	try {
 		await bindSession();
-		send({ type: "ready", persona, agent: persistentAgentIdForSession, persistentAgentId: persistentAgentIdForSession, conversationId: persistentConversationId, model: modelStatusPayload((session as any)?.model), contextHealth: initialContextHealthForSession(session) });
+		send({ type: "ready", persona, agent: persistentAgentIdForSession, persistentAgentId: persistentAgentIdForSession, conversationId: persistentConversationId, model: modelStatusPayload((session as any)?.model), contextHealth: initialContextHealthForSession(session), effort: roomEffortStatusPayload(persistentAgentIdForSession, session) });
 	} catch (e) {
 		send({ type: "error", message: `failed to create session: ${(e as Error).message}` });
 		socket.close();
 		return;
+	}
+
+	// Issue #33: this session's agent session was bound while (or right after)
+	// an adopted turn was writing to the room's session history, so its context
+	// predates the turn's landing. Rebuild it through the same single-rebind
+	// gate workspace changes use: frames arriving mid-rebind await it, and the
+	// next prompt retries if the rebuild failed.
+	const scheduleAdoptedSessionRebind = (): void => {
+		const rebind = (async () => {
+			if (!sessionDisposed) {
+				sessionDisposed = true;
+				try { (session as any)?.dispose?.(); } catch {}
+			}
+			session = null;
+			await bindSession();
+		})();
+		workspaceRebindInFlight = rebind;
+		rebind.catch(() => {}).finally(() => {
+			if (workspaceRebindInFlight === rebind) workspaceRebindInFlight = null;
+		});
+	};
+
+	// Test-only (EXXPERTS_TEST_INTROSPECTION=1, same spirit as the watchdog's
+	// env override): widen the claim-to-adopt window deterministically so the
+	// settle-during-bind branch and its lock ordering can be pinned by tests
+	// instead of relying on timing luck.
+	if (process.env.EXXPERTS_TEST_INTROSPECTION === "1") {
+		const testBindDelayMs = Number(params.get("testBindDelayMs") ?? "") || 0;
+		if (testBindDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, Math.min(testBindDelayMs, 10_000)));
+	}
+
+	// Issue #33 (stepping back into a room): adopt the cooking turn this
+	// connection claimed at connect. Adopt + snapshot + replay run in ONE
+	// synchronous block, so no frame can slip between the replayed snapshot
+	// and the live sink: the seam is gapless and duplicate-free by
+	// construction. If the turn settled while this session was binding, the
+	// buffer already ends with the turn's terminal frames and the replay alone
+	// carries the whole answer; the landing was written exactly once by the
+	// settle path either way.
+	if (claimedCookingTurn) {
+		const cooking = claimedCookingTurn;
+		if (cooking.claimantConnectionId !== connectionId) {
+			// A newer connection took the claim while this one was binding. The
+			// claim-time displacement hook already told this client and closed
+			// the socket; finish the story here too (belt for any path where
+			// the hook could not run) instead of proceeding as a silent
+			// lock-less session during a cooking turn.
+			claimedCookingTurn = null;
+			send({ type: "error", code: "room_displaced", message: "This room is now open in another window." });
+			try { socket.close(); } catch {}
+			return;
+		} else if (cooking.replayUnavailable()) {
+			// The turn overflowed the replay cap between the claim and this
+			// adopt (narrow window), still cooking OR already settled: a
+			// half-blind adoption would render a gappy stream, and a SETTLED
+			// adoption would replay the freed (empty) buffer, superseding the
+			// client's partial with nothing so its persist could overwrite the
+			// landed answer. Both degrade to the honest bounce, late but safe;
+			// the landing carries the whole answer and reopening finds it. The
+			// close handler does the right thing either way: a cooking turn
+			// re-detaches (this connection is the claimant) keeping the lock
+			// held until the settle releases it, a settled one releases now.
+			send({ type: "error", code: "room_cooking", message: "This room is currently finishing a response in the background. The answer is saved into the conversation when it is done; open the room again then." });
+			try { socket.close(); } catch {}
+			return;
+		} else {
+			const adopted = !cooking.settled && cooking.adopt(connectionId, send, {
+				onSettled: () => {
+					// The adopted turn landed while this session watched: release
+					// the handle (its closure, buffer included, becomes
+					// collectable) and rebuild the session against the landed
+					// history before the next prompt.
+					claimedCookingTurn = null;
+					try { scheduleAdoptedSessionRebind(); } catch (error) { app.log.warn({ err: error }, "adopted-turn session rebind failed to schedule"); }
+				},
+				onDisplaced: () => {
+					// A newer connection took the turn over: this session stops
+					// receiving frames, so it must not sit busy on a spinner that
+					// will never resolve. The error frame lands the partial and
+					// clears the client's busy state; Stop authority moved with
+					// the claim.
+					claimedCookingTurn = null;
+					send({ type: "error", code: "room_displaced", message: "This room is now open in another window." });
+				},
+			});
+			send({ type: "turn_reattach", turnId: cooking.turnId, conversationId: persistentConversationId, settled: !adopted, ...(cooking.userText ? { userText: cooking.userText } : {}), ...(cooking.anchorItemId !== undefined ? { anchorItemId: cooking.anchorItemId } : {}) });
+			for (const frame of cooking.bufferedTurnFrames()) send(frame);
+			// Close the replay window before any live frame can follow (this
+			// whole block is synchronous, so the agent cannot interleave): the
+			// client renders everything between turn_reattach and this marker
+			// instantly instead of re-animating the caught-up text at reading
+			// pace, and only post-seam live tokens reveal paced.
+			send({ type: "turn_reattach_replay_done", turnId: cooking.turnId });
+			if (adopted) {
+				app.log.info({ agentId: persistentAgentIdForSession, turnId: cooking.turnId }, "session stepped back into a cooking turn; replayed the stream so far");
+			} else {
+				// The landing beat this bind: the frames above carried the whole
+				// stream to its end, and the settle path recorded the unseen
+				// marker before it knew anyone was watching. Clear it again (this
+				// session just watched the answer land), and rebuild the session
+				// against the landed history.
+				claimedCookingTurn = null;
+				// The settled replay above was the buffer's last possible use.
+				cooking.releaseReplayBuffer();
+				// Bind-scoped: this session watched THIS conversation's answer
+				// land; a still-unseen scheduled answer in another thread keeps
+				// its badge.
+				try { clearPersistentAgentUnseenLandedAnswerForBind(persistentAgentIdForSession, persistentConversationId); } catch {}
+				scheduleAdoptedSessionRebind();
+				app.log.info({ agentId: persistentAgentIdForSession, turnId: cooking.turnId }, "cooking turn settled while the session was binding; replayed the finished stream");
+			}
+		}
 	}
 
 	// Rung 2 (assets contract §2): the connection inherits what the ledger knows
@@ -4976,6 +5739,27 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 		if (workspaceRebindInFlight) {
 			try { await workspaceRebindInFlight; } catch {}
 		}
+		// The composer's effort control, chosen between turns. Sticky per room:
+		// the choice is stored and every following turn inherits it, so this
+		// frame carries no turn of its own. An unknown level is ignored rather
+		// than refused, and the echo tells the client what actually took hold
+		// once the locked model's capability clamped it.
+		//
+		// Handled BEFORE the session guard below: storing a preference and
+		// answering with it needs no session, and a connection sitting in the
+		// window after a failed rebind (session null until the next prompt
+		// retries) must still be able to record what the user picked.
+		if (msg.type === "effort") {
+			if (!isRoomEffortLevel(msg.level)) return;
+			recordRoomEffortChoice(persistentAgentIdForSession, session, msg.level);
+			// A turn finishes under the rules it started with, the same principle
+			// the live-settings rebind follows: a choice made while an answer is
+			// being written is stored and applies from the next prompt, never
+			// mid-answer where half the steps would think at a different depth.
+			if (session && !activePersistentWebTurn && !autoSummaryRunning) applyRoomEffortToSession(session, msg.level);
+			send({ type: "effort", ...roomEffortStatusPayload(persistentAgentIdForSession, session, msg.level) });
+			return;
+		}
 		if (!session && msg.type !== "prompt") return;
 		if (msg.type === "prompt") {
 			// Workspace settings apply from the next message: when the room's
@@ -4989,9 +5773,14 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 			if (!activePersistentWebTurn && !autoSummaryRunning && boundWorkspaceFingerprint !== null) {
 				try {
 					const liveWorkspacePolicy = resolvePersistentRoomEffectiveWorkspacePolicy(persistentAgentIdForSession, persistentConversationId);
+					// Per-room MCP grants ride the same live-settings rebind: call
+					// gating is already per-call in the wrapper, but the proxy tool's
+					// manifest description is bind-time, so a grant change rebuilds
+					// the session before the next turn.
+					const liveMcpGrantsFingerprint = persistentRoomMcpGrantsFingerprint(persistentAgentIdForSession);
 					// `!session` here means an earlier rebind failed after disposing
 					// the old session; retry rather than bricking the connection.
-					if (!session || liveWorkspacePolicy.fingerprint.value !== boundWorkspaceFingerprint) {
+					if (!session || liveWorkspacePolicy.fingerprint.value !== boundWorkspaceFingerprint || liveMcpGrantsFingerprint !== boundMcpGrantsFingerprint) {
 						if (!workspaceRebindInFlight) {
 							const rebind = (async () => {
 								if (!sessionDisposed) {
@@ -5009,7 +5798,7 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 						await workspaceRebindInFlight;
 					}
 				} catch (e) {
-					send({ type: "error", message: `failed to apply updated workspace settings: ${(e as Error).message}` });
+					send({ type: "error", message: `failed to apply updated room settings: ${(e as Error).message}` });
 					return;
 				}
 			}
@@ -5021,7 +5810,41 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 				persistentTurnId = startedTurn.turnId;
 				activePersistentWebTurn = { turnId: persistentTurnId, promptSettled: false };
 				resetTurnTrace();
+				// #33: a fresh turn owns a fresh replay buffer, and records the
+				// supersede anchor: the last item the thread file held BEFORE this
+				// turn produced anything (the client's debounced persist of this
+				// prompt lands ~500ms later, so the file still ends on the prior
+				// turn here). Best-effort: an unreadable file leaves the anchor
+				// unknown and clients fall back to their conservative rule.
+				turnFrameBuffer = [];
+				turnFrameBufferBytes = 0;
+				turnReplayOverflowed = false;
+				updateReattachBufferProbe();
+				try {
+					const priorItems = getPersistentAgentThread(persistentAgentIdForSession, persistentConversationId)?.items ?? [];
+					const lastPrior = priorItems.length > 0 ? (priorItems[priorItems.length - 1] as any) : null;
+					turnStartAnchorItemId = lastPrior ? (String(lastPrior.id ?? "") || null) : null;
+				} catch {
+					turnStartAnchorItemId = undefined;
+				}
 				const sessionAtPromptStart = session;
+				// Reasoning effort for this turn. `effort` on a prompt frame is an
+				// explicit choice and behaves exactly like the effort frame: the
+				// raw level is stored and the clamped one applies to this turn.
+				// This app's own composer never sends it (it would echo back the
+				// CLAMPED level it was shown and overwrite the raw preference);
+				// it is here for clients that have no second frame to spend.
+				//
+				// Otherwise the room's stored choice is re-applied, because a
+				// rebind since the last turn would have rebuilt the session at
+				// the machine default. A room that never chose is left alone.
+				if (isRoomEffortLevel(msg.effort)) {
+					recordRoomEffortChoice(persistentAgentIdForSession, session, msg.effort);
+					applyRoomEffortToSession(session, msg.effort);
+				} else {
+					const storedRoomEffortChoice = readPersistentRoomEffortChoice(persistentAgentIdForSession);
+					if (storedRoomEffortChoice) applyRoomEffortToSession(session, storedRoomEffortChoice);
+				}
 				const userText = String(msg.text ?? "");
 				// Consent scope for delegate auto-dispatch: only what the USER typed
 				// this turn — never the model-written handoff blocks or app-written
@@ -5052,7 +5875,9 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 			} catch (e) {
 				promptDiagnosticsPendingTurn = undefined;
 				if (!activePersistentWebTurn?.terminalReason) setActivePersistentWebTurnTerminalReason("failed");
-				send({ type: "error", message: (e as Error).message });
+				// #33: the turn's failure frame belongs to the turn stream, so a
+				// session that stepped back in sees it live (or in the replay).
+				sendTurnFrame({ type: "error", message: (e as Error).message });
 			} finally {
 				// Clear the consent text only for a turn that actually began: a
 				// CONCURRENT prompt frame that 409s at beginPersistentAgentTurn never
@@ -5067,28 +5892,75 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 					// writePersistentAgentThread asserts no turn is in flight (the
 					// same order scheduled background execution uses). New
 					// connections still cannot slip in between — the acquire path
-					// refuses while this room is in detachedCookingRooms.
+					// refuses while this room is in detachedCookingRooms, and a
+					// reattach (#33) binds to the SETTLED handle from here on.
+					const cookingHandle = detachedFromClient ? detachedCookingHandle : null;
+					const watchedByAdopter = !!(cookingHandle && cookingHandle.adopterConnectionId);
+					if (cookingHandle) {
+						// Settle the handle FIRST, synchronously with the landing:
+						// a connection consulting the registry after this line binds
+						// to a settled thread, never onto a stream about to vanish.
+						cookingHandle.settled = true;
+						if (detachedCookingTurnHandles.get(persistentAgentIdForSession) === cookingHandle) detachedCookingTurnHandles.delete(persistentAgentIdForSession);
+					}
 					if (detachedFromClient) {
-						try { landDetachedTurnOutcome(persistentTurnId, turn?.terminalReason ?? "failed"); } catch (error) { app.log.warn({ err: error }, "failed to land detached persistent-room turn outcome"); }
+						try { landDetachedTurnOutcome(persistentTurnId, turn?.terminalReason ?? "failed", { watchedByAdopter }); } catch (error) { app.log.warn({ err: error }, "failed to land detached persistent-room turn outcome"); }
 					}
 					if (activePersistentWebTurn?.turnId === persistentTurnId) activePersistentWebTurn = null;
-					// Detached settle: nobody owns this connection anymore — release
-					// the room lock the close handler deliberately kept, unregister
-					// the live-session handle and dispose the session.
+					// Detached settle: this connection's ownership ends here — the
+					// deadline, the cooking flag, this closure's own lock record
+					// (owner-checked, so inert after an adoption takeover) and the
+					// session all wind down. The claimed lock record is released
+					// only when nobody is inside; a live adopter keeps it as its
+					// ordinary session lock, released by ITS close handler.
 					if (detachedFromClient) {
 						clearDetachedTurnDeadline();
 						detachedCookingRooms.delete(persistentAgentIdForSession);
 						if (persistentRoomLiveSessions.get(persistentAgentIdForSession) === liveSessionHandle) persistentRoomLiveSessions.delete(persistentAgentIdForSession);
 						releaseRoomLockNow();
+						if (watchedByAdopter) {
+							// #33: hand the adopter the settle signal so it rebinds
+							// its session against the landed history.
+							try { adopterOnSettled?.(); } catch (error) { app.log.warn({ err: error }, "adopted-turn settle callback failed"); }
+						} else if (cookingHandle?.claimantConnectionId) {
+							// A claimant is ALIVE mid-bind (redetach clears the
+							// claimant when one dies): the lock record it took over
+							// is about to be its ordinary session lock, released by
+							// its own close handler. Releasing it here would strand
+							// that live session lock-less the moment its bind
+							// finishes onto the settled thread.
+						} else {
+							try { adopterReleaseLock?.(); } catch {}
+						}
+						cookingTurnSink = null;
+						adopterOnDisplaced = null;
 						if (!sessionDisposed) {
 							sessionDisposed = true;
 							try { (session as any)?.dispose?.(); } catch {}
 						}
 					}
+					// #33 buffer lifecycle (review): the replay buffer dies with
+					// the turn, on EVERY connection, attached or detached, so an
+					// idle tab never retains its last turn's stream. The one
+					// exception is a claimant still alive mid-bind, whose settled
+					// replay needs the buffer; its phase two releases it after
+					// replaying (and its disconnect drops the closure either way).
+					const keepReplayBufferForPendingClaim = !!(cookingHandle && cookingHandle.claimantConnectionId && !watchedByAdopter);
+					if (!keepReplayBufferForPendingClaim) releaseTurnFrameBuffer();
 				}
 			}
 		} else if (msg.type === "abort") {
-			await abortActivePersistentWebTurn("cancelled");
+			// #33: Stop after a reattach cancels the ADOPTED turn, which runs in
+			// the detaching connection's closure, through the same cancelling
+			// machinery a never-left session uses. Claimant-checked: a session
+			// another window displaced falls through to its own (idle) session,
+			// so its Stop can never abort a stream someone else is watching.
+			const cooking = claimedCookingTurn;
+			if (cooking && !cooking.settled && cooking.claimantConnectionId === connectionId) {
+				await cooking.stop(connectionId);
+			} else {
+				await abortActivePersistentWebTurn("cancelled");
+			}
 		} else if (msg.type === "consult") {
 			const consultId = String(msg.consultId ?? "").trim();
 			if (!consultId) return;
@@ -5098,7 +5970,8 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 			const consultError = (message: string, code?: string) => send({ type: "consult_error", consultId, message, ...(code ? { code } : {}) });
 			// Start gate: a consult may not start while this room is answering.
 			// (The reverse is allowed — prompts process normally during a consult.)
-			if (activePersistentWebTurn) {
+			// An adopted cooking turn (#33) counts as answering too.
+			if (activePersistentWebTurn || (claimedCookingTurn && !claimedCookingTurn.settled)) {
 				consultError("This room is answering right now. Wait for the current turn to finish, then consult.");
 				return;
 			}
@@ -5311,25 +6184,82 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 			detachedFromClient = true;
 			detachedCookingRooms.add(persistentAgentIdForSession);
 			uiContext.detach("The user left the room while this response was being written, so interactive questions cannot be answered right now. Proceed with your best judgment and finish the task; anything that strictly needs the user's approval must be left undone and mentioned in your answer.");
-			// Watchdog: nobody is watching this turn anymore, so a hung
-			// provider stream would hold the room lock and refuse every new
-			// connection forever. Past the deadline the turn is aborted the
-			// way a user stop aborts it — with terminal reason `failed`, so
-			// the landing write parks the partial (or the failure note) and
-			// the settle path releases the lock and disposes the session. The
-			// callback re-checks the live turn state so a timer that lost the
-			// race against a normal settle does nothing.
-			const detachedTurnId = activePersistentWebTurn?.turnId;
-			clearDetachedTurnDeadline();
-			detachedTurnDeadlineTimer = setTimeout(() => {
-				detachedTurnDeadlineTimer = null;
-				const turn = activePersistentWebTurn;
-				if (!turn || turn.turnId !== detachedTurnId || turn.promptSettled || turn.terminalReason) return;
-				app.log.warn({ agentId: persistentAgentIdForSession, turnId: detachedTurnId, deadlineMs: DETACHED_TURN_DEADLINE_MS }, "detached turn exceeded its deadline; aborting");
-				void abortActivePersistentWebTurn("failed").catch((error) => {
-					app.log.warn({ err: error }, "detached-turn deadline abort failed");
-				});
-			}, DETACHED_TURN_DEADLINE_MS);
+			armDetachedTurnDeadline();
+			// Issue #33: register the reattach handle, so a session stepping
+			// back into the room adopts this cooking turn instead of bouncing.
+			// Methods run in THIS closure; the registry entry dies at settle.
+			const handle: DetachedCookingTurnHandle = {
+				conversationId: persistentConversationId,
+				turnId: activePersistentWebTurn?.turnId ?? "",
+				userText: activeTurnUserAuthoredText ?? "",
+				anchorItemId: turnStartAnchorItemId,
+				settled: false,
+				claimantConnectionId: null,
+				adopterConnectionId: null,
+				bufferedTurnFrames: () => [...turnFrameBuffer],
+				replayUnavailable: () => turnReplayOverflowed,
+				releaseReplayBuffer: () => releaseTurnFrameBuffer(),
+				claim: (claimant, releaseLock, onDisplaced) => {
+					if (handle.claimantConnectionId !== claimant) {
+						// A previous claimant's lock record was just taken over; its
+						// release is owner-checked, so invoking it only stops that
+						// connection's now-pointless heartbeat.
+						if (adopterReleaseLock) { try { adopterReleaseLock(); } catch {} }
+						// Whoever held the claim is displaced: a live ADOPTER stops
+						// receiving frames (the new claimant replays the buffer)
+						// and is told, so its window never freezes busy; a claimant
+						// still MID-BIND is told too (the hook it registered at its
+						// own claim), so it never proceeds as a silent lock-less
+						// session during a cooking turn.
+						const displaced = adopterOnDisplaced;
+						handle.adopterConnectionId = null;
+						cookingTurnSink = null;
+						adopterOnSettled = null;
+						adopterOnDisplaced = null;
+						try { displaced?.(); } catch {}
+					}
+					handle.claimantConnectionId = claimant;
+					adopterReleaseLock = releaseLock;
+					adopterOnDisplaced = onDisplaced;
+				},
+				adopt: (claimant, sink, hooks) => {
+					if (handle.settled || handle.claimantConnectionId !== claimant) return false;
+					handle.adopterConnectionId = claimant;
+					cookingTurnSink = sink;
+					adopterOnSettled = hooks.onSettled;
+					adopterOnDisplaced = hooks.onDisplaced;
+					detachedCookingRooms.delete(persistentAgentIdForSession);
+					// Somebody is watching again and Stop is reachable: the
+					// hung-stream watchdog stands down.
+					clearDetachedTurnDeadline();
+					return true;
+				},
+				redetach: (claimant) => {
+					if (handle.settled || handle.claimantConnectionId !== claimant) return;
+					handle.adopterConnectionId = null;
+					// The claimant is GONE (its close handler is the only caller):
+					// clearing it lets the settle path release the lock record it
+					// left behind, and distinguishes this from a claimant still
+					// alive mid-bind, whose lock the settle must NOT touch.
+					handle.claimantConnectionId = null;
+					cookingTurnSink = null;
+					adopterOnSettled = null;
+					adopterOnDisplaced = null;
+					detachedCookingRooms.add(persistentAgentIdForSession);
+					// Memento must still be able to quiesce the re-detached turn.
+					persistentRoomLiveSessions.set(persistentAgentIdForSession, liveSessionHandle);
+					armDetachedTurnDeadline();
+				},
+				stop: (claimant) => {
+					// Claimant-checked exactly like adopt/redetach: a displaced
+					// connection's Stop must never abort the stream the CURRENT
+					// adopter is watching.
+					if (handle.settled || handle.claimantConnectionId !== claimant) return Promise.resolve();
+					return abortActivePersistentWebTurn("cancelled");
+				},
+			};
+			detachedCookingHandle = handle;
+			detachedCookingTurnHandles.set(persistentAgentIdForSession, handle);
 			app.log.info({ agentId: persistentAgentIdForSession }, "ws client disconnected mid-turn; finishing the response in the background");
 			return;
 		}
@@ -6112,6 +7042,25 @@ try {
 	for (const migrationError of shelfMigration.errors) app.log.warn(`shelf migration: ${migrationError}`);
 } catch (e) {
 	app.log.warn({ err: (e as Error).message }, "shelf migration failed; task-store artifacts stay in place until the next boot");
+}
+
+// Per-room MCP update-day migration: before the server accepts traffic, every
+// EXISTING room without a grants file receives the full current connector
+// list (nothing a room could do before the update stops working), one time
+// only (marker-guarded; the CLI room door runs the same guarded migration,
+// whichever surface boots first wins). An unreadable config file ABORTS the
+// run without the marker - the adapter would silently read it as "no
+// servers" and this migration must never wipe legacy rooms off a corrupt
+// file - so the next boot retries.
+try {
+	const migration = await ensureRoomScopedMcpGrantsMigration();
+	if (migration.skipped === "unreadable-config") {
+		app.log.warn("per-room MCP migration skipped: a connector config file is unreadable; existing rooms keep no grants file until a boot after the file is fixed");
+	} else if (migration.migrated.length > 0) {
+		app.log.info(`per-room MCP migration: granted the full connector list to ${migration.migrated.length} existing room(s)`);
+	}
+} catch (e) {
+	app.log.warn({ err: (e as Error).message }, "per-room MCP grants migration failed; rooms without a grants file read as empty until the next boot");
 }
 
 let schedulerPreflightLoopHandle: ReturnType<typeof startPersistentRoomSchedulePreflightLoop> | null = null;

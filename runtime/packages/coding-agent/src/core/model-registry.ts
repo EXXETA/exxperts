@@ -89,6 +89,7 @@ const ThinkingLevelMapSchema = Type.Object({
 	medium: Type.Optional(ThinkingLevelMapValueSchema),
 	high: Type.Optional(ThinkingLevelMapValueSchema),
 	xhigh: Type.Optional(ThinkingLevelMapValueSchema),
+	max: Type.Optional(ThinkingLevelMapValueSchema),
 });
 
 const OpenAICompletionsCompatSchema = Type.Object({
@@ -216,8 +217,16 @@ function formatValidationPath(error: TLocalizedValidationError): string {
 	return path || "root";
 }
 
-/** Strip `//` line comments and trailing commas from JSON, leaving string literals untouched. */
-function stripJsonComments(input: string): string {
+/**
+ * Strip `//` line comments and trailing commas from JSON, leaving string
+ * literals untouched.
+ *
+ * Exported because models.json is a hand-editable file with a dialect, and
+ * anything outside this module that reads or rewrites it has to read it the
+ * same way the registry does. A second, stricter parser elsewhere would call a
+ * perfectly valid annotated file corrupt.
+ */
+export function stripJsonComments(input: string): string {
 	return input
 		.replace(/"(?:\\.|[^"\\])*"|\/\/[^\n]*/g, (m) => (m[0] === '"' ? m : ""))
 		.replace(/"(?:\\.|[^"\\])*"|,(\s*[}\]])/g, (m, tail) => tail ?? (m[0] === '"' ? m : ""));

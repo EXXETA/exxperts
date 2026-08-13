@@ -4,6 +4,7 @@ import { InRoomChatShellView } from "../components/in-room-chat";
 import { PersistentAgentCard } from "../components/launcher-room-card";
 import { ProductSidebar, type ProductSidebarActive, type ThemeMode } from "../components/product-shell";
 import { Sidebar } from "../components/Sidebar";
+import { ConnectionLostBanner } from "../components/connection-lost-banner";
 import type { PersistentAgentAiProfileSelectionStatus, PersistentAgentStatus, WebChatModelOption, WebChatModelStatus } from "../types";
 import { FIXTURE_DEFAULT_AGENT_ID, fixtureStates, type CreateRoomFixtureState, type FixtureState, type HomeFixtureState, type InRoomChatActionItem, type InRoomChatFixtureState, type SidebarFixtureState, type TaskCardsFixtureState } from "./fixture-data";
 import { TaskRunView } from "../components/task-run-view";
@@ -12,13 +13,12 @@ import type { TaskState } from "../task-stream";
 
 const noop = () => {};
 
-function sidebarFixtureFor(active: ProductSidebarActive, theme: ThemeMode, connected = true) {
+function sidebarFixtureFor(active: ProductSidebarActive, theme: ThemeMode) {
 	return (
 		<ProductSidebar
 			onHome={noop}
 			onAiSetup={noop}
 			onDashboard={noop}
-			connected={connected}
 			theme={theme}
 			onToggleTheme={noop}
 			active={active}
@@ -32,7 +32,8 @@ function sidebarFixtureFor(active: ProductSidebarActive, theme: ThemeMode, conne
 function SidebarFixtureScreen({ fixture, theme }: { fixture: SidebarFixtureState; theme: ThemeMode }) {
 	return (
 		<div className="landing-shell with-product-sidebar">
-			{sidebarFixtureFor(fixture.active, theme, fixture.connected)}
+			{fixture.connectionLost && <ConnectionLostBanner />}
+			{sidebarFixtureFor(fixture.active, theme)}
 			<div className="landing">
 				<section className="landing-hero">
 					<h1>{fixture.label}</h1>
@@ -162,11 +163,24 @@ function CreateRoomFixtureScreen({ fixture, theme }: { fixture: CreateRoomFixtur
 }
 
 function fixtureActionButtons(actions: InRoomChatActionItem[] | undefined) {
-	return actions?.map((action) => (
-		<button key={`${action.label}-${action.title ?? ""}`} className="icon-btn" title={action.title} disabled={action.disabled} onClick={noop}>
-			{action.label}
-		</button>
-	));
+	return actions?.map((action, index) => {
+		const Glyph = action.glyph;
+		// An icon with no label is a square button, exactly as the room renders it.
+		const iconOnly = !!Glyph && !action.label;
+		return (
+			<button
+				key={`${action.label}-${action.title ?? ""}-${index}`}
+				className={`icon-btn${iconOnly ? " icon-btn-square" : ""}`}
+				title={action.title}
+				aria-label={action.ariaLabel}
+				disabled={action.disabled}
+				onClick={noop}
+			>
+				{Glyph ? <Glyph /> : null}
+				{action.label ? <span>{action.label}</span> : null}
+			</button>
+		);
+	});
 }
 
 function InRoomChatFixtureScreen({ fixture, theme }: { fixture: InRoomChatFixtureState; theme: ThemeMode }) {
@@ -178,7 +192,6 @@ function InRoomChatFixtureScreen({ fixture, theme }: { fixture: InRoomChatFixtur
 			sidebar={
 				<Sidebar
 					onHome={noop}
-					connected={fixture.connected}
 					theme={theme}
 					onToggleTheme={noop}
 					onHelp={noop}

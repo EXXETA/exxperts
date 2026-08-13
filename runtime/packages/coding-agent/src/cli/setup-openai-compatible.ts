@@ -20,7 +20,12 @@ const OPENAI_COMPATIBLE_PROFILE_ID = "openai-compatible";
 const OPENAI_COMPATIBLE_POLICY_FILE_NAME = "openai-compatible-ai-profile.json";
 
 const SIMPLE_PROVIDER_KEYS = new Set(["name", "baseUrl", "api", "models"]);
-const SIMPLE_MODEL_KEYS = new Set(["id", "name"]);
+// `input` and `contextWindow` belong here, not in the "advanced config we must
+// not touch" bucket: the app writes them per model when someone marks a gateway
+// model as image-capable or corrects its context size. Treating them as
+// surprises made this wizard refuse to run against a config the app itself had
+// produced.
+const SIMPLE_MODEL_KEYS = new Set(["id", "name", "input", "contextWindow"]);
 
 type JsonObject = Record<string, unknown>;
 
@@ -31,12 +36,26 @@ type JsonFileState = {
 	parseError?: string;
 };
 
+/** Per-model capability facts the app records and this wizard must not erase. */
+export type OpenAiCompatibleModelCapabilities = {
+	/** True when the model accepts images; written as input: ["text","image"]. */
+	vision?: boolean;
+	/** Token window for the model; omitted means the runtime default applies. */
+	contextWindow?: number;
+};
+
 export type OpenAiCompatibleSetupConfig = {
 	displayName: string;
 	baseUrl: string;
 	primaryRoomModelId: string;
 	additionalRoomModelIds: string[];
 	maintenanceModelId: string;
+	/**
+	 * Keyed by model id. The terminal wizard never asks for these; it inherits
+	 * whatever the app already stored so a re-run keeps a model's image support
+	 * and context size instead of quietly resetting them to the defaults.
+	 */
+	modelCapabilities?: Record<string, OpenAiCompatibleModelCapabilities>;
 };
 
 export type OpenAiCompatibleSetupPlan = {
@@ -135,6 +154,12 @@ function inspectSimpleProvider(provider: JsonObject, conflicts: string[]): void 
 		}
 		if (model.name !== undefined && typeof model.name !== "string") {
 			conflicts.push(`${OPENAI_COMPATIBLE_PROVIDER_ID}.models[${index}].name must be a string when present.`);
+		}
+		if (model.input !== undefined && (!Array.isArray(model.input) || model.input.some((value) => value !== "text" && value !== "image"))) {
+			conflicts.push(`${OPENAI_COMPATIBLE_PROVIDER_ID}.models[${index}].input must list only "text" and "image" when present.`);
+		}
+		if (model.contextWindow !== undefined && (typeof model.contextWindow !== "number" || !(model.contextWindow > 0))) {
+			conflicts.push(`${OPENAI_COMPATIBLE_PROVIDER_ID}.models[${index}].contextWindow must be a positive number when present.`);
 		}
 		const surprisingModelKeys = Object.keys(model).filter((key) => !SIMPLE_MODEL_KEYS.has(key));
 		if (surprisingModelKeys.length > 0) {
@@ -236,18 +261,42 @@ export function normalizeOpenAiCompatibleSetupConfig(
 		primaryRoomModelId,
 		additionalRoomModelIds,
 		maintenanceModelId,
+		...(config.modelCapabilities ? { modelCapabilities: config.modelCapabilities } : {}),
 	};
+}
+
+// What models.json already says about each model's image support and context
+// size. Read back so a wizard run that only changes the URL or the model list
+// does not throw away facts it never asked about.
+function existingModelCapabilities(state: JsonFileState): Record<string, OpenAiCompatibleModelCapabilities> {
+	const capabilities: Record<string, OpenAiCompatibleModelCapabilities> = {};
+	if (!isObject(state.data)) return capabilities;
+	const providers = state.data.providers;
+	if (!isObject(providers)) return capabilities;
+	const provider = providers[OPENAI_COMPATIBLE_PROVIDER_ID];
+	if (!isObject(provider) || !Array.isArray(provider.models)) return capabilities;
+	for (const model of provider.models) {
+		if (!isObject(model) || typeof model.id !== "string") continue;
+		const entry: OpenAiCompatibleModelCapabilities = {};
+		if (Array.isArray(model.input) && model.input.includes("image")) entry.vision = true;
+		if (typeof model.contextWindow === "number" && model.contextWindow > 0) entry.contextWindow = model.contextWindow;
+		if (entry.vision || entry.contextWindow) capabilities[model.id] = entry;
+	}
+	return capabilities;
 }
 
 export function buildOpenAiCompatibleSetupPlan(
 	config: OpenAiCompatibleSetupConfig,
 	paths: { agentDir?: string; modelsPath?: string; appPolicyPath?: string } = {},
 ): OpenAiCompatibleSetupPlan {
-	const normalizedConfig = normalizeOpenAiCompatibleSetupConfig(config);
 	const agentDir = paths.agentDir ?? getAgentDir();
 	const modelsPath = paths.modelsPath ?? getModelsPath();
 	const appPolicyPath = paths.appPolicyPath ?? getOpenAiCompatibleAppPolicyPath();
 	const modelsState = readJsonFile(modelsPath);
+	const normalizedConfig = normalizeOpenAiCompatibleSetupConfig({
+		...config,
+		modelCapabilities: config.modelCapabilities ?? existingModelCapabilities(modelsState),
+	});
 	const appPolicyState = readJsonFile(appPolicyPath);
 	const changes: string[] = [];
 	const conflicts: string[] = [];
@@ -329,12 +378,22 @@ function writeJsonFile(path: string, data: unknown): void {
 	chmodBestEffort(path, 0o600);
 }
 
+function canonicalModel(id: string, capabilities: OpenAiCompatibleModelCapabilities | undefined): JsonObject {
+	const model: JsonObject = { id, name: id };
+	// A gateway model is text-only unless someone says otherwise; saying so out
+	// loud is what lets attached images reach it instead of being replaced by a
+	// placeholder further down.
+	if (capabilities?.vision) model.input = ["text", "image"];
+	if (capabilities?.contextWindow && capabilities.contextWindow > 0) model.contextWindow = capabilities.contextWindow;
+	return model;
+}
+
 function canonicalProvider(config: OpenAiCompatibleSetupConfig): JsonObject {
 	return {
 		name: config.displayName,
 		baseUrl: config.baseUrl,
 		api: OPENAI_COMPATIBLE_API,
-		models: modelIdsForConfig(config).map((id) => ({ id, name: id })),
+		models: modelIdsForConfig(config).map((id) => canonicalModel(id, config.modelCapabilities?.[id])),
 	};
 }
 

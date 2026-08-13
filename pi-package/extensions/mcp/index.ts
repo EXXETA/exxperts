@@ -20,6 +20,7 @@
 
 import * as os from "node:os";
 import * as path from "node:path";
+import { ensureRoomScopedMcpGrantsMigration, prepareRoomScopedMcpSessionCache, roomScopedMcpToolRegistration, type RegisteredToolLike, type RoomScopeRegistrationOptions } from "./room-scope.js";
 
 // Kept non-literal so tsc never resolves the specifiers into raw .ts sources,
 // and so no tsconfig `paths` remap is needed — a remap would also be applied
@@ -33,11 +34,42 @@ interface RegisteredCommandLike {
 	handler: (args: string | undefined, ctx: unknown) => Promise<void> | void;
 }
 
+/**
+ * Per-room MCP: the session assemblers (web server room sessions, scheduled
+ * background room runs) pass the room id explicitly; a CLI room process
+ * carries it in EXXETA_PERSISTENT_ROOM_AGENT (set by the launcher for the
+ * whole process), which the default export picks up. No room id means an
+ * unscoped session: the adapter registers untouched.
+ */
+export function createRoomScopedMcpExtension(roomId: string, options: RoomScopeRegistrationOptions = {}) {
+	const scopedRoomId = String(roomId ?? "").trim();
+	if (!scopedRoomId) throw new Error("createRoomScopedMcpExtension requires a room id");
+	return (pi: unknown) => registerMcpExtension(pi, scopedRoomId, options);
+}
+
 export default async function (pi: unknown) {
+	const envRoomId = String(process.env.EXXETA_PERSISTENT_ROOM_AGENT ?? "").trim();
+	return registerMcpExtension(pi, envRoomId || null, {});
+}
+
+async function registerMcpExtension(pi: unknown, roomScopeId: string | null, scopeOptions: RoomScopeRegistrationOptions) {
 	// The adapter resolves its agent-global config dir from PI_CODING_AGENT_DIR
 	// (defaulting to ~/.pi/agent); point it at the exxperts agent dir instead.
 	if (!process.env.PI_CODING_AGENT_DIR) {
 		process.env.PI_CODING_AGENT_DIR = path.join(os.homedir(), ".exxperts", "agent");
+	}
+	if (roomScopeId) {
+		// Whichever room door registers first after the update runs the
+		// marker-guarded migration - a CLI room must not read zero grants just
+		// because the web server has not booted yet. Then, on a truly cold
+		// metadata cache, warm ONLY this room's granted connectors so the
+		// adapter's bootstrap-all never connects ungranted servers.
+		try {
+			await ensureRoomScopedMcpGrantsMigration();
+		} catch {
+			// migration is retried by the next door; enforcement stays fail-closed
+		}
+		await prepareRoomScopedMcpSessionCache(roomScopeId);
 	}
 	// Dynamic import: default-export interop differs between the jiti and tsx
 	// loading paths — including a double `default` wrapper when this module
@@ -52,7 +84,10 @@ export default async function (pi: unknown) {
 	// override the bare command with our own panel. Commands are stored per
 	// extension keyed by name, so the later registration below wins.
 	let adapterMcpCommand: RegisteredCommandLike | null = null;
-	const api = pi as { registerCommand?: (name: string, options: RegisteredCommandLike) => void };
+	const api = pi as {
+		registerCommand?: (name: string, options: RegisteredCommandLike) => void;
+		registerTool?: (tool: RegisteredToolLike) => void;
+	};
 	const originalRegisterCommand = api.registerCommand?.bind(pi);
 	if (originalRegisterCommand) {
 		api.registerCommand = (name: string, options: RegisteredCommandLike) => {
@@ -62,11 +97,37 @@ export default async function (pi: unknown) {
 			originalRegisterCommand(name, options);
 		};
 	}
+	// Per-room MCP: in a room-scoped session the adapter's tool registrations
+	// (the `mcp` proxy tool, optional per-server direct tools) are captured and
+	// re-registered through the shared room-scope wrapper, which filters what
+	// the room's model can see, gates what it can call, and sanitizes results
+	// against the room's live grant list. The adapter only registers tools
+	// synchronously inside its register call, so deferring them past it loses
+	// nothing.
+	const deferredRoomScopedTools: RegisteredToolLike[] = [];
+	const originalRegisterTool = api.registerTool?.bind(pi);
+	if (roomScopeId && originalRegisterTool) {
+		api.registerTool = (tool: RegisteredToolLike) => {
+			deferredRoomScopedTools.push(tool);
+		};
+	}
 	let result: unknown;
 	try {
 		result = await (register as (pi: unknown) => unknown)(pi);
 	} finally {
 		if (originalRegisterCommand) api.registerCommand = originalRegisterCommand;
+		if (roomScopeId && originalRegisterTool) api.registerTool = originalRegisterTool;
+	}
+	if (roomScopeId && originalRegisterTool) {
+		const getAllTools = (pi as { getAllTools?: () => Array<{ name: string }> }).getAllTools?.bind(pi);
+		const registrationOptions: RoomScopeRegistrationOptions = {
+			...scopeOptions,
+			...(getAllTools ? { getAllTools } : {}),
+		};
+		for (const tool of deferredRoomScopedTools) {
+			const scoped = await roomScopedMcpToolRegistration(roomScopeId, tool, registrationOptions);
+			if (scoped) originalRegisterTool(scoped);
+		}
 	}
 
 	// Fingerprint the connector list as loaded for this session, so the panel

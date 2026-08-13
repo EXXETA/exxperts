@@ -1893,23 +1893,65 @@ export function getPersistentAgentRuntimeState(agentIdRaw: string): PersistentAg
 // recorded at landing time, surfaced on the room status, and cleared when a
 // session next binds to the room (the user is about to see the landed answer
 // in the transcript). File-backed so a fresh app load still badges the room.
+// A scheduled run lands the same way but not into the same place: its answer
+// may go into a conversation of its own rather than into the room's live one.
+// The origin says which door landed the answer so the status read can pick the
+// honest reachability test for each (see `unseenLandedAnswerStillReachable`).
+// Marker files written before this field existed are detached turns.
+export type PersistentAgentUnseenLandedAnswerOrigin = "detached-turn" | "scheduled-run";
+
 export interface PersistentAgentUnseenLandedAnswer {
 	threadId: string;
 	turnId: string;
 	terminalReason: "completed" | "failed";
 	landedAt: number;
+	origin: PersistentAgentUnseenLandedAnswerOrigin;
 }
 
-export function recordPersistentAgentUnseenLandedAnswer(agentIdRaw: string, marker: { threadId: string; turnId: string; terminalReason: "completed" | "failed" }): void {
+export function recordPersistentAgentUnseenLandedAnswer(agentIdRaw: string, marker: { threadId: string; turnId: string; terminalReason: "completed" | "failed"; origin?: PersistentAgentUnseenLandedAnswerOrigin }): void {
 	const instance = createPersistentAgentInstance(agentIdRaw);
 	const threadId = safeRuntimeThreadId(marker.threadId);
 	if (!threadId) throw new Error("invalid persistent-agent thread id");
 	const turnId = String(marker.turnId ?? "").trim();
 	if (!turnId) throw new Error("invalid persistent-agent turn id");
+	const origin = marker.origin ?? "detached-turn";
+	// One file, two producers. A live landing goes into the room's live
+	// conversation, which the user walks into by default; a scheduled answer
+	// sits in a conversation of its own that has to be opened on purpose. So a
+	// live landing must not truncate a scheduled marker for a different
+	// conversation: the badge would then clear on the bind that shows the live
+	// answer, and the scheduled one would stay unread with nothing pointing at
+	// it. The badge the user keeps is the one that is harder to reach; the live
+	// answer is waiting in the conversation they open anyway. Same conversation,
+	// or a scheduled landing arriving on top: newest wins.
+	if (origin === "detached-turn") {
+		const existing = getPersistentAgentUnseenLandedAnswer(instance.agentId);
+		if (existing && existing.origin === "scheduled-run" && existing.threadId !== threadId) return;
+	}
 	const file = instance.runtimeUnseenLandedAnswerPath();
 	ensureDir(path.dirname(file));
-	const record: PersistentAgentUnseenLandedAnswer = { threadId, turnId, terminalReason: marker.terminalReason, landedAt: Date.now() };
+	const record: PersistentAgentUnseenLandedAnswer = { threadId, turnId, terminalReason: marker.terminalReason, landedAt: Date.now(), origin };
 	writeFileAtomic(file, JSON.stringify(record, null, 2) + "\n");
+}
+
+// A session is binding to a conversation in this room. A detached turn landed
+// into the room's live conversation, so any bind puts the user in front of it
+// and clears the badge, exactly as before. A scheduled answer lives in its own
+// conversation: only a bind that opens THAT conversation actually shows it, so
+// a bind that starts a new one has to leave the badge lit.
+export function clearPersistentAgentUnseenLandedAnswerForBind(agentIdRaw: string, boundThreadIdRaw: string): void {
+	const marker = getPersistentAgentUnseenLandedAnswer(agentIdRaw);
+	if (!marker) return;
+	if (marker.origin === "scheduled-run" && marker.threadId !== String(boundThreadIdRaw ?? "").trim()) return;
+	clearPersistentAgentUnseenLandedAnswer(agentIdRaw);
+}
+
+// A conversation is being closed for good. Only the marker that points AT it
+// dies with it; a badge for some other conversation in the room is untouched.
+export function clearPersistentAgentUnseenLandedAnswerForClosedThread(agentIdRaw: string, closedThreadIdRaw: string): void {
+	const marker = getPersistentAgentUnseenLandedAnswer(agentIdRaw);
+	if (!marker || marker.threadId !== String(closedThreadIdRaw ?? "").trim()) return;
+	clearPersistentAgentUnseenLandedAnswer(agentIdRaw);
 }
 
 export function clearPersistentAgentUnseenLandedAnswer(agentIdRaw: string): void {
@@ -1927,7 +1969,73 @@ export function getPersistentAgentUnseenLandedAnswer(agentIdRaw: string): Persis
 	const terminalReason = raw?.terminalReason === "completed" || raw?.terminalReason === "failed" ? raw.terminalReason : null;
 	if (!threadId || !turnId || !terminalReason) return null;
 	const landedAt = Number.isFinite(raw?.landedAt) && Number(raw?.landedAt) > 0 ? Math.floor(Number(raw?.landedAt)) : 0;
-	return { threadId, turnId, terminalReason, landedAt };
+	const origin: PersistentAgentUnseenLandedAnswerOrigin = raw?.origin === "scheduled-run" ? "scheduled-run" : "detached-turn";
+	return { threadId, turnId, terminalReason, landedAt, origin };
+}
+
+// Is the answer this marker points at still something the user can walk into?
+// A detached turn landed INTO the room's live conversation, so the marker only
+// means anything while that conversation is still the active one; anything else
+// (a CLI bind moved on, a checkpoint retired the thread) makes it stale. A
+// scheduled run instead lands into a conversation of its own, which the active
+// thread stops naming the moment any other door moves the room on, while the
+// answer is still sitting there to be opened. So the active-thread test is not
+// the right question for that flavor; whether the landed conversation still
+// exists and is not closed is.
+function unseenLandedAnswerStillReachable(agentId: string, marker: PersistentAgentUnseenLandedAnswer, runtime: PersistentAgentRuntimeState): boolean {
+	if (marker.origin === "detached-turn") return marker.threadId === (runtime.activeThreadId ?? "");
+	const thread = getPersistentAgentThread(agentId, marker.threadId);
+	return !!thread && thread.state !== "closed";
+}
+
+// A question that came up with nobody watching is answered with a safe default
+// so the work can keep going. Whichever surface declined it (the detached web
+// bridge, a headless background run) writes the same plain note into the turn's
+// thread items, so the transcript tells the story instead of leaving it to the
+// answer. One note per question, deduplicated by title, in the order they came
+// up; the id prefix belongs to the turn, so a re-landed write updates its own
+// notes instead of stacking new ones.
+export interface PersistentRoomAutoDeclinedQuestionLog {
+	note(question: { title: string }): void;
+	titles(): string[];
+	appendItems(items: unknown[], idPrefix: string): unknown[];
+}
+
+function persistentRoomAutoDeclinedQuestionNoteText(question: string): string {
+	const title = String(question ?? "").trim().replace(/\s+/g, " ").slice(0, 200);
+	if (!title) return "While you were away, a question came up and was answered with a safe default.";
+	return `While you were away, a question came up and was answered with a safe default: ${title}`;
+}
+
+export function createPersistentRoomAutoDeclinedQuestionLog(): PersistentRoomAutoDeclinedQuestionLog {
+	const notes: Array<{ title: string; text: string }> = [];
+	return {
+		// Deduplicated on the note as the user would read it, not on the raw
+		// title: two dialogs that would say exactly the same thing are one note
+		// (whatever differed lived in a message the note never shows), and two
+		// long titles that only differ past the truncation cannot leave a pair
+		// of notes that look like a bug.
+		note(question) {
+			const title = String(question?.title ?? "").trim();
+			const text = persistentRoomAutoDeclinedQuestionNoteText(title);
+			if (notes.some((existing) => existing.text === text)) return;
+			notes.push({ title, text });
+		},
+		titles() {
+			return notes.map((note) => note.title);
+		},
+		appendItems(items, idPrefix) {
+			let next = [...items];
+			notes.forEach((note, index) => {
+				const id = `${idPrefix}-${index + 1}`;
+				const item = { kind: "system", id, text: note.text, level: "info" };
+				const existing = next.findIndex((candidate) => String((candidate as any)?.id ?? "") === id);
+				if (existing >= 0) next[existing] = { ...(next[existing] as any), ...item };
+				else next.push(item);
+			});
+			return next;
+		},
+	};
 }
 
 export function isPersistentAgentArchived(value: Partial<AgentJson> | PersistentAgentStatus | null | undefined): boolean {
@@ -3119,7 +3227,7 @@ export function discardEmptyPreparedBoundaryThread(agentIdRaw: string, threadIdR
 			? "memento"
 			: null;
 	if (!boundary) {
-		const error = new Error("empty prepared boundary retirement requires a checkpoint or Memento boundary thread");
+		const error = new Error("retiring an empty prepared conversation requires a checkpoint or forget boundary");
 		(error as any).statusCode = 409;
 		throw error;
 	}
@@ -4108,6 +4216,11 @@ export function createPersistentAgentFromScaffoldInput(input: PersistentAgentSca
 			["L1b/current.md", genericL1b(reserved.agentId, normalized, new Date(now))],
 			["section_registry.json", defaultSectionRegistry(now)],
 			["runtime/state.json", JSON.stringify(defaultPersistentAgentRuntimeState(reserved.agentId), null, 2) + "\n"],
+			// Per-room MCP: NEW rooms start with an explicit empty grant list -
+			// the room's settings control which connectors this room can use, and
+			// none are granted until the user grants them. (Existing rooms get the
+			// full list once, via the update-day migration.)
+			["runtime/mcp-settings.json", JSON.stringify({ schemaVersion: 1, grantedConnectors: [], updatedAt: new Date(now).toISOString() }, null, 2) + "\n"],
 		];
 		for (const [rel, body] of files) {
 			const file = path.join(reserved.rootDir, rel);
@@ -4649,10 +4762,9 @@ export function getPersistentAgentStatus(agentIdRaw: string): PersistentAgentSta
 	let unseenLandedAnswer = getPersistentAgentUnseenLandedAnswer(instance.agentId);
 	// Self-heal: the marker is cleared by a web bind, but other surfaces read
 	// the answer without one (CLI bind, a thread retired by checkpoint from
-	// another door). A marker whose thread is no longer the room's active
-	// thread points at a conversation nobody can be "about to see" — drop it
-	// here so a file-backed note cannot badge a room forever.
-	if (unseenLandedAnswer && unseenLandedAnswer.threadId !== (runtime.activeThreadId ?? "")) {
+	// another door). A marker pointing at a conversation nobody can be "about
+	// to see" is dropped here so a file-backed note cannot badge a room forever.
+	if (unseenLandedAnswer && !unseenLandedAnswerStillReachable(instance.agentId, unseenLandedAnswer, runtime)) {
 		clearPersistentAgentUnseenLandedAnswer(instance.agentId);
 		unseenLandedAnswer = null;
 	}
@@ -5371,10 +5483,10 @@ export function writePersistentAgentMementoBoundary(agentIdRaw: string, conversa
 	const conversationId = safeRuntimeThreadId(conversationIdRaw);
 	if (!conversationId) throw new Error("invalid persistent-agent thread id");
 	const runtime = getPersistentAgentRuntimeState(instance.agentId);
-	if ((runtime.state !== "active" && runtime.state !== "standby") || !runtime.activeThreadId) throw new Error("Memento requires the current activeThread");
-	if (runtime.activeThreadId !== conversationId) throw new Error("Memento target is stale; the requested thread is not the current activeThread");
+	if ((runtime.state !== "active" && runtime.state !== "standby") || !runtime.activeThreadId) throw new Error("forgetting a conversation requires the room's current open conversation");
+	if (runtime.activeThreadId !== conversationId) throw new Error("the request is stale; the room has a different conversation open now");
 	const oldThread = getPersistentAgentThread(instance.agentId, conversationId);
-	if (!oldThread) throw new Error("Memento activeThread is missing; request is stale");
+	if (!oldThread) throw new Error("the room's open conversation is missing; the request is stale");
 	// A crashed or previously-failed Memento can leave the boundary half
 	// applied: the old thread already closed with closedReason "memento" but
 	// the fresh thread never created, so the runtime pointer targets a closed
@@ -5382,7 +5494,7 @@ export function writePersistentAgentMementoBoundary(agentIdRaw: string, conversa
 	// completes that boundary instead of refusing. Threads closed by anything
 	// other than a Memento are still refused (genuinely stale request).
 	const completingHalfAppliedBoundary = oldThread.state === "closed";
-	if (completingHalfAppliedBoundary && oldThread.closedReason !== "memento") throw new Error("Memento activeThread is already closed; request is stale");
+	if (completingHalfAppliedBoundary && oldThread.closedReason !== "memento") throw new Error("the room's open conversation is already closed; the request is stale");
 	if (!completingHalfAppliedBoundary) assertPersistentAgentThreadNotInFlight(instance.agentId, conversationId);
 
 	const meta = instance.readAgentJson();
@@ -5403,7 +5515,7 @@ export function writePersistentAgentMementoBoundary(agentIdRaw: string, conversa
 		model: freshModel,
 		cwd: runtimeCwd,
 	});
-	if (freshRuntime.kind !== "pi-session-jsonl") throw new Error("fresh post-Memento runtime must be Pi-backed");
+	if (freshRuntime.kind !== "pi-session-jsonl") throw new Error("the fresh conversation could not be prepared on a supported runtime");
 
 	// Create the fresh thread BEFORE closing the old one: the runtime pointer
 	// swaps to the fresh thread inside this write, so no failure can leave the
@@ -5423,7 +5535,7 @@ export function writePersistentAgentMementoBoundary(agentIdRaw: string, conversa
 		// block this write. Prompting/resume keep full enforcement.
 		allowInactiveProfileModel: true,
 	});
-	if (freshWrite.thread.runtime.kind !== "pi-session-jsonl") throw new Error("fresh post-Memento runtime must be Pi-backed");
+	if (freshWrite.thread.runtime.kind !== "pi-session-jsonl") throw new Error("the fresh conversation could not be prepared on a supported runtime");
 	let closedThread: PersistentAgentThreadRecord;
 	if (completingHalfAppliedBoundary) {
 		closedThread = oldThread;
@@ -5440,7 +5552,10 @@ export function writePersistentAgentMementoBoundary(agentIdRaw: string, conversa
 	}
 	// The forgotten conversation takes its unseen-landed-answer marker with it:
 	// a fresh-session badge must not point at a transcript Memento just closed.
-	clearPersistentAgentUnseenLandedAnswer(instance.agentId);
+	// Only that conversation's marker, though: a scheduled answer waiting in
+	// another conversation of this room is still there to be read, and a
+	// boundary on the live thread is no reason to throw its badge away.
+	clearPersistentAgentUnseenLandedAnswerForClosedThread(instance.agentId, closedThread.threadId);
 	const runtimeBoundary: PersistentAgentMementoRuntimeBoundary = {
 		closedThreadId: closedThread.threadId,
 		closedReason: "memento",

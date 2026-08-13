@@ -18,6 +18,7 @@ import {
 	type BackgroundRunTarget,
 } from "./background-runs.js";
 import { executePersistentRoomBackgroundPrompt } from "./persistent-room-background-execution.js";
+import { recordPersistentAgentUnseenLandedAnswer } from "./persistent-agents.js";
 import { appendUsageOnce, resolveUsageAuthType } from "./usage-log.js";
 import {
 	inspectScheduledPromptBackgroundRunIdempotency,
@@ -316,12 +317,13 @@ async function executeClaimedRun(input: {
 		const inputArtifacts = writeScheduledPromptBackgroundRunInputArtifact({ run, prompt: schedule.prompt, snapshottedAt: new Date() });
 		run = updateRunningReason({ run, token: input.token, now: new Date(), target: finalTarget, artifacts: inputArtifacts });
 		stopHeartbeat = startHeartbeat({ roomId, lockOwner: owner, runId: run.runId, token: input.token, leaseMs: input.leaseMs, heartbeatMs: input.heartbeatMs });
+		const turnId = `scheduled_${run.runId}`;
 		const result = await input.executePrompt({
 			roomId,
 			target: finalTarget,
 			prompt: schedule.prompt,
 			executionId: run.runId,
-			turnId: `scheduled_${run.runId}`,
+			turnId,
 			connectionId: `scheduler:${run.runId}`,
 		});
 		// The output artifact is the idempotency evidence: it must land before the usage row so a
@@ -349,6 +351,22 @@ async function executeClaimedRun(input: {
 				runId: run.runId,
 			}, (message) => console.warn(message));
 		}
+		// Nobody was in the room while this ran, so the answer would otherwise
+		// only be found by opening the room. Record the same unseen-landed-answer
+		// marker the detached-turn landing writes, so the room card badges it and
+		// the badge survives a restart. Best-effort: a completed, paid run must
+		// never fail on this bookkeeping.
+		try {
+			recordPersistentAgentUnseenLandedAnswer(roomId, {
+				threadId: result.threadId,
+				turnId,
+				terminalReason: "completed",
+				origin: "scheduled-run",
+			});
+		} catch (error) {
+			console.warn(`failed to record unseen landed-answer marker for scheduled run ${run.runId}: ${safeErrorMessage(error)}`);
+		}
+		const declinedQuestions = Array.isArray(result.declinedQuestions) ? result.declinedQuestions : [];
 		const succeededTarget: BackgroundRunTarget = {
 			...finalTarget,
 			threadId: result.threadId,
@@ -359,7 +377,13 @@ async function executeClaimedRun(input: {
 			token: input.token,
 			status: "succeeded",
 			reason: "completed",
-			message: "Scheduled prompt background run completed.",
+			// The question titles stay out of the run record (it is a public
+			// projection); the conversation carries them.
+			message: declinedQuestions.length === 0
+				? "Scheduled prompt background run completed."
+				: declinedQuestions.length === 1
+					? "Scheduled prompt background run completed. A question came up during the run and was answered with a safe default; the conversation says which one."
+					: "Scheduled prompt background run completed. Questions came up during the run and were answered with safe defaults; the conversation says which ones.",
 			target: succeededTarget,
 			artifacts: outputArtifacts,
 			now: new Date(),

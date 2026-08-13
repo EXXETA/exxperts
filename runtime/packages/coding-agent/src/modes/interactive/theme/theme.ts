@@ -416,7 +416,7 @@ export class Theme {
 		return this.mode;
 	}
 
-	getThinkingBorderColor(level: "off" | "minimal" | "low" | "medium" | "high" | "xhigh"): (str: string) => string {
+	getThinkingBorderColor(level: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max"): (str: string) => string {
 		// Map thinking levels to dedicated theme colors
 		switch (level) {
 			case "off":
@@ -429,7 +429,10 @@ export class Theme {
 				return (str: string) => this.fg("thinkingMedium", str);
 			case "high":
 				return (str: string) => this.fg("thinkingHigh", str);
+			// The tiers above high share one band: they are both "beyond high",
+			// and no theme carries a separate colour for the second one.
 			case "xhigh":
+			case "max":
 				return (str: string) => this.fg("thinkingXhigh", str);
 			default:
 				return (str: string) => this.fg("thinkingOff", str);

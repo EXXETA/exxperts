@@ -5,6 +5,7 @@ export { getAgentDir, getModelsPath, VERSION } from "./config.js";
 export {
 	buildOpenAiCompatibleSetupPlan,
 	writeOpenAiCompatibleSetupFiles,
+	type OpenAiCompatibleModelCapabilities,
 	type OpenAiCompatibleSetupConfig,
 	type OpenAiCompatibleSetupPlan,
 } from "./cli/setup-openai-compatible.js";
@@ -154,11 +155,23 @@ export {
 // Footer data provider (git branch + extension statuses - data not otherwise available to extensions)
 export type { ReadonlyFooterDataProvider } from "./core/footer-data-provider.js";
 export { convertToLlm } from "./core/messages.js";
-export { ModelRegistry } from "./core/model-registry.js";
+export { ModelRegistry, stripJsonComments } from "./core/model-registry.js";
 export { defaultModelPerProvider } from "./core/model-resolver.js";
 export { BUILT_IN_PROVIDER_DISPLAY_NAMES } from "./core/provider-display-names.js";
 export { BUILT_IN_MODEL_PROVIDERS, isApiKeyLoginProvider } from "./core/provider-login.js";
 export { listGitHubCopilotModels } from "@exxeta/exxperts-ai/oauth";
+// Model reasoning capability, for embedders that need to clamp a level to what
+// a model can actually do without going through the session setter (which also
+// writes the machine-wide default), and to show the dial the way the model's
+// own provider names its rungs.
+export {
+	clampThinkingLevel,
+	getSupportedThinkingLevels,
+	getThinkingLevelLadder,
+	resolveThinkingLevelRung,
+	thinkingEffortName,
+} from "@exxeta/exxperts-ai";
+export type { ThinkingLevelRung } from "@exxeta/exxperts-ai";
 export type {
 	PackageManager,
 	PathMetadata,

@@ -140,7 +140,8 @@ The helper writes generated SearXNG settings to `~/.exxperts/app/searxng/setting
 | `~/.exxperts/app/persistent-room-schedules/` | Room schedule definitions | yes |
 | `~/.exxperts/app/background-runs/` | Scheduled-run history | yes |
 | `~/.exxperts/app/persistent-agent-ai-profile.json` | Active AI profile selection | yes |
-| `~/.exxperts/app/openai-compatible-ai-profile.json` | Gateway profile policy, when configured | yes |
+| `~/.exxperts/app/openai-compatible-gateways.json` | Saved OpenAI-compatible gateways (name, base URL, approved models with image support and context window), when configured | yes |
+| `~/.exxperts/app/openai-compatible-ai-profile.json` | First gateway's profile policy, kept as a mirror for the terminal setup wizard | yes |
 | `~/.exxperts/app/usage.jsonl` | Token/cost log | yes |
 | `~/.exxperts/app/memory.jsonl` | CLI long-term fact store (created on first use) | yes |
 | `~/.exxperts/app/agents/`, `~/.exxperts/app/skills/` | User-created agents/skills | yes |

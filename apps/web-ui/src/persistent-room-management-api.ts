@@ -175,3 +175,38 @@ export function updatePersistentRoomSkillSetting(agentId: PersistentAgentId, act
 		"Failed to update room skill settings."
 	);
 }
+
+// ── Per-room MCP: connector grants ───────────────────────────────────────────
+
+export interface PersistentRoomGrantedConnectorStatus {
+	name: string;
+	/** False when the connector is no longer globally configured. */
+	configured: boolean;
+}
+
+export interface PersistentRoomMcpConnectorsResponse {
+	agentId: PersistentAgentId;
+	settings: { schemaVersion: 1; grantedConnectors: string[]; updatedAt: string };
+	configuredConnectors: string[];
+	granted: PersistentRoomGrantedConnectorStatus[];
+}
+
+export function fetchPersistentRoomMcpConnectors(agentId: PersistentAgentId): Promise<PersistentRoomMcpConnectorsResponse> {
+	return fetchJson<PersistentRoomMcpConnectorsResponse>(
+		`/api/persistent-agents/${encodeURIComponent(agentId)}/mcp-connectors`,
+		undefined,
+		"Failed to load room connector settings."
+	);
+}
+
+export function updatePersistentRoomMcpConnector(agentId: PersistentAgentId, action: "grant" | "revoke", name: string): Promise<PersistentRoomMcpConnectorsResponse> {
+	return fetchJson<PersistentRoomMcpConnectorsResponse>(
+		`/api/persistent-agents/${encodeURIComponent(agentId)}/mcp-connectors`,
+		{
+			method: "PUT",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ action, name }),
+		},
+		"Failed to update room connector settings."
+	);
+}

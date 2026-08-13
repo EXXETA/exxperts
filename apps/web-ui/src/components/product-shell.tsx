@@ -214,7 +214,7 @@ function SidebarConfigMenu({ onAiSetup, theme, onToggleTheme, active, aiProfileS
 	);
 }
 
-export function ProductSidebar({ onHome, onAiSetup, onDashboard, onConnectors, onMemory, onSkills, connected, theme, onToggleTheme, active, aiProfileStatus, onSelectAiProfile, onRefreshAiProfile, standbyLockedModels }: { onHome: () => void; onAiSetup: () => void; onDashboard: () => void; onConnectors?: () => void; onMemory?: () => void; onSkills?: () => void; connected: boolean; theme: ThemeMode; onToggleTheme: () => void; active: ProductSidebarActive } & SidebarAiProfileProps) {
+export function ProductSidebar({ onHome, onAiSetup, onDashboard, onConnectors, onMemory, onSkills, theme, onToggleTheme, active, aiProfileStatus, onSelectAiProfile, onRefreshAiProfile, standbyLockedModels }: { onHome: () => void; onAiSetup: () => void; onDashboard: () => void; onConnectors?: () => void; onMemory?: () => void; onSkills?: () => void; theme: ThemeMode; onToggleTheme: () => void; active: ProductSidebarActive } & SidebarAiProfileProps) {
 	return (
 		<aside className="product-sidebar">
 			<div className="product-sidebar-header">
@@ -240,11 +240,10 @@ export function ProductSidebar({ onHome, onAiSetup, onDashboard, onConnectors, o
 					{onSkills && <button className={`list-btn ${active === "skills" ? "active" : ""}`} onClick={onSkills}>Skills</button>}
 				</div>
 			</nav>
+			{/* No connection status here on purpose: a healthy app says nothing
+			    about its plumbing, and a sustained failure gets a banner that
+			    speaks in words the user can act on. */}
 			<div className="product-sidebar-footer">
-				<div className="sidebar-connection-status" title={connected ? "Connected" : "Offline. If the server isn't running, start it with: exxperts web"} aria-label={connected ? "Connected" : "Offline"}>
-					<span className={`dot ${connected ? "ok" : "bad"}`} />
-					{connected ? "connected" : "offline"}
-				</div>
 				<div className="sidebar-footer-controls">
 					<SidebarConfigMenu onAiSetup={onAiSetup} theme={theme} onToggleTheme={onToggleTheme} active={active} aiProfileStatus={aiProfileStatus} onSelectAiProfile={onSelectAiProfile} onRefreshAiProfile={onRefreshAiProfile} standbyLockedModels={standbyLockedModels} />
 					<SidebarToggleButton />

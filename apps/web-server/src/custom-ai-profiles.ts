@@ -1,21 +1,33 @@
 import fs from "node:fs";
 import path from "node:path";
 import { productAppStatePath } from "../../../pi-package/product-state-paths.js";
-import { OPENAI_COMPATIBLE_PROVIDER_ID, PERSISTENT_AGENT_AI_PROFILES } from "./persistent-agent-ai-profiles.js";
+import { PERSISTENT_AGENT_AI_PROFILES } from "./persistent-agent-ai-profiles.js";
 import type { PersistentAgentAiProfile } from "./persistent-agent-ai-profiles.js";
+import { OPENAI_COMPATIBLE_PROVIDER_ID, readOpenAiCompatibleGateways } from "./openai-compatible-gateways.js";
 
 export const CUSTOM_AI_PROFILES_FILE = productAppStatePath("custom-ai-profiles.json");
 export const CUSTOM_AI_PROFILE_ID_PREFIX = "custom-";
 const CUSTOM_AI_PROFILES_VERSION = 1;
 
-// The gateway's model policy is owned by its own policy file; everything else
-// may carry a custom entry. For built-in providers the entry acts as an
-// OVERRIDE of the curated catalog (the built-in profile keeps its id/label),
-// for any other provider it creates a standalone custom profile. Lazy because
-// this module and the profiles module import each other; bindings resolve by
-// call time.
-export function isReservedCustomProfileProvider(providerId: string): boolean {
-	return providerId === OPENAI_COMPATIBLE_PROVIDER_ID;
+// A gateway's model policy is owned by the gateway store, which already gives
+// it a profile of its own; everything else may carry a custom entry. For
+// built-in providers the entry acts as an OVERRIDE of the curated catalog (the
+// built-in profile keeps its id/label), for any other provider it creates a
+// standalone custom profile. Lazy because this module and the profiles module
+// import each other; bindings resolve by call time.
+export function isReservedCustomProfileProvider(providerId: string, gatewayProviderIds?: ReadonlySet<string>): boolean {
+	// The default gateway's provider id is reserved even before any gateway is
+	// saved, so a custom profile can never claim the name a later gateway setup
+	// needs back.
+	if (providerId === OPENAI_COMPATIBLE_PROVIDER_ID) return true;
+	// The set is passed in by callers that check many providers at once; reading
+	// the gateway store once per provider is a file read per row of a list.
+	const gateways = gatewayProviderIds ?? savedGatewayProviderIds();
+	return gateways.has(providerId);
+}
+
+function savedGatewayProviderIds(): ReadonlySet<string> {
+	return new Set(readOpenAiCompatibleGateways().gateways.map((gateway) => gateway.providerId));
 }
 
 // The built-in profile id a provider belongs to, or null for regular providers.
@@ -62,7 +74,7 @@ export function isCustomAiProfileId(profileId: string): boolean {
 	return profileId.startsWith(CUSTOM_AI_PROFILE_ID_PREFIX);
 }
 
-function parseEntry(raw: unknown, index: number): { entry?: CustomAiProfileEntry; error?: string } {
+function parseEntry(raw: unknown, index: number, gatewayProviderIds: ReadonlySet<string>): { entry?: CustomAiProfileEntry; error?: string } {
 	if (!isObject(raw)) return { error: `profiles[${index}] must be a JSON object.` };
 	const providerId = nonEmptyString(raw.providerId);
 	if (!providerId) return { error: `profiles[${index}].providerId is required.` };
@@ -70,7 +82,7 @@ function parseEntry(raw: unknown, index: number): { entry?: CustomAiProfileEntry
 	if (id !== customAiProfileIdForProvider(providerId)) {
 		return { error: `profiles[${index}].id must be "${customAiProfileIdForProvider(providerId)}".` };
 	}
-	if (isReservedCustomProfileProvider(providerId)) {
+	if (isReservedCustomProfileProvider(providerId, gatewayProviderIds)) {
 		return { error: `profiles[${index}] provider "${providerId}" is managed by a built-in profile.` };
 	}
 	if (!Array.isArray(raw.roomModels) || raw.roomModels.length === 0) {
@@ -124,8 +136,10 @@ export function readCustomAiProfiles(filePath = CUSTOM_AI_PROFILES_FILE): Custom
 		return result;
 	}
 	const seenProviders = new Set<string>();
+	// One gateway-store read for the whole file, not one per entry.
+	const gatewayProviderIds = savedGatewayProviderIds();
 	for (const [index, value] of raw.profiles.entries()) {
-		const { entry, error } = parseEntry(value, index);
+		const { entry, error } = parseEntry(value, index, gatewayProviderIds);
 		if (!entry) {
 			if (error) result.errors.push(error);
 			continue;

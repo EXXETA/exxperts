@@ -1047,9 +1047,11 @@ export interface PersistentAgentStatus {
 	runtime: PersistentAgentRuntimeState;
 	activeThread: PersistentAgentActiveThreadSummary | null;
 	/** Community #14 slice 3: a detached turn landed its answer while no session was connected; the server clears it when a session next binds to the room. */
-	unseenLandedAnswer?: { threadId: string; turnId: string; terminalReason: "completed" | "failed"; landedAt: number };
+	unseenLandedAnswer?: { threadId: string; turnId: string; terminalReason: "completed" | "failed"; landedAt: number; origin?: "detached-turn" | "scheduled-run" };
 	/** Set when this room is currently open or busy in another surface (CLI, browser, or scheduled background work). */
 	activeLock?: { surface: "cli" | "web" | "scheduler" | string; acquiredAt: number } | null;
+	/** Issue #33: the web lock is held by a detached turn still cooking with NO client attached, so stepping back in is offered; a room genuinely open in another window stays locked out. */
+	answeringDetached?: boolean;
 	displayName?: string;
 	description?: string;
 	role?: string;

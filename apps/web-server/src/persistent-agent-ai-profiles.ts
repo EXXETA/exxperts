@@ -1,17 +1,22 @@
-import fs from "node:fs";
-import { productAppStatePath } from "../../../pi-package/product-state-paths.js";
 import { isCustomAiProfileId, readCustomAiProfiles } from "./custom-ai-profiles.js";
+import {
+	GATEWAY_PROVIDER_ID_PREFIX,
+	OPENAI_COMPATIBLE_AI_PROFILE_FILE,
+	OPENAI_COMPATIBLE_AI_PROFILE_ID,
+	OPENAI_COMPATIBLE_PROVIDER_ID,
+	readOpenAiCompatibleGateways,
+	type OpenAiCompatibleGateway,
+} from "./openai-compatible-gateways.js";
 
 export type BuiltInPersistentAgentAiProfileId = "chatgpt-codex" | "anthropic";
 export type LocalPersistentAgentAiProfileId = "openai-compatible";
-// Widened to string: besides the built-in and openai-compatible profiles, users
-// can create custom per-provider profiles ("custom-<providerId>"); membership is
-// validated at runtime via isPersistentAgentAiProfileId / getPersistentAgentAiProfile.
+// Widened to string: besides the built-in profiles, users can save any number of
+// OpenAI-compatible gateways (each its own profile) and create custom
+// per-provider profiles ("custom-<providerId>"); membership is validated at
+// runtime via isPersistentAgentAiProfileId / getPersistentAgentAiProfile.
 export type PersistentAgentAiProfileId = string;
 
-export const OPENAI_COMPATIBLE_AI_PROFILE_ID = "openai-compatible" satisfies LocalPersistentAgentAiProfileId;
-export const OPENAI_COMPATIBLE_PROVIDER_ID = "openai-compatible";
-export const OPENAI_COMPATIBLE_AI_PROFILE_FILE = productAppStatePath("openai-compatible-ai-profile.json");
+export { OPENAI_COMPATIBLE_AI_PROFILE_FILE, OPENAI_COMPATIBLE_AI_PROFILE_ID, OPENAI_COMPATIBLE_PROVIDER_ID };
 export const SCHEDULED_ROOM_MODEL_POLICY_KEY = "scheduledRoom" as const;
 
 export type PersistentAgentAiProcess =
@@ -117,74 +122,32 @@ export function persistentAgentModelLocksEqual(a: PersistentAgentModelLock, b: P
 	return a.provider === b.provider && a.model === b.model;
 }
 
-type LocalOpenAiCompatibleProfileFile = {
-	profileId: LocalPersistentAgentAiProfileId;
-	providerId: typeof OPENAI_COMPATIBLE_PROVIDER_ID;
-	label: string;
-	roomModels: Array<{ modelId: string; label?: string }>;
-	maintenanceModel: string;
-};
-
-type LocalOpenAiCompatibleProfileLoadResult =
-	| { ok: true; profile: PersistentAgentAiProfile; path: string }
-	| { ok: false; path: string; message: string };
-
-function isObject(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
+/**
+ * A saved gateway seen as an AI profile: one profile per gateway, so several
+ * gateways sit in the picker next to ChatGPT and Claude and switch the same
+ * way. The gateway's provider id is the profile's provider id, which keeps the
+ * provider-to-profile lookup one-to-one and keeps every room's stored
+ * {provider, model} lock pointing at exactly the endpoint that answered it.
+ */
+export function persistentAgentAiProfileFromGateway(gateway: OpenAiCompatibleGateway): PersistentAgentAiProfile {
+	const maintenanceLock = { provider: gateway.providerId, model: gateway.maintenanceModel };
+	return {
+		id: gateway.id,
+		label: gateway.label,
+		providerId: gateway.providerId,
+		providerLabel: gateway.label,
+		description: "Local OpenAI-compatible gateway profile for persistent-agent room and maintenance workflows.",
+		processes: {
+			persistentRoom: gateway.roomModels.map((model) => ({ provider: gateway.providerId, model: model.modelId })),
+			checkpoint: { kind: "inheritPersistentRoom" },
+			absorb: maintenanceLock,
+			structuralReview: maintenanceLock,
+		},
+	};
 }
 
-function nonEmptyString(value: unknown): string | undefined {
-	if (typeof value !== "string") return undefined;
-	const trimmed = value.trim();
-	return trimmed || undefined;
-}
-
-function readLocalOpenAiCompatibleProfileFile(path = OPENAI_COMPATIBLE_AI_PROFILE_FILE): LocalOpenAiCompatibleProfileLoadResult {
-	try {
-		if (!fs.existsSync(path)) return { ok: false, path, message: "OpenAI-compatible gateway policy file is missing." };
-		const raw = JSON.parse(fs.readFileSync(path, "utf-8")) as unknown;
-		if (!isObject(raw)) return { ok: false, path, message: "OpenAI-compatible gateway policy must be a JSON object." };
-		if (raw.profileId !== OPENAI_COMPATIBLE_AI_PROFILE_ID) return { ok: false, path, message: "OpenAI-compatible gateway policy has the wrong profileId." };
-		if (raw.providerId !== OPENAI_COMPATIBLE_PROVIDER_ID) return { ok: false, path, message: "OpenAI-compatible gateway policy has the wrong providerId." };
-		const label = nonEmptyString(raw.label) ?? "OpenAI-compatible gateway";
-		const maintenanceModel = nonEmptyString(raw.maintenanceModel);
-		if (!maintenanceModel) return { ok: false, path, message: "OpenAI-compatible gateway policy is missing maintenanceModel." };
-		if (!Array.isArray(raw.roomModels) || raw.roomModels.length === 0) return { ok: false, path, message: "OpenAI-compatible gateway policy must include at least one room model." };
-
-		const roomModelIds: string[] = [];
-		const seenRoomModels = new Set<string>();
-		for (const [index, entry] of raw.roomModels.entries()) {
-			if (!isObject(entry)) return { ok: false, path, message: `OpenAI-compatible gateway roomModels[${index}] must be a JSON object.` };
-			const modelId = nonEmptyString(entry.modelId);
-			if (!modelId) return { ok: false, path, message: `OpenAI-compatible gateway roomModels[${index}].modelId is required.` };
-			if (seenRoomModels.has(modelId)) continue;
-			seenRoomModels.add(modelId);
-			roomModelIds.push(modelId);
-		}
-		if (roomModelIds.length === 0) return { ok: false, path, message: "OpenAI-compatible gateway policy must include at least one room model." };
-
-		const maintenanceLock = { provider: OPENAI_COMPATIBLE_PROVIDER_ID, model: maintenanceModel };
-		const profile: PersistentAgentAiProfile = {
-			id: OPENAI_COMPATIBLE_AI_PROFILE_ID,
-			label,
-			providerId: OPENAI_COMPATIBLE_PROVIDER_ID,
-			providerLabel: label,
-			description: "Local OpenAI-compatible gateway profile for persistent-agent room and maintenance workflows.",
-			processes: {
-				persistentRoom: roomModelIds.map((modelId) => ({ provider: OPENAI_COMPATIBLE_PROVIDER_ID, model: modelId })),
-				checkpoint: { kind: "inheritPersistentRoom" },
-				absorb: maintenanceLock,
-				structuralReview: maintenanceLock,
-			},
-		};
-		return { ok: true, profile, path };
-	} catch {
-		return { ok: false, path, message: "OpenAI-compatible gateway policy could not be read." };
-	}
-}
-
-export function readLocalOpenAiCompatibleAiProfile(path = OPENAI_COMPATIBLE_AI_PROFILE_FILE): LocalOpenAiCompatibleProfileLoadResult {
-	return readLocalOpenAiCompatibleProfileFile(path);
+function gatewayAiProfiles(): PersistentAgentAiProfile[] {
+	return readOpenAiCompatibleGateways().gateways.map(persistentAgentAiProfileFromGateway);
 }
 
 function isBuiltInPersistentAgentAiProfileId(value: string): value is BuiltInPersistentAgentAiProfileId {
@@ -210,33 +173,37 @@ function withBuiltInOverride(profile: PersistentAgentAiProfile, overrides: Recor
 
 export function getAvailablePersistentAgentAiProfiles(): PersistentAgentAiProfile[] {
 	// Order matters: auto-follow picks the first signed-in profile, so built-ins
-	// keep priority over the local gateway and user-created custom profiles.
+	// keep priority over saved gateways and user-created custom profiles.
 	const customRead = readCustomAiProfiles();
 	const profiles: PersistentAgentAiProfile[] = Object.values(PERSISTENT_AGENT_AI_PROFILES).map((profile) => withBuiltInOverride(profile, customRead.overridesByBuiltInProfileId));
-	const localOpenAiCompatible = readLocalOpenAiCompatibleProfileFile();
-	if (localOpenAiCompatible.ok) profiles.push(localOpenAiCompatible.profile);
+	profiles.push(...gatewayAiProfiles());
 	profiles.push(...customRead.profiles);
 	return profiles;
 }
 
 export function isPersistentAgentAiProfileId(value: string): value is PersistentAgentAiProfileId {
 	if (isBuiltInPersistentAgentAiProfileId(value)) return true;
-	if (value === OPENAI_COMPATIBLE_AI_PROFILE_ID) return readLocalOpenAiCompatibleProfileFile().ok;
 	if (isCustomAiProfileId(value)) return readCustomAiProfiles().profiles.some((profile) => profile.id === value);
-	return false;
+	return gatewayAiProfiles().some((profile) => profile.id === value);
 }
 
 export function getPersistentAgentAiProfile(profileId: PersistentAgentAiProfileId): PersistentAgentAiProfile {
 	if (isBuiltInPersistentAgentAiProfileId(profileId)) {
 		return withBuiltInOverride(PERSISTENT_AGENT_AI_PROFILES[profileId], readCustomAiProfiles().overridesByBuiltInProfileId);
 	}
-	if (profileId === OPENAI_COMPATIBLE_AI_PROFILE_ID) {
-		const localOpenAiCompatible = readLocalOpenAiCompatibleProfileFile();
-		if (localOpenAiCompatible.ok) return localOpenAiCompatible.profile;
-		throw new Error(localOpenAiCompatible.message);
-	}
+	const gatewayRead = readOpenAiCompatibleGateways();
+	const gateway = gatewayRead.gateways.find((candidate) => candidate.id === profileId);
+	if (gateway) return persistentAgentAiProfileFromGateway(gateway);
 	const custom = readCustomAiProfiles().profiles.find((profile) => profile.id === profileId);
 	if (custom) return custom;
+	// A gateway file that exists but does not parse has to say what is wrong
+	// with it. "Unknown profile" would blame the caller for the file's problem,
+	// which is exactly the wrong direction to point someone in. The reverse
+	// misattribution is just as bad, so this only speaks for ids that could
+	// actually have been a gateway: a deleted custom profile is not the gateway
+	// file's fault and must not be reported as though it were.
+	const couldBeGateway = profileId === OPENAI_COMPATIBLE_AI_PROFILE_ID || profileId.startsWith(GATEWAY_PROVIDER_ID_PREFIX);
+	if (couldBeGateway && gatewayRead.errors.length > 0) throw new Error(gatewayRead.errors[0]);
 	throw new Error(`unknown persistent-agent AI profile: ${profileId}`);
 }
 

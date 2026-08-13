@@ -2,6 +2,7 @@ import fs from "node:fs";
 
 import {
 	buildPersistentAgentBootContext,
+	clearPersistentAgentUnseenLandedAnswerForBind,
 	createPersistentAgentInstance,
 	createPersistentAgentPiSessionJsonlThreadRuntime,
 	getPersistentAgentRuntimeState,
@@ -137,6 +138,12 @@ function main() {
 			...(workspaceCapability ? { workspaceCapability } : {}),
 		}),
 	});
+
+	// The CLI is a door onto the same room: opening a conversation here shows
+	// whatever landed unseen in it just as the web app does, so the badge that
+	// pointed at it has done its job. Without this the Home card would keep
+	// advertising an answer the user already read in the terminal.
+	try { clearPersistentAgentUnseenLandedAnswerForBind(status.id, threadId); } catch {}
 
 	const threadRuntime = writeResult.thread.runtime;
 	const runtimeSummary = threadRuntime.kind === "pi-session-jsonl"
