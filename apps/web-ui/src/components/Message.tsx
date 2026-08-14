@@ -110,9 +110,11 @@ const GENERIC_TOOL_VIEWS: Record<string, { icon: string; running: string; done: 
 	artifact_write_html_deck: { icon: "🗂️", running: "Building deck", done: "Built deck" },
 };
 
-function genericChipName(name: string, status: "running" | "done" | "error"): string {
+function genericChipName(name: string, status: ToolChatItem["status"]): string {
 	const view = GENERIC_TOOL_VIEWS[name];
-	if (view) return `${view.icon} ${status === "running" ? view.running : view.done}`;
+	// A stopped call keeps the in-flight verb: it WAS reading the file, and it
+	// never got to have read it. The icon and the body say how it ended.
+	if (view) return `${view.icon} ${status === "running" || status === "stopped" ? view.running : view.done}`;
 	// Unknown tool: humanize the internal name rather than showing it raw.
 	const humanized = name.replace(/_/g, " ").trim() || "Tool";
 	return `🛠️ ${humanized.charAt(0).toUpperCase()}${humanized.slice(1)}`;
@@ -397,7 +399,7 @@ type ToolChatItem = Extract<ChatItem, { kind: "tool" }>;
  */
 function ToolChip({ item, nested }: { item: ToolChatItem; nested?: boolean }) {
 	const summary = summariseToolArgs(item.name, item.args);
-	const icon = item.status === "running" ? "…" : item.status === "error" ? "✗" : "✓";
+	const icon = item.status === "running" ? "…" : item.status === "error" ? "✗" : item.status === "stopped" ? "■" : "✓";
 	// fetch_url reads as a source: show the page title + domain (from the
 	// result details) instead of the raw tool name and URL argument.
 	const isFetchUrl = item.name === "fetch_url";
@@ -430,7 +432,9 @@ function ToolChip({ item, nested }: { item: ToolChatItem; nested?: boolean }) {
 						<ResultBody text={item.result} />
 					</div>
 				) : (
-					<div className="chip-empty">{item.status === "running" ? "Working…" : "No output."}</div>
+					<div className="chip-empty">
+						{item.status === "running" ? "Working…" : item.status === "stopped" ? "Stopped before it finished." : "No output."}
+					</div>
 				)}
 			</div>
 		</details>
@@ -453,16 +457,22 @@ export function ToolBundle({ items }: { items: ToolChatItem[] }) {
 	const succeeded = items.filter((call) => call.status === "done").length;
 	const failed = items.filter((call) => call.status === "error").length;
 	const active = items.find((call) => call.status === "running");
+	const stopped = items.filter((call) => call.status === "stopped").length;
 	const allFailed = !active && succeeded === 0 && failed > 0;
-	const status = active ? "running" : allFailed ? "error" : "done";
-	const icon = active ? "…" : allFailed ? "✗" : "✓";
+	// Stopped only speaks for the whole bundle when nothing in it got anywhere;
+	// a run that read three pages before Stop still says it read three.
+	const allStopped = !active && succeeded === 0 && failed === 0 && stopped > 0;
+	const status = active ? "running" : allStopped ? "stopped" : allFailed ? "error" : "done";
+	const icon = active ? "…" : allStopped ? "■" : allFailed ? "✗" : "✓";
 	const label = active
 		? (isSearch ? "🔍 Searching the web" : "🌐 Reading pages")
-		: allFailed
-			? (isSearch ? "🔍 Web search failed" : "🌐 Couldn't read the pages")
-			: isSearch
-				? "🔍 Searched the web"
-				: `🌐 Read ${succeeded} ${succeeded === 1 ? "page" : "pages"}`;
+		: allStopped
+			? (isSearch ? "🔍 Web search stopped" : "🌐 Stopped reading pages")
+			: allFailed
+				? (isSearch ? "🔍 Web search failed" : "🌐 Couldn't read the pages")
+				: isSearch
+					? "🔍 Searched the web"
+					: `🌐 Read ${succeeded} ${succeeded === 1 ? "page" : "pages"}`;
 	// The swapping tail: whatever the in-flight call is looking at right now.
 	const tail = active
 		? isSearch
@@ -476,6 +486,7 @@ export function ToolBundle({ items }: { items: ToolChatItem[] }) {
 					<span className="icon">{icon}</span>
 					<span className="name">{label}</span>
 					{!active && !allFailed && failed > 0 && <span className="bundle-failed">· {failed} failed</span>}
+					{!active && !allStopped && stopped > 0 && <span className="bundle-failed">· {stopped} stopped</span>}
 					{tail && <span className="summary">{tail}</span>}
 					{status === "running" && <span className="spinner" />}
 				</summary>

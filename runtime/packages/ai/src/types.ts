@@ -257,6 +257,29 @@ export interface Usage {
 	cacheRead: number;
 	cacheWrite: number;
 	totalTokens: number;
+	/**
+	 * How much context this turn actually leaves behind, which is not the same
+	 * number as what it cost.
+	 *
+	 * For a turn that took one request these are the same thing, and this is
+	 * exactly `input + output + cacheRead + cacheWrite`. For a turn that took
+	 * several (a provider pausing a long server-side search and being handed the
+	 * turn back), every request resends the whole conversation, so adding the
+	 * prompts up counts the same tokens once per request. That total is the
+	 * right answer for a bill and badly wrong for a context meter: it grows with
+	 * the number of round trips rather than with the conversation.
+	 *
+	 * So the fields above stay summed, for cost and the usage ledger, and this
+	 * one is measured instead: the FIRST request's prompt plus everything the
+	 * turn generated. The first request's prompt, not the last, because the
+	 * continuations' prompts also carry the provider's own injected search
+	 * results, which never reach our messages and so are not there to be resent
+	 * next turn.
+	 *
+	 * Optional because only providers that can do this bother to set it;
+	 * consumers fall back to the sum.
+	 */
+	contextTokens?: number;
 	cost: {
 		input: number;
 		output: number;
@@ -391,6 +414,8 @@ export interface OpenAICompletionsCompat {
 	zaiToolStream?: boolean;
 	/** Whether the provider supports the `strict` field in tool definitions. Default: true. */
 	supportsStrictMode?: boolean;
+	/** Whether this model can search the web through its provider, requested with `web_search_options: {}` on the request. Per model, not per provider: a gateway routes some models that can and some that cannot. Default: false. */
+	supportsWebSearch?: boolean;
 	/** Cache control convention for prompt caching. "anthropic" applies Anthropic-style `cache_control` markers to the system prompt, last tool definition, and last user/assistant text content. */
 	cacheControlFormat?: "anthropic";
 	/** Whether to send known session-affinity headers (`session_id`, `x-client-request-id`, `x-session-affinity`) from `options.sessionId` when caching is enabled. Default: false. */

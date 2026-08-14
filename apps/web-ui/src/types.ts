@@ -1197,7 +1197,8 @@ export type ChatItem =
 			id: string;
 			name: string;
 			args: any;
-			status: "running" | "done" | "error";
+			/** "stopped" is a tool call that never finished because the turn was stopped: not a failure, and not a result. */
+			status: "running" | "done" | "error" | "stopped";
 			result?: string;
 			/** Tool result `details` object, when the server sends one (e.g. fetch_url title/finalUrl). */
 			details?: any;

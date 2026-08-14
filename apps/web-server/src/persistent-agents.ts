@@ -2819,7 +2819,7 @@ export function renamePersistentAgent(agentIdRaw: string, displayNameRaw: unknow
 	}
 
 	// Apply. Re-read L1b immediately before the read-modify-write: a memory write that landed
-	// after the preview scan above (a checkpoint approval, Learn) must be renamed too, never
+	// after the preview scan above (a checkpoint approval, Memorize) must be renamed too, never
 	// silently reverted to the stale snapshot — and the archive must capture the fresh content so
 	// it never predates a just-learned memory. Archive convention follows checkpoint/structural
 	// review: <archiveDir>/<stamp>-before-<id>.md.
@@ -2938,6 +2938,49 @@ function normalizePersistentAgentThreadItems(raw: unknown): unknown[] {
 	} catch {
 		throw new Error("thread items must be JSON-serializable");
 	}
+}
+
+/**
+ * Nothing is in flight when nothing is running: neither a streaming answer nor
+ * a tool call waiting for its result.
+ *
+ * The `streaming` mark is written by the browser as an answer arrives, and the
+ * save that clears it again is a debounced one that can be dropped: navigate at
+ * the wrong moment and the finished answer stays marked mid-flight on disk
+ * forever. That is not cosmetic. The restored-context reader treats a streaming
+ * assistant item as an unfinished one and leaves it out, so a room that comes
+ * back later resumes without the answer it just gave, and a scheduled run does
+ * the same.
+ *
+ * The write path is the one place every producer passes through, and whether a
+ * turn is running is knowable right here, so the invariant is enforced where it
+ * cannot be forgotten. A save that lands mid-answer still keeps the mark, which
+ * is what lets a reload draw the caret in the right place.
+ */
+function clearStaleStreamingMarks(items: unknown[], turnInFlight: boolean): unknown[] {
+	if (turnInFlight) return items;
+	let changed = false;
+	const cleared = items.map((item) => {
+		if (!item || typeof item !== "object" || Array.isArray(item)) return item;
+		const record = item as Record<string, unknown>;
+		if (record.kind === "assistant" && record.streaming === true) {
+			changed = true;
+			const { streaming: _streaming, ...rest } = record;
+			return rest;
+		}
+		// A tool call is the same problem wearing a different field. One that was
+		// in flight when the turn ended never gets its result, so it stays
+		// "running" in the transcript, spins forever in the room, and is read back
+		// later as a live call: the checkpoint prompt says "Status: running" about
+		// a tool that stopped days ago. Stopped rather than error, because being
+		// interrupted is not a failure.
+		if (record.kind === "tool" && record.status === "running") {
+			changed = true;
+			return { ...record, status: "stopped" };
+		}
+		return item;
+	});
+	return changed ? cleared : items;
 }
 
 function defaultPersistentAgentThreadRuntime(): PersistentAgentThreadRuntime {
@@ -3076,7 +3119,13 @@ export function writePersistentAgentThread(agentIdRaw: string, threadIdRaw: stri
 		origin: normalizePersistentAgentThreadOrigin(input.origin ?? existing?.origin),
 		model,
 		runtime: threadRuntime,
-		items: normalizePersistentAgentThreadItems(input.items ?? existing?.items ?? []),
+		items: clearStaleStreamingMarks(
+			normalizePersistentAgentThreadItems(input.items ?? existing?.items ?? []),
+			(() => {
+				const turn = getPersistentAgentActiveTurnState(instance.agentId, threadId);
+				return turn.state === "running" || turn.state === "cancelling";
+			})(),
+		),
 		...(pendingHandoffs.length ? { pendingHandoffs } : {}),
 		createdAt: existing?.createdAt ?? now,
 		updatedAt: now,
@@ -3939,7 +3988,7 @@ Use what you remember the way a colleague recalls shared history: woven in natur
 
 Leave remembered details out where they would be irrelevant or intrusive. Recall should feel like attentiveness, not surveillance.
 
-If the user asks how your memory works, explain it conversationally at the product level — sessions are checkpointed with the user's approval and consolidated over time — without internal jargon or layer names.
+If the user asks how your memory works, explain it conversationally at the product level, without internal jargon or layer names: the user chooses to remember a session, and remembered sessions are consolidated into lasting memory over time.
 
 While your memory is still thin, work well with what the current conversation gives you; continuity builds through the approved workflows, not through apologies about missing history.
 
@@ -4057,7 +4106,7 @@ The web UI and CLI render Markdown directly.
 ## Tool Hygiene
 
 - Summarize long documents instead of quoting them wholesale; keep only the parts the task needs.
-- When an answer may have changed since your training data — prices, versions, people in roles, current events — prefer web_search over answering from stale knowledge or declining.
+- When an answer may have changed since your training data — prices, versions, people in roles, current events, anything recent — prefer searching the web over answering from stale knowledge or declining; where the web_search tool is present, use it. Being asked to search, look something up, or check online is an instruction, not a suggestion: search first, answer from what you find, and never present remembered specifics as though you had just looked them up.
 - If a tool is unavailable or blocked by the active capability/tool policy, surface the block reason and suggested alternative instead of guessing or working around it.
 
 ## System and Memory Boundaries
@@ -4845,7 +4894,7 @@ function parseCheckpointTranscriptSourceMetadata(raw: any): CheckpointTranscript
 
 function assertCheckpointFingerprintMatches(actual: L1bSourceFingerprint, expected: L1bSourceFingerprint, label: string): void {
 	if (actual.algorithm === expected.algorithm && actual.value === expected.value) return;
-	throw new Error(`${label} fingerprint changed; checkpoint proposal is stale`);
+	throw new Error(`${label} fingerprint changed; this memory proposal is stale`);
 }
 
 function assertCheckpointSourceFresh(input: {
@@ -4869,16 +4918,16 @@ function assertCheckpointSourceFresh(input: {
 		l1b: currentL1b,
 		runtimeCwd: input.runtimeCwd,
 	});
-	if (currentSource.source.runtimeKind !== input.source.runtimeKind) throw new Error("checkpoint proposal runtime kind changed; checkpoint proposal is stale");
+	if (currentSource.source.runtimeKind !== input.source.runtimeKind) throw new Error("the conversation's runtime changed; this memory proposal is stale");
 	assertCheckpointFingerprintMatches(currentSource.source.l1bFingerprint, input.source.l1bFingerprint, "checkpoint proposal source L1b");
 	assertCheckpointFingerprintMatches(currentSource.source.transcriptFingerprint, input.source.transcriptFingerprint, "checkpoint proposal transcript");
-	if (currentSource.source.transcriptItemCount !== input.source.transcriptItemCount) throw new Error("checkpoint proposal transcript item count changed; checkpoint proposal is stale");
+	if (currentSource.source.transcriptItemCount !== input.source.transcriptItemCount) throw new Error("the conversation gained or lost messages; this memory proposal is stale");
 	if (input.source.runtimeKind === "pi-session-jsonl" && currentSource.source.runtimeKind === "pi-session-jsonl") {
-		if (currentSource.source.sessionId !== input.source.sessionId) throw new Error("checkpoint proposal Pi session id changed; checkpoint proposal is stale");
-		if (currentSource.source.sessionFileRelPath !== input.source.sessionFileRelPath) throw new Error("checkpoint proposal Pi session path changed; checkpoint proposal is stale");
-		if (currentSource.source.bootPromptSnapshotRelPath !== input.source.bootPromptSnapshotRelPath) throw new Error("checkpoint proposal boot snapshot path changed; checkpoint proposal is stale");
-		if (currentSource.source.bootPromptSha256 !== input.source.bootPromptSha256) throw new Error("checkpoint proposal boot snapshot hash changed; checkpoint proposal is stale");
-		if (currentSource.source.leafId !== input.source.leafId) throw new Error("checkpoint proposal Pi session leaf changed; checkpoint proposal is stale");
+		if (currentSource.source.sessionId !== input.source.sessionId) throw new Error("the conversation's session id changed; this memory proposal is stale");
+		if (currentSource.source.sessionFileRelPath !== input.source.sessionFileRelPath) throw new Error("the conversation's session path changed; this memory proposal is stale");
+		if (currentSource.source.bootPromptSnapshotRelPath !== input.source.bootPromptSnapshotRelPath) throw new Error("the conversation's boot snapshot path changed; this memory proposal is stale");
+		if (currentSource.source.bootPromptSha256 !== input.source.bootPromptSha256) throw new Error("the conversation's boot snapshot changed; this memory proposal is stale");
+		if (currentSource.source.leafId !== input.source.leafId) throw new Error("the conversation's session leaf changed; this memory proposal is stale");
 		assertCheckpointFingerprintMatches(currentSource.source.runtimeL1bFingerprint, input.source.runtimeL1bFingerprint, "checkpoint proposal runtime L1b");
 	}
 }
@@ -5302,14 +5351,14 @@ export function writeApprovedCheckpoint(request: CheckpointApprovalAcceptedReque
 	const sourceMetrics = l1bStateMetrics(currentL1b);
 	const proposalSource = parseCheckpointTranscriptSourceMetadata(request.proposal.source);
 	const oldThread = getPersistentAgentThread(instance.agentId, request.conversationId);
-	if (!oldThread) throw new Error("checkpoint approval activeThread is missing; checkpoint proposal is stale");
+	if (!oldThread) throw new Error("the conversation this proposal came from is missing; this memory proposal is stale");
 	// A crashed or previously-failed approval can leave the boundary half applied: the old thread
 	// already closed with closedReason "checkpoint" but the memory write / fresh thread never
 	// landed, so the room dead-ends on resume. Approving again completes that boundary instead of
 	// refusing. Threads closed by anything other than a checkpoint are still refused (genuinely
 	// stale proposal).
 	const completingHalfAppliedBoundary = oldThread.state === "closed";
-	if (completingHalfAppliedBoundary && oldThread.closedReason !== "checkpoint") throw new Error("checkpoint approval activeThread is already closed; checkpoint proposal is stale");
+	if (completingHalfAppliedBoundary && oldThread.closedReason !== "checkpoint") throw new Error("the conversation this proposal came from is already closed; this memory proposal is stale");
 	if (!completingHalfAppliedBoundary) assertPersistentAgentThreadNotInFlight(instance.agentId, request.conversationId);
 	assertCheckpointSourceFresh({ agentId: instance.agentId, conversationId: request.conversationId, source: proposalSource, currentL1b, runtimeCwd });
 	const sections = extractMarkdownSections(currentL1b);
@@ -5478,7 +5527,7 @@ export function writePersistentAgentMementoBoundary(agentIdRaw: string, conversa
 	const instance = createPersistentAgentInstance(agentIdRaw);
 	const status = getPersistentAgentStatus(instance.agentId);
 	// Memento never writes memory (runtime_boundary_only), so a room that is
-	// due for Learn (needs_absorb) may still be reset.
+	// due for Memorize (needs_absorb) may still be reset.
 	if (status.status !== "ready" && status.status !== "needs_absorb") throw new Error(`persistent agent scaffold is not ready: ${status.status}`);
 	const conversationId = safeRuntimeThreadId(conversationIdRaw);
 	if (!conversationId) throw new Error("invalid persistent-agent thread id");
@@ -5951,9 +6000,9 @@ function refuseOversizedMaintenancePrompt(input: {
 }
 
 const ABSORB_OVERFLOW_GUIDANCE =
-	"This room's memory is the prompt material and cannot be elided honestly — run Review Memory to shrink stable memory, or switch the maintenance profile to a larger-context model, then Learn again.";
+	"This room's memory is the prompt material and cannot be elided honestly: run Review to shrink stable memory, or switch the maintenance profile to a larger-context model, then Memorize again.";
 const STRUCTURAL_REVIEW_OVERFLOW_GUIDANCE =
-	"Deep Memory and Active Items are the prompt material and cannot be elided honestly — switch the maintenance profile to a larger-context model, then run Review Memory again.";
+	"Deep Memory and Active Items are the prompt material and cannot be elided honestly: switch the maintenance profile to a larger-context model, then run Review again.";
 
 // Draft-again feedback is client input bound for a worker prompt: it should
 // only ever carry the validator's own reasons, so flatten to short plain
@@ -5980,7 +6029,7 @@ function refuseTruncatedWorkerOutput(input: {
 	model: { provider: string; model: string };
 	generated: { truncated?: boolean; usage?: { output?: number }; modelMaxOutputTokens?: number };
 	/**
-	 * Set for the whole-document rewrites (Learn and Review Memory): their
+	 * Set for the whole-document rewrites (Memorize and Review): their
 	 * output scales with the room's memory, so truncation there means the
 	 * memory has outgrown what the model can rewrite in a single response —
 	 * the refusal says that instead of the generic cut-off line.
@@ -6011,9 +6060,9 @@ export async function buildStructuralReviewAssessment(agentId: string, model: St
 		sourceReviewTargetL1b: loaded.parts.sourceReviewTargetL1b,
 		model,
 	});
-	refuseOversizedMaintenancePrompt({ agentId: instance.agentId, processLabel: "Review Memory assessment", model, promptEstimatedTokens: assembly.telemetry.promptEstimatedTokens, window: options?.resolveModelWindow?.(model), guidance: STRUCTURAL_REVIEW_OVERFLOW_GUIDANCE });
+	refuseOversizedMaintenancePrompt({ agentId: instance.agentId, processLabel: "Review assessment", model, promptEstimatedTokens: assembly.telemetry.promptEstimatedTokens, window: options?.resolveModelWindow?.(model), guidance: STRUCTURAL_REVIEW_OVERFLOW_GUIDANCE });
 	const generated = await generate(assembly.prompt, model);
-	refuseTruncatedWorkerOutput({ agentId: instance.agentId, processLabel: "Review Memory assessment", model, generated });
+	refuseTruncatedWorkerOutput({ agentId: instance.agentId, processLabel: "Review assessment", model, generated });
 	const parsed = parseStructuralReviewAssessment(generated.text);
 	return {
 		agentId: instance.agentId,
@@ -6047,7 +6096,7 @@ export async function buildStructuralReviewDiscussionTurn(raw: any, model: Struc
 	});
 	if (!assembly.tokenBudget.canContinue) throw new Error("structural review discussion token budget exceeded");
 	const generated = await generate(assembly.prompt, model);
-	refuseTruncatedWorkerOutput({ agentId: request.agentId, processLabel: "Review Memory discussion", model, generated });
+	refuseTruncatedWorkerOutput({ agentId: request.agentId, processLabel: "Review discussion", model, generated });
 	return {
 		agentId: request.agentId,
 		writesMemory: false,
@@ -6080,7 +6129,7 @@ export async function buildStructuralReviewDiscussionSignoff(raw: any, model: St
 	});
 	if (!assembly.tokenBudget.canSignOff) throw new Error("structural review discussion token budget exceeded before signoff");
 	const generated = await generate(assembly.prompt, model);
-	refuseTruncatedWorkerOutput({ agentId: request.agentId, processLabel: "Review Memory discussion signoff", model, generated });
+	refuseTruncatedWorkerOutput({ agentId: request.agentId, processLabel: "Review discussion signoff", model, generated });
 	const handoffText = generated.text.trim();
 	if (!handoffText) throw new Error("structural review discussion signoff worker produced no text");
 	return {
@@ -6124,9 +6173,9 @@ export async function buildStructuralReviewProposal(raw: any, model: StructuralR
 		memoryBudgetTokens: readPersistentRoomMaintenanceSettings(agentId).memoryBudgetTokens,
 		retryFeedback: parseProposalRetryFeedback(raw?.retryFeedback),
 	});
-	refuseOversizedMaintenancePrompt({ agentId, processLabel: "Review Memory proposal", model, promptEstimatedTokens: assembly.telemetry.promptEstimatedTokens, window: options?.resolveModelWindow?.(model), guidance: STRUCTURAL_REVIEW_OVERFLOW_GUIDANCE });
+	refuseOversizedMaintenancePrompt({ agentId, processLabel: "Review proposal", model, promptEstimatedTokens: assembly.telemetry.promptEstimatedTokens, window: options?.resolveModelWindow?.(model), guidance: STRUCTURAL_REVIEW_OVERFLOW_GUIDANCE });
 	const generated = await generate(assembly.prompt, model);
-	refuseTruncatedWorkerOutput({ agentId, processLabel: "Review Memory proposal", model, generated, wholeDocumentRewriteLabel: "Review Memory" });
+	refuseTruncatedWorkerOutput({ agentId, processLabel: "Review proposal", model, generated, wholeDocumentRewriteLabel: "Review" });
 	const parsed = parseStructuralReviewProposal(generated.text);
 	const candidateValidation = validateStructuralReviewCandidateReviewTarget(loaded.parts.sourceReviewTargetL1b, parsed.fields.candidateReviewTargetL1b);
 	const review = structuralReviewProposalReview(loaded.parts.sourceReviewTargetL1b, parsed.fields.candidateReviewTargetL1b, parsed.fields.summary);
@@ -6155,9 +6204,9 @@ export async function buildAbsorbAssessment(agentId: string, model: AbsorbModelL
 		model,
 		sectionPurposeMap: buildSectionPurposeMap(loaded.sectionRegistry),
 	});
-	refuseOversizedMaintenancePrompt({ agentId: instance.agentId, processLabel: "Learn assessment", model, promptEstimatedTokens: assembly.telemetry.promptEstimatedTokens, window: options?.resolveModelWindow?.(model), guidance: ABSORB_OVERFLOW_GUIDANCE });
+	refuseOversizedMaintenancePrompt({ agentId: instance.agentId, processLabel: "Memorize assessment", model, promptEstimatedTokens: assembly.telemetry.promptEstimatedTokens, window: options?.resolveModelWindow?.(model), guidance: ABSORB_OVERFLOW_GUIDANCE });
 	const generated = await generate(assembly.prompt, model);
-	refuseTruncatedWorkerOutput({ agentId: instance.agentId, processLabel: "Learn assessment", model, generated });
+	refuseTruncatedWorkerOutput({ agentId: instance.agentId, processLabel: "Memorize assessment", model, generated });
 	const parsed = parseAbsorbAssessment(generated.text);
 	return {
 		agentId: instance.agentId,
@@ -6194,7 +6243,7 @@ export async function buildAbsorbDiscussionTurn(raw: any, model: AbsorbModelLock
 	});
 	if (!assembly.tokenBudget.canContinue) throw new Error("absorb discussion token budget exceeded");
 	const generated = await generate(assembly.prompt, model);
-	refuseTruncatedWorkerOutput({ agentId: request.agentId, processLabel: "Learn discussion", model, generated });
+	refuseTruncatedWorkerOutput({ agentId: request.agentId, processLabel: "Memorize discussion", model, generated });
 	return {
 		agentId: request.agentId,
 		writesMemory: false,
@@ -6227,7 +6276,7 @@ export async function buildAbsorbDiscussionSignoff(raw: any, model: AbsorbModelL
 	});
 	if (!assembly.tokenBudget.canSignOff) throw new Error("absorb discussion token budget exceeded before signoff");
 	const generated = await generate(assembly.prompt, model);
-	refuseTruncatedWorkerOutput({ agentId: request.agentId, processLabel: "Learn discussion signoff", model, generated });
+	refuseTruncatedWorkerOutput({ agentId: request.agentId, processLabel: "Memorize discussion signoff", model, generated });
 	const handoffText = generated.text.trim();
 	if (!handoffText) throw new Error("absorb discussion signoff worker produced no text");
 	return {
@@ -6265,9 +6314,9 @@ export async function buildAbsorbProposal(raw: any, model: AbsorbModelLock, gene
 		memoryBudgetTokens: readPersistentRoomMaintenanceSettings(agentId).memoryBudgetTokens,
 		retryFeedback: parseProposalRetryFeedback(raw?.retryFeedback),
 	});
-	refuseOversizedMaintenancePrompt({ agentId, processLabel: "Learn proposal", model, promptEstimatedTokens: assembly.telemetry.promptEstimatedTokens, window: options?.resolveModelWindow?.(model), guidance: ABSORB_OVERFLOW_GUIDANCE });
+	refuseOversizedMaintenancePrompt({ agentId, processLabel: "Memorize proposal", model, promptEstimatedTokens: assembly.telemetry.promptEstimatedTokens, window: options?.resolveModelWindow?.(model), guidance: ABSORB_OVERFLOW_GUIDANCE });
 	const generated = await generate(assembly.prompt, model);
-	refuseTruncatedWorkerOutput({ agentId, processLabel: "Learn proposal", model, generated, wholeDocumentRewriteLabel: "Learn" });
+	refuseTruncatedWorkerOutput({ agentId, processLabel: "Memorize proposal", model, generated, wholeDocumentRewriteLabel: "Memorize" });
 	const parsed = parseAbsorbProposal(generated.text);
 	const review = buildAbsorbProposalReview(loaded.l1b, parsed.fields);
 	const candidateValidation = validateAbsorbCandidateL1b(loaded.l1b, parsed.fields.candidateL1b);
@@ -6411,7 +6460,7 @@ export async function buildConsultAnswer(raw: any, model: ConsultModelLock, gene
 
 	const warnings = ["no memory has been written", "the consulted room was not activated and records no trace of this consult"];
 	if (String(raw?.targetLifecycleStatus ?? "") === "needs_absorb") {
-		warnings.unshift("the consulted room has recent context awaiting Learn; its stable memory may lag its latest sessions");
+		warnings.unshift("the consulted room has recent context awaiting Memorize; its stable memory may lag its latest sessions");
 	}
 	return {
 		targetAgentId: instance.agentId,
@@ -6500,7 +6549,7 @@ export async function buildCheckpointProposal(raw: any, generate: (prompt: strin
 	// Truncation is checked before the missing-fields retry: a draft cut at
 	// the output ceiling is missing its tail for size reasons, and a retry
 	// re-rolls the same dice at full cost.
-	refuseTruncatedWorkerOutput({ agentId: instance.agentId, processLabel: "checkpoint", model, generated });
+	refuseTruncatedWorkerOutput({ agentId: instance.agentId, processLabel: "Remember", model, generated });
 	let parsed = parseCheckpointCompressionFields(generated.text);
 	let usage = generated.usage;
 	let attempts = 1;
@@ -6510,7 +6559,7 @@ export async function buildCheckpointProposal(raw: any, generate: (prompt: strin
 		const retried = await generate(buildCheckpointCompressionRetryPrompt(assembly.prompt, missingBeforeRetry), model);
 		attempts = 2;
 		usage = mergeCheckpointCompressionUsage(usage, retried.usage);
-		refuseTruncatedWorkerOutput({ agentId: instance.agentId, processLabel: "checkpoint", model, generated: retried });
+		refuseTruncatedWorkerOutput({ agentId: instance.agentId, processLabel: "Remember", model, generated: retried });
 		const retriedParsed = parseCheckpointCompressionFields(retried.text);
 		if (retriedParsed.missingFields.length <= parsed.missingFields.length) parsed = retriedParsed;
 		retryWarnings.push(`compression worker output was regenerated once (first attempt was missing ${missingBeforeRetry.join(", ")})`);

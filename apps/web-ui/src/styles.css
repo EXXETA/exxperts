@@ -560,17 +560,6 @@ strong, b { font-weight: 700; }
 	justify-content: space-between;
 	gap: 8px;
 }
-.sidebar .theme-toggle {
-	border-color: var(--border-soft);
-	color: var(--fg-soft);
-	padding: 5px 9px;
-}
-.sidebar .theme-toggle:hover,
-.sidebar .theme-toggle:focus-visible {
-	background: var(--fg);
-	border-color: var(--fg);
-	color: var(--bg);
-}
 /* Main pane --------------------------------------------------------- */
 .workbench {
 	min-width: 0;
@@ -901,17 +890,6 @@ strong, b { font-weight: 700; }
 	justify-content: space-between;
 	gap: 8px;
 }
-.product-sidebar .theme-toggle {
-	border-color: var(--border-soft);
-	color: var(--fg-soft);
-	padding: 5px 9px;
-}
-.product-sidebar .theme-toggle:hover,
-.product-sidebar .theme-toggle:focus-visible {
-	background: var(--fg);
-	border-color: var(--fg);
-	color: var(--bg);
-}
 .sidebar-config {
 	position: relative;
 	display: flex;
@@ -989,29 +967,11 @@ strong, b { font-weight: 700; }
 	border-color: var(--border);
 	background: var(--panel-2);
 }
-.sidebar-config-menu .menu-section {
-	display: flex;
-	flex-direction: column;
-	gap: 4px;
-	padding: 6px 8px;
-	border-top: 1px solid var(--border-soft);
-}
-.sidebar-config-menu .menu-section-head {
-	display: flex;
-	align-items: baseline;
-	justify-content: space-between;
-	gap: 8px;
-}
-.sidebar-config-menu .menu-section + .menu-item,
+.sidebar-config-menu .menu-row + .menu-item,
 .sidebar-config-menu .menu-item + .menu-item {
 	border-top: 1px solid var(--border-soft);
 	margin-top: 4px;
 	padding-top: 10px;
-}
-.sidebar-config-menu .menu-ai-profile-list {
-	display: flex;
-	flex-direction: column;
-	gap: 4px;
 }
 .sidebar-config-menu .menu-theme-seg {
 	display: inline-flex;
@@ -1035,99 +995,6 @@ strong, b { font-weight: 700; }
 .sidebar-config-menu .menu-theme-seg button.on {
 	background: var(--fg);
 	color: var(--bg);
-}
-.sidebar-config-menu .menu-profile-row {
-	display: flex;
-	align-items: center;
-	gap: 9px;
-	padding: 6px 8px;
-	border-radius: 6px;
-	border: 1px solid transparent;
-	cursor: pointer;
-}
-.sidebar-config-menu .menu-profile-row:hover,
-.sidebar-config-menu .menu-profile-row:focus-visible {
-	background: var(--panel-2);
-	outline: none;
-}
-.sidebar-config-menu .menu-profile-row.active {
-	border-color: var(--border);
-	background: var(--panel-2);
-	cursor: default;
-}
-.sidebar-config-menu .menu-profile-radio {
-	width: 13px;
-	height: 13px;
-	border-radius: 50%;
-	border: 1.5px solid color-mix(in srgb, var(--fg) 38%, transparent);
-	flex-shrink: 0;
-	position: relative;
-}
-.sidebar-config-menu .menu-profile-row.active .menu-profile-radio {
-	border-color: var(--fg);
-}
-.sidebar-config-menu .menu-profile-row.active .menu-profile-radio::after {
-	content: "";
-	position: absolute;
-	inset: 2.5px;
-	border-radius: 50%;
-	background: var(--fg);
-}
-.sidebar-config-menu .menu-profile-text {
-	display: flex;
-	flex-direction: column;
-	gap: 1px;
-	min-width: 0;
-	flex: 1;
-}
-.sidebar-config-menu .menu-profile-name {
-	color: var(--fg);
-	font-size: var(--exx-font-size-xs);
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-}
-.sidebar-config-menu .menu-profile-row.notready .menu-profile-name {
-	color: var(--fg-soft);
-}
-/* Unready rows are inert: no pointer, no hover invite, dimmed radio. */
-.sidebar-config-menu .menu-profile-row.notready {
-	cursor: default;
-}
-.sidebar-config-menu .menu-profile-row.notready:not(.active):hover,
-.sidebar-config-menu .menu-profile-row.notready:not(.active):focus-visible {
-	background: transparent;
-}
-.sidebar-config-menu .menu-profile-row.notready .menu-profile-radio {
-	opacity: 0.45;
-}
-.sidebar-config-menu .menu-profile-sub {
-	color: var(--muted);
-	font-size: 10.5px;
-	line-height: 1.35;
-}
-.sidebar-config-menu .menu-profile-sub.warn {
-	color: var(--warning);
-}
-/* Consequence sublines (e.g. the strand warning) appear only at the moment of decision. */
-.sidebar-config-menu .menu-profile-sub.hover-only {
-	display: none;
-}
-.sidebar-config-menu .menu-profile-row:hover .menu-profile-sub.hover-only,
-.sidebar-config-menu .menu-profile-row:focus-visible .menu-profile-sub.hover-only {
-	display: block;
-}
-.sidebar-config-menu .menu-ai-profile-note {
-	color: var(--muted);
-	font-size: 10.5px;
-	line-height: 1.4;
-	margin: 2px 0 0;
-	padding: 0 8px;
-}
-.sidebar-config-menu .menu-ai-profile-error {
-	color: var(--error);
-	font-size: var(--exx-font-size-xs);
-	margin: 0;
 }
 .landing {
 	background: var(--bg);
@@ -1340,7 +1207,7 @@ strong, b { font-weight: 700; }
 /* Copy tracks the card width instead of the generic 700px landing cap, so text
    and cards share one right edge. */
 .ai-setup-page .landing-hero p,
-.ai-profile-switcher-section .ai-setup-copy,
+.ai-setup-page .ai-setup-copy,
 .ai-profile-switcher-section .cli-note,
 .add-provider-block .cli-note {
 	max-width: none;
@@ -1360,6 +1227,18 @@ strong, b { font-weight: 700; }
 }
 .ai-profile-row-group + .ai-profile-row-group {
 	border-top: 1px solid var(--exx-divider);
+}
+.ai-profile-card-empty {
+	padding: 16px 18px;
+	margin: 0;
+}
+/* Refresh sits on the card it re-reads, rather than floating at the page edge. */
+.ai-profile-card-foot {
+	display: flex;
+	justify-content: flex-end;
+	padding: 9px 18px;
+	border-top: 1px solid var(--exx-divider);
+	background: color-mix(in srgb, var(--panel-2) 55%, transparent);
 }
 .ai-profile-row {
 	display: flex;
@@ -1429,13 +1308,6 @@ strong, b { font-weight: 700; }
 	margin-top: 1px;
 }
 .ai-profile-sub.warn { color: var(--warning); }
-/* The strand warning surfaces at the moment of decision: it swaps in for the
-   quiet subline only while the row is hovered or focused. */
-.ai-profile-sub.sub-strand { display: none; }
-.ai-profile-row.has-strand:hover .ai-profile-sub.sub-default,
-.ai-profile-row.has-strand:has(.ai-profile-main:focus-visible) .ai-profile-sub.sub-default { display: none; }
-.ai-profile-row.has-strand:hover .ai-profile-sub.sub-strand,
-.ai-profile-row.has-strand:has(.ai-profile-main:focus-visible) .ai-profile-sub.sub-strand { display: block; }
 .ai-profile-side {
 	margin-left: auto;
 	display: flex;
@@ -1479,12 +1351,6 @@ strong, b { font-weight: 700; }
 	color: var(--muted);
 }
 .ai-profile-models-row > span:last-child { color: var(--fg-soft); }
-.ai-profile-foot {
-	display: flex;
-	align-items: center;
-	gap: 22px;
-	font-size: 13px;
-}
 .ai-profile-foot-link {
 	background: none;
 	border: none;
@@ -1495,7 +1361,7 @@ strong, b { font-weight: 700; }
 	border-radius: 0;
 }
 .ai-profile-foot-link:hover { color: var(--fg); }
-.ai-profile-foot-refresh { margin-left: auto; }
+.ai-profile-foot-link:disabled { opacity: 0.5; }
 /* Row management menu: the one affordance every ready profile row shares. */
 .ai-profile-menu-anchor { position: relative; display: inline-flex; }
 .ai-profile-menu-btn {
@@ -1586,7 +1452,8 @@ strong, b { font-weight: 700; }
 	display: flex;
 	align-items: center;
 	gap: 14px;
-	padding: 9px 0;
+	min-height: 40px;
+	padding: 5px 0;
 	font-size: 13.5px;
 }
 .add-provider-name { color: var(--fg-soft); }
@@ -1618,6 +1485,34 @@ strong, b { font-weight: 700; }
 /* Same code, shown under a profile row while its sign-in is pending. */
 .ai-profile-signin-instructions {
 	padding: 0 18px 14px 48px;
+}
+/* A row and the key form it opened read as one block, so the field is plainly
+   this row's and the single Cancel plainly closes this row. */
+.ai-profile-row-group.key-open,
+.add-provider-row-group.key-open {
+	background: color-mix(in srgb, var(--panel-2) 55%, transparent);
+	border-radius: var(--exx-radius-control);
+}
+.add-provider-row-group.key-open {
+	padding: 0 10px;
+	margin: 0 -10px;
+}
+.add-provider-key-form {
+	flex-wrap: wrap;
+}
+.add-provider-key-form .landing-action {
+	flex-shrink: 0;
+}
+/* A key form belongs to the row that opened it: indented to that row's name, and
+   padded so Save key and Cancel are not pressed against the card's edge. */
+.ai-profile-key-form {
+	padding: 2px 18px 14px 48px;
+	flex-wrap: wrap;
+}
+.add-provider-row-key-form {
+	padding-left: 14px;
+	border-left: 2px solid var(--exx-divider);
+	flex-wrap: wrap;
 }
 .add-provider-key-form input { flex: 1; }
 .configure-profile-modal { max-width: 560px; }
@@ -1673,9 +1568,10 @@ strong, b { font-weight: 700; }
 	font-size: 13.5px;
 }
 .configure-profile-remove { margin-left: auto; color: var(--danger, #d33); }
-/* A gateway model row asks three quiet questions at once: approve it, can it
-   see images, how much context does it have. Kept on one line so the list still
-   scans like a checkbox list rather than a form. */
+/* A gateway model row asks four quiet questions at once: approve it, can it
+   see images, can it search the web, how much context does it have. Kept on one
+   line where the panel is wide enough so the list still scans like a checkbox
+   list rather than a form, and wrapping rather than squeezing when it is not. */
 .gateway-model-row {
 	cursor: default;
 	gap: 12px;
@@ -1694,7 +1590,16 @@ strong, b { font-weight: 700; }
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
-.gateway-model-vision {
+/* Sits above the rows, appearing only once somebody has ticked web search, so
+   the consequence arrives at the moment it becomes theirs to get wrong. */
+.gateway-model-list-hint {
+	margin: 0 0 2px;
+	font-size: 12.5px;
+	color: var(--muted);
+	line-height: 1.5;
+}
+.gateway-model-vision,
+.gateway-model-websearch {
 	display: flex;
 	align-items: center;
 	gap: 6px;
@@ -1956,6 +1861,165 @@ strong, b { font-weight: 700; }
 	background: var(--bg-2);
 	border-color: var(--border-soft);
 	color: var(--fg);
+}
+/* Web search: the provider-side switch first, then the fallback backends,
+   sitting quietly under the profile list rather than competing with it. */
+.web-search-native {
+	display: grid;
+	gap: 10px;
+}
+.web-search-native-toggle {
+	display: flex;
+	align-items: flex-start;
+	gap: 10px;
+	border: 1px solid var(--border);
+	border-radius: 12px;
+	padding: 12px 14px;
+	cursor: pointer;
+}
+.web-search-native-toggle input {
+	margin-top: 3px;
+	accent-color: var(--fg);
+	cursor: pointer;
+}
+/* The fallback heading is a divider with a name, not a second section title:
+   the pane already has one heading and does not need to shout twice. */
+.web-search-fallback {
+	display: grid;
+	gap: 6px;
+}
+.web-search-fallback-heading {
+	font-family: "Bandeins Strange", "Sen", sans-serif;
+	font-size: 12px;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+	color: var(--muted);
+	margin: 0;
+	font-weight: 500;
+}
+.web-search-fallback-copy {
+	font-size: 12.5px;
+	margin: 0;
+}
+.web-search-options {
+	display: grid;
+	gap: 10px;
+}
+.web-search-option {
+	display: flex;
+	align-items: flex-start;
+	gap: 10px;
+	border: 1px solid var(--border);
+	border-radius: 12px;
+	padding: 12px 14px;
+	cursor: pointer;
+}
+/* Selected reads the way every other choice card in the app reads. One card in
+   the section carries that weight at a time, and it is the chosen fallback
+   below: the switch above states itself in its checkbox and stays neutral. */
+.web-search-option.selected {
+	border-color: var(--fg);
+	background: color-mix(in srgb, var(--fg) 10%, var(--panel));
+	box-shadow: inset 0 0 0 1px var(--fg);
+}
+/* A control mid-save is dimmed rather than moved: the value it shows is still
+   the machine's, until the machine says otherwise. */
+.web-search-option.pending,
+.web-search-native-toggle.pending {
+	opacity: 0.6;
+}
+.web-search-pending-note {
+	color: var(--muted);
+	font-size: 12px;
+}
+.web-search-option:hover:not(.selected),
+.web-search-native-toggle:hover {
+	border-color: color-mix(in srgb, var(--fg) 30%, transparent);
+}
+/* Native radios render as dark filled discs in this theme, which reads as a
+   third state beside the chosen one. Drawn here the way the profile rows draw
+   theirs: empty is empty, chosen is a dot. */
+.web-search-option input[type="radio"] {
+	appearance: none;
+	-webkit-appearance: none;
+	position: relative;
+	width: 16px;
+	height: 16px;
+	margin: 3px 0 0;
+	border-radius: 50%;
+	border: 1.5px solid color-mix(in srgb, var(--fg) 38%, transparent);
+	background: transparent;
+	flex-shrink: 0;
+	cursor: pointer;
+}
+.web-search-option input[type="radio"]:checked {
+	border-color: var(--fg);
+}
+.web-search-option input[type="radio"]:checked::after {
+	content: "";
+	position: absolute;
+	inset: 3px;
+	border-radius: 50%;
+	background: var(--fg);
+}
+.web-search-option input[type="radio"]:focus-visible {
+	outline: 2px solid var(--exx-focus);
+	outline-offset: 2px;
+}
+.web-search-option input[type="radio"]:disabled {
+	cursor: default;
+	opacity: 0.6;
+}
+.web-search-option-body {
+	display: grid;
+	gap: 3px;
+	min-width: 0;
+}
+.web-search-option-label {
+	color: var(--fg);
+}
+.web-search-option-blurb {
+	font-size: 12.5px;
+	color: var(--muted);
+	line-height: 1.5;
+}
+.web-search-searxng {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 10px;
+}
+.web-search-searxng-label {
+	font-size: 12.5px;
+	color: var(--muted);
+}
+.web-search-searxng input {
+	flex: 1 1 240px;
+	min-width: 0;
+}
+/* The starter belongs under the field, not squeezed in beside it. */
+.web-search-searxng-setup {
+	flex: 1 0 100%;
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 10px;
+}
+.web-search-searxng-status {
+	font-size: 12.5px;
+	color: var(--muted);
+}
+.web-search-searxng-status.failed {
+	color: var(--warning);
+}
+.web-search-env-note {
+	font-size: 12.5px;
+	margin: 0;
+}
+.configure-profile-model-option input[type="checkbox"],
+.add-provider-block input[type="checkbox"] {
+	accent-color: var(--fg);
+	cursor: pointer;
 }
 .ai-setup-section-heading {
 	display: flex;
@@ -4427,6 +4491,15 @@ strong, b { font-weight: 700; }
 	background: color-mix(in srgb, var(--error) 8%, transparent);
 }
 .tool-chip.error > summary .icon, .tool-chip.error > summary .name { color: var(--error); }
+/* Stopped is quieter than failed, because nothing went wrong: somebody pressed
+   Stop and this call never got to finish. Muted like a resting chip, with no
+   spinner and no alarm colour. */
+.tool-chip.stopped {
+	border-color: var(--border-soft);
+	background: transparent;
+}
+.tool-chip.stopped > summary .icon,
+.tool-chip.stopped > summary .name { color: var(--dim); }
 .tool-chip[open] {
 	border-color: var(--border-soft);
 	background: var(--bg);
@@ -5949,7 +6022,7 @@ strong, b { font-weight: 700; }
 .mem-hist-details { margin-left: auto; flex: 0 0 auto; }
 .mem-hist-more { background: none; border: 1px solid var(--border-soft); border-radius: 6px; padding: 3px 10px; margin-top: 8px; font: inherit; font-size: 11.5px; color: var(--muted); cursor: pointer; }
 .mem-hist-more:hover { color: var(--fg); border-color: var(--fg); }
-/* Time travel: the Learning curve itself is the control (click to place the
+/* Time travel: the memory-growth curve itself is the control (click to place the
    viewing line); the banner announces past mode above everything it changes. */
 .mem-tt-banner { font-size: 12.5px; color: var(--fg-soft); background: color-mix(in srgb, var(--exx-plan) 8%, transparent); border-left: 3px solid var(--exx-plan); border-radius: 6px; padding: 7px 11px; margin-bottom: 8px; }
 .mem-tt-banner-global { display: flex; justify-content: space-between; align-items: center; gap: 14px; margin: 14px 0; padding: 10px 14px; }
@@ -5963,7 +6036,7 @@ strong, b { font-weight: 700; }
 .mem-hist-future { opacity: 0.38; }
 .mem-youare { display: flex; align-items: center; gap: 10px; font-family: var(--exx-font-mono); font-size: 10.5px; color: var(--exx-plan); padding: 4px 0; }
 .mem-youare::before, .mem-youare::after { content: ""; flex: 1; height: 1px; background: color-mix(in srgb, var(--exx-plan) 40%, transparent); }
-/* "What changed": before/after diff of a Learn/Review, from its stored snapshots. */
+/* "What changed": before/after diff of a Memorize/Review, from its stored snapshots. */
 .mem-diff-note { padding: 2px 2px 10px; }
 .mem-diff { display: flex; flex-direction: column; gap: 10px; padding: 2px 2px 12px; }
 .mem-diff-meta { display: flex; gap: 12px; align-items: flex-start; justify-content: space-between; }
@@ -8975,6 +9048,78 @@ label.rs-row {
 	outline: none;
 }
 
+/* Update notice (desktop app): an attention dot on the gear, and the version
+   line turned into the action that installs the new release. The dot wears
+   the same orange the room badges wear (var(--warning), the token behind
+   .persistent-agent-badge.standby and .status-dot.standby), so "something
+   here wants you" reads the same everywhere and follows the theme. The dot
+   sits inside the gear button so it rides along in both sidebar variants
+   (the footer one makes .sidebar-config static, so an outer anchor would
+   drift to the page corner). */
+.sidebar-config-gear {
+	position: relative;
+}
+.sidebar-config-dot {
+	position: absolute;
+	top: 3px;
+	right: 3px;
+	width: 7px;
+	height: 7px;
+	border-radius: 50%;
+	background: var(--warning);
+	/* A ring in the surface colour keeps the dot legible over the gear's
+	   hover fill instead of melting into it. */
+	box-shadow: 0 0 0 1.5px var(--panel);
+	pointer-events: none;
+}
+/* The offer keeps its own line: side by side with the version and the GitHub
+   link the four items crowded the 260px menu and wrapped. */
+.sidebar-config-menu .menu-update-row {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	padding: 8px 8px 0;
+	margin-top: 4px;
+	border-top: 1px solid var(--border-soft);
+}
+/* One separator above the pair, not one between them: the offer and the
+   version it upgrades from belong to the same closing block. */
+.sidebar-config-menu .menu-update-row + .menu-meta-row {
+	border-top: 0;
+	margin-top: 0;
+}
+.sidebar-config-menu .menu-meta-update-btn {
+	background: transparent;
+	border: 1px solid color-mix(in srgb, var(--warning) 55%, var(--border));
+	border-radius: 6px;
+	color: var(--fg);
+	font-size: var(--exx-font-size-xs);
+	padding: 3px 8px;
+	cursor: pointer;
+	white-space: nowrap;
+}
+.sidebar-config-menu .menu-meta-update-btn:hover,
+.sidebar-config-menu .menu-meta-update-btn:focus-visible {
+	background: color-mix(in srgb, var(--warning) 18%, transparent);
+	border-color: var(--warning);
+	outline: none;
+}
+.sidebar-config-menu .menu-meta-dismiss {
+	background: transparent;
+	border: 0;
+	padding: 0;
+	color: var(--muted);
+	font-size: var(--exx-font-size-xs);
+	cursor: pointer;
+}
+.sidebar-config-menu .menu-meta-dismiss:hover,
+.sidebar-config-menu .menu-meta-dismiss:focus-visible {
+	color: var(--fg);
+	text-decoration: underline;
+	outline: none;
+}
+
 /* --- Wallet: Rhythm heatmap hover tooltip --------------------------------- */
 /* Styled hover readout for the weekday-by-hour heatmap: names the slot and
    shows the measured turn count behind the cell's shading. Anchored inside
@@ -11330,7 +11475,7 @@ html.desktop-app-mac .topbar input {
 html.desktop-app-mac.sidebar-collapsed .topbar {
 	padding-left: 84px;
 }
-/* Maintain workspaces (chooser, Learn, Review Memory) are full-page
+/* Maintain workspaces (chooser, Memorize, Review) are full-page
    takeovers with no sidebar: their header carries the exit button in the top
    48px, so without the lift the strip eats its clicks. Same pattern: header
    above the strip, bar drags, controls opt out; content steps past the
@@ -11431,7 +11576,7 @@ html.desktop-app-mac .mem-fullscreen {
 	justify-content: flex-start;
 }
 
-/* Round 2 (2026-07-23): the gate surfaces of the Learn/Review flows join the
+/* Round 2 (2026-07-23): the gate surfaces of the Memorize/Review flows join the
    compact modal language (the Maintain landing keeps its own big headlines -
    different markup, untouched). Footnote pattern replaces explainer boxes:
    one quiet line below the action row. */

@@ -1,7 +1,7 @@
 import { useEffect, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { apiFetch } from "../api";
 import { agentLabel } from "../types";
-import { GATEWAY_PROVIDER_ID_PREFIX, modelDisplayName } from "../model-names";
+import { GATEWAY_PROVIDER_ID_PREFIX, modelDisplayName, modelTooltipName } from "../model-names";
 
 // The Wallet never blends real and estimated dollars: the server splits every
 // aggregate by source (billed API spend, plan-covered subscription usage,
@@ -124,6 +124,12 @@ const PROVIDER_SHORT: Record<string, string> = {
 
 function modelCell(row: UsageRow): string {
 	return modelDisplayName(row) || "?";
+}
+
+/** Same cell, with the provider added: the table shows names, hover disambiguates. */
+function modelCellTitle(row: UsageRow): string | undefined {
+	const full = modelTooltipName(row);
+	return full && full !== modelCell(row) ? full : undefined;
 }
 
 // Mirrors the server's sourceOfRow: authType is exact; without it only the
@@ -406,7 +412,7 @@ export function Dashboard() {
 									<tr key={i}>
 										<td>{fmtAgo(r.ts)}</td>
 										<td className="first">{nameOf(r.agent)}</td>
-										<td>{modelCell(r)}</td>
+										<td title={modelCellTitle(r)}>{modelCell(r)}</td>
 										<td>{sourceCell(r)}</td>
 										<td><span className="kind-chip">{KIND_LABELS[r.kind ?? "chat"] ?? r.kind}</span></td>
 										<td>{fmtTok(r.input)}</td>

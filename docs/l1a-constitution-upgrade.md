@@ -66,7 +66,7 @@ current template are skipped ("already up to date").
 6. **Use the room normally.** New sessions boot with the upgraded
    constitution immediately. A room session that was saved before the upgrade
    resumes with its previous boot snapshot and picks up the new constitution
-   at its next checkpoint; that is expected.
+   the next time you Remember or Forget it; that is expected.
 
 ## What changes in the room's behavior
 

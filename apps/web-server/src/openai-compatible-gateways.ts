@@ -78,6 +78,8 @@ export type GatewayRoomModel = {
 	label?: string;
 	/** The person ticked "supports images"; written to models.json as input: ["text","image"]. */
 	vision?: boolean;
+	/** The person ticked "supports web search"; written to models.json as compat.supportsWebSearch, which is what makes the request ask the gateway to search. */
+	webSearch?: boolean;
 	/** Token window for this model. Absent means the runtime default applies. */
 	contextWindow?: number;
 };
@@ -153,6 +155,7 @@ function parseRoomModels(raw: unknown): { models: GatewayRoomModel[]; error?: st
 		const label = nonEmptyString(entry.label);
 		if (label) model.label = label;
 		if (entry.vision === true) model.vision = true;
+		if (entry.webSearch === true) model.webSearch = true;
 		const contextWindow = positiveInteger(entry.contextWindow);
 		if (contextWindow) model.contextWindow = contextWindow;
 		models.push(model);
@@ -336,6 +339,7 @@ function writeLegacyPolicyFile(gateway: OpenAiCompatibleGateway, legacyPolicyPat
 			modelId: model.modelId,
 			label: model.label ?? model.modelId,
 			...(model.vision ? { vision: true } : {}),
+			...(model.webSearch ? { webSearch: true } : {}),
 			...(model.contextWindow ? { contextWindow: model.contextWindow } : {}),
 		})),
 		maintenanceModel: gateway.maintenanceModel,

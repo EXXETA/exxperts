@@ -137,9 +137,19 @@ export const DEFAULT_COMPACTION_SETTINGS: CompactionSettings = {
 
 /**
  * Calculate total context tokens from usage.
- * Uses the native totalTokens field when available, falls back to computing from components.
+ *
+ * Prefers `contextTokens` when the provider measured it. That field exists
+ * because a turn's token totals answer "what did this cost", and a turn that
+ * took several round trips resent the whole conversation each time, so its
+ * totals count the same tokens once per request. Reading a cost number as a
+ * context number makes a room look several times fuller than it is, and that
+ * number drives both the context chip and auto-compaction.
+ *
+ * Falls back to the totals for every provider that does not set it, where the
+ * two are the same thing.
  */
 export function calculateContextTokens(usage: Usage): number {
+	if (typeof usage.contextTokens === "number" && usage.contextTokens > 0) return usage.contextTokens;
 	return usage.totalTokens || usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
 }
 

@@ -73,10 +73,14 @@ if (argv.includes("--fake-update-feed")) {
     res.setHeader("content-type", "application/json");
     res.end(JSON.stringify({ tag_name: "v9.9.9", prerelease: false, draft: false }));
   });
-  await new Promise((resolve) => fakeFeed.listen(8793, "127.0.0.1", resolve));
-  env.EXXPERTS_DESKTOP_UPDATE_FEED = "http://127.0.0.1:8793/";
+  // Port is overridable so a scripted smoke can run while a hand-driven
+  // --fake-update-feed session is open; the fixed port made the two runs
+  // fight over the same listener.
+  const feedPort = Number(env.EXXPERTS_DESKTOP_FAKE_FEED_PORT || 8793);
+  await new Promise((resolve) => fakeFeed.listen(feedPort, "127.0.0.1", resolve));
+  env.EXXPERTS_DESKTOP_UPDATE_FEED = `http://127.0.0.1:${feedPort}/`;
   env.EXXPERTS_DESKTOP_EXPECT_UPDATE = "1";
-  console.log("[desktop dev] fake update feed on 127.0.0.1:8793 (v9.9.9)");
+  console.log(`[desktop dev] fake update feed on 127.0.0.1:${feedPort} (v9.9.9)`);
 }
 
 const electronBinary = require("electron");

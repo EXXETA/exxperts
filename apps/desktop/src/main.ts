@@ -13,7 +13,7 @@ import { payloadVersion, PORT, probePort, SERVER_ORIGIN, ServerHandle, serverRoo
 import { bootWindowOpen, bootWindowWasShown, closeBootWindow, setBootStatus, showBootWindow } from "./boot-window";
 import { showHealthCheck, showTextWindow } from "./health";
 import { loadWindowState, trackWindowState } from "./window-state";
-import { checkForUpdate, getAvailableUpdate, isNewerVersion, onUpdateStateChanged, openUpdatePage } from "./update-check";
+import { checkForUpdate, getAvailableUpdate, getUpdateSnapshot, isNewerVersion, onUpdateStateChanged, openUpdatePage } from "./update-check";
 import { checkViaUpdater, downloadUpdate, installPlan, quitAndInstallNow, smokeSetFeed, updaterAvailability } from "./updater";
 
 const SMOKE = process.env.EXXPERTS_DESKTOP_SMOKE === "1";
@@ -133,6 +133,15 @@ function handleDeepLink(rawUrl: string): void {
     if (parsed.protocol !== "exxperts:") return;
     route = parsed.host || parsed.pathname.replace(/\//g, "");
   } catch {
+    return;
+  }
+  // update is the settings menu's update row. That row already names a
+  // version, so it goes straight to the install offer for the version the
+  // page was shown; only a page acting on state the shell no longer has
+  // falls back to a fresh check. The window is already in front; do not
+  // raise it.
+  if (route === "update") {
+    void startUpdateInstall();
     return;
   }
   // task-done is the page's badge signal (a notification just fired): mark
@@ -332,7 +341,10 @@ async function offerOneClickUpdate(version: string): Promise<void> {
     cancelId: 1,
   });
   if (response !== 0) return;
-  const progressWin = showTextWindow("exxperts update", `Downloading exxperts v${version}`, "Starting the download...", mainWindow ?? undefined);
+  // The heading no longer claims a download is running before one is: the
+  // check can take seconds behind a slow proxy, and "Starting the
+  // download..." made that look like a stalled transfer.
+  const progressWin = showTextWindow("exxperts update", `Updating to exxperts v${version}`, "Checking for the update...", mainWindow ?? undefined);
   let cancelDownload: (() => void) | null = null;
   progressWin.on("closed", () => cancelDownload?.());
   const setProgress = (text: string) => {
@@ -341,10 +353,21 @@ async function offerOneClickUpdate(version: string): Promise<void> {
       `document.querySelector("pre").textContent = ${JSON.stringify(text)}; true`,
     ).catch(() => undefined);
   };
+  // Rate from the transfer itself (bytes since the first progress event over
+  // the time since it), so a slow line reads as slow instead of as stuck.
+  let firstProgressAt = 0;
+  let firstProgressBytes = 0;
   const outcome = await downloadUpdate(app.getVersion(), {
     onProgress: (percent, transferred, total) => {
       const mb = (n: number) => Math.max(1, Math.round(n / (1024 * 1024)));
-      setProgress(`${Math.floor(percent)}% (${mb(transferred)} of ${mb(total)} MB)`);
+      if (!firstProgressAt) {
+        firstProgressAt = Date.now();
+        firstProgressBytes = transferred;
+      }
+      const seconds = (Date.now() - firstProgressAt) / 1000;
+      const moved = transferred - firstProgressBytes;
+      const rate = seconds >= 1 && moved > 0 ? `, ${(moved / (1024 * 1024) / seconds).toFixed(1)} MB/s` : "";
+      setProgress(`Downloading... ${Math.floor(percent)}% (${mb(transferred)} of ${mb(total)} MB${rate})`);
     },
     registerCancel: (cancel) => { cancelDownload = cancel; },
   });
@@ -369,6 +392,59 @@ async function offerOneClickUpdate(version: string): Promise<void> {
   if (fallback === 0) openUpdatePage();
 }
 
+// Shell to page, the mirror of the exxperts:// deep links going the other
+// way: the sandboxed page has no preload and no IPC, so the update state is
+// written straight into it. Both channels are set, a property for a page that
+// renders after the push and an event for one already on screen. Only the
+// snapshot's own strings travel, JSON-encoded, and both of them are version
+// numbers derived from parsed numeric triples.
+function pushUpdateStateToPage(): void {
+  const win = mainWindow;
+  if (!win || win.isDestroyed()) return;
+  const detail = JSON.stringify(getUpdateSnapshot(app.getVersion()));
+  void win.webContents.executeJavaScript(
+    `{ const detail = ${detail};
+       window.__exxpertsUpdate = detail;
+       window.dispatchEvent(new CustomEvent("exxperts:update", { detail })); }
+     true`,
+  ).catch(() => undefined);
+}
+
+// The install offer, one place: which path a build can take is the updater's
+// policy call, not the caller's. Re-entrancy matters here because the page
+// can send the same deep link twice (a double click on the update row); a
+// second dialog stacked on the first would be the visible bug.
+let updateOfferOpen = false;
+
+async function offerUpdate(version: string): Promise<void> {
+  if (updateOfferOpen) return;
+  updateOfferOpen = true;
+  try {
+    if (installPlan(updaterAvailability()) === "one-click") {
+      await offerOneClickUpdate(version);
+    } else {
+      await offerManualUpdate(version);
+    }
+  } finally {
+    updateOfferOpen = false;
+  }
+}
+
+// The settings menu's update row: the version it names is the version the
+// shell already found, so offer that install directly. Rechecking first
+// would cost a round trip and could answer a button reading "Update to
+// v1.2.3" with a "you are on the latest version" dialog. Only a page whose
+// state the shell no longer holds (a restart between render and click) takes
+// the full check.
+async function startUpdateInstall(): Promise<void> {
+  const update = getAvailableUpdate();
+  if (!update) {
+    await manualUpdateCheck();
+    return;
+  }
+  await offerUpdate(update.version);
+}
+
 // User-initiated check with visible feedback; the tray rebuild also
 // re-reads the login-item state, curing a stale checkbox in passing.
 async function manualUpdateCheck(): Promise<void> {
@@ -377,11 +453,7 @@ async function manualUpdateCheck(): Promise<void> {
   if (result === "update") {
     const update = getAvailableUpdate();
     if (!update) return;
-    if (installPlan(updaterAvailability()) === "one-click") {
-      await offerOneClickUpdate(update.version);
-    } else {
-      await offerManualUpdate(update.version);
-    }
+    await offerUpdate(update.version);
   } else if (result === "none") {
     await dialog.showMessageBox({
       type: "info",
@@ -640,12 +712,23 @@ async function boot(): Promise<void> {
   buildAppMenu();
   mainWindow = createMainWindow();
   onUpdateStateChanged(refreshTrayMenu);
+  onUpdateStateChanged(pushUpdateStateToPage);
+  // Every load gets the state, not just the first: a reload drops the page's
+  // copy, and a check that landed while the app was on another page would
+  // otherwise never reach the settings menu.
+  mainWindow.webContents.on("did-finish-load", pushUpdateStateToPage);
   server.onUnexpectedExit((code, signal) => { void handleServerCrash(code, signal); });
   await mainWindow.loadURL(`${SERVER_ORIGIN}/auth/session?token=${encodeURIComponent(authToken)}`);
   // Hand off: reveal the loaded app window first, then retire the boot
   // window, so there is never a moment with nothing on screen.
   if (!startHidden) showMainWindow();
   closeBootWindow();
+
+  // One anonymous version check per launch, after the app is on screen so it
+  // can never delay startup. It asks the release feed for the latest tag and
+  // sends nothing about this machine; a failure stays silent (offline is a
+  // normal state). Nothing polls after this.
+  void checkForUpdate(app.getVersion());
 
   if (SMOKE) await smokeReport();
 }
@@ -792,6 +875,41 @@ async function smokeReport(): Promise<void> {
       : `fail(availability=${availability},check=${positive.status}${positive.status === "available" ? `:${positive.version}` : ""},error-case=${negative.status},policy=${policyOk ? "ok" : "fail"})`;
   }
   const updaterFlowOk = updaterFlow === "ok" || updaterFlow === "not-exercised";
+  // The notice in the app window, end to end under the fake feed: the state
+  // the shell pushed into the page must have produced the gear dot, and the
+  // settings menu must offer the version as an action WITHOUT hiding the
+  // version in use (a DOM read, so a renderer that silently dropped the push
+  // cannot smoke green). The gear is clicked and clicked shut again so later
+  // assertions see the same page.
+  let updateNoticeUi = "not-exercised";
+  if (process.env.EXXPERTS_DESKTOP_EXPECT_UPDATE === "1") {
+    const dotPresent: unknown = await win.webContents
+      .executeJavaScript(`(() => {
+        const gear = document.querySelector(".sidebar-config-gear");
+        if (!gear) return "no-gear";
+        const dot = gear.querySelector(".sidebar-config-dot") ? "dot" : "no-dot";
+        gear.click();
+        return dot;
+      })()`)
+      .catch(() => "error");
+    await new Promise((r) => setTimeout(r, 400)); // let the menu render
+    const rowLabel: unknown = await win.webContents
+      .executeJavaScript(`(() => {
+        const btn = document.querySelector(".sidebar-config-menu .menu-meta-update-btn");
+        const version = document.querySelector(".sidebar-config-menu .menu-meta-version");
+        const label = (btn ? btn.textContent : "no-button")
+          + "|" + (version && version.textContent.trim() ? "version-shown" : "version-hidden");
+        const gear = document.querySelector(".sidebar-config-gear");
+        if (gear) gear.click();
+        return label;
+      })()`)
+      .catch(() => "error");
+    await new Promise((r) => setTimeout(r, 300));
+    updateNoticeUi = dotPresent === "dot" && rowLabel === "Update to v9.9.9|version-shown"
+      ? "ok"
+      : `fail(gear=${String(dotPresent)},row=${String(rowLabel)})`;
+  }
+  const updateNoticeUiOk = updateNoticeUi === "ok" || updateNoticeUi === "not-exercised";
   // S5 acceptance evidence: EXXPERTS_DESKTOP_SHOT_MATRIX=<dir> captures the
   // sidebar states at 80/100/125% zoom in REAL Electron (zoom via the real
   // webContents zoom factor, clicks via the real input pipeline).
@@ -932,8 +1050,8 @@ async function smokeReport(): Promise<void> {
   }
   const ok = landedUrl.startsWith(SERVER_ORIGIN) && !landedUrl.includes("token=") && healthOk && trayIconOk && stateOk && dragOk
     && contextOk && spellOk && deepLinkOk && notifOk && payload !== "unknown" && bootVisibleOk && bootFeedbackOk && loginItemPresent
-    && updateLogicOk && updateConsistent && updaterFlowOk && notifyE2EOk && watchdogOk && appMenuOk && sidebarToggleOk && matrixFailure === null;
-  console.log(`DESKTOP_SMOKE ${ok ? "OK" : "FAIL"} url=${landedUrl} initialUrl=${url} title=${title} tray=${tray ? "yes" : "no"} trayIcon=${trayIconOk ? "ok" : "empty"} health=${healthOk ? "ok" : "fail"} windowState=${stateOk ? "ok" : "missing"} dragRegion=${dragRegion} contextMenu=${contextOk ? `ok(${smokeContextMenuItems})` : "none"} spellcheck=${spellOk ? "on" : "off"} deepLink=${deepLinkOk ? "ok" : "fail"} notifications=${String(notifPerm)} payload=${payload} bootWindow=${bootWindow}${hiddenExpected ? "(hidden expected)" : ""} bootFeedback=${bootFeedbackOk ? "ok" : "fail"} loginItem=${loginItemPresent ? "present" : "missing"} appMenu=${appMenuOk ? "ok" : "fail"} updateLogic=${updateLogicOk ? "ok" : "fail"} updateCheck=${updateCheck}${updateConsistent ? "" : "(tray inconsistent)"} updaterFlow=${updaterFlow} sidebarToggle=${sidebarToggleOk ? "ok" : "fail"}${matrixFailure ? ` matrix=fail(${matrixFailure})` : ""} notifyE2E=${notifyE2EOk ? "ok" : `fail(hook=${String(notifyHook)},badge=${badgeSet ? "set" : "unset"},cleared=${badgeCleared ? "yes" : "no"})`} watchdog=${watchdogOk ? "ok" : "fail"}`);
+    && updateLogicOk && updateConsistent && updaterFlowOk && updateNoticeUiOk && notifyE2EOk && watchdogOk && appMenuOk && sidebarToggleOk && matrixFailure === null;
+  console.log(`DESKTOP_SMOKE ${ok ? "OK" : "FAIL"} url=${landedUrl} initialUrl=${url} title=${title} tray=${tray ? "yes" : "no"} trayIcon=${trayIconOk ? "ok" : "empty"} health=${healthOk ? "ok" : "fail"} windowState=${stateOk ? "ok" : "missing"} dragRegion=${dragRegion} contextMenu=${contextOk ? `ok(${smokeContextMenuItems})` : "none"} spellcheck=${spellOk ? "on" : "off"} deepLink=${deepLinkOk ? "ok" : "fail"} notifications=${String(notifPerm)} payload=${payload} bootWindow=${bootWindow}${hiddenExpected ? "(hidden expected)" : ""} bootFeedback=${bootFeedbackOk ? "ok" : "fail"} loginItem=${loginItemPresent ? "present" : "missing"} appMenu=${appMenuOk ? "ok" : "fail"} updateLogic=${updateLogicOk ? "ok" : "fail"} updateCheck=${updateCheck}${updateConsistent ? "" : "(tray inconsistent)"} updaterFlow=${updaterFlow} updateNoticeUi=${updateNoticeUi} sidebarToggle=${sidebarToggleOk ? "ok" : "fail"}${matrixFailure ? ` matrix=fail(${matrixFailure})` : ""} notifyE2E=${notifyE2EOk ? "ok" : `fail(hook=${String(notifyHook)},badge=${badgeSet ? "set" : "unset"},cleared=${badgeCleared ? "yes" : "no"})`} watchdog=${watchdogOk ? "ok" : "fail"}`);
   if (!ok) process.exitCode = 1;
   app.quit();
 }

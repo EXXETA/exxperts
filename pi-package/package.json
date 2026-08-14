@@ -23,7 +23,6 @@
     ]
   },
   "dependencies": {
-    "pptxgenjs": "^3.12.0",
     "typebox": "^1.1.24",
     "pi-mcp-adapter": "2.10.0"
   },

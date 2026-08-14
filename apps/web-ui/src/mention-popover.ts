@@ -164,12 +164,12 @@ function relativeTime(ms: number): string {
 	return `${years} year${years === 1 ? "" : "s"} ago`;
 }
 
-// The right-aligned memory-freshness hint, e.g. "last checkpoint 2 days ago".
+// The right-aligned memory-freshness hint, e.g. "remembered 2 days ago".
 // Returns null when the checkpoint time is unknown or unparseable — the row then
 // omits the hint (spec §4.3).
 export function memoryFreshnessHint(lastCheckpointAt: string | null | undefined, now: number = Date.now()): string | null {
 	if (!lastCheckpointAt) return null;
 	const parsed = Date.parse(lastCheckpointAt);
 	if (Number.isNaN(parsed)) return null;
-	return `last checkpoint ${relativeTime(Math.max(0, now - parsed))}`;
+	return `remembered ${relativeTime(Math.max(0, now - parsed))}`;
 }

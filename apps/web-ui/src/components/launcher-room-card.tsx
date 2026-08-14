@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { modelDisplayName } from "../model-names";
+import { modelDisplayName, modelTooltipName } from "../model-names";
 import type { PersistentAgentAiProfileSelectionStatus, PersistentAgentId, PersistentAgentStatus, WebChatModelOption, WebChatModelStatus } from "../types";
 import { strandedBySwitchCount } from "./product-shell";
 import { ProfileSwitchConfirm, RoomModelPicker } from "./room-model-picker";
@@ -18,10 +18,16 @@ export type LauncherRoomMaintainTarget = { agentId: PersistentAgentId; displayNa
 
 // Canonical display name for a model lock/option however its label was
 // persisted ("moonshotai.kimi-k2.5" and "GitHub Copilot — Claude Opus 4.8"
-// both come out clean).
+// both come out clean). The tooltip form adds the provider, which the card
+// face deliberately leaves out.
 function cardModelName(model: { provider?: string; model?: string; label?: string } | null | undefined): string {
 	if (!model) return "";
 	return modelDisplayName({ model: model.model, modelLabel: model.label, provider: model.provider });
+}
+
+function cardModelTooltip(model: { provider?: string; model?: string; label?: string } | null | undefined): string {
+	if (!model) return "";
+	return modelTooltipName({ model: model.model, modelLabel: model.label, provider: model.provider });
 }
 
 function persistentRoomModels(status: WebChatModelStatus | null): WebChatModelOption[] {
@@ -80,7 +86,7 @@ export function PersistentAgentCard({ status, modelStatus, aiProfileStatus, thre
 	const hasStandbyThread = thread?.state === "standby" || (!live && !preparedBoundaryThread && (status?.runtime.state === "standby" || status?.runtime.state === "active") && !!status.runtime.activeThreadId);
 	const hasActiveThread = live || hasStandbyThread || preparedBoundaryThread;
 	const state = hasStandbyThread ? "standby" : live ? "live" : status?.status ?? "missing";
-	const stateLabel = state === "needs_absorb" ? "ready to learn" : state;
+	const stateLabel = state === "needs_absorb" ? "ready to memorize" : state;
 	const label = status?.displayName || thread?.displayName || status?.id || "Room";
 	const memory = status?.memoryStatus;
 	const memoryLevel = memory?.recentContextLevel ?? "unknown";
@@ -142,6 +148,7 @@ export function PersistentAgentCard({ status, modelStatus, aiProfileStatus, thre
 	// and enters fresh.
 	const preparedSelectionMatchesLock = !!preparedModelKey && draftModel === preparedModelKey;
 	const lockedModelLabel = cardModelName(standbyLockedModel) || cardModelName(status?.runtime.model) || "Locked model";
+	const lockedModelTooltip = cardModelTooltip(standbyLockedModel) || cardModelTooltip(status?.runtime.model);
 	// Which ready profile provides the locked model — names the way out in the tooltip when resume is dimmed.
 	const switchTargetProfile = !standbyModelAllowed && standbyLockedModel
 		? aiProfileStatus?.profiles.find((profile) => !profile.active && profile.ready && profile.processes?.persistentRoom.models.some((model) => model.provider === standbyLockedModel.provider && model.model === standbyLockedModel.model)) ?? null
@@ -149,11 +156,18 @@ export function PersistentAgentCard({ status, modelStatus, aiProfileStatus, thre
 	const modelLabel = hasStandbyThread || preparedBoundaryThread
 		? lockedModelLabel
 		: selectedModel ? cardModelName(selectedModel) : "No model";
+	const selectedModelTooltip = hasStandbyThread || preparedBoundaryThread ? lockedModelTooltip : cardModelTooltip(selectedModel);
 	const standbyActionTitle = standbyModelAllowed
 		? "Resume this standby thread"
 		: switchTargetProfile
-			? `This thread is locked to ${lockedModelLabel}. Switch the AI profile to ${switchTargetProfile.label} (⚙ settings) to resume it.`
+			? `This thread is locked to ${lockedModelLabel}. Switch the AI profile to ${switchTargetProfile.label} in AI setup to resume it.`
 			: `This thread is locked to ${lockedModelLabel}, which no ready AI profile provides right now. Open AI setup to connect one.`;
+	// One title on the locked pill: the model's identity, then what the lock
+	// means. The incompatible sentences already name the model, so the prefix
+	// would only say it twice.
+	const lockedPillTitle = standbyModelAllowed
+		? `${lockedModelTooltip}${lockedModelTooltip ? " · " : ""}This thread continues on the model it started with.`
+		: standbyActionTitle;
 	const lockedElsewhere = !!status?.activeLock;
 	const lockSurface = status?.activeLock?.surface;
 	const lockedByScheduler = lockSurface === "scheduler";
@@ -227,7 +241,7 @@ export function PersistentAgentCard({ status, modelStatus, aiProfileStatus, thre
 	const enterDisabledReason = purging
 		? purgeNote
 		: state === "needs_absorb"
-		? "This room needs to learn its recent sessions first. Use Maintain, then enter."
+		? "This room needs to memorize its recent sessions first. Use Maintain, then enter."
 		: state === "ready"
 			? roomModels.length === 0 && switchableModelsAvailable
 				? "Pick a model from another profile to enter."
@@ -238,7 +252,7 @@ export function PersistentAgentCard({ status, modelStatus, aiProfileStatus, thre
 		: lockedElsewhere
 			? lockNote
 		: hasActiveThread
-			? "This room has a session in progress. Resume it and save a checkpoint, then Maintain becomes available."
+			? "This room has a session in progress. Resume it and use Remember, then Maintain becomes available."
 			: !status || !status.exists
 				? "Maintain becomes available once the room is set up."
 				: "This room needs attention before it can be maintained.";
@@ -345,11 +359,11 @@ export function PersistentAgentCard({ status, modelStatus, aiProfileStatus, thre
 				{state !== "missing" && (
 					<div className={`persistent-agent-model${hasStandbyThread ? " locked" : showModelPicker ? "" : " unavailable"}`}>
 						{hasStandbyThread ? (
-							<span className={`model-pill locked${standbyModelAllowed ? "" : " incompatible"}`} aria-label="Locked room thread model" title={standbyModelAllowed ? "This thread continues on the model it started with." : standbyActionTitle}>🔒 <span className="model-pill-name">{modelLabel}</span></span>
+							<span className={`model-pill locked${standbyModelAllowed ? "" : " incompatible"}`} aria-label="Locked room thread model" title={lockedPillTitle}>🔒 <span className="model-pill-name">{modelLabel}</span></span>
 						) : showModelPicker ? (
 							<RoomModelPicker roomModels={roomModels} modelStatusProfileId={modelStatus?.activeProfileId} value={draftModel} onChange={setDraftModel} aiProfileStatus={aiProfileStatus} standbyLockedModels={standbyLockedModels} onSelectAiProfile={onSelectAiProfile} />
 						) : (
-							<span className="model-pill disabled"><span className="model-pill-name">{modelLabel}</span></span>
+							<span className="model-pill disabled" title={selectedModelTooltip || undefined}><span className="model-pill-name">{modelLabel}</span></span>
 						)}
 					</div>
 				)}

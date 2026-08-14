@@ -203,7 +203,7 @@ try {
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
 		assert(/too large for the locked model/.test(message), `overflow refusal should name the size problem: ${message}`);
-		assert(/run Review Memory|larger-context/.test(message), "overflow refusal should carry guidance");
+		assert(/run Review to shrink stable memory/.test(message) && /larger-context/.test(message), "overflow refusal should carry guidance");
 		assert(/No memory has been written/.test(message), "overflow refusal should state memory is untouched");
 		assert((error as any).statusCode === 413, "overflow refusal should carry HTTP 413");
 	}

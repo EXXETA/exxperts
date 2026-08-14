@@ -1,12 +1,14 @@
-// Smoke for the gateway store and the two per-model facts it now carries.
+// Smoke for the gateway store and the three per-model facts it now carries.
 //
 // Gateway models used to be registered text-only with a silent 128k window, so
 // an attached image degraded to a placeholder and the room context chip counted
-// against a number nobody had chosen. This proves the whole path in process:
-// the store round-trips both facts, the legacy single-gateway file is read as
-// the first gateway without being rewritten, minted provider ids never collide
-// with the one the existing rooms are locked to, and the runtime model registry
-// reads back exactly what was written.
+// against a number nobody had chosen. Web search is the third fact: a model
+// that can search through the gateway has to say so, or the request never asks
+// it to. This proves the whole path in process: the store round-trips all
+// three, the legacy single-gateway file is read as the first gateway without
+// being rewritten, minted provider ids never collide with the one the existing
+// rooms are locked to, and the runtime model registry reads back exactly what
+// was written.
 //
 // Run: node scripts/run-smokes.mjs openai-compatible-gateway-capabilities
 
@@ -73,6 +75,7 @@ try {
 		roomModels: [
 			{ modelId: "sees-images", vision: true, contextWindow: 200000 },
 			{ modelId: "text-only" },
+			{ modelId: "searches-web", webSearch: true },
 		],
 		maintenanceModel: "text-only",
 	});
@@ -84,6 +87,8 @@ try {
 	const savedSecond = both.find((gateway) => gateway.id === minted)!;
 	assert(savedSecond.roomModels[0].vision === true && savedSecond.roomModels[0].contextWindow === 200000, `the store should round-trip both facts, got ${JSON.stringify(savedSecond.roomModels[0])}`);
 	assert(savedSecond.roomModels[1].vision === undefined, "a model nobody marked stays unmarked rather than being marked false");
+	assert(savedSecond.roomModels[2].webSearch === true, `the store should round-trip the web-search flag, got ${JSON.stringify(savedSecond.roomModels[2])}`);
+	assert(savedSecond.roomModels[0].webSearch === undefined, "a model nobody marked for web search stays unmarked");
 
 	// Writing the second gateway must not have touched the first one's file.
 	const legacyAfterWrite = JSON.parse(fs.readFileSync(legacyPath, "utf-8"));
@@ -99,6 +104,30 @@ try {
 	assert(visionModel!.contextWindow === 200000, `the chosen context window must reach the registry, got ${visionModel!.contextWindow}`);
 	assert(!textModel!.input.includes("image"), "a model nobody marked stays text-only");
 	assert(textModel!.contextWindow === gateways.GATEWAY_DEFAULT_CONTEXT_WINDOW, `an unset window falls back to the documented default, got ${textModel!.contextWindow}`);
+	// The last link before the request layer: the flag has to survive as compat
+	// on the model the registry hands out, because that is the only thing the
+	// provider reads when it decides whether to ask the gateway to search.
+	const searchModel = registry.find(minted, "searches-web");
+	assert((searchModel!.compat as any)?.supportsWebSearch === true, `a model marked for web search must reach the registry saying so, got ${JSON.stringify(searchModel!.compat)}`);
+	assert((textModel!.compat as any)?.supportsWebSearch === undefined, `a model nobody marked must stay silent about web search, got ${JSON.stringify(textModel!.compat)}`);
+
+	// Unticking the box has to remove the key, not leave it saying true forever.
+	const untickedWebSearch = gateways.writeOpenAiCompatibleGateway({ ...second, roomModels: second.roomModels.map((model) => (model.modelId === "searches-web" ? { modelId: model.modelId } : model)) });
+	catalog.writeGatewayProviderEntry(untickedWebSearch, modelsPath);
+	const afterUntick = JSON.parse(fs.readFileSync(modelsPath, "utf-8")).providers[minted].models.find((model: any) => model.id === "searches-web");
+	assert(afterUntick.compat?.supportsWebSearch === undefined, `unticking web search must clear the key, got ${JSON.stringify(afterUntick)}`);
+	assert(!("compat" in afterUntick), `a model whose only compat key was ours must not keep an empty compat block, got ${JSON.stringify(afterUntick)}`);
+	// The maintenance model has no row in the approve list, so nothing here ever
+	// spoke for it: a hand-set flag on it must survive a save, not be cleared by
+	// a checkbox that was never shown.
+	const modelsNow = JSON.parse(fs.readFileSync(modelsPath, "utf-8"));
+	modelsNow.providers[minted].models.find((model: any) => model.id === "text-only").compat = { supportsWebSearch: true };
+	fs.writeFileSync(modelsPath, JSON.stringify(modelsNow, null, "\t"), { mode: 0o600 });
+	catalog.writeGatewayProviderEntry({ ...second, roomModels: [{ modelId: "sees-images", vision: true, contextWindow: 200000 }], maintenanceModel: "text-only" }, modelsPath);
+	const maintenanceAfter = JSON.parse(fs.readFileSync(modelsPath, "utf-8")).providers[minted].models.find((model: any) => model.id === "text-only");
+	assert(maintenanceAfter.compat?.supportsWebSearch === true, `a flag on the maintenance model must survive a save, got ${JSON.stringify(maintenanceAfter)}`);
+	// Put it back, so the rest of this smoke sees the gateway it was written with.
+	catalog.writeGatewayProviderEntry(gateways.writeOpenAiCompatibleGateway(second), modelsPath);
 
 	// ---- models.json belongs to the person, not to this writer --------------
 	// A hand-annotated catalog: comments and a trailing comma, which the file
@@ -121,7 +150,7 @@ try {
 			"api": "openai-completions",
 			"headers": { "x-team": "platform" },
 			"models": [
-				{ "id": "sees-images", "name": "Sees Images", "reasoning": "medium" },
+				{ "id": "sees-images", "name": "Sees Images", "reasoning": "medium", "compat": { "supportsStrictMode": false } },
 			],
 		},
 	},
@@ -133,7 +162,7 @@ try {
 		providerId: minted,
 		label: "Project gateway",
 		baseUrl: "https://gateway.example.invalid/v1",
-		roomModels: [{ modelId: "sees-images", vision: true, contextWindow: 200000 }],
+		roomModels: [{ modelId: "sees-images", vision: true, webSearch: true, contextWindow: 200000 }],
 		maintenanceModel: "sees-images",
 	}, annotatedPath);
 	const annotated = JSON.parse(fs.readFileSync(annotatedPath, "utf-8"));
@@ -142,6 +171,10 @@ try {
 	assert(annotated.providers[minted]?.headers?.["x-team"] === "platform", `unknown provider keys must survive, got ${JSON.stringify(annotated.providers[minted])}`);
 	assert(annotated.providers[minted].models[0].reasoning === "medium", `unknown per-model keys must survive, got ${JSON.stringify(annotated.providers[minted].models[0])}`);
 	assert(JSON.stringify(annotated.providers[minted].models[0].input) === JSON.stringify(["text", "image"]), "the keys this writer owns are still written");
+	// Compat is where somebody hand-tunes a stubborn deployment. This writer sets
+	// one key inside it and must leave the rest of the block alone.
+	assert(annotated.providers[minted].models[0].compat?.supportsStrictMode === false, `a hand-tuned compat key must survive, got ${JSON.stringify(annotated.providers[minted].models[0].compat)}`);
+	assert(annotated.providers[minted].models[0].compat?.supportsWebSearch === true, `the one compat key this writer owns is still written, got ${JSON.stringify(annotated.providers[minted].models[0].compat)}`);
 	// Comments cannot survive a re-serialisation, so the version that had them
 	// has to survive somewhere else.
 	const backups = fs.readdirSync(tempHome).filter((name) => name.startsWith("annotated-models.json.bak-"));

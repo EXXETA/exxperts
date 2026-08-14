@@ -11,7 +11,7 @@ import { RoomDangerZone } from "./RoomDangerZone";
 import { useEscapeKey } from "./use-escape-key";
 
 function roomStatusLabel(status: PersistentAgentStatus["status"]): string {
-	return status === "needs_absorb" ? "ready to learn" : status;
+	return status === "needs_absorb" ? "ready to memorize" : status;
 }
 
 type SettingsPane = "workspace" | "memory" | "skills" | "connectors" | "schedules" | "session" | "danger";

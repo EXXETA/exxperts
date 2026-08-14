@@ -114,7 +114,7 @@ export function RoomMaintenanceSection({ status }: { status: PersistentAgentStat
 				<div className="rs-row-main">
 					<span className="rs-row-label">
 						Apply Maintain results without final review
-						<RsInfo text="When you finish a Learn or Review Memory session and approve its plan, the changes are written straight to memory instead of being shown one last time. Changes to memory marked as must-keep are always shown first, and you can always see what changed afterwards in the room's Memory view." />
+						<RsInfo text="When you finish a Memorize or Review session and approve its plan, the changes are written straight to memory instead of being shown one last time. Changes to memory marked as must-keep are always shown first, and you can always see what changed afterwards in the room's Memory view." />
 					</span>
 				</div>
 				<input
@@ -129,8 +129,8 @@ export function RoomMaintenanceSection({ status }: { status: PersistentAgentStat
 			<label className="rs-row">
 				<div className="rs-row-main">
 					<span className="rs-row-label">
-						Save Checkpoints without preview
-						<RsInfo text="Checkpoint normally shows you what it is about to save from the conversation. With this on, the save happens without that preview. If a save looks incomplete, the preview comes back and you decide." />
+						Remember without preview
+						<RsInfo text="Remember normally shows you what it is about to save from the conversation. With this on, the save happens without that preview. If a save looks incomplete, the preview comes back and you decide." />
 					</span>
 				</div>
 				<input
@@ -139,7 +139,7 @@ export function RoomMaintenanceSection({ status }: { status: PersistentAgentStat
 					checked={quickApply === true}
 					disabled={quickApply === null || saving}
 					onChange={(e) => void toggleQuickApply(e.target.checked)}
-					aria-label="Save Checkpoints without preview"
+					aria-label="Remember without preview"
 				/>
 			</label>
 			<div className="rs-row memory-budget-row">
@@ -162,7 +162,7 @@ export function RoomMaintenanceSection({ status }: { status: PersistentAgentStat
 					/>
 					{usagePercent !== null && (
 						<p className={`memory-budget-usage${overBudget ? " over" : ""}`}>
-							~{fmtTokensK(currentMemoryTokens!)} tokens in use, {usagePercent}% of the target.{overBudget ? " Consider running Review Memory." : ""}
+							~{fmtTokensK(currentMemoryTokens!)} tokens in use, {usagePercent}% of the target.{overBudget ? " Consider running Review." : ""}
 						</p>
 					)}
 				</div>

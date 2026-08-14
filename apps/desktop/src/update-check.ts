@@ -1,9 +1,10 @@
-// Update notice (the check layer; updater.ts does one-click installs),
-// USER-INITIATED ONLY: the check runs when the user picks "Check for
-// Updates..." or opens the Health Check window - nothing polls in the
-// background, so the no-telemetry story stays true. When the feed's latest
-// release is newer than this build, the tray gains an update entry and the
-// health window a download line.
+// Update notice (the check layer; updater.ts does one-click installs). One
+// anonymous version check runs once at startup; after that the check only
+// runs when the user picks "Check for Updates..." or opens the Health Check
+// window. Nothing polls on a timer and nothing but the version request leaves
+// the machine, so the no-telemetry story stays true. When the feed's latest
+// release is newer than this build, the tray gains an update entry, the
+// health window a download line, and the app window a settings-menu notice.
 //
 // Trust boundary: the feed is input, not authority. Nothing from the feed is
 // ever rendered or opened directly - the version is parsed to a numeric
@@ -20,16 +21,28 @@ const RELEASE_PAGE_BASE = "https://github.com/EXXETA/exxperts/releases/tag";
 export type AvailableUpdate = { version: string; url: string };
 
 let available: AvailableUpdate | null = null;
-let stateChanged: (() => void) | null = null;
+const stateListeners: Array<() => void> = [];
 
 export function getAvailableUpdate(): AvailableUpdate | null {
   return available;
 }
 
-// The shell registers its tray rebuild here; fired when a check finds an
-// update (health.ts also triggers checks and must not import the shell).
+// What the app window needs to render its own notice, in one object: the
+// version offered (null when there is nothing to offer) and the build the
+// user is running. Both are plain version strings; the available one comes
+// from the parsed numeric triple, never from raw feed text.
+export type UpdateSnapshot = { available: string | null; current: string };
+
+export function getUpdateSnapshot(currentVersion: string): UpdateSnapshot {
+  return { available: available?.version ?? null, current: currentVersion };
+}
+
+// More than one consumer now: the tray rebuild and the push into the app
+// window, both registered by the shell (health.ts also triggers checks and
+// must not import the shell). A single slot would have silently replaced one
+// with the other.
 export function onUpdateStateChanged(fn: () => void): void {
-  stateChanged = fn;
+  stateListeners.push(fn);
 }
 
 function parseTriple(v: string): [number, number, number] | null {
@@ -65,7 +78,7 @@ export async function checkForUpdate(currentVersion: string): Promise<"update" |
     if (!triple) return "none";
     const version = `${triple[0]}.${triple[1]}.${triple[2]}`;
     available = { version, url: `${RELEASE_PAGE_BASE}/v${version}` };
-    stateChanged?.();
+    for (const listener of stateListeners) listener();
     return "update";
   } catch {
     return "error"; // offline is a valid state; stay quiet

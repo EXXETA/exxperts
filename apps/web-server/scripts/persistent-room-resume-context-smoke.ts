@@ -44,7 +44,7 @@ try {
 			{ kind: "user", text: 123 },
 			null,
 			"malformed",
-		] as unknown[]) === null,
+		] as unknown[], true) === null,
 		"no eligible items should return null",
 	);
 
@@ -58,7 +58,7 @@ try {
 		{ kind: "assistant", text: "STREAMING_SENTINEL_SHOULD_NOT_APPEAR", streaming: true },
 		{ kind: "assistant", text: 42 },
 		{ nope: true },
-	] as unknown[]);
+	] as unknown[], true);
 	assert(filtered != null, "eligible user/assistant text should produce restored context");
 	assert(filtered.metadata.sourceItemCount === 9, "sourceItemCount should count all source items");
 	assert(filtered.metadata.eligibleItemCount === 2, "eligibleItemCount should count only eligible user/assistant text");
@@ -76,6 +76,24 @@ try {
 	]) {
 		assertNotIncludes(filtered.block, sentinel, "excluded item filtering");
 	}
+
+	// The streaming mark only means "still being written" while the room is
+	// actually writing. It is set by the browser and cleared by a debounced save
+	// that can be lost, and no server-side write closes that gap on the attached
+	// path, so a finished answer can sit on disk marked mid-flight forever, and
+	// threads written before this was enforced carry the same scars. Trusting it
+	// on an idle room deletes the answer from the room's own memory of itself,
+	// which is the more damaging mistake of the two.
+	const idleItems = [
+		{ kind: "user", text: "hello from user" },
+		{ kind: "assistant", text: "an answer nobody cleared", streaming: true },
+	] as unknown[];
+	const whileIdle = buildPersistentRoomRestoredLiveThreadContext(idleItems);
+	assert(whileIdle != null, "an idle room with a stale mark should still restore context");
+	assertIncludes(whileIdle.block, "an answer nobody cleared", "stale streaming mark on an idle room");
+	assert(whileIdle.metadata.eligibleItemCount === 2, "a stale mark should not make the answer ineligible");
+	const whileAnswering = buildPersistentRoomRestoredLiveThreadContext(idleItems, true);
+	assertNotIncludes(whileAnswering?.block ?? "", "an answer nobody cleared", "genuine mid-answer item");
 
 	const allIncludedItems = [
 		{ kind: "user", text: "first under caps" },

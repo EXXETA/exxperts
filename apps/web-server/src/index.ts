@@ -91,6 +91,7 @@ import { assertPersistentRoomModelForActiveProfile, DEFAULT_PERSISTENT_AGENT_AI_
 import { deleteOpenAiCompatibleGateway, findOpenAiCompatibleGateway, GATEWAY_DEFAULT_CONTEXT_WINDOW, GATEWAY_MAX_CONTEXT_WINDOW, GATEWAY_MIN_CONTEXT_WINDOW, GATEWAY_PROVIDER_ID_PREFIX, GatewayStoreUnreadableError, mintGatewayProviderId, parseGatewayContextWindow, readOpenAiCompatibleGateways, writeOpenAiCompatibleGateway, type GatewayRoomModel, type OpenAiCompatibleGateway } from "./openai-compatible-gateways.js";
 import { ModelCatalogUnreadableError, readCatalogProviderIds, readGatewayProviderBaseUrl, removeGatewayProviderEntry, writeGatewayProviderEntry } from "./openai-compatible-gateway-catalog.js";
 import { discoverGatewayModels, GatewayDiscoveryError, normalizeGatewayBaseUrl } from "./openai-compatible-gateway-detect.js";
+import { readWebSearchSettings, WebSearchSettingsError, WebSearchSettingsUnreadableError, writeWebSearchSettings } from "./web-search-settings.js";
 import { runIsolatedPersistentAgentWorker } from "./persistent-agent-worker-runtime.js";
 import { PERSISTENT_AGENTS_ROOT } from "./persistent-agents.js";
 import { registerUsageApi } from "./usage-api.js";
@@ -125,12 +126,13 @@ import { chooseLocalFolder } from "./local-folder-picker.js";
 // register them with the SDK runtime.
 import contentPolicyExt from "../../../pi-package/extensions/content-policy/index.js";
 import permissionsExt from "../../../pi-package/extensions/permissions/index.js";
-import kbExt from "../../../pi-package/extensions/kb/index.js";
 import artifactsExt, { SAFE_SEGMENT, artifactRoot, validateArtifactPath } from "../../../pi-package/extensions/artifacts/index.js";
 import { createRoomScopedMcpExtension } from "../../../pi-package/extensions/mcp/index.js";
 import { ensureRoomScopedMcpGrantsMigration } from "../../../pi-package/extensions/mcp/room-scope.js";
 import webSearchExt from "../../../pi-package/extensions/web-search/index.js";
+import { createNativeProviderSearchExtension, resolveNativeProviderSearchDecision, shouldRegisterClientWebSearch, stripProviderSearchFromModel } from "../../../pi-package/extensions/web-search/native-provider-search.js";
 import fetchUrlExt from "../../../pi-package/extensions/fetch_url/index.js";
+import toolResultAgingExt, { readAgedToolResultMarker } from "../../../pi-package/extensions/tool-result-aging/index.js";
 import { addPersistentRoomScheduleJob, listPersistentRoomScheduleJobs, removePersistentRoomScheduleJob, summarizePersistentRoomScheduleJobs, updatePersistentRoomScheduleJob } from "../../../pi-package/extensions/schedule-prompt/index.js";
 import type { AddPersistentRoomScheduleJobInput, PersistentRoomScheduleJob, PersistentRoomScheduleSummary, PersistentRoomScheduleType, UpdatePersistentRoomScheduleJobInput } from "../../../pi-package/extensions/schedule-prompt/index.js";
 import { ensureProductAppStateRoot, ensureProductAppUserDirs, productAppStatePath, productAppStateRoot } from "../../../pi-package/product-state-paths.js";
@@ -142,6 +144,7 @@ import { appendUsage, resolveUsageAuthType } from "./usage-log.js";
 import type { UsageKind, UsageRow } from "./usage-log.js";
 import { importHistoricalSessionUsage } from "./usage-import.js";
 import { buildMemoryAskContext, buildMemoryDigest, buildMemoryOverview, buildRoomMemory, readConversationTranscript, readMemoryArea, readMemoryEventDiff, readMemorySnapshotAt, searchMemory } from "./memory-api.js";
+import { searxngSetupStatus, startSearxngSetup } from "./searxng-setup.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = process.env.EXXETA_HOME ? path.resolve(process.env.EXXETA_HOME) : path.resolve(__dirname, "..", "..", "..");
@@ -1487,7 +1490,7 @@ app.post("/api/persistent-agents/:id/memento", async (req, reply) => {
 	try {
 		// Memento is a force operation: when the user clicks it, the thread
 		// closes. It works on ready and needs_absorb rooms alike (it never
-		// writes memory, so a room that is due for Learn can still be reset).
+		// writes memory, so a room that is due for Memorize can still be reset).
 		const status = getUsablePersistentAgentStatusForNormalUse(idRaw);
 		// A scheduled background run or a CLI session is actively writing this
 		// room's thread; closing it under their feet silently loses their output.
@@ -1982,12 +1985,11 @@ app.post("/api/persistent-agents/:id/checkpoint/propose", async (req, reply) => 
 				workerSystemPrompt: prompt,
 				triggerPrompt: "Produce the checkpoint compression fields now.",
 				modelLock,
-				resolveExpectedModel: (workerRegistry, expectedModelLock) => {
-					const model = workerRegistry.find(expectedModelLock.provider, expectedModelLock.model);
-					if (!model) throw new Error(`model not found: ${expectedModelLock.provider}/${expectedModelLock.model}`);
-					if (!workerRegistry.hasConfiguredAuth(model)) throw new Error(`provider not connected: ${expectedModelLock.provider}`);
-					return model;
-				},
+				// Checkpoint compression inherits the ROOM model, so this is the one
+				// restricted worker most likely to be handed a model marked for
+				// provider search. Same resolver as the other workers, same removal.
+				resolveExpectedModel: (workerRegistry, expectedModelLock) =>
+					resolveConfiguredWorkerModel(workerRegistry, expectedModelLock, "checkpoint compression model"),
 				workerLabel: "checkpoint compression worker",
 				emptyTextError: "checkpoint compression worker produced no text",
 				cwd: runtimeCwd,
@@ -2721,11 +2723,19 @@ function resolvePersistentAgentQueryModel(registry: ModelRegistry, params: URLSe
 	return model;
 }
 
+/**
+ * The model a restricted worker runs on: Memorize, Review, consult, the
+ * file specialists. Every one of them is defined by what it may not reach, so
+ * the model arrives here with its web-search permission removed. A gateway may
+ * legitimately point its maintenance model at one of its room models, and that
+ * model may be marked for provider-side search; the mark belongs to the room,
+ * not to a worker that was told to answer from memory.
+ */
 function resolveConfiguredWorkerModel(registry: ModelRegistry, modelLock: { provider: string; model: string }, label: string) {
 	const model = registry.find(modelLock.provider, modelLock.model);
 	if (!model) throw new Error(`${label} not found: ${modelLock.provider}/${modelLock.model}`);
 	if (!registry.hasConfiguredAuth(model)) throw new Error(`${label} provider not connected: ${modelLock.provider}`);
-	return model;
+	return stripProviderSearchFromModel(model);
 }
 
 function profileStatusPayload(profile: PersistentAgentAiProfile) {
@@ -2781,7 +2791,7 @@ function resolveSpecialistModel(registry: ModelRegistry, modelLock: { provider: 
 // prompt, so the trigger carries no user content.
 const CONSULT_TRIGGER_PROMPT = "Answer the consult question now, from your memory only.";
 
-// Arms the prompt overflow guards (consult + Learn/Review Memory workers):
+// Arms the prompt overflow guards (consult + Memorize/Review workers):
 // the room's memory is the prompt material and cannot be elided honestly, so
 // oversize prompts refuse with guidance instead of running against a
 // truncated memory or a provider error.
@@ -2988,6 +2998,7 @@ function gatewayModelPayload(model: GatewayRoomModel) {
 		modelId: model.modelId,
 		label: model.label ?? model.modelId,
 		vision: model.vision === true,
+		webSearch: model.webSearch === true,
 		// Null, not the default, so the form can tell "nobody chose" from "someone
 		// chose 128000" while still showing the same number either way.
 		contextWindow: model.contextWindow ?? null,
@@ -3026,6 +3037,7 @@ function parseGatewayRoomModels(raw: unknown): { models: GatewayRoomModel[]; err
 		const label = String(source.label ?? "").trim();
 		if (label && label !== modelId) model.label = label;
 		if (source.vision === true) model.vision = true;
+		if (source.webSearch === true) model.webSearch = true;
 		// Validated rather than coerced. A window is not a cosmetic field: it
 		// decides what the room's context chip reads and when the conversation
 		// compacts itself, so a value nobody could have meant is refused out
@@ -3101,6 +3113,7 @@ async function gatewayDiscoverHandler(req: any, reply: any, gatewayIdFromRoute =
 			detected: discovery.models.map((model) => ({
 				id: model.id,
 				vision: model.vision ?? null,
+				webSearch: model.webSearch ?? null,
 				contextWindow: model.contextWindow ?? null,
 			})),
 		};
@@ -3197,6 +3210,50 @@ function gatewayDeleteHandler(gatewayId: string, reply: any) {
 	forgetGatewayProviderLabel(gateway.providerId);
 	return buildPersistentAgentAiProfileSelectionStatus();
 }
+// How the app's own web_search tool runs. Settable, and it takes effect on the
+// next search rather than the next launch: the tool re-reads the file. The
+// environment variable still outranks the file, so the payload says which of
+// the two is actually in force instead of drawing the saved value as the truth.
+function webSearchSettingsPayload() {
+	const settings = readWebSearchSettings();
+	return {
+		provider: settings.provider,
+		baseUrl: settings.baseUrl ?? "",
+		source: settings.source,
+		// The provider-side switch is its own answer with no environment
+		// override behind it, so there is nothing to disambiguate here.
+		providerSearch: settings.providerSearch,
+		saved: { provider: settings.saved.provider ?? null, baseUrl: settings.saved.baseUrl ?? "" },
+		envProvider: process.env.EXXETA_SEARCH_PROVIDER?.trim() || null,
+		// A broken file is drawn as broken rather than as a set of choices
+		// nobody made. Provider search reads off in this state, and the screen
+		// has to say why instead of showing an unticked box as a preference.
+		unreadable: settings.unreadable ?? null,
+	};
+}
+app.get("/api/settings/web-search", async () => webSearchSettingsPayload());
+// Starting a local search engine, for the people who will never type a command
+// to do it. Pulling the image takes minutes on a first run, so the POST starts
+// the work and answers immediately; the GET is what the screen watches.
+app.post("/api/web-search/searxng/setup", async () => startSearxngSetup(REPO_ROOT));
+app.get("/api/web-search/searxng/setup", async () => searxngSetupStatus());
+app.put("/api/settings/web-search", async (req, reply) => {
+	const body = (req.body ?? {}) as any;
+	try {
+		writeWebSearchSettings({
+			...("provider" in body ? { provider: body.provider } : {}),
+			...("baseUrl" in body ? { baseUrl: body.baseUrl } : {}),
+			...("providerSearch" in body ? { providerSearch: body.providerSearch } : {}),
+		});
+	} catch (e) {
+		if (e instanceof WebSearchSettingsError) return reply.code(400).send({ error: e.message });
+		// Not a bad request: the request was fine and the machine's own file is
+		// the problem, so this is ours to own rather than the caller's to fix.
+		if (e instanceof WebSearchSettingsUnreadableError) return reply.code(500).send({ error: e.message });
+		return reply.code(500).send({ error: (e as Error).message });
+	}
+	return webSearchSettingsPayload();
+});
 app.get("/api/persistent-agent-ai-profiles/gateways", async () => {
 	const read = readOpenAiCompatibleGateways();
 	return {
@@ -4214,6 +4271,25 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 		});
 		return;
 	}
+	// The socket is open from the upgrade onward, but this handler binds the
+	// session before it can attach the real message listener below, and a
+	// client is entitled to send its first frame the moment the socket opens.
+	// Anything arriving in that window would reach a socket with no listener
+	// and be dropped without a trace: no error, no log, and a client waiting
+	// forever for an answer to a message the server never saw. So the window
+	// is covered from the first synchronous line — early frames are held and
+	// replayed in order once the listener exists. The hold is bounded because
+	// a client that floods the window must not be able to grow this queue
+	// without limit; past the bound the connection is refused outright rather
+	// than half-answered.
+	const framesBeforeListener: Buffer[] = [];
+	let framesBeforeListenerOverflowed = false;
+	const holdFrameUntilListener = (raw: Buffer) => {
+		if (framesBeforeListener.length >= 64) { framesBeforeListenerOverflowed = true; return; }
+		framesBeforeListener.push(raw);
+	};
+	socket.on("message", holdFrameUntilListener);
+
 	const status = getUsablePersistentAgentStatusForNormalUse(persistentAgentIdRaw);
 	if (status.status !== "ready") throw new Error(`persistent agent is not ready: ${status.status}`);
 	const persistentAgentIdForSession = status.id;
@@ -4225,7 +4301,14 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 	try {
 		persistentAgentThreadForSession = getPersistentAgentThread(persistentAgentIdForSession, persistentConversationId);
 		if (persistentAgentThreadForSession?.runtime.kind === "transcript-recap-v1") {
-			persistentRoomRestoredLiveThreadContext = buildPersistentRoomRestoredLiveThreadContext(persistentAgentThreadForSession.items ?? []);
+			// Restoring happens as a session binds, so a turn in flight here means
+			// one adopted from another connection. Only then is a streaming mark
+			// describing something genuinely still being written.
+			const turnAtRestore = getPersistentAgentActiveTurnState(persistentAgentIdForSession, persistentConversationId);
+			persistentRoomRestoredLiveThreadContext = buildPersistentRoomRestoredLiveThreadContext(
+				persistentAgentThreadForSession.items ?? [],
+				turnAtRestore.state === "running" || turnAtRestore.state === "cancelling",
+			);
 		}
 	} catch (error) {
 		persistentAgentThreadLoadError = error instanceof Error ? error : new Error(String(error));
@@ -4475,6 +4558,15 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 	// built at bind time - a grant change rebinds before the next turn so what
 	// the model sees in its manifest matches what it may call.
 	let boundMcpGrantsFingerprint: string | null = null;
+	// And the same discipline for native provider search. Whether the room's own
+	// web_search tool is registered is decided when the session binds, because
+	// both providers' server-side search is itself called web_search and the two
+	// cannot both be on the request. So a change to the setting has to rebuild
+	// the session before the next turn, exactly like a workspace or grant
+	// change, or the room would keep whichever tool set it happened to bind.
+	let boundNativeProviderSearch: boolean | null = null;
+	/** The provider the live session bound against, so the check above compares the setting and not the model. */
+	let boundSessionProviderId: string | null = null;
 	// The single in-flight rebind: while a rebind runs, `session` is null and
 	// every frame that needs the session awaits THIS promise instead of racing
 	// past the guards onto the disposed session with the old toolset.
@@ -4796,7 +4888,19 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 		const counts = { user: 0, assistant: 0, toolResult: 0, custom: 0 };
 		let aggregateChars = 0;
 		let aggregateBytes = 0;
+		// Tool results the aging extension replaced with a short note, and how
+		// many characters that kept out of this request.
+		let agedToolResultCount = 0;
+		let agedToolResultCharsSaved = 0;
 		for (const message of messages) {
+			// The saving is the number the aging step itself computed, not a
+			// second guess at it from here: only that one knows the image data it
+			// took out as well as the text.
+			const agedMarker = readAgedToolResultMarker(message);
+			if (agedMarker) {
+				agedToolResultCount += 1;
+				agedToolResultCharsSaved += agedMarker.charsSaved;
+			}
 			const role = roleOfDiagnosticMessage(message);
 			if (role === "user") counts.user += 1;
 			else if (role === "assistant") counts.assistant += 1;
@@ -4815,6 +4919,8 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 			`custom=${counts.custom}`,
 			`chars=${aggregateChars}`,
 			`bytes=${aggregateBytes}`,
+			`aged=${agedToolResultCount}`,
+			`agedCharsSaved=${agedToolResultCharsSaved}`,
 		].join("\n");
 		turn.components.push(componentFromText({
 			id: `persistent-room:${safeDiagnosticIdPart(turn.turnId)}:message-context`,
@@ -4832,6 +4938,8 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 				aggregateChars,
 				aggregateBytes,
 				aggregateEstimatedTokens,
+				agedToolResultCount,
+				agedToolResultCharsSaved,
 			},
 		}));
 	};
@@ -5347,17 +5455,37 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 		// connection: any such edit now differs from the captured fingerprint
 		// and rebinds before the next turn.
 		let mcpGrantsFingerprintAtBind: string | null = null;
+		// Read once here and used for both halves of the same decision: which
+		// search tool this session registers, and what the prompt path compares
+		// against to notice the setting changed under it. Two reads could
+		// disagree across a save landing between them, and the two halves
+		// disagreeing is exactly the state that sends both tools to a provider
+		// that will only accept one.
+		const nativeSearchDecisionAtBind = resolveNativeProviderSearchDecision(webChatModel.provider);
+		const registerClientWebSearchAtBind = shouldRegisterClientWebSearch(nativeSearchDecisionAtBind);
+		const nativeProviderSearchAtBind = nativeSearchDecisionAtBind.active;
 		const extensionFactories = [
 			contentPolicyExt as any,
 			permissionsExtForSession as any,
-			kbExt as any,
 			artifactsExt as any,
 			// Per-room MCP: the session's connector surface goes through the shared
 			// room-scope wrapper, keyed to this room.
 			createRoomScopedMcpExtension(persistentAgentId, { onBoundGrants: (fingerprint) => { mcpGrantsFingerprintAtBind = fingerprint; } }) as any,
-			webSearchExt as any,
+			// The room's own web search and the provider's own are the same name
+			// on the wire, so exactly one of them is offered per session. When the
+			// model searches for itself the local tool stands down; fetch_url is
+			// untouched either way, since opening a page you were handed is a
+			// different job from finding one.
+			...(registerClientWebSearchAtBind ? [webSearchExt as any] : []),
+			// Carries the decision this session bound with, so every round trip of
+			// every turn asks for the same thing the tool registry was built for.
+			createNativeProviderSearchExtension(nativeSearchDecisionAtBind) as any,
 			fetchUrlExt as any,
 			liveRoomStateExtForSession as any,
+			// Ages the room's own bulky tool results out of the replayed context.
+			// Ordered ahead of the diagnostics extension so what diagnostics
+			// measures is the message list the provider will actually receive.
+			toolResultAgingExt as any,
 			...(promptDiagnosticsEnabledForConnection && persistentRoomModel ? [persistentRoomPromptDiagnosticsExt(persistentRoomModel) as any] : []),
 		];
 		const sessionRuntimeCwd = persistentRoomRuntimeCwd;
@@ -5399,6 +5527,8 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 		// Prefer the fingerprint of the read the manifest description used; the
 		// fresh-read fallback only covers configs where no proxy tool registered.
 		boundMcpGrantsFingerprint = mcpGrantsFingerprintAtBind ?? persistentRoomMcpGrantsFingerprint(persistentAgentId);
+		boundNativeProviderSearch = nativeProviderSearchAtBind;
+		boundSessionProviderId = webChatModel.provider;
 		await session.bindExtensions({ uiContext });
 		// The room's sticky effort outlives the connection AND the session: a
 		// rebind (workspace/MCP settings, adopted turn) rebuilds the session at
@@ -5450,7 +5580,7 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 					const modelLabel = currentModel ? webChatModelLabel(currentModel.provider, currentModel) : undefined;
 					const turnProvider: string | undefined = currentModel?.provider ?? msg.provider ?? undefined;
 					recordUsage({ ts: Date.now(), agent: activeOwner, persona, model: msg.model, modelLabel, provider: turnProvider, authType: resolveUsageAuthType(turnProvider, true), kind: "chat", input: u.input ?? 0, output: u.output ?? 0, cacheRead: u.cacheRead ?? 0, cacheWrite: u.cacheWrite ?? 0, cost: u.cost?.total ?? 0, tools: toolsUsed.length ? toolsUsed : undefined });
-					sendTurnFrame({ type: "usage_turn", agent: activeOwner, model: msg.model, modelProvider: msg.provider, modelLabel, input: u.input ?? 0, output: u.output ?? 0, cacheRead: u.cacheRead ?? 0, cacheWrite: u.cacheWrite ?? 0, cost: u.cost?.total ?? 0, totalTokens: u.totalTokens ?? 0, contextHealth: contextHealthForSession(session) });
+					sendTurnFrame({ type: "usage_turn", agent: activeOwner, model: msg.model, modelProvider: msg.provider, modelLabel, input: u.input ?? 0, output: u.output ?? 0, cacheRead: u.cacheRead ?? 0, cacheWrite: u.cacheWrite ?? 0, cost: u.cost?.total ?? 0, totalTokens: u.totalTokens ?? 0, contextTokens: u.contextTokens ?? null, contextHealth: contextHealthForSession(session) });
 				}
 			}
 			if (event.type === "message_end" && (event as any).message?.role === "toolResult") {
@@ -5724,7 +5854,7 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 	// terminal frame sent while this socket is closing reports undelivered.
 	bindSpecialistSink(persistentAgentIdForSession, sendChecked);
 
-	socket.on("message", async (raw: Buffer) => {
+	const handleSocketMessage = async (raw: Buffer) => {
 		let msg: any;
 		try { msg = JSON.parse(raw.toString()); } catch { return; }
 		streamTrace.frameIn(msg);
@@ -5778,9 +5908,20 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 					// manifest description is bind-time, so a grant change rebuilds
 					// the session before the next turn.
 					const liveMcpGrantsFingerprint = persistentRoomMcpGrantsFingerprint(persistentAgentIdForSession);
+					// Native provider search rides along for the same reason: the
+					// choice of which web_search this room offers is made at bind,
+					// so switching it in settings has to rebuild the session before
+					// the next message rather than at the next reconnect.
+					// A decision the resolver could not actually make is not a change:
+					// rebuilding the session on a momentary failure to read a
+					// credential store would cost the room its warm cache for a
+					// reason that has nothing to do with the setting. Keep what the
+					// session bound with until something readable says otherwise.
+					const liveNativeSearchDecision = resolveNativeProviderSearchDecision(boundSessionProviderId ?? undefined);
+					const liveNativeProviderSearch = liveNativeSearchDecision.indeterminate ? boundNativeProviderSearch : liveNativeSearchDecision.active;
 					// `!session` here means an earlier rebind failed after disposing
 					// the old session; retry rather than bricking the connection.
-					if (!session || liveWorkspacePolicy.fingerprint.value !== boundWorkspaceFingerprint || liveMcpGrantsFingerprint !== boundMcpGrantsFingerprint) {
+					if (!session || liveWorkspacePolicy.fingerprint.value !== boundWorkspaceFingerprint || liveMcpGrantsFingerprint !== boundMcpGrantsFingerprint || liveNativeProviderSearch !== boundNativeProviderSearch) {
 						if (!workspaceRebindInFlight) {
 							const rebind = (async () => {
 								if (!sessionDisposed) {
@@ -6162,7 +6303,26 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 				}
 			})();
 		}
-	});
+	};
+
+	// The listener is live from here, so the hold ends: the queued frames go
+	// through the same handler, in the order they arrived and before anything
+	// that lands from now on, which makes an early first message merely early
+	// rather than lost. A client that overran the bound is told so, because a
+	// connection that silently ate some of its frames is worse than one that
+	// says it could not keep them.
+	socket.off("message", holdFrameUntilListener);
+	socket.on("message", handleSocketMessage);
+	if (framesBeforeListenerOverflowed) {
+		send({ type: "error", message: "too many messages arrived before the room finished opening; reload the room and send that again" });
+	}
+	if (framesBeforeListener.length > 0) {
+		const held = framesBeforeListener.splice(0, framesBeforeListener.length);
+		void held.reduce(
+			(chain, raw) => chain.then(() => handleSocketMessage(raw)).catch((e) => { app.log.warn({ err: e }, "failed to replay a frame received before the room finished opening"); }),
+			Promise.resolve(),
+		);
+	}
 
 	socket.on("close", () => {
 		app.log.info("ws client disconnected");

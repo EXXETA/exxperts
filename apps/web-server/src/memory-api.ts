@@ -92,7 +92,7 @@ export interface RoomMemorySummary {
 	series: MemoryGrowthPoint[];
 	/** number of Recent Context session entries (awaiting absorb) */
 	sessions: number;
-	/** hard cap on recent sessions before a Learn is required */
+	/** hard cap on recent sessions before a Memorize is required */
 	sessionsCap: number;
 	/** recent (pending, not-yet-consolidated) session titles, newest first */
 	topics: string[];
@@ -466,7 +466,7 @@ function buildFullMemoryMap(l1b: string): StructuralReviewMemoryMapRow[] {
 		const rc = structuralReviewMetrics(parts.preservedRecentContext);
 		if (rc.estimatedTokens > 0) {
 			const n = recentContextSessions(parts.preservedRecentContext).length;
-			rows.push({ area: `Recent sessions · ${n} · not yet learned`, words: rc.words, estimatedTokens: rc.estimatedTokens });
+			rows.push({ area: `Recent sessions · ${n} · not yet memorized`, words: rc.words, estimatedTokens: rc.estimatedTokens });
 		}
 		const chronos = structuralReviewMetrics(parts.preservedChronos);
 		if (chronos.estimatedTokens > 0) {
@@ -548,7 +548,7 @@ function absorbPoint(record: AbsorbEventRecord): MemoryGrowthPoint {
 		ts: Date.parse(record.approvedAt) || 0,
 		tokens: record.result.estimatedTokens,
 		added: 0,
-		title: "Learn",
+		title: "Memorize",
 		kind: "absorb",
 		consolidated: layers.deep,
 		recent: layers.recent,
@@ -593,7 +593,7 @@ function reviewPoint(record: StructuralReviewEventRecord): MemoryGrowthPoint {
 	};
 }
 
-/** Merged growth series: checkpoints + Learn (absorb) + Review (prune), oldest → newest. */
+/** Merged growth series: remembered sessions + Memorize (absorb) + Review (prune), oldest → newest. */
 function growthSeries(id: string, checkpoints: CheckpointEventRecord[]): MemoryGrowthPoint[] {
 	const points = [...checkpoints.map(growthPoint), ...readAbsorbs(id).map(absorbPoint), ...readReviews(id).map(reviewPoint)];
 	// A record with a malformed approvedAt parses to ts 0 — as a chart point it
@@ -1181,7 +1181,7 @@ function diffSectionsOf(raw: string): Array<{ name: string; text: string }> {
 }
 
 /**
- * What a Learn or Review actually changed: the event's own archived snapshot
+ * What a Memorize or Review actually changed: the event's own archived snapshot
  * against the next recorded state. Read-only; null when the event or its
  * archive is gone (the UI only offers the diff for `diffable` events).
  */

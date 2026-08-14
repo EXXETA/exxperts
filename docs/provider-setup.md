@@ -27,7 +27,7 @@ These are the current product-approved profiles for persistent-room/product work
 | `openai-compatible` | The name you gave your first gateway | `openai-compatible` | In-app **Add gateway**, or terminal setup + CLI `/login` API-key entry; bring-your-own gateway for advanced users/orgs. |
 | `gateway-<name>` | The name you gave that gateway | `gateway-<name>` | In-app **Add gateway**. Every gateway after the first gets ids of its own so the first one's ids never move. |
 
-Any other provider the runtime knows (Google Gemini, Groq, Mistral, DeepSeek, OpenRouter, xAI, and about 25 more) can be added from the web app: open **AI setup** and use **Add another provider**, then sign in with a subscription where the provider offers one, or paste an API key. After signing in, approve the models that provider may use in rooms plus the one that runs Learn and Review Memory. Approval creates the provider's AI profile; without it, the provider is signed in but not usable in rooms.
+Any other provider the runtime knows (Google Gemini, Groq, Mistral, DeepSeek, OpenRouter, xAI, and about 25 more) can be added from the web app: open **AI setup** and use **Add another provider**, then sign in with a subscription where the provider offers one, or paste an API key. After signing in, approve the models that provider may use in rooms plus the one that runs Memorize and Review. Approval creates the provider's AI profile; without it, the provider is signed in but not usable in rooms.
 
 ## ChatGPT Plus/Pro / Codex setup
 
@@ -68,7 +68,7 @@ Profile switching is readiness-gated. If the profile is not ready, the web app k
 
 The active profile governs current persistent-room/product LLM workflows. Switching the active profile does not rewrite old threads or model locks.
 
-Message-bearing room threads are model-locked and resume with their locked model. To change models cleanly, create a checkpoint or Memento boundary. If you leave before sending a new turn after the boundary, Exxperts retires the empty prepared runtime and returns the room to a fresh-entry state where the model picker applies to the next runtime.
+Message-bearing room threads are model-locked and resume with their locked model. To change models cleanly, close the conversation with Remember or Forget. If you leave before sending a new turn after that boundary, Exxperts retires the empty prepared runtime and returns the room to a fresh-entry state where the model picker applies to the next runtime.
 
 ## Claude / Anthropic setup
 
@@ -111,7 +111,7 @@ Profile switching is readiness-gated. If the profile is not ready, the web app k
 
 The active profile governs current persistent-room/product LLM workflows. Switching the active profile does not rewrite old threads or model locks.
 
-Message-bearing room threads are model-locked and resume with their locked model. To change models cleanly, create a checkpoint or Memento boundary. If you leave before sending a new turn after the boundary, Exxperts retires the empty prepared runtime and returns the room to a fresh-entry state where the model picker applies to the next runtime.
+Message-bearing room threads are model-locked and resume with their locked model. To change models cleanly, close the conversation with Remember or Forget. If you leave before sending a new turn after that boundary, Exxperts retires the empty prepared runtime and returns the room to a fresh-entry state where the model picker applies to the next runtime.
 
 ## OpenAI-compatible gateway setup
 
@@ -145,29 +145,30 @@ Rooms call tools on every turn, so a model has to support function calling to be
 
 Open **AI setup**, then **Add another provider**, then **Add gateway**. Give the gateway a name, enter its base URL and API key, and choose **Load models from gateway**. Exxperts calls the gateway's `/models` and shows what it routes, so you approve from a list instead of copying ids by hand. If your gateway does not publish a model list, **enter ids manually** takes exact ids instead.
 
-Each model in the list carries three decisions:
+Each model in the list carries four decisions:
 
 - **Approve**: whether rooms may run on this model.
 - **Supports images**: whether attached images are sent to the model. A model left unticked is registered as text-only, and an attached image is not sent to it. The room says so plainly rather than passing the image along silently.
+- **Supports web search**: whether this model may search the web through the gateway's own search machinery. Ticking it makes Exxperts ask for provider-side search on every request to that model, so the model can look things up itself instead of only through the room's `web_search` tool. Leave it unticked unless the gateway really runs search for that model. A gateway that does not will do one of two things, and only one of them is loud: some reject that model's requests outright, others accept the request, ignore the field and answer without searching. Because the second failure is silent, confirm a newly ticked model with a question about something current before relying on it. The room's own `web_search` tool stays available either way, and the two coexist. Detection ticks this for you where a gateway declares it; otherwise it is yours to set. See [`web-search.md`](web-search.md) for the app's own search, which is a separate setting.
 - **Context window**: the token budget Exxperts assumes for this model. It drives the room's context reading and decides when a conversation is compacted, so a wrong number here is felt as premature compaction or as a chip that never fills.
 
-Below the list, pick the model that runs Learn and Review Memory. Save, and the gateway appears as a profile row.
+Below the list, pick the model that runs Memorize and Review. Save, and the gateway appears as a profile row.
 
 Model ids are exact strings supplied by your gateway and are often case-sensitive. If you are unsure whether the id is `gpt-5.5`, `GPT-5.5`, `gpt5.5`, or another alias, ask the gateway owner/admin or check the gateway's API/model documentation before approving it.
 
 ### What auto-detection fills in, and when it cannot
 
-After loading the model list, Exxperts asks the gateway what it is willing to say about its own models and pre-fills the two fields above from the answer. Nothing announces this; the values are simply there, and every field stays editable. Whatever you save is what counts.
+After loading the model list, Exxperts asks the gateway what it is willing to say about its own models and pre-fills the fields above from the answer. Nothing announces this; the values are simply there, and every field stays editable. Whatever you save is what counts.
 
 Three shapes are understood:
 
-- **LiteLLM `/model/info`**: per-model image support and token limits. The most complete answer, and the one that wins where sources disagree, because it describes the deployment rather than a catalogue entry.
+- **LiteLLM `/model/info`**: per-model image support, web-search support and token limits. The most complete answer, and the one that wins where sources disagree, because it describes the deployment rather than a catalogue entry.
 - **LiteLLM `/models`**: a LiteLLM deployment also states `max_input_tokens` on its ordinary model rows, so context windows fill in from there even when the richer route is unavailable.
-- **OpenRouter `/models`**: modality and `context_length` on the model rows, which fills in both fields.
+- **OpenRouter `/models`**: modality and `context_length` on the model rows, which fills in image support and the context window. Web search is only ever declared on LiteLLM's `/model/info`, so it stays yours to set here.
 
 A gateway that publishes none of this is not a lesser gateway. The form opens on the defaults, a context window of 128000 shown rather than hidden, and you fill in what you know.
 
-**Restricted virtual keys.** A LiteLLM virtual key is often scoped to the `llm_api_routes` group, which does not include the model info route. Such a key gets a `403` naming the allowed routes, and that is a correctly configured company gateway, not a broken one. Detection stays useful: context windows still fill in from `max_input_tokens` on the plain `/models` rows, and the images tick is left to you, since no shape available to that key carries it. If you want full detection, the gateway administrator can allow the model info route on virtual keys.
+**Restricted virtual keys.** A LiteLLM virtual key is often scoped to the `llm_api_routes` group, which does not include the model info route. Such a key gets a `403` naming the allowed routes, and that is a correctly configured company gateway, not a broken one. Detection stays useful: context windows still fill in from `max_input_tokens` on the plain `/models` rows, and the images and web-search ticks are left to you, since no shape available to that key carries them. If you want full detection, the gateway administrator can allow the model info route on virtual keys.
 
 ### Edit, switch, and remove a gateway
 
@@ -181,7 +182,7 @@ Removing a gateway is not reversible from inside the app, and it does not migrat
 
 ### Terminal setup for the first gateway
 
-The terminal wizard remains available and manages the first gateway only. It and the app write the same files, so a gateway set up in the terminal is editable in the app and an edit made in the app is visible to the wizard. The wizard does not ask about image support or context windows; it preserves whatever the app recorded rather than resetting it.
+The terminal wizard remains available and manages the first gateway only. It and the app write the same files, so a gateway set up in the terminal is editable in the app and an edit made in the app is visible to the wizard. The wizard does not ask about image support, web search or context windows; it preserves whatever the app recorded rather than resetting it.
 
 ### 1. Configure non-secret gateway and model policy
 
@@ -274,9 +275,9 @@ The local app policy approves only the model ids you approved:
 | Process | Mapping |
 | --- | --- |
 | Persistent-room conversation | Explicit `roomModels` for that gateway |
-| Checkpoint compression | Inherits the selected persistent-room model |
-| Learn (absorb recent context) | `maintenanceModel` |
-| Structural review | `maintenanceModel` |
+| Remember (checkpoint compression) | Inherits the selected persistent-room model |
+| Memorize (absorb recent context) | `maintenanceModel` |
+| Review (structural review) | `maintenanceModel` |
 
 A maintenance-only model is included in runtime `models.json` so maintenance processes can use it, but it is not automatically selectable for persistent-room conversation unless you also list it as a room model.
 
@@ -306,9 +307,9 @@ Current `chatgpt-codex` mapping:
 | Process | Approved provider/model |
 | --- | --- |
 | Persistent-room conversation | `openai-codex/gpt-5.5` |
-| Checkpoint compression | Inherits the selected persistent-room model |
-| Learn (absorb recent context) | `openai-codex/gpt-5.5` |
-| Structural review | `openai-codex/gpt-5.5` |
+| Remember (checkpoint compression) | Inherits the selected persistent-room model |
+| Memorize (absorb recent context) | `openai-codex/gpt-5.5` |
+| Review (structural review) | `openai-codex/gpt-5.5` |
 
 Model-policy editing is not a user/admin feature today. Any editable policy needs a separate product design for storage, schema, validation, merge behavior, thread-lock safety, and rollback.
 
@@ -321,9 +322,9 @@ Current `anthropic` mapping:
 | Process | Approved provider/model |
 | --- | --- |
 | Persistent-room conversation | `anthropic/claude-opus-4-8`, `anthropic/claude-sonnet-5`, `anthropic/claude-fable-5`, `anthropic/claude-opus-4-6`, `anthropic/claude-opus-4-7`, `anthropic/claude-sonnet-4-6` |
-| Checkpoint compression | Inherits the selected persistent-room model |
-| Learn (absorb recent context) | `anthropic/claude-opus-4-8` |
-| Structural review | `anthropic/claude-opus-4-8` |
+| Remember (checkpoint compression) | Inherits the selected persistent-room model |
+| Memorize (absorb recent context) | `anthropic/claude-opus-4-8` |
+| Review (structural review) | `anthropic/claude-opus-4-8` |
 
 `claude-opus-4-8` is the default/recommended model. `claude-sonnet-5` and `claude-fable-5` are approved as additional persistent-room conversation choices.
 
@@ -384,7 +385,7 @@ Status endpoints and UI should be used for readiness checks, not for copying or 
 | A room compacts far too early, or its context reading never moves | The model's context window is wrong. Correct it per model in **Approve models**; auto-detection fills it in only where the gateway declares it. |
 | Sign-in succeeds but the web still shows not connected | Use **Refresh** on the AI setup page; restart the web app if needed; do not inspect or share raw credential files. |
 | Profile cannot be selected | The readiness gate likely still sees missing auth, missing runtime model config, or missing/invalid local app policy. Refresh status and check the profile diagnostics. |
-| Room cannot resume after switching profile | Message-bearing saved threads are model-locked. Select the compatible profile to resume that thread. To change models cleanly, resume under a compatible profile, create a checkpoint/Memento boundary, then leave before the next turn to return the room to fresh-entry state where the picker applies. |
+| Room cannot resume after switching profile | Message-bearing saved threads are model-locked. Select the compatible profile to resume that thread. To change models cleanly, resume under a compatible profile, close the conversation with Remember or Forget, then leave before the next turn to return the room to fresh-entry state where the picker applies. |
 | Status output appears to contain secrets | Stop and escalate before sharing screenshots/output. |
 
 ## Related docs

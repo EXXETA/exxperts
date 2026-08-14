@@ -41,6 +41,8 @@ export type GatewayModelDetection = {
 	id: string;
 	/** Present only when the gateway actually said so. */
 	vision?: boolean;
+	/** Present only when the gateway actually said so. */
+	webSearch?: boolean;
 	/** Present only when the gateway published a window. */
 	contextWindow?: number;
 };
@@ -129,7 +131,8 @@ export function normalizeGatewayBaseUrl(baseUrl: string): string {
  * OpenRouter's context_length comes first because a gateway that speaks that
  * dialect is describing the model itself; max_input_tokens answers only when
  * it has not already been answered. Vision is never inferred here from the
- * LiteLLM shape, which does not carry it: silence about images stays silence.
+ * LiteLLM shape, which does not carry it: silence about images stays silence,
+ * and so does silence about web search, which only /model/info ever mentions.
  */
 function detectionFromModelsRow(row: Record<string, unknown>): { vision?: boolean; contextWindow?: number } {
 	const detection: { vision?: boolean; contextWindow?: number } = {};
@@ -154,19 +157,20 @@ function detectionFromModelsRow(row: Record<string, unknown>): { vision?: boolea
  * uses. max_input_tokens is the context window; max_tokens is LiteLLM's older
  * name for the same number, used only when the newer key is absent.
  */
-function detectionsFromLiteLlmModelInfo(payload: unknown): Map<string, { vision?: boolean; contextWindow?: number }> {
-	const byModel = new Map<string, { vision?: boolean; contextWindow?: number }>();
+function detectionsFromLiteLlmModelInfo(payload: unknown): Map<string, { vision?: boolean; webSearch?: boolean; contextWindow?: number }> {
+	const byModel = new Map<string, { vision?: boolean; webSearch?: boolean; contextWindow?: number }>();
 	const rows = isObject(payload) && Array.isArray(payload.data) ? payload.data : Array.isArray(payload) ? payload : [];
 	for (const row of rows) {
 		if (!isObject(row)) continue;
 		const modelName = typeof row.model_name === "string" ? row.model_name.trim() : "";
 		if (!modelName) continue;
 		const info = isObject(row.model_info) ? row.model_info : {};
-		const detection: { vision?: boolean; contextWindow?: number } = {};
+		const detection: { vision?: boolean; webSearch?: boolean; contextWindow?: number } = {};
 		if (typeof info.supports_vision === "boolean") detection.vision = info.supports_vision;
+		if (typeof info.supports_web_search === "boolean") detection.webSearch = info.supports_web_search;
 		const contextWindow = positiveInteger(info.max_input_tokens) ?? positiveInteger(info.max_tokens);
 		if (contextWindow) detection.contextWindow = contextWindow;
-		if (detection.vision !== undefined || detection.contextWindow !== undefined) byModel.set(modelName, detection);
+		if (detection.vision !== undefined || detection.webSearch !== undefined || detection.contextWindow !== undefined) byModel.set(modelName, detection);
 	}
 	return byModel;
 }
@@ -212,6 +216,7 @@ export async function discoverGatewayModels(baseUrl: string, key: string): Promi
 			const existing = detections.get(modelName);
 			if (!existing) continue;
 			if (detection.vision !== undefined) existing.vision = detection.vision;
+			if (detection.webSearch !== undefined) existing.webSearch = detection.webSearch;
 			if (detection.contextWindow !== undefined) existing.contextWindow = detection.contextWindow;
 		}
 	}

@@ -126,20 +126,43 @@ async function waitUntilReady() {
 // Write the web-search config into the shared product app state dir
 // (~/.exxperts/app) so the user does not have to hand-edit anything. Both the
 // global `exxperts` command and the repo `./scripts/exxperts-cli` read this same file,
-// and it survives reinstalls. Non-destructive: if a config already exists it is
-// left as-is.
+// and it survives reinstalls.
+//
+// Non-destructive about the BACKEND choice, which is the thing this command is
+// here to set: if somebody already chose one, it is left alone. It is not
+// non-destructive about the file, because the file holds other settings now.
+// The app's settings screen can write a file that says only "provider search
+// off", and treating that as "a backend is already configured" would leave this
+// command refusing to do the one job it was asked to do, on a machine with no
+// backend configured at all.
 function ensureSearchConfig() {
 	const cfgDir = path.join(os.homedir(), ".exxperts", "app");
 	const cfgFile = path.join(cfgDir, "web-search.json");
 	fs.mkdirSync(cfgDir, { recursive: true });
+	let existing = null;
 	if (fs.existsSync(cfgFile)) {
-		console.log(`Web-search config already present at ${cfgFile} — left as-is.`);
+		try {
+			const parsed = JSON.parse(fs.readFileSync(cfgFile, "utf-8"));
+			if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) existing = parsed;
+		} catch {
+			// A file we cannot read is not a choice we can honour, and not one we
+			// are willing to overwrite either.
+			console.log(`Web-search config at ${cfgFile} could not be read — leaving it alone.`);
+			console.log("  Repair or delete it, then run this again.");
+			return;
+		}
+	}
+	if (existing && typeof existing.provider === "string" && existing.provider.trim()) {
+		console.log(`Web-search backend already chosen in ${cfgFile} (provider=${existing.provider}) — left as-is.`);
 		console.log(`  (If search is still off, check it points at ${BASE_URL}.)`);
 	} else {
-		fs.writeFileSync(cfgFile, JSON.stringify({ provider: "searxng", baseUrl: BASE_URL }, null, 2) + "\n");
+		// Everything already in the file survives; only the backend is filled in.
+		const next = { ...(existing ?? {}), provider: "searxng", baseUrl: BASE_URL };
+		fs.writeFileSync(cfgFile, JSON.stringify(next, null, 2) + "\n");
 		console.log(`Configured web search at ${cfgFile} (provider=searxng, baseUrl=${BASE_URL}).`);
 	}
-	console.log("Restart the app (exxperts web, exxperts cli, ./scripts/exxperts-web, or ./scripts/exxperts-cli) to pick it up.");
+	console.log("A running app picks this up on its next search; no restart needed.");
+	console.log("You can also see and change it in the app under AI setup, Web search.");
 	console.log("");
 	const engine = isWindows ? "Docker Desktop" : "OrbStack/Docker";
 	console.log(`Tip: enable "Start at login" in ${engine} so search keeps working`);

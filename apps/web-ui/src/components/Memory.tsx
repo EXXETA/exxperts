@@ -108,7 +108,7 @@ interface Snapshot {
 	composition: { deep: number; active: number; recent: number; chronos: number };
 }
 
-// Before/after snapshot texts for one Learn/Review, from the archive chain,
+// Before/after snapshot texts for one Memorize/Review, from the archive chain,
 // split into memory sections BEFORE diffing so nothing gets mislabeled.
 interface EventSectionDiff {
 	section: string;
@@ -374,7 +374,7 @@ function GrowthChart({ series, height = 56 }: { series: GrowthPoint[]; height?: 
 
 // Expanded view: total memory over the event history (oldest → newest), a filled
 // area split into deep memory and recent sessions. Every event is a point — a dot
-// for a checkpoint, a filled circle for a Learn, a hollow circle for a Review.
+// for a remembered session, a filled circle for a Memorize, a hollow circle for a Review.
 // Hover any point for its stored details (when, compression, before → after).
 function BreakdownChart({ series, height = 300, markerTs = null, onPickTs }: { series: GrowthPoint[]; height?: number; markerTs?: number | null; onPickTs?: (ts: number | null) => void }) {
 	const wrapRef = useRef<HTMLDivElement>(null);
@@ -449,14 +449,14 @@ function BreakdownChart({ series, height = 300, markerTs = null, onPickTs }: { s
 			if (ratio && ratio > 1) lines.push(`Compressed about ${ratio}:1`);
 			if (prev) lines.push(`Deep memory ${kTok(prev.consolidated)} → ${kTok(s.consolidated)} tok`);
 			lines.push(`Recent sessions ${prev ? `${kTok(prev.recent)} → ` : ""}${kTok(s.recent)} tok`);
-			return { title: "Learn", when, lines };
+			return { title: "Memorize", when, lines };
 		}
 		if (s.kind === "review") {
 			const trimmed = Math.abs(s.added || (prev ? tot(prev) - tot(s) : 0));
 			const lines = [`Trimmed ~${kTok(trimmed)} tok from deep memory`];
 			if (prev) lines.push(`Deep memory ${kTok(prev.consolidated)} → ${kTok(s.consolidated)} tok`);
 			lines.push(`Recent sessions ${kTok(s.recent)} tok`);
-			return { title: "Review Memory", when, lines };
+			return { title: "Review", when, lines };
 		}
 		const addedRecent = prev ? Math.max(0, s.recent - prev.recent) : s.recent;
 		const lines: string[] = [];
@@ -523,20 +523,20 @@ function BreakdownChart({ series, height = 300, markerTs = null, onPickTs }: { s
 				    paper fills vanished on a light background). */}
 				<path d={band(() => 0, (s) => s.consolidated)} fill="var(--fg)" opacity={0.18} />
 				<path d={band((s) => s.consolidated, (s) => s.consolidated + s.recent)} fill="var(--exx-plan)" opacity={0.8} />
-				{/* The deep-memory boundary is a real (thin) line so the Learn/Review
+				{/* The deep-memory boundary is a real (thin) line so the Memorize/Review
 				    markers visibly sit ON it, mirroring the session dots on the total. */}
 				<polyline points={linePts((s) => s.consolidated).join(" ")} fill="none" stroke="var(--fg-soft)" strokeWidth={1} opacity={0.7} vectorEffect="non-scaling-stroke" />
 				<polyline points={linePts(tot).join(" ")} fill="none" stroke="var(--fg-soft)" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
-				{/* Sessions dot the total line; Learn/Review get a labelled full-height
+				{/* Sessions dot the total line; Memorize/Review get a labelled full-height
 				    tick with their marker on the DEEP-MEMORY boundary — the layer those
 				    two events actually change. */}
 				{series.map((s, i) => {
 					if (s.kind === "checkpoint") return null;
 					const x = X(i).toFixed(1);
 					const on = hover?.i === i;
-					// Learn/Review change BOTH layers, so they mark both lines: the
+					// Memorize/Review change BOTH layers, so they mark both lines: the
 					// deep boundary (where knowledge lands) and the total (compression).
-					// Shape carries the protocol: filled diamond = Learn, hollow = Review.
+					// Shape carries the protocol: filled diamond = Memorize, hollow = Review.
 					const xNum = X(i);
 					const mark = (cyNum: number) => {
 						const r = on ? 6.5 : 5.5;
@@ -551,7 +551,7 @@ function BreakdownChart({ series, height = 300, markerTs = null, onPickTs }: { s
 							<line x1={x} y1={Y(tot(s)).toFixed(1)} x2={x} y2={padT + iH} stroke="var(--fg-soft)" strokeWidth={1} strokeDasharray="3 3" opacity={0.55} />
 							{mark(Y(s.consolidated))}
 							{Y(tot(s)) - Y(s.consolidated) < -8 && mark(Y(tot(s)))}
-							<text x={x} y={H - 20} textAnchor={anchor} fontSize={9} fill="var(--muted)" fontFamily="var(--exx-font-mono)">{s.kind === "absorb" ? "Learn" : "Review"}</text>
+							<text x={x} y={H - 20} textAnchor={anchor} fontSize={9} fill="var(--muted)" fontFamily="var(--exx-font-mono)">{s.kind === "absorb" ? "Memorize" : "Review"}</text>
 						</g>
 					);
 				})}
@@ -560,7 +560,7 @@ function BreakdownChart({ series, height = 300, markerTs = null, onPickTs }: { s
 					const on = hover?.i === i;
 					return (
 						<g key={`hit-${i}`} onMouseEnter={(e) => onEnter(i, e)} onMouseMove={(e) => onEnter(i, e)} onMouseLeave={() => setHover((h) => (h?.i === i ? null : h))} style={{ cursor: "pointer" }}>
-							{/* Hit areas on BOTH lines for Learn/Review — they draw a marker on each. */}
+							{/* Hit areas on BOTH lines for Memorize/Review, which draw a marker on each. */}
 							<circle cx={x} cy={Y(tot(s)).toFixed(1)} r={12} fill="transparent" />
 							{s.kind !== "checkpoint" && <circle cx={x} cy={Y(s.consolidated).toFixed(1)} r={12} fill="transparent" />}
 							{s.kind === "checkpoint" && <circle cx={x} cy={Y(tot(s)).toFixed(1)} r={on ? 4.5 : 3} fill="var(--fg)" />}
@@ -710,7 +710,7 @@ export function Memory({ onMaintain, maintainBlocked }: { onMaintain?: (target: 
 			.catch(() => setPanel((p) => (p?.kind === "transcript" && p.cp === cp ? { kind: "transcript", cp, title: s.title, state: "error" } : p)));
 	};
 
-	// Toggle "What changed" on a Learn/Review history row.
+	// Toggle "What changed" on a Memorize/Review history row.
 	const toggleDiff = (e: MemoryHistoryEvent) => {
 		if (!detail || !e.id || (e.kind !== "learn" && e.kind !== "review")) return;
 		const key = e.id;
@@ -822,7 +822,7 @@ export function Memory({ onMaintain, maintainBlocked }: { onMaintain?: (target: 
 	}, []);
 
 	// Budget share + weekly deep delta per room. Memory changes only through
-	// Learn/Review/checkpoint events, so a slow poll is plenty.
+	// Memorize/Review/remember events, so a slow poll is plenty.
 	useEffect(() => {
 		let cancelled = false;
 		const load = () =>
@@ -1047,7 +1047,7 @@ export function Memory({ onMaintain, maintainBlocked }: { onMaintain?: (target: 
 							<div className="mem-glance-nums">
 								<div className="mem-g" title="Measured from the memory documents on disk, converted to tokens. Token counts are always approximate. Each model's tokenizer splits text differently."><div className="v">{fmtTok(t.l1bTokens)} tok</div><div className="k">memory (est.)</div></div>
 								<div className="mem-g"><div className="v">{t.checkpoints.toLocaleString()}</div><div className="k">sessions</div></div>
-								<div className="mem-g"><div className="v">{toAbsorb}</div><div className="k">to learn</div></div>
+								<div className="mem-g"><div className="v">{toAbsorb}</div><div className="k">to memorize</div></div>
 								<div className="mem-g"><div className="v">{t.rooms}</div><div className="k">exxperts</div></div>
 							</div>
 							{(() => {
@@ -1077,15 +1077,15 @@ export function Memory({ onMaintain, maintainBlocked }: { onMaintain?: (target: 
 						<section className="dash-section">
 							<div className="mem-absorb-callout">
 								<div className="mem-absorb-body">
-									<div className="mem-digest-title">Ready to learn</div>
-									<div className="sub">These exxperts have recent sessions waiting to be learned into deep memory. Learn runs the model and shows you the proposed update before anything is written. Rooms with automatic memory maintenance apply clean updates on their own.</div>
+									<div className="mem-digest-title">Ready to memorize</div>
+									<div className="sub">These exxperts have remembered sessions waiting to become deep memory. Memorize runs the model and shows you the proposed update before anything is written. Rooms with automatic memory maintenance apply clean updates on their own.</div>
 								</div>
 								<div className="mem-absorb-rooms">
 									{data.rooms.filter((r) => r.needsAbsorb).map((r) => {
 										const blocked = maintainBlocked?.(r.id) ?? null;
 										return (
 											<button key={r.id} type="button" className="mem-review-btn" disabled={!!blocked} title={blocked ?? undefined} onClick={() => onMaintain({ agentId: r.id, displayName: r.displayName })}>
-												{r.displayName}: learn →
+												{r.displayName}: memorize →
 											</button>
 										);
 									})}
@@ -1102,13 +1102,13 @@ export function Memory({ onMaintain, maintainBlocked }: { onMaintain?: (target: 
 								const isSel = selected === r.id;
 								return (
 									<button key={r.id} type="button" className={`mem-card${isSel ? " sel" : ""}`} aria-expanded={isSel} onClick={() => setSelected(isSel ? null : r.id)}>
-										<div className="mem-card-head"><div className="mem-card-name">{r.displayName}</div>{r.needsAbsorb && <span className="mem-pill">to learn</span>}</div>
+										<div className="mem-card-head"><div className="mem-card-name">{r.displayName}</div>{r.needsAbsorb && <span className="mem-pill">to memorize</span>}</div>
 										<div className="mem-card-stats">
 											<div className="st" title={`Everything this exxpert carries: deep memory ${fmtInt(r.composition.deep)} tok, recent sessions ${fmtInt(r.composition.recent)} tok, active items and timeline ${fmtInt(r.composition.active + r.composition.chronos)} tok.`}>
 												<div className="v">{fmtTok(r.l1bTokens)} tok</div><div className="k">Total memory</div>
 											</div>
 											<div className="st"><div className="v">{r.checkpoints}</div><div className="k">Sessions</div></div>
-											<div className="st"><div className="v">{r.sessions}<span className="mem-st-cap">/{r.sessionsCap}</span></div><div className="k">To learn</div></div>
+											<div className="st"><div className="v">{r.sessions}<span className="mem-st-cap">/{r.sessionsCap}</span></div><div className="k">To memorize</div></div>
 										</div>
 																					<div className="mem-card-spark">
 												{r.series.length >= 2 ? <GrowthChart series={r.series} height={38} /> : <span className="mem-card-empty">{r.checkpoints > 0 ? "First memory saved. The curve appears with the next one" : "No memories yet. Have a session with this exxpert"}</span>}
@@ -1122,8 +1122,8 @@ export function Memory({ onMaintain, maintainBlocked }: { onMaintain?: (target: 
 												const total = deep + pend;
 												if (total <= 0 || r.checkpoints === 0) return null;
 												return (
-													<div className="mem-card-comp" title={`Deep memory ${fmtInt(deep)} tok · to learn ${fmtInt(pend)} tok`}>
-														<div className="mem-comp-bar mem-comp-bar-mini" role="img" aria-label="Deep memory vs to-learn split">
+													<div className="mem-card-comp" title={`Deep memory ${fmtInt(deep)} tok · to memorize ${fmtInt(pend)} tok`}>
+														<div className="mem-comp-bar mem-comp-bar-mini" role="img" aria-label="Deep memory vs to-memorize split">
 															<div className="mem-comp-seg durable" style={{ width: `${(deep / total) * 100}%` }} />
 															<div className="mem-comp-seg recent" style={{ width: `${(pend / total) * 100}%` }} />
 														</div>
@@ -1147,12 +1147,12 @@ export function Memory({ onMaintain, maintainBlocked }: { onMaintain?: (target: 
 									<div className="mem-detail-name">
 										<h1>{detail.displayName}</h1>
 										{/* Exactly the Rooms page's chips: standby while a parked
-										    conversation waits, ready to learn when Learn is due,
+										    conversation waits, ready to memorize when Memorize is due,
 										    and no chip at all for a settled room. */}
 										{detail.standbyThread
 											? <span className="mem-pill" title="This exxpert has a conversation parked to resume.">standby</span>
 											: detail.needsAbsorb
-												? <span className="mem-pill" title="Recent sessions are waiting to be learned into deep memory.">ready to learn</span>
+												? <span className="mem-pill" title="Recent sessions are waiting to become deep memory.">ready to memorize</span>
 												: null}
 									</div>
 									{detail.description && <div className="sub">{detail.description}</div>}
@@ -1166,8 +1166,8 @@ export function Memory({ onMaintain, maintainBlocked }: { onMaintain?: (target: 
 											: null;
 										return (
 											<div className="sub mem-detail-strip">
-												{since && <>Remembering since {since} · </>}
-												{detail.checkpoints} session{detail.checkpoints === 1 ? "" : "s"} · {learns} learn{learns === 1 ? "" : "s"} · {reviews} review{reviews === 1 ? "" : "s"}
+												{since && <>In memory since {since} · </>}
+												{detail.checkpoints} session{detail.checkpoints === 1 ? "" : "s"} · {learns} memorized · {reviews} reviewed
 											</div>
 										);
 									})()}
@@ -1204,7 +1204,7 @@ export function Memory({ onMaintain, maintainBlocked }: { onMaintain?: (target: 
 									// and charts use; the budget (room settings) and the weekly deep
 									// delta (recorded events only, never extrapolated) come from
 									// /api/memory/room-memory. Distillation is measured across the
-									// Learn events themselves: each Learn's stored snapshots say how
+									// Memorize events themselves: each run's stored snapshots say how
 									// many recent-session tokens were folded and how much new deep
 									// memory came out. No estimates beyond the token unit itself.
 									const learnFolds = detail.series.reduce(
@@ -1243,11 +1243,11 @@ export function Memory({ onMaintain, maintainBlocked }: { onMaintain?: (target: 
 													<div className="v">~{fmtTok(totalTok)} tok</div>
 													<div className="k">{past ? "total memory then" : "total memory, in every turn"}</div>
 												</div>
-												<div className="mem-g" title="The Deep Memory section: distilled knowledge this exxpert has learned.">
+												<div className="mem-g" title="The Deep Memory section: distilled knowledge this exxpert has memorized.">
 													<div className="v">{fmtTok(comp.deep)} tok</div>
 													<div className="k">deep memory{then}</div>
 												</div>
-												<div className="mem-g" title="Session memories this exxpert hasn't learned into deep memory yet. Listed in full under Recent sessions below.">
+												<div className="mem-g" title="Session memories this exxpert hasn't memorized into deep memory yet. Listed in full under Recent sessions below.">
 													<div className="v">{fmtTok(comp.recent)} tok</div>
 													<div className="k">{sessCount} recent session{sessCount === 1 ? "" : "s"}{then}</div>
 												</div>
@@ -1258,9 +1258,9 @@ export function Memory({ onMaintain, maintainBlocked }: { onMaintain?: (target: 
 													</div>
 												)}
 												{ratio && (
-													<div className={`mem-g${past ? " mem-g-today" : ""}`} title={`Measured across ${learnCount} Learn${learnCount === 1 ? "" : "s"}: ${fmtTok(learnFolds.folded)} tok of recent sessions became ${fmtTok(learnFolds.gained)} tok of new deep memory.`}>
+													<div className={`mem-g${past ? " mem-g-today" : ""}`} title={`Measured across ${learnCount} Memorize run${learnCount === 1 ? "" : "s"}: ${fmtTok(learnFolds.folded)} tok of recent sessions became ${fmtTok(learnFolds.gained)} tok of new deep memory.`}>
 														<div className="v">{ratio}:1</div>
-														<div className="k">distilled across {learnCount} learn{learnCount === 1 ? "" : "s"}</div>
+														<div className="k">distilled across {learnCount} memorize run{learnCount === 1 ? "" : "s"}</div>
 													</div>
 												)}
 												{w && (
@@ -1288,7 +1288,7 @@ export function Memory({ onMaintain, maintainBlocked }: { onMaintain?: (target: 
 									);
 								})()}
 								<div className="chart-block mem-detail-graph">
-									<div className="chart-head"><h2>Learning curve</h2></div>
+									<div className="chart-head"><h2>Memory growth</h2></div>
 									<div className="sub" style={{ marginBottom: 8 }}>How this exxpert's memory has grown, event by event. Hover any point for details.{detail.series.length >= 2 ? " Click anywhere on the curve to view the memory as it was then." : ""}</div>
 									{detail.series.length >= 2 ? (
 										<>
@@ -1296,8 +1296,8 @@ export function Memory({ onMaintain, maintainBlocked }: { onMaintain?: (target: 
 											<div className="mem-comp-legend" style={{ marginTop: 8 }}>
 												<span><span className="sw" style={{ background: "var(--fg)", opacity: 0.35 }} />Deep memory</span>
 												<span><span className="sw" style={{ background: "var(--exx-plan)" }} />Recent sessions</span>
-												<span><span className="mem-dot cp" />Checkpoint</span>
-												<span><span className="mem-dot learn" />Learn</span>
+												<span><span className="mem-dot cp" />Remember</span>
+												<span><span className="mem-dot learn" />Memorize</span>
 												<span><span className="mem-dot review" />Review</span>
 											</div>
 										</>
@@ -1307,7 +1307,7 @@ export function Memory({ onMaintain, maintainBlocked }: { onMaintain?: (target: 
 										if (!lastLearn && !detail.lastReviewAt) return null;
 										return (
 											<div className="sub" style={{ marginTop: 8 }}>
-												{lastLearn && <>Last learned {fmtAgo(lastLearn.ts)}.</>}
+												{lastLearn && <>Last memorized {fmtAgo(lastLearn.ts)}.</>}
 												{detail.lastReviewAt && <>{lastLearn ? " " : ""}Last memory review {fmtAgo(detail.lastReviewAt)}{detail.lastReviewTokenDelta < 0 ? `, trimmed ${-detail.lastReviewTokenDelta} tok from deep memory` : detail.lastReviewTokenDelta > 0 ? `, +${detail.lastReviewTokenDelta} tok` : ""}.</>}
 											</div>
 										);
@@ -1443,9 +1443,9 @@ export function Memory({ onMaintain, maintainBlocked }: { onMaintain?: (target: 
 														<button type="button" className="mem-close" onClick={() => setPanelFull(!panelFull)}>{panelFull ? "Exit full screen" : "Full screen ⤢"}</button>
 													</div>
 												</div>
-												<div className="sub" style={{ marginBottom: 6 }}>{past ? "What was waiting to be learned that day. Newest first." : "Memories from recent sessions your exxpert hasn't learned from yet. Newest first."}</div>
+												<div className="sub" style={{ marginBottom: 6 }}>{past ? "What was waiting to be memorized that day. Newest first." : "Memories from recent sessions your exxpert hasn't memorized yet. Newest first."}</div>
 												{(past ? past.recentSessions : detail.recentSessions).length === 0 && (
-													<div className="sub">{past ? "No sessions were waiting to be learned that day." : detail.checkpoints > 0 ? "All caught up. Your exxpert has learned every recent session into deep memory." : "No memories yet. This exxpert hasn't had a session."}</div>
+													<div className="sub">{past ? "No sessions were waiting to be memorized that day." : detail.checkpoints > 0 ? "All caught up. Your exxpert has memorized every recent session into deep memory." : "No memories yet. This exxpert hasn't had a session."}</div>
 												)}
 												<div className="mem-learned">
 													{(past ? past.recentSessions : detail.recentSessions).map((s, i) => (
@@ -1478,7 +1478,7 @@ export function Memory({ onMaintain, maintainBlocked }: { onMaintain?: (target: 
 																	)}
 																	{s.approvedAt && (
 																		<div className="mem-prov">
-																			saved to memory {fmtWhen(s.approvedAt)} through the checkpoint gate
+																			saved to memory {fmtWhen(s.approvedAt)} through Remember
 																			{s.conversation && s.checkpointId && (
 																				<>
 																					{" · "}
@@ -1519,7 +1519,7 @@ export function Memory({ onMaintain, maintainBlocked }: { onMaintain?: (target: 
 											)}
 											<div className="mem-hist-row" title={fmtWhen(new Date(e.ts).toISOString())}>
 												<span className="mem-hist-date">{fmtDayShort(e.ts)}</span>
-												<span className="mem-hist-kind">{e.kind === "checkpoint" ? "Checkpoint" : e.kind === "learn" ? "Learn" : "Review"}</span>
+												<span className="mem-hist-kind">{e.kind === "checkpoint" ? "Remember" : e.kind === "learn" ? "Memorize" : "Review"}</span>
 												<span className="mem-hist-what">{historyText(e)}</span>
 												{e.diffable && e.id && (e.kind === "learn" || e.kind === "review") && (
 													<button type="button" className="mem-prov-toggle mem-hist-details" aria-expanded={diffOpen === e.id} onClick={() => toggleDiff(e)}>
@@ -1538,7 +1538,7 @@ export function Memory({ onMaintain, maintainBlocked }: { onMaintain?: (target: 
 													<div className="mem-diff">
 														<div className="mem-diff-meta">
 															<span className="sub">
-																What this {e.kind === "learn" ? "Learn" : "Review"} changed, grouped by memory section from its stored before/after snapshots. Removed lines are struck, added lines marked +.
+																What this {e.kind === "learn" ? "Memorize" : "Review"} changed, grouped by memory section from its stored before/after snapshots. Removed lines are struck, added lines marked +.
 																{st.data.afterVerified === false ? " The after side is the next recorded state, which may include changes beyond this event." : ""}
 															</span>
 															<button type="button" className="mem-close" onClick={() => setDiffFull(!diffFull)}>{diffFull ? "Exit full screen" : "Full screen \u2922"}</button>

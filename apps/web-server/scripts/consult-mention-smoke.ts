@@ -136,8 +136,8 @@ try {
 	assert(resolveLeadingMention(selection.text, rooms, CURRENT) === null, "a completed mention with no question does not route");
 
 	// ---- freshness hint ---------------------------------------------------
-	assert(memoryFreshnessHint(iso(2 * DAY), NOW) === "last checkpoint 2 days ago", "freshness hint formats days");
-	assert(memoryFreshnessHint(iso(21 * DAY), NOW) === "last checkpoint 3 weeks ago", "freshness hint formats weeks");
+	assert(memoryFreshnessHint(iso(2 * DAY), NOW) === "remembered 2 days ago", "freshness hint formats days");
+	assert(memoryFreshnessHint(iso(21 * DAY), NOW) === "remembered 3 weeks ago", "freshness hint formats weeks");
 	assert(memoryFreshnessHint(null, NOW) === null, "unknown checkpoint → no hint");
 
 	console.log("consult mention popover smoke passed");

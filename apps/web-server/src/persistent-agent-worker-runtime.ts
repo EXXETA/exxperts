@@ -98,7 +98,7 @@ export async function runIsolatedPersistentAgentWorker<TModelLock extends { prov
 	// Ask for the model's full declared output ceiling on every request.
 	// Without an explicit cap, providers fall back to defaults far below it
 	// (Anthropic requests a third of maxTokens; gateways apply their own
-	// server default), which is what silently truncated large Learn/Review
+	// server default), which is what silently truncated large Memorize/Review
 	// rewrites in the field.
 	const workerMaxTokens = typeof model.maxTokens === "number" && model.maxTokens > 0 ? model.maxTokens : undefined;
 	const created = await createAgentSession({

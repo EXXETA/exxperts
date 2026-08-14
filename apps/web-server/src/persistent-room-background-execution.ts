@@ -38,11 +38,12 @@ import {
 
 import contentPolicyExt from "../../../pi-package/extensions/content-policy/index.js";
 import permissionsExt from "../../../pi-package/extensions/permissions/index.js";
-import kbExt from "../../../pi-package/extensions/kb/index.js";
 import artifactsExt from "../../../pi-package/extensions/artifacts/index.js";
 import { createRoomScopedMcpExtension } from "../../../pi-package/extensions/mcp/index.js";
 import webSearchExt from "../../../pi-package/extensions/web-search/index.js";
+import { createNativeProviderSearchExtension, resolveNativeProviderSearchDecision, shouldRegisterClientWebSearch } from "../../../pi-package/extensions/web-search/native-provider-search.js";
 import fetchUrlExt from "../../../pi-package/extensions/fetch_url/index.js";
+import toolResultAgingExt from "../../../pi-package/extensions/tool-result-aging/index.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = process.env.EXXETA_HOME ? path.resolve(process.env.EXXETA_HOME) : path.resolve(__dirname, "..", "..", "..");
@@ -233,7 +234,12 @@ function appendFailureItem(items: unknown[], executionId: string, message: strin
 }
 
 function promptWithRestoredLegacyContext(prompt: string, thread: PersistentAgentThreadRecord): string {
-	const restored = buildPersistentRoomRestoredLiveThreadContext(thread.items ?? []);
+	// Never trusts a streaming mark, and not by accident of call ordering. A
+	// background run restores a thread written before it started, and the only
+	// turn it will ever hold is its own, which has not written any of these
+	// items. So every mark in here belongs to a session that stopped writing,
+	// whether it finished cleanly or the browser was closed on top of it.
+	const restored = buildPersistentRoomRestoredLiveThreadContext(thread.items ?? [], false);
 	if (!restored) return prompt;
 	return [restored.block, "", prompt].join("\n");
 }
@@ -401,16 +407,28 @@ async function createPersistentRoomBackgroundSession(input: {
 	const customTools = workspaceToolsEnabled && effectiveWorkspacePolicy.policy
 		? createPersistentRoomWorkspaceTools(effectiveWorkspacePolicy.policy)
 		: [];
+	// One read for the whole run, which is also the whole binding: a background
+	// run is a single turn and finishes under the rule it started with.
+	const nativeSearchDecision = resolveNativeProviderSearchDecision(input.model.provider);
 	const extensionFactories = [
 		contentPolicyExt as any,
 		createPersistentRoomPermissionsExtension(input.roomId, workspaceToolNames, workspaceToolsEnabled, effectiveWorkspacePolicy.workspaceAccessMode) as any,
-		kbExt as any,
 		artifactsExt as any,
 		// Per-room MCP: scheduled and detached background runs inherit the
 		// room's connector grants through the same shared wrapper as live turns.
 		createRoomScopedMcpExtension(input.roomId) as any,
-		webSearchExt as any,
+		// Same rule as a live turn, and the same reason: the provider's own
+		// search is called web_search too, so only one of the two is offered. A
+		// background run is a single bind, so reading the setting here is reading
+		// it for the whole run.
+		...(shouldRegisterClientWebSearch(nativeSearchDecision) ? [webSearchExt as any] : []),
+		createNativeProviderSearchExtension(nativeSearchDecision) as any,
 		fetchUrlExt as any,
+		// A scheduled or detached run replays the same room history a live turn
+		// does, so it ages that history by the same rule. Registering it in only
+		// one of the two factories would make the two kinds of run send
+		// different context for the same room.
+		toolResultAgingExt as any,
 	];
 	const loader = new DefaultResourceLoader({
 		cwd: input.cwd,

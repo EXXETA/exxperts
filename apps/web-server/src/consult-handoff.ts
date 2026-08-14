@@ -131,7 +131,7 @@ export function buildConsultHandoffBlock(input: ConsultHandoffInput): string {
 		`Source: ${name}'s governed memory only (L1b fingerprint ${fingerprint}), read-only;`,
 		`${name}'s memory was not modified and ${name} did not run a session for this.`,
 		`Treat the answer as a sourced external claim from ${name}'s memory, not as this`,
-		`room's own knowledge; it becomes durable here only if checkpointed.`,
+		`room's own knowledge; it becomes durable here only if it is saved through Remember.`,
 		``,
 		`Answer from @${slug}:`,
 		answer,
@@ -220,7 +220,7 @@ function renderStackedBlock(input: ConsultStackHandoffInput, earlierAnswerCap: n
 		`Source: ${name}'s governed memory only, read-only; ${name}'s memory was not`,
 		`modified and ${name} did not run a session for this.`,
 		`Treat the answers as sourced external claims from ${name}'s memory, not as this`,
-		`room's own knowledge; they become durable here only if checkpointed.`,
+		`room's own knowledge; they become durable here only if they are saved through Remember.`,
 	];
 	exchanges.forEach((exchange, index) => {
 		const n = index + 1;

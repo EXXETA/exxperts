@@ -124,7 +124,7 @@ function formatFriendlyRunReason(run: PersistentRoomBackgroundRunView): string |
 	switch (reason) {
 		case "room_in_use": return "Room is in use; will retry.";
 		case "active_turn_in_flight": return "Room has work in progress.";
-		case "prepared_runtime_boundary": return "Checkpoint/Forget needs a manual decision.";
+		case "prepared_runtime_boundary": return "Remember or Forget needs a manual decision.";
 		case "model_not_found": return "Scheduled model is not available.";
 		case "provider_not_connected": return "AI provider is not connected.";
 		case "model_policy_unavailable": return "Scheduled-room model policy is unavailable.";

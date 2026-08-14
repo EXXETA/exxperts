@@ -94,8 +94,8 @@ function startStubGateway(): Promise<http.Server> {
 				data: [
 					// Overrides the /models context_length: LiteLLM answers about the
 					// deployment, the catalog row only about the family.
-					{ model_name: "vision-model", model_info: { supports_vision: true, max_input_tokens: 200000, max_output_tokens: 8192 } },
-					{ model_name: "plain-model", model_info: { supports_vision: false, max_tokens: 32000 } },
+					{ model_name: "vision-model", model_info: { supports_vision: true, supports_web_search: true, max_input_tokens: 200000, max_output_tokens: 8192 } },
+					{ model_name: "plain-model", model_info: { supports_vision: false, supports_web_search: false, max_tokens: 32000 } },
 				],
 			}));
 			return;
@@ -270,6 +270,12 @@ try {
 	assert(detected.get("vision-model")?.contextWindow === 200000, `LiteLLM max_input_tokens should win, got ${JSON.stringify(detected.get("vision-model"))}`);
 	assert(detected.get("plain-model")?.vision === false, `a model declared text-only should read as text-only, got ${JSON.stringify(detected.get("plain-model"))}`);
 	assert(detected.get("silent-model")?.vision === null && detected.get("silent-model")?.contextWindow === null, `an undescribed model should stay undecided, got ${JSON.stringify(detected.get("silent-model"))}`);
+	// Web search is only ever declared on the rich probe. A gateway that says so
+	// pre-ticks the box; one that says the opposite unticks it; silence leaves
+	// the decision to the person, the same as everything else here.
+	assert(detected.get("vision-model")?.webSearch === true, `a declared web-search model should be detected, got ${JSON.stringify(detected.get("vision-model"))}`);
+	assert(detected.get("plain-model")?.webSearch === false, `a model declared without web search should read as without, got ${JSON.stringify(detected.get("plain-model"))}`);
+	assert(detected.get("silent-model")?.webSearch === null, `an undescribed model must not be assumed to search, got ${JSON.stringify(detected.get("silent-model"))}`);
 
 	// The company case: a LiteLLM virtual key scoped to llm_api_routes, so the
 	// rich probe is refused outright. The window is still declared, on the rows
@@ -304,8 +310,8 @@ try {
 			baseUrl: stubGatewayBaseUrl,
 			key: projectGatewayKey,
 			roomModels: [
-				{ modelId: "vision-model", vision: true, contextWindow: 200000 },
-				{ modelId: "plain-model", vision: false, contextWindow: 32000 },
+				{ modelId: "vision-model", vision: true, webSearch: true, contextWindow: 200000 },
+				{ modelId: "plain-model", vision: false, webSearch: false, contextWindow: 32000 },
 			],
 			maintenanceModel: "plain-model",
 		}),
@@ -334,7 +340,7 @@ try {
 	assert(auth["openai-compatible"]?.key === legacyGatewayKey, "the legacy gateway must keep its own key");
 	assert(auth[projectProviderId]?.key === projectGatewayKey, `the second gateway should store its own key, got ${JSON.stringify(Object.keys(auth))}`);
 
-	// (c) The two capability facts reach models.json.
+	// (c) The three capability facts reach models.json.
 	const models = readJsonFile(modelsPath);
 	const projectProvider = models.providers[projectProviderId];
 	assert(projectProvider, `models.json should carry the second gateway, got ${JSON.stringify(Object.keys(models.providers))}`);
@@ -344,6 +350,14 @@ try {
 	assert(visionEntry.contextWindow === 200000, `the chosen context window should be written, got ${JSON.stringify(visionEntry)}`);
 	assert(plainEntry.input === undefined, `a text-only model should not claim image input, got ${JSON.stringify(plainEntry)}`);
 	assert(plainEntry.contextWindow === 32000, `the chosen context window should be written, got ${JSON.stringify(plainEntry)}`);
+	// The web-search flag lands as the one compat key the request layer reads.
+	assert(visionEntry.compat?.supportsWebSearch === true, `a model approved for web search should be registered as such, got ${JSON.stringify(visionEntry)}`);
+	assert(plainEntry.compat === undefined, `a model nobody approved for web search should carry no compat block at all, got ${JSON.stringify(plainEntry)}`);
+	// And it comes back out of the API the panel reads, so reopening the form
+	// shows the box still ticked instead of quietly forgetting.
+	const savedProject = bothListed.body.gateways.find((gateway: any) => gateway.id === projectProviderId);
+	assert(savedProject.roomModels.find((model: any) => model.modelId === "vision-model")?.webSearch === true, `the saved flag must come back from the API, got ${JSON.stringify(savedProject.roomModels)}`);
+	assert(savedProject.roomModels.find((model: any) => model.modelId === "plain-model")?.webSearch === false, `an unmarked model must come back unmarked, got ${JSON.stringify(savedProject.roomModels)}`);
 
 	// The plural store now exists, and the legacy file is still a faithful
 	// mirror of the first gateway rather than a stale second opinion.

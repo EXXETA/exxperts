@@ -19,7 +19,7 @@ const POINTS: { term: string; body: string }[] = [
 	},
 	{
 		term: "It remembers",
-		body: "Your work is saved as you go. At each Checkpoint you choose what your exxpert keeps from the session, so nothing important is lost.",
+		body: "Your work is saved as you go. Each time you Remember you choose what your exxpert keeps from the session, so nothing important is lost.",
 	},
 	{
 		term: "Come back any time",

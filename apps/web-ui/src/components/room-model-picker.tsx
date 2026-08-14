@@ -1,5 +1,5 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
-import { modelDisplayName } from "../model-names";
+import { modelDisplayName, modelTooltipName } from "../model-names";
 import type { PersistentAgentAiProfileSelectionStatus, PersistentAgentAiProfileStatus, WebChatModelOption } from "../types";
 import { firstWordOfLabel, strandedBySwitchCount } from "./product-shell";
 
@@ -8,7 +8,7 @@ import { firstWordOfLabel, strandedBySwitchCount } from "./product-shell";
 // meant a detour through the sidebar ⚙ profile radio. This popover lists every
 // profile's curated room models grouped under their profile, and picking one
 // on a READY non-active profile runs the same switch the sidebar would —
-// behind a confirm that names what moves (new threads, Learn, Review Memory)
+// behind a confirm that names what moves (new threads, Memorize, Review)
 // and how many standby rooms the switch strands. Unready profiles stay
 // visible but inert: the group header says why, AI setup is the way in.
 // Selecting inside the active profile is exactly the old select: local,
@@ -21,7 +21,8 @@ import { firstWordOfLabel, strandedBySwitchCount } from "./product-shell";
 // "switches profile" group with a dead header. The server-validated
 // roomModels list only substitutes in when it names the same profile.
 
-type PickerModel = { key: string; name: string };
+/** `tooltip` carries the provider; the row itself only ever shows `name`. */
+type PickerModel = { key: string; name: string; tooltip: string };
 
 type PickerGroup =
 	| { kind: "active"; id: string; label: string; models: PickerModel[] }
@@ -34,12 +35,14 @@ type PickerGroup =
 const FILTER_THRESHOLD = 12;
 
 function pickerModel(option: { provider: string; model: string; label?: string }): PickerModel {
+	const nameInput = { model: option.model, modelLabel: option.label, provider: option.provider };
 	return {
 		key: `${option.provider}/${option.model}`,
 		// One naming path for every group, so the same model reads identically
 		// wherever it appears (modelDisplayName prefers the raw id's family
 		// name over whatever label era the source carries).
-		name: modelDisplayName({ model: option.model, modelLabel: option.label, provider: option.provider }),
+		name: modelDisplayName(nameInput),
+		tooltip: modelTooltipName(nameInput),
 	};
 }
 
@@ -112,7 +115,7 @@ export function ProfileSwitchConfirm({ profile, strandedCount, continuation, swi
 			<section className="checkpoint-input-card maintain-confirm-card" ref={cardRef} tabIndex={-1}>
 				<h2>Switch AI profile to {profile.label}?</h2>
 				<p>
-					New room threads will start on {profile.label}, and Learn and Review Memory move with it.
+					New room threads will start on {profile.label}, and Memorize and Review move with it.
 					{strandedCount > 0 && ` ${strandedCount} standby room${strandedCount === 1 ? "" : "s"} can then only resume once you switch back.`}
 					{continuation && ` ${continuation}`}
 				</p>
@@ -238,16 +241,21 @@ export function RoomModelPicker({ roomModels, modelStatusProfileId, value, onCha
 	// The trigger names the selection even during the beat between a profile
 	// switch landing and the refreshed model status arriving, when the chosen
 	// model is not in `roomModels` yet.
-	const triggerName = ((): string => {
+	const trigger = ((): { name: string; tooltip: string } => {
 		for (const group of groups) {
 			if (group.kind === "inert") continue;
 			const match = group.models.find((model) => model.key === value);
-			if (match) return match.name;
+			if (match) return { name: match.name, tooltip: match.tooltip };
 		}
 		const slash = value.indexOf("/");
-		if (slash > 0) return modelDisplayName({ model: value.slice(slash + 1), provider: value.slice(0, slash) });
-		return value || "Choose model";
+		if (slash > 0) {
+			const nameInput = { model: value.slice(slash + 1), provider: value.slice(0, slash) };
+			return { name: modelDisplayName(nameInput), tooltip: modelTooltipName(nameInput) };
+		}
+		const fallback = value || "Choose model";
+		return { name: fallback, tooltip: fallback };
 	})();
+	const triggerName = trigger.name;
 
 	// A refresh that removed the highlighted entry (group refolded, filter
 	// changed under our feet) must not leave aria-activedescendant pointing at
@@ -440,7 +448,7 @@ export function RoomModelPicker({ roomModels, modelStatusProfileId, value, onCha
 				aria-haspopup="listbox"
 				aria-expanded={open}
 				aria-controls={open ? visibleListboxIds : undefined}
-				title={`Room model: ${triggerName}`}
+				title={`Room model: ${trigger.tooltip}`}
 				onClick={() => (open ? close() : setOpen(true))}
 				onKeyDown={(e) => {
 					if (open || (e.key !== "ArrowDown" && e.key !== "ArrowUp")) return;
@@ -543,7 +551,7 @@ export function RoomModelPicker({ roomModels, modelStatusProfileId, value, onCha
 														aria-selected={selected}
 														data-picker-item
 														tabIndex={showFilter ? -1 : 0}
-														title={group.kind === "switch" ? `Switches the AI profile to ${group.label}` : undefined}
+														title={group.kind === "switch" ? `${model.tooltip} · switches the AI profile to ${group.label}` : model.tooltip !== model.name ? model.tooltip : undefined}
 														onClick={() => pick(group, model)}
 													>
 														<span className="model-picker-option-name">{model.name}</span>

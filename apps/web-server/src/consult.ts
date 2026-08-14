@@ -85,7 +85,7 @@ export class ConsultPromptOverflowError extends Error {
 		super(
 			`the consult prompt for ${input.targetAgentId} is too large for the locked consult model ${input.model.provider}/${input.model.model}: ` +
 				`~${input.promptEstimatedTokens} estimated tokens exceeds the ~${input.promptTokenBudget}-token prompt budget. ` +
-				`The consulted room's memory is the prompt material and cannot be elided honestly — run Review Memory on that room to shrink its memory, or switch to a larger-context profile, then consult again. Nothing was consulted and no memory has been written.`,
+				`The consulted room's memory is the prompt material and cannot be elided honestly: run Review on that room to shrink its memory, or switch to a larger-context profile, then consult again. Nothing was consulted and no memory has been written.`,
 		);
 		this.promptEstimatedTokens = input.promptEstimatedTokens;
 		this.promptTokenBudget = input.promptTokenBudget;

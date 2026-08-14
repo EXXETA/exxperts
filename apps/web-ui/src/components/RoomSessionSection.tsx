@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { apiFetch } from "../api";
 import type { PersistentAgentMementoBoundaryResponse, PersistentAgentStatus } from "../types";
-import { modelDisplayName } from "../model-names";
+import { modelDisplayName, modelTooltipName } from "../model-names";
 import { RsInfo } from "./rs-info";
 
 async function applyMemento(agentId: string, conversationId: string): Promise<PersistentAgentMementoBoundaryResponse> {
@@ -20,10 +20,11 @@ async function applyMemento(agentId: string, conversationId: string): Promise<Pe
 	return payload as PersistentAgentMementoBoundaryResponse;
 }
 
-function sessionModelLabel(status: PersistentAgentStatus): string | null {
+function sessionModelLabel(status: PersistentAgentStatus): { name: string; title: string } | null {
 	const model = status.runtime.model;
 	if (!model) return null;
-	return modelDisplayName({ model: model.model, modelLabel: model.label, provider: model.provider }) || model.model;
+	const input = { model: model.model, modelLabel: model.label, provider: model.provider };
+	return { name: modelDisplayName(input) || model.model, title: modelTooltipName(input) || model.model };
 }
 
 export function RoomSessionSection({ status, onRefresh, onMementoApplied, onMementoForget }: { status: PersistentAgentStatus; onRefresh: () => void; onMementoApplied?: () => void; onMementoForget?: () => void }) {
@@ -93,7 +94,7 @@ export function RoomSessionSection({ status, onRefresh, onMementoApplied, onMeme
 				<div className="rs-row">
 					<div className="rs-row-main">
 						<span className="rs-row-label">
-							Open conversation{modelLabel ? <> on <strong>{modelLabel}</strong></> : null}{busy ? " (in use)" : ""}
+							Open conversation{modelLabel ? <> on <strong title={modelLabel.title}>{modelLabel.name}</strong></> : null}{busy ? " (in use)" : ""}
 						</span>
 						<span className="rs-row-hint">
 							Forget ends this conversation and starts a fresh one. The room keeps everything already in its memory, and nothing new is saved from this conversation.
@@ -105,7 +106,7 @@ export function RoomSessionSection({ status, onRefresh, onMementoApplied, onMeme
 			)}
 			{confirming && (
 				<div className="room-session-confirm" ref={confirmRef}>
-					<p className="room-danger-note"><strong>Forget this conversation?</strong> It is discarded and the room starts fresh. Memory stays and nothing is checkpointed.{busy ? " The room is in use right now: any response being written will be stopped and a live session will be closed." : ""}</p>
+					<p className="room-danger-note"><strong>Forget this conversation?</strong> It is discarded and the room starts fresh. The room keeps its memory, and nothing from this conversation is added to it.{busy ? " The room is in use right now: any response being written will be stopped and a live session will be closed." : ""}</p>
 					<div className="room-danger-confirm-actions">
 						<button className="rs-btn" disabled={submitting} onClick={() => void submitMemento()}>{submitting ? "Forgetting…" : "Forget conversation"}</button>
 						<button className="rs-quiet" type="button" disabled={submitting} onClick={() => { setConfirming(false); setError(null); }}>Cancel</button>

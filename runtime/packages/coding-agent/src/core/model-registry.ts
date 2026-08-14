@@ -117,6 +117,7 @@ const OpenAICompletionsCompatSchema = Type.Object({
 	openRouterRouting: Type.Optional(OpenRouterRoutingSchema),
 	vercelGatewayRouting: Type.Optional(VercelGatewayRoutingSchema),
 	supportsStrictMode: Type.Optional(Type.Boolean()),
+	supportsWebSearch: Type.Optional(Type.Boolean()),
 	supportsOpenAIPromptCacheRetention: Type.Optional(Type.Boolean()),
 	supportsAnthropicCacheControlTtl: Type.Optional(Type.Boolean()),
 	supportsLongCacheRetention: Type.Optional(Type.Boolean()),

@@ -13,7 +13,7 @@ for your interactions, and the *exxpert* living in it is the colleague you
 talk to, with its own identity and durable, human-governed memory. You work
 with it over weeks, not sessions. The core of the product is
 not chat; it is the **memory engine**: an approval-gated lifecycle
-(checkpoint → Learn → Review Memory) that turns conversations into durable,
+(Remember → Memorize → Review) that turns conversations into durable,
 auditable memory the agent boots from next time. Chat orbits the memory
 engine, not the other way around.
 
@@ -71,14 +71,15 @@ Three workflows move material through that file. Each follows the same
 contract: an isolated worker **proposes**, the human **approves**, the
 system **writes**, never the worker.
 
-### Checkpoint: end of a work session
+### Remember: end of a work session
 
 Freezes the active thread and asks a compression worker to distill it
-into a proposed Recent Context entry. The default Checkpoint button
-runs a fast path at standard density that applies automatically when
-the proposal is warning-free; "Checkpoint with options…" opens the
-full flow, where you choose a density (compact/standard/rich) and can
-add an optional steering note. Things
+into a proposed Recent Context entry. The default Remember button
+runs a fast path at standard density and shows you the proposal before
+it is saved; a room can be set to apply warning-free proposals without
+that preview. "Remember with options…" opens the full flow, where you
+choose a density (compact/standard/rich) and can add an optional
+steering note. Things
 you explicitly asked the agent to remember are marked **must-keep** and
 survive every compression budget. The worker prompt is measured against
 the model's context window before the call; oversized transcripts are
@@ -86,9 +87,9 @@ reduced with declared elisions (never silently truncated) or refused
 with guidance. On approval, the entry is appended, the thread closes at
 a clean boundary, and the previous memory file is archived.
 
-### Learn (absorb): consolidating the buffer
+### Memorize (absorb): consolidating the buffer
 
-Once several Recent Context entries accumulate, Learn reads the chain
+Once several Recent Context entries accumulate, Memorize reads the chain
 *in chronological order* (later entries supersede earlier ones) and
 proposes a rewritten L1b: durable material merged into Deep Memory and
 Active Items, the buffer cleared, must-keep content carried over with
@@ -96,7 +97,7 @@ its marker. The goal is stable memory that gets **denser, not merely
 larger**. You see an assessment first, can discuss it, and approve the
 final proposal.
 
-### Review Memory (structural review): tightening stable memory
+### Review (structural review): tightening stable memory
 
 Reviews only Deep Memory and Active Items (Chronos and Recent Context
 are withheld from the worker and grafted back byte-exact). It improves
@@ -120,8 +121,8 @@ See [`memory.md`](memory.md) for the user-facing walkthrough.
 
 A global **AI profile** (Claude, ChatGPT Plus/Pro, or a local
 OpenAI-compatible gateway) maps each LLM process to an allowed model:
-rooms pick from the profile's room-model list, checkpoint workers
-inherit the room's model, and Learn/Review Memory use the profile's
+rooms pick from the profile's room-model list, Remember workers
+inherit the room's model, and Memorize/Review use the profile's
 maintenance model. The mapping is asserted at call time, so a room
 cannot silently run on an off-profile model. Setup is described in
 [`provider-setup.md`](provider-setup.md).

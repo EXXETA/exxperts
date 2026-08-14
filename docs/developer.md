@@ -91,7 +91,7 @@ Markdown prompt files are involved; the code is the source of truth.
 See [`how-exxperts-works.md`](how-exxperts-works.md) for the layer
 model.
 
-**Memory lifecycle workers** (checkpoint; absorb, shown as “Learn” in the UI; prune/structural review, shown as “Review Memory”) each carry a
+**Memory lifecycle workers** (checkpoint, shown as “Remember” in the UI; absorb, shown as “Memorize”; prune/structural review, shown as “Review”) each carry a
 platform-owned constitution defined next to their prompt assembly:
 `checkpoint-compression.ts`, `absorb-consolidation.ts`, and
 `structural-review.ts` under `apps/web-server/src/`. Workers run as

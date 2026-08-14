@@ -542,6 +542,19 @@ function buildParams(
 		params.tools = [];
 	}
 
+	// Search the model runs itself, through whatever machinery its provider or
+	// gateway has behind it. The empty object is the "on, your defaults" form of
+	// the chat-completions convention, which is what a proxy passes straight
+	// through; there is nothing here worth tuning per request. What comes back
+	// is ordinary assistant text, because the source annotations ride on the
+	// message rather than the deltas and our delta handling drops them: the
+	// model's own citations are all the reader gets for now. The room's
+	// web_search tool stays available either way, so a model that ignores this
+	// still has a way to look something up.
+	if (compat.supportsWebSearch) {
+		(params as any).web_search_options = {};
+	}
+
 	if (cacheControl) {
 		applyAnthropicCacheControl(messages, params.tools, cacheControl);
 	}
@@ -1111,6 +1124,10 @@ function detectCompat(model: Model<"openai-completions">): ResolvedOpenAIComplet
 		vercelGatewayRouting: {},
 		zaiToolStream: false,
 		supportsStrictMode: !isMoonshot && !isTogether && !isCloudflareAiGateway,
+		// Never guessed from the URL. Whether a model searches the web is a fact
+		// about that one deployment, and asking for it where it is not offered is
+		// an error on the request, so silence means off until somebody says so.
+		supportsWebSearch: false,
 		cacheControlFormat,
 		sendSessionAffinityHeaders: false,
 		supportsOpenAIPromptCacheRetention: supportsLongCacheRetention,
@@ -1145,6 +1162,7 @@ function getCompat(model: Model<"openai-completions">): ResolvedOpenAICompletion
 		vercelGatewayRouting: model.compat.vercelGatewayRouting ?? detected.vercelGatewayRouting,
 		zaiToolStream: model.compat.zaiToolStream ?? detected.zaiToolStream,
 		supportsStrictMode: model.compat.supportsStrictMode ?? detected.supportsStrictMode,
+		supportsWebSearch: model.compat.supportsWebSearch ?? detected.supportsWebSearch,
 		cacheControlFormat: model.compat.cacheControlFormat ?? detected.cacheControlFormat,
 		sendSessionAffinityHeaders: model.compat.sendSessionAffinityHeaders ?? detected.sendSessionAffinityHeaders,
 		supportsOpenAIPromptCacheRetention:

@@ -50,11 +50,18 @@ function renderedMessageChars(message: Pick<EligibleLiveThreadMessage, "role" | 
 	return `${roleLabel(message.role)}: ${message.text}`.length;
 }
 
-function eligibleLiveThreadMessage(item: unknown): EligibleLiveThreadMessage | null {
+function eligibleLiveThreadMessage(item: unknown, trustStreamingMarks: boolean): EligibleLiveThreadMessage | null {
 	if (!isRecord(item)) return null;
 	const kind = item.kind;
 	if (kind !== "user" && kind !== "assistant") return null;
-	if (kind === "assistant" && item.streaming === true) return null;
+	// A half-written answer is not context. But the mark that says so is written
+	// by the browser and cleared by a debounced save that can be lost, and no
+	// server-side write closes the gap on the attached path, so a finished answer
+	// can sit on disk marked mid-flight forever. Threads written before this was
+	// enforced carry the same scars. When the room has no turn running, nothing
+	// is streaming and the mark is stale by definition, so it is ignored rather
+	// than allowed to delete an answer from the room's own memory of itself.
+	if (kind === "assistant" && item.streaming === true && trustStreamingMarks) return null;
 	if (typeof item.text !== "string") return null;
 
 	const normalized = normalizeLiveThreadText(item.text);
@@ -92,10 +99,14 @@ function mostRecentTailWithinCaps(messages: EligibleLiveThreadMessage[]): Eligib
 	return tail.reverse();
 }
 
-export function buildPersistentRoomRestoredLiveThreadContext(items: unknown[]): RestoredLiveThreadContext | null {
+/**
+ * @param turnInFlight Whether the room is mid-answer right now. Only then does a
+ * streaming mark describe something that is actually still being written.
+ */
+export function buildPersistentRoomRestoredLiveThreadContext(items: unknown[], turnInFlight = false): RestoredLiveThreadContext | null {
 	const sourceItemCount = Array.isArray(items) ? items.length : 0;
 	const eligibleMessages = Array.isArray(items)
-		? items.map(eligibleLiveThreadMessage).filter((message): message is EligibleLiveThreadMessage => message != null)
+		? items.map((item) => eligibleLiveThreadMessage(item, turnInFlight)).filter((message): message is EligibleLiveThreadMessage => message != null)
 		: [];
 	if (eligibleMessages.length === 0) return null;
 

@@ -560,7 +560,10 @@ export default function (pi: ExtensionAPI) {
 		description:
 			"Fetch a single public http(s) URL and return its main content as readable Markdown (JS-rendered pages are rendered locally when needed; JSON/plain text pass through). Outbound only; internal/private addresses are refused.",
 		promptSnippet:
-			"Use `fetch_url` to read a specific web page or API the user references by URL, or to open a promising `web_search` result. It returns readable Markdown, not raw HTML, and can render JavaScript-heavy pages. It cannot reach internal/private hosts and does not download binary files. When you use anything from a fetched page in your answer, cite it as a clickable Markdown link to the exact URL you fetched — [page title](https://the-actual-url) — so the user can click through. Never mention tool or function names (e.g. `fetch_url`) anywhere in your answer, not even to describe how you got the content — say it in plain language instead (\"I read the page at …\"). Never present a URL as plain or code-formatted text; always make it a Markdown link.",
+			// Deliberately does not name the search tool: a room whose model
+			// searches through its own provider has no `web_search` registered, and
+			// a description that pointed at it would be naming something absent.
+			"Use `fetch_url` to read a specific web page or API the user references by URL, or to open a page you found or were given, for example a search result. It returns readable Markdown, not raw HTML, and can render JavaScript-heavy pages. It cannot reach internal/private hosts and does not download binary files. When you use anything from a fetched page in your answer, cite it as a clickable Markdown link to the exact URL you fetched — [page title](https://the-actual-url) — so the user can click through. Never mention tool or function names (e.g. `fetch_url`) anywhere in your answer, not even to describe how you got the content — say it in plain language instead (\"I read the page at …\"). Never present a URL as plain or code-formatted text; always make it a Markdown link.",
 		parameters: Type.Object({
 			url: Type.String({ description: "The absolute http(s) URL to fetch." }),
 			max_chars: Type.Optional(

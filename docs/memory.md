@@ -9,7 +9,7 @@ exxperts has two memory systems, one per surface:
 
 | Surface | Memory | Where | Who writes it |
 | --- | --- | --- | --- |
-| **Persistent rooms (web)** | The room's L1b memory file, grown through checkpoint → Learn → Review Memory | `~/.exxperts/app/personalized-agents/<id>/` | Only you, through approval screens |
+| **Persistent rooms (web)** | The room's L1b memory file, grown through Remember → Memorize → Review | `~/.exxperts/app/personalized-agents/<id>/` | Only you, through approval screens |
 | **CLI (ExxCode)** | Context files + a fact store + session compaction | repo `AGENTS.md`, `~/.exxperts/app/memory.jsonl` | You directly, or the model with your approval |
 
 The room memory engine is the product's core; the CLI layers are
@@ -24,22 +24,23 @@ understanding), **Active Items** (live threads), and **Recent Context**
 
 Nothing enters or leaves this file without you:
 
-1. **Checkpoint**: at the end of a work session (the room shows a
+1. **Remember**: at the end of a work session (the room shows a
    context meter so you know when it's worth doing), a compression
    worker proposes a Recent Context entry at your chosen density. You
    can add a steering note; anything you explicitly asked the agent to
    remember is marked **must-keep** and survives every compression
    budget. You review the proposal and approve or discard it. The
-   default Checkpoint button runs a fast path: standard density, and
-   the proposal applies automatically when it is warning-free; any
-   warning falls back to the full preview for manual review.
-   "Checkpoint with options…" always opens the full preview.
-2. **Learn**: once several Recent Context entries accumulate, an
+   default Remember button runs a fast path at standard density and
+   shows you the proposal before saving; a room set to remember
+   without preview saves warning-free proposals straight away and
+   falls back to the preview for anything questionable.
+   "Remember with options…" always opens the full preview.
+2. **Memorize**: once several remembered sessions accumulate, an
    assessment proposes what to merge into stable memory and what to
    forget. You can discuss it before approving the consolidated
    rewrite. Must-keep content carries through with its marker; later
    entries supersede earlier ones.
-3. **Review Memory**: a review of stable memory only (Deep Memory + Active
+3. **Review**: a review of stable memory only (Deep Memory + Active
    Items) that tightens and reorganizes without growing it. Must-keep
    entries are only removed at your explicit direction, and any such
    removal is called out in the proposal, never silent.
@@ -49,7 +50,7 @@ event record with content fingerprints, so you can always see what
 changed, when, and from what.
 
 Rooms also have a per-room **Automatic memory maintenance** toggle
-(default off). When on, Learn and Review Memory proposals apply
+(default off). When on, Memorize and Review proposals apply
 automatically only when they are structurally clean and carry no
 must-keep removals; anything else falls back to the manual review
 above.
@@ -91,7 +92,7 @@ When a CLI session approaches the model's context window, the runtime
 compacts older messages into a structured summary and keeps recent
 messages verbatim. Compaction is lossy for the model but the full
 transcript stays on disk. (Persistent rooms don't rely on compaction;
-the checkpoint workflow is their deliberate, human-approved
+Remember is their deliberate, human-approved
 equivalent.)
 
 ## Privacy

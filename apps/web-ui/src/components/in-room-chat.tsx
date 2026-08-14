@@ -7,7 +7,7 @@ import { useEscapeKey } from "./use-escape-key";
 import type { ApprovalPreviewData } from "../approval-preview";
 import type { ChatItem, ContextHealthStatus } from "../types";
 import { completeMention, detectMentionQuery, filterMentionCandidates, resolveLeadingMention, type MentionCandidateRoom } from "../mention-popover";
-import { modelDisplayName } from "../model-names";
+import { formatModelWithProvider, modelDisplayName } from "../model-names";
 
 export interface InRoomChatUsage {
 	turns: number;
@@ -17,6 +17,7 @@ export interface InRoomChatUsage {
 	cacheWrite: number;
 	cost: number;
 	totalTokens: number;
+	contextTokens?: number | null;
 }
 
 export interface InRoomChatShellViewProps {
@@ -28,6 +29,8 @@ export interface InRoomChatShellViewProps {
 	usage: InRoomChatUsage;
 	contextHealth?: ContextHealthStatus | null;
 	currentModelLabel?: string | null;
+	/** Provider behind that label. Tooltip only; the face stays the bare name. */
+	currentModelProvider?: string | null;
 	topbarActions?: ReactNode;
 	composerRightActions?: ReactNode;
 	/** Files UI slice: staged-attachment chips above the composer textarea. */
@@ -153,12 +156,14 @@ function ContextPill({
 	status,
 	usage,
 	currentModelLabel,
+	currentModelProvider,
 	connected,
 	reconnectState = "idle",
 }: {
 	status: ContextHealthStatus;
 	usage: InRoomChatUsage;
 	currentModelLabel?: string | null;
+	currentModelProvider?: string | null;
 	connected: boolean;
 	reconnectState?: "idle" | "reconnecting" | "failed";
 }) {
@@ -171,7 +176,7 @@ function ContextPill({
 	const label = !connected
 		? (reconnecting ? "Reconnecting…" : "Offline")
 		: known
-			? `${Math.round(status.checkpointPercent!)}% of recommended checkpoint tokens`
+			? `${Math.round(status.checkpointPercent!)}% of recommended context`
 			: "Measuring tokens";
 	// Nothing here names plumbing the user did not install and cannot restart.
 	// While a retry is running, say so; once it has given up, the Reconnect
@@ -214,7 +219,7 @@ function ContextPill({
 			{open && (
 				<div className="composer-context-popover" id={popoverId} role="dialog" aria-label="Context and model details">
 					{currentModelLabel && (
-						<div className="composer-context-popover-row" title={`current chat model: ${currentModelLabel}`}>
+						<div className="composer-context-popover-row" title={`current chat model: ${formatModelWithProvider(currentModelLabel ?? "", currentModelProvider)}`}>
 							<span>model</span>
 							<strong>{compactModelLabel(currentModelLabel)}</strong>
 						</div>
@@ -232,7 +237,7 @@ function ContextPill({
 						</div>
 					)}
 					<div className="composer-context-popover-row">
-						<span>recommended checkpoint</span>
+						<span>recommended</span>
 						<strong>{fmtContextTok(status.checkpointTokens)}</strong>
 					</div>
 					{status.contextWindow && (
@@ -255,10 +260,10 @@ function ContextPill({
 					</div>
 					<p className="composer-context-popover-note">
 						{zone === "red"
-							? "Recommended checkpoint reached. Consider checkpointing soon. No automatic action is taken."
+							? "Recommended context size reached. Consider using Remember soon. Nothing happens automatically."
 							: zone === "yellow"
-								? "Approaching the checkpoint threshold."
-								: "The recommended checkpoint optimises for answer quality: models lose sharpness as context grows, so checkpoint into memory before that happens."}
+								? "Approaching the recommended context size."
+								: "Models lose sharpness as context grows. Use Remember before you reach the recommendation to keep answers sharp."}
 					</p>
 				</div>
 			)}
@@ -571,6 +576,7 @@ export function InRoomChatShellView({
 	usage,
 	contextHealth,
 	currentModelLabel,
+	currentModelProvider,
 	topbarActions,
 	composerRightActions,
 	composerStagingSlot,
@@ -784,18 +790,19 @@ export function InRoomChatShellView({
 											status={contextHealth}
 											usage={usage}
 											currentModelLabel={currentModelLabel}
+											currentModelProvider={currentModelProvider}
 											connected={connected}
 											reconnectState={reconnectState}
 										/>
 									) : (
 										<div className="composer-status" aria-label="Chat status">
-											{currentModelLabel && <span title={`current chat model: ${currentModelLabel}`}>model <strong>{compactModelLabel(currentModelLabel)}</strong></span>}
+											{currentModelLabel && <span title={`current chat model: ${formatModelWithProvider(currentModelLabel ?? "", currentModelProvider)}`}>model <strong>{compactModelLabel(currentModelLabel)}</strong></span>}
 											<span><strong>{usage.turns}</strong> turn{usage.turns === 1 ? "" : "s"}</span>
 											<span>↑ <strong>{fmtTok(usage.input)}</strong></span>
 											<span>↓ <strong>{fmtTok(usage.output)}</strong></span>
 											{usage.cacheRead > 0 && <span>cache <strong>{fmtTok(usage.cacheRead)}</strong></span>}
 											<span><strong>{fmtCost(usage.cost)}</strong></span>
-											{usage.totalTokens > 0 && <span title="last assistant context">ctx <strong>{fmtTok(usage.totalTokens)}</strong></span>}
+											{(usage.contextTokens ?? usage.totalTokens) > 0 && <span title="last assistant context">ctx <strong>{fmtTok(usage.contextTokens ?? usage.totalTokens)}</strong></span>}
 											<span className={`composer-connection ${connected ? "live" : ""}`}>{connected ? "online" : reconnectState === "reconnecting" ? "reconnecting…" : "offline"}</span>
 										</div>
 									)}

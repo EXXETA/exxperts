@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { SidebarToggleButton } from "../sidebar-collapse";
-import type { PersistentAgentAiProfileSelectionStatus, PersistentAgentAiProfileStatus } from "../types";
+import type { PersistentAgentAiProfileStatus } from "../types";
+import { requestUpdate, useUpdateNotice } from "../update-notice";
 import { Help } from "./Help";
 
 export type ThemeMode = "dark" | "light";
@@ -8,14 +9,6 @@ export type ThemeMode = "dark" | "light";
 // Injected at build time from the root package.json "version" field (vite define).
 const APP_VERSION = __APP_VERSION__;
 const GITHUB_URL = "https://github.com/EXXETA/exxperts";
-
-export interface SidebarAiProfileProps {
-	aiProfileStatus: PersistentAgentAiProfileSelectionStatus | null;
-	onSelectAiProfile: (profileId: string) => Promise<void>;
-	onRefreshAiProfile?: () => void;
-	/** Locked models of rooms currently on standby — used to warn when switching profile would leave them unable to resume. */
-	standbyLockedModels?: Array<{ provider: string; model: string }>;
-}
 
 export function profileIncludesModel(profile: PersistentAgentAiProfileStatus, model: { provider: string; model: string }): boolean {
 	return profile.processes?.persistentRoom.models.some((candidate) => candidate.provider === model.provider && candidate.model === model.model) ?? true;
@@ -39,38 +32,18 @@ export function firstWordOfLabel(label: string): string {
 
 export type ProductSidebarActive = "home" | "ai-setup" | "dashboard" | "connectors" | "memory" | "skills";
 
-export function ThemeToggle({ theme, onToggle }: { theme: ThemeMode; onToggle: () => void }) {
-	return (
-		<button className="theme-toggle" onClick={onToggle} title={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}>
-			{theme === "dark" ? "Light" : "Dark"}
-		</button>
-	);
-}
-
-function SidebarConfigMenu({ onAiSetup, theme, onToggleTheme, active, aiProfileStatus, onSelectAiProfile, onRefreshAiProfile, standbyLockedModels }: { onAiSetup: () => void; theme: ThemeMode; onToggleTheme: () => void; active: ProductSidebarActive } & SidebarAiProfileProps) {
+/**
+ * The one settings menu behind the gear. Home and the in-room rail render the
+ * same component, so the same settings are one click away wherever you are.
+ * `active` only exists to mark the AI setup row when that shell is already open.
+ */
+export function ConfigMenu({ onAiSetup, theme, onToggleTheme, active }: { onAiSetup: () => void; theme: ThemeMode; onToggleTheme: () => void; active?: ProductSidebarActive }) {
 	const [open, setOpen] = useState(false);
 	const [helpOpen, setHelpOpen] = useState(false);
-	const [switchingId, setSwitchingId] = useState<string | null>(null);
-	const [selectError, setSelectError] = useState<string | null>(null);
 	const wrapRef = useRef<HTMLDivElement>(null);
-
-	const profiles = aiProfileStatus?.profiles;
-	// No profile explicitly chosen yet — the "active" one is just the default,
-	// so don't present it as a selection the user made.
-	const notConfigured = aiProfileStatus ? aiProfileStatus.state.source === "default" : false;
-
-	async function selectProfile(profileId: string) {
-		setSwitchingId(profileId);
-		setSelectError(null);
-		try {
-			await onSelectAiProfile(profileId);
-			onRefreshAiProfile?.();
-		} catch (e) {
-			setSelectError((e as Error).message);
-		} finally {
-			setSwitchingId(null);
-		}
-	}
+	// Desktop only; in a browser tab this stays empty and the row keeps
+	// showing the plain version.
+	const update = useUpdateNotice();
 
 	useEffect(() => {
 		if (!open) return;
@@ -99,80 +72,6 @@ function SidebarConfigMenu({ onAiSetup, theme, onToggleTheme, active, aiProfileS
 							<button className={theme === "light" ? "on" : ""} aria-pressed={theme === "light"} onClick={() => theme !== "light" && onToggleTheme()}>Light</button>
 						</div>
 					</div>
-					<div className="menu-section menu-ai-profile">
-						<div className="menu-section-head">
-							<span className="menu-row-label">AI profile</span>
-						</div>
-						{aiProfileStatus ? (
-							profiles && profiles.length > 0 ? (
-								<div className="menu-ai-profile-list" role="radiogroup" aria-label="AI profile">
-									{profiles.map((profile) => {
-										const activeProfile = aiProfileStatus.activeProfile;
-										const strandedCount = strandedBySwitchCount(standbyLockedModels, activeProfile, profile);
-										// Sublines only when they say something actionable — healthy rows stay one line,
-										// and the strand warning surfaces on hover/focus, at the moment of decision.
-										// The same state reads the same on every row: "not signed in" when the
-										// provider is signed out, "setup needed" only for signed-in-but-broken.
-										// No "set up" hint: unready rows are inert here, AI setup is the path.
-										const notReadyText = profile.provider.configured ? "setup needed" : "not signed in";
-										// A selection that cannot run is not presented as one: the dot and
-										// active styling only show when the active profile is signed in.
-										const presentedActive = profile.active && profile.provider.configured;
-										const subline = switchingId === profile.id
-											? { text: "selecting…", warn: false, hoverOnly: false }
-											: presentedActive
-												? notConfigured
-													? { text: "default", warn: false, hoverOnly: false }
-													: profile.ready
-														? null
-														: { text: notReadyText, warn: true, hoverOnly: false }
-												: !profile.ready
-													? { text: notReadyText, warn: false, hoverOnly: false }
-													: strandedCount > 0
-														? { text: `${strandedCount} standby room${strandedCount === 1 ? "" : "s"} can only resume on ${firstWordOfLabel(activeProfile.label)}`, warn: true, hoverOnly: true }
-														: null;
-										const title = profile.active
-											? undefined
-											: profile.ready
-												? "Select this AI profile. New room threads start on it; standby threads keep their model"
-												: "Sign in from AI setup to use this profile";
-										// Unready rows are inert: nothing to select, so nothing to click.
-										// The AI setup item below is the way to sign in.
-										const disabled = !profile.ready;
-										return (
-											<div
-												key={profile.id}
-												className={`menu-profile-row${presentedActive ? " active" : ""}${disabled ? " notready" : ""}`}
-												role="radio"
-												aria-checked={presentedActive}
-												aria-disabled={disabled || undefined}
-												tabIndex={disabled ? -1 : 0}
-												title={title}
-												onClick={() => {
-													if (disabled || profile.active || switchingId !== null) return;
-													void selectProfile(profile.id);
-												}}
-												onKeyDown={(e) => {
-													if (e.key !== "Enter" && e.key !== " ") return;
-													e.preventDefault();
-													(e.currentTarget as HTMLElement).click();
-												}}
-											>
-												<span className="menu-profile-radio" aria-hidden="true" />
-												<span className="menu-profile-text">
-													<span className="menu-profile-name">{profile.label}</span>
-													{subline && <span className={`menu-profile-sub${subline.warn ? " warn" : ""}${subline.hoverOnly ? " hover-only" : ""}`}>{subline.text}</span>}
-												</span>
-											</div>
-										);
-									})}
-								</div>
-							) : (
-								<p className="menu-ai-profile-note">Profiles still loading</p>
-							)
-						) : null}
-						{selectError && <p className="menu-ai-profile-error">{selectError}</p>}
-					</div>
 					<button
 						className={`menu-item ${active === "ai-setup" ? "active" : ""}`}
 						role="menuitem"
@@ -194,6 +93,28 @@ function SidebarConfigMenu({ onAiSetup, theme, onToggleTheme, active, aiProfileS
 					>
 						Help
 					</button>
+					{/* The offer is its own line above the metadata, so the version
+					    the user is running stays readable next to the version on
+					    offer (a swapped-out version line answered "update to what,
+					    from what?" with only half of it). Dismiss silences the gear
+					    dot only; the offer stays here for whenever the user wants
+					    it. */}
+					{update.available && (
+						<div className="menu-update-row">
+							<button
+								className="menu-meta-update-btn"
+								onClick={() => {
+									requestUpdate();
+									setOpen(false);
+								}}
+							>
+								Update to v{update.available}
+							</button>
+							{update.dotVisible && (
+								<button className="menu-meta-dismiss" onClick={update.dismiss}>Dismiss</button>
+							)}
+						</div>
+					)}
 					<div className="menu-meta-row">
 						<span className="menu-meta-version">{APP_VERSION}</span>
 						<a className="menu-meta-link" href={GITHUB_URL} target="_blank" rel="noopener noreferrer">GitHub</a>
@@ -203,18 +124,19 @@ function SidebarConfigMenu({ onAiSetup, theme, onToggleTheme, active, aiProfileS
 			{helpOpen && <Help onClose={() => setHelpOpen(false)} />}
 			<button
 				className="sidebar-config-gear"
-				aria-label="Settings"
+				aria-label={update.dotVisible ? "Settings, update available" : "Settings"}
 				aria-haspopup="menu"
 				aria-expanded={open}
 				onClick={() => setOpen((v) => !v)}
 			>
 				⚙
+				{update.dotVisible && <span className="sidebar-config-dot" aria-hidden="true" />}
 			</button>
 		</div>
 	);
 }
 
-export function ProductSidebar({ onHome, onAiSetup, onDashboard, onConnectors, onMemory, onSkills, theme, onToggleTheme, active, aiProfileStatus, onSelectAiProfile, onRefreshAiProfile, standbyLockedModels }: { onHome: () => void; onAiSetup: () => void; onDashboard: () => void; onConnectors?: () => void; onMemory?: () => void; onSkills?: () => void; theme: ThemeMode; onToggleTheme: () => void; active: ProductSidebarActive } & SidebarAiProfileProps) {
+export function ProductSidebar({ onHome, onAiSetup, onDashboard, onConnectors, onMemory, onSkills, theme, onToggleTheme, active }: { onHome: () => void; onAiSetup: () => void; onDashboard: () => void; onConnectors?: () => void; onMemory?: () => void; onSkills?: () => void; theme: ThemeMode; onToggleTheme: () => void; active: ProductSidebarActive }) {
 	return (
 		<aside className="product-sidebar">
 			<div className="product-sidebar-header">
@@ -245,7 +167,7 @@ export function ProductSidebar({ onHome, onAiSetup, onDashboard, onConnectors, o
 			    speaks in words the user can act on. */}
 			<div className="product-sidebar-footer">
 				<div className="sidebar-footer-controls">
-					<SidebarConfigMenu onAiSetup={onAiSetup} theme={theme} onToggleTheme={onToggleTheme} active={active} aiProfileStatus={aiProfileStatus} onSelectAiProfile={onSelectAiProfile} onRefreshAiProfile={onRefreshAiProfile} standbyLockedModels={standbyLockedModels} />
+					<ConfigMenu onAiSetup={onAiSetup} theme={theme} onToggleTheme={onToggleTheme} active={active} />
 					<SidebarToggleButton />
 				</div>
 			</div>

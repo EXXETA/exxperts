@@ -96,7 +96,7 @@ export interface ConsultState {
 	/** Provenance, known at `consult_end`. */
 	l1bFingerprint: L1bFingerprint | null;
 	generatedAt: string | null;
-	/** e.g. a "recent context awaiting Learn" lag warning for needs_absorb rooms. */
+	/** e.g. a "recent context awaiting Memorize" lag warning for needs_absorb rooms. */
 	warnings: string[];
 	/** True once the user asked to stop — routes the next error to `stopped`. */
 	stopRequested: boolean;

@@ -1,8 +1,9 @@
-// One-click install layer over electron-updater, USER-INITIATED ONLY: nothing
-// here runs until the user has clicked "Check for Updates..." and then chosen
-// "Install and restart". autoDownload and autoInstallOnAppQuit stay off, no
-// timers exist, and the no-telemetry story stays true: the feed is contacted
-// only inside a user-initiated flow.
+// One-click install layer over electron-updater: nothing here downloads or
+// installs anything until the user has chosen "Install and restart".
+// autoDownload and autoInstallOnAppQuit stay off and no timers exist. The
+// only unattended network call in the app is the single anonymous version
+// check the shell runs once at startup (update-check.ts); everything in this
+// file waits for a click, so the no-telemetry story stays true.
 //
 // Trust boundary, same stance as update-check.ts: the feed is input, not
 // authority. electron-updater verifies the download against the sha512 in the
@@ -34,6 +35,11 @@ function configure(): void {
   autoUpdater.autoDownload = false;
   autoUpdater.autoInstallOnAppQuit = false;
   autoUpdater.disableWebInstaller = true;
+  // Field failures used to be invisible: a blocked proxy or a rejected
+  // signature left only a silent fallback dialog. electron-updater's own log
+  // lines go to the shell's stdout/stderr, where the Health Check and a
+  // terminal run can both see them.
+  autoUpdater.logger = console;
   if (FEED_OVERRIDE && FEED_OVERRIDE.trim()) {
     // The same test override the version check honors: a generic feed serving
     // latest.yml / latest-mac.yml plus the artifacts, so the full download +
@@ -80,13 +86,33 @@ export type UpdaterCheck =
   | { status: "none" }
   | { status: "error" };
 
+// A blocked proxy makes electron-updater's check hang with no deadline of its
+// own, which is what "the update takes forever" looked like from the outside.
+// A bounded wait turns that into a visible error and the manual fallback.
+const CHECK_TIMEOUT_MS = 15_000;
+// How long a check stays usable for the download that follows it. The
+// download needs electron-updater to have checked in this process; repeating
+// the request one click later only added a second round trip to the feed.
+const CHECK_FRESH_MS = 60_000;
+
+let lastCheck: { at: number; result: UpdaterCheck } | null = null;
+
 // electron-updater's own feed check (it must run before downloadUpdate). The
 // version-compare hardening from update-check.ts applies on top: a feed whose
 // version is unparseable or not strictly newer is never "available".
 export async function checkViaUpdater(currentVersion: string): Promise<UpdaterCheck> {
   configure();
+  const result = await runCheck(currentVersion);
+  lastCheck = { at: Date.now(), result };
+  return result;
+}
+
+async function runCheck(currentVersion: string): Promise<UpdaterCheck> {
+  let timer: NodeJS.Timeout | undefined;
   try {
-    const result = await autoUpdater.checkForUpdates();
+    const timeout = new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), CHECK_TIMEOUT_MS); });
+    const result = await Promise.race([autoUpdater.checkForUpdates(), timeout]);
+    if (result === null) return { status: "error" }; // the feed never answered
     const raw = result?.updateInfo?.version ?? "";
     if (!isNewerVersion(currentVersion, raw)) return { status: "none" };
     const version = parseTriple(raw);
@@ -94,6 +120,8 @@ export async function checkViaUpdater(currentVersion: string): Promise<UpdaterCh
     return { status: "available", version };
   } catch {
     return { status: "error" };
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 }
 
@@ -106,7 +134,10 @@ export async function downloadUpdate(
   currentVersion: string,
   hooks: { onProgress: (percent: number, transferredBytes: number, totalBytes: number) => void; registerCancel: (cancel: () => void) => void },
 ): Promise<DownloadOutcome> {
-  const check = await checkViaUpdater(currentVersion);
+  // Reuse the check the caller just made (the offer dialog cannot appear
+  // without one); only a stale or missing result costs another round trip.
+  const fresh = lastCheck && Date.now() - lastCheck.at < CHECK_FRESH_MS ? lastCheck.result : null;
+  const check = fresh ?? await checkViaUpdater(currentVersion);
   if (check.status !== "available") return "error";
   const token = new CancellationToken();
   hooks.registerCancel(() => token.cancel());

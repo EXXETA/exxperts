@@ -42,7 +42,7 @@ Both builds are signed. The macOS app is notarized by Apple and opens clean; the
 
 ## See it
 
-![A three-act tour: ask and the room searches the live web; Checkpoint proposes what to remember and you edit the proposal before approving it; the memory page links the saved memory back to the exact conversation it came from](docs/assets/exxperts-demo.gif)
+![A three-act tour: ask and the room searches the live web; Remember proposes what to keep and you edit the proposal before approving it; the memory page links the saved memory back to the exact conversation it came from](docs/assets/exxperts-demo.gif)
 
 Every memory shows **where it came from**: click any remembered fact and the exact conversation it was learned from opens. The growth chart is clickable time travel: pick a day, read everything your AI knew then.
 
@@ -56,9 +56,9 @@ Every memory shows **where it came from**: click any remembered fact and the exa
 
 **Work.** A room replaces a chat thread: it is the durable place where you set up your exxpert's tools, folders, connections, and skills - and the exxpert in it searches the web, reads pages, writes documents, decks and web pages, and runs background tasks. Which tools each room may use is your call.
 
-**Checkpoint.** At the end of a session, the room proposes what is worth remembering. You steer it, edit it, or reject it; nothing enters memory without you.
+**Remember.** At the end of a session, the room proposes what is worth keeping. You steer it, edit it, or reject it; nothing enters memory without you.
 
-**Learn.** After several sessions, the room consolidates its notes into durable long-term memory, and you review the update before it is written. This is how a room stops being a tool and starts becoming a colleague: session by session, it knows more of your work.
+**Memorize.** After several sessions, the room consolidates its notes into durable long-term memory, and you review the update before it is written. This is how a room stops being a tool and starts becoming a colleague: session by session, it knows more of your work.
 
 Every memory traces back to the conversation it came from, and everything a room is lives as plain files on your machine. Switch AI providers anytime, and you keep the colleague.
 
@@ -114,7 +114,7 @@ The app is self-contained and always runs its own version; a terminal install up
 
 ### What's inside
 
-Persistent rooms with governed memory · artifacts (documents, decks, pages your rooms produce) · delegated background tasks · skills · MCP connectors · scheduled work · built-in web search (DuckDuckGo with no setup; [SearXNG](docs/web-search.md) for heavy use or networks where DuckDuckGo blocks automated queries) · a health check (`exxperts doctor` / in-app) · multi-provider wallet.
+Persistent rooms with governed memory · artifacts (documents, decks, pages your rooms produce) · delegated background tasks · skills · MCP connectors · scheduled work · web search (rooms on Claude and ChatGPT search through the provider itself, gateway models through their gateway where marked, everything else through the built-in search: DuckDuckGo with no setup, or [SearXNG](docs/web-search.md) for heavy use) · a health check (`exxperts doctor` / in-app) · multi-provider wallet.
 
 ### Documentation
 

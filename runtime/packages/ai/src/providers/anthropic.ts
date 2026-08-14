@@ -485,174 +485,300 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 				...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
 				...(options?.maxRetries !== undefined ? { maxRetries: options.maxRetries } : {}),
 			};
-			const response = await client.messages.create({ ...params, stream: true }, requestOptions).asResponse();
-			await options?.onResponse?.({ status: response.status, headers: headersToRecord(response.headers) }, model);
-			stream.push({ type: "start", partial: output });
-
 			type Block = (ThinkingContent | TextContent | (ToolCall & { partialJson: string })) & { index: number };
 			const blocks = output.content as Block[];
 
-			for await (const event of iterateAnthropicEvents(response, options?.signal)) {
-				if (event.type === "message_start") {
-					output.responseId = event.message.id;
-					// Capture initial token usage from message_start event
-					// This ensures we have input token counts even if the stream is aborted early
-					output.usage.input = event.message.usage.input_tokens || 0;
-					output.usage.output = event.message.usage.output_tokens || 0;
-					output.usage.cacheRead = event.message.usage.cache_read_input_tokens || 0;
-					output.usage.cacheWrite = event.message.usage.cache_creation_input_tokens || 0;
-					// Anthropic doesn't provide total_tokens, compute from components
-					output.usage.totalTokens =
-						output.usage.input + output.usage.output + output.usage.cacheRead + output.usage.cacheWrite;
-					calculateCost(model, output.usage);
-				} else if (event.type === "content_block_start") {
-					if (event.content_block.type === "text") {
-						const block: Block = {
-							type: "text",
-							text: "",
-							index: event.index,
-						};
-						output.content.push(block);
-						stream.push({ type: "text_start", contentIndex: output.content.length - 1, partial: output });
-					} else if (event.content_block.type === "thinking") {
-						const block: Block = {
-							type: "thinking",
-							thinking: "",
-							thinkingSignature: "",
-							index: event.index,
-						};
-						output.content.push(block);
-						stream.push({ type: "thinking_start", contentIndex: output.content.length - 1, partial: output });
-					} else if (event.content_block.type === "redacted_thinking") {
-						const block: Block = {
-							type: "thinking",
-							thinking: "[Reasoning redacted]",
-							thinkingSignature: event.content_block.data,
-							redacted: true,
-							index: event.index,
-						};
-						output.content.push(block);
-						stream.push({ type: "thinking_start", contentIndex: output.content.length - 1, partial: output });
-					} else if (event.content_block.type === "tool_use") {
-						const block: Block = {
-							type: "toolCall",
-							id: event.content_block.id,
-							name: isOAuth
-								? fromClaudeCodeName(event.content_block.name, context.tools)
-								: event.content_block.name,
-							arguments: (event.content_block.input as Record<string, any>) ?? {},
-							partialJson: "",
-							index: event.index,
-						};
-						output.content.push(block);
-						stream.push({ type: "toolcall_start", contentIndex: output.content.length - 1, partial: output });
-					}
-				} else if (event.type === "content_block_delta") {
-					if (event.delta.type === "text_delta") {
-						const index = blocks.findIndex((b) => b.index === event.index);
-						const block = blocks[index];
-						if (block && block.type === "text") {
-							block.text += event.delta.text;
-							stream.push({
-								type: "text_delta",
-								contentIndex: index,
-								delta: event.delta.text,
-								partial: output,
-							});
-						}
-					} else if (event.delta.type === "thinking_delta") {
-						const index = blocks.findIndex((b) => b.index === event.index);
-						const block = blocks[index];
-						if (block && block.type === "thinking") {
-							block.thinking += event.delta.thinking;
-							stream.push({
-								type: "thinking_delta",
-								contentIndex: index,
-								delta: event.delta.thinking,
-								partial: output,
-							});
-						}
-					} else if (event.delta.type === "input_json_delta") {
-						const index = blocks.findIndex((b) => b.index === event.index);
-						const block = blocks[index];
-						if (block && block.type === "toolCall") {
-							block.partialJson += event.delta.partial_json;
-							block.arguments = parseStreamingJson(block.partialJson);
-							stream.push({
-								type: "toolcall_delta",
-								contentIndex: index,
-								delta: event.delta.partial_json,
-								partial: output,
-							});
-						}
-					} else if (event.delta.type === "signature_delta") {
-						const index = blocks.findIndex((b) => b.index === event.index);
-						const block = blocks[index];
-						if (block && block.type === "thinking") {
-							block.thinkingSignature = block.thinkingSignature || "";
-							block.thinkingSignature += event.delta.signature;
-						}
-					}
-				} else if (event.type === "content_block_stop") {
-					const index = blocks.findIndex((b) => b.index === event.index);
-					const block = blocks[index];
-					if (block) {
-						delete (block as any).index;
-						if (block.type === "text") {
-							stream.push({
-								type: "text_end",
-								contentIndex: index,
-								content: block.text,
-								partial: output,
-							});
-						} else if (block.type === "thinking") {
-							stream.push({
-								type: "thinking_end",
-								contentIndex: index,
-								content: block.thinking,
-								partial: output,
-							});
-						} else if (block.type === "toolCall") {
-							block.arguments = parseStreamingJson(block.partialJson);
-							// Finalize in-place and strip the scratch buffer so replay only
-							// carries parsed arguments.
-							delete (block as { partialJson?: string }).partialJson;
-							stream.push({
-								type: "toolcall_end",
-								contentIndex: index,
-								toolCall: block,
-								partial: output,
-							});
-						}
-					}
-				} else if (event.type === "message_delta") {
-					if (event.delta.stop_reason) {
-						output.stopReason = mapStopReason(event.delta.stop_reason);
-					}
-					// Only update usage fields if present (not null).
-					// Preserves input_tokens from message_start when proxies omit it in message_delta.
-					if (event.usage.input_tokens != null) {
-						output.usage.input = event.usage.input_tokens;
-					}
-					if (event.usage.output_tokens != null) {
-						output.usage.output = event.usage.output_tokens;
-					}
-					if (event.usage.cache_read_input_tokens != null) {
-						output.usage.cacheRead = event.usage.cache_read_input_tokens;
-					}
-					if (event.usage.cache_creation_input_tokens != null) {
-						output.usage.cacheWrite = event.usage.cache_creation_input_tokens;
-					}
-					// Anthropic doesn't provide total_tokens, compute from components
-					output.usage.totalTokens =
-						output.usage.input + output.usage.output + output.usage.cacheRead + output.usage.cacheWrite;
-					calculateCost(model, output.usage);
-				}
-			}
+			// A turn that uses one of the provider's own server tools can come
+			// back with stop_reason "pause_turn". The model has not finished; the
+			// provider is handing control back rather than holding a connection
+			// open through a long search. Left alone it reads as a clean ending,
+			// which is how an answer gets cut off mid-sentence and still looks
+			// finished. The documented answer is to send the partial turn back and
+			// let it carry on, so that is what happens here, invisibly: one start
+			// event, one accumulating assistant message, one stream.
+			//
+			// Only a request that declares a server tool can pause, so the
+			// bookkeeping that makes continuing possible is only paid for then and
+			// every other request runs the path it has always run.
+			const declaresServerTool =
+				Array.isArray((params as any).tools) &&
+				(params as any).tools.some((tool: any) => tool && typeof tool.type === "string" && tool.type !== "custom");
+			let pausedTurns = 0;
+			let started = false;
+			// Usage arrives per response, so a continuation's numbers are added to
+			// what the turn has already spent instead of replacing it. That sum is
+			// what the turn COST, and every request in it resent the whole
+			// conversation, so it is not what the turn left behind.
+			const usageBase = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+			// What the turn leaves behind is measured from the first request's
+			// prompt AS SUBMITTED, which is the one the next turn will resend.
+			//
+			// Taken from the first usage report of the first response rather than
+			// from its last, because a server-side search grows the prompt while
+			// the response is still streaming: the results it finds are billed
+			// back as cache creation on the same request. Those results never
+			// reach our messages, so they are not there to be resent, and counting
+			// them leaves the meter reading a conversation that does not exist.
+			// A turn with no server tool reports the same prompt at both ends, so
+			// for everything else this is the number it always was.
+			let firstSegmentPrompt: number | undefined;
+			/** Set when a continuation should open with a paragraph break. */
+			let needsSegmentSeparator = false;
+			// Recomputed wherever the sums are, so a caller reading mid-stream sees
+			// a context number that agrees with the tokens counted so far.
+			const refreshContextTokens = () => {
+				const prompt = firstSegmentPrompt ?? output.usage.input + output.usage.cacheRead + output.usage.cacheWrite;
+				output.usage.contextTokens = prompt + output.usage.output;
+			};
 
-			if (options?.signal?.aborted) {
-				throw new Error("Request was aborted");
-			}
+			for (;;) {
+				const response = await client.messages.create({ ...params, stream: true }, requestOptions).asResponse();
+				await options?.onResponse?.({ status: response.status, headers: headersToRecord(response.headers) }, model);
+				if (!started) {
+					// Exactly one start for the whole turn: the agent loop reads a
+					// second one as a second assistant message.
+					stream.push({ type: "start", partial: output });
+					started = true;
+				}
+				const rawBlocks = declaresServerTool ? new Map<number, Record<string, any>>() : null;
+				let rawStopReason: string | undefined;
+
+				for await (const event of iterateAnthropicEvents(response, options?.signal)) {
+					if (rawBlocks) captureRawAnthropicBlock(rawBlocks, event);
+					if (event.type === "message_start") {
+						// The id of the response the caller started, kept across any
+						// continuation so the turn correlates to one thing.
+						output.responseId ??= event.message.id;
+						// Capture initial token usage from message_start event
+						// This ensures we have input token counts even if the stream is aborted early
+						output.usage.input = usageBase.input + (event.message.usage.input_tokens || 0);
+						output.usage.output = usageBase.output + (event.message.usage.output_tokens || 0);
+						output.usage.cacheRead = usageBase.cacheRead + (event.message.usage.cache_read_input_tokens || 0);
+						output.usage.cacheWrite = usageBase.cacheWrite + (event.message.usage.cache_creation_input_tokens || 0);
+						// The prompt as this request was submitted, pinned before the
+						// response has had a chance to grow it. Only the first response
+						// of the turn sets it, and only when it actually reported
+						// something: a proxy that sends usage-free message_start events
+						// leaves it undefined and the seam below picks it up instead.
+						if (firstSegmentPrompt === undefined) {
+							const submittedPrompt =
+								(event.message.usage.input_tokens || 0) +
+								(event.message.usage.cache_read_input_tokens || 0) +
+								(event.message.usage.cache_creation_input_tokens || 0);
+							if (submittedPrompt > 0) firstSegmentPrompt = submittedPrompt;
+						}
+						// Anthropic doesn't provide total_tokens, compute from components
+						output.usage.totalTokens =
+							output.usage.input + output.usage.output + output.usage.cacheRead + output.usage.cacheWrite;
+						refreshContextTokens();
+						calculateCost(model, output.usage);
+					} else if (event.type === "content_block_start") {
+						if (event.content_block.type === "text") {
+							const block: Block = {
+								type: "text",
+								text: "",
+								index: event.index,
+							};
+							output.content.push(block);
+							stream.push({ type: "text_start", contentIndex: output.content.length - 1, partial: output });
+							// The first text after a pause opens the paragraph the pause
+							// interrupted, so it carries the break the model never got to
+							// write.
+							if (needsSegmentSeparator) {
+								needsSegmentSeparator = false;
+								block.text = "\n\n";
+								stream.push({ type: "text_delta", contentIndex: output.content.length - 1, delta: "\n\n", partial: output });
+							}
+						} else if (event.content_block.type === "thinking") {
+							const block: Block = {
+								type: "thinking",
+								thinking: "",
+								thinkingSignature: "",
+								index: event.index,
+							};
+							output.content.push(block);
+							stream.push({ type: "thinking_start", contentIndex: output.content.length - 1, partial: output });
+						} else if (event.content_block.type === "redacted_thinking") {
+							const block: Block = {
+								type: "thinking",
+								thinking: "[Reasoning redacted]",
+								thinkingSignature: event.content_block.data,
+								redacted: true,
+								index: event.index,
+							};
+							output.content.push(block);
+							stream.push({ type: "thinking_start", contentIndex: output.content.length - 1, partial: output });
+						} else if (event.content_block.type === "tool_use") {
+							const block: Block = {
+								type: "toolCall",
+								id: event.content_block.id,
+								name: isOAuth
+									? fromClaudeCodeName(event.content_block.name, context.tools)
+									: event.content_block.name,
+								arguments: (event.content_block.input as Record<string, any>) ?? {},
+								partialJson: "",
+								index: event.index,
+							};
+							output.content.push(block);
+							stream.push({ type: "toolcall_start", contentIndex: output.content.length - 1, partial: output });
+						}
+					} else if (event.type === "content_block_delta") {
+						if (event.delta.type === "text_delta") {
+							const index = blocks.findIndex((b) => b.index === event.index);
+							const block = blocks[index];
+							if (block && block.type === "text") {
+								block.text += event.delta.text;
+								stream.push({
+									type: "text_delta",
+									contentIndex: index,
+									delta: event.delta.text,
+									partial: output,
+								});
+							}
+						} else if (event.delta.type === "thinking_delta") {
+							const index = blocks.findIndex((b) => b.index === event.index);
+							const block = blocks[index];
+							if (block && block.type === "thinking") {
+								block.thinking += event.delta.thinking;
+								stream.push({
+									type: "thinking_delta",
+									contentIndex: index,
+									delta: event.delta.thinking,
+									partial: output,
+								});
+							}
+						} else if (event.delta.type === "input_json_delta") {
+							const index = blocks.findIndex((b) => b.index === event.index);
+							const block = blocks[index];
+							if (block && block.type === "toolCall") {
+								block.partialJson += event.delta.partial_json;
+								block.arguments = parseStreamingJson(block.partialJson);
+								stream.push({
+									type: "toolcall_delta",
+									contentIndex: index,
+									delta: event.delta.partial_json,
+									partial: output,
+								});
+							}
+						} else if (event.delta.type === "signature_delta") {
+							const index = blocks.findIndex((b) => b.index === event.index);
+							const block = blocks[index];
+							if (block && block.type === "thinking") {
+								block.thinkingSignature = block.thinkingSignature || "";
+								block.thinkingSignature += event.delta.signature;
+							}
+						}
+					} else if (event.type === "content_block_stop") {
+						const index = blocks.findIndex((b) => b.index === event.index);
+						const block = blocks[index];
+						if (block) {
+							delete (block as any).index;
+							if (block.type === "text") {
+								stream.push({
+									type: "text_end",
+									contentIndex: index,
+									content: block.text,
+									partial: output,
+								});
+							} else if (block.type === "thinking") {
+								stream.push({
+									type: "thinking_end",
+									contentIndex: index,
+									content: block.thinking,
+									partial: output,
+								});
+							} else if (block.type === "toolCall") {
+								block.arguments = parseStreamingJson(block.partialJson);
+								// Finalize in-place and strip the scratch buffer so replay only
+								// carries parsed arguments.
+								delete (block as { partialJson?: string }).partialJson;
+								stream.push({
+									type: "toolcall_end",
+									contentIndex: index,
+									toolCall: block,
+									partial: output,
+								});
+							}
+						}
+					} else if (event.type === "message_delta") {
+						if (event.delta.stop_reason) {
+							rawStopReason = event.delta.stop_reason;
+							output.stopReason = mapStopReason(event.delta.stop_reason);
+						}
+						// Only update usage fields if present (not null).
+						// Preserves input_tokens from message_start when proxies omit it in message_delta.
+						if (event.usage.input_tokens != null) {
+							output.usage.input = usageBase.input + event.usage.input_tokens;
+						}
+						if (event.usage.output_tokens != null) {
+							output.usage.output = usageBase.output + event.usage.output_tokens;
+						}
+						if (event.usage.cache_read_input_tokens != null) {
+							output.usage.cacheRead = usageBase.cacheRead + event.usage.cache_read_input_tokens;
+						}
+						if (event.usage.cache_creation_input_tokens != null) {
+							output.usage.cacheWrite = usageBase.cacheWrite + event.usage.cache_creation_input_tokens;
+						}
+						// Anthropic doesn't provide total_tokens, compute from components
+						output.usage.totalTokens =
+							output.usage.input + output.usage.output + output.usage.cacheRead + output.usage.cacheWrite;
+						refreshContextTokens();
+						calculateCost(model, output.usage);
+					}
+				}
+
+				if (options?.signal?.aborted) {
+					throw new Error("Request was aborted");
+				}
+				// A CONTINUATION that said nothing told us nothing, not even that it
+				// finished, and breaking here would publish the previous segment as a
+				// clean, complete answer. Only continuations though: a first response
+				// that streams a message without ever naming a stop reason is a
+				// proxy quirk this file tolerates elsewhere, and it has already
+				// delivered an answer somebody paid for. Downgrading that to an error
+				// would be a regression, so segment one keeps its lenient default.
+				if (pausedTurns > 0 && rawStopReason === undefined) {
+					throw new Error("Anthropic paused this turn and the continuation returned no stream events");
+				}
+				if (rawStopReason !== "pause_turn" || !rawBlocks) break;
+				if (pausedTurns >= MAX_PAUSED_TURN_RESUBMITS) {
+					// Out of patience rather than out of answer. "length" is the honest
+					// signal: the turn was cut short, and every consumer already knows
+					// what a truncated answer means.
+					output.stopReason = "length";
+					break;
+				}
+				pausedTurns += 1;
+				// Fallback only. Normally message_start already pinned this from the
+				// prompt as submitted; this catches the proxies that report no usage
+				// there. It is the end-of-segment figure, so on a segment that ran a
+				// server-side search it will read high, which is still better than
+				// having no anchor at all and summing every continuation's prompt.
+				firstSegmentPrompt ??= output.usage.input + output.usage.cacheRead + output.usage.cacheWrite;
+				usageBase.input = output.usage.input;
+				usageBase.output = output.usage.output;
+				usageBase.cacheRead = output.usage.cacheRead;
+				usageBase.cacheWrite = output.usage.cacheWrite;
+				// The turn resumes as new blocks, so the last thing written before the
+				// pause and the first thing written after it would otherwise run
+				// together into one word. The break belongs at the START of the
+				// continuation's first text block rather than appended to the
+				// previous one, which has already been closed and announced: this way
+				// it arrives as an ordinary delta, in order, and a reader sees the
+				// paragraph the model would have written had nothing interrupted it.
+				// Accumulated, never recomputed: a segment that produced only thinking
+				// leaves the pending break pending, so the text that eventually
+				// arrives still opens a new paragraph rather than colliding with the
+				// last thing written before the first pause. Any trailing whitespace
+				// counts as already separated, a space as much as a newline, so the
+				// seam never reads as " \n\n".
+				const lastBlock = blocks[blocks.length - 1];
+				needsSegmentSeparator ||= !!lastBlock && lastBlock.type === "text" && !!lastBlock.text && !/\s$/.test(lastBlock.text);
+				params = {
+					...params,
+					messages: [...params.messages, { role: "assistant", content: finalizeRawAnthropicBlocks(rawBlocks) as any }],
+				};
+			} // end of the pause_turn continuation loop
 
 			if (output.stopReason === "aborted" || output.stopReason === "error") {
 				throw new Error("An unknown error occurred");
@@ -1186,6 +1312,66 @@ function convertTools(
 	});
 }
 
+/**
+ * How many times a paused turn is handed back before we stop and say so. A
+ * bound rather than a loop: a provider that paused three times in a row is not
+ * about to finish, and an unbounded resubmit spends somebody's money forever.
+ */
+const MAX_PAUSED_TURN_RESUBMITS = 3;
+
+/**
+ * The provider's own blocks, kept exactly as they arrived.
+ *
+ * Continuing a paused turn means handing the turn back the way it came, and
+ * the assistant message we build for the caller cannot do that job: it has no
+ * home for a server tool's call or its results, which is the right shape for
+ * reading an answer and the wrong one for resuming it. A block dropped on the
+ * way out would be a block missing on the way back in, and a tool_use without
+ * its result is a request the API refuses. So the raw blocks are accumulated
+ * beside the parsed ones, used only to build the continuation, and thrown away
+ * with the response.
+ */
+function captureRawAnthropicBlock(rawBlocks: Map<number, Record<string, any>>, event: any): void {
+	if (event.type === "content_block_start") {
+		rawBlocks.set(event.index, JSON.parse(JSON.stringify(event.content_block)));
+		return;
+	}
+	if (event.type === "content_block_delta") {
+		const block = rawBlocks.get(event.index);
+		if (!block) return;
+		const delta = event.delta;
+		if (delta.type === "text_delta") block.text = (block.text ?? "") + delta.text;
+		else if (delta.type === "thinking_delta") block.thinking = (block.thinking ?? "") + delta.thinking;
+		else if (delta.type === "signature_delta") block.signature = (block.signature ?? "") + delta.signature;
+		else if (delta.type === "input_json_delta") block.partialJsonScratch = (block.partialJsonScratch ?? "") + delta.partial_json;
+		return;
+	}
+	if (event.type === "content_block_stop") {
+		const block = rawBlocks.get(event.index);
+		if (!block) return;
+		if (typeof block.partialJsonScratch === "string") {
+			try {
+				block.input = block.partialJsonScratch ? JSON.parse(block.partialJsonScratch) : {};
+			} catch {
+				block.input = {};
+			}
+			delete block.partialJsonScratch;
+		}
+	}
+}
+
+/** The paused turn as content the provider will accept back. */
+function finalizeRawAnthropicBlocks(rawBlocks: Map<number, Record<string, any>>): Record<string, any>[] {
+	const content: Record<string, any>[] = [];
+	for (const block of rawBlocks.values()) {
+		const { partialJsonScratch: _scratch, ...rest } = block;
+		// An empty text block is not something the API takes back.
+		if (rest.type === "text" && !String(rest.text ?? "").trim()) continue;
+		content.push(rest);
+	}
+	return content;
+}
+
 function mapStopReason(reason: Anthropic.Messages.StopReason | string): StopReason {
 	switch (reason) {
 		case "end_turn":
@@ -1196,7 +1382,11 @@ function mapStopReason(reason: Anthropic.Messages.StopReason | string): StopReas
 			return "toolUse";
 		case "refusal":
 			return "error";
-		case "pause_turn": // Stop is good enough -> resubmit
+		// The streaming function resubmits a paused turn before anyone sees this,
+		// so by the time a stop reason reaches a caller the turn really has
+		// stopped. This mapping only covers the case where it paused more times
+		// than we were willing to follow, and there the turn is genuinely over.
+		case "pause_turn":
 			return "stop";
 		case "stop_sequence":
 			return "stop"; // We don't supply stop sequences, so this should never happen

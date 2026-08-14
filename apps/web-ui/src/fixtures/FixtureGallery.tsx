@@ -22,9 +22,6 @@ function sidebarFixtureFor(active: ProductSidebarActive, theme: ThemeMode) {
 			theme={theme}
 			onToggleTheme={noop}
 			active={active}
-			aiProfileStatus={null}
-			onSelectAiProfile={async () => {}}
-			onRefreshAiProfile={() => {}}
 		/>
 	);
 }
@@ -194,7 +191,7 @@ function InRoomChatFixtureScreen({ fixture, theme }: { fixture: InRoomChatFixtur
 					onHome={noop}
 					theme={theme}
 					onToggleTheme={noop}
-					onHelp={noop}
+					onAiSetup={noop}
 				/>
 			}
 			activeDisplay={fixture.activeDisplay}

@@ -73,7 +73,7 @@ try {
 	assert(lines[3] === "Source: Neo's governed memory only, read-only; Neo's memory was not", `source line 1; got "${lines[3]}"`);
 	assert(lines[4] === "modified and Neo did not run a session for this.", `source line 2; got "${lines[4]}"`);
 	assert(lines[5] === "Treat the answers as sourced external claims from Neo's memory, not as this", `treat line 1; got "${lines[5]}"`);
-	assert(lines[6] === "room's own knowledge; they become durable here only if checkpointed.", `treat line 2; got "${lines[6]}"`);
+	assert(lines[6] === "room's own knowledge; they become durable here only if they are saved through Remember.", `treat line 2; got "${lines[6]}"`);
 	assert(!lines[2].includes("fingerprint") && lines.slice(3, 7).every((l) => !l.includes("fingerprint")), "the stacked provenance header carries no fingerprint (per-exchange only)");
 
 	// Exchange 1 always shows the as-of + fingerprint line (no previous), no drift tail.

@@ -74,12 +74,12 @@ Where API calls happen:
 |---|---|
 | Web room chat | `apps/web-server/src/index.ts` creates a runtime agent session; the runtime calls the selected LLM provider. |
 | CLI chat | `bin/exxperts-cli.cjs` starts the runtime CLI with the exxperts extensions. |
-| Memory lifecycle workers | Checkpoint, Learn, and Review Memory proposals each run an isolated, tool-less worker session (`apps/web-server/src/persistent-agent-worker-runtime.ts`). |
+| Memory lifecycle workers | Remember, Memorize, and Review proposals each run an isolated, tool-less worker session (`apps/web-server/src/persistent-agent-worker-runtime.ts`). |
 | Scheduled room runs | Background schedule execution runs room turns headlessly. |
 
 Model selection is owned by the active **AI profile**: rooms pick from
-the profile's room-model list, checkpoint workers inherit the room's
-model, and Learn/Review Memory use the profile's maintenance model
+the profile's room-model list, Remember workers inherit the room's
+model, and Memorize/Review use the profile's maintenance model
 (`apps/web-server/src/persistent-agent-ai-profiles.ts`). See
 [`provider-setup.md`](provider-setup.md).
 
@@ -172,7 +172,7 @@ lsof -ti:5173 | xargs kill -9
 Check `.exxperts-cache/web-ui.log` for a Vite compile error. Usually a
 bad import path. Run `cd apps/web-ui && npm run build` to surface it.
 
-### A room refuses to run or checkpoint
+### A room refuses to run or remember
 
 Room and worker models are locked to the active AI profile. If the
 profile changed since the room was created, the UI names the expected

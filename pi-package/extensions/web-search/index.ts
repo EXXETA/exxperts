@@ -35,27 +35,112 @@ interface SearxngResult {
 interface SharedSearchConfig {
 	provider?: string;
 	baseUrl?: string;
+	providerSearch?: boolean;
 }
 
-let sharedConfigCache: SharedSearchConfig | null | undefined;
+// A file nobody wrote and a file nobody can read are different answers, and
+// collapsing them is how a corrupted config turns into a setting somebody
+// never chose. Absent means "no opinion, use the defaults". Unreadable means
+// "there is an opinion here and we cannot see it", which is not the same thing
+// at all.
+type SharedConfigRead =
+	| { state: "absent" }
+	| { state: "ok"; config: SharedSearchConfig }
+	| { state: "unreadable"; message: string };
 
-function sharedConfig(): SharedSearchConfig {
-	if (sharedConfigCache !== undefined) return sharedConfigCache ?? {};
+// Read fresh every time, deliberately. This used to be cached for the life of
+// the process, which was invisible while the only writer was a terminal command
+// you ran before starting the app. Now the settings screen writes this file
+// while rooms are running, and a choice that only takes effect after a restart
+// is a choice the app quietly ignored. One small JSON read per search costs
+// nothing next to the search itself, and it means every writer is heard: the
+// settings screen, the setup command, or a hand edit.
+export function readSharedSearchConfig(): SharedConfigRead {
+	const file = productAppStatePath("web-search.json");
+	let raw: string;
 	try {
-		const file = productAppStatePath("web-search.json");
-		const parsed = JSON.parse(fs.readFileSync(file, "utf-8")) as unknown;
-		sharedConfigCache = parsed && typeof parsed === "object" ? (parsed as SharedSearchConfig) : null;
-	} catch {
-		sharedConfigCache = null;
+		raw = fs.readFileSync(file, "utf-8");
+	} catch (e) {
+		if ((e as NodeJS.ErrnoException).code === "ENOENT") return { state: "absent" };
+		return { state: "unreadable", message: `could not be read (${(e as Error).message})` };
 	}
-	return sharedConfigCache ?? {};
+	try {
+		const parsed = JSON.parse(raw) as unknown;
+		if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+			return { state: "unreadable", message: "does not contain a JSON object" };
+		}
+		return { state: "ok", config: parsed as SharedSearchConfig };
+	} catch (e) {
+		return { state: "unreadable", message: `is not valid JSON (${(e as Error).message})` };
+	}
 }
 
-function getProvider(): SearchProvider {
-	const raw = String(process.env.EXXETA_SEARCH_PROVIDER || sharedConfig().provider || "").trim().toLowerCase();
-	if (raw === "searxng") return "searxng";
-	if (raw === "disabled") return "disabled";
+function normalizeProvider(raw: string): SearchProvider {
+	const value = raw.trim().toLowerCase();
+	if (value === "searxng") return "searxng";
+	if (value === "disabled") return "disabled";
 	return "duckduckgo";
+}
+
+/**
+ * Which search is actually going to run, and who decided it. The settings
+ * screen shows this rather than only the saved file, because an environment
+ * variable set for the process silently outranks anything saved and a screen
+ * that hid that would be lying about what the next search does.
+ */
+export type WebSearchSettings = {
+	provider: SearchProvider;
+	baseUrl?: string;
+	/** "environment" when a variable decided it, "settings" when the saved file did, "default" when nobody did. */
+	source: "environment" | "settings" | "default";
+	/**
+	 * Whether rooms whose provider searches for itself are allowed to. This is
+	 * the app's own search's opposite number and deliberately NOT governed by
+	 * EXXETA_SEARCH_PROVIDER: that variable picks which local backend runs, and
+	 * reading it as "no provider search either" would turn a backend choice into
+	 * a data-governance decision nobody made. Default on, because for the two
+	 * subscription profiles it is the better search and it is already paid for.
+	 */
+	providerSearch: boolean;
+	/** What the saved file says, whether or not it is what wins. Empty when the file cannot be read. */
+	saved: { provider?: SearchProvider; baseUrl?: string; providerSearch?: boolean };
+	/** Set when the config file exists but cannot be understood, so callers can say so instead of acting on a guess. */
+	unreadable?: string;
+};
+
+export function resolveWebSearchSettings(): WebSearchSettings {
+	const read = readSharedSearchConfig();
+	if (read.state === "unreadable") {
+		// Fail closed on the one setting where guessing wrong sends data
+		// somewhere nobody agreed to. A machine with a config file has an
+		// opinion; until we can read it, the safe reading of that opinion is
+		// that provider search was not wanted. The local backend falls back to
+		// the zero-setup default, which is a taste question, not a governance
+		// one, and the caller is told the file is broken either way.
+		return { provider: "duckduckgo", source: "default", providerSearch: false, saved: {}, unreadable: read.message };
+	}
+	const config = read.state === "ok" ? read.config : {};
+	const savedProvider = config.provider ? normalizeProvider(String(config.provider)) : undefined;
+	const savedBaseUrl = typeof config.baseUrl === "string" && config.baseUrl.trim() ? config.baseUrl.trim() : undefined;
+	// Absent means on. Files written before provider search existed say nothing
+	// about it, and the honest reading of silence is the default, not "off".
+	const savedProviderSearch = typeof config.providerSearch === "boolean" ? config.providerSearch : undefined;
+	const providerSearch = savedProviderSearch ?? true;
+	const saved = {
+		...(savedProvider ? { provider: savedProvider } : {}),
+		...(savedBaseUrl ? { baseUrl: savedBaseUrl } : {}),
+		...(savedProviderSearch !== undefined ? { providerSearch: savedProviderSearch } : {}),
+	};
+
+	const envProvider = String(process.env.EXXETA_SEARCH_PROVIDER || "").trim();
+	const envBaseUrl = String(process.env.EXXETA_SEARCH_BASE_URL || "").trim();
+	if (envProvider) {
+		return { provider: normalizeProvider(envProvider), baseUrl: envBaseUrl || savedBaseUrl, source: "environment", providerSearch, saved };
+	}
+	if (savedProvider) {
+		return { provider: savedProvider, baseUrl: envBaseUrl || savedBaseUrl, source: "settings", providerSearch, saved };
+	}
+	return { provider: "duckduckgo", baseUrl: envBaseUrl || savedBaseUrl, source: "default", providerSearch, saved };
 }
 
 function clampLimit(limit: unknown): number {
@@ -123,9 +208,9 @@ function takeDdgSlot(): Promise<void> {
 }
 
 async function searchSearxng(query: string, limit: number): Promise<SearchResult[]> {
-	const baseUrl = process.env.EXXETA_SEARCH_BASE_URL || sharedConfig().baseUrl;
+	const baseUrl = resolveWebSearchSettings().baseUrl;
 	if (!baseUrl) {
-		throw new Error(`SearXNG is selected but has no base URL. Run ${SEARXNG_START} to write the config, then restart the app.`);
+		throw new Error(`SearXNG is selected but has no base URL. Set one in AI setup under Web search, or run ${SEARXNG_START} to start one and write the config.`);
 	}
 
 	const url = new URL(baseUrl.replace(/\/+$/, "") + "/search");
@@ -268,7 +353,8 @@ export default function (pi: ExtensionAPI) {
 			limit: Type.Optional(Type.Number({ description: "Maximum number of results to return. Default 5, max 10." })),
 		}),
 		async execute(_id, { query, limit = 5 }): Promise<any> {
-			const provider = getProvider();
+			const settings = resolveWebSearchSettings();
+			const provider = settings.provider;
 			const maxResults = clampLimit(limit);
 
 			if (provider === "disabled") {
@@ -276,7 +362,12 @@ export default function (pi: ExtensionAPI) {
 					content: [
 						{
 							type: "text",
-							text: "Web search is disabled (EXXETA_SEARCH_PROVIDER=disabled). Remove that setting to re-enable it.",
+							// Two ways to turn it off, and the message names the one that
+							// actually did: telling somebody to edit a setting that is not
+							// the one in force sends them looking in the wrong place.
+							text: settings.source === "environment"
+								? "Web search is disabled by EXXETA_SEARCH_PROVIDER=disabled. Remove that setting to re-enable it."
+								: "Web search is switched off in AI setup under Web search. Turn it back on there to use it.",
 						},
 					],
 					details: { configured: false, provider },

@@ -229,6 +229,23 @@ export function modelDisplayName(input: ModelNameInput): string {
 }
 
 /**
+ * "Name (Provider)". The face of the app shows the name alone; the tooltip is
+ * where the provider belongs, so two look-alike models from different
+ * providers are still tellable apart. Falls back to the bare name when the
+ * provider is unknown.
+ */
+export function formatModelWithProvider(name: string, provider: string | null | undefined): string {
+	if (!name) return provider ?? "";
+	return provider ? `${name} (${provider})` : name;
+}
+
+/** The canonical name with its provider, ready for a title attribute. */
+export function modelTooltipName(input: ModelNameInput): string {
+	const { name, provider } = canonicalModelName(input);
+	return formatModelWithProvider(name, provider);
+}
+
+/**
  * Grouping key: two persisted rows share a key iff they display as the same
  * model. Lowercased so casing quirks never split a group.
  */

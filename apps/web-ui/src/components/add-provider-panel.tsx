@@ -31,10 +31,16 @@ export function ModelCheckboxList({ options, selected, onToggle, ariaLabel }: {
 }
 
 // Masked credential entry, shared by the add-panel rows and the profile rows.
-export function ApiKeyForm({ placeholder, onSave, className }: {
+/**
+ * A key entry row. When the caller can close it, it says so: a form that opens
+ * on a menu click and offers no way back leaves reloading the page as the only
+ * exit, which is not an exit.
+ */
+export function ApiKeyForm({ placeholder, onSave, className, onCancel }: {
 	placeholder: string;
 	onSave: (key: string) => Promise<void>;
 	className?: string;
+	onCancel?: () => void;
 }) {
 	const [key, setKey] = useState("");
 	const [saving, setSaving] = useState(false);
@@ -58,17 +64,28 @@ export function ApiKeyForm({ placeholder, onSave, className }: {
 				onChange={(e) => setKey(e.target.value)}
 				onKeyDown={(e) => {
 					if (e.key === "Enter" && key.trim() && !saving) void save();
+					// Escape backs out of a field somebody opened by mistake, the way
+					// it closes every other transient surface in the app. Stopped from
+					// propagating so it does not also close whatever contains this.
+					if (e.key === "Escape" && onCancel && !saving) {
+						e.preventDefault();
+						e.stopPropagation();
+						onCancel();
+					}
 				}}
 			/>
 			<button className="landing-action" disabled={!key.trim() || saving} onClick={() => void save()}>
 				{saving ? "Saving…" : "Save key"}
 			</button>
+			{onCancel && (
+				<button className="ai-profile-foot-link" type="button" disabled={saving} onClick={onCancel}>Cancel</button>
+			)}
 		</div>
 	);
 }
 
-// Browser sign-in for a raw provider id: the server starts the same OAuth flow
-// the CLI /login runs, we open the URL in a new tab and poll until it settles.
+// Browser sign-in for a raw provider id: the server starts the runtime's OAuth
+// flow, we open the URL in a new tab and poll until it settles.
 export function useProviderLogin(onDone: (providerId: string, ok: boolean) => void) {
 	const [signingInProvider, setSigningInProvider] = useState<string | null>(null);
 	// Device-code flows (GitHub Copilot) hand back a code the person must type
@@ -129,7 +146,7 @@ export function useProviderLogin(onDone: (providerId: string, ok: boolean) => vo
 }
 
 // Suggest-then-approve model configuration for one provider: which models its
-// rooms may use, and which model runs Learn and Review Memory. Saving creates
+// rooms may use, and which model runs Memorize and Review. Saving creates
 // or updates the provider's custom AI profile.
 export function ConfigureProfileModal({ providerId, providerName, existingProfile, allowRemove = true, onClose, onSaved }: {
 	providerId: string;
@@ -240,7 +257,7 @@ export function ConfigureProfileModal({ providerId, providerName, existingProfil
 				</div>
 				<div className="room-settings-body configure-profile-body">
 					<p className="ai-setup-copy">
-						Choose the models your rooms may run on, and which model handles Learn and Review Memory. You can change this later.
+						Choose the models your rooms may run on, and which model handles Memorize and Review. You can change this later.
 					</p>
 					{loadError && <div className="checkpoint-proposal-error">{loadError}</div>}
 					{!catalog && !loadError && <p className="cli-note">Loading models…</p>}
@@ -257,16 +274,16 @@ export function ConfigureProfileModal({ providerId, providerName, existingProfil
 								/>
 							</div>
 							<div className="configure-profile-field">
-								<h3>Learn</h3>
-								<select className="configure-profile-select" value={learnModel} onChange={(e) => setLearnModel(e.target.value)} aria-label="Learn model">
+								<h3>Memorize</h3>
+								<select className="configure-profile-select" value={learnModel} onChange={(e) => setLearnModel(e.target.value)} aria-label="Memorize model">
 									{catalog.models.map((model) => (
 										<option key={model.id} value={model.id}>{catalogModelName(model)}{model.suggestedDefault ? " (suggested)" : ""}</option>
 									))}
 								</select>
 							</div>
 							<div className="configure-profile-field">
-								<h3>Review Memory</h3>
-								<select className="configure-profile-select" value={reviewMemoryModel} onChange={(e) => setReviewMemoryModel(e.target.value)} aria-label="Review Memory model">
+								<h3>Review</h3>
+								<select className="configure-profile-select" value={reviewMemoryModel} onChange={(e) => setReviewMemoryModel(e.target.value)} aria-label="Review model">
 									{catalog.models.map((model) => (
 										<option key={model.id} value={model.id}>{catalogModelName(model)}{model.suggestedDefault ? " (suggested)" : ""}</option>
 									))}
@@ -295,6 +312,7 @@ export type GatewayModelConfig = {
 	modelId: string;
 	label?: string;
 	vision: boolean;
+	webSearch: boolean;
 	/** Null when nobody chose one, which means the default window applies. */
 	contextWindow: number | null;
 };
@@ -311,7 +329,7 @@ export type GatewayConfig = {
 };
 
 type GatewayListResponse = { gateways: GatewayConfig[]; errors: string[]; unreadable?: boolean; defaultContextWindow: number };
-type GatewayDetection = { id: string; vision: boolean | null; contextWindow: number | null };
+type GatewayDetection = { id: string; vision: boolean | null; webSearch: boolean | null; contextWindow: number | null };
 type GatewayDiscoverResponse = { models: string[]; detected?: GatewayDetection[] };
 type GatewaySaveResponse = { gateway?: GatewayConfig | null; error?: string };
 
@@ -358,14 +376,16 @@ export function gatewaysUrl(gatewayId: string | null, suffix = ""): string {
 
 /**
  * One row of the approve step: whether the model is approved, whether it can
- * look at images, and how much context it really has. Detection fills these in
- * where a gateway publishes them; the person editing them has the last word,
- * which is why every field stays enabled either way.
+ * look at images, whether it can search the web through the gateway, and how
+ * much context it really has. Detection fills these in where a gateway
+ * publishes them; the person editing them has the last word, which is why
+ * every field stays enabled either way.
  */
 type ModelDraft = {
 	id: string;
 	approved: boolean;
 	vision: boolean;
+	webSearch: boolean;
 	contextWindow: string;
 	/**
 	 * The display name a gateway's model was saved under. Carried through the
@@ -381,17 +401,19 @@ function draftFromParts(id: string, approved: boolean, saved: GatewayModelConfig
 		id,
 		approved,
 		vision: saved?.vision ?? detected?.vision ?? false,
+		webSearch: saved?.webSearch ?? detected?.webSearch ?? false,
 		contextWindow: String(saved?.contextWindow ?? detected?.contextWindow ?? DEFAULT_CONTEXT_WINDOW),
 		...(saved?.label && saved.label !== id ? { label: saved.label } : {}),
 	};
 }
 
-function draftsToPayload(drafts: ModelDraft[]): Array<{ modelId: string; vision: boolean; contextWindow: number; label?: string }> {
+function draftsToPayload(drafts: ModelDraft[]): Array<{ modelId: string; vision: boolean; webSearch: boolean; contextWindow: number; label?: string }> {
 	return drafts
 		.filter((draft) => draft.approved)
 		.map((draft) => ({
 			modelId: draft.id,
 			vision: draft.vision,
+			webSearch: draft.webSearch,
 			// Validated before we get here, so the fallback is only ever reached
 			// by a caller that skipped the check.
 			contextWindow: contextWindowError(draft.contextWindow) ? DEFAULT_CONTEXT_WINDOW : Number(draft.contextWindow.trim()),
@@ -420,8 +442,20 @@ export function GatewayModelApprovalList({ drafts, onChange, ariaLabel }: {
 	function update(id: string, patch: Partial<ModelDraft>) {
 		onChange(drafts.map((draft) => (draft.id === id ? { ...draft, ...patch } : draft)));
 	}
+	// Ticking web search for a model the gateway does not run it on fails in one
+	// of two ways, and only one of them is loud: some gateways reject the
+	// request outright, and others accept the field, ignore it, and answer
+	// without searching. The quiet one is the reason this cannot live in a hover
+	// tooltip, and the reason the hint ends by asking somebody to check.
+	const anyWebSearch = drafts.some((draft) => draft.approved && draft.webSearch);
 	return (
 		<div className="configure-profile-model-list gateway-model-list" role="group" aria-label={ariaLabel}>
+			{anyWebSearch && (
+				<p className="gateway-model-list-hint">
+					Only tick web search for models your gateway really runs it on. A gateway that does not will either reject that
+					model's requests or quietly answer without searching, so check with a question about something current.
+				</p>
+			)}
 			{drafts.map((draft) => {
 				// An unapproved model's window is not going anywhere, so it is not
 				// worth complaining about; the row people are actually saving is.
@@ -435,6 +469,10 @@ export function GatewayModelApprovalList({ drafts, onChange, ariaLabel }: {
 						<label className="gateway-model-vision" title="Send attached images to this model instead of a placeholder">
 							<input type="checkbox" checked={draft.vision} onChange={() => update(draft.id, { vision: !draft.vision })} />
 							<span>supports images</span>
+						</label>
+						<label className="gateway-model-websearch" title="Let this model search the web through the gateway's own search, on top of the room's web search tool">
+							<input type="checkbox" checked={draft.webSearch} onChange={() => update(draft.id, { webSearch: !draft.webSearch })} />
+							<span>supports web search</span>
 						</label>
 						<label className="gateway-model-window">
 							<span className="gateway-model-window-label">context</span>
@@ -674,7 +712,7 @@ export function GatewayConfigModal({ gatewayId, knownLabel, onClose, onSaved }: 
 						)}
 					</div>
 					<div className="configure-profile-field">
-						<h3>Learn &amp; Review Memory</h3>
+						<h3>Memorize &amp; Review</h3>
 						<select className="configure-profile-select" value={effectiveMaintenanceModel} onChange={(e) => setMaintenanceModel(e.target.value)} aria-label="Maintenance model" disabled={approvedIds.length === 0}>
 							{approvedIds.map((id) => (
 								<option key={id} value={id}>{catalogModelName({ id })}</option>
@@ -696,8 +734,8 @@ export function GatewayConfigModal({ gatewayId, knownLabel, onClose, onSaved }: 
  * Approve-models for one saved gateway: the same suggest-then-approve step
  * custom providers get, scoped to the model set and its two capability fields.
  * Name, base URL and API key are untouched here; Edit gateway owns those. A
- * gateway policy has one maintenance model that runs both Learn and Review
- * Memory, so the modal shows a single picker instead of pretending there are two.
+ * gateway policy has one maintenance model that runs both Memorize and
+ * Review, so the modal shows a single picker instead of pretending there are two.
  */
 export function GatewayApproveModelsModal({ gatewayId, onClose, onSaved }: { gatewayId: string; onClose: () => void; onSaved: () => void }) {
 	const [config, setConfig] = useState<GatewayConfig | null>(null);
@@ -867,7 +905,7 @@ export function GatewayApproveModelsModal({ gatewayId, onClose, onSaved }: { gat
 								)}
 							</div>
 							<div className="configure-profile-field">
-								<h3>Learn and Review Memory</h3>
+								<h3>Memorize and Review</h3>
 								<select className="configure-profile-select" value={effectiveMaintenanceModel} onChange={(e) => setMaintenanceModel(e.target.value)} aria-label="Maintenance model" disabled={approvedIds.length === 0}>
 									{approvedIds.map((id) => (
 										<option key={id} value={id}>{catalogModelName({ id })}</option>
@@ -898,7 +936,13 @@ const POPULAR_PROVIDER_ORDER = ["google", "mistral", "openrouter", "deepseek", "
 // "Add provider" flow on the AI setup page: the full raw-Pi sign-in surface —
 // subscription (OAuth) providers plus API-key providers — followed by the
 // approve-models step that creates the provider's profile.
-export function AddProviderPanel({ onProfilesChanged }: { onProfilesChanged: () => void }) {
+export function AddProviderPanel({ onProfilesChanged, onKeyFormOpen, keyFormBlocked }: {
+	onProfilesChanged: () => void;
+	/** Told when this panel opens a key form, so the page can close any other one. */
+	onKeyFormOpen?: () => void;
+	/** True while a key form outside this panel is open; this panel closes its own. */
+	keyFormBlocked?: boolean;
+}) {
 	const [open, setOpen] = useState(false);
 	const [providers, setProviders] = useState<LoginProviderCatalogEntry[] | null>(null);
 	const [loadError, setLoadError] = useState<string | null>(null);
@@ -912,6 +956,21 @@ export function AddProviderPanel({ onProfilesChanged }: { onProfilesChanged: () 
 	const [gatewayNotice, setGatewayNotice] = useState<string | null>(null);
 	const [filter, setFilter] = useState("");
 	const [addedNote, setAddedNote] = useState<string | null>(null);
+
+	/** The provider whose key form is open, if any. */
+	const keyFormOpen = apiKeyProvider?.id ?? null;
+	// Two open key forms at once is two invitations to type a secret with no way
+	// of telling which row either belongs to. Only one stays open, page-wide.
+	function openApiKeyProvider(provider: LoginProviderCatalogEntry | null) {
+		// Refusing outright rather than trusting the caller to also hand us a way of
+		// closing the other form: the invariant holds on its own either way.
+		if (provider && keyFormBlocked) return;
+		setApiKeyProvider(provider);
+		if (provider) onKeyFormOpen?.();
+	}
+	useEffect(() => {
+		if (keyFormBlocked) setApiKeyProvider(null);
+	}, [keyFormBlocked]);
 
 	// Called when a provider gains its profile: collapse the panel and narrate
 	// the hand-off so the row appearing above does not read as a disappearance.
@@ -1009,7 +1068,10 @@ export function AddProviderPanel({ onProfilesChanged }: { onProfilesChanged: () 
 	return (
 		<div className="add-provider-panel">
 			<span className="add-provider-toggle-row">
-				<button className="ai-profile-foot-link add-provider-toggle" aria-expanded={open} onClick={() => { setAddedNote(null); setOpen((value) => !value); }}>
+				{/* Collapsing takes the key form with it. Leaving it open would bring an
+				    autofocused secret field back on the next open, one nothing outside
+				    this panel knows about. */}
+				<button className="ai-profile-foot-link add-provider-toggle" aria-expanded={open} onClick={() => { setAddedNote(null); setApiKeyProvider(null); setOpen((value) => !value); }}>
 					{open ? "Add another provider ▴" : "Add another provider ▾"}
 				</button>
 				{addedNote && !open && <span className="add-provider-added-note">{addedNote}</span>}
@@ -1017,7 +1079,7 @@ export function AddProviderPanel({ onProfilesChanged }: { onProfilesChanged: () 
 			{open && (
 				<div className="ai-setup-block add-provider-block">
 					<p className="cli-note">
-						Sign in with any provider the runtime supports · the same options as the CLI /login. After signing in you approve which models it may use.
+						Sign in with any provider the runtime supports. After signing in you approve which models it may use.
 					</p>
 					{loadError && <div className="checkpoint-proposal-error">{loadError}</div>}
 					{!providers && !loadError && <p className="cli-note">Loading providers…</p>}
@@ -1090,36 +1152,36 @@ export function AddProviderPanel({ onProfilesChanged }: { onProfilesChanged: () 
 							<h3>API key</h3>
 							<div className="add-provider-rows">
 								{apiKeyProviders.map((provider) => (
-									<div key={provider.id} className="add-provider-row-group">
+									<div key={provider.id} className={`add-provider-row-group${keyFormOpen === provider.id ? " key-open" : ""}`}>
 										<div className="add-provider-row">
 											<span className="add-provider-name">{provider.name}</span>
 											<span className="add-provider-side">
 												{provider.configured && <span className="add-provider-configured">key saved</span>}
+												{/* The open form owns the way out. A row that also kept its own
+												    Cancel put two of them on screen at once, one under the other,
+												    both closing the same thing. */}
 												{provider.configured ? (
 													<>
 														<button className="ai-profile-foot-link" onClick={() => setConfigureProvider({ id: provider.id, name: provider.name })}>Approve models</button>
-														<button className="ai-profile-foot-link" onClick={() => setApiKeyProvider(apiKeyProvider?.id === provider.id ? null : provider)}>
-															{apiKeyProvider?.id === provider.id ? "Cancel" : "Replace key"}
-														</button>
+														{keyFormOpen !== provider.id && (
+															<button className="ai-profile-foot-link" onClick={() => openApiKeyProvider(provider)}>Replace key</button>
+														)}
 														<button className="ai-profile-foot-link" onClick={() => void removeKey(provider)}>Remove key</button>
 													</>
 												) : (
-													<button
-														className="ai-profile-foot-link"
-														onClick={() => setApiKeyProvider(apiKeyProvider?.id === provider.id ? null : provider)}
-													>
-														{apiKeyProvider?.id === provider.id ? "Cancel" : "Add API key"}
-													</button>
+													keyFormOpen !== provider.id && (
+														<button className="ai-profile-foot-link" onClick={() => openApiKeyProvider(provider)}>Add API key</button>
+													)
 												)}
 											</span>
 										</div>
-										{apiKeyProvider?.id === provider.id && (
-											<ApiKeyForm placeholder={`${provider.name} API key`} onSave={saveApiKey} />
+										{keyFormOpen === provider.id && (
+											<ApiKeyForm className="add-provider-row-key-form" placeholder={`${provider.name} API key`} onSave={saveApiKey} onCancel={() => setApiKeyProvider(null)} />
 										)}
 									</div>
 								))}
 							</div>
-							<p className="cli-note">Keys stay on this device in the local auth store, shared with the exxperts CLI.</p>
+							<p className="cli-note">Keys stay on this device, in the local auth store.</p>
 						</div>
 					)}
 				</div>

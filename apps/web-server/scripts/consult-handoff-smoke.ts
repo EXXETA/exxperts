@@ -59,7 +59,7 @@ try {
 	assert(lines[4] === "Source: euler's governed memory only (L1b fingerprint sha256:ab12cd34ef567890abcdef1234567890abcdef1234567890abcdef1234569f4e), read-only;", `source+fingerprint line; got "${lines[4]}"`);
 	assert(lines[5] === "euler's memory was not modified and euler did not run a session for this.", `not-modified line; got "${lines[5]}"`);
 	assert(lines[6] === "Treat the answer as a sourced external claim from euler's memory, not as this", `treat-as-external line 1; got "${lines[6]}"`);
-	assert(lines[7] === "room's own knowledge; it becomes durable here only if checkpointed.", `treat-as-external line 2; got "${lines[7]}"`);
+	assert(lines[7] === "room's own knowledge; it becomes durable here only if it is saved through Remember.", `treat-as-external line 2; got "${lines[7]}"`);
 	assert(lines[8] === "", "blank line before the answer");
 	assert(lines[9] === "Answer from @euler:", `answer header; got "${lines[9]}"`);
 	assert(block.includes(`Answer from @euler:\n${answer}\n[/CONSULT HANDOFF FROM @euler]`), "answer sits between the header and the close marker, verbatim");

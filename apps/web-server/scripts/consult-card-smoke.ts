@@ -166,7 +166,7 @@ try {
 
 	// ---- warnings capture (needs_absorb lag) -----------------------------
 	const warned = run(afterRequest.state, [
-		{ type: "end", consultId: "local_abc", text: "answer", l1bFingerprint: FINGERPRINT, generatedAt: "g", warnings: ["Recent context is awaiting Learn — the answer may lag."] },
+		{ type: "end", consultId: "local_abc", text: "answer", l1bFingerprint: FINGERPRINT, generatedAt: "g", warnings: ["Recent context is awaiting Memorize; the answer may lag."] },
 	]);
 	assert(warned.state.warnings.length === 1, "end warnings captured for the card notice");
 

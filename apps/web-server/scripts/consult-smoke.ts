@@ -119,7 +119,7 @@ try {
 	} catch (error) {
 		assert(error instanceof ConsultPromptOverflowError, "overflow should raise ConsultPromptOverflowError");
 		assert((error as any).statusCode === 413, "overflow error should carry HTTP 413");
-		assert(/run Review Memory/.test((error as Error).message), "overflow guidance should point at Review Memory");
+		assert(/run Review on that room to shrink its memory/.test((error as Error).message), "overflow guidance should point at Review");
 	}
 
 	// --- Orchestration: the consult answers from memory and leaves no trace ---
@@ -180,7 +180,7 @@ try {
 		CONSULT_MODEL,
 		async () => ({ text: "Yes: X-42." }),
 	);
-	assert(laggingResponse.warnings.some((warning: string) => /awaiting Learn/.test(warning)), "needs_absorb consult should warn that stable memory may lag");
+	assert(laggingResponse.warnings.some((warning: string) => /awaiting Memorize/.test(warning)), "needs_absorb consult should warn that stable memory may lag");
 
 	// --- Rejections ---
 	await expectError(() => buildConsultAnswer({ targetAgentId, question: "" }, CONSULT_MODEL, async () => ({ text: "x" })), /question is required/, "empty question should be rejected");

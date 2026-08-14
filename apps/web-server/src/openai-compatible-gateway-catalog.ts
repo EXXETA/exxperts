@@ -23,7 +23,10 @@ import type { OpenAiCompatibleGateway } from "./openai-compatible-gateways.js";
  * are passed through untouched, unknown keys at the root and on this gateway's
  * own provider entry are preserved, and per-model keys nobody here understands
  * survive on the model they belong to. What this module owns is the provider's
- * name, baseUrl and api, and each model's id, name, input and contextWindow.
+ * name, baseUrl and api, and each model's id, name, input and contextWindow,
+ * plus one key inside compat: supportsWebSearch. Compat as a whole is not ours
+ * to own, because a model's compat block is where somebody hand-tunes a
+ * stubborn deployment, so that block is edited in place rather than replaced.
  *
  * The one thing a rewrite cannot preserve is the comments, because the file is
  * re-serialised from parsed values. That is why every mutation takes a
@@ -32,6 +35,8 @@ import type { OpenAiCompatibleGateway } from "./openai-compatible-gateways.js";
 
 const OPENAI_COMPATIBLE_API = "openai-completions";
 const MODEL_KEYS_THIS_WRITER_OWNS = ["id", "name", "input", "contextWindow"] as const;
+/** The only key inside a model's `compat` block this writer decides. Everything else in there is somebody else's. */
+const COMPAT_KEY_THIS_WRITER_OWNS = "supportsWebSearch";
 
 type JsonObject = Record<string, unknown>;
 
@@ -127,16 +132,27 @@ function providersOf(root: JsonObject): JsonObject {
  * One model entry, rebuilt from what this writer decides plus whatever the file
  * already said about that model and this writer does not understand.
  */
-function mergeModelEntry(existing: unknown, next: JsonObject): JsonObject {
-	if (!isObject(existing)) return next;
+function mergeModelEntry(existing: unknown, next: JsonObject, webSearch: boolean | undefined): JsonObject {
+	const existingCompat = isObject(existing) && isObject(existing.compat) ? existing.compat : undefined;
+	// The compat block, rebuilt as whatever was already there with our one key
+	// set or cleared. Unticking the box removes the key rather than writing
+	// false, so a model that never had a compat block does not grow an empty one
+	// and a model that had one keeps everything else in it. `undefined` means no
+	// checkbox spoke for this model at all, so even our own key is left alone.
+	const compat: JsonObject = { ...existingCompat };
+	if (webSearch === true) compat[COMPAT_KEY_THIS_WRITER_OWNS] = true;
+	else if (webSearch === false) delete compat[COMPAT_KEY_THIS_WRITER_OWNS];
+	const withCompat = Object.keys(compat).length > 0 ? { ...next, compat } : next;
+	if (!isObject(existing)) return withCompat;
 	const preserved: JsonObject = {};
 	for (const [key, value] of Object.entries(existing)) {
+		if (key === "compat") continue;
 		if (!MODEL_KEYS_THIS_WRITER_OWNS.includes(key as (typeof MODEL_KEYS_THIS_WRITER_OWNS)[number])) preserved[key] = value;
 	}
-	return { ...preserved, ...next };
+	return { ...preserved, ...withCompat };
 }
 
-/** Every model the gateway needs registered: its room models plus the one that runs Learn and Review Memory. */
+/** Every model the gateway needs registered: its room models plus the one that runs Memorize and Review. */
 function gatewayCatalogModels(gateway: OpenAiCompatibleGateway, existingModels: unknown): JsonObject[] {
 	const existingById = new Map<string, unknown>();
 	if (Array.isArray(existingModels)) {
@@ -154,10 +170,13 @@ function gatewayCatalogModels(gateway: OpenAiCompatibleGateway, existingModels: 
 		// image for a placeholder; saying both is what lets it through.
 		if (roomModel.vision) entry.input = ["text", "image"];
 		if (roomModel.contextWindow) entry.contextWindow = roomModel.contextWindow;
-		models.push(mergeModelEntry(existingById.get(roomModel.modelId), entry));
+		models.push(mergeModelEntry(existingById.get(roomModel.modelId), entry, roomModel.webSearch === true));
 	}
 	if (gateway.maintenanceModel && !seen.has(gateway.maintenanceModel)) {
-		models.push(mergeModelEntry(existingById.get(gateway.maintenanceModel), { id: gateway.maintenanceModel, name: gateway.maintenanceModel }));
+		// The approve list has no row for the maintenance model, so nothing here
+		// ever ticked or unticked web search for it. Whatever the file says about
+		// it stays said.
+		models.push(mergeModelEntry(existingById.get(gateway.maintenanceModel), { id: gateway.maintenanceModel, name: gateway.maintenanceModel }, undefined));
 	}
 	return models;
 }

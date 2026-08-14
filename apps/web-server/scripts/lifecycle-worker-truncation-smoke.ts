@@ -6,8 +6,8 @@ import path from "node:path";
 // be refused with an honest size error BEFORE parsing/validation. Otherwise
 // the candidate validator blames the document structure ("missing Recent
 // Context") for what is a model output limit, and every "Draft again" retry
-// re-rolls the same dice. This smoke pins the refusal for Learn, Review
-// Memory, checkpoint, and consult, and pins that complete outputs and the
+// re-rolls the same dice. This smoke pins the refusal for Memorize, Review,
+// checkpoint, and consult, and pins that complete outputs and the
 // validator backstop are untouched.
 
 const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "exxeta-worker-truncation-home-"));
@@ -92,16 +92,16 @@ try {
 	assert(fs.existsSync(l1bPath), "scaffold should create L1b/current.md");
 	setRecentContextEntries(5);
 
-	// 1. Learn proposal: truncated draft refuses with the size truth, before the validator.
+	// 1. Memorize proposal: truncated draft refuses with the size truth, before the validator.
 	const learnError = await expectRejects(
 		() => buildAbsorbProposal({ agentId, assessmentMarkdown: assessmentFixture }, ABSORB_MODEL, async () => truncatedResult(cutAbsorbDraft)),
 		/too large to rewrite in one response/,
-		"truncated Learn proposal",
+		"truncated Memorize proposal",
 	);
-	assert(/Learn/.test(learnError.message), "Learn refusal should name the process");
-	assert(/42666/.test(learnError.message), "Learn refusal should carry the real token numbers");
-	assert(/No memory has been written/.test(learnError.message), "Learn refusal should state that memory is untouched");
-	assert(!/topology|missing Recent Context/.test(learnError.message), "Learn refusal must not surface validator structure errors");
+	assert(/the Memorize draft was cut off/.test(learnError.message), "Memorize refusal should name the process");
+	assert(/42666/.test(learnError.message), "Memorize refusal should carry the real token numbers");
+	assert(/No memory has been written/.test(learnError.message), "Memorize refusal should state that memory is untouched");
+	assert(!/topology|missing Recent Context/.test(learnError.message), "Memorize refusal must not surface validator structure errors");
 
 	// 2. Same cut draft WITHOUT the truncated flag: the validator backstop still
 	// catches it exactly as before (the guard fires only on the provider signal).
@@ -109,20 +109,20 @@ try {
 	assert(untaggedCut.candidateValidation.valid === false, "validator backstop should still reject an untagged cut draft");
 	assert(untaggedCut.candidateValidation.errors.some((error: string) => /Candidate L1b is empty/.test(error)), "validator backstop errors should be unchanged");
 
-	// 3. Learn assessment: generic refusal (small outputs, still honest).
+	// 3. Memorize assessment: generic refusal (small outputs, still honest).
 	await expectRejects(
 		() => buildAbsorbAssessment(agentId, ABSORB_MODEL, async () => truncatedResult("## Absorb assessment\n\nI found")),
-		/Learn assessment response was cut off at the model's output limit/,
-		"truncated Learn assessment",
+		/Memorize assessment response was cut off at the model's output limit/,
+		"truncated Memorize assessment",
 	);
 
-	// 4. Review Memory proposal: same whole-document-rewrite lead as Learn.
+	// 4. Review proposal: same whole-document-rewrite lead as Memorize.
 	const reviewError = await expectRejects(
 		() => buildStructuralReviewProposal({ agentId, assessmentMarkdown: "## Prune memory assessment\n\nSynthetic." }, STRUCTURAL_REVIEW_MODEL, async () => truncatedResult("## Structural Review Proposal\n\n### Summary\ncut")),
 		/too large to rewrite in one response/,
-		"truncated Review Memory proposal",
+		"truncated Review proposal",
 	);
-	assert(/Review Memory/.test(reviewError.message), "Review Memory refusal should name the process");
+	assert(/the Review draft was cut off/.test(reviewError.message), "Review refusal should name the process");
 
 	// 5. Checkpoint: a truncated first attempt refuses immediately — the
 	// missing-fields retry must NOT run (it would re-roll the same dice).
@@ -136,8 +136,8 @@ try {
 				checkpointCalls += 1;
 				return truncatedResult("TITLE:\nCut checkpoint\n\nSESSION_ARC:\ncut");
 			}),
-		/checkpoint response was cut off at the model's output limit/,
-		"truncated checkpoint",
+		/Remember response was cut off at the model's output limit/,
+		"truncated Remember",
 	);
 	assert(checkpointCalls === 1, `truncated checkpoint must not trigger the missing-fields retry (got ${checkpointCalls} calls)`);
 
@@ -151,8 +151,8 @@ try {
 				if (checkpointCalls === 1) return { text: "TITLE:\nRetry smoke\n\nSESSION_ARC:\nComplete first attempt missing BODY.\n\nPARKED:\nNone\n" };
 				return truncatedResult("TITLE:\nRetry cut");
 			}),
-		/checkpoint response was cut off at the model's output limit/,
-		"truncated checkpoint retry",
+		/Remember response was cut off at the model's output limit/,
+		"truncated Remember retry",
 	);
 	assert(checkpointCalls === 2, `missing-fields retry should still run when the first attempt is complete (got ${checkpointCalls} calls)`);
 
@@ -167,7 +167,7 @@ try {
 	const bareError = await expectRejects(
 		() => buildAbsorbProposal({ agentId, assessmentMarkdown: assessmentFixture }, ABSORB_MODEL, async () => ({ text: cutAbsorbDraft, truncated: true })),
 		/too large to rewrite in one response/,
-		"truncated Learn proposal without usage",
+		"truncated Memorize proposal without usage",
 	);
 	assert(!/undefined|NaN/.test(bareError.message), "refusal without usage must not render placeholder numbers");
 

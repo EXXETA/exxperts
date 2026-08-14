@@ -109,9 +109,9 @@ Try this:
 
 1. Chat normally: ask it to help with something real.
 2. Tell it something worth keeping: *"Remember that I prefer concise summaries."*
-3. When you finish the session, press **Checkpoint** next to the message box. The room distills the conversation into its durable memory, and anything you explicitly asked it to remember is protected through every later compression.
+3. When you finish the session, press **Remember** next to the message box. The room distills the conversation into its durable memory, and anything you explicitly asked it to remember is protected through every later compression.
 
-Nothing is memorized silently. Checkpoint proposals apply automatically only when they're clean; anything questionable comes back to you for review. Later, as checkpoints accumulate, the room offers **Learn** (consolidating recent context into stable memory) and **Review Memory** (tidying stable memory), both approval-gated the same way. The full story: [Memory](memory.md).
+Nothing enters memory silently. Remember shows you the proposal before it saves, and a room can be set to save clean proposals without that preview; anything questionable always comes back to you. Later, as remembered sessions accumulate, the room offers **Memorize** (consolidating recent context into stable memory) and **Review** (tidying stable memory), both approval-gated the same way. The full story: [Memory](memory.md).
 
 ## 4. Give the room a workspace (optional)
 
@@ -138,7 +138,7 @@ Each room is a self-contained folder under `~/.exxperts/app/personalized-agents/
 
 Because a room is just a folder, backing it up or moving it to another machine is a copy:
 
-1. Finish the session in the room (checkpoint if you want the latest conversation remembered) and close it.
+1. Finish the session in the room (use Remember if you want the latest conversation kept) and close it.
 2. Copy the room's folder, `~/.exxperts/app/personalized-agents/<room-id>/`, to the same path on the other machine (or archive it: `tar -czf my-room.tgz -C ~/.exxperts/app/personalized-agents <room-id>`).
 3. On the other machine, install Exxperts and sign in to the **same provider profile**; saved threads are model-locked, so the room needs a profile that offers its model.
 4. If the room had a workspace, set it again in room settings; workspace grants reference absolute paths on the original machine and don't carry over. The workspace section warns when the saved folder isn't found on this machine.
