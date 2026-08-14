@@ -751,6 +751,8 @@ function AiProfileSwitcherSection({ status, onSelect, onRefresh, onRefreshAuth }
 	);
 	return (
 		<section className="ai-setup-section ai-profile-switcher-section" aria-label="AI profile selection">
+			<div className="ai-setup-section-heading"><h2>AI provider</h2></div>
+			<p className="ai-setup-copy">Sign in and choose the profile your exxperts run on. A profile is a provider plus the models you've approved for Rooms, Memorize, and Review.</p>
 			{status ? (
 				status.profiles.length > 0 ? (
 					<div className="ai-profile-card">
@@ -1220,8 +1222,7 @@ function AiSetupShell({ onHome, onDashboard, onConnectors, onMemory, onSkills, o
 			<ProductSidebar onHome={onHome} onAiSetup={() => {}} onDashboard={onDashboard} onConnectors={onConnectors} onMemory={onMemory} onSkills={onSkills} theme={theme} onToggleTheme={onToggleTheme} active="ai-setup" />
 			<div className="landing ai-setup-page">
 				<section className="landing-hero ai-setup-hero">
-					<h1>AI setup.</h1>
-					<p>Sign in and choose the profile your exxperts run on. A profile is a provider plus the models you've approved for Rooms, Memorize, and Review.</p>
+					<h1>Settings.</h1>
 				</section>
 				<AiProfileSwitcherSection status={aiProfileStatus} onSelect={onSelectAiProfile} onRefresh={onRefreshAiProfile} onRefreshAuth={onRefreshAuth} />
 				{/* Below the profiles, because it is the smaller decision and it is
@@ -2393,7 +2394,7 @@ function absorbUnavailableCopy(availability: AbsorbAvailability): { heading: str
 	}
 	return {
 		heading: "Memorizing cannot start yet",
-		body: "Memorizing cannot run for this room right now. No memory was changed. If this persists, check the room's AI profile in AI setup.",
+		body: "Memorizing cannot run for this room right now. No memory was changed. If this persists, check the room's AI profile in Settings.",
 		detail: availability.message || availability.error || null,
 	};
 }
@@ -4850,7 +4851,7 @@ export function App() {
 					kind: "system",
 					id: errorLineId,
 					level: "error",
-					text: `The model could not respond${detail ? ` · ${detail}` : ""} · check the model and its sign-in in AI setup.`,
+					text: `The model could not respond${detail ? ` · ${detail}` : ""} · check the model and its sign-in in Settings.`,
 				}]);
 			}
 			dispatchStream({ type: "message_end", finalText: extractAssistantText(ev.message), stopReason: ev.message.stopReason, now });

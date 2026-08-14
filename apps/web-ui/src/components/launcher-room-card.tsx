@@ -160,8 +160,8 @@ export function PersistentAgentCard({ status, modelStatus, aiProfileStatus, thre
 	const standbyActionTitle = standbyModelAllowed
 		? "Resume this standby thread"
 		: switchTargetProfile
-			? `This thread is locked to ${lockedModelLabel}. Switch the AI profile to ${switchTargetProfile.label} in AI setup to resume it.`
-			: `This thread is locked to ${lockedModelLabel}, which no ready AI profile provides right now. Open AI setup to connect one.`;
+			? `This thread is locked to ${lockedModelLabel}. Switch the AI profile to ${switchTargetProfile.label} in Settings to resume it.`
+			: `This thread is locked to ${lockedModelLabel}, which no ready AI profile provides right now. Open Settings to connect one.`;
 	// One title on the locked pill: the model's identity, then what the lock
 	// means. The incompatible sentences already name the model, so the prefix
 	// would only say it twice.
