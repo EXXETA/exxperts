@@ -309,6 +309,16 @@ export interface AssistantMessage {
 	usage: Usage;
 	stopReason: StopReason;
 	errorMessage?: string;
+	/**
+	 * The assistant content exactly as the provider's wire produced it, kept
+	 * only when the parsed `content` above could not hold every block —
+	 * currently Anthropic's server-tool blocks, such as its own web search.
+	 * During a tool loop the provider validates the latest assistant message
+	 * against what it originally signed, block for block, so a message that
+	 * lost blocks in parsing must be resent from this instead of being
+	 * reconstructed.
+	 */
+	rawContent?: unknown[];
 	timestamp: number; // Unix timestamp in milliseconds
 }
 

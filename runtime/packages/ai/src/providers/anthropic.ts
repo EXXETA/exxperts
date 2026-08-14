@@ -524,6 +524,18 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 			let firstSegmentPrompt: number | undefined;
 			/** Set when a continuation should open with a paragraph break. */
 			let needsSegmentSeparator = false;
+			// The wire truth of the whole turn, accumulated across continuations.
+			// The parsed `output.content` only holds the block types this file
+			// understands, so a turn that used a server tool (the provider's own
+			// web search) produced blocks the parse dropped. If the model then
+			// calls a CLIENT tool, the follow-up request has to send this
+			// assistant message back exactly as it was produced: the API checks
+			// the thinking blocks of the latest assistant message against what it
+			// signed, and a reconstruction with blocks missing moves every index
+			// and fails that check as "thinking blocks cannot be modified". So
+			// the raw blocks ride along on the finished message and the message
+			// conversion resends them verbatim while the message is the latest.
+			const turnRawContent: Record<string, any>[] = [];
 			// Recomputed wherever the sums are, so a caller reading mid-stream sees
 			// a context number that agrees with the tokens counted so far.
 			const refreshContextTokens = () => {
@@ -730,6 +742,12 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 				if (options?.signal?.aborted) {
 					throw new Error("Request was aborted");
 				}
+				// This segment's blocks as the wire produced them, finalized once and
+				// shared by both consumers: the continuation below hands them straight
+				// back, and the turn's accumulated raw content keeps them for the
+				// finished message.
+				const segmentRawContent = rawBlocks ? finalizeRawAnthropicBlocks(rawBlocks) : null;
+				if (segmentRawContent) turnRawContent.push(...segmentRawContent);
 				// A CONTINUATION that said nothing told us nothing, not even that it
 				// finished, and breaking here would publish the previous segment as a
 				// clean, complete answer. Only continuations though: a first response
@@ -776,12 +794,20 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 				needsSegmentSeparator ||= !!lastBlock && lastBlock.type === "text" && !!lastBlock.text && !/\s$/.test(lastBlock.text);
 				params = {
 					...params,
-					messages: [...params.messages, { role: "assistant", content: finalizeRawAnthropicBlocks(rawBlocks) as any }],
+					messages: [...params.messages, { role: "assistant", content: segmentRawContent as any }],
 				};
 			} // end of the pause_turn continuation loop
 
 			if (output.stopReason === "aborted" || output.stopReason === "error") {
 				throw new Error("An unknown error occurred");
+			}
+
+			// The raw copy is only kept when parsing actually lost something: a
+			// turn of nothing but text, thinking and client tool calls
+			// reconstructs perfectly, and a byte-identical duplicate of it would
+			// grow every session for no protection.
+			if (turnRawContent.some((block) => !PARSED_ANTHROPIC_BLOCK_TYPES.has(String(block?.type)))) {
+				output.rawContent = turnRawContent;
 			}
 
 			stream.push({ type: "done", reason: output.stopReason, message: output });
@@ -1130,6 +1156,17 @@ function convertMessages(
 	// Transform messages for cross-provider compatibility
 	const transformedMessages = transformMessages(messages, model, normalizeToolCallId);
 
+	// The one assistant message the API still validates verbatim: during a tool
+	// loop, the message whose tool calls are being answered. Everything before
+	// it is past validation.
+	let lastAssistantIndex = -1;
+	for (let i = transformedMessages.length - 1; i >= 0; i--) {
+		if (transformedMessages[i].role === "assistant") {
+			lastAssistantIndex = i;
+			break;
+		}
+	}
+
 	for (let i = 0; i < transformedMessages.length; i++) {
 		const msg = transformedMessages[i];
 
@@ -1172,6 +1209,27 @@ function convertMessages(
 				});
 			}
 		} else if (msg.role === "assistant") {
+			// A turn that used one of the provider's server tools carries its wire
+			// truth in rawContent (see the streaming side), because the
+			// reconstruction below cannot rebuild the server tool blocks and the
+			// API validates the latest assistant message verbatim during a tool
+			// loop — signatures, order, every block. Only the latest message and
+			// only for the model that signed it: earlier turns are past
+			// validation, and resending old search results for the rest of a
+			// room's life is exactly the dead weight aged tool results put down.
+			// Cloned so nothing downstream can ever mutate the session's stored
+			// message through the shared array.
+			if (
+				Array.isArray(msg.rawContent) &&
+				msg.rawContent.length > 0 &&
+				i === lastAssistantIndex &&
+				msg.api === model.api &&
+				msg.provider === model.provider &&
+				msg.model === model.id
+			) {
+				params.push({ role: "assistant", content: JSON.parse(JSON.stringify(msg.rawContent)) });
+				continue;
+			}
 			const blocks: ContentBlockParam[] = [];
 
 			for (const block of msg.content) {
@@ -1318,6 +1376,14 @@ function convertTools(
  * about to finish, and an unbounded resubmit spends somebody's money forever.
  */
 const MAX_PAUSED_TURN_RESUBMITS = 3;
+
+/**
+ * The block types the streaming parse above turns into `output.content`.
+ * Anything the wire sends outside this set (server_tool_use,
+ * web_search_tool_result, whatever the provider adds next) is invisible to the
+ * parsed message, which is exactly when the raw copy has to be kept.
+ */
+const PARSED_ANTHROPIC_BLOCK_TYPES = new Set(["text", "thinking", "redacted_thinking", "tool_use"]);
 
 /**
  * The provider's own blocks, kept exactly as they arrived.

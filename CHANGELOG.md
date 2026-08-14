@@ -2,6 +2,10 @@
 
 User-visible changes per release. Historical private/internal development notes are not part of this public-facing changelog.
 
+## 0.9.1 (2026-08-14)
+
+- Fixed: a room on a Claude subscription could hit a wall right after using one of its tools, refusing every following message with "thinking blocks in the latest assistant message cannot be modified". It took three of 0.9.0's features meeting in a single turn: the model searched through its provider, it was thinking at a chosen effort level, and it then reached for one of the room's own tools. The provider checks that the message holding those tool calls comes back exactly as it was produced, and the search results it had woven into that message were not being kept, so what came back was not what it had signed. The complete record of such a turn now rides along and is returned exactly as produced, for precisely as long as the provider checks it, so a searched turn can use tools like any other. ChatGPT and gateway rooms were never affected. If a room refused this way, updating is enough: nothing in the conversation was lost, and the next message simply works.
+
 ## 0.9.0 (2026-08-14)
 
 - Rooms: old tool results stop being replayed for the rest of a room's life. A web page a room opened, a search it ran, a document or spreadsheet it read for you: each used to ride along in full on every later message, so busy rooms carried dead weight that cost money and dulled answers. Now, once such a result is more than a few of your turns old and big enough to matter, the model receives a one-line note in its place saying it can re-run the tool if it needs the material again. Your transcript, the room's memory workflows and every cost figure keep the full record, because only the copy sent to the model slims. Recent results, small results and error messages always stay, and a room working in a connected folder never loses the files it is editing.
