@@ -2,7 +2,9 @@
 
 User-visible changes per release. Historical private/internal development notes are not part of this public-facing changelog.
 
-## 0.9.1 (2026-08-14)
+## 0.9.2 (2026-08-14)
+
+- Fixed: a Claude room that searched through its provider could refuse every further message with a red "invalid_request_error" wall. 0.9.1 closed one shape of this; others existed, and this release closes the family. The provider verifies that its search material comes back exactly as it produced it, and the app's copies were not exact; they now are, verified byte for byte, and a copy damaged by an earlier version is detected and never sent. Should the provider refuse a conversation anyway, the app now recovers by itself mid-answer and the reply simply arrives; at most, that one reply is written without the model re-reading its own earlier reasoning, and a note of the recovery is kept in the conversation's file on your machine. Rooms already stuck heal on their own once you update, nothing to do. ChatGPT and gateway rooms were never affected.
 
 - Fixed: a room on a Claude subscription could hit a wall right after using one of its tools, refusing every following message with "thinking blocks in the latest assistant message cannot be modified". It took three of 0.9.0's features meeting in a single turn: the model searched through its provider, it was thinking at a chosen effort level, and it then reached for one of the room's own tools. The provider checks that the message holding those tool calls comes back exactly as it was produced, and the search results it had woven into that message were not being kept, so what came back was not what it had signed. The complete record of such a turn now rides along and is returned exactly as produced, for precisely as long as the provider checks it, so a searched turn can use tools like any other. ChatGPT and gateway rooms were never affected. If a room refused this way, updating is enough: nothing in the conversation was lost, and the next message simply works.
 

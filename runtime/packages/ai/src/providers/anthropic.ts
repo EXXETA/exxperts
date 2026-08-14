@@ -28,6 +28,7 @@ import type {
 	ToolCall,
 	ToolResultMessage,
 } from "../types.js";
+import { appendAssistantMessageDiagnostic, createAssistantMessageDiagnostic } from "../utils/diagnostics.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { headersToRecord } from "../utils/headers.js";
 import { parseJsonWithRepair, parseStreamingJson } from "../utils/json-parse.js";
@@ -536,6 +537,8 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 			// the raw blocks ride along on the finished message and the message
 			// conversion resends them verbatim while the message is the latest.
 			const turnRawContent: Record<string, any>[] = [];
+			/** The recovery below fires at most once per turn. */
+			let recoveredThinkingValidation = false;
 			// Recomputed wherever the sums are, so a caller reading mid-stream sees
 			// a context number that agrees with the tokens counted so far.
 			const refreshContextTokens = () => {
@@ -544,7 +547,31 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 			};
 
 			for (;;) {
-				const response = await client.messages.create({ ...params, stream: true }, requestOptions).asResponse();
+				let response: Response;
+				try {
+					response = await client.messages.create({ ...params, stream: true }, requestOptions).asResponse();
+				} catch (requestError) {
+					// The last line of defense against the provider's validation of
+					// the history we resend. The verbatim resend above is supposed
+					// to satisfy it, but the validators live on the provider's
+					// servers, their enforcement varies by account, more of them
+					// keep appearing (the verbatim-thinking check and the
+					// server-tool pairing check have both been met in the field),
+					// and a conversation recorded by an older build may simply not
+					// hold what they want back. When the refusal is about that
+					// history, the request is retried once with thinking disabled
+					// and every thinking and server-tool block stripped: plain text
+					// and tool-call pairs, with nothing left for any of them to
+					// inspect. The model loses its reasoning trace and its old
+					// search citations for this one request; the user keeps a room
+					// that answers. Anything else, and the second failure surfaces
+					// exactly as the first would have.
+					if (recoveredThinkingValidation || !isResentHistoryRefusal(requestError)) throw requestError;
+					recoveredThinkingValidation = true;
+					appendAssistantMessageDiagnostic(output, createAssistantMessageDiagnostic("anthropic-history-validation-recovery", requestError, { model: model.id }));
+					params = stripValidatedHistoryFromParams(params);
+					response = await client.messages.create({ ...params, stream: true }, requestOptions).asResponse();
+				}
 				await options?.onResponse?.({ status: response.status, headers: headersToRecord(response.headers) }, model);
 				if (!started) {
 					// Exactly one start for the whole turn: the agent loop reads a
@@ -1225,7 +1252,8 @@ function convertMessages(
 				i === lastAssistantIndex &&
 				msg.api === model.api &&
 				msg.provider === model.provider &&
-				msg.model === model.id
+				msg.model === model.id &&
+				rawContentPairingIntact(msg.rawContent)
 			) {
 				params.push({ role: "assistant", content: JSON.parse(JSON.stringify(msg.rawContent)) });
 				continue;
@@ -1386,6 +1414,74 @@ const MAX_PAUSED_TURN_RESUBMITS = 3;
 const PARSED_ANTHROPIC_BLOCK_TYPES = new Set(["text", "thinking", "redacted_thinking", "tool_use"]);
 
 /**
+ * The provider's refusal to accept the HISTORY we resent, in any of its known
+ * voices. Two validators have been met in the field: the verbatim-thinking
+ * check ("thinking blocks in the latest assistant message cannot be modified")
+ * and the server-tool pairing check ("each web_search_tool_result block must
+ * have a corresponding server_tool_use block before it"). Both complain about
+ * material only the app's resend puts on the wire, and the provider is
+ * entitled to add more relatives; the match is therefore kept to refusals that
+ * name that material rather than to one memorized sentence.
+ */
+export function isResentHistoryRefusal(error: unknown): boolean {
+	const message = error instanceof Error ? error.message : String(error);
+	if (!/invalid_request_error/i.test(message)) return false;
+	return (
+		/(thinking|redacted_thinking)[^.]*cannot be modified|must remain as they were in the original response/i.test(message) ||
+		/(server_tool_use|web_search_tool_result)/i.test(message) ||
+		// The family fingerprint, for the validator nobody has met yet: every
+		// history refusal seen in the field pinpoints a position in the resent
+		// conversation. A complaint that points into messages.N is a complaint
+		// about material we sent back, whatever vocabulary it uses, and one
+		// sanitized retry is cheaper than one walled room. A false match costs
+		// exactly one extra request before the original error surfaces.
+		/messages\.\d+/.test(message)
+	);
+}
+
+/**
+ * The same request with nothing left for a history validator to check:
+ * thinking declared off, every thinking block removed, and every server tool
+ * block (the search calls and results the provider itself wove into earlier
+ * answers) removed with them. What remains is plain text and tool-call pairs,
+ * the shape every effort-off conversation sends all day. An assistant message
+ * left with no blocks at all is dropped whole rather than sent empty.
+ */
+export function stripValidatedHistoryFromParams<T extends { messages: any[]; thinking?: unknown }>(params: T): T {
+	const stripped = new Set(["thinking", "redacted_thinking", "server_tool_use", "web_search_tool_result"]);
+	return {
+		...params,
+		thinking: { type: "disabled" },
+		messages: params.messages
+			.map((message: any) => {
+				if (message?.role !== "assistant" || !Array.isArray(message.content)) return message;
+				const content = message.content.filter((block: any) => !stripped.has(String(block?.type)));
+				return { ...message, content };
+			})
+			.filter((message: any) => message?.role !== "assistant" || !Array.isArray(message.content) || message.content.length > 0),
+	};
+}
+
+/**
+ * Whether a raw copy is structurally fit to resend: every search result must
+ * be preceded, in the same message, by the search call it answers. The
+ * provider validates that pairing on input, so a copy that lost a call (a
+ * fault in the recording, however it happened) must fall back to the lean
+ * form rather than be sent and refused.
+ */
+export function rawContentPairingIntact(rawContent: unknown[]): boolean {
+	const seenServerToolUse = new Set<string>();
+	for (const block of rawContent as Array<Record<string, any>>) {
+		if (block?.type === "server_tool_use" && typeof block.id === "string") seenServerToolUse.add(block.id);
+		if (block?.type === "web_search_tool_result") {
+			const id = block.tool_use_id;
+			if (typeof id !== "string" || !seenServerToolUse.has(id)) return false;
+		}
+	}
+	return true;
+}
+
+/**
  * The provider's own blocks, kept exactly as they arrived.
  *
  * Continuing a paused turn means handing the turn back the way it came, and
@@ -1410,6 +1506,12 @@ function captureRawAnthropicBlock(rawBlocks: Map<number, Record<string, any>>, e
 		else if (delta.type === "thinking_delta") block.thinking = (block.thinking ?? "") + delta.thinking;
 		else if (delta.type === "signature_delta") block.signature = (block.signature ?? "") + delta.signature;
 		else if (delta.type === "input_json_delta") block.partialJsonScratch = (block.partialJsonScratch ?? "") + delta.partial_json;
+		// Citations arrive as their own delta on text written from server search
+		// results. A block resent without them is not the block the provider
+		// signed, so they are accumulated exactly like text.
+		else if (delta.type === "citations_delta" && delta.citation !== undefined) {
+			block.citations = Array.isArray(block.citations) ? [...block.citations, delta.citation] : [delta.citation];
+		}
 		return;
 	}
 	if (event.type === "content_block_stop") {
@@ -1431,8 +1533,12 @@ function finalizeRawAnthropicBlocks(rawBlocks: Map<number, Record<string, any>>)
 	const content: Record<string, any>[] = [];
 	for (const block of rawBlocks.values()) {
 		const { partialJsonScratch: _scratch, ...rest } = block;
-		// An empty text block is not something the API takes back.
-		if (rest.type === "text" && !String(rest.text ?? "").trim()) continue;
+		// Only a block with NOTHING in it is withheld: the API refuses a text
+		// block whose text is the empty string. A whitespace-only block, on the
+		// other hand, is something the provider itself produced and signed -
+		// dropping it moves every later block down one index, which is exactly
+		// the modification the verbatim validation rejects.
+		if (rest.type === "text" && String(rest.text ?? "") === "") continue;
 		content.push(rest);
 	}
 	return content;
