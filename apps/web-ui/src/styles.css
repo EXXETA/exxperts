@@ -977,13 +977,13 @@ strong, b { font-weight: 700; }
 	margin-top: 4px;
 	padding-top: 10px;
 }
-.sidebar-config-menu .menu-theme-seg {
+.sidebar-config-menu .menu-appearance-seg {
 	display: inline-flex;
 	border: 1px solid var(--border);
 	border-radius: 6px;
 	overflow: hidden;
 }
-.sidebar-config-menu .menu-theme-seg button {
+.sidebar-config-menu .menu-appearance-seg button {
 	background: transparent;
 	border: 0;
 	color: var(--fg-soft);
@@ -991,12 +991,12 @@ strong, b { font-weight: 700; }
 	padding: 4px 10px;
 	cursor: pointer;
 }
-.sidebar-config-menu .menu-theme-seg button:hover,
-.sidebar-config-menu .menu-theme-seg button:focus-visible {
+.sidebar-config-menu .menu-appearance-seg button:hover,
+.sidebar-config-menu .menu-appearance-seg button:focus-visible {
 	color: var(--fg);
 	outline: none;
 }
-.sidebar-config-menu .menu-theme-seg button.on {
+.sidebar-config-menu .menu-appearance-seg button.on {
 	background: var(--fg);
 	color: var(--bg);
 }
@@ -1599,7 +1599,7 @@ strong, b { font-weight: 700; }
 	cursor: default;
 }
 .gateway-model-bulk-label { color: var(--muted); }
-/* Mirrors .menu-theme-seg at list scale. As two bare links the pair read as
+/* Mirrors .menu-appearance-seg at list scale. As two bare links the pair read as
    prose in the middle of a header, and "all on off" was one phrase nobody could
    see the seam in; bordered and joined, they read as the two buttons they are. */
 .gateway-model-bulk-seg {
