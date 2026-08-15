@@ -304,8 +304,8 @@ export function Dashboard() {
 								<div className="sub">{activityMetric === "value" ? `Est. value per ${unit}, split by source.` : `Tokens per ${unit}.`}</div>
 							</div>
 							<div className="range-toggle" role="group" aria-label="Activity metric">
-								<button type="button" className={activityMetric === "tokens" ? "active" : ""} aria-pressed={activityMetric === "tokens"} onClick={() => setActivityMetric("tokens")}>Tokens</button>
-								<button type="button" className={activityMetric === "value" ? "active" : ""} aria-pressed={activityMetric === "value"} onClick={() => setActivityMetric("value")}>Value</button>
+								<button type="button" className={activityMetric === "tokens" ? "active" : ""} aria-pressed={activityMetric === "tokens"} title="Chart token counts" onClick={() => setActivityMetric("tokens")}>Tokens</button>
+								<button type="button" className={activityMetric === "value" ? "active" : ""} aria-pressed={activityMetric === "value"} title="Chart estimated cost at list prices" onClick={() => setActivityMetric("value")}>Value</button>
 							</div>
 						</div>
 						<StackedChart buckets={buckets} metric={activityMetric} unit={unit} />
@@ -383,6 +383,7 @@ export function Dashboard() {
 							className="recent-filter"
 							role="button"
 							tabIndex={0}
+							title="Clear this filter"
 							onClick={(e) => { e.stopPropagation(); setAgent("all"); }}
 							onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); setAgent("all"); } }}
 						>

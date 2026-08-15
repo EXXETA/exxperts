@@ -67,7 +67,7 @@ export function AssetsPanel({ rows, selectedTaskId, onSelect, onStopRunning, onR
 	};
 	return (
 		<div className="sidebar-assets" aria-label="Files in this room">
-			<button className="assets-head" aria-expanded={!collapsed} onClick={() => setCollapsed((v) => !v)}>
+			<button className="assets-head" aria-expanded={!collapsed} title="Show or hide the files this room has made and received" onClick={() => setCollapsed((v) => !v)}>
 				<span className="assets-caret">{collapsed ? "▸" : "▾"}</span>
 				<span className="assets-head-label">Files</span>
 				<span className="assets-count">{rows.length}</span>

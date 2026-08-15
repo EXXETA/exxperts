@@ -279,7 +279,7 @@ export function ConsultDock({ state, onMinimize, onOpen, onStop, onDismiss, onTr
 			</span>
 		);
 		footerActions = (
-			<button className="btn" type="button" onClick={onStop}>
+			<button className="btn" type="button" onClick={onStop} title="Stop the answer — what has arrived stays">
 				Stop
 			</button>
 		);
@@ -294,10 +294,10 @@ export function ConsultDock({ state, onMinimize, onOpen, onStop, onDismiss, onTr
 		footerMeta = undefined;
 		footerActions = (
 			<>
-				<button className="btn" type="button" onClick={onDismiss}>
+				<button className="btn" type="button" onClick={onDismiss} title="Discard this consult — nothing enters the conversation">
 					Dismiss
 				</button>
-				<button className="btn btn-primary" type="button" onClick={onTransfer}>
+				<button className="btn btn-primary" type="button" onClick={onTransfer} title="Bring this exchange into the room's conversation">
 					Transfer to thread
 				</button>
 			</>
@@ -324,15 +324,15 @@ export function ConsultDock({ state, onMinimize, onOpen, onStop, onDismiss, onTr
 		subline = state.errorMessage ?? (state.phase === "stopped" ? "Consult stopped." : "Consult failed.");
 		footerActions = showTransfer ? (
 			<>
-				<button className="btn" type="button" onClick={onDismiss}>
+				<button className="btn" type="button" onClick={onDismiss} title="Discard this consult — nothing enters the conversation">
 					Dismiss
 				</button>
-				<button className="btn btn-primary" type="button" onClick={onTransfer}>
+				<button className="btn btn-primary" type="button" onClick={onTransfer} title="Bring this exchange into the room's conversation">
 					Transfer to thread
 				</button>
 			</>
 		) : (
-			<button className="btn" type="button" onClick={onDismiss}>
+			<button className="btn" type="button" onClick={onDismiss} title="Discard this consult — nothing enters the conversation">
 				Dismiss
 			</button>
 		);

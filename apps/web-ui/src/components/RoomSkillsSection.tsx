@@ -215,7 +215,7 @@ export function RoomSkillsSection({ status, onOpenSkillsLibrary }: { status: Per
 												{reviewLoadingName === state.name ? "Loading…" : "Review changes"}
 											</button>
 										)}
-										<button className="rs-quiet" disabled={busyName === state.name} onClick={() => void toggle(state.name, "disable")}>
+										<button className="rs-quiet" disabled={busyName === state.name} title="Disable for this room — the skill stays in your library" onClick={() => void toggle(state.name, "disable")}>
 											{busyName === state.name ? "Removing…" : "Remove"}
 										</button>
 									</div>
@@ -245,7 +245,7 @@ export function RoomSkillsSection({ status, onOpenSkillsLibrary }: { status: Per
 											{skill.description && <span className="room-skills-desc">{skill.description}</span>}
 										</div>
 										<div className="room-skills-row-actions">
-											<button className="rs-btn" disabled={busyName === skill.name} onClick={() => void toggle(skill.name, "enable")}>
+											<button className="rs-btn" disabled={busyName === skill.name} title="Let this room use this skill" onClick={() => void toggle(skill.name, "enable")}>
 												{busyName === skill.name ? "Enabling…" : "Enable"}
 											</button>
 										</div>

@@ -778,7 +778,7 @@ export function InRoomChatShellView({
 							/>
 						</div>
 						{showJumpToLatest && (
-							<button type="button" className="jump-to-latest" onClick={jumpToLatest} aria-label="Jump to latest message">
+							<button type="button" className="jump-to-latest" onClick={jumpToLatest} aria-label="Jump to latest message" title="Jump to the newest message">
 								↓ Latest
 							</button>
 						)}

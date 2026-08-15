@@ -116,7 +116,7 @@ export function ConfigMenu({ onSettings, theme, onToggleTheme }: { onSettings: (
 								Update to v{update.available}
 							</button>
 							{update.dotVisible && (
-								<button className="menu-meta-dismiss" onClick={update.dismiss}>Dismiss</button>
+								<button className="menu-meta-dismiss" onClick={update.dismiss} title="Hide the update dot — the update stays available here">Dismiss</button>
 							)}
 						</div>
 					)}
@@ -130,6 +130,7 @@ export function ConfigMenu({ onSettings, theme, onToggleTheme }: { onSettings: (
 			<button
 				className="sidebar-config-gear"
 				aria-label={update.dotVisible ? "Settings, update available" : "Settings"}
+				title={update.dotVisible ? "Settings — update available" : "Settings"}
 				aria-haspopup="menu"
 				aria-expanded={open}
 				onClick={() => setOpen((v) => !v)}
@@ -178,15 +179,15 @@ export function ProductSidebar({ onHome, onSettings, onDashboard, onMemory, them
 			</div>
 			<nav className="product-nav" aria-label="Product navigation">
 				<div className="product-nav-section">
-					<button className={`list-btn ${active === "home" ? "active" : ""}`} onClick={onHome}>Rooms</button>
+					<button className={`list-btn ${active === "home" ? "active" : ""}`} onClick={onHome} title="Your rooms — one exxpert per topic">Rooms</button>
 				</div>
 				{onMemory && (
 					<div className="product-nav-section">
-						<button className={`list-btn ${active === "memory" ? "active" : ""}`} onClick={onMemory}>Memory</button>
+						<button className={`list-btn ${active === "memory" ? "active" : ""}`} onClick={onMemory} title="What your rooms know, and questions across all of it">Memory</button>
 					</div>
 				)}
 				<div className="product-nav-section">
-					<button className={`list-btn ${active === "dashboard" ? "active" : ""}`} onClick={onDashboard}>Wallet</button>
+					<button className={`list-btn ${active === "dashboard" ? "active" : ""}`} onClick={onDashboard} title="What your exxperts spend — API costs and plan usage">Wallet</button>
 				</div>
 			</nav>
 			{/* No connection status here on purpose: a healthy app says nothing

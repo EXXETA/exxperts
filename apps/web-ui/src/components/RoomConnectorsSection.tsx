@@ -121,7 +121,7 @@ export function RoomConnectorsSection({ status }: { status: PersistentAgentStatu
 										)}
 									</div>
 									<div className="room-skills-row-actions">
-										<button className="rs-quiet" disabled={busyName === entry.name} onClick={() => void toggle(entry.name, "revoke")}>
+										<button className="rs-quiet" disabled={busyName === entry.name} title="Disconnect from this room — the connector stays configured" onClick={() => void toggle(entry.name, "revoke")}>
 											{busyName === entry.name ? "Removing…" : "Remove"}
 										</button>
 									</div>
@@ -159,7 +159,7 @@ export function RoomConnectorsSection({ status }: { status: PersistentAgentStatu
 												)}
 											</div>
 											<div className="room-skills-row-actions">
-												<button className="rs-btn" disabled={busyName === name} onClick={() => void toggle(name, "grant")}>
+												<button className="rs-btn" disabled={busyName === name} title="Let this room use this connector" onClick={() => void toggle(name, "grant")}>
 													{busyName === name ? "Enabling…" : "Enable"}
 												</button>
 											</div>

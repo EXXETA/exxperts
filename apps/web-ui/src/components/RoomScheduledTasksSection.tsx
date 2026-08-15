@@ -757,7 +757,7 @@ function ScheduleJobCard({
 					{error && <p className="workspaces-error">{error}</p>}
 					<div className="room-schedules-job-actions">
 						<button className="rs-quiet" type="button" onClick={onEdit} disabled={actionDisabled}>Edit</button>
-						<button className="rs-quiet" type="button" onClick={onToggleEnabled} disabled={actionDisabled}>{toggling ? "Saving…" : job.enabled ? "Disable" : "Enable"}</button>
+						<button className="rs-quiet" type="button" onClick={onToggleEnabled} disabled={actionDisabled} title={job.enabled ? "Pause this schedule — the record stays" : "Turn this schedule back on"}>{toggling ? "Saving…" : job.enabled ? "Disable" : "Enable"}</button>
 						<button className="rs-quiet rs-quiet-danger" type="button" onClick={onRequestDelete} disabled={actionDisabled}>Delete</button>
 					</div>
 					{confirmingDelete && (

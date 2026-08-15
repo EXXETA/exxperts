@@ -104,7 +104,7 @@ export function RoomDangerZone({ status, visible, onArchive, onPurge }: {
 					)}
 				</div>
 				<div className="rs-pane-actions">
-					{armed && <button className="rs-quiet" type="button" disabled={submitting !== null} onClick={() => setArmed(false)}>Keep it</button>}
+					{armed && <button className="rs-quiet" type="button" disabled={submitting !== null} onClick={() => setArmed(false)} title="Cancel — keep this room">Keep it</button>}
 					<button className="rs-btn rs-btn-danger" disabled={submitting !== null} onClick={() => void submitPurge()}>
 						{submitting === "purge" ? "Deleting…" : armed ? "Delete forever" : "Delete permanently"}
 					</button>

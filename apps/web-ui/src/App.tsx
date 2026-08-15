@@ -845,7 +845,7 @@ function AiProfileSwitcherSection({ status, onSelect, onRefresh, onRefreshAuth }
 								const title = !profile.ready
 									? "Sign in to this profile before using it"
 									: profile.active
-										? undefined
+										? "The active profile — your exxperts run on it"
 										: "Select this AI profile. New room threads start on it; standby threads keep their model";
 								return (
 									<div key={profile.id} className={`ai-profile-row-group${modelsOpen ? " open" : ""}${keyProfileId === profile.id ? " key-open" : ""}`}>
@@ -899,13 +899,14 @@ function AiProfileSwitcherSection({ status, onSelect, onRefresh, onRefreshAuth }
 													<button
 														className="ai-profile-models-toggle"
 														aria-expanded={modelsOpen}
+														title="Show or hide this profile's approved models"
 														onClick={() => setModelsOpenId(modelsOpen ? null : profile.id)}
 													>
 														{roomModelsLabel} {modelsOpen ? "▴" : "▾"}
 													</button>
 												)}
 												{signingIn ? (
-													<button className="ai-profile-foot-link" onClick={() => void login.cancel()}>Cancel</button>
+													<button className="ai-profile-foot-link" onClick={() => void login.cancel()} title="Stop this sign-in attempt">Cancel</button>
 												) : (
 													<>
 														{/* The key row carries its own Cancel now, for every row rather
@@ -926,6 +927,7 @@ function AiProfileSwitcherSection({ status, onSelect, onRefresh, onRefreshAuth }
 															aria-haspopup="menu"
 															aria-expanded={menuOpenId === profile.id}
 															aria-label={`Manage ${profile.label}`}
+															title={`Manage ${profile.label}: models, keys, sign-out`}
 															onClick={(e) => { if (menuOpenId === profile.id) { closeMenu(); } else { menuAnchorRef.current = e.currentTarget; setMenuOpenId(profile.id); setConfirmRemoveId(null); setKeyProfileId(null); } }}
 														>···</button>
 														{menuOpenId === profile.id && (
@@ -934,7 +936,7 @@ function AiProfileSwitcherSection({ status, onSelect, onRefresh, onRefreshAuth }
 																	<>
 																		<span className="ai-profile-menu-confirm">Remove {profile.label}? This {profile.provider.configured ? "signs out and deletes" : "deletes"} its approved models.</span>
 																		<button className="ai-profile-menu-item danger" role="menuitem" disabled={removing} onClick={() => void removeProfile(profile)}>{removing ? "Removing…" : "Remove"}</button>
-																		<button className="ai-profile-menu-item" role="menuitem" disabled={removing} onClick={() => setConfirmRemoveId(null)}>Keep it</button>
+																		<button className="ai-profile-menu-item" role="menuitem" disabled={removing} onClick={() => setConfirmRemoveId(null)} title="Cancel — keep this profile">Keep it</button>
 																	</>
 																) : (
 																	<>
@@ -943,18 +945,18 @@ function AiProfileSwitcherSection({ status, onSelect, onRefresh, onRefreshAuth }
 																		    the opened panel would be uncloseable. */}
 																		<button className="ai-profile-menu-item" role="menuitem" onClick={() => { setModelsOpenId(modelsOpen ? null : profile.id); closeMenu(); }}>{modelsOpen ? "Hide models" : "View models"}</button>
 																		{profile.kind !== "gateway" && (
-																			<button className="ai-profile-menu-item" role="menuitem" onClick={() => { setEditProfile(profile); closeMenu(); }}>Approve models</button>
+																			<button className="ai-profile-menu-item" role="menuitem" onClick={() => { setEditProfile(profile); closeMenu(); }} title="Choose which models rooms may use">Approve models</button>
 																		)}
 																		{profile.kind === "gateway" && (
 																			<>
 																				{/* Approve models edits the model set only; Edit gateway
 																				    owns the base URL and API key. */}
-																				<button className="ai-profile-menu-item" role="menuitem" onClick={() => { setGatewayApproveId(profile.id); closeMenu(); }}>Approve models</button>
-																				<button className="ai-profile-menu-item" role="menuitem" onClick={() => { setGatewayEdit({ id: profile.id, label: profile.label }); closeMenu(); }}>Edit gateway</button>
+																				<button className="ai-profile-menu-item" role="menuitem" onClick={() => { setGatewayApproveId(profile.id); closeMenu(); }} title="Choose which models rooms may use">Approve models</button>
+																				<button className="ai-profile-menu-item" role="menuitem" onClick={() => { setGatewayEdit({ id: profile.id, label: profile.label }); closeMenu(); }} title="Change the gateway URL or API key">Edit gateway</button>
 																			</>
 																		)}
 																		{profile.kind === "builtin" && profile.overridden && (
-																			<button className="ai-profile-menu-item" role="menuitem" onClick={() => { closeMenu(); void resetBuiltInModels(profile); }}>Reset to curated models</button>
+																			<button className="ai-profile-menu-item" role="menuitem" onClick={() => { closeMenu(); void resetBuiltInModels(profile); }} title="Drop the custom model list and restore the built-in catalog">Reset to curated models</button>
 																		)}
 																		{providerAcceptsApiKey(profile.provider.id) && profile.provider.configured && (
 																			<button className="ai-profile-menu-item" role="menuitem" onClick={() => { setKeyProfileId(profile.id); closeMenu(); }}>Replace API key</button>
@@ -1091,7 +1093,7 @@ function Landing({ onOpenSettings, onOpenDashboard, onOpenMemory, onOpenPersiste
 					<button type="button" className="section-help-btn" aria-label="How rooms work" title="How rooms work" onClick={() => setHelpOpen(true)}>?</button>
 				</div>
 				{aiProfileStatus && aiProfileStatus.ready === false && (
-					<button type="button" className="home-ai-profile-status setup-needed" onClick={() => onOpenSettings("ai-setup")}>
+					<button type="button" className="home-ai-profile-status setup-needed" onClick={() => onOpenSettings("ai-setup")} title="Open Settings to finish AI setup">
 						{aiProfileStatus.message}
 					</button>
 				)}
@@ -1247,7 +1249,7 @@ function ArchivedRoomsSection({ activeRoomCount, onRestored }: { activeRoomCount
 	return (
 		<section className="archived-rooms" aria-label="Archived rooms">
 			{rooms.length > 0 && (
-				<button type="button" className="archived-rooms-summary" aria-expanded={open} onClick={() => { setOpen((v) => !v); setArmedId(null); }}>
+				<button type="button" className="archived-rooms-summary" aria-expanded={open} title="Show or hide archived rooms" onClick={() => { setOpen((v) => !v); setArmedId(null); }}>
 					<span className="archived-rooms-title">Archived rooms ({rooms.length})</span>
 					<span className="archived-rooms-toggle" aria-hidden="true">{open ? "▾" : "▸"}</span>
 				</button>
@@ -1268,11 +1270,11 @@ function ArchivedRoomsSection({ activeRoomCount, onRestored }: { activeRoomCount
 								)}
 							</div>
 							<div className="archived-room-actions">
-								{armedId === room.id && <button type="button" className="rs-quiet" disabled={busy?.id === room.id} onClick={() => setArmedId(null)}>Keep it</button>}
-								<button type="button" className="rs-btn" disabled={busy?.id === room.id} onClick={() => void restoreRoom(room)}>
+								{armedId === room.id && <button type="button" className="rs-quiet" disabled={busy?.id === room.id} onClick={() => setArmedId(null)} title="Cancel — keep this room archived">Keep it</button>}
+								<button type="button" className="rs-btn" disabled={busy?.id === room.id} title="Bring this room back to Home" onClick={() => void restoreRoom(room)}>
 									{busy?.id === room.id && busy.action === "restore" ? "Restoring…" : "Restore"}
 								</button>
-								<button type="button" className="rs-btn rs-btn-danger" disabled={busy?.id === room.id} onClick={() => void deleteForever(room)}>
+								<button type="button" className="rs-btn rs-btn-danger" disabled={busy?.id === room.id} title="Erase this room and its files from this machine" onClick={() => void deleteForever(room)}>
 									{busy?.id === room.id && busy.action === "purge" ? "Deleting…" : "Delete forever"}
 								</button>
 							</div>
@@ -1350,8 +1352,8 @@ function ExportCollisionDialog({ collision, onClose }: { collision: ExportCollis
 				<p>A file called “{collision.fileName}” is already in {collision.place ?? "the chosen folder"}.</p>
 				<div className="checkpoint-preview-actions">
 					<button className="landing-action secondary" autoFocus onClick={onClose}>Cancel</button>
-					<button className="landing-action secondary" onClick={() => { onClose(); collision.onKeepBoth(); }}>Keep both</button>
-					<button className="rs-btn rs-btn-danger" onClick={() => { onClose(); collision.onReplace(); }}>Replace</button>
+					<button className="landing-action secondary" onClick={() => { onClose(); collision.onKeepBoth(); }} title="Save with a new name; the existing file stays">Keep both</button>
+					<button className="rs-btn rs-btn-danger" onClick={() => { onClose(); collision.onReplace(); }} title="Overwrite the existing file">Replace</button>
 				</div>
 			</section>
 		</div>
@@ -1449,8 +1451,8 @@ function TaskStoreGcBanner({ assessment, onReview, onDismiss }: { assessment: Ta
 	return (
 		<div className="task-store-gc-banner" role="status">
 			<span>Old specialist files are taking up {fmtMb(assessment.totalBytes)} — {fmtMb(assessment.proposal.reclaimBytes)} can be freed safely.</span>
-			<button className="landing-action secondary" onClick={onReview}>Review</button>
-			<button className="icon-btn" aria-label="Dismiss" onClick={onDismiss}>✕</button>
+			<button className="landing-action secondary" onClick={onReview} title="See which old task folders would be deleted">Review</button>
+			<button className="icon-btn" aria-label="Dismiss" title="Dismiss — nothing is deleted" onClick={onDismiss}>✕</button>
 		</div>
 	);
 }
@@ -1510,7 +1512,7 @@ function MaintainChooserShell({ target, memoryStatus, onAbsorb, onPrune, onRetur
 						</div>
 						<div className="maintain-choice-footer">
 							{recentCount !== null && <span className="maintain-choice-status" title={nothingToLearn ? undefined : "Memorizing needs a few remembered sessions; the check when you start confirms this is enough."}>{nothingToLearn ? "Nothing new to memorize right now" : `${recentCount} recent ${recentCount === 1 ? "session" : "sessions"} waiting`}</span>}
-							<button className="landing-action" disabled={nothingToLearn} title={nothingToLearn ? "Have a session with this room first." : undefined} onClick={onAbsorb}>Start memorizing</button>
+							<button className="landing-action" disabled={nothingToLearn} title={nothingToLearn ? "Have a session with this room first." : "Turn remembered sessions into lasting memory"} onClick={onAbsorb}>Start memorizing</button>
 						</div>
 					</article>
 					<article className="maintain-choice-card">
@@ -1520,7 +1522,7 @@ function MaintainChooserShell({ target, memoryStatus, onAbsorb, onPrune, onRetur
 							<p>Go over what {target.displayName} keeps long-term and tighten anything stale, redundant, or overgrown.</p>
 						</div>
 						<div className="maintain-choice-footer">
-							<button className="landing-action secondary" onClick={onPrune}>Start review</button>
+							<button className="landing-action secondary" onClick={onPrune} title="Tidy and tighten this room's long-term memory">Start review</button>
 						</div>
 					</article>
 				</section>
@@ -1824,8 +1826,8 @@ function StructuralReviewWorkflowShell({ state, loadingMessage, waitingMessage, 
 							{meaningfulMaintenanceWarnings(assessment.warnings).length > 0 && <div className="checkpoint-proposal-warnings">{meaningfulMaintenanceWarnings(assessment.warnings).map((warning) => <div key={warning}>{warning}</div>)}</div>}
 							<div className="checkpoint-preview-actions">
 								<button className="landing-action secondary" onClick={onAbort}>Cancel</button>
-								<button className="landing-action secondary" onClick={onDiscuss}>Discuss memory</button>
-								<button className="landing-action" onClick={onGenerate}>Draft memory update</button>
+								<button className="landing-action secondary" onClick={onDiscuss} title="Talk the assessment through first — the discussion itself isn't saved">Discuss memory</button>
+								<button className="landing-action" onClick={onGenerate} title="Generate the memory update for your review">Draft memory update</button>
 							</div>
 							{state.fastPathEnabled && <p className="checkpoint-footnote">Automatic maintenance is on · a clean draft is applied without a second review</p>}
 						</div>
@@ -2034,8 +2036,8 @@ function AbsorbWorkflowShell({ state, loadingMessage, waitingMessage, onAbort, o
 						{meaningfulMaintenanceWarnings(assessment.warnings).length > 0 && <div className="checkpoint-proposal-warnings">{meaningfulMaintenanceWarnings(assessment.warnings).map((warning) => <div key={warning}>{warning}</div>)}</div>}
 						<div className="checkpoint-preview-actions">
 							<button className="landing-action secondary" onClick={onAbort}>Cancel</button>
-							<button className="landing-action secondary" onClick={onDiscuss}>Discuss memory</button>
-							<button className="landing-action" onClick={onGenerate}>Draft memory update</button>
+							<button className="landing-action secondary" onClick={onDiscuss} title="Talk the assessment through first — the discussion itself isn't saved">Discuss memory</button>
+							<button className="landing-action" onClick={onGenerate} title="Generate the memory update for your review">Draft memory update</button>
 						</div>
 						{state.fastPathEnabled && <p className="checkpoint-footnote">Automatic maintenance is on · a clean draft is applied without a second review</p>}
 					</div>
@@ -2551,7 +2553,7 @@ function CheckpointPreviewShell({ chat, itemCount, rememberText, density, propos
 						</div>
 						{approvalResult.warnings.length > 0 && <div className="checkpoint-proposal-warnings">{approvalResult.warnings.map((warning) => <div key={warning}>{warning}</div>)}</div>}
 						<div className="checkpoint-preview-actions">
-							<button className="landing-action" onClick={onContinueAfterCheckpoint}>Continue working</button>
+							<button className="landing-action" onClick={onContinueAfterCheckpoint} title="Stay in this room on a fresh thread">Continue working</button>
 							<button className="landing-action secondary" onClick={onRestAfterCheckpoint}>Return Home</button>
 						</div>
 					</div>
@@ -2582,7 +2584,7 @@ function CheckpointPreviewShell({ chat, itemCount, rememberText, density, propos
 									{showFullEntry ? (
 										<div className="checkpoint-review-actions">
 											<button className="inline-action" onClick={() => setShowFullEntry(false)}>Hide full entry</button>
-											<button className="inline-action" onClick={() => setEditing(true)}>Edit</button>
+											<button className="inline-action" onClick={() => setEditing(true)} title="Edit the entry before saving">Edit</button>
 										</div>
 									) : (
 										<button className="inline-action checkpoint-full-entry-trigger" onClick={() => setShowFullEntry(true)}>Show full entry</button>
@@ -2619,7 +2621,7 @@ function CheckpointPreviewShell({ chat, itemCount, rememberText, density, propos
 						{honestyNoticesNode}
 						<div className="checkpoint-preview-actions">
 							<button className="landing-action" disabled={approvalLoading || !approvalReady} onClick={() => onApprove(approvedDraft)}>{approvalLoading ? "Saving…" : "Save to memory"}</button>
-							<button className="landing-action secondary" disabled={approvalLoading} onClick={confirmDiscard}>Discard</button>
+							<button className="landing-action secondary" disabled={approvalLoading} onClick={confirmDiscard} title="Throw away this draft — nothing is saved">Discard</button>
 						</div>
 						<p className="checkpoint-footnote">Saved only when you approve · automatic apply can be turned on in room settings</p>
 					</div>
@@ -7579,8 +7581,8 @@ export function App() {
 								{/* Hide only for the moment, never write the dismissed flag:
 								    the close-modal re-check re-shows the nudge if the user
 								    cancelled without setting a workspace. Only Dismiss burns it. */}
-								<button className="rs-btn" type="button" onClick={() => { setWorkspaceNudgeRoomId(null); openRoomSettings(); }}>Set workspace</button>
-								<button className="rs-quiet" type="button" onClick={dismissWorkspaceNudge}>Dismiss</button>
+								<button className="rs-btn" type="button" title="Choose the folder this room may read and write" onClick={() => { setWorkspaceNudgeRoomId(null); openRoomSettings(); }}>Set workspace</button>
+								<button className="rs-quiet" type="button" title="Hide this hint for good" onClick={dismissWorkspaceNudge}>Dismiss</button>
 							</div>
 						</div>
 					)}

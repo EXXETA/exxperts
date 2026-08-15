@@ -133,7 +133,7 @@ export function AssetViewerFooter({ taskId, artifact, userFileName, roomId, canI
 							}
 						}}
 					/>
-					<button type="button" className="artifact-viewer-action" disabled={iteratePending || !brief.trim()} onClick={submitIterate}>
+					<button type="button" className="artifact-viewer-action" disabled={iteratePending || !brief.trim()} title="Ask the room to revise this file" onClick={submitIterate}>
 						{iteratePending ? "Starting…" : "Go"}
 					</button>
 				</div>
