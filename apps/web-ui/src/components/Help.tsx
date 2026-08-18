@@ -38,7 +38,7 @@ export function Help({ onClose }: Props) {
 					<section>
 						<h3>Your AI</h3>
 						<p>
-							Connect the AI you already have in AI setup: sign in with a subscription, paste
+							Connect the AI you already have in Settings: sign in with a subscription, paste
 							an API key, or point at a company gateway. You approve which models rooms may
 							use, and you switch between AI profiles right here in the settings menu.
 						</p>

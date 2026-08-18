@@ -80,7 +80,7 @@ export function ConfigMenu({ onAiSetup, theme, onToggleTheme, active }: { onAiSe
 							setOpen(false);
 						}}
 					>
-						<span>AI setup</span>
+						<span>Settings</span>
 						<span className="menu-item-arrow" aria-hidden="true">→</span>
 					</button>
 					<button

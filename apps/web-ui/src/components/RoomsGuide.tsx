@@ -7,7 +7,7 @@ interface Props {
 const POINTS: { term: string; body: string }[] = [
 	{
 		term: "Bring your own AI",
-		body: "exxperts runs with the AI you already have. Connect a subscription or an API key once, in AI setup behind the gear at the bottom of the sidebar.",
+		body: "exxperts runs with the AI you already have. Connect a subscription or an API key once, in Settings behind the gear at the bottom of the sidebar.",
 	},
 	{
 		term: "Create and chat",

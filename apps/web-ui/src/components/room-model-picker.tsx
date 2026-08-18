@@ -58,7 +58,7 @@ function inertGroup(profile: PersistentAgentAiProfileStatus): PickerGroup {
 		id: profile.id,
 		label: profile.label,
 		modelCount: profile.processes?.persistentRoom.models.length ?? 0,
-		note: profile.provider.configured ? "setup needed · finish in AI setup" : "not signed in · connect it in AI setup",
+		note: profile.provider.configured ? "setup needed · finish in Settings" : "not signed in · connect it in Settings",
 	};
 }
 
@@ -489,7 +489,7 @@ export function RoomModelPicker({ roomModels, modelStatusProfileId, value, onCha
 						{renderGroups.map(({ group, matches, collapsed, collapsible, headerId }) => {
 							if (group.kind === "inert") {
 								return (
-									<div key={group.id} className="model-picker-group inert" role="presentation" title="Sign in from AI setup to use this profile">
+									<div key={group.id} className="model-picker-group inert" role="presentation" title="Sign in from Settings to use this profile">
 										<div className="model-picker-group-head">
 											<span className="model-picker-group-text">
 												<span className="model-picker-group-name">{group.label}</span>
