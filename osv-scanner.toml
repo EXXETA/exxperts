@@ -1,0 +1,11 @@
+# Documented exceptions for the OSV dependency scan (release gate + weekly).
+# Every entry must say why the finding does not apply; delete entries the
+# moment they stop being true.
+
+[[IgnoredVulns]]
+id = "GHSA-4r6h-8v6p-xvw6"
+reason = "xlsx prototype pollution, fixed upstream in 0.19.3. We ship 0.20.3 straight from the vendor's CDN; the npm registry stopped receiving releases at 0.18.5, so the advisory's npm record carries no fixed version and every version looks affected to the scanner."
+
+[[IgnoredVulns]]
+id = "GHSA-5pgg-2g8v-p4x9"
+reason = "xlsx ReDoS, fixed upstream in 0.20.2. Same situation: we ship 0.20.3 from the vendor's CDN, which the npm-ecosystem advisory record cannot see."
