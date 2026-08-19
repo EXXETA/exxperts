@@ -62,6 +62,9 @@ jobs:
     permissions:
       actions: read
       contents: read
+      # The reusable workflow's job declares this even when SARIF upload is
+      # off; without the grant the whole Release workflow fails at startup.
+      security-events: write
     uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@v2.5.1
     with:
       upload-sarif: false
