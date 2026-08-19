@@ -301,16 +301,18 @@ export function createGrepToolDefinition(
 								settle(() => reject(new Error("Operation aborted")));
 								return;
 							}
-							if (!killedDueToLimit && isDirectoryEnumerationPermissionError(stderr)) {
-								settle(() => reject(new Error(directoryEnumerationPermissionMessage(searchPath, stderr.trim()))));
-								return;
-							}
-							if (!killedDueToLimit && code !== 0 && code !== 1) {
-								const errorMsg = stderr.trim() || `ripgrep exited with code ${code}`;
-								settle(() => reject(new Error(errorMsg)));
-								return;
-							}
 							if (matchCount === 0) {
+								// ripgrep prints "Permission denied" to stderr for unreadable subdirectories
+								// while still streaming valid matches, so stderr alone must not turn partial
+								// results into an error.
+								if (isDirectoryEnumerationPermissionError(stderr)) {
+									settle(() => reject(new Error(directoryEnumerationPermissionMessage(searchPath, stderr.trim()))));
+									return;
+								}
+								if (code !== 0 && code !== 1) {
+									settle(() => reject(new Error(stderr.trim() || `ripgrep exited with code ${code}`)));
+									return;
+								}
 								settle(() =>
 									resolve({ content: [{ type: "text", text: "No matches found" }], details: undefined }),
 								);

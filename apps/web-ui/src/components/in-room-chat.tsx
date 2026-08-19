@@ -4,6 +4,7 @@ import { Approval } from "./Approval";
 import { ConsultThreadItem, Message, TaskThreadItem, ToolBundle, isBundleableToolItem, type MessageAttachmentAccess } from "./Message";
 import { MentionConsultPopover, MentionConsultPopoverBusy, type MentionSupport } from "./mention-consult-popover";
 import { useEscapeKey } from "./use-escape-key";
+import { SidebarDrawerBackdrop } from "../sidebar-collapse";
 import type { ApprovalPreviewData } from "../approval-preview";
 import type { ChatItem, ContextHealthStatus } from "../types";
 import { completeMention, detectMentionQuery, filterMentionCandidates, resolveLeadingMention, type MentionCandidateRoom } from "../mention-popover";
@@ -22,6 +23,9 @@ export interface InRoomChatUsage {
 
 export interface InRoomChatShellViewProps {
 	sidebar: ReactNode;
+	/** Phone-only affordance (hidden by CSS above the breakpoint): the rail
+	 *  is a drawer there, so the topbar carries a direct way home. */
+	onHome?: () => void;
 	withPreview?: boolean;
 	activeDisplay: string;
 	ownerSecondary?: string | null;
@@ -214,7 +218,13 @@ function ContextPill({
 				onClick={() => setOpen((v) => !v)}
 			>
 				<span className="context-health-dot" aria-hidden="true" />
-				<span className="composer-context-pill-label">{label}</span>
+				<span className="composer-context-pill-label">
+					{connected && known
+						// The phrase hides at the phone breakpoint: "10%" is the
+						// meter there, the full sentence is desktop room.
+						? <>{Math.round(status.checkpointPercent!)}%<span className="composer-context-pill-phrase"> of recommended context</span></>
+						: label}
+				</span>
 			</button>
 			{open && (
 				<div className="composer-context-popover" id={popoverId} role="dialog" aria-label="Context and model details">
@@ -569,6 +579,7 @@ function ComposerInput({
 
 export function InRoomChatShellView({
 	sidebar,
+	onHome,
 	withPreview = false,
 	activeDisplay,
 	ownerSecondary,
@@ -725,12 +736,21 @@ export function InRoomChatShellView({
 
 	return (
 		<div className="app">
+			<SidebarDrawerBackdrop />
 			{sidebar}
 
 			<div ref={workbenchRef} className={`workbench ${withPreview ? "with-preview" : ""} ${workbenchClassName ?? ""}`.trim()} style={workbenchStyle}>
 				<main className="main">
 					<div className="topbar">
 						<div className="left">
+							{onHome && (
+								<button className="topbar-home-btn" aria-label="Back to rooms" title="Back to rooms" onClick={onHome}>
+									<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" aria-hidden="true">
+										<path d="M2.5 7.5 8 2.5l5.5 5" />
+										<path d="M4 7v6h8V7" />
+									</svg>
+								</button>
+							)}
 							<span className="agent-label">talking to</span>
 							<div className="title-stack">
 								<span className="title">{activeDisplay || "…"}</span>

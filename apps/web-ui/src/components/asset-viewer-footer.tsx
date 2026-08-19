@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { resolveRouteUrl, type ArtifactRef } from "./ArtifactViewer";
+import { useRemoteClientContext } from "../remote-client-context";
 
 interface Props {
 	taskId: string;
@@ -34,6 +35,9 @@ interface Props {
  * header, where chrome belongs.
  */
 export function AssetViewerFooter({ taskId, artifact, userFileName, roomId, canIterate, summary, onIterate, iteratePending, iterateNotice, onSaveTo, onDelete }: Props) {
+	// Save… opens a native folder dialog on the computer; hidden for remote
+	// devices (Download remains the take-away there).
+	const remoteClient = useRemoteClientContext();
 	const [iterateOpen, setIterateOpen] = useState(false);
 	const [brief, setBrief] = useState("");
 	const [detailsOpen, setDetailsOpen] = useState(false);
@@ -93,7 +97,7 @@ export function AssetViewerFooter({ taskId, artifact, userFileName, roomId, canI
 				<button type="button" className="artifact-viewer-quiet" disabled={!downloadUrl} onClick={downloadSnapshot} title="Download a snapshot of this file to your Downloads folder">
 					⬇ Download
 				</button>
-				{onSaveTo && (
+				{onSaveTo && !remoteClient.remote && (
 					<button type="button" className="artifact-viewer-quiet" onClick={onSaveTo} title="Save a snapshot of this file into a folder you pick">
 						💾 Save…
 					</button>

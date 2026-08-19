@@ -24,6 +24,7 @@ import { listTaskLedgerRecords } from "./persistent-room-task-ledger.js";
 import { backgroundRunsDirectoryPath, isValidBackgroundRunId } from "./background-runs.js";
 import { artifactRoot } from "../../../pi-package/extensions/artifacts/index.js";
 import { readPersistentRoomMaintenanceSettings } from "./persistent-room-maintenance-settings.js";
+import { readPersistentRoomPreferredModel } from "./persistent-room-preferred-model.js";
 import { abortAllSpecialistTasks, runningSpecialistCount } from "./persistent-room-specialist-registry.js";
 import { computePersistentRoomScheduleDueOccurrence, listPersistentRoomScheduleJobs, parsePersistentRoomSchedule, readPersistentRoomScheduleStore, summarizePersistentRoomScheduleJobs, writePersistentRoomScheduleStore } from "../../../pi-package/extensions/schedule-prompt/index.js";
 import type { PersistentRoomScheduleSummary } from "../../../pi-package/extensions/schedule-prompt/index.js";
@@ -986,6 +987,8 @@ export interface PersistentAgentStatus {
 	description?: string;
 	role?: string;
 	model?: { provider: string; model: string } | string;
+	/** The model this room's picker last settled on — an empty room's memory across profile switches. Display/seeding state only; never routes execution. */
+	preferredModel?: { provider: string; model: string };
 	archivedAt?: number;
 	archivedBy?: string;
 	archivedReason?: string;
@@ -4553,6 +4556,8 @@ No workspace is configured for this room right now. Workspace file tools and Bas
 ${writeLine}
 - Bash/shell access: ${capability.bashEnabled ? "enabled" : "disabled"}
 
+Where files land, so you describe it truthfully: a file you create in the workspace stays in the workspace folder on the user's computer and does NOT appear in this room's Files panel (that panel shows only the room's own shelf files and task artifacts). When you tell the user where a file is, name the actual workspace folder path; never claim a workspace file is in the Files panel.
+
 If these facts differ from a workspace described earlier in this conversation, the user changed the workspace mid-conversation; follow these facts and the usage rules of this mode from the boot context.`;
 }
 
@@ -4829,6 +4834,14 @@ export function getPersistentAgentStatus(agentIdRaw: string): PersistentAgentSta
 		description: meta?.description,
 		role: meta?.role,
 		model: meta?.model,
+		// The launcher card seeds an empty room's picker from this and, when the
+		// preference lives on a non-active profile, offers switch-and-enter the
+		// way a stranded standby room does. Riding the status payload keeps it
+		// one fetch — no per-card lookup loop.
+		...((): { preferredModel?: { provider: string; model: string } } => {
+			const preferred = readPersistentRoomPreferredModel(instance.agentId);
+			return preferred ? { preferredModel: { provider: preferred.provider, model: preferred.model } } : {};
+		})(),
 		...(Number.isFinite(archivedAt) && archivedAt > 0 ? { archivedAt } : {}),
 		...(archivedBy ? { archivedBy } : {}),
 		...(archivedReason ? { archivedReason } : {}),

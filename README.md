@@ -68,7 +68,7 @@ Every memory traces back to the conversation it came from, and everything a room
 - **Every memory has a receipt.** Each fact links back to the conversation it came from, and time travel shows exactly what your AI knew on any given day.
 - **You can see what the model saw.** The full context behind any answer is inspectable, so replies can be audited rather than taken on faith.
 - **Memory you can correct.** Inspect, maintain, and reset what's remembered; wrong facts don't fossilize.
-- **Everything lives on your machine.** Memory, conversations, credentials, and the files you attach or a room creates: plain files on your disk, under your control. No cloud account, no telemetry; nothing leaves your machine unless you send it.
+- **Everything lives on your machine.** Memory, conversations, credentials, and the files you attach or a room creates: plain files on your disk, under your control. No cloud account, no telemetry; nothing leaves your machine unless you send it. The optional remote mode (off by default) only ever serves your own paired devices over your private tunnel; there is no cloud in between.
 - **No provider lock-in.** Claude, ChatGPT, Gemini, Mistral, or any OpenAI-compatible endpoint, including local models; switching keeps everything your AI has learned, and a provider outage never strands your work.
 
 Most local AI tools are chat interfaces with hidden state. exxperts is built around governed memory: lean by design, and the more you work with it, the sharper it gets.

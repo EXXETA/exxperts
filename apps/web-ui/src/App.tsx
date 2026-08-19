@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { Sidebar } from "./components/Sidebar";
 import { AssetsPanel } from "./components/assets-panel";
 import { AssetViewerFooter } from "./components/asset-viewer-footer";
@@ -14,6 +15,10 @@ import { CreateRoomPanel } from "./components/create-room-panel";
 import { useEscapeKey } from "./components/use-escape-key";
 import { PersistentAgentCard } from "./components/launcher-room-card";
 import { ProductSidebar, type ThemeMode } from "./components/product-shell";
+import { SettingsOverlay, type SettingsSection } from "./components/settings-overlay";
+import { WhatsNewDialog } from "./components/whats-new-dialog";
+import { useRemoteClientContext } from "./remote-client-context";
+import { RemoteAccessPage } from "./components/remote-access-page";
 import { ConnectorsPage } from "./components/ConnectorsPage";
 import { WebSearchSettingsSection } from "./components/web-search-settings-section";
 import { SkillsPage } from "./components/SkillsPage";
@@ -29,7 +34,7 @@ import { canonicalModelName, modelDisplayName, modelTooltipName } from "./model-
 import type { ApprovalPreviewData } from "./approval-preview";
 import type { AbsorbApprovalResponse, AbsorbAssessmentResponse, AbsorbAvailability, AbsorbDiscussionMessage, AbsorbDiscussionSignoffResponse, AbsorbDiscussionTokenBudget, AbsorbDiscussionTurnResponse, AbsorbProposalResponse, AbsorbProposalSourceMetadata, AbsorbReviewAction, AbsorbReviewEntryChange, AbsorbReviewSectionChange, AuthStatusResponse, ChatItem, CheckpointApprovalResponse, CheckpointProposalResponse, ContextHealthStatus, LoginProviderCatalogEntry, PersistentAgentAiProfileSelectionStatus, PersistentAgentAiProfileStatus, ArchivedPersistentAgentSummary, PersistentAgentArchiveResponse, PersistentAgentCreateRequest, PersistentAgentCreateResponse, PersistentAgentId, PersistentAgentMementoBoundaryResponse, PersistentAgentPurgeResponse, PersistentAgentStatus, PersistentAgentThreadOrigin, PersistentAgentThreadRecord, StructuralReviewApprovalResponse, StructuralReviewAssessmentResponse, StructuralReviewAvailability, StructuralReviewDiscussionMessage, StructuralReviewDiscussionSignoffResponse, StructuralReviewDiscussionTokenBudget, StructuralReviewDiscussionTurnResponse, StructuralReviewMemoryMapRow, StructuralReviewProposalResponse, StructuralReviewSourceMetadata, WebChatModelOption, WebChatModelStatus } from "./types";
 import { archivePersistentRoom, fetchArchivedPersistentRooms, fetchPersistentRoomMaintenanceSettings, purgePersistentRoom, restorePersistentRoom, type PersistentRoomPurgeError } from "./persistent-room-management-api";
-import { createAssistantStreamState, DEFAULT_REVEAL_PACING, isAssistantStreamActive, reduceAssistantStream, type AssistantStreamAction, type AssistantStreamEffect, type AssistantStreamState, type RevealPacing } from "./assistant-stream";
+import { createAssistantStreamState, DEFAULT_REVEAL_PACING, isAssistantStreamActive, outputLimitNoticeForTurn, reduceAssistantStream, type AssistantStreamAction, type AssistantStreamEffect, type AssistantStreamState, type RevealPacing } from "./assistant-stream";
 import { consultStack, createConsultState, reduceConsult, type ConsultAction, type ConsultExchange, type ConsultState } from "./consult-stream";
 import { createTaskState, reduceTask, type TaskAction, type TaskState } from "./task-stream";
 import { ConsultDock } from "./components/delegation-card";
@@ -44,7 +49,7 @@ import { buildConsultHandoffBlockFromStack, composeOutgoingPromptWithHandoffs, r
 import { isSpecialistHandoffBlock } from "../../web-server/src/specialist-handoff";
 import type { MentionCandidateRoom } from "./mention-popover";
 
-type MainView = "home" | "chat" | "dashboard" | "ai-setup" | "connectors" | "memory" | "skills";
+type MainView = "home" | "chat" | "dashboard" | "memory";
 type CheckpointDensity = "compact" | "standard" | "rich";
 type AbsorbWorkflowStep = "closed" | "checking" | "assessing" | "assessment" | "discussing" | "signing_off" | "proposing" | "proposal" | "approving" | "saved" | "unavailable" | "error";
 type StructuralReviewWorkflowStep = "closed" | "checking" | "assessing" | "assessment" | "discussing" | "signing_off" | "proposing" | "proposal" | "approving" | "saved" | "unavailable" | "error";
@@ -580,7 +585,71 @@ function AiProfileModelsDetail({ profile }: { profile: PersistentAgentAiProfileS
 	);
 }
 
+/** The profile row's management popover, rendered through a portal to <body>.
+ *  The rows live inside scroll containers (the settings modal's content pane,
+ *  the onboarding page) that clip an in-place absolute menu at the fold; the
+ *  portal escapes every ancestor clip and containing-block trap (the modal
+ *  backdrop's backdrop-filter would otherwise capture position:fixed). The
+ *  menu hangs right-aligned under its anchor and flips above it when the
+ *  viewport bottom would cut it; a ResizeObserver re-measures when the
+ *  contents swap (the remove-confirm is taller than the item list). */
+function AiProfileRowMenu({ anchorRef, onDismiss, children }: { anchorRef: React.RefObject<HTMLElement | null>; onDismiss: () => void; children: ReactNode }) {
+	const menuRef = useRef<HTMLSpanElement>(null);
+	const [pos, setPos] = useState<{ top: number | undefined; bottom: number | undefined; left: number } | null>(null);
+	useLayoutEffect(() => {
+		function measure() {
+			const menu = menuRef.current;
+			const anchor = anchorRef.current;
+			if (!menu || !anchor) return;
+			const rect = anchor.getBoundingClientRect();
+			const height = menu.offsetHeight;
+			const spaceBelow = window.innerHeight - rect.bottom - 12;
+			const spaceAbove = rect.top - 12;
+			const up = height > spaceBelow && spaceAbove > spaceBelow;
+			const left = Math.max(8, Math.min(rect.right - menu.offsetWidth, window.innerWidth - menu.offsetWidth - 8));
+			const next = up
+				? { top: undefined, bottom: window.innerHeight - rect.top + 6, left }
+				: { top: rect.bottom + 6, bottom: undefined, left };
+			setPos((prev) => (prev && prev.top === next.top && prev.bottom === next.bottom && prev.left === next.left ? prev : next));
+		}
+		measure();
+		// Content swaps (confirm state) change the height; window scrolls and
+		// resizes move the anchor. The capture-phase scroll listener sees the
+		// modal pane's scrolls too.
+		const observer = new ResizeObserver(measure);
+		if (menuRef.current) observer.observe(menuRef.current);
+		window.addEventListener("resize", measure);
+		window.addEventListener("scroll", measure, true);
+		return () => {
+			observer.disconnect();
+			window.removeEventListener("resize", measure);
+			window.removeEventListener("scroll", measure, true);
+		};
+	}, [anchorRef]);
+	return createPortal(
+		<>
+			<span className="ai-profile-menu-backdrop" onClick={onDismiss} />
+			<span
+				className="ai-profile-menu"
+				role="menu"
+				ref={menuRef}
+				style={pos ? { top: pos.top, bottom: pos.bottom, left: pos.left } : { visibility: "hidden" }}
+			>
+				{children}
+			</span>
+		</>,
+		document.body,
+	);
+}
+
 function AiProfileSwitcherSection({ status, onSelect, onRefresh, onRefreshAuth }: { status: PersistentAgentAiProfileSelectionStatus | null; onSelect: (profileId: string) => Promise<void>; onRefresh: () => void; onRefreshAuth: () => void }) {
+	// On a remote device the provider/gateway setup routes are local-only
+	// (remote-route-policy is the truth), so those controls render as facts
+	// with one honest line instead of failing per tap. Switching the active
+	// profile is a write route, so full-capability devices keep it.
+	const remoteClient = useRemoteClientContext();
+	const remoteSetupLocked = remoteClient.remote;
+	const remoteSwitchLocked = remoteClient.remote && remoteClient.capability !== "full";
 	const [switchingId, setSwitchingId] = useState<string | null>(null);
 	const [error, setError] = useState<string | null>(null);
 	const [modelsOpenId, setModelsOpenId] = useState<string | null>(null);
@@ -590,6 +659,9 @@ function AiProfileSwitcherSection({ status, onSelect, onRefresh, onRefreshAuth }
 	const [gatewayEdit, setGatewayEdit] = useState<{ id: string; label: string } | null>(null);
 	const [gatewayApproveId, setGatewayApproveId] = useState<string | null>(null);
 	const [menuOpenId, setMenuOpenId] = useState<string | null>(null);
+	// The trigger of the open menu, captured at click time: the portaled
+	// popover positions itself off this element's live rect.
+	const menuAnchorRef = useRef<HTMLElement | null>(null);
 	const [confirmRemoveId, setConfirmRemoveId] = useState<string | null>(null);
 	const [removing, setRemoving] = useState(false);
 	const [keyProfileId, setKeyProfileId] = useState<string | null>(null);
@@ -729,28 +801,17 @@ function AiProfileSwitcherSection({ status, onSelect, onRefresh, onRefreshAuth }
 			setRemoving(false);
 		}
 	}
-	function refreshAll() {
-		onRefresh();
-		onRefreshAuth();
-	}
-	// Refresh belongs to the list it re-reads, so it sits on the card rather than
-	// floating at the far edge of the page.
-	const cardFoot = (
-		<div className="ai-profile-card-foot">
-			<button className="ai-profile-foot-link" onClick={refreshAll}>Refresh</button>
-		</div>
-	);
-	// A first fetch that failed leaves nothing but this line, and nothing else on
-	// the page fetches the profiles again, so the way out has to be on the card
-	// that has no rows just as much as on the one that has them.
 	const emptyCard = (
 		<div className="ai-profile-card">
 			<p className="cli-note ai-profile-card-empty">Profile status is still loading.</p>
-			{cardFoot}
 		</div>
 	);
 	return (
 		<section className="ai-setup-section ai-profile-switcher-section" aria-label="AI profile selection">
+			<div className="ai-profile-section-head">
+				<h3 className="web-search-fallback-heading">Profiles</h3>
+				<p className="ai-setup-copy web-search-fallback-copy">The profile your exxperts run on: a provider plus the models you approved for it.</p>
+			</div>
 			{status ? (
 				status.profiles.length > 0 ? (
 					<div className="ai-profile-card">
@@ -764,7 +825,6 @@ function AiProfileSwitcherSection({ status, onSelect, onRefresh, onRefreshAuth }
 								// One quiet subline per row, describing the row's own state — the same
 								// state reads the same on every row, active or not. "Setup needed" is
 								// reserved for signed-in-but-still-broken.
-								const notSignedInText = roomModelCount > 0 ? `not signed in · ${roomModelsLabel}` : "not signed in";
 								const subline = switchingId === profile.id
 									? "selecting…"
 									: signingIn
@@ -773,7 +833,10 @@ function AiProfileSwitcherSection({ status, onSelect, onRefresh, onRefreshAuth }
 											? profile.active && notConfigured ? "default" : "signed in"
 											: profile.provider.configured
 												? "setup needed"
-												: notSignedInText;
+												// The models toggle beside the row already carries the count;
+												// repeating it here read as a glitch, loudest on phones where
+												// the toggle wraps directly under this line.
+												: "not signed in";
 								// A selection that cannot run is not presented as one: the dot only
 								// shows when the active profile is actually signed in.
 								const presentedActive = profile.active && profile.provider.configured;
@@ -790,6 +853,7 @@ function AiProfileSwitcherSection({ status, onSelect, onRefresh, onRefreshAuth }
 											className={`ai-profile-row${presentedActive ? " active" : ""}${profile.ready ? "" : " notready"}`}
 											onClick={() => {
 												// Unready rows are inert; only the Sign in button starts a sign-in.
+												if (remoteSwitchLocked) return;
 												if (!profile.ready || switchingId !== null || login.signingInProvider !== null) return;
 												if (!profile.active) void selectProfile(profile.id);
 											}}
@@ -847,7 +911,7 @@ function AiProfileSwitcherSection({ status, onSelect, onRefresh, onRefreshAuth }
 														{/* The key row carries its own Cancel now, for every row rather
 														    than only the not-ready ones, so this offers the way IN and the
 														    form offers the way out. */}
-														{!profile.ready && keyProfileId !== profile.id && (
+														{!profile.ready && keyProfileId !== profile.id && !remoteSetupLocked && (
 															<button className="ai-profile-signin" disabled={login.signingInProvider !== null} onClick={() => void signIn(profile)}>
 																{providerUsesOAuth(profile.provider.id) ? "Sign in →" : "Add API key →"}
 															</button>
@@ -856,62 +920,59 @@ function AiProfileSwitcherSection({ status, onSelect, onRefresh, onRefreshAuth }
 														    token, missing model) AND fully signed out. A signed-out custom
 														    profile must still offer Remove, or the row becomes a dead end;
 														    items that need a credential gate themselves below. */}
-													<span className="ai-profile-menu-anchor">
+													{!remoteSetupLocked && <span className="ai-profile-menu-anchor">
 														<button
 															className="ai-profile-menu-btn"
 															aria-haspopup="menu"
 															aria-expanded={menuOpenId === profile.id}
 															aria-label={`Manage ${profile.label}`}
-															onClick={() => (menuOpenId === profile.id ? closeMenu() : (setMenuOpenId(profile.id), setConfirmRemoveId(null), setKeyProfileId(null)))}
+															onClick={(e) => { if (menuOpenId === profile.id) { closeMenu(); } else { menuAnchorRef.current = e.currentTarget; setMenuOpenId(profile.id); setConfirmRemoveId(null); setKeyProfileId(null); } }}
 														>···</button>
 														{menuOpenId === profile.id && (
-															<>
-																<span className="ai-profile-menu-backdrop" onClick={closeMenu} />
-																<span className="ai-profile-menu" role="menu">
-																	{confirmRemoveId === profile.id ? (
-																		<>
-																			<span className="ai-profile-menu-confirm">Remove {profile.label}? This {profile.provider.configured ? "signs out and deletes" : "deletes"} its approved models.</span>
-																			<button className="ai-profile-menu-item danger" role="menuitem" disabled={removing} onClick={() => void removeProfile(profile)}>{removing ? "Removing…" : "Remove"}</button>
-																			<button className="ai-profile-menu-item" role="menuitem" disabled={removing} onClick={() => setConfirmRemoveId(null)}>Keep it</button>
-																		</>
-																	) : (
-																		<>
-																			{/* A toggle, not an opener: a 0-room-model profile renders no
-																			    "N room models" collapse control, so without the Hide branch
-																			    the opened panel would be uncloseable. */}
-																			<button className="ai-profile-menu-item" role="menuitem" onClick={() => { setModelsOpenId(modelsOpen ? null : profile.id); closeMenu(); }}>{modelsOpen ? "Hide models" : "View models"}</button>
-																			{profile.kind !== "gateway" && (
-																				<button className="ai-profile-menu-item" role="menuitem" onClick={() => { setEditProfile(profile); closeMenu(); }}>Approve models</button>
-																			)}
-																			{profile.kind === "gateway" && (
-																				<>
-																					{/* Approve models edits the model set only; Edit gateway
-																					    owns the base URL and API key. */}
-																					<button className="ai-profile-menu-item" role="menuitem" onClick={() => { setGatewayApproveId(profile.id); closeMenu(); }}>Approve models</button>
-																					<button className="ai-profile-menu-item" role="menuitem" onClick={() => { setGatewayEdit({ id: profile.id, label: profile.label }); closeMenu(); }}>Edit gateway</button>
-																				</>
-																			)}
-																			{profile.kind === "builtin" && profile.overridden && (
-																				<button className="ai-profile-menu-item" role="menuitem" onClick={() => { closeMenu(); void resetBuiltInModels(profile); }}>Reset to curated models</button>
-																			)}
-																			{providerAcceptsApiKey(profile.provider.id) && profile.provider.configured && (
-																				<button className="ai-profile-menu-item" role="menuitem" onClick={() => { setKeyProfileId(profile.id); closeMenu(); }}>Replace API key</button>
-																			)}
-																			{/* No credential stored → nothing to sign out of. */}
-																			{profile.provider.configured && (
-																				<button className="ai-profile-menu-item" role="menuitem" onClick={() => { closeMenu(); void signOut(profile); }}>Sign out</button>
-																			)}
-																			{profile.kind !== "builtin" && (
-																				<button className="ai-profile-menu-item danger" role="menuitem" onClick={() => setConfirmRemoveId(profile.id)}>
-																					{profile.kind === "gateway" ? "Remove gateway…" : "Remove provider…"}
-																				</button>
-																			)}
-																		</>
-																	)}
-																</span>
-															</>
+															<AiProfileRowMenu anchorRef={menuAnchorRef} onDismiss={closeMenu}>
+																{confirmRemoveId === profile.id ? (
+																	<>
+																		<span className="ai-profile-menu-confirm">Remove {profile.label}? This {profile.provider.configured ? "signs out and deletes" : "deletes"} its approved models.</span>
+																		<button className="ai-profile-menu-item danger" role="menuitem" disabled={removing} onClick={() => void removeProfile(profile)}>{removing ? "Removing…" : "Remove"}</button>
+																		<button className="ai-profile-menu-item" role="menuitem" disabled={removing} onClick={() => setConfirmRemoveId(null)}>Keep it</button>
+																	</>
+																) : (
+																	<>
+																		{/* A toggle, not an opener: a 0-room-model profile renders no
+																		    "N room models" collapse control, so without the Hide branch
+																		    the opened panel would be uncloseable. */}
+																		<button className="ai-profile-menu-item" role="menuitem" onClick={() => { setModelsOpenId(modelsOpen ? null : profile.id); closeMenu(); }}>{modelsOpen ? "Hide models" : "View models"}</button>
+																		{profile.kind !== "gateway" && (
+																			<button className="ai-profile-menu-item" role="menuitem" onClick={() => { setEditProfile(profile); closeMenu(); }}>Approve models</button>
+																		)}
+																		{profile.kind === "gateway" && (
+																			<>
+																				{/* Approve models edits the model set only; Edit gateway
+																				    owns the base URL and API key. */}
+																				<button className="ai-profile-menu-item" role="menuitem" onClick={() => { setGatewayApproveId(profile.id); closeMenu(); }}>Approve models</button>
+																				<button className="ai-profile-menu-item" role="menuitem" onClick={() => { setGatewayEdit({ id: profile.id, label: profile.label }); closeMenu(); }}>Edit gateway</button>
+																			</>
+																		)}
+																		{profile.kind === "builtin" && profile.overridden && (
+																			<button className="ai-profile-menu-item" role="menuitem" onClick={() => { closeMenu(); void resetBuiltInModels(profile); }}>Reset to curated models</button>
+																		)}
+																		{providerAcceptsApiKey(profile.provider.id) && profile.provider.configured && (
+																			<button className="ai-profile-menu-item" role="menuitem" onClick={() => { setKeyProfileId(profile.id); closeMenu(); }}>Replace API key</button>
+																		)}
+																		{/* No credential stored → nothing to sign out of. */}
+																		{profile.provider.configured && (
+																			<button className="ai-profile-menu-item" role="menuitem" onClick={() => { closeMenu(); void signOut(profile); }}>Sign out</button>
+																		)}
+																		{profile.kind !== "builtin" && (
+																			<button className="ai-profile-menu-item danger" role="menuitem" onClick={() => setConfirmRemoveId(profile.id)}>
+																				{profile.kind === "gateway" ? "Remove gateway…" : "Remove provider…"}
+																			</button>
+																		)}
+																	</>
+																)}
+															</AiProfileRowMenu>
 														)}
-													</span>
+													</span>}
 													</>
 												)}
 											</span>
@@ -927,7 +988,6 @@ function AiProfileSwitcherSection({ status, onSelect, onRefresh, onRefreshAuth }
 								);
 							})}
 						</div>
-						{cardFoot}
 					</div>
 				) : (
 					emptyCard
@@ -935,16 +995,28 @@ function AiProfileSwitcherSection({ status, onSelect, onRefresh, onRefreshAuth }
 			) : (
 				emptyCard
 			)}
+			{/* One controls row directly under the list: Add another provider on
+			    the left (its fold still opens beneath), Refresh quiet on the
+			    right. One key form at a time across the whole page: the panel
+			    closes the row form when it opens its own, and closes its own when
+			    a row opens one. The signature is how the panel learns this list
+			    moved: removing a gateway profile here deletes the gateway the
+			    panel lists below, and a renamed one would keep its old name
+			    there. A string rather than the status object, so a refetch that
+			    changed nothing costs no fetch. */}
+			{remoteSetupLocked ? (
+				<p className="cli-note">Providers and gateways are set up on the computer itself.</p>
+			) : (
+				<AddProviderPanel
+					onProfilesChanged={() => { onRefresh(); onRefreshAuth(); }}
+					onKeyFormOpen={() => setKeyProfileId(null)}
+					keyFormBlocked={keyProfileId !== null}
+					profilesSignature={(status?.profiles ?? []).map((profile) => `${profile.id}:${profile.label}`).join("|")}
+				/>
+			)}
 			{status?.state.message && <p className="cli-note">{status.state.message}</p>}
 			{status?.customProfiles?.errors?.map((message) => <p key={message} className="cli-note">{message}</p>)}
 			{(error ?? login.error) && <div className="checkpoint-proposal-error">{error ?? login.error}</div>}
-			{/* One key form at a time across the whole page: the panel closes the row
-			    form when it opens its own, and closes its own when a row opens one. */}
-			<AddProviderPanel
-				onProfilesChanged={() => { onRefresh(); onRefreshAuth(); }}
-				onKeyFormOpen={() => setKeyProfileId(null)}
-				keyFormBlocked={keyProfileId !== null}
-			/>
 			{editProfile && (
 				<ConfigureProfileModal
 					providerId={editProfile.provider.id}
@@ -974,7 +1046,7 @@ function AiProfileSwitcherSection({ status, onSelect, onRefresh, onRefreshAuth }
 	);
 }
 
-function Landing({ onOpenAiSetup, onOpenDashboard, onOpenConnectors, onOpenMemory, onOpenSkills, onOpenPersistentAgent, onResumePersistentAgent, onMaintainPersistentAgent, onCreatePersistentAgent, onArchiveRoom, onPurgeRoom, onMementoForget, modelStatus, persistentAgentStatuses, persistentThread, persistentLive, persistentResumeError, onRefreshPersistentAgent, theme, onToggleTheme, aiProfileStatus: aiProfileSelection, onSelectAiProfile, standbyLockedModels, backgroundReadyRooms, purgingRooms }: { onOpenAiSetup: () => void; onOpenDashboard: () => void; onOpenConnectors: () => void; onOpenMemory: () => void; onOpenSkills: () => void; onOpenPersistentAgent: (status: PersistentAgentStatus, model: WebChatModelOption) => Promise<void> | void; onResumePersistentAgent: (status: PersistentAgentStatus) => Promise<void> | void; onMaintainPersistentAgent: (target: MaintainTarget) => void; onCreatePersistentAgent: (request: PersistentAgentCreateRequest) => Promise<void>; onArchiveRoom: (agentId: PersistentAgentId, confirmation: string) => Promise<PersistentAgentArchiveResponse>; onPurgeRoom: (agentId: PersistentAgentId, confirmation: string) => Promise<PersistentAgentPurgeResponse>; onMementoForget: (agentId: PersistentAgentId) => void; modelStatus: WebChatModelStatus | null; persistentAgentStatuses: PersistentAgentStatus[]; persistentThread: PersistentAgentThread | null; persistentLive: boolean; persistentResumeError: string | null; onRefreshPersistentAgent: () => void; theme: ThemeMode; onToggleTheme: () => void; aiProfileStatus: PersistentAgentAiProfileSelectionStatus | null; onSelectAiProfile: (profileId: string) => Promise<void>; standbyLockedModels?: Array<{ provider: string; model: string }>; backgroundReadyRooms?: ReadonlySet<PersistentAgentId>; purgingRooms?: ReadonlySet<PersistentAgentId> }) {
+function Landing({ onOpenSettings, onOpenDashboard, onOpenMemory, onOpenPersistentAgent, onResumePersistentAgent, onMaintainPersistentAgent, onCreatePersistentAgent, onArchiveRoom, onPurgeRoom, onMementoForget, onRecordPreferredModel, modelStatus, persistentAgentStatuses, persistentThread, persistentLive, persistentResumeError, onRefreshPersistentAgent, theme, onToggleTheme, aiProfileStatus: aiProfileSelection, onSelectAiProfile, standbyLockedModels, backgroundReadyRooms, purgingRooms }: { onOpenSettings: (section?: SettingsSection) => void; onOpenDashboard: () => void; onOpenMemory: () => void; onOpenPersistentAgent: (status: PersistentAgentStatus, model: WebChatModelOption) => Promise<void> | void; onResumePersistentAgent: (status: PersistentAgentStatus) => Promise<void> | void; onMaintainPersistentAgent: (target: MaintainTarget) => void; onCreatePersistentAgent: (request: PersistentAgentCreateRequest) => Promise<void>; onArchiveRoom: (agentId: PersistentAgentId, confirmation: string) => Promise<PersistentAgentArchiveResponse>; onPurgeRoom: (agentId: PersistentAgentId, confirmation: string) => Promise<PersistentAgentPurgeResponse>; onMementoForget: (agentId: PersistentAgentId) => void; onRecordPreferredModel?: (agentId: PersistentAgentId, model: { provider: string; model: string }) => void; modelStatus: WebChatModelStatus | null; persistentAgentStatuses: PersistentAgentStatus[]; persistentThread: PersistentAgentThread | null; persistentLive: boolean; persistentResumeError: string | null; onRefreshPersistentAgent: () => void; theme: ThemeMode; onToggleTheme: () => void; aiProfileStatus: PersistentAgentAiProfileSelectionStatus | null; onSelectAiProfile: (profileId: string) => Promise<void>; standbyLockedModels?: Array<{ provider: string; model: string }>; backgroundReadyRooms?: ReadonlySet<PersistentAgentId>; purgingRooms?: ReadonlySet<PersistentAgentId> }) {
 	const [createOpen, setCreateOpen] = useState(false);
 	useEscapeKey(() => setCreateOpen(false), createOpen);
 	const [settingsRoomId, setSettingsRoomId] = useState<PersistentAgentId | null>(null);
@@ -1008,7 +1080,7 @@ function Landing({ onOpenAiSetup, onOpenDashboard, onOpenConnectors, onOpenMemor
 
 	return (
 		<div className="landing-shell with-product-sidebar">
-			<ProductSidebar onHome={() => {}} onAiSetup={onOpenAiSetup} onDashboard={onOpenDashboard} onConnectors={onOpenConnectors} onMemory={onOpenMemory} onSkills={onOpenSkills} theme={theme} onToggleTheme={onToggleTheme} active="home" />
+			<ProductSidebar onHome={() => {}} onSettings={onOpenSettings} onDashboard={onOpenDashboard} onMemory={onOpenMemory} theme={theme} onToggleTheme={onToggleTheme} active="home" />
 			<div className="landing home-page">
 			<section className="landing-hero">
 				<div className="landing-hero-head">
@@ -1019,7 +1091,7 @@ function Landing({ onOpenAiSetup, onOpenDashboard, onOpenConnectors, onOpenMemor
 					<button type="button" className="section-help-btn" aria-label="How rooms work" title="How rooms work" onClick={() => setHelpOpen(true)}>?</button>
 				</div>
 				{aiProfileStatus && aiProfileStatus.ready === false && (
-					<button type="button" className="home-ai-profile-status setup-needed" onClick={onOpenAiSetup}>
+					<button type="button" className="home-ai-profile-status setup-needed" onClick={() => onOpenSettings("ai-setup")}>
 						{aiProfileStatus.message}
 					</button>
 				)}
@@ -1029,10 +1101,10 @@ function Landing({ onOpenAiSetup, onOpenDashboard, onOpenConnectors, onOpenMemor
 			</section>
 			<section className={`landing-grid${roomStatuses.length === 0 ? " landing-grid--empty" : ""}`} aria-label="exxperts entry points">
 				{firstRoomStatus && (
-					<PersistentAgentCard key={firstRoomStatus.id} status={firstRoomStatus} modelStatus={modelStatus} aiProfileStatus={aiProfileSelection} thread={persistentThread?.agentId === firstRoomStatus.id ? persistentThread : null} live={persistentLive && persistentThread?.agentId === firstRoomStatus.id} duplicateDisplayName={hasDuplicateDisplayName(firstRoomStatus)} backgroundReady={backgroundReadyRooms?.has(firstRoomStatus.id) ?? false} purging={purgingRooms?.has(firstRoomStatus.id) ?? false} onEnter={onOpenPersistentAgent} onResume={onResumePersistentAgent} onMaintain={onMaintainPersistentAgent} onOpenSettings={() => openRoomSettings(firstRoomStatus)} standbyLockedModels={standbyLockedModels} onSelectAiProfile={onSelectAiProfile} />
+					<PersistentAgentCard key={firstRoomStatus.id} status={firstRoomStatus} modelStatus={modelStatus} aiProfileStatus={aiProfileSelection} thread={persistentThread?.agentId === firstRoomStatus.id ? persistentThread : null} live={persistentLive && persistentThread?.agentId === firstRoomStatus.id} duplicateDisplayName={hasDuplicateDisplayName(firstRoomStatus)} backgroundReady={backgroundReadyRooms?.has(firstRoomStatus.id) ?? false} purging={purgingRooms?.has(firstRoomStatus.id) ?? false} onEnter={onOpenPersistentAgent} onResume={onResumePersistentAgent} onMaintain={onMaintainPersistentAgent} onOpenSettings={() => openRoomSettings(firstRoomStatus)} standbyLockedModels={standbyLockedModels} onSelectAiProfile={onSelectAiProfile} onRecordPreferredModel={onRecordPreferredModel} />
 				)}
 				{additionalRoomStatuses.map((status) => (
-					<PersistentAgentCard key={status.id} status={status} modelStatus={modelStatus} aiProfileStatus={aiProfileSelection} thread={persistentThread?.agentId === status.id ? persistentThread : null} live={persistentLive && persistentThread?.agentId === status.id} duplicateDisplayName={hasDuplicateDisplayName(status)} backgroundReady={backgroundReadyRooms?.has(status.id) ?? false} purging={purgingRooms?.has(status.id) ?? false} onEnter={onOpenPersistentAgent} onResume={onResumePersistentAgent} onMaintain={onMaintainPersistentAgent} onOpenSettings={() => openRoomSettings(status)} standbyLockedModels={standbyLockedModels} onSelectAiProfile={onSelectAiProfile} />
+					<PersistentAgentCard key={status.id} status={status} modelStatus={modelStatus} aiProfileStatus={aiProfileSelection} thread={persistentThread?.agentId === status.id ? persistentThread : null} live={persistentLive && persistentThread?.agentId === status.id} duplicateDisplayName={hasDuplicateDisplayName(status)} backgroundReady={backgroundReadyRooms?.has(status.id) ?? false} purging={purgingRooms?.has(status.id) ?? false} onEnter={onOpenPersistentAgent} onResume={onResumePersistentAgent} onMaintain={onMaintainPersistentAgent} onOpenSettings={() => openRoomSettings(status)} standbyLockedModels={standbyLockedModels} onSelectAiProfile={onSelectAiProfile} onRecordPreferredModel={onRecordPreferredModel} />
 				))}
 				<button type="button" className="landing-card add-room-card" onClick={() => setCreateOpen(true)} aria-label="Create a new room">
 					<span className="add-room-plus" aria-hidden="true">+</span>
@@ -1059,7 +1131,7 @@ function Landing({ onOpenAiSetup, onOpenDashboard, onOpenConnectors, onOpenMemor
 				</div>
 			)}
 			{settingsRoom && (
-				<RoomSettingsModal status={settingsRoom} onClose={() => setSettingsRoomId(null)} onArchive={onArchiveRoom} onPurge={onPurgeRoom} onRefresh={onRefreshPersistentAgent} onMementoForget={() => onMementoForget(settingsRoom.id)} onOpenSkillsLibrary={onOpenSkills} />
+				<RoomSettingsModal status={settingsRoom} onClose={() => setSettingsRoomId(null)} onArchive={onArchiveRoom} onPurge={onPurgeRoom} onRefresh={onRefreshPersistentAgent} onMementoForget={() => onMementoForget(settingsRoom.id)} onOpenSkillsLibrary={() => onOpenSettings("skills")} />
 			)}
 			{helpOpen && <RoomsGuide onClose={() => setHelpOpen(false)} />}
 		</div>
@@ -1214,48 +1286,10 @@ function ArchivedRoomsSection({ activeRoomCount, onRestored }: { activeRoomCount
 	);
 }
 
-function AiSetupShell({ onHome, onDashboard, onConnectors, onMemory, onSkills, onRefreshAuth, aiProfileStatus, onRefreshAiProfile, onSelectAiProfile, theme, onToggleTheme }: { onHome: () => void; onDashboard: () => void; onConnectors: () => void; onMemory: () => void; onSkills: () => void; onRefreshAuth: () => void; aiProfileStatus: PersistentAgentAiProfileSelectionStatus | null; onRefreshAiProfile: () => void; onSelectAiProfile: (profileId: string) => Promise<void>; theme: ThemeMode; onToggleTheme: () => void }) {
+function MemoryShell({ onHome, onSettings, onDashboard, onMaintain, maintainBlocked, theme, onToggleTheme }: { onHome: () => void; onSettings: (section?: SettingsSection) => void; onDashboard: () => void; onMaintain: (target: MaintainTarget) => void; maintainBlocked?: (agentId: PersistentAgentId) => string | null; theme: ThemeMode; onToggleTheme: () => void }) {
 	return (
 		<div className="landing-shell with-product-sidebar">
-			<ProductSidebar onHome={onHome} onAiSetup={() => {}} onDashboard={onDashboard} onConnectors={onConnectors} onMemory={onMemory} onSkills={onSkills} theme={theme} onToggleTheme={onToggleTheme} active="ai-setup" />
-			<div className="landing ai-setup-page">
-				<section className="landing-hero ai-setup-hero">
-					<h1>AI setup.</h1>
-					<p>Sign in and choose the profile your exxperts run on. A profile is a provider plus the models you've approved for Rooms, Memorize, and Review.</p>
-				</section>
-				<AiProfileSwitcherSection status={aiProfileStatus} onSelect={onSelectAiProfile} onRefresh={onRefreshAiProfile} onRefreshAuth={onRefreshAuth} />
-				{/* Below the profiles, because it is the smaller decision and it is
-				    about the app rather than about which models run. */}
-				<WebSearchSettingsSection />
-			</div>
-		</div>
-	);
-}
-
-function ConnectorsShell({ onHome, onAiSetup, onDashboard, onMemory, onSkills, theme, onToggleTheme }: { onHome: () => void; onAiSetup: () => void; onDashboard: () => void; onMemory: () => void; onSkills: () => void; theme: ThemeMode; onToggleTheme: () => void }) {
-	return (
-		<div className="landing-shell with-product-sidebar">
-			<ProductSidebar onHome={onHome} onAiSetup={onAiSetup} onDashboard={onDashboard} onConnectors={() => {}} onMemory={onMemory} onSkills={onSkills} theme={theme} onToggleTheme={onToggleTheme} active="connectors" />
-			<div className="landing ai-setup-page connectors-page">
-				<ConnectorsPage />
-			</div>
-		</div>
-	);
-}
-
-function SkillsShell({ onHome, onAiSetup, onDashboard, onConnectors, onMemory, theme, onToggleTheme }: { onHome: () => void; onAiSetup: () => void; onDashboard: () => void; onConnectors: () => void; onMemory: () => void; theme: ThemeMode; onToggleTheme: () => void }) {
-	return (
-		<div className="landing-shell with-product-sidebar">
-			<ProductSidebar onHome={onHome} onAiSetup={onAiSetup} onDashboard={onDashboard} onConnectors={onConnectors} onMemory={onMemory} onSkills={() => {}} theme={theme} onToggleTheme={onToggleTheme} active="skills" />
-			<SkillsPage />
-		</div>
-	);
-}
-
-function MemoryShell({ onHome, onAiSetup, onDashboard, onConnectors, onSkills, onMaintain, maintainBlocked, theme, onToggleTheme }: { onHome: () => void; onAiSetup: () => void; onDashboard: () => void; onConnectors: () => void; onSkills: () => void; onMaintain: (target: MaintainTarget) => void; maintainBlocked?: (agentId: PersistentAgentId) => string | null; theme: ThemeMode; onToggleTheme: () => void }) {
-	return (
-		<div className="landing-shell with-product-sidebar">
-			<ProductSidebar onHome={onHome} onAiSetup={onAiSetup} onDashboard={onDashboard} onConnectors={onConnectors} onMemory={() => {}} onSkills={onSkills} theme={theme} onToggleTheme={onToggleTheme} active="memory" />
+			<ProductSidebar onHome={onHome} onSettings={onSettings} onDashboard={onDashboard} onMemory={() => {}} theme={theme} onToggleTheme={onToggleTheme} active="memory" />
 			<div className="landing dashboard-page">
 				<section className="landing-hero">
 					<h1>Memory.</h1>
@@ -2689,6 +2723,53 @@ function CheckpointSplitButton({ hasUserInput, inFlight, onQuickCheckpoint, onOp
 
 export function App() {
 	const [view, setView] = useState<MainView>("home");
+	// The Settings overlay renders over whatever view is current; closing it
+	// changes nothing underneath, so the user lands back exactly where they
+	// were. `mobileNav` seeds the phone collapse: a generic open (the gear's
+	// Settings item) starts on the section list, a targeted open goes straight
+	// to its section.
+	const [settingsOverlay, setSettingsOverlay] = useState<{ section: SettingsSection; mobileNav: boolean } | null>(null);
+	const openSettings = (section?: SettingsSection): void => {
+		setSettingsOverlay(section ? { section, mobileNav: false } : { section: "ai-setup", mobileNav: true });
+		// Opening settings re-asks for sign-in and profile state, so the pane
+		// never needs a refresh control of its own: it is simply current when
+		// it appears, and the focus listener keeps it current after that.
+		void refreshAuthStatus();
+		void refreshAiProfileStatus();
+	};
+	// The one-time What's new window after an update. Asked once per app load;
+	// the server decides whether there is anything to show. The seen POST is
+	// loopback-only ("local" in the remote route policy), so on a remote
+	// device it is refused with a 403; apiFetch does not throw on that and
+	// the catch below swallows anything else, so the refusal is silent. Each
+	// remote device instead dismisses for itself via localStorage, while only
+	// the computer records durably; the GET stays readable remotely because
+	// the window is purely informative. Shown on Home only, never over a
+	// room. Any failure here means no window, never a broken app.
+	const [whatsNew, setWhatsNew] = useState<{ version: string; entries: string[] } | null>(null);
+	useEffect(() => {
+		let cancelled = false;
+		void (async () => {
+			try {
+				const data = await fetchJson<{ version: string; entries: string[] | null; show: boolean }>("/api/whats-new");
+				if (cancelled || !data.show || !data.version || !data.entries || data.entries.length === 0) return;
+				try {
+					if (localStorage.getItem("exxperts.whats-new-seen") === data.version) return;
+				} catch {}
+				setWhatsNew({ version: data.version, entries: data.entries });
+			} catch {}
+		})();
+		return () => { cancelled = true; };
+	}, []);
+	const dismissWhatsNew = (): void => {
+		if (!whatsNew) return;
+		try { localStorage.setItem("exxperts.whats-new-seen", whatsNew.version); } catch {}
+		void apiFetch("/api/whats-new/seen", { method: "POST" }).catch(() => {});
+		setWhatsNew(null);
+	};
+	// A remote device never sees the Remote access section: the server refuses
+	// the admin routes there regardless.
+	const remoteClient = useRemoteClientContext().remote;
 	const [theme, setTheme] = useState<ThemeMode>(() => {
 		try {
 			const saved = localStorage.getItem("exxperts.theme");
@@ -2877,6 +2958,11 @@ export function App() {
 	// treat the open room as "cooking with nobody inside" and fire the
 	// done-moment toast at the user sitting in front of the answer.
 	const refreshPersistentAgentStatusRef = useRef<() => Promise<void>>(async () => {});
+	const refreshSetupStatusRef = useRef<() => void>(() => {});
+	refreshSetupStatusRef.current = () => {
+		void refreshAuthStatus();
+		void refreshAiProfileStatus();
+	};
 	const [backgroundReadyRooms, setBackgroundReadyRooms] = useState<ReadonlySet<PersistentAgentId>>(new Set());
 	// Rooms with a purge in flight (community #10): the delete endpoint may be
 	// retrying for a few seconds after an in-room delete, and the card must not
@@ -3057,6 +3143,9 @@ export function App() {
 	// so the reveal drains instantly instead of re-animating it at reading pace.
 	const reattachReplayDrainRef = useRef(false);
 	const streamErrorLineIdRef = useRef<string | null>(null);
+	// One output-limit line per turn. Turn frames replay on reattach (#33), so
+	// the guard has to survive the same message_end arriving twice.
+	const outputLimitNoticeShownRef = useRef(false);
 	const retryNoticeIdRef = useRef<string | null>(null);
 	const persistentChatRef = useRef<PersistentChatConfig>(persistentChat);
 	// The projected asset rows, mirrored for callbacks created before the memo
@@ -3248,7 +3337,12 @@ export function App() {
 		// so a room locked/freed from the CLI reflects without a manual reload.
 		// Via the ref: this listener outlives every render, and the refresh must
 		// know which room is open NOW, not at mount.
-		const onFocus = () => { void refreshPersistentAgentStatusRef.current(); };
+		const onFocus = () => {
+			void refreshPersistentAgentStatusRef.current();
+			// Sign-ins and profile edits that happen outside the app (an OAuth
+			// tab, the CLI) finish exactly when the person comes back here.
+			refreshSetupStatusRef.current();
+		};
 		window.addEventListener("focus", onFocus);
 		return () => window.removeEventListener("focus", onFocus);
 	}, []);
@@ -3866,6 +3960,7 @@ export function App() {
 	// transcript forever.
 	function clearTransientStreamNotes() {
 		streamErrorLineIdRef.current = null;
+		outputLimitNoticeShownRef.current = false;
 		const noteId = retryNoticeIdRef.current;
 		retryNoticeIdRef.current = null;
 		if (noteId) {
@@ -4246,7 +4341,10 @@ export function App() {
 			// room_cooking bounce they understand.
 			wsParams.set("reattach", "1");
 		}
-		const ws = new WebSocket(`ws://${wsHost}/ws?${wsParams.toString()}`);
+		// Scheme follows the page: https (remote mode's TLS stage) needs wss,
+		// plain http (loopback and the tunnel's http stage) keeps ws.
+		const wsScheme = location.protocol === "https:" ? "wss" : "ws";
+		const ws = new WebSocket(`${wsScheme}://${wsHost}/ws?${wsParams.toString()}`);
 		wsRef.current = ws;
 		// A port that accepts TCP and never finishes the upgrade leaves this
 		// socket in CONNECTING with no event ever coming: no failure, no retry,
@@ -4853,6 +4951,33 @@ export function App() {
 					text: `The model could not respond${detail ? ` · ${detail}` : ""} · check the model and its sign-in in AI setup.`,
 				}]);
 			}
+			// A turn that ran out of output budget owes the room an explanation.
+			// The starved shape (stopReason "length", nothing user-visible in the
+			// content) renders as literally nothing without this — the reducer has
+			// no text to open a bubble with, so the room went silent and the
+			// composer just came back. Same line as the provider-error case above,
+			// one per turn (turn frames replay on reattach), and never on the Stop
+			// path, which writes its own interrupted note.
+			{
+				const outputLimitNotice = outputLimitNoticeForTurn({
+					message: ev.message,
+					persistentRoom: !!persistentChatRef.current,
+					turnCancelling: turnCancellingRef.current,
+					alreadyShown: outputLimitNoticeShownRef.current,
+				});
+				if (outputLimitNotice) {
+					outputLimitNoticeShownRef.current = true;
+					setItems((s) => {
+						// A reattach replays the turn's frames over a transcript that
+						// may already hold this line (it was persisted before the
+						// leave, and only the assistant/tool tail is superseded).
+						// Nothing since the last user item means the same turn.
+						const lastUserIndex = s.map((it) => it.kind).lastIndexOf("user");
+						const alreadySaid = s.some((it, index) => index > lastUserIndex && it.kind === "system" && it.text === outputLimitNotice);
+						return alreadySaid ? s : [...s, { kind: "system", id: nid(), text: outputLimitNotice, level: "info" }];
+					});
+				}
+			}
 			dispatchStream({ type: "message_end", finalText: extractAssistantText(ev.message), stopReason: ev.message.stopReason, now });
 
 			const content = ev.message.content as any[] | undefined;
@@ -5093,6 +5218,7 @@ export function App() {
 		// which the effort frame does.
 		ws.send(JSON.stringify({ type: "prompt", text: wireText }));
 		dispatchStream({ type: "new_turn", now: performance.now() });
+		outputLimitNoticeShownRef.current = false;
 		retrievalActivityIdRef.current = null;
 		setComposerPrefill("");
 		setComposerResetNonce((value) => value + 1);
@@ -6400,6 +6526,23 @@ export function App() {
 		}
 	}
 
+	// Best-effort per-room model memory: the room remembers the model it was
+	// last pointed at, so a profile switch stops reverting an empty room's
+	// picker to the new profile's recommendation. Failures stay silent — the
+	// pick already applied locally, the memory just does not outlive it.
+	function recordRoomPreferredModel(agentId: PersistentAgentId, model: { provider: string; model: string }): void {
+		void apiFetch(`/api/persistent-agents/${encodeURIComponent(agentId)}/preferred-model`, {
+			method: "PUT",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ provider: model.provider, model: model.model }),
+		}).then((res) => {
+			if (!res.ok) return;
+			// Fold the write into the statuses the cards already render, so the
+			// memory is live before the next status poll.
+			setPersistentAgentStatuses((statuses) => statuses.map((status) => status.id === agentId ? { ...status, preferredModel: { provider: model.provider, model: model.model } } : status));
+		}).catch(() => {});
+	}
+
 	async function openPersistentAgent(target: PersistentAgentTarget, model: WebChatModelOption) {
 		const label = target.displayName?.trim() || "Exxpert";
 		// An empty prepared boundary thread (post-checkpoint/Memento) only pins
@@ -6429,6 +6572,9 @@ export function App() {
 			}
 		}
 		const nextConversationId = newConversationId();
+		// Entering IS a model choice: record it so the room remembers it once
+		// this conversation is gone again.
+		recordRoomPreferredModel(target.id, { provider: model.provider, model: model.model });
 		setPersistentResumeError(null);
 		clearBackgroundActivityBadge(target.id);
 		resetLiveUiState();
@@ -7079,10 +7225,62 @@ export function App() {
 	// One banner per screen, and never inside a room: a room carries its own
 	// reconnect affordance on the composer, which is both more specific and
 	// actionable, so the two must not stack.
+	// The Settings sections host the existing pages unchanged; the overlay only
+	// frames them. Web search stays its own section because it already is its
+	// own component; the Remote access section is absent on remote devices.
+	const settingsOverlayNode = settingsOverlay ? (
+		<SettingsOverlay
+			key={settingsOverlay.mobileNav ? "nav" : "section"}
+			active={settingsOverlay.section}
+			initialMobileNav={settingsOverlay.mobileNav}
+			onSelect={(section) => setSettingsOverlay({ section, mobileNav: false })}
+			onClose={() => setSettingsOverlay(null)}
+			sections={[
+				{
+					id: "ai-setup",
+					label: "AI setup",
+					content: (
+						<div className="landing ai-setup-page">
+							<AiProfileSwitcherSection status={aiProfileStatus} onSelect={selectAiProfile} onRefresh={refreshAiProfileStatus} onRefreshAuth={refreshAuthStatus} />
+						</div>
+					),
+				},
+				{
+					id: "web-search",
+					label: "Web search",
+					content: (
+						<div className="landing ai-setup-page settings-web-search">
+							<WebSearchSettingsSection />
+						</div>
+					),
+				},
+				{
+					id: "connectors",
+					label: "Connectors",
+					content: (
+						<div className="landing ai-setup-page connectors-page">
+							<ConnectorsPage />
+						</div>
+					),
+				},
+				{ id: "skills", label: "Skills", content: <SkillsPage /> },
+				...(remoteClient ? [] : [{
+					id: "remote" as const,
+					label: "Remote access",
+					content: (
+						<div className="landing ai-setup-page remote-access-shell">
+							<RemoteAccessPage />
+						</div>
+					),
+				}]),
+			]}
+		/>
+	) : null;
 	const withConnectionBanner = (content: ReactNode): ReactNode => (
 		<>
 			{connectionWarning && <ConnectionLostBanner />}
 			{content}
+			{settingsOverlayNode}
 		</>
 	);
 	const standbyLockedModels = persistentAgentStatuses
@@ -7131,25 +7329,14 @@ export function App() {
 				{gcAssessment && !gcReviewOpen && <TaskStoreGcBanner assessment={gcAssessment} onReview={() => setGcReviewOpen(true)} onDismiss={() => setGcAssessment(null)} />}
 				{gcReviewOpen && gcAssessment && <TaskStoreGcDialog assessment={gcAssessment} busy={gcBusy} onConfirm={() => void confirmTaskStoreGc()} onClose={() => setGcReviewOpen(false)} />}
 				{backgroundDoneToastView && <div className="launcher-toasts"><ToastStack toasts={[backgroundDoneToastView]} /></div>}
-				<Landing onOpenAiSetup={() => setView("ai-setup")} onOpenDashboard={() => setView("dashboard")} onOpenConnectors={() => setView("connectors")} onOpenMemory={() => setView("memory")} onOpenSkills={() => setView("skills")} onOpenPersistentAgent={openPersistentAgent} onResumePersistentAgent={openPersistentAgentResume} onMaintainPersistentAgent={(target) => { if (!openMaintainChooser(target)) setPersistentResumeError(maintainBlockedReason(target.agentId) ?? "Maintain is not available for this room right now."); }} onCreatePersistentAgent={createPersistentAgentRoom} onArchiveRoom={archivePersistentAgentRoom} onPurgeRoom={purgePersistentAgentRoom} onMementoForget={(agentId) => { roomDraftsRef.current.delete(agentId); }} modelStatus={modelStatus} persistentAgentStatuses={persistentAgentStatuses} persistentThread={persistentThread} persistentLive={!!persistentChat} persistentResumeError={persistentResumeError} onRefreshPersistentAgent={refreshPersistentAgentStatus} theme={theme} onToggleTheme={() => setTheme((t) => (t === "dark" ? "light" : "dark"))} aiProfileStatus={aiProfileStatus} onSelectAiProfile={selectAiProfile} standbyLockedModels={standbyLockedModels} backgroundReadyRooms={backgroundReadyRooms} purgingRooms={purgingRooms} />
+				{whatsNew && <WhatsNewDialog version={whatsNew.version} entries={whatsNew.entries} onClose={dismissWhatsNew} />}
+				<Landing onOpenSettings={openSettings} onOpenDashboard={() => setView("dashboard")} onOpenMemory={() => setView("memory")} onOpenPersistentAgent={openPersistentAgent} onResumePersistentAgent={openPersistentAgentResume} onMaintainPersistentAgent={(target) => { if (!openMaintainChooser(target)) setPersistentResumeError(maintainBlockedReason(target.agentId) ?? "Maintain is not available for this room right now."); }} onCreatePersistentAgent={createPersistentAgentRoom} onArchiveRoom={archivePersistentAgentRoom} onPurgeRoom={purgePersistentAgentRoom} onMementoForget={(agentId) => { roomDraftsRef.current.delete(agentId); }} onRecordPreferredModel={recordRoomPreferredModel} modelStatus={modelStatus} persistentAgentStatuses={persistentAgentStatuses} persistentThread={persistentThread} persistentLive={!!persistentChat} persistentResumeError={persistentResumeError} onRefreshPersistentAgent={refreshPersistentAgentStatus} theme={theme} onToggleTheme={() => setTheme((t) => (t === "dark" ? "light" : "dark"))} aiProfileStatus={aiProfileStatus} onSelectAiProfile={selectAiProfile} standbyLockedModels={standbyLockedModels} backgroundReadyRooms={backgroundReadyRooms} purgingRooms={purgingRooms} />
 			</>
 		);
 	}
 
-	if (view === "ai-setup") {
-		return withConnectionBanner(<AiSetupShell onHome={goHome} onDashboard={() => setView("dashboard")} onConnectors={() => setView("connectors")} onMemory={() => setView("memory")} onSkills={() => setView("skills")} onRefreshAuth={refreshAuthStatus} aiProfileStatus={aiProfileStatus} onRefreshAiProfile={refreshAiProfileStatus} onSelectAiProfile={selectAiProfile} theme={theme} onToggleTheme={() => setTheme((t) => (t === "dark" ? "light" : "dark"))} />);
-	}
-
-	if (view === "connectors") {
-		return withConnectionBanner(<ConnectorsShell onHome={goHome} onAiSetup={() => setView("ai-setup")} onDashboard={() => setView("dashboard")} onMemory={() => setView("memory")} onSkills={() => setView("skills")} theme={theme} onToggleTheme={() => setTheme((t) => (t === "dark" ? "light" : "dark"))} />);
-	}
-
 	if (view === "memory") {
-		return withConnectionBanner(<MemoryShell onHome={goHome} onAiSetup={() => setView("ai-setup")} onDashboard={() => setView("dashboard")} onConnectors={() => setView("connectors")} onSkills={() => setView("skills")} onMaintain={(target) => { if (openMaintainChooser(target, "memory")) setView("home"); }} maintainBlocked={maintainBlockedReason} theme={theme} onToggleTheme={() => setTheme((t) => (t === "dark" ? "light" : "dark"))} />);
-	}
-
-	if (view === "skills") {
-		return withConnectionBanner(<SkillsShell onHome={goHome} onAiSetup={() => setView("ai-setup")} onDashboard={() => setView("dashboard")} onConnectors={() => setView("connectors")} onMemory={() => setView("memory")} theme={theme} onToggleTheme={() => setTheme((t) => (t === "dark" ? "light" : "dark"))} />);
+		return withConnectionBanner(<MemoryShell onHome={goHome} onSettings={openSettings} onDashboard={() => setView("dashboard")} onMaintain={(target) => { if (openMaintainChooser(target, "memory")) setView("home"); }} maintainBlocked={maintainBlockedReason} theme={theme} onToggleTheme={() => setTheme((t) => (t === "dark" ? "light" : "dark"))} />);
 	}
 
 	if (view === "dashboard") {
@@ -7157,11 +7344,9 @@ export function App() {
 			<div className="landing-shell with-product-sidebar">
 				<ProductSidebar
 					onHome={goHome}
-					onAiSetup={() => setView("ai-setup")}
+					onSettings={openSettings}
 					onDashboard={() => {}}
-					onConnectors={() => setView("connectors")}
 					onMemory={() => setView("memory")}
-					onSkills={() => setView("skills")}
 					theme={theme}
 					onToggleTheme={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}
 					active="dashboard"
@@ -7256,12 +7441,13 @@ export function App() {
 
 	return (
 		<InRoomChatShellView
+			onHome={goHome}
 			sidebar={
 				<Sidebar
 					onHome={goHome}
 					theme={theme}
 					onToggleTheme={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}
-					onAiSetup={() => { void goHome().then((left) => { if (left) setView("ai-setup"); }); }}
+					onSettings={openSettings}
 					assetsSlot={persistentChat ? <AssetsPanel rows={assetRows} selectedTaskId={selectedAssetTaskId} onSelect={openAssetRow} onStopRunning={() => dispatchTask({ type: "abort_requested" })} onRemove={(row) => void removeAssetRow(row)} onDeleteFile={(row, fileName) => requestFileDelete(row, fileName)} onRenameFile={(row, fileName, newName) => void renameFileRow(row, fileName, newName)} /> : undefined}
 				/>
 			}
@@ -7414,12 +7600,13 @@ export function App() {
 			globalOverlaySlot={
 				<>
 					{roomSettingsOpen && currentPersistentStatus && (
-						<RoomSettingsModal status={currentPersistentStatus} onClose={() => setRoomSettingsOpen(false)} onArchive={archivePersistentAgentRoom} onPurge={purgePersistentAgentRoom} onRefresh={refreshPersistentAgentStatus} onMementoApplied={leaveRoomAfterMemento} onOpenSkillsLibrary={() => { void goHome().then((left) => { if (left) setView("skills"); }); }} />
+						<RoomSettingsModal status={currentPersistentStatus} onClose={() => setRoomSettingsOpen(false)} onArchive={archivePersistentAgentRoom} onPurge={purgePersistentAgentRoom} onRefresh={refreshPersistentAgentStatus} onMementoApplied={leaveRoomAfterMemento} onOpenSkillsLibrary={() => openSettings("skills")} />
 					)}
 					{assetDeleteConfirm && <AssetDeleteDialog title={assetDeleteConfirm.title} onDelete={() => { const row = assetDeleteConfirm; setAssetDeleteConfirm(null); if (row) void deleteAssetRow(row); }} onCancel={() => setAssetDeleteConfirm(null)} />}
 					{fileDeleteConfirm && <FileDeleteDialog fileName={fileDeleteConfirm.fileName} reason={fileDeleteConfirm.reason} onDelete={() => { const confirm = fileDeleteConfirm; setFileDeleteConfirm(null); if (confirm) void performFileDelete(confirm.fileName); }} onCancel={() => setFileDeleteConfirm(null)} />}
 					{saveAsPrompt && <SaveAsDialog shelfName={saveAsPrompt.shelfName} onSave={(chosenName) => { const prompt = saveAsPrompt; setSaveAsPrompt(null); if (prompt) void saveViewerFileToFolder(prompt.shelfName, undefined, chosenName); }} onCancel={() => setSaveAsPrompt(null)} />}
 					{exportCollision && <ExportCollisionDialog collision={exportCollision} onClose={() => setExportCollision(null)} />}
+					{settingsOverlayNode}
 				</>
 			}
 		/>

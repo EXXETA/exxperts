@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from "react";
+import { useRemoteAccessStatus } from "../remote-access-api";
+import { useRemoteClientContext } from "../remote-client-context";
 import { SidebarToggleButton } from "../sidebar-collapse";
 import type { PersistentAgentAiProfileStatus } from "../types";
 import { requestUpdate, useUpdateNotice } from "../update-notice";
@@ -30,20 +32,23 @@ export function firstWordOfLabel(label: string): string {
 	return label.split(" ")[0] || label;
 }
 
-export type ProductSidebarActive = "home" | "ai-setup" | "dashboard" | "connectors" | "memory" | "skills";
+export type ProductSidebarActive = "home" | "ai-setup" | "remote" | "dashboard" | "connectors" | "memory" | "skills";
 
 /**
  * The one settings menu behind the gear. Home and the in-room rail render the
  * same component, so the same settings are one click away wherever you are.
- * `active` only exists to mark the AI setup row when that shell is already open.
+ * `onSettings` opens the Settings overlay; the optional section targets it.
  */
-export function ConfigMenu({ onAiSetup, theme, onToggleTheme, active }: { onAiSetup: () => void; theme: ThemeMode; onToggleTheme: () => void; active?: ProductSidebarActive }) {
+export function ConfigMenu({ onSettings, theme, onToggleTheme }: { onSettings: (section?: "remote") => void; theme: ThemeMode; onToggleTheme: () => void }) {
 	const [open, setOpen] = useState(false);
 	const [helpOpen, setHelpOpen] = useState(false);
 	const wrapRef = useRef<HTMLDivElement>(null);
 	// Desktop only; in a browser tab this stays empty and the row keeps
 	// showing the plain version.
 	const update = useUpdateNotice();
+	// Remote-access admin lives on the computer; a phone viewing the app over
+	// the tunnel gets neither the menu entry nor the indicator (the server
+	// refuses the admin routes there regardless).
 
 	useEffect(() => {
 		if (!open) return;
@@ -73,14 +78,14 @@ export function ConfigMenu({ onAiSetup, theme, onToggleTheme, active }: { onAiSe
 						</div>
 					</div>
 					<button
-						className={`menu-item ${active === "ai-setup" ? "active" : ""}`}
+						className="menu-item"
 						role="menuitem"
 						onClick={() => {
-							onAiSetup();
+							onSettings();
 							setOpen(false);
 						}}
 					>
-						<span>AI setup</span>
+						<span>Settings</span>
 						<span className="menu-item-arrow" aria-hidden="true">→</span>
 					</button>
 					<button
@@ -136,7 +141,34 @@ export function ConfigMenu({ onAiSetup, theme, onToggleTheme, active }: { onAiSe
 	);
 }
 
-export function ProductSidebar({ onHome, onAiSetup, onDashboard, onConnectors, onMemory, onSkills, theme, onToggleTheme, active }: { onHome: () => void; onAiSetup: () => void; onDashboard: () => void; onConnectors?: () => void; onMemory?: () => void; onSkills?: () => void; theme: ThemeMode; onToggleTheme: () => void; active: ProductSidebarActive }) {
+/**
+ * The standing "remote is on" signal, anchored at the app's bottom left on
+ * its own line above the gear row: as long as the tunnel listener is meant
+ * to be up, the fact is one glance away without crowding the gear. Paused =
+ * enabled but not serving (tunnel address gone). Renders nothing on remote
+ * devices and while remote access is off.
+ */
+export function RemoteOnPill({ onSettings }: { onSettings: (section?: "remote") => void }) {
+	const clientContext = useRemoteClientContext();
+	const remoteStatus = useRemoteAccessStatus();
+	const showRemote = !clientContext.remote;
+	const remoteOn = showRemote && remoteStatus?.enabled === true;
+	const remotePaused = showRemote && !remoteStatus?.enabled && remoteStatus?.stateFile === "valid";
+	if (!remoteOn && !remotePaused) return null;
+	return (
+		<button
+			className={`remote-on-pill${remotePaused ? " paused" : ""}`}
+			type="button"
+			title={remotePaused ? "Remote access is on but not serving; it resumes when the tunnel is back" : "Remote access is on; paired devices can reach this app"}
+			onClick={() => onSettings("remote")}
+		>
+			<span className="remote-on-dot" aria-hidden="true" />
+			{remotePaused ? "Remote paused" : "Remote on"}
+		</button>
+	);
+}
+
+export function ProductSidebar({ onHome, onSettings, onDashboard, onMemory, theme, onToggleTheme, active }: { onHome: () => void; onSettings: (section?: "remote") => void; onDashboard: () => void; onMemory?: () => void; theme: ThemeMode; onToggleTheme: () => void; active: ProductSidebarActive }) {
 	return (
 		<aside className="product-sidebar">
 			<div className="product-sidebar-header">
@@ -156,18 +188,14 @@ export function ProductSidebar({ onHome, onAiSetup, onDashboard, onConnectors, o
 				<div className="product-nav-section">
 					<button className={`list-btn ${active === "dashboard" ? "active" : ""}`} onClick={onDashboard}>Wallet</button>
 				</div>
-				<div className="product-nav-section">
-					<div className="product-nav-label">Tools</div>
-					{onConnectors && <button className={`list-btn ${active === "connectors" ? "active" : ""}`} onClick={onConnectors}>Connectors</button>}
-					{onSkills && <button className={`list-btn ${active === "skills" ? "active" : ""}`} onClick={onSkills}>Skills</button>}
-				</div>
 			</nav>
 			{/* No connection status here on purpose: a healthy app says nothing
 			    about its plumbing, and a sustained failure gets a banner that
 			    speaks in words the user can act on. */}
 			<div className="product-sidebar-footer">
+				<RemoteOnPill onSettings={onSettings} />
 				<div className="sidebar-footer-controls">
-					<ConfigMenu onAiSetup={onAiSetup} theme={theme} onToggleTheme={onToggleTheme} active={active} />
+					<ConfigMenu onSettings={onSettings} theme={theme} onToggleTheme={onToggleTheme} />
 					<SidebarToggleButton />
 				</div>
 			</div>

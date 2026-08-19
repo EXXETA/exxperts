@@ -18,7 +18,9 @@ auditable memory the agent boots from next time. Chat orbits the memory
 engine, not the other way around.
 
 Everything runs on your machine: the web server binds to localhost
-only, state lives under `~/.exxperts/`, and no memory changes without
+only (with an off-by-default remote mode for your own paired devices
+over your private tunnel, see `SECURITY.md`), state lives under
+`~/.exxperts/`, and no memory changes without
 your explicit approval.
 
 ## Lineage
@@ -165,7 +167,9 @@ delete them.
 
 ## Security posture
 
-- The web server binds to `127.0.0.1` only (no LAN exposure),
+- The web server binds to `127.0.0.1` only (no LAN exposure; remote
+  mode, off by default, additionally serves your own paired devices
+  over your private tunnel),
   validates Host/Origin headers against DNS rebinding, and requires a
   client auth token on API and WebSocket requests (see `SECURITY.md`).
 - Durable memory has no silent write path: every mutation goes through

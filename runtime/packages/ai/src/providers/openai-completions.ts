@@ -219,6 +219,10 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions", OpenA
 					};
 					blocks.push(thinkingBlock);
 					stream.push({ type: "thinking_start", contentIndex: getContentIndex(thinkingBlock), partial: output });
+				} else if (!thinkingBlock.thinkingSignature && thinkingSignature) {
+					// The block can be opened by a source that has no replay field to
+					// name, so the first named one still gets recorded.
+					thinkingBlock.thinkingSignature = thinkingSignature;
 				}
 				return thinkingBlock;
 			};
@@ -330,6 +334,32 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions", OpenA
 								type: "thinking_delta",
 								contentIndex: getContentIndex(block),
 								delta,
+								partial: output,
+							});
+						}
+					}
+
+					// Gateways that relay Claude models (LiteLLM) stream the thinking as
+					// delta.thinking_blocks entries instead of a reasoning string field,
+					// so the same block and the same deltas are fed from there too.
+					// Entries can also carry a signature, which is dropped on purpose:
+					// thinkingSignature names the request field used to replay thinking
+					// on this API, so a token stored there would be echoed as a field name.
+					const thinkingBlocks = deltaFields.thinking_blocks;
+					if (Array.isArray(thinkingBlocks)) {
+						for (const entry of thinkingBlocks) {
+							if (!entry || typeof entry !== "object") continue;
+							const text = (entry as { thinking?: unknown }).thinking;
+							if (typeof text !== "string" || text.length === 0) continue;
+							// A gateway that mirrors one fragment into both a reasoning
+							// field and thinking_blocks must not have it appended twice.
+							if (foundReasoningField !== null && deltaFields[foundReasoningField] === text) continue;
+							const block = ensureThinkingBlock("");
+							block.thinking += text;
+							stream.push({
+								type: "thinking_delta",
+								contentIndex: getContentIndex(block),
+								delta: text,
 								partial: output,
 							});
 						}

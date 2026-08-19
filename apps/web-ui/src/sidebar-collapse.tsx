@@ -1,4 +1,5 @@
 import React, { useSyncExternalStore } from "react";
+import { useEscapeKey } from "./components/use-escape-key";
 
 // Sidebar collapse state, shared by the in-header toggles (one per sidebar
 // variant) and the collapsed-only floating affordance. A module store instead
@@ -6,7 +7,14 @@ import React, { useSyncExternalStore } from "react";
 // class on <html> is what the CSS keys off, and localStorage persists it.
 const STORAGE_KEY = "exxperts.sidebarCollapsed";
 let collapsed = false;
-try { collapsed = localStorage.getItem(STORAGE_KEY) === "1"; } catch { /* private mode */ }
+try {
+	const stored = localStorage.getItem(STORAGE_KEY);
+	// No stored choice on a phone-sized screen starts collapsed: at that
+	// width the rail overlays the content (see the mobile block in
+	// styles.css), so open-by-default would cover the very first screen. An
+	// explicit choice, either way, always wins.
+	collapsed = stored === null ? window.matchMedia("(max-width: 760px)").matches : stored === "1";
+} catch { /* private mode */ }
 document.documentElement.classList.toggle("sidebar-collapsed", collapsed);
 
 const listeners = new Set<() => void>();
@@ -25,6 +33,17 @@ function subscribe(cb: () => void): () => void {
 
 function useSidebarCollapsed(): boolean {
 	return useSyncExternalStore(subscribe, () => collapsed);
+}
+
+// Phone width, reactive: the drawer backdrop must appear/disappear when a
+// rotation or window resize crosses the breakpoint, not just on mount.
+const phoneQuery = window.matchMedia("(max-width: 760px)");
+function subscribePhone(cb: () => void): () => void {
+	phoneQuery.addEventListener("change", cb);
+	return () => phoneQuery.removeEventListener("change", cb);
+}
+function usePhoneWidth(): boolean {
+	return useSyncExternalStore(subscribePhone, () => phoneQuery.matches);
 }
 
 function PanelIcon() {
@@ -53,6 +72,19 @@ export function SidebarToggleButton() {
 			<PanelIcon />
 		</button>
 	);
+}
+
+// Phone-only: at the breakpoint the in-room rail overlays the chat, so an
+// open rail dims what it covers; tapping the dim (or Escape, via the shared
+// stack so modals above it keep their own Escape) closes the rail. Closing
+// this way is the same explicit, remembered choice as the toggle.
+export function SidebarDrawerBackdrop() {
+	const isCollapsed = useSidebarCollapsed();
+	const isPhone = usePhoneWidth();
+	const open = isPhone && !isCollapsed;
+	useEscapeKey(toggleSidebar, open);
+	if (!open) return null;
+	return <div className="sidebar-drawer-backdrop" aria-hidden="true" onClick={toggleSidebar} />;
 }
 
 // The collapsed-state home: the header toggle disappears with the sidebar,

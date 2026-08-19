@@ -20,11 +20,21 @@ import { sha256 } from "./skills-store.js";
  *
  * NB: no room-session wiring lives here (MR-2 is data + API only). Server-side.
  */
+export interface SkillExecuteApproval {
+	/** `filesSha256` of the skill's whole on-disk content, pinned at approval time
+	 *  (see `computeSkillFilesDigest`). Any file change voids the approval. */
+	filesSha256: string;
+	approvedAt: string;
+}
+
 export interface EnabledSkill {
 	/** Library skill name (strict-id, matching the `/api/skills` rules). */
 	name: string;
 	/** `sha256` of the skill body pinned at enable time. */
 	sha256: string;
+	/** Present when the user approved running this skill's bundled scripts in
+	 *  this room, pinned to the exact file set reviewed. Absent = never. */
+	executeApproval?: SkillExecuteApproval;
 }
 
 export interface PersistentRoomSkillSettings {
@@ -48,6 +58,11 @@ export type SkillBodyResolver = (name: string) => string | null;
 /** Per-enabled-skill mismatch state the UI (MR-5) renders. */
 export type SkillMismatchStatus = "ok" | "hash-mismatch" | "missing";
 
+/** Execution-approval state per enabled skill, for the settings panel.
+ *  `none` = never approved; `approved` = approval matches the files on disk;
+ *  `drifted` = files changed (or vanished) since approval — void until re-approved. */
+export type SkillExecutionState = "none" | "approved" | "drifted";
+
 export interface EnabledSkillStatus {
 	name: string;
 	/** The hash pinned at enable time. */
@@ -55,6 +70,8 @@ export interface EnabledSkillStatus {
 	/** The library body's current hash, or `null` when the skill is missing. */
 	currentSha256: string | null;
 	status: SkillMismatchStatus;
+	/** Present when a files-digest resolver was supplied (rooms wiring). */
+	executeState?: SkillExecutionState;
 }
 
 export type SkillMutationReason = "invalid-name" | "unknown-skill";
@@ -104,7 +121,20 @@ function sanitizeEnabledSkills(raw: unknown): EnabledSkill[] {
 		const hash = (item as any).sha256;
 		if (!isValidSkillName(name)) continue;
 		if (typeof hash !== "string" || !SHA256_RE.test(hash)) continue;
-		byName.set(name, { name, sha256: hash });
+		const skill: EnabledSkill = { name, sha256: hash };
+		// The approval survives a read/write cycle only when well-formed; a
+		// hand-mangled one degrades to "never approved", the safe direction.
+		const approval = (item as any).executeApproval;
+		if (
+			approval &&
+			typeof approval === "object" &&
+			typeof approval.filesSha256 === "string" &&
+			SHA256_RE.test(approval.filesSha256) &&
+			typeof approval.approvedAt === "string"
+		) {
+			skill.executeApproval = { filesSha256: approval.filesSha256, approvedAt: approval.approvedAt };
+		}
+		byName.set(name, skill);
 	}
 	return sortByName([...byName.values()]);
 }
@@ -161,8 +191,72 @@ export function enablePersistentRoomSkill(
 	const body = resolveBody(name);
 	if (body == null) return { ok: false, reason: "unknown-skill" };
 	const current = readPersistentRoomSkillSettings(agentIdRaw, options);
-	const pinned: EnabledSkill = { name, sha256: sha256(body) };
+	// An existing execution approval rides along untouched: it is pinned to the
+	// files digest, which is its own guard — if the files changed, the approval
+	// is already void at call time regardless of what the manifest pin does.
+	const existing = current.enabledSkills.find((skill) => skill.name === name);
+	const pinned: EnabledSkill = { name, sha256: sha256(body), ...(existing?.executeApproval ? { executeApproval: existing.executeApproval } : {}) };
 	const next = [...current.enabledSkills.filter((skill) => skill.name !== name), pinned];
+	return { ok: true, settings: writePersistentRoomSkillSettings(agentIdRaw, next, options, now) };
+}
+
+export type SkillExecutionMutationReason = SkillMutationReason | "not-enabled" | "no-files";
+
+export type SkillExecutionMutationResult =
+	| { ok: true; settings: PersistentRoomSkillSettings }
+	| { ok: false; reason: SkillExecutionMutationReason };
+
+/**
+ * A lens returning the CURRENT whole-content digest of a skill's on-disk dir
+ * (see `computeSkillFilesDigest`), or null when the skill is not an
+ * execution-capable library entry (missing, or outside the user store). Injected
+ * like `SkillBodyResolver` so this module never reaches into the library.
+ */
+export type SkillFilesDigestResolver = (name: string) => string | null;
+
+/**
+ * Approve running a skill's bundled scripts in this room, pinned to the exact
+ * file set on disk right now. Server-computed digest only — the client never
+ * supplies it. Requires the skill to already be enabled: consent to execute
+ * builds on consent to instruct, never replaces it. Re-approving a drifted
+ * skill re-pins the current digest — the only way to clear a drift.
+ */
+export function approvePersistentRoomSkillExecution(
+	agentIdRaw: string,
+	name: string,
+	resolveFilesDigest: SkillFilesDigestResolver,
+	options: PersistentRoomSkillSettingsStorageOptions = {},
+	now = new Date(),
+): SkillExecutionMutationResult {
+	if (!isValidSkillName(name)) return { ok: false, reason: "invalid-name" };
+	const current = readPersistentRoomSkillSettings(agentIdRaw, options);
+	const enabled = current.enabledSkills.find((skill) => skill.name === name);
+	if (!enabled) return { ok: false, reason: "not-enabled" };
+	const filesSha256 = resolveFilesDigest(name);
+	if (filesSha256 == null) return { ok: false, reason: "no-files" };
+	const next = current.enabledSkills.map((skill) =>
+		skill.name === name ? { ...skill, executeApproval: { filesSha256, approvedAt: now.toISOString() } } : skill,
+	);
+	return { ok: true, settings: writePersistentRoomSkillSettings(agentIdRaw, next, options, now) };
+}
+
+/** Withdraw a room's execution approval for a skill. Idempotent; the skill stays enabled. */
+export function revokePersistentRoomSkillExecution(
+	agentIdRaw: string,
+	name: string,
+	options: PersistentRoomSkillSettingsStorageOptions = {},
+	now = new Date(),
+): SkillExecutionMutationResult {
+	if (!isValidSkillName(name)) return { ok: false, reason: "invalid-name" };
+	const current = readPersistentRoomSkillSettings(agentIdRaw, options);
+	const enabled = current.enabledSkills.find((skill) => skill.name === name);
+	if (!enabled) return { ok: false, reason: "not-enabled" };
+	if (!enabled.executeApproval) return { ok: true, settings: current };
+	const next = current.enabledSkills.map((skill) => {
+		if (skill.name !== name) return skill;
+		const { executeApproval: _gone, ...rest } = skill;
+		return rest;
+	});
 	return { ok: true, settings: writePersistentRoomSkillSettings(agentIdRaw, next, options, now) };
 }
 
@@ -190,16 +284,27 @@ export function disablePersistentRoomSkill(
  * has it, `hash-mismatch` when the body changed, `ok` otherwise. This is what
  * the settings panel renders.
  */
-export function computeSkillStatuses(enabledSkills: readonly EnabledSkill[], resolveBody: SkillBodyResolver): EnabledSkillStatus[] {
+export function computeSkillStatuses(
+	enabledSkills: readonly EnabledSkill[],
+	resolveBody: SkillBodyResolver,
+	resolveFilesDigest?: SkillFilesDigestResolver,
+): EnabledSkillStatus[] {
 	return enabledSkills.map((skill) => {
+		const executeState = (): SkillExecutionState => {
+			if (!skill.executeApproval) return "none";
+			const current = resolveFilesDigest?.(skill.name) ?? null;
+			return current !== null && current === skill.executeApproval.filesSha256 ? "approved" : "drifted";
+		};
+		const withExecute = resolveFilesDigest ? { executeState: executeState() } : {};
 		const body = resolveBody(skill.name);
-		if (body == null) return { name: skill.name, sha256: skill.sha256, currentSha256: null, status: "missing" as const };
+		if (body == null) return { name: skill.name, sha256: skill.sha256, currentSha256: null, status: "missing" as const, ...withExecute };
 		const currentSha256 = sha256(body);
 		return {
 			name: skill.name,
 			sha256: skill.sha256,
 			currentSha256,
 			status: currentSha256 === skill.sha256 ? ("ok" as const) : ("hash-mismatch" as const),
+			...withExecute,
 		};
 	});
 }

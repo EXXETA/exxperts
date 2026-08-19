@@ -76,6 +76,20 @@ import { authedFetch, type AuthedFetchInit, SMOKE_AUTH_HEADERS, SMOKE_SERVER_AUT
 //      bind, while the takeover adopts and streams the whole answer;
 //  18. the landing cut drops post-anchor tool chips (same predicate as the
 //      client's supersede), keeping everything before the anchor.
+// Post-stream tail (fix/post-stream-answer-landing) appends:
+//  19. a turn that COMPLETED while the client watched, whose debounced persist
+//      never fired, lands on socket close: the thread gains the answer (and
+//      the never-persisted prompt), parks standby, and records the unseen
+//      marker — the multi-second window between "model finished" and "client
+//      persisted" no longer loses the answer;
+//  20. when the client DID persist the answer before closing, the close-time
+//      landing skips entirely: no detached items, state stays active, no
+//      marker;
+//  21. a stale client PUT that arrives AFTER the landing (the in-flight save
+//      from before the drop) merges: the landed answer survives, the stale
+//      partial fragment is dropped, no duplicate prompt — and a late save
+//      that carries the client's own full copy of the answer is left
+//      untouched (no detached duplicate appended).
 
 const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "exxperts-detached-turn-home-"));
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
@@ -376,6 +390,9 @@ let ws17a: WsHarness | null = null;
 let ws17b: WsHarness | null = null;
 let ws17c: WsHarness | null = null;
 let ws18: WsHarness | null = null;
+let ws19: WsHarness | null = null;
+let ws20: WsHarness | null = null;
+let ws21: WsHarness | null = null;
 
 try {
 	await new Promise<void>((resolve) => gateway.listen(0, "127.0.0.1", resolve));
@@ -1149,6 +1166,126 @@ try {
 	assert(!items18.some((item) => String(item.id ?? "").startsWith("detached-user-")), "no prompt restore is needed when the prompt was persisted");
 	await waitUntil(async () => !(await getStatus(room18)).activeLock, "room18 lock released after the landing", 20_000);
 
+	// --- 19. Post-stream tail: unpersisted answer lands on socket close ------
+	// The turn completes while the client is still attached, but the client
+	// never persists (the debounced save fires ~500ms after the last reveal
+	// tick, and this client dies inside that window). The close handler must
+	// land the finished answer server-side.
+	const fastText = FAST_ANSWER_CHUNKS.join("").trim();
+	const room19 = await createRoom("Post-Stream Tail Room");
+	const conv19 = `smokeconv19_${Date.now().toString(36)}`;
+	const prompt19 = "Just answer quickly, please.";
+	await putThread(room19, conv19, []);
+	ws19 = await WsHarness.connect(room19, conv19);
+	await ws19.waitFor((frame) => frame.type === "ready", "room19 ready frame");
+	ws19.send({ type: "prompt", text: prompt19 });
+	await ws19.waitFor((frame) => frame.type === "event" && frame.event?.type === "agent_end", "room19 turn end", 0, 20_000);
+	await waitUntil(async () => {
+		const status = await getStatus(room19);
+		return status.activeThread?.inFlight === false && status.activeThread?.activeTurn?.lastTerminalReason === "completed";
+	}, "room19 turn settled completed", 20_000);
+	// No client persist at all: the thread file still holds the pre-turn state.
+	const preClose19 = await getThread(room19, conv19);
+	assert((preClose19.items ?? []).length === 0, `room19 thread must still be empty before the close, got ${JSON.stringify(preClose19.items)}`);
+	ws19.close();
+	ws19 = null;
+	await waitUntil(async () => {
+		const thread = await getThread(room19, conv19);
+		return (thread.items ?? []).some((item: any) => String(item.id ?? "").startsWith("detached-assistant-"));
+	}, "room19 post-stream landing written", 20_000);
+	const thread19 = await getThread(room19, conv19);
+	assert(thread19.state === "standby", `room19 should park standby after the unwatched landing, got ${thread19.state}`);
+	const items19: any[] = thread19.items ?? [];
+	const landed19 = items19.find((item) => String(item.id ?? "").startsWith("detached-assistant-"));
+	assert(landed19?.kind === "assistant" && landed19.text === fastText, `room19 must land the full answer, got ${JSON.stringify(landed19)}`);
+	assert(landed19.streaming === false, "room19 landed answer must not be marked streaming");
+	const landedUser19 = items19.find((item) => String(item.id ?? "").startsWith("detached-user-"));
+	assert(landedUser19?.kind === "user" && landedUser19.text === prompt19, `room19 must restore the never-persisted prompt, got ${JSON.stringify(landedUser19)}`);
+	assert(items19.filter((item) => item.kind === "assistant").length === 1, `room19 must land exactly one assistant item, got ${JSON.stringify(items19.map((item) => item.id))}`);
+	const status19 = await getStatus(room19);
+	assert(status19.unseenLandedAnswer, `room19 landing should record the unseen marker, got ${JSON.stringify(status19.unseenLandedAnswer)}`);
+	assert(status19.unseenLandedAnswer.terminalReason === "completed", `room19 marker should carry completed, got ${JSON.stringify(status19.unseenLandedAnswer)}`);
+	assert(String(landed19.id) === `detached-assistant-${status19.unseenLandedAnswer.turnId}`, `room19 marker turnId should match the landed item, got ${JSON.stringify({ landedId: landed19.id, marker: status19.unseenLandedAnswer })}`);
+	await waitUntil(async () => !(await getStatus(room19)).activeLock, "room19 lock released after the close", 20_000);
+
+	// --- 20. Client persisted first: the close-time landing skips ------------
+	const room20 = await createRoom("Persisted First Room");
+	const conv20 = `smokeconv20_${Date.now().toString(36)}`;
+	const prompt20 = "Another quick one, please.";
+	await putThread(room20, conv20, []);
+	ws20 = await WsHarness.connect(room20, conv20);
+	await ws20.waitFor((frame) => frame.type === "ready", "room20 ready frame");
+	ws20.send({ type: "prompt", text: prompt20 });
+	await ws20.waitFor((frame) => frame.type === "event" && frame.event?.type === "agent_end", "room20 turn end", 0, 20_000);
+	await waitUntil(async () => {
+		const status = await getStatus(room20);
+		return status.activeThread?.inFlight === false && status.activeThread?.activeTurn?.lastTerminalReason === "completed";
+	}, "room20 turn settled completed", 20_000);
+	// The client's ordinary debounced save carries the answer before the close
+	// (the pagehide keepalive save takes this same shape).
+	const persistedPut20 = await putThread(room20, conv20, [
+		{ kind: "user", id: "u-20", text: prompt20 },
+		{ kind: "assistant", id: "a-20", text: fastText, streaming: false },
+	]);
+	assert(persistedPut20.status === 200, `room20 client persist should succeed, got ${persistedPut20.status}: ${JSON.stringify(persistedPut20.body)}`);
+	ws20.close();
+	ws20 = null;
+	await waitUntil(async () => !(await getStatus(room20)).activeLock, "room20 lock released after the close", 20_000);
+	const thread20 = await getThread(room20, conv20);
+	const items20: any[] = thread20.items ?? [];
+	assert(thread20.state === "active", `room20 must stay active when the client already persisted, got ${thread20.state}`);
+	assert(!items20.some((item) => String(item.id ?? "").startsWith("detached-")), `room20 must not land detached items over a persisted answer, got ${JSON.stringify(items20.map((item) => item.id))}`);
+	assert(items20.filter((item) => item.kind === "assistant").length === 1, `room20 must keep exactly the client's answer, got ${JSON.stringify(items20.map((item) => item.id))}`);
+	const status20 = await getStatus(room20);
+	assert(!status20.unseenLandedAnswer, `room20 must not record a marker when the landing skipped, got ${JSON.stringify(status20.unseenLandedAnswer)}`);
+
+	// --- 21. A stale client PUT after the landing merges, never clobbers -----
+	const room21 = await createRoom("Late Save Room");
+	const conv21 = `smokeconv21_${Date.now().toString(36)}`;
+	const prompt21 = "One more quick one, please.";
+	await putThread(room21, conv21, []);
+	ws21 = await WsHarness.connect(room21, conv21);
+	await ws21.waitFor((frame) => frame.type === "ready", "room21 ready frame");
+	ws21.send({ type: "prompt", text: prompt21 });
+	await ws21.waitFor((frame) => frame.type === "event" && frame.event?.type === "agent_end", "room21 turn end", 0, 20_000);
+	await waitUntil(async () => {
+		const status = await getStatus(room21);
+		return status.activeThread?.inFlight === false && status.activeThread?.activeTurn?.lastTerminalReason === "completed";
+	}, "room21 turn settled completed", 20_000);
+	ws21.close();
+	ws21 = null;
+	await waitUntil(async () => {
+		const thread = await getThread(room21, conv21);
+		return (thread.items ?? []).some((item: any) => String(item.id ?? "").startsWith("detached-assistant-"));
+	}, "room21 post-stream landing written", 20_000);
+	const landedId21 = String((await getThread(room21, conv21)).items.find((item: any) => String(item.id ?? "").startsWith("detached-assistant-")).id);
+	// The stale save that was in flight when the socket died arrives now: the
+	// prompt plus a partial reveal fragment, from BEFORE the landing.
+	const stalePut21 = await putThread(room21, conv21, [
+		{ kind: "user", id: "u-21", text: prompt21 },
+		{ kind: "assistant", id: "a-21-partial", text: "Quick ", streaming: true },
+	]);
+	assert(stalePut21.status === 200, `room21 stale save should succeed, got ${stalePut21.status}: ${JSON.stringify(stalePut21.body)}`);
+	const merged21 = await getThread(room21, conv21);
+	const mergedItems21: any[] = merged21.items ?? [];
+	const mergedLanded21 = mergedItems21.find((item) => item.id === landedId21);
+	assert(mergedLanded21?.text === fastText, `room21 stale save must not clobber the landed answer, got ${JSON.stringify(mergedItems21.map((item) => [item.id, String(item.text ?? "").slice(0, 30)]))}`);
+	assert(!mergedItems21.some((item) => item.id === "a-21-partial"), `room21 merge must drop the stale partial fragment, got ${JSON.stringify(mergedItems21.map((item) => item.id))}`);
+	assert(mergedItems21.some((item) => item.id === "u-21"), "room21 merge must keep the client's prompt item");
+	assert(!mergedItems21.some((item) => String(item.id ?? "").startsWith("detached-user-")), `room21 merge must not duplicate the prompt, got ${JSON.stringify(mergedItems21.map((item) => item.id))}`);
+	assert(mergedItems21.filter((item) => item.kind === "assistant").length === 1, `room21 must end with exactly one assistant item, got ${JSON.stringify(mergedItems21.map((item) => item.id))}`);
+	// A late save carrying the client's OWN full copy of the answer (pagehide
+	// keepalive that lost the race) is left untouched: no detached duplicate.
+	const ownCopyPut21 = await putThread(room21, conv21, [
+		{ kind: "user", id: "u-21", text: prompt21 },
+		{ kind: "assistant", id: "a-21", text: fastText, streaming: false },
+	]);
+	assert(ownCopyPut21.status === 200, `room21 own-copy save should succeed, got ${ownCopyPut21.status}`);
+	const ownCopy21 = await getThread(room21, conv21);
+	const ownCopyItems21: any[] = ownCopy21.items ?? [];
+	assert(ownCopyItems21.filter((item) => item.kind === "assistant").length === 1, `room21 own-copy save must not gain a detached duplicate, got ${JSON.stringify(ownCopyItems21.map((item) => item.id))}`);
+	assert(ownCopyItems21.some((item) => item.id === "a-21" && item.text === fastText), `room21 own-copy answer must be the one kept, got ${JSON.stringify(ownCopyItems21.map((item) => item.id))}`);
+
 	console.log("persistent-room detached turn smoke passed");
 } catch (error) {
 	const output = serverOutput.join("").trim();
@@ -1189,6 +1326,9 @@ try {
 	try { ws17b?.close(); } catch {}
 	try { ws17c?.close(); } catch {}
 	try { ws18?.close(); } catch {}
+	try { ws19?.close(); } catch {}
+	try { ws20?.close(); } catch {}
+	try { ws21?.close(); } catch {}
 	await stopSmokeServer(server ?? undefined);
 	gateway.close();
 	if (process.exitCode == null || process.exitCode === 0) {

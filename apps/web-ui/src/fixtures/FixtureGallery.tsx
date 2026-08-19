@@ -17,7 +17,7 @@ function sidebarFixtureFor(active: ProductSidebarActive, theme: ThemeMode) {
 	return (
 		<ProductSidebar
 			onHome={noop}
-			onAiSetup={noop}
+			onSettings={noop}
 			onDashboard={noop}
 			theme={theme}
 			onToggleTheme={noop}
@@ -191,7 +191,7 @@ function InRoomChatFixtureScreen({ fixture, theme }: { fixture: InRoomChatFixtur
 					onHome={noop}
 					theme={theme}
 					onToggleTheme={noop}
-					onAiSetup={noop}
+					onSettings={noop}
 				/>
 			}
 			activeDisplay={fixture.activeDisplay}

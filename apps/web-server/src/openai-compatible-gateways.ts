@@ -73,16 +73,139 @@ export function parseGatewayContextWindow(value: unknown): { contextWindow?: num
 	return { contextWindow: parsed };
 }
 
+/**
+ * The rungs of the thinking dial, in the app's own vocabulary. "off" is what
+ * LiteLLM calls "none". The order matters nowhere here; the runtime owns the
+ * ladder, this list only names which keys a declaration may speak about.
+ */
+export const GATEWAY_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+export type GatewayThinkingLevel = (typeof GATEWAY_THINKING_LEVELS)[number];
+/**
+ * The thinking intensities in ascending order, "off" excluded: a ceiling is a
+ * cap on how hard a model may think, and off is not a strength of thinking.
+ */
+export const GATEWAY_EFFORT_INTENSITIES = ["minimal", "low", "medium", "high", "xhigh", "max"] as const;
+export type GatewayEffortIntensity = (typeof GATEWAY_EFFORT_INTENSITIES)[number];
+/**
+ * Per-level effort declarations, sparse: a level appears only when the gateway
+ * answered it with a real boolean. Most gateways answer nothing here, and a
+ * missing level is "not answered", never "no".
+ */
+export type GatewayThinkingLevels = Partial<Record<GatewayThinkingLevel, boolean>>;
+
+/**
+ * What the gateway itself declared about one model, snapshotted at the last
+ * reload. A field is present only when the gateway actually answered it; an
+ * empty object is a gateway that had nothing to say. Kept per model so the
+ * form can show what was detected, and so the effective value can fall back to
+ * it wherever the person has not spoken.
+ */
+export type GatewayModelDetected = {
+	vision?: boolean;
+	webSearch?: boolean;
+	reasoning?: boolean;
+	contextWindow?: number;
+	/** The largest answer the deployment lets one request produce, when the gateway declared one. */
+	maxTokens?: number;
+	/**
+	 * The gateway's declared mode, lowercased. Anything in the known non-chat
+	 * set (embedding, image_generation, ...) is a model no room turn can run on;
+	 * absent or unknown reads as chat-compatible.
+	 */
+	mode?: string;
+	/**
+	 * Which rungs of the thinking dial the gateway spoke about. Pure detection:
+	 * there is no per-level override, the person's one lever stays the reasoning
+	 * switch, and when that is off the levels are moot.
+	 */
+	thinkingLevels?: GatewayThinkingLevels;
+	/**
+	 * The hardest thinking the deployment lets through, when the gateway names
+	 * one. Seen live contradicting the per-level flags on the same row (a max
+	 * flag beside an xhigh ceiling), and the ceiling is the deployment speaking,
+	 * so it caps whatever the flags declared.
+	 */
+	effortCeiling?: GatewayEffortIntensity;
+	/** Whether the gateway says the model chooses its own effort. Recorded as said; nothing acts on it yet. */
+	adaptiveThinking?: boolean;
+};
+
+/**
+ * One approved model. The capability fields are the person's overrides,
+ * sparse: a field is present only when they explicitly set it, and an explicit
+ * false is as much a decision as an explicit true. What the runtime acts on is
+ * effectiveGatewayModel(), which reads override over detection over default.
+ * Entries saved before detection existed (no `detected` key on disk) are read
+ * with every field filled in as an override, because those saves were the
+ * whole truth of that setup and a later detection must not change what an
+ * existing gateway does.
+ */
 export type GatewayRoomModel = {
 	modelId: string;
 	label?: string;
-	/** The person ticked "supports images"; written to models.json as input: ["text","image"]. */
+	/** Override: send attached images. The effective value is written to models.json as input: ["text","image"]. */
 	vision?: boolean;
-	/** The person ticked "supports web search"; written to models.json as compat.supportsWebSearch, which is what makes the request ask the gateway to search. */
+	/** The web search tick. Never detection-driven, because the gateway may bill these searches per use; only the person turns it on. Stored only when true. */
 	webSearch?: boolean;
-	/** Token window for this model. Absent means the runtime default applies. */
+	/** Override: forward the room's reasoning effort. The effective value is written to models.json as reasoning: true. */
+	reasoning?: boolean;
+	/** Override: token window for this model. */
 	contextWindow?: number;
+	/** Override: per-request output cap for this model. */
+	maxTokens?: number;
+	/** The gateway's own answers, refreshed by every reload. Absent only on entries read from a pre-detection file. */
+	detected?: GatewayModelDetected;
 };
+
+/** The four facts a room experiences, resolved from override over detection over default. */
+export type EffectiveGatewayModel = {
+	vision: boolean;
+	webSearch: boolean;
+	reasoning: boolean;
+	contextWindow: number;
+	/**
+	 * The per-request output cap: override over detection, with no default of
+	 * its own. Absent when neither spoke, so the runtime registry's default
+	 * stays exactly what it was; the context window cannot copy this because a
+	 * window drives the context chip and has to show a number.
+	 */
+	maxTokens?: number;
+	/**
+	 * The declared thinking ladder, present only when reasoning is effectively
+	 * on and the gateway actually declared levels. Detection-only: no override
+	 * exists for it, and a reasoning switched off takes the ladder with it.
+	 */
+	thinkingLevels?: GatewayThinkingLevels;
+	/** The declared cap on thinking intensity, under the same conditions as thinkingLevels. */
+	effortCeiling?: GatewayEffortIntensity;
+};
+
+/**
+ * The one place a gateway model's stored halves become the values everything
+ * else runs on. Every consumer that acts on a capability reads this, so the
+ * precedence cannot drift apart between the catalog, the API payload and the
+ * form.
+ */
+export function effectiveGatewayModel(model: GatewayRoomModel): EffectiveGatewayModel {
+	const reasoning = model.reasoning ?? model.detected?.reasoning ?? false;
+	const maxTokens = model.maxTokens ?? model.detected?.maxTokens;
+	const thinkingLevels = model.detected?.thinkingLevels;
+	const effortCeiling = model.detected?.effortCeiling;
+	return {
+		vision: model.vision ?? model.detected?.vision ?? false,
+		// The one per-use billable capability: detection never decides it, the
+		// tick does, and the tick starts off.
+		webSearch: model.webSearch === true,
+		reasoning,
+		contextWindow: model.contextWindow ?? model.detected?.contextWindow ?? GATEWAY_DEFAULT_CONTEXT_WINDOW,
+		...(maxTokens ? { maxTokens } : {}),
+		// The ladder rides only on a reasoning that is on: switching reasoning
+		// off is the person's whole answer, and the levels have nothing left to
+		// describe.
+		...(reasoning && thinkingLevels && Object.keys(thinkingLevels).length > 0 ? { thinkingLevels } : {}),
+		...(reasoning && effortCeiling ? { effortCeiling } : {}),
+	};
+}
 
 export type OpenAiCompatibleGateway = {
 	/** Doubles as the AI profile id. */
@@ -94,6 +217,14 @@ export type OpenAiCompatibleGateway = {
 	baseUrl?: string;
 	roomModels: GatewayRoomModel[];
 	maintenanceModel: string;
+	/**
+	 * Detection for a maintenance model that is not also a room model. A room
+	 * model's own snapshot covers the usual case; this one exists so Memorize
+	 * and Review are not registered blind when their model has no row of its
+	 * own. Absent on every config saved before it existed, which keeps those
+	 * registering exactly as they did.
+	 */
+	maintenanceModelDetected?: GatewayModelDetected;
 };
 
 export type OpenAiCompatibleGatewaysReadResult = {
@@ -136,6 +267,33 @@ function positiveInteger(value: unknown): number | undefined {
 	return rounded > 0 ? rounded : undefined;
 }
 
+/** The detection snapshot as stored: only well-typed answers survive the read. */
+function parseDetected(raw: Record<string, unknown>): GatewayModelDetected {
+	const detected: GatewayModelDetected = {};
+	if (typeof raw.vision === "boolean") detected.vision = raw.vision;
+	if (typeof raw.webSearch === "boolean") detected.webSearch = raw.webSearch;
+	if (typeof raw.reasoning === "boolean") detected.reasoning = raw.reasoning;
+	const contextWindow = positiveInteger(raw.contextWindow);
+	if (contextWindow) detected.contextWindow = contextWindow;
+	const maxTokens = positiveInteger(raw.maxTokens);
+	if (maxTokens) detected.maxTokens = maxTokens;
+	const mode = nonEmptyString(raw.mode);
+	if (mode) detected.mode = mode.toLowerCase();
+	if (isObject(raw.thinkingLevels)) {
+		const levels: GatewayThinkingLevels = {};
+		for (const level of GATEWAY_THINKING_LEVELS) {
+			const value = raw.thinkingLevels[level];
+			if (typeof value === "boolean") levels[level] = value;
+		}
+		if (Object.keys(levels).length > 0) detected.thinkingLevels = levels;
+	}
+	if (typeof raw.effortCeiling === "string" && (GATEWAY_EFFORT_INTENSITIES as readonly string[]).includes(raw.effortCeiling)) {
+		detected.effortCeiling = raw.effortCeiling as GatewayEffortIntensity;
+	}
+	if (typeof raw.adaptiveThinking === "boolean") detected.adaptiveThinking = raw.adaptiveThinking;
+	return detected;
+}
+
 /**
  * roomModels entries are objects in both file shapes. Unknown keys are ignored
  * rather than rejected: the legacy file predates vision and contextWindow, and
@@ -154,10 +312,30 @@ function parseRoomModels(raw: unknown): { models: GatewayRoomModel[]; error?: st
 		const model: GatewayRoomModel = { modelId };
 		const label = nonEmptyString(entry.label);
 		if (label) model.label = label;
-		if (entry.vision === true) model.vision = true;
-		if (entry.webSearch === true) model.webSearch = true;
-		const contextWindow = positiveInteger(entry.contextWindow);
-		if (contextWindow) model.contextWindow = contextWindow;
+		if (isObject(entry.detected)) {
+			// The entry records detection, so its capability fields are the
+			// sparse overrides they claim to be: present means chosen, an
+			// explicit false included.
+			if (typeof entry.vision === "boolean") model.vision = entry.vision;
+			if (entry.webSearch === true) model.webSearch = true;
+			if (typeof entry.reasoning === "boolean") model.reasoning = entry.reasoning;
+			const contextWindow = positiveInteger(entry.contextWindow);
+			if (contextWindow) model.contextWindow = contextWindow;
+			const maxTokens = positiveInteger(entry.maxTokens);
+			if (maxTokens) model.maxTokens = maxTokens;
+			model.detected = parseDetected(entry.detected);
+		} else {
+			// An entry from before detection existed. Everything it saved,
+			// including what it saved by leaving a field out, was the whole truth
+			// of that setup, so all of it becomes an override: an existing
+			// gateway keeps behaving exactly as it did until somebody edits a
+			// field or clears one back to detection.
+			model.vision = entry.vision === true;
+			if (entry.webSearch === true) model.webSearch = true;
+			model.reasoning = entry.reasoning === true;
+			model.contextWindow = positiveInteger(entry.contextWindow) ?? GATEWAY_DEFAULT_CONTEXT_WINDOW;
+			model.detected = {};
+		}
 		models.push(model);
 	}
 	if (models.length === 0) return { models: [], error: "must include at least one room model." };
@@ -197,6 +375,7 @@ function readLegacyGateway(legacyPolicyPath: string): { gateway?: OpenAiCompatib
 	if (!maintenanceModel) return { error: "OpenAI-compatible gateway policy is missing maintenanceModel." };
 	const { models, error } = parseRoomModels(raw.roomModels);
 	if (error) return { error: `OpenAI-compatible gateway policy ${error}` };
+	const maintenanceModelDetected = isObject(raw.maintenanceModelDetected) ? parseDetected(raw.maintenanceModelDetected) : undefined;
 	return {
 		gateway: {
 			id: OPENAI_COMPATIBLE_AI_PROFILE_ID,
@@ -205,6 +384,7 @@ function readLegacyGateway(legacyPolicyPath: string): { gateway?: OpenAiCompatib
 			...(nonEmptyString(raw.baseUrl) ? { baseUrl: nonEmptyString(raw.baseUrl) } : {}),
 			roomModels: models,
 			maintenanceModel,
+			...(maintenanceModelDetected && Object.keys(maintenanceModelDetected).length > 0 ? { maintenanceModelDetected } : {}),
 		},
 	};
 }
@@ -224,6 +404,7 @@ function parseGatewayEntry(raw: unknown, index: number): { gateway?: OpenAiCompa
 	if (!maintenanceModel) return { error: `gateways[${index}].maintenanceModel is required.` };
 	const { models, error } = parseRoomModels(raw.roomModels);
 	if (error) return { error: `gateways[${index}] ${error}` };
+	const maintenanceModelDetected = isObject(raw.maintenanceModelDetected) ? parseDetected(raw.maintenanceModelDetected) : undefined;
 	return {
 		gateway: {
 			id,
@@ -232,6 +413,7 @@ function parseGatewayEntry(raw: unknown, index: number): { gateway?: OpenAiCompa
 			...(nonEmptyString(raw.baseUrl) ? { baseUrl: nonEmptyString(raw.baseUrl) } : {}),
 			roomModels: models,
 			maintenanceModel,
+			...(maintenanceModelDetected && Object.keys(maintenanceModelDetected).length > 0 ? { maintenanceModelDetected } : {}),
 		},
 	};
 }
@@ -338,11 +520,21 @@ function writeLegacyPolicyFile(gateway: OpenAiCompatibleGateway, legacyPolicyPat
 		roomModels: gateway.roomModels.map((model) => ({
 			modelId: model.modelId,
 			label: model.label ?? model.modelId,
-			...(model.vision ? { vision: true } : {}),
+			...(model.vision !== undefined ? { vision: model.vision } : {}),
 			...(model.webSearch ? { webSearch: true } : {}),
+			...(model.reasoning !== undefined ? { reasoning: model.reasoning } : {}),
 			...(model.contextWindow ? { contextWindow: model.contextWindow } : {}),
+			// Written even when empty: its presence is what marks the entry as
+			// sparse-override shape on the next read. Older builds and the
+			// wizard ignore it, and they read explicit falses as unticked, which
+			// lands them on the same effective values.
+			detected: model.detected ?? {},
 		})),
 		maintenanceModel: gateway.maintenanceModel,
+		// Rides along like the base URL: the wizard's shape ignores it, and
+		// without it the first gateway would forget its maintenance model's
+		// detection on every read, because this file is authoritative for it.
+		...(gateway.maintenanceModelDetected ? { maintenanceModelDetected: gateway.maintenanceModelDetected } : {}),
 	});
 }
 

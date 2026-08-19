@@ -2,6 +2,111 @@
 
 User-visible changes per release. Historical private/internal development notes are not part of this public-facing changelog.
 
+## 0.10.0 (2026-08-19)
+
+- Remote access: use your exxperts from your phone, over your own private tunnel. A new Remote
+  access tab in Settings turns it on; while it is off, and it starts off, the app remains reachable
+  from your computer only, byte for byte as before. It works over Tailscale, which you install once
+  on both devices: nothing goes through a cloud in between, your phone talks to your computer
+  directly inside an encrypted tunnel. Pairing is a QR code that renews itself on screen and an
+  approval you confirm on the computer, and each paired device gets exactly the access you choose:
+  full, or viewing only, switchable and revocable at any time. Viewing only means what it says, the
+  phone can read but every attempt to change anything is refused by the computer, not hidden by the
+  phone. Rooms can be hidden from remote devices entirely, and a hidden room does not exist as far
+  as the phone can tell; rooms that can run commands on the computer are flagged in that list so you
+  know what you are exposing. Turning remote access off blocks every device until you turn it back
+  on; pairings themselves persist, and only revoking a device or thirty days of not using it end
+  one, so coming back from a holiday does not mean pairing again. A switch on the same tab keeps
+  the computer awake while remote access is on, so the phone does not go dark because the laptop
+  lid dimmed. When your Tailscale account has HTTPS certificates enabled, the app serves your phone
+  over https under your machine's own tailnet name with a real certificate, minted locally, and the
+  address always lands on that name even if you typed the raw numbers; when it cannot, it says
+  exactly why and continues over plain http inside the still-encrypted tunnel rather than failing.
+  A phone that is not paired sees an honest page saying so instead of an error. Adding the page to
+  your phone's home screen makes it open like an app, on iPhone and Android alike.
+
+- On a phone, the app now behaves like it was built for one. Tapping the message box no longer
+  zooms the page in and leaves it stuck there; the keyboard and the message box move together;
+  buttons respond to the first tap; and the box sits at the bottom where your thumb expects it,
+  with a compact meter and the send button on one line. A home button next to the sidebar control
+  takes you back to your rooms, the room list drawer dims the chat and closes with a tap outside,
+  and room settings open as a proper full-screen sheet. Adding the app to your home screen now
+  installs it with a real icon and it opens full screen, without the browser around it. And on a
+  viewing-only phone, settings that only make sense at the computer now say so once, honestly,
+  instead of refusing every tap one by one.
+
+- Settings moved into one place: a settings window over the app, like every tool you know. The gear
+  now opens a centered overlay with five tabs: AI setup, Web search, Connectors, Skills and Remote
+  access, so configuring the app no longer means leaving what you were doing or hunting across
+  pages. Each tab was rebuilt for the space: profiles and providers as clean rows, connectors as a
+  table that expands inline when you click a name, skills as a table with visible View and Delete
+  and honest provenance dates, and remote access with its switches, device list and self-renewing
+  QR code. The window scrolls like a proper dialog, menus near the edge flip instead of clipping,
+  and on the phone it becomes a full-screen sheet.
+
+- The app tells you what is new, once. The first start after an update opens a small window with
+  one line per change, drawn from this very changelog; Continue, and it never returns for that
+  version. A full read is one click away, a fresh install sees nothing, and nothing interrupts you
+  ever again for that release.
+
+- Rooms: an empty room now remembers the model you picked for it. Choosing a model on a room's card
+  is no longer undone by switching your AI profile: the room keeps its choice, shows it, and if the
+  model belongs to another profile, entering offers to switch and enter in one step, the same way a
+  paused conversation already protected its model. Restarts do not forget it either.
+
+- Gateways: what a model can do is now something the app reads, not boxes you tick. When a gateway
+  declares its models' abilities, and company gateways like LiteLLM do, the approval list simply
+  shows them: an images badge, a thinking badge, the context window, filled in from the gateway's
+  own answers and refreshed when you reload. Correcting the gateway is still yours: a small adjust
+  on each row edits any fact, your corrections survive every reload, and one click returns to what
+  the gateway declares; a gateway that declares nothing says so honestly and hands you the controls.
+  The one exception is deliberate: web search stays a choice you make per model and starts off,
+  because a gateway may bill those searches, and the list says exactly that; the room's own web
+  search costs nothing beyond ordinary tokens. Marked models think at the effort you dial, the app
+  shows the thinking happening as it does for every other room, and a turn that spends its whole
+  budget thinking now says so plainly instead of showing nothing. Existing gateways keep behaving exactly as configured
+  until you touch a field.
+
+- Every model now offers its real thinking levels, whatever way it is connected. A user on GitHub
+  noticed that the newest GPT models stopped one level short of what they can actually do, and he
+  was right: the two highest levels never made it into our model catalogue for that generation.
+  The catalogue is fixed, the dial now goes exactly as high as each model truly goes on your kind
+  of connection, and levels a route does not accept are not shown. A coming release will read
+  these levels from the provider's own published catalogue so new model generations arrive with
+  their real levels on day one.
+
+- Skills can now bring their own tools and run them. A skill has always been instructions; it can
+  now bundle files alongside them, scripts included, and a room with command access can run those
+  files to do the work, generating a presentation instead of describing one. Nothing runs without
+  you: each room asks per skill, the approval names the bundled files, and it is pinned to the
+  skill's exact content, so a skill that changes after you approved it, even by one file, is back to
+  not runnable until you approve what changed. Withdrawing approval works the same way and takes
+  effect immediately. Skills imported from a zip or a repository keep their bundled files through
+  import.
+
+- Web search: the screen for running your own search engine now knows what is actually happening.
+  It checks rather than remembers: Running means the engine answered just now, and the note adds
+  that it keeps running in the background even when the OrbStack or Docker window is closed. With
+  no container runtime installed it says so and links OrbStack and Docker Desktop; installed but
+  not started, it says exactly that; and a first download announces itself as one instead of hiding
+  behind a spinner.
+
+- Fixed: searching for files or text no longer comes back empty because one subfolder was
+  unreadable. When a room or ExxCode searched a folder tree containing even one directory it was
+  not allowed into, the tools could report a permission failure or nothing at all despite valid
+  results, and the model would conclude the files did not exist. Both search tools now return what
+  they found; only a search that truly could not enumerate anything reports the permission problem,
+  and that message names the folder so you can act on it.
+
+- Fixed: a skill run no longer claims its outputs are somewhere they are not. Files a skill writes
+  land in the room's workspace folder on your machine, and the room now says so, naming the folder,
+  instead of pointing you at the room's Files panel where workspace outputs never appear unless
+  explicitly shelved.
+
+## 0.9.3 (2026-08-15)
+
+- Fixed: three more ways a Claude room's history could go back to the provider not quite as produced, each one a wall the 0.9.2 self-recovery was absorbing instead of preventing. A reply whose reasoning arrived signed but with no visible text is now returned exactly as signed instead of being dropped; a reply that was cut off mid-reasoning and then retried no longer rides along beside its own retry, a pairing the provider refuses; and content a gateway or proxy delivers in the opening frame of a stream instead of drip-feeding it is no longer lost. Conversations already worked through all three thanks to the recovery, at the cost of that one reply thinking from scratch; now the request is right the first time and the recovery stays reserved for genuine surprises.
+
 ## 0.9.2 (2026-08-14)
 
 - Fixed: a Claude room that searched through its provider could refuse every further message with a red "invalid_request_error" wall. 0.9.1 closed one shape of this; others existed, and this release closes the family. The provider verifies that its search material comes back exactly as it produced it, and the app's copies were not exact; they now are, verified byte for byte, and a copy damaged by an earlier version is detected and never sent. Should the provider refuse a conversation anyway, the app now recovers by itself mid-answer and the reply simply arrives; at most, that one reply is written without the model re-reading its own earlier reasoning, and a note of the recovery is kept in the conversation's file on your machine. Rooms already stuck heal on their own once you update, nothing to do. ChatGPT and gateway rooms were never affected.

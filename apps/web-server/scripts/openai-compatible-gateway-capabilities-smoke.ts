@@ -1,11 +1,12 @@
-// Smoke for the gateway store and the three per-model facts it now carries.
+// Smoke for the gateway store and the four per-model facts it now carries.
 //
 // Gateway models used to be registered text-only with a silent 128k window, so
 // an attached image degraded to a placeholder and the room context chip counted
 // against a number nobody had chosen. Web search is the third fact: a model
 // that can search through the gateway has to say so, or the request never asks
-// it to. This proves the whole path in process: the store round-trips all
-// three, the legacy single-gateway file is read as the first gateway without
+// it to. Reasoning is the fourth, and the only one that decides whether a
+// parameter is sent at all. This proves the whole path in process: the store
+// round-trips all four, the legacy single-gateway file is read as the first gateway without
 // being rewritten, minted provider ids never collide with the one the existing
 // rooms are locked to, and the runtime model registry reads back exactly what
 // was written.
@@ -76,6 +77,7 @@ try {
 			{ modelId: "sees-images", vision: true, contextWindow: 200000 },
 			{ modelId: "text-only" },
 			{ modelId: "searches-web", webSearch: true },
+			{ modelId: "thinks", reasoning: true },
 		],
 		maintenanceModel: "text-only",
 	});
@@ -86,9 +88,14 @@ try {
 	assert(both[0].id === "openai-compatible", "the first gateway stays first, so auto-follow order does not shuffle");
 	const savedSecond = both.find((gateway) => gateway.id === minted)!;
 	assert(savedSecond.roomModels[0].vision === true && savedSecond.roomModels[0].contextWindow === 200000, `the store should round-trip both facts, got ${JSON.stringify(savedSecond.roomModels[0])}`);
-	assert(savedSecond.roomModels[1].vision === undefined, "a model nobody marked stays unmarked rather than being marked false");
+	// Entries written without a detection snapshot are pre-detection saves, and
+	// everything they said, including by omission, reads back as a pinned
+	// override so a later detection can never change what they do.
+	assert(savedSecond.roomModels[1].vision === false, "a pre-detection model nobody marked reads back pinned off");
 	assert(savedSecond.roomModels[2].webSearch === true, `the store should round-trip the web-search flag, got ${JSON.stringify(savedSecond.roomModels[2])}`);
 	assert(savedSecond.roomModels[0].webSearch === undefined, "a model nobody marked for web search stays unmarked");
+	assert(savedSecond.roomModels[3].reasoning === true, `the store should round-trip the reasoning flag, got ${JSON.stringify(savedSecond.roomModels[3])}`);
+	assert(savedSecond.roomModels[0].reasoning === false, "a pre-detection model nobody marked for reasoning reads back pinned off");
 
 	// Writing the second gateway must not have touched the first one's file.
 	const legacyAfterWrite = JSON.parse(fs.readFileSync(legacyPath, "utf-8"));
@@ -110,6 +117,30 @@ try {
 	const searchModel = registry.find(minted, "searches-web");
 	assert((searchModel!.compat as any)?.supportsWebSearch === true, `a model marked for web search must reach the registry saying so, got ${JSON.stringify(searchModel!.compat)}`);
 	assert((textModel!.compat as any)?.supportsWebSearch === undefined, `a model nobody marked must stay silent about web search, got ${JSON.stringify(textModel!.compat)}`);
+	// Reasoning is the gate the request layer reads before it attaches the room's
+	// effort: on means the effort travels, off means the gateway never sees the
+	// parameter at all.
+	const thinkingModel = registry.find(minted, "thinks");
+	assert(thinkingModel!.reasoning === true, `a model marked for reasoning must reach the registry saying so, got ${JSON.stringify(thinkingModel!.reasoning)}`);
+	assert(textModel!.reasoning === false, `a model nobody marked must reach the registry without reasoning, got ${JSON.stringify(textModel!.reasoning)}`);
+	// A model whose gateway declared per-level efforts reaches the registry with
+	// the runtime's thinkingLevelMap, and the runtime's own ladder function reads
+	// the extended dial off it; a model without a declaration keeps the generic
+	// ladder, exactly as before.
+	const { getSupportedThinkingLevels } = await import("@exxeta/exxperts-runtime");
+	catalog.writeGatewayProviderEntry(gateways.writeOpenAiCompatibleGateway({
+		...second,
+		roomModels: [
+			...second.roomModels,
+			{ modelId: "thinks-to-max", detected: { reasoning: true, thinkingLevels: { minimal: false, xhigh: true, max: true }, adaptiveThinking: true } },
+		],
+	}), modelsPath);
+	const laddered = ModelRegistry.create(AuthStorage.create()).find(minted, "thinks-to-max");
+	assert(JSON.stringify(laddered!.thinkingLevelMap) === JSON.stringify({ minimal: null, xhigh: "xhigh", max: "max" }), `the declared ladder must reach the registry, got ${JSON.stringify(laddered!.thinkingLevelMap)}`);
+	assert(JSON.stringify(getSupportedThinkingLevels(laddered!)) === JSON.stringify(["off", "low", "medium", "high", "xhigh", "max"]), `the runtime must read the extended dial off the map, got ${JSON.stringify(getSupportedThinkingLevels(laddered!))}`);
+	assert(JSON.stringify(getSupportedThinkingLevels(thinkingModel!)) === JSON.stringify(["off", "minimal", "low", "medium", "high"]), `an undeclared model keeps the generic ladder, got ${JSON.stringify(getSupportedThinkingLevels(thinkingModel!))}`);
+	// Put the gateway back as written, so the sections below see what they expect.
+	catalog.writeGatewayProviderEntry(gateways.writeOpenAiCompatibleGateway(second), modelsPath);
 
 	// Unticking the box has to remove the key, not leave it saying true forever.
 	const untickedWebSearch = gateways.writeOpenAiCompatibleGateway({ ...second, roomModels: second.roomModels.map((model) => (model.modelId === "searches-web" ? { modelId: model.modelId } : model)) });
@@ -117,6 +148,12 @@ try {
 	const afterUntick = JSON.parse(fs.readFileSync(modelsPath, "utf-8")).providers[minted].models.find((model: any) => model.id === "searches-web");
 	assert(afterUntick.compat?.supportsWebSearch === undefined, `unticking web search must clear the key, got ${JSON.stringify(afterUntick)}`);
 	assert(!("compat" in afterUntick), `a model whose only compat key was ours must not keep an empty compat block, got ${JSON.stringify(afterUntick)}`);
+	// The same for reasoning: unticking it must leave the model with no reasoning
+	// key at all, because that is what stops the effort parameter being sent.
+	const untickedReasoning = gateways.writeOpenAiCompatibleGateway({ ...second, roomModels: second.roomModels.map((model) => (model.modelId === "thinks" ? { modelId: model.modelId } : model)) });
+	catalog.writeGatewayProviderEntry(untickedReasoning, modelsPath);
+	const thinksAfterUntick = JSON.parse(fs.readFileSync(modelsPath, "utf-8")).providers[minted].models.find((model: any) => model.id === "thinks");
+	assert(thinksAfterUntick.reasoning === undefined, `unticking reasoning must clear the key, got ${JSON.stringify(thinksAfterUntick)}`);
 	// The maintenance model has no row in the approve list, so nothing here ever
 	// spoke for it: a hand-set flag on it must survive a save, not be cleared by
 	// a checkbox that was never shown.
@@ -150,7 +187,7 @@ try {
 			"api": "openai-completions",
 			"headers": { "x-team": "platform" },
 			"models": [
-				{ "id": "sees-images", "name": "Sees Images", "reasoning": "medium", "compat": { "supportsStrictMode": false } },
+				{ "id": "sees-images", "name": "Sees Images", "maxTokens": 4096, "temperature": 0.2, "compat": { "supportsStrictMode": false } },
 			],
 		},
 	},
@@ -162,15 +199,20 @@ try {
 		providerId: minted,
 		label: "Project gateway",
 		baseUrl: "https://gateway.example.invalid/v1",
-		roomModels: [{ modelId: "sees-images", vision: true, webSearch: true, contextWindow: 200000 }],
+		roomModels: [{ modelId: "sees-images", vision: true, webSearch: true, reasoning: true, contextWindow: 200000 }],
 		maintenanceModel: "sees-images",
 	}, annotatedPath);
 	const annotated = JSON.parse(fs.readFileSync(annotatedPath, "utf-8"));
 	assert(annotated.providers["house-proxy"]?.apiKey === "HOUSE_PROXY_KEY", `another provider must survive untouched, got ${JSON.stringify(annotated.providers)}`);
 	assert(annotated.defaults?.somethingElse === true, "unknown root keys must survive");
 	assert(annotated.providers[minted]?.headers?.["x-team"] === "platform", `unknown provider keys must survive, got ${JSON.stringify(annotated.providers[minted])}`);
-	assert(annotated.providers[minted].models[0].reasoning === "medium", `unknown per-model keys must survive, got ${JSON.stringify(annotated.providers[minted].models[0])}`);
+	assert(annotated.providers[minted].models[0].temperature === 0.2, `unknown per-model keys must survive, got ${JSON.stringify(annotated.providers[minted].models[0])}`);
+	// maxTokens is an owned key now: with nothing declared and nothing
+	// overridden, the save clears a stale hand-set cap on a gateway model, the
+	// same way a withdrawn window would be cleared.
+	assert(annotated.providers[minted].models[0].maxTokens === undefined, `an owned maxTokens with no declaration must be cleared, got ${JSON.stringify(annotated.providers[minted].models[0])}`);
 	assert(JSON.stringify(annotated.providers[minted].models[0].input) === JSON.stringify(["text", "image"]), "the keys this writer owns are still written");
+	assert(annotated.providers[minted].models[0].reasoning === true, `an approved reasoning model is written as one, got ${JSON.stringify(annotated.providers[minted].models[0])}`);
 	// Compat is where somebody hand-tunes a stubborn deployment. This writer sets
 	// one key inside it and must leave the rest of the block alone.
 	assert(annotated.providers[minted].models[0].compat?.supportsStrictMode === false, `a hand-tuned compat key must survive, got ${JSON.stringify(annotated.providers[minted].models[0].compat)}`);
@@ -281,6 +323,55 @@ try {
 	gateways.deleteOpenAiCompatibleGateway("openai-compatible");
 	assert(!fs.existsSync(legacyPath), "removing the first gateway removes the file that described it");
 	assert(gateways.readOpenAiCompatibleGateways().gateways.length === 0, "no gateway is left");
+
+
+	// ---- live-shape detection: output caps and modes off a mock gateway -----
+	const detect = await import("../src/openai-compatible-gateway-detect.js");
+	assert(detect.isNonChatGatewayMode("embedding") && detect.isNonChatGatewayMode("image_generation"), "known non-chat modes classify as non-chat");
+	assert(!detect.isNonChatGatewayMode("chat") && !detect.isNonChatGatewayMode(undefined) && !detect.isNonChatGatewayMode("some-future-mode"), "chat, silence and unknown modes stay chat-compatible");
+
+	const { createServer } = await import("node:http");
+	const litellm = createServer((req, res) => {
+		res.setHeader("content-type", "application/json");
+		if (req.url?.startsWith("/model/info")) {
+			res.end(JSON.stringify({ data: [
+				{ model_name: "chatty", model_info: { mode: "chat", max_input_tokens: 200000, max_output_tokens: 64000, supports_reasoning: true } },
+				{ model_name: "embedder", model_info: { mode: "embedding", max_input_tokens: 8192 } },
+				{ model_name: "quiet", model_info: {} },
+				{ model_name: "bad-cap", model_info: { mode: "chat", max_output_tokens: -5 } },
+			] }));
+			return;
+		}
+		res.end(JSON.stringify({ data: [{ id: "chatty" }, { id: "embedder" }, { id: "quiet" }, { id: "bad-cap" }] }));
+	});
+	await new Promise<void>((resolve) => litellm.listen(0, "127.0.0.1", resolve));
+	const litellmPort = (litellm.address() as any).port;
+	const litellmModels = (await detect.discoverGatewayModels(`http://127.0.0.1:${litellmPort}`, "test-key")).models;
+	litellm.close();
+	const chatty = litellmModels.find((model) => model.id === "chatty")!;
+	assert(chatty.maxTokens === 64000 && chatty.contextWindow === 200000 && chatty.mode === "chat", `LiteLLM's declared output cap and mode must be detected, got ${JSON.stringify(chatty)}`);
+	const embedder = litellmModels.find((model) => model.id === "embedder")!;
+	assert(embedder.mode === "embedding" && detect.isNonChatGatewayMode(embedder.mode), `a declared embedding mode must be detected and classify as non-chat, got ${JSON.stringify(embedder)}`);
+	const quiet = litellmModels.find((model) => model.id === "quiet")!;
+	assert(quiet.maxTokens === undefined && quiet.mode === undefined, `silence must stay silence, got ${JSON.stringify(quiet)}`);
+	assert(litellmModels.find((model) => model.id === "bad-cap")!.maxTokens === undefined, "a non-positive cap is not a declaration");
+
+	const openrouter = createServer((req, res) => {
+		res.setHeader("content-type", "application/json");
+		if (req.url?.startsWith("/model/info")) {
+			res.statusCode = 404;
+			res.end("{}");
+			return;
+		}
+		res.end(JSON.stringify({ data: [
+			{ id: "router-model", context_length: 1000000, top_provider: { context_length: 400000, max_completion_tokens: 32000 } },
+		] }));
+	});
+	await new Promise<void>((resolve) => openrouter.listen(0, "127.0.0.1", resolve));
+	const orPort = (openrouter.address() as any).port;
+	const orModels = (await detect.discoverGatewayModels(`http://127.0.0.1:${orPort}`, "test-key")).models;
+	openrouter.close();
+	assert(orModels[0].maxTokens === 32000, `OpenRouter's top_provider.max_completion_tokens must be detected, got ${JSON.stringify(orModels[0])}`);
 
 	fs.rmSync(tempHome, { recursive: true, force: true });
 	console.log("openai-compatible gateway capabilities smoke passed");

@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { LoginProviderCatalogEntry, PersistentAgentAiProfileStatus, ProviderModelCatalog } from "../types";
 import { useEscapeKey } from "./use-escape-key";
 import { apiFetch, fetchJson } from "../api";
 import { modelDisplayName } from "../model-names";
+import { applyToApproved, approvedCount, detectionAnswers, draftEffective, isNonChatMode, setAllApproved, trustDetected, type BulkDetection } from "../gateway-model-bulk";
 
 // Catalog entries carry a bare name ("Opus 4.8") or none; canonicalise so the
 // approval lists read the same as chips and Wallet ("Claude Opus 4.8").
@@ -311,10 +312,15 @@ export function ConfigureProfileModal({ providerId, providerName, existingProfil
 export type GatewayModelConfig = {
 	modelId: string;
 	label?: string;
+	/** Effective values: override over detection over default, resolved server-side. */
 	vision: boolean;
 	webSearch: boolean;
-	/** Null when nobody chose one, which means the default window applies. */
-	contextWindow: number | null;
+	reasoning: boolean;
+	contextWindow: number;
+	/** The fields the person pinned. Sparse: present means chosen, an explicit false included. */
+	overrides?: { vision?: boolean; reasoning?: boolean; contextWindow?: number };
+	/** What the gateway last declared, null per field where it did not answer. */
+	detected?: BulkDetection;
 };
 
 export type GatewayConfig = {
@@ -329,8 +335,8 @@ export type GatewayConfig = {
 };
 
 type GatewayListResponse = { gateways: GatewayConfig[]; errors: string[]; unreadable?: boolean; defaultContextWindow: number };
-type GatewayDetection = { id: string; vision: boolean | null; webSearch: boolean | null; contextWindow: number | null };
-type GatewayDiscoverResponse = { models: string[]; detected?: GatewayDetection[] };
+type GatewayDetection = BulkDetection & { id: string };
+type GatewayDiscoverResponse = { models: string[]; detected?: GatewayDetection[]; excludedNonChat?: Array<{ id: string; mode: string }> };
 type GatewaySaveResponse = { gateway?: GatewayConfig | null; error?: string };
 
 // What the runtime falls back to when a gateway model declares no window. Shown
@@ -358,10 +364,12 @@ function contextWindowError(value: string): string | null {
 	return null;
 }
 
-/** The first complaint any approved model's window has, or null when they are all fine. */
+/** The first complaint any approved model's window override has, or null when they are all fine. */
 function approvedContextWindowError(drafts: ModelDraft[]): string | null {
 	for (const draft of drafts) {
-		if (!draft.approved) continue;
+		// Only an override can be mistyped; a field following detection or the
+		// default always holds a number the server produced.
+		if (!draft.approved || draft.contextWindow === undefined) continue;
 		const error = contextWindowError(draft.contextWindow);
 		if (error) return `${draft.id}: ${error}`;
 	}
@@ -375,18 +383,26 @@ export function gatewaysUrl(gatewayId: string | null, suffix = ""): string {
 }
 
 /**
- * One row of the approve step: whether the model is approved, whether it can
- * look at images, whether it can search the web through the gateway, and how
- * much context it really has. Detection fills these in where a gateway
- * publishes them; the person editing them has the last word, which is why
- * every field stays enabled either way.
+ * One row of the approve step. Approval and the web search tick are plain
+ * values; images, reasoning and the context window live in two halves, the
+ * person's sparse overrides here and the gateway's detection snapshot beside
+ * them, resolved for display by draftEffective exactly as the server resolves
+ * them for the runtime. Web search is the exception because those searches can
+ * bill per use: detection never sets the tick, only the person does.
  */
 type ModelDraft = {
 	id: string;
 	approved: boolean;
-	vision: boolean;
+	/** The web search tick, effective as it stands. */
 	webSearch: boolean;
-	contextWindow: string;
+	/** Override: present only when the person set it. */
+	vision?: boolean;
+	/** Override: present only when the person set it. */
+	reasoning?: boolean;
+	/** Override: the window as typed. Present only when the person set it. */
+	contextWindow?: string;
+	/** What the gateway last declared about this model, from the saved snapshot or the last reload. */
+	detected: BulkDetection | null;
 	/**
 	 * The display name a gateway's model was saved under. Carried through the
 	 * form untouched: it is nobody's job here to edit it, but dropping it would
@@ -396,101 +412,336 @@ type ModelDraft = {
 	label?: string;
 };
 
-function draftFromParts(id: string, approved: boolean, saved: GatewayModelConfig | undefined, detected: GatewayDetection | undefined): ModelDraft {
+function draftFromParts(id: string, approved: boolean, saved: GatewayModelConfig | undefined, detected: BulkDetection | undefined): ModelDraft {
 	return {
 		id,
 		approved,
-		vision: saved?.vision ?? detected?.vision ?? false,
-		webSearch: saved?.webSearch ?? detected?.webSearch ?? false,
-		contextWindow: String(saved?.contextWindow ?? detected?.contextWindow ?? DEFAULT_CONTEXT_WINDOW),
+		// Web search is the one capability that can bill the user per use, so a
+		// gateway's declaration never pre-ticks it: "can search" is the gateway's
+		// statement, "search on my account" stays the user's. The declaration is
+		// still one explicit click away through "use detected".
+		webSearch: saved?.webSearch ?? false,
+		...(saved?.overrides?.vision !== undefined ? { vision: saved.overrides.vision } : {}),
+		...(saved?.overrides?.reasoning !== undefined ? { reasoning: saved.overrides.reasoning } : {}),
+		...(saved?.overrides?.contextWindow !== undefined ? { contextWindow: String(saved.overrides.contextWindow) } : {}),
+		detected: detected ?? saved?.detected ?? null,
 		...(saved?.label && saved.label !== id ? { label: saved.label } : {}),
 	};
 }
 
-function draftsToPayload(drafts: ModelDraft[]): Array<{ modelId: string; vision: boolean; webSearch: boolean; contextWindow: number; label?: string }> {
+/** Whether any row carries a hand-set field, the thing a reload deliberately keeps. */
+function anyAdjustments(drafts: ModelDraft[]): boolean {
+	return drafts.some((draft) => draft.vision !== undefined || draft.reasoning !== undefined || draft.contextWindow !== undefined);
+}
+
+function draftsToPayload(drafts: ModelDraft[]): Array<{ modelId: string; webSearch: boolean; overrides: { vision?: boolean; reasoning?: boolean; contextWindow?: number }; detected: BulkDetection | Record<string, never>; label?: string }> {
 	return drafts
 		.filter((draft) => draft.approved)
 		.map((draft) => ({
 			modelId: draft.id,
-			vision: draft.vision,
 			webSearch: draft.webSearch,
-			// Validated before we get here, so the fallback is only ever reached
-			// by a caller that skipped the check.
-			contextWindow: contextWindowError(draft.contextWindow) ? DEFAULT_CONTEXT_WINDOW : Number(draft.contextWindow.trim()),
+			// Only what the person actually chose travels as an override; the
+			// detection snapshot rides along so the store remembers what the
+			// gateway said between reloads.
+			overrides: {
+				...(draft.vision !== undefined ? { vision: draft.vision } : {}),
+				...(draft.reasoning !== undefined ? { reasoning: draft.reasoning } : {}),
+				// Validated before we get here, so the drop is only ever reached
+				// by a caller that skipped the check.
+				...(draft.contextWindow !== undefined && !contextWindowError(draft.contextWindow) ? { contextWindow: Number(draft.contextWindow.trim()) } : {}),
+			},
+			detected: draft.detected ?? {},
 			...(draft.label ? { label: draft.label } : {}),
 		}));
 }
 
 /**
- * Merge what the gateway just said with what is already on screen. Anything the
- * person touched survives a reload; a model the gateway stopped listing stays
- * visible so saving never drops it behind their back.
+ * Merge what the gateway just said with what is already on screen. The
+ * detection snapshot refreshes on every row the reload answered for; the
+ * person's overrides survive untouched, which is the whole contract. A model
+ * the gateway stopped listing stays visible so saving never drops it behind
+ * their back.
  */
 function mergeDrafts(current: ModelDraft[], discovered: string[], detections: GatewayDetection[], saved: GatewayModelConfig[]): ModelDraft[] {
 	const byId = new Map(current.map((draft) => [draft.id, draft]));
 	const detectedById = new Map(detections.map((detection) => [detection.id, detection]));
 	const savedById = new Map(saved.map((model) => [model.modelId, model]));
 	const ids = [...new Set([...discovered, ...saved.map((model) => model.modelId), ...current.map((draft) => draft.id)])].sort();
-	return ids.map((id) => byId.get(id) ?? draftFromParts(id, savedById.has(id), savedById.get(id), detectedById.get(id)));
+	return ids.map((id) => {
+		const existing = byId.get(id);
+		const detection = detectedById.get(id);
+		if (existing) return detection ? { ...existing, detected: detection } : existing;
+		return draftFromParts(id, savedById.has(id), savedById.get(id), detection);
+	});
 }
 
-export function GatewayModelApprovalList({ drafts, onChange, ariaLabel }: {
+/**
+ * Typing ids is the one path that can save a dozen models nobody looked at, so
+ * it says out loud what those models are being saved as.
+ */
+const MANUAL_IDS_DEFAULTS_NOTE = "Models added by id start with images, web search and reasoning off, and the default context window. Set them per model below or with the controls at the top of the list.";
+
+/** The context figure as a badge: compact where round, exact where not. */
+function formatContextFigure(tokens: number): string {
+	if (tokens >= 1000000 && tokens % 100000 === 0) return `${tokens / 1000000}M context`;
+	if (tokens % 1000 === 0) return `${tokens / 1000}k context`;
+	return `${tokens} context`;
+}
+
+/** One honest sentence for the adjust fold: what the gateway declared, field by field. */
+function detectedNote(detection: BulkDetection | null): string {
+	if (!detectionAnswers(detection)) return "This gateway did not say what this model can do.";
+	const parts: string[] = [];
+	if (detection!.vision != null) parts.push(`images ${detection!.vision ? "on" : "off"}`);
+	if (detection!.webSearch != null) parts.push(`web search ${detection!.webSearch ? "yes" : "no"}`);
+	if (detection!.reasoning != null) {
+		// The one ladder fact worth a word here: a top tier above the generic
+		// dial, capped by the deployment's own ceiling where it names one. The
+		// full rung list belongs to the room's effort dial, not to this sentence.
+		const ceiling = detection!.effortCeiling ?? null;
+		const declaredTop = detection!.thinkingLevels?.max === true ? "max" : detection!.thinkingLevels?.xhigh === true ? "xhigh" : null;
+		const top = declaredTop === "max" && (ceiling === "xhigh") ? "xhigh"
+			: declaredTop != null && ceiling != null && ceiling !== "xhigh" && ceiling !== "max" ? null
+			: declaredTop;
+		parts.push(`thinking ${detection!.reasoning ? (top ? `on, up to ${top}` : "on") : "off"}`);
+	}
+	if (detection!.contextWindow != null) parts.push(`context ${detection!.contextWindow}`);
+	if (detection!.maxTokens != null) parts.push(`max output ${detection!.maxTokens}`);
+	return `Gateway detected: ${parts.join(", ")}.`;
+}
+
+/**
+ * One honest line about models the discover step kept out of the list, or null
+ * when it kept nothing out.
+ */
+function nonChatExcludedNote(excluded: Array<{ id: string; mode: string }> | undefined): string | null {
+	const count = excluded?.length ?? 0;
+	if (count === 0) return null;
+	return count === 1
+		? "1 model the gateway lists is not a chat model and is not shown."
+		: `${count} models the gateway lists are not chat models and are not shown.`;
+}
+
+/**
+ * Whether "use detected" would change this row: an override sits on a field
+ * the gateway answered, or the tick differs from its declaration.
+ */
+function rowCanTrustDetection(draft: ModelDraft): boolean {
+	const detection = draft.detected;
+	if (!detectionAnswers(detection)) return false;
+	if (detection!.vision != null && draft.vision !== undefined) return true;
+	if (detection!.reasoning != null && draft.reasoning !== undefined) return true;
+	if (detection!.contextWindow != null && draft.contextWindow !== undefined) return true;
+	if (detection!.webSearch != null && draft.webSearch !== detection!.webSearch) return true;
+	return false;
+}
+
+export function GatewayModelApprovalList({ drafts, onChange, ariaLabel, askedGateway = false }: {
 	drafts: ModelDraft[];
 	onChange: (next: ModelDraft[]) => void;
 	ariaLabel: string;
+	/** True once this panel actually asked the gateway (a load or reload ran). A migrated config's empty snapshot says nothing about the gateway itself, so the undeclared line waits for a real answer. */
+	askedGateway?: boolean;
 }) {
+	// Starts empty on purpose. Seeded with the default it read as a value the
+	// list already held, when it is only a tool waiting to be pointed at one.
+	const [bulkWindow, setBulkWindow] = useState("");
+	// Which rows have their adjust fold open. Plain view state: nothing in it
+	// survives a save or belongs in the drafts.
+	const [openAdjust, setOpenAdjust] = useState<ReadonlySet<string>>(new Set());
 	function update(id: string, patch: Partial<ModelDraft>) {
 		onChange(drafts.map((draft) => (draft.id === id ? { ...draft, ...patch } : draft)));
 	}
+	function toggleAdjust(id: string) {
+		setOpenAdjust((current) => {
+			const next = new Set(current);
+			if (next.has(id)) next.delete(id);
+			else next.add(id);
+			return next;
+		});
+	}
+	const approved = approvedCount(drafts);
+	const allApproved = drafts.length > 0 && approved === drafts.length;
+	// An empty field is not a mistake here, it is the resting state, so it stays
+	// quiet and only disables apply. Anything typed is held to the same bounds.
+	const bulkWindowTouched = bulkWindow.trim().length > 0;
+	const bulkWindowError = bulkWindowTouched ? contextWindowError(bulkWindow) : null;
 	// Ticking web search for a model the gateway does not run it on fails in one
 	// of two ways, and only one of them is loud: some gateways reject the
 	// request outright, and others accept the field, ignore it, and answer
 	// without searching. The quiet one is the reason this cannot live in a hover
 	// tooltip, and the reason the hint ends by asking somebody to check.
 	const anyWebSearch = drafts.some((draft) => draft.approved && draft.webSearch);
+	const hasDetections = drafts.some((draft) => detectionAnswers(draft.detected));
+	const webSearchCount = drafts.filter((draft) => draft.approved && draft.webSearch).length;
 	return (
-		<div className="configure-profile-model-list gateway-model-list" role="group" aria-label={ariaLabel}>
+		<>
+			{askedGateway && drafts.length > 0 && !hasDetections && (
+				<p className="gateway-model-list-hint">This gateway does not say what its models can do. Set capabilities through adjust.</p>
+			)}
 			{anyWebSearch && (
 				<p className="gateway-model-list-hint">
-					Only tick web search for models your gateway really runs it on. A gateway that does not will either reject that
-					model's requests or quietly answer without searching, so check with a question about something current.
+					Web search is on for {webSearchCount === 1 ? "1 model" : `${webSearchCount} models`}. The gateway may bill those searches; untick any model you would rather not pay for.
 				</p>
 			)}
+		<div className="configure-profile-model-list gateway-model-list" role="group" aria-label={ariaLabel}>
+			{drafts.length > 1 && (
+				<div className="configure-profile-model-option gateway-model-row gateway-model-bulk-row">
+					<label className="gateway-model-approve" title={allApproved ? "Unapprove every model in this list" : "Approve every model in this list"}>
+						<input
+							type="checkbox"
+							checked={allApproved}
+							ref={(node) => {
+								// Half a list is neither ticked nor unticked, and the box
+								// should say so rather than pick a side.
+								if (node) node.indeterminate = approved > 0 && !allApproved;
+							}}
+							aria-label="Approve all models"
+							onChange={() => onChange(setAllApproved(drafts, !allApproved))}
+						/>
+						<span className="configure-profile-model-name">{`${approved} of ${drafts.length} approved`}</span>
+					</label>
+					{/* The bulk pairs write the person's choice onto every approved
+					    row at once, which makes each of them an override: they exist
+					    for the gateway that declares nothing, and for overruling one
+					    that declares wrongly. */}
+					<div className="gateway-model-vision gateway-model-bulk-cell">
+						<span className="gateway-model-bulk-label">images</span>
+						<span className="gateway-model-bulk-seg">
+							<button type="button" title="Set images on for every approved model the gateway does not rule out" onClick={() => onChange(applyToApproved(drafts, { vision: true }))}>on</button>
+							<button type="button" title="Set images off for every approved model, as your choice over detection" onClick={() => onChange(applyToApproved(drafts, { vision: false }))}>off</button>
+						</span>
+					</div>
+					<div className="gateway-model-websearch gateway-model-bulk-cell">
+						<span className="gateway-model-bulk-label">web search</span>
+						<span className="gateway-model-bulk-seg">
+							<button type="button" title="Turn web search on for every approved model" onClick={() => onChange(applyToApproved(drafts, { webSearch: true }))}>on</button>
+							<button type="button" title="Turn web search off for every approved model" onClick={() => onChange(applyToApproved(drafts, { webSearch: false }))}>off</button>
+						</span>
+					</div>
+					<div className="gateway-model-reasoning gateway-model-bulk-cell">
+						<span className="gateway-model-bulk-label">thinking</span>
+						<span className="gateway-model-bulk-seg">
+							<button type="button" title="Set thinking on for every approved model the gateway does not rule out" onClick={() => onChange(applyToApproved(drafts, { reasoning: true }))}>on</button>
+							<button type="button" title="Set thinking off for every approved model, as your choice over detection" onClick={() => onChange(applyToApproved(drafts, { reasoning: false }))}>off</button>
+						</span>
+					</div>
+					<div className="gateway-model-window gateway-model-bulk-cell">
+						<span className="gateway-model-window-label">context</span>
+						<input
+							className={`launcher-path-input gateway-model-window-input${bulkWindowError ? " invalid" : ""}`}
+							type="text"
+							inputMode="numeric"
+							placeholder="set all to…"
+							value={bulkWindow}
+							aria-label="Context window to apply to all approved models"
+							aria-invalid={bulkWindowError ? true : undefined}
+							onChange={(e) => setBulkWindow(e.target.value)}
+						/>
+						<button
+							type="button"
+							className="gateway-model-bulk-button"
+							disabled={!bulkWindowTouched || Boolean(bulkWindowError)}
+							title={bulkWindowError ?? (bulkWindowTouched ? "Give every approved model this context window, as your choice over detection" : "Type a context window first")}
+							onClick={() => onChange(applyToApproved(drafts, { contextWindow: bulkWindow.trim() }))}
+						>
+							apply
+						</button>
+					</div>
+					{/* Use detected belongs to the whole list rather than to a
+					    column, and sits at the far end saying so. */}
+					{hasDetections && (
+						<button
+							type="button"
+							className="gateway-model-bulk-button gateway-model-bulk-detected"
+							title="Follow the gateway's detection: clears your per-model choices for the fields it answers, and sets the web search tick to what it declares"
+							onClick={() => onChange(trustDetected(drafts))}
+						>
+							use detected
+						</button>
+					)}
+				</div>
+			)}
 			{drafts.map((draft) => {
-				// An unapproved model's window is not going anywhere, so it is not
-				// worth complaining about; the row people are actually saving is.
-				const windowError = draft.approved ? contextWindowError(draft.contextWindow) : null;
+				const effective = draftEffective(draft, DEFAULT_CONTEXT_WINDOW);
+				// Only an override can be mistyped, and only an approved row is
+				// being saved; everything else keeps quiet.
+				const windowError = draft.approved && draft.contextWindow !== undefined ? contextWindowError(draft.contextWindow) : null;
+				const effectiveWindow = contextWindowError(effective.contextWindow) ? null : Number(effective.contextWindow.trim());
+				const adjustOpen = openAdjust.has(draft.id);
 				return (
 					<div key={draft.id} className="configure-profile-model-option gateway-model-row">
 						<label className="gateway-model-approve" title={draft.id}>
 							<input type="checkbox" checked={draft.approved} onChange={() => update(draft.id, { approved: !draft.approved })} />
 							<span className="configure-profile-model-name">{draft.id}</span>
 						</label>
-						<label className="gateway-model-vision" title="Send attached images to this model instead of a placeholder">
-							<input type="checkbox" checked={draft.vision} onChange={() => update(draft.id, { vision: !draft.vision })} />
-							<span>supports images</span>
-						</label>
-						<label className="gateway-model-websearch" title="Let this model search the web through the gateway's own search, on top of the room's web search tool">
+						{/* Facts, not controls: what the model effectively is, from the
+						    person's choice where there is one and the gateway's word
+						    where there is not. Changing them lives behind adjust. */}
+						<span className="gateway-model-facts">
+							{effective.vision && <span className="gateway-model-fact" title={draft.vision !== undefined ? "Images on, set by you" : "Images on, declared by the gateway"}>images</span>}
+							{effective.reasoning && <span className="gateway-model-fact" title={draft.reasoning !== undefined ? "Thinking on, set by you" : "Thinking on, declared by the gateway"}>thinking</span>}
+							<span className="gateway-model-fact" title={effectiveWindow == null ? "The context window needs fixing under adjust" : `${effectiveWindow} tokens${draft.contextWindow !== undefined ? ", set by you" : draft.detected?.contextWindow != null ? ", declared by the gateway" : ", the default"}`}>
+								{effectiveWindow == null ? "context not set" : formatContextFigure(effectiveWindow)}
+							</span>
+						</span>
+						<label className="gateway-model-websearch" title="Let this model search the web through the gateway's own search, on top of the room's web search tool. The gateway may bill these searches.">
 							<input type="checkbox" checked={draft.webSearch} onChange={() => update(draft.id, { webSearch: !draft.webSearch })} />
-							<span>supports web search</span>
+							<span>web search</span>
 						</label>
-						<label className="gateway-model-window">
-							<span className="gateway-model-window-label">context</span>
-							<input
-								className={`launcher-path-input gateway-model-window-input${windowError ? " invalid" : ""}`}
-								type="text"
-								inputMode="numeric"
-								value={draft.contextWindow}
-								aria-label={`Context window for ${draft.id}`}
-								aria-invalid={windowError ? true : undefined}
-								onChange={(e) => update(draft.id, { contextWindow: e.target.value })}
-							/>
-						</label>
+						<button type="button" className="gateway-model-adjust" aria-expanded={adjustOpen} onClick={() => toggleAdjust(draft.id)}>adjust</button>
+						{adjustOpen && (
+							<div className="gateway-model-adjust-fold">
+								<div className="gateway-adjust-field">
+									<span className="gateway-model-bulk-label">images</span>
+									<span className="gateway-model-bulk-seg">
+										<button type="button" className={effective.vision ? "seg-active" : ""} title="Send attached images to this model, as your choice" onClick={() => update(draft.id, { vision: true })}>on</button>
+										<button type="button" className={effective.vision ? "" : "seg-active"} title="Keep images away from this model, as your choice" onClick={() => update(draft.id, { vision: false })}>off</button>
+									</span>
+								</div>
+								<div className="gateway-adjust-field">
+									<span className="gateway-model-bulk-label">thinking</span>
+									<span className="gateway-model-bulk-seg">
+										<button type="button" className={effective.reasoning ? "seg-active" : ""} title="Forward the room's thinking effort, the Faster to Smarter dial, to this model, as your choice" onClick={() => update(draft.id, { reasoning: true })}>on</button>
+										<button type="button" className={effective.reasoning ? "" : "seg-active"} title="Never ask this model for extra thinking, as your choice" onClick={() => update(draft.id, { reasoning: false })}>off</button>
+									</span>
+								</div>
+								<label className="gateway-adjust-field gateway-model-window">
+									<span className="gateway-model-window-label">context</span>
+									<input
+										className={`launcher-path-input gateway-model-window-input${windowError ? " invalid" : ""}`}
+										type="text"
+										inputMode="numeric"
+										value={effective.contextWindow}
+										aria-label={`Context window for ${draft.id}`}
+										aria-invalid={windowError ? true : undefined}
+										onChange={(e) => update(draft.id, { contextWindow: e.target.value })}
+									/>
+								</label>
+								<div className="gateway-model-detected-row">
+									<span className="gateway-model-detected-note">{detectedNote(draft.detected)}</span>
+									{rowCanTrustDetection(draft) && (
+										<button
+											type="button"
+											className="gateway-model-bulk-button"
+											title="Clear your choices for the fields the gateway answered, so this model follows detection again"
+											onClick={() => onChange(drafts.map((row) => (row.id === draft.id ? trustDetected([row])[0] : row)))}
+										>
+											use detected
+										</button>
+									)}
+								</div>
+							</div>
+						)}
+						{isNonChatMode(draft.detected?.mode) && (
+							<span className="gateway-model-window-error">{`The gateway says this model's mode is "${draft.detected?.mode}", not chat. A room locked to it cannot answer.`}</span>
+						)}
 						{windowError && <span className="gateway-model-window-error">{windowError}</span>}
 					</div>
 				);
 			})}
 		</div>
+		</>
 	);
 }
 
@@ -511,6 +762,10 @@ export function GatewayConfigModal({ gatewayId, knownLabel, onClose, onSaved }: 
 	const [token, setToken] = useState("");
 	const [drafts, setDrafts] = useState<ModelDraft[]>([]);
 	const [discoveredOnce, setDiscoveredOnce] = useState(false);
+	// One quiet reassurance after a reload: hand-set fields survived it.
+	const [reloadKeptNote, setReloadKeptNote] = useState(false);
+	// One honest line about models the discover step kept out of the list.
+	const [excludedNote, setExcludedNote] = useState<string | null>(null);
 	const [manualMode, setManualMode] = useState(false);
 	const [modelsText, setModelsText] = useState("");
 	const [maintenanceModel, setMaintenanceModel] = useState("");
@@ -574,7 +829,10 @@ export function GatewayConfigModal({ gatewayId, knownLabel, onClose, onSaved }: 
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify({ baseUrl, key: token }),
 			});
-			setDrafts((current) => mergeDrafts(current, result.models, result.detected ?? [], saved?.roomModels ?? []));
+			const merged = mergeDrafts(drafts, result.models, result.detected ?? [], saved?.roomModels ?? []);
+			setDrafts(merged);
+			setReloadKeptNote(anyAdjustments(merged));
+			setExcludedNote(nonChatExcludedNote(result.excludedNonChat));
 			setDiscoveredOnce(true);
 			setManualMode(false);
 		} catch (e) {
@@ -590,7 +848,10 @@ export function GatewayConfigModal({ gatewayId, knownLabel, onClose, onSaved }: 
 		? manualIds.map((id) => drafts.find((draft) => draft.id === id) ?? draftFromParts(id, true, undefined, undefined))
 		: drafts;
 	const approvedIds = effectiveDrafts.filter((draft) => draft.approved).map((draft) => draft.id);
-	const effectiveMaintenanceModel = maintenanceModel && approvedIds.includes(maintenanceModel) ? maintenanceModel : approvedIds[0] ?? "";
+	// The maintenance dropdown never offers a model the gateway declares
+	// non-chat: Memorize and Review are chat turns and would never work on one.
+	const maintenanceEligibleIds = effectiveDrafts.filter((draft) => draft.approved && !isNonChatMode(draft.detected?.mode)).map((draft) => draft.id);
+	const effectiveMaintenanceModel = maintenanceModel && maintenanceEligibleIds.includes(maintenanceModel) ? maintenanceModel : maintenanceEligibleIds[0] ?? approvedIds[0] ?? "";
 
 	async function save() {
 		const windowError = approvedContextWindowError(effectiveDrafts);
@@ -641,7 +902,7 @@ export function GatewayConfigModal({ gatewayId, knownLabel, onClose, onSaved }: 
 
 	return (
 		<div className="room-settings-overlay configure-profile-overlay" role="dialog" aria-modal="true" aria-label={title} onClick={onClose}>
-			<div className="room-settings-modal configure-profile-modal" onClick={(e) => e.stopPropagation()}>
+			<div className="room-settings-modal configure-profile-modal gateway-config-modal" onClick={(e) => e.stopPropagation()}>
 				<div className="room-settings-head">
 					<div className="room-settings-title-block">
 						<div className="room-settings-title-row">
@@ -682,7 +943,9 @@ export function GatewayConfigModal({ gatewayId, knownLabel, onClose, onSaved }: 
 						)}
 						{!manualMode && (discoveredOnce || drafts.length > 0) && (
 							<>
-								<GatewayModelApprovalList drafts={drafts} onChange={setDrafts} ariaLabel="Room models" />
+								<GatewayModelApprovalList drafts={drafts} onChange={setDrafts} ariaLabel="Room models" askedGateway={discoveredOnce} />
+								{excludedNote && <p className="cli-note">{excludedNote}</p>}
+								{reloadKeptNote && <p className="cli-note">Your adjustments are kept. Use detected returns to the gateway's answers.</p>}
 								<div className="gateway-discover-row">
 									<button className="ai-profile-foot-link" disabled={!canDiscover} onClick={() => void discover()}>{discovering ? "reloading…" : "reload from gateway"}</button>
 									<button className="ai-profile-foot-link" disabled={saving} onClick={() => setManualMode(true)}>enter ids manually</button>
@@ -699,11 +962,14 @@ export function GatewayConfigModal({ gatewayId, knownLabel, onClose, onSaved }: 
 									rows={4}
 								/>
 								{effectiveDrafts.length > 0 && (
-									<GatewayModelApprovalList
-										drafts={effectiveDrafts}
-										onChange={(next) => setDrafts((current) => [...current.filter((draft) => !next.some((entry) => entry.id === draft.id)), ...next])}
-										ariaLabel="Room models"
-									/>
+									<>
+										<p className="cli-note">{MANUAL_IDS_DEFAULTS_NOTE}</p>
+										<GatewayModelApprovalList
+											drafts={effectiveDrafts}
+											onChange={(next) => setDrafts((current) => [...current.filter((draft) => !next.some((entry) => entry.id === draft.id)), ...next])}
+											ariaLabel="Room models"
+										/>
+									</>
 								)}
 								<div className="gateway-discover-row">
 									<button className="ai-profile-foot-link" disabled={!canDiscover} onClick={() => { setManualMode(false); void discover(); }}>load from gateway instead</button>
@@ -714,7 +980,7 @@ export function GatewayConfigModal({ gatewayId, knownLabel, onClose, onSaved }: 
 					<div className="configure-profile-field">
 						<h3>Memorize &amp; Review</h3>
 						<select className="configure-profile-select" value={effectiveMaintenanceModel} onChange={(e) => setMaintenanceModel(e.target.value)} aria-label="Maintenance model" disabled={approvedIds.length === 0}>
-							{approvedIds.map((id) => (
+							{maintenanceEligibleIds.map((id) => (
 								<option key={id} value={id}>{catalogModelName({ id })}</option>
 							))}
 						</select>
@@ -743,6 +1009,11 @@ export function GatewayApproveModelsModal({ gatewayId, onClose, onSaved }: { gat
 	const [drafts, setDrafts] = useState<ModelDraft[]>([]);
 	const [discovering, setDiscovering] = useState(false);
 	const [discoverError, setDiscoverError] = useState<string | null>(null);
+	const [reloadKeptNote, setReloadKeptNote] = useState(false);
+	// One honest line about models the discover step kept out of the list.
+	const [excludedNote, setExcludedNote] = useState<string | null>(null);
+	// Only a real answer from the gateway justifies claiming it says nothing.
+	const [askedGateway, setAskedGateway] = useState(false);
 	const [manualMode, setManualMode] = useState(false);
 	const [modelsText, setModelsText] = useState("");
 	const [maintenanceModel, setMaintenanceModel] = useState("");
@@ -760,7 +1031,11 @@ export function GatewayApproveModelsModal({ gatewayId, onClose, onSaved }: { gat
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify({ baseUrl: gateway.baseUrl }),
 			});
-			setDrafts(mergeDrafts(keepDrafts, result.models, result.detected ?? [], gateway.roomModels));
+			const merged = mergeDrafts(keepDrafts, result.models, result.detected ?? [], gateway.roomModels);
+			setDrafts(merged);
+			setReloadKeptNote(anyAdjustments(merged));
+			setExcludedNote(nonChatExcludedNote(result.excludedNonChat));
+			setAskedGateway(true);
 			setManualMode(false);
 		} catch (e) {
 			setDiscoverError((e as Error).message);
@@ -807,7 +1082,10 @@ export function GatewayApproveModelsModal({ gatewayId, onClose, onSaved }: { gat
 		? manualIds.map((id) => drafts.find((draft) => draft.id === id) ?? draftFromParts(id, true, undefined, undefined))
 		: drafts;
 	const approvedIds = effectiveDrafts.filter((draft) => draft.approved).map((draft) => draft.id);
-	const effectiveMaintenanceModel = maintenanceModel && approvedIds.includes(maintenanceModel) ? maintenanceModel : approvedIds[0] ?? "";
+	// The maintenance dropdown never offers a model the gateway declares
+	// non-chat: Memorize and Review are chat turns and would never work on one.
+	const maintenanceEligibleIds = effectiveDrafts.filter((draft) => draft.approved && !isNonChatMode(draft.detected?.mode)).map((draft) => draft.id);
+	const effectiveMaintenanceModel = maintenanceModel && maintenanceEligibleIds.includes(maintenanceModel) ? maintenanceModel : maintenanceEligibleIds[0] ?? approvedIds[0] ?? "";
 
 	async function save() {
 		if (!config) return;
@@ -847,7 +1125,7 @@ export function GatewayApproveModelsModal({ gatewayId, onClose, onSaved }: { gat
 
 	return (
 		<div className="room-settings-overlay configure-profile-overlay" role="dialog" aria-modal="true" aria-label="Approve gateway models" onClick={onClose}>
-			<div className="room-settings-modal configure-profile-modal" onClick={(e) => e.stopPropagation()}>
+			<div className="room-settings-modal configure-profile-modal gateway-config-modal" onClick={(e) => e.stopPropagation()}>
 				<div className="room-settings-head">
 					<div className="room-settings-title-block">
 						<div className="room-settings-title-row">
@@ -875,7 +1153,9 @@ export function GatewayApproveModelsModal({ gatewayId, onClose, onSaved }: { gat
 								)}
 								{!discovering && !manualMode && (
 									<>
-										<GatewayModelApprovalList drafts={drafts} onChange={setDrafts} ariaLabel="Room models" />
+										<GatewayModelApprovalList drafts={drafts} onChange={setDrafts} ariaLabel="Room models" askedGateway={askedGateway} />
+										{excludedNote && <p className="cli-note">{excludedNote}</p>}
+										{reloadKeptNote && <p className="cli-note">Your adjustments are kept. Use detected returns to the gateway's answers.</p>}
 										<div className="gateway-discover-row">
 											<button className="ai-profile-foot-link" disabled={saving} onClick={() => void discover(config, drafts)}>reload from gateway</button>
 											<button className="ai-profile-foot-link" disabled={saving} onClick={() => setManualMode(true)}>enter ids manually</button>
@@ -892,11 +1172,14 @@ export function GatewayApproveModelsModal({ gatewayId, onClose, onSaved }: { gat
 											rows={4}
 										/>
 										{effectiveDrafts.length > 0 && (
-											<GatewayModelApprovalList
-												drafts={effectiveDrafts}
-												onChange={(next) => setDrafts((current) => [...current.filter((draft) => !next.some((entry) => entry.id === draft.id)), ...next])}
-												ariaLabel="Room models"
-											/>
+											<>
+												<p className="cli-note">{MANUAL_IDS_DEFAULTS_NOTE}</p>
+												<GatewayModelApprovalList
+													drafts={effectiveDrafts}
+													onChange={(next) => setDrafts((current) => [...current.filter((draft) => !next.some((entry) => entry.id === draft.id)), ...next])}
+													ariaLabel="Room models"
+												/>
+											</>
 										)}
 										<div className="gateway-discover-row">
 											<button className="ai-profile-foot-link" disabled={saving} onClick={() => setManualMode(false)}>back to the model list</button>
@@ -907,7 +1190,7 @@ export function GatewayApproveModelsModal({ gatewayId, onClose, onSaved }: { gat
 							<div className="configure-profile-field">
 								<h3>Memorize and Review</h3>
 								<select className="configure-profile-select" value={effectiveMaintenanceModel} onChange={(e) => setMaintenanceModel(e.target.value)} aria-label="Maintenance model" disabled={approvedIds.length === 0}>
-									{approvedIds.map((id) => (
+									{maintenanceEligibleIds.map((id) => (
 										<option key={id} value={id}>{catalogModelName({ id })}</option>
 									))}
 								</select>
@@ -936,12 +1219,20 @@ const POPULAR_PROVIDER_ORDER = ["google", "mistral", "openrouter", "deepseek", "
 // "Add provider" flow on the AI setup page: the full raw-Pi sign-in surface —
 // subscription (OAuth) providers plus API-key providers — followed by the
 // approve-models step that creates the provider's profile.
-export function AddProviderPanel({ onProfilesChanged, onKeyFormOpen, keyFormBlocked }: {
+export function AddProviderPanel({ onProfilesChanged, onKeyFormOpen, keyFormBlocked, profilesSignature, trailing }: {
 	onProfilesChanged: () => void;
 	/** Told when this panel opens a key form, so the page can close any other one. */
 	onKeyFormOpen?: () => void;
 	/** True while a key form outside this panel is open; this panel closes its own. */
 	keyFormBlocked?: boolean;
+	/** A string that changes whenever the profile list above changes. Removing a
+	 *  gateway-backed profile up there deletes the gateway down here, and a signed-out
+	 *  provider becomes addable again, so both of this panel's lists are re-read when
+	 *  it moves. Passing nothing simply keeps the open-time refresh. */
+	profilesSignature?: string;
+	/** Rendered at the right end of the toggle row (the page's Refresh link),
+	 *  so the two controls share one line under the profile list. */
+	trailing?: ReactNode;
 }) {
 	const [open, setOpen] = useState(false);
 	const [providers, setProviders] = useState<LoginProviderCatalogEntry[] | null>(null);
@@ -950,9 +1241,9 @@ export function AddProviderPanel({ onProfilesChanged, onKeyFormOpen, keyFormBloc
 	const [configureProvider, setConfigureProvider] = useState<{ id: string; name: string } | null>(null);
 	// null id means "adding a new one"; the modal is closed when the whole slot is null.
 	const [gatewayEdit, setGatewayEdit] = useState<{ id: string | null; label?: string } | null>(null);
-	const [gateways, setGateways] = useState<GatewayConfig[]>([]);
 	// A gateways file that cannot be read is not an empty one, and the panel must
-	// not quietly offer to add a first gateway on top of a list it cannot see.
+	// not quietly offer to add a gateway on top of a list it cannot see. The list
+	// itself is not kept: nothing down here renders it any more.
 	const [gatewayNotice, setGatewayNotice] = useState<string | null>(null);
 	const [filter, setFilter] = useState("");
 	const [addedNote, setAddedNote] = useState<string | null>(null);
@@ -1000,7 +1291,6 @@ export function AddProviderPanel({ onProfilesChanged, onKeyFormOpen, keyFormBloc
 	async function refreshGateways() {
 		try {
 			const result = await fetchJson<GatewayListResponse>(gatewaysUrl(null));
-			setGateways(result.gateways);
 			setGatewayNotice(result.unreadable ? result.errors[0] ?? "Saved gateways could not be read." : null);
 		} catch {
 			// Leave whatever the panel is already showing rather than replacing it
@@ -1008,11 +1298,15 @@ export function AddProviderPanel({ onProfilesChanged, onKeyFormOpen, keyFormBloc
 		}
 	}
 
+	// Both lists are read on open, and read again whenever the profile list above
+	// moves. That list is where a gateway-backed profile gets removed, and the
+	// server deletes the gateway with it; without this the row below stayed on
+	// screen offering to edit something that no longer exists.
 	useEffect(() => {
 		if (!open) return;
 		void refreshProviders();
 		void refreshGateways();
-	}, [open]);
+	}, [open, profilesSignature]);
 
 	async function removeKey(provider: LoginProviderCatalogEntry) {
 		login.setError(null);
@@ -1075,12 +1369,11 @@ export function AddProviderPanel({ onProfilesChanged, onKeyFormOpen, keyFormBloc
 					{open ? "Add another provider ▴" : "Add another provider ▾"}
 				</button>
 				{addedNote && !open && <span className="add-provider-added-note">{addedNote}</span>}
+				{trailing && <span className="add-provider-toggle-trailing">{trailing}</span>}
 			</span>
 			{open && (
 				<div className="ai-setup-block add-provider-block">
-					<p className="cli-note">
-						Sign in with any provider the runtime supports. After signing in you approve which models it may use.
-					</p>
+					<p className="cli-note">Sign in, then approve the models it may use.</p>
 					{loadError && <div className="checkpoint-proposal-error">{loadError}</div>}
 					{!providers && !loadError && <p className="cli-note">Loading providers…</p>}
 					{login.error && <div className="checkpoint-proposal-error">{login.error}</div>}
@@ -1127,20 +1420,15 @@ export function AddProviderPanel({ onProfilesChanged, onKeyFormOpen, keyFormBloc
 						</div>
 					)}
 					<div className="add-provider-group">
-						<h3>Custom gateways</h3>
+						<h3>Gateways</h3>
 						{gatewayNotice && <div className="checkpoint-proposal-error">{gatewayNotice}</div>}
+						{/* This group only adds. A gateway that exists is a profile in the
+						    list above, and that row's menu already carries every way of
+						    changing or ending it; a second copy of those actions down here
+						    was a second place to look and a second place to be wrong. */}
 						<div className="add-provider-rows">
-							{gateways.map((gateway) => (
-								<div key={gateway.id} className="add-provider-row">
-									<span className="add-provider-name">{gateway.label}</span>
-									<span className="add-provider-side">
-										<span className="add-provider-configured">configured</span>
-										<button className="ai-profile-foot-link" onClick={() => setGatewayEdit({ id: gateway.id, label: gateway.label })}>Edit gateway</button>
-									</span>
-								</div>
-							))}
 							<div className="add-provider-row">
-								<span className="add-provider-name">OpenAI-compatible endpoint · LiteLLM, vLLM, OpenRouter, company proxies</span>
+								<span className="add-provider-name">OpenAI-compatible gateway · LiteLLM, vLLM, company proxies</span>
 								<span className="add-provider-side">
 									<button className="ai-profile-foot-link" onClick={() => setGatewayEdit({ id: null })}>Add gateway</button>
 								</span>
@@ -1181,7 +1469,7 @@ export function AddProviderPanel({ onProfilesChanged, onKeyFormOpen, keyFormBloc
 									</div>
 								))}
 							</div>
-							<p className="cli-note">Keys stay on this device, in the local auth store.</p>
+							<p className="cli-note">Keys stay on this device.</p>
 						</div>
 					)}
 				</div>

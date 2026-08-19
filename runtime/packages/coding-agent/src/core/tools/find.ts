@@ -352,14 +352,15 @@ export function createFindToolDefinition(
 								return;
 							}
 							const output = lines.join("\n");
-							if (isDirectoryEnumerationPermissionError(stderr)) {
-								settle(() => reject(new Error(directoryEnumerationPermissionMessage(searchPath, stderr.trim()))));
-								return;
-							}
-							if (code !== 0) {
-								const errorMsg = stderr.trim() || `fd exited with code ${code}`;
-								if (!output) {
-									settle(() => reject(new Error(errorMsg)));
+							if (!output) {
+								// fd exits 0 and still prints "Permission denied" to stderr for unreadable
+								// subdirectories, so stderr alone must not turn partial results into an error.
+								if (isDirectoryEnumerationPermissionError(stderr)) {
+									settle(() => reject(new Error(directoryEnumerationPermissionMessage(searchPath, stderr.trim()))));
+									return;
+								}
+								if (code !== 0) {
+									settle(() => reject(new Error(stderr.trim() || `fd exited with code ${code}`)));
 									return;
 								}
 							}

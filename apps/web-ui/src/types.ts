@@ -1056,6 +1056,8 @@ export interface PersistentAgentStatus {
 	description?: string;
 	role?: string;
 	model?: { provider: string; model: string } | string;
+	/** The model this room's picker last settled on: an empty room's memory across profile switches. Display/seeding only; execution always rides the active profile. */
+	preferredModel?: { provider: string; model: string };
 	l1a: { path: string; exists: boolean; bytes?: number };
 	l1b: { path: string; exists: boolean; bytes?: number; sections: string[]; missingSections: string[] };
 	sectionRegistry: { path: string; exists: boolean; missingSections: string[] };

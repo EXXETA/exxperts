@@ -148,6 +148,18 @@ export interface PersistentRoomEnabledSkillStatus {
 	sha256: string;
 	currentSha256: string | null;
 	status: "ok" | "hash-mismatch" | "missing";
+	/** Execution approval in this room, pinned to the skill's whole-content digest:
+	 *  "none" (never approved), "approved" (this exact version may run its files),
+	 *  "drifted" (approved once, but the files changed since). */
+	executeState: "none" | "approved" | "drifted";
+	/** GET view only: whether this skill can be approved for execution at all. */
+	executable?: boolean;
+	/** GET view only: the files bundled next to SKILL.md (SKILL.md excluded). */
+	bundledFiles?: string[];
+	/** GET view only: the author marked this skill for manual invocation only, so
+	 *  the model never auto-runs it. Rooms have no manual trigger yet, so it is
+	 *  inert once enabled; the UI says so. */
+	manualOnly?: boolean;
 }
 
 export interface PersistentRoomSkillSettingsResponse {
@@ -164,7 +176,7 @@ export function fetchPersistentRoomSkillSettings(agentId: PersistentAgentId): Pr
 	);
 }
 
-export function updatePersistentRoomSkillSetting(agentId: PersistentAgentId, action: "enable" | "disable", name: string): Promise<PersistentRoomSkillSettingsResponse> {
+export function updatePersistentRoomSkillSetting(agentId: PersistentAgentId, action: "enable" | "disable" | "approve-execution" | "revoke-execution", name: string): Promise<PersistentRoomSkillSettingsResponse> {
 	return fetchJson<PersistentRoomSkillSettingsResponse>(
 		`/api/persistent-agents/${encodeURIComponent(agentId)}/skill-settings`,
 		{

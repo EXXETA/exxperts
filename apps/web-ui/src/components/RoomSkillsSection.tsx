@@ -19,6 +19,9 @@ export function RoomSkillsSection({ status, onOpenSkillsLibrary }: { status: Per
 	const [library, setLibrary] = useState<SkillListItem[] | null>(null);
 	const [enabled, setEnabled] = useState<PersistentRoomEnabledSkillStatus[] | null>(null);
 	const [busyName, setBusyName] = useState<string | null>(null);
+	// Execution approval (executable skills): its own busy name so the enable/remove
+	// buttons keep their own labels while an approval is in flight.
+	const [execBusyName, setExecBusyName] = useState<string | null>(null);
 	const [error, setError] = useState<string | null>(null);
 	// Re-review gate (skills MR-5 hardening): a drifted skill can only be
 	// re-enabled after its CURRENT body is shown here — no sight-unseen re-adoption.
@@ -50,13 +53,28 @@ export function RoomSkillsSection({ status, onOpenSkillsLibrary }: { status: Per
 		setBusyName(name);
 		setError(null);
 		try {
-			const response = await updatePersistentRoomSkillSetting(status.id, action, name);
-			setEnabled(response.skills);
+			await updatePersistentRoomSkillSetting(status.id, action, name);
+			// The PUT view carries no execution capability, so the pane re-reads the
+			// full settings view and the approval rows stay accurate.
+			setEnabled((await fetchPersistentRoomSkillSettings(status.id)).skills);
 			if (action === "enable") setReviewing(null);
 		} catch (e) {
 			setError((e as Error).message);
 		} finally {
 			setBusyName(null);
+		}
+	}
+
+	async function setExecution(name: string, action: "approve-execution" | "revoke-execution") {
+		setExecBusyName(name);
+		setError(null);
+		try {
+			await updatePersistentRoomSkillSetting(status.id, action, name);
+			setEnabled((await fetchPersistentRoomSkillSettings(status.id)).skills);
+		} catch (e) {
+			setError((e as Error).message);
+		} finally {
+			setExecBusyName(null);
 		}
 	}
 
@@ -139,6 +157,11 @@ export function RoomSkillsSection({ status, onOpenSkillsLibrary }: { status: Per
 						{enabled.map((state) => {
 							const entry = libraryByName.get(state.name);
 							const isOk = state.status === "ok";
+							// Execution approval only exists for a skill that can be approved
+							// at all and actually carries files; everything else renders as before.
+							const bundledFiles = state.bundledFiles ?? [];
+							const showExecution = Boolean(state.executable) && bundledFiles.length > 0;
+							const manualOnly = Boolean(state.manualOnly);
 							return (
 								<div key={state.name} className="room-skills-row">
 									<div className="room-skills-row-main">
@@ -153,8 +176,40 @@ export function RoomSkillsSection({ status, onOpenSkillsLibrary }: { status: Per
 										{state.status === "missing" && (
 											<span className="room-skills-warn">Removed from the library. No longer injected. Remove to clear, or re-import and re-enable.</span>
 										)}
+										{manualOnly && (
+											<span className="room-skills-warn">The author marked this skill for manual use only, so the room never runs it on its own. Rooms cannot trigger it manually yet, so it stays inactive here for now.</span>
+										)}
+										{showExecution && (
+											<div className="room-skills-exec">
+												{state.executeState === "approved" && (
+													<span className="room-skills-exec-title">This exact version may run its files in this room.</span>
+												)}
+												{state.executeState === "drifted" && (
+													<span className="room-skills-warn">The skill's files changed since you approved them. It will not run until you approve this version.</span>
+												)}
+												{state.executeState !== "approved" && state.executeState !== "drifted" && (
+													<span className="room-skills-exec-title">Asks to run its bundled files in this room.</span>
+												)}
+												<ul className="room-skills-files">
+													{bundledFiles.map((file) => (
+														<li key={file}>{file}</li>
+													))}
+												</ul>
+											</div>
+										)}
 									</div>
 									<div className="room-skills-row-actions">
+										{showExecution && (
+											state.executeState === "approved" ? (
+												<button className="rs-quiet" disabled={execBusyName === state.name} onClick={() => void setExecution(state.name, "revoke-execution")}>
+													{execBusyName === state.name ? "Withdrawing…" : "Withdraw"}
+												</button>
+											) : (
+												<button className="rs-btn" disabled={execBusyName === state.name} onClick={() => void setExecution(state.name, "approve-execution")}>
+													{execBusyName === state.name ? "Approving…" : state.executeState === "drifted" ? "Approve this version" : "Allow running this skill's files"}
+												</button>
+											)
+										)}
 										{state.status === "hash-mismatch" && (
 											<button className="rs-btn" disabled={reviewLoadingName === state.name} onClick={() => void openReview(state.name)}>
 												{reviewLoadingName === state.name ? "Loading…" : "Review changes"}

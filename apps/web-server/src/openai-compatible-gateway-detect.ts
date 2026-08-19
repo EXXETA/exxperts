@@ -37,14 +37,28 @@ const PROBE_TIMEOUT_MS = 10_000;
 // an endless stream fill this process's memory while we wait for the timeout.
 const PROBE_MAX_BYTES = 5 * 1024 * 1024;
 
+import { GATEWAY_EFFORT_INTENSITIES, type GatewayEffortIntensity, type GatewayThinkingLevel, type GatewayThinkingLevels } from "./openai-compatible-gateways.js";
+
 export type GatewayModelDetection = {
 	id: string;
 	/** Present only when the gateway actually said so. */
 	vision?: boolean;
 	/** Present only when the gateway actually said so. */
 	webSearch?: boolean;
+	/** Present only when the gateway actually said so. */
+	reasoning?: boolean;
 	/** Present only when the gateway published a window. */
 	contextWindow?: number;
+	/** Present only when the gateway published a per-request output cap. */
+	maxTokens?: number;
+	/** The gateway's declared mode (chat, embedding, image_generation, ...), lowercased. Present only when declared. */
+	mode?: string;
+	/** Per-rung effort declarations; a rung appears only when the gateway answered it with a boolean. */
+	thinkingLevels?: GatewayThinkingLevels;
+	/** Present only when the gateway named the hardest thinking the deployment lets through. */
+	effortCeiling?: GatewayEffortIntensity;
+	/** Present only when the gateway said whether the model picks its own effort. */
+	adaptiveThinking?: boolean;
 };
 
 export type GatewayDiscovery = {
@@ -59,6 +73,19 @@ function positiveInteger(value: unknown): number | undefined {
 	if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
 	const rounded = Math.floor(value);
 	return rounded > 0 ? rounded : undefined;
+}
+
+/**
+ * LiteLLM modes that name a model no chat completion can run on. A room locked
+ * to one of these has zero working turns, which is why the discover step keeps
+ * them out of the approvable list. Absent and unknown modes stay
+ * chat-compatible: dropping a model over a word we do not know would hide
+ * models that work.
+ */
+export const NON_CHAT_GATEWAY_MODES = ["embedding", "image_generation", "audio_transcription", "audio_speech", "rerank", "moderation"] as const;
+
+export function isNonChatGatewayMode(mode: string | null | undefined): boolean {
+	return typeof mode === "string" && (NON_CHAT_GATEWAY_MODES as readonly string[]).includes(mode);
 }
 
 /** Read the body with a hard ceiling, giving up the moment the cap is passed. */
@@ -133,9 +160,14 @@ export function normalizeGatewayBaseUrl(baseUrl: string): string {
  * it has not already been answered. Vision is never inferred here from the
  * LiteLLM shape, which does not carry it: silence about images stays silence,
  * and so does silence about web search, which only /model/info ever mentions.
+ *
+ * Reasoning is the one fact the OpenRouter row does answer for itself, in its
+ * supported_parameters list: a model that accepts a reasoning parameter is a
+ * model the room's effort dial can reach. A row without that list says nothing
+ * about reasoning, which is not the same as saying no.
  */
-function detectionFromModelsRow(row: Record<string, unknown>): { vision?: boolean; contextWindow?: number } {
-	const detection: { vision?: boolean; contextWindow?: number } = {};
+function detectionFromModelsRow(row: Record<string, unknown>): { vision?: boolean; reasoning?: boolean; contextWindow?: number; maxTokens?: number } {
+	const detection: { vision?: boolean; reasoning?: boolean; contextWindow?: number; maxTokens?: number } = {};
 	const architecture = isObject(row.architecture) ? row.architecture : undefined;
 	if (architecture) {
 		const inputModalities = architecture.input_modalities;
@@ -145,32 +177,88 @@ function detectionFromModelsRow(row: Record<string, unknown>): { vision?: boolea
 			detection.vision = architecture.modality.split("->")[0].split("+").includes("image");
 		}
 	}
+	const supportedParameters = row.supported_parameters;
+	if (Array.isArray(supportedParameters)) {
+		detection.reasoning = supportedParameters.some((value) => value === "reasoning" || value === "include_reasoning");
+	}
 	const contextWindow = positiveInteger(row.context_length)
 		?? positiveInteger(isObject(row.top_provider) ? row.top_provider.context_length : undefined)
 		?? positiveInteger(row.max_input_tokens);
 	if (contextWindow) detection.contextWindow = contextWindow;
+	// The per-request output cap, the same two dialects again: OpenRouter's
+	// top_provider speaks for the deployment that will actually answer, and
+	// LiteLLM enriches its rows with max_output_tokens for the keys that cannot
+	// reach /model/info. Discarding it is what ran every gateway model on the
+	// registry's 16384 default.
+	const maxTokens = positiveInteger(isObject(row.top_provider) ? row.top_provider.max_completion_tokens : undefined)
+		?? positiveInteger(row.max_output_tokens);
+	if (maxTokens) detection.maxTokens = maxTokens;
 	return detection;
 }
+
+/**
+ * LiteLLM's per-rung effort flags, one boolean question per level of the
+ * thinking dial. Our "off" is LiteLLM's "none". Every key here was seen live
+ * on a real LiteLLM /model/info answer except the medium and high pair, which
+ * follow the same supports_<level>_reasoning_effort naming and are read so a
+ * gateway that does answer them is heard; a gateway that leaves them null is
+ * simply not answering, like every other level.
+ */
+const LITELLM_EFFORT_FLAGS: ReadonlyArray<readonly [string, GatewayThinkingLevel]> = [
+	["supports_none_reasoning_effort", "off"],
+	["supports_minimal_reasoning_effort", "minimal"],
+	["supports_low_reasoning_effort", "low"],
+	["supports_medium_reasoning_effort", "medium"],
+	["supports_high_reasoning_effort", "high"],
+	["supports_xhigh_reasoning_effort", "xhigh"],
+	["supports_max_reasoning_effort", "max"],
+];
 
 /**
  * LiteLLM's richer endpoint, keyed by the model name the /models list also
  * uses. max_input_tokens is the context window; max_tokens is LiteLLM's older
  * name for the same number, used only when the newer key is absent.
+ *
+ * The per-level effort flags are typed nullable on LiteLLM's side and are null
+ * on most deployments; only a real boolean is a declaration. This endpoint is
+ * the only place these levels are ever declared: OpenRouter's /models rows say
+ * whether a model takes a reasoning parameter at all (supported_parameters),
+ * but nothing per level, so nothing per level is invented for them.
  */
-function detectionsFromLiteLlmModelInfo(payload: unknown): Map<string, { vision?: boolean; webSearch?: boolean; contextWindow?: number }> {
-	const byModel = new Map<string, { vision?: boolean; webSearch?: boolean; contextWindow?: number }>();
+function detectionsFromLiteLlmModelInfo(payload: unknown): Map<string, Omit<GatewayModelDetection, "id">> {
+	const byModel = new Map<string, Omit<GatewayModelDetection, "id">>();
 	const rows = isObject(payload) && Array.isArray(payload.data) ? payload.data : Array.isArray(payload) ? payload : [];
 	for (const row of rows) {
 		if (!isObject(row)) continue;
 		const modelName = typeof row.model_name === "string" ? row.model_name.trim() : "";
 		if (!modelName) continue;
 		const info = isObject(row.model_info) ? row.model_info : {};
-		const detection: { vision?: boolean; webSearch?: boolean; contextWindow?: number } = {};
+		const detection: Omit<GatewayModelDetection, "id"> = {};
 		if (typeof info.supports_vision === "boolean") detection.vision = info.supports_vision;
 		if (typeof info.supports_web_search === "boolean") detection.webSearch = info.supports_web_search;
+		if (typeof info.supports_reasoning === "boolean") detection.reasoning = info.supports_reasoning;
 		const contextWindow = positiveInteger(info.max_input_tokens) ?? positiveInteger(info.max_tokens);
 		if (contextWindow) detection.contextWindow = contextWindow;
-		if (detection.vision !== undefined || detection.webSearch !== undefined || detection.contextWindow !== undefined) byModel.set(modelName, detection);
+		const maxTokens = positiveInteger(info.max_output_tokens);
+		if (maxTokens) detection.maxTokens = maxTokens;
+		// The declared mode, lowercased so the known non-chat values match however
+		// a deployment cases them. Absent stays absent: an undeclared model is not
+		// dropped over silence.
+		if (typeof info.mode === "string" && info.mode.trim()) detection.mode = info.mode.trim().toLowerCase();
+		const levels: GatewayThinkingLevels = {};
+		for (const [flag, level] of LITELLM_EFFORT_FLAGS) {
+			const value = info[flag];
+			if (typeof value === "boolean") levels[level] = value;
+		}
+		if (Object.keys(levels).length > 0) detection.thinkingLevels = levels;
+		// The deployment's own cap, seen live contradicting the flags on the same
+		// row (supports_max true beside an xhigh ceiling). Recorded so the ladder
+		// can be capped by it; only a known intensity is a cap.
+		if (typeof info.bedrock_output_config_effort_ceiling === "string" && (GATEWAY_EFFORT_INTENSITIES as readonly string[]).includes(info.bedrock_output_config_effort_ceiling)) {
+			detection.effortCeiling = info.bedrock_output_config_effort_ceiling as GatewayEffortIntensity;
+		}
+		if (typeof info.supports_adaptive_thinking === "boolean") detection.adaptiveThinking = info.supports_adaptive_thinking;
+		if (Object.keys(detection).length > 0) byModel.set(modelName, detection);
 	}
 	return byModel;
 }
@@ -217,7 +305,13 @@ export async function discoverGatewayModels(baseUrl: string, key: string): Promi
 			if (!existing) continue;
 			if (detection.vision !== undefined) existing.vision = detection.vision;
 			if (detection.webSearch !== undefined) existing.webSearch = detection.webSearch;
+			if (detection.reasoning !== undefined) existing.reasoning = detection.reasoning;
 			if (detection.contextWindow !== undefined) existing.contextWindow = detection.contextWindow;
+			if (detection.maxTokens !== undefined) existing.maxTokens = detection.maxTokens;
+			if (detection.mode !== undefined) existing.mode = detection.mode;
+			if (detection.thinkingLevels !== undefined) existing.thinkingLevels = detection.thinkingLevels;
+			if (detection.effortCeiling !== undefined) existing.effortCeiling = detection.effortCeiling;
+			if (detection.adaptiveThinking !== undefined) existing.adaptiveThinking = detection.adaptiveThinking;
 		}
 	}
 

@@ -175,8 +175,17 @@ async function start() {
 	requireDocker();
 	ensureSettings();
 	if (containerRunning()) {
-		console.log(`SearXNG already running at ${BASE_URL}`);
-		ensureSearchConfig();
+		// "The container is up" is not "search works". Ask the engine itself
+		// before claiming anything; when it is healthy the first probe answers
+		// straight away and this costs nothing.
+		if (await waitUntilReady()) {
+			console.log(`SearXNG already running at ${BASE_URL}`);
+			ensureSearchConfig();
+		} else {
+			console.error(`The SearXNG container is running, but its search endpoint at ${BASE_URL} did not become ready.`);
+			console.error(`Check logs with: docker logs ${NAME}`);
+			process.exit(1);
+		}
 		return;
 	}
 	if (containerExists()) {
@@ -232,6 +241,13 @@ switch (cmd) {
 	case "start": await start(); break;
 	case "stop": stop(); break;
 	case "restart": stop(); await start(); break;
+	case "runtime":
+		// One word for the app's settings pane: is a container runtime there at
+		// all, and is its daemon answering. The same resolveDocker split that
+		// requireDocker uses, without the prose.
+		if (!DOCKER) console.log("missing");
+		else console.log(spawnSync(DOCKER, ["info"], { stdio: "ignore", timeout: 4000 }).status === 0 ? "up" : "stopped");
+		break;
 	case "status": status(); break;
 	case "url": console.log(BASE_URL); break;
 	case "--help": case "-h": case "": usage(); break;

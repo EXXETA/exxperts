@@ -47,6 +47,9 @@ Behind the scenes:
 The web server binds to `127.0.0.1` only, validates Host/Origin
 headers, and requires a client auth token on API and WebSocket
 requests (see `SECURITY.md`); it is not reachable from the LAN by design.
+The one exception is the off-by-default remote mode (`exxperts remote`),
+which additionally serves the user's own enrolled devices over their
+private tunnel; `SECURITY.md` has its threat model.
 
 ### CLI
 
@@ -122,7 +125,7 @@ The helper writes generated SearXNG settings to `~/.exxperts/app/searxng/setting
 | Port | Service |
 |---|---|
 | `5173` | Vite dev server (web UI). |
-| `8787` | Fastify web server. Exposes `/healthz`, `/api/*`, `/ws`. Loopback only. |
+| `8787` | Fastify web server. Exposes `/healthz`, `/api/*`, `/ws`. Loopback only (plus the machine's own tailnet address while remote mode is enabled). |
 
 ## Logs
 

@@ -78,7 +78,10 @@ function startStubGateway(): Promise<http.Server> {
 			res.end(JSON.stringify({
 				data: [
 					{ id: "vision-model", architecture: { input_modalities: ["text", "image"] }, context_length: 64000 },
-					{ id: "plain-model", architecture: { modality: "text->text" }, context_length: 32000 },
+					{ id: "plain-model", architecture: { modality: "text->text" }, context_length: 32000, supported_parameters: ["tools", "temperature"] },
+					// The OpenRouter way of declaring reasoning, which is the only
+					// thing a /models row ever says about it.
+					{ id: "thinking-model", architecture: { modality: "text->text" }, context_length: 32000, supported_parameters: ["tools", "include_reasoning", "reasoning"] },
 					// Both dialects on one row, disagreeing on purpose, and absent from
 					// /model/info so the row is the only source: OpenRouter's field is
 					// the more specific of the two and must be the one that is read.
@@ -94,8 +97,11 @@ function startStubGateway(): Promise<http.Server> {
 				data: [
 					// Overrides the /models context_length: LiteLLM answers about the
 					// deployment, the catalog row only about the family.
-					{ model_name: "vision-model", model_info: { supports_vision: true, supports_web_search: true, max_input_tokens: 200000, max_output_tokens: 8192 } },
-					{ model_name: "plain-model", model_info: { supports_vision: false, supports_web_search: false, max_tokens: 32000 } },
+					{ model_name: "vision-model", model_info: { supports_vision: true, supports_web_search: true, supports_reasoning: true, max_input_tokens: 200000, max_output_tokens: 8192 } },
+					// The row listed its parameters without reasoning among them; the
+					// deployment says otherwise, and it is the more specific source,
+					// so it decides.
+					{ model_name: "plain-model", model_info: { supports_vision: false, supports_web_search: false, supports_reasoning: true, max_tokens: 32000 } },
 				],
 			}));
 			return;
@@ -265,7 +271,7 @@ try {
 	});
 	assertStatusOk(discovered, "gateway discovery");
 	const detected = new Map<string, any>((discovered.body.detected ?? []).map((entry: any) => [entry.id, entry]));
-	assert(discovered.body.models.join(",") === "dual-shape-model,plain-model,silent-model,vision-model", `discovery should list every model id, got ${JSON.stringify(discovered.body.models)}`);
+	assert(discovered.body.models.join(",") === "dual-shape-model,plain-model,silent-model,thinking-model,vision-model", `discovery should list every model id, got ${JSON.stringify(discovered.body.models)}`);
 	assert(detected.get("vision-model")?.vision === true, `vision should be detected, got ${JSON.stringify(detected.get("vision-model"))}`);
 	assert(detected.get("vision-model")?.contextWindow === 200000, `LiteLLM max_input_tokens should win, got ${JSON.stringify(detected.get("vision-model"))}`);
 	assert(detected.get("plain-model")?.vision === false, `a model declared text-only should read as text-only, got ${JSON.stringify(detected.get("plain-model"))}`);
@@ -276,6 +282,16 @@ try {
 	assert(detected.get("vision-model")?.webSearch === true, `a declared web-search model should be detected, got ${JSON.stringify(detected.get("vision-model"))}`);
 	assert(detected.get("plain-model")?.webSearch === false, `a model declared without web search should read as without, got ${JSON.stringify(detected.get("plain-model"))}`);
 	assert(detected.get("silent-model")?.webSearch === null, `an undescribed model must not be assumed to search, got ${JSON.stringify(detected.get("silent-model"))}`);
+	// Reasoning has two sources, and both are read: the OpenRouter row lists the
+	// parameters it takes, LiteLLM answers supports_reasoning on the deployment,
+	// and where they meet the deployment is the more specific of the two. A model
+	// neither source describes stays undecided, because sending an effort a
+	// gateway has never heard of is how a request comes back rejected.
+	assert(detected.get("thinking-model")?.reasoning === true, `a row listing a reasoning parameter should be detected, got ${JSON.stringify(detected.get("thinking-model"))}`);
+	assert(detected.get("vision-model")?.reasoning === true, `supports_reasoning should be detected, got ${JSON.stringify(detected.get("vision-model"))}`);
+	assert(detected.get("plain-model")?.reasoning === true, `the deployment's answer should win over the row's parameter list, got ${JSON.stringify(detected.get("plain-model"))}`);
+	assert(detected.get("dual-shape-model")?.reasoning === null, `a row that lists no parameters says nothing about reasoning, got ${JSON.stringify(detected.get("dual-shape-model"))}`);
+	assert(detected.get("silent-model")?.reasoning === null, `an undescribed model must not be assumed to reason, got ${JSON.stringify(detected.get("silent-model"))}`);
 
 	// The company case: a LiteLLM virtual key scoped to llm_api_routes, so the
 	// rich probe is refused outright. The window is still declared, on the rows
@@ -310,8 +326,8 @@ try {
 			baseUrl: stubGatewayBaseUrl,
 			key: projectGatewayKey,
 			roomModels: [
-				{ modelId: "vision-model", vision: true, webSearch: true, contextWindow: 200000 },
-				{ modelId: "plain-model", vision: false, webSearch: false, contextWindow: 32000 },
+				{ modelId: "vision-model", vision: true, webSearch: true, reasoning: true, contextWindow: 200000 },
+				{ modelId: "plain-model", vision: false, webSearch: false, reasoning: false, contextWindow: 32000 },
 			],
 			maintenanceModel: "plain-model",
 		}),
@@ -353,11 +369,17 @@ try {
 	// The web-search flag lands as the one compat key the request layer reads.
 	assert(visionEntry.compat?.supportsWebSearch === true, `a model approved for web search should be registered as such, got ${JSON.stringify(visionEntry)}`);
 	assert(plainEntry.compat === undefined, `a model nobody approved for web search should carry no compat block at all, got ${JSON.stringify(plainEntry)}`);
+	// The reasoning flag lands as the model key the request layer reads before it
+	// attaches the room's effort; without it the parameter is never sent.
+	assert(visionEntry.reasoning === true, `a model approved for reasoning should be registered as such, got ${JSON.stringify(visionEntry)}`);
+	assert(plainEntry.reasoning === undefined, `a model nobody approved for reasoning should carry no reasoning key, got ${JSON.stringify(plainEntry)}`);
 	// And it comes back out of the API the panel reads, so reopening the form
 	// shows the box still ticked instead of quietly forgetting.
 	const savedProject = bothListed.body.gateways.find((gateway: any) => gateway.id === projectProviderId);
 	assert(savedProject.roomModels.find((model: any) => model.modelId === "vision-model")?.webSearch === true, `the saved flag must come back from the API, got ${JSON.stringify(savedProject.roomModels)}`);
 	assert(savedProject.roomModels.find((model: any) => model.modelId === "plain-model")?.webSearch === false, `an unmarked model must come back unmarked, got ${JSON.stringify(savedProject.roomModels)}`);
+	assert(savedProject.roomModels.find((model: any) => model.modelId === "vision-model")?.reasoning === true, `the saved reasoning flag must come back from the API, got ${JSON.stringify(savedProject.roomModels)}`);
+	assert(savedProject.roomModels.find((model: any) => model.modelId === "plain-model")?.reasoning === false, `a model nobody marked for reasoning must come back unmarked, got ${JSON.stringify(savedProject.roomModels)}`);
 
 	// The plural store now exists, and the legacy file is still a faithful
 	// mirror of the first gateway rather than a stale second opinion.

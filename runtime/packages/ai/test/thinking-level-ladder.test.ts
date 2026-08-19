@@ -30,6 +30,22 @@ describe("getThinkingLevelLadder", () => {
 		expect(ladder.some((rung) => rung.level === "minimal")).toBe(false);
 	});
 
+	it("carries the 5.6 family all the way to max on the subscription route", () => {
+		const model = getModel("openai-codex", "gpt-5.6-luna");
+		expect(model).toBeDefined();
+		const ladder = getThinkingLevelLadder(model!);
+		expect(ladder.map((rung) => rung.level)).toEqual(["off", "low", "medium", "high", "xhigh", "max"]);
+		// This surface folds minimal onto "low" like its 5.5 sibling does.
+		expect(ladder.some((rung) => rung.level === "minimal")).toBe(false);
+	});
+
+	it("carries the 5.6 family all the way to max on the API route too", () => {
+		const model = getModel("openai", "gpt-5.6-luna");
+		expect(model).toBeDefined();
+		const ladder = getThinkingLevelLadder(model!);
+		expect(ladder.map((rung) => rung.level)).toEqual(["minimal", "low", "medium", "high", "xhigh", "max"]);
+	});
+
 	it("labels the off rung with the effort a model actually sends for it", () => {
 		const model = getModel("openai", "gpt-5.4");
 		expect(model).toBeDefined();

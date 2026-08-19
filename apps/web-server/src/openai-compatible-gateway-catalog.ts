@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { getModelsPath, stripJsonComments } from "@exxeta/exxperts-runtime";
-import type { OpenAiCompatibleGateway } from "./openai-compatible-gateways.js";
+import { effectiveGatewayModel, GATEWAY_EFFORT_INTENSITIES, type EffectiveGatewayModel, type GatewayEffortIntensity, type GatewayThinkingLevels, type OpenAiCompatibleGateway } from "./openai-compatible-gateways.js";
 
 /**
  * The runtime half of a saved gateway: its entry in models.json, one provider
@@ -23,8 +23,8 @@ import type { OpenAiCompatibleGateway } from "./openai-compatible-gateways.js";
  * are passed through untouched, unknown keys at the root and on this gateway's
  * own provider entry are preserved, and per-model keys nobody here understands
  * survive on the model they belong to. What this module owns is the provider's
- * name, baseUrl and api, and each model's id, name, input and contextWindow,
- * plus one key inside compat: supportsWebSearch. Compat as a whole is not ours
+ * name, baseUrl and api, and each model's id, name, input, contextWindow,
+ * maxTokens, reasoning and thinkingLevelMap, plus one key inside compat: supportsWebSearch. Compat as a whole is not ours
  * to own, because a model's compat block is where somebody hand-tunes a
  * stubborn deployment, so that block is edited in place rather than replaced.
  *
@@ -34,7 +34,7 @@ import type { OpenAiCompatibleGateway } from "./openai-compatible-gateways.js";
  */
 
 const OPENAI_COMPATIBLE_API = "openai-completions";
-const MODEL_KEYS_THIS_WRITER_OWNS = ["id", "name", "input", "contextWindow"] as const;
+const MODEL_KEYS_THIS_WRITER_OWNS = ["id", "name", "input", "contextWindow", "maxTokens", "reasoning", "thinkingLevelMap"] as const;
 /** The only key inside a model's `compat` block this writer decides. Everything else in there is somebody else's. */
 const COMPAT_KEY_THIS_WRITER_OWNS = "supportsWebSearch";
 
@@ -152,6 +152,82 @@ function mergeModelEntry(existing: unknown, next: JsonObject, webSearch: boolean
 	return { ...preserved, ...withCompat };
 }
 
+/**
+ * The runtime's thinkingLevelMap, derived from the gateway's per-level effort
+ * declarations and its ceiling. The runtime's ladder rules are the contract
+ * here: xhigh and max exist only where a model maps them explicitly, so a
+ * declared-true top tier is written as its own effort name; every other level
+ * is in the generic ladder already and needs no entry when declared true. A
+ * declared false pins the level to null, which is the runtime's word for "this
+ * rung does not exist". Undeclared levels are left unwritten, so a gateway that
+ * says nothing changes nothing.
+ *
+ * Three edges of the live data shape this:
+ *
+ * The ceiling caps the flags. Real rows declare supports_max true and an xhigh
+ * ceiling in the same breath; the ceiling is the deployment speaking about
+ * itself, so every intensity above it is pinned null however its flag reads.
+ *
+ * The flags declare, they do not promise rejection: a route has been seen
+ * accepting an effort its flag declared false and quietly coercing it. The
+ * ladder still drops a declared-false level, because offering a rung that
+ * silently becomes a different one is the dishonest option.
+ *
+ * "off" follows what the wire does. On this API the off level sends no effort
+ * parameter unless the map names one, and a provider whose reasoning is
+ * always-on then applies its own default, which is thinking the person turned
+ * off. So a declared-true "none" becomes off: "none", the wire value that
+ * genuinely stops; a declared-false "none" pins off to null, because the model
+ * cannot stop and the dial must not claim it can; and an undeclared "none"
+ * writes nothing, keeping today's no-parameter behavior, which in front of an
+ * opt-in-thinking provider is a real off. Every always-on family observed so
+ * far declares the flag one way or the other, so the silent case is the one
+ * where silence already works.
+ */
+function thinkingLevelMapFromDeclaration(levels: GatewayThinkingLevels, ceiling: GatewayEffortIntensity | undefined): JsonObject | undefined {
+	const map: JsonObject = {};
+	if (levels.off === true) map.off = "none";
+	else if (levels.off === false) map.off = null;
+	const ceilingIndex = ceiling ? GATEWAY_EFFORT_INTENSITIES.indexOf(ceiling) : -1;
+	for (const [index, level] of GATEWAY_EFFORT_INTENSITIES.entries()) {
+		const declared = levels[level];
+		if (ceilingIndex >= 0 && index > ceilingIndex) map[level] = null;
+		else if (declared === false) map[level] = null;
+		else if (declared === true && (level === "xhigh" || level === "max")) map[level] = level;
+	}
+	return Object.keys(map).length > 0 ? map : undefined;
+}
+
+/**
+ * One catalog entry from one resolved capability set. Room models and the
+ * maintenance model both come through here, so what a fact becomes in the file
+ * cannot differ by which list the model sat in.
+ */
+function catalogEntryFromEffective(id: string, name: string, effective: EffectiveGatewayModel): JsonObject {
+	const entry: JsonObject = { id, name };
+	// Saying "text" only is what makes the provider layer swap an attached
+	// image for a placeholder; saying both is what lets it through.
+	if (effective.vision) entry.input = ["text", "image"];
+	// The one thing that makes the provider layer attach the room's effort to
+	// the request; a model without it is asked for nothing, which is what keeps
+	// a gateway that rejects the parameter from seeing it at all.
+	if (effective.reasoning) entry.reasoning = true;
+	// The declared thinking ladder, when the gateway spoke one. Emitted only
+	// beside reasoning: true, because effectiveGatewayModel already drops the
+	// levels when reasoning is off, and read back by the runtime's
+	// getSupportedThinkingLevels exactly as written.
+	if (effective.reasoning && (effective.thinkingLevels || effective.effortCeiling)) {
+		const thinkingLevelMap = thinkingLevelMapFromDeclaration(effective.thinkingLevels ?? {}, effective.effortCeiling);
+		if (thinkingLevelMap) entry.thinkingLevelMap = thinkingLevelMap;
+	}
+	entry.contextWindow = effective.contextWindow;
+	// The per-request output cap, written only where somebody declared one.
+	// Nothing declared writes nothing, which leaves the runtime registry's own
+	// default in charge, exactly as before this key existed.
+	if (effective.maxTokens) entry.maxTokens = effective.maxTokens;
+	return entry;
+}
+
 /** Every model the gateway needs registered: its room models plus the one that runs Memorize and Review. */
 function gatewayCatalogModels(gateway: OpenAiCompatibleGateway, existingModels: unknown): JsonObject[] {
 	const existingById = new Map<string, unknown>();
@@ -165,18 +241,28 @@ function gatewayCatalogModels(gateway: OpenAiCompatibleGateway, existingModels: 
 	for (const roomModel of gateway.roomModels) {
 		if (seen.has(roomModel.modelId)) continue;
 		seen.add(roomModel.modelId);
-		const entry: JsonObject = { id: roomModel.modelId, name: roomModel.label ?? roomModel.modelId };
-		// Saying "text" only is what makes the provider layer swap an attached
-		// image for a placeholder; saying both is what lets it through.
-		if (roomModel.vision) entry.input = ["text", "image"];
-		if (roomModel.contextWindow) entry.contextWindow = roomModel.contextWindow;
-		models.push(mergeModelEntry(existingById.get(roomModel.modelId), entry, roomModel.webSearch === true));
+		// What the file gets is the effective capability set, override over
+		// detection over default, resolved by the one function every consumer
+		// shares. This file is what the runtime reads, so this is the line where
+		// a detected fact becomes a working one.
+		const effective = effectiveGatewayModel(roomModel);
+		const entry = catalogEntryFromEffective(roomModel.modelId, roomModel.label ?? roomModel.modelId, effective);
+		models.push(mergeModelEntry(existingById.get(roomModel.modelId), entry, effective.webSearch));
 	}
 	if (gateway.maintenanceModel && !seen.has(gateway.maintenanceModel)) {
+		// A maintenance model that is also a room model was written above with
+		// that row's full resolution. This branch is the one with no row of its
+		// own, and it used to be written bare, which ran Memorize and Review on
+		// the registry defaults whatever the model's real facts were. It now goes
+		// through the same resolution as everything else, from the detection the
+		// config kept for it; a config that kept none resolves to the same
+		// defaults the bare entry meant.
+		const effective = effectiveGatewayModel({ modelId: gateway.maintenanceModel, detected: gateway.maintenanceModelDetected ?? {} });
+		const entry = catalogEntryFromEffective(gateway.maintenanceModel, gateway.maintenanceModel, effective);
 		// The approve list has no row for the maintenance model, so nothing here
 		// ever ticked or unticked web search for it. Whatever the file says about
 		// it stays said.
-		models.push(mergeModelEntry(existingById.get(gateway.maintenanceModel), { id: gateway.maintenanceModel, name: gateway.maintenanceModel }, undefined));
+		models.push(mergeModelEntry(existingById.get(gateway.maintenanceModel), entry, undefined));
 	}
 	return models;
 }

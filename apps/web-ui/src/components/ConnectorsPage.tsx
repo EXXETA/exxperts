@@ -13,6 +13,7 @@ import {
 } from "../mcp-api";
 import { CONNECTOR_CATALOG, type ConnectorCatalogEntry } from "../connector-catalog";
 import { CONNECTOR_ICONS } from "../connector-icons";
+import { useRemoteClientContext } from "../remote-client-context";
 
 const APPLY_NOTE = "Config change saved. Rooms pick it up the next time you enter or resume them.";
 
@@ -44,24 +45,37 @@ function authView(server: McpConnectorStatus, knownOpen: boolean): { label: stri
 }
 
 function cachedToolsLine(server: McpConnectorStatus): string {
-	if (!server.tools) return "Tools not listed yet. Test the connection below, or just use it in a room.";
+	if (!server.tools) return "";
 	const when = new Date(server.tools.cachedAt).toLocaleString();
 	const names = server.tools.names.slice(0, 6).join(", ");
 	const more = server.tools.count > 6 ? `, +${server.tools.count - 6} more` : "";
 	return `${server.tools.count} tool${server.tools.count === 1 ? "" : "s"}: ${names}${more} · listed ${when}`;
 }
 
+/** Table type cell: how you connect, from the same catalog metadata the Add
+ *  cards use; local commands and bearer-token customs are recognizable without
+ *  a catalog entry, anything else stays blank. */
+const ROW_TYPE_LABELS: Record<ConnectorCatalogEntry["kind"], string> = {
+	open: "no login needed",
+	oauth: "one-click login",
+	token: "API token",
+	"oauth-client": "OAuth app",
+	guided: "guided setup",
+};
+
 interface RowOutcome {
 	text: string;
 	tone: "ok" | "error" | "progress";
 }
 
-function ConnectorRow({ server, onChanged, onNotice }: { server: McpConnectorStatus; onChanged: () => Promise<void>; onNotice: (text: string) => void }) {
+function ConnectorRow({ server, expanded, onToggle, onChanged, onNotice, readOnly }: { server: McpConnectorStatus; expanded: boolean; onToggle: () => void; onChanged: () => Promise<void>; onNotice: (text: string) => void; readOnly: boolean }) {
 	const [busy, setBusy] = useState<"test" | "login" | "logout" | "remove" | null>(null);
 	const [confirmRemove, setConfirmRemove] = useState(false);
 	// One outcome line per row: each action replaces the previous result.
 	const [outcome, setOutcome] = useState<RowOutcome | null>(null);
 	const [needsAuthSeen, setNeedsAuthSeen] = useState(false);
+	// Tool chips render capped at 8; this opens the full set for this row.
+	const [showAllTools, setShowAllTools] = useState(false);
 	const loginPollRef = useRef<number | null>(null);
 
 	useEffect(() => () => {
@@ -70,6 +84,9 @@ function ConnectorRow({ server, onChanged, onNotice }: { server: McpConnectorSta
 
 	const knownOpen = CONNECTOR_CATALOG.some((entry) => entry.kind === "open" && entry.url === server.target);
 	const auth = authView(server, knownOpen);
+	const catalogEntry = CONNECTOR_CATALOG.find((entry) => entry.id === server.name || (entry.url !== undefined && entry.url === server.target));
+	const typeLabel = server.transport !== "http" ? "local process" : catalogEntry ? ROW_TYPE_LABELS[catalogEntry.kind] : server.auth.mode === "bearer" ? "API token" : "";
+	const rowStatus = auth.state === "missing" ? "not connected" : server.tools || server.auth.hasStoredTokens ? "connected" : "not tested";
 	// Offer login only when it can plausibly matter: never for servers a
 	// connection already succeeded against without tokens or that the
 	// directory knows are public, always after a test reported "needs
@@ -113,122 +130,162 @@ function ConnectorRow({ server, onChanged, onNotice }: { server: McpConnectorSta
 
 	// "not connected yet" next to a "Logged in" badge reads as a contradiction —
 	// the missing piece is only the tool list, so say that.
-	const toolsSummary = server.tools ? `${server.tools.count} tool${server.tools.count === 1 ? "" : "s"}` : "Tools not listed yet. Test the connection, or just use it in a room.";
+	const toolsSummary = server.tools ? `${server.tools.count} tool${server.tools.count === 1 ? "" : "s"}` : "";
 	// The default config file is the same for every row and the page footnote
 	// already explains it — only surface the source when it is the odd one out.
 	const defaultSource = server.source?.path.includes(".exxperts") && !server.source.importKind;
 	const sourceSummary = server.source && !defaultSource ? `from ${server.source.path}${server.source.importKind ? ` (imported from ${server.source.importKind})` : ""}` : "";
 
+	// Inline expansion: pure presentation of the already-fetched status row
+	// plus the static catalog blurb. The chip names come from the same cached
+	// tool list the "N tools" hint counts.
+	// The raw URL/command is the identity only for custom servers; catalog
+	// connectors are identified by their card, and timestamps stay out.
+	const expansionMeta = [
+		catalogEntry ? "" : server.transport === "http" ? server.target : `local: ${server.target}`,
+		sourceSummary,
+	]
+		.filter(Boolean)
+		.join(" · ");
+
 	return (
 		<div className="connector-row">
-			<ConnectorAvatar id={server.name} name={server.name} size={32} />
-			<div className="connector-row-main">
+			<ConnectorAvatar id={server.name} name={server.name} size={24} />
+			<button type="button" className="connector-row-main connector-row-toggle" aria-expanded={expanded} onClick={onToggle}>
 				<div className="connector-row-title">
-					<strong>{server.name}</strong>
-					<span className="connector-row-target">{server.transport === "http" ? server.target : `local: ${server.target}`}</span>
+					<strong title={server.transport === "http" ? server.target : `local: ${server.target}`}>{server.name}</strong>
 				</div>
-				{/* Exactly one meta line per row; transient states replace it. */}
+				{/* Exactly one meta line per row; action outcomes get their own
+				    full-width line below instead. */}
 				{busy === "login" ? (
 					<span className="connector-row-meta">Waiting for the login to finish in your browser…</span>
-				) : outcome ? (
-					<span className={`connector-row-meta${outcome.tone === "error" ? " connector-outcome-error" : ""}`}>{outcome.text}</span>
-				) : auth.note ? (
-					<span className="connector-row-meta">{auth.note}</span>
-				) : (
+				) : toolsSummary || sourceSummary ? (
 					<span className="connector-row-meta" title={server.tools ? cachedToolsLine(server) : undefined}>
-						{toolsSummary}{sourceSummary ? ` · ${sourceSummary}` : ""}
+						{toolsSummary}{toolsSummary && sourceSummary ? " · " : ""}{sourceSummary}
 					</span>
-				)}
-			</div>
-			<em className={auth.state}>{auth.label}</em>
-			<div className="connector-row-actions">
-					<button
-						className="inline-action"
-						disabled={busy !== null}
-						onClick={() => void run("test", async () => {
-							const result = await testMcpServer(server.name);
-							setBusy(null);
-							if (result.ok && server.auth.explicit && !server.auth.hasStoredTokens) {
-								setOutcome({ text: "Reachable, but not logged in yet. Use Log in below.", tone: "error" });
-								await onChanged();
-							} else if (result.ok) {
-								setOutcome({ text: `Connection OK · ${result.toolCount} tool${result.toolCount === 1 ? "" : "s"} available.`, tone: "ok" });
-								setNeedsAuthSeen(false);
-								await onChanged();
-							} else if (result.needsAuth) {
-								setNeedsAuthSeen(true);
-								setOutcome({ text: "This connector needs a login. Use Log in below.", tone: "error" });
-								await onChanged();
-							} else {
-								setOutcome({ text: `Connection failed: ${result.error}`, tone: "error" });
-							}
-						})}
-					>
-						{busy === "test" ? "Testing…" : "Test"}
-					</button>
-					{showLogin && busy !== "login" && (
-						<button
-							className="inline-action connector-action-primary"
-							disabled={busy !== null}
-							onClick={() => void run("login", async () => {
-								await startMcpServerLogin(server.name);
-								pollLogin(Date.now() + 3 * 60_000);
-							})}
-						>
-							Log in
-						</button>
-					)}
-					{busy === "login" && (
+				) : null}
+			</button>
+			{/* One wrapper around the two fact cells: on desktop it dissolves
+			    into the table grid (display: contents); the phone layout folds
+			    it into a single dot-separated hint line under the name. */}
+			<span className="connector-table-facts">
+				<span className="connector-table-type">{typeLabel}</span>
+				<span className="connector-table-status">{rowStatus}</span>
+			</span>
+			{!readOnly && (
+				<div className="connector-row-actions">
 						<button
 							className="inline-action"
-							onClick={() => void (async () => {
-								if (loginPollRef.current !== null) window.clearTimeout(loginPollRef.current);
-								try {
-									await cancelMcpServerLogin(server.name);
-								} catch {
-									// the attempt also dies on its own timeout
+							disabled={busy !== null}
+							onClick={() => void run("test", async () => {
+								const result = await testMcpServer(server.name);
+								setBusy(null);
+								if (result.ok && server.auth.explicit && !server.auth.hasStoredTokens) {
+									setOutcome({ text: "Reachable, but not logged in yet. Use Log in below.", tone: "error" });
+									await onChanged();
+								} else if (result.ok) {
+									setOutcome({ text: "Connection OK", tone: "ok" });
+									setNeedsAuthSeen(false);
+									await onChanged();
+								} else if (result.needsAuth) {
+									setNeedsAuthSeen(true);
+									setOutcome({ text: "This connector needs a login. Use Log in below.", tone: "error" });
+									await onChanged();
+								} else {
+									setOutcome({ text: `Connection failed: ${result.error}`, tone: "error" });
 								}
-								setBusy(null);
-								setOutcome({ text: "Login cancelled.", tone: "ok" });
-							})()}
-						>
-							Cancel login
-						</button>
-					)}
-					{canLogin && server.auth.hasStoredTokens && (
-						<button
-							className="inline-action"
-							disabled={busy !== null}
-							onClick={() => void run("logout", async () => {
-								await logoutMcpServer(server.name);
-								setBusy(null);
-								onNotice(`Cleared the stored login for ${server.name}.`);
-								await onChanged();
 							})}
 						>
-							{busy === "logout" ? "Clearing…" : "Log out"}
+							{busy === "test" ? "Testing…" : "Test"}
 						</button>
-					)}
-					{confirmRemove ? (
-						<>
+						{showLogin && busy !== "login" && (
 							<button
-								className="inline-action connector-action-danger"
+								className="inline-action connector-action-primary"
 								disabled={busy !== null}
-								onClick={() => void run("remove", async () => {
-									await removeMcpServer(server.name);
+								onClick={() => void run("login", async () => {
+									await startMcpServerLogin(server.name);
+									pollLogin(Date.now() + 3 * 60_000);
+								})}
+							>
+								Log in
+							</button>
+						)}
+						{busy === "login" && (
+							<button
+								className="inline-action"
+								onClick={() => void (async () => {
+									if (loginPollRef.current !== null) window.clearTimeout(loginPollRef.current);
+									try {
+										await cancelMcpServerLogin(server.name);
+									} catch {
+										// the attempt also dies on its own timeout
+									}
 									setBusy(null);
-									onNotice(`Removed ${server.name}. Rooms pick it up the next time you enter or resume them.`);
+									setOutcome({ text: "Login cancelled.", tone: "ok" });
+								})()}
+							>
+								Cancel login
+							</button>
+						)}
+						{canLogin && server.auth.hasStoredTokens && (
+							<button
+								className="inline-action"
+								disabled={busy !== null}
+								onClick={() => void run("logout", async () => {
+									await logoutMcpServer(server.name);
+									setBusy(null);
+									onNotice(`Cleared the stored login for ${server.name}.`);
 									await onChanged();
 								})}
 							>
-								{busy === "remove" ? "Removing…" : `Remove ${server.name}`}
+								{busy === "logout" ? "Clearing…" : "Log out"}
 							</button>
-							<button className="inline-action connector-action-quiet" disabled={busy !== null} onClick={() => setConfirmRemove(false)}>Keep</button>
-						</>
-					) : (
-						<button className="inline-action connector-action-quiet" disabled={busy !== null} onClick={() => setConfirmRemove(true)}>Remove</button>
-					)}
-			</div>
+						)}
+						{confirmRemove ? (
+							<>
+								<button
+									className="inline-action connector-action-danger"
+									disabled={busy !== null}
+									onClick={() => void run("remove", async () => {
+										await removeMcpServer(server.name);
+										setBusy(null);
+										onNotice(`Removed ${server.name}. Rooms pick it up the next time you enter or resume them.`);
+										await onChanged();
+									})}
+								>
+									{busy === "remove" ? "Removing…" : "Remove"}
+								</button>
+								<button className="inline-action connector-action-quiet" disabled={busy !== null} onClick={() => setConfirmRemove(false)}>Keep</button>
+							</>
+						) : (
+							<button className="inline-action connector-action-quiet" disabled={busy !== null} onClick={() => setConfirmRemove(true)}>Remove</button>
+						)}
+				</div>
+			)}
+			{outcome && (
+				<span className={`connector-row-outcome${outcome.tone === "error" ? " connector-outcome-error" : ""}`}>{outcome.text}</span>
+			)}
+			{expanded && (
+				<div className="connector-row-expansion">
+					{catalogEntry?.description && <p className="connector-expansion-desc">{catalogEntry.description}</p>}
+					{server.tools &&
+						(server.tools.names.length > 0 ? (
+							<div className="connector-tool-chips" aria-label={`${server.tools.count} tools`}>
+								{(showAllTools ? server.tools.names : server.tools.names.slice(0, 8)).map((toolName, i) => (
+									<span key={`${toolName}-${i}`} className="connector-tool-chip">{toolName}</span>
+								))}
+								{server.tools.names.length > 8 && (
+									<button type="button" className="connector-tool-chip connector-tool-chip-more" onClick={() => setShowAllTools((value) => !value)}>
+										{showAllTools ? "show fewer" : `and ${server.tools.names.length - 8} more`}
+									</button>
+								)}
+							</div>
+						) : (
+							<p className="connector-expansion-desc">{server.tools.count} tool{server.tools.count === 1 ? "" : "s"}</p>
+						))}
+					{expansionMeta && <p className="connector-expansion-meta">{expansionMeta}</p>}
+				</div>
+			)}
 		</div>
 	);
 }
@@ -390,66 +447,69 @@ function DirectoryCard({ entry, installed, onAdd, onOpenCustom }: { entry: Conne
 		}
 	}
 
+	// One small square + carries what the old per-kind buttons did: open and
+	// oauth entries add directly, token entries open the inline token row,
+	// oauth-client entries open the prefilled custom form. Guided entries
+	// link out to their setup guide. The kind label beside the name says
+	// which flow the + opens.
+	const addLabel =
+		entry.kind === "token" ? `Add ${entry.name} with an API token` : entry.kind === "oauth-client" ? `Add ${entry.name} with an OAuth app` : `Add ${entry.name}`;
+
 	return (
 		<article className="connector-dir-card">
-			<div className="connector-dir-head">
-				<ConnectorAvatar id={entry.id} name={entry.name} />
-				<div>
-					<strong>{entry.name}</strong>
-					<span className="connector-dir-kind">{KIND_LABELS[entry.kind]}</span>
+			<div className="connector-dir-card-row">
+				<ConnectorAvatar id={entry.id} name={entry.name} size={40} />
+				<div className="connector-dir-body">
+					<div className="connector-dir-title">
+						<strong>{entry.name}</strong>
+						<span className="connector-dir-kind">{KIND_LABELS[entry.kind]}</span>
+					</div>
+					<p className="connector-dir-desc" title={entry.description}>{entry.description}</p>
 				</div>
-			</div>
-			<p className="connector-dir-desc">{entry.description}</p>
-			{entry.shortNote && <p className="connector-dir-note">{entry.shortNote}</p>}
-			{error && <p className="connector-dir-note connector-outcome-error">{error}</p>}
-			<div className="connector-dir-actions">
 				{installed ? (
-					<span className="connector-dir-added">✓ Added</span>
+					<span className="connector-dir-add connector-dir-added" title="Added" aria-label={`${entry.name} is added`}>✓</span>
 				) : entry.kind === "guided" ? (
-					entry.docsUrl && <a className="inline-action" href={entry.docsUrl} target="_blank" rel="noreferrer">Setup guide ↗</a>
-				) : entry.kind === "oauth-client" ? (
-					<>
-						<button
-							className="inline-action"
-							onClick={() => onOpenCustom({ name: entry.id, url: entry.url, note: entry.guideNote, openOAuthClient: true })}
-						>
-							Add with OAuth app
-						</button>
-						{entry.docsUrl && (
-							<a className="connector-dir-token-guide" href={entry.docsUrl} target="_blank" rel="noreferrer">
-								Where do I create one? ↗
-							</a>
-						)}
-					</>
-				) : entry.kind === "token" ? (
-					tokenOpen ? (
-						<>
-							<input
-								type="password"
-								className="connector-dir-token-input"
-								placeholder={entry.tokenHint ?? "API token"}
-								value={token}
-								onChange={(e) => setToken(e.target.value)}
-							/>
-							<button className="inline-action" disabled={adding || !token.trim()} onClick={() => void add(token.trim())}>
-								{adding ? "Adding…" : "Add"}
-							</button>
-							<button className="inline-action" disabled={adding} onClick={() => setTokenOpen(false)}>Cancel</button>
-							{entry.docsUrl && (
-								<a className="connector-dir-token-guide" href={entry.docsUrl} target="_blank" rel="noreferrer">
-									Where do I get one? ↗
-								</a>
-							)}
-						</>
-					) : (
-						<button className="inline-action" onClick={() => setTokenOpen(true)}>Add with token</button>
+					entry.docsUrl && (
+						<a className="connector-dir-add" href={entry.docsUrl} target="_blank" rel="noreferrer" title="Setup guide" aria-label={`${entry.name} setup guide`}>↗</a>
 					)
 				) : (
-					<button className="inline-action" disabled={adding} onClick={() => void add()}>
-						{adding ? "Adding…" : "Add"}
+					<button
+						className="connector-dir-add"
+						disabled={adding || (entry.kind === "token" && tokenOpen)}
+						title={addLabel}
+						aria-label={addLabel}
+						aria-expanded={entry.kind === "token" ? tokenOpen : undefined}
+						onClick={() => {
+							if (entry.kind === "oauth-client") onOpenCustom({ name: entry.id, url: entry.url, note: entry.guideNote, openOAuthClient: true });
+							else if (entry.kind === "token") setTokenOpen(true);
+							else void add();
+						}}
+					>
+						{adding ? "…" : "+"}
 					</button>
 				)}
 			</div>
+			{tokenOpen && !installed && (
+				<div className="connector-dir-actions">
+					<input
+						type="password"
+						className="connector-dir-token-input"
+						placeholder={entry.tokenHint ?? "API token"}
+						value={token}
+						onChange={(e) => setToken(e.target.value)}
+					/>
+					<button className="inline-action" disabled={adding || !token.trim()} onClick={() => void add(token.trim())}>
+						{adding ? "Adding…" : "Add"}
+					</button>
+					<button className="inline-action" disabled={adding} onClick={() => setTokenOpen(false)}>Cancel</button>
+					{entry.docsUrl && (
+						<a className="connector-dir-token-guide" href={entry.docsUrl} target="_blank" rel="noreferrer">
+							Where do I get one? ↗
+						</a>
+					)}
+				</div>
+			)}
+			{error && <p className="connector-dir-note connector-outcome-error">{error}</p>}
 		</article>
 	);
 }
@@ -478,12 +538,8 @@ function ConnectorDirectory({ status, onChanged, onNotice, customOpen, onOpenCus
 
 	return (
 		<section className="ai-setup-section" aria-label="Connector directory">
-			<div className="ai-setup-section-heading">
-				<div>
-					<h2>Add connectors</h2>
-				</div>
-			</div>
-			<p className="ai-setup-copy">Verified servers, one click to add.</p>
+			<h3 className="web-search-fallback-heading">Add</h3>
+			<p className="ai-setup-copy web-search-fallback-copy">Verified servers, one click to add. Same list on the web and in the CLI.</p>
 			<input
 				type="search"
 				className="connector-dir-search"
@@ -499,18 +555,16 @@ function ConnectorDirectory({ status, onChanged, onNotice, customOpen, onOpenCus
 				))}
 				{entries.length === 0 && <p className="cli-note">No matches. Use the custom connector card to add one.</p>}
 				<article className="connector-dir-card connector-dir-custom">
-					<div className="connector-dir-head">
-						<span className="connector-avatar" style={{ width: 34, height: 34 }}>+</span>
-						<div>
-							<strong>Custom connector</strong>
-							<span className="connector-dir-kind">URL, command, or API token</span>
+					<div className="connector-dir-card-row">
+						<span className="connector-avatar" style={{ width: 40, height: 40 }}>+</span>
+						<div className="connector-dir-body">
+							<div className="connector-dir-title">
+								<strong>Custom connector</strong>
+								<span className="connector-dir-kind">custom</span>
+							</div>
+							<p className="connector-dir-desc">Add any MCP server that isn't in the list.</p>
 						</div>
-					</div>
-					<p className="connector-dir-desc">Add any MCP server that isn't in the list.</p>
-					<div className="connector-dir-actions">
-						<button className="inline-action" onClick={() => onOpenCustom()} disabled={customOpen}>
-							{customOpen ? "Fill in the form above" : "Add custom"}
-						</button>
+						<button className="connector-dir-add" onClick={() => onOpenCustom()} disabled={customOpen} title={customOpen ? "Fill in the form above" : "Add a custom connector"} aria-label="Add a custom connector">+</button>
 					</div>
 				</article>
 			</div>
@@ -523,8 +577,13 @@ export function ConnectorsPage() {
 	const [error, setError] = useState<string | null>(null);
 	const [loading, setLoading] = useState(true);
 	const [addOpen, setAddOpen] = useState(false);
+	const [expandedRow, setExpandedRow] = useState<string | null>(null);
 	const [addPrefill, setAddPrefill] = useState<AddConnectorPrefill | undefined>(undefined);
 	const [notice, setNotice] = useState<string | null>(null);
+	// Remote devices may read connector status, but the server's remote route
+	// policy keeps add, remove, login, logout, and test local-only, so the
+	// whole section renders read-only over the tunnel.
+	const remoteClient = useRemoteClientContext();
 
 	const refresh = useCallback(async () => {
 		setLoading(true);
@@ -543,78 +602,97 @@ export function ConnectorsPage() {
 	}, [refresh]);
 
 	const servers = status?.servers ?? [];
-	// Reachable = a connection has already succeeded (tools listed) or a login
-	// is stored; merely-configured servers still need a test or login.
-	const reachable = servers.filter((server) => server.tools || server.auth.hasStoredTokens).length;
-	const countLabel = loading && !status ? "checking" : servers.length === 0 ? "none yet" : `${reachable} of ${servers.length} reachable in rooms`;
 	const exxSource = status?.configSources.find((source) => source.path.includes(".exxperts"));
 	const sharedSource = status?.configSources.find((source) => !source.path.includes(".exxperts"));
 
 	return (
 		<>
-			<section className="landing-hero ai-setup-hero">
-				<h1>Connectors.</h1>
-				<p>External MCP servers your rooms can use. Same list on the web and in the CLI.</p>
-			</section>
 			<section className="ai-setup-section" aria-label="MCP connectors">
-				<div className="connector-section-head">
-					<h2>Active connections</h2>
-					<div className={`ai-setup-status-pill ${reachable > 0 ? "ready" : ""}`}>{countLabel}</div>
-				</div>
+				<h3 className="web-search-fallback-heading">Available</h3>
 				{notice && <p className="cli-note" role="status">{notice}</p>}
 				{error && <div className="checkpoint-proposal-error">{error}</div>}
 				{!error && loading && !status && <p className="ai-setup-copy">Loading connectors…</p>}
 				{!error && servers.length > 0 && (
-					<div className="connector-rows" aria-label="Configured MCP servers">
-						{servers.map((server) => (
-							<ConnectorRow key={server.name} server={server} onChanged={refresh} onNotice={setNotice} />
-						))}
-					</div>
+					<>
+						<div className="connector-rows connector-table" aria-label="Configured MCP servers">
+							<div className="settings-table-head connector-table-head" aria-hidden="true">
+								<span className="connector-table-head-name">Connector</span>
+								<span>Type</span>
+								<span>Status</span>
+								<span />
+							</div>
+							{servers.map((server) => (
+								<ConnectorRow
+									key={server.name}
+									server={server}
+									expanded={expandedRow === server.name}
+									onToggle={() => setExpandedRow((current) => (current === server.name ? null : server.name))}
+									onChanged={refresh}
+									onNotice={setNotice}
+									readOnly={remoteClient.remote}
+								/>
+							))}
+						</div>
+						{remoteClient.remote ? (
+							<p className="cli-note">Connectors are set up and signed in on the computer itself.</p>
+						) : (
+							<p className="cli-note">Rooms choose their connectors in room settings.</p>
+						)}
+					</>
 				)}
 				{!error && !loading && servers.length === 0 && (
-					<p className="ai-setup-copy">No connectors yet. Add one from the directory below.</p>
+					remoteClient.remote ? (
+						<p className="cli-note">Connectors are set up and signed in on the computer itself.</p>
+					) : (
+						<p className="ai-setup-copy">No connectors yet. Add one from the directory below.</p>
+					)
 				)}
 			</section>
-			<ConnectorDirectory
-				status={status}
-				onChanged={refresh}
-				onNotice={setNotice}
-				customOpen={addOpen}
-				onOpenCustom={(prefill) => {
-					setAddPrefill(prefill);
-					setAddOpen(true);
-				}}
-				customForm={
-					addOpen ? (
-						<AddConnectorForm
-							key={addPrefill?.name ?? "blank"}
-							prefill={addPrefill}
-							onAdded={async () => {
-								setAddOpen(false);
-								setAddPrefill(undefined);
-								setNotice(APPLY_NOTE);
-								await refresh();
-							}}
-							onCancel={() => {
-								setAddOpen(false);
-								setAddPrefill(undefined);
-							}}
-						/>
-					) : null
-				}
-			/>
+			{!remoteClient.remote && (
+				<ConnectorDirectory
+					status={status}
+					onChanged={refresh}
+					onNotice={setNotice}
+					customOpen={addOpen}
+					onOpenCustom={(prefill) => {
+						setAddPrefill(prefill);
+						setAddOpen(true);
+					}}
+					customForm={
+						addOpen ? (
+							<AddConnectorForm
+								key={addPrefill?.name ?? "blank"}
+								prefill={addPrefill}
+								onAdded={async () => {
+									setAddOpen(false);
+									setAddPrefill(undefined);
+									setNotice(APPLY_NOTE);
+									await refresh();
+								}}
+								onCancel={() => {
+									setAddOpen(false);
+									setAddPrefill(undefined);
+								}}
+							/>
+						) : null
+					}
+				/>
+			)}
 			{status && (
 				<section className="ai-setup-section connector-config-note" aria-label="Where connectors are stored">
-					<p className="cli-note">
-						Connectors you add here are saved to <code>{exxSource?.path ?? "~/.exxperts/agent/mcp.json"}</code>.
-						{sharedSource && (
-							<> The shared <code>{sharedSource.path}</code>, used by Cursor, Claude, and other MCP tools, works here too.</>
-						)}
-					</p>
-					<p className="cli-note">
-						The CLI uses the same list: <code>/mcp</code> shows it with live connection state, and project folders can add
-						their own connectors via a local <code>.mcp.json</code>. Full reference: <code>docs/mcp.md</code>.
-					</p>
+					<details className="remote-fold">
+						<summary>Where this list lives</summary>
+						<p className="cli-note">
+							Saved to <code>{exxSource?.path ?? "~/.exxperts/agent/mcp.json"}</code>.
+							{sharedSource && (
+								<> The shared <code>{sharedSource.path}</code>, used by Cursor, Claude, and other MCP tools, works here too.</>
+							)}
+						</p>
+						<p className="cli-note">
+							In the CLI, <code>/mcp</code> shows the same list with live connection state; project folders can add their
+							own via a local <code>.mcp.json</code>. Full reference: <code>docs/mcp.md</code>.
+						</p>
+					</details>
 					<p className="cli-note">All product names and logos are trademarks of their respective owners, used for identification only.</p>
 				</section>
 			)}

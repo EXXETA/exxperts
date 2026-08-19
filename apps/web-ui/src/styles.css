@@ -882,6 +882,10 @@ strong, b { font-weight: 700; }
 }
 .product-sidebar-footer {
 	margin-top: auto;
+	/* One row, like the old connection-label days: the remote pill takes the
+	   label's left slot, the gear pair keeps its right corner. */
+	display: flex;
+	align-items: center;
 	color: var(--muted);
 	font-size: var(--exx-font-size-xs);
 	padding: 10px 12px;
@@ -1221,24 +1225,12 @@ strong, b { font-weight: 700; }
 	background: var(--panel);
 	overflow: hidden;
 }
-/* The row-management popover must escape the card's corner clipping. */
-.ai-profile-card:has(.ai-profile-menu) {
-	overflow: visible;
-}
 .ai-profile-row-group + .ai-profile-row-group {
 	border-top: 1px solid var(--exx-divider);
 }
 .ai-profile-card-empty {
 	padding: 16px 18px;
 	margin: 0;
-}
-/* Refresh sits on the card it re-reads, rather than floating at the page edge. */
-.ai-profile-card-foot {
-	display: flex;
-	justify-content: flex-end;
-	padding: 9px 18px;
-	border-top: 1px solid var(--exx-divider);
-	background: color-mix(in srgb, var(--panel-2) 55%, transparent);
 }
 .ai-profile-row {
 	display: flex;
@@ -1376,16 +1368,17 @@ strong, b { font-weight: 700; }
 }
 .ai-profile-menu-btn:hover,
 .ai-profile-menu-btn[aria-expanded="true"] { color: var(--fg); background: var(--panel-2); }
+/* Backdrop and menu render in a portal on <body> (the anchor rows live
+   inside scroll containers that would clip an in-place popover, and the
+   settings modal sits at z-index 70), so both stack above every host. */
 .ai-profile-menu-backdrop {
 	position: fixed;
 	inset: 0;
-	z-index: 40;
+	z-index: 90;
 }
 .ai-profile-menu {
-	position: absolute;
-	top: calc(100% + 6px);
-	right: 0;
-	z-index: 41;
+	position: fixed;
+	z-index: 91;
 	min-width: 200px;
 	display: grid;
 	padding: 6px;
@@ -1467,6 +1460,7 @@ strong, b { font-weight: 700; }
 	font-size: 12.5px;
 	color: var(--muted);
 }
+.ai-profile-foot-link.danger { color: var(--danger, #d33); }
 .add-provider-key-form {
 	display: flex;
 	align-items: center;
@@ -1568,21 +1562,106 @@ strong, b { font-weight: 700; }
 	font-size: 13.5px;
 }
 .configure-profile-remove { margin-left: auto; color: var(--danger, #d33); }
-/* A gateway model row asks four quiet questions at once: approve it, can it
-   see images, can it search the web, how much context does it have. Kept on one
-   line where the panel is wide enough so the list still scans like a checkbox
-   list rather than a form, and wrapping rather than squeezing when it is not. */
+/* A gateway model row is one question and a set of facts: approve it, and
+   here is what it can do. Images, reasoning and the context figure read as
+   quiet badges; web search stays the row's one interactive tick because it can
+   bill per use; everything else is edited behind the row's adjust fold. Kept
+   on one line where the panel is wide enough so the list still scans like a
+   checkbox list rather than a form, and wrapping rather than squeezing when it
+   is not. */
 .gateway-model-row {
 	cursor: default;
 	gap: 12px;
 	flex-wrap: wrap;
 }
+/* A company gateway routes fifty models or more, and a 260px window turns the
+   capability controls into something you hunt for. The list gets most of the
+   screen instead, and the modal gets the width the row needs to stay on one
+   line. */
+.gateway-model-list { max-height: min(60vh, 560px); }
+/* Written against .room-settings-modal, whose own max-width is declared further
+   down this file and would otherwise win on equal specificity. */
+.room-settings-modal.gateway-config-modal { max-width: 960px; }
+/* The bulk controls stay put while the list scrolls: on model fifty they are
+   the reason somebody is here, and scrolling back up to find them is the
+   problem this row exists to end. */
+.gateway-model-bulk-row {
+	position: sticky;
+	top: 0;
+	z-index: 1;
+	background: var(--panel-2);
+	cursor: default;
+}
+.gateway-model-bulk-cell {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	cursor: default;
+}
+.gateway-model-bulk-label { color: var(--muted); }
+/* Mirrors .menu-theme-seg at list scale. As two bare links the pair read as
+   prose in the middle of a header, and "all on off" was one phrase nobody could
+   see the seam in; bordered and joined, they read as the two buttons they are. */
+.gateway-model-bulk-seg {
+	display: inline-flex;
+	border: 1px solid var(--border);
+	border-radius: var(--exx-radius-sm);
+	overflow: hidden;
+}
+.gateway-model-bulk-seg button {
+	background: transparent;
+	border: 0;
+	color: var(--fg-soft);
+	font-size: var(--exx-font-size-xs);
+	padding: 3px 8px;
+	cursor: pointer;
+}
+.gateway-model-bulk-seg button + button { border-left: 1px solid var(--border); }
+.gateway-model-bulk-seg button:hover,
+.gateway-model-bulk-seg button:focus-visible {
+	background: color-mix(in srgb, var(--fg) 8%, transparent);
+	color: var(--fg);
+	outline: none;
+}
+/* The header's two real actions, apply and use detected. Same secondary tokens
+   as .inline-action, without its uppercase display face: at this size the
+   toolbar has to stay quieter than the list it sits on. */
+.gateway-model-bulk-button {
+	background: var(--exx-action-secondary-bg);
+	border: 1px solid var(--exx-action-secondary-border);
+	border-radius: var(--exx-radius-sm);
+	color: var(--exx-action-secondary-fg);
+	font-size: var(--exx-font-size-xs);
+	padding: 3px 8px;
+	cursor: pointer;
+}
+.gateway-model-bulk-button:hover:not(:disabled),
+.gateway-model-bulk-button:focus-visible {
+	background: color-mix(in srgb, var(--fg) 8%, transparent);
+	border-color: var(--border);
+	color: var(--fg);
+	outline: none;
+}
+.gateway-model-bulk-button:disabled { opacity: 0.45; cursor: not-allowed; }
+/* Use detected acts on the whole list rather than on a column, and the gap to
+   its right-hand seat says so. At the mobile widths the row wraps anyway, and
+   auto margin on a wrapped line collapses to nothing, so it degrades with the
+   cells instead of fighting them. */
+.gateway-model-bulk-detected { margin-left: auto; }
+/* Wrapping is decided on the flex bases, and the approve cell's shared 180px
+   basis left no room for use detected at the modal's width. The count it holds
+   is short, and the cell still grows into whatever the line has spare, so a
+   smaller basis costs nothing at full width and buys the one-line row. */
+.gateway-model-bulk-row .gateway-model-approve { flex-basis: 96px; }
 .gateway-model-approve {
 	display: flex;
 	align-items: center;
 	gap: 10px;
 	min-width: 0;
-	flex: 1 1 200px;
+	/* The name takes the leftover width but asks for little, so the four
+	   controls beside it decide the line break instead of being pushed off it.
+	   Long ids ellipsize, which they did before this too. */
+	flex: 1 1 180px;
 	cursor: pointer;
 }
 .gateway-model-approve .configure-profile-model-name {
@@ -1598,8 +1677,17 @@ strong, b { font-weight: 700; }
 	color: var(--muted);
 	line-height: 1.5;
 }
+/* The gateway dialog is 960px wide, but `.landing p` caps prose at 700px and
+   reaches the hint and note paragraphs inside the modal. The list they sit
+   against spans the modal, so the capped copy wrapped three quarters of the
+   way across and stopped short of the list's right edge. */
+.gateway-config-modal .gateway-model-list-hint,
+.gateway-config-modal .cli-note {
+	max-width: none;
+}
 .gateway-model-vision,
-.gateway-model-websearch {
+.gateway-model-websearch,
+.gateway-model-reasoning {
 	display: flex;
 	align-items: center;
 	gap: 6px;
@@ -1608,12 +1696,34 @@ strong, b { font-weight: 700; }
 	cursor: pointer;
 	white-space: nowrap;
 }
+/* Fixed per column, and the same width in the header row as in the model rows,
+   so "images" sits over the images box instead of somewhere near it. Sized just
+   past the longest label in either row so nothing clips: with use detected now
+   living on the header line, the spare width these once carried is what keeps
+   the approved count from ellipsizing. */
+.gateway-model-vision { flex: 0 0 116px; }
+.gateway-model-websearch { flex: 0 0 140px; }
+.gateway-model-reasoning { flex: 0 0 132px; }
+/* A ticked box was inheriting accent-color: var(--fg), which in this theme is a
+   near-white tick on a near-white fill: on a fifty-model list an approved
+   capability looked untouched. The brand lila is the palette's one accent and
+   holds its contrast in both themes. Written past
+   .configure-profile-model-option input[type="checkbox"], which is declared
+   later in this file and would otherwise win on equal specificity. */
+.configure-profile-model-option.gateway-model-row input[type="checkbox"] {
+	accent-color: var(--exx-plan);
+	width: 15px;
+	height: 15px;
+}
 .gateway-model-window {
 	display: flex;
 	align-items: center;
 	gap: 6px;
 	font-size: 12.5px;
 	color: var(--muted);
+	/* Wide enough for the header's extra apply button, and the same in the rows,
+	   so the context field sits at one x down the whole list. */
+	flex: 0 0 202px;
 }
 .gateway-model-window-label { white-space: nowrap; }
 .gateway-model-window-input {
@@ -1622,12 +1732,97 @@ strong, b { font-weight: 700; }
 	font-size: 12.5px;
 }
 .gateway-model-window-input.invalid { border-color: var(--danger, #d33); }
+/* .launcher-path-input is declared later in this file with the same specificity,
+   so its full width and full padding were winning here: the context field grew
+   into a page-wide control and pushed the capability checkboxes off the model's
+   line. Scoped one level deeper so the row gets the compact field it was
+   written for, and fifty rows still read as a list. */
+.gateway-model-row .gateway-model-window-input {
+	flex: 0 0 92px;
+	width: 92px;
+	padding: 4px 6px;
+	font-size: 12.5px;
+}
 /* The complaint sits under the row that caused it, on its own line, so a wide
    value never pushes the three controls out of alignment. */
 .gateway-model-window-error {
 	flex: 1 0 100%;
 	font-size: 12px;
 	color: var(--danger, #d33);
+}
+/* The row's quiet middle: what the model effectively is. Muted chips, because
+   these are facts to read, not controls to press; changing them is what the
+   adjust fold is for. */
+.gateway-model-facts {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	flex: 1 1 auto;
+	justify-content: flex-end;
+	min-width: 0;
+}
+.gateway-model-fact {
+	font-size: 11.5px;
+	color: var(--muted);
+	border: 1px solid var(--border);
+	border-radius: var(--exx-radius-sm);
+	padding: 1px 7px;
+	white-space: nowrap;
+	cursor: default;
+}
+/* The one way into a row's field editors: a small word, not a button, so fifty
+   rows do not become fifty toolbars. */
+.gateway-model-adjust {
+	background: transparent;
+	border: 0;
+	color: var(--fg-soft);
+	font-size: var(--exx-font-size-xs);
+	padding: 3px 6px;
+	cursor: pointer;
+	border-radius: var(--exx-radius-sm);
+}
+.gateway-model-adjust:hover,
+.gateway-model-adjust:focus-visible {
+	background: color-mix(in srgb, var(--fg) 8%, transparent);
+	color: var(--fg);
+	outline: none;
+}
+.gateway-model-adjust[aria-expanded="true"] { color: var(--fg); }
+/* The fold takes the row's full width on its own line, one editor per fact
+   plus the detection note, so opening it never reflows the line above it. */
+.gateway-model-adjust-fold {
+	flex: 1 0 100%;
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 10px 20px;
+	padding: 4px 0 2px 25px;
+}
+.gateway-adjust-field {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	font-size: 12.5px;
+	color: var(--muted);
+}
+/* Inside a fold the window field has no header column to line up with, so it
+   gives up the header-matched fixed width the old row version needed. */
+.gateway-model-adjust-fold .gateway-model-window { flex: 0 0 auto; }
+/* The side of the pair currently in force, so the fold answers before it asks. */
+.gateway-model-bulk-seg button.seg-active {
+	background: color-mix(in srgb, var(--fg) 12%, transparent);
+	color: var(--fg);
+}
+.gateway-model-detected-row {
+	flex: 1 0 100%;
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+}
+.gateway-model-detected-note {
+	font-size: 12px;
+	color: var(--muted);
 }
 .gateway-models-input {
 	min-height: 84px;
@@ -1641,8 +1836,15 @@ strong, b { font-weight: 700; }
 }
 .add-provider-toggle-row {
 	display: flex;
-	align-items: baseline;
+	align-items: center;
 	gap: 14px;
+	/* The panel left-aligns its items; this row spans it so the trailing
+	   Refresh can ride the far right edge. */
+	justify-self: stretch;
+}
+/* The page's Refresh link rides the toggle row's right end. */
+.add-provider-toggle-trailing {
+	margin-left: auto;
 }
 .add-provider-added-note {
 	font-size: 12.5px;
@@ -8740,7 +8942,6 @@ label.rs-row {
 /* Connector directory ------------------------------------------------ */
 .connector-dir-search {
 	width: 100%;
-	max-width: 420px;
 	border: 1px solid var(--border-soft);
 	border-radius: var(--exx-radius-control);
 	background: var(--bg-2);
@@ -8756,26 +8957,49 @@ label.rs-row {
 }
 .connector-dir-grid {
 	display: grid;
-	grid-template-columns: repeat(auto-fill, minmax(min(280px, 100%), 1fr));
-	gap: 12px;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 10px;
+}
+@media (max-width: 760px) {
+	.connector-dir-grid {
+		grid-template-columns: minmax(0, 1fr);
+	}
 }
 .connector-dir-card {
 	border: 1px solid var(--border-soft);
-	border-radius: 10px;
+	border-radius: 12px;
 	background: color-mix(in srgb, var(--panel) 82%, transparent);
-	padding: 14px;
+	padding: 12px 14px;
 	display: flex;
 	flex-direction: column;
 	gap: 8px;
 }
-.connector-dir-head {
+/* Reference card geometry: icon left; name, kind, and a two-line blurb in
+   the middle; one small square add control right, vertically centered. */
+.connector-dir-card-row {
 	display: flex;
 	align-items: center;
-	gap: 10px;
+	gap: 12px;
+	min-width: 0;
 }
-.connector-dir-head div {
+.connector-dir-body {
+	flex: 1 1 auto;
+	min-width: 0;
 	display: grid;
-	gap: 1px;
+	gap: 2px;
+}
+.connector-dir-title {
+	display: flex;
+	align-items: baseline;
+	gap: 8px;
+	min-width: 0;
+}
+.connector-dir-title strong {
+	font-size: 14px;
+	font-weight: 500;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
 	min-width: 0;
 }
 .connector-avatar {
@@ -8831,6 +9055,15 @@ label.rs-row {
 	font-size: 12px;
 	line-height: 1.5;
 }
+/* Transient action outcomes: a full-width line under the row that wraps
+   instead of truncating inside the name cell. */
+.connector-row-outcome {
+	grid-column: 1 / -1;
+	color: var(--muted);
+	font-size: 12px;
+	line-height: 1.5;
+	min-width: 0;
+}
 .connector-row em.ready,
 .connector-row em.missing {
 	font-style: normal;
@@ -8862,16 +9095,90 @@ label.rs-row {
 		justify-content: flex-start;
 	}
 }
+/* Inline row expansion (Available table): the name area toggles a
+   full-width detail strip under the row — catalog blurb, tool chips,
+   quiet metadata. Pure presentation of already-fetched status data. */
+.connector-row-toggle {
+	background: none;
+	border: none;
+	margin: 0;
+	padding: 0;
+	font: inherit;
+	color: inherit;
+	text-align: left;
+	cursor: pointer;
+}
+.connector-row-expansion {
+	grid-column: 1 / -1;
+	display: grid;
+	gap: 8px;
+	padding: 2px 0 8px 36px;
+}
+.connector-expansion-desc {
+	margin: 0;
+	font-size: 12.5px;
+	line-height: 1.5;
+	color: var(--muted);
+	max-width: 44rem;
+}
+.connector-tool-chips {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+}
+.connector-tool-chip {
+	border: 1px solid var(--border-soft);
+	border-radius: 6px;
+	background: color-mix(in srgb, var(--fg) 4%, transparent);
+	color: var(--muted);
+	font-family: var(--exx-font-mono);
+	font-size: 11px;
+	line-height: 1;
+	padding: 5px 8px;
+	white-space: nowrap;
+}
+/* The quiet toggle after the 8th chip: chip-shaped, dashed, obviously an
+   action rather than a tool name. */
+.connector-tool-chip-more {
+	background: none;
+	border-style: dashed;
+	cursor: pointer;
+}
+.connector-tool-chip-more:hover,
+.connector-tool-chip-more:focus-visible {
+	color: var(--fg);
+	border-color: var(--border);
+}
+.connector-expansion-meta {
+	margin: 0;
+	font-size: 11.5px;
+	color: color-mix(in srgb, var(--muted) 80%, transparent);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	min-width: 0;
+}
 .connector-dir-kind {
+	flex: 0 1 auto;
+	min-width: 0;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
 	font-size: 11px;
 	color: var(--muted);
 }
 .connector-dir-desc {
 	margin: 0;
-	font-size: 13px;
-	line-height: 1.5;
+	font-size: 12.5px;
+	line-height: 1.45;
 	color: var(--muted);
-	flex: 1 1 auto;
+	display: -webkit-box;
+	-webkit-line-clamp: 2;
+	-webkit-box-orient: vertical;
+	overflow: hidden;
+	/* Two reserved lines: every card keeps the same height whether the
+	   blurb fills them or not. */
+	min-height: calc(2 * 1.45em);
 }
 .connector-dir-note {
 	margin: 0;
@@ -8915,6 +9222,43 @@ label.rs-row {
 .connector-dir-token-guide:hover {
 	color: var(--fg);
 	text-decoration: underline;
+}
+/* The card's one control: a small square +, existing secondary tokens. */
+.connector-dir-add {
+	flex: 0 0 auto;
+	width: 28px;
+	height: 28px;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	padding: 0;
+	border: 1px solid var(--exx-action-secondary-border);
+	border-radius: var(--exx-radius-control);
+	background: var(--exx-action-secondary-bg);
+	color: var(--exx-action-secondary-fg);
+	font-size: 16px;
+	line-height: 1;
+	cursor: pointer;
+	text-decoration: none;
+	transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+.connector-dir-add:hover:not(:disabled),
+.connector-dir-add:focus-visible {
+	background: color-mix(in srgb, var(--fg) 8%, transparent);
+	border-color: var(--border);
+	color: var(--fg);
+}
+.connector-dir-add:disabled {
+	opacity: 0.45;
+	cursor: not-allowed;
+}
+/* Installed marker in the same square footprint, quiet and inert. */
+.connector-dir-add.connector-dir-added {
+	min-height: 0;
+	border-color: transparent;
+	background: transparent;
+	font-size: 14px;
+	cursor: default;
 }
 
 /* Connectors polish ---------------------------------------------------- */
@@ -10740,7 +11084,8 @@ label.rs-row {
 	display: flex;
 	align-items: center;
 	justify-content: center;
-	z-index: 50;
+	/* Above the settings overlay (70): this dialog opens from inside it. */
+	z-index: 90;
 	padding: 24px;
 }
 .skill-upload-modal {
@@ -10933,6 +11278,28 @@ label.rs-row {
 .room-skills-warn {
 	font-size: 12px;
 	color: var(--exx-warning, #c47f00);
+}
+.room-skills-exec {
+	display: grid;
+	gap: 2px;
+	margin-top: 4px;
+	min-width: 0;
+}
+.room-skills-exec-title {
+	font-size: 12px;
+	font-weight: 600;
+}
+.room-skills-files {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+	font-size: 12px;
+	opacity: 0.75;
+	max-height: 96px;
+	overflow-y: auto;
+}
+.room-skills-files li {
+	overflow-wrap: anywhere;
 }
 .room-skills-row-actions {
 	display: flex;
@@ -11371,7 +11738,10 @@ label.rs-row {
 	bottom: 24px;
 	left: 50%;
 	transform: translateX(-50%);
-	z-index: 70;
+	/* Above settings (70), memory fullscreen (80) and the mermaid viewer (85):
+	   a dead connection concerns the whole app, whatever is on screen. Portaled
+	   menus (90) stay above; they dismiss on any click anyway. */
+	z-index: 86;
 	display: flex;
 	align-items: center;
 	gap: 10px;
@@ -11531,6 +11901,7 @@ html.desktop-app-mac .help-overlay,
 html.desktop-app-mac .rooms-guide-overlay,
 html.desktop-app-mac .skill-upload-overlay,
 html.desktop-app-mac .ai-profile-menu-backdrop,
+html.desktop-app-mac .settings-overlay-backdrop,
 html.desktop-app-mac .mem-fullscreen {
 	-webkit-app-region: no-drag;
 }
@@ -11976,4 +12347,1387 @@ button.model-picker-group-head.kb-active {
 	background: var(--panel-2);
 	outline: 2px solid var(--exx-focus);
 	outline-offset: -2px;
+}
+
+/* Remote access (Settings page + sidebar indicator) */
+.remote-master {
+	display: flex;
+	flex-direction: column;
+	align-items: stretch;
+	gap: 0;
+}
+.remote-master > .web-search-fallback-heading {
+	margin-bottom: 8px;
+}
+.remote-master-state {
+	margin: 0;
+	font-size: 14px;
+	line-height: 1.5;
+	display: flex;
+	align-items: baseline;
+	gap: 8px;
+}
+.remote-master-state code {
+	font-size: 13px;
+}
+.remote-hint-degraded {
+	color: var(--warning);
+}
+.remote-master-footnote {
+	margin: 0;
+	color: var(--muted);
+	font-size: 12.5px;
+	line-height: 1.5;
+	max-width: 40rem;
+}
+/* Secondary explanations fold shut so a state reads as one calm line. */
+.remote-fold {
+	max-width: 40rem;
+}
+.remote-fold summary {
+	color: var(--muted);
+	font-size: 12.5px;
+	cursor: pointer;
+	width: fit-content;
+}
+.remote-fold summary:hover,
+.remote-fold summary:focus-visible {
+	color: var(--fg);
+}
+.remote-fold[open] summary {
+	color: var(--fg-soft);
+	margin-bottom: 6px;
+}
+/* Folds and the pairing panel sit between rows; small margins keep the
+   row rhythm around them. */
+.remote-master > .remote-fold {
+	margin: 2px 0 10px;
+}
+.remote-fold .remote-fold {
+	margin-top: 6px;
+}
+/* The serving address lives folded away: 13px code plus the copy control. */
+.remote-address {
+	margin: 0;
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+.remote-address code {
+	font-size: 13px;
+	word-break: break-all;
+}
+.remote-address .message-copy {
+	margin-top: 0;
+}
+.remote-on-dot {
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+	background: var(--success);
+	flex-shrink: 0;
+	align-self: center;
+}
+.remote-on-pill {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	border: 1px solid color-mix(in srgb, var(--success) 24%, var(--border-soft));
+	border-radius: 999px;
+	background: color-mix(in srgb, var(--success) 8%, transparent);
+	color: var(--fg-soft);
+	font-size: var(--exx-font-size-xs);
+	padding: 3px 10px;
+	cursor: pointer;
+	white-space: nowrap;
+}
+.remote-on-pill:hover,
+.remote-on-pill:focus-visible {
+	color: var(--fg);
+	outline: none;
+	border-color: color-mix(in srgb, var(--success) 40%, var(--border-soft));
+}
+.remote-on-pill.paused {
+	border-color: color-mix(in srgb, var(--warning) 30%, var(--border-soft));
+	background: color-mix(in srgb, var(--warning) 9%, transparent);
+}
+.remote-on-pill.paused .remote-on-dot {
+	background: var(--warning);
+}
+.menu-item-state {
+	color: var(--muted);
+	font-size: var(--exx-font-size-xs);
+}
+/* Inside the settings tab the section grid already spaces the blocks; the
+   headings only need a little air above and a steady gap to their rows. */
+.remote-devices {
+	margin-top: 6px;
+}
+.remote-devices .web-search-fallback-heading {
+	margin-bottom: 12px;
+}
+.remote-pairing-copy {
+	margin-bottom: 12px;
+	max-width: 40rem;
+}
+.remote-pairing-panel {
+	display: flex;
+	gap: 22px;
+	align-items: flex-start;
+	flex-wrap: wrap;
+	margin-top: 8px;
+}
+.remote-pairing-qr {
+	width: 140px;
+	height: 140px;
+	border-radius: 8px;
+	flex-shrink: 0;
+}
+/* Same footprint while a code is minting, so the panel never jumps. */
+.remote-pairing-qr-pending {
+	width: 140px;
+	height: 140px;
+	border-radius: 8px;
+	flex-shrink: 0;
+	background: color-mix(in srgb, var(--muted) 10%, transparent);
+}
+.remote-pairing-side {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 10px;
+	min-width: 0;
+	/* Grows beside the QR and only wraps under it when the pane is truly
+	   narrow (the settings pane is ~660px, so a fixed 34rem cap wrapped). */
+	flex: 1 1 260px;
+	max-width: 34rem;
+}
+.remote-pairing-side .remote-pairing-copy {
+	margin: 0;
+}
+.remote-pairing-url {
+	font-size: 12.5px;
+	color: var(--fg-soft);
+	word-break: break-all;
+}
+.remote-pairing-waiting {
+	margin: 0;
+	color: var(--muted);
+}
+.remote-pending-row {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 12px;
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	padding: 10px 14px;
+}
+.remote-pending-name {
+	font-weight: 600;
+	font-size: 14px;
+}
+.remote-pending-actions {
+	display: flex;
+	gap: 10px;
+	align-items: center;
+}
+.remote-capability-seg {
+	display: inline-flex;
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	overflow: hidden;
+}
+.remote-capability-seg button {
+	background: transparent;
+	border: 0;
+	color: var(--fg-soft);
+	font-size: var(--exx-font-size-xs);
+	padding: 4px 10px;
+	cursor: pointer;
+	white-space: nowrap;
+}
+.remote-capability-seg button:hover,
+.remote-capability-seg button:focus-visible {
+	color: var(--fg);
+	outline: none;
+}
+.remote-capability-seg button.on {
+	background: var(--fg);
+	color: var(--bg);
+}
+.remote-capability-seg button:disabled {
+	cursor: default;
+	opacity: 0.6;
+}
+/* Soft divider between the pairing area and the paired-device rows. */
+.remote-section-divider {
+	border-top: 1px solid color-mix(in srgb, var(--border-soft) 55%, transparent);
+	margin: 14px 0 2px;
+}
+/* Device and room rows borrow the room-settings rs-row shape: label and hint
+   stacked on the left, controls as one quiet aligned group on the right. */
+.remote-device-armed {
+	color: var(--error);
+}
+.remote-device-actions {
+	display: flex;
+	gap: 14px;
+	align-items: center;
+	flex-shrink: 0;
+}
+/* Room rows are a long list; they sit tighter than the device rows. */
+.remote-room-row {
+	padding: 8px 0;
+}
+
+/* Remote access onboarding (no tunnel yet) */
+.remote-onboarding {
+	margin: 10px 0;
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 10px;
+	border: 1px solid var(--border);
+	border-radius: 10px;
+	padding: 16px 18px;
+	max-width: 40rem;
+}
+.remote-onboarding-copy {
+	margin: 0;
+}
+.remote-onboarding-steps {
+	margin: 0;
+	padding-left: 20px;
+	color: var(--fg-soft);
+	font-size: 14px;
+	line-height: 1.6;
+}
+.remote-onboarding-actions {
+	display: flex;
+	align-items: center;
+	gap: 14px;
+	flex-wrap: wrap;
+}
+.remote-onboarding-link {
+	text-decoration: none;
+}
+.remote-onboarding-waiting {
+	color: var(--muted);
+	font-size: 12.5px;
+}
+
+/* ================= Mobile pass (function-first) =================
+   One breakpoint for phone-sized screens. Scope: make every screen usable
+   and unbroken on a phone; the visual language stays exactly as it is.
+   Landing shells keep a compact always-visible top bar (a slim bar in grid
+   flow covers nothing); the in-room rail becomes an overlay drawer, closed
+   by default on first visit (sidebar-collapse.tsx). */
+@media (max-width: 760px) {
+	/* Landing top bar: one row - logo, nav scrolling sideways, controls.
+	   Replaces the tall stacked header the shared 760px block produced. */
+	.product-sidebar {
+		flex-direction: row;
+		align-items: center;
+		gap: 4px;
+		padding: 0;
+		border-bottom: 1px solid var(--exx-divider);
+	}
+	.product-sidebar-header {
+		padding: 10px 8px 10px 14px;
+	}
+	.product-sidebar .brand img.logo {
+		height: 20px;
+	}
+	.product-sidebar .product-nav {
+		display: flex;
+		flex-direction: row;
+		align-items: center;
+		flex: 1 1 auto;
+		min-width: 0;
+		overflow-x: auto;
+		gap: 2px;
+		padding: 0 4px;
+		scrollbar-width: none;
+	}
+	.product-sidebar .product-nav::-webkit-scrollbar { display: none; }
+	.product-nav-section { display: contents; }
+	.product-nav-label { display: none; }
+	.product-sidebar .product-nav .list-btn {
+		white-space: nowrap;
+		width: auto;
+		flex: 0 0 auto;
+	}
+	.product-sidebar-footer {
+		padding: 4px 10px 4px 4px;
+		margin-left: auto;
+		flex: 0 0 auto;
+	}
+	/* The top bar stays even while "collapsed": hiding the only navigation
+	   behind a floating toggle helps nobody on a phone, and the bar is slim.
+	   The floating affordance is therefore redundant on these pages. */
+	html.sidebar-collapsed .product-sidebar { display: flex; }
+	/* minmax(0, 1fr), not 1fr: a bare 1fr track's automatic minimum is the
+	   items' min-content, which let one wide descendant push the whole shell
+	   past the viewport. */
+	.landing-shell.with-product-sidebar,
+	html.sidebar-collapsed .landing-shell.with-product-sidebar {
+		grid-template-columns: minmax(0, 1fr);
+		grid-template-rows: auto minmax(0, 1fr);
+	}
+	.product-sidebar, .landing { min-width: 0; }
+	html.sidebar-collapsed:has(.product-sidebar) .sidebar-toggle-floating { display: none; }
+	html.sidebar-collapsed:not(.desktop-app-mac) .landing { padding-left: 16px; }
+	/* The collapse control is meaningless while the bar is forced visible. */
+	.product-sidebar-footer .sidebar-toggle { display: none; }
+	/* The gear menu anchors to a footer that now sits in a TOP bar, so it
+	   opens downward here (the in-room drawer keeps its upward menu). */
+	.product-sidebar .sidebar-config-menu {
+		bottom: auto;
+		top: 100%;
+		margin-bottom: 0;
+		margin-top: 8px;
+		right: 0;
+	}
+	.landing { padding: 20px 16px; }
+
+	/* In-room: the chat owns the full width. The rail, when opened, overlays
+	   as a drawer instead of squeezing the conversation into a sliver. */
+	.app { grid-template-columns: minmax(0, 1fr); }
+	.app > .sidebar {
+		position: fixed;
+		top: 0;
+		bottom: 0;
+		left: 0;
+		width: min(82vw, 320px);
+		z-index: 60;
+		border-right: 1px solid var(--border);
+		box-shadow: 0 0 40px rgba(0, 0, 0, 0.45);
+	}
+	.topbar { flex-wrap: wrap; row-gap: 4px; }
+	/* The floating reveal control moves to the top corner in a room: at the
+	   bottom it sat on the composer's attach button. The collapsed topbar
+	   already clears 52px on the left for exactly this spot. */
+	.sidebar-toggle-floating { top: 8px; bottom: auto; left: 10px; }
+	.messages { padding: 16px 14px 20px; }
+	/* In a browser tab env() is zero and the browser's own bar already
+	   clears the home indicator, so the composer sits near-flush with the
+	   bottom edge; the home-screen app gets the real inset on top. The
+	   composer box's own border supplies the visual separation. */
+	.composer { padding: 4px 10px calc(2px + env(safe-area-inset-bottom)); }
+
+	/* Rows that keep the desktop's one-line shape wrap instead of crushing
+	   their text columns. */
+	.ai-profile-row { flex-wrap: wrap; row-gap: 8px; }
+	/* Name and status keep the full line; the controls drop to their own row
+	   instead of crushing the text column into one word per line. */
+	.ai-profile-main { flex-basis: 100%; }
+	.ai-profile-side { margin-left: 30px; }
+	.archived-room-row { flex-wrap: wrap; }
+	.remote-device-row {
+		flex-direction: column;
+		align-items: flex-start;
+		gap: 10px;
+	}
+}
+
+/* Remote rooms exposure section */
+.remote-rooms-copy {
+	margin-bottom: 4px;
+	max-width: 40rem;
+}
+
+/* Settings overlay ------------------------------------------------
+   A centered modal over the dimmed current view (same backdrop treatment as
+   the checkpoint preview, same card tokens as the checkpoint input card).
+   The hosted pages keep their own .landing layout and scrolling; the modal
+   only supplies the two-column grid, the section nav, and the phone
+   collapse into a full-screen sheet. */
+.settings-overlay-backdrop {
+	position: fixed;
+	inset: 0;
+	z-index: 70;
+	background: color-mix(in srgb, var(--bg) 72%, transparent);
+	backdrop-filter: blur(10px);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding: 24px;
+}
+.settings-overlay {
+	position: relative;
+	width: min(940px, 100%);
+	height: min(720px, 85vh);
+	border: 1px solid var(--border);
+	border-radius: 22px;
+	background: var(--bg);
+	box-shadow: 0 24px 80px color-mix(in srgb, #000 26%, transparent);
+	color: var(--fg);
+	overflow: hidden;
+	display: grid;
+	grid-template-columns: 200px minmax(0, 1fr);
+}
+.settings-overlay-nav {
+	display: flex;
+	flex-direction: column;
+	gap: 18px;
+	padding: 22px 14px 16px 20px;
+	border-right: 1px solid var(--exx-divider);
+	overflow-y: auto;
+	min-height: 0;
+}
+.settings-overlay-nav-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 10px;
+}
+/* Same typographic pattern as the page titles, sized to the modal-header
+   scale the room-settings dialog uses. */
+.settings-overlay-nav h1 {
+	font-family: "Bandeins Strange Variable", "Bandeins Strange", "Sen", sans-serif;
+	font-variation-settings: "wght" 820;
+	font-size: 22px;
+	line-height: 1;
+	letter-spacing: -0.025em;
+	margin: 0;
+}
+.settings-overlay-sections {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+}
+.settings-overlay-sections .list-btn {
+	width: 100%;
+	font-size: 14px;
+}
+/* Flex column, not a grid: the phone back bar is display:none on desktop,
+   and a hidden first child left the grid's auto row to swallow the page,
+   which then sized to its content instead of the pane. Short content left
+   dead space below a stunted scrollbar; tall content overflowed the
+   overflow:hidden frame, which the browser then scrolled on focus, shoving
+   the whole dialog upward. In a flex column the page always fills exactly
+   what the strip leaves, so the one scroll container per pane is the page
+   itself and its scrollbar starts below the strip at the right edge. */
+.settings-overlay-content {
+	min-width: 0;
+	min-height: 0;
+	display: flex;
+	flex-direction: column;
+}
+/* A slim non-scrolling strip across the pane's top: the close X's home.
+   Chromeless on desktop (no border, no title; the nav names the tab), it
+   starts the scroll region below the X so content clips under the X band
+   instead of sliding behind the control, and the scrollbar track begins
+   below the modal's top rounding. Not a pointer target itself: only the X
+   (pinned over it) is interactive, and there is nothing under the strip
+   for it to shadow. On phones the same element is the sheet's back bar
+   (media block below). */
+.settings-overlay-content-bar {
+	height: 44px;
+	flex: 0 0 auto;
+}
+/* The close X floats pinned to the modal's top-right corner; content
+   scrolls beneath it. Chromeless at rest; the circular backdrop appears on
+   hover and focus only. */
+.settings-overlay-close {
+	position: absolute;
+	top: 12px;
+	right: 12px;
+	z-index: 5;
+	width: 30px;
+	height: 30px;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	padding: 0;
+	border: none;
+	border-radius: 50%;
+	background: transparent;
+	color: var(--muted);
+	font-size: 13px;
+	line-height: 1;
+	cursor: pointer;
+}
+.settings-overlay-close:hover,
+.settings-overlay-close:focus-visible {
+	background: color-mix(in srgb, var(--fg) 14%, transparent);
+	color: var(--fg);
+	outline: none;
+}
+.settings-overlay-content > .landing {
+	flex: 1 1 auto;
+	min-height: 0;
+}
+/* The pages were built for full-page width; inside the modal pane, wide
+   content (tables, model lists) scrolls horizontally within the pane
+   instead of clipping against the rounded frame. */
+.settings-overlay .landing {
+	overflow-x: auto;
+	padding: 6px 28px 30px;
+	gap: 16px;
+}
+/* Quiet custom scrollbar; the standard scrollbar-width/scrollbar-color
+   pair is deliberately absent above because setting either one makes
+   engines ignore these pseudo-element rules, and only the pseudo-element
+   track takes a margin. The top inset comes structurally from the strip
+   (the scroll container starts below it); the bottom margin keeps the
+   track and thumb clear of the modal's rounded corner. */
+.settings-overlay .landing::-webkit-scrollbar {
+	width: 8px;
+}
+.settings-overlay .landing::-webkit-scrollbar-thumb {
+	background: var(--border);
+	border-radius: 4px;
+}
+.settings-overlay .landing::-webkit-scrollbar-thumb:hover {
+	background: var(--fg-soft);
+}
+.settings-overlay .landing::-webkit-scrollbar-track {
+	background: transparent;
+	margin-bottom: 18px;
+}
+/* Engines without ::-webkit-scrollbar keep the thin standard treatment
+   (no inset available there). */
+@supports not selector(::-webkit-scrollbar) {
+	.settings-overlay .landing {
+		scrollbar-width: thin;
+		scrollbar-color: var(--border) transparent;
+	}
+}
+/* The nav names the section and the header bar repeats it; the pages'
+   full-page hero titles would say it a third time at poster size, so the
+   hero keeps only its intro copy in here. */
+.settings-overlay .landing-hero h1 {
+	display: none;
+}
+.settings-overlay .landing-hero {
+	padding-bottom: 12px;
+}
+/* The hero already names the section; the component's own heading would
+   say it twice. */
+.settings-overlay .settings-web-search .ai-setup-section-heading {
+	display: none;
+}
+
+/* Compact scale inside the modal only: the hosted pages were built for
+   full-page air, and at modal density their sizes read loose. Everything
+   here is scoped under .settings-overlay so the full-page views (remote
+   devices see some of these components full-page) are untouched. */
+.settings-overlay .landing p,
+.settings-overlay .ai-setup-copy,
+.settings-overlay .remote-onboarding-steps {
+	font-size: 14px;
+	line-height: 1.55;
+}
+.settings-overlay .landing-hero p {
+	max-width: 36rem;
+}
+.settings-overlay .ai-setup-section {
+	gap: 14px;
+	padding-bottom: 20px;
+}
+.settings-overlay .connectors-page .ai-setup-section,
+.settings-overlay .skills-page .ai-setup-section {
+	padding-top: 6px;
+}
+.settings-overlay .connectors-page.ai-setup-page {
+	gap: 10px;
+}
+.settings-overlay .remote-master-state {
+	font-size: 14px;
+}
+.settings-overlay .remote-master-state code {
+	font-size: 13px;
+}
+.settings-overlay .remote-master-footnote,
+.settings-overlay .remote-fold summary,
+.settings-overlay .remote-onboarding-waiting {
+	font-size: 12.5px;
+}
+.settings-overlay .web-search-fallback-heading {
+	font-size: 11px;
+	letter-spacing: 0.12em;
+	color: color-mix(in srgb, var(--muted) 78%, transparent);
+}
+.settings-overlay .remote-devices {
+	margin-top: 2px;
+}
+.settings-overlay .remote-devices .web-search-fallback-heading {
+	margin-bottom: 8px;
+}
+/* Row rhythm: ~44-48px rows, hint tight beneath the name, dividers a shade
+   quieter than the full-page token. */
+.settings-overlay .rs-row {
+	padding: 6px 0;
+	min-height: 46px;
+	gap: 12px;
+}
+.settings-overlay .rs-row ~ .rs-row {
+	border-top-color: color-mix(in srgb, var(--border-soft) 55%, transparent);
+}
+.settings-overlay .rs-row-label {
+	font-size: 14px;
+	font-weight: 500;
+}
+.settings-overlay .rs-row-hint {
+	font-size: 12px;
+	line-height: 1.4;
+}
+.settings-overlay .remote-room-row {
+	padding: 4px 0;
+	min-height: 40px;
+}
+/* Small quiet pills instead of chunky bordered segments; the selected side
+   keeps the app's existing filled-selection treatment. */
+.settings-overlay .remote-capability-seg {
+	border-color: var(--border-soft);
+}
+.settings-overlay .remote-capability-seg button {
+	font-size: 12px;
+	line-height: 1.3;
+	padding: 4px 9px;
+}
+/* Revoke rests muted; red is saved for hover and the armed confirm state,
+   so one row shows at most one emphasis at a time. */
+.settings-overlay .rs-quiet-danger {
+	color: var(--muted);
+	text-decoration: none;
+}
+.settings-overlay .rs-quiet-danger:hover:not(:disabled),
+.settings-overlay .rs-quiet-danger:focus-visible {
+	color: var(--error);
+	text-decoration: underline;
+	text-underline-offset: 3px;
+}
+/* Skills at modal density: compact rows, quiet row actions; Add skill
+   stays the section's one primary action. */
+.settings-overlay .skill-row {
+	padding: 8px 0;
+}
+.settings-overlay .skill-row-title strong {
+	font-size: 14px;
+}
+.settings-overlay .skill-row-desc {
+	font-size: 12px;
+}
+.settings-overlay .skill-row-actions .inline-action {
+	background: none;
+	border-color: transparent;
+	font-family: inherit;
+	font-size: 12.5px;
+	font-weight: 400;
+	letter-spacing: normal;
+	text-transform: none;
+	padding: 2px 4px;
+	color: var(--muted);
+	text-decoration: underline;
+	text-underline-offset: 3px;
+}
+.settings-overlay .skill-row-actions .inline-action:hover:not(:disabled),
+.settings-overlay .skill-row-actions .inline-action:focus-visible {
+	color: var(--fg);
+	background: none;
+	border-color: transparent;
+}
+/* Connectors at modal density: quiet row actions (the one primary Log in
+   keeps its fill), compact rows, and a plain count beside the header. */
+.connector-count-hint {
+	color: var(--muted);
+	font-size: 12px;
+}
+.settings-overlay .connector-row {
+	padding: 6px 0;
+	min-height: 48px;
+}
+/* Expandable rows answer the pointer: a faint tint across the whole row
+   while the name area is hovered, and the name underlines the way the
+   skills table's does. */
+.settings-overlay .connector-row:has(.connector-row-toggle:hover) {
+	background: color-mix(in srgb, var(--fg) 3%, transparent);
+}
+.settings-overlay .connector-row-toggle:hover .connector-row-title strong,
+.settings-overlay .connector-row-toggle:focus-visible .connector-row-title strong {
+	text-decoration: underline;
+}
+.settings-overlay .connector-row-title strong {
+	font-size: 14px;
+	font-weight: 600;
+	flex: 0 1 auto;
+	min-width: 0;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+/* The one hint line per row never wraps: clamped to one line with an
+   ellipsis (the full tool list stays in the title attribute). */
+.settings-overlay .connector-row-meta {
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	min-width: 0;
+}
+.settings-overlay .connector-row-actions .inline-action:not(.connector-action-primary) {
+	background: none;
+	border-color: transparent;
+	font-family: inherit;
+	font-size: 12.5px;
+	font-weight: 400;
+	letter-spacing: normal;
+	text-transform: none;
+	padding: 2px 4px;
+	color: var(--muted);
+	text-decoration: underline;
+	text-underline-offset: 3px;
+}
+.settings-overlay .connector-row-actions .inline-action:not(.connector-action-primary):hover:not(:disabled),
+.settings-overlay .connector-row-actions .inline-action:not(.connector-action-primary):focus-visible {
+	color: var(--fg);
+	background: none;
+	border-color: transparent;
+}
+/* Reference tables (skills + connectors): one thin tracked-caps header
+   style shared by both tabs, rows on the remote tab's divider rhythm,
+   provenance as muted text instead of pills. */
+.settings-overlay .settings-table-head {
+	display: grid;
+	align-items: baseline;
+	padding: 0 0 6px;
+	border-bottom: 1px solid var(--exx-divider);
+	font-size: 10.5px;
+	font-weight: 600;
+	letter-spacing: 0.12em;
+	text-transform: uppercase;
+	color: color-mix(in srgb, var(--muted) 78%, transparent);
+}
+/* The one control row that reaches into the floating X's band keeps
+   clear of it; every other control keeps the shared right edge. */
+.settings-overlay .skill-library-controls {
+	justify-content: flex-end;
+	padding-right: 48px;
+}
+.settings-overlay .skill-table-head,
+.settings-overlay .skill-table .skill-row {
+	grid-template-columns: minmax(0, 1fr) 88px 104px 108px;
+	gap: 6px 14px;
+}
+.settings-overlay .skill-table .skill-row {
+	border-bottom-color: var(--exx-divider);
+}
+.settings-overlay .skill-table .skill-row:has(.skill-row-main:hover) {
+	background: color-mix(in srgb, var(--fg) 3%, transparent);
+}
+.settings-overlay .skill-table-name {
+	font-size: 14px;
+	font-weight: 500;
+}
+.settings-overlay .skill-table .skill-row-main:hover .skill-table-name {
+	text-decoration: underline;
+}
+.settings-overlay .skill-table-cell {
+	font-size: 12px;
+	color: var(--muted);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	min-width: 0;
+}
+.settings-overlay .skill-table .skill-row-actions {
+	justify-content: flex-end;
+	flex-wrap: wrap;
+	gap: 6px;
+}
+/* Connectors table: header first cell spans icon+name; fixed type/status/
+   action columns keep the rows aligned even though each row is its own grid. */
+.settings-overlay .connector-table-head,
+.settings-overlay .connector-table .connector-row {
+	grid-template-columns: 24px minmax(0, 1fr) 118px 92px 190px;
+	gap: 6px 12px;
+}
+.settings-overlay .connector-table-head .connector-table-head-name {
+	grid-column: 1 / 3;
+}
+/* The type/status (and origin/date) cells share a wrapper so the phone
+   layout can fold them into one hint line; on desktop the wrapper
+   dissolves into the grid. */
+.settings-overlay .connector-table-facts,
+.settings-overlay .skill-table-facts {
+	display: contents;
+}
+.settings-overlay .connector-table-type,
+.settings-overlay .connector-table-status {
+	font-size: 12px;
+	color: var(--muted);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	min-width: 0;
+}
+.settings-overlay .connector-table .connector-row-actions {
+	grid-column: 5;
+	grid-row: 1;
+	justify-content: flex-end;
+	flex-wrap: nowrap;
+	white-space: nowrap;
+	gap: 6px;
+	padding-right: 12px;
+}
+/* Add catalog: the base card styles already carry the modal-density
+   reference geometry; only the token row's buttons compact here. */
+.settings-overlay .connector-dir-actions .inline-action {
+	font-size: 10px;
+	padding: 5px 8px;
+}
+/* Sentence case on every action pill inside the modal: the source strings
+   are already typed that way, only the uppercase transform lifts. Pills
+   outside the modal keep the display face. */
+.settings-overlay .inline-action,
+.settings-overlay .landing-action {
+	text-transform: none;
+}
+/* Web search at modal density: the provider-search card becomes a switch
+   row like the remote tab's, and the engine cards compact. */
+.settings-overlay .web-search-native {
+	gap: 4px;
+}
+.settings-overlay .web-search-native .rs-row.pending {
+	opacity: 0.6;
+}
+.settings-overlay .web-search-options {
+	gap: 8px;
+}
+.settings-overlay .web-search-option {
+	padding: 9px 12px;
+	border-radius: 8px;
+}
+.settings-overlay .web-search-option-label {
+	font-size: 14px;
+	font-weight: 500;
+}
+.settings-overlay .web-search-option-blurb {
+	font-size: 12px;
+}
+/* AI setup at modal density: the profile card flattens to bare rows with
+   the remote tab's divider rhythm; the active profile keeps the one filled
+   emphasis per section. */
+.settings-overlay .ai-profile-switcher-section {
+	gap: 10px;
+}
+.settings-overlay .ai-profile-section-head {
+	display: grid;
+	gap: 8px;
+}
+.settings-overlay .ai-profile-card {
+	border: none;
+	border-radius: 0;
+	background: transparent;
+	overflow: visible;
+}
+.settings-overlay .ai-profile-row {
+	padding: 8px 12px;
+	min-height: 46px;
+	border-radius: 8px;
+}
+.settings-overlay .ai-profile-row.active {
+	background: color-mix(in srgb, var(--panel-2) 70%, transparent);
+}
+.settings-overlay .ai-profile-row-group + .ai-profile-row-group {
+	border-top-color: color-mix(in srgb, var(--border-soft) 55%, transparent);
+}
+.settings-overlay .ai-profile-name {
+	font-size: 14px;
+	font-weight: 600;
+}
+.settings-overlay .ai-profile-sub {
+	font-size: 12px;
+}
+.settings-overlay .ai-profile-card-empty {
+	padding: 8px 12px;
+}
+.settings-overlay .ai-profile-models {
+	padding: 10px 12px 12px 42px;
+}
+.settings-overlay .add-provider-block {
+	border: none;
+	border-radius: 0;
+	background: transparent;
+	padding: 2px 0 0;
+}
+/* Desktop shows both panes; the back control is a phone affordance. */
+.settings-overlay-back {
+	display: none;
+}
+@media (max-width: 760px) {
+	/* The modal becomes a full-screen sheet on phones. */
+	.settings-overlay-backdrop {
+		padding: 0;
+	}
+	.settings-overlay {
+		width: 100%;
+		height: 100%;
+		border: none;
+		border-radius: 0;
+		box-shadow: none;
+		grid-template-columns: minmax(0, 1fr);
+	}
+	.settings-overlay-nav {
+		border-right: none;
+		padding: 24px 16px 16px;
+	}
+	.settings-overlay.show-nav .settings-overlay-content { display: none; }
+	.settings-overlay:not(.show-nav) .settings-overlay-nav { display: none; }
+	/* The sheet keeps its back bar; the floating X is pinned to the sheet
+	   itself, so it closes from both the nav view and a section view. The
+	   bar leaves room for it on the right. */
+	.settings-overlay-back {
+		display: inline-block;
+	}
+	.settings-overlay-content-bar {
+		display: flex;
+		height: auto;
+		align-items: center;
+		padding: 10px 52px 10px 12px;
+		border-bottom: 1px solid var(--exx-divider);
+	}
+	.settings-overlay .landing {
+		padding: 16px 16px 24px;
+	}
+	.settings-overlay .landing::-webkit-scrollbar-track {
+		margin-bottom: 0;
+	}
+	.settings-overlay-close {
+		top: 8px;
+		right: 8px;
+		width: 44px;
+		height: 44px;
+		font-size: 15px;
+	}
+	/* Phone tables: the fixed desktop columns collapse into stacked rows —
+	   name on top, the fact cells folded into one muted dot-separated hint
+	   line beneath, actions at the right. Self-labeling, so no header row. */
+	.settings-overlay .settings-table-head {
+		display: none;
+	}
+	.settings-overlay .connector-table .connector-row {
+		grid-template-columns: 24px minmax(0, 1fr) auto;
+	}
+	.settings-overlay .connector-table .connector-row-main {
+		grid-column: 2;
+		grid-row: 1;
+	}
+	.settings-overlay .connector-table-facts {
+		display: flex;
+		align-items: baseline;
+		gap: 4px;
+		grid-column: 2;
+		grid-row: 2;
+		min-width: 0;
+	}
+	.settings-overlay .connector-table-type:empty {
+		display: none;
+	}
+	.settings-overlay .connector-table-status::before {
+		content: "· ";
+	}
+	.settings-overlay .connector-table-type:empty + .connector-table-status::before {
+		content: none;
+	}
+	.settings-overlay .connector-table .connector-row-actions {
+		grid-column: 3;
+		grid-row: 1 / span 2;
+		align-self: center;
+		flex-wrap: wrap;
+		white-space: normal;
+		max-width: 40vw;
+		padding-right: 0;
+	}
+	.settings-overlay .skill-table .skill-row {
+		grid-template-columns: minmax(0, 1fr) auto;
+	}
+	.settings-overlay .skill-table .skill-row-main {
+		grid-column: 1;
+		grid-row: 1;
+	}
+	.settings-overlay .skill-table-facts {
+		display: flex;
+		align-items: baseline;
+		gap: 4px;
+		grid-column: 1;
+		grid-row: 2;
+		min-width: 0;
+	}
+	.settings-overlay .skill-table-facts .skill-table-cell:empty {
+		display: none;
+	}
+	.settings-overlay .skill-table-facts .skill-table-cell + .skill-table-cell::before {
+		content: "· ";
+	}
+	.settings-overlay .skill-table .skill-row-actions {
+		grid-column: 2;
+		grid-row: 1 / span 2;
+		align-self: center;
+	}
+}
+
+/* What's new window --------------------------------------------------
+   The one-time changelog window after an update. Same backdrop treatment
+   as the Settings overlay (own class so the phone full-screen-sheet rules
+   there do not apply: this pane keeps its margins on small screens), same
+   card tokens, one scrolling column of entries and one way forward. */
+.whats-new-backdrop {
+	position: fixed;
+	inset: 0;
+	z-index: 70;
+	background: color-mix(in srgb, var(--bg) 72%, transparent);
+	backdrop-filter: blur(10px);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding: 24px;
+}
+.whats-new-dialog {
+	position: relative;
+	width: min(560px, 100%);
+	max-height: min(640px, 70vh);
+	display: flex;
+	flex-direction: column;
+	border: 1px solid var(--border);
+	border-radius: 22px;
+	background: var(--bg);
+	box-shadow: 0 24px 80px color-mix(in srgb, #000 26%, transparent);
+	color: var(--fg);
+	overflow: hidden;
+}
+/* Same typographic pattern as the Settings overlay's nav head. */
+.whats-new-title {
+	font-family: "Bandeins Strange Variable", "Bandeins Strange", "Sen", sans-serif;
+	font-variation-settings: "wght" 820;
+	font-size: 22px;
+	line-height: 1;
+	letter-spacing: -0.025em;
+	margin: 0;
+	padding: 24px 52px 16px 28px;
+}
+.whats-new-entries {
+	min-height: 0;
+	overflow-y: auto;
+	padding: 2px 28px 8px;
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+	/* Same quiet scrollbar treatment as the Settings overlay panes. */
+	scrollbar-width: thin;
+	scrollbar-color: var(--border) transparent;
+}
+.whats-new-entries::-webkit-scrollbar {
+	width: 8px;
+}
+.whats-new-entries::-webkit-scrollbar-thumb {
+	background: var(--border);
+	border-radius: 4px;
+}
+.whats-new-entries::-webkit-scrollbar-track {
+	background: transparent;
+}
+.whats-new-entry {
+	margin: 0;
+	font-size: 13px;
+	line-height: 1.55;
+	color: var(--fg-soft);
+}
+.whats-new-entry strong {
+	color: var(--fg);
+	font-weight: 700;
+}
+.whats-new-foot {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	padding: 16px 28px 20px;
+	border-top: 1px solid var(--exx-divider);
+}
+.whats-new-full-link {
+	font-size: 12px;
+	color: var(--fg-soft);
+	text-decoration: none;
+	border-bottom: 1px solid var(--exx-divider);
+}
+.whats-new-full-link:hover {
+	color: var(--fg);
+	border-bottom-color: var(--fg-soft);
+}
+.whats-new-foot .btn-primary {
+	text-transform: none;
+	letter-spacing: normal;
+	font-size: 13px;
+}
+@media (max-width: 760px) {
+	.whats-new-backdrop {
+		padding: 16px;
+	}
+	.whats-new-title {
+		padding: 20px 52px 14px 20px;
+	}
+	.whats-new-entries {
+		padding: 2px 20px 8px;
+	}
+	.whats-new-foot {
+		padding: 14px 20px 16px;
+	}
+}
+
+/* Phone mechanical correctness ------------------------------------
+   Everything here is media-scoped to the one phone breakpoint so desktop
+   rendering stays byte-identical. */
+@media (max-width: 760px) {
+	/* iOS Safari zooms the whole page when a focused field's font size is
+	   under 16px, and the zoom sticks after blur. Every text-entry control
+	   gets 16px at this width so no field can trigger it; !important
+	   because the desktop rules being overridden are more specific. */
+	input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]),
+	textarea,
+	select {
+		font-size: 16px !important;
+	}
+	/* Controls respond to the first tap: no double-tap-zoom wait and no
+	   accidental zoom on fast taps. Content areas keep pinch zoom. */
+	button,
+	a,
+	label,
+	summary,
+	input,
+	textarea,
+	select,
+	[role="button"] {
+		touch-action: manipulation;
+	}
+	/* A pane that hits its scroll edge must not rubber-band the page. */
+	html,
+	body {
+		overscroll-behavior: none;
+	}
+	.messages,
+	.sidebar-body,
+	.sidebar-list,
+	.landing,
+	.creator-body,
+	.agent-details-body,
+	.room-settings-body,
+	.rooms-guide-modal,
+	.help-body,
+	.skill-review-body,
+	.settings-overlay-nav,
+	.whats-new-entries,
+	.model-picker-menu,
+	.configure-profile-model-list,
+	.composer textarea {
+		overscroll-behavior: contain;
+	}
+	/* Keyboard: phone-viewport.ts mirrors the keyboard's overlap into the
+	   lift variable while a text entry is focused. The composer and the
+	   dock above it ride up on the compositor - the transition smooths the
+	   resize-event steps into one glide that starts with the keyboard -
+	   and the transcript gains the same bottom padding (the module re-pins
+	   it), so its latest line rises with the composer. The shell itself
+	   never resizes: no relayout storm, and every composer popover is
+	   absolute inside it, so they all ride the transform. */
+	.above-composer-dock,
+	.composer {
+		transform: translateY(calc(-1 * var(--phone-keyboard-lift, 0px)));
+		/* Short and linear: just enough to soften the sparse viewport
+		   events into steps, without adding perceptible lag of its own. */
+		transition: transform 80ms linear;
+		will-change: transform;
+	}
+	.messages {
+		padding-bottom: calc(20px + var(--phone-keyboard-lift, 0px));
+	}
+	/* Safe areas (viewport-fit=cover): the bars along the top edge pad
+	   past the status bar / notch; the composer already respects the home
+	   indicator. Zero in a regular browser tab, real on a home-screen app
+	   and in landscape. */
+	.topbar {
+		padding-top: calc(8px + env(safe-area-inset-top, 0px));
+	}
+	.product-sidebar {
+		padding-top: env(safe-area-inset-top, 0px);
+	}
+	.app > .sidebar {
+		padding-top: env(safe-area-inset-top, 0px);
+		padding-left: env(safe-area-inset-left, 0px);
+	}
+	.sidebar-toggle-floating {
+		top: calc(8px + env(safe-area-inset-top, 0px));
+	}
+	.settings-overlay-nav {
+		padding-top: calc(24px + env(safe-area-inset-top, 0px));
+	}
+	.settings-overlay-content-bar {
+		padding-top: calc(10px + env(safe-area-inset-top, 0px));
+	}
+	.settings-overlay-close {
+		top: calc(8px + env(safe-area-inset-top, 0px));
+	}
+}
+
+/* Composer on phones ----------------------------------------------
+   Same one-row bottom as desktop - meter left, the attach/effort/
+   Remember/send cluster right. Shortening the meter to the bare
+   percentage is what buys the row its fit at 393px. */
+@media (max-width: 760px) {
+	.composer-box-bottom .composer-actions {
+		gap: 8px;
+	}
+	.composer-context-pill-phrase {
+		display: none;
+	}
+}
+
+/* In-room drawer backdrop (phone) --------------------------------
+   The rail overlays the chat at this width, so an open rail dims what it
+   covers - same backdrop treatment as the settings overlay. Tap closes;
+   the component itself only mounts at phone width. */
+@media (max-width: 760px) {
+	.sidebar-drawer-backdrop {
+		position: fixed;
+		inset: 0;
+		z-index: 59;
+		background: color-mix(in srgb, var(--bg) 72%, transparent);
+		backdrop-filter: blur(10px);
+	}
+}
+@media (min-width: 761px) {
+	.sidebar-drawer-backdrop {
+		display: none;
+	}
+}
+
+/* Phone type scale ------------------------------------------------
+   Hero headings drop a step at the phone breakpoint: the 32px clamp floor
+   next to phone body copy reads shouty at arm's length, 28px keeps the
+   display voice without the shout. */
+@media (max-width: 760px) {
+	.landing h1 {
+		font-size: 28px;
+	}
+}
+
+/* Gateway panel on phones -----------------------------------------
+   The bulk row's desktop one-liner cannot survive 393px; instead of an
+   accidental three-line wrap it becomes a deliberate stack: the approve
+   count with use detected beside it, then the capability toggles in
+   their own rows. Controls get comfortable tap sizes here too. */
+@media (max-width: 760px) {
+	.gateway-model-bulk-row {
+		row-gap: 10px;
+		padding-top: 10px;
+		padding-bottom: 10px;
+	}
+	.gateway-model-bulk-row .gateway-model-approve {
+		flex-basis: 100%;
+	}
+	.gateway-model-bulk-seg button,
+	.gateway-model-bulk-button {
+		padding: 8px 12px;
+	}
+	.gateway-model-adjust {
+		padding: 8px 12px;
+	}
+	.gateway-model-row {
+		row-gap: 10px;
+	}
+}
+
+/* Effort popover + room settings strip on phones ------------------
+   The effort popover right-anchors to its pill, which sits near the LEFT
+   edge of a phone composer, so it hung off-screen. On phones it spans the
+   composer box instead: the box becomes the containing block and the
+   popover stretches across it, overriding the inline desktop width (the
+   scale lays its ticks out in percentages, so it just breathes wider). */
+@media (max-width: 760px) {
+	.composer-box {
+		position: relative;
+	}
+	.effort-control {
+		position: static;
+	}
+	.effort-popover {
+		left: 8px;
+		right: 8px;
+		bottom: calc(100% + 10px);
+		min-width: 0;
+		width: auto !important;
+	}
+	/* Room settings: the same full-screen sheet the settings overlay
+	   gets on phones - the floating card read as sparse desktop furniture
+	   at this width, and its margins bought nothing. */
+	.room-settings-overlay {
+		padding: 0;
+	}
+	.room-settings-modal.rs-shell {
+		width: 100%;
+		max-width: none;
+		height: 100%;
+		max-height: none;
+		border: none;
+		border-radius: 0;
+	}
+	.rs-shell .room-settings-head {
+		padding-top: calc(14px + env(safe-area-inset-top, 0px));
+	}
+	/* Room settings: the section strip scrolls sideways; the end fade
+	   marks the cut as scrollable rather than clipped, and the raw
+	   scrollbar stays hidden like the landing nav's. */
+	.room-settings-nav {
+		scrollbar-width: none;
+		mask-image: linear-gradient(to right, #000 calc(100% - 64px), transparent);
+		-webkit-mask-image: linear-gradient(to right, #000 calc(100% - 64px), transparent);
+	}
+	.room-settings-nav::-webkit-scrollbar {
+		display: none;
+	}
+}
+
+/* Phone home button ------------------------------------------------
+   On desktop the persistent sidebar is the way home; on a phone the rail
+   is a drawer, so the room topbar carries a direct way back to the rooms
+   landing. Chromeless like the rail toggle beside it. Hidden above the
+   breakpoint, so desktop pixels stay untouched. */
+.topbar-home-btn {
+	display: none;
+}
+@media (max-width: 760px) {
+	/* Pinned to the same fixed coordinate system as the floating rail
+	   toggle beside it, same box, same vertical center - as a flow child
+	   of the topbar it sat visibly off the toggle's line. */
+	.topbar-home-btn {
+		position: fixed;
+		top: calc(8px + env(safe-area-inset-top, 0px));
+		left: 46px;
+		z-index: 40;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: 28px;
+		height: 28px;
+		padding: 0;
+		background: transparent;
+		border: 0;
+		border-radius: 9px;
+		color: var(--muted);
+		cursor: pointer;
+	}
+	.topbar-home-btn:hover,
+	.topbar-home-btn:focus-visible {
+		background: color-mix(in srgb, var(--fg) 10%, transparent);
+		color: var(--fg);
+		outline: none;
+	}
+	/* The in-room topbar clears BOTH floating buttons now, not just the
+	   rail toggle's 52px. The second selector matches the collapsed-state
+	   rule that sets the 52px, so it wins on order at equal specificity. */
+	.app .topbar,
+	html.sidebar-collapsed:not(.desktop-app-mac) .app .topbar {
+		padding-left: 84px;
+	}
 }

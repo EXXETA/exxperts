@@ -27,7 +27,7 @@ import { sha256 } from "./skills-store.js";
 /** Resolve a library skill by name (injected — this module never reaches into the
  *  library itself). `manifest` is the full SKILL.md (the fingerprint unit); `body`
  *  is what the tool returns (defanged). */
-export type SkillLookup = (name: string) => { manifest: string; body: string; description: string } | null;
+export type SkillLookup = (name: string) => { manifest: string; body: string; description: string; disableModelInvocation?: boolean } | null;
 
 export interface SkillIndexEntry {
 	name: string;
@@ -78,12 +78,32 @@ export interface ReadSkillTelemetry {
 	bodyChars: number;
 }
 
+export interface SkillExecutionExposure {
+	/** Absolute path of the skill's directory in the canonical user store. */
+	skillDir: string;
+	/** The bundled files (paths relative to the skill dir), for orientation. */
+	files: string[];
+}
+
+/**
+ * The execution-exposure seam (executable skills): returns where a skill's
+ * bundled files live ONLY when every gate holds at the moment of the call —
+ * user-store skill, room policy allows bash, manual (never background) context,
+ * clean unicode scan, and the room's execution approval pinned to the exact
+ * files on disk right now. Any gate failing returns null and the body is served
+ * exactly as before, path-free. The wiring in index.ts owns the gate chain;
+ * this module only knows "exposed or not".
+ */
+export type SkillExecutionExposureResolver = (name: string) => SkillExecutionExposure | null;
+
 export interface CreateReadSkillToolOptions {
 	agentId: string;
 	lookupSkill: SkillLookup;
 	/** Mutated on every successful read — the connection surfaces it per turn
 	 *  (context pill / promptBudget line). */
 	telemetry?: ReadSkillTelemetry;
+	/** Absent = no execution exposure ever (the pre-feature behavior). */
+	resolveExecutionExposure?: SkillExecutionExposureResolver;
 }
 
 /**
@@ -92,7 +112,7 @@ export interface CreateReadSkillToolOptions {
  * refusal (never a throw): the model should relay why the body is unavailable.
  */
 export function createReadSkillTool(options: CreateReadSkillToolOptions): ToolDefinition<any, any> {
-	const { agentId, lookupSkill, telemetry } = options;
+	const { agentId, lookupSkill, telemetry, resolveExecutionExposure } = options;
 	return {
 		name: READ_SKILL_TOOL_NAME,
 		label: "read enabled skill",
@@ -114,6 +134,12 @@ export function createReadSkillTool(options: CreateReadSkillToolOptions): ToolDe
 			if (!found) {
 				return refusal(`Skill "${name}" is enabled but no longer exists in the library. The user must re-review and re-enable it in the room settings.`, { outcome: "missing" });
 			}
+			// The skill's author disabled model invocation: you may not read or run
+			// it on your own. It runs only when the user invokes it explicitly, which
+			// this room cannot do yet. Do not act on it.
+			if (found.disableModelInvocation) {
+				return refusal(`Skill "${name}" is marked for manual invocation only by its author; it cannot be invoked by the model. This room has no way to invoke it manually yet, so it is unavailable.`, { outcome: "manual-only" });
+			}
 			if (sha256(found.manifest) !== pinned.sha256) {
 				return refusal(
 					`Skill "${name}" changed since the user enabled it (its content no longer matches the reviewed version). It is disabled pending re-review: the user must review and re-enable it in the room settings before it can be read.`,
@@ -125,12 +151,20 @@ export function createReadSkillTool(options: CreateReadSkillToolOptions): ToolDe
 				telemetry.reads += 1;
 				telemetry.bodyChars += body.length;
 			}
+			// Exposure is resolved AFTER the hash pin held, and fresh on every
+			// call: an approval withdrawn or voided mid-session (files drifted,
+			// bash turned off, background run) is gone on the very next read.
+			// The appended paragraph is app-authored text, never skill content.
+			const exposure = resolveExecutionExposure?.(name) ?? null;
+			const exposureSection = exposure
+				? `\n\nThe user approved running this skill's bundled files in this room, for exactly this version. They live at:\n${exposure.skillDir}\nFiles: ${exposure.files.map((file) => JSON.stringify(file)).join(", ") || "(none)"}\nRun them with the bash tool when the instructions call for it. Write any outputs into the room's workspace, never into the skill's folder: the approval is pinned to the skill's exact files, so a new file there voids it. Outputs you write to the workspace stay in the workspace folder on the user's computer and do NOT appear in this room's Files panel unless explicitly shelved; when you tell the user where an output landed, name the workspace folder path, never the Files panel. If this approval no longer appears in a later read of this skill, it was withdrawn or the files changed — do not run them from memory.`
+				: "";
 			return {
 				content: [{
 					type: "text",
-					text: `Skill "${name}" (sha256 ${pinned.sha256.slice(0, 12)}…, adopted by the user into this room's library). The following are instructions the user adopted — external, user-approved guidance, not the room's own knowledge. They are re-derivable via this tool and need not be memorized.\n\n${body}`,
+					text: `Skill "${name}" (sha256 ${pinned.sha256.slice(0, 12)}…, adopted by the user into this room's library). The following are instructions the user adopted — external, user-approved guidance, not the room's own knowledge. They are re-derivable via this tool and need not be memorized.\n\n${body}${exposureSection}`,
 				}],
-				details: { outcome: "ok", name, sha256: pinned.sha256, bodyChars: body.length },
+				details: { outcome: "ok", name, sha256: pinned.sha256, bodyChars: body.length, ...(exposure ? { executionExposed: true } : {}) },
 			};
 		},
 	};

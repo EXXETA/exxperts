@@ -77,7 +77,11 @@ if (argv[0] === "setup" && (argv[1] === "chromium" || argv[1] === "search")) {
   if (res.error) console.error(`exxperts setup search: ${res.error.message}`);
   process.exit(res.status ?? 1);
 }
-if (argv[0] === "web" || argv[0] === "ui") {
+if (argv[0] === "remote") {
+  // Remote mode: serve the app to the user's own enrolled devices over their
+  // private tunnel. Off by default; `exxperts remote --help` explains.
+  Promise.resolve(require("./lib/remote-control.cjs").main(argv.slice(1), "exxperts remote")).catch(onError);
+} else if (argv[0] === "web" || argv[0] === "ui") {
   require("./lib/web-launcher.cjs").main(argv.slice(1), "exxperts web");
 } else if (argv[0] === "cli") {
   Promise.resolve(require("./lib/exxcode-launcher.cjs").main(argv.slice(1), "exxperts cli")).catch(onError);

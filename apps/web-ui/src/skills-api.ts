@@ -51,6 +51,9 @@ export interface SkillCandidate {
 	license: string | null;
 	scanFindings: SkillScanFinding[];
 	bundledScripts: string[];
+	/** Upload only: checkout token for the bundled files the zip carried. Passed back
+	 *  on accept so those files are vendored next to the SKILL.md. */
+	token?: string;
 }
 
 export function fetchSkills(): Promise<SkillListItem[]> {
@@ -104,6 +107,7 @@ export function acceptSkillCandidate(candidate: SkillCandidate): Promise<SkillLi
 			instructions: candidate.body,
 			source: candidate.source,
 			license: candidate.license,
+			...(candidate.token ? { token: candidate.token } : {}),
 		}),
 	});
 }

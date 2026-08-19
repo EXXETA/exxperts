@@ -2,6 +2,7 @@ import React from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import { SidebarCollapsedAffordance } from "./sidebar-collapse";
+import { installPhoneViewportTracking } from "./phone-viewport";
 
 
 // Desktop-app gating: the Electron shell appends this UA token, and the
@@ -12,6 +13,9 @@ if (navigator.userAgent.includes("ExxpertsDesktop")) {
 	document.documentElement.classList.add("desktop-app");
 	if (navigator.userAgent.includes("Macintosh")) document.documentElement.classList.add("desktop-app-mac");
 }
+
+// Phone keyboard/viewport tracking (no-op above the phone breakpoint).
+installPhoneViewportTracking();
 
 createRoot(document.getElementById("root")!).render(
 	<React.StrictMode>

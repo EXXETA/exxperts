@@ -70,8 +70,9 @@ import {
 } from "./persistent-room-tool-policy.js";
 import { assertPersistentRoomWorkspaceDefaultMutable, createPersistentRoomCapabilityPolicy, createPersistentRoomDefaultCapabilityPolicy, deletePersistentRoomCapabilityPolicy, deletePersistentRoomDefaultCapabilityPolicy, missingPersistentRoomWorkspaceRootWarnings, normalizePersistentRoomWorkspaceAccessModeInput, persistentRoomCapabilityPolicyView, persistentRoomRuntimeCwdForEffectiveWorkspacePolicy, PersistentRoomWorkspacePolicyError, PERSISTENT_ROOM_WORKSPACE_DEFAULT_STORAGE_SOURCE, PERSISTENT_ROOM_WORKSPACE_POLICY_STORAGE_SOURCE, readPersistentRoomCapabilityPolicy, readPersistentRoomDefaultCapabilityPolicy, releasePersistentRoomThreadWorkspaceMirror, resolvePersistentRoomCapabilityPolicy, resolvePersistentRoomEffectiveWorkspacePolicy, updatePersistentRoomCapabilityPolicyWorkspaceSettings, writePersistentRoomCapabilityPolicy, writePersistentRoomDefaultCapabilityPolicy } from "./persistent-room-workspace-policy.js";
 import { MEMORY_BUDGET_DEFAULT_TOKENS, readPersistentRoomMaintenanceSettings, writePersistentRoomMaintenanceSettings } from "./persistent-room-maintenance-settings.js";
+import { readPersistentRoomPreferredModel, writePersistentRoomPreferredModel } from "./persistent-room-preferred-model.js";
 import { isRoomEffortLevel, readPersistentRoomEffortChoice, writePersistentRoomEffortChoice, type RoomEffortLevel } from "./persistent-room-effort-settings.js";
-import { computeSkillStatuses, disablePersistentRoomSkill, effectiveEnabledSkills, enablePersistentRoomSkill, readPersistentRoomSkillSettings } from "./persistent-room-skill-settings.js";
+import { approvePersistentRoomSkillExecution, computeSkillStatuses, disablePersistentRoomSkill, effectiveEnabledSkills, enablePersistentRoomSkill, isValidSkillName, readPersistentRoomSkillSettings, revokePersistentRoomSkillExecution } from "./persistent-room-skill-settings.js";
 import { buildEnabledSkillsIndexSection, createReadSkillTool } from "./persistent-room-skill-tool.js";
 import { buildSpecialistTemplatesIndexSection, createDelegateTaskTool, userAuthoredPromptText } from "./persistent-room-delegate-tool.js";
 import { buildSpecialistSessionPlan, ingestShelfInputs, runSpecialistWorker, listSpecialistTaskArtifacts, type SpecialistSessionPlan } from "./persistent-room-specialist-execution.js";
@@ -88,10 +89,11 @@ import { getSpecialistTemplate, SPECIALIST_TASK_CAPS } from "./specialist-templa
 import { generateTaskArtifactThumbnails } from "./task-artifact-thumbnails.js";
 import { createPersistentRoomWorkspaceTools } from "./persistent-room-workspace-tools.js";
 import { assertPersistentRoomModelForActiveProfile, DEFAULT_PERSISTENT_AGENT_AI_PROFILE_ID, getAbsorbModelLock, getAvailablePersistentAgentAiProfiles, getConsultModelLock, getPersistentAgentAiProfile, getPersistentRoomModelLocks, getStructuralReviewModelLock, isPersistentAgentAiProfileId, isPersistentRoomModelForProfile, OPENAI_COMPATIBLE_AI_PROFILE_ID, OPENAI_COMPATIBLE_PROVIDER_ID } from "./persistent-agent-ai-profiles.js";
-import { deleteOpenAiCompatibleGateway, findOpenAiCompatibleGateway, GATEWAY_DEFAULT_CONTEXT_WINDOW, GATEWAY_MAX_CONTEXT_WINDOW, GATEWAY_MIN_CONTEXT_WINDOW, GATEWAY_PROVIDER_ID_PREFIX, GatewayStoreUnreadableError, mintGatewayProviderId, parseGatewayContextWindow, readOpenAiCompatibleGateways, writeOpenAiCompatibleGateway, type GatewayRoomModel, type OpenAiCompatibleGateway } from "./openai-compatible-gateways.js";
+import { deleteOpenAiCompatibleGateway, findOpenAiCompatibleGateway, GATEWAY_DEFAULT_CONTEXT_WINDOW, GATEWAY_EFFORT_INTENSITIES, GATEWAY_MAX_CONTEXT_WINDOW, GATEWAY_MIN_CONTEXT_WINDOW, GATEWAY_PROVIDER_ID_PREFIX, GATEWAY_THINKING_LEVELS, GatewayStoreUnreadableError, mintGatewayProviderId, effectiveGatewayModel, parseGatewayContextWindow, readOpenAiCompatibleGateways, writeOpenAiCompatibleGateway, type GatewayEffortIntensity, type GatewayModelDetected, type GatewayRoomModel, type GatewayThinkingLevels, type OpenAiCompatibleGateway } from "./openai-compatible-gateways.js";
 import { ModelCatalogUnreadableError, readCatalogProviderIds, readGatewayProviderBaseUrl, removeGatewayProviderEntry, writeGatewayProviderEntry } from "./openai-compatible-gateway-catalog.js";
-import { discoverGatewayModels, GatewayDiscoveryError, normalizeGatewayBaseUrl } from "./openai-compatible-gateway-detect.js";
+import { discoverGatewayModels, GatewayDiscoveryError, isNonChatGatewayMode, normalizeGatewayBaseUrl } from "./openai-compatible-gateway-detect.js";
 import { readWebSearchSettings, WebSearchSettingsError, WebSearchSettingsUnreadableError, writeWebSearchSettings } from "./web-search-settings.js";
+import { acknowledgeWhatsNew, resolveWhatsNew } from "./whats-new.js";
 import { runIsolatedPersistentAgentWorker } from "./persistent-agent-worker-runtime.js";
 import { PERSISTENT_AGENTS_ROOT } from "./persistent-agents.js";
 import { registerUsageApi } from "./usage-api.js";
@@ -136,9 +138,15 @@ import toolResultAgingExt, { readAgedToolResultMarker } from "../../../pi-packag
 import { addPersistentRoomScheduleJob, listPersistentRoomScheduleJobs, removePersistentRoomScheduleJob, summarizePersistentRoomScheduleJobs, updatePersistentRoomScheduleJob } from "../../../pi-package/extensions/schedule-prompt/index.js";
 import type { AddPersistentRoomScheduleJobInput, PersistentRoomScheduleJob, PersistentRoomScheduleSummary, PersistentRoomScheduleType, UpdatePersistentRoomScheduleJobInput } from "../../../pi-package/extensions/schedule-prompt/index.js";
 import { ensureProductAppStateRoot, ensureProductAppUserDirs, productAppStatePath, productAppStateRoot } from "../../../pi-package/product-state-paths.js";
-import { agentSkillsDir, localSkillProvenance, migrateLegacyUserSkills, readSkillProvenance, removeManagedSkillDir, sha256, sharedAgentsSkillsDir, SKILL_PROVENANCE_FILENAME, writeSkillProvenance, type SkillProvenance } from "./skills-store.js";
+import { createRemoteModeManager, isAllowedTunnelPeerAddress, isRemoteTestModeEnabled } from "./remote-mode.js";
+import { createRemoteDeviceStore, REMOTE_DEVICE_TTL_MS } from "./remote-devices.js";
+import { classifyRemoteRoute } from "./remote-route-policy.js";
+import { createRemoteRoomExposureStore } from "./remote-room-exposure.js";
+import { createRemoteAuditLog } from "./remote-audit-log.js";
+import { qrMatrixFor } from "./remote-qr.js";
+import { agentSkillsDir, computeSkillFilesDigest, localSkillProvenance, migrateLegacyUserSkills, readSkillProvenance, removeManagedSkillDir, sha256, sharedAgentsSkillsDir, SKILL_PROVENANCE_FILENAME, writeSkillProvenance, type SkillProvenance } from "./skills-store.js";
 import { filterRepoScanSkillFiles, scanInvisibleUnicode, type InvisibleUnicodeFinding } from "./skills-import.js";
-import { cloneRepoShallow, getCheckout, installCheckoutCleanup, loadFeaturedSource, parseSkillFrontmatter as parseFrontmatter, readRepoCandidate, registerCheckout, resolveFeaturedSources, resolveRepoSource, scanRepoSkills, vendorRepoSkill } from "./skills-repo-fetch.js";
+import { cloneRepoShallow, getCheckout, installCheckoutCleanup, loadFeaturedSource, parseSkillFrontmatter as parseFrontmatter, readRepoCandidate, registerCheckout, removeCheckout, resolveFeaturedSources, resolveRepoSource, scanRepoSkills, vendorRepoSkill } from "./skills-repo-fetch.js";
 import JSZip from "jszip";
 import { appendUsage, resolveUsageAuthType } from "./usage-log.js";
 import type { UsageKind, UsageRow } from "./usage-log.js";
@@ -370,6 +378,33 @@ p { line-height: 1.5; }
 </html>
 `;
 
+// Served to a phone browser that reaches the tunnel listener without a
+// device cookie (expired, revoked, or never enrolled). Self-contained like
+// the loopback hint page: asset routes require device auth too.
+const REMOTE_UNAUTHENTICATED_PAGE = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Exxperts</title>
+<style>
+body { font-family: system-ui, sans-serif; background: #111; color: #eee; display: flex; min-height: 100vh; align-items: center; justify-content: center; margin: 0; }
+main { max-width: 34rem; padding: 2rem; }
+h1 { font-size: 1.3rem; }
+p { line-height: 1.5; }
+</style>
+</head>
+<body>
+<main>
+<h1>This device is not paired with Exxperts</h1>
+<p>On the computer running Exxperts, generate a pairing code and scan it with this device. Pairing needs an approval on the computer; after that this device stays signed in.</p>
+<p>If this phone was already paired, open exactly the address shown in the app's Remote access settings. Pairing is tied to that exact address, so another spelling of the same machine will not be recognized.</p>
+<p>A device is also signed out when it is removed in those settings or has gone unused for a month. Pairing again once after that is normal.</p>
+</main>
+</body>
+</html>
+`;
+
 // Request logs are pino JSON — useful when developing, noise in a user's
 // terminal. The launcher runs with NODE_ENV=production, so default to
 // warnings there; LOG_LEVEL overrides in either direction.
@@ -395,6 +430,18 @@ const app = Fastify({
 });
 await app.register(websocket);
 
+// Live route inventory, for the remote-route-policy coverage check: every
+// registered route must carry an explicit remote classification, and the
+// classification smoke fails when one does not, so a new route can never
+// silently become remotely reachable.
+const registeredRouteInventory: Array<{ method: string; url: string }> = [];
+app.addHook("onRoute", (route) => {
+	for (const method of ([] as string[]).concat(route.method)) {
+		if (method === "HEAD" || method === "OPTIONS") continue;
+		registeredRouteInventory.push({ method, url: route.url });
+	}
+});
+
 // This server is local-only by design. Binding to 127.0.0.1 (see listen())
 // keeps other machines out; this guard additionally rejects any request whose
 // remote address, Host, or Origin is not loopback, so a browser page on a
@@ -412,6 +459,90 @@ app.addHook("onRequest", async (req, reply) => {
 			error: `Request carries the proxy header "${proxyHeader}". Reverse proxies are not supported: Exxperts is a local, single-user app and must be reached directly at its loopback address. See SECURITY.md in the repository.`,
 			code: "reverse_proxy_unsupported",
 		});
+	}
+	// Requests accepted by the remote-mode tunnel listener take their own
+	// branch: everything the loopback guard demands, minus loopback shape,
+	// plus (in a later unit) device identity. The socket tag is the
+	// authority; the checks inside are belt-and-suspenders on top of it.
+	// With remote OFF no socket is ever tagged, so this branch is dead code
+	// and the loopback path below is byte-identical to today.
+	if (remoteMode.isRemoteSocket((req.raw as any)?.socket)) {
+		// A real tunnel delivers the peer's own tailnet address; anything
+		// else has no business on this listener.
+		if (!requestRemoteAddresses(req).some(isAllowedTunnelPeerAddress)) {
+			return reply.code(403).send({ error: "This listener only accepts requests from devices on the private tunnel.", code: "remote_request_required" });
+		}
+		// Exact-self Host and Origin (the machine's own tunnel identity),
+		// never a range: DNS rebinding stays dead on this listener too.
+		if (!remoteMode.isOwnTunnelHost(String(req.headers.host ?? ""))) {
+			return reply.code(403).send({ error: "This listener only accepts requests addressed to the machine's own tunnel address.", code: "remote_request_required" });
+		}
+		const tunnelOrigin = String(req.headers.origin ?? "").trim();
+		if (tunnelOrigin && !remoteMode.isOwnTunnelOrigin(tunnelOrigin)) {
+			return reply.code(403).send({ error: "This listener only accepts requests addressed to the machine's own tunnel address.", code: "remote_request_required" });
+		}
+		// Canonical-address redirect, AFTER every refusal above and BEFORE any
+		// auth or dispatch: under https the exact-self Host check accepts two
+		// spellings of this machine (the certificate's DNS name and the raw
+		// tunnel address), but the device cookie is scoped to the DNS name
+		// only, so a validly paired phone arriving on the raw-address form
+		// (old bookmark, hand-typed IP) sends no cookie and would be told it
+		// is not paired. Send it to the one true address instead, keeping
+		// path and query. Only requests that already passed the exact-self
+		// checks reach this point, so a foreign Host still gets the 403 above,
+		// never a redirect; a request already carrying the canonical Host
+		// falls through, so no loop; on plain http there is no canonical name
+		// and this is inert; and the loopback listener never enters this
+		// branch at all.
+		const canonicalTunnelHost = remoteMode.canonicalTunnelHost();
+		if (canonicalTunnelHost && String(req.headers.host ?? "").trim().toLowerCase() !== canonicalTunnelHost) {
+			return reply.redirect(`https://${canonicalTunnelHost}${String(req.raw.url ?? "/")}`, 302);
+		}
+		const tunnelPathname = String(req.raw.url ?? "").split("?")[0];
+		// The readiness probe leaks nothing to enrolled devices: liveness only.
+		if (tunnelPathname === "/healthz") {
+			return reply.send({ ok: true });
+		}
+		// The master-token exchange does not exist on this listener; the
+		// master token never travels to a phone in any form.
+		if (tunnelPathname === "/auth/session") {
+			return reply.code(404).send({ error: "not found" });
+		}
+		// The enrollment surface is the tunnel's only pre-auth surface (the
+		// loopback /auth/session analog). The route handlers validate codes,
+		// rate-limit, and log; nothing else on the tunnel is reachable
+		// without a device key.
+		if (tunnelPathname === "/remote/enroll" || tunnelPathname === "/remote/enroll.js" || tunnelPathname === "/remote/enroll/exchange" || tunnelPathname === "/remote/enroll/status") {
+			return;
+		}
+		// Device-key auth. Deliberately never consults the master token: it
+		// is not a credential on this listener, so its presence or
+		// correctness must not be observable in any refusal.
+		const device = remoteDevices.authenticate(cookieValue(req.headers.cookie, REMOTE_DEVICE_COOKIE_NAME));
+		if (!device) {
+			// Auth failures on the tunnel are logged and audited (redacted: no
+			// key material, query strings stripped) and rate limited; today's
+			// loopback listener has neither, and the tunnel is where they
+			// become mandatory.
+			app.log.warn({ listener: "tunnel", path: tunnelPathname, method: req.method }, "remote device auth failed");
+			remoteAudit("device_auth_failed", { method: req.method, path: tunnelPathname.slice(0, 200) });
+			if (!remoteAuthFailureLimiter()) {
+				remoteAudit("rate_limited", { path: tunnelPathname.slice(0, 200) });
+				return reply.code(429).send({ error: "Too many failed attempts. Wait a minute and try again.", code: "remote_rate_limited" });
+			}
+			if (req.method === "GET" && (tunnelPathname === "/" || String(req.headers.accept ?? "").includes("text/html"))) {
+				return reply.code(401).headers(staticSecurityHeadersFor(req)).type("text/html; charset=utf-8").send(REMOTE_UNAUTHENTICATED_PAGE);
+			}
+			return reply.code(401).send({ error: "This device is not paired with Exxperts. Generate a pairing code on the computer and scan it with this device.", code: "remote_device_auth_required" });
+		}
+		// Authenticated device: bind the socket for per-device revocation,
+		// refresh last-seen, attach the record for capability checks, and let
+		// the request proceed to the shared routes. Capability and per-room
+		// exposure enforcement build on this attachment in a later unit.
+		remoteMode.registerDeviceSocket((req.raw as any)?.socket, device.id);
+		remoteDevices.touchLastSeen(device.id);
+		(req as any).exxRemoteDevice = device;
+		return;
 	}
 	if (!requestRemoteAddresses(req).some(isLoopbackAddress)) {
 		return reply.code(403).send({ error: "This server only accepts local requests from the Exxperts app.", code: "local_request_required" });
@@ -468,6 +599,434 @@ app.get("/auth/session", async (req, reply) => {
 	}
 	reply.header("set-cookie", `${AUTH_COOKIE_NAME}=${AUTH_TOKEN}; HttpOnly; SameSite=Strict; Path=/; Max-Age=31536000`);
 	return reply.redirect("/", 302);
+});
+
+// Remote mode (SECURITY.md's "explicit opt-in may come later", now explicit):
+// an OFF-by-default tunnel listener on the machine's own tailnet address.
+// This unit is state + lifecycle only; the tunnel listener serves, but the
+// request guard above still holds every request to loopback shape, so until
+// the guard learns tailnet identities (separate change), remote requests are
+// refused. OFF stays byte-identical: with no state file nothing below runs.
+const remoteMode = createRemoteModeManager({ port: PORT, appServer: app.server, log: app.log });
+const remoteDevices = createRemoteDeviceStore(app.log);
+const remoteRoomExposure = createRemoteRoomExposureStore(app.log);
+const remoteAudit = createRemoteAuditLog(app.log);
+
+// The phone's credential is its own device key, never the master token. The
+// cookie name is distinct from the loopback session cookie so the two
+// credential classes cannot be confused by any code path.
+const REMOTE_DEVICE_COOKIE_NAME = "exxperts_remote_device";
+// The Max-Age is a hint for the browser; the device record's server-side
+// expiry (same 30 days, sliding on use) is what actually authorizes.
+const REMOTE_DEVICE_COOKIE_MAX_AGE_S = Math.floor(REMOTE_DEVICE_TTL_MS / 1000);
+
+// Fixed-window rate limiting for the tunnel listener's unauthenticated
+// surface. Single-user product, so global windows (not per-IP) are the
+// honest model: the budget is "how fast can anything hammer this machine".
+function makeFixedWindowLimiter(limitPerMinute: number): () => boolean {
+	let windowStart = 0;
+	let count = 0;
+	return () => {
+		const now = Date.now();
+		if (now - windowStart > 60_000) {
+			windowStart = now;
+			count = 0;
+		}
+		count += 1;
+		return count <= limitPerMinute;
+	};
+}
+const enrollBeginLimiter = makeFixedWindowLimiter(10);
+const enrollStatusLimiter = makeFixedWindowLimiter(120);
+const remoteAuthFailureLimiter = makeFixedWindowLimiter(30);
+
+// Admin surface for the CLI and the Settings mirror. Loopback-only by
+// intent: a request arriving over the tunnel must never be able to flip
+// remote state (a phone cannot disable, re-enable, or reconfigure its own
+// access path). The socket tag is the authority.
+function refuseRemoteAdminFromTunnel(req: any, reply: any): boolean {
+	if (remoteMode.isRemoteSocket(req.raw?.socket)) {
+		reply.code(403).send({ error: "Remote-mode settings can only be changed on the computer itself.", code: "remote_admin_local_only" });
+		return true;
+	}
+	return false;
+}
+
+app.get("/api/remote/status", async (req, reply) => {
+	if (refuseRemoteAdminFromTunnel(req, reply)) return;
+	return remoteMode.status();
+});
+
+app.post("/api/remote/enable", async (req, reply) => {
+	if (refuseRemoteAdminFromTunnel(req, reply)) return;
+	const result = await remoteMode.enable();
+	if (!result.ok) return reply.code(result.code === "no_tunnel_address" ? 412 : 500).send({ error: result.error, code: result.code });
+	remoteAudit("remote_enabled");
+	return { ok: true, address: result.address, status: remoteMode.status() };
+});
+
+app.post("/api/remote/disable", async (req, reply) => {
+	if (refuseRemoteAdminFromTunnel(req, reply)) return;
+	// Disable also kills any outstanding pairing code and pending approvals:
+	// "off" means nothing about remote stays actionable.
+	remoteDevices.invalidateEnrollment();
+	await remoteMode.disable();
+	remoteAudit("remote_disabled");
+	return { ok: true, status: remoteMode.status() };
+});
+
+// Keep-awake preference (loopback only, like all remote admin): whether
+// this computer holds a system-sleep assertion while remote access is on.
+// The audit line is written only when the stored value actually changed.
+app.post("/api/remote/keep-awake", async (req, reply) => {
+	if (refuseRemoteAdminFromTunnel(req, reply)) return;
+	const value = (req.body as Record<string, unknown> | undefined)?.keepAwake;
+	if (typeof value !== "boolean") {
+		return reply.code(400).send({ error: "keepAwake must be true or false", code: "remote_bad_keep_awake" });
+	}
+	if (remoteMode.setKeepAwake(value)) remoteAudit(value ? "keepawake_enabled" : "keepawake_disabled");
+	return { ok: true, status: remoteMode.status() };
+});
+
+// Test hook (smokes only, gated on the same env var that fakes the tailnet
+// address): runs the shared failure path as if the address vanished, so the
+// resilience smoke can assert that remote degrades to off while loopback
+// keeps serving.
+app.post("/api/remote/test/drop-listener", async (req, reply) => {
+	if (!isRemoteTestModeEnabled()) return reply.code(404).send({ error: "not found" });
+	if (refuseRemoteAdminFromTunnel(req, reply)) return;
+	remoteMode.simulateAddressLoss();
+	return { ok: true, status: remoteMode.status() };
+});
+
+// Test hook (smokes only): force one watcher tick so the address-returns
+// rebind can be asserted without waiting out the 30s interval.
+app.post("/api/remote/test/recheck", async (req, reply) => {
+	if (!isRemoteTestModeEnabled()) return reply.code(404).send({ error: "not found" });
+	if (refuseRemoteAdminFromTunnel(req, reply)) return;
+	remoteMode.simulateRecheck();
+	return { ok: true, status: remoteMode.status() };
+});
+
+// Device administration (loopback only, like all remote admin): the list the
+// Settings mirror renders, per-device revocation that force-closes the
+// device's live sockets, and capability changes that do the same so a
+// downgrade takes effect immediately instead of at the next reconnect.
+app.get("/api/remote/devices", async (req, reply) => {
+	if (refuseRemoteAdminFromTunnel(req, reply)) return;
+	return { devices: remoteDevices.list() };
+});
+
+app.post("/api/remote/devices/revoke", async (req, reply) => {
+	if (refuseRemoteAdminFromTunnel(req, reply)) return;
+	const id = String((req.body as Record<string, unknown> | undefined)?.id ?? "");
+	if (!remoteDevices.revoke(id)) return reply.code(404).send({ error: "No such device.", code: "remote_device_not_found" });
+	remoteMode.closeDeviceSockets(id);
+	remoteAudit("device_revoked", { deviceId: id });
+	return { ok: true, devices: remoteDevices.list() };
+});
+
+app.post("/api/remote/devices/capability", async (req, reply) => {
+	if (refuseRemoteAdminFromTunnel(req, reply)) return;
+	const body = (req.body ?? {}) as Record<string, unknown>;
+	const id = String(body.id ?? "");
+	const capability = String(body.capability ?? "");
+	if (capability !== "full" && capability !== "read-only") {
+		return reply.code(400).send({ error: "capability must be full or read-only", code: "remote_bad_capability" });
+	}
+	if (!remoteDevices.setCapability(id, capability)) return reply.code(404).send({ error: "No such device.", code: "remote_device_not_found" });
+	remoteMode.closeDeviceSockets(id);
+	remoteAudit("device_capability_changed", { deviceId: id, capability });
+	return { ok: true, devices: remoteDevices.list() };
+});
+
+// Enrollment, computer side (loopback only): mint the single-use code the QR
+// carries, list pending approvals, approve or deny. The code is random and
+// unrelated to the master token; minting a new one replaces any outstanding
+// one.
+app.post("/api/remote/enroll-code", async (req, reply) => {
+	if (refuseRemoteAdminFromTunnel(req, reply)) return;
+	const status = remoteMode.status();
+	if (!status.enabled || !status.address) {
+		return reply.code(412).send({ error: "Remote mode is not serving; enable it first.", code: "remote_not_serving" });
+	}
+	const minted = remoteDevices.mintEnrollCode();
+	remoteAudit("enroll_code_minted");
+	// Under https the QR flips from address-primary to name-primary: the
+	// certificate carries a DNS SAN only (no public CA validates CGNAT
+	// space), so the MagicDNS name is the address that gets the padlock.
+	const host = status.scheme === "https" && status.dnsName ? status.dnsName : status.address.includes(":") ? `[${status.address}]` : status.address;
+	const url = `${status.scheme ?? "http"}://${host}:${PORT}/remote/enroll?code=${minted.code}`;
+	// The matrix rides along for the Settings page, which renders it as an
+	// SVG; the CLI keeps drawing its own terminal QR from the same url. A
+	// null matrix (encoder unavailable) is simply omitted: the page falls
+	// back to showing the URL, which is the mechanism anyway.
+	const matrix = qrMatrixFor(url);
+	return { ok: true, url, ...(matrix ? { matrix } : {}), expiresAt: minted.expiresAt };
+});
+
+app.get("/api/remote/enroll-pending", async (req, reply) => {
+	if (refuseRemoteAdminFromTunnel(req, reply)) return;
+	return { pending: remoteDevices.pendingApprovals() };
+});
+
+app.post("/api/remote/enroll-approve", async (req, reply) => {
+	if (refuseRemoteAdminFromTunnel(req, reply)) return;
+	const body = (req.body ?? {}) as Record<string, unknown>;
+	const capability = body.capability === "read-only" ? "read-only" : "full";
+	const approvedDeviceId = remoteDevices.approve(String(body.requestId ?? ""), capability);
+	if (!approvedDeviceId) {
+		return reply.code(404).send({ error: "No such pending pairing request.", code: "remote_enroll_not_found" });
+	}
+	remoteAudit("enroll_approved", { deviceId: approvedDeviceId, capability });
+	return { ok: true, devices: remoteDevices.list() };
+});
+
+app.post("/api/remote/enroll-deny", async (req, reply) => {
+	if (refuseRemoteAdminFromTunnel(req, reply)) return;
+	if (!remoteDevices.deny(String((req.body as Record<string, unknown> | undefined)?.requestId ?? ""))) {
+		return reply.code(404).send({ error: "No such pending pairing request.", code: "remote_enroll_not_found" });
+	}
+	remoteAudit("enroll_denied");
+	return { ok: true };
+});
+
+// Enrollment, phone side (tunnel only; on the loopback listener these routes
+// answer with Fastify's own not-found so the loopback surface is unchanged).
+// The guard's tunnel branch lets exactly these paths through pre-auth; they
+// rate-limit and validate here.
+function refuseEnrollOutsideTunnel(req: any, reply: any): boolean {
+	if (!remoteMode.isRemoteSocket(req.raw?.socket)) {
+		reply.callNotFound();
+		return true;
+	}
+	return false;
+}
+
+const REMOTE_ENROLL_PAGE = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pair with Exxperts</title>
+<style>
+body { font-family: system-ui, sans-serif; background: #111; color: #eee; display: flex; min-height: 100vh; align-items: center; justify-content: center; margin: 0; }
+main { max-width: 34rem; padding: 2rem; text-align: center; }
+h1 { font-size: 1.3rem; }
+p { line-height: 1.5; }
+</style>
+</head>
+<body>
+<main>
+<h1>Pairing this device</h1>
+<p id="msg">Contacting your computer...</p>
+</main>
+<script src="/remote/enroll.js"></script>
+</body>
+</html>
+`;
+
+// Separate file instead of an inline script: the static CSP allows only
+// script-src 'self', and the enroll page must not weaken it.
+const REMOTE_ENROLL_SCRIPT = `"use strict";
+const msg = document.getElementById("msg");
+function guessName() {
+	const ua = navigator.userAgent;
+	const device = /iPhone/.test(ua) ? "iPhone" : /iPad/.test(ua) ? "iPad" : /Android/.test(ua) ? "Android device" : /Macintosh/.test(ua) ? "Mac" : /Windows/.test(ua) ? "Windows device" : "Device";
+	const browser = /CriOS|Chrome/.test(ua) ? "Chrome" : /FxiOS|Firefox/.test(ua) ? "Firefox" : /Safari/.test(ua) ? "Safari" : "browser";
+	return device + " (" + browser + ")";
+}
+async function run() {
+	const code = new URLSearchParams(location.search).get("code") || "";
+	if (!code) { msg.textContent = "This pairing link is missing its code. Scan the QR on your computer again."; return; }
+	let requestId = "";
+	try {
+		const res = await fetch("/remote/enroll/exchange", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ code, name: guessName() }) });
+		if (!res.ok) { msg.textContent = "This pairing code is no longer valid. Generate a fresh one on your computer and scan again."; return; }
+		requestId = String((await res.json()).requestId || "");
+	} catch { msg.textContent = "Could not reach your computer. Check that it is awake and on the tunnel, then scan again."; return; }
+	msg.textContent = "Now approve this device on your computer.";
+	for (;;) {
+		await new Promise((r) => setTimeout(r, 2000));
+		let body;
+		try {
+			const res = await fetch("/remote/enroll/status?requestId=" + requestId);
+			if (!res.ok) continue;
+			body = await res.json();
+		} catch { continue; }
+		if (body.state === "approved") { msg.textContent = "Paired. Opening Exxperts..."; location.replace("/"); return; }
+		if (body.state === "denied") { msg.textContent = "Pairing was declined on the computer."; return; }
+		if (body.state === "unknown") { msg.textContent = "This pairing attempt expired. Generate a fresh code on your computer and scan again."; return; }
+	}
+}
+run();
+`;
+
+app.get("/remote/enroll", async (req, reply) => {
+	if (refuseEnrollOutsideTunnel(req, reply)) return;
+	if (!enrollBeginLimiter()) {
+		remoteAudit("rate_limited", { path: "/remote/enroll" });
+		return reply.code(429).send({ error: "Too many pairing attempts. Wait a minute and scan again.", code: "remote_rate_limited" });
+	}
+	return reply.headers(staticSecurityHeadersFor(req)).type("text/html; charset=utf-8").send(REMOTE_ENROLL_PAGE);
+});
+
+app.get("/remote/enroll.js", async (req, reply) => {
+	if (refuseEnrollOutsideTunnel(req, reply)) return;
+	return reply.headers(staticSecurityHeadersFor(req)).type("application/javascript; charset=utf-8").send(REMOTE_ENROLL_SCRIPT);
+});
+
+app.post("/remote/enroll/exchange", async (req, reply) => {
+	if (refuseEnrollOutsideTunnel(req, reply)) return;
+	if (!enrollBeginLimiter()) {
+		app.log.warn({ listener: "tunnel" }, "enroll exchange rate limited");
+		remoteAudit("rate_limited", { path: "/remote/enroll/exchange" });
+		return reply.code(429).send({ error: "Too many pairing attempts. Wait a minute and scan again.", code: "remote_rate_limited" });
+	}
+	const body = (req.body ?? {}) as Record<string, unknown>;
+	const result = remoteDevices.beginExchange(String(body.code ?? ""), body.name);
+	if (!result.ok) {
+		// Redacted on purpose: never log code material, only the outcome.
+		app.log.warn({ listener: "tunnel" }, "enroll exchange with invalid or expired code");
+		remoteAudit("enroll_exchange_invalid");
+		return reply.code(403).send({ error: "This pairing code is not valid.", code: "remote_enroll_invalid_code" });
+	}
+	// The device name is user-controlled input; it is sanitized by the store
+	// and shown in the approval list, not echoed into logs or the audit file.
+	app.log.info("remote pairing requested; approve or deny on the computer");
+	remoteAudit("enroll_requested");
+	return { ok: true, requestId: result.requestId };
+});
+
+app.get("/remote/enroll/status", async (req, reply) => {
+	if (refuseEnrollOutsideTunnel(req, reply)) return;
+	if (!enrollStatusLimiter()) {
+		remoteAudit("rate_limited", { path: "/remote/enroll/status" });
+		return reply.code(429).send({ error: "Too many attempts. Wait a minute.", code: "remote_rate_limited" });
+	}
+	const requestId = String((req.query as Record<string, unknown> | undefined)?.requestId ?? "");
+	const status = remoteDevices.exchangeStatus(requestId);
+	if (status.state === "approved" && status.key) {
+		// The one moment the device key crosses the wire: as an HttpOnly
+		// cookie on the poll response, over the encrypted tunnel, exactly
+		// once. Max-Age is a hint; the record's server-side expiry decides.
+		// Secure rides along whenever the transport is TLS (read off the
+		// actual socket, not configuration), so on the https listener the
+		// key can never be replayed over a plain-http downgrade.
+		const secure = (req.raw.socket as { encrypted?: boolean }).encrypted === true ? "; Secure" : "";
+		reply.header("set-cookie", `${REMOTE_DEVICE_COOKIE_NAME}=${status.key}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${REMOTE_DEVICE_COOKIE_MAX_AGE_S}${secure}`);
+	}
+	return { state: status.state };
+});
+
+app.addHook("onClose", async () => {
+	await remoteMode.stop();
+});
+
+// What kind of client is this connection? The web-ui asks once at boot and
+// hides host-local affordances (native folder picker, save-to-disk) for
+// remote devices. Purely cosmetic: the server enforces regardless.
+app.get("/api/remote/client-context", async (req) => {
+	const device = (req as any).exxRemoteDevice as { capability?: string } | undefined;
+	if (!device) return { remote: false, capability: "full" };
+	return { remote: true, capability: device.capability === "full" ? "full" : "read-only" };
+});
+
+// Per-room exposure admin (loopback only). Every room is remotely reachable
+// by default; the user can hide any room from remote devices. The write path
+// living here, behind refuseRemoteAdminFromTunnel, is what makes "a phone
+// can never widen its own access" structural.
+app.get("/api/remote/rooms", async (req, reply) => {
+	if (refuseRemoteAdminFromTunnel(req, reply)) return;
+	return {
+		rooms: listPersistentAgents().map((agent) => ({
+			id: agent.id,
+			displayName: agent.displayName || agent.id,
+			exposed: !remoteRoomExposure.isHidden(agent.id),
+			// The Settings page flags rooms that can run commands: such a room
+			// is still exposable by default (the user's own devices, full
+			// capability by design), but the flag keeps the reach visible.
+			bashEnabled: readPersistentRoomDefaultCapabilityPolicy(agent.id)?.bashEnabled === true,
+		})),
+		hidden: [...remoteRoomExposure.hiddenRooms()].sort(),
+	};
+});
+
+app.post("/api/remote/rooms/exposure", async (req, reply) => {
+	if (refuseRemoteAdminFromTunnel(req, reply)) return;
+	const body = (req.body ?? {}) as Record<string, unknown>;
+	const id = String(body.id ?? "").trim();
+	if (!id) return reply.code(400).send({ error: "id is required", code: "remote_bad_room" });
+	remoteRoomExposure.setExposed(id, body.exposed === true);
+	return { ok: true, hidden: [...remoteRoomExposure.hiddenRooms()].sort() };
+});
+
+// Test hook (smokes only): the live route table with each route's remote
+// classification, so the coverage smoke can assert the policy is total.
+app.get("/api/remote/test/routes", async (req, reply) => {
+	if (!isRemoteTestModeEnabled()) return reply.code(404).send({ error: "not found" });
+	if (refuseRemoteAdminFromTunnel(req, reply)) return;
+	return {
+		routes: registeredRouteInventory.map((route) => ({ ...route, class: classifyRemoteRoute(route.method, route.url) })),
+	};
+});
+
+// Remote-device enforcement, after routing so the matched route pattern is
+// known. Three layers, all fail-closed:
+// 1. Route class: unclassified refuses; "local" is the computer's own
+//    surface; "write" needs a full-capability device. Capability is read
+//    from the device record on every request, and anything that is not
+//    exactly "full" is treated as read-only.
+// 2. Per-room exposure on room-keyed routes: a hidden room answers with the
+//    same not-found shape as a nonexistent one, so remote devices cannot
+//    distinguish hidden from absent.
+// 3. Task artifacts: an artifact belonging to a hidden room's task is not
+//    found, closing the taskId side channel.
+app.addHook("preHandler", async (req, reply) => {
+	const device = (req as any).exxRemoteDevice as { capability?: string } | undefined;
+	if (!device) return;
+	const routeUrl = String((req as any).routeOptions?.url ?? (req as any).routerPath ?? "");
+	const routeClass = classifyRemoteRoute(req.method, routeUrl);
+	if (routeClass === null) {
+		app.log.warn({ route: `${req.method} ${routeUrl}` }, "remote device reached an unclassified route; refusing");
+		return reply.code(403).send({ error: "This action is not available remotely.", code: "remote_unclassified_route" });
+	}
+	if (routeClass === "local") {
+		return reply.code(403).send({ error: "This action is only available on the computer running Exxperts.", code: "remote_local_only" });
+	}
+	if (routeClass === "write" && device.capability !== "full") {
+		return reply.code(403).send({ error: "This device is set to viewing only. Change it on the computer to interact remotely.", code: "remote_read_only" });
+	}
+	const params = (req.params ?? {}) as Record<string, string>;
+	if (routeUrl.startsWith("/api/persistent-agents/:id")) {
+		const id = String(params.id ?? "");
+		if (id && remoteRoomExposure.isHidden(id)) {
+			// The same body a nonexistent room answers with on these routes,
+			// so hidden and nonexistent are indistinguishable.
+			return reply.code(404).send({ error: `persistent agent not found: ${id}` });
+		}
+	} else if (routeUrl.startsWith("/api/persistent-agents/:targetId")) {
+		const targetId = String(params.targetId ?? "");
+		if (targetId && remoteRoomExposure.isHidden(targetId)) {
+			return reply.code(404).send({ error: `persistent agent not found: ${targetId}` });
+		}
+	} else if (routeUrl.startsWith("/api/memory/rooms/:id")) {
+		const id = String(params.id ?? "");
+		// This family's own unknown-room shape.
+		if (id && remoteRoomExposure.isHidden(id)) return reply.code(404).send({ error: "Room not found." });
+	} else if (routeUrl.startsWith("/api/artifacts/:taskId") && remoteRoomExposure.hiddenRooms().size > 0) {
+		const taskId = String(params.taskId ?? "");
+		for (const roomId of remoteRoomExposure.hiddenRooms()) {
+			let owned = false;
+			try {
+				owned = listTaskLedgerRecords(roomId).some((record) => record.taskId === taskId);
+			} catch {
+				// An unreadable hidden-room ledger must not grant access.
+				owned = true;
+			}
+			if (owned) return reply.headers(ARTIFACT_SECURITY_HEADERS).code(404).send({ error: "Artifact not found." });
+		}
+	}
 });
 
 function isPromptDiagnosticsEnabled(): boolean {
@@ -778,7 +1337,11 @@ function recordPersistentRoomPromptDiagnostics(input: {
 // `answeringDetached` (issue #33): the web lock is held by a detached cooking
 // turn with NO client attached, so the launcher card can offer stepping back
 // in; a room genuinely open in another window keeps its lock-and-stay-out.
-app.get("/api/persistent-agents", async () => listPersistentAgents().map((agent) => ({ ...agent, activeLock: activeRoomLock(agent.id), answeringDetached: detachedCookingRooms.has(agent.id) })));
+app.get("/api/persistent-agents", async (req) => {
+	// Remote devices never see hidden rooms, in listings or anywhere else.
+	const rows = (req as any).exxRemoteDevice ? listPersistentAgents().filter((agent) => !remoteRoomExposure.isHidden(agent.id)) : listPersistentAgents();
+	return rows.map((agent) => ({ ...agent, activeLock: activeRoomLock(agent.id), answeringDetached: detachedCookingRooms.has(agent.id) }));
+});
 
 // Test-only (EXXPERTS_TEST_INTROSPECTION=1): the replay-buffer probe, so the
 // smoke can assert the buffer's lifecycle (released at settle, overflow
@@ -850,7 +1413,10 @@ app.post("/api/persistent-agents/:id/archive", async (req, reply) => {
 });
 // The archived shadow of the room list: everything GET /api/persistent-agents
 // hides. Counts only, no filesystem paths — the browser never learns roots.
-app.get("/api/persistent-agents/archived", async () => listArchivedPersistentAgents());
+app.get("/api/persistent-agents/archived", async (req) => {
+	const rows = listArchivedPersistentAgents();
+	return (req as any).exxRemoteDevice ? rows.filter((agent: { id: string }) => !remoteRoomExposure.isHidden(agent.id)) : rows;
+});
 app.get("/api/persistent-agents/:id/lifecycle-counts", async (req, reply) => {
 	const idRaw = String((req.params as any).id ?? "").trim();
 	try {
@@ -1455,6 +2021,79 @@ app.get("/api/persistent-agents/:id/threads/:threadId", async (req, reply) => {
 		return persistentAgentNormalUseErrorReply(reply, e);
 	}
 });
+// Post-stream landing (community #14 follow-up): thread answers are client-
+// authored, and the client's debounced persist fires ~500ms after the LAST
+// reveal tick, so a settled turn has a window where the finished answer exists
+// only client-side. These helpers guard both directions of the double-write:
+// the close-handler landing skips when a client write already carried the
+// answer, and a stale client PUT that raced the landing merges instead of
+// clobbering the landed answer back out of the file.
+function normalizedThreadAnswerText(text: unknown): string {
+	return String(text ?? "").replace(/\s+/g, " ").trim();
+}
+// Whitespace-insensitive containment over the joined assistant texts: the
+// client's persisted copy of an answer differs from the server's turn trace
+// only in whitespace and item slicing, never in words, so strict equality
+// would be fragile and per-item equality would miss multi-part answers.
+function threadItemsCarryAssistantText(items: unknown, finalText: string): boolean {
+	const wanted = normalizedThreadAnswerText(finalText);
+	if (!wanted) return true;
+	const joined = normalizedThreadAnswerText(
+		(Array.isArray(items) ? items : [])
+			.filter((item: any) => item?.kind === "assistant" && typeof item.text === "string")
+			.map((item: any) => item.text)
+			.join("\n"),
+	);
+	return joined.includes(wanted);
+}
+// A landed answer must survive a stale client save. The detached/post-stream
+// landing writes the finished answer under detached-* item ids; a client PUT
+// that was already in flight when the socket died can arrive afterwards with
+// an item list from before the landing, and a wholesale items overwrite would
+// clobber the paid answer back out of the file. Merge instead: any landed
+// assistant item the incoming list carries neither by id nor by text is
+// re-appended (with its landed prompt sibling), and a stale partial reveal of
+// that same answer is dropped so the merge never leaves a duplicate fragment
+// in front of the full text. An incoming list that DOES carry the answer (the
+// pagehide keepalive save's own copy, or the landed items a resume loaded) is
+// left untouched.
+function mergeLandedAnswerTailIntoClientItems(agentId: string, threadId: string, incoming: unknown): unknown[] | undefined {
+	if (!Array.isArray(incoming)) return undefined;
+	let existing: ReturnType<typeof getPersistentAgentThread> = null;
+	try { existing = getPersistentAgentThread(agentId, threadId); } catch { return incoming; }
+	const existingItems: any[] = existing?.items ?? [];
+	const landedAssistants = existingItems.filter((item: any) => item?.kind === "assistant" && String(item?.id ?? "").startsWith("detached-assistant-"));
+	if (landedAssistants.length === 0) return incoming;
+	const incomingIds = new Set(incoming.map((item: any) => String(item?.id ?? "")));
+	let merged: any[] = [...incoming];
+	for (const landed of landedAssistants) {
+		const landedId = String((landed as any).id ?? "");
+		if (incomingIds.has(landedId)) continue;
+		const landedText = String((landed as any).text ?? "");
+		if (threadItemsCarryAssistantText(merged, landedText)) continue;
+		// Drop a stale partial reveal of THIS answer: assistant items after the
+		// list's last user item whose whole text is a fragment of the landed
+		// text. Anything else after that user item (a previous turn's answer
+		// has different words) is deliberately kept.
+		const wanted = normalizedThreadAnswerText(landedText);
+		let lastUserIndex = -1;
+		for (let i = merged.length - 1; i >= 0; i--) { if ((merged[i] as any)?.kind === "user") { lastUserIndex = i; break; } }
+		merged = merged.filter((item: any, index: number) => {
+			if (index <= lastUserIndex || item?.kind !== "assistant") return true;
+			const fragment = normalizedThreadAnswerText(item?.text);
+			return !(fragment && wanted.includes(fragment));
+		});
+		const userSiblingId = `detached-user-${landedId.slice("detached-assistant-".length)}`;
+		if (!incomingIds.has(userSiblingId)) {
+			const userSibling = existingItems.find((item: any) => String(item?.id ?? "") === userSiblingId);
+			if (userSibling && !merged.some((item: any) => item?.kind === "user" && normalizedThreadAnswerText(item?.text) === normalizedThreadAnswerText((userSibling as any).text))) {
+				merged.push(userSibling);
+			}
+		}
+		merged.push(landed);
+	}
+	return merged;
+}
 app.put("/api/persistent-agents/:id/threads/:threadId", async (req, reply) => {
 	const idRaw = String((req.params as any).id ?? "").trim();
 	const threadId = String((req.params as any).threadId ?? "").trim();
@@ -1463,7 +2102,10 @@ app.put("/api/persistent-agents/:id/threads/:threadId", async (req, reply) => {
 		const body = (req.body ?? {}) as any;
 		const effectiveWorkspacePolicy = resolvePersistentRoomEffectiveWorkspacePolicy(status.id, threadId);
 		const runtimeCwd = persistentRoomRuntimeCwdForEffectiveWorkspacePolicy(effectiveWorkspacePolicy, REPO_ROOT);
-		return writePersistentAgentThread(status.id, threadId, { state: body.state, origin: body.origin, model: body.model, items: body.items, pendingHandoffs: body.pendingHandoffs }, {
+		// A save that raced a server-side landing merges the landed answer in
+		// instead of overwriting it away (see mergeLandedAnswerTailIntoClientItems).
+		const items = mergeLandedAnswerTailIntoClientItems(status.id, threadId, body.items);
+		return writePersistentAgentThread(status.id, threadId, { state: body.state, origin: body.origin, model: body.model, items, pendingHandoffs: body.pendingHandoffs }, {
 			createRuntime: ({ model }) => createPersistentAgentPiSessionJsonlThreadRuntime({
 				agentId: status.id,
 				threadId,
@@ -1632,14 +2274,50 @@ app.put("/api/persistent-agents/:id/maintenance-settings", async (req, reply) =>
 		return persistentAgentNormalUseErrorReply(reply, e);
 	}
 });
+// Per-room preferred model: what an empty room's picker remembers across
+// restarts and profile switches. Deliberately not gated on the active
+// profile's catalog: a pick recorded just before a switch away is exactly the
+// value that must survive it. Execution still runs through the active profile;
+// the thread-write and model-selection approval gates are untouched.
+app.get("/api/persistent-agents/:id/preferred-model", async (req, reply) => {
+	const idRaw = String((req.params as any).id ?? "").trim();
+	try {
+		const status = getUsablePersistentAgentStatusForNormalUse(idRaw);
+		const preferred = readPersistentRoomPreferredModel(status.id);
+		return { agentId: status.id, preferredModel: preferred ? { provider: preferred.provider, model: preferred.model } : null };
+	} catch (e) {
+		return persistentAgentNormalUseErrorReply(reply, e);
+	}
+});
+app.put("/api/persistent-agents/:id/preferred-model", async (req, reply) => {
+	const idRaw = String((req.params as any).id ?? "").trim();
+	try {
+		const status = getUsablePersistentAgentStatusForNormalUse(idRaw);
+		const body = (req.body ?? {}) as any;
+		const preferred = writePersistentRoomPreferredModel(status.id, { provider: body.provider, model: body.model ?? body.modelId });
+		return { agentId: status.id, preferredModel: { provider: preferred.provider, model: preferred.model } };
+	} catch (e) {
+		return persistentAgentNormalUseErrorReply(reply, e);
+	}
+});
 app.get("/api/persistent-agents/:id/skill-settings", async (req, reply) => {
 	const idRaw = String((req.params as any).id ?? "").trim();
 	try {
 		const status = getUsablePersistentAgentStatusForNormalUse(idRaw);
 		const settings = readPersistentRoomSkillSettings(status.id);
 		// `skills` is the mismatch view the settings panel (MR-5) renders:
-		// ok | hash-mismatch | missing per enabled skill.
-		return { agentId: status.id, settings, skills: computeSkillStatuses(settings.enabledSkills, skillLibraryFingerprint) };
+		// ok | hash-mismatch | missing per enabled skill, plus the execution
+		// approval state (none | approved | drifted) and, per skill, whether it
+		// is execution-capable at all and which bundled files it carries.
+		const skills = computeSkillStatuses(settings.enabledSkills, skillLibraryFingerprint, (name) => resolveExecutableSkillFiles(name)?.filesSha256 ?? null);
+		return {
+			agentId: status.id,
+			settings,
+			skills: skills.map((skill) => {
+				const executable = resolveExecutableSkillFiles(skill.name);
+				return { ...skill, executable: executable !== null, bundledFiles: executable?.files ?? [], manualOnly: resolveLibrarySkillManifest(skill.name)?.disableModelInvocation === true };
+			}),
+		};
 	} catch (e) {
 		return persistentAgentNormalUseErrorReply(reply, e);
 	}
@@ -1651,16 +2329,28 @@ app.put("/api/persistent-agents/:id/skill-settings", async (req, reply) => {
 		const body = (req.body ?? {}) as any;
 		const action = String(body.action ?? "");
 		const name = String(body.name ?? "");
-		if (action !== "enable" && action !== "disable") return reply.code(400).send({ error: "action must be 'enable' or 'disable'" });
+		if (action !== "enable" && action !== "disable" && action !== "approve-execution" && action !== "revoke-execution") {
+			return reply.code(400).send({ error: "action must be 'enable', 'disable', 'approve-execution' or 'revoke-execution'" });
+		}
 		// Enable pins sha256(current library body), computed server-side by the
 		// resolver — the client never supplies the hash. An unknown skill is a 4xx.
-		const result = action === "enable"
-			? enablePersistentRoomSkill(status.id, name, skillLibraryFingerprint)
-			: disablePersistentRoomSkill(status.id, name);
+		// approve-execution pins the skill's whole-content files digest the same
+		// way: server-computed, only for an already-enabled, execution-capable
+		// user-store skill. revoke-execution withdraws it; the skill stays enabled.
+		const result =
+			action === "enable" ? enablePersistentRoomSkill(status.id, name, skillLibraryFingerprint)
+			: action === "disable" ? disablePersistentRoomSkill(status.id, name)
+			: action === "approve-execution" ? approvePersistentRoomSkillExecution(status.id, name, (n) => resolveExecutableSkillFiles(n)?.filesSha256 ?? null)
+			: revokePersistentRoomSkillExecution(status.id, name);
 		if (!result.ok) {
-			return reply.code(400).send({ error: result.reason === "unknown-skill" ? `unknown skill: ${name}` : "invalid skill name" });
+			const message =
+				result.reason === "unknown-skill" ? `unknown skill: ${name}`
+				: result.reason === "not-enabled" ? `skill not enabled for this room: ${name}`
+				: result.reason === "no-files" ? `skill is not executable (not a user-library skill, or its content did not pass review): ${name}`
+				: "invalid skill name";
+			return reply.code(400).send({ error: message });
 		}
-		return { agentId: status.id, settings: result.settings, skills: computeSkillStatuses(result.settings.enabledSkills, skillLibraryFingerprint) };
+		return { agentId: status.id, settings: result.settings, skills: computeSkillStatuses(result.settings.enabledSkills, skillLibraryFingerprint, (n) => resolveExecutableSkillFiles(n)?.filesSha256 ?? null) };
 	} catch (e) {
 		return persistentAgentNormalUseErrorReply(reply, e);
 	}
@@ -2994,14 +3684,40 @@ app.put("/api/persistent-agent-ai-profiles/custom", async (req, reply) => {
 // keeps the profile and provider ids it has always had, so rooms already locked
 // to it never notice that the store learned to hold more than one.
 function gatewayModelPayload(model: GatewayRoomModel) {
+	const effective = effectiveGatewayModel(model);
 	return {
 		modelId: model.modelId,
 		label: model.label ?? model.modelId,
-		vision: model.vision === true,
-		webSearch: model.webSearch === true,
-		// Null, not the default, so the form can tell "nobody chose" from "someone
-		// chose 128000" while still showing the same number either way.
-		contextWindow: model.contextWindow ?? null,
+		// The four facts exactly as a room will experience them: override over
+		// detection over default, resolved by the same function every other
+		// consumer reads, so nothing downstream has to know the halves exist.
+		vision: effective.vision,
+		webSearch: effective.webSearch,
+		reasoning: effective.reasoning,
+		contextWindow: effective.contextWindow,
+		// Present only when somebody declared one; nothing here means the
+		// runtime registry's own default is in charge.
+		...(effective.maxTokens ? { maxTokens: effective.maxTokens } : {}),
+		// The raw halves, for the form: which fields the person pinned, and what
+		// the gateway last declared. Sparse and nullable respectively, so the
+		// form can tell "chosen off" from "never spoken about".
+		overrides: {
+			...(model.vision !== undefined ? { vision: model.vision } : {}),
+			...(model.reasoning !== undefined ? { reasoning: model.reasoning } : {}),
+			...(model.contextWindow !== undefined ? { contextWindow: model.contextWindow } : {}),
+			...(model.maxTokens !== undefined ? { maxTokens: model.maxTokens } : {}),
+		},
+		detected: {
+			vision: model.detected?.vision ?? null,
+			webSearch: model.detected?.webSearch ?? null,
+			reasoning: model.detected?.reasoning ?? null,
+			contextWindow: model.detected?.contextWindow ?? null,
+			maxTokens: model.detected?.maxTokens ?? null,
+			mode: model.detected?.mode ?? null,
+			thinkingLevels: model.detected?.thinkingLevels ?? null,
+			effortCeiling: model.detected?.effortCeiling ?? null,
+			adaptiveThinking: model.detected?.adaptiveThinking ?? null,
+		},
 	};
 }
 
@@ -3019,10 +3735,52 @@ function gatewayPayload(gateway: OpenAiCompatibleGateway) {
 	};
 }
 
+/** A body value that should be a JSON object, or nothing. */
+function gatewayBodyObject(value: unknown): Record<string, unknown> | undefined {
+	return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
+}
+
+/** A body value that should be a positive safe integer, or nothing. */
+function gatewayBodyPositiveInteger(value: unknown): number | undefined {
+	return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
+}
+
 /**
- * Room models as the approve step sends them: an id, optionally the two facts
- * the person just confirmed. Plain string ids are still accepted so anything
- * scripted against the single-gateway route keeps working.
+ * A detection snapshot as a request body carries it: only well-typed answers
+ * survive. The per-level effort declarations ride inside the snapshot. Pure
+ * detection with no override half, so only well-typed booleans under known
+ * level names are kept; everything else is not a declaration.
+ */
+function parseGatewayDetectedSnapshot(detected: Record<string, unknown> | undefined): GatewayModelDetected {
+	const detectedWindow = gatewayBodyPositiveInteger(detected?.contextWindow);
+	const detectedMaxTokens = gatewayBodyPositiveInteger(detected?.maxTokens);
+	const detectedMode = typeof detected?.mode === "string" ? detected.mode.trim().toLowerCase() : "";
+	const rawLevels = gatewayBodyObject(detected?.thinkingLevels);
+	const detectedLevels: GatewayThinkingLevels = {};
+	if (rawLevels) {
+		for (const level of GATEWAY_THINKING_LEVELS) {
+			const value = rawLevels[level];
+			if (typeof value === "boolean") detectedLevels[level] = value;
+		}
+	}
+	return {
+		...(typeof detected?.vision === "boolean" ? { vision: detected.vision } : {}),
+		...(typeof detected?.webSearch === "boolean" ? { webSearch: detected.webSearch } : {}),
+		...(typeof detected?.reasoning === "boolean" ? { reasoning: detected.reasoning } : {}),
+		...(detectedWindow ? { contextWindow: detectedWindow } : {}),
+		...(detectedMaxTokens ? { maxTokens: detectedMaxTokens } : {}),
+		...(detectedMode ? { mode: detectedMode } : {}),
+		...(Object.keys(detectedLevels).length > 0 ? { thinkingLevels: detectedLevels } : {}),
+		...(typeof detected?.effortCeiling === "string" && (GATEWAY_EFFORT_INTENSITIES as readonly string[]).includes(detected.effortCeiling) ? { effortCeiling: detected.effortCeiling as GatewayEffortIntensity } : {}),
+		...(typeof detected?.adaptiveThinking === "boolean" ? { adaptiveThinking: detected.adaptiveThinking } : {}),
+	};
+}
+
+/**
+ * Room models as the approve step sends them. The form sends the sparse shape,
+ * per-field overrides plus the gateway's detection snapshot; older clients and
+ * scripts send the dense one, and plain string ids are still accepted so
+ * anything scripted against the single-gateway route keeps working.
  */
 function parseGatewayRoomModels(raw: unknown): { models: GatewayRoomModel[]; error?: string } {
 	if (!Array.isArray(raw)) return { models: [] };
@@ -3036,17 +3794,41 @@ function parseGatewayRoomModels(raw: unknown): { models: GatewayRoomModel[]; err
 		const model: GatewayRoomModel = { modelId };
 		const label = String(source.label ?? "").trim();
 		if (label && label !== modelId) model.label = label;
-		if (source.vision === true) model.vision = true;
 		if (source.webSearch === true) model.webSearch = true;
-		// Validated rather than coerced. A window is not a cosmetic field: it
-		// decides what the room's context chip reads and when the conversation
-		// compacts itself, so a value nobody could have meant is refused out
-		// loud instead of being rounded into something plausible.
-		const { contextWindow, error } = parseGatewayContextWindow(source.contextWindow);
-		if (error) return { models: [], error: `${modelId}: ${error}` };
-		// The default is not worth storing: leaving it out keeps the file honest
-		// about what somebody actually decided.
-		if (contextWindow && contextWindow !== GATEWAY_DEFAULT_CONTEXT_WINDOW) model.contextWindow = contextWindow;
+		const overrides = gatewayBodyObject(source.overrides);
+		const detected = gatewayBodyObject(source.detected);
+		if (overrides || detected) {
+			// The form speaks the sparse shape: overrides carry only the fields
+			// the person actually set, and the detection snapshot rides along so
+			// the store remembers what the gateway said between reloads.
+			if (typeof overrides?.vision === "boolean") model.vision = overrides.vision;
+			if (typeof overrides?.reasoning === "boolean") model.reasoning = overrides.reasoning;
+			// Validated rather than coerced. A window is not a cosmetic field: it
+			// decides what the room's context chip reads and when the conversation
+			// compacts itself, so a value nobody could have meant is refused out
+			// loud instead of being rounded into something plausible.
+			const { contextWindow, error } = parseGatewayContextWindow(overrides?.contextWindow);
+			if (error) return { models: [], error: `${modelId}: ${error}` };
+			// Stored even at the default: pinning 128000 against a detection that
+			// says a million is a choice, and dropping it would undo that choice.
+			if (contextWindow) model.contextWindow = contextWindow;
+			// The cap override has no form field yet, so it only ever arrives from
+			// a script; a well-typed positive integer is the whole contract.
+			const overrideMaxTokens = gatewayBodyPositiveInteger(overrides?.maxTokens);
+			if (overrideMaxTokens) model.maxTokens = overrideMaxTokens;
+			model.detected = parseGatewayDetectedSnapshot(detected);
+		} else {
+			// The dense shape older clients and scripts send: every field stated,
+			// nothing known about detection. Everything stated is an override,
+			// which is exactly what it always effectively was.
+			if (source.vision === true) model.vision = true;
+			if (source.reasoning === true) model.reasoning = true;
+			const { contextWindow, error } = parseGatewayContextWindow(source.contextWindow);
+			if (error) return { models: [], error: `${modelId}: ${error}` };
+			// The default is not worth storing: absent and 128000 read back the
+			// same for an entry that carries no detection to fall through to.
+			if (contextWindow && contextWindow !== GATEWAY_DEFAULT_CONTEXT_WINDOW) model.contextWindow = contextWindow;
+		}
 		models.push(model);
 	}
 	return { models };
@@ -3106,16 +3888,31 @@ async function gatewayDiscoverHandler(req: any, reply: any, gatewayIdFromRoute =
 	if (!key) return reply.code(400).send({ error: "Enter the gateway API key to load its models." });
 	try {
 		const discovery = await discoverGatewayModels(baseUrl, key);
+		// A model whose declared mode is a known non-chat value (an embedding or
+		// image model) never enters the approvable list: a room locked to one has
+		// zero working turns. Only a KNOWN non-chat declaration excludes; absent
+		// and unknown modes stay in. The detection list still carries every row,
+		// so a model somebody already saved that the gateway now calls non-chat
+		// keeps its row and learns why it is broken instead of being dropped
+		// behind their back.
+		const excludedNonChat = discovery.models.filter((model) => isNonChatGatewayMode(model.mode));
 		return {
 			// The bare id list the single-gateway route always returned, kept so
 			// nothing that reads `models` has to change.
-			models: discovery.models.map((model) => model.id),
+			models: discovery.models.filter((model) => !isNonChatGatewayMode(model.mode)).map((model) => model.id),
 			detected: discovery.models.map((model) => ({
 				id: model.id,
 				vision: model.vision ?? null,
 				webSearch: model.webSearch ?? null,
+				reasoning: model.reasoning ?? null,
 				contextWindow: model.contextWindow ?? null,
+				maxTokens: model.maxTokens ?? null,
+				mode: model.mode ?? null,
+				thinkingLevels: model.thinkingLevels ?? null,
+				effortCeiling: model.effortCeiling ?? null,
+				adaptiveThinking: model.adaptiveThinking ?? null,
 			})),
+			excludedNonChat: excludedNonChat.map((model) => ({ id: model.id, mode: model.mode ?? "" })),
 		};
 	} catch (e) {
 		if (e instanceof GatewayDiscoveryError) return reply.code(502).send({ error: e.message });
@@ -3147,6 +3944,22 @@ async function gatewaySaveHandler(req: any, reply: any, gatewayIdFromRoute: stri
 	const baseUrl = submittedBaseUrl || knownBaseUrl;
 	if (!existing && !baseUrl) return reply.code(400).send({ error: "baseUrl is required" });
 
+	// The maintenance model is usually also a room model, and then its own row's
+	// snapshot speaks for it in the catalog. When it is not, whatever detection
+	// the client sent for it is kept on the config, so Memorize and Review are
+	// not registered blind; an edit that keeps the same maintenance model keeps
+	// the detection it already had.
+	let maintenanceModelDetected: GatewayModelDetected | undefined;
+	if (maintenanceModel && !roomModels.some((model) => model.modelId === maintenanceModel)) {
+		const submitted = gatewayBodyObject(body.maintenanceModelDetected);
+		if (submitted) {
+			const snapshot = parseGatewayDetectedSnapshot(submitted);
+			if (Object.keys(snapshot).length > 0) maintenanceModelDetected = snapshot;
+		} else if (existing && existing.maintenanceModel === maintenanceModel) {
+			maintenanceModelDetected = existing.maintenanceModelDetected;
+		}
+	}
+
 	let gateway: OpenAiCompatibleGateway;
 	if (existing) {
 		// Ids never move under an existing gateway: every room thread locked to
@@ -3171,6 +3984,10 @@ async function gatewaySaveHandler(req: any, reply: any, gatewayIdFromRoute: stri
 		}
 		gateway = { id: providerId, providerId, label: label || providerId, baseUrl, roomModels, maintenanceModel };
 	}
+	// Set fresh on every save: the spread of an existing gateway above may carry
+	// a stale snapshot for a maintenance model this save just changed.
+	delete gateway.maintenanceModelDetected;
+	if (maintenanceModelDetected) gateway.maintenanceModelDetected = maintenanceModelDetected;
 	try {
 		saveGatewayEverywhere(gateway, key, !existing);
 	} catch (e) {
@@ -3232,11 +4049,25 @@ function webSearchSettingsPayload() {
 	};
 }
 app.get("/api/settings/web-search", async () => webSearchSettingsPayload());
+// The one-time What's new window after an update. The GET can record: a
+// machine with no acknowledgement yet (fresh install, or the first run of the
+// version that grew this feature) is recorded quietly instead of shown a
+// window about things that are not new to it. The POST records the current
+// version and is idempotent.
+app.get("/api/whats-new", async () => resolveWhatsNew());
+app.post("/api/whats-new/seen", async () => {
+	acknowledgeWhatsNew();
+	return { ok: true };
+});
 // Starting a local search engine, for the people who will never type a command
 // to do it. Pulling the image takes minutes on a first run, so the POST starts
 // the work and answers immediately; the GET is what the screen watches.
 app.post("/api/web-search/searxng/setup", async () => startSearxngSetup(REPO_ROOT));
-app.get("/api/web-search/searxng/setup", async () => searxngSetupStatus());
+app.get("/api/web-search/searxng/setup", async () => {
+	// The probe target when no run has claimed one: the saved local address.
+	const saved = readWebSearchSettings().saved;
+	return searxngSetupStatus(REPO_ROOT, saved.provider === "searxng" ? saved.baseUrl ?? null : null);
+});
 app.put("/api/settings/web-search", async (req, reply) => {
 	const body = (req.body ?? {}) as any;
 	try {
@@ -3331,6 +4162,25 @@ interface SkillInfo {
 	 *  builtin/project skills, which carry no sidecar. Surfaced by the library list and
 	 *  the review/detail screen (the trust moment — where it came from, what license). */
 	provenance: { source: string; license: string | null; importedAt: string } | null;
+	/** The skill's author marked it `disable-model-invocation`: the model must not
+	 *  invoke it on its own. In a room that means it is kept out of the per-turn
+	 *  enabled-skills index and refused by read_skill, so it never auto-runs.
+	 *  Rooms have no manual trigger yet, so such a skill is inert once enabled;
+	 *  the UI says so. */
+	disableModelInvocation: boolean;
+}
+
+/** True when a frontmatter value (a raw string from the skill's YAML) reads as an
+ *  affirmative boolean. Skill authors write `disable-model-invocation: true`. */
+function frontmatterFlagTrue(value: string | undefined): boolean {
+	if (typeof value !== "string") return false;
+	// The frontmatter parser hands plain scalars over with trailing comments
+	// intact; in YAML a `#` preceded by whitespace starts a comment, so
+	// `disable-model-invocation: true # why` must still read as true. A flag
+	// misread as off fails OPEN (the skill becomes model-invocable), which is
+	// the wrong direction to fail in.
+	const scalar = value.split(/\s#/)[0];
+	return ["true", "yes", "1", "on"].includes(scalar.trim().toLowerCase());
 }
 
 /** A not-yet-saved skill returned by the upload endpoint for the review screen (spec §3).
@@ -3350,6 +4200,10 @@ interface SkillUploadCandidate {
 	license: string | null;
 	/** Hidden/zero-width/bidi characters found in the body (never silently stripped). */
 	scanFindings: InvisibleUnicodeFinding[];
+	/** Checkout token when the upload was a zip with bundled files: accept passes
+	 *  it back so the reviewed files are vendored beside the SKILL.md, the same
+	 *  continuity contract as repo import. Absent for single-file uploads. */
+	token?: string;
 	/** Names of bundled scripts in the package. They are NEVER run — the review says so. */
 	bundledScripts: string[];
 }
@@ -3405,6 +4259,7 @@ function listSkills(): SkillInfo[] {
 				protected: source !== "user",
 				usedByAgents: [],
 				provenance: sidecar ? { source: sidecar.source, license: sidecar.license, importedAt: sidecar.importedAt } : null,
+				disableModelInvocation: frontmatterFlagTrue(fm["disable-model-invocation"]),
 			});
 		}
 	}
@@ -3441,8 +4296,8 @@ function skillExistsAnySource(id: string): boolean {
  * be inside the pinned region — spec §7 must 2). read_skill still returns only
  * the (defanged) body; the manifest is the integrity unit, not the output.
  */
-function resolveLibrarySkillManifest(name: string): { manifest: string; body: string; description: string } | null {
-	let match: { manifest: string; body: string; description: string } | null = null;
+function resolveLibrarySkillManifest(name: string): { manifest: string; body: string; description: string; disableModelInvocation: boolean } | null {
+	let match: { manifest: string; body: string; description: string; disableModelInvocation: boolean } | null = null;
 	for (const { dir } of skillDirs()) {
 		let entries: fs.Dirent[];
 		try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { continue; }
@@ -3460,7 +4315,7 @@ function resolveLibrarySkillManifest(name: string): { manifest: string; body: st
 			const { fm, body } = parseFrontmatter(manifest);
 			const skillName = (fm.name || entry.name).trim();
 			if (skillName !== name) continue;
-			match = { manifest, body, description: (fm.description || "").trim() }; // last source wins, mirroring listSkills
+			match = { manifest, body, description: (fm.description || "").trim(), disableModelInvocation: frontmatterFlagTrue(fm["disable-model-invocation"]) }; // last source wins, mirroring listSkills
 		}
 	}
 	return match;
@@ -3470,6 +4325,35 @@ function resolveLibrarySkillManifest(name: string): { manifest: string; body: st
  *  by name, or null when the skill is gone. enablePersistentRoomSkill hashes it. */
 function skillLibraryFingerprint(name: string): string | null {
 	return resolveLibrarySkillManifest(name)?.manifest ?? null;
+}
+
+/**
+ * The execution side of the library (executable skills): a skill's on-disk
+ * location and whole-content digest, or null when the skill is not
+ * execution-capable AT ALL, regardless of any room's approval. Only the
+ * canonical user store qualifies — shared (~/.agents/skills, writable by any
+ * local agent), builtin and project skills never do. The user-store copy must
+ * also be the copy the library actually serves for that name (a project-store
+ * shadow disqualifies it: what the model reads must be what was approved), it
+ * must carry its provenance sidecar, and its manifest must be free of invisible
+ * unicode — hidden characters make it instructions-only forever.
+ */
+function resolveExecutableSkillFiles(name: string): { skillDir: string; filesSha256: string; files: string[] } | null {
+	if (!isValidSkillName(name)) return null;
+	const skillDir = path.join(agentSkillsDir(), name);
+	const digest = computeSkillFilesDigest(skillDir);
+	if (!digest) return null;
+	let manifest: string;
+	try {
+		manifest = fs.readFileSync(path.join(skillDir, "SKILL.md"), "utf-8");
+	} catch {
+		return null;
+	}
+	const served = resolveLibrarySkillManifest(name);
+	if (!served || served.manifest !== manifest) return null;
+	if (!readSkillProvenance(skillDir)) return null;
+	if (scanInvisibleUnicode(manifest).findings.length > 0) return null;
+	return { skillDir, filesSha256: digest.filesSha256, files: digest.files.map((f) => f.path).filter((p) => p !== "SKILL.md") };
 }
 
 function getUserSkillFile(id: string): string | null {
@@ -3553,6 +4437,14 @@ function looksLikeZip(buffer: Buffer): boolean {
  * `onOverflow()` the moment the cap is crossed.
  */
 function readZipEntryCapped(entry: JSZip.JSZipObject, maxBytes: number, onOverflow: () => Error): Promise<string> {
+	return readZipEntryBufferCapped(entry, maxBytes, onOverflow).then((buffer) => buffer.toString("utf-8"));
+}
+
+/** The binary-safe core of `readZipEntryCapped` — same abort-on-overflow
+ *  contract, raw bytes out. Bundled skill files are not necessarily text and
+ *  must survive verbatim: their bytes are what the execution-approval digest
+ *  pins, so a lossy utf-8 round-trip would silently void every approval. */
+function readZipEntryBufferCapped(entry: JSZip.JSZipObject, maxBytes: number, onOverflow: () => Error): Promise<Buffer> {
 	return new Promise((resolve, reject) => {
 		const chunks: Buffer[] = [];
 		let total = 0;
@@ -3572,7 +4464,7 @@ function readZipEntryCapped(entry: JSZip.JSZipObject, maxBytes: number, onOverfl
 			chunks.push(buf);
 		});
 		stream.on("error", (err: Error) => { if (!aborted) reject(err); });
-		stream.on("end", () => { if (!aborted) resolve(Buffer.concat(chunks).toString("utf-8")); });
+		stream.on("end", () => { if (!aborted) resolve(Buffer.concat(chunks)); });
 	});
 }
 
@@ -3587,6 +4479,7 @@ async function buildSkillCandidateFromUpload(filename: string, buffer: Buffer): 
 	let skillMd: string;
 	let dirHint: string;
 	let bundledScripts: string[] = [];
+	let token: string | undefined;
 
 	if (looksLikeZip(buffer)) {
 		let zip: JSZip;
@@ -3616,6 +4509,34 @@ async function buildSkillCandidateFromUpload(filename: string, buffer: Buffer): 
 			),
 		).sort();
 		dirHint = skillRoot === "." ? "" : path.posix.basename(skillRoot);
+		// Retain the bundled files for accept — the same reviewed-is-accepted
+		// continuity repo import gets from its checkout. Before this, accept
+		// wrote only the SKILL.md and the package's files were silently dropped,
+		// while repo import vendored them: the two paths now agree. Extraction is
+		// read-only, byte-capped in total, and refuses traversal paths outright.
+		const bundledRelPaths = relPaths.filter((p) => p !== manifestPath && (prefix === "" || p.startsWith(prefix)));
+		if (bundledRelPaths.length > 0) {
+			const retainDir = fs.mkdtempSync(path.join(os.tmpdir(), "exxperts-skill-upload-"));
+			let remaining = MAX_SKILL_UPLOAD_BYTES;
+			for (const rel of bundledRelPaths) {
+				const inner = rel.slice(prefix.length);
+				const safe = inner.split("/").filter((seg) => seg && seg !== "." && seg !== "..").join("/");
+				if (!safe || safe !== inner || inner.includes("\\")) throw new Error(`archive contains an unsafe path: ${rel}`);
+				// Control characters in a filename make trouble downstream: a
+				// newline lets two different trees serialize to one files digest
+				// (the manifest joins entries with newlines), and it lets a name
+				// inject lines into the app-authored read_skill text. A colon on
+				// Windows writes an NTFS alternate data stream the digest never
+				// sees. No legitimate skill file needs any of them.
+				if (/[\p{Cc}\p{Cf}:]/u.test(inner)) throw new Error(`archive contains an unsafe file name: ${rel}`);
+				const bytes = await readZipEntryBufferCapped(zip.files[rel], remaining, () => new Error("the archive's bundled files are too large"));
+				remaining -= bytes.length;
+				const dest = path.join(retainDir, safe);
+				fs.mkdirSync(path.dirname(dest), { recursive: true, mode: 0o700 });
+				fs.writeFileSync(dest, bytes, { mode: 0o600 });
+			}
+			token = registerCheckout(retainDir, "upload");
+		}
 	} else {
 		if (buffer.byteLength > MAX_SKILL_BODY_BYTES) throw new Error("skill file is too large");
 		skillMd = buffer.toString("utf-8");
@@ -3641,6 +4562,7 @@ async function buildSkillCandidateFromUpload(filename: string, buffer: Buffer): 
 		// Scan body AND description — the description reaches the system prompt too.
 		scanFindings: scanInvisibleUnicode(`${instructions}\n${description}`).findings,
 		bundledScripts,
+		...(token ? { token } : {}),
 	};
 }
 
@@ -3681,11 +4603,47 @@ app.post("/api/skills/accept", async (req, reply) => {
 	fs.mkdirSync(skillDir, { recursive: true, mode: 0o700 });
 	const acceptedManifest = buildUserSkillMarkdown(value);
 	fs.writeFileSync(path.join(skillDir, "SKILL.md"), acceptedManifest, { mode: 0o600, flag: "wx" });
+	// A zip upload retained its bundled files under a checkout token (see
+	// buildSkillCandidateFromUpload): vendor them beside the accepted SKILL.md
+	// as inert files, exactly like repo import. An expired/absent token accepts
+	// the manifest alone — same outcome as the pre-retention behavior.
+	const uploadToken = typeof raw.token === "string" ? raw.token : "";
+	let bundledCopied = 0;
+	if (uploadToken) {
+		const checkout = getCheckout(uploadToken);
+		// Flow-bound: only a token minted by the UPLOAD endpoint vendors files
+		// here. A repo/featured checkout token also resolves in the shared cache
+		// but points at a whole repository clone; pairing one with a reviewed
+		// upload manifest would vendor a tree the review screen never showed.
+		if (checkout && checkout.source === "upload") {
+			const copyTree = (fromDir: string, toDir: string): void => {
+				for (const entry of fs.readdirSync(fromDir, { withFileTypes: true })) {
+					if (entry.isSymbolicLink()) continue;
+					const from = path.join(fromDir, entry.name);
+					const to = path.join(toDir, entry.name);
+					if (entry.isDirectory()) {
+						fs.mkdirSync(to, { recursive: true, mode: 0o700 });
+						copyTree(from, to);
+					} else if (entry.isFile() && entry.name !== "SKILL.md") {
+						fs.copyFileSync(from, to);
+						fs.chmodSync(to, 0o600);
+						bundledCopied += 1;
+					}
+				}
+			};
+			copyTree(checkout.dir, skillDir);
+			// Consumed: an accept is the token's one purpose; a token that kept
+			// resolving for its 15-minute TTL could vendor into later accepts.
+			removeCheckout(uploadToken);
+		}
+	}
 	// sha256 pins the whole accepted SKILL.md (frontmatter + body), so any later
-	// edit — description included — forces re-review (spec §7 must 2).
+	// edit — description included — forces re-review (spec §7 must 2). Written
+	// AFTER the bundled files so the stamped files digest covers them.
 	writeSkillProvenance(skillDir, { source, importedAt: new Date().toISOString(), license, sha256: sha256(acceptedManifest) });
 	const created = listSkills().find((skill) => skill.name === value.id);
-	return reply.code(201).send(created ?? { name: value.id, displayName: value.displayName, description: value.description, body: value.instructions, source: "user", protected: false, usedByAgents: [], provenance: { source, license, importedAt: new Date().toISOString() } });
+	const payload = created ?? { name: value.id, displayName: value.displayName, description: value.description, body: value.instructions, source: "user", protected: false, usedByAgents: [], provenance: { source, license, importedAt: new Date().toISOString() } };
+	return reply.code(201).send({ ...payload, bundledCopied });
 });
 app.post("/api/skills", async (req, reply) => {
 	const validation = validateSkillWritePayload(req.body ?? {});
@@ -3983,9 +4941,35 @@ registerUsageApi(app, {
 // current L1b size, growth over checkpoints, topic map, and absorb backlog.
 // Read-only — never mutates memory. See memory-api.ts.
 
-app.get("/api/memory/overview", async (_req, reply) => {
+// For remote devices, memory aggregations must not leak hidden rooms: the
+// room rows are filtered and every total is recomputed from the filtered
+// set, so neither names nor counts betray a hidden room's existence.
+function filterMemoryOverviewForRemote(overview: ReturnType<typeof buildMemoryOverview>): ReturnType<typeof buildMemoryOverview> {
+	if (remoteRoomExposure.hiddenRooms().size === 0) return overview;
+	const rooms = overview.rooms.filter((room) => !remoteRoomExposure.isHidden(room.id));
+	return {
+		...overview,
+		rooms,
+		totals: {
+			rooms: rooms.length,
+			l1bTokens: rooms.reduce((sum, r) => sum + r.l1bTokens, 0),
+			checkpoints: rooms.reduce((sum, r) => sum + r.checkpoints, 0),
+			recentContextBacklog: rooms.reduce((sum, r) => sum + r.recentContextBacklog, 0),
+			roomsNeedingAbsorb: rooms.filter((r) => r.needsAbsorb).length,
+			composition: {
+				deep: rooms.reduce((sum, r) => sum + r.composition.deep, 0),
+				active: rooms.reduce((sum, r) => sum + r.composition.active, 0),
+				recent: rooms.reduce((sum, r) => sum + r.composition.recent, 0),
+				chronos: rooms.reduce((sum, r) => sum + r.composition.chronos, 0),
+			},
+		},
+	};
+}
+
+app.get("/api/memory/overview", async (req, reply) => {
 	try {
-		return buildMemoryOverview();
+		const overview = buildMemoryOverview();
+		return (req as any).exxRemoteDevice ? filterMemoryOverviewForRemote(overview) : overview;
 	} catch (e) {
 		app.log.warn({ err: (e as Error).message }, "failed to build memory overview");
 		return reply.code(500).send({ error: "Failed to read memory." });
@@ -3998,9 +4982,9 @@ app.get("/api/memory/overview", async (_req, reply) => {
 // measured (chars/4, the estimate used everywhere else); the weekly deep
 // delta is computed strictly from recorded Learn/Review/checkpoint events,
 // never extrapolated.
-app.get("/api/memory/room-memory", async (_req, reply) => {
+app.get("/api/memory/room-memory", async (req, reply) => {
 	try {
-		const overview = buildMemoryOverview();
+		const overview = (req as any).exxRemoteDevice ? filterMemoryOverviewForRemote(buildMemoryOverview()) : buildMemoryOverview();
 		const weekStart = overview.generatedAt - 7 * 24 * 3600 * 1000;
 		return {
 			generatedAt: overview.generatedAt,
@@ -4049,7 +5033,21 @@ app.get("/api/memory/digest", async (req, reply) => {
 	// Default to the last 7 days when no valid `since` is given.
 	const since = Number.isFinite(parsed) && parsed > 0 ? parsed : Date.now() - 7 * 24 * 3600 * 1000;
 	try {
-		return buildMemoryDigest(since);
+		const digest = buildMemoryDigest(since);
+		if (!(req as any).exxRemoteDevice || remoteRoomExposure.hiddenRooms().size === 0) return digest;
+		const rooms = digest.rooms.filter((room) => !remoteRoomExposure.isHidden(room.id));
+		const top = [...rooms].sort((a, b) => b.addedChars - a.addedChars)[0];
+		return {
+			...digest,
+			rooms,
+			totals: {
+				newCheckpoints: rooms.reduce((sum, r) => sum + r.newCheckpoints, 0),
+				newReviews: rooms.reduce((sum, r) => sum + r.newReviews, 0),
+				roomsChanged: rooms.length,
+				addedChars: rooms.reduce((sum, r) => sum + r.addedChars, 0),
+				topRoom: top ? top.displayName : null,
+			},
+		};
 	} catch (e) {
 		app.log.warn({ err: (e as Error).message }, "failed to build memory digest");
 		return reply.code(500).send({ error: "Failed to read memory." });
@@ -4065,7 +5063,18 @@ app.post("/api/memory/ask", async (req, reply) => {
 	if (!question) return reply.code(400).send({ error: "Ask a question." });
 
 	// Optional room scope (1-to-many) and prior conversation for follow-ups.
-	const rooms = Array.isArray(body.rooms) ? body.rooms.map((r) => String(r)).filter(Boolean) : undefined;
+	let rooms = Array.isArray(body.rooms) ? body.rooms.map((r) => String(r)).filter(Boolean) : undefined;
+	// A remote device's ask is always scoped away from hidden rooms: an
+	// unscoped ask becomes "every exposed room", a scoped one loses its
+	// hidden entries, and an all-hidden scope answers exactly like a scope
+	// with no memory, so nothing about hidden rooms is inferable.
+	if ((req as any).exxRemoteDevice && remoteRoomExposure.hiddenRooms().size > 0) {
+		const scoped = rooms ?? listPersistentAgents().map((agent) => agent.id);
+		rooms = scoped.filter((id) => !remoteRoomExposure.isHidden(id));
+		if (rooms.length === 0) {
+			return { ok: false, reason: "no-memory", message: "No memory in the selected exxpert(s) to answer from." };
+		}
+	}
 	const history = Array.isArray(body.history)
 		? body.history
 			.filter((m): m is { role: string; content: string } => !!m && typeof (m as any).content === "string")
@@ -4130,7 +5139,13 @@ app.get("/api/memory/search", async (req) => {
 	const q = (req.query as { q?: string; room?: string } | undefined) ?? {};
 	const query = String(q.q ?? "").slice(0, 200);
 	const room = q.room ? String(q.room) : undefined;
-	return { query, hits: query.trim() ? searchMemory(query, room) : [] };
+	let hits = query.trim() ? searchMemory(query, room) : [];
+	// A hidden room searches like a nonexistent one (zero hits either way),
+	// and cross-room hits from hidden rooms are dropped.
+	if ((req as any).exxRemoteDevice && remoteRoomExposure.hiddenRooms().size > 0) {
+		hits = hits.filter((hit) => !remoteRoomExposure.isHidden(hit.roomId));
+	}
+	return { query, hits };
 });
 
 app.get("/api/memory/rooms/:id", async (req, reply) => {
@@ -4292,6 +5307,28 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 
 	const status = getUsablePersistentAgentStatusForNormalUse(persistentAgentIdRaw);
 	if (status.status !== "ready") throw new Error(`persistent agent is not ready: ${status.status}`);
+	// Remote devices: a hidden room's socket fails exactly like a
+	// nonexistent room's (same thrown shape as the unknown-room path above),
+	// and capability is re-derived from the device record at attach, with
+	// anything that is not exactly "full" treated as read-only.
+	const remoteDeviceForSession = (req as any).exxRemoteDevice as { id: string; capability?: string } | undefined;
+	if (remoteDeviceForSession && remoteRoomExposure.isHidden(status.id)) {
+		const hiddenError = new Error(`persistent agent not found: ${status.id}`);
+		(hiddenError as any).statusCode = 404;
+		throw hiddenError;
+	}
+	const remoteReadOnlySession = Boolean(remoteDeviceForSession && remoteDeviceForSession.capability !== "full");
+	if (remoteReadOnlySession) {
+		// Attached synchronously, before any session setup can stall or fail:
+		// a read-only device's frames are refused from the first byte, and the
+		// refusal does not depend on the room session coming up (the socket
+		// stays open as an observer for server-pushed events). The main
+		// message handler below additionally drops these frames silently, so
+		// the held-frame replay cannot act on them either.
+		socket.on("message", () => {
+			try { socket.send(JSON.stringify({ type: "error", message: "This device is set to viewing only. Change it on the computer to interact remotely.", code: "remote_read_only" })); } catch {}
+		});
+	}
 	const persistentAgentIdForSession = status.id;
 	const promptDiagnosticsEnabledForConnection = isPromptDiagnosticsEnabled() && isLocalPromptDiagnosticsRequest(req);
 	const persistentConversationId = conversationId ?? `local_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
@@ -4441,6 +5478,22 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 	// handler owns landing the finished answer, releasing the room lock and
 	// disposing the session.
 	let detachedFromClient = false;
+	// Post-stream tail (community #14 follow-up): thread answers are client-
+	// authored and the debounced persist rearms on every reveal tick, so the
+	// first write carrying the answer lands ~500ms after the LAST tick. A turn
+	// that settled "completed" therefore has a window where the finished answer
+	// exists only client-side. This snapshot, taken at settle (after
+	// finishPersistentAgentTurn, preserving the no-turn-in-flight write order),
+	// is what the close handler needs to land the answer server-side when the
+	// client dies inside that window. Per-connection closure state, cleared
+	// when the next turn begins; error/cancel settles never set it.
+	type SettledTurnLandingSnapshot = { turnId: string; finalAssistantText: string; anchorItemId: string | null | undefined; userText: string };
+	let settledTurnLandingSnapshot: SettledTurnLandingSnapshot | null = null;
+	// The turn's user-authored prompt text, kept through settle: the consent
+	// variable (activeTurnUserAuthoredText) is deliberately nulled the moment
+	// the answer ends, but the landing may still need the prompt text to
+	// restore a never-persisted user item.
+	let currentTurnUserTextForLanding = "";
 	// Issue #33: the reattach handle THIS connection registered when its turn
 	// detached, plus the hooks the adopting connection registered on it. All
 	// null until a detach happens; the handle methods run in this closure.
@@ -4698,7 +5751,7 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 	// leave save); the landed text carries the WHOLE turn, so trailing
 	// assistant items after the last user item are superseded, not additional.
 	// Parked as standby so the launcher offers Resume, like a scheduled run.
-	const landDetachedTurnOutcome = (turnId: string, terminalReason: PersistentWebTurnTerminalReason, options: { watchedByAdopter?: boolean } = {}): void => {
+	const landDetachedTurnOutcome = (turnId: string, terminalReason: PersistentWebTurnTerminalReason, options: { watchedByAdopter?: boolean; snapshot?: SettledTurnLandingSnapshot } = {}): void => {
 		const current = getPersistentAgentThread(persistentAgentIdForSession, persistentConversationId);
 		if (!current || current.state === "closed") return;
 		// Issue #33: `watchedByAdopter` means a session stepped back in and
@@ -4709,7 +5762,7 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 		// (the adopter watched the live error), no standby parking (the room is
 		// open), no unseen marker (the answer was seen landing).
 		const watched = options.watchedByAdopter === true;
-		const finalText = turnTrace.finalAssistantText.trim();
+		const finalText = (options.snapshot ? options.snapshot.finalAssistantText : turnTrace.finalAssistantText).trim();
 		const safeTurnId = turnId.replace(/[^a-zA-Z0-9_-]+/g, "_").slice(0, 96);
 		let items = [...(current.items ?? [])];
 		if (finalText) {
@@ -4721,7 +5774,7 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 			// prompt. Null anchor means the thread was empty at turn start
 			// (everything is this turn's); a set-but-missing anchor deletes
 			// nothing; an unknown anchor falls back to the old rule.
-			const anchorItemId = detachedCookingHandle?.anchorItemId;
+			const anchorItemId = options.snapshot ? options.snapshot.anchorItemId : detachedCookingHandle?.anchorItemId;
 			let cutIndex: number;
 			if (anchorItemId === null) {
 				cutIndex = -1;
@@ -4751,7 +5804,7 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 			// The crash-leave that lost the partial can lose the PROMPT too:
 			// land it alongside the answer, so the transcript never shows an
 			// answer to a question that is not there.
-			const anchorUserText = (detachedCookingHandle?.userText ?? "").trim();
+			const anchorUserText = (options.snapshot ? options.snapshot.userText : detachedCookingHandle?.userText ?? "").trim();
 			if (!tailHasUser && anchorUserText) {
 				items.push({ kind: "user", id: `detached-user-${safeTurnId}`, text: anchorUserText });
 			}
@@ -5100,7 +6153,17 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 				if (effective.length === 0) return [];
 				// Description comes from the SAME manifest the fingerprint pins, so the
 				// index can never surface a description whose change was not re-reviewed.
-				return effective.map((skill) => ({ name: skill.name, description: resolveLibrarySkillManifest(skill.name)?.description ?? "" }));
+				// A skill whose author disabled model invocation is withheld from the
+				// index entirely: the model is never told about it, so it cannot
+				// auto-invoke it. (Rooms have no manual trigger yet; when one exists it
+				// will reach these by an explicit user path, not this autonomous index.)
+				const entries: { name: string; description: string }[] = [];
+				for (const skill of effective) {
+					const manifest = resolveLibrarySkillManifest(skill.name);
+					if (!manifest || manifest.disableModelInvocation) continue;
+					entries.push({ name: skill.name, description: manifest.description });
+				}
+				return entries;
 			} catch (error) {
 				app.log.warn({ err: error }, "failed to resolve enabled skills for room session");
 				return [];
@@ -5340,9 +6403,42 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 			// can never diverge.
 			lookupSkill: (name) => {
 				const resolved = resolveLibrarySkillManifest(name);
-				return resolved ? { manifest: resolved.manifest, body: resolved.body, description: resolved.description } : null;
+				return resolved ? { manifest: resolved.manifest, body: resolved.body, description: resolved.description, disableModelInvocation: resolved.disableModelInvocation } : null;
 			},
 			telemetry: persistentRoomSkillTelemetry,
+			// The executable-skills gate chain, re-evaluated on EVERY read, so a
+			// gate that closes mid-session closes exposure on the next call. Every
+			// check is a hard boolean; any miss serves the body path-free, exactly
+			// as before the feature existed.
+			resolveExecutionExposure: (name) => {
+				// Only a live manual turn — background and scheduled runs never see
+				// a path. That holds by construction: this closure is built only in
+				// the live WS session (the manual surface); background, scheduled,
+				// and specialist sessions never register read_skill at all, matching
+				// bash itself (which they also never get). It must NOT be re-derived
+				// from EXXETA_PERSISTENT_ROOM_EXECUTION_CONTEXT here: that env var
+				// exists only inside the extension-install bracket (set, snapshotted
+				// by the permissions extension, restored on install completion), so a
+				// live read at tool-call time always saw it unset and the gate could
+				// never open.
+				// The room's LIVE policy must put bash on the table right now: full
+				// local access with the bash switch on, the same pair the bash
+				// tool's own gate reads.
+				try {
+					const livePolicy = resolvePersistentRoomEffectiveWorkspacePolicy(persistentAgentId, persistentConversationId);
+					if (livePolicy?.workspaceAccessMode !== "localFiles" || livePolicy?.bashEnabled !== true) return null;
+				} catch {
+					return null;
+				}
+				// The room must hold an execution approval for this skill, pinned
+				// to the EXACT files on disk right now — a drifted file set is an
+				// approval that no longer exists.
+				const pinned = readPersistentRoomSkillSettings(persistentAgentId).enabledSkills.find((skill) => skill.name === name);
+				if (!pinned?.executeApproval) return null;
+				const executable = resolveExecutableSkillFiles(name);
+				if (!executable || executable.filesSha256 !== pinned.executeApproval.filesSha256) return null;
+				return { skillDir: executable.skillDir, files: executable.files };
+			},
 		})];
 		// The shelf pair (files core slice): default-on for every room, fenced to
 		// the room's own files/ folder by the tools themselves — deliberately
@@ -5858,6 +6954,12 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 		let msg: any;
 		try { msg = JSON.parse(raw.toString()); } catch { return; }
 		streamTrace.frameIn(msg);
+		// A read-only device's socket is observe-only: EVERY inbound frame is
+		// dropped here (the early listener attached at connection start
+		// already answered it with the refusal frame). A capability check,
+		// not a frame-type allowlist, so a future frame type cannot slip
+		// through it.
+		if (remoteReadOnlySession) return;
 		if (msg.type === "ui_response") {
 			uiContext.resolveResponse(msg.id, msg.value);
 			return;
@@ -5950,6 +7052,9 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 				if (!startedTurn.turnId) throw new Error("persistent-agent turn id was not created");
 				persistentTurnId = startedTurn.turnId;
 				activePersistentWebTurn = { turnId: persistentTurnId, promptSettled: false };
+				// A new turn owns the anchor from here on: the previous turn's
+				// post-stream landing snapshot must not fire against it.
+				settledTurnLandingSnapshot = null;
 				resetTurnTrace();
 				// #33: a fresh turn owns a fresh replay buffer, and records the
 				// supersede anchor: the last item the thread file held BEFORE this
@@ -5991,6 +7096,7 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 				// this turn — never the model-written handoff blocks or app-written
 				// attachment notes the client prepends to the wire text.
 				activeTurnUserAuthoredText = userAuthoredPromptText(userText);
+				currentTurnUserTextForLanding = activeTurnUserAuthoredText;
 				autoDispatchBudgetRemaining = AUTO_DISPATCH_BUDGET_PER_TURN;
 				// Consult MR-5 hardening: this prompt has consumed any queued handoff
 				// blocks (the client prepended them to userText). Clear the persisted
@@ -6046,6 +7152,17 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 					}
 					if (detachedFromClient) {
 						try { landDetachedTurnOutcome(persistentTurnId, turn?.terminalReason ?? "failed", { watchedByAdopter }); } catch (error) { app.log.warn({ err: error }, "failed to land detached persistent-room turn outcome"); }
+					}
+					// Post-stream tail: a turn that ran to its COMPLETED end with
+					// the client still attached has its answer only client-side
+					// until the debounced persist fires. Snapshot what a close-time
+					// landing would need; detached turns just landed above, and
+					// error/cancel settles keep today's behavior.
+					if (!detachedFromClient && turn?.terminalReason === "completed") {
+						const settledFinalText = turnTrace.finalAssistantText.trim();
+						settledTurnLandingSnapshot = settledFinalText
+							? { turnId: persistentTurnId, finalAssistantText: settledFinalText, anchorItemId: turnStartAnchorItemId, userText: currentTurnUserTextForLanding }
+							: null;
 					}
 					if (activePersistentWebTurn?.turnId === persistentTurnId) activePersistentWebTurn = null;
 					// Detached settle: this connection's ownership ends here — the
@@ -6423,6 +7540,32 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 			app.log.info({ agentId: persistentAgentIdForSession }, "ws client disconnected mid-turn; finishing the response in the background");
 			return;
 		}
+		// Post-stream tail: the turn settled "completed" while this client
+		// watched, but the client-authored persist may never have fired (the
+		// debounce rearms on every reveal tick; the first write with the answer
+		// lands ~500ms after the last one). If the finished answer is not in
+		// the thread file, land it through the same machinery a detached turn
+		// uses: supersede-safe write, standby parking, unseen marker. Skipped
+		// whenever a client write already carried the answer, so a pagehide
+		// keepalive save that won the race makes this a no-op; a save that
+		// LOSES the race merges in the PUT handler instead of clobbering. When
+		// a newer connection already took the room over (reload), the landing
+		// still writes the answer but keeps the room's state and records no
+		// marker, exactly like a watched adopter landing.
+		const closeLandingSnapshot = settledTurnLandingSnapshot;
+		settledTurnLandingSnapshot = null;
+		if (closeLandingSnapshot) {
+			try {
+				const persisted = getPersistentAgentThread(persistentAgentIdForSession, persistentConversationId);
+				if (persisted && persisted.state !== "closed" && !threadItemsCarryAssistantText(persisted.items, closeLandingSnapshot.finalAssistantText)) {
+					const otherLiveSession = persistentRoomLiveSessions.get(persistentAgentIdForSession);
+					const watchedByNewerSession = !!otherLiveSession && otherLiveSession !== liveSessionHandle;
+					landDetachedTurnOutcome(closeLandingSnapshot.turnId, "completed", { snapshot: closeLandingSnapshot, watchedByAdopter: watchedByNewerSession });
+				}
+			} catch (error) {
+				app.log.warn({ err: error }, "failed to land the settled turn answer on close");
+			}
+		}
 		void disposeSessionAfterAbortIfNeeded("disconnect_cancelled").catch((error) => {
 			app.log.warn({ err: error }, "persistent-room disconnect cleanup failed");
 			if (!sessionDisposed && session) {
@@ -6458,6 +7601,36 @@ const STATIC_SECURITY_HEADERS: Record<string, string> = {
 	"x-content-type-options": "nosniff",
 	"referrer-policy": "no-referrer",
 };
+
+// Static security headers per listener. Loopback requests (and remote OFF,
+// where no socket is ever tunnel-tagged) get the exact object above,
+// byte-identical to today. Pages served over the tunnel need the tunnel's
+// own ws:// origin in connect-src, or the app's WebSocket is silently
+// CSP-blocked ('self' does not reliably match ws:, see the comment above).
+let tunnelSecurityHeadersCache: { identity: string; headers: Record<string, string> } | null = null;
+function staticSecurityHeadersFor(req: { raw?: { socket?: unknown } }): Record<string, string> {
+	if (!remoteMode.isRemoteSocket(req.raw?.socket)) return STATIC_SECURITY_HEADERS;
+	const status = remoteMode.status();
+	if (!status.address) return STATIC_SECURITY_HEADERS;
+	// Under https the page's own origin is the MagicDNS name and its
+	// WebSocket is wss; under http it is the tunnel address and ws. Either
+	// way exactly one WebSocket origin is added: the listener's own.
+	const host = status.scheme === "https" && status.dnsName ? status.dnsName : status.address.includes(":") ? `[${status.address}]` : status.address;
+	const wsOrigin = `${status.scheme === "https" ? "wss" : "ws"}://${host}:${PORT}`;
+	if (!tunnelSecurityHeadersCache || tunnelSecurityHeadersCache.identity !== wsOrigin) {
+		tunnelSecurityHeadersCache = {
+			identity: wsOrigin,
+			headers: {
+				...STATIC_SECURITY_HEADERS,
+				"content-security-policy": STATIC_SECURITY_HEADERS["content-security-policy"].replace(
+					"connect-src 'self' ",
+					`connect-src 'self' ${wsOrigin} `,
+				),
+			},
+		};
+	}
+	return tunnelSecurityHeadersCache.headers;
+}
 
 // Artifact bytes are model-generated and potentially hostile, and a same-origin
 // document carries the auth cookie on its requests, so such a document would
@@ -7092,6 +8265,7 @@ function contentType(file: string): string {
 	if (file.endsWith(".js")) return "text/javascript; charset=utf-8";
 	if (file.endsWith(".css")) return "text/css; charset=utf-8";
 	if (file.endsWith(".json")) return "application/json; charset=utf-8";
+	if (file.endsWith(".webmanifest")) return "application/manifest+json; charset=utf-8";
 	if (file.endsWith(".png")) return "image/png";
 	if (file.endsWith(".jpg") || file.endsWith(".jpeg")) return "image/jpeg";
 	if (file.endsWith(".svg")) return "image/svg+xml";
@@ -7102,6 +8276,21 @@ function contentType(file: string): string {
 	return "application/octet-stream";
 }
 
+// The entry points must revalidate on every load: with no caching headers
+// at all, a heuristically cached index.html silently pins a phone to an old
+// build (and made a whole round of field tests unreliable). The hashed
+// assets index.html references are immutable by construction - vite renames
+// them on every content change - so they may cache forever. Everything else
+// keeps its previous no-header behavior.
+function staticCacheControl(file: string): string | null {
+	if (file.endsWith("index.html") || file.endsWith(".webmanifest")) return "no-cache";
+	if (file.includes(`${path.sep}assets${path.sep}`)) return "public, max-age=31536000, immutable";
+	// Brand images and fonts change rarely but are not content-hashed: a
+	// day's cache, never immutable.
+	if (file.includes(`${path.sep}brand${path.sep}`) || file.includes(`${path.sep}fonts${path.sep}`)) return "public, max-age=86400";
+	return null;
+}
+
 function safeStaticPath(urlPath: string): string | null {
 	if (!fs.existsSync(WEB_UI_DIST)) return null;
 	const rel = urlPath === "/" ? "index.html" : urlPath.replace(/^\/+/, "");
@@ -7110,23 +8299,28 @@ function safeStaticPath(urlPath: string): string | null {
 	return fs.existsSync(resolved) && fs.statSync(resolved).isFile() ? resolved : path.join(WEB_UI_DIST, "index.html");
 }
 
-app.get("/", async (_req, reply) => {
-	reply.headers(STATIC_SECURITY_HEADERS);
+app.get("/", async (req, reply) => {
+	reply.headers(staticSecurityHeadersFor(req));
 	const file = safeStaticPath("/");
 	if (!file) return reply.code(404).send({ error: "web UI dist not found; run npm run build --workspace @exxeta/pi-web-ui" });
+	const cache = staticCacheControl(file);
+	if (cache) reply.header("cache-control", cache);
 	return reply.type(contentType(file)).send(fs.createReadStream(file));
 });
 
-async function sendStatic(req: { raw: { url?: string } }, reply: any) {
-	reply.headers(STATIC_SECURITY_HEADERS);
+async function sendStatic(req: { raw: { url?: string; socket?: unknown } }, reply: any) {
+	reply.headers(staticSecurityHeadersFor(req));
 	const file = safeStaticPath((req.raw.url ?? "/").split("?")[0]);
 	if (!file) return reply.code(404).send({ error: "web UI dist not found" });
+	const cache = staticCacheControl(file);
+	if (cache) reply.header("cache-control", cache);
 	return reply.type(contentType(file)).send(fs.createReadStream(file));
 }
 
 app.get("/assets/*", sendStatic);
 app.get("/brand/*", sendStatic);
 app.get("/fonts/*", sendStatic);
+app.get("/manifest.webmanifest", sendStatic);
 
 ensureProductAppUserDirs();
 
@@ -7237,8 +8431,17 @@ const schedulerPreflightLoopOptions = resolvePersistentRoomSchedulePreflightLoop
 const schedulerExecutionLoopOptions = resolveScheduledPromptBackgroundExecutionLoopOptionsFromEnv(process.env, app.log);
 
 app.listen({ port: PORT, host: "127.0.0.1" })
-	.then(() => {
+	.then(async () => {
 		console.log(`exxperts web server on http://localhost:${PORT} (ws: /ws, ui: /, local-only)`);
+		// After the loopback listener is up, honor a persisted remote-enable.
+		// applyBootState never throws and never touches the primary listener:
+		// a bad state file or a missing tailnet address degrades to remote-off
+		// with a logged reason. Fire-and-forget on purpose: a boot-time TLS
+		// certificate renewal (expired while the app was off) may block for a
+		// while, and nothing below depends on remote state, so the scheduler
+		// loops must not wait for it. The catch keeps a contract violation
+		// from becoming an unhandled rejection.
+		void remoteMode.applyBootState().catch((error) => app.log.warn({ err: error }, "remote mode boot apply failed; remote stays off"));
 		if (schedulerPreflightLoopOptions.enabled !== false) {
 			schedulerPreflightLoopHandle = startPersistentRoomSchedulePreflightLoop({
 				...schedulerPreflightLoopOptions,

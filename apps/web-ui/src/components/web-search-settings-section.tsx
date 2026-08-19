@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { fetchJson } from "../api";
+import { useRemoteClientContext } from "../remote-client-context";
 
 /**
  * Web search, made visible: both kinds of it.
@@ -39,12 +40,12 @@ const OPTIONS: Array<{ id: WebSearchProvider; label: string; blurb: (providerSea
 	{
 		id: "duckduckgo",
 		label: "DuckDuckGo",
-		blurb: () => "Works straight away, nothing to install. On some networks DuckDuckGo refuses automated searches; when that happens the room says so instead of guessing.",
+		blurb: () => "Nothing to install. Some networks refuse automated searches; the room says so when that happens.",
 	},
 	{
 		id: "searxng",
 		label: "Your own SearXNG",
-		blurb: () => "A search instance you run yourself. Steadier under heavy use and nothing leaves for a search engine under your name.",
+		blurb: () => "Run your own. Steadier under heavy use; nothing leaves under your name.",
 	},
 	{
 		id: "disabled",
@@ -55,8 +56,8 @@ const OPTIONS: Array<{ id: WebSearchProvider; label: string; blurb: (providerSea
 		// search carries that on the model itself, past anything chosen here.
 		blurb: (providerSearchOn) =>
 			providerSearchOn
-				? "No search through the app's own machinery. Claude and ChatGPT rooms still search through the provider while the switch above is on, and gateway models still search where you ticked it. Rooms can still open a page you give them a link to."
-				: "No search through the app's own machinery. Gateway models still search where you ticked web search for them. Rooms can still open a page you give them a link to.",
+				? "Claude and ChatGPT still search through the provider, gateway models where ticked. Rooms can still open links you give them."
+				: "Gateway models still search where ticked. Rooms can still open links you give them.",
 	},
 ];
 
@@ -68,6 +69,7 @@ type SearxngSetupPhase =
 	| "pulling-image"
 	| "starting"
 	| "ready"
+	| "stopped"
 	| "error";
 
 type SearxngSetupStatus = {
@@ -82,18 +84,33 @@ type SearxngSetupStatus = {
  * enough that silence reads as a hang, so every phase says something, and none
  * of it asks anybody to open a terminal.
  */
-function setupLine(status: SearxngSetupStatus): string | null {
+function setupLine(status: SearxngSetupStatus): ReactNode | null {
 	switch (status.phase) {
 		case "checking-docker":
 		case "starting":
+			return "Getting the search engine ready. This can take a moment.";
 		case "pulling-image":
-			return "Getting the search engine ready. The first time can take a few minutes.";
+			return "Downloading the search engine. The first time can take a few minutes.";
 		case "docker-missing":
-			return "This needs Docker Desktop or OrbStack installed first.";
+			return (
+				<>
+					This needs a container runtime first. Install{" "}
+					<a href="https://orbstack.dev" target="_blank" rel="noreferrer">OrbStack</a> or{" "}
+					<a href="https://www.docker.com/products/docker-desktop/" target="_blank" rel="noreferrer">Docker Desktop</a>,
+					then press Start one on this computer.
+				</>
+			);
 		case "docker-stopped":
-			return "Docker is installed but not running. Start it, then try again.";
+			return "Docker is installed but not running. Start Docker Desktop or OrbStack, then press Start one on this computer.";
 		case "ready":
-			return "Running.";
+			return (
+				<>
+					{status.baseUrl ? `Running at ${status.baseUrl}.` : "Running."} The engine keeps running in the
+					background even when the OrbStack or Docker Desktop window is closed.
+				</>
+			);
+		case "stopped":
+			return status.message ?? "The search engine is not answering. Press Start one on this computer to bring it back.";
 		case "error":
 			return status.message ?? "The search engine could not be started.";
 		default:
@@ -105,6 +122,7 @@ function setupLine(status: SearxngSetupStatus): string | null {
 type Pending = null | { kind: "providerSearch"; value: boolean } | { kind: "provider"; value: WebSearchProvider } | { kind: "baseUrl" };
 
 export function WebSearchSettingsSection() {
+	const remoteClient = useRemoteClientContext();
 	const [settings, setSettings] = useState<WebSearchSettingsPayload | null>(null);
 	const [loadError, setLoadError] = useState<string | null>(null);
 	const [loading, setLoading] = useState(true);
@@ -197,7 +215,7 @@ export function WebSearchSettingsSection() {
 	// does not lose sight of it.
 	const setupRunning = setup?.running ?? false;
 	useEffect(() => {
-		if (shownChoice !== "searxng") return;
+		if (remoteClient.remote || shownChoice !== "searxng") return;
 		let stopped = false;
 		async function read() {
 			try {
@@ -215,11 +233,12 @@ export function WebSearchSettingsSection() {
 			stopped = true;
 			window.clearInterval(timer);
 		};
-	}, [shownChoice, setupRunning]);
+	}, [remoteClient.remote, shownChoice, setupRunning]);
 
 	// A ready engine is only useful once the address is saved, so the flow
 	// finishes itself through the same save path the field uses.
 	useEffect(() => {
+		if (remoteClient.remote) return;
 		const url = setup?.phase === "ready" ? setup.baseUrl : null;
 		if (!url || adoptedBaseUrl.current === url) return;
 		adoptedBaseUrl.current = url;
@@ -231,7 +250,7 @@ export function WebSearchSettingsSection() {
 			{ kind: "provider", value: "searxng" },
 			"Saved. The next search uses it.",
 		);
-	}, [setup?.phase, setup?.baseUrl]);
+	}, [remoteClient.remote, setup?.phase, setup?.baseUrl]);
 
 	async function startSetup() {
 		setSetupStarting(true);
@@ -266,8 +285,7 @@ export function WebSearchSettingsSection() {
 	if (loading) {
 		return (
 			<section className="ai-setup-section" aria-label="Web search">
-				<div className="ai-setup-section-heading"><h2>Web search</h2></div>
-				<p className="ai-setup-copy" role="status">Reading the current setting…</p>
+					<p className="ai-setup-copy" role="status">Reading the current setting…</p>
 			</section>
 		);
 	}
@@ -278,27 +296,55 @@ export function WebSearchSettingsSection() {
 	if (loadError || !settings) {
 		return (
 			<section className="ai-setup-section" aria-label="Web search">
-				<div className="ai-setup-section-heading"><h2>Web search</h2></div>
-				<div className="workspaces-error archived-rooms-note" role="alert">{loadError ?? "Could not read the web search settings."}</div>
+					<div className="workspaces-error archived-rooms-note" role="alert">{loadError ?? "Could not read the web search settings."}</div>
 				<p><button className="inline-action" type="button" onClick={() => void load()}>Try again</button></p>
+			</section>
+		);
+	}
+
+	// A remote device can read this setting but not change it: the PUT route is
+	// local-only in the server's remote route policy, so every control here
+	// would refuse each tap. State the facts and offer nothing operable.
+	if (remoteClient.remote) {
+		return (
+			<section className="ai-setup-section" aria-label="Web search">
+				{settings.unreadable && (
+					<div className="workspaces-error archived-rooms-note" role="alert">
+						The saved settings file {settings.unreadable}, so none of it is in force: provider search is off and the app is
+						falling back to DuckDuckGo.
+					</div>
+				)}
+				<div className="web-search-native">
+					<h3 className="web-search-fallback-heading">Provider search</h3>
+					<p className="ai-setup-copy">
+						{settings.providerSearch
+							? "On. Claude and ChatGPT rooms search on the provider's side."
+							: "Off. Claude and ChatGPT rooms use the search below."}
+					</p>
+				</div>
+				<div className="web-search-fallback">
+					<h3 className="web-search-fallback-heading">Everything else</h3>
+					<p className="ai-setup-copy">
+						{settings.provider === "searxng"
+							? `Your own SearXNG${settings.baseUrl ? ` at ${settings.baseUrl}` : ""}.`
+							: settings.provider === "disabled"
+								? "Off. Rooms can still open links you give them."
+								: "DuckDuckGo."}
+					</p>
+				</div>
+				<p className="cli-note">Web search is set up on the computer itself.</p>
 			</section>
 		);
 	}
 
 	const providerSearchOn = settings.providerSearch;
 	const setupMessage = setup ? setupLine(setup) : null;
-	const setupFailed = setup ? setup.phase === "error" || setup.phase === "docker-missing" || setup.phase === "docker-stopped" : false;
+	const setupFailed = setup ? setup.phase === "error" || setup.phase === "docker-missing" || setup.phase === "docker-stopped" || setup.phase === "stopped" : false;
 	const togglePending = pending?.kind === "providerSearch";
 	const baseUrlPending = pending?.kind === "baseUrl" || (pending?.kind === "provider" && pending.value === "searxng");
 
 	return (
 		<section className="ai-setup-section" aria-label="Web search">
-			<div className="ai-setup-section-heading">
-				<h2>Web search</h2>
-			</div>
-			<p className="ai-setup-copy">
-				How your exxperts search the web when they need something current. Changes apply from the next message, no restart.
-			</p>
 
 			{settings.unreadable && (
 				<div className="workspaces-error archived-rooms-note" role="alert">
@@ -308,23 +354,21 @@ export function WebSearchSettingsSection() {
 			)}
 
 			<div className="web-search-native">
-				<label className={`web-search-native-toggle${togglePending ? " pending" : ""}`}>
+				<h3 className="web-search-fallback-heading">Provider search</h3>
+				<label className={`rs-row${togglePending ? " pending" : ""}`}>
+					<div className="rs-row-main">
+						<span className="rs-row-label">Use provider search where available{togglePending ? " (saving…)" : ""}</span>
+						<span className="rs-row-hint">Claude and ChatGPT rooms search on the provider's side; nothing runs on your machine.</span>
+						<span className="rs-row-hint">Gateway models follow their own per-model web search tick, not this switch.</span>
+					</div>
 					<input
+						className="workspaces-tool-switch"
 						type="checkbox"
 						checked={providerSearchOn}
 						disabled={pending !== null || !!settings.unreadable}
 						onChange={(e) => void saveProviderSearch(e.target.checked)}
+						aria-label="Use provider search where available"
 					/>
-					<span className="web-search-option-body">
-						<span className="web-search-option-label">
-							Use provider search where available{togglePending ? " (saving…)" : ""}
-						</span>
-						<span className="web-search-option-blurb">
-							Rooms on the Claude and ChatGPT subscriptions search through the provider itself, so nothing runs on your
-							machine. Gateway models search on their own only where you ticked web search for them, which this switch
-							does not change.
-						</span>
-					</span>
 				</label>
 			</div>
 
@@ -337,9 +381,8 @@ export function WebSearchSettingsSection() {
 				</p>
 				{envHeld && (
 					<p className="ai-setup-copy web-search-env-note" role="status">
-						This computer is set up to force {settings.provider === "disabled" ? "no search backend at all" : settings.provider},
-						and that setting wins over this screen. The choice below is saved and takes over the moment the forced one is
-						removed. It does not affect provider search above.
+						This computer forces {settings.provider === "disabled" ? "no search backend" : settings.provider} over this screen.
+						Your choice is saved and takes over when the forced one is removed; provider search above is unaffected.
 					</p>
 				)}
 			</div>

@@ -129,9 +129,12 @@ export function SkillReview({
 
 			{scripts.length > 0 && (
 				<div className="skill-review-banner" role="note">
-					<strong>This package bundles {scripts.length} {scripts.length === 1 ? "script" : "scripts"}.</strong>{" "}
-					Scripts will not run. Instructions only. exxperts adopts the prose; the bundled files
-					({scripts.join(", ")}) are never executed.
+					<strong>This package bundles {scripts.length} {scripts.length === 1 ? "file" : "files"}.</strong>{" "}
+					The bundled files ({scripts.join(", ")}) are saved next to the instructions, and they
+					never run on their own. A room can run them only after you enable this skill in it,
+					the room has bash allowed, and you separately approve running exactly this version's
+					files in that room's settings. Any change to the files voids that approval.
+					{findings.length > 0 && " A skill with hidden characters can never be approved for execution."}
 				</div>
 			)}
 

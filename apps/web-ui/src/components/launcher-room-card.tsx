@@ -75,9 +75,11 @@ export type PersistentAgentCardProps = {
 	standbyLockedModels?: Array<{ provider: string; model: string }>;
 	/** Runs a profile switch when the picker confirms a cross-profile model pick. */
 	onSelectAiProfile?: (profileId: string) => Promise<void>;
+	/** Records a model pick as this room's preferred model — the memory a profile switch cannot revert. */
+	onRecordPreferredModel?: (agentId: PersistentAgentId, model: { provider: string; model: string }) => void;
 };
 
-export function PersistentAgentCard({ status, modelStatus, aiProfileStatus, thread, live, duplicateDisplayName = false, onEnter, onResume, onMaintain, onOpenSettings, backgroundReady = false, purging = false, standbyLockedModels, onSelectAiProfile }: PersistentAgentCardProps) {
+export function PersistentAgentCard({ status, modelStatus, aiProfileStatus, thread, live, duplicateDisplayName = false, onEnter, onResume, onMaintain, onOpenSettings, backgroundReady = false, purging = false, standbyLockedModels, onSelectAiProfile, onRecordPreferredModel }: PersistentAgentCardProps) {
 	const [entering, setEntering] = useState(false);
 	const [expanded, setExpanded] = useState(false);
 	const [draftModel, setDraftModel] = useState("");
@@ -125,6 +127,18 @@ export function PersistentAgentCard({ status, modelStatus, aiProfileStatus, thre
 	const activeModelJudgeList: Array<{ provider: string; model: string }> = modelStatusAgreesWithProfile ? roomModels : aiProfileStatus?.activeProfile.processes?.persistentRoom.models ?? [];
 	const standbyModelAllowed = !standbyLockedModel || activeModelJudgeList.some((model) => model.provider === standbyLockedModel.provider && model.model === standbyLockedModel.model);
 	const preparedModelKey = preparedBoundaryThread && standbyLockedModel && standbyModelAllowed ? `${standbyLockedModel.provider}/${standbyLockedModel.model}` : "";
+	// The room's server-recorded preferred model: the empty-room counterpart of
+	// the standby lock. Only an EMPTY room consults it — a live, standby, or
+	// prepared-boundary thread already carries its own model.
+	const preferredModel = !live && !hasStandbyThread && !preparedBoundaryThread ? status?.preferredModel ?? null : null;
+	const preferredModelKey = preferredModel ? `${preferredModel.provider}/${preferredModel.model}` : "";
+	const preferredInActiveList = !!preferredModel && activeModelJudgeList.some((model) => model.provider === preferredModel.provider && model.model === preferredModel.model);
+	// Which ready non-active profile provides the preference when the active one
+	// does not — the same shape switchTargetProfile gives a stranded standby room.
+	const preferredSwitchProfile = preferredModel && !preferredInActiveList
+		? aiProfileStatus?.profiles.find((profile) => !profile.active && profile.ready && profile.processes?.persistentRoom.models.some((model) => model.provider === preferredModel.provider && model.model === preferredModel.model)) ?? null
+		: null;
+	const preferredModelLabel = cardModelName(preferredModel);
 	useEffect(() => {
 		if (preparedModelKey) {
 			setDraftModel(preparedModelKey);
@@ -138,11 +152,25 @@ export function PersistentAgentCard({ status, modelStatus, aiProfileStatus, thre
 		// NOT carry falls back to the recommendation instead of leaving a
 		// selection Enter silently cannot resolve.
 		setDraftModel((current) => {
-			if (current && persistentRoomModels(modelStatus).some((m) => `${m.provider}/${m.model}` === current)) return current;
-			const selected = persistentRoomRecommended(modelStatus);
-			return selected ? `${selected.provider}/${selected.model}` : "";
+			const recommended = persistentRoomRecommended(modelStatus);
+			const recommendedKey = recommended ? `${recommended.provider}/${recommended.model}` : "";
+			// The room's recorded preference outranks the recommendation: it
+			// seeds the empty picker, and when it lives on another READY profile
+			// it survives the refresh instead of being reverted — Enter then
+			// offers the same profile switch the stranded standby card does.
+			// A preference no configured profile serves anymore is unusable and
+			// falls through to the recommendation, exactly as before.
+			const preferredUsable = !!preferredModelKey && (preferredInActiveList || !!preferredSwitchProfile);
+			const currentInList = !!current && persistentRoomModels(modelStatus).some((m) => `${m.provider}/${m.model}` === current);
+			// A draft still sitting on the bare recommendation is a seed, not a
+			// choice, so a recorded preference may replace it. An explicit pick
+			// records a new preference the moment it is made, so the two agree
+			// from then on and picks keep winning here.
+			if (currentInList && (!preferredUsable || current !== recommendedKey || preferredModelKey === current)) return current;
+			if (preferredUsable) return preferredModelKey;
+			return recommendedKey;
 		});
-	}, [modelStatus, preparedModelKey, draftModel, modelStatusAgreesWithProfile]);
+	}, [modelStatus, preparedModelKey, draftModel, modelStatusAgreesWithProfile, preferredModelKey, preferredInActiveList, preferredSwitchProfile]);
 	// A prepared boundary session is empty, so it only continues on its prepared
 	// model when the user keeps that selection; picking another model retires it
 	// and enters fresh.
@@ -206,7 +234,12 @@ export function PersistentAgentCard({ status, modelStatus, aiProfileStatus, thre
 	// the picker's confirmReturnFocusRef pattern.
 	const switchResumeReturnFocusRef = useRef<HTMLElement | null>(null);
 	const canSwitchResume = hasStandbyThread && !standbyModelAllowed && !!switchTargetProfile && !!onSelectAiProfile && !!status && !lockedElsewhere && !purging;
-	const switchResumeStranded = switchTargetProfile && aiProfileStatus ? strandedBySwitchCount(standbyLockedModels, aiProfileStatus.activeProfile, switchTargetProfile) : 0;
+	// The one confirm dialog serves both stranded shapes: a standby thread
+	// locked to another profile's model (switch and resume) and an empty room
+	// preferring one (switch and enter). They are mutually exclusive — a room
+	// has a thread or it does not.
+	const confirmSwitchProfile = switchTargetProfile ?? preferredSwitchProfile;
+	const switchResumeStranded = confirmSwitchProfile && aiProfileStatus ? strandedBySwitchCount(standbyLockedModels, aiProfileStatus.activeProfile, confirmSwitchProfile) : 0;
 	function closeSwitchResume() {
 		setSwitchResumeOpen(false);
 		setSwitchResumeError(null);
@@ -223,6 +256,27 @@ export function PersistentAgentCard({ status, modelStatus, aiProfileStatus, thre
 			// failures surface where every resume failure does).
 			setSwitchResumeOpen(false);
 			await onResume(status);
+		} catch (e) {
+			setSwitchResumeError((e as Error).message);
+		} finally {
+			setSwitchResumeBusy(false);
+		}
+	}
+	// The empty-room twin of switchAndResume: the room's preferred model lives
+	// on another ready profile, so Enter runs the same confirm-then-switch and
+	// then enters fresh on the preferred model instead of resuming a thread.
+	// A draft moved off the preference (the user picked something else) hands
+	// the button back to the normal enter path.
+	const canSwitchEnter = !hasActiveThread && state === "ready" && !!preferredSwitchProfile && !!onSelectAiProfile && !!status && !lockedElsewhere && !purging && (!draftModel || draftModel === preferredModelKey);
+	async function switchAndEnter() {
+		if (!status || !preferredModel || !preferredSwitchProfile || !onSelectAiProfile || switchResumeBusy) return;
+		setSwitchResumeBusy(true);
+		setSwitchResumeError(null);
+		try {
+			await onSelectAiProfile(preferredSwitchProfile.id);
+			setSwitchResumeOpen(false);
+			const option = preferredSwitchProfile.processes?.persistentRoom.models.find((model) => model.provider === preferredModel.provider && model.model === preferredModel.model);
+			await onEnter(status, { provider: preferredModel.provider, model: preferredModel.model, label: option?.label ?? `${preferredModel.provider}/${preferredModel.model}` });
 		} catch (e) {
 			setSwitchResumeError((e as Error).message);
 		} finally {
@@ -348,6 +402,16 @@ export function PersistentAgentCard({ status, modelStatus, aiProfileStatus, thre
 								else void enter();
 							}}
 						>{entering ? "Entering…" : "Enter →"}</button>
+					) : canSwitchEnter && preferredSwitchProfile ? (
+						<button
+							className="landing-action"
+							title={`This room prefers ${preferredModelLabel}, which ${preferredSwitchProfile.label} provides. Entering asks to switch the AI profile first.`}
+							onClick={(e) => {
+								switchResumeReturnFocusRef.current = e.currentTarget;
+								setSwitchResumeError(null);
+								setSwitchResumeOpen(true);
+							}}
+						>Enter →</button>
 					) : (
 						<button className="landing-action" disabled={!canEnter || entering} title={lockedElsewhere ? lockNote : enterDisabledReason} onClick={enter}>{entering ? "Entering…" : "Enter →"}</button>
 					)}
@@ -361,7 +425,14 @@ export function PersistentAgentCard({ status, modelStatus, aiProfileStatus, thre
 						{hasStandbyThread ? (
 							<span className={`model-pill locked${standbyModelAllowed ? "" : " incompatible"}`} aria-label="Locked room thread model" title={lockedPillTitle}>🔒 <span className="model-pill-name">{modelLabel}</span></span>
 						) : showModelPicker ? (
-							<RoomModelPicker roomModels={roomModels} modelStatusProfileId={modelStatus?.activeProfileId} value={draftModel} onChange={setDraftModel} aiProfileStatus={aiProfileStatus} standbyLockedModels={standbyLockedModels} onSelectAiProfile={onSelectAiProfile} />
+							<RoomModelPicker roomModels={roomModels} modelStatusProfileId={modelStatus?.activeProfileId} value={draftModel} onChange={(key) => {
+								setDraftModel(key);
+								// A pick is the room's memory: record it so it survives the
+								// next profile switch away. Provider ids never contain "/",
+								// so the first slash splits the key unambiguously.
+								const slash = key.indexOf("/");
+								if (status && slash > 0 && onRecordPreferredModel) onRecordPreferredModel(status.id, { provider: key.slice(0, slash), model: key.slice(slash + 1) });
+							}} aiProfileStatus={aiProfileStatus} standbyLockedModels={standbyLockedModels} onSelectAiProfile={onSelectAiProfile} />
 						) : (
 							<span className="model-pill disabled" title={selectedModelTooltip || undefined}><span className="model-pill-name">{modelLabel}</span></span>
 						)}
@@ -374,15 +445,15 @@ export function PersistentAgentCard({ status, modelStatus, aiProfileStatus, thre
 					{status.warnings.length > 0 && <div>Some room diagnostics are available in server logs.</div>}
 				</div>
 			)}
-			{switchResumeOpen && switchTargetProfile && (
+			{switchResumeOpen && confirmSwitchProfile && (
 				<ProfileSwitchConfirm
-					profile={switchTargetProfile}
+					profile={confirmSwitchProfile}
 					strandedCount={switchResumeStranded}
-					continuation={`This conversation continues on ${lockedModelLabel}.`}
+					continuation={switchTargetProfile ? `This conversation continues on ${lockedModelLabel}.` : `This room enters on ${preferredModelLabel}.`}
 					switching={switchResumeBusy}
 					error={switchResumeError}
 					onCancel={closeSwitchResume}
-					onConfirm={() => void switchAndResume()}
+					onConfirm={() => void (switchTargetProfile ? switchAndResume() : switchAndEnter())}
 				/>
 			)}
 		</article>

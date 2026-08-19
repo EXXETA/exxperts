@@ -58,7 +58,7 @@ npm run install:global   # builds, packs, and installs the exxperts commands
 exxperts web
 ```
 
-The web app starts on `http://127.0.0.1:8787` and opens in your browser (if it doesn't, open the URL the command prints). Everything runs locally: the server only listens on your machine.
+The web app starts on `http://127.0.0.1:8787` and opens in your browser (if it doesn't, open the URL the command prints). Everything runs locally: the server only listens on your machine (unless you later opt in to remote mode, which serves your own paired devices over your private tunnel; see `SECURITY.md`).
 
 If `install:global` fails with `ENOTEMPTY`, an older exxperts install is in the way: run `npm uninstall -g @exxeta/exxperts-app`, delete the leftover directory the error names if it survives, and retry. (The tarball it mentions is named after the npm package `@exxeta/exxperts-app`; Exxeta is the company behind exxperts.)
 

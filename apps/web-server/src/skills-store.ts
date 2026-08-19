@@ -51,6 +51,77 @@ export function sha256(body: string): string {
 	return crypto.createHash("sha256").update(String(body ?? ""), "utf8").digest("hex");
 }
 
+export interface SkillFilesDigestEntry {
+	/** Posix-style path relative to the skill dir. */
+	path: string;
+	/** sha256 hex of the file's bytes. */
+	sha256: string;
+}
+
+export interface SkillFilesDigest {
+	/** Digest over every file's path+hash — the unit execution approval pins. */
+	filesSha256: string;
+	files: SkillFilesDigestEntry[];
+}
+
+/**
+ * Digest of a skill's ENTIRE on-disk content: SKILL.md plus every bundled file,
+ * hashed by bytes, keyed by relative path, in sorted order. This is the unit an
+ * execution approval pins: any file added, removed, renamed or edited changes
+ * the digest and voids the approval. The provenance sidecar is excluded (it is
+ * the app's bookkeeping, not the skill's content), as are symlinks (never
+ * followed — a symlink cannot smuggle content from outside the dir into an
+ * approved digest). Returns null when the dir has no SKILL.md.
+ */
+export function computeSkillFilesDigest(skillDir: string): SkillFilesDigest | null {
+	const root = path.resolve(skillDir);
+	if (!fs.existsSync(path.join(root, "SKILL.md"))) return null;
+	const files: SkillFilesDigestEntry[] = [];
+	// Non-regular entries (symlinks, fifos, sockets) carry no hashable content,
+	// but their APPEARANCE must still void an approval: a symlink added after
+	// approval points the exposed dir at bytes the digest never covered. They
+	// are folded into the digest as their own records, not silently skipped.
+	const specials: string[] = [];
+	const walk = (dir: string): void => {
+		let entries: fs.Dirent[];
+		try {
+			entries = fs.readdirSync(dir, { withFileTypes: true });
+		} catch {
+			return;
+		}
+		for (const entry of entries) {
+			const abs = path.join(dir, entry.name);
+			const rel = path.relative(root, abs).split(path.sep).join("/");
+			if (entry.isSymbolicLink()) {
+				let target = "";
+				try { target = fs.readlinkSync(abs); } catch {}
+				specials.push(`${JSON.stringify(rel)} symlink ${JSON.stringify(target)}`);
+				continue;
+			}
+			if (entry.isDirectory()) {
+				walk(abs);
+				continue;
+			}
+			if (!entry.isFile()) {
+				specials.push(`${JSON.stringify(rel)} special`);
+				continue;
+			}
+			if (rel === SKILL_PROVENANCE_FILENAME) continue;
+			files.push({ path: rel, sha256: crypto.createHash("sha256").update(fs.readFileSync(abs)).digest("hex") });
+		}
+	};
+	walk(root);
+	// Codepoint order, NOT localeCompare: the digest must be byte-identical for
+	// the same content on every machine, and locale collation is not.
+	files.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+	specials.sort();
+	// Paths are JSON-encoded in the manifest so a filename containing a newline
+	// cannot make two different trees serialize identically (the entry joiner
+	// is itself a newline; a raw path could forge entry boundaries).
+	const manifest = files.map((f) => `${JSON.stringify(f.path)}\n${f.sha256}\n`).join("") + specials.map((s) => `${s}\n`).join("");
+	return { filesSha256: sha256(manifest), files };
+}
+
 export interface SkillProvenance {
 	/** Where the skill came from: `"local"` for a hand-written (API) skill; a git/URL
 	 *  reference for imports (MR-4). */
@@ -61,6 +132,10 @@ export interface SkillProvenance {
 	license: string | null;
 	/** sha256 of the SKILL.md body (see `sha256`). */
 	sha256: string;
+	/** Whole-content digest (SKILL.md + every bundled file) at write time — see
+	 *  `computeSkillFilesDigest`. Stamped by `writeSkillProvenance`; older
+	 *  sidecars lack it, and execution recomputes from disk anyway. */
+	filesSha256?: string;
 }
 
 export const SKILL_PROVENANCE_FILENAME = "provenance.json";
@@ -72,9 +147,14 @@ export function localSkillProvenance(fingerprintSource: string): SkillProvenance
 	return { source: "local", importedAt: new Date().toISOString(), license: null, sha256: sha256(fingerprintSource) };
 }
 
-/** Write `provenance.json` next to a skill's SKILL.md (0o600, like the SKILL.md itself). */
+/** Write `provenance.json` next to a skill's SKILL.md (0o600, like the SKILL.md
+ *  itself), stamping the whole-content files digest of whatever is on disk at
+ *  this moment — callers therefore write provenance LAST, after any bundled
+ *  files have landed. */
 export function writeSkillProvenance(skillDir: string, provenance: SkillProvenance): void {
-	fs.writeFileSync(path.join(skillDir, SKILL_PROVENANCE_FILENAME), `${JSON.stringify(provenance, null, 2)}\n`, { mode: 0o600 });
+	const digest = computeSkillFilesDigest(skillDir);
+	const payload: SkillProvenance = digest ? { ...provenance, filesSha256: digest.filesSha256 } : provenance;
+	fs.writeFileSync(path.join(skillDir, SKILL_PROVENANCE_FILENAME), `${JSON.stringify(payload, null, 2)}\n`, { mode: 0o600 });
 }
 
 /** Read a skill's provenance sidecar, or null when absent/corrupt (never throws). */

@@ -28,6 +28,7 @@ export type SearxngSetupPhase =
 	| "pulling-image"
 	| "starting"
 	| "ready"
+	| "stopped"
 	| "error";
 
 export type SearxngSetupStatus = {
@@ -71,8 +72,102 @@ function snapshot(run: Run): SearxngSetupStatus {
 	};
 }
 
-export function searxngSetupStatus(): SearxngSetupStatus {
-	return current ? snapshot(current) : last;
+/** A quick real question to the engine: a status shown as running must be one
+ * somebody just checked, not one remembered from a run that finished well. */
+export async function probeSearxng(baseUrl: string, timeoutMs = 1500): Promise<boolean> {
+	try {
+		const res = await fetch(`${baseUrl}/search?q=exxperts&format=json`, { signal: AbortSignal.timeout(timeoutMs) });
+		return res.ok;
+	} catch {
+		return false;
+	}
+}
+
+/** Only addresses on this machine are ours to vouch for from here. */
+function isLoopback(baseUrl: string): boolean {
+	try {
+		const host = new URL(baseUrl).hostname;
+		return host === "127.0.0.1" || host === "localhost" || host === "::1" || host === "[::1]";
+	} catch {
+		return false;
+	}
+}
+
+type ContainerRuntimeState = "missing" | "stopped" | "up" | "unknown";
+
+/**
+ * Whether a container runtime exists and answers, asked through the helper so
+ * the not-installed versus not-running split lives in exactly one place: its
+ * resolveDocker knows the off-PATH install locations a bare which misses.
+ * Only consulted after the engine probe has already failed, which is the one
+ * moment the answer changes what the screen should say; the happy path stays
+ * a single HTTP probe.
+ */
+function containerRuntimeState(repoRoot: string): Promise<ContainerRuntimeState> {
+	const script = searxngScriptPath(repoRoot);
+	if (!fs.existsSync(script)) return Promise.resolve("unknown");
+	return new Promise((resolve) => {
+		const child = spawn(process.execPath, [script, "runtime"], { stdio: ["ignore", "pipe", "ignore"] });
+		let out = "";
+		const timer = setTimeout(() => {
+			child.kill();
+			resolve("unknown");
+		}, 6000);
+		child.stdout?.on("data", (data) => { out += String(data); });
+		child.on("error", () => {
+			clearTimeout(timer);
+			resolve("unknown");
+		});
+		child.on("close", () => {
+			clearTimeout(timer);
+			const word = out.trim();
+			resolve(word === "missing" || word === "stopped" || word === "up" ? word : "unknown");
+		});
+	});
+}
+
+/**
+ * The status the screen draws. While a run is in flight its phases speak for
+ * themselves. Once nothing is running, "ready" is only ever said after the
+ * engine just answered an actual search: a run that finished well an hour ago
+ * proves nothing about a machine where Docker has since been quit. So the
+ * claimed address, or failing that the saved local one, is probed on every
+ * read, and when the engine is silent the runtime is asked about too, so the
+ * guidance can say what is actually missing instead of hedging.
+ */
+export async function searxngSetupStatus(repoRoot: string, configuredBaseUrl?: string | null): Promise<SearxngSetupStatus> {
+	if (current) return snapshot(current);
+	const claimed = last.phase === "ready" ? (last.baseUrl ?? DEFAULT_BASE_URL) : null;
+	const candidate = claimed ?? (configuredBaseUrl && isLoopback(configuredBaseUrl) ? configuredBaseUrl : null);
+	if (!candidate) return last;
+	if (await probeSearxng(candidate)) {
+		return { phase: "ready", baseUrl: candidate, message: null, running: false };
+	}
+	const runtime = await containerRuntimeState(repoRoot);
+	if (runtime === "missing") {
+		return {
+			phase: "docker-missing",
+			baseUrl: null,
+			message: "This needs a container runtime. Install OrbStack (orbstack.dev) or Docker Desktop (docker.com), then press Start one on this computer.",
+			running: false,
+		};
+	}
+	if (runtime === "stopped") {
+		return {
+			phase: "docker-stopped",
+			baseUrl: null,
+			message: "Docker is installed but not running. Start Docker Desktop or OrbStack, then press Start one on this computer.",
+			running: false,
+		};
+	}
+	return {
+		phase: "stopped",
+		baseUrl: null,
+		message: runtime === "up"
+			? `The search engine at ${candidate} is not answering. Press Start one on this computer to bring it back.`
+			: `The search engine at ${candidate} is not answering. If Docker Desktop or OrbStack is not running, start it. Then press Start one on this computer to bring the search engine back.`,
+		running: false,
+	};
 }
 
 /** The first address in a line, which is how the helper announces where it landed. */
@@ -97,7 +192,7 @@ function absorb(run: Run, chunk: string) {
 		}
 		if (/installed but not running/i.test(text)) {
 			run.phase = "docker-stopped";
-			run.message = "Docker is installed but not running. Start it, then try again.";
+			run.message = "Docker is installed but not running. Start Docker Desktop or OrbStack, then try again.";
 			continue;
 		}
 		// The engine prints these itself while it fetches the image, and this is
@@ -115,7 +210,7 @@ function absorb(run: Run, chunk: string) {
 		}
 		if (/did not become ready/i.test(text)) {
 			run.phase = "error";
-			run.message = "The search engine started but did not answer in time. Try again in a moment.";
+			run.message = "The search engine did not answer in time. Try again in a moment.";
 			continue;
 		}
 	}

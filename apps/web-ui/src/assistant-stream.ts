@@ -82,6 +82,65 @@ const QUARANTINE_MIN_PROBE_CHARS = 24;
 /** How long a too-short orphan head may wait for more text before deciding. */
 const ORPHAN_HOLD_MAX_MS = 500;
 
+/**
+ * Output-limit honesty.
+ *
+ * A model with withheld reasoning can spend its ENTIRE output allowance on
+ * thinking and get cut before it writes a single answer character: the
+ * assistant message arrives with stopReason "length", usage output at the full
+ * max_tokens, and content that is empty or thinking-only. The reducer has
+ * nothing to render for it (message_end with no final text returns early), so
+ * the room used to go completely silent — no bubble, no error, composer back to
+ * idle — and the user was left to guess.
+ *
+ * The sibling case is the ordinary truncation: stopReason "length" WITH text.
+ * The answer is real but may stop mid-thought, and that is worth one line too.
+ *
+ * Pure on purpose, like the rest of this module: the host decides where the
+ * line goes, this decides whether there is one.
+ */
+export const OUTPUT_LIMIT_STARVED_NOTICE =
+	"The model used its entire reply allowance on internal reasoning and never reached an answer. Lower the reasoning effort and try again.";
+export const OUTPUT_LIMIT_TRUNCATED_NOTICE = "The reply hit this model's output limit and may be cut off.";
+
+/** Anything the transcript actually shows: answer text or a tool chip. Thinking is not it. */
+export function hasUserVisibleAssistantContent(content: unknown): boolean {
+	if (typeof content === "string") return content.trim().length > 0;
+	if (!Array.isArray(content)) return false;
+	return content.some((part: any) => {
+		if (part?.type === "text") return typeof part.text === "string" && part.text.trim().length > 0;
+		if (part?.type === "toolCall") return true;
+		return false;
+	});
+}
+
+/**
+ * The notice this finished assistant message earns, or null for the normal
+ * case. Only stopReason "length" says anything here: every other stop reason
+ * either produced a real answer or already has its own line (provider errors,
+ * Stop).
+ */
+export function outputLimitNoticeFor(message: { stopReason?: unknown; content?: unknown } | null | undefined): string | null {
+	if (!message || String(message.stopReason ?? "") !== "length") return null;
+	return hasUserVisibleAssistantContent(message.content) ? OUTPUT_LIMIT_TRUNCATED_NOTICE : OUTPUT_LIMIT_STARVED_NOTICE;
+}
+
+export interface OutputLimitNoticeTurnInput {
+	message: { stopReason?: unknown; content?: unknown } | null | undefined;
+	/** Persistent rooms only: the surface where a silent turn is a durable transcript hole. */
+	persistentRoom: boolean;
+	/** The Stop path writes its own interrupted note; two lines for one act is noise. */
+	turnCancelling: boolean;
+	/** This turn already said it (reattach replays the whole turn's frames). */
+	alreadyShown: boolean;
+}
+
+/** The whole decision, guards included, so the host is one call and one setItems. */
+export function outputLimitNoticeForTurn(input: OutputLimitNoticeTurnInput): string | null {
+	if (!input.persistentRoom || input.turnCancelling || input.alreadyShown) return null;
+	return outputLimitNoticeFor(input.message);
+}
+
 export type AssistantStreamPhase = "idle" | "streaming" | "draining";
 
 export interface AssistantStreamState {

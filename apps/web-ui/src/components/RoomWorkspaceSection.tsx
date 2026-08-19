@@ -1,6 +1,7 @@
 import { type FormEvent, useEffect, useRef, useState } from "react";
 import type { PersistentAgentStatus, PersistentRoomCapabilityPolicyView, PersistentRoomWorkspaceAccessMode } from "../types";
 import { chooseSystemFolder, clearPersistentRoomWorkspaceDefault, fetchPersistentRoomWorkspaceDefault, savePersistentRoomWorkspaceDefault } from "../persistent-room-workspace-api";
+import { useRemoteClientContext } from "../remote-client-context";
 
 const BOUNDED_WORKSPACE_TOOL_OPTIONS = [
 	{ name: "ls", label: "List" },
@@ -128,6 +129,10 @@ export function RoomWorkspaceSection({ status, onDirtyChange }: { status: Persis
 	const [loading, setLoading] = useState(false);
 	const [saving, setSaving] = useState(false);
 	const [choosingFolder, setChoosingFolder] = useState(false);
+	// The native folder chooser opens a dialog on the computer; from a remote
+	// device that can only confuse (the server refuses it anyway), so the
+	// button hides and the typed-path input stands alone.
+	const remoteClient = useRemoteClientContext();
 	const [editing, setEditing] = useState(false);
 	const [draftRoot, setDraftRoot] = useState("");
 	const [draftAccessMode, setDraftAccessMode] = useState<PersistentRoomWorkspaceAccessMode>("localFiles");
@@ -333,10 +338,12 @@ export function RoomWorkspaceSection({ status, onDirtyChange }: { status: Persis
 								</div>
 							)}
 							<div className="workspace-folder-row">
-								<button className="inline-action workspace-folder-choice-action" type="button" disabled={saving || choosingFolder} onClick={() => void chooseWorkspaceRootFolder()}>
-									<svg className="workspace-folder-icon" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M1.5 2.5A1.5 1.5 0 0 1 3 1h3.2c.4 0 .78.16 1.06.44L8.6 2.78c.1.1.22.15.35.15H13a1.5 1.5 0 0 1 1.5 1.5v8.07A1.5 1.5 0 0 1 13 14H3a1.5 1.5 0 0 1-1.5-1.5v-10Z" /></svg>
-									{choosingFolder ? "Choosing…" : "Choose folder…"}
-								</button>
+								{!remoteClient.remote && (
+									<button className="inline-action workspace-folder-choice-action" type="button" disabled={saving || choosingFolder} onClick={() => void chooseWorkspaceRootFolder()}>
+										<svg className="workspace-folder-icon" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M1.5 2.5A1.5 1.5 0 0 1 3 1h3.2c.4 0 .78.16 1.06.44L8.6 2.78c.1.1.22.15.35.15H13a1.5 1.5 0 0 1 1.5 1.5v8.07A1.5 1.5 0 0 1 13 14H3a1.5 1.5 0 0 1-1.5-1.5v-10Z" /></svg>
+										{choosingFolder ? "Choosing…" : "Choose folder…"}
+									</button>
+								)}
 								<input
 									className="launcher-path-input workspace-folder-path-input"
 									type="text"

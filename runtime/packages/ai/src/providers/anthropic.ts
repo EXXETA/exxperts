@@ -628,15 +628,34 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 								block.text = "\n\n";
 								stream.push({ type: "text_delta", contentIndex: output.content.length - 1, delta: "\n\n", partial: output });
 							}
+							// Proxies can put content in the start event itself instead of
+							// streaming it as deltas; hardcoding "" would silently drop it.
+							if (typeof event.content_block.text === "string" && event.content_block.text.length > 0) {
+								block.text += event.content_block.text;
+								stream.push({
+									type: "text_delta",
+									contentIndex: output.content.length - 1,
+									delta: event.content_block.text,
+									partial: output,
+								});
+							}
 						} else if (event.content_block.type === "thinking") {
 							const block: Block = {
 								type: "thinking",
-								thinking: "",
-								thinkingSignature: "",
+								thinking: typeof event.content_block.thinking === "string" ? event.content_block.thinking : "",
+								thinkingSignature: typeof event.content_block.signature === "string" ? event.content_block.signature : "",
 								index: event.index,
 							};
 							output.content.push(block);
 							stream.push({ type: "thinking_start", contentIndex: output.content.length - 1, partial: output });
+							if (block.thinking.length > 0) {
+								stream.push({
+									type: "thinking_delta",
+									contentIndex: output.content.length - 1,
+									delta: block.thinking,
+									partial: output,
+								});
+							}
 						} else if (event.content_block.type === "redacted_thinking") {
 							const block: Block = {
 								type: "thinking",
@@ -1276,22 +1295,25 @@ function convertMessages(
 						});
 						continue;
 					}
-					if (block.thinking.trim().length === 0) continue;
-					// If thinking signature is missing/empty (e.g., from aborted stream),
-					// convert to plain text block without <thinking> tags to avoid API rejection
-					// and prevent Claude from mimicking the tags in responses
-					if (!block.thinkingSignature || block.thinkingSignature.trim().length === 0) {
-						blocks.push({
-							type: "text",
-							text: sanitizeSurrogates(block.thinking),
-						});
-					} else {
+					// A signed thinking block is the provider's own material and goes
+					// back even when its text is empty: on accounts where the API
+					// validates resent history, withholding a block it signed is a 400.
+					if (block.thinkingSignature && block.thinkingSignature.trim().length > 0) {
 						blocks.push({
 							type: "thinking",
 							thinking: sanitizeSurrogates(block.thinking),
 							signature: block.thinkingSignature,
 						});
+						continue;
 					}
+					if (block.thinking.trim().length === 0) continue;
+					// If thinking signature is missing/empty (e.g., from aborted stream),
+					// convert to plain text block without <thinking> tags to avoid API rejection
+					// and prevent Claude from mimicking the tags in responses
+					blocks.push({
+						type: "text",
+						text: sanitizeSurrogates(block.thinking),
+					});
 				} else if (block.type === "toolCall") {
 					blocks.push({
 						type: "tool_use",
@@ -1300,6 +1322,18 @@ function convertMessages(
 						input: block.arguments ?? {},
 					});
 				}
+			}
+			// A turn cut off inside its reasoning leaves nothing but thinking
+			// behind. The API merges consecutive assistant content before
+			// validating and refuses two adjacent thinking blocks in the merged
+			// turn, so replaying that fragment next to the retry that followed it
+			// is a 400. It said nothing and called nothing; it stays out.
+			if (
+				(msg.stopReason === "length" || msg.stopReason === "error" || msg.stopReason === "aborted") &&
+				blocks.length > 0 &&
+				blocks.every((b) => b.type === "thinking" || b.type === "redacted_thinking")
+			) {
+				continue;
 			}
 			if (blocks.length === 0) continue;
 			params.push({
