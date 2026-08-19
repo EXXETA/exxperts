@@ -7,6 +7,8 @@ import { requestUpdate, useUpdateNotice } from "../update-notice";
 import { Help } from "./Help";
 
 export type ThemeMode = "dark" | "light";
+/** What the user picked in the Appearance control; "system" resolves to a ThemeMode via prefers-color-scheme. */
+export type AppearancePreference = ThemeMode | "system";
 
 // Injected at build time from the root package.json "version" field (vite define).
 const APP_VERSION = __APP_VERSION__;
@@ -39,7 +41,7 @@ export type ProductSidebarActive = "home" | "ai-setup" | "remote" | "dashboard" 
  * same component, so the same settings are one click away wherever you are.
  * `onSettings` opens the Settings overlay; the optional section targets it.
  */
-export function ConfigMenu({ onSettings, theme, onToggleTheme }: { onSettings: (section?: "remote") => void; theme: ThemeMode; onToggleTheme: () => void }) {
+export function ConfigMenu({ onSettings, appearance, onSetAppearance }: { onSettings: (section?: "remote") => void; appearance: AppearancePreference; onSetAppearance: (pref: AppearancePreference) => void }) {
 	const [open, setOpen] = useState(false);
 	const [helpOpen, setHelpOpen] = useState(false);
 	const wrapRef = useRef<HTMLDivElement>(null);
@@ -71,10 +73,11 @@ export function ConfigMenu({ onSettings, theme, onToggleTheme }: { onSettings: (
 			{open && (
 				<div className="sidebar-config-menu" role="menu">
 					<div className="menu-row">
-						<span className="menu-row-label">Theme</span>
-						<div className="menu-theme-seg" role="group" aria-label="Theme">
-							<button className={theme === "dark" ? "on" : ""} aria-pressed={theme === "dark"} onClick={() => theme !== "dark" && onToggleTheme()}>Dark</button>
-							<button className={theme === "light" ? "on" : ""} aria-pressed={theme === "light"} onClick={() => theme !== "light" && onToggleTheme()}>Light</button>
+						<span className="menu-row-label">Appearance</span>
+						<div className="menu-appearance-seg" role="group" aria-label="Appearance">
+							<button className={appearance === "system" ? "on" : ""} aria-pressed={appearance === "system"} title="Follow this device's light or dark setting" onClick={() => onSetAppearance("system")}>System</button>
+							<button className={appearance === "light" ? "on" : ""} aria-pressed={appearance === "light"} onClick={() => onSetAppearance("light")}>Light</button>
+							<button className={appearance === "dark" ? "on" : ""} aria-pressed={appearance === "dark"} onClick={() => onSetAppearance("dark")}>Dark</button>
 						</div>
 					</div>
 					<button
@@ -169,7 +172,7 @@ export function RemoteOnPill({ onSettings }: { onSettings: (section?: "remote") 
 	);
 }
 
-export function ProductSidebar({ onHome, onSettings, onDashboard, onMemory, theme, onToggleTheme, active }: { onHome: () => void; onSettings: (section?: "remote") => void; onDashboard: () => void; onMemory?: () => void; theme: ThemeMode; onToggleTheme: () => void; active: ProductSidebarActive }) {
+export function ProductSidebar({ onHome, onSettings, onDashboard, onMemory, theme, appearance, onSetAppearance, active }: { onHome: () => void; onSettings: (section?: "remote") => void; onDashboard: () => void; onMemory?: () => void; theme: ThemeMode; appearance: AppearancePreference; onSetAppearance: (pref: AppearancePreference) => void; active: ProductSidebarActive }) {
 	return (
 		<aside className="product-sidebar">
 			<div className="product-sidebar-header">
@@ -196,7 +199,7 @@ export function ProductSidebar({ onHome, onSettings, onDashboard, onMemory, them
 			<div className="product-sidebar-footer">
 				<RemoteOnPill onSettings={onSettings} />
 				<div className="sidebar-footer-controls">
-					<ConfigMenu onSettings={onSettings} theme={theme} onToggleTheme={onToggleTheme} />
+					<ConfigMenu onSettings={onSettings} appearance={appearance} onSetAppearance={onSetAppearance} />
 					<SidebarToggleButton />
 				</div>
 			</div>
