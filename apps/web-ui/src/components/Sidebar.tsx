@@ -1,19 +1,20 @@
 import { SidebarToggleButton } from "../sidebar-collapse";
-import { RemoteOnPill, ConfigMenu, type ThemeMode } from "./product-shell";
+import { RemoteOnPill, ConfigMenu, type AppearancePreference, type ThemeMode } from "./product-shell";
 
 import type { ReactNode } from "react";
 
 interface Props {
 	onHome: () => void;
 	theme: ThemeMode;
-	onToggleTheme: () => void;
+	appearance: AppearancePreference;
+	onSetAppearance: (pref: AppearancePreference) => void;
 	/** Opens the Settings overlay over the room; the optional section targets it. */
 	onSettings: (section?: "remote") => void;
 	/** The Assets section (contract §2 rung 3) — the rail's first occupant below Home. */
 	assetsSlot?: ReactNode;
 }
 
-export function Sidebar({ theme, onToggleTheme, onSettings, onHome, assetsSlot }: Props) {
+export function Sidebar({ theme, appearance, onSetAppearance, onSettings, onHome, assetsSlot }: Props) {
 	return (
 		<aside className="sidebar">
 			<div className="sidebar-header">
@@ -31,7 +32,7 @@ export function Sidebar({ theme, onToggleTheme, onSettings, onHome, assetsSlot }
 			<div className="sidebar-footer">
 				<RemoteOnPill onSettings={onSettings} />
 				<div className="sidebar-footer-controls">
-					<ConfigMenu onSettings={onSettings} theme={theme} onToggleTheme={onToggleTheme} />
+					<ConfigMenu onSettings={onSettings} appearance={appearance} onSetAppearance={onSetAppearance} />
 					<SidebarToggleButton />
 				</div>
 			</div>

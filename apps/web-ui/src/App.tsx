@@ -14,7 +14,7 @@ import { InRoomChatShellView } from "./components/in-room-chat";
 import { CreateRoomPanel } from "./components/create-room-panel";
 import { useEscapeKey } from "./components/use-escape-key";
 import { PersistentAgentCard } from "./components/launcher-room-card";
-import { ProductSidebar, type ThemeMode } from "./components/product-shell";
+import { ProductSidebar, type AppearancePreference, type ThemeMode } from "./components/product-shell";
 import { SettingsOverlay, type SettingsSection } from "./components/settings-overlay";
 import { WhatsNewDialog } from "./components/whats-new-dialog";
 import { useRemoteClientContext } from "./remote-client-context";
@@ -1046,7 +1046,7 @@ function AiProfileSwitcherSection({ status, onSelect, onRefresh, onRefreshAuth }
 	);
 }
 
-function Landing({ onOpenSettings, onOpenDashboard, onOpenMemory, onOpenPersistentAgent, onResumePersistentAgent, onMaintainPersistentAgent, onCreatePersistentAgent, onArchiveRoom, onPurgeRoom, onMementoForget, onRecordPreferredModel, modelStatus, persistentAgentStatuses, persistentThread, persistentLive, persistentResumeError, onRefreshPersistentAgent, theme, onToggleTheme, aiProfileStatus: aiProfileSelection, onSelectAiProfile, standbyLockedModels, backgroundReadyRooms, purgingRooms }: { onOpenSettings: (section?: SettingsSection) => void; onOpenDashboard: () => void; onOpenMemory: () => void; onOpenPersistentAgent: (status: PersistentAgentStatus, model: WebChatModelOption) => Promise<void> | void; onResumePersistentAgent: (status: PersistentAgentStatus) => Promise<void> | void; onMaintainPersistentAgent: (target: MaintainTarget) => void; onCreatePersistentAgent: (request: PersistentAgentCreateRequest) => Promise<void>; onArchiveRoom: (agentId: PersistentAgentId, confirmation: string) => Promise<PersistentAgentArchiveResponse>; onPurgeRoom: (agentId: PersistentAgentId, confirmation: string) => Promise<PersistentAgentPurgeResponse>; onMementoForget: (agentId: PersistentAgentId) => void; onRecordPreferredModel?: (agentId: PersistentAgentId, model: { provider: string; model: string }) => void; modelStatus: WebChatModelStatus | null; persistentAgentStatuses: PersistentAgentStatus[]; persistentThread: PersistentAgentThread | null; persistentLive: boolean; persistentResumeError: string | null; onRefreshPersistentAgent: () => void; theme: ThemeMode; onToggleTheme: () => void; aiProfileStatus: PersistentAgentAiProfileSelectionStatus | null; onSelectAiProfile: (profileId: string) => Promise<void>; standbyLockedModels?: Array<{ provider: string; model: string }>; backgroundReadyRooms?: ReadonlySet<PersistentAgentId>; purgingRooms?: ReadonlySet<PersistentAgentId> }) {
+function Landing({ onOpenSettings, onOpenDashboard, onOpenMemory, onOpenPersistentAgent, onResumePersistentAgent, onMaintainPersistentAgent, onCreatePersistentAgent, onArchiveRoom, onPurgeRoom, onMementoForget, onRecordPreferredModel, modelStatus, persistentAgentStatuses, persistentThread, persistentLive, persistentResumeError, onRefreshPersistentAgent, theme, appearance, onSetAppearance, aiProfileStatus: aiProfileSelection, onSelectAiProfile, standbyLockedModels, backgroundReadyRooms, purgingRooms }: { onOpenSettings: (section?: SettingsSection) => void; onOpenDashboard: () => void; onOpenMemory: () => void; onOpenPersistentAgent: (status: PersistentAgentStatus, model: WebChatModelOption) => Promise<void> | void; onResumePersistentAgent: (status: PersistentAgentStatus) => Promise<void> | void; onMaintainPersistentAgent: (target: MaintainTarget) => void; onCreatePersistentAgent: (request: PersistentAgentCreateRequest) => Promise<void>; onArchiveRoom: (agentId: PersistentAgentId, confirmation: string) => Promise<PersistentAgentArchiveResponse>; onPurgeRoom: (agentId: PersistentAgentId, confirmation: string) => Promise<PersistentAgentPurgeResponse>; onMementoForget: (agentId: PersistentAgentId) => void; onRecordPreferredModel?: (agentId: PersistentAgentId, model: { provider: string; model: string }) => void; modelStatus: WebChatModelStatus | null; persistentAgentStatuses: PersistentAgentStatus[]; persistentThread: PersistentAgentThread | null; persistentLive: boolean; persistentResumeError: string | null; onRefreshPersistentAgent: () => void; theme: ThemeMode; appearance: AppearancePreference; onSetAppearance: (pref: AppearancePreference) => void; aiProfileStatus: PersistentAgentAiProfileSelectionStatus | null; onSelectAiProfile: (profileId: string) => Promise<void>; standbyLockedModels?: Array<{ provider: string; model: string }>; backgroundReadyRooms?: ReadonlySet<PersistentAgentId>; purgingRooms?: ReadonlySet<PersistentAgentId> }) {
 	const [createOpen, setCreateOpen] = useState(false);
 	useEscapeKey(() => setCreateOpen(false), createOpen);
 	const [settingsRoomId, setSettingsRoomId] = useState<PersistentAgentId | null>(null);
@@ -1080,7 +1080,7 @@ function Landing({ onOpenSettings, onOpenDashboard, onOpenMemory, onOpenPersiste
 
 	return (
 		<div className="landing-shell with-product-sidebar">
-			<ProductSidebar onHome={() => {}} onSettings={onOpenSettings} onDashboard={onOpenDashboard} onMemory={onOpenMemory} theme={theme} onToggleTheme={onToggleTheme} active="home" />
+			<ProductSidebar onHome={() => {}} onSettings={onOpenSettings} onDashboard={onOpenDashboard} onMemory={onOpenMemory} theme={theme} appearance={appearance} onSetAppearance={onSetAppearance} active="home" />
 			<div className="landing home-page">
 			<section className="landing-hero">
 				<div className="landing-hero-head">
@@ -1286,10 +1286,10 @@ function ArchivedRoomsSection({ activeRoomCount, onRestored }: { activeRoomCount
 	);
 }
 
-function MemoryShell({ onHome, onSettings, onDashboard, onMaintain, maintainBlocked, theme, onToggleTheme }: { onHome: () => void; onSettings: (section?: SettingsSection) => void; onDashboard: () => void; onMaintain: (target: MaintainTarget) => void; maintainBlocked?: (agentId: PersistentAgentId) => string | null; theme: ThemeMode; onToggleTheme: () => void }) {
+function MemoryShell({ onHome, onSettings, onDashboard, onMaintain, maintainBlocked, theme, appearance, onSetAppearance }: { onHome: () => void; onSettings: (section?: SettingsSection) => void; onDashboard: () => void; onMaintain: (target: MaintainTarget) => void; maintainBlocked?: (agentId: PersistentAgentId) => string | null; theme: ThemeMode; appearance: AppearancePreference; onSetAppearance: (pref: AppearancePreference) => void }) {
 	return (
 		<div className="landing-shell with-product-sidebar">
-			<ProductSidebar onHome={onHome} onSettings={onSettings} onDashboard={onDashboard} onMemory={() => {}} theme={theme} onToggleTheme={onToggleTheme} active="memory" />
+			<ProductSidebar onHome={onHome} onSettings={onSettings} onDashboard={onDashboard} onMemory={() => {}} theme={theme} appearance={appearance} onSetAppearance={onSetAppearance} active="memory" />
 			<div className="landing dashboard-page">
 				<section className="landing-hero">
 					<h1>Memory.</h1>
@@ -2770,14 +2770,27 @@ export function App() {
 	// A remote device never sees the Remote access section: the server refuses
 	// the admin routes there regardless.
 	const remoteClient = useRemoteClientContext().remote;
-	const [theme, setTheme] = useState<ThemeMode>(() => {
+	// "system" follows the OS setting via prefers-color-scheme. The old
+	// "exxperts.theme" key is read as a fallback so an explicit pre-appearance
+	// choice of light/dark survives the rename; users who never chose follow
+	// the system.
+	const [appearance, setAppearance] = useState<AppearancePreference>(() => {
 		try {
-			const saved = localStorage.getItem("exxperts.theme");
-			return saved === "light" || saved === "dark" ? saved : "dark";
+			const saved = localStorage.getItem("exxperts.appearance") ?? localStorage.getItem("exxperts.theme");
+			return saved === "light" || saved === "dark" || saved === "system" ? saved : "system";
 		} catch {
-			return "dark";
+			return "system";
 		}
 	});
+	const [systemDark, setSystemDark] = useState(() => (typeof window.matchMedia === "function" ? window.matchMedia("(prefers-color-scheme: dark)").matches : true));
+	useEffect(() => {
+		if (typeof window.matchMedia !== "function") return;
+		const query = window.matchMedia("(prefers-color-scheme: dark)");
+		const onChange = (event: MediaQueryListEvent) => setSystemDark(event.matches);
+		query.addEventListener("change", onChange);
+		return () => query.removeEventListener("change", onChange);
+	}, []);
+	const theme: ThemeMode = appearance === "system" ? (systemDark ? "dark" : "light") : appearance;
 	const [items, setItems] = useState<ChatItem[]>([]);
 	const [composerResetNonce, setComposerResetNonce] = useState(0);
 	// V6 iterate affordance: a one-shot composer prefill. Set together with a
@@ -3326,8 +3339,13 @@ export function App() {
 
 	useEffect(() => {
 		document.documentElement.dataset.theme = theme;
-		try { localStorage.setItem("exxperts.theme", theme); } catch {}
 	}, [theme]);
+	useEffect(() => {
+		try {
+			localStorage.setItem("exxperts.appearance", appearance);
+			localStorage.removeItem("exxperts.theme");
+		} catch {}
+	}, [appearance]);
 
 	useEffect(() => {
 		refreshAuthStatus(); // includes the model-status refresh
@@ -7330,13 +7348,13 @@ export function App() {
 				{gcReviewOpen && gcAssessment && <TaskStoreGcDialog assessment={gcAssessment} busy={gcBusy} onConfirm={() => void confirmTaskStoreGc()} onClose={() => setGcReviewOpen(false)} />}
 				{backgroundDoneToastView && <div className="launcher-toasts"><ToastStack toasts={[backgroundDoneToastView]} /></div>}
 				{whatsNew && <WhatsNewDialog version={whatsNew.version} entries={whatsNew.entries} onClose={dismissWhatsNew} />}
-				<Landing onOpenSettings={openSettings} onOpenDashboard={() => setView("dashboard")} onOpenMemory={() => setView("memory")} onOpenPersistentAgent={openPersistentAgent} onResumePersistentAgent={openPersistentAgentResume} onMaintainPersistentAgent={(target) => { if (!openMaintainChooser(target)) setPersistentResumeError(maintainBlockedReason(target.agentId) ?? "Maintain is not available for this room right now."); }} onCreatePersistentAgent={createPersistentAgentRoom} onArchiveRoom={archivePersistentAgentRoom} onPurgeRoom={purgePersistentAgentRoom} onMementoForget={(agentId) => { roomDraftsRef.current.delete(agentId); }} onRecordPreferredModel={recordRoomPreferredModel} modelStatus={modelStatus} persistentAgentStatuses={persistentAgentStatuses} persistentThread={persistentThread} persistentLive={!!persistentChat} persistentResumeError={persistentResumeError} onRefreshPersistentAgent={refreshPersistentAgentStatus} theme={theme} onToggleTheme={() => setTheme((t) => (t === "dark" ? "light" : "dark"))} aiProfileStatus={aiProfileStatus} onSelectAiProfile={selectAiProfile} standbyLockedModels={standbyLockedModels} backgroundReadyRooms={backgroundReadyRooms} purgingRooms={purgingRooms} />
+				<Landing onOpenSettings={openSettings} onOpenDashboard={() => setView("dashboard")} onOpenMemory={() => setView("memory")} onOpenPersistentAgent={openPersistentAgent} onResumePersistentAgent={openPersistentAgentResume} onMaintainPersistentAgent={(target) => { if (!openMaintainChooser(target)) setPersistentResumeError(maintainBlockedReason(target.agentId) ?? "Maintain is not available for this room right now."); }} onCreatePersistentAgent={createPersistentAgentRoom} onArchiveRoom={archivePersistentAgentRoom} onPurgeRoom={purgePersistentAgentRoom} onMementoForget={(agentId) => { roomDraftsRef.current.delete(agentId); }} onRecordPreferredModel={recordRoomPreferredModel} modelStatus={modelStatus} persistentAgentStatuses={persistentAgentStatuses} persistentThread={persistentThread} persistentLive={!!persistentChat} persistentResumeError={persistentResumeError} onRefreshPersistentAgent={refreshPersistentAgentStatus} theme={theme} appearance={appearance} onSetAppearance={setAppearance} aiProfileStatus={aiProfileStatus} onSelectAiProfile={selectAiProfile} standbyLockedModels={standbyLockedModels} backgroundReadyRooms={backgroundReadyRooms} purgingRooms={purgingRooms} />
 			</>
 		);
 	}
 
 	if (view === "memory") {
-		return withConnectionBanner(<MemoryShell onHome={goHome} onSettings={openSettings} onDashboard={() => setView("dashboard")} onMaintain={(target) => { if (openMaintainChooser(target, "memory")) setView("home"); }} maintainBlocked={maintainBlockedReason} theme={theme} onToggleTheme={() => setTheme((t) => (t === "dark" ? "light" : "dark"))} />);
+		return withConnectionBanner(<MemoryShell onHome={goHome} onSettings={openSettings} onDashboard={() => setView("dashboard")} onMaintain={(target) => { if (openMaintainChooser(target, "memory")) setView("home"); }} maintainBlocked={maintainBlockedReason} theme={theme} appearance={appearance} onSetAppearance={setAppearance} />);
 	}
 
 	if (view === "dashboard") {
@@ -7348,7 +7366,7 @@ export function App() {
 					onDashboard={() => {}}
 					onMemory={() => setView("memory")}
 					theme={theme}
-					onToggleTheme={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}
+					appearance={appearance} onSetAppearance={setAppearance}
 					active="dashboard"
 				/>
 				<div className="landing dashboard-page">
@@ -7446,7 +7464,8 @@ export function App() {
 				<Sidebar
 					onHome={goHome}
 					theme={theme}
-					onToggleTheme={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}
+					appearance={appearance}
+					onSetAppearance={setAppearance}
 					onSettings={openSettings}
 					assetsSlot={persistentChat ? <AssetsPanel rows={assetRows} selectedTaskId={selectedAssetTaskId} onSelect={openAssetRow} onStopRunning={() => dispatchTask({ type: "abort_requested" })} onRemove={(row) => void removeAssetRow(row)} onDeleteFile={(row, fileName) => requestFileDelete(row, fileName)} onRenameFile={(row, fileName, newName) => void renameFileRow(row, fileName, newName)} /> : undefined}
 				/>
