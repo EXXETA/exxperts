@@ -374,7 +374,7 @@ export function PersistentAgentCard({ status, modelStatus, aiProfileStatus, thre
 			<div className="persistent-agent-actions">
 				<div className="persistent-agent-primary-actions">
 					{state === "missing" ? (
-						<button className="landing-action" disabled>Unavailable</button>
+						<button className="landing-action" disabled title="This room's files are missing on this machine">Unavailable</button>
 					) : hasStandbyThread ? (
 						canSwitchResume && switchTargetProfile ? (
 							<button
@@ -418,7 +418,7 @@ export function PersistentAgentCard({ status, modelStatus, aiProfileStatus, thre
 				</div>
 				<div className="persistent-agent-secondary-actions">
 					<button className="inline-action" disabled={!canMaintain} title={canMaintain ? `Fold ${label}'s recent activity into long-term memory. Routine housekeeping, not an error.` : maintainDisabledReason} onClick={() => status && onMaintain({ agentId: status.id, displayName: label })}>Maintain</button>
-					{status && (status.errors.length > 0 || status.warnings.length > 0) && <button className="inline-action" onClick={() => setExpanded((v) => !v)}>{expanded ? "Hide" : "Details"}</button>}
+					{status && (status.errors.length > 0 || status.warnings.length > 0) && <button className="inline-action" title={expanded ? "Hide the details" : "Show what needs attention"} onClick={() => setExpanded((v) => !v)}>{expanded ? "Hide" : "Details"}</button>}
 				</div>
 				{state !== "missing" && (
 					<div className={`persistent-agent-model${hasStandbyThread ? " locked" : showModelPicker ? "" : " unavailable"}`}>

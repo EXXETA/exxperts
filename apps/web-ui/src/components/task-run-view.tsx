@@ -54,7 +54,7 @@ export function TaskRunView({ state, onStop, onClose, maximized, onToggleMaximiz
 						>
 							{maximized ? "⤡" : "⤢"}
 						</button>
-						<button type="button" className="artifact-viewer-close" onClick={onClose} aria-label="Close run view. The task keeps running.">
+						<button type="button" className="artifact-viewer-close" onClick={onClose} aria-label="Close run view. The task keeps running." title="Close — the task keeps running">
 							✕
 						</button>
 					</div>

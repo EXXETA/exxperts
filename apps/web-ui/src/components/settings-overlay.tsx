@@ -3,7 +3,7 @@ import { useEscapeKey } from "./use-escape-key";
 
 export type SettingsSection = "ai-setup" | "web-search" | "connectors" | "skills" | "remote";
 
-export type SettingsOverlaySectionDef = { id: SettingsSection; label: string; content: ReactNode };
+export type SettingsOverlaySectionDef = { id: SettingsSection; label: string; title?: string; content: ReactNode };
 
 /**
  * The one Settings surface. A centered modal over whatever the user was
@@ -38,6 +38,7 @@ export function SettingsOverlay({ sections, active, onSelect, onClose, initialMo
 								key={section.id}
 								type="button"
 								data-section={section.id}
+								title={section.title}
 								className={`list-btn ${section.id === activeSection?.id ? "active" : ""}`}
 								aria-current={section.id === activeSection?.id ? "page" : undefined}
 								onClick={() => {

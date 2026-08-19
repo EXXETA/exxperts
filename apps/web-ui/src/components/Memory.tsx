@@ -913,8 +913,8 @@ export function Memory({ onMaintain, maintainBlocked }: { onMaintain?: (target: 
 	return (
 		<div className="dashboard">
 			<div className="mem-tabs" role="tablist">
-				<button type="button" role="tab" aria-selected={tab === "overview"} className={tab === "overview" ? "active" : ""} onClick={() => setTab("overview")}>Overview</button>
-				<button type="button" role="tab" aria-selected={tab === "hivemind"} className={tab === "hivemind" ? "active" : ""} onClick={() => setTab("hivemind")}>HiveMind</button>
+				<button type="button" role="tab" aria-selected={tab === "overview"} className={tab === "overview" ? "active" : ""} title="What each room knows" onClick={() => setTab("overview")}>Overview</button>
+				<button type="button" role="tab" aria-selected={tab === "hivemind"} className={tab === "hivemind" ? "active" : ""} title="Ask questions across all your rooms' memory" onClick={() => setTab("hivemind")}>HiveMind</button>
 			</div>
 
 			{tab === "hivemind" && (
@@ -927,8 +927,8 @@ export function Memory({ onMaintain, maintainBlocked }: { onMaintain?: (target: 
 									<button type="button" className="mem-close" onClick={() => { setMessages([]); setAskError(null); }}>New chat</button>
 								)}
 								<div className="range-toggle" role="group" aria-label="Query mode">
-									<button type="button" className={askMode === "ask" ? "active" : ""} aria-pressed={askMode === "ask"} onClick={() => setAskMode("ask")}>Ask</button>
-									<button type="button" className={askMode === "find" ? "active" : ""} aria-pressed={askMode === "find"} onClick={() => setAskMode("find")}>Find text</button>
+									<button type="button" className={askMode === "ask" ? "active" : ""} aria-pressed={askMode === "ask"} title="Ask a question — the AI answers from memory" onClick={() => setAskMode("ask")}>Ask</button>
+									<button type="button" className={askMode === "find" ? "active" : ""} aria-pressed={askMode === "find"} title="Search memory for exact text — local, no model" onClick={() => setAskMode("find")}>Find text</button>
 								</div>
 								<span className="mem-measured" style={{ color: "var(--muted)", borderColor: "var(--border)" }}>{askMode === "ask" ? `Read-only · ${scopeLabel}` : "Local · no model"}</span>
 							</div>
@@ -938,9 +938,9 @@ export function Memory({ onMaintain, maintainBlocked }: { onMaintain?: (target: 
 							{askMode === "ask" && data.rooms.length > 1 && (
 								<div className="mem-scope">
 									<span className="mem-scope-label">Exxperts</span>
-									<button type="button" className={`mem-scope-chip${scope.size === 0 ? " active" : ""}`} onClick={() => setScope(new Set())}>All exxperts</button>
+									<button type="button" className={`mem-scope-chip${scope.size === 0 ? " active" : ""}`} title="Answer from every room's memory" onClick={() => setScope(new Set())}>All exxperts</button>
 									{data.rooms.map((r) => (
-										<button key={r.id} type="button" className={`mem-scope-chip${scope.has(r.id) ? " active" : ""}`} onClick={() => toggleScopeRoom(r.id)}>{r.displayName}</button>
+										<button key={r.id} type="button" className={`mem-scope-chip${scope.has(r.id) ? " active" : ""}`} title={`Include or exclude ${r.displayName}'s memory`} onClick={() => toggleScopeRoom(r.id)}>{r.displayName}</button>
 									))}
 								</div>
 							)}
@@ -1084,7 +1084,7 @@ export function Memory({ onMaintain, maintainBlocked }: { onMaintain?: (target: 
 									{data.rooms.filter((r) => r.needsAbsorb).map((r) => {
 										const blocked = maintainBlocked?.(r.id) ?? null;
 										return (
-											<button key={r.id} type="button" className="mem-review-btn" disabled={!!blocked} title={blocked ?? undefined} onClick={() => onMaintain({ agentId: r.id, displayName: r.displayName })}>
+											<button key={r.id} type="button" className="mem-review-btn" disabled={!!blocked} title={blocked ?? `Turn ${r.displayName}'s remembered sessions into lasting memory`} onClick={() => onMaintain({ agentId: r.id, displayName: r.displayName })}>
 												{r.displayName}: memorize →
 											</button>
 										);
@@ -1320,7 +1320,7 @@ export function Memory({ onMaintain, maintainBlocked }: { onMaintain?: (target: 
 									<div className="dash-section-head" style={{ marginBottom: 0 }}>
 										<div className="chart-head mem-head-row"><h2>Memory map</h2>{past && <span className="mem-asof">as of {fmtDayShort(past.at)}</span>}</div>
 										<div className="mem-panel-actions">
-											<button type="button" className="mem-close" onClick={openFullMemory}>Read all →</button>
+											<button type="button" className="mem-close" title="Open the full memory document" onClick={openFullMemory}>Read all →</button>
 										</div>
 									</div>
 									<div className="sub" style={{ marginBottom: 6 }}>{past ? "Composition that day, same measuring as today. Click a section to read what it held." : "Composition by estimated token weight. Click a section to read what's inside."}</div>

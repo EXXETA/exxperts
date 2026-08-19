@@ -525,6 +525,7 @@ export function RoomModelPicker({ roomModels, modelStatusProfileId, value, onCha
 											data-picker-item
 											tabIndex={showFilter ? -1 : 0}
 											aria-expanded={!collapsed}
+											title="Show or hide this profile's models"
 											onClick={() => setToggledGroups((prev) => ({ ...prev, [group.id]: collapsed }))}
 										>
 											{headBody}

@@ -319,7 +319,7 @@ export function RoomWorkspaceSection({ status, onDirtyChange }: { status: Persis
 				{!editing && policy && (
 					<div className="rs-pane-actions">
 						<button className="rs-btn" disabled={!canManageWorkspace || loading || saving} onClick={startOrCancelEditing}>Edit workspace</button>
-						<button className="rs-quiet" disabled={!canManageWorkspace || loading || saving} onClick={() => void clearWorkspaceDefault()}>{saving ? "Updating…" : "Clear"}</button>
+						<button className="rs-quiet" disabled={!canManageWorkspace || loading || saving} title="Remove the saved workspace folder" onClick={() => void clearWorkspaceDefault()}>{saving ? "Updating…" : "Clear"}</button>
 					</div>
 				)}
 			</header>
@@ -361,8 +361,8 @@ export function RoomWorkspaceSection({ status, onDirtyChange }: { status: Persis
 						<div className="workspaces-tool-options">
 							<strong>Access mode</strong>
 							<div className="workspace-mode-segments" role="radiogroup" aria-label="Workspace access mode">
-								<button type="button" role="radio" aria-checked={draftAccessMode === "localFiles"} className={`workspace-mode-segment${draftAccessMode === "localFiles" ? " active" : ""}`} disabled={saving} onClick={() => changeAccessMode("localFiles")}>Full access</button>
-								<button type="button" role="radio" aria-checked={draftAccessMode === "bounded"} className={`workspace-mode-segment${draftAccessMode === "bounded" ? " active" : ""}`} disabled={saving} onClick={() => changeAccessMode("bounded")}>Bounded workspace</button>
+								<button type="button" role="radio" aria-checked={draftAccessMode === "localFiles"} className={`workspace-mode-segment${draftAccessMode === "localFiles" ? " active" : ""}`} disabled={saving} title={accessModeHint("localFiles")} onClick={() => changeAccessMode("localFiles")}>Full access</button>
+								<button type="button" role="radio" aria-checked={draftAccessMode === "bounded"} className={`workspace-mode-segment${draftAccessMode === "bounded" ? " active" : ""}`} disabled={saving} title={accessModeHint("bounded")} onClick={() => changeAccessMode("bounded")}>Bounded workspace</button>
 							</div>
 							<p className="workspaces-session-note">{accessModeHint(draftAccessMode)}</p>
 						</div>
