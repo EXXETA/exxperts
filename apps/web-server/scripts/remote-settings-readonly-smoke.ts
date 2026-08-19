@@ -87,7 +87,7 @@ try {
 		cwd: webServerDir,
 		env: { ...process.env, PORT: String(port), ...SMOKE_SERVER_AUTH_ENV },
 		stdio: ["ignore", "pipe", "pipe"],
-	}) as ChildProcessWithoutNullStreams;
+	}) as unknown as ChildProcessWithoutNullStreams;
 	await waitForServer();
 
 	const browser = await chromium.launch();

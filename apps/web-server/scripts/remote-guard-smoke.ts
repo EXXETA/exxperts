@@ -42,7 +42,7 @@ fs.mkdirSync(path.join(tempHome, ".exxperts", "app", "personalized-agents"), { r
 function rawRequest(host: string, pathname: string, headers: Record<string, string>): Promise<{ status: number; body: string }> {
 	return new Promise((resolve, reject) => {
 		const req = http.request(
-			{ host, port, path: pathname, method: "GET", headers, setDefaultHeaders: false as any },
+			{ host, port, path: pathname, method: "GET", headers, setDefaultHeaders: false } as http.RequestOptions,
 			(res) => {
 				const chunks: Buffer[] = [];
 				res.on("data", (chunk) => chunks.push(chunk as Buffer));
