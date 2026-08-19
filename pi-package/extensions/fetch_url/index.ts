@@ -115,16 +115,51 @@ function ipv4IsPrivate(ip: string): boolean {
 	return false;
 }
 
+// Expand an IPv6 literal into its 8 16-bit groups. Handles "::" compression,
+// a trailing embedded dotted IPv4 ("::ffff:1.2.3.4"), and zone suffixes.
+// Returns null when the address is not parseable.
+function parseIpv6Groups(ip: string): number[] | null {
+	let addr = ip.toLowerCase().replace(/^\[|\]$/g, "");
+	const zone = addr.indexOf("%");
+	if (zone !== -1) addr = addr.slice(0, zone);
+	const dotted = addr.match(/(\d+\.\d+\.\d+\.\d+)$/);
+	if (dotted) {
+		const parts = dotted[1].split(".").map((n) => Number(n));
+		if (parts.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return null;
+		const hexTail = `${(((parts[0] << 8) | parts[1]) >>> 0).toString(16)}:${(((parts[2] << 8) | parts[3]) >>> 0).toString(16)}`;
+		addr = addr.slice(0, addr.length - dotted[1].length) + hexTail;
+	}
+	const halves = addr.split("::");
+	if (halves.length > 2) return null;
+	const head = halves[0] ? halves[0].split(":") : [];
+	const tail = halves.length === 2 && halves[1] ? halves[1].split(":") : [];
+	if (halves.length === 2 ? head.length + tail.length > 7 : head.length !== 8) return null;
+	const fill = halves.length === 2 ? new Array(8 - head.length - tail.length).fill("0") : [];
+	const groups: number[] = [];
+	for (const g of [...head, ...fill, ...tail]) {
+		if (!/^[0-9a-f]{1,4}$/.test(g)) return null;
+		groups.push(Number.parseInt(g, 16));
+	}
+	return groups;
+}
+
 function ipv6IsPrivate(ip: string): boolean {
-	const addr = ip.toLowerCase().replace(/^\[|\]$/g, "");
-	if (addr === "::1" || addr === "::") return true; // loopback / unspecified
-	if (addr.startsWith("fe80")) return true; // link-local
-	if (addr.startsWith("fc") || addr.startsWith("fd")) return true; // unique local
-	// IPv4-mapped (::ffff:a.b.c.d) — validate the embedded v4.
-	const mapped = addr.match(/::ffff:(\d+\.\d+\.\d+\.\d+)$/);
-	if (mapped) return ipv4IsPrivate(mapped[1]);
+	const groups = parseIpv6Groups(ip);
+	if (!groups) return true; // unparseable → refuse
+	// IPv4-mapped (::ffff:0:0/96) and IPv4-compatible (::/96) addresses embed a
+	// v4 address in the low 32 bits; judge that v4 in ANY spelling — `new URL()`
+	// normalises "[::ffff:169.254.169.254]" to the hex form "::ffff:a9fe:a9fe",
+	// so matching only the dotted spelling is bypassable. This also covers
+	// "::1" / "::" (loopback / unspecified) via ipv4IsPrivate's 0.0.0.0/8 rule.
+	if (groups.slice(0, 5).every((g) => g === 0) && (groups[5] === 0xffff || groups[5] === 0)) {
+		const v4 = `${groups[6] >> 8}.${groups[6] & 0xff}.${groups[7] >> 8}.${groups[7] & 0xff}`;
+		return ipv4IsPrivate(v4);
+	}
+	if ((groups[0] & 0xffc0) === 0xfe80) return true; // link-local fe80::/10
+	if ((groups[0] & 0xfe00) === 0xfc00) return true; // unique local fc00::/7
 	return false;
 }
+
 
 function ipIsBlocked(ip: string): boolean {
 	const kind = net.isIP(ip);

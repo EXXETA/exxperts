@@ -454,6 +454,20 @@ describe("Coding Agent Tools", () => {
 			);
 		});
 
+		it("should apply the default timeout when none is given", async () => {
+			const seen: Array<number | undefined> = [];
+			const operations: BashOperations = {
+				exec: async (_command, _cwd, { timeout }) => {
+					seen.push(timeout);
+					return { exitCode: 0 };
+				},
+			};
+			const bash = createBashTool(testDir, { operations });
+			await bash.execute("test-call-timeout-default", { command: "true" });
+			await bash.execute("test-call-timeout-explicit", { command: "true", timeout: 1800 });
+			expect(seen).toEqual([600, 1800]);
+		});
+
 		it("should include full output path for truncated timeout and abort errors", async () => {
 			for (const testCase of [
 				{ error: "timeout:5", expected: "Command timed out after 5 seconds" },

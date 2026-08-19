@@ -19,6 +19,7 @@ type CallbackServerInfo = {
 
 type NodeApis = {
 	createServer: typeof import("node:http").createServer;
+	randomBytes: typeof import("node:crypto").randomBytes;
 };
 
 let nodeApis: NodeApis | null = null;
@@ -28,7 +29,15 @@ const decode = (s: string) => atob(s);
 const CLIENT_ID = decode("OWQxYzI1MGEtZTYxYi00NGQ5LTg4ZWQtNTk0NGQxOTYyZjVl");
 const AUTHORIZE_URL = "https://claude.ai/oauth/authorize";
 const TOKEN_URL = "https://platform.claude.com/v1/oauth/token";
-const CALLBACK_HOST = process.env.PI_OAUTH_CALLBACK_HOST || "127.0.0.1";
+// The callback server receives the authorization code, so it must only ever
+// bind a loopback interface — on a shared interface any host on the network
+// could capture the code. Non-loopback values are ignored.
+function resolveCallbackHost(): string {
+	const requested = (process.env.PI_OAUTH_CALLBACK_HOST || "").trim();
+	const isLoopback = requested === "localhost" || requested === "::1" || /^127(\.\d{1,3}){3}$/.test(requested);
+	return isLoopback ? requested : "127.0.0.1";
+}
+const CALLBACK_HOST = resolveCallbackHost();
 const CALLBACK_PORT = 53692;
 const CALLBACK_PATH = "/callback";
 const REDIRECT_URI = `http://localhost:${CALLBACK_PORT}${CALLBACK_PATH}`;
@@ -40,8 +49,9 @@ async function getNodeApis(): Promise<NodeApis> {
 		if (typeof process === "undefined" || (!process.versions?.node && !process.versions?.bun)) {
 			throw new Error("Anthropic OAuth is only available in Node.js environments");
 		}
-		nodeApisPromise = import("node:http").then((httpModule) => ({
+		nodeApisPromise = Promise.all([import("node:http"), import("node:crypto")]).then(([httpModule, cryptoModule]) => ({
 			createServer: httpModule.createServer,
+			randomBytes: cryptoModule.randomBytes,
 		}));
 	}
 	nodeApis = await nodeApisPromise;
@@ -234,10 +244,13 @@ export async function loginAnthropic(options: {
 	onManualCodeInput?: () => Promise<string>;
 }): Promise<OAuthCredentials> {
 	const { verifier, challenge } = await generatePKCE();
-	const server = await startCallbackServer(verifier);
+	// The state parameter rides in browser URLs and history, so it must be an
+	// independent random value — never the PKCE verifier, which is a secret.
+	const { randomBytes } = await getNodeApis();
+	const expectedState = randomBytes(16).toString("hex");
+	const server = await startCallbackServer(expectedState);
 
 	let code: string | undefined;
-	let state: string | undefined;
 	let redirectUriForExchange = REDIRECT_URI;
 
 	try {
@@ -249,7 +262,7 @@ export async function loginAnthropic(options: {
 			scope: SCOPES,
 			code_challenge: challenge,
 			code_challenge_method: "S256",
-			state: verifier,
+			state: expectedState,
 		});
 
 		options.onAuth({
@@ -280,15 +293,13 @@ export async function loginAnthropic(options: {
 
 			if (result?.code) {
 				code = result.code;
-				state = result.state;
 				redirectUriForExchange = REDIRECT_URI;
 			} else if (manualInput) {
 				const parsed = parseAuthorizationInput(manualInput);
-				if (parsed.state && parsed.state !== verifier) {
+				if (parsed.state && parsed.state !== expectedState) {
 					throw new Error("OAuth state mismatch");
 				}
 				code = parsed.code;
-				state = parsed.state ?? verifier;
 			}
 
 			if (!code) {
@@ -298,18 +309,16 @@ export async function loginAnthropic(options: {
 				}
 				if (manualInput) {
 					const parsed = parseAuthorizationInput(manualInput);
-					if (parsed.state && parsed.state !== verifier) {
+					if (parsed.state && parsed.state !== expectedState) {
 						throw new Error("OAuth state mismatch");
 					}
 					code = parsed.code;
-					state = parsed.state ?? verifier;
 				}
 			}
 		} else {
 			const result = await server.waitForCode();
 			if (result?.code) {
 				code = result.code;
-				state = result.state;
 				redirectUriForExchange = REDIRECT_URI;
 			}
 		}
@@ -320,23 +329,18 @@ export async function loginAnthropic(options: {
 				placeholder: REDIRECT_URI,
 			});
 			const parsed = parseAuthorizationInput(input);
-			if (parsed.state && parsed.state !== verifier) {
+			if (parsed.state && parsed.state !== expectedState) {
 				throw new Error("OAuth state mismatch");
 			}
 			code = parsed.code;
-			state = parsed.state ?? verifier;
 		}
 
 		if (!code) {
 			throw new Error("Missing authorization code");
 		}
 
-		if (!state) {
-			throw new Error("Missing OAuth state");
-		}
-
 		options.onProgress?.("Exchanging authorization code for tokens...");
-		return exchangeAuthorizationCode(code, state, verifier, redirectUriForExchange);
+		return exchangeAuthorizationCode(code, expectedState, verifier, redirectUriForExchange);
 	} finally {
 		server.server.close();
 	}

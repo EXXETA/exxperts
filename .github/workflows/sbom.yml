@@ -1,0 +1,78 @@
+name: SBOM
+
+# Two supply-chain nets, complementing Dependabot's advisory matching:
+# - CycloneDX SBOMs for the app and the runtime, attached to every release
+#   (and kept as run artifacts on scheduled/manual runs), so any scanner or
+#   audit can consume the full dependency inventory without cloning the repo.
+# - A weekly OSV scan over both lockfiles, which draws on a broader database
+#   than Dependabot (including malicious-package reports) and fails loudly.
+on:
+  release:
+    types: [published]
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sbom:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      # Needed to attach the SBOMs to the release on release-published runs.
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Three dependency trees ship to users: the app (root), the runtime,
+      # and the desktop wrapper (not a workspace, but Electron itself is in
+      # every installer, so its tree belongs in the inventory too). Electron
+      # is a devDependency by npm convention, so the desktop SBOM keeps dev
+      # packages in.
+      - name: Install desktop dependencies
+        working-directory: apps/desktop
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+        run: npm ci
+
+      - name: Generate SBOMs (CycloneDX)
+        run: |
+          npx --yes @cyclonedx/cyclonedx-npm@4 --omit dev --output-format JSON --output-file sbom-app.cdx.json
+          cd runtime && npx --yes @cyclonedx/cyclonedx-npm@4 --omit dev --output-format JSON --output-file ../sbom-runtime.cdx.json
+          cd ../apps/desktop && npx --yes @cyclonedx/cyclonedx-npm@4 --output-format JSON --output-file ../../sbom-desktop.cdx.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: |
+            sbom-app.cdx.json
+            sbom-runtime.cdx.json
+            sbom-desktop.cdx.json
+
+      - name: Attach SBOMs to the release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ github.event.release.tag_name }}" sbom-app.cdx.json sbom-runtime.cdx.json sbom-desktop.cdx.json --clobber
+
+  osv-scan:
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@v2.5.1
+    with:
+      scan-args: |-
+        --lockfile=./package-lock.json
+        --lockfile=./runtime/package-lock.json
+        --lockfile=./apps/desktop/package-lock.json

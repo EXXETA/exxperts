@@ -33,6 +33,12 @@ const REFUSED_URLS = [
 	"http://172.16.0.1/",
 	"https://[::1]/",
 	"http://[fd00::1]/",
+	"http://[::ffff:169.254.169.254]/", // IPv4-mapped metadata endpoint, dotted spelling
+	"http://[::ffff:a9fe:a9fe]/", // same address in the hex spelling URL normalisation produces
+	"http://[::ffff:7f00:1]/", // IPv4-mapped loopback, hex spelling
+	"http://[::169.254.169.254]/", // IPv4-compatible spelling
+	"http://[0:0:0:0:0:0:0:1]/", // uncompressed loopback spelling
+	"http://[fe80::1]/", // link-local
 	"ftp://example.com/file",
 	"file:///etc/passwd",
 	"http://foo.internal/",

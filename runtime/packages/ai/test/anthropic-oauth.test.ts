@@ -73,6 +73,55 @@ describe.sequential("Anthropic OAuth", () => {
 		expect(fetchMock).toHaveBeenCalledOnce();
 	});
 
+	it("uses an independent random state instead of the PKCE verifier", async () => {
+		let authUrl = "";
+		const fetchMock = vi.fn(async (_input: unknown, init?: RequestInit): Promise<Response> => {
+			const body = getJsonBody(init);
+			const url = new URL(authUrl);
+			expect(body.state).toBe(url.searchParams.get("state"));
+			return jsonResponse({
+				access_token: "access-token",
+				refresh_token: "refresh-token",
+				expires_in: 3600,
+			});
+		});
+		vi.stubGlobal("fetch", fetchMock);
+
+		const credentials = await loginAnthropic({
+			onAuth: (info) => {
+				authUrl = info.url;
+			},
+			onPrompt: async () => "",
+			onManualCodeInput: async () => {
+				const url = new URL(authUrl);
+				const state = url.searchParams.get("state");
+				const challenge = url.searchParams.get("code_challenge");
+				// The state rides in browser URLs and history: it must be a short
+				// random hex value, not the PKCE verifier or anything derived from it.
+				expect(state).toMatch(/^[0-9a-f]{32}$/);
+				expect(state).not.toBe(challenge);
+				return `http://localhost:53692/callback?code=manual-code&state=${state}`;
+			},
+		});
+
+		expect(credentials.access).toBe("access-token");
+		expect(fetchMock).toHaveBeenCalledOnce();
+	});
+
+	it("rejects a pasted redirect whose state does not match", async () => {
+		const fetchMock = vi.fn();
+		vi.stubGlobal("fetch", fetchMock);
+
+		await expect(
+			loginAnthropic({
+				onAuth: () => {},
+				onPrompt: async () => "",
+				onManualCodeInput: async () => "http://localhost:53692/callback?code=stolen-code&state=wrong-state",
+			}),
+		).rejects.toThrow(/state mismatch/i);
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
 	it("omits scope from refresh token requests", async () => {
 		const fetchMock = vi.fn(async (input: unknown, init?: RequestInit): Promise<Response> => {
 			expect(getUrl(input)).toBe("https://platform.claude.com/v1/oauth/token");

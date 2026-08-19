@@ -1,12 +1,15 @@
 // The one-time What's new window after an update, at module level: the
 // changelog section parser and the show/record decision. What has to hold:
-// a fresh install records the current version silently and shows nothing; an
-// update from an acknowledged older version shows exactly the new version's
-// changelog bullets; dismissing records and the window never returns for
-// that version; a version the changelog says nothing about records silently,
-// because an empty window helps nobody. And the ambiguous case: no record
-// but prior app state on disk is an update into the first version carrying
-// this feature, so it must show, not record until seen.
+// a fresh install records the current version silently and shows nothing;
+// the window speaks in minors — what it shows is the changelog section of
+// the running version's x.y.0 base, so a pure patch update inside a seen
+// minor records silently and an update crossing a minor boundary shows the
+// x.y.0 bullets under the running version; dismissing records and the
+// window never returns for that version; a version the changelog says
+// nothing about (its base's section missing and its own too) records
+// silently, because an empty window helps nobody. And the ambiguous case:
+// no record but prior app state on disk is an update into the first version
+// carrying this feature, so it must show, not record until seen.
 //
 // Run: node scripts/run-smokes.mjs whats-new
 
@@ -24,6 +27,7 @@ const {
 	acknowledgeWhatsNew,
 	compareVersions,
 	hasPriorInstallationState,
+	minorBase,
 	parseChangelogEntries,
 	readAcknowledgedVersion,
 	recordAcknowledgedVersion,
@@ -81,6 +85,9 @@ try {
 	assert(compareVersions("0.9.3", "0.10.0") < 0, "0.9.3 must compare below 0.10.0");
 	assert(compareVersions("0.10.0", "0.10.0") === 0, "equal versions must compare equal");
 	assert(compareVersions("1.0.0", "0.10.0") > 0, "1.0.0 must compare above 0.10.0");
+	assert(minorBase("0.10.1") === "0.10.0", "a patch must base at its minor's x.y.0");
+	assert(minorBase("0.10.0") === "0.10.0", "an x.y.0 must be its own base");
+	assert(minorBase("1.2.3") === "1.2.0", "the base must keep major and minor");
 
 	// --- Show/record state logic against a synthetic package root ---
 	const packageRoot = path.join(tempHome, "package-root");
@@ -108,14 +115,17 @@ try {
 	const again = resolveWhatsNew(packageRoot);
 	assert(again.show === false, "an acknowledged version must stay quiet");
 
-	// An update: the record is older, the changelog has a section, so the
-	// window shows with exactly that section's entries.
-	recordAcknowledgedVersion("0.9.0");
+	// An update crossing a minor boundary: the record is older than the
+	// running version's x.y.0 base, so the window shows — with the base
+	// section's bullets, because the window speaks in minors — under the
+	// running version.
+	recordAcknowledgedVersion("0.8.2");
 	const updated = resolveWhatsNew(packageRoot);
-	assert(updated.show === true, "an update past the acknowledged version must show");
+	assert(updated.show === true, "an update past the acknowledged minor must show");
 	assert(updated.version === "0.9.3", "the shown version must be the running one");
-	assert(updated.entries !== null && updated.entries.length === 2, "the shown entries must be the running version's section");
-	assert(readAcknowledgedVersion() === "0.9.0", "showing must not record; only dismissing does");
+	assert(updated.entries !== null && updated.entries.length === 2, "the shown entries must be the minor base's section");
+	assert(updated.entries[0] === "Rooms: the last section in the file.", "the entries must come from the 0.9.0 section");
+	assert(readAcknowledgedVersion() === "0.8.2", "showing must not record; only dismissing does");
 
 	// Asking again before dismissal: still shows. One-time means until seen,
 	// not until fetched.
@@ -129,12 +139,13 @@ try {
 	assert(readAcknowledgedVersion() === "0.9.3", "seen must be idempotent");
 	assert(resolveWhatsNew(packageRoot).show === false, "a seen version must never show again");
 
-	// An update whose changelog says nothing: recorded silently, never an
-	// empty window, and the next update counts from here.
+	// A pure patch update inside the seen minor: CHANGELOG.md still
+	// documents it, only the window stays quiet, and the record advances so
+	// the next update counts from here.
 	fs.writeFileSync(path.join(packageRoot, "package.json"), `${JSON.stringify({ name: "x", version: "0.9.4" })}\n`);
 	const silent = resolveWhatsNew(packageRoot);
-	assert(silent.show === false, "a version without a changelog section must not show");
-	assert(readAcknowledgedVersion() === "0.9.4", "a sectionless version must be recorded so the next update counts from it");
+	assert(silent.show === false, "a patch inside an acknowledged minor must not show");
+	assert(readAcknowledgedVersion() === "0.9.4", "a quiet patch must be recorded so the next update counts from it");
 
 	// A downgrade: the record is newer than the running version; quiet, and
 	// the newer record stands.
@@ -155,12 +166,81 @@ try {
 	const debut = resolveWhatsNew(packageRoot);
 	assert(debut.show === true, "an existing installation with no record must be shown the window");
 	assert(debut.version === "0.9.3", "the debut must show the running version");
-	assert(debut.entries !== null && debut.entries.length === 2, "the debut must carry the running version's entries");
+	assert(debut.entries !== null && debut.entries.length === 2, "the debut must carry the minor base's entries");
+	assert(debut.entries[0] === "Rooms: the last section in the file.", "the debut's entries must come from the 0.9.0 section");
 	assert(readAcknowledgedVersion() === null, "the debut must not record until seen");
 	assert(resolveWhatsNew(packageRoot).show === true, "the unseen debut must survive a reload");
 	acknowledgeWhatsNew(packageRoot);
 	assert(readAcknowledgedVersion() === "0.9.3", "dismissing the debut must record the current version");
 	assert(resolveWhatsNew(packageRoot).show === false, "a seen debut must never return");
+
+	// --- The window speaks in minors, on a changelog with a patch on top ---
+	const minorChangelog = [
+		"# Changelog",
+		"",
+		"## 0.10.1 (2026-08-20)",
+		"",
+		"- Fixed: a patch-sized correction.",
+		"",
+		"## 0.10.0 (2026-08-19)",
+		"",
+		"- Rooms: the minor's headline feature.",
+		"- Fixed: the minor's second bullet.",
+		"",
+		"## 0.9.2 (2026-08-14)",
+		"",
+		"- Fixed: an old bullet.",
+		"",
+	].join("\n");
+	fs.writeFileSync(path.join(packageRoot, "CHANGELOG.md"), minorChangelog);
+
+	// Running an x.y.0 exactly: nothing about the minor rule changes what an
+	// older acknowledged version sees — its own section, shown.
+	fs.writeFileSync(path.join(packageRoot, "package.json"), `${JSON.stringify({ name: "x", version: "0.10.0" })}\n`);
+	recordAcknowledgedVersion("0.9.2");
+	const atBase = resolveWhatsNew(packageRoot);
+	assert(atBase.show === true, "an update to an x.y.0 must show");
+	assert(atBase.version === "0.10.0", "the x.y.0 must be shown as itself");
+	assert(atBase.entries !== null && atBase.entries.length === 2 && atBase.entries[0] === "Rooms: the minor's headline feature.", "the x.y.0 must show its own section");
+	assert(readAcknowledgedVersion() === "0.9.2", "showing an x.y.0 must not record");
+
+	// A pure patch update: the minor was acknowledged, so the window stays
+	// quiet even though the changelog has a 0.10.1 section, and the record
+	// advances to the running version.
+	fs.writeFileSync(path.join(packageRoot, "package.json"), `${JSON.stringify({ name: "x", version: "0.10.1" })}\n`);
+	recordAcknowledgedVersion("0.10.0");
+	const patch = resolveWhatsNew(packageRoot);
+	assert(patch.show === false, "a patch on an acknowledged minor must not show");
+	assert(patch.entries === null, "a quiet patch must carry no entries");
+	assert(readAcknowledgedVersion() === "0.10.1", "a quiet patch must advance the record to the running version");
+
+	// An update crossing the minor boundary while a patch runs: the 0.10.0
+	// section's bullets, under the running 0.10.1.
+	recordAcknowledgedVersion("0.9.2");
+	const crossed = resolveWhatsNew(packageRoot);
+	assert(crossed.show === true, "crossing a minor boundary must show");
+	assert(crossed.version === "0.10.1", "the payload version must stay the running one");
+	assert(crossed.entries !== null && crossed.entries.length === 2, "the crossing update must carry the x.y.0 section");
+	assert(crossed.entries[0] === "Rooms: the minor's headline feature.", "the bullets must be the 0.10.0 section's, not the patch's");
+	assert(readAcknowledgedVersion() === "0.9.2", "crossing must not record until seen");
+	acknowledgeWhatsNew(packageRoot);
+	assert(readAcknowledgedVersion() === "0.10.1", "dismissing must record the running version");
+	assert(resolveWhatsNew(packageRoot).show === false, "a dismissed crossing update must never return");
+
+	// Fallback honesty: no 0.10.0 section, but the running 0.10.1 has one of
+	// its own — that beats saying nothing.
+	fs.writeFileSync(path.join(packageRoot, "CHANGELOG.md"), ["# Changelog", "", "## 0.10.1 (2026-08-20)", "", "- Fixed: a patch-sized correction.", ""].join("\n"));
+	recordAcknowledgedVersion("0.9.2");
+	const fallback = resolveWhatsNew(packageRoot);
+	assert(fallback.show === true, "a missing x.y.0 section must fall back to the running version's own");
+	assert(fallback.entries !== null && fallback.entries.length === 1 && fallback.entries[0] === "Fixed: a patch-sized correction.", "the fallback must carry the running version's entries");
+	assert(readAcknowledgedVersion() === "0.9.2", "the fallback must not record until seen");
+
+	// Neither section exists: recorded silently, never an empty window.
+	fs.writeFileSync(path.join(packageRoot, "CHANGELOG.md"), ["# Changelog", "", "## 0.9.2 (2026-08-14)", "", "- Fixed: an old bullet.", ""].join("\n"));
+	const sectionless = resolveWhatsNew(packageRoot);
+	assert(sectionless.show === false, "a version without any section to show must not show");
+	assert(readAcknowledgedVersion() === "0.10.1", "a sectionless version must be recorded so the next update counts from it");
 
 	console.log("whats-new smoke: all assertions passed");
 } finally {

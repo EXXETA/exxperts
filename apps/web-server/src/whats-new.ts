@@ -9,10 +9,14 @@ import { productAppStatePath } from "../../../pi-package/product-state-paths.js"
  * The app already knows what changed, because the changelog ships inside the
  * package next to package.json; what was missing was the moment where the
  * person who just updated gets told. This module owns that moment's facts:
- * which version is running, what its changelog section says, and which
- * version was last acknowledged. The rule that makes it one-time and
- * fresh-install-silent lives in resolveWhatsNew. A missing record alone does
- * not mean a fresh install: everyone updating into the first version that
+ * which version is running, what the changelog says about it, and which
+ * version was last acknowledged. The window speaks in minors: what it shows
+ * is always the changelog section of the running version's x.y.0 base, so a
+ * pure patch update passes quietly (the changelog still documents every
+ * patch) and an update that crosses a minor boundary tells the minor's
+ * whole story even when a patch of it is what ended up running. The rule
+ * that makes it one-time and fresh-install-silent lives in resolveWhatsNew.
+ * A missing record alone does not mean a fresh install: everyone updating into the first version that
  * carries this feature has no record either, so the module looks for state
  * that only using the app leaves behind to tell the two apart. A truly fresh
  * machine records quietly; an existing one gets its window, and only a
@@ -132,6 +136,20 @@ export function compareVersions(a: string, b: string): number {
 	return 0;
 }
 
+/**
+ * The x.y.0 base of a version, the section the window speaks in. Parsed the
+ * same forgiving way compareVersions parses: a part that is not a number
+ * reads as 0, which for a malformed version errs toward an existing early
+ * section rather than none at all.
+ */
+export function minorBase(version: string): string {
+	const parts = version.split(".").map((part) => {
+		const n = Number.parseInt(part, 10);
+		return Number.isFinite(n) ? n : 0;
+	});
+	return `${parts[0] ?? 0}.${parts[1] ?? 0}.0`;
+}
+
 export function readAcknowledgedVersion(): string | null {
 	try {
 		const raw = fs.readFileSync(whatsNewStatePath(), "utf8");
@@ -156,13 +174,19 @@ export function recordAcknowledgedVersion(version: string): void {
 export type WhatsNewPayload = { version: string; entries: string[] | null; show: boolean };
 
 /**
- * What the window should do right now. Reading this can write: a genuinely
- * fresh install records the current version on the spot, and so does an
- * update whose changelog has nothing to say, because an empty window helps
- * nobody and the next update should count from here. A machine with no
- * record but with prior installation state is an update into the first
- * version that carries this feature: it gets the window and records only on
- * dismissal, like any other update.
+ * What the window should do right now. The content, when there is any, is
+ * the changelog section of the running version's minor base: an update that
+ * stays inside an already-acknowledged minor records the current version
+ * quietly and shows nothing, while an update crossing a minor boundary
+ * shows the x.y.0 section's bullets under the running version. Should the
+ * changelog lack the x.y.0 section, the running version's own section is
+ * the fallback before giving up. Reading this can write: a genuinely fresh
+ * install records the current version on the spot, and so does an update
+ * whose changelog has nothing to say for either version, because an empty
+ * window helps nobody and the next update should count from here. A machine
+ * with no record but with prior installation state is an update into the
+ * first version that carries this feature: it gets the window and records
+ * only on dismissal, like any other update.
  */
 export function resolveWhatsNew(packageRoot: string = PACKAGE_ROOT): WhatsNewPayload {
 	const version = readAppVersion(packageRoot);
@@ -175,8 +199,21 @@ export function resolveWhatsNew(packageRoot: string = PACKAGE_ROOT): WhatsNewPay
 	if (acknowledged !== null && compareVersions(acknowledged, version) >= 0) {
 		return { version, entries: null, show: false };
 	}
+	const base = minorBase(version);
+	if (acknowledged !== null && compareVersions(acknowledged, base) >= 0) {
+		// A pure patch update: some x.y.* was already acknowledged, so the
+		// minor's story has been seen. Record quietly so the next update
+		// counts from here; the changelog still documents the patch.
+		recordAcknowledgedVersion(version);
+		return { version, entries: null, show: false };
+	}
 	const changelog = readChangelog(packageRoot);
-	const entries = changelog === null ? null : parseChangelogEntries(changelog, version);
+	let entries = changelog === null ? null : parseChangelogEntries(changelog, base);
+	if ((!entries || entries.length === 0) && changelog !== null && base !== version) {
+		// The changelog should always carry the x.y.0 section; if it somehow
+		// does not, the running version's own section beats saying nothing.
+		entries = parseChangelogEntries(changelog, version);
+	}
 	if (!entries || entries.length === 0) {
 		recordAcknowledgedVersion(version);
 		return { version, entries: null, show: false };

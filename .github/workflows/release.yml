@@ -54,8 +54,25 @@ jobs:
               ;;
           esac
 
+  # No release ships with a known vulnerability: the same OSV scan that runs
+  # weekly also gates the tag. fail-on-vuln stops the pipeline before any
+  # asset is built or published; SARIF upload stays off here (the scheduled
+  # scan owns the Security tab).
+  dependency-scan:
+    permissions:
+      actions: read
+      contents: read
+    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@v2.5.1
+    with:
+      upload-sarif: false
+      fail-on-vuln: true
+      scan-args: |-
+        --lockfile=./package-lock.json
+        --lockfile=./runtime/package-lock.json
+        --lockfile=./apps/desktop/package-lock.json
+
   build:
-    needs: [node-currency, tag-version-guard]
+    needs: [node-currency, tag-version-guard, dependency-scan]
     strategy:
       fail-fast: false
       matrix:

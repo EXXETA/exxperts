@@ -63,11 +63,23 @@ function runSmoke(name) {
 	});
 }
 
+// Endpoint-security tooling on a workstation can deny a file open at random
+// (EPERM on our own node_modules), killing a smoke that has nothing wrong
+// with it. That exact signature gets one retry; a genuine failure repeats
+// and still fails, and the retry is said out loud rather than hidden.
+function isInterferenceFailure(result) {
+	return result.code !== 0 && result.output.includes("EPERM: operation not permitted, open") && result.output.includes("node_modules");
+}
+
 const results = [];
 console.log(`Running ${smokes.length} smoke${smokes.length === 1 ? "" : "s"}…\n`);
 for (const name of smokes) {
 	process.stdout.write(`  ${name} … `);
-	const result = await runSmoke(name);
+	let result = await runSmoke(name);
+	if (isInterferenceFailure(result)) {
+		process.stdout.write(`retrying after a file-permission denial outside the smoke … `);
+		result = await runSmoke(name);
+	}
 	results.push(result);
 	console.log(result.code === 0 ? `ok (${result.seconds.toFixed(1)}s)` : `FAIL (${result.seconds.toFixed(1)}s)`);
 }

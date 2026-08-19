@@ -1,15 +1,24 @@
 import chalk from "chalk";
 import { spawnSync } from "child_process";
-import extractZip from "extract-zip";
-import { chmodSync, createWriteStream, existsSync, mkdirSync, readdirSync, renameSync, rmSync } from "fs";
+import { createHash } from "crypto";
+import {
+	chmodSync,
+	createReadStream,
+	createWriteStream,
+	existsSync,
+	mkdirSync,
+	readdirSync,
+	renameSync,
+	rmSync,
+} from "fs";
 import { arch, platform } from "os";
 import { join } from "path";
 import { Readable } from "stream";
 import { pipeline } from "stream/promises";
-import { APP_NAME, getBinDir } from "../config.js";
+import { getBinDir } from "../config.js";
+import { extractZipSafe } from "./zip-extract.js";
 
 const TOOLS_DIR = getBinDir();
-const NETWORK_TIMEOUT_MS = 10_000;
 const DOWNLOAD_TIMEOUT_MS = 120_000;
 
 function isOfflineModeEnabled(): boolean {
@@ -24,6 +33,8 @@ interface ToolConfig {
 	binaryName: string; // Name of the binary inside the archive
 	systemBinaryNames?: string[]; // Alternative system command names to try before downloading
 	tagPrefix: string; // Prefix for tags (e.g., "v" for v1.0.0, "" for 1.0.0)
+	version: string; // Pinned release version; downloads are checksum-verified against assetHashes
+	assetHashes: Record<string, string>; // SHA-256 per release asset, keyed by asset file name
 	getAssetName: (version: string, plat: string, architecture: string) => string | null;
 }
 
@@ -34,10 +45,21 @@ const TOOLS: Record<string, ToolConfig> = {
 		binaryName: "fd",
 		systemBinaryNames: ["fd", "fdfind"],
 		tagPrefix: "v",
+		version: "10.4.2",
+		assetHashes: {
+			"fd-v10.4.2-aarch64-apple-darwin.tar.gz": "623dc0afc81b92e4d4606b380d7bc91916ba7b97814263e554d50923a39e480a",
+			"fd-v10.4.2-aarch64-unknown-linux-gnu.tar.gz":
+				"6c51f7c5446b3338b1e401ff15dc194c590bb2fa64fd43ff3278300f073adec5",
+			"fd-v10.4.2-x86_64-unknown-linux-gnu.tar.gz":
+				"def59805cd14b5651b68990855f426ad087f3b96881296d963910431ba3143c8",
+			"fd-v10.4.2-aarch64-pc-windows-msvc.zip": "4f9110c2d5b33a7f760bfa5510f4c113d828109f7277d421b1053a9943c0fc92",
+			"fd-v10.4.2-x86_64-pc-windows-msvc.zip": "b2816e506390a89941c63c9187d58a3cc10e9a55f2ef0685f9ea0eccaf7c98c8",
+		},
 		getAssetName: (version, plat, architecture) => {
 			if (plat === "darwin") {
-				const archStr = architecture === "arm64" ? "aarch64" : "x86_64";
-				return `fd-v${version}-${archStr}-apple-darwin.tar.gz`;
+				// Upstream ships no Intel mac build for this release
+				if (architecture !== "arm64") return null;
+				return `fd-v${version}-aarch64-apple-darwin.tar.gz`;
 			} else if (plat === "linux") {
 				const archStr = architecture === "arm64" ? "aarch64" : "x86_64";
 				return `fd-v${version}-${archStr}-unknown-linux-gnu.tar.gz`;
@@ -53,6 +75,21 @@ const TOOLS: Record<string, ToolConfig> = {
 		repo: "BurntSushi/ripgrep",
 		binaryName: "rg",
 		tagPrefix: "",
+		version: "15.2.0",
+		assetHashes: {
+			"ripgrep-15.2.0-aarch64-apple-darwin.tar.gz":
+				"3750b2e93f37e0c692657da574d7019a101c0084da05a790c83fd335bad973e4",
+			"ripgrep-15.2.0-x86_64-apple-darwin.tar.gz":
+				"af7825fcc69a2afc7a7aea55fc9af90e26421d8f20fe59df32e233c0b8a231c1",
+			"ripgrep-15.2.0-aarch64-unknown-linux-gnu.tar.gz":
+				"a740b91c82eaf9914cfedd353572f2791cbe0162c84101ee0951058f4dcbc90d",
+			"ripgrep-15.2.0-x86_64-unknown-linux-musl.tar.gz":
+				"33e15bcf1624b25cdd2a55813a47a2f95dbe126268203e76aa6a585d1e7b149c",
+			"ripgrep-15.2.0-aarch64-pc-windows-msvc.zip":
+				"e4abca10c3a64ebea742667dd7009449d49403db5460dd6873e389fa2945360f",
+			"ripgrep-15.2.0-x86_64-pc-windows-msvc.zip":
+				"71b2fef860abe467217a538ff31de02f5258807c0129f771846f87bd029aafc5",
+		},
 		getAssetName: (version, plat, architecture) => {
 			if (plat === "darwin") {
 				const archStr = architecture === "arm64" ? "aarch64" : "x86_64";
@@ -104,19 +141,10 @@ export function getToolPath(tool: "fd" | "rg"): string | null {
 	return null;
 }
 
-// Fetch latest release version from GitHub
-async function getLatestVersion(repo: string): Promise<string> {
-	const response = await fetch(`https://api.github.com/repos/${repo}/releases/latest`, {
-		headers: { "User-Agent": `${APP_NAME}-coding-agent` },
-		signal: AbortSignal.timeout(NETWORK_TIMEOUT_MS),
-	});
-
-	if (!response.ok) {
-		throw new Error(`GitHub API error: ${response.status}`);
-	}
-
-	const data = (await response.json()) as { tag_name: string };
-	return data.tag_name.replace(/^v/, "");
+async function sha256OfFile(path: string): Promise<string> {
+	const hash = createHash("sha256");
+	await pipeline(createReadStream(path), hash);
+	return hash.digest("hex");
 }
 
 // Download a file from URL
@@ -167,13 +195,16 @@ async function downloadTool(tool: "fd" | "rg"): Promise<string> {
 	const plat = platform();
 	const architecture = arch();
 
-	// Get latest version
-	const version = await getLatestVersion(config.repo);
-
-	// Get asset name for this platform
+	// Get asset name for this platform, at the pinned version
+	const version = config.version;
 	const assetName = config.getAssetName(version, plat, architecture);
 	if (!assetName) {
 		throw new Error(`Unsupported platform: ${plat}/${architecture}`);
+	}
+
+	const expectedHash = config.assetHashes[assetName];
+	if (!expectedHash) {
+		throw new Error(`No pinned checksum for ${assetName} (${plat}/${architecture})`);
 	}
 
 	// Create tools directory
@@ -184,8 +215,15 @@ async function downloadTool(tool: "fd" | "rg"): Promise<string> {
 	const binaryExt = plat === "win32" ? ".exe" : "";
 	const binaryPath = join(TOOLS_DIR, config.binaryName + binaryExt);
 
-	// Download
+	// Download and verify against the pinned checksum before touching the archive
 	await downloadFile(downloadUrl, archivePath);
+	const actualHash = await sha256OfFile(archivePath);
+	if (actualHash !== expectedHash) {
+		rmSync(archivePath, { force: true });
+		throw new Error(
+			`Checksum mismatch for ${config.name} asset ${assetName}: expected ${expectedHash}, got ${actualHash}`,
+		);
+	}
 
 	// Extract into a unique temp directory. fd and rg downloads can run concurrently
 	// during startup, so sharing a fixed directory causes races.
@@ -203,7 +241,7 @@ async function downloadTool(tool: "fd" | "rg"): Promise<string> {
 				throw new Error(`Failed to extract ${assetName}: ${errMsg}`);
 			}
 		} else if (assetName.endsWith(".zip")) {
-			await extractZip(archivePath, { dir: extractDir });
+			await extractZipSafe(archivePath, extractDir);
 		} else {
 			throw new Error(`Unsupported archive format: ${assetName}`);
 		}

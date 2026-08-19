@@ -12867,6 +12867,13 @@ button.model-picker-group-head.kb-active {
 	padding: 6px 28px 30px;
 	gap: 16px;
 }
+/* The mac desktop app pads full-page landings 60px down to clear the
+   traffic lights; the modal pane floats well below them, so it keeps the
+   modal's own inset (the desktop rule is more specific than the pair
+   above and would win without this). */
+html.desktop-app-mac .settings-overlay .landing {
+	padding-top: 6px;
+}
 /* Quiet custom scrollbar; the standard scrollbar-width/scrollbar-color
    pair is deliberately absent above because setting either one makes
    engines ignore these pseudo-element rules, and only the pseudo-element
