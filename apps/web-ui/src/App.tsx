@@ -7259,13 +7259,14 @@ export function App() {
 				{
 					id: "connectors",
 					label: "Connectors",
+					title: "External tools your rooms can reach",
 					content: (
 						<div className="landing ai-setup-page connectors-page">
 							<ConnectorsPage />
 						</div>
 					),
 				},
-				{ id: "skills", label: "Skills", content: <SkillsPage /> },
+				{ id: "skills", label: "Skills", title: "Reusable instructions your rooms can follow", content: <SkillsPage /> },
 				...(remoteClient ? [] : [{
 					id: "remote" as const,
 					label: "Remote access",
