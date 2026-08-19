@@ -2,6 +2,30 @@
 
 User-visible changes per release. Historical private/internal development notes are not part of this public-facing changelog.
 
+## 0.10.1 (2026-08-19)
+
+- The app can now follow your system's light or dark mode. The theme toggle in the gear menu
+  became a three-way Appearance control: System, Light, Dark. On System, the app flips the moment
+  your device does; your earlier explicit choice, if you made one, carries over unchanged.
+- Controls across the app now explain themselves on hover. Buttons whose effect was not obvious,
+  from archived-room actions to per-room skill toggles, carry short hover texts that say what will
+  happen, including whether an action is scoped to one room or the whole app.
+- The settings window no longer opens with a large empty gap at the top in the desktop app on Mac.
+- Update notes now only appear for real releases. A patch like this one updates quietly, and if you
+  skip a release and update later, the app shows you the highlights you actually missed instead of
+  the patch notes.
+- The search tools the app downloads are now locked down. Their versions are pinned, every download
+  is checksum-verified before it is used, and the archive extraction refuses files that try to
+  escape their folder. A dependency with a known vulnerability and no available fix was removed
+  entirely; the app's dependency pages report zero known vulnerabilities.
+- Several small security holes are closed. Shell commands a room runs now stop after ten minutes
+  instead of hanging forever unless you allow longer; the web fetch tool now blocks every spelling
+  of an internal network address, not just the common one; and the Claude sign-in no longer places
+  a secret value in browser URLs and history.
+- Every release now publishes its complete dependency inventory, and a release with a known
+  vulnerability refuses to build. A weekly scan additionally watches the dependencies between
+  releases, using a broader database than the one built into the code platform.
+
 ## 0.10.0 (2026-08-19)
 
 - Remote access: use your exxperts from your phone, over your own private tunnel. A new Remote
