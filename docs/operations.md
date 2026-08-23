@@ -136,6 +136,8 @@ The helper writes generated SearXNG settings to `~/.exxperts/app/searxng/setting
 
 ## Data profiles
 
+Full user guide: [data-profiles.md](data-profiles.md). Operational summary:
+
 The standard profile is `~/.exxperts` — it never moves, has no name, and
 cannot be deleted. Additional profiles (demos, talks) are self-contained
 directories at `~/.exxperts-<name>`, each with its own `.exxperts` state tree
