@@ -259,7 +259,7 @@ export function StateProfileSection() {
 						<div className="rs-row">
 							<div className="rs-row-main">
 								<span className="rs-row-label">.exxperts</span>
-								<span className="rs-row-hint">Your standard profile. It never moves and cannot be deleted.</span>
+								<span className="rs-row-hint">Your standard profile. It cannot be deleted.</span>
 								{armed?.kind === "switch" && armed.name === null && (
 									<span className="rs-row-hint room-danger-armed" role="alert">Switch back to “.exxperts” and restart now?</span>
 								)}
