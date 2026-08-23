@@ -155,6 +155,8 @@ The helper writes generated SearXNG settings to `~/.exxperts/app/searxng/setting
 | `~/.exxperts/app/searxng/settings.yml` | Generated local SearXNG settings | yes |
 | `~/.exxperts/agent/mcp.json` | MCP server config (also `~/.config/mcp/mcp.json`, project `.mcp.json`) | yes |
 | `~/.exxperts/agent/` | Embedded runtime provider/auth/model/session state | yes |
+| `~/.exxperts/app/run/active-profile.json` | Pointer to the loaded data profile (Settings → Profiles; absent = the standard `~/.exxperts`) | no (transient) |
+| `~/.exxperts-<name>/` | Additional data profiles, each a self-contained `.exxperts` tree; the standard `~/.exxperts` never moves | yes |
 | `~/.exxeta/` | Legacy alpha/prototype product state only, if present | yes (legacy) |
 | `.exxperts-cache/*.log` | Dev process logs | no (gitignored) |
 | `.exxeta-cache/` | Legacy local cache only, if present | no (gitignored) |

@@ -183,6 +183,25 @@ function activeRoomLock(agentId: string): { surface: string; acquiredAt: number 
 	return lock && roomLock.isActive(lock) ? { surface: lock.surface, acquiredAt: lock.acquiredAt } : null;
 }
 
+// Data profiles. The standard profile IS ~/.exxperts and never moves; other
+// profiles live at ~/.exxperts-<name> and are activated via a pointer file
+// plus env indirection — same CJS module the launcher, desktop shell, and
+// dev harness use. When a profile is active, THIS process runs with an
+// overridden HOME, so profile management must address the REAL home, which
+// the supervisor passes in EXXPERTS_REAL_HOME.
+const stateProfiles = createRequire(import.meta.url)(path.join(REPO_ROOT, "bin", "lib", "state-profiles.cjs")) as {
+	SWITCH_EXIT_CODE: number;
+	validateNewProfileName: (name: string) => string | null;
+	readActiveProfile: (home: string) => string | null;
+	listProfiles: (home: string) => { name: string }[];
+	createProfile: (home: string, name: string) => void;
+	deleteProfile: (home: string, name: string) => void;
+	prepareSwitch: (home: string, target: string | null) => string;
+};
+function stateProfileRealHome(): string {
+	return process.env.EXXPERTS_REAL_HOME?.trim() || os.homedir();
+}
+
 function roomLockBusyStatus(lock: Pick<RoomLockRecord, "surface"> | null | undefined): string {
 	if (lock?.surface === "scheduler") return "working on a scheduled background task";
 	if (lock?.surface === "cli") return "open in the CLI";
@@ -4084,6 +4103,73 @@ app.put("/api/settings/web-search", async (req, reply) => {
 		return reply.code(500).send({ error: (e as Error).message });
 	}
 	return webSearchSettingsPayload();
+});
+// Data profiles: which state tree this computer runs. The standard profile
+// is always ~/.exxperts (never renamed, never deletable, has no name);
+// switching just updates the pointer and restarts the server — the
+// supervisor (exxperts web launcher, desktop shell, dev harness) reads the
+// pointer on every start and points the server's env at the profile.
+function stateProfilePayload() {
+	const home = stateProfileRealHome();
+	const active = stateProfiles.readActiveProfile(home);
+	return {
+		active,
+		profiles: stateProfiles.listProfiles(home).filter((p) => p.name !== active),
+	};
+}
+app.get("/api/settings/state-profile", async () => stateProfilePayload());
+app.post("/api/settings/state-profile/create", async (req, reply) => {
+	const name = String((req.body as { name?: unknown } | null)?.name ?? "");
+	const invalid = stateProfiles.validateNewProfileName(name);
+	if (invalid) return reply.code(400).send({ error: invalid });
+	try {
+		stateProfiles.createProfile(stateProfileRealHome(), name);
+	} catch (e) {
+		return reply.code(409).send({ error: (e as Error).message });
+	}
+	return stateProfilePayload();
+});
+app.post("/api/settings/state-profile/delete", async (req, reply) => {
+	const name = String((req.body as { name?: unknown } | null)?.name ?? "");
+	try {
+		stateProfiles.deleteProfile(stateProfileRealHome(), name);
+	} catch (e) {
+		return reply.code(409).send({ error: (e as Error).message });
+	}
+	return stateProfilePayload();
+});
+app.post("/api/settings/state-profile/switch", async (req, reply) => {
+	// The restart happens OUTSIDE this process. Without a supervisor that
+	// knows the protocol (exxperts web launcher, desktop shell, dev harness —
+	// they set this marker), exiting would just leave a dead app. Refuse
+	// while we can still say why.
+	if (!process.env.EXXPERTS_SWITCH_SUPERVISED) {
+		return reply.code(409).send({ error: "Switching needs the app to run under 'exxperts web', the desktop app, or the dev harness. This server process has no supervisor to perform the switch." });
+	}
+	const rawName = (req.body as { name?: unknown } | null)?.name ?? null;
+	const name = rawName === null ? null : String(rawName);
+	let nextToken: string;
+	try {
+		// Points the app at the target and returns its sign-in token (minted
+		// now if the profile never ran): the reply carries the new sign-in
+		// link so the open page follows the restart on its own. An env-pinned
+		// token never rotates.
+		const minted = stateProfiles.prepareSwitch(stateProfileRealHome(), name);
+		nextToken = process.env.EXXPERTS_AUTH_TOKEN?.trim() || minted;
+	} catch (e) {
+		return reply.code(409).send({ error: (e as Error).message });
+	}
+	// Reply first, exit after it flushes. app.close() waits for in-flight
+	// replies and runs the onClose hook (scheduler loops); the unref'd timer
+	// is the ceiling in case a keep-alive or WS socket refuses to drain. It
+	// is tight on purpose: the whole switch must finish inside the
+	// connection banner's 12s sustained-outage grace, so every donated
+	// second here is a second closer to a false alarm.
+	setTimeout(() => process.exit(stateProfiles.SWITCH_EXIT_CODE), 750).unref();
+	setImmediate(() => {
+		void app.close().finally(() => process.exit(stateProfiles.SWITCH_EXIT_CODE));
+	});
+	return { ok: true, restarting: true, target: name, signInPath: `/auth/session?token=${encodeURIComponent(nextToken)}` };
 });
 app.get("/api/persistent-agent-ai-profiles/gateways", async () => {
 	const read = readOpenAiCompatibleGateways();

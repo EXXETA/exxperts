@@ -12867,6 +12867,26 @@ button.model-picker-group-head.kb-active {
 	padding: 6px 28px 30px;
 	gap: 16px;
 }
+/* Profiles: rows wrap and the create input shrinks inside the pane. Without
+   this, the input's width:100% inside the flex actions (and a long armed
+   hint's max-content in the section grid) push the pane into the horizontal
+   scroll above, which no settings row should ever cause. */
+.state-profiles .rs-row {
+	flex-wrap: wrap;
+}
+.state-profiles .rs-row-main {
+	flex: 1 1 240px;
+}
+.state-profiles .rs-pane-actions {
+	flex-wrap: wrap;
+	justify-content: flex-end;
+	min-width: 0;
+}
+.state-profiles .launcher-path-input {
+	width: auto;
+	flex: 1 1 160px;
+	min-width: 0;
+}
 /* The mac desktop app pads full-page landings 60px down to clear the
    traffic lights; the modal pane floats well below them, so it keeps the
    modal's own inset (the desktop rule is more specific than the pair

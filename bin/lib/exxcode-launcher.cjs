@@ -3,6 +3,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { ensureProductAppUserDirs, productAppStatePath, ensureCliLauncherStateDir } = require("./product-state-paths.cjs");
+const stateProfiles = require("./state-profiles.cjs");
 const roomLock = require("./room-lock.cjs");
 const roomPicker = require("./room-picker.cjs");
 
@@ -394,6 +395,18 @@ async function main(argv = process.argv.slice(2), command = path.basename(proces
   if (argv.includes("--help") || argv.includes("-h")) {
     console.log(usage(command));
     return;
+  }
+
+  // Data profiles: the CLI follows the same active-profile pointer the web
+  // launcher and desktop shell use. Overriding this process's own HOME before
+  // any state path resolves (os.homedir() reads env per call) points every
+  // read — rooms, locks, picker — and every spawned runtime child at the
+  // profile's tree. The standard ~/.exxperts never moves.
+  const realHome = os.homedir();
+  const activeProfile = stateProfiles.readActiveProfile(realHome);
+  if (activeProfile !== null) {
+    Object.assign(process.env, stateProfiles.serverEnvForProfile(realHome, activeProfile));
+    console.error(`\n  Data profile "${activeProfile}" is loaded — this CLI runs against it. Switch profiles in Settings → Profiles.\n`);
   }
 
   ensureDirs();

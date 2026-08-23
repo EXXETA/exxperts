@@ -61,6 +61,19 @@ export function stateHome(): string {
   return os.homedir();
 }
 
+// Data-profile helpers shared with the CLI launcher (plain CJS in the server
+// payload). Lazy: an older payload without the module only matters when a
+// profile is actually in play.
+type StateProfilesModule = {
+  SWITCH_EXIT_CODE: number;
+  readActiveProfile: (home: string) => string | null;
+  serverEnvForProfile: (home: string, name: string | null) => Record<string, string>;
+  activeTokenPath: (home: string) => string;
+};
+export function stateProfilesModule(): StateProfilesModule {
+  return require(path.join(serverRoot(), "bin", "lib", "state-profiles.cjs")) as StateProfilesModule;
+}
+
 export function serverEnv(): NodeJS.ProcessEnv {
   const root = serverRoot();
   const env: NodeJS.ProcessEnv = {
@@ -68,6 +81,9 @@ export function serverEnv(): NodeJS.ProcessEnv {
     EXXETA_HOME: root,
     NODE_ENV: process.env.NODE_ENV || "production",
     PORT: String(PORT),
+    // The desktop shell performs profile switches (main.ts watchdog); the
+    // switch route refuses on servers that run without a supervisor.
+    EXXPERTS_SWITCH_SUPERVISED: "1",
   };
   const scratch = process.env.EXXPERTS_DESKTOP_SCRATCH_HOME;
   if (scratch && scratch.trim()) {
@@ -75,6 +91,16 @@ export function serverEnv(): NodeJS.ProcessEnv {
     env.HOME = home;
     env.USERPROFILE = home;
     env.EXXPERTS_CODING_AGENT_DIR = path.join(home, ".exxperts", "agent");
+  }
+  // Data profiles: the active-profile pointer decides which state tree the
+  // server runs against; ~/.exxperts itself never moves. Resolved on every
+  // start, so a restart after a switch lands on the new profile.
+  try {
+    const profiles = stateProfilesModule();
+    env.EXXPERTS_REAL_HOME = stateHome();
+    Object.assign(env, profiles.serverEnvForProfile(stateHome(), profiles.readActiveProfile(stateHome())));
+  } catch {
+    // Payload without the module: standard profile only.
   }
   return env;
 }
@@ -264,7 +290,13 @@ export class ServerHandle {
   async authToken(): Promise<string> {
     const envToken = process.env.EXXPERTS_AUTH_TOKEN?.trim();
     if (envToken) return envToken;
-    const tokenFile = path.join(stateHome(), ".exxperts", "app", "auth-token");
+    let tokenFile = path.join(stateHome(), ".exxperts", "app", "auth-token");
+    try {
+      // The token belongs to the ACTIVE profile's tree, standard or named.
+      tokenFile = stateProfilesModule().activeTokenPath(stateHome());
+    } catch {
+      // Payload without the module: standard profile only.
+    }
     for (let i = 0; i < 20; i++) {
       try {
         const token = fs.readFileSync(tokenFile, "utf8").trim();

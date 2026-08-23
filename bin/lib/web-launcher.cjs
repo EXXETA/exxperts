@@ -1,8 +1,10 @@
 const { spawn, spawnSync } = require("node:child_process");
 const fs = require("node:fs");
 const http = require("node:http");
+const os = require("node:os");
 const path = require("node:path");
 const { ensureProductAppUserDirs, productAppStatePath } = require("./product-state-paths.cjs");
+const stateProfiles = require("./state-profiles.cjs");
 
 function usage(command) {
   return `Usage: ${command} [--port <port>] [--no-open] [--help]\n\nStarts the local exxperts business/user web app, serves the built UI,\nand opens the browser unless --no-open is set.\n\nOptions:\n  --port <port>   Port for the local server (default: 8787 or PORT)\n  --no-open       Do not open a browser\n  --help          Show this help\n`;
@@ -97,8 +99,10 @@ function waitFor(url) {
 function readAuthToken() {
   const fromEnv = String(process.env.EXXPERTS_AUTH_TOKEN || "").trim();
   if (fromEnv) return fromEnv;
+  // The token belongs to the ACTIVE profile's tree (standard ~/.exxperts or
+  // ~/.exxperts-<name>/.exxperts), so it is resolved per read, per leg.
   try {
-    return fs.readFileSync(productAppStatePath("auth-token"), "utf8").trim() || null;
+    return fs.readFileSync(stateProfiles.activeTokenPath(os.homedir()), "utf8").trim() || null;
   } catch {
     return null;
   }
@@ -153,59 +157,94 @@ function main(argv = process.argv.slice(2), command = path.basename(process.argv
       console.error(portHeldMessage(command, opts.port, portState));
       process.exit(1);
     }
-
     const tsxCli = require.resolve("tsx/cli");
     const serverEntry = path.join(root, "apps", "web-server", "src", "index.ts");
-    const env = {
+    const baseEnv = {
       ...process.env,
       EXXETA_HOME: root,
       NODE_ENV: process.env.NODE_ENV || "production",
       PORT: String(opts.port),
+      // This launcher restarts the server on profile switches (loop below);
+      // the switch route refuses on servers that run without a supervisor.
+      EXXPERTS_SWITCH_SUPERVISED: "1",
+      // With a profile active the server runs under an overridden HOME;
+      // profile management still addresses the real one.
+      EXXPERTS_REAL_HOME: os.homedir(),
     };
+    const url = `http://localhost:${opts.port}`;
 
-    const server = spawn(process.execPath, [tsxCli, serverEntry], {
-      cwd: root,
-      stdio: "inherit",
-      env,
-    });
-
+    let server = null;
+    let stopping = false;
+    let firstLeg = true;
     function stop() {
-      if (!server.killed) server.kill("SIGTERM");
+      stopping = true;
+      if (server && !server.killed) server.kill("SIGTERM");
     }
     process.on("SIGINT", stop);
     process.on("SIGTERM", stop);
-    server.on("error", (err) => {
-      console.error(`Could not start the exxperts web server: ${err.message}`);
-      process.exit(1);
-    });
-    server.on("exit", (code, signal) => process.exit(code ?? (signal ? 1 : 0)));
 
-    const url = `http://localhost:${opts.port}`;
-    let ready = false;
-    for (let i = 0; i < 40 && !ready; i++) {
+    // Runs until the server exits for any reason other than a profile switch
+    // (the sentinel exit code). Each leg reads the active-profile pointer and
+    // points the server's env at that profile's tree; the standard profile
+    // runs with the plain environment. Nothing is ever renamed.
+    for (;;) {
+      if (stopping) process.exit(0);
+      const activeProfile = stateProfiles.readActiveProfile(os.homedir());
+      server = spawn(process.execPath, [tsxCli, serverEntry], {
+        cwd: root,
+        stdio: "inherit",
+        env: { ...baseEnv, ...stateProfiles.serverEnvForProfile(os.homedir(), activeProfile) },
+      });
+      const exited = new Promise((resolve) => {
+        server.on("error", (err) => {
+          console.error(`Could not start the exxperts web server: ${err.message}`);
+          process.exit(1);
+        });
+        server.on("exit", (code, signal) => resolve({ code, signal }));
+      });
+
+      let ready = false;
       // If the server child already died (e.g. port in use), it printed why —
       // don't claim the app is running just because something answers on the port.
-      if (server.exitCode !== null) return;
-      ready = await waitFor(`${url}/healthz`);
-      if (!ready) await new Promise((r) => setTimeout(r, 250));
-    }
-    if (!ready) {
-      // Say so and keep waiting instead of claiming success: the first start
-      // after an install or update pays a cold TypeScript startup that can
-      // outlast the poll window, especially on Windows.
-      console.error(`\nThe web server is not answering on ${url} yet. The first start after an install or update can be slow; still waiting. Press Ctrl+C to stop.`);
-      while (!ready) {
-        if (server.exitCode !== null) return;
+      for (let i = 0; i < 40 && !ready && server.exitCode === null; i++) {
         ready = await waitFor(`${url}/healthz`);
-        if (!ready) await new Promise((r) => setTimeout(r, 1000));
+        if (!ready) await new Promise((r) => setTimeout(r, 250));
       }
+      if (!ready && server.exitCode === null) {
+        // Say so and keep waiting instead of claiming success: the first start
+        // after an install or update pays a cold TypeScript startup that can
+        // outlast the poll window, especially on Windows.
+        console.error(`\nThe web server is not answering on ${url} yet. The first start after an install or update can be slow; still waiting. Press Ctrl+C to stop.`);
+        while (!ready && server.exitCode === null) {
+          ready = await waitFor(`${url}/healthz`);
+          if (!ready) await new Promise((r) => setTimeout(r, 1000));
+        }
+      }
+      if (server.exitCode === null) {
+        // The token is re-read per leg: it lives inside the profile, so a
+        // switch rotates it. The browser only opens on the first leg — after
+        // a switch the already-open page signs itself into the new profile,
+        // and a second tab would just be litter; the link is still printed
+        // for anyone who closed that page.
+        const token = readAuthToken();
+        const signInUrl = token ? `${url}/auth/session?token=${encodeURIComponent(token)}` : url;
+        console.error(`\nexxperts web running at ${url}\nPress Ctrl+C to stop.\n`);
+        if (opts.open && firstLeg) openBrowser(signInUrl);
+        else if (token) console.error(`Open this link once to sign the browser in:\n${signInUrl}\n`);
+      }
+      firstLeg = false;
+
+      const { code, signal } = await exited;
+      if (!stopping && code === stateProfiles.SWITCH_EXIT_CODE) {
+        // The server already updated the active-profile pointer; the next leg
+        // reads it and starts against the new profile. No port pre-flight:
+        // our own child just released the port.
+        const next = stateProfiles.readActiveProfile(os.homedir());
+        console.error(`\nSwitching to ${next === null ? "the standard profile (.exxperts)" : `profile "${next}"`}; restarting exxperts web…\n`);
+        continue;
+      }
+      process.exit(code ?? (signal ? 1 : 0));
     }
-    if (server.exitCode !== null) return;
-    const token = readAuthToken();
-    const signInUrl = token ? `${url}/auth/session?token=${encodeURIComponent(token)}` : url;
-    console.error(`\nexxperts web running at ${url}\nPress Ctrl+C to stop.\n`);
-    if (opts.open) openBrowser(signInUrl);
-    else if (token) console.error(`Open this link once to sign the browser in:\n${signInUrl}\n`);
   })().catch((err) => {
     console.error(`Could not start exxperts web: ${err && err.message ? err.message : err}`);
     process.exit(1);
