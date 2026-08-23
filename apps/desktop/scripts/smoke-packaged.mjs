@@ -19,7 +19,7 @@ if (!fs.existsSync(binary)) {
   console.error(`[smoke:packaged] no packaged app at ${binary}; run npm run package first.`);
   process.exit(1);
 }
-const scratch = path.join(os.homedir(), ".exxperts-desktop-scratch");
+const scratch = path.join(os.homedir(), ".exxperts.desktop-scratch");
 fs.mkdirSync(scratch, { recursive: true });
 const child = spawn(binary, process.argv.slice(2).includes("--hidden") ? ["--hidden"] : [], {
   stdio: "inherit",

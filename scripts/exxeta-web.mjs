@@ -211,6 +211,13 @@ process.on("SIGTERM", () => {
   cleanup();
   process.exit(143);
 });
+// The service trees run in their own process groups (killTree), so they no
+// longer die with this harness's group: a closed terminal (SIGHUP) must tear
+// them down explicitly or they linger on :8787/:5173.
+process.on("SIGHUP", () => {
+  cleanup();
+  process.exit(129);
+});
 
 await waitForUrl("http://localhost:8787/healthz");
 await waitForUrl("http://localhost:5173/");
@@ -235,14 +242,19 @@ const switchWatcher = setInterval(() => {
     if (switching) return;
     const active = stateProfiles.readActiveProfile(os.homedir());
     if (active === lastActive) return;
-    if (await waitForUrl("http://localhost:8787/healthz", 1, 0)) return;
+    // Latch BEFORE the first await: the healthz probe can outlast a whole
+    // tick, and an unlatched second tick would kill the fresh server tree.
     switching = true;
-    lastActive = active;
-    if (serverChild.pid && serverChild.exitCode === null) killTree(serverChild.pid);
-    for (const pid of listeningPids(8787)) forceKillPid(pid);
-    console.log(`\nswitching to ${active === null ? "the standard profile (.exxperts)" : `profile "${active}"`}; restarting the web server…`);
-    serverChild = startDevService(path.join("apps", "web-server"), serverLog, serverEnv());
-    switching = false;
+    try {
+      if (await waitForUrl("http://localhost:8787/healthz", 1, 0)) return;
+      lastActive = active;
+      if (serverChild.pid && serverChild.exitCode === null) killTree(serverChild.pid);
+      for (const pid of listeningPids(8787)) forceKillPid(pid);
+      console.log(`\nswitching to ${active === null ? "the standard profile (.exxperts)" : `profile "${active}"`}; restarting the web server…`);
+      serverChild = startDevService(path.join("apps", "web-server"), serverLog, serverEnv());
+    } finally {
+      switching = false;
+    }
   })();
 }, 500);
 

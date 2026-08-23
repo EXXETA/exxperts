@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { fetchJson } from "../api";
+import { apiFetch, fetchJson } from "../api";
 
 /**
  * Data profiles: which ~/.exxperts state tree this computer runs — rooms,
@@ -44,10 +44,21 @@ export function StateProfileSection() {
 		setLoading(true);
 		setLoadError(null);
 		try {
-			setPayload(await fetchJson<StateProfilePayload>("/api/settings/state-profile"));
+			// Status-checked by hand: an older server 404s here with a body
+			// whose error text ("Not Found") says nothing useful.
+			const res = await apiFetch("/api/settings/state-profile");
+			if (res.status === 404) {
+				setLoadError("This server does not offer profiles yet. Update it to switch profiles from here.");
+				return;
+			}
+			if (!res.ok) {
+				const body = (await res.json().catch(() => null)) as { error?: string } | null;
+				setLoadError(body?.error ?? `Request failed (${res.status})`);
+				return;
+			}
+			setPayload(await res.json() as StateProfilePayload);
 		} catch (e) {
-			const message = (e as Error).message;
-			setLoadError(/\(404\)/.test(message) ? "This server does not offer profiles yet. Update it to switch profiles from here." : message);
+			setLoadError((e as Error).message);
 		} finally {
 			setLoading(false);
 		}

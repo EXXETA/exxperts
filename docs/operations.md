@@ -134,6 +134,25 @@ The helper writes generated SearXNG settings to `~/.exxperts/app/searxng/setting
 | `.exxperts-cache/web-server.log` | Fastify pino logs, request/response, extension probes. |
 | `.exxperts-cache/web-ui.log` | Vite output. |
 
+## Data profiles
+
+The standard profile is `~/.exxperts` — it never moves, has no name, and
+cannot be deleted. Additional profiles (demos, talks) are self-contained
+directories at `~/.exxperts-<name>`, each with its own `.exxperts` state tree
+nested inside; every `~/.exxperts-<name>` directory counts as a profile,
+including hand-made ones and raw copies (`cp -r ~/.exxperts
+~/.exxperts-snapshot`), which are normalized into the nested layout on first
+load. Which profile is loaded is recorded in
+`~/.exxperts/app/run/active-profile.json`; the supervisor (the `exxperts web`
+launcher, the desktop shell, or the dev harness) reads it on every server
+start and, for a non-standard profile, starts the server with
+`HOME`/`USERPROFILE` pointed at the profile directory. Switching happens in
+Settings → Profiles: the server updates the pointer and exits with code 75,
+the supervisor restarts it, and the open page signs itself into the new
+session. The CLI reads the pointer at launch and announces which profile it
+runs against. A server started without one of these supervisors refuses to
+switch (the route answers 409) instead of exiting into nothing.
+
 ## Storage layout
 
 | Path | What | Persists across reinstalls? |

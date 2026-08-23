@@ -5,8 +5,17 @@
 // directly when no server is up, so "make it off" always works.
 const fs = require("node:fs");
 const http = require("node:http");
+const os = require("node:os");
+const path = require("node:path");
 const readline = require("node:readline");
-const { productAppStatePath } = require("./product-state-paths.cjs");
+const stateProfiles = require("./state-profiles.cjs");
+
+// Everything here must address the ACTIVE data profile's tree (standard
+// ~/.exxperts or ~/.exxperts-<name>/.exxperts) — the running server's token
+// and state live there.
+function activeAppPath(...segments) {
+  return path.join(path.dirname(stateProfiles.activeTokenPath(os.homedir())), ...segments);
+}
 
 const DEFAULT_PORT = Number(process.env.PORT || 8787);
 
@@ -30,7 +39,7 @@ function readAuthToken() {
   const fromEnv = String(process.env.EXXPERTS_AUTH_TOKEN || "").trim();
   if (fromEnv) return fromEnv;
   try {
-    return fs.readFileSync(productAppStatePath("auth-token"), "utf8").trim() || null;
+    return fs.readFileSync(activeAppPath("auth-token"), "utf8").trim() || null;
   } catch {
     return null;
   }
@@ -207,7 +216,7 @@ async function main(argv, invokedAs) {
   if (command === "disable" && !running) {
     // Offline disable: delete the state file so the next boot is plain OFF.
     try {
-      fs.unlinkSync(productAppStatePath("remote-mode.json"));
+      fs.unlinkSync(activeAppPath("remote-mode.json"));
       console.log("Remote mode is OFF on disk (the server did not answer on this port).");
       console.log("If the app is still running somewhere, restart it to be sure remote is fully off.");
     } catch (err) {

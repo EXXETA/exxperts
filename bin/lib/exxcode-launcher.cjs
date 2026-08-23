@@ -375,6 +375,20 @@ async function runCreateRoom(root, env) {
 async function main(argv = process.argv.slice(2), command = path.basename(process.argv[1] || "exxperts-cli")) {
   const root = path.resolve(__dirname, "..", "..");
 
+  // Data profiles: the CLI follows the same active-profile pointer the web
+  // launcher and desktop shell use. Overriding this process's own HOME before
+  // ANYTHING resolves a state path (os.homedir() reads env per call) points
+  // every read — rooms, locks, picker, provider setup — and every spawned
+  // runtime child at the profile's tree. This must precede the setup/package
+  // branch below, or `exxperts setup` would write provider auth into the
+  // standard ~/.exxperts while a profile is loaded.
+  const realHome = os.homedir();
+  const activeProfile = stateProfiles.readActiveProfile(realHome);
+  if (activeProfile !== null) {
+    Object.assign(process.env, stateProfiles.serverEnvForProfile(realHome, activeProfile));
+    console.error(`\n  Data profile "${activeProfile}" is loaded — this CLI runs against it. Switch profiles in Settings → Profiles.\n`);
+  }
+
   // Product setup and package-manager commands should not require an agent
   // file, banner, theme, or extension wrapper. Route them directly to the
   // runtime, before the --help check so `exxperts install --help` shows the
@@ -395,18 +409,6 @@ async function main(argv = process.argv.slice(2), command = path.basename(proces
   if (argv.includes("--help") || argv.includes("-h")) {
     console.log(usage(command));
     return;
-  }
-
-  // Data profiles: the CLI follows the same active-profile pointer the web
-  // launcher and desktop shell use. Overriding this process's own HOME before
-  // any state path resolves (os.homedir() reads env per call) points every
-  // read — rooms, locks, picker — and every spawned runtime child at the
-  // profile's tree. The standard ~/.exxperts never moves.
-  const realHome = os.homedir();
-  const activeProfile = stateProfiles.readActiveProfile(realHome);
-  if (activeProfile !== null) {
-    Object.assign(process.env, stateProfiles.serverEnvForProfile(realHome, activeProfile));
-    console.error(`\n  Data profile "${activeProfile}" is loaded — this CLI runs against it. Switch profiles in Settings → Profiles.\n`);
   }
 
   ensureDirs();

@@ -120,6 +120,16 @@ function listProfiles(home) {
 		.sort((a, b) => a.name.localeCompare(b.name));
 }
 
+// The filesystem aliases names (case-insensitive APFS, Windows trailing-dot
+// stripping), so an exact-compare guard plus existsSync would let "demo"
+// address ~/.exxperts-Demo — including for deletion while it is loaded.
+// Every destructive or activating call therefore resolves the requested
+// name to the exact directory-entry spelling first, or refuses.
+function resolveListedName(home, name) {
+	if (!isSwitchableName(name)) return null;
+	return listProfiles(home).some((p) => p.name === name) ? name : null;
+}
+
 // A profile dir can arrive in any shape: empty (created here or by hand), a
 // raw copied state tree (app/agent at its root), or with its nested .exxperts
 // already in place. Normalizing wraps whatever is there into the nested
@@ -127,9 +137,31 @@ function listProfiles(home) {
 function normalizeProfileDir(dir) {
 	const tree = path.join(dir, ".exxperts");
 	if (fs.existsSync(tree)) return;
-	const entries = fs.readdirSync(dir);
-	fs.mkdirSync(tree, { mode: 0o700 });
-	for (const entry of entries) fs.renameSync(path.join(dir, entry), path.join(tree, entry));
+	// Staged: entries move into a temp dir first and the finished tree is
+	// renamed into place last, so a failure mid-move (Windows AV holding a
+	// file, say) never leaves a half-tree that the existsSync guard above
+	// would then freeze forever. On failure the moved entries go back.
+	const staging = path.join(dir, `.exxperts.tmp-${process.pid}`);
+	fs.mkdirSync(staging, { mode: 0o700 });
+	const entries = fs.readdirSync(dir).filter((e) => e !== path.basename(staging));
+	const moved = [];
+	try {
+		for (const entry of entries) {
+			fs.renameSync(path.join(dir, entry), path.join(staging, entry));
+			moved.push(entry);
+		}
+		fs.renameSync(staging, tree);
+	} catch (err) {
+		for (const entry of moved) {
+			try {
+				fs.renameSync(path.join(staging, entry), path.join(dir, entry));
+			} catch {}
+		}
+		try {
+			fs.rmSync(staging, { recursive: true, force: true });
+		} catch {}
+		throw err;
+	}
 }
 
 // Empty on purpose: the first boot as the active profile lazily seeds the
@@ -144,12 +176,25 @@ function createProfile(home, name) {
 
 // Deleting is forever, so the guards live here and not only in the screen.
 // The standard profile has no name and can never be addressed by this call.
+// The dir is renamed aside instantly (gone from listings and unreachable by
+// the prefix) and the recursive delete runs afterwards off the caller's
+// thread — a copied 300MB tree must not stall the server's event loop.
 function deleteProfile(home, name) {
-	if (!isSwitchableName(name)) throw new Error("That is not a usable profile name.");
-	if (name === readActiveProfile(home)) throw new Error("The loaded profile cannot be deleted.");
-	const dir = profileDir(home, name);
-	if (!fs.existsSync(dir)) throw new Error(`There is no profile named "${name}".`);
-	fs.rmSync(dir, { recursive: true, force: true });
+	const listed = resolveListedName(home, name);
+	if (listed === null) throw new Error(`There is no profile named "${name}".`);
+	if (listed === readActiveProfile(home)) throw new Error("The loaded profile cannot be deleted.");
+	const dir = profileDir(home, listed);
+	const doomed = path.join(home, `.exxperts.deleting-${Date.now().toString(36)}-${process.pid}`);
+	fs.renameSync(dir, doomed);
+	void fs.promises.rm(doomed, { recursive: true, force: true }).catch(() => {});
+	// A crash between rename and rm leaves a .exxperts.deleting-* husk; the
+	// next delete sweeps them. (The dot after "exxperts" keeps them out of
+	// the profile prefix, so they can never be listed.)
+	for (const entry of fs.readdirSync(home)) {
+		if (entry.startsWith(".exxperts.deleting-") && path.join(home, entry) !== doomed) {
+			void fs.promises.rm(path.join(home, entry), { recursive: true, force: true }).catch(() => {});
+		}
+	}
 }
 
 // The sign-in token lives inside each profile's tree, so a switch rotates it
@@ -186,9 +231,10 @@ function prepareSwitch(home, target) {
 	if (target === null) {
 		if (active === null) throw new Error("The standard profile is already loaded.");
 	} else {
-		if (!isSwitchableName(target)) throw new Error("That is not a usable profile name.");
+		const listed = resolveListedName(home, target);
+		if (listed === null) throw new Error(`There is no profile named "${target}".`);
+		target = listed;
 		if (target === active) throw new Error(`"${target}" is already the loaded profile.`);
-		if (!fs.existsSync(profileDir(home, target))) throw new Error(`There is no profile named "${target}".`);
 		normalizeProfileDir(profileDir(home, target));
 	}
 	const token = ensureProfileToken(home, target);
