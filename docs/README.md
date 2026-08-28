@@ -9,7 +9,7 @@ This is the canonical index for documentation in this repository. Treat this pag
 - [Memory](memory.md): how room memory (Remember → Memorize → Review) and CLI memory work, what is stored where, and who approves it.
 - [Provider setup and AI profiles](provider-setup.md): connecting a provider: in-app sign-in for Claude / ChatGPT Plus/Pro, and the OpenAI-compatible gateway path.
 - [Web search](web-search.md): built-in DuckDuckGo backend and its limits; SearXNG setup for heavy use or blocked networks, keeping it running, and configuration reference.
-- [Data profiles](data-profiles.md): running more than one complete state world on one machine (private setup vs. curated demo), switching between them, and what the standard `~/.exxperts` guarantees.
+- [Data profiles](data-profiles.md): running more than one complete state world on one machine (private setup vs. curated demo), switching between them, what the standard `.exxperts` tree guarantees, and moving the whole data folder from Settings (cloud-synced folder across computers, Docker volume via `EXXPERTS_DATA_DIR`).
 - [Security](../SECURITY.md): threat model, supported deployments, release integrity, and vulnerability reporting.
 - [MCP client support](mcp.md): MCP connectors: transports, config locations, and commands.
 

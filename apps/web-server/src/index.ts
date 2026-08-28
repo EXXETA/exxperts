@@ -197,9 +197,27 @@ const stateProfiles = createRequire(import.meta.url)(path.join(REPO_ROOT, "bin",
 	createProfile: (home: string, name: string) => void;
 	deleteProfile: (home: string, name: string) => void;
 	prepareSwitch: (home: string, target: string | null) => string;
+	resolveStateHome: (loginHome: string, env?: NodeJS.ProcessEnv) => { home: string; source: "env" | "setting" | "default" };
+	planHomeMove: (currentHome: string, target: string) => { dir: string; mode: "migrate" | "adopt"; moving: string[] };
+	prepareHomeMove: (loginHome: string, currentHome: string, target: string) => { dir: string; mode: "migrate" | "adopt"; moving: string[]; token: string };
 };
 function stateProfileRealHome(): string {
 	return process.env.EXXPERTS_REAL_HOME?.trim() || os.homedir();
+}
+// Where the exxperts-home pointer and move intents live: the OS login home.
+// This process may run under a repointed HOME (moved home, active profile),
+// so the supervisor passes the login home in; os.userInfo() is the
+// env-independent fallback for servers started some other way.
+function stateProfileLoginHome(): string {
+	const fromEnv = process.env.EXXPERTS_LOGIN_HOME?.trim();
+	if (fromEnv) return fromEnv;
+	try {
+		const fromAccount = os.userInfo().homedir;
+		if (fromAccount) return fromAccount;
+	} catch {
+		// No account record (some containers): fall through.
+	}
+	return os.homedir();
 }
 
 function roomLockBusyStatus(lock: Pick<RoomLockRecord, "surface"> | null | undefined): string {
@@ -4115,7 +4133,42 @@ function stateProfilePayload() {
 	return {
 		active,
 		profiles: stateProfiles.listProfiles(home).filter((p) => p.name !== active),
+		home: stateHomePayload(),
 	};
+}
+// The exxperts home: where the whole state family (standard tree + profiles)
+// lives, and whether the in-app move is available. Moving needs a supervisor
+// that executes the recorded move between server legs, and is refused while
+// EXXPERTS_DATA_DIR pins the location — the operator owns it then.
+function stateHomePayload() {
+	const loginHome = stateProfileLoginHome();
+	let source: "env" | "setting" | "default" = "default";
+	try {
+		source = stateProfiles.resolveStateHome(loginHome, process.env).source;
+	} catch {
+		source = "setting";
+	}
+	const reason = source === "env"
+		? "The location is pinned by the EXXPERTS_DATA_DIR environment variable; unset it to move the folder from here."
+		: !process.env.EXXPERTS_HOME_MOVE_SUPERVISED
+			? "Moving needs the app to run under 'exxperts web', the desktop app, or the dev harness."
+			: null;
+	return {
+		dir: stateProfileRealHome(),
+		defaultDir: loginHome,
+		source,
+		canMove: reason === null,
+		...(reason === null ? {} : { reason }),
+	};
+}
+function stateHomeMoveRefusal(): string | null {
+	if (!process.env.EXXPERTS_SWITCH_SUPERVISED || !process.env.EXXPERTS_HOME_MOVE_SUPERVISED) {
+		return "Moving the exxperts data needs the app to run under 'exxperts web', the desktop app, or the dev harness. This server process has no supervisor to perform the move.";
+	}
+	if (stateHomePayload().source === "env") {
+		return "The data location is pinned by the EXXPERTS_DATA_DIR environment variable. Unset it (where exxperts is started) to move the folder from here.";
+	}
+	return null;
 }
 app.get("/api/settings/state-profile", async () => stateProfilePayload());
 app.post("/api/settings/state-profile/create", async (req, reply) => {
@@ -4170,6 +4223,42 @@ app.post("/api/settings/state-profile/switch", async (req, reply) => {
 		void app.close().finally(() => process.exit(stateProfiles.SWITCH_EXIT_CODE));
 	});
 	return { ok: true, restarting: true, target: name, signInPath: `/auth/session?token=${encodeURIComponent(nextToken)}` };
+});
+// Moving the exxperts home: /plan validates a candidate folder and returns
+// what a confirmation must disclose (mode "migrate" moves the whole family
+// there; mode "adopt" means the folder already holds exxperts data — the
+// other-computer case for a cloud-synced folder — and is used as-is, nothing
+// moved or merged). /apply re-validates, records the move for the supervisor
+// to execute between legs, and exits with the same sentinel a profile switch
+// uses; the reply carries the sign-in link the restarted leg will honor.
+app.post("/api/settings/state-home/plan", async (req, reply) => {
+	const refusal = stateHomeMoveRefusal();
+	if (refusal) return reply.code(409).send({ error: refusal });
+	const dir = String((req.body as { dir?: unknown } | null)?.dir ?? "");
+	try {
+		return stateProfiles.planHomeMove(stateProfileRealHome(), dir);
+	} catch (e) {
+		return reply.code(409).send({ error: (e as Error).message });
+	}
+});
+app.post("/api/settings/state-home/apply", async (req, reply) => {
+	const refusal = stateHomeMoveRefusal();
+	if (refusal) return reply.code(409).send({ error: refusal });
+	const dir = String((req.body as { dir?: unknown } | null)?.dir ?? "");
+	let token: string;
+	try {
+		token = stateProfiles.prepareHomeMove(stateProfileLoginHome(), stateProfileRealHome(), dir).token;
+	} catch (e) {
+		return reply.code(409).send({ error: (e as Error).message });
+	}
+	const nextToken = process.env.EXXPERTS_AUTH_TOKEN?.trim() || token;
+	// Reply first, exit after it flushes — same timing rationale as the
+	// profile-switch route above.
+	setTimeout(() => process.exit(stateProfiles.SWITCH_EXIT_CODE), 750).unref();
+	setImmediate(() => {
+		void app.close().finally(() => process.exit(stateProfiles.SWITCH_EXIT_CODE));
+	});
+	return { ok: true, restarting: true, signInPath: `/auth/session?token=${encodeURIComponent(nextToken)}` };
 });
 app.get("/api/persistent-agent-ai-profiles/gateways", async () => {
 	const read = readOpenAiCompatibleGateways();

@@ -27,6 +27,253 @@ const path = require("node:path");
 const SWITCH_EXIT_CODE = 75;
 const PROFILE_PREFIX = ".exxperts-";
 
+// ---------------------------------------------------------------------------
+// The exxperts home: the ONE directory holding the whole state family — the
+// standard .exxperts tree plus every .exxperts-<name> profile. Default: the
+// OS login home. It can be relocated (issue #60), resolved in this order:
+//
+//   1. EXXPERTS_DATA_DIR (env): operator pinning for containers/automation.
+//      While set, the in-app move is refused — the operator owns the location.
+//   2. <loginHome>/.exxperts.home.json: written by Settings → Profiles →
+//      "Move". The dotted name keeps it outside the .exxperts-<name> profile
+//      namespace, same trick as .exxperts.deleting-*.
+//   3. Neither: the login home itself, unchanged from before this feature.
+//
+// Everything downstream rides on the same env indirection profiles use:
+// entry points adopt the home into HOME/USERPROFILE once, and every
+// homedir()-based state resolution in the process and its children follows.
+//
+// An in-app move reuses the switch protocol's shape: the server validates,
+// writes an intent file next to the pointer, replies with the sign-in link,
+// and exits with the sentinel; the SUPERVISOR executes the move while
+// nothing has the trees open, updates the pointer, and starts the next leg
+// against the new home. performPendingHomeMove is also called by supervisors
+// at cold start, so an intent stranded by a crash heals on the next launch.
+// ---------------------------------------------------------------------------
+
+function homePointerPath(loginHome) {
+	return path.join(loginHome, ".exxperts.home.json");
+}
+
+function homeMoveIntentPath(loginHome) {
+	return path.join(loginHome, ".exxperts.home-move.json");
+}
+
+function readHomePointer(loginHome) {
+	try {
+		const parsed = JSON.parse(fs.readFileSync(homePointerPath(loginHome), "utf8"));
+		if (typeof parsed.dir === "string" && parsed.dir.trim()) return path.resolve(parsed.dir.trim());
+	} catch {
+		// No or unreadable pointer: the default home.
+	}
+	return null;
+}
+
+function writeHomePointer(loginHome, dir) {
+	const file = homePointerPath(loginHome);
+	if (dir === null) {
+		fs.rmSync(file, { force: true });
+		return;
+	}
+	const tmp = `${file}.${process.pid}.tmp`;
+	fs.writeFileSync(tmp, `${JSON.stringify({ dir }, null, 2)}\n`, { mode: 0o600 });
+	fs.renameSync(tmp, file);
+}
+
+/** Where the state family lives, and why: {home, source: env|setting|default}. */
+function resolveStateHome(loginHome, env = process.env) {
+	const raw = env.EXXPERTS_DATA_DIR;
+	if (raw && raw.trim()) return { home: path.resolve(raw.trim()), source: "env" };
+	const pointed = readHomePointer(loginHome);
+	if (pointed !== null) {
+		// Never fall back silently: booting against the login home while the
+		// data sits elsewhere would look exactly like data loss.
+		if (!fs.existsSync(pointed)) {
+			throw new Error(`Your exxperts home is set to "${pointed}" (in ${homePointerPath(loginHome)}), but that folder is not there right now. Reconnect the drive or cloud folder it lives on — or delete that file to start over against "${loginHome}".`);
+		}
+		return { home: pointed, source: "setting" };
+	}
+	return { home: loginHome, source: "default" };
+}
+
+// Create-if-missing plus a writability gate, with an actionable message.
+function ensureUsableHome(dir, pointsAt) {
+	try {
+		fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+		fs.accessSync(dir, fs.constants.W_OK);
+	} catch (err) {
+		let problem = `cannot be created (${err.code || err.message})`;
+		try {
+			problem = !fs.statSync(dir).isDirectory()
+				? "is a file, not a directory"
+				: (err.code === "EACCES" || err.code === "EPERM" ? "is not writable" : `is not usable (${err.code || err.message})`);
+		} catch {
+			// Nothing there: the mkdir failure message stands.
+		}
+		throw new Error(`${pointsAt} points at "${dir}", but that directory ${problem}. Point it at a writable directory, or fall back to the default ~/.exxperts.`);
+	}
+}
+
+// Entry points call this FIRST, before anything resolves a state path
+// (os.homedir() reads env per call): resolves the home, validates it, and
+// repoints the env at it. loginHome must be the REAL login home, captured
+// before any repointing. Returns {home, source}.
+function adoptStateHome(loginHome, env = process.env) {
+	const resolved = resolveStateHome(loginHome, env);
+	if (resolved.home !== loginHome) {
+		ensureUsableHome(resolved.home, resolved.source === "env" ? "EXXPERTS_DATA_DIR" : `Your exxperts home setting (${homePointerPath(loginHome)})`);
+		Object.assign(env, {
+			HOME: resolved.home,
+			USERPROFILE: resolved.home,
+			EXXPERTS_CODING_AGENT_DIR: path.join(resolved.home, ".exxperts", "agent"),
+		});
+	}
+	return resolved;
+}
+
+/** The family members present in a home: ".exxperts" and every ".exxperts-<name>". */
+function listStateFamily(home) {
+	let entries;
+	try {
+		entries = fs.readdirSync(home, { withFileTypes: true });
+	} catch {
+		return [];
+	}
+	return entries
+		.filter((e) => e.isDirectory() && (e.name === ".exxperts" || (e.name.startsWith(PROFILE_PREFIX) && e.name.length > PROFILE_PREFIX.length)))
+		.map((e) => e.name)
+		.sort();
+}
+
+function sameDir(a, b) {
+	try {
+		return fs.realpathSync(a) === fs.realpathSync(b);
+	} catch {
+		return path.resolve(a) === path.resolve(b);
+	}
+}
+
+// Validate a move target and say what a confirmation must disclose:
+// {dir, mode, moving}. mode "migrate" moves the family there; mode "adopt"
+// means the target already holds exxperts data (the other-computer case for
+// a cloud-synced folder) — it is used as-is and NOTHING is moved or merged.
+function planHomeMove(currentHome, target) {
+	const raw = typeof target === "string" ? target.trim() : "";
+	if (!raw) throw new Error("Choose a folder.");
+	const dir = path.resolve(raw);
+	ensureUsableHome(dir, "The chosen folder");
+	if (sameDir(dir, currentHome)) throw new Error(`Exxperts already keeps its data in "${dir}".`);
+	for (const name of listStateFamily(currentHome)) {
+		const tree = path.join(currentHome, name);
+		if (sameDir(dir, tree) || dir.startsWith(tree + path.sep)) {
+			throw new Error(`"${dir}" is inside "${tree}", which is part of what would move. Choose a folder outside the exxperts data.`);
+		}
+	}
+	const mode = listStateFamily(dir).length > 0 ? "adopt" : "migrate";
+	return { dir, mode, moving: mode === "migrate" ? listStateFamily(currentHome) : [] };
+}
+
+// Move every family member from one home to another — by COPYING everything
+// first and deleting the sources only after every copy landed. Never a
+// rename: the old home stays complete until the very last step, so a crash,
+// a Ctrl+C, or a pulled cable at ANY point leaves at least one whole copy of
+// the data, and re-running simply starts the copy phase over.
+//
+// Per entry, the copy goes into a dotted staging dir and is renamed into its
+// final name only when complete, so a half-copied tree can never be mistaken
+// for a finished one. A destination entry that already exists is the debris
+// of an interrupted earlier run (migrate mode only ever targets a folder
+// that held no exxperts data when the move was decided) and is rebuilt from
+// the still-complete source. A failure removes what this run created and
+// throws; the old home was never touched.
+function migrateStateFamily(fromHome, toDir) {
+	const names = listStateFamily(fromHome);
+	// Debris of interrupted earlier runs.
+	for (const entry of fs.readdirSync(toDir)) {
+		if (entry.startsWith(".exxperts.copying-")) fs.rmSync(path.join(toDir, entry), { recursive: true, force: true });
+	}
+	const copied = [];
+	try {
+		for (const name of names) {
+			const src = path.join(fromHome, name);
+			const dest = path.join(toDir, name);
+			fs.rmSync(dest, { recursive: true, force: true });
+			const staging = path.join(toDir, `.exxperts.copying-${process.pid}-${name.replace(/[^\w.-]+/g, "_")}`);
+			fs.cpSync(src, staging, { recursive: true, verbatimSymlinks: true });
+			fs.renameSync(staging, dest);
+			copied.push(name);
+		}
+	} catch (err) {
+		for (const name of copied) {
+			try {
+				fs.rmSync(path.join(toDir, name), { recursive: true, force: true });
+			} catch {
+				// Best effort; the sources were never touched.
+			}
+		}
+		throw err;
+	}
+	// Every copy landed: only now do the sources go. A source that refuses to
+	// delete (a file held open, say) stays behind as an inert duplicate — the
+	// new home is complete and authoritative either way.
+	for (const name of names) {
+		try {
+			fs.rmSync(path.join(fromHome, name), { recursive: true, force: true });
+		} catch {
+			// See above.
+		}
+	}
+}
+
+// Server side of a move, BEFORE the exit (mirrors prepareSwitch): validate,
+// record the intent for the supervisor, hand back the sign-in token the
+// restarted leg will honor. For a migrate the token travels with the tree
+// (same value); for an adopt it is the target's own token, minted now if
+// that home never ran.
+function prepareHomeMove(loginHome, currentHome, target) {
+	const plan = planHomeMove(currentHome, target);
+	const tokenHome = plan.mode === "adopt" ? plan.dir : currentHome;
+	const token = ensureProfileToken(tokenHome, readActiveProfile(tokenHome));
+	const file = homeMoveIntentPath(loginHome);
+	const tmp = `${file}.${process.pid}.tmp`;
+	fs.writeFileSync(tmp, `${JSON.stringify({ from: currentHome, to: plan.dir, mode: plan.mode }, null, 2)}\n`, { mode: 0o600 });
+	fs.renameSync(tmp, file);
+	return { ...plan, token };
+}
+
+// Supervisor side: execute a recorded move, point the home at the target,
+// clear the intent. Returns {to, mode} when something happened, null when
+// there was nothing to do. A failed migration rolls back, drops the intent
+// (retry is a fresh decision in the UI, not a crash loop), and rethrows so
+// the supervisor can say what happened; the pointer then still names the old
+// home, which is intact.
+function performPendingHomeMove(loginHome) {
+	let intent;
+	try {
+		intent = JSON.parse(fs.readFileSync(homeMoveIntentPath(loginHome), "utf8"));
+	} catch {
+		return null;
+	}
+	const to = typeof intent.to === "string" && intent.to.trim() ? path.resolve(intent.to.trim()) : null;
+	// The source is recorded in the intent, so a resume stays exact whatever
+	// state the crash left behind.
+	const fromHome = typeof intent.from === "string" && intent.from.trim() ? path.resolve(intent.from.trim()) : null;
+	if (to === null || fromHome === null) {
+		fs.rmSync(homeMoveIntentPath(loginHome), { force: true });
+		return null;
+	}
+	try {
+		fs.mkdirSync(to, { recursive: true, mode: 0o700 });
+		if (intent.mode !== "adopt" && fs.existsSync(fromHome) && !sameDir(fromHome, to)) migrateStateFamily(fromHome, to);
+	} catch (err) {
+		fs.rmSync(homeMoveIntentPath(loginHome), { force: true });
+		throw err;
+	}
+	writeHomePointer(loginHome, sameDir(to, loginHome) ? null : to);
+	fs.rmSync(homeMoveIntentPath(loginHome), { force: true });
+	return { to, mode: intent.mode === "adopt" ? "adopt" : "migrate" };
+}
+
 function standardTree(home) {
 	return path.join(home, ".exxperts");
 }
@@ -245,6 +492,17 @@ function prepareSwitch(home, target) {
 module.exports = {
 	SWITCH_EXIT_CODE,
 	PROFILE_PREFIX,
+	homePointerPath,
+	homeMoveIntentPath,
+	readHomePointer,
+	writeHomePointer,
+	resolveStateHome,
+	adoptStateHome,
+	listStateFamily,
+	planHomeMove,
+	migrateStateFamily,
+	prepareHomeMove,
+	performPendingHomeMove,
 	standardTree,
 	profileDir,
 	profileTree,

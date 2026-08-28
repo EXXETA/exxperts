@@ -58,6 +58,17 @@ export function nodeBinary(): string {
 export function stateHome(): string {
   const scratch = process.env.EXXPERTS_DESKTOP_SCRATCH_HOME;
   if (scratch && scratch.trim()) return path.resolve(scratch.trim());
+  // The exxperts home can be relocated: EXXPERTS_DATA_DIR pins it for
+  // operators; otherwise the pointer written by Settings → Profiles → Move
+  // names it — same contract as the CLI/web launchers (state-profiles.cjs).
+  const dataDir = process.env.EXXPERTS_DATA_DIR;
+  if (dataDir && dataDir.trim()) return path.resolve(dataDir.trim());
+  try {
+    const pointed = JSON.parse(fs.readFileSync(path.join(os.homedir(), ".exxperts.home.json"), "utf8")) as { dir?: unknown };
+    if (typeof pointed.dir === "string" && pointed.dir.trim()) return path.resolve(pointed.dir.trim());
+  } catch {
+    // No pointer: the login home.
+  }
   return os.homedir();
 }
 
@@ -69,6 +80,8 @@ type StateProfilesModule = {
   readActiveProfile: (home: string) => string | null;
   serverEnvForProfile: (home: string, name: string | null) => Record<string, string>;
   activeTokenPath: (home: string) => string;
+  adoptStateHome?: (loginHome: string, env: NodeJS.ProcessEnv) => { home: string; source: string };
+  performPendingHomeMove?: (loginHome: string) => { to: string; mode: string } | null;
 };
 export function stateProfilesModule(): StateProfilesModule {
   return require(path.join(serverRoot(), "bin", "lib", "state-profiles.cjs")) as StateProfilesModule;
@@ -92,15 +105,30 @@ export function serverEnv(): NodeJS.ProcessEnv {
     env.USERPROFILE = home;
     env.EXXPERTS_CODING_AGENT_DIR = path.join(home, ".exxperts", "agent");
   }
-  // Data profiles: the active-profile pointer decides which state tree the
-  // server runs against; ~/.exxperts itself never moves. Resolved on every
-  // start, so a restart after a switch lands on the new profile.
+  // Exxperts home and data profiles, resolved on every start: a pending home
+  // move (recorded by the server before it exited) is executed first, while
+  // nothing has the trees open; then the active-profile pointer decides
+  // which state tree inside the home the server runs against.
+  let profiles: StateProfilesModule | null = null;
   try {
-    const profiles = stateProfilesModule();
+    profiles = stateProfilesModule();
+  } catch {
+    // Payload without the module: standard profile at the login home only.
+  }
+  if (profiles) {
+    // Scratch mode (dev/tests) already relocated everything above and wins;
+    // it must never execute a real pending move or adopt the real home.
+    if (!(scratch && scratch.trim())) {
+      profiles.performPendingHomeMove?.(os.homedir());
+      // Points the server CHILD at the resolved home (the shell's own env
+      // stays untouched); a bad location throws its actionable message here
+      // rather than silently starting against the login home.
+      profiles.adoptStateHome?.(os.homedir(), env);
+      env.EXXPERTS_HOME_MOVE_SUPERVISED = "1";
+      env.EXXPERTS_LOGIN_HOME = os.homedir();
+    }
     env.EXXPERTS_REAL_HOME = stateHome();
     Object.assign(env, profiles.serverEnvForProfile(stateHome(), profiles.readActiveProfile(stateHome())));
-  } catch {
-    // Payload without the module: standard profile only.
   }
   return env;
 }

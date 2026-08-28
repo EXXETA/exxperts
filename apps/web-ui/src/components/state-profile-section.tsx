@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { apiFetch, fetchJson } from "../api";
+import { chooseSystemFolder } from "../persistent-room-workspace-api";
 
 /**
  * Data profiles: which ~/.exxperts state tree this computer runs — rooms,
@@ -21,24 +22,38 @@ import { apiFetch, fetchJson } from "../api";
  * it is not addressable by the delete route at all.
  */
 
+/** Where the whole state family lives, and whether the in-app move is available. */
+type StateHomeInfo = { dir: string; defaultDir: string; source: "env" | "setting" | "default"; canMove: boolean; reason?: string };
+
 /** active null = the standard ~/.exxperts profile; profiles excludes it. */
-type StateProfilePayload = { active: string | null; profiles: Array<{ name: string }> };
+type StateProfilePayload = { active: string | null; profiles: Array<{ name: string }>; home?: StateHomeInfo };
+
+/** What a home move would do; "adopt" = the target already holds exxperts data and is used as-is. */
+type MovePlan = { dir: string; mode: "migrate" | "adopt"; moving: string[] };
 
 /** One armed action at a time; name null addresses the standard profile. */
 type Armed = { kind: "switch" | "delete"; name: string | null } | null;
+
+/** Terminal restart states: a profile switch, or a move of the whole data home. */
+type Restarting = { kind: "switch"; name: string | null; signInPath: string | null } | { kind: "home"; dir: string; signInPath: string | null };
 
 export function StateProfileSection() {
 	const [payload, setPayload] = useState<StateProfilePayload | null>(null);
 	const [loading, setLoading] = useState(true);
 	const [loadError, setLoadError] = useState<string | null>(null);
 	const [armed, setArmed] = useState<Armed>(null);
-	/** Terminal: the switch is running; this page follows it into the new profile. */
-	const [restarting, setRestarting] = useState<{ name: string | null; signInPath: string | null } | null>(null);
+	/** Terminal: a restart is running; this page follows it into the new session. */
+	const [restarting, setRestarting] = useState<Restarting | null>(null);
 	const [busy, setBusy] = useState(false);
 	const [createError, setCreateError] = useState<string | null>(null);
 	const [listError, setListError] = useState<string | null>(null);
 	const [draft, setDraft] = useState("");
 	const [creating, setCreating] = useState(false);
+	const [movePlan, setMovePlan] = useState<MovePlan | null>(null);
+	const [moveError, setMoveError] = useState<string | null>(null);
+	const [moveBusy, setMoveBusy] = useState(false);
+	const [manualVisible, setManualVisible] = useState(false);
+	const [manualDir, setManualDir] = useState("");
 
 	async function load() {
 		setLoading(true);
@@ -127,6 +142,71 @@ export function StateProfileSection() {
 		}
 	}
 
+	// The home move asks twice like everything else here, but with the
+	// consequence text coming from the server's plan: what moves where, or —
+	// when the chosen folder already holds exxperts data (the other-computer
+	// case for a synced folder) — that it is used as-is, nothing merged.
+	async function pickMoveTarget() {
+		setMoveBusy(true);
+		setMoveError(null);
+		let dir: string | null = null;
+		try {
+			const picked = await chooseSystemFolder();
+			if (picked.cancelled) {
+				setMoveBusy(false);
+				return;
+			}
+			if (picked.supported && picked.path) dir = picked.path;
+		} catch {
+			// No native picker here (remote page, headless server): type the path.
+		}
+		if (!dir) {
+			setManualVisible(true);
+			setMoveBusy(false);
+			return;
+		}
+		await requestMovePlan(dir);
+	}
+
+	async function requestMovePlan(dir: string) {
+		setMoveBusy(true);
+		setMoveError(null);
+		setMovePlan(null);
+		try {
+			setMovePlan(await fetchJson<MovePlan>("/api/settings/state-home/plan", {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ dir }),
+			}));
+			setManualVisible(false);
+		} catch (e) {
+			setMoveError((e as Error).message);
+		} finally {
+			setMoveBusy(false);
+		}
+	}
+
+	async function applyMove() {
+		if (!movePlan) return;
+		setMoveBusy(true);
+		setMoveError(null);
+		try {
+			const reply = await fetchJson<{ signInPath?: string }>("/api/settings/state-home/apply", {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ dir: movePlan.dir }),
+			});
+			setRestarting({ kind: "home", dir: movePlan.dir, signInPath: reply.signInPath ?? null });
+		} catch (e) {
+			// Same rule as the switch: the fetch dying means the server is going
+			// down as asked; only a refusal the server sent renders as an error.
+			if (e instanceof TypeError) setRestarting({ kind: "home", dir: movePlan.dir, signInPath: null });
+			else setMoveError((e as Error).message);
+		} finally {
+			setMoveBusy(false);
+		}
+	}
+
 	function arm(kind: "switch" | "delete", name: string | null): boolean {
 		if (armed?.kind === kind && armed.name === name) return true;
 		setArmed({ kind, name });
@@ -144,12 +224,12 @@ export function StateProfileSection() {
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify({ name }),
 			});
-			setRestarting({ name, signInPath: reply.signInPath ?? null });
+			setRestarting({ kind: "switch", name, signInPath: reply.signInPath ?? null });
 		} catch (e) {
 			// fetch itself failing means the server dropped the connection while
 			// going down — the restart is happening. Anything else is the server
 			// refusing, with its reason in the message.
-			if (e instanceof TypeError) setRestarting({ name, signInPath: null });
+			if (e instanceof TypeError) setRestarting({ kind: "switch", name, signInPath: null });
 			else {
 				setListError((e as Error).message);
 				setArmed(null);
@@ -181,7 +261,9 @@ export function StateProfileSection() {
 		return (
 			<section className="ai-setup-section state-profiles" aria-label="Profiles">
 				<p className="ai-setup-copy" role="status">
-					Restarting with profile “{restarting.name ?? ".exxperts"}”… This page reconnects and signs in by itself when the app is back.
+					{restarting.kind === "home"
+						? `Moving the exxperts data to “${restarting.dir}”… This page reloads and signs in by itself in a few seconds.`
+						: `Switching to profile “${restarting.name ?? ".exxperts"}”… This page reloads and signs in by itself in a few seconds.`}
 				</p>
 				{restarting.signInPath && (
 					<p className="ai-setup-copy">
@@ -211,24 +293,139 @@ export function StateProfileSection() {
 
 	return (
 		<>
-			<section className="ai-setup-section state-profiles" aria-label="Loaded profile">
+			{payload.home && (
+				<section className="ai-setup-section state-profiles" aria-label="Data folder">
+					<h3 className="web-search-fallback-heading">Data folder</h3>
+					<div className="rs-row">
+						<div className="rs-row-main">
+							<span className="rs-row-label">{payload.home.source === "default" ? "Your home folder" : payload.home.dir}</span>
+							<span className="rs-row-hint">
+								{payload.home.source === "default"
+									? `All profiles live here (${payload.home.dir}). They can move anywhere — for example a folder synced by OneDrive or Dropbox, to use the same setup on more than one computer.`
+									: payload.home.source === "env"
+										? "All profiles live here, set by the EXXPERTS_DATA_DIR environment variable."
+										: "All profiles live here. Moving takes every profile along and reloads exxperts."}
+							</span>
+							{movePlan && (
+								<span className="rs-row-hint room-danger-armed" role="alert">
+									{movePlan.mode === "migrate"
+										? `Move everything to “${movePlan.dir}” and reload now? ${movePlan.moving.length > 0 ? `${movePlan.moving.join(", ")} move there.` : "It becomes the new data folder."} Nothing is deleted, nothing changes inside your profiles.`
+										: `“${movePlan.dir}” already holds exxperts data. Use that data as it is and reload now? What is loaded right now stays behind, unchanged, at “${payload.home.dir}” — nothing is moved or merged.`}
+								</span>
+							)}
+						</div>
+						<div className="rs-pane-actions">
+							{movePlan ? (
+								<>
+									<button className="rs-quiet" type="button" disabled={moveBusy} onClick={() => { setMovePlan(null); setMoveError(null); }}>Keep it</button>
+									<button className="rs-btn" type="button" disabled={moveBusy} onClick={() => void applyMove()}>
+										{moveBusy ? "Moving…" : movePlan.mode === "migrate" ? "Move and reload" : "Use it and reload"}
+									</button>
+								</>
+							) : payload.home.canMove ? (
+								<button className="rs-btn" type="button" disabled={moveBusy} onClick={() => void pickMoveTarget()}>
+									{moveBusy ? "Choosing…" : "Move…"}
+								</button>
+							) : (
+								<span className="rs-row-hint">{payload.home.reason}</span>
+							)}
+						</div>
+					</div>
+					{manualVisible && !movePlan && (
+						<div className="rs-row">
+							<div className="rs-row-main">
+								<span className="rs-row-hint">No folder picker is available here — enter the full path of the new folder.</span>
+							</div>
+							<div className="rs-pane-actions">
+								<input
+									className="launcher-path-input"
+									type="text"
+									value={manualDir}
+									placeholder="/path/to/folder"
+									disabled={moveBusy}
+									onChange={(e) => setManualDir(e.target.value)}
+									onKeyDown={(e) => { if (e.key === "Enter" && manualDir.trim()) void requestMovePlan(manualDir.trim()); }}
+									aria-label="New data folder path"
+								/>
+								<button className="rs-btn" type="button" disabled={moveBusy || !manualDir.trim()} onClick={() => void requestMovePlan(manualDir.trim())}>
+									Check
+								</button>
+							</div>
+						</div>
+					)}
+					{moveError && <div className="workspaces-error archived-rooms-note" role="alert">{moveError}</div>}
+				</section>
+			)}
+			<section className="ai-setup-section state-profiles" aria-label="Profiles on this computer">
+				<h3 className="web-search-fallback-heading">Profiles</h3>
 				<p className="ai-setup-copy">
-					A profile is everything this computer's exxperts holds: rooms, agents, history, wallet, memory. Only one is
-					loaded at a time; the others wait untouched in your home folder as “.exxperts-name”.
+					A profile is everything exxperts holds — rooms, agents, history, wallet, memory — living side by side in the
+					data folder. Only one is loaded at a time; switching reloads exxperts and signs this page back in. Running
+					work stops, nothing is lost.
 				</p>
 				<div className="rs-row">
 					<div className="rs-row-main">
 						<span className="rs-row-label">{payload.active ?? ".exxperts"}</span>
-						<span className="rs-row-hint">The loaded profile — everything you see in the app right now lives here.</span>
+						<span className="rs-row-hint">Everything you see in the app right now lives here.</span>
 					</div>
-					<span className="rs-row-hint">Current</span>
+					<span className="rs-row-hint">Loaded</span>
 				</div>
-			</section>
-			<section className="ai-setup-section state-profiles" aria-label="Create a new profile">
-				<h3 className="web-search-fallback-heading">Create a new profile</h3>
+				{payload.active !== null && (
+					<div className="rs-row">
+						<div className="rs-row-main">
+							<span className="rs-row-label">.exxperts</span>
+							<span className="rs-row-hint">Your standard profile. It cannot be deleted.</span>
+							{armed?.kind === "switch" && armed.name === null && (
+								<span className="rs-row-hint room-danger-armed" role="alert">Switch back to “.exxperts” and reload now?</span>
+							)}
+						</div>
+						<div className="rs-pane-actions">
+							{armed?.kind === "switch" && armed.name === null && (
+								<button className="rs-quiet" type="button" disabled={busy} onClick={() => setArmed(null)}>Keep it</button>
+							)}
+							<button className="rs-btn" type="button" disabled={busy} onClick={() => void switchTo(null)}>
+								{busy && armed?.kind === "switch" && armed.name === null ? "Switching…" : armed?.kind === "switch" && armed.name === null ? "Switch and reload" : "Switch"}
+							</button>
+						</div>
+					</div>
+				)}
+				{payload.profiles.map((profile) => {
+					const switchArmed = armed?.kind === "switch" && armed.name === profile.name;
+					const deleteArmed = armed?.kind === "delete" && armed.name === profile.name;
+					return (
+						<div className="rs-row" key={profile.name}>
+							<div className="rs-row-main">
+								<span className="rs-row-label">{profile.name}</span>
+								{switchArmed && (
+									<span className="rs-row-hint room-danger-armed" role="alert">Switch to “{profile.name}” and reload now?</span>
+								)}
+								{deleteArmed && (
+									<span className="rs-row-hint room-danger-armed" role="alert">
+										Delete “{profile.name}” forever? Everything in it is removed from this machine.
+									</span>
+								)}
+							</div>
+							<div className="rs-pane-actions">
+								{(switchArmed || deleteArmed) && (
+									<button className="rs-quiet" type="button" disabled={busy} onClick={() => setArmed(null)}>Keep it</button>
+								)}
+								{!deleteArmed && (
+									<button className="rs-btn" type="button" disabled={busy} onClick={() => void switchTo(profile.name)}>
+										{busy && switchArmed ? "Switching…" : switchArmed ? "Switch and reload" : "Switch"}
+									</button>
+								)}
+								{!switchArmed && (
+									<button className="rs-btn rs-btn-danger" type="button" disabled={busy} onClick={() => void deleteProfile(profile.name)}>
+										{busy && deleteArmed ? "Deleting…" : deleteArmed ? "Delete forever" : "Delete"}
+									</button>
+								)}
+							</div>
+						</div>
+					);
+				})}
 				<div className="rs-row">
 					<div className="rs-row-main">
-						<span className="rs-row-hint">Starts empty, like a fresh install. Nothing is copied from the loaded profile.</span>
+						<span className="rs-row-hint">A new profile starts empty, like a fresh install.</span>
 					</div>
 					<div className="rs-pane-actions">
 						<input
@@ -247,70 +444,8 @@ export function StateProfileSection() {
 					</div>
 				</div>
 				{createError && <div className="workspaces-error archived-rooms-note" role="alert">{createError}</div>}
+				{listError && <div className="workspaces-error archived-rooms-note" role="alert">{listError}</div>}
 			</section>
-			{(payload.profiles.length > 0 || payload.active !== null) && (
-				<section className="ai-setup-section state-profiles" aria-label="Other profiles on this computer">
-					<h3 className="web-search-fallback-heading">Other profiles on this computer</h3>
-					<p className="ai-setup-copy">
-						Switching restarts exxperts and opens a newly signed-in tab — running work stops, nothing is lost. Deleting
-						removes a profile and everything in it from this machine.
-					</p>
-					{payload.active !== null && (
-						<div className="rs-row">
-							<div className="rs-row-main">
-								<span className="rs-row-label">.exxperts</span>
-								<span className="rs-row-hint">Your standard profile. It cannot be deleted.</span>
-								{armed?.kind === "switch" && armed.name === null && (
-									<span className="rs-row-hint room-danger-armed" role="alert">Switch back to “.exxperts” and restart now?</span>
-								)}
-							</div>
-							<div className="rs-pane-actions">
-								{armed?.kind === "switch" && armed.name === null && (
-									<button className="rs-quiet" type="button" disabled={busy} onClick={() => setArmed(null)}>Keep it</button>
-								)}
-								<button className="rs-btn" type="button" disabled={busy} onClick={() => void switchTo(null)}>
-									{busy && armed?.kind === "switch" && armed.name === null ? "Switching…" : armed?.kind === "switch" && armed.name === null ? "Switch and restart" : "Switch"}
-								</button>
-							</div>
-						</div>
-					)}
-					{payload.profiles.map((profile) => {
-						const switchArmed = armed?.kind === "switch" && armed.name === profile.name;
-						const deleteArmed = armed?.kind === "delete" && armed.name === profile.name;
-						return (
-							<div className="rs-row" key={profile.name}>
-								<div className="rs-row-main">
-									<span className="rs-row-label">{profile.name}</span>
-									{switchArmed && (
-										<span className="rs-row-hint room-danger-armed" role="alert">Switch to “{profile.name}” and restart now?</span>
-									)}
-									{deleteArmed && (
-										<span className="rs-row-hint room-danger-armed" role="alert">
-											Delete “{profile.name}” forever? Everything in it is removed from this machine.
-										</span>
-									)}
-								</div>
-								<div className="rs-pane-actions">
-									{(switchArmed || deleteArmed) && (
-										<button className="rs-quiet" type="button" disabled={busy} onClick={() => setArmed(null)}>Keep it</button>
-									)}
-									{!deleteArmed && (
-										<button className="rs-btn" type="button" disabled={busy} onClick={() => void switchTo(profile.name)}>
-											{busy && switchArmed ? "Switching…" : switchArmed ? "Switch and restart" : "Switch"}
-										</button>
-									)}
-									{!switchArmed && (
-										<button className="rs-btn rs-btn-danger" type="button" disabled={busy} onClick={() => void deleteProfile(profile.name)}>
-											{busy && deleteArmed ? "Deleting…" : deleteArmed ? "Delete forever" : "Delete"}
-										</button>
-									)}
-								</div>
-							</div>
-						);
-					})}
-					{listError && <div className="workspaces-error archived-rooms-note" role="alert">{listError}</div>}
-				</section>
-			)}
 		</>
 	);
 }

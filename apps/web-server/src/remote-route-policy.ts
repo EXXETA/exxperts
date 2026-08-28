@@ -247,6 +247,8 @@ const POLICY: Record<string, RemoteRouteClass> = {
 	"POST /api/settings/state-profile/create": "local",
 	"POST /api/settings/state-profile/delete": "local",
 	"POST /api/settings/state-profile/switch": "local",
+	"POST /api/settings/state-home/plan": "local",
+	"POST /api/settings/state-home/apply": "local",
 };
 
 export function classifyRemoteRoute(method: string, routeUrl: string): RemoteRouteClass | null {

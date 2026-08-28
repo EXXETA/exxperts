@@ -155,6 +155,24 @@ session. The CLI reads the pointer at launch and announces which profile it
 runs against. A server started without one of these supervisors refuses to
 switch (the route answers 409) instead of exiting into nothing.
 
+The whole state family (standard tree plus profiles) lives in one data
+folder, default the login home. Settings → Profiles moves it: the server
+records a move intent and exits with code 75; the supervisor executes the
+move between legs (`performPendingHomeMove`) and writes the new location to
+`~/.exxperts.home.json`. The move is copy-first: sources are deleted only
+after every copy landed, so an interruption leaves a complete copy and the
+next start finishes the job. A target that already holds exxperts data is
+adopted as-is (nothing moved or merged). A pointer naming an unreachable
+folder refuses startup with the reason instead of silently starting empty.
+`EXXPERTS_DATA_DIR` pins the folder for containers/automation and disables
+the in-app move; the directory is created on first use, an unusable path
+refuses startup, and relative paths resolve against the launch cwd — use
+absolute paths in production. Both mechanisms are honored by all launchers,
+the desktop app, and the dev harness. Use cases and examples:
+[data-profiles.md](data-profiles.md#where-exxperts-keeps-its-data).
+Smokes: `npm run smoke:state-home-move` and `npm run smoke:data-dir`
+(in `apps/web-server`).
+
 ## Storage layout
 
 | Path | What | Persists across reinstalls? |

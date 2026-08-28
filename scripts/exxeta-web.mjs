@@ -155,6 +155,18 @@ function openBrowser(url) {
 // moves; a profile runs via env indirection at ~/.exxperts-<name>.
 const stateProfiles = createRequire(import.meta.url)(path.join(EXXETA_HOME, "bin", "lib", "state-profiles.cjs"));
 
+// Exxperts home: the login home anchors the pointer and move intents;
+// captured before adoptStateHome repoints HOME. A stranded move completes
+// here, then this process (and every child) follows the resolved home.
+const loginHome = os.homedir();
+try {
+  stateProfiles.performPendingHomeMove(loginHome);
+  stateProfiles.adoptStateHome(loginHome);
+} catch (err) {
+  console.error(err.message);
+  process.exit(1);
+}
+
 killStalePortListeners();
 await new Promise((r) => setTimeout(r, 1000));
 
@@ -181,6 +193,8 @@ function startDevService(relCwd, logPath, extraEnv = {}) {
 function serverEnv() {
   return {
     EXXPERTS_SWITCH_SUPERVISED: "1",
+    EXXPERTS_HOME_MOVE_SUPERVISED: "1",
+    EXXPERTS_LOGIN_HOME: loginHome,
     EXXPERTS_REAL_HOME: os.homedir(),
     ...stateProfiles.serverEnvForProfile(os.homedir(), stateProfiles.readActiveProfile(os.homedir())),
   };
@@ -240,17 +254,29 @@ let switching = false;
 const switchWatcher = setInterval(() => {
   void (async () => {
     if (switching) return;
+    // A home-move intent plus a dead server means a move is waiting for its
+    // restart, exactly like a changed pointer means a profile switch.
+    const movePending = fs.existsSync(stateProfiles.homeMoveIntentPath(loginHome));
     const active = stateProfiles.readActiveProfile(os.homedir());
-    if (active === lastActive) return;
+    if (active === lastActive && !movePending) return;
     // Latch BEFORE the first await: the healthz probe can outlast a whole
     // tick, and an unlatched second tick would kill the fresh server tree.
     switching = true;
     try {
       if (await waitForUrl("http://localhost:8787/healthz", 1, 0)) return;
-      lastActive = active;
       if (serverChild.pid && serverChild.exitCode === null) killTree(serverChild.pid);
       for (const pid of listeningPids(8787)) forceKillPid(pid);
-      console.log(`\nswitching to ${active === null ? "the standard profile (.exxperts)" : `profile "${active}"`}; restarting the web server…`);
+      if (movePending) {
+        try {
+          if (stateProfiles.performPendingHomeMove(loginHome)) stateProfiles.adoptStateHome(loginHome);
+          console.log("\nmoving where exxperts keeps its data; restarting the web server…");
+        } catch (err) {
+          console.error(`\ncould not move the exxperts data: ${err.message}\ncontinuing with the current location…`);
+        }
+      } else {
+        console.log(`\nswitching to ${active === null ? "the standard profile (.exxperts)" : `profile "${active}"`}; restarting the web server…`);
+      }
+      lastActive = stateProfiles.readActiveProfile(os.homedir());
       serverChild = startDevService(path.join("apps", "web-server"), serverLog, serverEnv());
     } finally {
       switching = false;

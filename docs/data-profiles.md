@@ -66,3 +66,70 @@ the switch with an explanation instead of exiting into nothing.
 - Room workspaces granted inside a profile cannot reach the standard
   profile's state: the real `~/.exxperts` stays a forbidden workspace root
   even while a profile is loaded.
+
+## Where exxperts keeps its data
+
+All profiles live together in one folder, the exxperts data folder. By
+default that is your home folder — the standard tree at `~/.exxperts`,
+profiles at `~/.exxperts-<name>`. **Settings → Profiles** shows the current
+folder at the very top, and it can be moved.
+
+**Moving it**: click *Move…*, choose (or create) a folder in the picker —
+when no picker is available, type the path instead. Before anything happens,
+the row spells out exactly what a confirmation does: every profile
+(`.exxperts` and each `.exxperts-<name>`) moves into the chosen folder, then
+exxperts restarts and the open page signs itself back in. *Keep it* cancels
+and nothing changes. The actual move happens between server runs, while
+nothing has the data open — and it is copy-first: everything is copied into
+the new folder, and the originals are removed only after every copy has
+landed. Interrupting it at any point (quitting the app included) leaves at
+least one complete copy of your data, and the next start simply finishes the
+job; a failure leaves the old folder untouched and shows the error.
+
+**A folder that already holds exxperts data** — say a cloud-synced folder
+your other computer already moved its data into — is used *as is*: the
+confirmation says so, nothing is moved or merged, and whatever this computer
+had loaded stays behind, untouched, in the old folder. That is the way to
+share one setup across machines: move the data into the synced folder on the
+first computer, then point the second computer at the same folder. One
+machine at a time — the app is not built for two computers running against
+the same tree simultaneously.
+
+The chosen folder is remembered in `~/.exxperts.home.json` — that small file
+always stays in your home folder; it is how exxperts finds the data again.
+Everything else in this guide works unchanged wherever the data lives:
+creating, switching, and deleting profiles all happen inside the current
+data folder, and the standard `.exxperts` tree remains undeletable.
+
+One thing a move cannot do for you: anything **you** pointed at the old
+location — backup jobs, sync scripts, a git autosync of `~/.exxperts` —
+keeps pointing there and needs repointing to the new folder by hand. If the folder is unreachable
+at startup (a disconnected drive, a paused sync client), exxperts refuses to
+start and says so, rather than silently starting empty — reconnect the
+folder, or delete `~/.exxperts.home.json` to start over from your home
+folder.
+
+**Pinning it for operators: `EXXPERTS_DATA_DIR`.** Containers and managed
+setups can pin the data folder with an environment variable instead; while
+it is set, the in-app move is disabled and Settings shows where the location
+comes from. The directory is created automatically; an unusable path refuses
+startup with the reason; a relative path resolves against the launch
+directory (use absolute paths in production). Honored by every way of
+running exxperts: `exxperts web`, `exxperts cli`, `exxperts remote`, the
+desktop app, and the dev harness.
+
+```yaml
+services:
+  exxperts:
+    environment:
+      EXXPERTS_DATA_DIR: /data/exxperts
+    volumes:
+      - ./exxperts-data:/data/exxperts
+```
+
+**Backups** — everything lives under the one folder; back it up or restore
+it as a whole.
+
+Same caveat as loaded profiles: with the data folder moved, everything the
+app spawns runs with `HOME` pointed at that folder, so tools inside sessions
+(git, ssh, gcloud) do not see your global dotfiles.

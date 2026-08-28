@@ -194,6 +194,14 @@ async function cmdEnable(port, token) {
 }
 
 async function main(argv, invokedAs) {
+  // Exxperts home: the running server's state (token, remote-mode file)
+  // lives under the resolved home; address the same tree.
+  try {
+    stateProfiles.adoptStateHome(os.homedir());
+  } catch (err) {
+    console.error(err.message);
+    process.exit(1);
+  }
   const args = [...argv];
   let port = DEFAULT_PORT;
   const portIndex = args.indexOf("--port");

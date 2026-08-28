@@ -121,6 +121,20 @@ function openBrowser(url) {
 function main(argv = process.argv.slice(2), command = path.basename(process.argv[1] || "exxperts")) {
   const root = path.resolve(__dirname, "..", "..");
 
+  // The login home anchors the exxperts-home pointer and move intents; it is
+  // captured before any repointing (adoptStateHome overwrites HOME).
+  const loginHome = os.homedir();
+  // Complete a move a dying run left behind, then point this process at the
+  // exxperts home before ANYTHING (setup branch, ensureDirs, profile pointer
+  // reads) resolves a state path.
+  try {
+    stateProfiles.performPendingHomeMove(loginHome);
+    stateProfiles.adoptStateHome(loginHome);
+  } catch (err) {
+    console.error(err.message);
+    process.exit(1);
+  }
+
   // Product setup commands should not start the web server or require an
   // already-configured AI provider. Route them directly to the runtime setup
   // handler, matching the exxcode launcher behavior.
@@ -159,17 +173,19 @@ function main(argv = process.argv.slice(2), command = path.basename(process.argv
     }
     const tsxCli = require.resolve("tsx/cli");
     const serverEntry = path.join(root, "apps", "web-server", "src", "index.ts");
-    const baseEnv = {
-      ...process.env,
+    // Spread per leg on top of the live process.env: the exxperts home can
+    // move between legs, and the adopt updates HOME/USERPROFILE in place.
+    const extraEnv = {
       EXXETA_HOME: root,
       NODE_ENV: process.env.NODE_ENV || "production",
       PORT: String(opts.port),
-      // This launcher restarts the server on profile switches (loop below);
-      // the switch route refuses on servers that run without a supervisor.
+      // This launcher restarts the server on profile switches and executes
+      // home moves (loop below); the routes refuse on servers that run
+      // without a supervisor.
       EXXPERTS_SWITCH_SUPERVISED: "1",
-      // With a profile active the server runs under an overridden HOME;
-      // profile management still addresses the real one.
-      EXXPERTS_REAL_HOME: os.homedir(),
+      EXXPERTS_HOME_MOVE_SUPERVISED: "1",
+      // Where the home pointer and move intents live, whatever HOME says.
+      EXXPERTS_LOGIN_HOME: loginHome,
     };
     const url = `http://localhost:${opts.port}`;
 
@@ -189,11 +205,19 @@ function main(argv = process.argv.slice(2), command = path.basename(process.argv
     // runs with the plain environment. Nothing is ever renamed.
     for (;;) {
       if (stopping) process.exit(0);
-      const activeProfile = stateProfiles.readActiveProfile(os.homedir());
+      // A leg that exited for a home move left an intent behind: execute it
+      // now, while nothing has the trees open, and follow the new home.
+      try {
+        if (stateProfiles.performPendingHomeMove(loginHome)) stateProfiles.adoptStateHome(loginHome);
+      } catch (err) {
+        console.error(`\nCould not move the exxperts data: ${err.message}\nContinuing with the current location.\n`);
+      }
+      const home = os.homedir();
+      const activeProfile = stateProfiles.readActiveProfile(home);
       server = spawn(process.execPath, [tsxCli, serverEntry], {
         cwd: root,
         stdio: "inherit",
-        env: { ...baseEnv, ...stateProfiles.serverEnvForProfile(os.homedir(), activeProfile) },
+        env: { ...process.env, ...extraEnv, EXXPERTS_REAL_HOME: home, ...stateProfiles.serverEnvForProfile(home, activeProfile) },
       });
       const exited = new Promise((resolve) => {
         server.on("error", (err) => {
@@ -236,11 +260,15 @@ function main(argv = process.argv.slice(2), command = path.basename(process.argv
 
       const { code, signal } = await exited;
       if (!stopping && code === stateProfiles.SWITCH_EXIT_CODE) {
-        // The server already updated the active-profile pointer; the next leg
-        // reads it and starts against the new profile. No port pre-flight:
+        // The server already updated the active-profile pointer (or recorded
+        // a home-move intent); the next leg picks it up. No port pre-flight:
         // our own child just released the port.
-        const next = stateProfiles.readActiveProfile(os.homedir());
-        console.error(`\nSwitching to ${next === null ? "the standard profile (.exxperts)" : `profile "${next}"`}; restarting exxperts web…\n`);
+        if (fs.existsSync(stateProfiles.homeMoveIntentPath(loginHome))) {
+          console.error("\nMoving where exxperts keeps its data; restarting exxperts web…\n");
+        } else {
+          const next = stateProfiles.readActiveProfile(os.homedir());
+          console.error(`\nSwitching to ${next === null ? "the standard profile (.exxperts)" : `profile "${next}"`}; restarting exxperts web…\n`);
+        }
         continue;
       }
       process.exit(code ?? (signal ? 1 : 0));
