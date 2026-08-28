@@ -296,7 +296,7 @@ export function StateProfileSection() {
 			{payload.home && (
 				<section className="ai-setup-section state-profiles" aria-label="Data folder">
 					<h3 className="web-search-fallback-heading">Data folder</h3>
-					<div className="rs-row">
+					<div className={movePlan ? "rs-row rs-row-armed" : "rs-row"}>
 						<div className="rs-row-main">
 							<span className="rs-row-label">{payload.home.source === "default" ? "Your home folder" : payload.home.dir}</span>
 							<span className="rs-row-hint">
@@ -371,7 +371,7 @@ export function StateProfileSection() {
 					<span className="rs-row-hint">Loaded</span>
 				</div>
 				{payload.active !== null && (
-					<div className="rs-row">
+					<div className={armed?.kind === "switch" && armed.name === null ? "rs-row rs-row-armed" : "rs-row"}>
 						<div className="rs-row-main">
 							<span className="rs-row-label">.exxperts</span>
 							<span className="rs-row-hint">Your standard profile. It cannot be deleted.</span>
@@ -393,7 +393,7 @@ export function StateProfileSection() {
 					const switchArmed = armed?.kind === "switch" && armed.name === profile.name;
 					const deleteArmed = armed?.kind === "delete" && armed.name === profile.name;
 					return (
-						<div className="rs-row" key={profile.name}>
+						<div className={switchArmed || deleteArmed ? "rs-row rs-row-armed" : "rs-row"} key={profile.name}>
 							<div className="rs-row-main">
 								<span className="rs-row-label">{profile.name}</span>
 								{switchArmed && (

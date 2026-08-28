@@ -12887,6 +12887,19 @@ button.model-picker-group-head.kb-active {
 	flex: 1 1 160px;
 	min-width: 0;
 }
+/* An armed row is a decision in progress (move the data folder, switch,
+   delete): the whole row lights up with the danger-notice tint, so
+   confirm-or-cancel is unmissable instead of one red line of text. The
+   extra class in the selector outranks the settings-overlay row-rhythm
+   rule further down, whose zero side padding would press the text against
+   the tinted border. */
+.state-profiles .rs-row.rs-row-armed {
+	border: 1px solid color-mix(in srgb, var(--error) 55%, var(--border));
+	background: color-mix(in srgb, var(--error) 8%, transparent);
+	border-radius: 8px;
+	padding: 14px 16px;
+	margin: 6px 0;
+}
 /* The mac desktop app pads full-page landings 60px down to clear the
    traffic lights; the modal pane floats well below them, so it keeps the
    modal's own inset (the desktop rule is more specific than the pair
