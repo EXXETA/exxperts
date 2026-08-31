@@ -518,7 +518,10 @@ try {
 	// A failure AFTER the memory write (audit record unwritable): the approval
 	// SUCCEEDS — memory, archive and the export stay, consistent — and the
 	// record failure is a disclosed warning, never a thrown "not applied".
-	if (process.getuid?.() !== 0) {
+	// The unwritable-directory fixture is POSIX-only: Windows' read-only bit
+	// does not stop file creation inside a directory, so there the write just
+	// succeeds and there is nothing to disclose — skip alongside the root case.
+	if (process.platform !== "win32" && process.getuid?.() !== 0) {
 		fs.writeFileSync(l1bPath, sourceL1b(), "utf-8");
 		const postArchive = archiveCount();
 		const postEvents = structuralReviewEventCount();

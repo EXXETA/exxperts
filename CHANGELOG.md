@@ -2,7 +2,7 @@
 
 User-visible changes per release. Historical private/internal development notes are not part of this public-facing changelog.
 
-## 0.11.0 (unreleased)
+## 0.11.0 (2026-08-31)
 
 - An image copied to the clipboard pastes straight into the chat composer. A screenshot or a
   picture from a page stages as an attachment with Cmd+V, exactly as if it had been added through
