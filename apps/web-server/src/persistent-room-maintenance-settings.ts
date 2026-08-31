@@ -21,11 +21,18 @@ import { DEFAULT_PERSISTENT_ROOM_AGENTS_ROOT, persistentAgentRootPath } from "./
  * explicitly opts in, and records written before the field existed read as
  * off too.
  *
- * `memoryBudgetTokens` is the room's advisory memory budget: the size the
- * whole L1b should stay near. It never gates anything — it drives the
- * settings meter, the room-card nudge, and a target line in the absorb /
- * structural-review proposal prompts. Estimated tokens ≈ chars / 4, the same
- * estimate used everywhere else.
+ * `memoryBudgetTokens` is the room's memory budget. It binds on the
+ * REVIEW TARGET — Deep Memory + Active Items — not the whole L1b (decision
+ * 2026-08-26): Recent Context is transient intake that Memorize clears, and
+ * Chronos is system-managed and near-constant, so counting either would nudge
+ * the wrong process. It drives the settings meter, the room-card badge, and
+ * the memory-page bar (all through `overMemoryBudget` below), the budget
+ * section in the absorb / structural-review proposal prompts, the fast-path
+ * refusal of over-budget-after outcomes, and Review's pruning depth + retry
+ * loop (through `deriveReviewHardness` below). It never hard-gates a manual
+ * approval: a user can always approve an over-budget outcome — disclosed —
+ * and there is always a working way back under.
+ * Estimated tokens ≈ chars / 4, the same estimate used everywhere else.
  */
 export interface PersistentRoomMaintenanceSettings {
 	schemaVersion: 1;
@@ -42,6 +49,34 @@ export interface PersistentRoomMaintenanceSettingsStorageOptions {
 export const MEMORY_BUDGET_MIN_TOKENS = 10_000;
 export const MEMORY_BUDGET_MAX_TOKENS = 50_000;
 export const MEMORY_BUDGET_DEFAULT_TOKENS = 20_000;
+
+// The ONE over-budget comparison. Every surface — server status, meters,
+// badges, bars, and the enforcement loop — calls this; never re-derive
+// the predicate or its denominator at a render site.
+export function overMemoryBudget(reviewTargetEstimatedTokens: number, budgetTokens: number): boolean {
+	return reviewTargetEstimatedTokens > budgetTokens;
+}
+
+export type ReviewHardnessLevel = "light" | "standard" | "deep";
+
+export const REVIEW_HARDNESS_LEVELS: readonly ReviewHardnessLevel[] = ["light", "standard", "deep"] as const;
+
+// Over budget by more than this fraction of the budget derives deep pruning.
+// The percentage is tuning; the shape (agreed 2026-08-25) is the decision:
+// light = under budget, standard = modestly over, deep = far over or a
+// previous run already ended still-over. Thresholds are measured in the same
+// chars/4 estimated tokens as the budget itself.
+export const REVIEW_HARDNESS_DEEP_OVERAGE_RATIO = 0.25;
+
+// The ONE hardness derivation, next to the ONE budget predicate so their
+// denominators can never drift apart. `previousRunPartial` means the latest
+// Review ended still over the current budget with no Memorize rewriting the
+// material since — that run's depth was not enough, so the next derives deep.
+export function deriveReviewHardness(reviewTargetEstimatedTokens: number, budgetTokens: number, previousRunPartial: boolean): ReviewHardnessLevel {
+	if (!overMemoryBudget(reviewTargetEstimatedTokens, budgetTokens)) return "light";
+	if (previousRunPartial) return "deep";
+	return reviewTargetEstimatedTokens - budgetTokens > budgetTokens * REVIEW_HARDNESS_DEEP_OVERAGE_RATIO ? "deep" : "standard";
+}
 
 function clampMemoryBudgetTokens(value: unknown): number {
 	const num = typeof value === "number" && Number.isFinite(value) ? Math.round(value) : MEMORY_BUDGET_DEFAULT_TOKENS;

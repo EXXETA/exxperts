@@ -23,6 +23,7 @@ const {
 	fingerprintL1bSource,
 } = await import("../src/persistent-agents.js");
 const { getStructuralReviewModelLock } = await import("../src/persistent-agent-ai-profiles.js");
+const { DISCUSSION_HANDOFF_MAX_CHARS, DISCUSSION_HANDOFF_TRIM_MARKER, DISCUSSION_TRANSCRIPT_TRIM_MARKER } = await import("../src/discussion-handoff.js");
 const STRUCTURAL_REVIEW_MODEL = getStructuralReviewModelLock("openai-compatible");
 
 const agentId = "structural-review-discussion-smoke-room";
@@ -180,6 +181,9 @@ None detected.
 ### Warnings
 None
 
+### Dropped material
+None.
+
 ### Candidate review target L1b
 ${candidate}`;
 }
@@ -270,6 +274,7 @@ try {
 	}, STRUCTURAL_REVIEW_MODEL, async (prompt, model) => {
 		signoffGeneratorCalled = true;
 		assert(prompt.includes("## Task: Prune Memory Discussion Signoff Handoff"), "signoff builder should pass signoff task to generator");
+		assert(prompt.includes("Keep the whole handoff under about"), "signoff prompt should state an output budget");
 		assert(!prompt.includes("UNIQUE_CHRONOS_SENTINEL_MUST_NOT_REACH_DISCUSSION_OPERATOR"), "signoff generator prompt must exclude Chronos body");
 		assert(!prompt.includes("UNIQUE_RECENT_CONTEXT_SENTINEL_MUST_NOT_REACH_DISCUSSION_OPERATOR"), "signoff generator prompt must exclude Recent Context body");
 		assert(model.provider === STRUCTURAL_REVIEW_MODEL.provider && model.model === STRUCTURAL_REVIEW_MODEL.model, "discussion signoff should use system-selected structural review model");
@@ -300,6 +305,88 @@ try {
 	assert(proposalResponse.writesMemory === false, "proposal from discussion signoff should be non-mutating");
 	assert(proposalResponse.candidateValidation.valid, "proposal from discussion signoff should validate candidate");
 	assert(readL1b() === originalL1b, "proposal generation must not mutate L1b");
+
+	// --- Trap family: the server never rejects its own signoff output ---------
+
+	// 1. Oversized handoff: Transcript summary is shed first, Needs judgment
+	// survives, the trim is disclosed, and /propose accepts the result.
+	const oversizedSignoff = signoffMarkdown.replace(
+		"The discussion confirmed that signoff should hand off guidance to a separate proposal operator.",
+		`The discussion ran long. ${"Every turn restated the same operator-boundary point in new words. ".repeat(160)}`,
+	).replace("### Needs judgment\n- None", "### Needs judgment\n- NEEDS_JUDGMENT_SENTINEL: keep or drop the MR25 follow-ups?");
+	assert(oversizedSignoff.length > DISCUSSION_HANDOFF_MAX_CHARS, "oversized signoff fixture should exceed the handoff cap");
+	const trimmedSignoff = await buildStructuralReviewDiscussionSignoff({
+		agentId,
+		source,
+		assessmentMarkdown,
+		messages: [{ role: "user", content: "Preserve the operator-boundary decision." }, { role: "assistant", content: discussionReply }],
+	}, STRUCTURAL_REVIEW_MODEL, async () => ({ text: oversizedSignoff, usage: { input: 20, output: 15, totalTokens: 35, cost: 0 } }));
+	assert(trimmedSignoff.assessmentHandoff.text.length <= DISCUSSION_HANDOFF_MAX_CHARS, "oversized handoff should be trimmed under the cap");
+	assert(trimmedSignoff.assessmentHandoff.text.includes(`### Transcript summary\n\n${DISCUSSION_HANDOFF_TRIM_MARKER}`), "Transcript summary should be shed first with a disclosed marker");
+	assert(trimmedSignoff.assessmentHandoff.text.includes("NEEDS_JUDGMENT_SENTINEL"), "Needs judgment must survive the trim");
+	assert(trimmedSignoff.assessmentHandoff.text.includes("Preserve the Prune memory discussion/proposal operator separation"), "User guidance should survive when shedding the summary is enough");
+	assert(trimmedSignoff.warnings.some((warning) => /discussion summary handed to the draft ran past its 8000-character limit/.test(warning) && /"Transcript summary"/.test(warning)), "trimmed handoff should be disclosed in warnings");
+	let trimmedProposalPrompt = "";
+	await buildStructuralReviewProposal({
+		agentId,
+		assessmentMarkdown,
+		assessmentHandoff: trimmedSignoff.assessmentHandoff,
+		source,
+	}, STRUCTURAL_REVIEW_MODEL, async (prompt) => {
+		trimmedProposalPrompt = prompt;
+		return { text: proposalFixture(), usage: { input: 30, output: 40, totalTokens: 70, cost: 0 } };
+	});
+	assert(trimmedProposalPrompt.includes(DISCUSSION_HANDOFF_TRIM_MARKER), "proposal step should accept the trimmed handoff and see the marker");
+
+	// 2. Signoff prompt ladder on a small-window model: older long messages are
+	// shortened, the last 4 stay whole, and the trim is disclosed.
+	const ladderMessages = Array.from({ length: 20 }, (_, index) => ({
+		role: (index % 2 === 0 ? "user" : "assistant") as "user" | "assistant",
+		content: index === 19 ? `LAST_MESSAGE_SENTINEL ${"closing point ".repeat(277).trim()}` : `Turn ${index + 1}: ${"long discussion turn ".repeat(185).trim()}`,
+	}));
+	let ladderPrompt = "";
+	const ladderSignoff = await buildStructuralReviewDiscussionSignoff({
+		agentId,
+		source,
+		assessmentMarkdown,
+		messages: ladderMessages,
+	}, STRUCTURAL_REVIEW_MODEL, async (prompt) => {
+		ladderPrompt = prompt;
+		return { text: signoffMarkdown, usage: { input: 20, output: 15, totalTokens: 35, cost: 0 } };
+	}, { resolveModelWindow: () => ({ contextWindow: 24000, maxOutputTokens: 1000 }) });
+	assert(ladderPrompt.includes(DISCUSSION_TRANSCRIPT_TRIM_MARKER), "ladder should trim long older messages in the signoff prompt");
+	assert(ladderPrompt.includes(ladderMessages[19].content), "ladder must keep the latest messages whole");
+	assert(!ladderPrompt.includes("UNIQUE_CHRONOS_SENTINEL_MUST_NOT_REACH_DISCUSSION_OPERATOR"), "laddered signoff prompt must still exclude Chronos body");
+	assert(ladderSignoff.tokenBudget.promptEstimatedTokens <= 19400, `laddered signoff prompt should fit the window budget (got ${ladderSignoff.tokenBudget.promptEstimatedTokens})`);
+	assert(ladderSignoff.warnings.some((warning) => /discussion was trimmed so the model could read it back/.test(warning) && /last 4 turns were kept in full/.test(warning)), `ladder should be disclosed in warnings (got ${JSON.stringify(ladderSignoff.warnings)})`);
+
+	// 3. Below the tightest stage, signoff and turn refuse honestly (413, named
+	// process) before the provider is called.
+	let refusedSignoffGeneratorCalled = false;
+	try {
+		await buildStructuralReviewDiscussionSignoff({ agentId, source, assessmentMarkdown, messages: ladderMessages }, STRUCTURAL_REVIEW_MODEL, async () => {
+			refusedSignoffGeneratorCalled = true;
+			return { text: signoffMarkdown };
+		}, { resolveModelWindow: () => ({ contextWindow: 2000, maxOutputTokens: 1000 }) });
+		throw new Error("oversized signoff prompt should refuse");
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		assert(/the Review discussion summary prompt for .* is too large for the locked model/.test(message) && (error as any).statusCode === 413, `signoff overflow should refuse with 413 and the named process (got ${message})`);
+	}
+	assert(!refusedSignoffGeneratorCalled, "refused signoff must not call the provider");
+	let refusedTurnGeneratorCalled = false;
+	try {
+		await buildStructuralReviewDiscussionTurn({ agentId, source, assessmentMarkdown, messages: [], userMessage: "Please continue." }, STRUCTURAL_REVIEW_MODEL, async () => {
+			refusedTurnGeneratorCalled = true;
+			return { text: "should not run" };
+		}, { resolveModelWindow: () => ({ contextWindow: 2000, maxOutputTokens: 1000 }) });
+		throw new Error("oversized discussion turn prompt should refuse");
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		assert(/the Review discussion prompt for .* is too large/.test(message) && (error as any).statusCode === 413, `turn overflow should refuse with 413 and the named process (got ${message})`);
+	}
+	assert(!refusedTurnGeneratorCalled, "refused discussion turn must not call the provider");
+	assert(readL1b() === originalL1b, "trap-family checks must not mutate L1b");
 
 	let missingSourceProposalGeneratorCalled = false;
 	await expectThrowsAsync(

@@ -1,8 +1,18 @@
-import { memo, useEffect, useMemo, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { approvalPreviewFromItem, type ApprovalPreviewData } from "../approval-preview";
 import type { ChatItem } from "../types";
 
 type ApprovalItem = Extract<ChatItem, { kind: "approval" }>;
+
+/**
+ * The chat composer's textarea: the only textarea inside the composer box
+ * (in-room-chat.tsx). The keyboard-approval flow needs it twice — to refuse
+ * stealing focus from someone mid-typing, and to hand focus back after a
+ * card resolves.
+ */
+function composerTextarea(): HTMLTextAreaElement | null {
+	return document.querySelector<HTMLTextAreaElement>(".composer-box textarea");
+}
 
 interface Props {
 	item: ApprovalItem;
@@ -72,6 +82,26 @@ function ApprovalImpl({ item, onResolve, onPreview }: Props) {
 		if (preview) onPreview?.(preview);
 	}, [item.requestId, preview, onPreview]);
 
+	// A pending card offers its Approve button to the keyboard — but it must
+	// never steal focus from someone typing: a grabbed focus would turn their
+	// "send" Enter into a silent approval. So the button is focused only when
+	// no text surface holds focus AND the composer is empty (an unfocused
+	// draft still means someone is mid-thought). Once per card, on mount.
+	const approveRef = useRef<HTMLButtonElement | null>(null);
+	useEffect(() => {
+		if (item.done) return;
+		const btn = approveRef.current;
+		if (!btn) return;
+		const active = document.activeElement;
+		if (active instanceof HTMLElement) {
+			const tag = active.tagName;
+			if (tag === "TEXTAREA" || tag === "INPUT" || tag === "SELECT" || active.isContentEditable) return;
+		}
+		const composer = composerTextarea();
+		if (composer && composer.value !== "") return;
+		btn.focus();
+	}, [item.requestId]);
+
 	if (item.done) {
 		// Resolved approvals fold to one quiet line: the decision is chat
 		// history, not a live card. The verdict comes from the resolution label
@@ -101,9 +131,50 @@ function ApprovalImpl({ item, onResolve, onPreview }: Props) {
 		item.uiKind === "confirm" ? "approve?" : item.uiKind === "select" ? "your call" : "your input";
 	const metadata = preview ? approvalMetadata(item.title, item.detail || item.message) : [];
 
+	// Every resolution path — click or key — hands focus back to the composer:
+	// the card is about to fold to a line, and focus must not die on body.
+	const resolve = (value: any, label: string): void => {
+		onResolve(item.requestId, value, label);
+		composerTextarea()?.focus();
+	};
+
+	// The keyboard twin of the Decline/No/Cancel button, per card kind. A
+	// select card with no decline-shaped option has nothing to map Escape to,
+	// so it reports "did not act" and the key keeps its usual meaning.
+	const declineCurrent = (): boolean => {
+		if (item.uiKind === "confirm") {
+			resolve(false, fenced ? "Decline" : "No");
+			return true;
+		}
+		if (item.uiKind === "select") {
+			const opt = (item.options ?? []).find((o) => /^(no\b|cancel|decline)/i.test(o));
+			if (!opt) return false;
+			resolve(opt, opt);
+			return true;
+		}
+		if (item.uiKind === "input") {
+			resolve(undefined, "Cancelled");
+			return true;
+		}
+		return false;
+	};
+
+	// Escape declines while focus is INSIDE the card (this handler only sees
+	// events targeted within it — that is the focus-within scope). Enter needs
+	// no handler: the focused Approve button activates natively. The event is
+	// stopped only when the card acts, so an Escape it cannot honor still
+	// closes menus and panes exactly as before.
+	const onCardKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>): void => {
+		if (e.key !== "Escape") return;
+		if (declineCurrent()) {
+			e.preventDefault();
+			e.stopPropagation();
+		}
+	};
+
 	return (
 		<div className="approval-row">
-			<div className={`approval-card${fenced ? " delegate" : ""}`}>
+			<div className={`approval-card${fenced ? " delegate" : ""}`} onKeyDown={onCardKeyDown}>
 				{fenced ? (
 					// The delegate approval is just the question: it already names the
 					// actor ("Have a specialist create ..."), so a chip and a "wants to
@@ -119,14 +190,21 @@ function ApprovalImpl({ item, onResolve, onPreview }: Props) {
 				{(() => {
 					if (preview) return null;
 					if (fenced) {
-						// Collapsed: just the question and the buttons. Details shows the
-						// guidance facts only — the model-written brief is never rendered
-						// here (it still travels on the wire and in the durable record).
-						return detailsOpen && fenced.facts ? (
-							<div className="approval-delegate">
-								<div className="approval-message approval-delegate-facts">{fenced.facts}</div>
-							</div>
-						) : null;
+						// A command approval shows the fenced text ON the card: the command
+						// is what the user consents to, and the tool row above truncates
+						// long commands. Delegate briefs stay hidden as before — long, and
+						// not themselves the consent object.
+						const isCommand = /command/i.test(fenced.label);
+						return (
+							<>
+								{isCommand && fenced.brief && <pre className="approval-detail approval-command">{fenced.brief}</pre>}
+								{detailsOpen && fenced.facts ? (
+									<div className="approval-delegate">
+										<div className="approval-message approval-delegate-facts">{fenced.facts}</div>
+									</div>
+								) : null}
+							</>
+						);
 					}
 					return (
 						<>
@@ -149,14 +227,15 @@ function ApprovalImpl({ item, onResolve, onPreview }: Props) {
 						    confirms keep Yes/No. Both label pairs map onto the resolved
 						    line's verdict regexes above. */}
 						<button
+							ref={approveRef}
 							className="btn-primary"
-							onClick={() => onResolve(item.requestId, true, fenced ? "Approve" : "Yes")}
+							onClick={() => resolve(true, fenced ? "Approve" : "Yes")}
 						>
 							{fenced ? "Approve" : "Yes"}
 						</button>
 						<button
 							className="btn-secondary"
-							onClick={() => onResolve(item.requestId, false, fenced ? "Decline" : "No")}
+							onClick={() => resolve(false, fenced ? "Decline" : "No")}
 						>
 							{fenced ? "Decline" : "No"}
 						</button>
@@ -170,21 +249,26 @@ function ApprovalImpl({ item, onResolve, onPreview }: Props) {
 
 				{item.uiKind === "select" && (
 					<div className="approval-buttons">
-						{(item.options ?? []).map((opt) => (
-							<button
-								key={opt}
-								className={
-									opt.toLowerCase() === "approve" || opt.toLowerCase() === "yes"
-										? "btn-primary"
-										: opt.toLowerCase() === "no" || opt.toLowerCase() === "cancel"
-											? "btn-secondary"
-											: "btn-neutral"
-								}
-								onClick={() => onResolve(item.requestId, opt, opt)}
-							>
-								{opt}
-							</button>
-						))}
+						{(item.options ?? []).map((opt) => {
+							const lower = opt.toLowerCase();
+							const primary = lower === "approve" || lower === "yes";
+							return (
+								<button
+									key={opt}
+									ref={primary ? approveRef : undefined}
+									className={
+										primary
+											? "btn-primary"
+											: lower === "no" || lower === "cancel"
+												? "btn-secondary"
+												: "btn-neutral"
+									}
+									onClick={() => resolve(opt, opt)}
+								>
+									{opt}
+								</button>
+							);
+						})}
 					</div>
 				)}
 
@@ -200,13 +284,13 @@ function ApprovalImpl({ item, onResolve, onPreview }: Props) {
 						<div className="approval-buttons">
 							<button
 								className="btn-primary"
-								onClick={() => onResolve(item.requestId, text, text ? "Submitted" : "(empty)")}
+								onClick={() => resolve(text, text ? "Submitted" : "(empty)")}
 							>
 								Submit
 							</button>
 							<button
 								className="btn-secondary"
-								onClick={() => onResolve(item.requestId, undefined, "Cancelled")}
+								onClick={() => resolve(undefined, "Cancelled")}
 							>
 								Cancel
 							</button>

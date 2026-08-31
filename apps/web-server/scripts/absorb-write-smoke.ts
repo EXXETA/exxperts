@@ -22,13 +22,15 @@ const {
 	getPersistentAgentStatus,
 	parseAbsorbApprovalRequest,
 	parseCheckpointApprovalRequest,
+	reviewTargetEstimatedTokensFromL1b,
 	writeApprovedAbsorb,
 	writeApprovedCheckpoint,
 	writePersistentAgentThread,
 } = await import("../src/persistent-agents.js");
+const { overMemoryBudget } = await import("../src/persistent-room-maintenance-settings.js");
 
 const agentId = "absorb-write-smoke-room";
-const { ABSORB_CONSOLIDATION_WORKER_TYPE, ABSORB_EMPTY_RECENT_CONTEXT_PLACEHOLDER } = await import("../src/absorb-consolidation.js");
+const { ABSORB_CONSOLIDATION_WORKER_TYPE, ABSORB_EMPTY_RECENT_CONTEXT_PLACEHOLDER, extractTopLevelSectionBody } = await import("../src/absorb-consolidation.js");
 
 const SOURCE_L1B_SENTINEL = "RAW_SOURCE_L1B_SENTINEL_ABSORB_SMOKE";
 const CANDIDATE_L1B_SENTINEL = "RAW_CANDIDATE_L1B_SENTINEL_ABSORB_SMOKE";
@@ -74,7 +76,11 @@ function setRecentContextEntries(count: number): void {
 }
 
 function candidateL1b(recentContextBody = ABSORB_EMPTY_RECENT_CONTEXT_PLACEHOLDER): string {
-	return `<!-- exxeta:l1b schema_version=1 -->\n\n## Chronos\n\n- Current scaffold timestamp: 2026-05-18T00:00:00.000Z\n- Persistent agent id: absorb-write-smoke-room\n- Lifecycle state: ready\n- Last checkpoint: cp_smoke\n- Last consolidation: none\n\n## Deep Memory\n\n- Synthetic user is validating persistence-native personalized agents inside exxperts.\n- Absorb write smoke durable understanding has been consolidated into stable memory.\n- Candidate-only redaction marker: ${CANDIDATE_L1B_SENTINEL}.\n\n## Active Items\n\n### High Priority\n\n- Continue absorb approval-gated write implementation.\n\n### Medium Priority\n\n- Keep checkpoint and absorb mutation boundaries separate.\n\n### Low Priority\n\n- Revisit sidecar event records after proposal/write flow is stable.\n\n## Recent Context\n\n${recentContextBody}\n`;
+	// Chronos is system-managed: a faithful candidate carries the source's
+	// Chronos through unchanged, so the fixture splices it from the live L1b.
+	const chronos = extractTopLevelSectionBody(readL1b(), "Chronos");
+	if (chronos == null) throw new Error("source L1b should have a Chronos section");
+	return `<!-- exxeta:l1b schema_version=1 -->\n\n## Chronos\n\n${chronos.trim()}\n\n## Deep Memory\n\n- Synthetic user is validating persistence-native personalized agents inside exxperts.\n- Absorb write smoke durable understanding has been consolidated into stable memory.\n- Candidate-only redaction marker: ${CANDIDATE_L1B_SENTINEL}.\n\n## Active Items\n\n### High Priority\n\n- Continue absorb approval-gated write implementation.\n\n### Medium Priority\n\n- Keep checkpoint and absorb mutation boundaries separate.\n\n### Low Priority\n\n- Revisit sidecar event records after proposal/write flow is stable.\n\n## Recent Context\n\n${recentContextBody}\n`;
 }
 
 function proposal(candidate = candidateL1b(), sourceL1b = readL1b()) {
@@ -177,11 +183,28 @@ try {
 
 	setRecentContextEntries(5);
 	const sourceL1b = readL1b();
+	// Budget-staleness guard (slice 3): a proposal echoing a budget that no
+	// longer matches the room's settings must stale before anything is written.
+	// The default budget is 20k, so any other echoed number trips it; proposals
+	// that don't echo the impact block (this smoke's other cases) skip the guard.
+	expectThrows(
+		() => writeApprovedAbsorb(parseAbsorbApprovalRequest({ proposal: { ...proposal(), memoryBudgetImpact: { budgetTokens: 12_345, reviewTargetEstimatedTokensBefore: 1, reviewTargetEstimatedTokensAfter: 1, overBudgetBefore: false, overBudgetAfter: false } } }, agentId).request, [], new Date("2026-05-18T19:59:00.000Z")),
+		// The full prefix is load-bearing: the client's stale flow keys on
+		// "proposal is stale" and its cause copy on "memory budget changed".
+		/proposal is stale: memory budget changed/,
+		"a budget edited between propose and approve should stale the proposal",
+	);
 	const parsed = absorbRequest();
 	const result = writeApprovedAbsorb(parsed.request, parsed.warnings, new Date("2026-05-18T20:00:00.000Z"));
 	const absorbedL1b = readL1b();
 	assert(result.writesMemory === true, "absorb approval should report memory write");
 	assert(result.recentContextEntryCount === 0, "absorb approval should report zero RC entries");
+	// Slice-3 budget state: the saved screen's numbers must read the WRITTEN
+	// L1b through the shared numerator and the one predicate — not a cached
+	// pre-write value, not a re-derived comparison.
+	assert(result.memoryBudget && result.memoryBudget.reviewTargetEstimatedTokens === reviewTargetEstimatedTokensFromL1b(absorbedL1b), "approval budget state should measure the written L1b via the shared numerator");
+	assert(result.memoryBudget.overBudget === overMemoryBudget(result.memoryBudget.reviewTargetEstimatedTokens, result.memoryBudget.budgetTokens), "approval budget verdict should be the one predicate");
+	assert(result.memoryBudget.budgetTokens > 0, "approval budget state should carry the room's budget");
 	assert(/^## Chronos\n[\s\S]*^## Deep Memory\n[\s\S]*^## Active Items\n[\s\S]*^## Recent Context/m.test(absorbedL1b), "absorbed L1b should preserve top-level topology/order");
 	assert(!/^###\s+RC-/m.test(absorbedL1b), "absorbed L1b should clear all RC entries");
 	assert(absorbedL1b.includes(`## Recent Context\n\n${ABSORB_EMPTY_RECENT_CONTEXT_PLACEHOLDER}`), "absorbed L1b should keep checkpoint-safe Recent Context placeholder");

@@ -62,6 +62,8 @@ export type PersistentAgentCardProps = {
 	aiProfileStatus: PersistentAgentAiProfileSelectionStatus | null;
 	thread: LauncherRoomThread | null;
 	live: boolean;
+	/** The room refused to open because its memory does not fit the thread's model: the standby thread is not resumable, so it must not block Maintain. */
+	unresumable?: boolean;
 	duplicateDisplayName?: boolean;
 	onEnter: (status: PersistentAgentStatus, model: WebChatModelOption) => Promise<void> | void;
 	onResume: (status: PersistentAgentStatus) => Promise<void> | void;
@@ -79,7 +81,7 @@ export type PersistentAgentCardProps = {
 	onRecordPreferredModel?: (agentId: PersistentAgentId, model: { provider: string; model: string }) => void;
 };
 
-export function PersistentAgentCard({ status, modelStatus, aiProfileStatus, thread, live, duplicateDisplayName = false, onEnter, onResume, onMaintain, onOpenSettings, backgroundReady = false, purging = false, standbyLockedModels, onSelectAiProfile, onRecordPreferredModel }: PersistentAgentCardProps) {
+export function PersistentAgentCard({ status, modelStatus, aiProfileStatus, thread, live, unresumable = false, duplicateDisplayName = false, onEnter, onResume, onMaintain, onOpenSettings, backgroundReady = false, purging = false, standbyLockedModels, onSelectAiProfile, onRecordPreferredModel }: PersistentAgentCardProps) {
 	const [entering, setEntering] = useState(false);
 	const [expanded, setExpanded] = useState(false);
 	const [draftModel, setDraftModel] = useState("");
@@ -95,9 +97,7 @@ export function PersistentAgentCard({ status, modelStatus, aiProfileStatus, thre
 	const memoryHardCap = memory?.recentContextHardCap;
 	const memoryMeterReady = !!memory && typeof memoryHardCap === "number" && Number.isFinite(memoryHardCap) && memoryHardCap > 0;
 	const memoryFill = memoryMeterReady ? Math.min(Math.max((memory!.recentContextCount ?? 0) / memoryHardCap!, 0), 1) : 0;
-	const overMemoryBudget = typeof status?.memoryBudgetTokens === "number"
-		&& typeof status?.promptBudget?.l1bEstimatedTokens === "number"
-		&& status.promptBudget.l1bEstimatedTokens > status.memoryBudgetTokens;
+	const overMemoryBudget = status?.memoryBudget?.overBudget === true;
 	const maintenanceSeverity: "none" | "soft" | "hard" =
 		memoryLevel === "hard_cap"
 			? "hard"
@@ -289,7 +289,7 @@ export function PersistentAgentCard({ status, modelStatus, aiProfileStatus, thre
 	// is exactly when reaching another provider matters most (community #9).
 	const switchableModelsAvailable = !!onSelectAiProfile && !!aiProfileStatus?.profiles.some((profile) => profile.ready && (profile.processes?.persistentRoom.models.length ?? 0) > 0);
 	const showModelPicker = roomModels.length > 0 || switchableModelsAvailable;
-	const canMaintain = !!status && status.exists && !hasActiveThread && !lockedElsewhere && !purging && (status.status === "ready" || status.status === "needs_absorb");
+	const canMaintain = !!status && status.exists && (!hasActiveThread || unresumable) && !lockedElsewhere && !purging && (status.status === "ready" || status.status === "needs_absorb");
 	// Disabled tooltips name the actual blocker and the way out; "resting" is
 	// not a state shown anywhere else on the card.
 	const enterDisabledReason = purging
@@ -337,7 +337,7 @@ export function PersistentAgentCard({ status, modelStatus, aiProfileStatus, thre
 								? <span className="persistent-agent-badge locked" title={lockNote}>🔒 {lockShort}</span>
 								: backgroundReady
 									? <span className="persistent-agent-badge ready" title="A response finished after you left this room. Resume to read it.">response ready</span>
-									: showBadge && <span className={`persistent-agent-badge ${badgeClass}`}>{badgeLabel}</span>}
+									: showBadge && <span className={`persistent-agent-badge ${badgeClass}`} title={badgeLabel === "memory over budget" ? "This room's deep memory and active items are larger than the budget set in its room settings. Use Maintain → Review to tighten them; the room keeps working meanwhile." : badgeLabel === "needs maintenance" ? "This room's memory is getting large. Use Maintain when convenient; the room keeps working meanwhile." : badgeLabel === "maintenance required" ? "This room's memory needs maintenance before it degrades further. Use Maintain." : undefined}>{badgeLabel}</span>}
 						{status?.exists && onOpenSettings && <button className="card-gear-btn" aria-label="Room settings" title={purging ? purgeNote : "Room settings"} disabled={purging} onClick={onOpenSettings}>⚙</button>}
 					</div>
 				</div>

@@ -1,10 +1,12 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
+import { estimateTokens } from "./token-estimate.js";
+import { analyzeRecentContextIds, countRecentContextEntries } from "./recent-context-entries.js";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { SessionManager } from "@exxeta/exxperts-runtime";
-import { ABSORB_CONSOLIDATION_WORKER_TYPE, ABSORB_DISCUSSION_WORKER_TYPE, ABSORB_EMPTY_RECENT_CONTEXT_PLACEHOLDER, absorbAvailabilityFromL1b, buildAbsorbAssessmentPrompt, buildAbsorbDiscussionPrompt, buildAbsorbProposalPrompt, buildAbsorbProposalReview, buildSectionPurposeMap, parseAbsorbAssessment, parseAbsorbProposal, validateAbsorbCandidateL1b } from "./absorb-consolidation.js";
+import { ABSORB_CONSOLIDATION_WORKER_TYPE, ABSORB_DISCUSSION_TOKEN_BUDGET, ABSORB_DISCUSSION_WORKER_TYPE, ABSORB_EMPTY_RECENT_CONTEXT_PLACEHOLDER, absorbAvailabilityFromL1b, buildAbsorbAssessmentPrompt, buildAbsorbAssessmentRetryPrompt, extractRecentContextForAbsorb, buildAbsorbDiscussionPrompt, buildAbsorbProposalPrompt, buildAbsorbProposalReview, buildSectionPurposeMap, parseAbsorbAssessment, parseAbsorbProposal, validateAbsorbCandidateL1b } from "./absorb-consolidation.js";
 import type { AbsorbAssessmentFields, AbsorbAssessmentHandoffInput, AbsorbAvailability, AbsorbDiscussionMessage, AbsorbDiscussionPromptTelemetry, AbsorbDiscussionTokenBudget, AbsorbModelLock, AbsorbPromptTelemetry, AbsorbProposalFields, AbsorbProposalReview } from "./absorb-consolidation.js";
 import { assembleProposedRecentContext, buildCheckpointCompressionPrompt, buildCheckpointCompressionRetryPrompt, buildCheckpointProposalPreview, CHECKPOINT_COMPRESSION_WORKER_TYPE, parseCheckpointCompressionFields } from "./checkpoint-compression.js";
 import { buildConsultPrompt, CONSULT_MAX_STACK_EXCHANGES, CONSULT_PRIOR_ANSWER_BOUNDARY_MAX_CHARS, CONSULT_QUESTION_MAX_CHARS, CONSULT_WORKER_TYPE } from "./consult.js";
@@ -12,18 +14,20 @@ import type { ConsultPriorExchange, ConsultPromptTelemetry } from "./consult.js"
 import { buildConsultHandoffBlock, buildConsultHandoffBlockFromStack, readConsultHandoffQueue, validateConsultHandoffQueue, type ConsultHandoffExchange } from "./consult-handoff.js";
 import { buildSpecialistHandoffBlock } from "./specialist-handoff.js";
 import type { CheckpointCompressionFields, CheckpointCompressionPromptTelemetry, CheckpointProposalPreview } from "./checkpoint-compression.js";
-import { buildStructuralReviewAssessmentPrompt, buildStructuralReviewDiscussionPrompt, buildStructuralReviewProposalPrompt, extractStructuralReviewSourceParts, parseStructuralReviewAssessment, parseStructuralReviewProposal, STRUCTURAL_REVIEW_DISCUSSION_WORKER_TYPE, STRUCTURAL_REVIEW_MODE, STRUCTURAL_REVIEW_WORKER_TYPE, structuralReviewMetrics, validateStructuralReviewCandidateReviewTarget } from "./structural-review.js";
+import { ABSORB_HANDOFF_SHED_ORDER, ASSESSMENT_MAX_CHARS, ASSESSMENT_TARGET_WORDS, describeHandoffTrim, describeTranscriptReduction, DISCUSSION_HANDOFF_MAX_CHARS, DISCUSSION_TRANSCRIPT_REDUCTION_STAGES, fitDiscussionHandoff, reduceDiscussionTranscript, STRUCTURAL_REVIEW_HANDOFF_SHED_ORDER } from "./discussion-handoff.js";
+import type { DiscussionTranscriptMessage, DiscussionTranscriptReduction } from "./discussion-handoff.js";
+import { appendStructuralReviewShelfPointer, buildStructuralReviewAssessmentPrompt, buildStructuralReviewAssessmentRetryPrompt, buildStructuralReviewDiscussionPrompt, buildStructuralReviewProposalPrompt, buildStructuralReviewProposalRetryPrompt, composeForgetToDocumentDocument, extractStructuralReviewSourceParts, forgetToDocumentShelfFilename, parseStructuralReviewAssessment, parseStructuralReviewProposal, STRUCTURAL_REVIEW_DISCUSSION_TOKEN_BUDGET, STRUCTURAL_REVIEW_DISCUSSION_WORKER_TYPE, STRUCTURAL_REVIEW_MODE, STRUCTURAL_REVIEW_WORKER_TYPE, structuralReviewDroppedMaterialConflict, structuralReviewMetrics, structuralReviewShelfPointerAdditionText, structuralReviewShelfPointerLine, structuralReviewVanishedMemoryMapAreas, validateStructuralReviewCandidateReviewTarget } from "./structural-review.js";
 import type { StructuralReviewAssessmentFields, StructuralReviewAssessmentHandoffInput, StructuralReviewCandidateValidationResult, StructuralReviewDiscussionMessage, StructuralReviewDiscussionPromptTelemetry, StructuralReviewDiscussionTokenBudget, StructuralReviewMemoryMapRow, StructuralReviewModelLock, StructuralReviewPromptTelemetry, StructuralReviewProposalFields } from "./structural-review.js";
 import { assertPersistentRoomModelForActiveProfile, persistentAgentModelLocksEqual, resolveCheckpointModelLockForProfile } from "./persistent-agent-ai-profiles.js";
 import { readPersistentAgentAiProfileState } from "./persistent-agent-ai-profile-state.js";
 import { readOrgIdentityState } from "./org-identity.js";
 import type { OrgIdentity } from "./org-identity.js";
 import { resolvePersistentRoomEffectiveWorkspacePolicy, type PersistentRoomEffectiveWorkspacePolicy } from "./persistent-room-workspace-policy.js";
-import { listShelfFilesWithOrigin } from "./persistent-room-shelf.js";
+import { listShelfFilesWithOrigin, resolveShelfFilePath, writeDocumentOntoShelf } from "./persistent-room-shelf.js";
 import { listTaskLedgerRecords } from "./persistent-room-task-ledger.js";
 import { backgroundRunsDirectoryPath, isValidBackgroundRunId } from "./background-runs.js";
 import { artifactRoot } from "../../../pi-package/extensions/artifacts/index.js";
-import { readPersistentRoomMaintenanceSettings } from "./persistent-room-maintenance-settings.js";
+import { deriveReviewHardness, overMemoryBudget, readPersistentRoomMaintenanceSettings, REVIEW_HARDNESS_LEVELS, type ReviewHardnessLevel } from "./persistent-room-maintenance-settings.js";
 import { readPersistentRoomPreferredModel } from "./persistent-room-preferred-model.js";
 import { abortAllSpecialistTasks, runningSpecialistCount } from "./persistent-room-specialist-registry.js";
 import { computePersistentRoomScheduleDueOccurrence, listPersistentRoomScheduleJobs, parsePersistentRoomSchedule, readPersistentRoomScheduleStore, summarizePersistentRoomScheduleJobs, writePersistentRoomScheduleStore } from "../../../pi-package/extensions/schedule-prompt/index.js";
@@ -350,9 +354,25 @@ export interface AbsorbProposalResponse {
 	fields: AbsorbProposalFields;
 	review: AbsorbProposalReview;
 	candidateValidation: ReturnType<typeof validateAbsorbCandidateL1b>;
+	memoryBudgetImpact: MemoryBudgetImpact;
 	absorbTelemetry: AbsorbPromptTelemetry;
 	absorbUsage?: AbsorbGenerateResult["usage"];
 	warnings: string[];
+}
+
+/**
+ * Server-derived Review pruning depth: numbers and predicates only — the
+ * client words the copy (the same split MemoryBudgetImpact uses). Derived
+ * through the ONE `deriveReviewHardness` in the maintenance-settings module.
+ */
+export interface StructuralReviewHardnessDerivation {
+	level: ReviewHardnessLevel;
+	budgetTokens: number;
+	reviewTargetEstimatedTokens: number;
+	/** 0 when under budget. */
+	overBudgetTokens: number;
+	/** The latest Review ended still over the current budget, with no Memorize rewriting the material since. */
+	previousRunPartial: boolean;
 }
 
 export interface StructuralReviewAvailability {
@@ -362,6 +382,8 @@ export interface StructuralReviewAvailability {
 	reviewTargetEstimatedTokens: number;
 	reviewTargetWords: number;
 	memoryMap: StructuralReviewMemoryMapRow[];
+	/** Present when available: the depth the next Review run derives, shown before the run starts. */
+	reviewHardness?: StructuralReviewHardnessDerivation;
 }
 
 export interface StructuralReviewSourceMetadata {
@@ -434,6 +456,14 @@ export interface StructuralReviewProposalReview {
 	metrics: StructuralReviewReviewMetrics;
 }
 
+/** The depth this proposal was actually drafted at, and where it came from. */
+export interface StructuralReviewProposalHardness {
+	applied: ReviewHardnessLevel;
+	derived: StructuralReviewHardnessDerivation;
+	/** True when the per-run picker chose a different level than the derivation. */
+	overridden: boolean;
+}
+
 export interface StructuralReviewAssessmentResponse {
 	agentId: PersistentAgentId;
 	writesMemory: false;
@@ -464,8 +494,17 @@ export interface StructuralReviewProposalResponse {
 	fields: StructuralReviewProposalFields;
 	review: StructuralReviewProposalReview;
 	candidateValidation: StructuralReviewCandidateValidationResult;
+	memoryBudgetImpact: MemoryBudgetImpact;
+	reviewHardness: StructuralReviewProposalHardness;
 	structuralReviewTelemetry: StructuralReviewPromptTelemetry;
 	structuralReviewUsage?: StructuralReviewGenerateResult["usage"];
+	/**
+	 * Memory-map areas present in the source and gone from the candidate — the
+	 * ONE count-aware computation, independent of the worker's disclosure. The
+	 * client offers forget-to-document on this signal, so a none-like or
+	 * omitted disclosure over a real drop can never hide the choice.
+	 */
+	vanishedAreas: string[];
 	warnings: string[];
 }
 
@@ -477,6 +516,7 @@ export interface StructuralReviewApprovalProposalReference {
 	fields?: Partial<StructuralReviewProposalFields>;
 	review?: Partial<StructuralReviewProposalReview>;
 	candidateValidation?: StructuralReviewCandidateValidationResult;
+	memoryBudgetImpact?: Partial<MemoryBudgetImpact>;
 	structuralReviewTelemetry?: Partial<StructuralReviewPromptTelemetry>;
 	structuralReviewUsage?: StructuralReviewGenerateResult["usage"];
 }
@@ -485,6 +525,8 @@ export interface StructuralReviewApprovalAcceptedRequest {
 	agentId: PersistentAgentId;
 	proposal: StructuralReviewApprovalProposalReference;
 	approvedCandidateReviewTargetL1b: string;
+	/** User's explicit choice: save this Prune's dropped material to the room's Files and leave a pointer line in Deep Memory. Never set by the fast path. */
+	forgetToDocument?: boolean;
 }
 
 export interface StructuralReviewApprovalResponse {
@@ -495,6 +537,14 @@ export interface StructuralReviewApprovalResponse {
 	updatedL1bPath: string;
 	eventRecordPath: string;
 	eventRelPath?: string;
+	/** False when the audit record could not be written after the memory write (the warning names the consequences); the saved screen's Audit record card reads this, never the warning text. */
+	auditRecordWritten?: boolean;
+	/** The after-write budget verdict, measured from the WRITTEN file (pointer line included) through the ONE numerator — what the saved screen shows. */
+	memoryBudget?: PersistentAgentMemoryBudget;
+	/** Review-target token delta of what was WRITTEN (pointer line included), same metrics family as the propose-time delta the card showed. */
+	reviewTargetEstimatedTokenDelta?: number;
+	/** Present when the user chose forget-to-document: the saved screen names this file. */
+	forgetToDocument?: { shelfFileName: string };
 	postStructuralReview: {
 		returnToLauncher: true;
 	};
@@ -510,6 +560,7 @@ export interface AbsorbApprovalProposalReference {
 	fields?: Partial<AbsorbProposalFields>;
 	review?: Partial<AbsorbProposalReview>;
 	candidateValidation?: ReturnType<typeof validateAbsorbCandidateL1b>;
+	memoryBudgetImpact?: Partial<MemoryBudgetImpact>;
 	absorbTelemetry?: Partial<AbsorbPromptTelemetry>;
 	absorbUsage?: AbsorbGenerateResult["usage"];
 }
@@ -529,6 +580,10 @@ export interface AbsorbApprovalResponse {
 	eventRecordPath: string;
 	eventRelPath?: string;
 	recentContextEntryCount: number;
+	// After-write budget state (same shape and predicate as status.memoryBudget):
+	// the saved screen tells the user when this Memorize took the room over its
+	// budget, instead of leaving that for the next launcher visit.
+	memoryBudget: PersistentAgentMemoryBudget;
 	postAbsorb: {
 		returnToLauncher: true;
 	};
@@ -798,6 +853,17 @@ export interface StructuralReviewEventRecord {
 		recentContextEntryCountBefore: number;
 		recentContextEntryCountAfter: number;
 	};
+	/**
+	 * The after-write budget verdict through the ONE numerator — the number the
+	 * approval card and saved screen showed. The previous-partial escalation
+	 * reads THIS, never the metrics-family estimates above (they can differ by
+	 * a token). Absent on records written before slice 4.
+	 */
+	memoryBudget?: PersistentAgentMemoryBudget;
+	/** The applied draft's Dropped material disclosure, as approved. Absent on records written before slice 7 and when the draft omitted the section. */
+	droppedMaterial?: string;
+	/** Present when the user chose forget-to-document at approval: the shelf file the dropped material was saved to. */
+	forgetToDocument?: { shelfFileName: string };
 	validation: {
 		valid: true;
 		warnings: string[];
@@ -1007,8 +1073,20 @@ export interface PersistentAgentStatus {
 	scheduleSummary: PersistentRoomScheduleSummary;
 	promptBudget?: PersistentAgentPromptBudget;
 	memoryBudgetTokens?: number;
+	memoryBudget?: PersistentAgentMemoryBudget;
 	errors: string[];
 	warnings: string[];
+}
+
+// The budget binds on the review target — Deep Memory + Active Items — not the
+// whole L1b (decision 2026-08-26). The server computes the one predicate here;
+// meters, badges, and bars render this block and never re-derive the comparison.
+export interface PersistentAgentMemoryBudget {
+	budgetTokens: number;
+	reviewTargetEstimatedTokens: number;
+	overBudget: boolean;
+	/** On the room status only: the depth the next Review derives (same struct the Review availability carries). */
+	reviewHardness?: StructuralReviewHardnessDerivation;
 }
 
 interface AgentJson {
@@ -3639,8 +3717,43 @@ function stableMemoryAggregateMetrics(state: L1bEventStateMetrics, sectionTitles
 	};
 }
 
-function estimateTokens(text: string): number {
-	return Math.ceil(text.length / 4);
+// The ONE review-target numerator: Deep Memory + Active Items, selected by
+// section title (tolerant of extra or reordered sections — unlike the review
+// topology extractor, which is a different job). The status block and the
+// memory-page breakdown must agree to the token, so both compute through here;
+// a second extraction path is a second denominator, which is banned.
+export function reviewTargetEstimatedTokensFromL1b(l1b: string): number {
+	return stableMemoryAggregateMetrics(l1bStateMetrics(l1b)).estimatedTokens;
+}
+
+export function readPersistentAgentReviewTargetEstimatedTokens(agentIdRaw: string): number | null {
+	const instance = createPersistentAgentInstance(validatePersistentAgentId(agentIdRaw));
+	const l1bPath = path.join(instance.rootDir, "L1b", "current.md");
+	if (!fs.existsSync(l1bPath)) return null;
+	return reviewTargetEstimatedTokensFromL1b(fs.readFileSync(l1bPath, "utf-8"));
+}
+
+// Approval-card budget impact: both maintenance proposals carry before/after
+// review-target numbers so the card can state the impact in tokens BEFORE the
+// user approves. Built from the ONE numerator above and the ONE predicate in
+// persistent-room-maintenance-settings — a render site must never re-derive
+// either, or the card and the meters drift apart.
+export interface MemoryBudgetImpact {
+	budgetTokens: number;
+	reviewTargetEstimatedTokensBefore: number;
+	reviewTargetEstimatedTokensAfter: number;
+	overBudgetBefore: boolean;
+	overBudgetAfter: boolean;
+}
+
+export function buildMemoryBudgetImpact(reviewTargetEstimatedTokensBefore: number, reviewTargetEstimatedTokensAfter: number, budgetTokens: number): MemoryBudgetImpact {
+	return {
+		budgetTokens,
+		reviewTargetEstimatedTokensBefore,
+		reviewTargetEstimatedTokensAfter,
+		overBudgetBefore: overMemoryBudget(reviewTargetEstimatedTokensBefore, budgetTokens),
+		overBudgetAfter: overMemoryBudget(reviewTargetEstimatedTokensAfter, budgetTokens),
+	};
 }
 
 function isCheckpointDensity(value: string): value is CheckpointDensity {
@@ -3712,6 +3825,22 @@ function updateChronosForCheckpoint(l1b: string, checkpointId: string, sessionId
 	chronosBody = replaceOrAppendChronosLine(chronosBody, "Last checkpoint", checkpointId);
 	chronosBody = replaceOrAppendChronosLine(chronosBody, "Last checkpoint at", now.toISOString());
 	chronosBody = replaceOrAppendChronosLine(chronosBody, "Last approved session", sessionId);
+	return `${l1b.slice(0, start)}\n\n${chronosBody.trim()}\n\n${l1b.slice(end).replace(/^\n+/, "")}`;
+}
+
+// Chronos is system-managed: the absorb worker must copy it through unchanged
+// (validateAbsorbCandidateL1b rejects edits), so the consolidation stamp is
+// written here at apply time — the mirror of updateChronosForCheckpoint.
+function updateChronosForAbsorb(l1b: string, absorbId: string, now: Date): string {
+	const match = /^##\s+Chronos\s*$/m.exec(l1b);
+	if (!match || match.index == null) throw new Error("L1b missing mandatory section: Chronos");
+	const start = match.index + match[0].length;
+	const rest = l1b.slice(start);
+	const next = /^##\s+/m.exec(rest);
+	const end = next?.index == null ? l1b.length : start + next.index;
+	let chronosBody = l1b.slice(start, end);
+	chronosBody = replaceOrAppendChronosLine(chronosBody, "Last consolidation", absorbId);
+	chronosBody = replaceOrAppendChronosLine(chronosBody, "Last consolidation at", now.toISOString());
 	return `${l1b.slice(0, start)}\n\n${chronosBody.trim()}\n\n${l1b.slice(end).replace(/^\n+/, "")}`;
 }
 
@@ -3801,35 +3930,6 @@ function extractMarkdownSections(markdown: string): string[] {
 		if (m) sections.add(m[1].trim());
 	}
 	return [...sections];
-}
-
-function analyzeRecentContextIds(markdown: string): { ids: string[]; numericIds: number[]; duplicateIds: string[]; malformedHeadings: string[]; count: number } {
-	const recentStart = markdown.search(/^##\s+Recent Context\s*$/m);
-	if (recentStart < 0) return { ids: [], numericIds: [], duplicateIds: [], malformedHeadings: [], count: 0 };
-	const recent = markdown.slice(recentStart);
-	const nextSection = recent.slice(1).search(/^##\s+/m);
-	const body = nextSection >= 0 ? recent.slice(0, nextSection + 1) : recent;
-	const ids: string[] = [];
-	const numericIds: number[] = [];
-	const malformedHeadings: string[] = [];
-	const seen = new Set<string>();
-	const duplicateIds = new Set<string>();
-	for (const match of body.matchAll(/^###\s+(RC-[^\s|]+).*$/gm)) {
-		const heading = match[0].trim();
-		if (/stub/i.test(heading)) continue;
-		const id = match[1].trim();
-		ids.push(id);
-		if (seen.has(id)) duplicateIds.add(id);
-		seen.add(id);
-		const numeric = /^RC-(\d{4})$/.exec(id);
-		if (numeric) numericIds.push(Number(numeric[1]));
-		else malformedHeadings.push(heading);
-	}
-	return { ids, numericIds, duplicateIds: [...duplicateIds], malformedHeadings, count: ids.length };
-}
-
-function countRecentContextEntries(markdown: string): number {
-	return analyzeRecentContextIds(markdown).count;
 }
 
 function recentContextLevel(count: number, softCap: number, hardCap: number): PersistentAgentMemoryStatusLevel {
@@ -4127,14 +4227,20 @@ function safeWorkspaceCapabilityLabel(value: string): string {
 	return label.slice(0, 80) || "workspace";
 }
 
+/** The honest Full-access write line: writers on, or writers off with Bash
+ * still able to modify files, or truly read-only. */
+function localFilesWorkspaceWriteLine(capability: { writeEnabled: boolean; bashEnabled: boolean }): string {
+	if (capability.writeEnabled) return "- Write/edit access: enabled";
+	if (capability.bashEnabled) return "- Write/edit tools: disabled. Bash is enabled and can still modify files.";
+	return "- Write access: disabled. If asked to change files, say the room is read-only up front; do not attempt workarounds.";
+}
+
 function persistentAgentWorkspaceCapabilitySnippet(capability: PersistentAgentWorkspaceCapabilitySummary | undefined): string {
 	if (!capability || (capability.availableToolNames.length === 0 && !capability.bashEnabled)) return "";
 	const toolNames = capability.availableToolNames.join(", ");
 	const workspaceAccessMode = capability.workspaceAccessMode ?? "bounded";
 	if (workspaceAccessMode === "localFiles") {
-		const writeLine = capability.writeEnabled
-			? "- Write/edit access: enabled through native file tools"
-			: "- Write/edit access: disabled";
+		const writeLine = localFilesWorkspaceWriteLine(capability);
 		const bashLine = capability.bashEnabled
 			? "- Bash/shell access: enabled"
 			: "- Bash/shell access: disabled";
@@ -4164,8 +4270,8 @@ Use native file tools directly for local files work. read works on files only; f
 This workspace configuration is runtime metadata for tool use. Mention workspace setup only when it is relevant to the user's request.`;
 	}
 	const writeLine = capability.writeEnabled
-		? "- Write scope: Markdown files only inside the selected workspace via write_markdown_file"
-		: "- Write access: disabled";
+		? "- Write scope: files inside the selected workspace only, via the write and edit tools"
+		: "- Write access: disabled. If asked to change files, say the room is read-only up front; do not attempt workarounds.";
 	return `
 
 ## Active workspace capability
@@ -4181,7 +4287,7 @@ ${writeLine}
 
 Use workspace tools only for files under the selected workspace root. Tool paths are workspace-relative. read works on files only; for directories use ls to list contents or find to search by name. Do not use absolute paths, \`~\`, or path traversal to leave the workspace. Do not try to access application internals, the exxperts repo, \`.exxeta\`, \`.exxperts\`, persistent-agent object directories, \`.git\`, \`node_modules\`, or secret files such as \`.env\` or private keys.
 
-Use write_markdown_file only for workspace-relative \`.md\` files. Do not overwrite an existing file unless the user explicitly requested it. After writing a file, tell the user the workspace-relative path and do not paste the full written content unless the user asks for it.
+Use write and edit only with workspace-relative paths; any file type inside the workspace is allowed. Do not overwrite an existing file unless the user explicitly requested it. After writing or editing a file, tell the user the workspace-relative path and do not paste the full written content unless the user asks for it.
 
 If a requested file or folder is outside the workspace or denied by policy, say that the workspace policy blocks it and ask the user to select/confirm an appropriate workspace.
 
@@ -4466,6 +4572,68 @@ function buildPromptBudget(l0: string, l1a: string, l1b: string, l2: string): Pe
 	};
 }
 
+// The one unrecoverable room state: memory so large it fills the model's
+// window on its own. Chat cannot compact a system prompt, Maintain's workers
+// refuse the same memory, and Forget boots the next thread from the same
+// file — so the room must refuse to START on this model, loudly and with the
+// real remedy, instead of failing as a raw provider error on the first turn.
+// Same budget as the maintenance workers (checkpointPromptTokenBudget), same
+// rule when the model exposes no window metadata: run unguarded.
+export class PersistentAgentMemoryOverflowError extends Error {
+	readonly statusCode = 413;
+	readonly code = "memory_overflow";
+	readonly bootEstimatedTokens: number;
+	readonly promptTokenBudget: number;
+	constructor(message: string, bootEstimatedTokens: number, promptTokenBudget: number) {
+		super(message);
+		this.bootEstimatedTokens = bootEstimatedTokens;
+		this.promptTokenBudget = promptTokenBudget;
+	}
+}
+
+export function assertPersistentAgentBootPromptFitsWindow(input: {
+	agentId: string;
+	model: { provider: string; model: string; label?: string };
+	systemPrompt: string;
+	window?: CheckpointModelWindow;
+}): void {
+	const window = input.window;
+	if (window == null || !Number.isFinite(window.contextWindow) || !Number.isFinite(window.maxOutputTokens)) return;
+	const budget = checkpointPromptTokenBudget(window);
+	const bootEstimatedTokens = estimateTokens(input.systemPrompt);
+	if (bootEstimatedTokens <= budget) return;
+	const modelName = input.model.label?.trim() || `${input.model.provider}/${input.model.model}`;
+	// The remedy must be reachable from where the user stands: a refused room
+	// has a standby thread, which keeps Maintain disabled and the model picker
+	// locked — so the first step is Forget (model-free), and the Maintain run
+	// must match the heavy layer: Review never touches Recent Context, so an
+	// intake-heavy room needs Memorize.
+	const heavyLayer = persistentAgentHeavyMemoryLayer(input.agentId);
+	const maintainRun = heavyLayer === "recent"
+		? "Memorize (most of this room's memory is recent sessions)"
+		: "Review (most of this room's memory is long-term)";
+	throw new PersistentAgentMemoryOverflowError(
+		`This room's memory and setup (~${bootEstimatedTokens} estimated tokens) do not fit the usable window of ${modelName} (~${budget} tokens), so a conversation cannot start on this model. ` +
+			`Memory is unchanged and nothing was sent to the model. The way out from here: open Room settings → Session and choose Forget (it closes this session without using a model and unlocks the room), ` +
+			`then from Home open Maintain and run ${maintainRun}, or open the room again with a larger-context model.`,
+		bootEstimatedTokens,
+		budget,
+	);
+}
+
+function persistentAgentHeavyMemoryLayer(agentIdRaw: string): "recent" | "stable" {
+	try {
+		const instance = createPersistentAgentInstance(agentIdRaw);
+		const meta = instance.readAgentJson();
+		if (!meta) return "stable";
+		const l1b = fs.readFileSync(instance.l1bCurrentPath(meta), "utf-8");
+		const recent = extractRecentContextForAbsorb(l1b);
+		return recent.recentContext.length > recent.before.length + recent.after.length ? "recent" : "stable";
+	} catch {
+		return "stable";
+	}
+}
+
 export function buildPersistentAgentBootContext(contract: PersistentAgentBootContract): {
 	contract: PersistentAgentBootContract;
 	layers: PersistentAgentPromptLayer[];
@@ -4546,8 +4714,8 @@ No workspace is configured for this room right now. Workspace file tools and Bas
 	const modeLabel = capability.workspaceAccessMode === "localFiles" ? "Full access" : "Bounded workspace";
 	const toolNames = capability.availableToolNames.join(", ") || "none";
 	const writeLine = capability.workspaceAccessMode === "localFiles"
-		? (capability.writeEnabled ? "- Write/edit access: enabled" : "- Write/edit access: disabled")
-		: (capability.writeEnabled ? "- Write scope: Markdown files only via write_markdown_file" : "- Write access: disabled");
+		? localFilesWorkspaceWriteLine(capability)
+		: (capability.writeEnabled ? "- Write scope: files inside the selected workspace only, via the write and edit tools" : "- Write access: disabled. If asked to change files, say the room is read-only up front; do not attempt workarounds.");
 	return `${heading}
 
 - Workspace label: ${safeWorkspaceCapabilityLabel(capability.workspaceLabel)}
@@ -4768,11 +4936,13 @@ export function getPersistentAgentStatus(agentIdRaw: string): PersistentAgentSta
 	let sections: string[] = [];
 	let fullEntries = 0;
 	let lastCheckpointAt: string | null = null;
+	let reviewTargetEstimatedTokens: number | undefined;
 	if (l1bExists) {
 		const l1b = fs.readFileSync(l1bPath, "utf-8");
 		sections = extractMarkdownSections(l1b);
 		fullEntries = countRecentContextEntries(l1b);
 		lastCheckpointAt = extractChronosLine(l1b, "Last checkpoint at");
+		reviewTargetEstimatedTokens = reviewTargetEstimatedTokensFromL1b(l1b);
 	}
 	const missingSections = REQUIRED_L1B_SECTIONS.filter((section) => !sections.includes(section));
 	for (const section of missingSections) errors.push(`L1b missing mandatory section: ${section}`);
@@ -4822,6 +4992,7 @@ export function getPersistentAgentStatus(agentIdRaw: string): PersistentAgentSta
 		clearPersistentAgentUnseenLandedAnswer(instance.agentId);
 		unseenLandedAnswer = null;
 	}
+	const maintenanceSettings = readPersistentRoomMaintenanceSettings(instance.agentId);
 	return {
 		id: instance.agentId,
 		exists: true,
@@ -4852,7 +5023,17 @@ export function getPersistentAgentStatus(agentIdRaw: string): PersistentAgentSta
 		memoryStatus: buildMemoryStatus(fullEntries, RECENT_CONTEXT_SOFT_CAP, RECENT_CONTEXT_HARD_CAP, typeof meta?.lastCheckpointId === "string" ? meta.lastCheckpointId : null, lastCheckpointAt),
 		scheduleSummary,
 		promptBudget,
-		memoryBudgetTokens: readPersistentRoomMaintenanceSettings(instance.agentId).memoryBudgetTokens,
+		memoryBudgetTokens: maintenanceSettings.memoryBudgetTokens,
+		...(reviewTargetEstimatedTokens !== undefined ? {
+			memoryBudget: {
+				budgetTokens: maintenanceSettings.memoryBudgetTokens,
+				reviewTargetEstimatedTokens,
+				overBudget: overMemoryBudget(reviewTargetEstimatedTokens, maintenanceSettings.memoryBudgetTokens),
+				// The depth the next Review derives — the same struct the Review
+				// availability carries, so no surface re-derives it (CLI included).
+				reviewHardness: reviewHardnessDerivation(instance, reviewTargetEstimatedTokens),
+			},
+		} : {}),
 		errors,
 		warnings,
 	};
@@ -5041,6 +5222,7 @@ export function parseStructuralReviewApprovalRequest(raw: any, agentIdRaw: strin
 			agentId: instance.agentId,
 			proposal,
 			approvedCandidateReviewTargetL1b,
+			forgetToDocument: raw?.forgetToDocument === true,
 		},
 		warnings: [],
 	};
@@ -5091,39 +5273,132 @@ export function writeApprovedStructuralReview(request: StructuralReviewApprovalA
 	if (expectedReviewTargetFingerprint.value !== currentReviewTargetFingerprint.value) throw new Error("proposal is stale: source review target fingerprint changed since proposal generation");
 	if (expectedChronosFingerprint.value !== currentChronosFingerprint.value) throw new Error("proposal is stale: source Chronos fingerprint changed since proposal generation");
 	if (expectedRecentContextFingerprint.value !== currentRecentContextFingerprint.value) throw new Error("proposal is stale: source Recent Context fingerprint changed since proposal generation");
+	// Same budget-staleness guard as the Memorize twin: the card's impact line
+	// was computed against the propose-time budget, so an edit stales the draft.
+	const proposalBudgetTokens = request.proposal.memoryBudgetImpact?.budgetTokens;
+	if (typeof proposalBudgetTokens === "number" && proposalBudgetTokens !== readPersistentRoomMaintenanceSettings(instance.agentId).memoryBudgetTokens) throw new Error("proposal is stale: memory budget changed since proposal generation");
 
-	const candidateReviewTargetL1b = request.approvedCandidateReviewTargetL1b.trimEnd() + "\n";
-	const candidateValidation = validateStructuralReviewCandidateReviewTarget(currentParts.sourceReviewTargetL1b, candidateReviewTargetL1b);
-	if (!candidateValidation.valid) throw new Error(`Candidate review target L1b is invalid: ${candidateValidation.errors.join("; ")}`);
-	const review = structuralReviewProposalReview(currentParts.sourceReviewTargetL1b, candidateReviewTargetL1b, String(request.proposal.fields?.summary ?? ""));
-	const sourceTokens = review.metrics.reviewTargetEstimatedTokensBefore;
-	const candidateTokens = review.metrics.reviewTargetEstimatedTokensAfter;
-	if (structuralReviewTokenGrowthHardReject(sourceTokens, candidateTokens)) {
-		const growthPercent = sourceTokens > 0 ? ((candidateTokens - sourceTokens) / sourceTokens) * 100 : 100;
-		throw new Error(`Candidate review target token growth exceeds Structural Review hard limit: ${growthPercent.toFixed(1)}% > 5%`);
-	}
-	const warnings = [...validationWarnings, ...candidateValidation.warnings, ...structuralReviewTokenGrowthWarnings(sourceTokens, candidateTokens)];
-
-	const candidateFullL1b = graftStructuralReviewCandidate(currentParts.preservedChronos, candidateReviewTargetL1b, currentParts.preservedRecentContext);
-	const candidateParts = extractStructuralReviewSourceParts(candidateFullL1b);
-	if (candidateParts.preservedChronos !== currentParts.preservedChronos) throw new Error("Structural Review graft failed: Chronos was not restored exactly");
-	if (candidateParts.preservedRecentContext !== currentParts.preservedRecentContext) throw new Error("Structural Review graft failed: Recent Context was not restored exactly");
-	if (candidateParts.topLevelSections.join("\n") !== REQUIRED_L1B_SECTIONS.join("\n")) throw new Error("Structural Review candidate top-level section topology/order differs from required topology");
+	const approvedCandidate = request.approvedCandidateReviewTargetL1b.trimEnd() + "\n";
+	// The approved candidate is validated BEFORE any shelf write so a rejected
+	// draft never leaves an orphan document in the room's Files.
+	const approvedValidation = validateStructuralReviewCandidateReviewTarget(currentParts.sourceReviewTargetL1b, approvedCandidate);
+	if (!approvedValidation.valid) throw new Error(`Candidate review target L1b is invalid: ${approvedValidation.errors.join("; ")}`);
 
 	const stamp = slugTimestamp(now);
 	const suffix = shortRandomId();
 	const structuralReviewId = `structural_review_${stamp}_${suffix}`;
+	const droppedMaterial = String(request.proposal.fields?.droppedMaterial ?? "").trim();
+
+	// Forget-to-document: the shelf document is written before any memory
+	// mutation (a failed shelf write fails the approval with memory untouched),
+	// and the pointer line joins the candidate before validation, growth check,
+	// and metrics — everything downstream sees exactly what will be saved.
+	let forgetToDocument: StructuralReviewApprovalResponse["forgetToDocument"];
+	let candidateReviewTargetL1b = approvedCandidate;
+	if (request.forgetToDocument) {
+		const document = composeForgetToDocumentDocument({
+			structuralReviewId,
+			approvedAt: now,
+			droppedMaterial,
+			sectionLevelChangeLog: String(request.proposal.fields?.sectionLevelChangeLog ?? ""),
+			sourceReviewTargetL1b: currentParts.sourceReviewTargetL1b,
+			candidateReviewTargetL1b: approvedCandidate,
+		});
+		try {
+			forgetToDocument = { shelfFileName: writeDocumentOntoShelf(instance.agentId, forgetToDocumentShelfFilename(now), document) };
+		} catch (error) {
+			// The filesystem detail (errno, absolute server path) stays in the
+			// server log; the browser gets product words and the two levers.
+			console.warn(`[forget-to-document-shelf-write-failed] agent=${instance.agentId}: ${error instanceof Error ? error.message : String(error)}`);
+			throw new Error("The dropped material could not be saved to this room's Files, so nothing was applied. No memory was changed. Approve again, or approve without saving dropped material to Files.");
+		}
+		candidateReviewTargetL1b = appendStructuralReviewShelfPointer(approvedCandidate, structuralReviewShelfPointerLine(forgetToDocument.shelfFileName, now));
+	}
+	// From here to the memory write, any failure removes the document again: a
+	// file in the room's Files whose pointer never reached memory would claim an
+	// approval that did not happen. After the memory write the document stays.
+	const discardForgetToDocument = () => {
+		if (!forgetToDocument) return;
+		try {
+			fs.rmSync(resolveShelfFilePath(instance.agentId, forgetToDocument.shelfFileName).absolutePath, { force: true });
+		} catch {
+			// best-effort only
+		}
+	};
+	let candidateValidation!: StructuralReviewCandidateValidationResult;
+	let review!: StructuralReviewProposalReview;
+	let warnings!: string[];
+	let candidateFullL1b!: string;
 	const archivedL1bPath = path.join(archiveDir, `${stamp}-before-${structuralReviewId}.md`);
 	const eventRecordPath = structuralReviewEventRecordPath(instance, structuralReviewId);
-	ensureDir(path.dirname(eventRecordPath));
-	fs.writeFileSync(archivedL1bPath, currentL1b, { mode: 0o600, flag: "wx" });
-	writeFileAtomic(l1bPath, candidateFullL1b);
+	try {
+		candidateValidation = validateStructuralReviewCandidateReviewTarget(currentParts.sourceReviewTargetL1b, candidateReviewTargetL1b);
+		if (!candidateValidation.valid) throw new Error(`Candidate review target L1b is invalid: ${candidateValidation.errors.join("; ")}`);
+		review = structuralReviewProposalReview(currentParts.sourceReviewTargetL1b, candidateReviewTargetL1b, String(request.proposal.fields?.summary ?? ""));
+		const sourceTokens = review.metrics.reviewTargetEstimatedTokensBefore;
+		const candidateTokens = review.metrics.reviewTargetEstimatedTokensAfter;
+		if (structuralReviewTokenGrowthHardReject(sourceTokens, candidateTokens)) {
+			const growthPercent = sourceTokens > 0 ? ((candidateTokens - sourceTokens) / sourceTokens) * 100 : 100;
+			// A borderline candidate can cross the 5% line only because of the
+			// pointer line itself; that refusal must name the real lever.
+			if (forgetToDocument && !structuralReviewTokenGrowthHardReject(sourceTokens, structuralReviewMetrics(approvedCandidate).estimatedTokens)) {
+				throw new Error(`Candidate review target token growth exceeds Structural Review hard limit: ${growthPercent.toFixed(1)}% > 5% — the Files pointer line tipped it over. Approve without saving dropped material to Files, or draft a tighter update.`);
+			}
+			throw new Error(`Candidate review target token growth exceeds Structural Review hard limit: ${growthPercent.toFixed(1)}% > 5%`);
+		}
+		// Advisory growth warnings judge the DRAFT (pre-pointer): the pointer is
+		// the user's opt-in, not the worker's coherence outcome, so its cost is
+		// disclosed as its own line instead of blaming the draft for growth it
+		// did not cause. The hard reject above still judges what is written.
+		// The pointer's cost is the added text's own estimate (heading plus line
+		// on the first export, the line alone after), not written-minus-draft:
+		// anchoring the pointer also trims a blank run before Active Items, so
+		// the difference could read ~0 for a line that is plainly there.
+		const approvedCandidateTokens = forgetToDocument ? structuralReviewMetrics(approvedCandidate).estimatedTokens : candidateTokens;
+		const pointerNote = forgetToDocument ? [`Saving the dropped material to Files added a pointer line of ~${estimateTokens(structuralReviewShelfPointerAdditionText(approvedCandidate, structuralReviewShelfPointerLine(forgetToDocument.shelfFileName, now)))} estimated tokens to Deep Memory.`] : [];
+		warnings = [...validationWarnings, ...approvedValidation.warnings, ...structuralReviewTokenGrowthWarnings(sourceTokens, approvedCandidateTokens), ...pointerNote];
 
+		candidateFullL1b = graftStructuralReviewCandidate(currentParts.preservedChronos, candidateReviewTargetL1b, currentParts.preservedRecentContext);
+		const candidateParts = extractStructuralReviewSourceParts(candidateFullL1b);
+		if (candidateParts.preservedChronos !== currentParts.preservedChronos) throw new Error("Structural Review graft failed: Chronos was not restored exactly");
+		if (candidateParts.preservedRecentContext !== currentParts.preservedRecentContext) throw new Error("Structural Review graft failed: Recent Context was not restored exactly");
+		if (candidateParts.topLevelSections.join("\n") !== REQUIRED_L1B_SECTIONS.join("\n")) throw new Error("Structural Review candidate top-level section topology/order differs from required topology");
+
+		ensureDir(path.dirname(eventRecordPath));
+		fs.writeFileSync(archivedL1bPath, currentL1b, { mode: 0o600, flag: "wx" });
+		writeFileAtomic(l1bPath, candidateFullL1b);
+	} catch (error) {
+		discardForgetToDocument();
+		throw error;
+	}
+
+	// Measured from the WRITTEN file (pointer line included) through the ONE
+	// numerator: the saved screen and the event record read this same verdict,
+	// so the two surfaces can never disagree on over/under.
+	const writtenMemoryBudget: PersistentAgentMemoryBudget = (() => {
+		const budgetTokens = readPersistentRoomMaintenanceSettings(instance.agentId).memoryBudgetTokens;
+		const writtenReviewTargetTokens = reviewTargetEstimatedTokensFromL1b(candidateFullL1b);
+		return { budgetTokens, reviewTargetEstimatedTokens: writtenReviewTargetTokens, overBudget: overMemoryBudget(writtenReviewTargetTokens, budgetTokens) };
+	})();
+
+	// Memory is written from here on: the approval SUCCEEDED, whatever happens
+	// to the bookkeeping. A record failure is disclosed as a warning on the
+	// saved screen and in the record that could be written — never thrown, or
+	// the client would land the user on a "not saved" proposal screen over
+	// memory that was in fact saved. Each step is attempted independently.
+	const afterMemoryWrite = (step: string, consequence: string, fn: () => void): void => {
+		try {
+			fn();
+		} catch (error) {
+			console.warn(`[structural-review-post-write-failed] agent=${instance.agentId} step=${step}: ${error instanceof Error ? error.message : String(error)}`);
+			warnings.push(`Memory was updated and the previous memory archived first, but this Review's ${step} could not be written — ${consequence}`);
+		}
+	};
 	const updatedMeta: AgentJson = {
 		...(meta as AgentJson),
 		updatedAt: now.getTime(),
 	};
-	writeFileAtomic(agentJsonPath, JSON.stringify(updatedMeta, null, 2) + "\n");
+	afterMemoryWrite("room record", "the room's last-updated time was not refreshed.", () => writeFileAtomic(agentJsonPath, JSON.stringify(updatedMeta, null, 2) + "\n"));
 	const resultParts = extractStructuralReviewSourceParts(candidateFullL1b);
 	const sourceMetrics = l1bStateMetrics(currentL1b);
 	const resultMetrics = l1bStateMetrics(candidateFullL1b);
@@ -5192,6 +5467,10 @@ export function writeApprovedStructuralReview(request: StructuralReviewApprovalA
 			recentContextEntryCountBefore: sourceMetrics.recentContextEntryCount,
 			recentContextEntryCountAfter: resultMetrics.recentContextEntryCount,
 		},
+		// One numerator, one predicate: the same verdict the saved screen shows.
+		memoryBudget: writtenMemoryBudget,
+		...(droppedMaterial ? { droppedMaterial } : {}),
+		...(forgetToDocument ? { forgetToDocument } : {}),
 		validation: {
 			valid: true,
 			warnings,
@@ -5199,7 +5478,12 @@ export function writeApprovedStructuralReview(request: StructuralReviewApprovalA
 		},
 		warnings,
 	};
-	writeStructuralReviewEventRecord(instance, eventRecord);
+	let auditRecordWritten = true;
+	afterMemoryWrite("audit record", "it will not appear in this room's memory history, its archived snapshot is not listed there, and the next Review will not see this one's outcome when choosing its pruning depth.", () => {
+		auditRecordWritten = false;
+		writeStructuralReviewEventRecord(instance, eventRecord);
+		auditRecordWritten = true;
+	});
 
 	return {
 		agentId: instance.agentId,
@@ -5209,6 +5493,10 @@ export function writeApprovedStructuralReview(request: StructuralReviewApprovalA
 		updatedL1bPath: l1bPath,
 		eventRecordPath,
 		eventRelPath: paths.eventRelPath,
+		auditRecordWritten,
+		memoryBudget: writtenMemoryBudget,
+		reviewTargetEstimatedTokenDelta: review.metrics.reviewTargetEstimatedTokenDelta,
+		...(forgetToDocument ? { forgetToDocument } : {}),
 		postStructuralReview: { returnToLauncher: true },
 		warnings,
 	};
@@ -5236,6 +5524,12 @@ export function writeApprovedAbsorb(request: AbsorbApprovalAcceptedRequest, vali
 	if (proposalSourceFingerprint?.algorithm !== "sha256" || !/^[a-f0-9]{64}$/i.test(proposalSourceFingerprint.value)) throw new Error("proposal source L1b fingerprint is required");
 	const currentSourceFingerprint = fingerprintL1bSource(currentL1b);
 	if (proposalSourceFingerprint.value.toLowerCase() !== currentSourceFingerprint.value) throw new Error("proposal is stale: source L1b fingerprint changed since proposal generation");
+	// The budget is a proposal input like the L1b: the card's impact line was
+	// computed against it, so an edit between propose and approve stales the
+	// proposal (older clients that don't echo the impact block skip this guard).
+	const memoryBudgetTokens = readPersistentRoomMaintenanceSettings(instance.agentId).memoryBudgetTokens;
+	const proposalBudgetTokens = request.proposal.memoryBudgetImpact?.budgetTokens;
+	if (typeof proposalBudgetTokens === "number" && proposalBudgetTokens !== memoryBudgetTokens) throw new Error("proposal is stale: memory budget changed since proposal generation");
 
 	const initialValidation = validateAbsorbCandidateL1b(currentL1b, request.approvedCandidateL1b);
 	if (!initialValidation.valid) throw new Error(`Candidate L1b is invalid: ${initialValidation.errors.join("; ")}`);
@@ -5249,11 +5543,12 @@ export function writeApprovedAbsorb(request: AbsorbApprovalAcceptedRequest, vali
 	const stamp = slugTimestamp(now);
 	const suffix = shortRandomId();
 	const absorbId = `absorb_${stamp}_${suffix}`;
+	const writtenL1b = updateChronosForAbsorb(normalizedCandidateBody, absorbId, now);
 	const archivedL1bPath = path.join(archiveDir, `${stamp}-before-${absorbId}.md`);
 	const eventRecordPath = absorbEventRecordPath(instance, absorbId);
 	ensureDir(path.dirname(eventRecordPath));
 	fs.writeFileSync(archivedL1bPath, currentL1b, { mode: 0o600, flag: "wx" });
-	writeFileAtomic(l1bPath, normalizedCandidateBody);
+	writeFileAtomic(l1bPath, writtenL1b);
 
 	const updatedMeta: AgentJson = {
 		...(meta as AgentJson),
@@ -5261,7 +5556,7 @@ export function writeApprovedAbsorb(request: AbsorbApprovalAcceptedRequest, vali
 	};
 	writeFileAtomic(agentJsonPath, JSON.stringify(updatedMeta, null, 2) + "\n");
 	const sourceMetrics = l1bStateMetrics(currentL1b);
-	const resultMetrics = l1bStateMetrics(normalizedCandidateBody);
+	const resultMetrics = l1bStateMetrics(writtenL1b);
 	const sourceStableMemory = stableMemoryAggregateMetrics(sourceMetrics);
 	const resultStableMemory = stableMemoryAggregateMetrics(resultMetrics);
 	const mutationSections = deriveL1bMutationSections(sourceMetrics, resultMetrics);
@@ -5317,6 +5612,8 @@ export function writeApprovedAbsorb(request: AbsorbApprovalAcceptedRequest, vali
 	};
 	writeAbsorbEventRecord(instance, eventRecord);
 
+	// resultStableMemory sums Deep Memory + Active Items of the written L1b —
+	// the same quantity reviewTargetEstimatedTokensFromL1b reports to status.
 	return {
 		agentId: instance.agentId,
 		writesMemory: true,
@@ -5326,6 +5623,11 @@ export function writeApprovedAbsorb(request: AbsorbApprovalAcceptedRequest, vali
 		eventRecordPath,
 		eventRelPath: paths.eventRelPath,
 		recentContextEntryCount: resultRecentContextEntryCount,
+		memoryBudget: {
+			budgetTokens: memoryBudgetTokens,
+			reviewTargetEstimatedTokens: resultStableMemory.estimatedTokens,
+			overBudget: overMemoryBudget(resultStableMemory.estimatedTokens, memoryBudgetTokens),
+		},
 		postAbsorb: { returnToLauncher: true },
 		warnings,
 	};
@@ -5721,6 +6023,56 @@ function ensureAbsorbReady(agent: PersistentAgentInstance | string): { availabil
 	};
 }
 
+const EVENT_RECORD_STAMP = /_(\d{8}T\d{6}Z)_/;
+
+function latestEventRecordName(dir: string): string | null {
+	try {
+		const names = fs.readdirSync(dir).filter((name) => name.endsWith(".json") && EVENT_RECORD_STAMP.test(name));
+		// slugTimestamp rides every record name, so lexical order is write order.
+		return names.length ? names.sort().at(-1)! : null;
+	} catch {
+		return null;
+	}
+}
+
+// "Partial" = the latest Review was approved still over the CURRENT budget,
+// and no Memorize has rewritten the review target since (Memorize changes the
+// material, so the next Review derives from distance alone again). The budget
+// in force when that run happened is irrelevant on purpose: the question is
+// whether repeating the same depth can be expected to work against today's
+// ceiling. Checkpoints and Forget never touch the review target, so only
+// absorb events reset the escalation. Equal stamps (same second) count as an
+// absorb-after — the conservative read, no escalation on ambiguity.
+function structuralReviewPreviousRunPartial(instance: PersistentAgentInstance, budgetTokens: number): boolean {
+	const latestReview = latestEventRecordName(instance.structuralReviewEventDir());
+	if (!latestReview) return false;
+	const reviewStamp = EVENT_RECORD_STAMP.exec(latestReview)![1];
+	const latestAbsorb = latestEventRecordName(instance.absorbEventDir());
+	if (latestAbsorb && EVENT_RECORD_STAMP.exec(latestAbsorb)![1] >= reviewStamp) return false;
+	try {
+		const record = JSON.parse(fs.readFileSync(path.join(instance.structuralReviewEventDir(), latestReview), "utf-8"));
+		// Prefer the record's one-numerator verdict (the number the saved screen
+		// showed); records from before slice 4 fall back to the metrics-family
+		// estimate, at most a token off.
+		const after = record?.memoryBudget?.reviewTargetEstimatedTokens ?? record?.structuralReview?.reviewTargetEstimatedTokensAfter;
+		return typeof after === "number" && Number.isFinite(after) && overMemoryBudget(after, budgetTokens);
+	} catch {
+		return false;
+	}
+}
+
+function reviewHardnessDerivation(instance: PersistentAgentInstance, reviewTargetEstimatedTokens: number): StructuralReviewHardnessDerivation {
+	const budgetTokens = readPersistentRoomMaintenanceSettings(instance.agentId).memoryBudgetTokens;
+	const previousRunPartial = structuralReviewPreviousRunPartial(instance, budgetTokens);
+	return {
+		level: deriveReviewHardness(reviewTargetEstimatedTokens, budgetTokens, previousRunPartial),
+		budgetTokens,
+		reviewTargetEstimatedTokens,
+		overBudgetTokens: Math.max(0, reviewTargetEstimatedTokens - budgetTokens),
+		previousRunPartial,
+	};
+}
+
 function structuralReviewAvailabilityFromL1b(l1b: string, scaffoldReady = true): StructuralReviewAvailability {
 	if (!scaffoldReady) {
 		return {
@@ -5774,6 +6126,12 @@ function ensureStructuralReviewReady(agent: PersistentAgentInstance | string): {
 	}
 	const { l1b } = readCurrentL1bAndRegistry(instance);
 	const availability = structuralReviewAvailabilityFromL1b(l1b, true);
+	// The derivation measures through the ONE numerator — never through the
+	// availability's own metrics-family estimate (availability.reviewTarget-
+	// EstimatedTokens serves the map/metrics tables and can differ by a token),
+	// so the level shown here can never disagree with the status meters or the
+	// enforcement predicate.
+	if (availability.available) availability.reviewHardness = reviewHardnessDerivation(instance, reviewTargetEstimatedTokensFromL1b(l1b));
 	return {
 		availability,
 		l1b,
@@ -5815,7 +6173,7 @@ function parseAssessmentHandoff(raw: any): AbsorbAssessmentHandoffInput | undefi
 	if (!source && !text) return undefined;
 	if (source !== "direct_assessment" && source !== "discussion_signoff") throw new Error("assessmentHandoff.source must be direct_assessment or discussion_signoff");
 	if (!text) throw new Error("assessmentHandoff.text is required when assessmentHandoff is provided");
-	if (text.length > 8000) throw new Error("assessmentHandoff.text is too large");
+	if (text.length > DISCUSSION_HANDOFF_MAX_CHARS) throw new Error("assessmentHandoff.text is too large");
 	return { source, text };
 }
 
@@ -5826,7 +6184,7 @@ function parseStructuralReviewAssessmentHandoff(raw: any): StructuralReviewAsses
 	if (!source && !text) return undefined;
 	if (source !== "direct_assessment" && source !== "discussion_signoff") throw new Error("assessmentHandoff.source must be direct_assessment or discussion_signoff");
 	if (!text) throw new Error("assessmentHandoff.text is required when assessmentHandoff is provided");
-	if (text.length > 8000) throw new Error("assessmentHandoff.text is too large");
+	if (text.length > DISCUSSION_HANDOFF_MAX_CHARS) throw new Error("assessmentHandoff.text is too large");
 	return { source, text };
 }
 
@@ -5871,7 +6229,7 @@ function parseAbsorbDiscussionRequest(raw: any, requireUserMessage: boolean): {
 	const sourceFingerprint = parseAbsorbSourceFingerprint(raw?.source, "discussion source");
 	const assessmentMarkdown = String(raw?.assessmentMarkdown ?? "").trim();
 	if (!assessmentMarkdown) throw new Error("assessmentMarkdown is required");
-	if (assessmentMarkdown.length > 12000) throw new Error("assessmentMarkdown is too large");
+	if (assessmentMarkdown.length > ASSESSMENT_MAX_CHARS) throw new Error("assessmentMarkdown is too large");
 	const messages = parseAbsorbDiscussionMessages(raw?.messages);
 	const userMessage = String(raw?.userMessage ?? "").trim();
 	if (requireUserMessage && !userMessage) throw new Error("userMessage is required");
@@ -5911,7 +6269,7 @@ function parseStructuralReviewDiscussionRequest(raw: any, requireUserMessage: bo
 	};
 	const assessmentMarkdown = String(raw?.assessmentMarkdown ?? "").trim();
 	if (!assessmentMarkdown) throw new Error("assessmentMarkdown is required");
-	if (assessmentMarkdown.length > 12000) throw new Error("assessmentMarkdown is too large");
+	if (assessmentMarkdown.length > ASSESSMENT_MAX_CHARS) throw new Error("assessmentMarkdown is too large");
 	const messages = parseStructuralReviewDiscussionMessages(raw?.messages);
 	const userMessage = String(raw?.userMessage ?? "").trim();
 	if (requireUserMessage && !userMessage) throw new Error("userMessage is required");
@@ -5963,7 +6321,10 @@ export function getStructuralReviewAvailability(agentId: string): StructuralRevi
 		};
 	}
 	const { l1b } = readCurrentL1bAndRegistry(instance);
-	return structuralReviewAvailabilityFromL1b(l1b, true);
+	const availability = structuralReviewAvailabilityFromL1b(l1b, true);
+	// Same one-numerator rule as ensureStructuralReviewReady above.
+	if (availability.available) availability.reviewHardness = reviewHardnessDerivation(instance, reviewTargetEstimatedTokensFromL1b(l1b));
+	return availability;
 }
 
 export class MaintenancePromptOverflowError extends Error {
@@ -5978,6 +6339,12 @@ export class MaintenancePromptOverflowError extends Error {
 }
 
 export interface MaintenanceWorkerOptions {
+	/**
+	 * Assessment builders only: the previous assessment's parse warnings,
+	 * sent by the client's "Reassess" action (sanitized like Draft-again
+	 * feedback). The assessment prompt repeats them in a Retry Notice.
+	 */
+	retryFeedback?: string[];
 	/**
 	 * When provided, the assembled worker prompt is checked against the locked
 	 * model's window (same budget formula as the checkpoint/consult workers)
@@ -6020,7 +6387,16 @@ const STRUCTURAL_REVIEW_OVERFLOW_GUIDANCE =
 // Draft-again feedback is client input bound for a worker prompt: it should
 // only ever carry the validator's own reasons, so flatten to short plain
 // lines and cap hard — anything beyond that is not validation feedback.
-function parseProposalRetryFeedback(raw: unknown): string[] | undefined {
+// Reassess feedback is narrower still: the only legitimate content is the
+// assessment parser's own "missing section" findings, so anything else is
+// dropped before it can reach a worker prompt.
+const ASSESSMENT_RETRY_FEEDBACK = /^assessment missing [A-Za-z][A-Za-z /'-]{1,60}$/;
+export function parseAssessmentRetryFeedback(raw: unknown): string[] | undefined {
+	const items = (parseProposalRetryFeedback(raw) ?? []).filter((value) => ASSESSMENT_RETRY_FEEDBACK.test(value));
+	return items.length ? items : undefined;
+}
+
+export function parseProposalRetryFeedback(raw: unknown): string[] | undefined {
 	if (!Array.isArray(raw)) return undefined;
 	const items = raw
 		.filter((value): value is string => typeof value === "string")
@@ -6064,49 +6440,231 @@ function refuseTruncatedWorkerOutput(input: {
 	throw new Error(`${lead} No memory has been written.`);
 }
 
+// Discussion prompts (turns and signoff alike) carry the room's memory plus
+// the whole discussion. The memory is the material and is never elided; the
+// transcript is stepped down the reduction ladder until the prompt fits the
+// tighter of the locked model's prompt budget and the discussion hard stop.
+// The caller still runs the overflow refusal afterwards — if the tightest
+// stage does not fit the window, the step refuses with guidance instead of
+// failing at the provider. Stages that would not change the transcript are
+// skipped, so the failing path does not rebuild an identical prompt.
+function assembleDiscussionPromptWithinBudget<TMessage extends DiscussionTranscriptMessage, TAssembly extends { telemetry: { promptEstimatedTokens: number } }>(input: {
+	messages: TMessage[];
+	hardStopTokens: number;
+	window?: CheckpointModelWindow;
+	build: (messages: TMessage[]) => TAssembly;
+}): { assembly: TAssembly; reduction: DiscussionTranscriptReduction<TMessage> | null } {
+	const window = input.window;
+	// The target is the tighter of the locked model's prompt budget and the
+	// discussion hard stop: the hard stop is a quality bound (a discussion past
+	// ~100k tokens degrades the model that reads it back), so it binds even on
+	// models whose window would fit more. Without window metadata (gateway
+	// models) the hard stop is the only bound.
+	const windowKnown = window != null && Number.isFinite(window.contextWindow) && Number.isFinite(window.maxOutputTokens);
+	const target = windowKnown ? Math.min(checkpointPromptTokenBudget(window), input.hardStopTokens) : input.hardStopTokens;
+	let assembly = input.build(input.messages);
+	if (assembly.telemetry.promptEstimatedTokens <= target) return { assembly, reduction: null };
+	// A stage is skipped only when its transcript is literally the one already
+	// built — comparing trim/drop counts is not enough: a tighter per-message
+	// cap trims the same set of messages to shorter text, and skipping it would
+	// refuse where a trim had worked.
+	const sameTranscript = (a: readonly TMessage[], b: readonly TMessage[]): boolean => a.length === b.length && a.every((message, index) => message.content === b[index].content);
+	let reduction: DiscussionTranscriptReduction<TMessage> | null = null;
+	for (const stage of DISCUSSION_TRANSCRIPT_REDUCTION_STAGES.slice(1)) {
+		const candidate = reduceDiscussionTranscript(input.messages, stage);
+		if (sameTranscript(candidate.messages, reduction ? reduction.messages : input.messages)) continue;
+		reduction = candidate;
+		assembly = input.build(reduction.messages);
+		if (assembly.telemetry.promptEstimatedTokens <= target) break;
+	}
+	return { assembly, reduction };
+}
+
+// Worker drafts the user reads (assessments, proposals) share one retry
+// shape — the checkpoint missing-fields shape: truncation refused first,
+// capped at two attempts, usage merged, the retry kept only if it is not
+// worse, disclosed via a warning. What counts as a problem, how drafts are
+// scored, and whether a still-unacceptable final draft throws or degrades to
+// a disclosed warning are the caller's — the loop itself never varies.
+// Trimming is wrong here: a trimmed draft diverges the parsed fields from
+// the markdown a later step reads.
+type AssessmentWorkerResult = { text: string; usage?: AbsorbGenerateResult["usage"]; truncated?: boolean; modelMaxOutputTokens?: number };
+
+function assessmentRetryReasons(text: string, parseWarnings: string[]): string[] {
+	const reasons: string[] = [];
+	if (text.length > ASSESSMENT_MAX_CHARS) reasons.push(`the assessment was ${text.length} characters long; it must stay under ${ASSESSMENT_MAX_CHARS} characters (about ${ASSESSMENT_TARGET_WORDS} words)`);
+	reasons.push(...parseWarnings);
+	return reasons;
+}
+
+function assessmentDraftScore(text: string, parseWarnings: string[]): number {
+	return (text.length > ASSESSMENT_MAX_CHARS ? 100 : 0) + parseWarnings.length;
+}
+
+async function generateWorkerDraftWithRetry<TResult extends AssessmentWorkerResult, TParsed>(input: {
+	agentId: string;
+	processLabel: string;
+	/** The prompt actually sent first (may already carry a user-requested Retry Notice). */
+	prompt: string;
+	/** The same prompt without any Retry Notice — the retry is rebuilt from it so two notices never stack. */
+	basePrompt: string;
+	/** Reasons the user's redo request sent, repeated in the single merged notice. */
+	priorReasons?: string[];
+	generate: (prompt: string) => Promise<TResult>;
+	/** Truncation refusal — always runs before parsing, on both attempts; a cut-off draft is never scored or retried. */
+	refuseTruncated: (generated: TResult) => void;
+	parse: (text: string) => TParsed;
+	/** Deterministic reasons this draft is not acceptable; any reason triggers the single retry. */
+	draftProblems: (text: string, parsed: TParsed) => string[];
+	/** Lower is better; the retry replaces the first draft only when not worse. */
+	draftScore: (text: string, parsed: TParsed) => number;
+	/** Whether the first draft may stand if the retry generation itself fails. */
+	draftUsable: (text: string, parsed: TParsed) => boolean;
+	buildRetryPrompt: (prompt: string, reasons: string[]) => string;
+	/** Disclosure copy — the caller owns the noun ("assessment", "proposal") so warnings stay translatable. */
+	copy: {
+		regenerated: (firstAttemptReasons: string[]) => string;
+		notBetter: (firstAttemptReasons: string[]) => string;
+		retryFailed: (message: string) => string;
+	};
+	/** Console tag for the failed-retry warn line; callers keep their pre-refactor tags so log greps stay stable. */
+	logTag?: string;
+}): Promise<{ text: string; parsed: TParsed; usage: TResult["usage"]; warnings: string[]; attempts: number }> {
+	const first = await input.generate(input.prompt);
+	input.refuseTruncated(first);
+	let text = first.text.trim();
+	let parsed = input.parse(text);
+	let usage = first.usage;
+	let attempts = 1;
+	const warnings: string[] = [];
+	const reasons = input.draftProblems(text, parsed);
+	if (reasons.length > 0) {
+		attempts = 2;
+		const firstUsable = input.draftUsable(text, parsed);
+		try {
+			const retried = await input.generate(input.buildRetryPrompt(input.basePrompt, [...(input.priorReasons ?? []), ...reasons]));
+			usage = mergeCheckpointCompressionUsage(usage, retried.usage);
+			input.refuseTruncated(retried);
+			const retriedText = retried.text.trim();
+			const retriedParsed = input.parse(retriedText);
+			if (retriedText && input.draftScore(retriedText, retriedParsed) <= input.draftScore(text, parsed)) {
+				text = retriedText;
+				parsed = retriedParsed;
+				warnings.push(input.copy.regenerated(reasons));
+			} else {
+				warnings.push(input.copy.notBetter(reasons));
+			}
+		} catch (error) {
+			// A failed retry must not destroy a usable first draft: on main this
+			// user saw their draft with a warning, and still does.
+			if (!firstUsable) throw error;
+			console.warn(`[${input.logTag ?? "worker-draft-retry-failed"}] agent=${input.agentId} process=${input.processLabel}: ${(error as Error).message}`);
+			warnings.push(input.copy.retryFailed((error as Error).message.replace(/\s+No memory has been written\.?$/, "")));
+		}
+	}
+	return { text, parsed, usage, warnings, attempts };
+}
+
+async function generateAssessmentWithRetry<TResult extends AssessmentWorkerResult, TParsed extends { warnings: string[] }>(input: {
+	agentId: string;
+	processLabel: string;
+	model: { provider: string; model: string };
+	/** The prompt actually sent first (may already carry a Reassess notice). */
+	prompt: string;
+	/** The same prompt without any Retry Notice — the retry is rebuilt from it so two notices never stack. */
+	basePrompt: string;
+	/** Reasons the user's Reassess sent, repeated in the single merged notice. */
+	priorReasons?: string[];
+	generate: (prompt: string) => Promise<TResult>;
+	parse: (text: string) => TParsed;
+	buildRetryPrompt: (prompt: string, reasons: string[]) => string;
+}): Promise<{ text: string; parsed: TParsed; usage: TResult["usage"]; warnings: string[]; attempts: number }> {
+	const draft = await generateWorkerDraftWithRetry({
+		...input,
+		refuseTruncated: (generated) => refuseTruncatedWorkerOutput({ agentId: input.agentId, processLabel: input.processLabel, model: input.model, generated }),
+		draftProblems: (text, parsed) => assessmentRetryReasons(text, parsed.warnings),
+		draftScore: (text, parsed) => assessmentDraftScore(text, parsed.warnings),
+		draftUsable: (text) => text.length <= ASSESSMENT_MAX_CHARS,
+		logTag: "assessment-retry-failed",
+		copy: {
+			regenerated: (reasons) => `the assessment was regenerated once (first attempt: ${reasons.join("; ")})`,
+			notBetter: (reasons) => `the assessment was regenerated once (first attempt: ${reasons.join("; ")}), but the second attempt was not better, so the first is shown`,
+			retryFailed: (message) => `the assessment could not be regenerated (${message}), so the first attempt is shown`,
+		},
+	});
+	// Terminal for assessments: an oversized assessment cannot flow to the next
+	// step, so this path throws where the proposal path degrades to a warning.
+	if (draft.text.length > ASSESSMENT_MAX_CHARS) {
+		throw new Error(
+			`The ${input.processLabel} came back at ${draft.text.length} characters after ${draft.attempts} attempt(s), over the ${ASSESSMENT_MAX_CHARS}-character limit the next step accepts. ` +
+				`Try Reassess or start Maintain again; if this keeps happening, the maintenance model set in AI setup is writing assessments that are too long and a different one will be needed. No memory has been written.`,
+		);
+	}
+	return draft;
+}
+
 export async function buildStructuralReviewAssessment(agentId: string, model: StructuralReviewModelLock, generate: (prompt: string, model: StructuralReviewModelLock) => Promise<StructuralReviewGenerateResult>, options?: MaintenanceWorkerOptions): Promise<StructuralReviewAssessmentResponse> {
 	const instance = createPersistentAgentInstance(agentId);
 	const loaded = ensureStructuralReviewReady(instance);
 	if (!loaded.availability.available || !loaded.parts) throw new Error(loaded.availability.message);
-	const assembly = buildStructuralReviewAssessmentPrompt({
+	const promptInput = {
 		agentId: instance.agentId,
 		sourceReviewTargetL1b: loaded.parts.sourceReviewTargetL1b,
 		model,
-	});
+	};
+	const assembly = buildStructuralReviewAssessmentPrompt({ ...promptInput, retryFeedback: options?.retryFeedback });
+	const basePrompt = options?.retryFeedback?.length ? buildStructuralReviewAssessmentPrompt(promptInput).prompt : assembly.prompt;
 	refuseOversizedMaintenancePrompt({ agentId: instance.agentId, processLabel: "Review assessment", model, promptEstimatedTokens: assembly.telemetry.promptEstimatedTokens, window: options?.resolveModelWindow?.(model), guidance: STRUCTURAL_REVIEW_OVERFLOW_GUIDANCE });
-	const generated = await generate(assembly.prompt, model);
-	refuseTruncatedWorkerOutput({ agentId: instance.agentId, processLabel: "Review assessment", model, generated });
-	const parsed = parseStructuralReviewAssessment(generated.text);
+	const generated = await generateAssessmentWithRetry({
+		agentId: instance.agentId,
+		processLabel: "Review assessment",
+		model,
+		prompt: assembly.prompt,
+		basePrompt,
+		priorReasons: options?.retryFeedback,
+		generate: (prompt) => generate(prompt, model),
+		parse: parseStructuralReviewAssessment,
+		buildRetryPrompt: buildStructuralReviewAssessmentRetryPrompt,
+	});
 	return {
 		agentId: instance.agentId,
 		writesMemory: false,
 		process: { type: STRUCTURAL_REVIEW_WORKER_TYPE, mode: STRUCTURAL_REVIEW_MODE, model },
 		availability: loaded.availability,
 		source: structuralReviewSourceMetadata(loaded.l1b, loaded.parts),
-		assessmentMarkdown: generated.text.trim(),
-		fields: parsed.fields,
+		assessmentMarkdown: generated.text,
+		fields: generated.parsed.fields,
 		structuralReviewTelemetry: assembly.telemetry,
 		structuralReviewUsage: generated.usage,
-		warnings: [...parsed.warnings, "no memory has been written"],
+		warnings: [...generated.parsed.warnings, ...generated.warnings, "no memory has been written"],
 	};
 }
 
-export async function buildStructuralReviewDiscussionTurn(raw: any, model: StructuralReviewModelLock, generate: (prompt: string, model: StructuralReviewModelLock) => Promise<StructuralReviewGenerateResult>): Promise<StructuralReviewDiscussionTurnResponse> {
+export async function buildStructuralReviewDiscussionTurn(raw: any, model: StructuralReviewModelLock, generate: (prompt: string, model: StructuralReviewModelLock) => Promise<StructuralReviewGenerateResult>, options?: MaintenanceWorkerOptions): Promise<StructuralReviewDiscussionTurnResponse> {
 	const request = parseStructuralReviewDiscussionRequest(raw, true);
 	const loaded = ensureStructuralReviewReady(request.agentId);
 	if (!loaded.availability.available || !loaded.parts) throw new Error(loaded.availability.message);
 	const currentSource = assertStructuralReviewSourceCurrent(request.source, loaded.l1b, loaded.parts, "discussion source");
-	const assembly = buildStructuralReviewDiscussionPrompt({
-		agentId: request.agentId,
-		sourceReviewTargetL1b: loaded.parts.sourceReviewTargetL1b,
-		model,
-		assessmentMarkdown: request.assessmentMarkdown,
+	const window = options?.resolveModelWindow?.(model);
+	const { assembly, reduction } = assembleDiscussionPromptWithinBudget({
 		messages: request.messages,
-		userMessage: request.userMessage,
-		sourceFingerprint: currentSource.l1bFingerprint,
-		sourceReviewTargetFingerprint: currentSource.reviewTargetFingerprint,
-		mode: "turn",
+		hardStopTokens: STRUCTURAL_REVIEW_DISCUSSION_TOKEN_BUDGET.hardStop,
+		window,
+		build: (messages) => buildStructuralReviewDiscussionPrompt({
+			agentId: request.agentId,
+			sourceReviewTargetL1b: loaded.parts!.sourceReviewTargetL1b,
+			model,
+			assessmentMarkdown: request.assessmentMarkdown,
+			messages,
+			userMessage: request.userMessage,
+			sourceFingerprint: currentSource.l1bFingerprint,
+			sourceReviewTargetFingerprint: currentSource.reviewTargetFingerprint,
+			mode: "turn",
+		}),
 	});
+	// Window check first: a ladder-exhausted prompt should refuse with the
+	// remedy-naming overflow copy, not the generic budget line below it.
+	refuseOversizedMaintenancePrompt({ agentId: request.agentId, processLabel: "Review discussion", model, promptEstimatedTokens: assembly.telemetry.promptEstimatedTokens, window, guidance: STRUCTURAL_REVIEW_OVERFLOW_GUIDANCE });
 	if (!assembly.tokenBudget.canContinue) throw new Error("structural review discussion token budget exceeded");
 	const generated = await generate(assembly.prompt, model);
 	refuseTruncatedWorkerOutput({ agentId: request.agentId, processLabel: "Review discussion", model, generated });
@@ -6120,51 +6678,99 @@ export async function buildStructuralReviewDiscussionTurn(raw: any, model: Struc
 		structuralReviewDiscussionTelemetry: assembly.telemetry,
 		structuralReviewDiscussionUsage: generated.usage,
 		tokenBudget: assembly.tokenBudget,
-		warnings: [assembly.tokenBudget.state === "soft_warning" ? "structural review discussion token budget is approaching the limit" : "", "no memory has been written"].filter(Boolean),
+		warnings: [assembly.tokenBudget.state === "soft_warning" ? "structural review discussion token budget is approaching the limit" : "", reduction ? describeTranscriptReduction(reduction) ?? "" : "", "no memory has been written"].filter(Boolean),
 	};
 }
 
-export async function buildStructuralReviewDiscussionSignoff(raw: any, model: StructuralReviewModelLock, generate: (prompt: string, model: StructuralReviewModelLock) => Promise<StructuralReviewGenerateResult>): Promise<StructuralReviewDiscussionSignoffResponse> {
+export async function buildStructuralReviewDiscussionSignoff(raw: any, model: StructuralReviewModelLock, generate: (prompt: string, model: StructuralReviewModelLock) => Promise<StructuralReviewGenerateResult>, options?: MaintenanceWorkerOptions): Promise<StructuralReviewDiscussionSignoffResponse> {
 	const request = parseStructuralReviewDiscussionRequest(raw, false);
 	const loaded = ensureStructuralReviewReady(request.agentId);
 	if (!loaded.availability.available || !loaded.parts) throw new Error(loaded.availability.message);
 	const currentSource = assertStructuralReviewSourceCurrent(request.source, loaded.l1b, loaded.parts, "discussion source");
-	const assembly = buildStructuralReviewDiscussionPrompt({
-		agentId: request.agentId,
-		sourceReviewTargetL1b: loaded.parts.sourceReviewTargetL1b,
-		model,
-		assessmentMarkdown: request.assessmentMarkdown,
+	const window = options?.resolveModelWindow?.(model);
+	const { assembly, reduction } = assembleDiscussionPromptWithinBudget({
 		messages: request.messages,
-		userMessage: request.userMessage,
-		sourceFingerprint: currentSource.l1bFingerprint,
-		sourceReviewTargetFingerprint: currentSource.reviewTargetFingerprint,
-		mode: "signoff",
+		hardStopTokens: STRUCTURAL_REVIEW_DISCUSSION_TOKEN_BUDGET.hardStop,
+		window,
+		build: (messages) => buildStructuralReviewDiscussionPrompt({
+			agentId: request.agentId,
+			sourceReviewTargetL1b: loaded.parts!.sourceReviewTargetL1b,
+			model,
+			assessmentMarkdown: request.assessmentMarkdown,
+			messages,
+			userMessage: request.userMessage,
+			sourceFingerprint: currentSource.l1bFingerprint,
+			sourceReviewTargetFingerprint: currentSource.reviewTargetFingerprint,
+			mode: "signoff",
+		}),
 	});
 	if (!assembly.tokenBudget.canSignOff) throw new Error("structural review discussion token budget exceeded before signoff");
+	refuseOversizedMaintenancePrompt({ agentId: request.agentId, processLabel: "Review discussion summary", model, promptEstimatedTokens: assembly.telemetry.promptEstimatedTokens, window, guidance: STRUCTURAL_REVIEW_OVERFLOW_GUIDANCE });
 	const generated = await generate(assembly.prompt, model);
-	refuseTruncatedWorkerOutput({ agentId: request.agentId, processLabel: "Review discussion signoff", model, generated });
-	const handoffText = generated.text.trim();
-	if (!handoffText) throw new Error("structural review discussion signoff worker produced no text");
+	refuseTruncatedWorkerOutput({ agentId: request.agentId, processLabel: "Review discussion summary", model, generated });
+	const rawHandoff = generated.text.trim();
+	if (!rawHandoff) throw new Error("structural review discussion signoff worker produced no text");
+	const handoff = fitDiscussionHandoff(rawHandoff, STRUCTURAL_REVIEW_HANDOFF_SHED_ORDER);
 	return {
 		agentId: request.agentId,
 		writesMemory: false,
 		process: { type: STRUCTURAL_REVIEW_DISCUSSION_WORKER_TYPE, mode: STRUCTURAL_REVIEW_MODE, model },
 		availability: loaded.availability,
 		source: { ...currentSource, checkedAt: new Date().toISOString() },
-		assessmentHandoff: { source: "discussion_signoff", text: handoffText },
+		assessmentHandoff: { source: "discussion_signoff", text: handoff.text },
 		structuralReviewDiscussionTelemetry: assembly.telemetry,
 		structuralReviewDiscussionUsage: generated.usage,
 		tokenBudget: assembly.tokenBudget,
-		warnings: [assembly.tokenBudget.state === "soft_warning" ? "structural review discussion token budget is approaching the limit" : "", "no memory has been written"].filter(Boolean),
+		warnings: [
+			assembly.tokenBudget.state === "soft_warning" ? "structural review discussion token budget is approaching the limit" : "",
+			reduction ? describeTranscriptReduction(reduction) ?? "" : "",
+			describeHandoffTrim(handoff) ?? "",
+			"no memory has been written",
+		].filter(Boolean),
 	};
+}
+
+function parseReviewHardness(raw: unknown): ReviewHardnessLevel | undefined {
+	if (raw === undefined || raw === null) return undefined;
+	if (typeof raw === "string" && (REVIEW_HARDNESS_LEVELS as readonly string[]).includes(raw)) return raw as ReviewHardnessLevel;
+	throw new Error("hardness must be one of light, standard, deep");
+}
+
+// The enforcement loop's problem test: only an over-budget candidate triggers
+// the server retry (parse/topology problems keep the client's own Draft-again
+// path). Measured through the ONE numerator and the ONE predicate, same as
+// every meter. The reason strings become the Retry Notice AND ride the
+// disclosure warning, so they carry the numbers — and the ask speaks the
+// applied depth's own language: at light depth "prune further" would
+// contradict the drop-nothing rule the same prompt states.
+function structuralReviewBudgetProblems(parsed: ReturnType<typeof parseStructuralReviewProposal>, budgetTokens: number, hardness: ReviewHardnessLevel): string[] {
+	const candidate = parsed.fields.candidateReviewTargetL1b;
+	if (!candidate) return [];
+	const candidateTokens = reviewTargetEstimatedTokensFromL1b(candidate);
+	if (!overMemoryBudget(candidateTokens, budgetTokens)) return [];
+	const ask = hardness === "light" ? "rephrase more densely within the light depth rules — drop nothing, and" : "prune further within the depth rules —";
+	return [`the candidate review target came back at ~${candidateTokens} estimated tokens, ~${candidateTokens - budgetTokens} over the room's ${budgetTokens}-token memory budget; ${ask} never drop must-keep entries or provenance to fit`];
+}
+
+// Lower is better. A candidate that fails validation loses to anything that
+// passes; among valid drafts, the one closer to (or under) the budget wins;
+// parse warnings tiebreak. The retry replaces the first draft only when not
+// worse — a partial prune is never traded for a worse one.
+function structuralReviewDraftScore(sourceReviewTargetL1b: string, parsed: ReturnType<typeof parseStructuralReviewProposal>, budgetTokens: number): number {
+	const candidate = parsed.fields.candidateReviewTargetL1b;
+	if (!candidate) return Number.MAX_SAFE_INTEGER;
+	const valid = validateStructuralReviewCandidateReviewTarget(sourceReviewTargetL1b, candidate).valid;
+	const overTokens = Math.max(0, reviewTargetEstimatedTokensFromL1b(candidate) - budgetTokens);
+	return (valid ? 0 : 1_000_000) + overTokens * 10 + parsed.warnings.length;
 }
 
 export async function buildStructuralReviewProposal(raw: any, model: StructuralReviewModelLock, generate: (prompt: string, model: StructuralReviewModelLock) => Promise<StructuralReviewGenerateResult>, options?: MaintenanceWorkerOptions): Promise<StructuralReviewProposalResponse> {
 	const agentId = validatePersistentAgentId(raw?.agentId);
 	const assessmentMarkdown = String(raw?.assessmentMarkdown ?? "").trim();
 	if (!assessmentMarkdown) throw new Error("assessmentMarkdown is required");
-	if (assessmentMarkdown.length > 12000) throw new Error("assessmentMarkdown is too large");
+	if (assessmentMarkdown.length > ASSESSMENT_MAX_CHARS) throw new Error("assessmentMarkdown is too large");
 	const assessmentHandoff = parseStructuralReviewAssessmentHandoff(raw?.assessmentHandoff);
+	const requestedHardness = parseReviewHardness(raw?.hardness);
 	const loaded = ensureStructuralReviewReady(agentId);
 	if (!loaded.availability.available || !loaded.parts) throw new Error(loaded.availability.message);
 	if (assessmentHandoff?.source === "discussion_signoff") {
@@ -6177,20 +6783,54 @@ export async function buildStructuralReviewProposal(raw: any, model: StructuralR
 		};
 		assertStructuralReviewSourceCurrent(source, loaded.l1b, loaded.parts, "discussion source");
 	}
-	const assembly = buildStructuralReviewProposalPrompt({
+	const memoryBudgetTokens = readPersistentRoomMaintenanceSettings(agentId).memoryBudgetTokens;
+	const derivation = loaded.availability.reviewHardness ?? reviewHardnessDerivation(createPersistentAgentInstance(agentId), loaded.availability.reviewTargetEstimatedTokens);
+	const hardness = requestedHardness ?? derivation.level;
+	const retryFeedback = parseProposalRetryFeedback(raw?.retryFeedback);
+	const promptInput = {
 		agentId,
 		sourceReviewTargetL1b: loaded.parts.sourceReviewTargetL1b,
 		model,
 		assessmentMarkdown,
 		assessmentHandoff,
-		memoryBudgetTokens: readPersistentRoomMaintenanceSettings(agentId).memoryBudgetTokens,
-		retryFeedback: parseProposalRetryFeedback(raw?.retryFeedback),
-	});
+		memoryBudgetTokens,
+		hardness,
+		// One numerator into the prompt's over/under statement, same as the meters.
+		reviewTargetEstimatedTokens: derivation.reviewTargetEstimatedTokens,
+	};
+	const assembly = buildStructuralReviewProposalPrompt({ ...promptInput, retryFeedback });
+	const basePrompt = retryFeedback?.length ? buildStructuralReviewProposalPrompt(promptInput).prompt : assembly.prompt;
 	refuseOversizedMaintenancePrompt({ agentId, processLabel: "Review proposal", model, promptEstimatedTokens: assembly.telemetry.promptEstimatedTokens, window: options?.resolveModelWindow?.(model), guidance: STRUCTURAL_REVIEW_OVERFLOW_GUIDANCE });
-	const generated = await generate(assembly.prompt, model);
-	refuseTruncatedWorkerOutput({ agentId, processLabel: "Review proposal", model, generated, wholeDocumentRewriteLabel: "Review" });
-	const parsed = parseStructuralReviewProposal(generated.text);
+	// Budget enforcement: a candidate that lands over budget is drafted once
+	// more with the size reasons. Truncation is refused before parsing on both
+	// attempts, usage is merged, and the retry is kept only when not worse.
+	// A final draft still over budget is NOT refused — it returns as a
+	// disclosed partial prune (the impact card and fast-path gate carry the
+	// over-budget state); the floor is a disclosed partial, never a dead end.
+	const generated = await generateWorkerDraftWithRetry({
+		agentId,
+		processLabel: "Review proposal",
+		prompt: assembly.prompt,
+		basePrompt,
+		priorReasons: retryFeedback,
+		generate: (prompt) => generate(prompt, model),
+		refuseTruncated: (result) => refuseTruncatedWorkerOutput({ agentId, processLabel: "Review proposal", model, generated: result, wholeDocumentRewriteLabel: "Review" }),
+		parse: parseStructuralReviewProposal,
+		draftProblems: (_text, parsed) => structuralReviewBudgetProblems(parsed, memoryBudgetTokens, hardness),
+		draftScore: (_text, parsed) => structuralReviewDraftScore(loaded.parts!.sourceReviewTargetL1b, parsed, memoryBudgetTokens),
+		// An over-budget draft is a usable partial-prune outcome, so a failed
+		// retry never destroys it.
+		draftUsable: () => true,
+		buildRetryPrompt: buildStructuralReviewProposalRetryPrompt,
+		copy: {
+			regenerated: (reasons) => `the proposal was drafted again once (first draft: ${reasons.join("; ")})`,
+			notBetter: (reasons) => `the proposal was drafted again once (first draft: ${reasons.join("; ")}), but the second draft was not better, so the first is shown`,
+			retryFailed: (message) => `the proposal could not be drafted again (${message}), so the first draft is shown`,
+		},
+	});
+	const parsed = generated.parsed;
 	const candidateValidation = validateStructuralReviewCandidateReviewTarget(loaded.parts.sourceReviewTargetL1b, parsed.fields.candidateReviewTargetL1b);
+	const droppedMaterialConflict = structuralReviewDroppedMaterialConflict(parsed.fields.droppedMaterial, loaded.parts.sourceReviewTargetL1b, parsed.fields.candidateReviewTargetL1b);
 	const review = structuralReviewProposalReview(loaded.parts.sourceReviewTargetL1b, parsed.fields.candidateReviewTargetL1b, parsed.fields.summary);
 	return {
 		agentId,
@@ -6201,9 +6841,16 @@ export async function buildStructuralReviewProposal(raw: any, model: StructuralR
 		fields: parsed.fields,
 		review,
 		candidateValidation,
+		// Before/after through the ONE numerator (the whole current L1b and the
+		// candidate review target both reduce to Deep Memory + Active Items), so
+		// the card's numbers equal the meters' — not the review metrics' whole-
+		// string estimate, which serves the map table.
+		memoryBudgetImpact: buildMemoryBudgetImpact(reviewTargetEstimatedTokensFromL1b(loaded.l1b), reviewTargetEstimatedTokensFromL1b(parsed.fields.candidateReviewTargetL1b), memoryBudgetTokens),
+		reviewHardness: { applied: hardness, derived: derivation, overridden: requestedHardness !== undefined && requestedHardness !== derivation.level },
 		structuralReviewTelemetry: assembly.telemetry,
 		structuralReviewUsage: generated.usage,
-		warnings: [...parsed.warnings, ...candidateValidation.warnings, "no memory has been written"],
+		vanishedAreas: parsed.fields.candidateReviewTargetL1b.trim() ? structuralReviewVanishedMemoryMapAreas(loaded.parts.sourceReviewTargetL1b, parsed.fields.candidateReviewTargetL1b) : [],
+		warnings: [...parsed.warnings, ...(droppedMaterialConflict ? [droppedMaterialConflict] : []), ...candidateValidation.warnings, ...generated.warnings, "no memory has been written"],
 	};
 }
 
@@ -6211,16 +6858,26 @@ export async function buildAbsorbAssessment(agentId: string, model: AbsorbModelL
 	const instance = createPersistentAgentInstance(agentId);
 	const loaded = ensureAbsorbReady(instance);
 	if (!loaded.availability.available) throw new Error(loaded.availability.message);
-	const assembly = buildAbsorbAssessmentPrompt({
+	const promptInput = {
 		agentId: instance.agentId,
 		l1b: loaded.l1b,
 		model,
 		sectionPurposeMap: buildSectionPurposeMap(loaded.sectionRegistry),
-	});
+	};
+	const assembly = buildAbsorbAssessmentPrompt({ ...promptInput, retryFeedback: options?.retryFeedback });
+	const basePrompt = options?.retryFeedback?.length ? buildAbsorbAssessmentPrompt(promptInput).prompt : assembly.prompt;
 	refuseOversizedMaintenancePrompt({ agentId: instance.agentId, processLabel: "Memorize assessment", model, promptEstimatedTokens: assembly.telemetry.promptEstimatedTokens, window: options?.resolveModelWindow?.(model), guidance: ABSORB_OVERFLOW_GUIDANCE });
-	const generated = await generate(assembly.prompt, model);
-	refuseTruncatedWorkerOutput({ agentId: instance.agentId, processLabel: "Memorize assessment", model, generated });
-	const parsed = parseAbsorbAssessment(generated.text);
+	const generated = await generateAssessmentWithRetry({
+		agentId: instance.agentId,
+		processLabel: "Memorize assessment",
+		model,
+		prompt: assembly.prompt,
+		basePrompt,
+		priorReasons: options?.retryFeedback,
+		generate: (prompt) => generate(prompt, model),
+		parse: parseAbsorbAssessment,
+		buildRetryPrompt: buildAbsorbAssessmentRetryPrompt,
+	});
 	return {
 		agentId: instance.agentId,
 		writesMemory: false,
@@ -6230,30 +6887,40 @@ export async function buildAbsorbAssessment(agentId: string, model: AbsorbModelL
 			l1bFingerprint: fingerprintL1bSource(loaded.l1b),
 			generatedAt: new Date().toISOString(),
 		},
-		assessmentMarkdown: generated.text.trim(),
-		fields: parsed.fields,
+		assessmentMarkdown: generated.text,
+		fields: generated.parsed.fields,
 		absorbTelemetry: assembly.telemetry,
 		absorbUsage: generated.usage,
-		warnings: [...parsed.warnings, "no memory has been written"],
+		warnings: [...generated.parsed.warnings, ...generated.warnings, "no memory has been written"],
 	};
 }
 
-export async function buildAbsorbDiscussionTurn(raw: any, model: AbsorbModelLock, generate: (prompt: string, model: AbsorbModelLock) => Promise<AbsorbGenerateResult>): Promise<AbsorbDiscussionTurnResponse> {
+export async function buildAbsorbDiscussionTurn(raw: any, model: AbsorbModelLock, generate: (prompt: string, model: AbsorbModelLock) => Promise<AbsorbGenerateResult>, options?: MaintenanceWorkerOptions): Promise<AbsorbDiscussionTurnResponse> {
 	const request = parseAbsorbDiscussionRequest(raw, true);
 	const loaded = ensureAbsorbReady(request.agentId);
 	if (!loaded.availability.available) throw new Error(loaded.availability.message);
 	const currentFingerprint = assertAbsorbSourceFingerprintCurrent(request.sourceFingerprint, loaded.l1b, "discussion source");
-	const assembly = buildAbsorbDiscussionPrompt({
-		agentId: request.agentId,
-		l1b: loaded.l1b,
-		model,
-		sectionPurposeMap: buildSectionPurposeMap(loaded.sectionRegistry),
-		assessmentMarkdown: request.assessmentMarkdown,
+	const window = options?.resolveModelWindow?.(model);
+	const sectionPurposeMap = buildSectionPurposeMap(loaded.sectionRegistry);
+	const { assembly, reduction } = assembleDiscussionPromptWithinBudget({
 		messages: request.messages,
-		userMessage: request.userMessage,
-		sourceFingerprint: currentFingerprint,
-		mode: "turn",
+		hardStopTokens: ABSORB_DISCUSSION_TOKEN_BUDGET.hardStop,
+		window,
+		build: (messages) => buildAbsorbDiscussionPrompt({
+			agentId: request.agentId,
+			l1b: loaded.l1b,
+			model,
+			sectionPurposeMap,
+			assessmentMarkdown: request.assessmentMarkdown,
+			messages,
+			userMessage: request.userMessage,
+			sourceFingerprint: currentFingerprint,
+			mode: "turn",
+		}),
 	});
+	// Window check first: a ladder-exhausted prompt should refuse with the
+	// remedy-naming overflow copy, not the generic budget line below it.
+	refuseOversizedMaintenancePrompt({ agentId: request.agentId, processLabel: "Memorize discussion", model, promptEstimatedTokens: assembly.telemetry.promptEstimatedTokens, window, guidance: ABSORB_OVERFLOW_GUIDANCE });
 	if (!assembly.tokenBudget.canContinue) throw new Error("absorb discussion token budget exceeded");
 	const generated = await generate(assembly.prompt, model);
 	refuseTruncatedWorkerOutput({ agentId: request.agentId, processLabel: "Memorize discussion", model, generated });
@@ -6267,42 +6934,56 @@ export async function buildAbsorbDiscussionTurn(raw: any, model: AbsorbModelLock
 		absorbDiscussionTelemetry: assembly.telemetry,
 		absorbDiscussionUsage: generated.usage,
 		tokenBudget: assembly.tokenBudget,
-		warnings: [assembly.tokenBudget.state === "soft_warning" ? "absorb discussion token budget is approaching the limit" : "", "no memory has been written"].filter(Boolean),
+		warnings: [assembly.tokenBudget.state === "soft_warning" ? "absorb discussion token budget is approaching the limit" : "", reduction ? describeTranscriptReduction(reduction) ?? "" : "", "no memory has been written"].filter(Boolean),
 	};
 }
 
-export async function buildAbsorbDiscussionSignoff(raw: any, model: AbsorbModelLock, generate: (prompt: string, model: AbsorbModelLock) => Promise<AbsorbGenerateResult>): Promise<AbsorbDiscussionSignoffResponse> {
+export async function buildAbsorbDiscussionSignoff(raw: any, model: AbsorbModelLock, generate: (prompt: string, model: AbsorbModelLock) => Promise<AbsorbGenerateResult>, options?: MaintenanceWorkerOptions): Promise<AbsorbDiscussionSignoffResponse> {
 	const request = parseAbsorbDiscussionRequest(raw, false);
 	const loaded = ensureAbsorbReady(request.agentId);
 	if (!loaded.availability.available) throw new Error(loaded.availability.message);
 	const currentFingerprint = assertAbsorbSourceFingerprintCurrent(request.sourceFingerprint, loaded.l1b, "discussion source");
-	const assembly = buildAbsorbDiscussionPrompt({
-		agentId: request.agentId,
-		l1b: loaded.l1b,
-		model,
-		sectionPurposeMap: buildSectionPurposeMap(loaded.sectionRegistry),
-		assessmentMarkdown: request.assessmentMarkdown,
+	const window = options?.resolveModelWindow?.(model);
+	const sectionPurposeMap = buildSectionPurposeMap(loaded.sectionRegistry);
+	const { assembly, reduction } = assembleDiscussionPromptWithinBudget({
 		messages: request.messages,
-		userMessage: request.userMessage,
-		sourceFingerprint: currentFingerprint,
-		mode: "signoff",
+		hardStopTokens: ABSORB_DISCUSSION_TOKEN_BUDGET.hardStop,
+		window,
+		build: (messages) => buildAbsorbDiscussionPrompt({
+			agentId: request.agentId,
+			l1b: loaded.l1b,
+			model,
+			sectionPurposeMap,
+			assessmentMarkdown: request.assessmentMarkdown,
+			messages,
+			userMessage: request.userMessage,
+			sourceFingerprint: currentFingerprint,
+			mode: "signoff",
+		}),
 	});
 	if (!assembly.tokenBudget.canSignOff) throw new Error("absorb discussion token budget exceeded before signoff");
+	refuseOversizedMaintenancePrompt({ agentId: request.agentId, processLabel: "Memorize discussion summary", model, promptEstimatedTokens: assembly.telemetry.promptEstimatedTokens, window, guidance: ABSORB_OVERFLOW_GUIDANCE });
 	const generated = await generate(assembly.prompt, model);
-	refuseTruncatedWorkerOutput({ agentId: request.agentId, processLabel: "Memorize discussion signoff", model, generated });
-	const handoffText = generated.text.trim();
-	if (!handoffText) throw new Error("absorb discussion signoff worker produced no text");
+	refuseTruncatedWorkerOutput({ agentId: request.agentId, processLabel: "Memorize discussion summary", model, generated });
+	const rawHandoff = generated.text.trim();
+	if (!rawHandoff) throw new Error("absorb discussion signoff worker produced no text");
+	const handoff = fitDiscussionHandoff(rawHandoff, ABSORB_HANDOFF_SHED_ORDER);
 	return {
 		agentId: request.agentId,
 		writesMemory: false,
 		process: { type: ABSORB_DISCUSSION_WORKER_TYPE, model },
 		availability: loaded.availability,
 		source: { l1bFingerprint: currentFingerprint, checkedAt: new Date().toISOString() },
-		assessmentHandoff: { source: "discussion_signoff", text: handoffText },
+		assessmentHandoff: { source: "discussion_signoff", text: handoff.text },
 		absorbDiscussionTelemetry: assembly.telemetry,
 		absorbDiscussionUsage: generated.usage,
 		tokenBudget: assembly.tokenBudget,
-		warnings: [assembly.tokenBudget.state === "soft_warning" ? "absorb discussion token budget is approaching the limit" : "", "no memory has been written"].filter(Boolean),
+		warnings: [
+			assembly.tokenBudget.state === "soft_warning" ? "absorb discussion token budget is approaching the limit" : "",
+			reduction ? describeTranscriptReduction(reduction) ?? "" : "",
+			describeHandoffTrim(handoff) ?? "",
+			"no memory has been written",
+		].filter(Boolean),
 	};
 }
 
@@ -6310,13 +6991,14 @@ export async function buildAbsorbProposal(raw: any, model: AbsorbModelLock, gene
 	const agentId = validatePersistentAgentId(raw?.agentId);
 	const assessmentMarkdown = String(raw?.assessmentMarkdown ?? "").trim();
 	if (!assessmentMarkdown) throw new Error("assessmentMarkdown is required");
-	if (assessmentMarkdown.length > 12000) throw new Error("assessmentMarkdown is too large");
+	if (assessmentMarkdown.length > ASSESSMENT_MAX_CHARS) throw new Error("assessmentMarkdown is too large");
 	const assessmentHandoff = parseAssessmentHandoff(raw?.assessmentHandoff);
 	const loaded = ensureAbsorbReady(agentId);
 	if (!loaded.availability.available) throw new Error(loaded.availability.message);
 	if (assessmentHandoff?.source === "discussion_signoff" && raw?.source != null) {
 		assertAbsorbSourceFingerprintCurrent(parseAbsorbSourceFingerprint(raw.source, "discussion source"), loaded.l1b, "discussion source");
 	}
+	const memoryBudgetTokens = readPersistentRoomMaintenanceSettings(agentId).memoryBudgetTokens;
 	const assembly = buildAbsorbProposalPrompt({
 		agentId,
 		l1b: loaded.l1b,
@@ -6324,7 +7006,7 @@ export async function buildAbsorbProposal(raw: any, model: AbsorbModelLock, gene
 		sectionPurposeMap: buildSectionPurposeMap(loaded.sectionRegistry),
 		assessmentMarkdown,
 		assessmentHandoff,
-		memoryBudgetTokens: readPersistentRoomMaintenanceSettings(agentId).memoryBudgetTokens,
+		memoryBudgetTokens,
 		retryFeedback: parseProposalRetryFeedback(raw?.retryFeedback),
 	});
 	refuseOversizedMaintenancePrompt({ agentId, processLabel: "Memorize proposal", model, promptEstimatedTokens: assembly.telemetry.promptEstimatedTokens, window: options?.resolveModelWindow?.(model), guidance: ABSORB_OVERFLOW_GUIDANCE });
@@ -6345,6 +7027,7 @@ export async function buildAbsorbProposal(raw: any, model: AbsorbModelLock, gene
 		fields: parsed.fields,
 		review,
 		candidateValidation,
+		memoryBudgetImpact: buildMemoryBudgetImpact(reviewTargetEstimatedTokensFromL1b(loaded.l1b), reviewTargetEstimatedTokensFromL1b(parsed.fields.candidateL1b), memoryBudgetTokens),
 		absorbTelemetry: assembly.telemetry,
 		absorbUsage: generated.usage,
 		warnings: [...parsed.warnings, ...candidateValidation.warnings, "no memory has been written"],

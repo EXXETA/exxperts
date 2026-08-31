@@ -57,6 +57,7 @@
 		"typebox": "^1.1.24",
 		"undici": "^7.19.1",
 		"uuid": "^14.0.0",
+		"xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
 		"yaml": "^2.8.2",
 		"yauzl": "^2.10.0"
 	},

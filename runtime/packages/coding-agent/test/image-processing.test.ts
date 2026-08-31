@@ -92,13 +92,22 @@ describe("resizeImage", () => {
 		expect(result!.data.length).toBeLessThan(LARGE_PNG_200x200.length);
 	});
 
-	it("should return null when image cannot be resized below maxBytes", async () => {
+	it("should report a size failure when image cannot be resized below maxBytes", async () => {
 		const result = await resizeImage(
 			{ type: "image", data: LARGE_PNG_200x200, mimeType: "image/png" },
 			{ maxWidth: 2000, maxHeight: 2000, maxBytes: 1 },
 		);
 
-		expect(result).toBeNull();
+		expect(result).toEqual({ failure: "size" });
+	});
+
+	it("should report a decode failure for bytes that are not an image", async () => {
+		const result = await resizeImage(
+			{ type: "image", data: Buffer.from("not an image").toString("base64"), mimeType: "image/png" },
+			{ maxWidth: 2000, maxHeight: 2000, maxBytes: 1024 * 1024 },
+		);
+
+		expect(result).toEqual({ failure: "decode" });
 	});
 
 	it("should handle JPEG input", async () => {

@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
-import type { CSSProperties, KeyboardEvent, MutableRefObject, ReactNode, Ref } from "react";
+import type { ClipboardEvent, CSSProperties, KeyboardEvent, MutableRefObject, ReactNode, Ref } from "react";
 import { Approval } from "./Approval";
 import { ConsultThreadItem, Message, TaskThreadItem, ToolBundle, isBundleableToolItem, type MessageAttachmentAccess } from "./Message";
 import { MentionConsultPopover, MentionConsultPopoverBusy, type MentionSupport } from "./mention-consult-popover";
@@ -41,6 +41,8 @@ export interface InRoomChatShellViewProps {
 	composerStagingSlot?: ReactNode;
 	/** Files UI slice: staged attachments make an attachments-only send legal. */
 	composerAllowEmptySend?: boolean;
+	/** #52: image files pasted into the textarea are handed here to be staged. */
+	composerOnPasteFiles?: (files: File[]) => void;
 	connected: boolean;
 	/** Room auto-reconnect: "reconnecting" while backoff attempts run, "failed" once capped. */
 	reconnectState?: "idle" | "reconnecting" | "failed";
@@ -391,6 +393,8 @@ interface ComposerInputProps {
 	stagingSlot?: ReactNode;
 	/** Files UI slice: ready attachments make an empty-text send legal (the note alone rides). */
 	allowEmptySend?: boolean;
+	/** #52: image files pasted into the textarea are handed here to be staged. */
+	onPasteFiles?: (files: File[]) => void;
 }
 
 function ComposerInput({
@@ -409,6 +413,7 @@ function ComposerInput({
 	rightActions,
 	stagingSlot,
 	allowEmptySend = false,
+	onPasteFiles,
 }: ComposerInputProps) {
 	const [draft, setDraft] = useState(() => initialDraftValue ?? "");
 	const [caret, setCaret] = useState(0);
@@ -536,6 +541,19 @@ function ComposerInput({
 		}
 	}
 
+	// #52: a pasted image stages as an attachment, through the exact path the
+	// 📎 uses. Only image FILES are taken (a screenshot, a copied picture) —
+	// any plain-text paste is untouched, and a mixed clipboard (text + image)
+	// stages the image AND lets the text paste normally, so preventDefault
+	// fires only when there is no text for the textarea to receive.
+	function handleComposerPaste(e: ClipboardEvent<HTMLTextAreaElement>) {
+		if (!onPasteFiles) return;
+		const images = Array.from(e.clipboardData?.files ?? []).filter((file) => file.type.startsWith("image/"));
+		if (images.length === 0) return;
+		onPasteFiles(images);
+		if (!e.clipboardData.getData("text/plain")) e.preventDefault();
+	}
+
 	return (
 		<div className="composer-box">
 			{mentionOpen && mentionQuery && (
@@ -558,6 +576,7 @@ function ComposerInput({
 				onClick={(e) => syncCaret(e.currentTarget)}
 				onSelect={(e) => syncCaret(e.currentTarget)}
 				onKeyDown={handleComposerKeyDown}
+				onPaste={handleComposerPaste}
 				placeholder={placeholder}
 				rows={2}
 				spellCheck={false}
@@ -592,6 +611,7 @@ export function InRoomChatShellView({
 	composerRightActions,
 	composerStagingSlot,
 	composerAllowEmptySend,
+	composerOnPasteFiles,
 	connected,
 	reconnectState = "idle",
 	onReconnect,
@@ -833,6 +853,7 @@ export function InRoomChatShellView({
 								rightActions={composerRightActions}
 								stagingSlot={composerStagingSlot}
 								allowEmptySend={composerAllowEmptySend}
+								onPasteFiles={composerOnPasteFiles}
 							/>
 						</div>
 					</div>

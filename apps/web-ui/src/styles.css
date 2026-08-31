@@ -676,6 +676,116 @@ strong, b { font-weight: 700; }
 .topbar-actions .icon-btn-danger:focus-visible {
 	box-shadow: 0 0 0 1px color-mix(in srgb, var(--exx-danger) 40%, transparent);
 }
+/* The bash-mode chip: only rooms with Bash on wear it, so its mere presence
+   already says "this room can run commands". The mode rides the color:
+   "asks" stays a quiet neutral pill, "auto" takes the warning wash used by
+   the room-card badges — permissive should be visible at a glance without
+   shouting. All colors are theme tokens, so both themes come for free. */
+.bash-mode-chip-anchor {
+	position: relative;
+	display: flex;
+	flex-shrink: 0;
+}
+/* Dressed like the other topbar actions: flat, borderless, a wash on hover.
+   The two states differ by their text alone — the room owner asked for no
+   alarm color on auto. */
+.bash-mode-chip {
+	display: inline-flex;
+	align-items: center;
+	border: none;
+	border-radius: var(--exx-radius-pill);
+	/* Same 30px box as the .icon-btn-square neighbours: with the row's
+	   align-items center, equal box heights are what guarantee equal
+	   centerlines — the old 4px padding left the chip's smaller line box
+	   riding a touch high next to the trash and gear. */
+	height: 30px;
+	padding: 0 10px;
+	background: transparent;
+	color: var(--fg-soft);
+	font-family: var(--exx-font-mono);
+	font-size: 10.5px;
+	font-weight: 600;
+	line-height: 1.2;
+	white-space: nowrap;
+	cursor: pointer;
+}
+.bash-mode-chip:hover,
+.bash-mode-chip:focus-visible {
+	color: var(--fg);
+	background: color-mix(in srgb, var(--fg) 12%, transparent);
+	outline: none;
+}
+.bash-mode-chip:focus-visible {
+	box-shadow: 0 0 0 1px color-mix(in srgb, var(--fg) 35%, transparent);
+}
+/* Two choices, one popover: hangs below the chip, right-aligned so it never
+   leaves the viewport from the header's right edge. */
+.bash-mode-menu {
+	position: absolute;
+	top: calc(100% + 8px);
+	right: 0;
+	min-width: 216px;
+	background: var(--bg);
+	border: 1px solid var(--border);
+	border-radius: 12px;
+	padding: 6px;
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	box-shadow: var(--exx-shadow-popover);
+	z-index: 30;
+}
+.bash-mode-option {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 10px;
+	border: none;
+	border-radius: 8px;
+	padding: 7px 10px;
+	background: transparent;
+	color: var(--fg-soft);
+	font-size: 12.5px;
+	line-height: 1.3;
+	text-align: left;
+	cursor: pointer;
+}
+.bash-mode-option:hover:not(:disabled),
+.bash-mode-option:focus-visible {
+	background: color-mix(in srgb, var(--fg) 10%, transparent);
+	color: var(--fg);
+	outline: none;
+}
+.bash-mode-option:disabled {
+	color: var(--dim);
+	cursor: not-allowed;
+}
+/* The current mode is marked, not merely highlighted: hover must not be able
+   to impersonate "this is what you have". */
+.bash-mode-option.is-current {
+	color: var(--fg);
+	font-weight: 700;
+}
+.bash-mode-option.is-current::after {
+	content: "✓";
+	font-weight: 700;
+	color: var(--success);
+}
+.bash-mode-option.is-current:disabled { color: var(--dim); }
+.bash-mode-menu-note {
+	margin: 2px 0 4px;
+	padding: 0 10px;
+	color: var(--muted);
+	font-size: 11px;
+	line-height: 1.35;
+}
+.bash-mode-menu-error {
+	margin: 2px 0 4px;
+	padding: 0 10px;
+	color: var(--error);
+	font-size: 11px;
+	line-height: 1.35;
+}
 .theme-toggle {
 	background: transparent;
 	border: 1px solid var(--border);
@@ -958,9 +1068,11 @@ strong, b { font-weight: 700; }
 	padding: 6px 8px;
 	cursor: pointer;
 }
-/* Navigation rows carry their arrow at the right edge. */
-.sidebar-config-menu .menu-item-arrow {
+/* Rows with a shortcut carry the accelerator at the right edge, quiet
+   mono like a macOS menu. */
+.sidebar-config-menu .menu-item-kbd {
 	color: var(--muted);
+	font-family: var(--exx-font-mono);
 }
 .sidebar-config-menu .menu-item:hover,
 .sidebar-config-menu .menu-item:focus-visible {
@@ -3630,6 +3742,12 @@ strong, b { font-weight: 700; }
 .structural-review-map-section {
 	text-align: left;
 }
+.review-hardness-picker {
+	display: flex;
+	gap: 10px;
+	flex-wrap: wrap;
+	margin-top: 8px;
+}
 .absorb-workspace .checkpoint-preview-actions {
 	position: sticky;
 	bottom: -1px;
@@ -4191,6 +4309,39 @@ strong, b { font-weight: 700; }
 	flex-direction: column;
 	gap: 8px;
 	align-items: stretch;
+}
+/* Shown only when the discussion has hit a wall (error or limit): the exit
+   that always works, explained, next to the error it answers. */
+.absorb-discussion-remedy {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	flex-wrap: wrap;
+	padding: 10px 14px;
+	border: 1px dashed color-mix(in srgb, var(--border-soft) 70%, transparent);
+	border-radius: 12px;
+	color: var(--muted);
+	font-size: 13px;
+}
+.absorb-discussion-remedy .landing-action {
+	align-self: center;
+	font-size: 12px;
+	padding: 6px 12px;
+}
+/* Lives under the textarea (first grid column) and spans the full row on the
+   stacked mobile layout. Tone shifts as the transcript nears its caps. */
+.absorb-discussion-counter {
+	grid-column: 1 / -1;
+	color: var(--muted);
+	font-size: 11px;
+	line-height: 1.4;
+}
+.absorb-discussion-counter.near {
+	color: color-mix(in srgb, var(--fg) 70%, var(--muted));
+}
+.absorb-discussion-counter.full {
+	color: var(--danger);
 }
 /* Generate proposal is the discussion's primary exit; keep it compact but filled. */
 .absorb-discussion-actions .absorb-discussion-generate {
@@ -6615,7 +6766,7 @@ strong, b { font-weight: 700; }
 }
 .src-row {
 	display: grid;
-	grid-template-columns: 12px minmax(200px, auto) 90px 1fr;
+	grid-template-columns: 12px minmax(200px, auto) minmax(90px, max-content) 1fr;
 	gap: 12px;
 	align-items: baseline;
 	padding: 8px 0;
@@ -6642,6 +6793,23 @@ strong, b { font-weight: 700; }
 .src-chip.billed { color: var(--fg); border-color: var(--fg); }
 .src-money { font-family: var(--exx-font-mono); font-size: 12.5px; font-weight: 700; text-align: right; white-space: nowrap; }
 .src-meta { color: var(--muted); font-size: 12px; }
+/* Removed gateways fold behind one quiet row; the caret is the whole affordance
+   and the header stays exactly as loud as its neighbours. */
+.src-row-fold {
+	width: 100%;
+	background: transparent;
+	color: inherit;
+	font: inherit;
+	text-align: left;
+	cursor: pointer;
+	border: none;
+	border-radius: 6px;
+}
+.src-row.src-row-fold { border-top: 1px solid var(--divider); }
+.src-row-fold:hover { background: var(--panel-2); }
+.src-row-fold:focus-visible { outline: 1px solid var(--fg); outline-offset: -2px; }
+.src-row-inner { padding-left: 14px; }
+.fold-caret { color: var(--muted); font-size: 10px; align-self: center; }
 .src-note {
 	font-size: 12.5px;
 	color: var(--muted);
@@ -6678,6 +6846,10 @@ strong, b { font-weight: 700; }
 	padding: 0 6px 8px 12px;
 	border-bottom: 1px solid var(--border-soft);
 }
+/* Retired rooms fold: the header toggles, it does not filter, and it is no
+   louder than the rows above it. */
+.bar-row .fold-caret { margin-right: 6px; }
+.bar-fold-row { padding-left: 14px; }
 .kind-chip {
 	font-family: var(--exx-font-display);
 	font-size: 9px;
@@ -6757,6 +6929,14 @@ strong, b { font-weight: 700; }
 	border-radius: 12px;
 	border-left: 3px solid var(--exx-plan);
 }
+
+.approval-command {
+	margin: 6px 0 2px;
+	max-height: 180px;
+	overflow: auto;
+	white-space: pre-wrap;
+	word-break: break-all;
+}
 .approval-card.delegate .approval-question {
 	display: block;
 	margin: 2px 0 0;
@@ -6830,6 +7010,15 @@ strong, b { font-weight: 700; }
 }
 .approval-input:focus { outline: none; border-color: var(--fg); }
 .approval-buttons { display: flex; gap: 8px; flex-wrap: wrap; }
+/* Keyboard approval: a pending card may focus its Approve button
+   programmatically, and script-moved focus does not reliably match
+   :focus-visible — so the ring rides plain :focus. Whenever an approval
+   button holds focus the ring MUST be visible, because an unseen focus
+   would turn a stray Enter into a silent approval. */
+.approval-buttons button:focus {
+	outline: 2px solid var(--exx-focus);
+	outline-offset: 2px;
+}
 .btn-primary:hover { background: color-mix(in srgb, var(--fg) 88%, var(--bg)); }
 .btn-primary {
 	background: var(--fg);
@@ -7481,6 +7670,16 @@ strong, b { font-weight: 700; }
 	max-width: 960px;
 	height: min(800px, 90vh);
 	max-height: none;
+	border-color: var(--border);
+	border-radius: 22px;
+	box-shadow: 0 24px 80px color-mix(in srgb, #000 26%, transparent);
+}
+/* Only the room settings dialog borrows the main Settings backdrop (soft
+   translucent blur instead of the solid dim); the shared overlay class also
+   serves create-room and configure-profile, which keep the app's dim. */
+.room-settings-overlay:has(> .rs-shell) {
+	background: color-mix(in srgb, var(--bg) 72%, transparent);
+	backdrop-filter: blur(10px);
 }
 .room-settings-layout {
 	display: flex;
@@ -7490,32 +7689,33 @@ strong, b { font-weight: 700; }
 .room-settings-nav {
 	width: 190px;
 	flex-shrink: 0;
-	border-right: 1px solid var(--border-soft);
-	padding: 14px 10px;
+	border-right: 1px solid var(--exx-divider);
+	padding: 16px 12px;
 	display: flex;
 	flex-direction: column;
-	gap: 2px;
+	gap: 4px;
 }
+/* The rail items speak the main Settings nav's language: fg text at rest, a
+   wash on hover, the inverted fill for the current section. */
 .rs-nav-item {
 	display: block;
 	width: 100%;
 	text-align: left;
 	background: none;
 	border: none;
-	border-radius: 8px;
-	color: var(--muted);
+	border-radius: 6px;
+	color: var(--fg);
 	font: inherit;
-	font-size: 13.5px;
-	padding: 8px 12px;
+	font-size: 14px;
+	padding: 8px 10px;
 	cursor: pointer;
 }
 .rs-nav-item:hover {
-	color: var(--fg);
+	background: color-mix(in srgb, currentColor 10%, transparent);
 }
 .rs-nav-item.active {
-	color: var(--fg);
-	font-weight: 700;
-	background: color-mix(in srgb, var(--fg) 7%, transparent);
+	background: var(--fg);
+	color: var(--bg);
 }
 .rs-nav-spacer {
 	flex: 1;
@@ -7610,11 +7810,30 @@ strong, b { font-weight: 700; }
 	flex-direction: column;
 	gap: 18px;
 }
+.rs-shell .room-settings-head {
+	border-bottom-color: var(--exx-divider);
+}
 .rs-shell .room-settings-body {
 	flex: 1;
 	min-width: 0;
 	display: block;
-	padding: 20px 24px 26px;
+	padding: 18px 28px 30px;
+}
+/* Quiet scrollbar, same recipe as the Settings overlay pane; the global
+   fg-colored thumb read as chrome inside the calm modal. */
+.rs-shell .room-settings-body::-webkit-scrollbar {
+	width: 8px;
+}
+.rs-shell .room-settings-body::-webkit-scrollbar-thumb {
+	background: var(--border);
+	border-radius: 4px;
+}
+.rs-shell .room-settings-body::-webkit-scrollbar-thumb:hover {
+	background: var(--fg-soft);
+}
+.rs-shell .room-settings-body::-webkit-scrollbar-track {
+	background: transparent;
+	margin-bottom: 18px;
 }
 .room-settings-status {
 	font-size: 10px;
@@ -7670,7 +7889,8 @@ strong, b { font-weight: 700; }
 .rs-pane-sub {
 	margin: -8px 0 4px;
 	color: var(--muted);
-	font-size: 12.5px;
+	font-size: 13px;
+	line-height: 1.5;
 }
 .rs-info-anchor {
 	position: relative;
@@ -12447,12 +12667,19 @@ button.model-picker-group-head.kb-active {
 	outline: none;
 	border-color: color-mix(in srgb, var(--success) 40%, var(--border-soft));
 }
+/* VPN deliberately off is a calm fact, not a warning: plain grey in both
+   themes (the vars resolve per theme), no amber nag. */
 .remote-on-pill.paused {
-	border-color: color-mix(in srgb, var(--warning) 30%, var(--border-soft));
-	background: color-mix(in srgb, var(--warning) 9%, transparent);
+	border-color: var(--border-soft);
+	background: transparent;
+	color: var(--muted);
+}
+.remote-on-pill.paused:hover,
+.remote-on-pill.paused:focus-visible {
+	border-color: var(--border);
 }
 .remote-on-pill.paused .remote-on-dot {
-	background: var(--warning);
+	background: var(--muted);
 }
 .menu-item-state {
 	color: var(--muted);
@@ -13737,4 +13964,197 @@ html.desktop-app-mac .settings-overlay .landing {
 	html.sidebar-collapsed:not(.desktop-app-mac) .app .topbar {
 		padding-left: 84px;
 	}
+}
+
+/* Room settings at the main Settings' density (visual pass 2026-08-31) ----
+   The room settings modal speaks the Settings overlay's quiet grammar:
+   hairline row rhythm instead of boxes, sentence-case action pills,
+   tracked-caps group labels, outcomes as plain colored sentences. Everything
+   is scoped to .rs-shell so the full-page borrowers of the rs-* control
+   language (remote devices, web search, archived rooms) keep their scale.
+   Appended after the base rules on purpose: same-specificity overrides here
+   must win on order. */
+.rs-shell .rs-row {
+	padding: 6px 0;
+	min-height: 46px;
+}
+.rs-shell .rs-row ~ .rs-row {
+	border-top-color: color-mix(in srgb, var(--border-soft) 55%, transparent);
+}
+.rs-shell .rs-row-label {
+	font-weight: 500;
+}
+.rs-shell .rs-row-hint {
+	font-size: 12px;
+	line-height: 1.4;
+}
+/* Sentence case on the action pills, like the Settings modal lifts the
+   uppercase transform from its inline actions; the pill shape stays. */
+.rs-shell .rs-btn {
+	font-size: 12.5px;
+	letter-spacing: normal;
+	text-transform: none;
+}
+/* Errors as plain colored sentences, no card: the boxed treatment read
+   heavier than the pane itself and the color already carries the meaning. */
+.rs-shell .checkpoint-proposal-error {
+	border: none;
+	border-radius: 0;
+	background: transparent;
+	padding: 0;
+}
+/* One hint scale across the panes (the settings modal's 12px), instead of
+   the full-page views' 11px small print. */
+.rs-shell .workspaces-empty-state,
+.rs-shell .workspaces-session-note,
+.rs-shell .workspaces-warnings,
+.rs-shell .workspaces-success,
+.rs-shell .workspaces-error,
+.rs-shell .workspace-summary-note,
+.rs-shell .room-schedules-help,
+.rs-shell .room-schedules-summary,
+.rs-shell .room-schedules-job-meta {
+	font-size: 12px;
+}
+/* One tracked-caps recipe for every group label in the panes, matching the
+   Settings tables' header treatment. */
+.rs-shell .workspace-summary-facts dt,
+.rs-shell .workspace-tool-group-label,
+.rs-shell .workspaces-field > strong,
+.rs-shell .workspaces-tool-options > strong,
+.rs-shell .room-schedules-recurrence legend,
+.rs-shell .room-schedules-save-summary span {
+	font-size: 10.5px;
+	font-weight: 600;
+	letter-spacing: 0.12em;
+	text-transform: uppercase;
+	color: color-mix(in srgb, var(--muted) 78%, transparent);
+}
+/* Workspace pane: the saved-state summary reads as a plain block, not a
+   card — the folder line and the facts carry the structure themselves. */
+.rs-shell .workspace-summary-card {
+	border: none;
+	border-radius: 0;
+	padding: 0;
+}
+/* The mode segments and tool rows sit on the soft divider palette. */
+.rs-shell .workspace-mode-segments {
+	border-color: var(--border-soft);
+}
+.rs-shell .workspace-mode-segment {
+	font-size: 12.5px;
+	font-weight: 500;
+	padding: 7px 14px;
+}
+.rs-shell .workspace-mode-segment + .workspace-mode-segment {
+	border-left-color: var(--border-soft);
+}
+.rs-shell .workspaces-default-form .workspaces-tool-row {
+	border-bottom-color: color-mix(in srgb, var(--border-soft) 55%, transparent);
+}
+.rs-shell .workspaces-default-form .workspace-tool-groups .workspaces-tool-row:hover {
+	background: color-mix(in srgb, var(--fg) 3%, transparent);
+}
+/* The Bash block keeps a subtle raised distinction, but neutral: a power
+   tool's home, not a warning. */
+.rs-shell .workspace-power-user {
+	border-color: var(--border-soft);
+	background: color-mix(in srgb, var(--panel-2) 55%, transparent);
+}
+/* Skills + connectors: bordered row-cards flatten to the shared divider
+   rhythm; the picker keeps its outline as a boundary but loses the fill. */
+.rs-shell .room-skills-rows {
+	gap: 0;
+	margin-top: 4px;
+}
+.rs-shell .room-skills-row {
+	border: none;
+	border-radius: 0;
+	padding: 8px 0;
+}
+.rs-shell .room-skills-row + .room-skills-row {
+	border-top: 1px solid color-mix(in srgb, var(--border-soft) 55%, transparent);
+}
+.rs-shell .room-skills-picker {
+	background: transparent;
+	border-color: var(--border-soft);
+}
+.rs-shell .room-skills-picker-list {
+	gap: 0;
+}
+/* The drifted-skill review gate keeps its warning identity, softened from a
+   full-strength outline to a tinted one. */
+.rs-shell .room-skills-review {
+	border-color: color-mix(in srgb, var(--exx-warning, #c47f00) 45%, transparent);
+}
+/* Scheduled tasks: the form, recurrence fieldset and preset panel run
+   without boxes; the field structure carries them. */
+.rs-shell .room-schedules-form,
+.rs-shell .room-schedules-recurrence,
+.rs-shell .room-schedules-preset-panel {
+	border: none;
+	border-radius: 0;
+	background: transparent;
+	padding: 0;
+}
+.rs-shell .room-schedules-recurrence legend {
+	padding: 0;
+}
+.rs-shell .room-schedules-field span,
+.rs-shell .room-schedules-checkbox span {
+	font-weight: 600;
+}
+/* The what-will-be-saved summary is a quiet labeled sentence, not an
+   amber alert box. */
+.rs-shell .room-schedules-save-summary {
+	border: none;
+	border-radius: 0;
+	background: transparent;
+	padding: 0;
+}
+/* Choice chips rest transparent at chip weight; the selected one keeps the
+   app's filled-selection treatment from the base rules. */
+.rs-shell .room-schedules-mode-button,
+.rs-shell .room-schedules-submode-button,
+.rs-shell .room-schedules-day-chip {
+	background: transparent;
+	font-weight: 500;
+}
+.rs-shell .room-schedules-mode-button.active,
+.rs-shell .room-schedules-submode-button.active,
+.rs-shell .room-schedules-day-chip.active {
+	background: var(--fg);
+}
+/* Task cards flatten to divider-separated entries. */
+.rs-shell .room-schedules-list {
+	gap: 0;
+}
+.rs-shell .room-schedules-job {
+	border: none;
+	border-radius: 0;
+	padding: 12px 0;
+}
+.rs-shell .room-schedules-job + .room-schedules-job {
+	border-top: 1px solid color-mix(in srgb, var(--border-soft) 55%, transparent);
+}
+/* Status reads as colored caps text rather than an outlined pill, the way
+   the Settings tables show provenance as muted text instead of chips. */
+.rs-shell .room-schedules-record-state,
+.rs-shell .room-schedules-run-status {
+	border: none;
+	border-radius: 0;
+	padding: 0;
+}
+/* The edit form's separator drops to the shared hairline strength. */
+.rs-shell .workspaces-default-form {
+	border-top-color: color-mix(in srgb, var(--border-soft) 55%, transparent);
+}
+/* The access-mode fact beside the folder name reads as quiet caps text,
+   not an outlined pill. */
+.rs-shell .workspace-summary-mode {
+	border: none;
+	border-radius: 0;
+	padding: 0;
+	font-weight: 600;
+	letter-spacing: 0.08em;
 }

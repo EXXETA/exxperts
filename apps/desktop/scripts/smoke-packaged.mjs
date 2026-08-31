@@ -19,6 +19,20 @@ if (!fs.existsSync(binary)) {
   console.error(`[smoke:packaged] no packaged app at ${binary}; run npm run package first.`);
   process.exit(1);
 }
+// The bundled ripgrep must have survived packaging: present in Resources and
+// actually runnable on this host (which also proves its signature/exec bit
+// came through electron-builder intact).
+const bundledRg = path.join(desktopRoot, "dist-app", "mac-arm64", "exxperts.app", "Contents", "Resources", "tools", "rg");
+if (!fs.existsSync(bundledRg)) {
+  console.error(`[smoke:packaged] bundled ripgrep missing at ${bundledRg}`);
+  process.exit(1);
+}
+const rgProbe = spawnSync(bundledRg, ["--version"], { encoding: "utf8" });
+if (rgProbe.status !== 0) {
+  console.error(`[smoke:packaged] bundled ripgrep failed to run: ${(rgProbe.stderr || rgProbe.error?.message || `exit ${rgProbe.status}`).toString().trim()}`);
+  process.exit(1);
+}
+console.log(`[smoke:packaged] bundled ripgrep runs: ${rgProbe.stdout.split("\n")[0]}`);
 const scratch = path.join(os.homedir(), ".exxperts-desktop-scratch");
 fs.mkdirSync(scratch, { recursive: true });
 const child = spawn(binary, process.argv.slice(2).includes("--hidden") ? ["--hidden"] : [], {

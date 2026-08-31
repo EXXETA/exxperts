@@ -350,6 +350,67 @@ try {
 	const bareEntry = JSON.parse(fs.readFileSync(modelsPath, "utf-8")).providers["gateway-bare-maint"].models.find((model: any) => model.id === "quiet-maintainer");
 	assert(bareEntry.maxTokens === undefined && bareEntry.reasoning === undefined && bareEntry.contextWindow === GATEWAY_DEFAULT_CONTEXT_WINDOW, `a maintenance model with no kept detection registers on the defaults, got ${JSON.stringify(bareEntry)}`);
 
+	// ---- the price: detection only, all four numbers or nothing, owned ------
+	// A price is what the ledger bills every turn at, so the store reads it
+	// strictly: a half block, a negative figure or a string is not a price.
+	const priced = effectiveGatewayModel({ modelId: "m", detected: { cost: { input: 0.2, output: 1.2, cacheRead: 0.02, cacheWrite: 0.25 } } });
+	assert(JSON.stringify(priced.cost) === JSON.stringify({ input: 0.2, output: 1.2, cacheRead: 0.02, cacheWrite: 0.25 }), `a detected price is effective, got ${JSON.stringify(priced.cost)}`);
+	assert(effectiveGatewayModel({ modelId: "m", detected: {} }).cost === undefined, "no detection means no price, never zero");
+	assert(effectiveGatewayModel({ modelId: "m", reasoning: false, vision: false, detected: { reasoning: true, cost: { input: 1, output: 2, cacheRead: 1, cacheWrite: 1 } } }).cost !== undefined, "switching capabilities off does not take the price with them");
+	assert(gateways.parseGatewayModelCost({ input: 0.2, output: 1.2 }) === undefined, "a price with no cache figures is refused, not filled in");
+	assert(gateways.parseGatewayModelCost({ input: 0.2, output: -1, cacheRead: 0.02, cacheWrite: 0.2 }) === undefined, "a negative figure is refused");
+	assert(gateways.parseGatewayModelCost({ input: "0.2", output: 1.2, cacheRead: 0.02, cacheWrite: 0.2 }) === undefined, "a string figure is refused");
+	assert(JSON.stringify(gateways.parseGatewayModelCost({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, extra: 1 })) === JSON.stringify({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }), "a zero price is a price and unknown keys do not ride along");
+	fs.writeFileSync(storePath, JSON.stringify({
+		version: 1,
+		gateways: [{
+			id: "gateway-priced",
+			providerId: "gateway-priced",
+			label: "Priced gateway",
+			baseUrl: "https://priced.example.invalid/v1",
+			roomModels: [
+				{ modelId: "priced", detected: { cost: { input: 0.2, output: 1.2, cacheRead: 0.02, cacheWrite: 0.25 } } },
+				{ modelId: "half", detected: { cost: { input: 0.2 } } },
+				{ modelId: "silent", detected: {} },
+			],
+			maintenanceModel: "priced",
+		}],
+		retiredProviderIds: [],
+	}), { mode: 0o600 });
+	const pricedGateway = gateways.readOpenAiCompatibleGateways().gateways.find((gateway) => gateway.id === "gateway-priced")!;
+	assert(JSON.stringify(pricedGateway.roomModels.find((model) => model.modelId === "priced")!.detected?.cost) === JSON.stringify({ input: 0.2, output: 1.2, cacheRead: 0.02, cacheWrite: 0.25 }), "a full price block round-trips through the store");
+	assert(pricedGateway.roomModels.find((model) => model.modelId === "half")!.detected?.cost === undefined, "a partial price block on disk reads as no price");
+	// The catalog writes the price in the registry's field names and unit, and
+	// only where one exists; a hand-set cost on a silent model is an owned key
+	// and is cleared, because a price the gateway stopped publishing must not
+	// bill this year's turns at last year's number.
+	fs.writeFileSync(modelsPath, JSON.stringify({ providers: { "gateway-priced": { name: "x", baseUrl: "https://priced.example.invalid/v1", api: "openai-completions", models: [
+		{ id: "silent", name: "silent", cost: { input: 99, output: 99, cacheRead: 99, cacheWrite: 99 } },
+	] } } }), { mode: 0o600 });
+	catalog.writeGatewayProviderEntry(pricedGateway, modelsPath);
+	const pricedCatalog = JSON.parse(fs.readFileSync(modelsPath, "utf-8")).providers["gateway-priced"];
+	const pricedEntry = pricedCatalog.models.find((model: any) => model.id === "priced");
+	assert(JSON.stringify(pricedEntry.cost) === JSON.stringify({ input: 0.2, output: 1.2, cacheRead: 0.02, cacheWrite: 0.25 }), `the catalog writes the published price, got ${JSON.stringify(pricedEntry)}`);
+	assert(!("cost" in pricedCatalog.models.find((model: any) => model.id === "half")), "a refused price block writes no cost");
+	assert(!("cost" in pricedCatalog.models.find((model: any) => model.id === "silent")), `a stale cost on a model the gateway no longer prices is cleared, got ${JSON.stringify(pricedCatalog.models.find((model: any) => model.id === "silent"))}`);
+	// A gateway that withdraws its price on the next reload takes the catalog
+	// entry's cost with it.
+	catalog.writeGatewayProviderEntry(gateways.writeOpenAiCompatibleGateway({
+		...pricedGateway,
+		roomModels: pricedGateway.roomModels.map((model) => (model.modelId === "priced" ? { modelId: model.modelId, detected: {} } : model)),
+	}), modelsPath);
+	assert(!("cost" in JSON.parse(fs.readFileSync(modelsPath, "utf-8")).providers["gateway-priced"].models.find((model: any) => model.id === "priced")), "a withdrawn price is cleared on the next save");
+
+	// ---- the caching declaration: detection only, strict, switch-independent --
+	// Like the price, it has no override half and rides on nothing: switching
+	// reasoning or images off says nothing about whether the deployment caches.
+	assert(effectiveGatewayModel({ modelId: "m", detected: { promptCaching: true } }).promptCaching === true, "a declared caching support is effective by itself");
+	assert(effectiveGatewayModel({ modelId: "m", detected: { promptCaching: false } }).promptCaching === false, "a declared refusal is carried as said");
+	assert(effectiveGatewayModel({ modelId: "m", detected: {} }).promptCaching === undefined, "silence about caching stays silence");
+	assert(effectiveGatewayModel({ modelId: "m", reasoning: false, vision: false, detected: { reasoning: true, vision: true, promptCaching: true } }).promptCaching === true, "switching capabilities off does not take the caching declaration with them");
+	assert(gateways.parseGatewayDetectedSnapshot({ promptCaching: "true" } as any).promptCaching === undefined, "a string is not a caching declaration");
+	assert(gateways.parseGatewayDetectedSnapshot({ promptCaching: null } as any).promptCaching === undefined, "a null is not a caching declaration");
+
 	console.log("gateway-capability-precedence smoke: all checks passed");
 } finally {
 	fs.rmSync(tempHome, { recursive: true, force: true });

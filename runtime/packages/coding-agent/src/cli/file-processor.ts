@@ -7,7 +7,7 @@ import type { ImageContent } from "@exxeta/exxperts-ai";
 import chalk from "chalk";
 import { resolve } from "path";
 import { resolveReadPath } from "../core/tools/path-utils.js";
-import { formatDimensionNote, resizeImage } from "../utils/image-resize.js";
+import { formatDimensionNote, imageOmittedNote, resizeImage } from "../utils/image-resize.js";
 import { detectSupportedImageMimeTypeFromFile } from "../utils/mime.js";
 
 export interface ProcessedFiles {
@@ -57,8 +57,8 @@ export async function processFileArguments(fileArgs: string[], options?: Process
 
 			if (autoResizeImages) {
 				const resized = await resizeImage({ type: "image", data: base64Content, mimeType });
-				if (!resized) {
-					text += `<file name="${absolutePath}">[Image omitted: could not be resized below the inline image size limit.]</file>\n`;
+				if ("failure" in resized) {
+					text += `<file name="${absolutePath}">${imageOmittedNote(resized)}</file>\n`;
 					continue;
 				}
 				dimensionNote = formatDimensionNote(resized);

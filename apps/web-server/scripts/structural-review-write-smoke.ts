@@ -12,11 +12,13 @@ const {
 	createPersistentAgentFromScaffoldInput,
 	fingerprintL1bSource,
 	parseStructuralReviewApprovalRequest,
+	reviewTargetEstimatedTokensFromL1b,
 	writeApprovedStructuralReview,
 } = await import("../src/persistent-agents.js");
+const { overMemoryBudget, readPersistentRoomMaintenanceSettings } = await import("../src/persistent-room-maintenance-settings.js");
 
 const agentId = "structural-review-write-smoke-room";
-const { extractStructuralReviewSourceParts, STRUCTURAL_REVIEW_MODE, STRUCTURAL_REVIEW_WORKER_TYPE } = await import("../src/structural-review.js");
+const { extractStructuralReviewSourceParts, STRUCTURAL_REVIEW_MODE, STRUCTURAL_REVIEW_SHELF_POINTER_HEADING, STRUCTURAL_REVIEW_WORKER_TYPE, structuralReviewMetrics, structuralReviewShelfPointerLine } = await import("../src/structural-review.js");
 
 const SOURCE_REVIEW_TARGET_SENTINEL = "RAW_SOURCE_REVIEW_TARGET_SENTINEL_STRUCTURAL_SMOKE";
 const CANDIDATE_REVIEW_TARGET_SENTINEL = "RAW_CANDIDATE_REVIEW_TARGET_SENTINEL_STRUCTURAL_SMOKE";
@@ -213,6 +215,16 @@ try {
 	const sourceBeforeApproval = readL1b();
 	const partsBeforeApproval = extractStructuralReviewSourceParts(sourceBeforeApproval);
 	const metaBeforeApproval = readAgentJson();
+	// Budget-staleness guard (slice 3), same as the Memorize twin: an echoed
+	// budget that no longer matches settings (default 20k) stales pre-write.
+	expectThrows(
+		() => writeApprovedStructuralReview(parseStructuralReviewApprovalRequest({ proposal: { ...proposal(readL1b(), candidateReviewTarget), memoryBudgetImpact: { budgetTokens: 12_345, reviewTargetEstimatedTokensBefore: 1, reviewTargetEstimatedTokensAfter: 1, overBudgetBefore: false, overBudgetAfter: false } } }, agentId).request, [], new Date("2026-05-21T19:59:00.000Z")),
+		// The full prefix is load-bearing: the client's stale flow keys on
+		// "proposal is stale" and its cause copy on "memory budget changed".
+		/proposal is stale: memory budget changed/,
+		"a budget edited between propose and approve should stale the proposal",
+	);
+	expectNoMutation(sourceBeforeApproval, 0, 0, "budget-stale rejection");
 	const parsed = structuralReviewRequest();
 	const result = writeApprovedStructuralReview(parsed.request, parsed.warnings, new Date("2026-05-21T20:00:00.000Z"));
 	const approvedL1b = readL1b();
@@ -236,6 +248,13 @@ try {
 
 	const eventRecord = JSON.parse(fs.readFileSync(result.eventRecordPath, "utf-8"));
 	assert(eventRecord.schemaVersion === 1, "structural-review event should use schema version 1");
+	// Slice 4: the record carries the after-write budget verdict through the
+	// ONE numerator, measured from the WRITTEN file — the previous-partial
+	// escalation reads this, so it must equal what the saved screen showed.
+	const recordBudget = readPersistentRoomMaintenanceSettings(agentId).memoryBudgetTokens;
+	assert(eventRecord.memoryBudget?.budgetTokens === recordBudget, "structural-review event should record the budget in force at write time");
+	assert(eventRecord.memoryBudget?.reviewTargetEstimatedTokens === reviewTargetEstimatedTokensFromL1b(fs.readFileSync(l1bPath, "utf-8")), "structural-review event budget tokens must come from the ONE numerator over the written L1b");
+	assert(eventRecord.memoryBudget?.overBudget === overMemoryBudget(eventRecord.memoryBudget.reviewTargetEstimatedTokens, recordBudget), "structural-review event budget verdict must be the one predicate");
 	assert(eventRecord.operation === "structural_review", "structural-review event should identify operation");
 	assert(eventRecord.mode === "stc_diagnostic", "structural-review event should identify mode");
 	assert(eventRecord.agentId === agentId, "structural-review event should include agent id");
@@ -375,6 +394,16 @@ try {
 	);
 	expectNoMutation(baselineL1b, baselineArchiveCount, baselineEventCount, "candidate with extra top-level section");
 
+	// Slice 5 (G2): a Dropped material section emitted after the candidate is
+	// swallowed into it by the extractor and must reject at approve — it would
+	// otherwise be written into memory as candidate content.
+	expectThrows(
+		() => writeApprovedStructuralReview(structuralReviewRequest(`${candidateReviewTarget}\n\n### Dropped material\n\n- Swallowed drop list\n`).request, [], new Date("2026-05-21T20:09:00.000Z")),
+		/must not contain a Dropped material section/,
+		"candidate with a swallowed Dropped material section should reject before archive/write",
+	);
+	expectNoMutation(baselineL1b, baselineArchiveCount, baselineEventCount, "candidate with swallowed Dropped material section");
+
 	const bloatedCandidate = `## Deep Memory\n\n### Bloated\n\n- ${"This candidate intentionally grows stable memory far beyond the source review target. ".repeat(120)}\n\n## Active Items\n\n### Current Focus\n\n- Keep MR24 focused.\n`;
 	expectThrows(
 		() => writeApprovedStructuralReview(structuralReviewRequest(bloatedCandidate).request, [], new Date("2026-05-21T20:08:00.000Z")),
@@ -382,6 +411,138 @@ try {
 		"candidate above token growth hard limit should reject before archive/write",
 	);
 	expectNoMutation(baselineL1b, baselineArchiveCount, baselineEventCount, "candidate above token growth hard limit");
+
+	// Slice 7: forget-to-document. An approval with the flag writes the dropped
+	// material to the room's Files BEFORE memory mutates, appends a pointer line
+	// at the end of Deep Memory, and records both in the event record.
+	assert(result.forgetToDocument === undefined, "an approval without the flag should export nothing");
+	assert(eventRecord.droppedMaterial === undefined, "an approval whose proposal omitted Dropped material should not fabricate one in the event record");
+	const shelfDir = path.join(agentRoot, "files");
+	const ftdCandidate = `## Deep Memory\n\n### Collaboration and Workflow\n\n- The synthetic user prefers scoped GitLab MRs with explicit cleanup steps and is learning collaborative Git/GitLab workflows.\n\n## Active Items\n\n### Current Focus\n\n- Implement MR24 approval-gated Prune memory write semantics.\n`;
+	const ftdBase = proposal(readL1b(), ftdCandidate);
+	const ftdProposal = { ...ftdBase, fields: { ...ftdBase.fields, droppedMaterial: "- Product Direction (whole area) — duplicated wording, superseded.\n- Parked — resolved.", sectionLevelChangeLog: "| Section | Prior Tokens | Candidate Tokens | Disposition | Rationale |\n|---|---:|---:|---|---|\n| Deep Memory / Product Direction | 40 | 0 | Dropped | superseded |" } };
+	const ftdParsed = parseStructuralReviewApprovalRequest({ proposal: ftdProposal, forgetToDocument: true }, agentId);
+	assert(ftdParsed.request.forgetToDocument === true, "approval parser should carry the forget-to-document flag");
+	const ftdResult = writeApprovedStructuralReview(ftdParsed.request, ftdParsed.warnings, new Date("2026-08-27T12:00:00.000Z"));
+	assert(ftdResult.forgetToDocument?.shelfFileName === "Pruned memory 2026-08-27.md", "approval should return the allocated shelf filename");
+	const shelfDocPath = path.join(shelfDir, ftdResult.forgetToDocument!.shelfFileName);
+	assert(fs.existsSync(shelfDocPath), "the dropped-material document should be in the room's Files");
+	const shelfDoc = fs.readFileSync(shelfDocPath, "utf-8");
+	assert(shelfDoc.includes(`Prune id: ${ftdResult.structuralReviewId}`), "the document should carry the Prune id");
+	assert(shelfDoc.includes("Deep Memory / Product Direction") && shelfDoc.includes(SOURCE_REVIEW_TARGET_SENTINEL), "the document should carry the vanished area's full source text");
+	assert(shelfDoc.includes("Active Items / Parked"), "the document should carry every vanished area");
+	assert(shelfDoc.includes("Product Direction (whole area) — duplicated wording, superseded."), "the document should carry the approved disclosure verbatim");
+	assert(!/happened on/i.test(shelfDoc), "the document must never say 'happened on'");
+	const ftdL1b = readL1b();
+	const pointerLine = structuralReviewShelfPointerLine("Pruned memory 2026-08-27.md", new Date("2026-08-27T12:00:00.000Z"));
+	assert(pointerLine.includes("(saved 2026-08-27)") && pointerLine.includes('"Pruned memory 2026-08-27.md"'), "smoke setup: the real pointer line names the saved-on date and the file");
+	assert(ftdL1b.includes(pointerLine), "memory should carry the pointer line naming the file");
+	const pointerHeading = `### ${STRUCTURAL_REVIEW_SHELF_POINTER_HEADING}`;
+	assert(ftdL1b.indexOf(pointerHeading) > 0 && ftdL1b.indexOf(pointerHeading) < ftdL1b.indexOf(pointerLine) && ftdL1b.indexOf(pointerLine) < ftdL1b.indexOf("## Active Items"), "the pointer line should sit under its own must-keep subsection at the end of Deep Memory (M1)");
+	const ftdEvent = JSON.parse(fs.readFileSync(ftdResult.eventRecordPath, "utf-8"));
+	assert(ftdEvent.forgetToDocument?.shelfFileName === "Pruned memory 2026-08-27.md", "the event record should name the shelf file");
+	assert(typeof ftdEvent.droppedMaterial === "string" && ftdEvent.droppedMaterial.includes("Product Direction"), "the event record should persist the Dropped material disclosure");
+	// The response's budget verdict is measured from the WRITTEN file — pointer
+	// line included — through the ONE numerator, so the saved screen can never
+	// disagree with the event record on over/under.
+	assert(ftdResult.memoryBudget?.reviewTargetEstimatedTokens === reviewTargetEstimatedTokensFromL1b(readL1b()), "approval response budget tokens must come from the ONE numerator over the written L1b");
+	assert(ftdResult.memoryBudget?.overBudget === overMemoryBudget(ftdResult.memoryBudget.reviewTargetEstimatedTokens, ftdResult.memoryBudget.budgetTokens), "approval response budget verdict must be the one predicate");
+	assert(JSON.stringify(ftdResult.memoryBudget) === JSON.stringify(ftdEvent.memoryBudget), "response and event record must carry the same written-file budget verdict");
+	// The written delta includes the pointer line: it must equal the event
+	// record's (both from the pointered review) and exceed the pointer-free one.
+	assert(ftdResult.reviewTargetEstimatedTokenDelta === ftdEvent.structuralReview?.reviewTargetEstimatedTokenDelta, "response delta must be the written (pointered) delta the event record carries");
+	assert(ftdResult.reviewTargetEstimatedTokenDelta! > structuralReviewMetrics(ftdCandidate).estimatedTokens - structuralReviewMetrics(extractStructuralReviewSourceParts(sourceL1b()).sourceReviewTargetL1b).estimatedTokens, "the written delta must include the pointer line's tokens");
+	// Growth warnings judge the draft, not the opt-in pointer: this candidate
+	// shrinks memory, so no growth warning may blame it; the pointer's cost is
+	// its own disclosed line, in the response and the event record.
+	assert(!ftdResult.warnings.some((warning) => /grows review-target|larger than source/.test(warning)), `a shrinking draft must not be blamed for the pointer's growth: ${ftdResult.warnings.join(" | ")}`);
+	const pointerNote = ftdResult.warnings.find((warning) => /added a pointer line of ~\d+ estimated tokens to Deep Memory/.test(warning));
+	assert(pointerNote, `the pointer's token cost should be disclosed as its own line: ${ftdResult.warnings.join(" | ")}`);
+	assert(!/~0 estimated/.test(pointerNote!), "the pointer's cost must be the line's own estimate, never ~0 for a line that is there");
+	assert(ftdEvent.warnings.includes(pointerNote!), "the event record should carry the pointer-cost line too");
+	assert(result.warnings.every((warning) => !/pointer line/.test(warning)), "an approval without the flag carries no pointer-cost line");
+
+	// A failed shelf write fails the approval cleanly: no archive, no event
+	// record, no memory mutation — and the error speaks product words.
+	fs.writeFileSync(l1bPath, sourceL1b(), "utf-8");
+	const preFailL1b = readL1b();
+	const preFailArchive = archiveCount();
+	const preFailEvents = structuralReviewEventCount();
+	fs.rmSync(shelfDir, { recursive: true, force: true });
+	fs.writeFileSync(shelfDir, "not a directory", "utf-8");
+	expectThrows(
+		() => writeApprovedStructuralReview(parseStructuralReviewApprovalRequest({ proposal: proposal(readL1b(), ftdCandidate), forgetToDocument: true }, agentId).request, [], new Date("2026-08-27T12:30:00.000Z")),
+		/could not be saved to this room's Files[\s\S]*No memory was changed/,
+		"a failed shelf write should fail the approval with product wording and a reachable action",
+	);
+	// The browser never sees the filesystem detail: no errno, no server path.
+	try {
+		writeApprovedStructuralReview(parseStructuralReviewApprovalRequest({ proposal: proposal(readL1b(), ftdCandidate), forgetToDocument: true }, agentId).request, [], new Date("2026-08-27T12:31:00.000Z"));
+		throw new Error("shelf failure should throw");
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		assert(!/E[A-Z]{3,}|ENOTDIR|EACCES/.test(message) && !message.includes(root) && !message.includes(shelfDir), `shelf-failure copy must not leak errno or server paths: ${message}`);
+	}
+	expectNoMutation(preFailL1b, preFailArchive, preFailEvents, "failed forget-to-document shelf write");
+	fs.rmSync(shelfDir, { force: true });
+
+	// The pointer-tipped growth refusal: scanned against the REAL approval path
+	// (no local copy of the 5% predicate) from clearly-over downward — the
+	// window where the pointer line alone tips the limit must exist, carry the
+	// load-bearing substring the client keys on, and leave nothing behind.
+	fs.writeFileSync(l1bPath, sourceL1b(), "utf-8");
+	const tippedBaseline = readL1b();
+	const tippedArchive = archiveCount();
+	const tippedEvents = structuralReviewEventCount();
+	let sawPlainReject = false;
+	let tippedMessage: string | null = null;
+	for (let pad = 1600; pad >= 0 && tippedMessage == null; pad -= 16) {
+		const cand = `## Deep Memory\n\n### Collaboration and Workflow\n\n- ${"x".repeat(400 + pad)}\n\n## Active Items\n\n### Current Focus\n\n- Keep MR24 focused.\n`;
+		const candBase = proposal(readL1b(), cand);
+		const candProposal = { ...candBase, fields: { ...candBase.fields, droppedMaterial: "- Product Direction — superseded." } };
+		try {
+			writeApprovedStructuralReview(parseStructuralReviewApprovalRequest({ proposal: candProposal, forgetToDocument: true }, agentId).request, [], new Date("2026-08-27T13:00:00.000Z"));
+			break;
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			if (/Files pointer line tipped it over/.test(message)) { tippedMessage = message; break; }
+			assert(/token growth exceeds/.test(message), `pad scan hit an unexpected error: ${message}`);
+			sawPlainReject = true;
+		}
+	}
+	assert(sawPlainReject && tippedMessage, "the pad scan should pass through plain growth rejects and reach the pointer-tipped window before any approval succeeds");
+	assert(/Approve without saving dropped material to Files/.test(tippedMessage!), "the pointer-tipped refusal should name the real lever");
+	expectNoMutation(tippedBaseline, tippedArchive, tippedEvents, "pointer-tipped growth refusal");
+	assert(!fs.existsSync(shelfDir) || fs.readdirSync(shelfDir).length === 0, "the pointer-tipped refusal must remove the shelf document again");
+
+	// A failure AFTER the memory write (audit record unwritable): the approval
+	// SUCCEEDS — memory, archive and the export stay, consistent — and the
+	// record failure is a disclosed warning, never a thrown "not applied".
+	if (process.getuid?.() !== 0) {
+		fs.writeFileSync(l1bPath, sourceL1b(), "utf-8");
+		const postArchive = archiveCount();
+		const postEvents = structuralReviewEventCount();
+		fs.mkdirSync(structuralReviewEventDir, { recursive: true });
+		fs.chmodSync(structuralReviewEventDir, 0o500);
+		let postWriteResult;
+		try {
+			postWriteResult = writeApprovedStructuralReview(parseStructuralReviewApprovalRequest({ proposal: { ...proposal(readL1b(), ftdCandidate), fields: ftdProposal.fields }, forgetToDocument: true }, agentId).request, [], new Date("2026-08-27T14:00:00.000Z"));
+		} finally {
+			fs.chmodSync(structuralReviewEventDir, 0o700);
+		}
+		assert(postWriteResult.writesMemory === true && postWriteResult.forgetToDocument?.shelfFileName, "a post-write record failure must still report a successful approval with its export");
+		const recordWarning = postWriteResult.warnings.find((warning) => /^Memory was updated and the previous memory archived first, but this Review's audit record could not be written/.test(warning));
+		assert(recordWarning, `the audit-record failure should be a disclosed warning: ${postWriteResult.warnings.join(" | ")}`);
+		assert(!postWriteResult.warnings.some((warning) => /room record/.test(warning)), "an audit-record failure must not also claim the room record failed");
+		assert(postWriteResult.auditRecordWritten === false, "the response must flag the unwritten audit record structurally, not only in copy");
+		assert(/memory history/.test(recordWarning!) && /archived snapshot/.test(recordWarning!), "the audit-record warning should name every surface that loses this Review");
+		assert(ftdResult.auditRecordWritten === true && result.auditRecordWritten === true, "successful approvals flag the audit record as written");
+		assert(structuralReviewEventCount() === postEvents, "the audit record is genuinely absent after the failure");
+		assert(readL1b().includes(`### ${STRUCTURAL_REVIEW_SHELF_POINTER_HEADING}`) && readL1b().includes("(saved 2026-08-27)"), "after a post-write failure the written memory (with its pointer) stays");
+		assert(archiveCount() === postArchive + 1, "after a post-write failure the archive stays");
+		assert(fs.existsSync(path.join(shelfDir, postWriteResult.forgetToDocument!.shelfFileName)), "after a post-write failure the shelf document stays — file and pointer remain consistent");
+		assert(readAgentJson().updatedAt === new Date("2026-08-27T14:00:00.000Z").getTime(), "the room record step still ran independently of the audit-record failure");
+	}
 
 	fs.rmSync(root, { recursive: true, force: true });
 	console.log("structural review write smoke passed");

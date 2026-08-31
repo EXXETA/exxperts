@@ -15,6 +15,8 @@ const {
 	readPersistentRoomCapabilityPolicy,
 	readPersistentRoomDefaultCapabilityPolicy,
 	resolvePersistentRoomCapabilityPolicy,
+	resolvePersistentRoomEffectiveWorkspacePolicy,
+	updatePersistentRoomCapabilityPolicyToolSelection,
 	writePersistentRoomCapabilityPolicy,
 	writePersistentRoomDefaultCapabilityPolicy,
 } = await import("../src/persistent-room-workspace-policy.js");
@@ -61,17 +63,17 @@ try {
 		now: new Date("2026-05-26T00:00:00.000Z"),
 	} as const;
 
-	const policy = createPersistentRoomCapabilityPolicy({ ...baseInput, root: workspaceRoot, workspaceAccessMode: "bounded", source: "manual", mode: "read" });
+	const policy = createPersistentRoomCapabilityPolicy({ ...baseInput, root: workspaceRoot, workspaceAccessMode: "bounded", source: "manual" });
 	assert(policy.schemaVersion === 1, "policy should use schema version 1");
 	assert(policy.workspaceAccessMode === "bounded", "explicit bounded policy should persist workspace access mode");
 	assert(policy.roots.length === 1, "policy should contain one root grant");
 	assert(policy.roots[0]?.path === workspaceRoot, "server policy should retain canonical path");
 	assert(policy.roots[0]?.realpath === fs.realpathSync.native(workspaceRoot), "server policy should retain realpath");
 	assert(policy.modes.read === true, "read mode should be enabled in policy model");
-	assert(policy.modes.write === true, "bounded Markdown write should be enabled for active workspace policies");
-	assert(policy.allowedToolNames.join(",") === "ls,find,read,write_markdown_file,read_spreadsheet", "workspace policy should allow the standard bounded workspace bundle");
+	assert(policy.modes.write === true, "modes.write is derived: the standard bounded bundle includes writer tools");
+	assert(policy.allowedToolNames.join(",") === "ls,find,grep,read,write,edit", "workspace policy should allow the standard bounded workspace bundle");
 	assert(policy.bashEnabled === false, "bounded workspace policy should keep bash disabled by default");
-	const boundedBashRequest = createPersistentRoomCapabilityPolicy({ ...baseInput, conversationId: "c_bounded_bash_request", root: workspaceRoot, workspaceAccessMode: "bounded", source: "manual", mode: "read", bashEnabled: true });
+	const boundedBashRequest = createPersistentRoomCapabilityPolicy({ ...baseInput, conversationId: "c_bounded_bash_request", root: workspaceRoot, workspaceAccessMode: "bounded", source: "manual", bashEnabled: true });
 	assert(boundedBashRequest.bashEnabled === false, "bounded workspace policy must resolve bash disabled even when requested");
 	assert(policy.deniedRoots.some((root) => root.kind === "repo-root"), "policy should record redacted repo-root deny metadata");
 	assert(policy.deniedRoots.some((root) => root.kind === "exxeta-state-root"), "policy should record redacted exxeta-state-root deny metadata");
@@ -84,13 +86,18 @@ try {
 	assert(view.rootCount === 1, "view should expose root count");
 	assert(view.roots[0]?.basename === "workspace", "view should expose basename only");
 	assert(view.pathAccess === "workspace-only", "view should state workspace-only path access");
-	assert(view.writeEnabled === true, "view should show bounded Markdown write enabled");
-	assert(view.markdownWriteEnabled === true, "view should state Markdown write is enabled");
+	assert(view.writeEnabled === true, "view writeEnabled is derived from writer tool presence in the selection");
 	assert(view.bashEnabled === false, "view should state bash is disabled");
 	assert(view.nativePiFilesystemToolsEnabled === false, "view should state native Pi filesystem tools are disabled");
 	assert(!viewJson.includes(JSON.stringify(workspaceRoot).slice(1, -1)), "view must not expose raw workspace path");
 	assert(!viewJson.includes(JSON.stringify(repoRoot).slice(1, -1)), "view must not expose raw repo path");
 	assert(!viewJson.includes(JSON.stringify(exxetaStateRoot).slice(1, -1)), "view must not expose raw exxeta path");
+
+	const readerOnlyPolicy = createPersistentRoomCapabilityPolicy({ ...baseInput, conversationId: "c_reader_only", root: workspaceRoot, workspaceAccessMode: "bounded", source: "manual", toolSelection: { kind: "custom", allowedToolNames: ["ls", "find", "grep", "read"] } });
+	assert(readerOnlyPolicy.modes.write === false, "a selection without writer tools derives modes.write false");
+	assert(persistentRoomCapabilityPolicyView(readerOnlyPolicy).writeEnabled === false, "a selection without writer tools derives view writeEnabled false");
+	const editOnlyPolicy = createPersistentRoomCapabilityPolicy({ ...baseInput, conversationId: "c_edit_only", root: workspaceRoot, workspaceAccessMode: "bounded", source: "manual", toolSelection: { kind: "custom", allowedToolNames: ["read", "edit"] } });
+	assert(editOnlyPolicy.modes.write === true && persistentRoomCapabilityPolicyView(editOnlyPolicy).writeEnabled === true, "edit alone is a writer tool and derives write capability");
 
 	writePersistentRoomCapabilityPolicy(policy, { persistentAgentsRoot });
 	const policyPath = persistentRoomWorkspacePolicyPath(agentId, "c_workspace_policy_smoke", { persistentAgentsRoot });
@@ -111,6 +118,26 @@ try {
 	assert(persistentRoomCapabilityPolicyView(legacyPolicy).pathAccess === "workspace-only", "legacy policy view should remain workspace-only");
 	fs.writeFileSync(policyPath, JSON.stringify({ ...legacyPolicyRecord, workspaceAccessMode: "unsafe" }, null, 2) + "\n");
 	assert(readPersistentRoomCapabilityPolicy(agentId, "c_workspace_policy_smoke", { persistentAgentsRoot }) === null, "stored invalid workspaceAccessMode should fail closed");
+
+	// Self-correction: a stored record claiming write:true with a read-only tool
+	// selection is re-derived to write:false on every read — the stored flag has
+	// no authority over the tool selection.
+	const lyingRecord = JSON.parse(storedPolicyJson);
+	lyingRecord.modes = { read: true, write: true };
+	lyingRecord.toolSelection = { kind: "custom", allowedToolNames: ["ls", "find", "grep", "read"] };
+	lyingRecord.allowedToolNames = ["ls", "find", "grep", "read"];
+	fs.writeFileSync(policyPath, JSON.stringify(lyingRecord, null, 2) + "\n");
+	const correctedPolicy = readPersistentRoomCapabilityPolicy(agentId, "c_workspace_policy_smoke", { persistentAgentsRoot });
+	assert(correctedPolicy?.modes.write === false, "a stored write:true flag over a read-only selection self-corrects to write:false");
+	assert(persistentRoomCapabilityPolicyView(correctedPolicy).writeEnabled === false, "the corrected record reports writeEnabled false");
+
+	// A selection change that flips writer presence changes the effective
+	// fingerprint, so the live rebind sees it.
+	const readOnlyFingerprint = resolvePersistentRoomEffectiveWorkspacePolicy(agentId, "c_workspace_policy_smoke", { persistentAgentsRoot }).fingerprint.value;
+	writePersistentRoomCapabilityPolicy(updatePersistentRoomCapabilityPolicyToolSelection(correctedPolicy, { kind: "custom", allowedToolNames: ["ls", "find", "grep", "read", "write"] }), { persistentAgentsRoot });
+	const writerFingerprint = resolvePersistentRoomEffectiveWorkspacePolicy(agentId, "c_workspace_policy_smoke", { persistentAgentsRoot }).fingerprint.value;
+	assert(readOnlyFingerprint !== writerFingerprint, "adding a writer tool must flip the effective workspace fingerprint");
+
 	writePersistentRoomCapabilityPolicy(policy, { persistentAgentsRoot });
 
 	const deletedPolicy = deletePersistentRoomCapabilityPolicy(agentId, "c_workspace_policy_smoke", { persistentAgentsRoot });
@@ -124,21 +151,21 @@ try {
 	const defaultSentinelSidecarPath = persistentRoomWorkspacePolicyPath(agentId, PERSISTENT_ROOM_WORKSPACE_DEFAULT_CONVERSATION_ID, { persistentAgentsRoot });
 	assert(readPersistentRoomDefaultCapabilityPolicy(agentId, { persistentAgentsRoot }) === null, "missing room-default policy should read as null");
 	assert(resolvePersistentRoomCapabilityPolicy(agentId, "c_workspace_policy_smoke", { persistentAgentsRoot }).source === "none", "resolver without thread/default policy should return none");
-	const localFilesDefaultPolicy = createPersistentRoomCapabilityPolicy({ ...baseInput, conversationId: "c_local_files_default", root: workspaceRoot, source: "manual", mode: "read" });
+	const localFilesDefaultPolicy = createPersistentRoomCapabilityPolicy({ ...baseInput, conversationId: "c_local_files_default", root: workspaceRoot, source: "manual" });
 	const localFilesDefaultView = persistentRoomCapabilityPolicyView(localFilesDefaultPolicy);
 	assert(localFilesDefaultPolicy.workspaceAccessMode === "localFiles", "new policies should default to Local files mode");
 	assert(localFilesDefaultView.pathAccess === "local-files", "new default Local files policy view should expose local-files path access");
 	assert(localFilesDefaultView.nativePiFilesystemToolsEnabled === true, "new default Local files policy view should expose native Pi filesystem capability");
 	assert(localFilesDefaultView.writeEnabled === true, "new default Local files policy view should expose native write/edit capability");
-	assert(localFilesDefaultView.markdownWriteEnabled === false, "new default Local files policy view should not claim bounded Markdown-only write");
-	assert(localFilesDefaultView.allowedToolNames.join(",") === "read,ls,find,grep,write,edit,read_spreadsheet", "new default Local files policy should expose fixed W5 local-files tools");
+	assert(localFilesDefaultView.allowedToolNames.join(",") === "read,ls,find,grep,write,edit", "new default Local files policy should expose fixed W5 local-files tools");
 	assert(localFilesDefaultView.bashEnabled === false, "new default Local files policy must keep bash disabled");
-	const localFilesBashPolicy = createPersistentRoomCapabilityPolicy({ ...baseInput, conversationId: "c_local_files_bash", root: workspaceRoot, workspaceAccessMode: "localFiles", source: "manual", mode: "read", bashEnabled: true });
+	const localFilesBashPolicy = createPersistentRoomCapabilityPolicy({ ...baseInput, conversationId: "c_local_files_bash", root: workspaceRoot, workspaceAccessMode: "localFiles", source: "manual", bashEnabled: true });
 	const localFilesBashView = persistentRoomCapabilityPolicyView(localFilesBashPolicy);
 	assert(localFilesBashPolicy.bashEnabled === true, "Local files policy should persist explicit bash enabled");
 	assert(localFilesBashView.bashEnabled === true, "Local files policy view should expose explicit bash enabled");
-	const bashOnlyPolicy = createPersistentRoomCapabilityPolicy({ ...baseInput, conversationId: "c_local_files_bash_only", root: workspaceRoot, workspaceAccessMode: "localFiles", source: "manual", mode: "read", toolSelection: { kind: "custom", allowedToolNames: [] }, bashEnabled: true });
+	const bashOnlyPolicy = createPersistentRoomCapabilityPolicy({ ...baseInput, conversationId: "c_local_files_bash_only", root: workspaceRoot, workspaceAccessMode: "localFiles", source: "manual", toolSelection: { kind: "custom", allowedToolNames: [] }, bashEnabled: true });
 	assert(bashOnlyPolicy.allowedToolNames.length === 0 && persistentRoomCapabilityPolicyView(bashOnlyPolicy).bashEnabled === true, "Local files bash can be enabled independently of ordinary file tools");
+	assert(bashOnlyPolicy.modes.write === false && persistentRoomCapabilityPolicyView(bashOnlyPolicy).writeEnabled === false, "bash alone does not derive writer capability — the write flag speaks only for writer tools");
 
 	const defaultPolicy = createPersistentRoomDefaultCapabilityPolicy({
 		...baseInput,
@@ -146,7 +173,6 @@ try {
 		workspaceAccessMode: "bounded",
 		displayLabel: "Default Workspace",
 		source: "manual",
-		mode: "read",
 	});
 	assert(defaultPolicy.conversationId === PERSISTENT_ROOM_WORKSPACE_DEFAULT_CONVERSATION_ID, "room-default policy should use only the internal default sentinel");
 	writePersistentRoomDefaultCapabilityPolicy(defaultPolicy, { persistentAgentsRoot });

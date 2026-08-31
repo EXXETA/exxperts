@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { MAX_SPREADSHEET_BYTES, renderSpreadsheetPreview, SpreadsheetPreviewError } from "@exxeta/exxperts-runtime";
 import {
 	PersistentRoomShelfError,
 	persistentRoomReadingCacheDirPath,
@@ -56,7 +57,7 @@ export const SHELF_VISION_TIMEOUT_MS = 60_000;
 const READING_CACHE_SCHEMA_VERSION = 1;
 const SNIFF_BYTES = 8192;
 
-export type ShelfFileKind = "text" | "pdf" | "docx" | "image" | "refused";
+export type ShelfFileKind = "text" | "pdf" | "docx" | "xlsx" | "image" | "refused";
 
 export interface ShelfFileSniff {
 	kind: ShelfFileKind;
@@ -66,9 +67,8 @@ export interface ShelfFileSniff {
 	imageMimeType?: string;
 }
 
-const REFUSAL_LEGACY_OFFICE = "Legacy Office formats (.doc/.xls/.ppt) cannot be read safely. Save the file as .docx or export it to PDF and add it again.";
+const REFUSAL_LEGACY_OFFICE = "Legacy Office formats (.doc/.xls/.ppt) cannot be read safely. Save the file as .docx or .xlsx, or export it to PDF, and add it again.";
 const REFUSAL_ARCHIVE = "Archives cannot be read. Extract the file you need and add it to this room's Files directly.";
-const REFUSAL_SPREADSHEET = "Spreadsheets in this room's Files are not readable yet. Export the sheet as CSV and add that, or use a workspace with read_spreadsheet.";
 const REFUSAL_PRESENTATION = "This presentation format is not readable yet. Export it to PDF and add that instead.";
 const REFUSAL_BINARY = "This is a binary file the room cannot read as text. Converting it to PDF or plain text almost always works.";
 const REFUSAL_MEDIA = "Audio and video cannot be read. Add a transcript or notes as text instead.";
@@ -104,7 +104,10 @@ export function sniffShelfFileBuffer(head: Buffer, name: string): ShelfFileSniff
 	if (startsWithBytes(head, [0x25, 0x50, 0x44, 0x46, 0x2d])) return { kind: "pdf" }; // %PDF-
 	if (startsWithBytes(head, [0x50, 0x4b, 0x03, 0x04]) || startsWithBytes(head, [0x50, 0x4b, 0x05, 0x06])) {
 		if (zipContainsLocalEntry(head, "word/document.xml") || (extension === ".docx" && zipContainsLocalEntry(head, "[Content_Types].xml"))) return { kind: "docx" };
-		if (extension === ".xlsx") return { kind: "refused", refusalReason: REFUSAL_SPREADSHEET };
+		// Some writers (SheetJS among them) place every entry name beyond the
+		// sniff window, so the extension fallback mirrors docx's: the preview
+		// engine itself refuses a mislabeled zip honestly.
+		if (zipContainsLocalEntry(head, "xl/workbook.xml") || extension === ".xlsx") return { kind: "xlsx" };
 		if (extension === ".pptx") return { kind: "refused", refusalReason: REFUSAL_PRESENTATION };
 		if (extension === ".docx") return { kind: "docx" };
 		return { kind: "refused", refusalReason: REFUSAL_ARCHIVE };
@@ -253,7 +256,7 @@ function runShelfWorker(request: Record<string, unknown>, timeoutMs: number): Pr
 	});
 }
 
-async function runShelfParseWorker(absolutePath: string, kind: "pdf" | "docx"): Promise<{ text: string; pages: number | null; truncated: boolean }> {
+export async function runShelfParseWorker(absolutePath: string, kind: "pdf" | "docx"): Promise<{ text: string; pages: number | null; truncated: boolean }> {
 	const message = await runShelfWorker({ absolutePath, kind, maxPages: SHELF_PARSE_MAX_PDF_PAGES, maxChars: SHELF_PARSE_MAX_EXTRACT_CHARS }, SHELF_PARSE_TIMEOUT_MS);
 	if (typeof message.text !== "string") throw new PersistentRoomShelfError("parse_failed", "The document could not be parsed: the parser returned no text.");
 	return { text: message.text, pages: typeof message.pages === "number" ? message.pages : null, truncated: message.truncated === true };
@@ -287,6 +290,25 @@ export async function readShelfFileText(roomIdRaw: string, rawName: string, opti
 			throw new PersistentRoomShelfError("not_readable", "File cannot be read in this room's Files.");
 		}
 		return { name: resolved.name, kind: "text", text, pages: null, truncated: false };
+	}
+	if (sniff.kind === "xlsx") {
+		// Spreadsheets render through the SAME preview engine workspace reads use
+		// (default options, the shelf file's name as the workbook name). No
+		// reading cache: rendering is cheap and the engine's own caps bound it.
+		if (resolved.stat.size > MAX_SPREADSHEET_BYTES) {
+			throw new PersistentRoomShelfError("file_too_large", `The workbook is larger than the ${MAX_SPREADSHEET_BYTES / (1024 * 1024)} MB preview cap.`);
+		}
+		let buffer: Buffer;
+		try {
+			buffer = fs.readFileSync(resolved.absolutePath);
+		} catch {
+			throw new PersistentRoomShelfError("not_readable", "File cannot be read in this room's Files.");
+		}
+		try {
+			return { name: resolved.name, kind: "xlsx", text: renderSpreadsheetPreview(buffer, resolved.name, {}).text, pages: null, truncated: false };
+		} catch (error) {
+			throw new PersistentRoomShelfError("parse_failed", error instanceof SpreadsheetPreviewError ? error.message : "The workbook could not be previewed.");
+		}
 	}
 
 	// pdf / docx: reading cache keyed by filename + content hash.

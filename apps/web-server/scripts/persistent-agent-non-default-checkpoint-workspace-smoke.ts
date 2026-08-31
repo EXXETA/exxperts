@@ -112,8 +112,6 @@ try {
 		root: workspaceRoot,
 		displayLabel: "Synthetic Workspace",
 		source: "manual",
-		mode: "read",
-		writeEnabled: false,
 		now: new Date("2026-05-30T10:00:00.000Z"),
 	});
 	writePersistentRoomCapabilityPolicy(policy, { persistentAgentsRoot: tempAgentsRoot });

@@ -19,7 +19,7 @@ export interface RoomShelfFile {
 export interface RoomFileUploadResult {
 	name: string;
 	bytes: number;
-	kind: "text" | "pdf" | "docx" | "image";
+	kind: "text" | "pdf" | "docx" | "xlsx" | "image";
 	extension: string;
 	pages?: number;
 	parseNote?: string;

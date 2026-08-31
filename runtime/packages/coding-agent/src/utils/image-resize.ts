@@ -9,6 +9,19 @@ export interface ImageResizeOptions {
 	jpegQuality?: number; // Default: 80
 }
 
+export interface ImageResizeFailure {
+	// "decode": the bytes could not be decoded as an image (or no decoder was
+	// available); "size": the image decoded fine but no encoding fit maxBytes.
+	failure: "decode" | "size";
+}
+
+/** The honest omission note for a resize failure. */
+export function imageOmittedNote(failure: ImageResizeFailure): string {
+	return failure.failure === "decode"
+		? "[Image omitted: the file could not be decoded as an image.]"
+		: "[Image omitted: could not be resized below the inline image size limit.]";
+}
+
 export interface ResizedImage {
 	data: string; // base64
 	mimeType: string;
@@ -46,10 +59,9 @@ function encodeCandidate(buffer: Uint8Array, mimeType: string): EncodedCandidate
 
 /**
  * Resize an image to fit within the specified max dimensions and encoded file size.
- * Returns null if the image cannot be resized below maxBytes.
- *
- * Uses Photon (Rust/WASM) for image processing. If Photon is not available,
- * returns null.
+ * Returns { failure: "size" } if the image decodes but cannot be resized below
+ * maxBytes, and { failure: "decode" } if the bytes cannot be decoded as an image
+ * (including when the Photon decoder is unavailable or processing throws).
  *
  * Strategy for staying under maxBytes:
  * 1. First resize to maxWidth/maxHeight
@@ -57,14 +69,14 @@ function encodeCandidate(buffer: Uint8Array, mimeType: string): EncodedCandidate
  * 3. If still too large, try JPEG with decreasing quality
  * 4. If still too large, progressively reduce dimensions until 1x1
  */
-export async function resizeImage(img: ImageContent, options?: ImageResizeOptions): Promise<ResizedImage | null> {
+export async function resizeImage(img: ImageContent, options?: ImageResizeOptions): Promise<ResizedImage | ImageResizeFailure> {
 	const opts = { ...DEFAULT_OPTIONS, ...options };
 	const inputBuffer = Buffer.from(img.data, "base64");
 	const inputBase64Size = Buffer.byteLength(img.data, "utf-8");
 
 	const photon = await loadPhoton();
 	if (!photon) {
-		return null;
+		return { failure: "decode" };
 	}
 
 	let image: ReturnType<typeof photon.PhotonImage.new_from_byteslice> | undefined;
@@ -152,9 +164,9 @@ export async function resizeImage(img: ImageContent, options?: ImageResizeOption
 			currentHeight = nextHeight;
 		}
 
-		return null;
+		return { failure: "size" };
 	} catch {
-		return null;
+		return { failure: "decode" };
 	} finally {
 		if (image) {
 			image.free();

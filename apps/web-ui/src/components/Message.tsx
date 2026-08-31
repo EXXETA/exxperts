@@ -101,8 +101,6 @@ const GENERIC_TOOL_VIEWS: Record<string, { icon: string; running: string; done: 
 	ls: { icon: "📁", running: "Listing files", done: "Listed files" },
 	find: { icon: "📁", running: "Finding files", done: "Found files" },
 	grep: { icon: "🔎", running: "Searching files", done: "Searched files" },
-	write_markdown_file: { icon: "📝", running: "Writing document", done: "Wrote document" },
-	read_spreadsheet: { icon: "📊", running: "Reading spreadsheet", done: "Read spreadsheet" },
 	kb_search: { icon: "📚", running: "Searching knowledge base", done: "Searched knowledge base" },
 	artifact_list: { icon: "🗂️", running: "Listing artifacts", done: "Listed artifacts" },
 	artifact_read: { icon: "🗂️", running: "Reading artifact", done: "Read artifact" },
@@ -123,13 +121,13 @@ function genericChipName(name: string, status: ToolChatItem["status"]): string {
 function summariseToolArgs(name: string, args: any): string {
 	if (!args || typeof args !== "object") return "";
 	if (name === "bash") return String(args.command ?? "").slice(0, 160);
-	if (name === "write_markdown_file") {
+	if (name === "write") {
 		const path = String(args.path ?? "").slice(0, 120);
 		const content = typeof args.content === "string" ? ` · ${args.content.length} chars/${utf8ByteLength(args.content)} bytes` : "";
 		const overwrite = args.overwrite === true ? " · overwrite" : "";
 		return `${path}${content}${overwrite}`.slice(0, 160);
 	}
-	if (name === "read" || name === "ls" || name === "find" || name === "grep" || name === "write" || name === "edit")
+	if (name === "read" || name === "ls" || name === "find" || name === "grep" || name === "edit")
 		return String(args.path ?? "").slice(0, 160);
 	if (name === "fetch_url") return String(args.url ?? "").slice(0, 160);
 	if (name === "web_search") return String(args.query ?? "").slice(0, 160);

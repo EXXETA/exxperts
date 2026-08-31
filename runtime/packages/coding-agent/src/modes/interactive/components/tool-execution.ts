@@ -338,7 +338,7 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	private sanitizedArgsForFallback(): any {
-		if (this.toolName !== "write_markdown_file" || !this.args || typeof this.args !== "object") return this.args;
+		if (this.toolName !== "write" || !this.args || typeof this.args !== "object") return this.args;
 		const content = typeof this.args.content === "string"
 			? `[omitted: ${this.args.content.length} chars, ${Buffer.byteLength(this.args.content, "utf-8")} bytes]`
 			: "[omitted]";

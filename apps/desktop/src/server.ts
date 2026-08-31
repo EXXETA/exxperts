@@ -76,6 +76,14 @@ export function serverEnv(): NodeJS.ProcessEnv {
     env.USERPROFILE = home;
     env.EXXPERTS_CODING_AGENT_DIR = path.join(home, ".exxperts", "agent");
   }
+  // The packaged app ships ripgrep as the "tools" extraResource; pointing the
+  // server at it makes a fresh install grep-ready without a runtime download.
+  // Guarded on existence so a package built without the resource (and every
+  // dev run) behaves exactly as before.
+  if (app.isPackaged) {
+    const bundledTools = path.join(process.resourcesPath, "tools");
+    if (fs.existsSync(bundledTools)) env.EXXETA_BUNDLED_TOOLS_DIR = bundledTools;
+  }
   return env;
 }
 

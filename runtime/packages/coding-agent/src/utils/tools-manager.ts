@@ -2,7 +2,9 @@ import chalk from "chalk";
 import { spawnSync } from "child_process";
 import { createHash } from "crypto";
 import {
+	accessSync,
 	chmodSync,
+	constants as fsConstants,
 	createReadStream,
 	createWriteStream,
 	existsSync,
@@ -119,12 +121,35 @@ function commandExists(cmd: string): boolean {
 	}
 }
 
-// Get the path to a tool (system-wide or in our tools dir)
+// A binary shipped inside the host application (e.g. the desktop app packages
+// ripgrep as a resource and points this env var at that directory). It ships
+// inside the signed app bundle, so no checksum is re-verified here — the
+// pinned-hash verification already happened when the build fetched it.
+function bundledToolPath(tool: "fd" | "rg"): string | null {
+	const dir = process.env.EXXETA_BUNDLED_TOOLS_DIR?.trim();
+	if (!dir) return null;
+	const config = TOOLS[tool];
+	if (!config) return null;
+	const candidate = join(dir, config.binaryName + (platform() === "win32" ? ".exe" : ""));
+	try {
+		// On Windows the executable bit does not exist; existence is the check.
+		accessSync(candidate, platform() === "win32" ? fsConstants.F_OK : fsConstants.X_OK);
+		return candidate;
+	} catch {
+		return null;
+	}
+}
+
+// Get the path to a tool (bundled with the host app, in our tools dir, or
+// system-wide)
 export function getToolPath(tool: "fd" | "rg"): string | null {
 	const config = TOOLS[tool];
 	if (!config) return null;
 
-	// Check our tools directory first
+	const bundled = bundledToolPath(tool);
+	if (bundled) return bundled;
+
+	// Check our tools directory
 	const localPath = join(TOOLS_DIR, config.binaryName + (platform() === "win32" ? ".exe" : ""));
 	if (existsSync(localPath)) {
 		return localPath;
@@ -187,13 +212,29 @@ function findBinaryRecursively(rootDir: string, binaryFileName: string): string 
 	return null;
 }
 
-// Download and install a tool
+// Download and install a tool for the host platform into the managed bin dir
 async function downloadTool(tool: "fd" | "rg"): Promise<string> {
+	return downloadToolInto(tool, platform(), arch(), TOOLS_DIR);
+}
+
+// Download and install a tool for an explicit target platform/arch into an
+// explicit directory. Used by packaging (e.g. the desktop build fetches the
+// ripgrep it bundles) so the shipped binary goes through the exact same
+// pinned-version, checksum-verified path as a runtime download. Archive
+// extraction runs on the HOST (tar / the zip extractor), which works for any
+// target's archive; only the resulting binary is target-specific.
+export async function downloadToolForTarget(
+	tool: "fd" | "rg",
+	targetPlatform: string,
+	targetArch: string,
+	destDir: string,
+): Promise<string> {
+	return downloadToolInto(tool, targetPlatform, targetArch, destDir);
+}
+
+async function downloadToolInto(tool: "fd" | "rg", plat: string, architecture: string, destDir: string): Promise<string> {
 	const config = TOOLS[tool];
 	if (!config) throw new Error(`Unknown tool: ${tool}`);
-
-	const plat = platform();
-	const architecture = arch();
 
 	// Get asset name for this platform, at the pinned version
 	const version = config.version;
@@ -208,12 +249,12 @@ async function downloadTool(tool: "fd" | "rg"): Promise<string> {
 	}
 
 	// Create tools directory
-	mkdirSync(TOOLS_DIR, { recursive: true });
+	mkdirSync(destDir, { recursive: true });
 
 	const downloadUrl = `https://github.com/${config.repo}/releases/download/${config.tagPrefix}${version}/${assetName}`;
-	const archivePath = join(TOOLS_DIR, assetName);
+	const archivePath = join(destDir, assetName);
 	const binaryExt = plat === "win32" ? ".exe" : "";
-	const binaryPath = join(TOOLS_DIR, config.binaryName + binaryExt);
+	const binaryPath = join(destDir, config.binaryName + binaryExt);
 
 	// Download and verify against the pinned checksum before touching the archive
 	await downloadFile(downloadUrl, archivePath);
@@ -228,7 +269,7 @@ async function downloadTool(tool: "fd" | "rg"): Promise<string> {
 	// Extract into a unique temp directory. fd and rg downloads can run concurrently
 	// during startup, so sharing a fixed directory causes races.
 	const extractDir = join(
-		TOOLS_DIR,
+		destDir,
 		`extract_tmp_${config.binaryName}_${process.pid}_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`,
 	);
 	mkdirSync(extractDir, { recursive: true });

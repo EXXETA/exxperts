@@ -2,6 +2,83 @@
 
 User-visible changes per release. Historical private/internal development notes are not part of this public-facing changelog.
 
+## 0.11.0 (unreleased)
+
+- An image copied to the clipboard pastes straight into the chat composer. A screenshot or a
+  picture from a page stages as an attachment with Cmd+V, exactly as if it had been added through
+  Files, and plain text pastes stay untouched.
+- Memorize and Review stopped getting stuck, and their messages became plain sentences. Memorize and Review no longer get stuck on
+  long discussions (a proposal is kept within what the next step accepts, and the app says exactly
+  what was shortened); assessments read the model's wording as written and are regenerated once
+  with the reasons when too long or incomplete, with a Reassess button for another try; every
+  error says what happened, that your memory is unchanged, and what to do next; Remember warns
+  when a room's recent sessions are about to fill up; and a room whose memory outgrew its model
+  now refuses to start with a clear way out (Forget the session, then Memorize or Review from
+  Maintain, or a larger-context model) instead of failing on the first reply. A room close to its
+  limit that still opened before this release can now refuse at entry: that is the new check
+  working, and the refusal walks you back under the limit.
+  The room memory budget is enforced, with your approval and never behind your back. The budget
+  binds on what Review rewrites, the room card, room settings and the Memory page all show the
+  same number and verdict, and a room crosses its budget only through a proposal you approve:
+  the proposal names every drop and every compression first, and automatic runs refuse to apply
+  any outcome that would leave the room over. Memory entries carry the date they were saved
+  ("saved on", never "happened on"); Review reads age as a prior, and age alone never deletes
+  anything. Before a Review removes material, you can save its full text to the room's Files,
+  with a must-keep pointer left in memory; nothing is exported unless you choose it, and a
+  failed save never touches memory. If you tuned memoryBudgetTokens before this release, note
+  the number now measures Deep Memory and Active Items only.
+- Bash now has two modes, "Bash: asks" and "Bash: auto", shown as a chip in the chat header.
+  Asks, the default, shows an approval card with the exact command before each run; auto is for
+  rooms you trust to run commands without asking. The chip switches the mode in place, and auto
+  can only be enabled at the computer itself, never from a connected phone.
+- Rooms now read PDFs and Word documents wherever they read files. The workspace Read tool, in
+  bounded and Full access rooms alike, extracts their text through the same hardened, isolated
+  parser the room's Files always used, with page counts noted and offset/limit paging like any
+  text file. A scanned PDF with no text layer is called out honestly instead of returning
+  nothing. And the room's Files tab learned spreadsheets: an .xlsx added there is previewed as a
+  readable table; only the legacy .xls format stays refused.
+- The app checks for updates every six hours while it runs, so an app that never restarts still
+  learns about new releases. The remote status pill now says "VPN off" in calm grey when your
+  tunnel is down, instead of an amber "Remote paused"; a deliberately-off VPN is not an alarm.
+  And the Remote access page notes plainly that on a company-managed computer, company policy
+  comes first.
+- Bounded workspace rooms now carry the same toolset as Full access, fenced to their folder. Read
+  opens text, images, and spreadsheets in one tool; Search finds text across the folder; Write and
+  Edit, when enabled, create and change files of any type inside the fence. The old Markdown-only
+  writer and the separate spreadsheet reader are gone, and existing rooms' settings translate over
+  automatically. One behavior change to know: a bounded room with write tools enabled can now edit
+  existing files in its folder, not just add new Markdown ones. The protected files (secrets,
+  keys, .git) stay untouchable either way.
+  A room with no write tools and no Bash is now genuinely read-only, and its settings say so in
+  one sentence. Whether a room can change files follows from the tools you actually enabled: the
+  old read/write setting that silently did nothing is gone, and a room with write tools off but
+  Bash on says plainly that Bash can still modify files.
+  A bounded room's folder boundary is enforced harder than before. The folder a room was granted is re-verified
+  against its original fingerprint on every use, so a swapped or redirected folder is refused;
+  custom protected-file lists now always include the built-in protections instead of replacing
+  them; and a tool that is supposed to be blocked now fails the session loudly instead of
+  slipping through.
+  Bounded Search runs on the same industrial search engine as Full access, which cannot be
+  stalled by a hostile search pattern. It falls back to a guarded built-in engine when the binary
+  is not available, search results in bounded rooms include files .gitignore would hide, and the
+  tools now say so.
+- The Wallet now shows real money for gateway usage, at the rates your gateway publishes. Turns
+  from before a price was on file are estimated at today's rate and marked with an approximation
+  sign, and anything that cannot be priced says "no price on file" instead of $0.00. Gateway rows
+  go by the name you gave them, removed gateways and retired rooms fold into one quiet line each,
+  and the CSV export says where every figure came from.
+- Claude models behind a gateway that declares prompt caching now reuse their prompt prefix
+  automatically. Long conversations get markedly cheaper, with nothing to configure.
+- Gateways re-read their own declarations shortly after the app starts and once a day. Prices,
+  capabilities and effort levels change on the platform side sometimes, and now that shows up
+  without a visit to the settings.
+- Changing a saved gateway's address now asks for its API key again. Gateway checks also stop at
+  the address you typed instead of following redirects.
+- Room settings got the same calm look as the app's own Settings, and the keyboard learned the
+  basics. Fewer boxes and quieter rows with every control exactly where it always was; approval
+  cards can be answered with Enter and Escape, but only while the card visibly holds the focus
+  ring, so a card never steals focus while you are typing; Settings open with Cmd+, (Ctrl+, on
+  Windows) and room settings with Cmd+Shift+, and the gear menu shows the shortcut.
 ## 0.10.1 (2026-08-19)
 
 - The app can now follow your system's light or dark mode. The theme toggle in the gear menu

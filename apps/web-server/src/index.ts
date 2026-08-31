@@ -49,6 +49,7 @@
  */
 
 import "dotenv/config";
+import { estimateTokensFromChars } from "./token-estimate.js";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -62,14 +63,16 @@ import { createWebUiContext } from "./web-ui-context.js";
 import { cancelProviderLogin, logoutProvider, ProviderAuthError, providerLoginState, saveProviderApiKey, startProviderLogin } from "./provider-auth.js";
 import { builtInProfileIdForProvider, deleteCustomAiProfile, isCustomAiProfileId, isReservedCustomProfileProvider, readCustomAiProfiles, writeCustomAiProfile } from "./custom-ai-profiles.js";
 import { ConsultPromptOverflowError } from "./consult.js";
-import { appendPersistentAgentThreadPendingHandoff, archivePersistentAgent, getPersistentAgentLifecycleCounts, listArchivedPersistentAgents, purgePersistentAgent, restorePersistentAgent, sweepPersistentAgentPurgeTombstones, beginPersistentAgentTurn, buildAbsorbAssessment, buildAbsorbDiscussionSignoff, buildAbsorbDiscussionTurn, buildAbsorbProposal, buildCheckpointProposal, buildConsultAnswer, buildPersistentAgentBootContext, buildPersistentAgentCurrentIdentitySection, buildPersistentRoomCurrentWorkspaceSection, buildStructuralReviewAssessment, buildStructuralReviewDiscussionSignoff, buildStructuralReviewDiscussionTurn, buildStructuralReviewProposal, createPersistentAgentFromScaffoldInput, createPersistentAgentPiSessionJsonlThreadRuntime, createPersistentRoomAutoDeclinedQuestionLog, clearPersistentAgentThreadPendingHandoffs, clearPersistentAgentUnseenLandedAnswerForBind, deletePersistentAgentThread, PERSISTENT_AGENT_L1A_DEFAULT_MODE_ID, PERSISTENT_AGENT_L1A_MODES, discardEmptyPreparedBoundaryThread, finishPersistentAgentTurn, getAbsorbAvailability, getPersistentAgentActiveTurnState, getPersistentAgentRuntimeState, getPersistentAgentStatus, getPersistentAgentThread, getStructuralReviewAvailability, isPersistentAgentArchived, listPersistentAgents, markPersistentAgentTurnCancelling, openPersistentAgentPiSessionManager, parseAbsorbApprovalRequest, parseCheckpointApprovalRequest, parseStructuralReviewApprovalRequest, readPersistentAgentBootPromptSnapshot, recordPersistentAgentUnseenLandedAnswer, renamePersistentAgent, validatePersistentAgentId, writeApprovedAbsorb, writeApprovedCheckpoint, writeApprovedStructuralReview, writePersistentAgentMementoBoundary, writePersistentAgentRuntimeState, writePersistentAgentThread } from "./persistent-agents.js";
+import { appendPersistentAgentThreadPendingHandoff, archivePersistentAgent, getPersistentAgentLifecycleCounts, listArchivedPersistentAgents, purgePersistentAgent, restorePersistentAgent, sweepPersistentAgentPurgeTombstones, beginPersistentAgentTurn, buildAbsorbAssessment, buildAbsorbDiscussionSignoff, buildAbsorbDiscussionTurn, buildAbsorbProposal, buildCheckpointProposal, buildConsultAnswer, buildPersistentAgentBootContext, buildPersistentAgentCurrentIdentitySection, buildPersistentRoomCurrentWorkspaceSection, buildStructuralReviewAssessment, buildStructuralReviewDiscussionSignoff, buildStructuralReviewDiscussionTurn, buildStructuralReviewProposal, createPersistentAgentFromScaffoldInput, createPersistentAgentPiSessionJsonlThreadRuntime, createPersistentRoomAutoDeclinedQuestionLog, clearPersistentAgentThreadPendingHandoffs, clearPersistentAgentUnseenLandedAnswerForBind, deletePersistentAgentThread, PERSISTENT_AGENT_L1A_DEFAULT_MODE_ID, PERSISTENT_AGENT_L1A_MODES, discardEmptyPreparedBoundaryThread, finishPersistentAgentTurn, getAbsorbAvailability, getPersistentAgentActiveTurnState, getPersistentAgentRuntimeState, getPersistentAgentStatus, getPersistentAgentThread, getStructuralReviewAvailability, isPersistentAgentArchived, listPersistentAgents, markPersistentAgentTurnCancelling, openPersistentAgentPiSessionManager, parseAbsorbApprovalRequest, parseCheckpointApprovalRequest, parseStructuralReviewApprovalRequest, readPersistentAgentBootPromptSnapshot, readPersistentAgentReviewTargetEstimatedTokens, recordPersistentAgentUnseenLandedAnswer, renamePersistentAgent, validatePersistentAgentId, writeApprovedAbsorb, writeApprovedCheckpoint, writeApprovedStructuralReview, writePersistentAgentMementoBoundary, writePersistentAgentRuntimeState, writePersistentAgentThread, parseAssessmentRetryFeedback, assertPersistentAgentBootPromptFitsWindow, PersistentAgentMemoryOverflowError } from "./persistent-agents.js";
 import { buildPersistentRoomRestoredLiveThreadContext } from "./persistent-room-resume-context.js";
 import {
 	getPersistentRoomToolPolicy,
 	normalizePersistentRoomWorkspaceToolSelectionInput,
 } from "./persistent-room-tool-policy.js";
 import { assertPersistentRoomWorkspaceDefaultMutable, createPersistentRoomCapabilityPolicy, createPersistentRoomDefaultCapabilityPolicy, deletePersistentRoomCapabilityPolicy, deletePersistentRoomDefaultCapabilityPolicy, missingPersistentRoomWorkspaceRootWarnings, normalizePersistentRoomWorkspaceAccessModeInput, persistentRoomCapabilityPolicyView, persistentRoomRuntimeCwdForEffectiveWorkspacePolicy, PersistentRoomWorkspacePolicyError, PERSISTENT_ROOM_WORKSPACE_DEFAULT_STORAGE_SOURCE, PERSISTENT_ROOM_WORKSPACE_POLICY_STORAGE_SOURCE, readPersistentRoomCapabilityPolicy, readPersistentRoomDefaultCapabilityPolicy, releasePersistentRoomThreadWorkspaceMirror, resolvePersistentRoomCapabilityPolicy, resolvePersistentRoomEffectiveWorkspacePolicy, updatePersistentRoomCapabilityPolicyWorkspaceSettings, writePersistentRoomCapabilityPolicy, writePersistentRoomDefaultCapabilityPolicy } from "./persistent-room-workspace-policy.js";
-import { MEMORY_BUDGET_DEFAULT_TOKENS, readPersistentRoomMaintenanceSettings, writePersistentRoomMaintenanceSettings } from "./persistent-room-maintenance-settings.js";
+import { MEMORY_BUDGET_DEFAULT_TOKENS, overMemoryBudget, readPersistentRoomMaintenanceSettings, writePersistentRoomMaintenanceSettings } from "./persistent-room-maintenance-settings.js";
+import { createPersistentRoomBashApprovalExtension, createPersistentRoomBashApprovalGuard } from "./persistent-room-bash-approval.js";
+import { migratePersistentRoomBashAutoApproveDefaults, readPersistentRoomBashSettings, writePersistentRoomBashSettings } from "./persistent-room-bash-settings.js";
 import { readPersistentRoomPreferredModel, writePersistentRoomPreferredModel } from "./persistent-room-preferred-model.js";
 import { isRoomEffortLevel, readPersistentRoomEffortChoice, writePersistentRoomEffortChoice, type RoomEffortLevel } from "./persistent-room-effort-settings.js";
 import { approvePersistentRoomSkillExecution, computeSkillStatuses, disablePersistentRoomSkill, effectiveEnabledSkills, enablePersistentRoomSkill, isValidSkillName, readPersistentRoomSkillSettings, revokePersistentRoomSkillExecution } from "./persistent-room-skill-settings.js";
@@ -89,9 +92,10 @@ import { getSpecialistTemplate, SPECIALIST_TASK_CAPS } from "./specialist-templa
 import { generateTaskArtifactThumbnails } from "./task-artifact-thumbnails.js";
 import { createPersistentRoomWorkspaceTools } from "./persistent-room-workspace-tools.js";
 import { assertPersistentRoomModelForActiveProfile, DEFAULT_PERSISTENT_AGENT_AI_PROFILE_ID, getAbsorbModelLock, getAvailablePersistentAgentAiProfiles, getConsultModelLock, getPersistentAgentAiProfile, getPersistentRoomModelLocks, getStructuralReviewModelLock, isPersistentAgentAiProfileId, isPersistentRoomModelForProfile, OPENAI_COMPATIBLE_AI_PROFILE_ID, OPENAI_COMPATIBLE_PROVIDER_ID } from "./persistent-agent-ai-profiles.js";
-import { deleteOpenAiCompatibleGateway, findOpenAiCompatibleGateway, GATEWAY_DEFAULT_CONTEXT_WINDOW, GATEWAY_EFFORT_INTENSITIES, GATEWAY_MAX_CONTEXT_WINDOW, GATEWAY_MIN_CONTEXT_WINDOW, GATEWAY_PROVIDER_ID_PREFIX, GATEWAY_THINKING_LEVELS, GatewayStoreUnreadableError, mintGatewayProviderId, effectiveGatewayModel, parseGatewayContextWindow, readOpenAiCompatibleGateways, writeOpenAiCompatibleGateway, type GatewayEffortIntensity, type GatewayModelDetected, type GatewayRoomModel, type GatewayThinkingLevels, type OpenAiCompatibleGateway } from "./openai-compatible-gateways.js";
+import { deleteOpenAiCompatibleGateway, findOpenAiCompatibleGateway, GATEWAY_DEFAULT_CONTEXT_WINDOW, GATEWAY_MAX_CONTEXT_WINDOW, GATEWAY_MIN_CONTEXT_WINDOW, GATEWAY_PROVIDER_ID_PREFIX, GatewayStoreUnreadableError, mintGatewayProviderId, effectiveGatewayModel, parseGatewayContextWindow, parseGatewayDetectedSnapshot, readOpenAiCompatibleGateways, writeOpenAiCompatibleGateway, type GatewayModelDetected, type GatewayRoomModel, type OpenAiCompatibleGateway } from "./openai-compatible-gateways.js";
 import { ModelCatalogUnreadableError, readCatalogProviderIds, readGatewayProviderBaseUrl, removeGatewayProviderEntry, writeGatewayProviderEntry } from "./openai-compatible-gateway-catalog.js";
 import { discoverGatewayModels, GatewayDiscoveryError, isNonChatGatewayMode, normalizeGatewayBaseUrl } from "./openai-compatible-gateway-detect.js";
+import { resolveGatewayDeclarationsRefreshOptionsFromEnv, startGatewayDeclarationsRefreshLoop, type GatewayDeclarationsRefreshLoopHandle } from "./openai-compatible-gateway-refresh.js";
 import { readWebSearchSettings, WebSearchSettingsError, WebSearchSettingsUnreadableError, writeWebSearchSettings } from "./web-search-settings.js";
 import { acknowledgeWhatsNew, resolveWhatsNew } from "./whats-new.js";
 import { runIsolatedPersistentAgentWorker } from "./persistent-agent-worker-runtime.js";
@@ -939,15 +943,20 @@ app.get("/api/remote/client-context", async (req) => {
 app.get("/api/remote/rooms", async (req, reply) => {
 	if (refuseRemoteAdminFromTunnel(req, reply)) return;
 	return {
-		rooms: listPersistentAgents().map((agent) => ({
-			id: agent.id,
-			displayName: agent.displayName || agent.id,
-			exposed: !remoteRoomExposure.isHidden(agent.id),
-			// The Settings page flags rooms that can run commands: such a room
-			// is still exposable by default (the user's own devices, full
-			// capability by design), but the flag keeps the reach visible.
-			bashEnabled: readPersistentRoomDefaultCapabilityPolicy(agent.id)?.bashEnabled === true,
-		})),
+		rooms: listPersistentAgents().map((agent) => {
+			const defaultPolicy = readPersistentRoomDefaultCapabilityPolicy(agent.id);
+			const policyView = defaultPolicy ? persistentRoomCapabilityPolicyView(defaultPolicy) : null;
+			return {
+				id: agent.id,
+				displayName: agent.displayName || agent.id,
+				exposed: !remoteRoomExposure.isHidden(agent.id),
+				// The Settings page flags rooms that can reach the computer: such a
+				// room is still exposable by default (the user's own devices, full
+				// capability by design), but the flags keep the reach visible.
+				bashEnabled: policyView?.bashEnabled === true,
+				writeEnabled: policyView?.writeEnabled === true,
+			};
+		}),
 		hidden: [...remoteRoomExposure.hiddenRooms()].sort(),
 	};
 });
@@ -1813,7 +1822,10 @@ function getPersistentAgentStatusForMaintenance(idRaw: string) {
 function persistentAgentNormalUseErrorReply(reply: any, error: unknown) {
 	const message = (error as Error).message;
 	const statusCode = (error as any).statusCode ?? (/invalid persistent agent id/i.test(message) ? 400 : 400);
-	return reply.code(statusCode).send({ error: message });
+	// A machine-readable code rides along when the error carries one (e.g.
+	// memory_overflow), so HTTP callers can branch like the ws client does.
+	const code = typeof (error as any).code === "string" ? (error as any).code : undefined;
+	return reply.code(statusCode).send({ error: message, ...(code ? { code } : {}) });
 }
 
 function browserSafeCheckpointApprovalResponse(result: ReturnType<typeof writeApprovedCheckpoint>) {
@@ -1852,6 +1864,7 @@ function browserSafeAbsorbApprovalResponse(result: ReturnType<typeof writeApprov
 		absorbId: result.absorbId,
 		eventRelPath: result.eventRelPath,
 		recentContextEntryCount: result.recentContextEntryCount,
+		memoryBudget: result.memoryBudget,
 		postAbsorb: result.postAbsorb,
 		warnings: result.warnings,
 	};
@@ -1863,6 +1876,14 @@ function browserSafeStructuralReviewApprovalResponse(result: ReturnType<typeof w
 		writesMemory: result.writesMemory,
 		structuralReviewId: result.structuralReviewId,
 		eventRelPath: result.eventRelPath,
+		auditRecordWritten: result.auditRecordWritten,
+		// After-write budget verdict from the written file — with the pointer
+		// line included, the propose-time impact can differ from what was saved.
+		memoryBudget: result.memoryBudget,
+		reviewTargetEstimatedTokenDelta: result.reviewTargetEstimatedTokenDelta,
+		// The saved screen names the forget-to-document file from this field; an
+		// export the response hides would be a silent one.
+		...(result.forgetToDocument ? { forgetToDocument: result.forgetToDocument } : {}),
 		postStructuralReview: result.postStructuralReview,
 		warnings: result.warnings,
 	};
@@ -2274,6 +2295,30 @@ app.put("/api/persistent-agents/:id/maintenance-settings", async (req, reply) =>
 		return persistentAgentNormalUseErrorReply(reply, e);
 	}
 });
+// Per-room bash approval preference (workspace reshape slice e). The PUT is
+// loopback-only at the remote route policy: a phone must never flip a room
+// to run commands without asking.
+app.get("/api/persistent-agents/:id/bash-settings", async (req, reply) => {
+	const idRaw = String((req.params as any).id ?? "").trim();
+	try {
+		const status = getUsablePersistentAgentStatusForNormalUse(idRaw);
+		const settings = readPersistentRoomBashSettings(status.id);
+		return { agentId: status.id, settings };
+	} catch (e) {
+		return persistentAgentNormalUseErrorReply(reply, e);
+	}
+});
+app.put("/api/persistent-agents/:id/bash-settings", async (req, reply) => {
+	const idRaw = String((req.params as any).id ?? "").trim();
+	try {
+		const status = getUsablePersistentAgentStatusForNormalUse(idRaw);
+		const body = (req.body ?? {}) as any;
+		const settings = writePersistentRoomBashSettings(status.id, { autoApprove: body.autoApprove });
+		return { agentId: status.id, settings };
+	} catch (e) {
+		return persistentAgentNormalUseErrorReply(reply, e);
+	}
+});
 // Per-room preferred model: what an empty room's picker remembers across
 // restarts and profile switches. Deliberately not gated on the active
 // profile's catalog: a pick recorded just before a switch away is exactly the
@@ -2414,7 +2459,10 @@ app.put("/api/persistent-agents/:id/workspace-default", async (req, reply) => {
 		const status = getUsablePersistentAgentStatusForNormalUse(idRaw);
 		const id = status.id;
 		const body = (req.body ?? {}) as any;
-		const mode = parsePersistentRoomWorkspaceMode(body.mode);
+		// Legacy field: older clients still send a workspace mode. Garbage keeps
+		// failing loudly, but the value itself no longer means anything — write
+		// capability is derived from the tool selection.
+		parsePersistentRoomWorkspaceMode(body.mode);
 		const root = String(body.root ?? "").trim();
 		let policy;
 		if (root) {
@@ -2425,10 +2473,8 @@ app.put("/api/persistent-agents/:id/workspace-default", async (req, reply) => {
 				repoRoot: REPO_ROOT,
 				root,
 				workspaceAccessMode,
-				mode,
 				source: "manual",
 				displayLabel: typeof body.displayLabel === "string" ? body.displayLabel : undefined,
-				writeEnabled: true,
 				toolSelection,
 				bashEnabled: body.bashEnabled === true,
 			});
@@ -2482,7 +2528,8 @@ app.post("/api/persistent-agents/:id/workspace/validate", async (req, reply) => 
 		const conversationId = String(body.conversationId ?? "").trim();
 		if (!conversationId) throw new Error("conversationId is required");
 		const workspaceAccessMode = normalizePersistentRoomWorkspaceAccessModeInput(body.workspaceAccessMode);
-		const mode = parsePersistentRoomWorkspaceMode(body.mode);
+		// Legacy field: validated for compat with older clients, then discarded.
+		parsePersistentRoomWorkspaceMode(body.mode);
 		const source = parsePersistentRoomWorkspaceSource(body.source);
 		const toolSelection = normalizePersistentRoomWorkspaceToolSelectionInput(body.toolSelection, { defaultToStandard: true, workspaceAccessMode });
 		const warnings: string[] = [];
@@ -2492,10 +2539,8 @@ app.post("/api/persistent-agents/:id/workspace/validate", async (req, reply) => 
 			repoRoot: REPO_ROOT,
 			root: String(body.root ?? ""),
 			workspaceAccessMode,
-			mode,
 			source,
 			displayLabel: typeof body.displayLabel === "string" ? body.displayLabel : undefined,
-			writeEnabled: true,
 			toolSelection,
 			bashEnabled: body.bashEnabled === true,
 		});
@@ -2536,7 +2581,7 @@ app.post("/api/persistent-agents/:id/absorb/assess", async (req, reply) => {
 		const status = getPersistentAgentStatusForMaintenance(idRaw);
 		const id = status.id;
 		const selection = activeAbsorbModelSelection();
-		return await buildAbsorbAssessment(id, selection.modelLock, async (prompt, modelLock) => runIsolatedLifecycleWorker(prompt, modelLock, resolveAbsorbModel, "absorb worker", "Produce the compact absorb assessment now.", "absorb assessment worker produced no text", { agent: id, kind: "upkeep" }), { resolveModelWindow: consultModelWindow });
+		return await buildAbsorbAssessment(id, selection.modelLock, async (prompt, modelLock) => runIsolatedLifecycleWorker(prompt, modelLock, resolveAbsorbModel, "absorb worker", "Produce the compact absorb assessment now.", "absorb assessment worker produced no text", { agent: id, kind: "upkeep" }), { resolveModelWindow: consultModelWindow, retryFeedback: parseAssessmentRetryFeedback((req.body as any)?.retryFeedback) });
 	} catch (e) {
 		return persistentAgentNormalUseErrorReply(reply, e);
 	}
@@ -2547,7 +2592,7 @@ app.post("/api/persistent-agents/:id/absorb/discuss", async (req, reply) => {
 		const status = getPersistentAgentStatusForMaintenance(idRaw);
 		const id = status.id;
 		const selection = activeAbsorbModelSelection();
-		return await buildAbsorbDiscussionTurn({ ...(req.body ?? {} as any), agentId: id }, selection.modelLock, async (prompt, modelLock) => runIsolatedLifecycleWorker(prompt, modelLock, resolveAbsorbModel, "absorb worker", "Produce the absorb discussion response now.", "absorb discussion worker produced no text", { agent: id, kind: "upkeep" }));
+		return await buildAbsorbDiscussionTurn({ ...(req.body ?? {} as any), agentId: id }, selection.modelLock, async (prompt, modelLock) => runIsolatedLifecycleWorker(prompt, modelLock, resolveAbsorbModel, "absorb worker", "Produce the absorb discussion response now.", "absorb discussion worker produced no text", { agent: id, kind: "upkeep" }), { resolveModelWindow: consultModelWindow });
 	} catch (e) {
 		return persistentAgentNormalUseErrorReply(reply, e);
 	}
@@ -2558,7 +2603,7 @@ app.post("/api/persistent-agents/:id/absorb/discuss/signoff", async (req, reply)
 		const status = getPersistentAgentStatusForMaintenance(idRaw);
 		const id = status.id;
 		const selection = activeAbsorbModelSelection();
-		return await buildAbsorbDiscussionSignoff({ ...(req.body ?? {} as any), agentId: id }, selection.modelLock, async (prompt, modelLock) => runIsolatedLifecycleWorker(prompt, modelLock, resolveAbsorbModel, "absorb worker", "Produce the absorb discussion signoff handoff now.", "absorb discussion signoff worker produced no text", { agent: id, kind: "upkeep" }));
+		return await buildAbsorbDiscussionSignoff({ ...(req.body ?? {} as any), agentId: id }, selection.modelLock, async (prompt, modelLock) => runIsolatedLifecycleWorker(prompt, modelLock, resolveAbsorbModel, "absorb worker", "Produce the absorb discussion signoff handoff now.", "absorb discussion signoff worker produced no text", { agent: id, kind: "upkeep" }), { resolveModelWindow: consultModelWindow });
 	} catch (e) {
 		return persistentAgentNormalUseErrorReply(reply, e);
 	}
@@ -2610,7 +2655,7 @@ app.post("/api/persistent-agents/:id/structural-review/assess", async (req, repl
 		const status = getPersistentAgentStatusForMaintenance(idRaw);
 		const id = status.id;
 		const selection = activeStructuralReviewModelSelection();
-		return await buildStructuralReviewAssessment(id, selection.modelLock, async (prompt, modelLock) => runIsolatedLifecycleWorker(prompt, modelLock, resolveStructuralReviewModel, "structural review worker", "Produce the Prune memory assessment now.", "structural review assessment worker produced no text", { agent: id, kind: "upkeep" }), { resolveModelWindow: consultModelWindow });
+		return await buildStructuralReviewAssessment(id, selection.modelLock, async (prompt, modelLock) => runIsolatedLifecycleWorker(prompt, modelLock, resolveStructuralReviewModel, "structural review worker", "Produce the Prune memory assessment now.", "structural review assessment worker produced no text", { agent: id, kind: "upkeep" }), { resolveModelWindow: consultModelWindow, retryFeedback: parseAssessmentRetryFeedback((req.body as any)?.retryFeedback) });
 	} catch (e) {
 		return persistentAgentNormalUseErrorReply(reply, e);
 	}
@@ -2621,7 +2666,7 @@ app.post("/api/persistent-agents/:id/structural-review/discuss", async (req, rep
 		const status = getPersistentAgentStatusForMaintenance(idRaw);
 		const id = status.id;
 		const selection = activeStructuralReviewModelSelection();
-		return await buildStructuralReviewDiscussionTurn({ ...(req.body ?? {} as any), agentId: id }, selection.modelLock, async (prompt, modelLock) => runIsolatedLifecycleWorker(prompt, modelLock, resolveStructuralReviewModel, "structural review worker", "Produce the Prune memory discussion response now.", "structural review discussion worker produced no text", { agent: id, kind: "upkeep" }));
+		return await buildStructuralReviewDiscussionTurn({ ...(req.body ?? {} as any), agentId: id }, selection.modelLock, async (prompt, modelLock) => runIsolatedLifecycleWorker(prompt, modelLock, resolveStructuralReviewModel, "structural review worker", "Produce the Prune memory discussion response now.", "structural review discussion worker produced no text", { agent: id, kind: "upkeep" }), { resolveModelWindow: consultModelWindow });
 	} catch (e) {
 		return persistentAgentNormalUseErrorReply(reply, e);
 	}
@@ -2632,7 +2677,7 @@ app.post("/api/persistent-agents/:id/structural-review/discuss/signoff", async (
 		const status = getPersistentAgentStatusForMaintenance(idRaw);
 		const id = status.id;
 		const selection = activeStructuralReviewModelSelection();
-		return await buildStructuralReviewDiscussionSignoff({ ...(req.body ?? {} as any), agentId: id }, selection.modelLock, async (prompt, modelLock) => runIsolatedLifecycleWorker(prompt, modelLock, resolveStructuralReviewModel, "structural review worker", "Produce the Prune memory discussion signoff handoff now.", "structural review discussion signoff worker produced no text", { agent: id, kind: "upkeep" }));
+		return await buildStructuralReviewDiscussionSignoff({ ...(req.body ?? {} as any), agentId: id }, selection.modelLock, async (prompt, modelLock) => runIsolatedLifecycleWorker(prompt, modelLock, resolveStructuralReviewModel, "structural review worker", "Produce the Prune memory discussion signoff handoff now.", "structural review discussion signoff worker produced no text", { agent: id, kind: "upkeep" }), { resolveModelWindow: consultModelWindow });
 	} catch (e) {
 		return persistentAgentNormalUseErrorReply(reply, e);
 	}
@@ -3717,6 +3762,8 @@ function gatewayModelPayload(model: GatewayRoomModel) {
 			thinkingLevels: model.detected?.thinkingLevels ?? null,
 			effortCeiling: model.detected?.effortCeiling ?? null,
 			adaptiveThinking: model.detected?.adaptiveThinking ?? null,
+			promptCaching: model.detected?.promptCaching ?? null,
+			cost: model.detected?.cost ?? null,
 		},
 	};
 }
@@ -3743,37 +3790,6 @@ function gatewayBodyObject(value: unknown): Record<string, unknown> | undefined 
 /** A body value that should be a positive safe integer, or nothing. */
 function gatewayBodyPositiveInteger(value: unknown): number | undefined {
 	return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
-}
-
-/**
- * A detection snapshot as a request body carries it: only well-typed answers
- * survive. The per-level effort declarations ride inside the snapshot. Pure
- * detection with no override half, so only well-typed booleans under known
- * level names are kept; everything else is not a declaration.
- */
-function parseGatewayDetectedSnapshot(detected: Record<string, unknown> | undefined): GatewayModelDetected {
-	const detectedWindow = gatewayBodyPositiveInteger(detected?.contextWindow);
-	const detectedMaxTokens = gatewayBodyPositiveInteger(detected?.maxTokens);
-	const detectedMode = typeof detected?.mode === "string" ? detected.mode.trim().toLowerCase() : "";
-	const rawLevels = gatewayBodyObject(detected?.thinkingLevels);
-	const detectedLevels: GatewayThinkingLevels = {};
-	if (rawLevels) {
-		for (const level of GATEWAY_THINKING_LEVELS) {
-			const value = rawLevels[level];
-			if (typeof value === "boolean") detectedLevels[level] = value;
-		}
-	}
-	return {
-		...(typeof detected?.vision === "boolean" ? { vision: detected.vision } : {}),
-		...(typeof detected?.webSearch === "boolean" ? { webSearch: detected.webSearch } : {}),
-		...(typeof detected?.reasoning === "boolean" ? { reasoning: detected.reasoning } : {}),
-		...(detectedWindow ? { contextWindow: detectedWindow } : {}),
-		...(detectedMaxTokens ? { maxTokens: detectedMaxTokens } : {}),
-		...(detectedMode ? { mode: detectedMode } : {}),
-		...(Object.keys(detectedLevels).length > 0 ? { thinkingLevels: detectedLevels } : {}),
-		...(typeof detected?.effortCeiling === "string" && (GATEWAY_EFFORT_INTENSITIES as readonly string[]).includes(detected.effortCeiling) ? { effortCeiling: detected.effortCeiling as GatewayEffortIntensity } : {}),
-		...(typeof detected?.adaptiveThinking === "boolean" ? { adaptiveThinking: detected.adaptiveThinking } : {}),
-	};
 }
 
 /**
@@ -3875,16 +3891,40 @@ function saveGatewayEverywhere(gateway: OpenAiCompatibleGateway, key: string, is
 	forgetGatewayProviderLabel(gateway.providerId);
 }
 
+/**
+ * Whether two gateway addresses name the same server: scheme, host and port,
+ * nothing else. The path is deliberately not part of it, because correcting
+ * /v1 to / on the edit form is the ordinary reason to re-probe a saved
+ * gateway. Anything that does not parse as a URL is nobody's server.
+ */
+function sameGatewayOrigin(a: string, b: string): boolean {
+	try {
+		return new URL(a).origin === new URL(b).origin;
+	} catch {
+		return false;
+	}
+}
+
 async function gatewayDiscoverHandler(req: any, reply: any, gatewayIdFromRoute = "") {
 	const body = (req.body ?? {}) as any;
 	const gatewayId = (gatewayIdFromRoute || String((req.params as any)?.gatewayId ?? body.gatewayId ?? "")).trim();
 	const gateway = gatewayId ? findOpenAiCompatibleGateway(gatewayId) : undefined;
-	const baseUrl = normalizeGatewayBaseUrl(String(body.baseUrl ?? "").trim() || gateway?.baseUrl || (gateway ? readGatewayProviderBaseUrl(gateway.providerId) : ""));
+	const storedBaseUrl = gateway ? normalizeGatewayBaseUrl(gateway.baseUrl || readGatewayProviderBaseUrl(gateway.providerId)) : "";
+	const baseUrl = normalizeGatewayBaseUrl(String(body.baseUrl ?? "").trim() || storedBaseUrl);
 	if (!/^https?:\/\//.test(baseUrl)) return reply.code(400).send({ error: "baseUrl must start with http:// or https://" });
 	let key = typeof body.key === "string" ? body.key.trim() : "";
 	// Editing an already-connected gateway means the person should not have to
-	// retype a key the machine already has.
-	if (!key && gateway) key = (await AuthStorage.create().getApiKey(gateway.providerId)) ?? "";
+	// retype a key the machine already has. That courtesy stops at the server
+	// the key belongs to: a probe of some other address with no key of its own
+	// would otherwise carry the stored secret to whoever answers there, and the
+	// bearer header is readable by any host that receives it. A different origin
+	// gets asked for its key like any new gateway would be.
+	if (!key && gateway) {
+		if (!sameGatewayOrigin(baseUrl, storedBaseUrl)) {
+			return reply.code(400).send({ error: "Enter the gateway API key to load models from a new address." });
+		}
+		key = (await AuthStorage.create().getApiKey(gateway.providerId)) ?? "";
+	}
 	if (!key) return reply.code(400).send({ error: "Enter the gateway API key to load its models." });
 	try {
 		const discovery = await discoverGatewayModels(baseUrl, key);
@@ -3911,6 +3951,8 @@ async function gatewayDiscoverHandler(req: any, reply: any, gatewayIdFromRoute =
 				thinkingLevels: model.thinkingLevels ?? null,
 				effortCeiling: model.effortCeiling ?? null,
 				adaptiveThinking: model.adaptiveThinking ?? null,
+				promptCaching: model.promptCaching ?? null,
+				cost: model.cost ?? null,
 			})),
 			excludedNonChat: excludedNonChat.map((model) => ({ id: model.id, mode: model.mode ?? "" })),
 		};
@@ -4933,6 +4975,17 @@ registerUsageApi(app, {
 		}
 	},
 	liveAgents: () => new Map(listPersistentAgents().map((status) => [status.id, status.displayName?.trim() || status.id])),
+	// The same resolution the model rows use, so a gateway's source row reads
+	// as the name the person gave it and a rename shows up on the next poll.
+	// The raw id coming back means nobody answers for the provider any more.
+	providerDisplayName: (providerId) => {
+		try {
+			const label = webChatProviderLabel(providerId);
+			return label === providerId ? undefined : label;
+		} catch {
+			return undefined;
+		}
+	},
 });
 
 // --- room memory telemetry (read-only) ------------------------------------
@@ -5014,6 +5067,17 @@ app.get("/api/memory/room-memory", async (req, reply) => {
 					recentTokens: room.composition.recent,
 					otherTokens: room.composition.active + room.composition.chronos,
 					budgetTokens: settings.memoryBudgetTokens,
+					// The budget binds on the review target (Deep Memory + Active
+					// Items), not the whole file — the bar renders these two
+					// server-computed fields and never re-derives the comparison.
+					// The numerator comes from the same function the status block
+					// uses, NOT from `composition` (whose legacy-topology fallback
+					// counts the whole file): two extraction paths would let two
+					// surfaces disagree over/under for the same room.
+					...((): { reviewTargetTokens: number; overBudget: boolean } => {
+						const reviewTargetTokens = readPersistentAgentReviewTargetEstimatedTokens(room.id) ?? 0;
+						return { reviewTargetTokens, overBudget: overMemoryBudget(reviewTargetTokens, settings.memoryBudgetTokens) };
+					})(),
 					// updatedAt stamps on ANY settings write (e.g. the fast-path toggle),
 					// so only an actual non-default budget counts as customized.
 					budgetCustomized: settings.memoryBudgetTokens !== MEMORY_BUDGET_DEFAULT_TOKENS,
@@ -5963,7 +6027,7 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 			aggregateChars += size.chars;
 			aggregateBytes += size.bytes;
 		}
-		const aggregateEstimatedTokens = Math.ceil(aggregateChars / 4);
+		const aggregateEstimatedTokens = estimateTokensFromChars(aggregateChars);
 		const safeAggregateText = [
 			`messages=${messages.length}`,
 			`user=${counts.user}`,
@@ -6121,7 +6185,9 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 			bashRuntimeAllowed: true,
 		});
 		const persistentRoomCustomTools = persistentRoomWorkspaceToolsEnabled && persistentRoomCapabilityPolicy
-			? createPersistentRoomWorkspaceTools(persistentRoomCapabilityPolicy)
+			// Full access rooms get the document-aware read override, bound to the
+			// same cwd the session itself binds with below.
+			? createPersistentRoomWorkspaceTools(persistentRoomCapabilityPolicy, { localFilesReadCwd: persistentRoomRuntimeCwdForEffectiveWorkspacePolicy(persistentRoomEffectiveWorkspacePolicy, REPO_ROOT) })
 			: [];
 		if (persistentRoomWorkspaceToolsEnabled) {
 			const allowedToolNames = persistentRoomToolPolicy?.allowedToolNames ?? [];
@@ -6501,6 +6567,23 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 		const persistentRoomRawSystemPrompt = persistentRoomRawBootPrompt != null
 			? `${persistentRoomRawBootPrompt}${persistentRoomSpecialistIndex}`
 			: persistentRoomRawBootPrompt;
+		// Deadlock guard: a room whose memory alone fills this model's window can
+		// never recover in chat (compaction cannot shrink the system prompt), so
+		// refuse to start here, with the remedy, instead of failing on turn one.
+		// What it measures is the boot prompt plus the specialist index, not the
+		// full per-turn prompt: the per-turn hooks append more (identity,
+		// workspace, skills and shelf stanzas) that rides in the headroom this
+		// check leaves, unmeasured by it. Every way a room comes alive (new
+		// thread, resume, after Remember or Forget) passes through this connect,
+		// so this is the single guard point.
+		if (persistentRoomRawSystemPrompt != null) {
+			assertPersistentAgentBootPromptFitsWindow({
+				agentId: persistentAgentId,
+				model: persistentRoomModel,
+				systemPrompt: persistentRoomRawSystemPrompt,
+				window: { contextWindow: webChatModel.contextWindow, maxOutputTokens: webChatModel.maxTokens },
+			});
+		}
 		const persistentRoomRuntimeCwd = persistentRoomRuntimeCwdForEffectiveWorkspacePolicy(persistentRoomEffectiveWorkspacePolicy, REPO_ROOT);
 		const persistentRoomSessionManager = persistentRoomThreadRuntime?.kind === "pi-session-jsonl"
 			? openPersistentAgentPiSessionManager(persistentAgentId, persistentRoomThreadRuntime, persistentRoomRuntimeCwd)
@@ -6563,6 +6646,25 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 		const extensionFactories = [
 			contentPolicyExt as any,
 			permissionsExtForSession as any,
+			// Per-command bash approval (workspace reshape slice e): a live
+			// Full-access session pauses every bash call on an approval card in
+			// the chat unless the room's auto-approve setting is on. Ordered
+			// after the permissions extension so a room that has no bash at all
+			// is refused before anyone is asked to approve anything. Built only
+			// here, in the live web bind: background, scheduled, and specialist
+			// runs never construct the guard (they never get bash either).
+			createPersistentRoomBashApprovalExtension(createPersistentRoomBashApprovalGuard({
+				// Fresh read on every bash call (like the read_skill exposure
+				// gate): flipping the room's auto-approve setting applies to the
+				// very next command, no rebind. An unreadable file asks.
+				isAutoApproved: () => {
+					try {
+						return readPersistentRoomBashSettings(persistentAgentId).autoApprove === true;
+					} catch {
+						return false;
+					}
+				},
+			})) as any,
 			artifactsExt as any,
 			// Per-room MCP: the session's connector surface goes through the shared
 			// room-scope wrapper, keyed to this room.
@@ -6626,6 +6728,18 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 		boundNativeProviderSearch = nativeProviderSearchAtBind;
 		boundSessionProviderId = webChatModel.provider;
 		await session.bindExtensions({ uiContext });
+		// The blocked list was only ever computed until here; check it against the
+		// session's actual registered tools (extensions included, so after bind)
+		// so a leaked tool fails the bind instead of quietly riding along.
+		if (persistentRoomToolPolicy) {
+			const sessionToolNames = session.getActiveToolNames();
+			const matchesBlockedToolName = (blocked: string, toolName: string): boolean =>
+				blocked.endsWith("*") ? toolName.startsWith(blocked.slice(0, -1)) : toolName === blocked;
+			for (const blockedToolName of persistentRoomToolPolicy.blockedToolNames) {
+				const leaked = sessionToolNames.find((toolName) => matchesBlockedToolName(blockedToolName, toolName));
+				if (leaked) throw new Error(`persistent-room blocked tool leaked into session: ${leaked}`);
+			}
+		}
 		// The room's sticky effort outlives the connection AND the session: a
 		// rebind (workspace/MCP settings, adopted turn) rebuilds the session at
 		// the runtime default, so the room's choice is re-applied here rather
@@ -6693,6 +6807,11 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 
 	const maybeAutoSummarizeToolTurn = async () => {
 		if (!session || autoSummaryRunning) return;
+		const turnTerminalReason = activePersistentWebTurn?.terminalReason;
+		if (turnTerminalReason && turnTerminalReason !== "completed") {
+			app.log.info({ activeOwner, reason: "turn_not_completed", turnTerminalReason }, "tool-turn recovery skipped");
+			return;
+		}
 		if (!turnTrace.sawToolResult) {
 			app.log.info({ activeOwner, reason: "no_tool_result" }, "tool-turn recovery skipped");
 			return;
@@ -6793,7 +6912,13 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 		await bindSession();
 		send({ type: "ready", persona, agent: persistentAgentIdForSession, persistentAgentId: persistentAgentIdForSession, conversationId: persistentConversationId, model: modelStatusPayload((session as any)?.model), contextHealth: initialContextHealthForSession(session), effort: roomEffortStatusPayload(persistentAgentIdForSession, session) });
 	} catch (e) {
-		send({ type: "error", message: `failed to create session: ${(e as Error).message}` });
+		if (e instanceof PersistentAgentMemoryOverflowError) {
+			// Named so the client can stand its reconnect loop down: redialing
+			// reaches the same memory and the same window.
+			send({ type: "error", code: e.code, message: e.message });
+		} else {
+			send({ type: "error", message: `failed to create session: ${(e as Error).message}` });
+		}
 		socket.close();
 		return;
 	}
@@ -6803,6 +6928,21 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 	// predates the turn's landing. Rebuild it through the same single-rebind
 	// gate workspace changes use: frames arriving mid-rebind await it, and the
 	// next prompt retries if the rebuild failed.
+	// A rebind that fails on the memory guard must reach the client with its
+	// code: swallowing it leaves a silently dead room, and the generic
+	// "failed to apply" wrapper hides the only sentence that names the exit.
+	const reportRebindRefusal = (error: unknown): void => {
+		if (!(error instanceof PersistentAgentMemoryOverflowError)) {
+			// Non-overflow rebind failures are retried on the next prompt rather
+			// than surfaced to the client; leave a trace so they at least reach
+			// the operator log instead of vanishing.
+			app.log.warn({ err: error }, "persistent room rebind failed");
+			return;
+		}
+		send({ type: "error", code: error.code, message: error.message });
+		try { socket.close(); } catch {}
+	};
+
 	const scheduleAdoptedSessionRebind = (): void => {
 		const rebind = (async () => {
 			if (!sessionDisposed) {
@@ -6813,7 +6953,7 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 			await bindSession();
 		})();
 		workspaceRebindInFlight = rebind;
-		rebind.catch(() => {}).finally(() => {
+		rebind.catch(reportRebindRefusal).finally(() => {
 			if (workspaceRebindInFlight === rebind) workspaceRebindInFlight = null;
 		});
 	};
@@ -7034,13 +7174,17 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 								await bindSession();
 							})();
 							workspaceRebindInFlight = rebind;
-							rebind.catch(() => {}).finally(() => {
+							rebind.catch(reportRebindRefusal).finally(() => {
 								if (workspaceRebindInFlight === rebind) workspaceRebindInFlight = null;
 							});
 						}
 						await workspaceRebindInFlight;
 					}
 				} catch (e) {
+					if (e instanceof PersistentAgentMemoryOverflowError) {
+						reportRebindRefusal(e);
+						return;
+					}
 					send({ type: "error", message: `failed to apply updated room settings: ${(e as Error).message}` });
 					return;
 				}
@@ -7116,7 +7260,10 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 				await flushSessionEvents();
 				// A detached turn skips the auto-summarize recovery prompt: it is a
 				// rescue for a user watching a thin answer, and nobody is watching.
-				if (!detachedFromClient && session === sessionAtPromptStart) {
+				// A turn that did not finish cleanly skips it too: after Stop, the
+				// tool-only shape IS the cancellation, not a missing answer, and the
+				// recovery would start a fresh paid turn the user just declined.
+				if (!detachedFromClient && session === sessionAtPromptStart && activePersistentWebTurn?.terminalReason === "completed") {
 					await maybeAutoSummarizeToolTurn();
 				}
 			} catch (e) {
@@ -8061,6 +8208,8 @@ app.post("/api/persistent-agents/:id/files", { bodyLimit: 40 * 1024 * 1024 }, as
 		} catch (e) {
 			parseNote = e instanceof PersistentRoomShelfError ? e.message : "could not be parsed";
 		}
+	} else if (sniff.kind === "xlsx") {
+		parseNote = "spreadsheet · previewed as a table";
 	} else if (sniff.kind === "image") {
 		parseNote = "image · the room reads it visually";
 	}
@@ -8419,16 +8568,33 @@ try {
 
 let schedulerPreflightLoopHandle: ReturnType<typeof startPersistentRoomSchedulePreflightLoop> | null = null;
 let schedulerExecutionLoopHandle: ReturnType<typeof startScheduledPromptBackgroundExecutionLoop> | null = null;
+let gatewayDeclarationsRefreshHandle: GatewayDeclarationsRefreshLoopHandle | null = null;
 
 app.addHook("onClose", async () => {
 	schedulerExecutionLoopHandle?.stop();
 	schedulerExecutionLoopHandle = null;
 	schedulerPreflightLoopHandle?.stop();
 	schedulerPreflightLoopHandle = null;
+	gatewayDeclarationsRefreshHandle?.stop();
+	gatewayDeclarationsRefreshHandle = null;
 });
+
+// Rooms that had bash before the approval card ran commands without asking;
+// the one-time grant preserves that. A failed sweep only means rooms ask.
+try {
+	const bashApprovalMigration = migratePersistentRoomBashAutoApproveDefaults(
+		listPersistentAgents().map((agent) => ({ id: agent.id, bashEnabled: readPersistentRoomDefaultCapabilityPolicy(agent.id)?.bashEnabled === true })),
+	);
+	if (bashApprovalMigration.migrated.length > 0) {
+		app.log.info({ rooms: bashApprovalMigration.migrated }, "bash auto-approve preserved for rooms predating the approval card");
+	}
+} catch (error) {
+	app.log.warn({ err: error }, "bash auto-approve upgrade sweep failed; affected rooms will ask per command");
+}
 
 const schedulerPreflightLoopOptions = resolvePersistentRoomSchedulePreflightLoopOptionsFromEnv(process.env, app.log);
 const schedulerExecutionLoopOptions = resolveScheduledPromptBackgroundExecutionLoopOptionsFromEnv(process.env, app.log);
+const gatewayDeclarationsRefreshOptions = resolveGatewayDeclarationsRefreshOptionsFromEnv(process.env, app.log);
 
 app.listen({ port: PORT, host: "127.0.0.1" })
 	.then(async () => {
@@ -8454,6 +8620,22 @@ app.listen({ port: PORT, host: "127.0.0.1" })
 				logger: app.log,
 			});
 		}
+		// Saved gateways re-read what they declare (prices, flags, windows) a
+		// few seconds from now and once a day after that, through the panel's
+		// own resolve, probe and save seams, so the snapshots stop going stale
+		// between visits to the panel. Best effort throughout: the loop never
+		// throws, and a gateway that cannot be reached keeps what it has.
+		gatewayDeclarationsRefreshHandle = startGatewayDeclarationsRefreshLoop({
+			readGateways: () => readOpenAiCompatibleGateways().gateways,
+			findGateway: (gatewayId) => findOpenAiCompatibleGateway(gatewayId),
+			resolveBaseUrl: (gateway) => normalizeGatewayBaseUrl(gateway.baseUrl || readGatewayProviderBaseUrl(gateway.providerId)),
+			readKey: async (providerId) => (await AuthStorage.create().getApiKey(providerId)) ?? undefined,
+			discover: discoverGatewayModels,
+			// The panel's save minus the key: catalog entry first, store second,
+			// same order and same failure story as a person pressing Save.
+			save: (gateway) => saveGatewayEverywhere(gateway, "", false),
+			logger: app.log,
+		}, gatewayDeclarationsRefreshOptions);
 	})
 	.catch((err: NodeJS.ErrnoException) => {
 		if (err?.code === "EADDRINUSE") {

@@ -8,11 +8,10 @@
  *               direct filesystem access by default. Persistent-room
  *               sessions may expose a validated workspace bundle. Bounded
  *               rooms use Exxperts guarded tools
- *               (ls/find/read/write_markdown_file/read_spreadsheet);
+ *               (ls/find/grep/read/write/edit, fenced to the workspace);
  *               Full access rooms use native Pi filesystem tools
- *               (read/ls/find/grep/write/edit) plus Exxperts
- *               read_spreadsheet. Bash is available only when explicitly
- *               enabled for a manual Full access room session.
+ *               (read/ls/find/grep/write/edit). Bash is available only when
+ *               explicitly enabled for a manual Full access room session.
  *
  * Enforcement is a soft gate: if a blocked tool is used, we block with a
  * clear reason. Hard enforcement (binary refuses to even register the
@@ -23,8 +22,8 @@ import type { ExtensionAPI } from "@exxeta/exxperts-runtime";
 
 type PersistentRoomWorkspaceAccessMode = "bounded" | "localFiles";
 
-const PERSISTENT_ROOM_BOUNDED_WORKSPACE_TOOLS = new Set(["ls", "find", "read", "write_markdown_file", "read_spreadsheet"]);
-const PERSISTENT_ROOM_LOCAL_FILES_WORKSPACE_TOOLS = new Set(["read", "ls", "find", "grep", "write", "edit", "read_spreadsheet"]);
+const PERSISTENT_ROOM_BOUNDED_WORKSPACE_TOOLS = new Set(["ls", "find", "grep", "read", "write", "edit"]);
+const PERSISTENT_ROOM_LOCAL_FILES_WORKSPACE_TOOLS = new Set(["read", "ls", "find", "grep", "write", "edit"]);
 const PERSISTENT_ROOM_AGENT_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,119}$/;
 
 function isPersistentRoomAgentEnvValue(value: string | undefined): boolean {
@@ -110,7 +109,7 @@ export default function (pi: ExtensionAPI) {
 		// Build a directive, retry-friendly block reason. The model should pick
 		// the suggested alternative on the next turn without asking the user.
 		const t = event.toolName;
-		const fsTools = ["bash", "read", "ls", "find", "grep", "write", "write_markdown_file", "read_spreadsheet", "edit"];
+		const fsTools = ["bash", "read", "ls", "find", "grep", "write", "edit"];
 		const hint = fsTools.includes(t)
 			? "This room has NO filesystem access. Do NOT retry with another filesystem tool. Tell the user plainly that file access must be enabled for this room in its workspace settings, then offer help on drafting, summaries, or knowledge-base aspects."
 			: "Answer directly with the tools available in this room.";

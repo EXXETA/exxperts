@@ -1,9 +1,10 @@
 // One-click install layer over electron-updater: nothing here downloads or
 // installs anything until the user has chosen "Install and restart".
-// autoDownload and autoInstallOnAppQuit stay off and no timers exist. The
-// only unattended network call in the app is the single anonymous version
-// check the shell runs once at startup (update-check.ts); everything in this
-// file waits for a click, so the no-telemetry story stays true.
+// autoDownload and autoInstallOnAppQuit stay off and no timers live here.
+// The only unattended network call in the app is the anonymous version check
+// the shell runs at startup and every six hours after (update-check.ts);
+// everything in this file waits for a click, so the no-telemetry story stays
+// true.
 //
 // Trust boundary, same stance as update-check.ts: the feed is input, not
 // authority. electron-updater verifies the download against the sha512 in the

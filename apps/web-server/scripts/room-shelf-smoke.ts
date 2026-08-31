@@ -255,6 +255,42 @@ try {
 	const manifestWithPages = buildShelfManifestSection(roomId, {}, (name, entry) => cachedShelfPageCount(roomId, name, entry));
 	assert(manifestWithPages.includes("terms.pdf · 1 page ·"), `manifest must show page counts once cached (got: ${manifestWithPages})`);
 
+	// ---- Spreadsheets: xlsx previews through the shared engine; .xls refuses --
+	{
+		const XLSX = await import("xlsx");
+		const wb = XLSX.utils.book_new();
+		XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
+			["Name", "Revenue"],
+			["Alice", 100],
+			["Bob", 250],
+		]), "Sales");
+		const workbookBuffer: Buffer = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+		assert(sniffShelfFileBuffer(workbookBuffer.subarray(0, 8192), "book.xlsx").kind === "xlsx", "xlsx must sniff as its own kind");
+		fs.writeFileSync(path.join(shelfDir, "book.xlsx"), workbookBuffer);
+		const workbook = await readShelfFileText(roomId, "book.xlsx");
+		assert(workbook.kind === "xlsx", "shelf xlsx must read as xlsx");
+		assert(workbook.text.includes("# Spreadsheet preview: book.xlsx"), `preview must carry the shelf file's name (got: ${workbook.text.split("\n")[0]})`);
+		assert(workbook.text.includes("| Alice | 100 |"), "preview must render cell values as a table");
+		assert(!workbook.text.includes("xl/workbook.xml"), "preview must not expose raw ZIP/XML bytes");
+		const workbookRead = await readFileTool!.execute("smoke-xlsx", { name: "book.xlsx" }, undefined as any, undefined as any, undefined as any);
+		const workbookReadText = resultText(workbookRead);
+		assert(workbookReadText.startsWith("[FILE: book.xlsx]"), "read_file must wrap the preview in the envelope");
+		assert(workbookReadText.includes("| Bob | 250 |"), "read_file must return the rendered preview");
+		fs.rmSync(path.join(shelfDir, "book.xlsx"));
+
+		// Legacy .xls (OLE compound file) stays refused, naming what IS supported.
+		fs.writeFileSync(path.join(shelfDir, "old.xls"), Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1, 0, 0]));
+		await expectShelfError(() => readShelfFileText(roomId, "old.xls"), "unsupported_format", "legacy xls refusal");
+		try {
+			await readShelfFileText(roomId, "old.xls");
+		} catch (error) {
+			const message = (error as Error).message;
+			assert(message.includes("Legacy Office"), "legacy refusal must name the format family");
+			assert(message.includes(".xlsx"), "legacy refusal must name the supported spreadsheet format");
+		}
+		fs.rmSync(path.join(shelfDir, "old.xls"));
+	}
+
 	// ---- Scanned PDF: extraction succeeds but is blank → canonical refusal ---
 	// Same generator as terms.pdf with an empty content stream: pdfjs parses it
 	// fine and yields only the [page 1] marker — the honest answer is the

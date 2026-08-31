@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { settingsChordHint } from "../platform";
 import { useRemoteAccessStatus } from "../remote-access-api";
 import { useRemoteClientContext } from "../remote-client-context";
 import { SidebarToggleButton } from "../sidebar-collapse";
@@ -89,7 +90,7 @@ export function ConfigMenu({ onSettings, appearance, onSetAppearance }: { onSett
 						}}
 					>
 						<span>Settings</span>
-						<span className="menu-item-arrow" aria-hidden="true">→</span>
+						<span className="menu-item-kbd" aria-hidden="true">{settingsChordHint()}</span>
 					</button>
 					<button
 						className="menu-item"
@@ -133,7 +134,7 @@ export function ConfigMenu({ onSettings, appearance, onSetAppearance }: { onSett
 			<button
 				className="sidebar-config-gear"
 				aria-label={update.dotVisible ? "Settings, update available" : "Settings"}
-				title={update.dotVisible ? "Settings — update available" : "Settings"}
+				title={update.dotVisible ? `Settings — update available — ${settingsChordHint()}` : `Settings — ${settingsChordHint()}`}
 				aria-haspopup="menu"
 				aria-expanded={open}
 				onClick={() => setOpen((v) => !v)}
@@ -148,9 +149,10 @@ export function ConfigMenu({ onSettings, appearance, onSetAppearance }: { onSett
 /**
  * The standing "remote is on" signal, anchored at the app's bottom left on
  * its own line above the gear row: as long as the tunnel listener is meant
- * to be up, the fact is one glance away without crowding the gear. Paused =
- * enabled but not serving (tunnel address gone). Renders nothing on remote
- * devices and while remote access is off.
+ * to be up, the fact is one glance away without crowding the gear. "VPN off"
+ * = remote stays enabled but the tunnel address is gone — a deliberate state,
+ * so it renders calm grey, not amber. Renders nothing on remote devices and
+ * while remote access is off.
  */
 export function RemoteOnPill({ onSettings }: { onSettings: (section?: "remote") => void }) {
 	const clientContext = useRemoteClientContext();
@@ -163,11 +165,11 @@ export function RemoteOnPill({ onSettings }: { onSettings: (section?: "remote") 
 		<button
 			className={`remote-on-pill${remotePaused ? " paused" : ""}`}
 			type="button"
-			title={remotePaused ? "Remote access is on but not serving; it resumes when the tunnel is back" : "Remote access is on; paired devices can reach this app"}
+			title={remotePaused ? "Remote stays available again when your VPN is back on" : "Remote access is on; paired devices can reach this app"}
 			onClick={() => onSettings("remote")}
 		>
 			<span className="remote-on-dot" aria-hidden="true" />
-			{remotePaused ? "Remote paused" : "Remote on"}
+			{remotePaused ? "VPN off" : "Remote on"}
 		</button>
 	);
 }

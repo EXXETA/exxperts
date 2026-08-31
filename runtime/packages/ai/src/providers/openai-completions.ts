@@ -30,6 +30,7 @@ import type {
 	ToolCall,
 	ToolResultMessage,
 } from "../types.js";
+import { CitationMarkerStreamFilter } from "../utils/citation-markers.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { headersToRecord } from "../utils/headers.js";
 import { parseStreamingJson } from "../utils/json-parse.js";
@@ -165,6 +166,7 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions", OpenA
 
 			let textBlock: TextContent | null = null;
 			let thinkingBlock: ThinkingContent | null = null;
+			const textFilter = new CitationMarkerStreamFilter();
 			const toolCallBlocksByIndex = new Map<number, StreamingToolCallBlock>();
 			const toolCallBlocksById = new Map<string, StreamingToolCallBlock>();
 			const blocks = output.content as StreamingBlock[];
@@ -175,6 +177,16 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions", OpenA
 					return;
 				}
 				if (block.type === "text") {
+					const tail = textFilter.flush();
+					if (tail.length > 0) {
+						block.text += tail;
+						stream.push({
+							type: "text_delta",
+							contentIndex,
+							delta: tail,
+							partial: output,
+						});
+					}
 					stream.push({
 						type: "text_end",
 						contentIndex,
@@ -301,13 +313,16 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions", OpenA
 						choice.delta.content.length > 0
 					) {
 						const block = ensureTextBlock();
-						block.text += choice.delta.content;
-						stream.push({
-							type: "text_delta",
-							contentIndex: getContentIndex(block),
-							delta: choice.delta.content,
-							partial: output,
-						});
+						const delta = textFilter.push(choice.delta.content);
+						if (delta.length > 0) {
+							block.text += delta;
+							stream.push({
+								type: "text_delta",
+								contentIndex: getContentIndex(block),
+								delta,
+								partial: output,
+							});
+						}
 					}
 
 					// Some endpoints return reasoning in reasoning_content (llama.cpp),

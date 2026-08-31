@@ -94,6 +94,21 @@ export type GatewayEffortIntensity = (typeof GATEWAY_EFFORT_INTENSITIES)[number]
 export type GatewayThinkingLevels = Partial<Record<GatewayThinkingLevel, boolean>>;
 
 /**
+ * What one model's tokens cost, in USD per million tokens, which is the unit
+ * the runtime's cost calculation multiplies by. Gateways publish per-token
+ * prices (2e-7 for twenty cents a million) and detection converts them once,
+ * so every consumer downstream reads the runtime's number. A model without
+ * this block is a model whose price nobody published: the ledger records its
+ * turns at zero, and the wallet says so instead of showing a bill.
+ */
+export type GatewayModelCost = {
+	input: number;
+	output: number;
+	cacheRead: number;
+	cacheWrite: number;
+};
+
+/**
  * What the gateway itself declared about one model, snapshotted at the last
  * reload. A field is present only when the gateway actually answered it; an
  * empty object is a gateway that had nothing to say. Kept per model so the
@@ -128,6 +143,18 @@ export type GatewayModelDetected = {
 	effortCeiling?: GatewayEffortIntensity;
 	/** Whether the gateway says the model chooses its own effort. Recorded as said; nothing acts on it yet. */
 	adaptiveThinking?: boolean;
+	/**
+	 * Whether the gateway says the deployment honors prompt-cache markers. Pure
+	 * detection with no override: a marker sent where the deployment rejects it
+	 * fails the whole request, so only the gateway's own word turns it on.
+	 */
+	promptCaching?: boolean;
+	/**
+	 * The price the gateway publishes for this model. Detection only: no
+	 * override exists, because a price typed by hand is a guess about somebody
+	 * else's bill, and the gateway is the one sending it.
+	 */
+	cost?: GatewayModelCost;
 };
 
 /**
@@ -178,6 +205,15 @@ export type EffectiveGatewayModel = {
 	thinkingLevels?: GatewayThinkingLevels;
 	/** The declared cap on thinking intensity, under the same conditions as thinkingLevels. */
 	effortCeiling?: GatewayEffortIntensity;
+	/**
+	 * The declared prompt-caching support, when the gateway declared it.
+	 * Detection only, and independent of the reasoning and vision switches:
+	 * switching a capability off changes what a turn does, not whether the
+	 * deployment caches its prefix.
+	 */
+	promptCaching?: boolean;
+	/** The published price, when the gateway published one. Absent means unknown, and unknown is never written as zero. */
+	cost?: GatewayModelCost;
 };
 
 /**
@@ -191,6 +227,8 @@ export function effectiveGatewayModel(model: GatewayRoomModel): EffectiveGateway
 	const maxTokens = model.maxTokens ?? model.detected?.maxTokens;
 	const thinkingLevels = model.detected?.thinkingLevels;
 	const effortCeiling = model.detected?.effortCeiling;
+	const promptCaching = model.detected?.promptCaching;
+	const cost = model.detected?.cost;
 	return {
 		vision: model.vision ?? model.detected?.vision ?? false,
 		// The one per-use billable capability: detection never decides it, the
@@ -204,6 +242,13 @@ export function effectiveGatewayModel(model: GatewayRoomModel): EffectiveGateway
 		// describe.
 		...(reasoning && thinkingLevels && Object.keys(thinkingLevels).length > 0 ? { thinkingLevels } : {}),
 		...(reasoning && effortCeiling ? { effortCeiling } : {}),
+		// Caching, like the price, rides on detection alone: whether the
+		// deployment caches its prefix is not something a capability switch
+		// changes, and no override exists for it.
+		...(promptCaching !== undefined ? { promptCaching } : {}),
+		// The price rides on detection alone and on nothing else: switching a
+		// capability off changes what a turn does, not what its tokens cost.
+		...(cost ? { cost } : {}),
 	};
 }
 
@@ -267,15 +312,50 @@ function positiveInteger(value: unknown): number | undefined {
 	return rounded > 0 ? rounded : undefined;
 }
 
-/** The detection snapshot as stored: only well-typed answers survive the read. */
-function parseDetected(raw: Record<string, unknown>): GatewayModelDetected {
+/** A token count as a detection may state it: whole, positive, and within what a number can hold exactly. */
+function positiveSafeInteger(value: unknown): number | undefined {
+	return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
+}
+
+/**
+ * A price block as a file or a request body carries it. All four numbers or
+ * nothing: a block with an input price and no output price would make the
+ * ledger multiply half a turn and show the result as the whole bill, which is
+ * worse than showing no price at all.
+ */
+export function parseGatewayModelCost(raw: unknown): GatewayModelCost | undefined {
+	if (!isObject(raw)) return undefined;
+	const cost: Partial<GatewayModelCost> = {};
+	for (const key of ["input", "output", "cacheRead", "cacheWrite"] as const) {
+		const value = raw[key];
+		if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return undefined;
+		cost[key] = value;
+	}
+	return cost as GatewayModelCost;
+}
+
+/**
+ * A detection snapshot as anything outside this module carries it: the store
+ * file, a request body from the approve form, or a fresh discovery. Only
+ * well-typed answers survive, and the same rule applies whichever way the
+ * snapshot arrived, which is why all three paths read it through this one
+ * function: a snapshot the file would refuse must not be writable from a body,
+ * and a refresh must not keep a field a reload would have dropped.
+ *
+ * Pure detection with no override half: only well-typed booleans under known
+ * level names are kept, a window or a cap is a positive safe integer or
+ * nothing, and the price is all four numbers or nothing, by the store's own
+ * rule, so nobody can hand the ledger a half-priced model.
+ */
+export function parseGatewayDetectedSnapshot(raw: Record<string, unknown> | undefined): GatewayModelDetected {
 	const detected: GatewayModelDetected = {};
+	if (!raw) return detected;
 	if (typeof raw.vision === "boolean") detected.vision = raw.vision;
 	if (typeof raw.webSearch === "boolean") detected.webSearch = raw.webSearch;
 	if (typeof raw.reasoning === "boolean") detected.reasoning = raw.reasoning;
-	const contextWindow = positiveInteger(raw.contextWindow);
+	const contextWindow = positiveSafeInteger(raw.contextWindow);
 	if (contextWindow) detected.contextWindow = contextWindow;
-	const maxTokens = positiveInteger(raw.maxTokens);
+	const maxTokens = positiveSafeInteger(raw.maxTokens);
 	if (maxTokens) detected.maxTokens = maxTokens;
 	const mode = nonEmptyString(raw.mode);
 	if (mode) detected.mode = mode.toLowerCase();
@@ -291,6 +371,9 @@ function parseDetected(raw: Record<string, unknown>): GatewayModelDetected {
 		detected.effortCeiling = raw.effortCeiling as GatewayEffortIntensity;
 	}
 	if (typeof raw.adaptiveThinking === "boolean") detected.adaptiveThinking = raw.adaptiveThinking;
+	if (typeof raw.promptCaching === "boolean") detected.promptCaching = raw.promptCaching;
+	const cost = parseGatewayModelCost(raw.cost);
+	if (cost) detected.cost = cost;
 	return detected;
 }
 
@@ -323,7 +406,7 @@ function parseRoomModels(raw: unknown): { models: GatewayRoomModel[]; error?: st
 			if (contextWindow) model.contextWindow = contextWindow;
 			const maxTokens = positiveInteger(entry.maxTokens);
 			if (maxTokens) model.maxTokens = maxTokens;
-			model.detected = parseDetected(entry.detected);
+			model.detected = parseGatewayDetectedSnapshot(entry.detected);
 		} else {
 			// An entry from before detection existed. Everything it saved,
 			// including what it saved by leaving a field out, was the whole truth
@@ -375,7 +458,7 @@ function readLegacyGateway(legacyPolicyPath: string): { gateway?: OpenAiCompatib
 	if (!maintenanceModel) return { error: "OpenAI-compatible gateway policy is missing maintenanceModel." };
 	const { models, error } = parseRoomModels(raw.roomModels);
 	if (error) return { error: `OpenAI-compatible gateway policy ${error}` };
-	const maintenanceModelDetected = isObject(raw.maintenanceModelDetected) ? parseDetected(raw.maintenanceModelDetected) : undefined;
+	const maintenanceModelDetected = isObject(raw.maintenanceModelDetected) ? parseGatewayDetectedSnapshot(raw.maintenanceModelDetected) : undefined;
 	return {
 		gateway: {
 			id: OPENAI_COMPATIBLE_AI_PROFILE_ID,
@@ -404,7 +487,7 @@ function parseGatewayEntry(raw: unknown, index: number): { gateway?: OpenAiCompa
 	if (!maintenanceModel) return { error: `gateways[${index}].maintenanceModel is required.` };
 	const { models, error } = parseRoomModels(raw.roomModels);
 	if (error) return { error: `gateways[${index}] ${error}` };
-	const maintenanceModelDetected = isObject(raw.maintenanceModelDetected) ? parseDetected(raw.maintenanceModelDetected) : undefined;
+	const maintenanceModelDetected = isObject(raw.maintenanceModelDetected) ? parseGatewayDetectedSnapshot(raw.maintenanceModelDetected) : undefined;
 	return {
 		gateway: {
 			id,
