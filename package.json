@@ -138,6 +138,7 @@
   "optionalDependencies": {
     "@mariozechner/clipboard": "^0.3.5",
     "@napi-rs/canvas": "^0.1.81",
+    "sherpa-onnx-node": "^1.13.7",
     "koffi": "^2.9.0"
   },
   "repository": {

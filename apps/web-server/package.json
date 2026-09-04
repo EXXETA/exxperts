@@ -71,6 +71,7 @@
     "smoke:structural-review-discussion": "tsx scripts/structural-review-discussion-smoke.ts",
     "smoke:artifact-export": "tsx scripts/artifact-export-smoke.ts",
     "smoke:artifact-route": "tsx scripts/artifact-route-smoke.ts",
+    "smoke:voice": "tsx scripts/voice-smoke.ts",
     "smoke:delegate-task": "tsx scripts/delegate-task-smoke.ts",
     "smoke:specialist-handoff": "tsx scripts/specialist-handoff-smoke.ts",
     "smoke:specialist-runtime": "tsx scripts/specialist-runtime-smoke.ts",
@@ -94,7 +95,8 @@
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
   },
   "optionalDependencies": {
-    "@napi-rs/canvas": "^0.1.81"
+    "@napi-rs/canvas": "^0.1.81",
+    "sherpa-onnx-node": "^1.13.7"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

@@ -21,6 +21,7 @@ import { useRemoteClientContext } from "./remote-client-context";
 import { RemoteAccessPage } from "./components/remote-access-page";
 import { ConnectorsPage } from "./components/ConnectorsPage";
 import { WebSearchSettingsSection } from "./components/web-search-settings-section";
+import { VoiceSettingsSection } from "./components/voice-settings-section";
 import { SkillsPage } from "./components/SkillsPage";
 import { Preview } from "./components/Preview";
 import { ConnectionLostBanner } from "./components/connection-lost-banner";
@@ -7271,6 +7272,16 @@ export function App() {
 					content: (
 						<div className="landing ai-setup-page settings-web-search">
 							<WebSearchSettingsSection />
+						</div>
+					),
+				},
+				{
+					id: "voice",
+					label: "Voice",
+					title: "Talk with exxperts and hear it answer",
+					content: (
+						<div className="landing ai-setup-page settings-voice">
+							<VoiceSettingsSection />
 						</div>
 					),
 				},

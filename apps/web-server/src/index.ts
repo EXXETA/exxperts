@@ -93,6 +93,7 @@ import { deleteOpenAiCompatibleGateway, findOpenAiCompatibleGateway, GATEWAY_DEF
 import { ModelCatalogUnreadableError, readCatalogProviderIds, readGatewayProviderBaseUrl, removeGatewayProviderEntry, writeGatewayProviderEntry } from "./openai-compatible-gateway-catalog.js";
 import { discoverGatewayModels, GatewayDiscoveryError, isNonChatGatewayMode, normalizeGatewayBaseUrl } from "./openai-compatible-gateway-detect.js";
 import { readWebSearchSettings, WebSearchSettingsError, WebSearchSettingsUnreadableError, writeWebSearchSettings } from "./web-search-settings.js";
+import { registerVoiceApi } from "./voice.js";
 import { acknowledgeWhatsNew, resolveWhatsNew } from "./whats-new.js";
 import { runIsolatedPersistentAgentWorker } from "./persistent-agent-worker-runtime.js";
 import { PERSISTENT_AGENTS_ROOT } from "./persistent-agents.js";
@@ -2859,6 +2860,7 @@ app.post("/api/auth/api-key", async (req, reply) => {
 	}
 });
 registerKnowledgeApi(app);
+registerVoiceApi(app);
 
 // Global compatibility state path: persistent-agent room default selection is
 // product/app state. This is not per-agent object state and must not be copied

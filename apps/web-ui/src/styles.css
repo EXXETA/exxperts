@@ -2214,6 +2214,93 @@ strong, b { font-weight: 700; }
 .web-search-searxng-status.failed {
 	color: var(--warning);
 }
+/* Settings › Voice: one card per downloadable model, then the voice controls.
+   Same grammar as the web search option cards; a downloaded model carries the
+   selected weight, since that is the state that makes voice work. */
+.voice-models {
+	display: grid;
+	gap: 10px;
+}
+.voice-model {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 12px;
+	border: 1px solid var(--border);
+	border-radius: 12px;
+	padding: 12px 14px;
+}
+.voice-model.installed {
+	border-color: var(--fg);
+}
+.voice-model-body {
+	display: grid;
+	gap: 3px;
+	min-width: 0;
+}
+.voice-model-name {
+	color: var(--fg);
+}
+.voice-model-blurb {
+	font-size: 12.5px;
+	color: var(--muted);
+	line-height: 1.5;
+}
+.voice-model-meta,
+.voice-model-status {
+	font-size: 12px;
+	color: var(--muted);
+}
+.voice-model-status.failed {
+	color: var(--fg);
+}
+.voice-model-actions {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-end;
+	gap: 6px;
+	flex-shrink: 0;
+	text-align: right;
+	max-width: 46%;
+}
+.voice-progress {
+	display: block;
+	width: 160px;
+	height: 4px;
+	border-radius: 2px;
+	background: var(--border);
+	overflow: hidden;
+}
+.voice-progress > span {
+	display: block;
+	height: 100%;
+	background: var(--fg);
+}
+.voice-controls {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 10px 18px;
+	margin-bottom: 12px;
+}
+.voice-controls.pending {
+	opacity: 0.6;
+}
+.voice-controls label {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	font-size: 13px;
+	color: var(--muted);
+}
+.voice-controls select {
+	font: inherit;
+	color: var(--fg);
+	background: var(--panel);
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	padding: 6px 8px;
+}
 .web-search-env-note {
 	font-size: 12.5px;
 	margin: 0;

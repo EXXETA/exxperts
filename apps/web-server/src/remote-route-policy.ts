@@ -229,6 +229,14 @@ const POLICY: Record<string, RemoteRouteClass> = {
 	"PUT /api/settings/web-search": "local",
 	"GET /api/web-search/searxng/setup": "read",
 	"POST /api/web-search/searxng/setup": "local",
+	// Voice: models and the speaker's settings are the computer's own; hearing a
+	// sentence is a read; the microphone stream is room interaction.
+	"GET /api/voice/settings": "read",
+	"PUT /api/voice/settings": "local",
+	"POST /api/voice/models/:id/download": "local",
+	"DELETE /api/voice/models/:id": "local",
+	"POST /api/voice/tts": "read",
+	"GET /ws/voice": "write",
 	// The what's-new window. Reading it is informative on any device, but
 	// the seen record is the computer's: a remote dismissal classified
 	// "write" would acknowledge the version machine-wide and the person at
