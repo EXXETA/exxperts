@@ -5,7 +5,7 @@
 //
 // Run: npm run smokes -- voice-conversation   (or tsx this file)
 
-import { cleanForSpeech, SentenceSplitter } from "../../web-ui/src/voice/spoken-text.js";
+import { cleanForSpeech, isEcho, looksLikeSpeech, SentenceSplitter } from "../../web-ui/src/voice/spoken-text.js";
 import { FillerPlanner, guessLanguage } from "../../web-ui/src/voice/filler.js";
 import { SPOKEN_CONVERSATION_HINT, withSpokenConversationHint } from "../src/voice.js";
 
@@ -72,6 +72,15 @@ planner.startTurn();
 assert(planner.planForTools([{ name: "memory_recall", args: {} }], "de").speak === null, "memory housekeeping is silent");
 assert(planner.planForTools([{ name: "delegate_task", args: {} }], "de").speak === "Okay, ich gebe das an einen Spezialisten weiter.", "delegation is announced in German");
 assert(planner.planForTools([{ name: "something_new", args: {} }], "en").speak === "Working on it.", "unknown tools get a generic line");
+
+// Barge-in guards: a person talking interrupts; a cough or the room's own echo does not.
+assert(!looksLikeSpeech("hm") && !looksLikeSpeech("ja okay"), "one or two short words are not speech");
+assert(looksLikeSpeech("wait, what about the fourth day"), "three real words are speech");
+const spokenByRoom = 'Okay, searching the web for "works council remote work". Found it. Two points matter for you.';
+assert(isEcho("searching the web for works council", spokenByRoom), "the room's own sentence leaking back is echo");
+assert(isEcho("two points matter for you", spokenByRoom), "a later sentence leaking back is echo too");
+assert(!isEcho("and who signs off on the fourth day", spokenByRoom), "a new question is not echo");
+assert(!isEcho("", spokenByRoom), "nothing heard is not echo");
 
 // The hint: only on spoken turns, appended, never replacing the text.
 assert(withSpokenConversationHint("hello", false) === "hello", "typed turns are untouched");

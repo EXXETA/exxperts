@@ -21,6 +21,8 @@ export class SpeechQueue {
 	private playing = false;
 	private stopped = false;
 	private generation = 0;
+	/** The last few sentences that started playing, for the echo guard. */
+	private recent: string[] = [];
 
 	constructor(private readonly hooks: { onStateChange(speaking: boolean): void; onError(failure: SpeechFailure): void }) {
 		// Created inside the user's click, so the graph is unlocked on every platform.
@@ -38,9 +40,12 @@ export class SpeechQueue {
 		if (!this.playing) void this.pump();
 	}
 
-	/** Drop everything, now. Used when the conversation ends. */
-	stop(): void {
-		this.stopped = true;
+	get recentlySpoken(): string {
+		return this.recent.join(" ");
+	}
+
+	/** Fall silent now and forget what was queued; the conversation goes on. */
+	clear(): void {
 		this.generation++;
 		this.items = [];
 		try { this.current?.stop(); } catch {}
@@ -49,6 +54,12 @@ export class SpeechQueue {
 			this.playing = false;
 			this.hooks.onStateChange(false);
 		}
+	}
+
+	/** Drop everything, now. Used when the conversation ends. */
+	stop(): void {
+		this.stopped = true;
+		this.clear();
 		void this.context.close().catch(() => {});
 	}
 
@@ -88,6 +99,7 @@ export class SpeechQueue {
 			if (generation !== this.generation) return;
 			this.items.shift();
 			this.prefetch();
+			this.recent = [...this.recent.slice(-2), item.text];
 			await this.play(buffer);
 		}
 		if (generation === this.generation) {

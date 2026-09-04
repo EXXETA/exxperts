@@ -89,3 +89,23 @@ export class SentenceSplitter {
 		return cut;
 	}
 }
+
+const wordsOf = (text: string): string[] => text.toLowerCase().split(/[^a-zäöüß0-9]+/).filter((word) => word.length >= 3);
+
+/** Three real words or more: a person talking, not a cough, a stray partial or a single "hm". */
+export function looksLikeSpeech(partial: string): boolean {
+	return wordsOf(partial).length >= 3;
+}
+
+/**
+ * Whether a partial is mostly the room's own recent words coming back through
+ * the microphone. Echo cancellation catches nearly all of it; this catches the
+ * rest, so the room does not interrupt itself.
+ */
+export function isEcho(partial: string, recentlySpoken: string): boolean {
+	const words = wordsOf(partial);
+	if (words.length === 0) return false;
+	const spoken = new Set(wordsOf(recentlySpoken));
+	const hits = words.filter((word) => spoken.has(word)).length;
+	return hits / words.length >= 0.6;
+}

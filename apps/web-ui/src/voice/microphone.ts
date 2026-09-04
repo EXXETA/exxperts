@@ -9,8 +9,6 @@
 export type MicrophoneFailure = { code: string; message: string };
 
 export type Microphone = {
-	/** Stop sending frames without closing anything; used while the room speaks. */
-	mute(on: boolean): void;
 	close(): void;
 };
 
@@ -51,11 +49,10 @@ export async function openMicrophone(hooks: {
 	const socket = new WebSocket(`${scheme}://${location.host}/ws/voice?language=${encodeURIComponent(hooks.language)}`);
 	socket.binaryType = "arraybuffer";
 	let ready = false;
-	let muted = false;
 	let closed = false;
 
 	capture.port.onmessage = (event: MessageEvent<ArrayBuffer>) => {
-		if (ready && !muted && socket.readyState === WebSocket.OPEN) socket.send(event.data);
+		if (ready && socket.readyState === WebSocket.OPEN) socket.send(event.data);
 	};
 	socket.onmessage = (event) => {
 		let message: { type?: string; text?: string; code?: string; message?: string };
@@ -72,7 +69,6 @@ export async function openMicrophone(hooks: {
 	};
 
 	return {
-		mute(on) { muted = on; },
 		close() {
 			closed = true;
 			try { socket.close(); } catch {}

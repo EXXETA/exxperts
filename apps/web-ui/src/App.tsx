@@ -2842,12 +2842,23 @@ export function App() {
 	const conversationRef = useRef<Conversation | null>(null);
 	const sendRef = useRef<(text: string) => boolean>(() => false);
 	const [voiceNotice, setVoiceNotice] = useState<{ text: string; sub?: string } | null>(null);
+	// Escape ends a conversation; Ctrl or Cmd + Shift + Space starts or ends
+	// one from anywhere in a room. The handlers live in a ref so one listener
+	// serves the whole session.
+	const conversationActionsRef = useRef<{ start: () => void; end: () => void }>({ start: () => {}, end: () => {} });
 	useEffect(() => {
-		if (!conversation) return;
-		const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") endConversation(); };
+		const onKey = (event: KeyboardEvent) => {
+			const active = conversationRef.current !== null;
+			if (event.key === "Escape" && active) { conversationActionsRef.current.end(); return; }
+			if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.code === "Space") {
+				event.preventDefault();
+				if (active) conversationActionsRef.current.end();
+				else if (persistentChatRef.current) conversationActionsRef.current.start();
+			}
+		};
 		window.addEventListener("keydown", onKey);
 		return () => window.removeEventListener("keydown", onKey);
-	}, [conversation !== null]);
+	}, []);
 	useEffect(() => {
 		if (!voiceNotice) return;
 		const timer = window.setTimeout(() => setVoiceNotice(null), 8000);
@@ -5299,6 +5310,8 @@ export function App() {
 		if (conversationRef.current) return;
 		const controller = new Conversation({
 			send: (text) => sendRef.current(text),
+			// Only a running turn can be stopped; Stop on an idle room would wait for an end that never comes.
+			interrupt: () => { if (busyRef.current) void abortCurrentTurn(); },
 			onState: setConversation,
 			onEnd: (failure) => {
 				if (conversationRef.current === controller) conversationRef.current = null;
@@ -5313,6 +5326,7 @@ export function App() {
 		setVoiceNotice(null);
 		void controller.start();
 	}
+	conversationActionsRef.current = { start: startConversation, end: endConversation };
 
 	// The composer @-mention popover (Consult MR-3) resolves a leading mention of
 	// a known room and hands off here instead of the normal send. MR-4 wires it to
@@ -7612,7 +7626,7 @@ export function App() {
 							<button
 								className="icon-btn icon-btn-square composer-voice-btn"
 								aria-label="Start a conversation"
-								title="Talk with this room. What you say is transcribed and the answer is spoken, both on this computer. End with Escape."
+								title="Talk with this room. What you say is transcribed and the answer is spoken, both on this computer. Talk over it to interrupt. Escape ends; Ctrl or Cmd + Shift + Space starts and ends."
 								disabled={!connectedForChrome}
 								onClick={startConversation}
 							><WaveformIcon /></button>

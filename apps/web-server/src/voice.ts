@@ -364,9 +364,10 @@ async function getRecognizer(): Promise<Loaded> {
 				debug: false,
 			},
 			enableEndpoint: true,
-			// A sentence ends after 1.2 s of silence following speech; 2.4 s of
-			// silence with nothing said resets quietly; 20 s of talk is cut anyway.
-			rule1MinTrailingSilence: 2.4,
+			// A sentence ends after 1.2 s of silence following speech; 20 s of talk
+			// is cut anyway. Silence with nothing said is not an endpoint worth
+			// acting on (see pump below), so rule 1 is kept out of the way.
+			rule1MinTrailingSilence: 10,
 			rule2MinTrailingSilence: 1.2,
 			rule3MinUtteranceLength: 20,
 		});
@@ -446,9 +447,14 @@ export async function createRecognitionSession(language: VoiceLanguage, onEvent:
 		while (rec.isReady(stream)) rec.decode(stream);
 		const text = String(rec.getResult(stream).text ?? "").trim();
 		if (rec.isEndpoint(stream)) {
-			if (text) onEvent({ type: "final", text });
-			rec.reset(stream);
-			last = "";
+			// Only a sentence resets the stream. Resetting on silence alone threw
+			// away whatever audio was in flight, which was the first words of the
+			// sentence that had just begun after a pause between turns.
+			if (text) {
+				onEvent({ type: "final", text });
+				rec.reset(stream);
+				last = "";
+			}
 			return;
 		}
 		if (text !== last) {
