@@ -2,6 +2,7 @@ import { memo, useCallback, useEffect, useId, useRef, useState } from "react";
 import type { ChatItem } from "../types";
 import { MarkdownRenderer, looksLikeMarkdown, unwrapOuterMarkdownFence } from "./Markdown";
 import { artifactBasename, artifactKindLabel, isSvgArtifact, taskArtifactUrl } from "../task-stream";
+import { GENERIC_TOOL_VIEWS, domainOf } from "../tool-views";
 
 // Copy a message's text to the clipboard. The button flips to a checkmark for
 // a moment so the click is acknowledged without a toast. On assistant replies
@@ -54,14 +55,6 @@ function utf8ByteLength(value: string): number {
 	return new TextEncoder().encode(value).length;
 }
 
-function domainOf(url: string): string {
-	try {
-		return new URL(url).hostname.replace(/^www\./, "");
-	} catch {
-		return "";
-	}
-}
-
 /**
  * The `mcp` proxy tool routes every connector interaction through one tool,
  * so the raw call reads as "mcp {json}". Surface what actually happened
@@ -86,29 +79,6 @@ function mcpChipView(args: any): { name: string; summary: string } {
 	if (a.server) return { name: "🔌 List connector tools", summary: String(a.server) };
 	return { name: "🔌 Connector status", summary: "" };
 }
-
-/**
- * Human chip labels for the remaining tools, matching the web_search /
- * fetch_url / mcp treatment: an emoji plus what the tool is doing in user
- * terms, never the internal tool name. Running gets the in-flight form; done
- * and error get the finished form (the status icon carries the outcome).
- */
-const GENERIC_TOOL_VIEWS: Record<string, { icon: string; running: string; done: string }> = {
-	bash: { icon: "⌨️", running: "Running command", done: "Ran command" },
-	read: { icon: "📄", running: "Reading file", done: "Read file" },
-	write: { icon: "✏️", running: "Writing file", done: "Wrote file" },
-	edit: { icon: "✏️", running: "Editing file", done: "Edited file" },
-	ls: { icon: "📁", running: "Listing files", done: "Listed files" },
-	find: { icon: "📁", running: "Finding files", done: "Found files" },
-	grep: { icon: "🔎", running: "Searching files", done: "Searched files" },
-	write_markdown_file: { icon: "📝", running: "Writing document", done: "Wrote document" },
-	read_spreadsheet: { icon: "📊", running: "Reading spreadsheet", done: "Read spreadsheet" },
-	kb_search: { icon: "📚", running: "Searching knowledge base", done: "Searched knowledge base" },
-	artifact_list: { icon: "🗂️", running: "Listing artifacts", done: "Listed artifacts" },
-	artifact_read: { icon: "🗂️", running: "Reading artifact", done: "Read artifact" },
-	artifact_write: { icon: "🗂️", running: "Writing artifact", done: "Wrote artifact" },
-	artifact_write_html_deck: { icon: "🗂️", running: "Building deck", done: "Built deck" },
-};
 
 function genericChipName(name: string, status: ToolChatItem["status"]): string {
 	const view = GENERIC_TOOL_VIEWS[name];

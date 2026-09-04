@@ -13,6 +13,10 @@ export default defineConfig({
 		__APP_VERSION__: JSON.stringify(rootPackage.version ?? "unknown"),
 	},
 	build: {
+		// The audio worklet must stay a file under /assets: it is loaded by URL
+		// into the audio thread, and the page's script policy allows only its
+		// own origin, so the default inlining of small assets would break it.
+		assetsInlineLimit: (filePath) => (filePath.endsWith("pcm-worklet.js") ? false : undefined),
 		rollupOptions: {
 			input: {
 				app: fileURLToPath(new URL("./index.html", import.meta.url)),

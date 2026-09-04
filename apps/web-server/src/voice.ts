@@ -488,6 +488,24 @@ function normalizeLanguage(value: unknown): VoiceLanguage {
 	return text === "de" || text === "en" ? text : "auto";
 }
 
+// ── Spoken turns ────────────────────────────────────────────────────────────
+
+/**
+ * One line for a turn the user spoke rather than typed. It asks for prose a
+ * voice can read, nothing about narrating steps: the app narrates from the
+ * tool chips on its own, so the model's message stays the answer and nothing
+ * else. Appended per turn rather than in the system prompt, because the
+ * runtime bakes the system prompt at load and a session-level change would
+ * outlive the conversation. The client renders and saves the text it sent,
+ * so this never appears in the room.
+ */
+export const SPOKEN_CONVERSATION_HINT =
+	"[Spoken conversation: the user is listening, not reading. Answer in plain spoken prose, concise, in the user's language; no headings, tables or lists unless asked for a document.]";
+
+export function withSpokenConversationHint(text: string, spoken: boolean): string {
+	return spoken ? `${text}\n\n${SPOKEN_CONVERSATION_HINT}` : text;
+}
+
 // ── Routes ──────────────────────────────────────────────────────────────────
 
 /** The routes below, for the remote policy coverage smoke. */

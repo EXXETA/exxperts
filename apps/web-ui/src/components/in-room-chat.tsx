@@ -87,6 +87,8 @@ export interface InRoomChatShellViewProps {
 	/** Taste pass: a message's attachment chip opens that file in the viewer, like its Files row. */
 	attachmentAccess?: MessageAttachmentAccess;
 	aboveComposerSlot?: ReactNode;
+	/** Conversation mode: rendered in the composer's place while it is on; the text field returns when it ends. */
+	composerReplacement?: ReactNode;
 }
 
 function fmtTok(n: number): string {
@@ -625,6 +627,7 @@ export function InRoomChatShellView({
 	onOpenTaskArtifact,
 	attachmentAccess,
 	aboveComposerSlot,
+	composerReplacement,
 }: InRoomChatShellViewProps) {
 	const messagesElRef = useRef<HTMLDivElement | null>(null);
 	const dockElRef = useRef<HTMLDivElement | null>(null);
@@ -792,6 +795,7 @@ export function InRoomChatShellView({
 					<div className="composer">
 						{composerOverlaySlot}
 						<div className={composerLayoutClass}>
+							{composerReplacement ?? (
 							<ComposerInput
 								onSend={onSend}
 								onStop={onStop}
@@ -834,6 +838,7 @@ export function InRoomChatShellView({
 								stagingSlot={composerStagingSlot}
 								allowEmptySend={composerAllowEmptySend}
 							/>
+							)}
 						</div>
 					</div>
 				</main>

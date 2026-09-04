@@ -72,6 +72,7 @@
     "smoke:artifact-export": "tsx scripts/artifact-export-smoke.ts",
     "smoke:artifact-route": "tsx scripts/artifact-route-smoke.ts",
     "smoke:voice": "tsx scripts/voice-smoke.ts",
+    "smoke:voice-conversation": "tsx scripts/voice-conversation-smoke.ts",
     "smoke:delegate-task": "tsx scripts/delegate-task-smoke.ts",
     "smoke:specialist-handoff": "tsx scripts/specialist-handoff-smoke.ts",
     "smoke:specialist-runtime": "tsx scripts/specialist-runtime-smoke.ts",

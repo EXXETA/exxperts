@@ -42,6 +42,9 @@ mac:
   category: public.app-category.productivity
   icon: build/icon.icns
   identity: null
+  # Conversation mode: macOS shows this the first time a room asks to listen.
+  extendInfo:
+    NSMicrophoneUsageDescription: exxperts listens only while you hold a conversation with a room. Speech is transcribed on this computer and never leaves it.
   target:
     - target: dmg
       arch: [arm64]

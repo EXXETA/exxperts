@@ -2214,6 +2214,54 @@ strong, b { font-weight: 700; }
 .web-search-searxng-status.failed {
 	color: var(--warning);
 }
+/* Conversation mode: the bar that takes the text field's place while it is
+   on. Same box as the composer; a ring says what the room is doing. */
+.composer-box.conversation-bar {
+	flex-direction: row;
+	align-items: center;
+	gap: 12px;
+	min-height: 58px;
+}
+.conversation-ring {
+	flex: 0 0 auto;
+	width: 18px;
+	height: 18px;
+	border-radius: 50%;
+	border: 2px solid var(--fg);
+	box-sizing: border-box;
+}
+.conversation-bar.starting .conversation-ring { opacity: 0.4; }
+.conversation-bar.listening .conversation-ring { animation: conversation-pulse 1.6s ease-in-out infinite; }
+.conversation-bar.working .conversation-ring { border-style: dashed; animation: conversation-spin 2.4s linear infinite; }
+.conversation-bar.speaking .conversation-ring { background: var(--fg); animation: conversation-pulse 0.9s ease-in-out infinite; }
+@keyframes conversation-pulse {
+	0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--fg) 35%, transparent); }
+	50% { box-shadow: 0 0 0 7px color-mix(in srgb, var(--fg) 0%, transparent); }
+}
+@keyframes conversation-spin { to { transform: rotate(360deg); } }
+.conversation-status {
+	flex: 0 0 auto;
+	min-width: 84px;
+	font-size: 12px;
+	font-weight: 700;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+	color: var(--muted);
+}
+.conversation-partial {
+	flex: 1 1 auto;
+	min-width: 0;
+	color: var(--fg);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.conversation-hint { color: var(--muted); }
+.conversation-end { flex: 0 0 auto; }
+@media (prefers-reduced-motion: reduce) {
+	.conversation-ring { animation: none !important; }
+}
+
 /* Settings › Voice: one card per downloadable model, then the voice controls.
    Same grammar as the web search option cards; a downloaded model carries the
    selected weight, since that is the state that makes voice work. */

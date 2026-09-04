@@ -42,7 +42,9 @@ import { ConsultDock } from "./components/delegation-card";
 import { TaskRunView } from "./components/task-run-view";
 import { ArtifactViewer } from "./components/ArtifactViewer";
 import { EffortControl } from "./components/EffortControl";
-import { ChevronDownIcon, GearIcon, PaperclipIcon, TrashIcon } from "./components/icons";
+import { ChevronDownIcon, GearIcon, PaperclipIcon, TrashIcon, WaveformIcon } from "./components/icons";
+import { ConversationBar } from "./components/ConversationBar";
+import { Conversation, type ConversationState } from "./voice/conversation";
 // The handoff grammar + queue helpers are the ONE shared source of truth, imported
 // straight from the server workspace's pure module (no node/server deps; vite
 // bundles it) so transfer here and the checkpoint formatter there agree exactly.
@@ -2772,7 +2774,8 @@ export function App() {
 	};
 	// A remote device never sees the Remote access section: the server refuses
 	// the admin routes there regardless.
-	const remoteClient = useRemoteClientContext().remote;
+	const remoteClientContext = useRemoteClientContext();
+	const remoteClient = remoteClientContext.remote;
 	// "system" follows the OS setting via prefers-color-scheme. The old
 	// "exxperts.theme" key is read as a fallback so an explicit pre-appearance
 	// choice of light/dark survives the rename; users who never chose follow
@@ -2831,6 +2834,25 @@ export function App() {
 	// this so it never claims "Reconnecting" while nothing is trying.
 	const [roomReconnectState, setRoomReconnectState] = useState<"idle" | "reconnecting" | "failed">("idle");
 	const [busy, setBusy] = useState(false);
+	// Conversation mode (voice). The controller lives in a ref because the
+	// websocket handler feeds it text and tool events; the state is what the
+	// bar draws in the composer's place. A failure ends the mode and shows one
+	// toast; a missing model also opens the Voice tab, where the download is.
+	const [conversation, setConversation] = useState<ConversationState | null>(null);
+	const conversationRef = useRef<Conversation | null>(null);
+	const sendRef = useRef<(text: string) => boolean>(() => false);
+	const [voiceNotice, setVoiceNotice] = useState<{ text: string; sub?: string } | null>(null);
+	useEffect(() => {
+		if (!conversation) return;
+		const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") endConversation(); };
+		window.addEventListener("keydown", onKey);
+		return () => window.removeEventListener("keydown", onKey);
+	}, [conversation !== null]);
+	useEffect(() => {
+		if (!voiceNotice) return;
+		const timer = window.setTimeout(() => setVoiceNotice(null), 8000);
+		return () => window.clearTimeout(timer);
+	}, [voiceNotice]);
 	const [turnCancelling, setTurnCancelling] = useState(false);
 	const [turnInterruptedNote, setTurnInterruptedNote] = useState<string | null>(null);
 	const [sessionVersion, setSessionVersion] = useState(0);
@@ -3768,6 +3790,14 @@ export function App() {
 		setPersistentAgentStatus((status) => status?.id === agentId ? { ...status, runtime } : status);
 	}
 
+
+	// A conversation ends with the room it started in: switching or leaving
+	// closes the microphone and stops speech; the room's text stays as it is.
+	useEffect(() => () => {
+		conversationRef.current?.end();
+		conversationRef.current = null;
+		setConversation(null);
+	}, [conversationId]);
 
 	useEffect(() => {
 		if (persistTimerRef.current) window.clearTimeout(persistTimerRef.current);
@@ -4922,11 +4952,13 @@ export function App() {
 		}
 
 		if (ev.type === "message_update" && ev.assistantMessageEvent?.type === "text_delta") {
+			conversationRef.current?.onTurnText(String(ev.assistantMessageEvent.delta ?? ""));
 			dispatchStream({ type: "delta", text: ev.assistantMessageEvent.delta ?? "", now });
 			return;
 		}
 
 		if (ev.type === "message_update" && ev.assistantMessageEvent?.type === "text_end") {
+			conversationRef.current?.onTurnTextEnd();
 			dispatchStream({ type: "text_end", blockText: extractAssistantTextFromUpdate(ev), now });
 			return;
 		}
@@ -5005,6 +5037,7 @@ export function App() {
 			if (Array.isArray(content)) {
 				const toolCalls = content.filter((c) => c?.type === "toolCall");
 				if (toolCalls.length) {
+					conversationRef.current?.onTurnTools(toolCalls.map((c) => ({ name: String(c.name ?? ""), args: c.arguments ?? c.args ?? {} })));
 					const visibleAdditions: ChatItem[] = [];
 					for (const c of toolCalls) {
 						const toolId = c.id ?? c.toolCallId;
@@ -5063,6 +5096,7 @@ export function App() {
 		if (ev.type === "agent_end") {
 			setBusy(false);
 			busyRef.current = false;
+			conversationRef.current?.onTurnEnd();
 			if (turnCancellingRef.current) {
 				markCurrentAssistantInterrupted(turnInterruptedNoteRef.current ?? "Response interrupted.");
 				setTurnCancelling(false);
@@ -5237,7 +5271,9 @@ export function App() {
 		// is sticky on its own and applies the room's level at bind and before
 		// every turn; the composer's only job is to say when the user CHOOSES,
 		// which the effort frame does.
-		ws.send(JSON.stringify({ type: "prompt", text: wireText }));
+		// Spoken turns carry a flag so the server can ask for spoken prose; the
+		// hint rides the wire only, never this bubble or the saved thread.
+		ws.send(JSON.stringify({ type: "prompt", text: wireText, ...(conversationRef.current ? { voice: true } : {}) }));
 		dispatchStream({ type: "new_turn", now: performance.now() });
 		outputLimitNoticeShownRef.current = false;
 		retrievalActivityIdRef.current = null;
@@ -5251,6 +5287,32 @@ export function App() {
 		busyRef.current = true;
 		return true;
 	};
+	sendRef.current = send;
+
+	function endConversation(): void {
+		conversationRef.current?.end();
+		conversationRef.current = null;
+		setConversation(null);
+	}
+
+	function startConversation(): void {
+		if (conversationRef.current) return;
+		const controller = new Conversation({
+			send: (text) => sendRef.current(text),
+			onState: setConversation,
+			onEnd: (failure) => {
+				if (conversationRef.current === controller) conversationRef.current = null;
+				setConversation(null);
+				if (!failure) return;
+				const wantsModel = failure.code === "model_missing" || failure.code === "voice_unavailable";
+				setVoiceNotice({ text: failure.message, sub: failure.code === "model_missing" ? "Download it under Settings › Voice, then try again." : undefined });
+				if (wantsModel) openSettings("voice");
+			},
+		});
+		conversationRef.current = controller;
+		setVoiceNotice(null);
+		void controller.start();
+	}
 
 	// The composer @-mention popover (Consult MR-3) resolves a leading mention of
 	// a known room and hands off here instead of the normal send. MR-4 wires it to
@@ -7048,6 +7110,7 @@ export function App() {
 		const list: ToastView[] = [];
 		if (backgroundDoneToastView) list.push(backgroundDoneToastView);
 		if (exportNotice) list.push({ id: "export", tone: exportNotice.kind, text: exportNotice.text });
+		if (voiceNotice) list.push({ id: "voice", tone: "error", text: voiceNotice.text, ...(voiceNotice.sub ? { sub: voiceNotice.sub } : {}) });
 		if (removeNotice) {
 			list.push({
 				id: `remove:${removeNotice.taskId}`,
@@ -7089,7 +7152,7 @@ export function App() {
 			});
 		}
 		return list;
-	}, [backgroundDoneToastView, exportNotice, removeNotice, fileDeleteNotice, taskDoneToast]);
+	}, [voiceNotice, backgroundDoneToastView, exportNotice, removeNotice, fileDeleteNotice, taskDoneToast]);
 	// The chip in a message opens the file exactly as its Files row does (taste
 	// pass), so the two entry points can never drift: find the row that stands
 	// for that shelf file and take the row's own path. A ref keeps the handler
@@ -7543,9 +7606,21 @@ export function App() {
 							onQuickCheckpoint={() => void runQuickCheckpoint()}
 							onOpenFullCheckpoint={() => { setCheckpointQuickRequested(false); setCheckpointQuickBlockedReasons(null); setCheckpointPreviewOpen(true); }}
 						/>
+						{/* Conversation mode. Hidden on a viewing-only device: the
+						    microphone route is a write, so the server would refuse it. */}
+						{remoteClientContext.capability !== "read-only" && (
+							<button
+								className="icon-btn icon-btn-square composer-voice-btn"
+								aria-label="Start a conversation"
+								title="Talk with this room. What you say is transcribed and the answer is spoken, both on this computer. End with Escape."
+								disabled={!connectedForChrome}
+								onClick={startConversation}
+							><WaveformIcon /></button>
+						)}
 					</>
 				) : null
 			}
+			composerReplacement={conversation ? <ConversationBar state={conversation} onEnd={endConversation} /> : undefined}
 			connected={connectedForChrome}
 			reconnectState={roomReconnectState}
 			onReconnect={retryRoomReconnectNow}

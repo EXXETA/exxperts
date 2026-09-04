@@ -8,7 +8,7 @@
 import path from "node:path";
 import fs from "node:fs";
 import os from "node:os";
-import { app, BrowserWindow, dialog, Menu, nativeImage, shell, Tray } from "electron";
+import { app, BrowserWindow, dialog, Menu, nativeImage, shell, systemPreferences, Tray } from "electron";
 import { payloadVersion, PORT, probePort, SERVER_ORIGIN, ServerHandle, serverRoot, takeOverPort } from "./server";
 import { bootWindowOpen, bootWindowWasShown, closeBootWindow, setBootStatus, showBootWindow } from "./boot-window";
 import { showHealthCheck, showTextWindow } from "./health";
@@ -229,6 +229,19 @@ function createMainWindow(): BrowserWindow {
   trackWindowState(win);
   wireNavigation(win);
   wireContextMenu(win);
+  // Conversation mode asks for the microphone. Granted to the app's own page
+  // only, audio only; on macOS the request goes through the system prompt so
+  // the OS records the choice (the Info.plist usage string is what makes that
+  // prompt legal). Everything else keeps Electron's default answer.
+  win.webContents.session.setPermissionRequestHandler((_contents, permission, callback, details) => {
+    if (permission !== "media") { callback(true); return; }
+    const mediaTypes = (details as { mediaTypes?: string[] }).mediaTypes ?? [];
+    const audioOnly = mediaTypes.length > 0 && mediaTypes.every((type) => type === "audio");
+    const ours = String(details.requestingUrl ?? "").startsWith(SERVER_ORIGIN);
+    if (!audioOnly || !ours) { callback(false); return; }
+    if (process.platform === "darwin") { void systemPreferences.askForMediaAccess("microphone").then((granted) => callback(granted), () => callback(false)); return; }
+    callback(true);
+  });
   win.on("close", (event) => {
     if (!quitting && !updaterQuitting) {
       event.preventDefault();

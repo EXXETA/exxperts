@@ -93,7 +93,7 @@ import { deleteOpenAiCompatibleGateway, findOpenAiCompatibleGateway, GATEWAY_DEF
 import { ModelCatalogUnreadableError, readCatalogProviderIds, readGatewayProviderBaseUrl, removeGatewayProviderEntry, writeGatewayProviderEntry } from "./openai-compatible-gateway-catalog.js";
 import { discoverGatewayModels, GatewayDiscoveryError, isNonChatGatewayMode, normalizeGatewayBaseUrl } from "./openai-compatible-gateway-detect.js";
 import { readWebSearchSettings, WebSearchSettingsError, WebSearchSettingsUnreadableError, writeWebSearchSettings } from "./web-search-settings.js";
-import { registerVoiceApi } from "./voice.js";
+import { registerVoiceApi, withSpokenConversationHint } from "./voice.js";
 import { acknowledgeWhatsNew, resolveWhatsNew } from "./whats-new.js";
 import { runIsolatedPersistentAgentWorker } from "./persistent-agent-worker-runtime.js";
 import { PERSISTENT_AGENTS_ROOT } from "./persistent-agents.js";
@@ -7107,7 +7107,8 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 				// never let it break the turn.
 				try { clearPersistentAgentThreadPendingHandoffs(persistentAgentIdForSession, persistentConversationId); } catch (error) { app.log.warn({ err: error }, "failed to clear consult pending-transfer queue on prompt"); }
 				preparePromptDiagnosticsTurn("user");
-				await session!.prompt(withPersistentRoomRestoredLiveThreadContext(userText));
+				// A spoken turn (conversation mode) asks for spoken prose; wire only.
+				await session!.prompt(withPersistentRoomRestoredLiveThreadContext(withSpokenConversationHint(userText, msg.voice === true)));
 				// Consent dies with the answer: everything after this line (event
 				// flush, auto-summarize recovery prompt) runs tools in the same
 				// session and must never be able to auto-dispatch on this turn's
