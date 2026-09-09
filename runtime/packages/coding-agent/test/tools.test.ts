@@ -47,6 +47,8 @@ describe("Coding Agent Tools", () => {
 	afterEach(() => {
 		// Clean up test directory
 		rmSync(testDir, { recursive: true, force: true });
+		// Put spied module exports back so a spy from one test never carries its call history into the next
+		vi.restoreAllMocks();
 	});
 
 	describe("read tool", () => {
