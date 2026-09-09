@@ -85,13 +85,15 @@
     "smoke:room-shelf-migration": "tsx scripts/room-shelf-migration-smoke.ts",
     "smoke:shelf-vision": "tsx scripts/shelf-vision-smoke.ts",
     "smoke:revise-conflict-notice": "tsx scripts/revise-conflict-notice-smoke.ts",
-    "smoke:persistent-room-effort": "tsx scripts/persistent-room-effort-smoke.ts"
+    "smoke:persistent-room-effort": "tsx scripts/persistent-room-effort-smoke.ts",
+    "smoke:lifecycle-worker-truncation": "tsx scripts/lifecycle-worker-truncation-smoke.ts",
+    "smoke:skills-execution-exposure": "tsx scripts/skills-execution-exposure-smoke.ts"
   },
   "dependencies": {
     "@fastify/websocket": "^11.2.0",
     "@exxeta/exxperts-runtime": "*",
     "dotenv": "^16.4.5",
-    "fastify": "^5.8.5",
+    "fastify": "^5.12.1",
     "jszip": "^3.10.1",
     "pdfjs-dist": "5.4.394",
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"

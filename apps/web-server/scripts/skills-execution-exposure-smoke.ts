@@ -148,7 +148,11 @@ async function runTurn(agentId: string, conversationId: string): Promise<void> {
 	const deadline = Date.now() + 30_000;
 	const before = capturedToolResults.length;
 	while (Date.now() < deadline) {
-		if (capturedToolResults.length > before) {
+		// Leave only once the turn has ended on the server side: closing the
+		// socket on the first tool result races the turn's own finish, whose
+		// final write moves the room's active thread back under the next
+		// conversation's feet and its prompt is refused as not current.
+		if (capturedToolResults.length > before && frames.some((frame) => frame?.type === "event" && frame?.event?.type === "agent_end")) {
 			try { socket.close(); } catch {}
 			return;
 		}
@@ -156,7 +160,7 @@ async function runTurn(agentId: string, conversationId: string): Promise<void> {
 		if (errors.length > 0) throw new Error(`turn errored before the tool round-trip: ${JSON.stringify(errors[0]).slice(0, 400)}`);
 		await new Promise((resolve) => setTimeout(resolve, 100));
 	}
-	throw new Error(`turn did not complete a tool round-trip; frame types: ${frames.map((f) => f?.type).join(", ")}`);
+	throw new Error(`turn did not complete a tool round-trip and end; frame types: ${frames.map((f) => f?.type).join(", ")}`);
 }
 
 let server: ChildProcessWithoutNullStreams | undefined;

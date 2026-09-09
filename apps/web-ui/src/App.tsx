@@ -2808,6 +2808,19 @@ function isUnappliableProposalMessage(message: string): boolean {
 	return isStaleMaintenanceMessage(message) || isBudgetStaleMessage(message) || /token growth exceeds|hard limit|> 5%/i.test(message);
 }
 
+// Provider wording for a rejected or missing credential. Applied only to a
+// worker failure's own detail, never to arbitrary messages, so "token limit"
+// or a room called "oauth" cannot trip it.
+function isMaintenanceSignInFailure(detail: string): boolean {
+	return /authentication_error|permission_error|unauthori[sz]ed|\b40[13]\b|api[ -]?key|oauth|token (?:has |is )?(?:expired|invalid|revoked)|invalid[_ ]token|not (?:logged|signed) in|credential/i.test(detail);
+}
+
+// First line only, capped: a provider error can be a whole JSON body.
+function shortenWorkerFailureDetail(detail: string): string {
+	const line = detail.split("\n")[0].trim();
+	return line.length > 160 ? `${line.slice(0, 157)}…` : line;
+}
+
 // Request-level rejections and worker refusals used to reach the screen as
 // the server's own words — field names ("assessmentHandoff.text is too
 // large"), agent ids, token counts. Every one of them now has a sentence that
@@ -2831,6 +2844,18 @@ function formatMaintenanceRequestError(message: string): string | null {
 	if (/Request failed \(413\)|FST_ERR_CTP_BODY_TOO_LARGE|body is too large/i.test(message)) return "The request was too large for the server to accept. No memory was updated. Try again with a shorter discussion, or draft from the assessment alone.";
 	const httpStatus = /Request failed \((\d+)\)/.exec(message);
 	if (httpStatus) return `The server could not complete this step (HTTP ${httpStatus[1]}). No memory was updated. Try again in a moment.`;
+	// A worker turn that ended in the session's own error (F1). The sign-in
+	// class gets the one remedy that helps; anything else keeps its detail so a
+	// transient provider failure and a setup problem stay distinguishable.
+	// Before the worker surfaced this, every such failure read "empty reply".
+	const workerFailed = /^.+? failed: ([\s\S]+)$/.exec(message);
+	const noApiKey = /^No API key found for/i.test(message);
+	if (workerFailed || noApiKey) {
+		const detail = shortenWorkerFailureDetail(workerFailed?.[1] ?? message);
+		if (noApiKey || isMaintenanceSignInFailure(detail)) return "The maintenance model's sign-in is missing or no longer valid. No memory was updated. Sign in again in AI setup, then run this step again.";
+		return `The maintenance model could not respond (${detail}). No memory was updated. Try again; if it repeats, check the model and its sign-in in AI setup.`;
+	}
+	if (/was aborted before it answered/i.test(message)) return "This step was stopped before the maintenance model answered. No memory was updated. Run it again.";
 	if (/produced no text/i.test(message)) return "The maintenance model returned an empty reply. No memory was updated. Try again.";
 	if (/model not found/i.test(message)) return "The maintenance model set in the AI profile is not available. No memory was updated. Check AI setup.";
 	if (/was cut off at the model's output limit|too large to rewrite in one response|came back at \d+ characters after \d+ attempt/i.test(message)) return message;

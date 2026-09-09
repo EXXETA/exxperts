@@ -141,7 +141,7 @@ Implemented for local npm tarball smoke testing only:
 - packaged static web UI serving, including logo and fonts
 - product command split: `exxperts web` for the web app, `exxperts cli` for the packaged CLI/TUI, and bare `exxperts` opening the interactive surface picker (the single installed command)
 
-Not included: Electron/Tauri, Docker, native installer, DMG/MSI, notarisation, icons, auto-update, or publishing automation.
+Not included in this local tarball flow: Electron, Docker, native installers, DMG/MSI, notarisation, icons, auto-update, or publishing automation. Those exist elsewhere: the signed desktop app with its installers and update check lives in `apps/desktop`, and publishing in the [release pipeline](release-pipeline.md).
 
 ## Prebuilt release archives (phase 0)
 

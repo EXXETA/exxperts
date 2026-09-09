@@ -105,7 +105,7 @@ One product, one shared brain (`~/.exxperts`), several doors; open whichever fit
 
 | Door | Get it | Updates | Terminal needed |
 |---|---|---|---|
-| **Desktop app** | [Download above](#download-the-app) | Check for Updates installs and restarts in one click (user-initiated; nothing polls in the background) | Never |
+| **Desktop app** | [Download above](#download-the-app) | Check for Updates installs and restarts in one click; the app also asks the GitHub releases feed for the newest version at launch and every six hours, which only shows a notice, nothing installs by itself | Never |
 | **Browser** (`exxperts web`) | One-liner above · or *Open in Browser* from the app | Re-run the one-liner | To start it |
 | **Terminal** (`exxperts cli`) | Same install | Same | Yes |
 | **Clone & build** | `git clone` | `git pull` | Yes |

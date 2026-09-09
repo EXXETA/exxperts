@@ -2,6 +2,22 @@
 
 User-visible changes per release. Historical private/internal development notes are not part of this public-facing changelog.
 
+## 0.11.1 (2026-09-09)
+
+- Writing ordinary code that names credentials no longer trips the content policy. A source file
+  with fields like access_token or refresh_token, an assignment such as client_secret =
+  settings.clientSecret, a password read from a form, or a line that reads process.env.API_KEY
+  used to be blocked as a leaked secret and the room was told never to retry. The policy now judges
+  the value, not the name: real secret-shaped values still block, placeholders and identifiers pass.
+- When a memory step fails because the model's sign-in expired or was rejected, the message says
+  so and points at AI setup, instead of reporting an empty reply. Other model failures keep their
+  detail, and a step you stopped says it was stopped.
+- Dependency updates behind the weekly security scan: fastify, fast-uri, qs, hono, browserslist,
+  xmldom and js-yaml move past their published advisories. No behavior change intended.
+- The docs caught up with 0.11.0: the privacy notes say the desktop app checks the releases feed
+  every six hours (notice only, nothing installs by itself), the memory page explains the memory
+  budget end to end, and two new pages cover the Wallet and Workspace and Bash.
+
 ## 0.11.0 (2026-08-31)
 
 - An image copied to the clipboard pastes straight into the chat composer. A screenshot or a

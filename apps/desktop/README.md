@@ -9,11 +9,19 @@ it; only Quit stops the server).
 - `npm run smoke` / `npm run smoke:update` / `npm run smoke:packaged` are the end-to-end checks (see scripts/).
 - `npm run package` builds the distributable app; the server payload is the release archive built by `scripts/bundle-release.mjs`.
 
-Privacy: the app makes no background network calls of its own. Check for
-Updates and the Health Check contact the GitHub releases feed when you use
-them; nothing runs on a schedule. Room web searches query DuckDuckGo (or
-your local SearXNG instance when one is configured); search terms leave the
-machine only when a room actually searches.
+Privacy: one network call runs on a schedule. The app asks the GitHub
+releases feed (`api.github.com`, the latest release of this repository) for
+the newest version number when it starts and again every six hours while it
+stays open, so an app that never restarts still learns about new releases.
+The request carries no account or usage data; a newer version only shows an
+update notice, and nothing downloads or installs until you choose it. There
+is no setting to turn the check off. Check for Updates and the Health Check
+make the same request when you use them. The server the app runs also
+re-reads your saved gateways' model declarations shortly after start and
+once a day; that contacts only the gateway addresses you saved. Room web
+searches query DuckDuckGo (or your local SearXNG instance when one is
+configured); search terms leave the machine only when a room actually
+searches.
 
 Known limit of unsigned local builds: macOS refuses notification-center
 registration for ad-hoc-signed apps, so notification banners do not display

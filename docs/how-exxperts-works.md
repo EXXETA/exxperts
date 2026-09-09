@@ -87,7 +87,9 @@ survive every compression budget. The worker prompt is measured against
 the model's context window before the call; oversized transcripts are
 reduced with declared elisions (never silently truncated) or refused
 with guidance. On approval, the entry is appended, the thread closes at
-a clean boundary, and the previous memory file is archived.
+a clean boundary, and the previous memory file is archived. Remember
+warns when one more save would fill the room's Recent Context; the
+budget behavior behind that is in [`memory.md`](memory.md).
 
 ### Memorize (absorb): consolidating the buffer
 
@@ -97,7 +99,9 @@ proposes a rewritten L1b: durable material merged into Deep Memory and
 Active Items, the buffer cleared, must-keep content carried over with
 its marker. The goal is stable memory that gets **denser, not merely
 larger**. You see an assessment first, can discuss it, and approve the
-final proposal.
+final proposal. The proposal states its effect on the room's memory
+budget, and an outcome that leaves the room over budget is never
+applied without your approval ([`memory.md`](memory.md)).
 
 ### Review (structural review): tightening stable memory
 
@@ -106,6 +110,10 @@ are withheld from the worker and grafted back byte-exact). It improves
 signal density and coherence; claims keep their sources, and
 **must-keep** entries can only be removed on your explicit direction;
 any such removal is named in the proposal's warnings, never silent.
+The room's memory budget binds here: an over-budget candidate is
+drafted once more with the reasons, and what still does not fit
+returns as a disclosed partial for you to decide on
+([`memory.md`](memory.md)).
 
 ### Safety rails
 
@@ -133,14 +141,36 @@ cannot silently run on an off-profile model. Setup is described in
 
 Rooms get tools through a per-room policy rather than a global grant:
 
-- **Workspace grants**: a room can be granted bounded access to a
-  chosen folder; workspace tools operate inside that grant.
+- **Workspace**: two access modes over the same toolset. **Full
+  access** works with files like you do, in the chosen folder and
+  beyond. **Bounded workspace** carries the same Read, List, Find,
+  Search, Write and Edit tools fenced to one folder: the folder is
+  re-verified against its fingerprint on every use (a swapped or
+  redirected folder is refused), protected files (secrets, keys,
+  `.git`) stay untouchable and a custom protected list adds to the
+  built-ins rather than replacing them, and Search runs on ripgrep
+  with a guarded built-in fallback. Each tool is a toggle; whether a
+  room can change files follows from the tools you enabled, and a room
+  with no write tools and no Bash says it is read-only
+  ([`workspace-and-bash.md`](workspace-and-bash.md)).
+- **Bash**: Full access only, off by default. Each command shows an
+  approval card with the exact command before it runs; the "Bash:
+  asks" / "Bash: auto" chip in the chat header switches a room to run
+  without asking, and auto can only be enabled at the computer, never
+  from a remote device. Rooms that had Bash before the card existed
+  were switched to auto once, at upgrade, so their behavior did not
+  change; every room since starts at asks.
 - **`fetch_url`**: HTTP fetching with SSRF defenses (private-range and
   redirect protection).
 - **Web search**: built in via DuckDuckGo; local SearXNG is the reliable path for heavy use or networks where DuckDuckGo blocks automated queries ([`web-search.md`](web-search.md)).
 - **Files**: documents and outputs a room or its specialists produce,
   viewable in a sandboxed file viewer; delegated tasks a room runs
-  live in the room's Files panel, with a click-to-watch run view.
+  live in the room's Files panel, with a click-to-watch run view. PDFs
+  and Word documents are read through an isolated parser, with page
+  counts noted and offset/limit paging like any text file; a scanned
+  PDF with no text layer is called out honestly instead of returning
+  nothing. An `.xlsx` added to Files is previewed as a readable table
+  (the legacy `.xls` format stays refused).
 - **`read_skill`**: rooms read the skills enabled for them through this
   tool; skills are the sanctioned way to give rooms new instructions
   (extensions never load in rooms). The library lists skills from the
@@ -155,9 +185,11 @@ Rooms get tools through a per-room policy rather than a global grant:
 - **Schedules**: recurring background prompts with preflight checks
   and run history.
 
-Tool permissions are an advisory gate (checked and explained per call),
-not an OS sandbox; the security boundary is the localhost-only server
-and your approval gates, not process isolation.
+Tool permissions are checked and explained per call, and the bounded
+fence is enforced: a tool that is supposed to be blocked fails the
+session loudly instead of slipping through. None of it is an OS
+sandbox; the security boundary is the localhost-only server and your
+approval gates, not process isolation.
 
 Where your file goes: when you attach a file to a room, it is stored
 on your machine under that room's own folder; it is not uploaded
