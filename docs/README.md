@@ -6,9 +6,11 @@ This is the canonical index for documentation in this repository. Treat this pag
 
 - [Quickstart](quickstart.md): install, connect your AI, first room, first memory; plus backup/move and uninstall. All platforms.
 - [How Exxperts works](how-exxperts-works.md): what the product is and how the pieces fit; the right orientation read.
-- [Memory](memory.md): how room memory (Remember → Memorize → Review) and CLI memory work, what is stored where, and who approves it.
+- [Memory](memory.md): how room memory (Remember → Memorize → Review) and CLI memory work, the memory budget, what is stored where, and who approves it.
+- [Workspace and Bash](workspace-and-bash.md): the two access modes, per-tool toggles, derived read-only, the bounded fence, and Bash asks/auto with the approval card.
 - [Provider setup and AI profiles](provider-setup.md): connecting a provider: in-app sign-in for Claude / ChatGPT Plus/Pro, and the OpenAI-compatible gateway path.
 - [Web search](web-search.md): built-in DuckDuckGo backend and its limits; SearXNG setup for heavy use or blocked networks, keeping it running, and configuration reference.
+- [Wallet](wallet.md): what rooms spend, where gateway prices come from, the approximation mark and "no price on file", caching savings, and the CSV export.
 - [Security](../SECURITY.md): threat model, supported deployments, release integrity, and vulnerability reporting.
 - [MCP client support](mcp.md): MCP connectors: transports, config locations, and commands.
 

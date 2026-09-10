@@ -43,6 +43,10 @@ export type BulkDetection = {
 	effortCeiling?: "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | null;
 	/** Whether the gateway says the model picks its own effort. */
 	adaptiveThinking?: boolean | null;
+	/** Whether the gateway says the deployment honors prompt-cache markers. */
+	promptCaching?: boolean | null;
+	/** The price the gateway publishes, in USD per million tokens, or null where it publishes none. */
+	cost?: { input: number; output: number; cacheRead: number; cacheWrite: number } | null;
 };
 
 /** The parts of a model draft the bulk controls touch. */

@@ -22,6 +22,51 @@ describe("loadEntriesFromFile", () => {
 		expect(entries).toEqual([]);
 	});
 
+	it("adds a newline after an unterminated valid record", () => {
+		const file = join(tempDir, "unterminated.jsonl");
+		const content =
+			'{"type":"session","id":"abc","timestamp":"2025-01-01T00:00:00Z","cwd":"/tmp"}\n' +
+			'{"type":"message","id":"1","parentId":null,"timestamp":"2025-01-01T00:00:01Z","message":{"role":"user","content":"hi","timestamp":1}}';
+		writeFileSync(file, content);
+
+		expect(loadEntriesFromFile(file)).toHaveLength(2);
+		expect(readFileSync(file, "utf8")).toBe(`${content}\n`);
+	});
+
+	it("adds a newline after an unterminated malformed final fragment", () => {
+		const file = join(tempDir, "malformed-tail.jsonl");
+		const content =
+			'{"type":"session","id":"abc","timestamp":"2025-01-01T00:00:00Z","cwd":"/tmp"}\n' + '{"type":"message"';
+		writeFileSync(file, content);
+
+		expect(loadEntriesFromFile(file)).toHaveLength(1);
+		expect(readFileSync(file, "utf8")).toBe(`${content}\n`);
+	});
+
+	it("does not modify an unterminated non-session file", () => {
+		const file = join(tempDir, "invalid.jsonl");
+		const content = '{"type":"message","id":"1"}';
+		writeFileSync(file, content);
+
+		expect(loadEntriesFromFile(file)).toEqual([]);
+		expect(readFileSync(file, "utf8")).toBe(content);
+	});
+
+	it("keeps an entry appended after resuming an unterminated file readable", () => {
+		const file = join(tempDir, "resume-unterminated.jsonl");
+		// Current-version header: open() must take the append path, not a migration rewrite.
+		const content =
+			'{"type":"session","version":3,"id":"abc","timestamp":"2025-01-01T00:00:00Z","cwd":"/tmp"}\n' +
+			'{"type":"message","id":"1","parentId":null,"timestamp":"2025-01-01T00:00:01Z","message":{"role":"user","content":"hi","timestamp":1}}';
+		writeFileSync(file, content);
+
+		const manager = SessionManager.open(file, tempDir);
+		manager.appendMessage(userMsg("second"));
+
+		const entries = loadEntriesFromFile(file);
+		expect(entries.map((entry) => entry.type)).toEqual(["session", "message", "message"]);
+	});
+
 	it("returns empty array for empty file", () => {
 		const file = join(tempDir, "empty.jsonl");
 		writeFileSync(file, "");

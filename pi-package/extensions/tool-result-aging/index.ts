@@ -67,7 +67,6 @@ export const AGING_TOOL_ALLOWLIST = [
 	"fetch_url",
 	"web_search",
 	"read_file",
-	"read_spreadsheet",
 	"search_file",
 	"grep",
 ] as const;

@@ -27,6 +27,7 @@ import type {
 	ToolCall,
 	Usage,
 } from "../types.js";
+import { CitationMarkerStreamFilter, stripCitationMarkers } from "../utils/citation-markers.js";
 import type { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { shortHash } from "../utils/hash.js";
 import { parseStreamingJson } from "../utils/json-parse.js";
@@ -289,6 +290,7 @@ export async function processResponsesStream<TApi extends Api>(
 ): Promise<void> {
 	let currentItem: ResponseReasoningItem | ResponseOutputMessage | ResponseFunctionToolCall | null = null;
 	let currentBlock: ThinkingContent | TextContent | (ToolCall & { partialJson: string }) | null = null;
+	let textFilter = new CitationMarkerStreamFilter();
 	const blocks = output.content;
 	const blockIndex = () => blocks.length - 1;
 
@@ -305,6 +307,7 @@ export async function processResponsesStream<TApi extends Api>(
 			} else if (item.type === "message") {
 				currentItem = item;
 				currentBlock = { type: "text", text: "" };
+				textFilter = new CitationMarkerStreamFilter();
 				output.content.push(currentBlock);
 				stream.push({ type: "text_start", contentIndex: blockIndex(), partial: output });
 			} else if (item.type === "function_call") {
@@ -379,14 +382,17 @@ export async function processResponsesStream<TApi extends Api>(
 				}
 				const lastPart = currentItem.content[currentItem.content.length - 1];
 				if (lastPart?.type === "output_text") {
-					currentBlock.text += event.delta;
-					lastPart.text += event.delta;
-					stream.push({
-						type: "text_delta",
-						contentIndex: blockIndex(),
-						delta: event.delta,
-						partial: output,
-					});
+					const delta = textFilter.push(event.delta);
+					if (delta.length > 0) {
+						currentBlock.text += delta;
+						lastPart.text += delta;
+						stream.push({
+							type: "text_delta",
+							contentIndex: blockIndex(),
+							delta,
+							partial: output,
+						});
+					}
 				}
 			}
 		} else if (event.type === "response.refusal.delta") {
@@ -451,7 +457,19 @@ export async function processResponsesStream<TApi extends Api>(
 				});
 				currentBlock = null;
 			} else if (item.type === "message" && currentBlock?.type === "text") {
-				currentBlock.text = item.content.map((c) => (c.type === "output_text" ? c.text : c.refusal)).join("");
+				const tail = textFilter.flush();
+				if (tail.length > 0) {
+					currentBlock.text += tail;
+					stream.push({
+						type: "text_delta",
+						contentIndex: blockIndex(),
+						delta: tail,
+						partial: output,
+					});
+				}
+				currentBlock.text = stripCitationMarkers(
+					item.content.map((c) => (c.type === "output_text" ? c.text : c.refusal)).join(""),
+				);
 				currentBlock.textSignature = encodeTextSignatureV1(item.id, item.phase ?? undefined);
 				stream.push({
 					type: "text_end",

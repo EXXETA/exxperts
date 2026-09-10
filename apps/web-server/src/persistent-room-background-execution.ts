@@ -27,6 +27,7 @@ import {
 import { buildPersistentRoomRestoredLiveThreadContext } from "./persistent-room-resume-context.js";
 import {
 	getPersistentRoomToolPolicy,
+	PERSISTENT_ROOM_SHELF_TOOL_NAMES,
 } from "./persistent-room-tool-policy.js";
 import {
 	resolvePersistentRoomEffectiveWorkspacePolicy,
@@ -390,6 +391,15 @@ function createPersistentRoomPermissionsExtension(roomId: string, workspaceToolN
 	};
 }
 
+/** Shelf tools are live-session custom tools; no shelf tool object is ever
+ * registered for a background run, so their names would sit inert in the
+ * allowlist. The mcp proxy IS registered here (room-scoped extension), so it
+ * stays. */
+export function persistentRoomBackgroundSessionToolNames(allowedToolNames: readonly string[]): string[] {
+	const shelfToolNames = new Set<string>(PERSISTENT_ROOM_SHELF_TOOL_NAMES);
+	return allowedToolNames.filter((toolName) => !shelfToolNames.has(toolName));
+}
+
 async function createPersistentRoomBackgroundSession(input: {
 	roomId: string;
 	threadId: string;
@@ -404,8 +414,12 @@ async function createPersistentRoomBackgroundSession(input: {
 	const workspaceToolNames = effectiveWorkspacePolicy.allowedToolNames;
 	const workspaceToolsEnabled = effectiveWorkspacePolicy.workspaceToolsEnabled;
 	const toolPolicy = getPersistentRoomToolPolicy(input.roomId, { workspaceToolsEnabled, workspaceToolNames, workspaceAccessMode: effectiveWorkspacePolicy.workspaceAccessMode, bashEnabled: false, bashRuntimeAllowed: false });
+	const backgroundToolNames = persistentRoomBackgroundSessionToolNames(toolPolicy.allowedToolNames);
 	const customTools = workspaceToolsEnabled && effectiveWorkspacePolicy.policy
-		? createPersistentRoomWorkspaceTools(effectiveWorkspacePolicy.policy)
+		// Same read override as the live bind: a Full access room's scheduled or
+		// detached run reads documents through the same wrapper, bound to the
+		// session cwd this run binds with.
+		? createPersistentRoomWorkspaceTools(effectiveWorkspacePolicy.policy, { localFilesReadCwd: input.cwd })
 		: [];
 	// One read for the whole run, which is also the whole binding: a background
 	// run is a single turn and finishes under the rule it started with.
@@ -449,7 +463,7 @@ async function createPersistentRoomBackgroundSession(input: {
 		modelRegistry: input.modelRegistry,
 		model: input.model,
 		...(input.prepared.rawSystemPrompt ? { rawSystemPrompt: input.prepared.rawSystemPrompt } : {}),
-		tools: toolPolicy.allowedToolNames,
+		tools: backgroundToolNames,
 		...(customTools.length > 0 ? { customTools } : {}),
 	});
 	await created.session.bindExtensions({ uiContext: createHeadlessUiContext(undefined, input.onAutoDecline) });

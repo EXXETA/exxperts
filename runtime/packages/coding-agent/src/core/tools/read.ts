@@ -8,25 +8,43 @@ import { type Static, Type } from "typebox";
 import { getReadmePath } from "../../config.js";
 import { keyHint, keyText } from "../../modes/interactive/components/keybinding-hints.js";
 import { getLanguageFromPath, highlightCode, type Theme } from "../../modes/interactive/theme/theme.js";
-import { formatDimensionNote, resizeImage } from "../../utils/image-resize.js";
+import { formatDimensionNote, imageOmittedNote, resizeImage } from "../../utils/image-resize.js";
 import { detectSupportedImageMimeTypeFromFile } from "../../utils/mime.js";
 import { formatPathRelativeToCwdOrAbsolute } from "../../utils/paths.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
 import { resolveReadPath } from "./path-utils.js";
+import { isSpreadsheetPath, MAX_SPREADSHEET_BYTES, renderSpreadsheetPreview, SpreadsheetPreviewError } from "./spreadsheet-preview.js";
 import { getTextOutput, invalidArgText, replaceTabs, shortenPath, str } from "./render-utils.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, type TruncationResult, truncateHead } from "./truncate.js";
 
 const readSchema = Type.Object({
 	path: Type.String({ description: "Path to the file to read (relative or absolute)" }),
-	offset: Type.Optional(Type.Number({ description: "Line number to start reading from (1-indexed)" })),
-	limit: Type.Optional(Type.Number({ description: "Maximum number of lines to read" })),
+	offset: Type.Optional(
+		Type.Number({
+			description: "Line number to start reading from (1-indexed). For .xlsx files: row to start the preview from (1-indexed)",
+		}),
+	),
+	limit: Type.Optional(
+		Type.Number({
+			description: "Maximum number of lines to read. For .xlsx files: rows to preview (default 30, hard cap 100)",
+		}),
+	),
+	sheet: Type.Optional(
+		Type.Union([Type.String(), Type.Number()], {
+			description: "Sheet name or 1-based sheet index to preview (.xlsx files only)",
+		}),
+	),
+	columns: Type.Optional(
+		Type.Number({ description: "Maximum columns to preview (default 12, hard cap 30) (.xlsx files only)" }),
+	),
 });
 
 export type ReadToolInput = Static<typeof readSchema>;
 
 export interface ReadToolDetails {
 	truncation?: TruncationResult;
+	spreadsheet?: Record<string, unknown>;
 }
 
 interface CompactReadClassification {
@@ -212,13 +230,19 @@ export function createReadToolDefinition(
 	return {
 		name: "read",
 		label: "read",
-		description: `Read the contents of a file. Supports text files and images (jpg, png, gif, webp). Images are sent as attachments. For text files, output is truncated to ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). Use offset/limit for large files. When you need the full file, continue with offset until complete.`,
+		description: `Read the contents of a file. Supports text files and images (jpg, png, gif, webp). Images are sent as attachments. For text files, output is truncated to ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). Use offset/limit for large files. When you need the full file, continue with offset until complete. Also supports .xlsx spreadsheets, previewed as a markdown table (default 30 rows and 12 columns of the first sheet); use sheet, offset, limit, and columns to control the previewed window.`,
 		promptSnippet: "Read file contents",
 		promptGuidelines: ["Use read to examine files instead of cat or sed."],
 		parameters: readSchema,
 		async execute(
 			_toolCallId,
-			{ path, offset, limit }: { path: string; offset?: number; limit?: number },
+			{
+				path,
+				offset,
+				limit,
+				sheet,
+				columns,
+			}: { path: string; offset?: number; limit?: number; sheet?: string | number; columns?: number },
 			signal?: AbortSignal,
 			_onUpdate?,
 			ctx?,
@@ -242,6 +266,33 @@ export function createReadToolDefinition(
 							// Check if file exists and is readable.
 							await ops.access(absolutePath);
 							if (aborted) return;
+							if (isSpreadsheetPath(absolutePath)) {
+								// Preview .xlsx workbooks as a markdown table.
+								const buffer = await ops.readFile(absolutePath);
+								if (aborted) return;
+								if (buffer.byteLength > MAX_SPREADSHEET_BYTES) {
+									throw new Error(`Workbook is too large for this tool (${MAX_SPREADSHEET_BYTES / (1024 * 1024)}MB limit).`);
+								}
+								const displayPath = formatPathRelativeToCwdOrAbsolute(absolutePath, cwd);
+								let preview: { text: string; details: Record<string, unknown> };
+								try {
+									preview = renderSpreadsheetPreview(buffer, basename(displayPath), {
+										sheet,
+										startRow: offset,
+										maxRows: limit,
+										maxColumns: columns,
+									});
+								} catch (error) {
+									if (error instanceof SpreadsheetPreviewError) throw new Error(error.message);
+									throw error;
+								}
+								signal?.removeEventListener("abort", onAbort);
+								resolve({
+									content: [{ type: "text", text: preview.text }],
+									details: { spreadsheet: { path: displayPath, ...preview.details } },
+								});
+								return;
+							}
 							const mimeType = ops.detectImageMimeType ? await ops.detectImageMimeType(absolutePath) : undefined;
 							let content: (TextContent | ImageContent)[];
 							let details: ReadToolDetails | undefined;
@@ -253,8 +304,8 @@ export function createReadToolDefinition(
 								if (autoResizeImages) {
 									// Resize image if needed before sending it back to the model.
 									const resized = await resizeImage({ type: "image", data: base64, mimeType });
-									if (!resized) {
-										let textNote = `Read image file [${mimeType}]\n[Image omitted: could not be resized below the inline image size limit.]`;
+									if ("failure" in resized) {
+										let textNote = `Read image file [${mimeType}]\n${imageOmittedNote(resized)}`;
 										if (nonVisionImageNote) textNote += `\n${nonVisionImageNote}`;
 										content = [{ type: "text", text: textNote }];
 									} else {

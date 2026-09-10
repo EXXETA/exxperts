@@ -4,7 +4,13 @@
 
 import { describe, expect, it } from "vitest";
 import { convertToPng } from "../src/utils/image-convert.js";
-import { formatDimensionNote, resizeImage } from "../src/utils/image-resize.js";
+import { formatDimensionNote, type ImageResizeFailure, type ResizedImage, resizeImage } from "../src/utils/image-resize.js";
+
+// resizeImage reports failures as a value rather than throwing; the success cases narrow here.
+function resized(result: ResizedImage | ImageResizeFailure): ResizedImage {
+	if ("failure" in result) throw new Error(`expected a resized image, got a ${result.failure} failure`);
+	return result;
+}
 
 // Small 2x2 red PNG image (base64) - generated with ImageMagick
 const TINY_PNG =
@@ -52,13 +58,13 @@ describe("resizeImage", () => {
 			{ maxWidth: 100, maxHeight: 100, maxBytes: 1024 * 1024 },
 		);
 
-		expect(result).not.toBeNull();
-		expect(result!.wasResized).toBe(false);
-		expect(result!.data).toBe(TINY_PNG);
-		expect(result!.originalWidth).toBe(2);
-		expect(result!.originalHeight).toBe(2);
-		expect(result!.width).toBe(2);
-		expect(result!.height).toBe(2);
+		const image = resized(result);
+		expect(image.wasResized).toBe(false);
+		expect(image.data).toBe(TINY_PNG);
+		expect(image.originalWidth).toBe(2);
+		expect(image.originalHeight).toBe(2);
+		expect(image.width).toBe(2);
+		expect(image.height).toBe(2);
 	});
 
 	it("should resize image exceeding dimension limits", async () => {
@@ -67,12 +73,12 @@ describe("resizeImage", () => {
 			{ maxWidth: 50, maxHeight: 50, maxBytes: 1024 * 1024 },
 		);
 
-		expect(result).not.toBeNull();
-		expect(result!.wasResized).toBe(true);
-		expect(result!.originalWidth).toBe(100);
-		expect(result!.originalHeight).toBe(100);
-		expect(result!.width).toBeLessThanOrEqual(50);
-		expect(result!.height).toBeLessThanOrEqual(50);
+		const image = resized(result);
+		expect(image.wasResized).toBe(true);
+		expect(image.originalWidth).toBe(100);
+		expect(image.originalHeight).toBe(100);
+		expect(image.width).toBeLessThanOrEqual(50);
+		expect(image.height).toBeLessThanOrEqual(50);
 	});
 
 	it("should resize image exceeding byte limit", async () => {
@@ -86,19 +92,28 @@ describe("resizeImage", () => {
 		);
 
 		// Should have tried to reduce size
-		expect(result).not.toBeNull();
-		const resultBuffer = Buffer.from(result!.data, "base64");
+		const image = resized(result);
+		const resultBuffer = Buffer.from(image.data, "base64");
 		expect(resultBuffer.length).toBeLessThan(originalSize);
-		expect(result!.data.length).toBeLessThan(LARGE_PNG_200x200.length);
+		expect(image.data.length).toBeLessThan(LARGE_PNG_200x200.length);
 	});
 
-	it("should return null when image cannot be resized below maxBytes", async () => {
+	it("should report a size failure when image cannot be resized below maxBytes", async () => {
 		const result = await resizeImage(
 			{ type: "image", data: LARGE_PNG_200x200, mimeType: "image/png" },
 			{ maxWidth: 2000, maxHeight: 2000, maxBytes: 1 },
 		);
 
-		expect(result).toBeNull();
+		expect(result).toEqual({ failure: "size" });
+	});
+
+	it("should report a decode failure for bytes that are not an image", async () => {
+		const result = await resizeImage(
+			{ type: "image", data: Buffer.from("not an image").toString("base64"), mimeType: "image/png" },
+			{ maxWidth: 2000, maxHeight: 2000, maxBytes: 1024 * 1024 },
+		);
+
+		expect(result).toEqual({ failure: "decode" });
 	});
 
 	it("should handle JPEG input", async () => {
@@ -107,10 +122,10 @@ describe("resizeImage", () => {
 			{ maxWidth: 100, maxHeight: 100, maxBytes: 1024 * 1024 },
 		);
 
-		expect(result).not.toBeNull();
-		expect(result!.wasResized).toBe(false);
-		expect(result!.originalWidth).toBe(2);
-		expect(result!.originalHeight).toBe(2);
+		const image = resized(result);
+		expect(image.wasResized).toBe(false);
+		expect(image.originalWidth).toBe(2);
+		expect(image.originalHeight).toBe(2);
 	});
 });
 

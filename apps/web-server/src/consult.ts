@@ -1,4 +1,5 @@
 import { neutralizeBlockContent } from "./consult-handoff.js";
+import { estimateTokens } from "./token-estimate.js";
 
 export const CONSULT_WORKER_TYPE = "consult-worker" as const;
 
@@ -90,10 +91,6 @@ export class ConsultPromptOverflowError extends Error {
 		this.promptEstimatedTokens = input.promptEstimatedTokens;
 		this.promptTokenBudget = input.promptTokenBudget;
 	}
-}
-
-function estimateTokens(text: string): number {
-	return Math.ceil(text.length / 4);
 }
 
 /**

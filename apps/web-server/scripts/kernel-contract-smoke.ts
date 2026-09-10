@@ -148,7 +148,7 @@ try {
 		workspaceLabel: "workspace",
 		rootCount: 1,
 		pathAccess: "local-files",
-		availableToolNames: ["read", "ls", "find", "grep", "write", "edit", "read_spreadsheet"],
+		availableToolNames: ["read", "ls", "find", "grep", "write", "edit"],
 		writeEnabled: true,
 		nativePiFilesystemToolsEnabled: true,
 	};
@@ -163,13 +163,13 @@ try {
 		workspaceLabel: "workspace",
 		rootCount: 1,
 		pathAccess: "workspace-only",
-		availableToolNames: ["ls", "find", "read", "write_markdown_file", "read_spreadsheet"],
+		availableToolNames: ["ls", "find", "grep", "read", "write", "edit"],
 		writeEnabled: true,
 		bashEnabled: false,
 		nativePiFilesystemToolsEnabled: false,
 	});
 	assert(boundedL2.includes("read works on files only; for directories use ls to list contents or find to search by name."), "bounded L2 should carry the relocated read/ls/find advice");
-	assert(!boundedL2.includes("grep"), "bounded L2 should not mention grep (the bounded bundle does not have it)");
+	assert(boundedL2.includes("Workspace tools: ls, find, grep, read, write, edit"), "bounded L2 should list the curated bundle including grep");
 
 	// 11. The assembled boot prompt carries the kernel exactly once, ahead of the constitution.
 	const agentId = "kernel-contract-smoke-room";

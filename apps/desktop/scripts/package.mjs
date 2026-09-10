@@ -160,6 +160,14 @@ if (!fs.existsSync(vendoredNode)) {
   process.exit(1);
 }
 
+// Step 2b: the bundled ripgrep for the target, fetched through the runtime's
+// tools-manager so the pinned version + SHA-256 there stay the single source
+// of truth (the script rebuilds build/tools from scratch; electron-builder
+// ships it as the "tools" extraResource).
+console.log("[package] fetching the bundled ripgrep (hash-pinned via the runtime tools-manager)...");
+execFileSync("npx", quoteForShell(["tsx", path.join(desktopRoot, "scripts", "fetch-bundled-tools.mts"), "--target", target]), { cwd: repoRoot, stdio: "inherit", shell });
+const toolsDir = path.join(buildDir, "tools");
+
 // --sign-windows preflight: every exe inside the payload is a third-party
 // binary already signed by its publisher (our own binaries — exxperts.exe and
 // the NSIS installer/uninstaller — are produced later by electron-builder),
@@ -179,9 +187,10 @@ if (signWindows) {
     }
   };
   walk(serverDir);
+  walk(toolsDir);
   if (uncovered.length > 0) {
     console.error("[package] --sign-windows: the payload carries executables with no signExts exclusion:");
-    for (const p of uncovered) console.error(`[package]   ${path.relative(serverDir, p)}`);
+    for (const p of uncovered) console.error(`[package]   ${path.relative(buildDir, p)}`);
     console.error('[package] add a "!<filename>" entry under win.signExts in electron-builder-win-signed.yml so each keeps its publisher\'s signature.');
     process.exit(1);
   }
@@ -236,14 +245,14 @@ if (!fs.existsSync(channelFile)) {
 // Cross-built output cannot be launched here; assert the layout instead.
 if (target === "win-x64") {
   const unpacked = path.join(desktopRoot, "dist-app", "win-unpacked");
-  for (const rel of ["exxperts.exe", path.join("resources", "server", "vendor", "node", "node.exe"), path.join("resources", "server", "app", "bin", "exxperts.cjs"), path.join("resources", "app.asar")]) {
+  for (const rel of ["exxperts.exe", path.join("resources", "server", "vendor", "node", "node.exe"), path.join("resources", "server", "app", "bin", "exxperts.cjs"), path.join("resources", "tools", "rg.exe"), path.join("resources", "app.asar")]) {
     const p = path.join(unpacked, rel);
     if (!fs.existsSync(p)) {
       console.error(`[package] win-unpacked is missing ${rel}`);
       process.exit(1);
     }
   }
-  console.log("[package] win-unpacked layout verified (exe, asar, payload, vendored node.exe)");
+  console.log("[package] win-unpacked layout verified (exe, asar, payload, vendored node.exe, bundled rg.exe)");
 
   // Fail closed: a --sign-windows build must never ship unsigned binaries.
   // Verify the Authenticode signature on the app exe (also the exe inside the

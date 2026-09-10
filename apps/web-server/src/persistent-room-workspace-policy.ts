@@ -3,7 +3,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
-	PERSISTENT_ROOM_MARKDOWN_WRITE_TOOL_NAME,
 	type PersistentRoomWorkspaceToolSelection,
 	normalizePersistentRoomWorkspaceToolSelectionInput,
 	normalizeStoredPersistentRoomWorkspaceToolSelection,
@@ -13,7 +12,6 @@ import {
 } from "./persistent-room-tool-policy.js";
 import { productAppStatePath, productAppStateRoot } from "../../../pi-package/product-state-paths.js";
 
-export type PersistentRoomWorkspaceMode = "read" | "write";
 export type PersistentRoomWorkspaceAccessMode = "bounded" | "localFiles";
 export type PersistentRoomWorkspaceRootSource = "manual" | "query-param" | "runtime-state" | "admin-dev";
 export type PersistentRoomForbiddenRootKind = "repo-root" | "persistent-agents-root" | "persistent-agent-root" | "exxeta-state-root";
@@ -78,7 +76,6 @@ export interface PersistentRoomCapabilityPolicyView {
 	denySegments: string[];
 	pathAccess: "workspace-only" | "local-files";
 	writeEnabled: boolean;
-	markdownWriteEnabled: boolean;
 	bashEnabled: boolean;
 	nativePiFilesystemToolsEnabled: boolean;
 }
@@ -137,8 +134,6 @@ export interface PersistentRoomWorkspacePolicyStorageOptions {
 export interface CreatePersistentRoomCapabilityPolicyInput extends PersistentRoomWorkspaceValidationContext {
 	root: string;
 	workspaceAccessMode?: PersistentRoomWorkspaceAccessMode;
-	mode?: PersistentRoomWorkspaceMode;
-	writeEnabled?: boolean;
 	toolSelection?: PersistentRoomWorkspaceToolSelection;
 	bashEnabled?: boolean;
 }
@@ -174,7 +169,6 @@ export interface PersistentRoomEffectiveWorkspacePolicy {
 	pathAccess: "workspace-only" | "local-files";
 	allowedToolNames: string[];
 	workspaceToolsEnabled: boolean;
-	markdownWriteEnabled: boolean;
 	bashEnabled: boolean;
 	nativePiFilesystemToolsEnabled: boolean;
 	capability?: PersistentRoomWorkspaceCapabilitySummary;
@@ -418,6 +412,13 @@ function normalizePersistentRoomBashEnabled(raw: unknown, workspaceAccessMode: P
 	return workspaceAccessMode === "localFiles" && raw === true;
 }
 
+/** The single source of truth for "this room can make changes": a writer tool
+ * is in the selection. Everything that reports or stores a write capability
+ * derives from this — there is no separate stored write switch. */
+export function persistentRoomWorkspaceWriterToolsEnabled(allowedToolNames: readonly string[]): boolean {
+	return allowedToolNames.includes("write") || allowedToolNames.includes("edit");
+}
+
 function normalizePersistentRoomCapabilityPolicy(raw: any, agentId: string, conversationId: string): PersistentRoomCapabilityPolicy | null {
 	if (!raw || typeof raw !== "object" || raw.schemaVersion !== 1) return null;
 	if (raw.agentId !== agentId || raw.conversationId !== conversationId) return null;
@@ -431,14 +432,14 @@ function normalizePersistentRoomCapabilityPolicy(raw: any, agentId: string, conv
 	const toolSelection = workspaceAccessMode === null ? null : normalizeStoredPersistentRoomWorkspaceToolSelection(raw.toolSelection, workspaceAccessMode);
 	if (!policyId || !createdAt || !updatedAt || workspaceAccessMode === null || toolSelection === null) return null;
 	const bashEnabled = normalizePersistentRoomBashEnabled(raw.bashEnabled, workspaceAccessMode);
-	return {
+	const policy: PersistentRoomCapabilityPolicy = {
 		schemaVersion: 1,
 		policyId,
 		agentId,
 		conversationId,
 		workspaceAccessMode,
 		roots: roots as PersistentRoomWorkspaceRootGrant[],
-		modes: { read: raw.modes?.read === true, write: raw.modes?.write === true },
+		modes: { read: raw.modes?.read === true, write: false },
 		allowedToolNames: Array.isArray(raw.allowedToolNames) ? raw.allowedToolNames.map(String).filter(Boolean) : [],
 		...(toolSelection ? { toolSelection } : {}),
 		bashEnabled,
@@ -448,6 +449,11 @@ function normalizePersistentRoomCapabilityPolicy(raw: any, agentId: string, conv
 		createdAt,
 		updatedAt,
 	};
+	// The stored write flag is ignored: write capability is derived from the
+	// record's effective tool names, using the same resolution the views use.
+	// This runs after every field that resolution reads is normalized.
+	policy.modes.write = persistentRoomWorkspaceWriterToolsEnabled(persistentRoomWorkspaceToolNamesForPolicy(policy));
+	return policy;
 }
 
 export function readPersistentRoomCapabilityPolicy(agentIdRaw: string, conversationIdRaw: string, options: PersistentRoomWorkspacePolicyStorageOptions = {}): PersistentRoomCapabilityPolicy | null {
@@ -601,7 +607,6 @@ export function createPersistentRoomCapabilityPolicy(input: CreatePersistentRoom
 	const now = (input.now ?? new Date()).toISOString();
 	const rootGrant = validatePersistentRoomWorkspaceRoot(input.root, { ...input, agentId, now: new Date(now) });
 	const workspaceAccessMode = normalizePersistentRoomWorkspaceAccessModeInput(input.workspaceAccessMode);
-	const mode = input.mode ?? "read";
 	const toolSelection = normalizePersistentRoomWorkspaceToolSelectionInput(input.toolSelection, { defaultToStandard: true, workspaceAccessMode });
 	const selectedToolNames = persistentRoomWorkspaceToolNamesForSelection(toolSelection, workspaceAccessMode);
 	const bashEnabled = normalizePersistentRoomBashEnabled(input.bashEnabled, workspaceAccessMode);
@@ -613,8 +618,8 @@ export function createPersistentRoomCapabilityPolicy(input: CreatePersistentRoom
 		workspaceAccessMode,
 		roots: [rootGrant],
 		modes: {
-			read: mode === "read" || mode === "write",
-			write: mode === "read" || mode === "write",
+			read: true,
+			write: persistentRoomWorkspaceWriterToolsEnabled(selectedToolNames),
 		},
 		allowedToolNames: selectedToolNames,
 		toolSelection,
@@ -665,8 +670,7 @@ export function updatePersistentRoomCapabilityPolicyWorkspaceSettings(policy: Pe
 export function persistentRoomCapabilityPolicyView(policy: PersistentRoomCapabilityPolicy): PersistentRoomCapabilityPolicyView {
 	const workspaceAccessMode = policy.workspaceAccessMode ?? PERSISTENT_ROOM_LEGACY_WORKSPACE_ACCESS_MODE;
 	const workspaceToolNames = persistentRoomWorkspaceToolNamesForPolicy(policy);
-	const markdownWriteEnabled = workspaceToolNames.includes("write_markdown_file");
-	const writeEnabled = workspaceAccessMode === "localFiles" ? workspaceToolNames.includes("write") : markdownWriteEnabled;
+	const writeEnabled = persistentRoomWorkspaceWriterToolsEnabled(workspaceToolNames);
 	const bashEnabled = normalizePersistentRoomBashEnabled(policy.bashEnabled, workspaceAccessMode);
 	return {
 		schemaVersion: policy.schemaVersion,
@@ -688,7 +692,6 @@ export function persistentRoomCapabilityPolicyView(policy: PersistentRoomCapabil
 		denySegments: [...policy.denySegments],
 		pathAccess: persistentRoomPathAccessForMode(workspaceAccessMode),
 		writeEnabled,
-		markdownWriteEnabled,
 		bashEnabled,
 		nativePiFilesystemToolsEnabled: persistentRoomNativePiFilesystemToolsEnabledForMode(workspaceAccessMode),
 	};
@@ -740,7 +743,7 @@ function effectiveWorkspaceCapability(policy: PersistentRoomCapabilityPolicy, al
 		rootCount: view.rootCount,
 		pathAccess: view.pathAccess,
 		availableToolNames: [...allowedToolNames],
-		writeEnabled: view.workspaceAccessMode === "localFiles" ? allowedToolNames.includes("write") : allowedToolNames.includes(PERSISTENT_ROOM_MARKDOWN_WRITE_TOOL_NAME),
+		writeEnabled: persistentRoomWorkspaceWriterToolsEnabled(allowedToolNames),
 		bashEnabled,
 		nativePiFilesystemToolsEnabled: view.nativePiFilesystemToolsEnabled,
 	};
@@ -758,7 +761,6 @@ function effectiveWorkspacePolicyFromResolution(input: {
 	const workspaceToolsEnabled = Boolean(input.policy && (allowedToolNames.length > 0 || policyBashEnabled) && input.policy.modes.read === true && workspacePolicyRootCurrentlyUsable(input.policy));
 	const effectiveAllowedToolNames = workspaceToolsEnabled ? allowedToolNames : [];
 	const effectiveBashEnabled = workspaceToolsEnabled ? policyBashEnabled : false;
-	const markdownWriteEnabled = effectiveAllowedToolNames.includes(PERSISTENT_ROOM_MARKDOWN_WRITE_TOOL_NAME);
 	const fingerprint = fingerprintEffectiveWorkspacePolicy({
 		source: input.source,
 		policy: input.policy,
@@ -777,7 +779,6 @@ function effectiveWorkspacePolicyFromResolution(input: {
 		pathAccess: persistentRoomPathAccessForMode(workspaceAccessMode),
 		allowedToolNames: effectiveAllowedToolNames,
 		workspaceToolsEnabled,
-		markdownWriteEnabled,
 		bashEnabled: effectiveBashEnabled,
 		nativePiFilesystemToolsEnabled: persistentRoomNativePiFilesystemToolsEnabledForMode(workspaceAccessMode),
 		...(input.policy && workspaceToolsEnabled ? { capability: effectiveWorkspaceCapability(input.policy, effectiveAllowedToolNames, effectiveBashEnabled) } : {}),
@@ -838,8 +839,10 @@ export function releasePersistentRoomThreadWorkspaceMirror(agentIdRaw: string, c
 
 export function persistentRoomRuntimeCwdForEffectiveWorkspacePolicy(effectivePolicy: PersistentRoomEffectiveWorkspacePolicy | null | undefined, fallbackCwd: string): string {
 	const fallback = String(fallbackCwd || "").trim() || process.cwd();
-	if (effectivePolicy?.workspaceAccessMode !== "localFiles") return fallback;
-	const root = effectivePolicy.policy?.roots[0];
+	// Bounded and Full-access rooms alike sit in their granted workspace; only
+	// a room without a usable grant falls back (bounded tools never consult the
+	// cwd, but the session claiming to run from the repo root was a lie).
+	const root = effectivePolicy?.policy?.roots[0];
 	if (!root) return fallback;
 	const rootRealpath = existingRealpath(root.realpath) ?? existingRealpath(root.path);
 	if (!rootRealpath) return fallback;

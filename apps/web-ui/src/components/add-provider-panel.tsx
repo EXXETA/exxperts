@@ -488,6 +488,11 @@ function formatContextFigure(tokens: number): string {
 	return `${tokens} context`;
 }
 
+/** A per-million price for the detected note: cents kept, sub-cent figures shown as published. */
+function formatPricePerMillion(price: number): string {
+	return `$${Number.isInteger(price * 100) ? price.toFixed(2) : String(price)}`;
+}
+
 /** One honest sentence for the adjust fold: what the gateway declared, field by field. */
 function detectedNote(detection: BulkDetection | null): string {
 	if (!detectionAnswers(detection)) return "This gateway did not say what this model can do.";
@@ -507,6 +512,12 @@ function detectedNote(detection: BulkDetection | null): string {
 	}
 	if (detection!.contextWindow != null) parts.push(`context ${detection!.contextWindow}`);
 	if (detection!.maxTokens != null) parts.push(`max output ${detection!.maxTokens}`);
+	// Only a declared yes is worth a word: silence is the usual case, and a
+	// declared no changes nothing the person could act on here.
+	if (detection!.promptCaching === true) parts.push("prompt caching");
+	// The published price is what the wallet will bill this model's turns at,
+	// so the person sees it where they approve the model.
+	if (detection!.cost != null) parts.push(`price ${formatPricePerMillion(detection!.cost.input)} in / ${formatPricePerMillion(detection!.cost.output)} out per M tokens`);
 	return `Gateway detected: ${parts.join(", ")}.`;
 }
 

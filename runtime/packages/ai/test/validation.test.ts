@@ -97,6 +97,42 @@ describe("validateToolArguments", () => {
 		}
 	});
 
+	it("preserves a value that already matches a nullable union arm", () => {
+		const tool: Tool = {
+			name: "echo",
+			description: "Echo tool",
+			parameters: Type.Object({
+				value: Type.Union([Type.Number(), Type.Null()]),
+			}),
+		};
+		const toolCall: ToolCall = {
+			type: "toolCall",
+			id: "tool-1",
+			name: "echo",
+			arguments: { value: null },
+		};
+
+		expect(validateToolArguments(tool, toolCall)).toEqual({ value: null });
+	});
+
+	it("preserves a value that already matches a oneOf nullable union arm", () => {
+		const { tool, toolCall } = createToolCallWithPlainSchema(
+			{ oneOf: [{ type: "number" }, { type: "null" }] } as Tool["parameters"],
+			null,
+		);
+
+		expect(validateToolArguments(tool, toolCall)).toEqual({ value: null });
+	});
+
+	it("still coerces nullable unions when the original value does not match any arm", () => {
+		const { tool, toolCall } = createToolCallWithPlainSchema(
+			{ anyOf: [{ type: "number" }, { type: "null" }] } as Tool["parameters"],
+			"42",
+		);
+
+		expect(validateToolArguments(tool, toolCall)).toEqual({ value: 42 });
+	});
+
 	it("rejects invalid coercions for serialized plain JSON schemas", () => {
 		const failingCases: Array<{
 			schema: Tool["parameters"];

@@ -1,7 +1,7 @@
 import type { AgentMessage } from "@exxeta/exxperts-core";
 import type { AssistantMessage, Model } from "@exxeta/exxperts-ai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { generateSummary } from "../src/core/compaction/index.js";
+import { type CompactionPreparation, compact, generateSummary } from "../src/core/compaction/index.js";
 
 const { completeSimpleMock } = vi.hoisted(() => ({
 	completeSimpleMock: vi.fn(),
@@ -74,6 +74,39 @@ describe("generateSummary reasoning options", () => {
 			reasoning: "medium",
 			apiKey: "test-key",
 		});
+	});
+
+	it("rejects a length-limited history summary", async () => {
+		completeSimpleMock.mockResolvedValueOnce({
+			...mockSummaryResponse,
+			stopReason: "length",
+			content: [{ type: "text", text: "partial" }],
+		});
+
+		await expect(generateSummary(messages, createModel(false), 2000, "test-key")).rejects.toThrow(
+			"generation hit the token cap",
+		);
+	});
+
+	it("rejects a length-limited split-turn summary", async () => {
+		completeSimpleMock.mockResolvedValueOnce({
+			...mockSummaryResponse,
+			stopReason: "length",
+			content: [{ type: "text", text: "partial" }],
+		});
+		const preparation: CompactionPreparation = {
+			firstKeptEntryId: "entry-keep",
+			messagesToSummarize: [],
+			turnPrefixMessages: messages,
+			isSplitTurn: true,
+			tokensBefore: 100,
+			fileOps: { read: new Set(), written: new Set(), edited: new Set() },
+			settings: { enabled: true, reserveTokens: 2000, keepRecentTokens: 20 },
+		};
+
+		await expect(compact(preparation, createModel(false), "test-key")).rejects.toThrow(
+			"generation hit the token cap",
+		);
 	});
 
 	it("does not set reasoning when thinking is off", async () => {

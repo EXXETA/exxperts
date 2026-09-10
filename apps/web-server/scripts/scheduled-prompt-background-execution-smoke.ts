@@ -86,10 +86,16 @@ try {
 	} = artifacts;
 	const executionAdapter = await import("../src/persistent-room-background-execution.js");
 	const {
+		persistentRoomBackgroundSessionToolNames,
 		scheduledPromptBackgroundAssistantItemId,
 		scheduledPromptBackgroundThreadId,
 		scheduledPromptBackgroundUserItemId,
 	} = executionAdapter;
+	const { getPersistentRoomToolPolicy } = await import("../src/persistent-room-tool-policy.js");
+	const backgroundAllowlist = persistentRoomBackgroundSessionToolNames(getPersistentRoomToolPolicy("bg-allowlist-smoke", { workspaceToolsEnabled: true, workspaceToolNames: ["read", "ls", "find", "grep", "write", "edit"] }).allowedToolNames);
+	assert(!backgroundAllowlist.includes("read_file") && !backgroundAllowlist.includes("search_file"), "background allowlist must not carry shelf tool names that are never registered there");
+	assert(backgroundAllowlist.includes("mcp"), "background allowlist keeps the mcp proxy, which the room-scoped extension registers");
+	assert(backgroundAllowlist.includes("web_search") && backgroundAllowlist.includes("fetch_url") && backgroundAllowlist.includes("read"), "background allowlist keeps web research and workspace tools");
 	const { appendUsage, loadUsage } = await import("../src/usage-log.js");
 	const { writePersistentAgentAiProfileState } = await import("../src/persistent-agent-ai-profile-state.js");
 	const scheduleModule = await import("../../../pi-package/extensions/schedule-prompt/index.js");

@@ -101,7 +101,7 @@ function selectedSourceL1b(agentId: string): string {
 }
 
 function absorbCandidateL1b(agentId: string): string {
-	return `<!-- exxeta:l1b schema_version=1 -->\n\n## Chronos\n\n- Current scaffold timestamp: 2026-05-30T10:00:00.000Z\n- Persistent agent id: ${agentId}\n- Lifecycle state: ready\n- Last checkpoint: cp_selected_maintenance_smoke\n- Last consolidation: absorb_selected_maintenance_smoke\n\n## Deep Memory\n\n### Collaboration\n\n- This selected room validates non-default maintenance targeting.\n- Selected Absorb consolidated durable insight into stable memory without touching the control room.\n\n### Maintenance Boundaries\n\n- Persistent-agent maintenance writes must target the route-selected room root.\n\n## Active Items\n\n### Current Focus\n\n- Prove selected Absorb and Structural Review write boundaries.\n- Review the selected room structural-review candidate after absorb.\n\n### Parked\n\n- Keep provider-dependent workflows out of this smoke.\n\n## Recent Context\n\n${ABSORB_EMPTY_RECENT_CONTEXT_PLACEHOLDER}\n`;
+	return `<!-- exxeta:l1b schema_version=1 -->\n\n## Chronos\n\n- Current scaffold timestamp: 2026-05-30T10:00:00.000Z\n- Persistent agent id: ${agentId}\n- Lifecycle state: ready\n- Last checkpoint: cp_selected_maintenance_smoke\n- Last consolidation: none\n\n## Deep Memory\n\n### Collaboration\n\n- This selected room validates non-default maintenance targeting.\n- Selected Absorb consolidated durable insight into stable memory without touching the control room.\n\n### Maintenance Boundaries\n\n- Persistent-agent maintenance writes must target the route-selected room root.\n\n## Active Items\n\n### Current Focus\n\n- Prove selected Absorb and Structural Review write boundaries.\n- Review the selected room structural-review candidate after absorb.\n\n### Parked\n\n- Keep provider-dependent workflows out of this smoke.\n\n## Recent Context\n\n${ABSORB_EMPTY_RECENT_CONTEXT_PLACEHOLDER}\n`;
 }
 
 const structuralCandidateReviewTarget = `## Deep Memory\n\n### Collaboration\n\n- This selected room validates non-default maintenance targeting and selected Absorb consolidated durable insight into stable memory.\n\n### Maintenance Boundaries\n\n- Persistent-agent maintenance writes must target the route-selected room root.\n\n## Active Items\n\n### Current Focus\n\n- Prove selected Absorb and Structural Review write boundaries.\n\n### Parked\n\n- Keep provider-dependent workflows out of this smoke.\n`;
@@ -226,6 +226,8 @@ try {
 	const afterAbsorbSelected = snapshot(selectedRoot);
 	assert(absorbResult.agentId === agentId, "absorb approval response should identify selected room");
 	assert(afterAbsorbSelected.l1b !== selectedBaseline.l1b, "selected L1b/current.md should change after absorb approval");
+	assert(/^- Last consolidation: absorb_/m.test(afterAbsorbSelected.l1b), "the system stamps the consolidation into Chronos at absorb apply (the worker carries Chronos unchanged)");
+	assert(/^- Last consolidation at: 2026-05-30T11:00:00\.000Z$/m.test(afterAbsorbSelected.l1b), "the consolidation stamp carries the apply time");
 	assert(afterAbsorbSelected.archiveCount === selectedBaseline.archiveCount + 1, "selected archive count should increase after absorb approval");
 	assert(afterAbsorbSelected.absorbEventCount === selectedBaseline.absorbEventCount + 1, "selected absorb event count should increase");
 	assert(absorbResult.eventRelPath, "absorb approval response should carry eventRelPath");

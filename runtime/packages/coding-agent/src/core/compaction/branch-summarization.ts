@@ -334,6 +334,10 @@ export async function generateBranchSummary(
 	if (response.stopReason === "error") {
 		return { error: response.errorMessage || "Summarization failed" };
 	}
+	// A length stop holds partial text and must not become a branch summary (upstream #7048).
+	if (response.stopReason === "length") {
+		return { error: "Branch summarization failed: generation hit the token cap and the summary is incomplete" };
+	}
 
 	let summary = response.content
 		.filter((c): c is { type: "text"; text: string } => c.type === "text")

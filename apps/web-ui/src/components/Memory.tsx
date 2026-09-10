@@ -189,6 +189,10 @@ interface RoomMemoryInfo {
 	recentTokens: number;
 	otherTokens: number;
 	budgetTokens: number;
+	// Server-computed: the budget binds on the review target (deep memory +
+	// active items); the bar renders these, never re-deriving the comparison.
+	reviewTargetTokens: number;
+	overBudget: boolean;
 	budgetCustomized: boolean;
 	weekly: { recorded: boolean; events: number; deepDelta: number; wholeHistory: boolean };
 }
@@ -1226,8 +1230,8 @@ export function Memory({ onMaintain, maintainBlocked }: { onMaintain?: (target: 
 									const other = detail.composition.active + detail.composition.chronos;
 									const mem = memInfo[detail.id];
 									const w = mem?.weekly;
-									const pct = mem ? Math.round((detail.l1bTokens / mem.budgetTokens) * 100) : 0;
-									const over = pct > 100;
+									const pct = mem ? Math.round((mem.reviewTargetTokens / mem.budgetTokens) * 100) : 0;
+									const over = mem?.overBudget === true;
 									// Past mode: sizes come from the snapshot ("then"); figures that
 									// cannot be re-derived for a past day (distillation, 7-day
 									// change, budget) stay visible but marked as today's.
@@ -1273,12 +1277,12 @@ export function Memory({ onMaintain, maintainBlocked }: { onMaintain?: (target: 
 												)}
 											</div>
 											{mem && (
-												<div className={`mem-budget${past ? " mem-g-today" : ""}`} title="This exxpert's memory against its advisory budget from room settings. The budget is a ceiling, not a goal. Today's figure, not time-travelled.">
+												<div className={`mem-budget${past ? " mem-g-today" : ""}`} title="Deep memory and active items against this exxpert's budget from room settings. Recent sessions and the timeline don't count toward it — Memorize folds sessions in. The budget is a ceiling, not a goal. Today's figure, not time-travelled.">
 													<div className="mem-budget-line">
-														<span>Memory budget</span>
+														<span>Memory budget (deep memory + active items)</span>
 														<strong className={over ? "over" : ""}>{pct}% of {fmtTok(mem.budgetTokens)} tok{mem.budgetCustomized ? "" : " (default)"}</strong>
 													</div>
-													<div className="mem-budget-meter" role="meter" aria-valuenow={Math.min(pct, 100)} aria-valuemin={0} aria-valuemax={100} aria-label="Memory used against this exxpert's budget">
+													<div className="mem-budget-meter" role="meter" aria-valuenow={Math.min(pct, 100)} aria-valuemin={0} aria-valuemax={100} aria-label="Deep memory and active items against this exxpert's budget">
 														<div className={`mem-budget-fill${over ? " over" : ""}`} style={{ width: `${Math.min(100, pct)}%` }} />
 													</div>
 												</div>

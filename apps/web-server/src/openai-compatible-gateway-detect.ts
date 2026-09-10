@@ -37,7 +37,7 @@ const PROBE_TIMEOUT_MS = 10_000;
 // an endless stream fill this process's memory while we wait for the timeout.
 const PROBE_MAX_BYTES = 5 * 1024 * 1024;
 
-import { GATEWAY_EFFORT_INTENSITIES, type GatewayEffortIntensity, type GatewayThinkingLevel, type GatewayThinkingLevels } from "./openai-compatible-gateways.js";
+import { GATEWAY_EFFORT_INTENSITIES, type GatewayEffortIntensity, type GatewayModelCost, type GatewayThinkingLevel, type GatewayThinkingLevels } from "./openai-compatible-gateways.js";
 
 export type GatewayModelDetection = {
 	id: string;
@@ -59,6 +59,10 @@ export type GatewayModelDetection = {
 	effortCeiling?: GatewayEffortIntensity;
 	/** Present only when the gateway said whether the model picks its own effort. */
 	adaptiveThinking?: boolean;
+	/** Present only when the gateway said whether the deployment honors prompt-cache markers. */
+	promptCaching?: boolean;
+	/** Present only when the gateway published an input and an output price, in USD per million tokens. */
+	cost?: GatewayModelCost;
 };
 
 export type GatewayDiscovery = {
@@ -73,6 +77,42 @@ function positiveInteger(value: unknown): number | undefined {
 	if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
 	const rounded = Math.floor(value);
 	return rounded > 0 ? rounded : undefined;
+}
+
+/**
+ * A per-token price as gateways publish it: LiteLLM sends numbers, OpenRouter
+ * sends decimal strings, and both send a negative number where the price is
+ * dynamic or unknown. Only a finite non-negative value is a price; zero is one,
+ * because a free deployment is a real thing a gateway can declare.
+ */
+function perTokenPrice(value: unknown): number | undefined {
+	const parsed = typeof value === "number" ? value : typeof value === "string" && value.trim() ? Number(value) : Number.NaN;
+	return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
+}
+
+/**
+ * Per token to per million tokens, the runtime's unit, rounded to six decimals
+ * so 2e-7 lands as 0.2 and not as 0.19999999999999998 in a file somebody will
+ * read.
+ */
+function perMillionTokens(perToken: number): number {
+	return Math.round(perToken * 1_000_000 * 1_000_000) / 1_000_000;
+}
+
+/**
+ * A price block from the four per-token figures, or nothing. Input and output
+ * both have to be there: a turn is priced on both, and a block that priced one
+ * side would make the ledger show half a bill as the whole bill. A missing
+ * cache price falls back to the input price, which prices a cached token like
+ * a fresh one: no invented saving, and no invented surcharge either.
+ */
+function costFromPerTokenPrices(prices: { input: unknown; output: unknown; cacheRead: unknown; cacheWrite: unknown }): GatewayModelCost | undefined {
+	const input = perTokenPrice(prices.input);
+	const output = perTokenPrice(prices.output);
+	if (input === undefined || output === undefined) return undefined;
+	const cacheRead = perTokenPrice(prices.cacheRead) ?? input;
+	const cacheWrite = perTokenPrice(prices.cacheWrite) ?? input;
+	return { input: perMillionTokens(input), output: perMillionTokens(output), cacheRead: perMillionTokens(cacheRead), cacheWrite: perMillionTokens(cacheWrite) };
 }
 
 /**
@@ -113,11 +153,26 @@ async function readCappedText(response: Response): Promise<string> {
 	return Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))).toString("utf-8");
 }
 
-async function fetchJsonWithTimeout(url: string, key: string): Promise<{ ok: true; payload: unknown } | { ok: false; status?: number; message: string; timedOut: boolean }> {
+// The statuses a browser would follow. Only these carry the request somewhere
+// else; a 304, the other common 3xx, is a stale-cache answer to a request that
+// never asked for one, and is reported as the plain status it is.
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+
+type ProbeFailure = { ok: false; status?: number; message: string; timedOut: boolean; redirected?: boolean };
+
+async function fetchJsonWithTimeout(url: string, key: string): Promise<{ ok: true; payload: unknown } | ProbeFailure> {
 	const abort = new AbortController();
 	const timeout = setTimeout(() => abort.abort(), PROBE_TIMEOUT_MS);
 	try {
-		const response = await fetch(url, { headers: { authorization: `Bearer ${key}` }, signal: abort.signal });
+		// The bearer goes to the address the person typed and nowhere else. A
+		// followed redirect would carry it to whatever the first hop points at,
+		// which may be another origin entirely; so redirects are not followed,
+		// and a gateway that answers with one is reported as such so the person
+		// can enter the address it actually lives at.
+		const response = await fetch(url, { headers: { authorization: `Bearer ${key}` }, signal: abort.signal, redirect: "manual" });
+		if (REDIRECT_STATUSES.has(response.status)) {
+			return { ok: false, status: response.status, message: "redirected to another address", timedOut: false, redirected: true };
+		}
 		if (!response.ok) return { ok: false, status: response.status, message: `answered ${response.status}`, timedOut: false };
 		return { ok: true, payload: JSON.parse(await readCappedText(response)) as unknown };
 	} catch (error) {
@@ -165,9 +220,13 @@ export function normalizeGatewayBaseUrl(baseUrl: string): string {
  * supported_parameters list: a model that accepts a reasoning parameter is a
  * model the room's effort dial can reach. A row without that list says nothing
  * about reasoning, which is not the same as saying no.
+ *
+ * The price is the OpenRouter row's other answer, in its pricing block. It is
+ * what the wallet bills a turn at, so it is read with the same discipline as
+ * everything else here: published or unknown, never guessed.
  */
-function detectionFromModelsRow(row: Record<string, unknown>): { vision?: boolean; reasoning?: boolean; contextWindow?: number; maxTokens?: number } {
-	const detection: { vision?: boolean; reasoning?: boolean; contextWindow?: number; maxTokens?: number } = {};
+function detectionFromModelsRow(row: Record<string, unknown>): { vision?: boolean; reasoning?: boolean; contextWindow?: number; maxTokens?: number; cost?: GatewayModelCost } {
+	const detection: { vision?: boolean; reasoning?: boolean; contextWindow?: number; maxTokens?: number; cost?: GatewayModelCost } = {};
 	const architecture = isObject(row.architecture) ? row.architecture : undefined;
 	if (architecture) {
 		const inputModalities = architecture.input_modalities;
@@ -193,6 +252,14 @@ function detectionFromModelsRow(row: Record<string, unknown>): { vision?: boolea
 	const maxTokens = positiveInteger(isObject(row.top_provider) ? row.top_provider.max_completion_tokens : undefined)
 		?? positiveInteger(row.max_output_tokens);
 	if (maxTokens) detection.maxTokens = maxTokens;
+	// OpenRouter's pricing block, per-token decimals as strings. The LiteLLM
+	// row shape carries no price at all, so a key that cannot reach /model/info
+	// leaves the price unknown, which the wallet then says out loud.
+	const pricing = isObject(row.pricing) ? row.pricing : undefined;
+	if (pricing) {
+		const cost = costFromPerTokenPrices({ input: pricing.prompt, output: pricing.completion, cacheRead: pricing.input_cache_read, cacheWrite: pricing.input_cache_write });
+		if (cost) detection.cost = cost;
+	}
 	return detection;
 }
 
@@ -258,6 +325,15 @@ function detectionsFromLiteLlmModelInfo(payload: unknown): Map<string, Omit<Gate
 			detection.effortCeiling = info.bedrock_output_config_effort_ceiling as GatewayEffortIntensity;
 		}
 		if (typeof info.supports_adaptive_thinking === "boolean") detection.adaptiveThinking = info.supports_adaptive_thinking;
+		// Whether the deployment honors prompt-cache markers. Typed nullable on
+		// LiteLLM's side like the effort flags, and null on most rows; only a real
+		// boolean is a declaration. The /models row shapes never carry it.
+		if (typeof info.supports_prompt_caching === "boolean") detection.promptCaching = info.supports_prompt_caching;
+		// The deployment's price, per token. Seen live on every row of a company
+		// gateway; a row that publishes none leaves the price unknown, and the
+		// catalog then writes none, so the ledger never multiplies by a guess.
+		const cost = costFromPerTokenPrices({ input: info.input_cost_per_token, output: info.output_cost_per_token, cacheRead: info.cache_read_input_token_cost, cacheWrite: info.cache_creation_input_token_cost });
+		if (cost) detection.cost = cost;
 		if (Object.keys(detection).length > 0) byModel.set(modelName, detection);
 	}
 	return byModel;
@@ -279,6 +355,7 @@ export async function discoverGatewayModels(baseUrl: string, key: string): Promi
 	const root = normalizeGatewayBaseUrl(baseUrl);
 	const listed = await fetchJsonWithTimeout(`${root}/models`, key);
 	if (!listed.ok) {
+		if (listed.redirected) throw new GatewayDiscoveryError(`${root}/models redirected to another address; enter the gateway's final URL.`);
 		if (listed.status === 401 || listed.status === 403) throw new GatewayDiscoveryError("The gateway rejected the API key.");
 		if (listed.status !== undefined) throw new GatewayDiscoveryError(`The gateway answered ${listed.status} for ${root}/models.`);
 		throw new GatewayDiscoveryError(`Could not reach ${root}/models: ${listed.message}`);
@@ -312,6 +389,8 @@ export async function discoverGatewayModels(baseUrl: string, key: string): Promi
 			if (detection.thinkingLevels !== undefined) existing.thinkingLevels = detection.thinkingLevels;
 			if (detection.effortCeiling !== undefined) existing.effortCeiling = detection.effortCeiling;
 			if (detection.adaptiveThinking !== undefined) existing.adaptiveThinking = detection.adaptiveThinking;
+			if (detection.promptCaching !== undefined) existing.promptCaching = detection.promptCaching;
+			if (detection.cost !== undefined) existing.cost = detection.cost;
 		}
 	}
 

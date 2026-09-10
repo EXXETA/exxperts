@@ -3,6 +3,7 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { executeBashWithOperations } from "../src/core/bash-executor.js";
+import type { ExtensionContext } from "../src/core/extensions/types.js";
 import { type BashOperations, createBashTool, createLocalBashOperations } from "../src/core/tools/bash.js";
 import { computeEditsDiff } from "../src/core/tools/edit-diff.js";
 import { createFindToolDefinition } from "../src/core/tools/find.js";
@@ -47,6 +48,8 @@ describe("Coding Agent Tools", () => {
 	afterEach(() => {
 		// Clean up test directory
 		rmSync(testDir, { recursive: true, force: true });
+		// Put spied module exports back so a spy from one test never carries its call history into the next
+		vi.restoreAllMocks();
 	});
 
 	describe("read tool", () => {
@@ -223,6 +226,20 @@ describe("Coding Agent Tools", () => {
 
 			expect(getTextOutput(result)).toContain("Successfully wrote");
 		});
+
+		it("should report the resolved absolute path for a relative path", async () => {
+			const scopedWriteTool = createWriteTool(testDir);
+
+			const result = await scopedWriteTool.execute("test-call-write-resolved", {
+				path: "sub/relative-write.txt",
+				content: "Relative content",
+			});
+
+			expect(getTextOutput(result)).toBe(
+				`Successfully wrote 16 bytes to ${join(testDir, "sub", "relative-write.txt")}`,
+			);
+			expect(readFileSync(join(testDir, "sub", "relative-write.txt"), "utf-8")).toBe("Relative content");
+		});
 	});
 
 	describe("edit tool", () => {
@@ -241,6 +258,19 @@ describe("Coding Agent Tools", () => {
 			expect(result.details.diff).toBeDefined();
 			expect(typeof result.details.diff).toBe("string");
 			expect(result.details.diff).toContain("testing");
+		});
+
+		it("should report the resolved absolute path for a relative path", async () => {
+			const testFile = join(testDir, "relative-edit.txt");
+			writeFileSync(testFile, "Hello, world!");
+			const scopedEditTool = createEditTool(testDir);
+
+			const result = await scopedEditTool.execute("test-call-edit-resolved", {
+				path: "relative-edit.txt",
+				edits: [{ oldText: "world", newText: "testing" }],
+			});
+
+			expect(getTextOutput(result)).toBe(`Successfully replaced 1 block(s) in ${testFile}.`);
 		});
 
 		it("should fail if text not found", async () => {
@@ -794,7 +824,7 @@ describe("Coding Agent Tools", () => {
 					},
 				},
 			});
-			await expect(def.execute("test-find-permission", { pattern: "**/*.md", path: "." })).rejects.toThrow(/Directory enumeration was blocked|macOS privacy|Full Disk Access/);
+			await expect(def.execute("test-find-permission", { pattern: "**/*.md", path: "." }, undefined, undefined, {} as ExtensionContext)).rejects.toThrow(/Directory enumeration was blocked|macOS privacy|Full Disk Access/);
 		});
 	});
 
@@ -822,7 +852,7 @@ describe("Coding Agent Tools", () => {
 					},
 				},
 			});
-			await expect(def.execute("test-ls-permission", { path: "." })).rejects.toThrow(/Directory enumeration was blocked|macOS privacy|Full Disk Access/);
+			await expect(def.execute("test-ls-permission", { path: "." }, undefined, undefined, {} as ExtensionContext)).rejects.toThrow(/Directory enumeration was blocked|macOS privacy|Full Disk Access/);
 		});
 	});
 });
@@ -1000,6 +1030,59 @@ describe("edit tool fuzzy matching", () => {
 		});
 
 		expect(readFileSync(testFile, "utf-8")).toBe("console.log('world');\nhello universe\n");
+	});
+
+	it("should preserve the correct occurrence when fuzzy replacement equals a nearby line", async () => {
+		const testFile = join(testDir, "fuzzy-preserve-duplicate-line.txt");
+		const originalContent = ["replace me\u0020\u0020\u0020", "after\u0020\u0020\u0020", ""].join("\n");
+		writeFileSync(testFile, originalContent);
+
+		const result = await editTool.execute("test-fuzzy-preserve-duplicate-line", {
+			path: testFile,
+			edits: [{ oldText: "replace me\n", newText: "after\n" }],
+		});
+
+		const expectedContent = ["after", "after\u0020\u0020\u0020", ""].join("\n");
+		expect(readFileSync(testFile, "utf-8")).toBe(expectedContent);
+		// The untouched second line must not show up as changed in the diff.
+		expect(result.details?.diff ?? "").not.toMatch(/^[-+]\s*2 /m);
+	});
+
+	it("should preserve untouched lines and produce an applicable patch for fuzzy multi-edits", async () => {
+		const testFile = join(testDir, "fuzzy-preserve-multi.txt");
+		const originalContent = [
+			"keep before\u0020\u0020",
+			"first target\u0020\u0020",
+			"first after",
+			"keep middle\u0020\u0020\u0020",
+			"second target\u0020\u0020",
+			"second after",
+			"keep after\u0020\u0020",
+			"",
+		].join("\n");
+		writeFileSync(testFile, originalContent);
+
+		const result = await editTool.execute("test-fuzzy-preserve-multi", {
+			path: testFile,
+			edits: [
+				{ oldText: "first target\nfirst after", newText: "FIRST\nFIRST2" },
+				{ oldText: "second target\nsecond after", newText: "SECOND\nSECOND2" },
+			],
+		});
+
+		const expectedContent = [
+			"keep before\u0020\u0020",
+			"FIRST",
+			"FIRST2",
+			"keep middle\u0020\u0020\u0020",
+			"SECOND",
+			"SECOND2",
+			"keep after\u0020\u0020",
+			"",
+		].join("\n");
+		expect(readFileSync(testFile, "utf-8")).toBe(expectedContent);
+		// The "keep" lines must not show up as changed in the diff.
+		expect(result.details?.diff ?? "").not.toMatch(/^[-+]\s*\d+ keep /m);
 	});
 });
 

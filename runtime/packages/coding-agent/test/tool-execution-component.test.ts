@@ -380,7 +380,10 @@ describe("ToolExecutionComponent parity", () => {
 				false,
 			);
 
-			const collapsed = stripAnsi(component.render(120).join("\n"));
+			// The outside-cwd scenario prints the absolute path, which grows with the checkout
+			// location; render wide enough that the compact line never wraps mid-path.
+			const width = Math.max(120, scenario.compact.length + 40);
+			const collapsed = stripAnsi(component.render(width).join("\n"));
 			expect(collapsed).toContain(scenario.compact);
 			expect(collapsed).not.toContain(scenario.hidden);
 			if (scenario.absent) {
@@ -388,7 +391,7 @@ describe("ToolExecutionComponent parity", () => {
 			}
 
 			component.setExpanded(true);
-			const expanded = stripAnsi(component.render(120).join("\n"));
+			const expanded = stripAnsi(component.render(width).join("\n"));
 			expect(expanded).toContain(scenario.hidden);
 		});
 	}

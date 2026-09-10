@@ -20,6 +20,11 @@ files:
 extraResources:
   - from: build/server
     to: server
+  # Per-target ripgrep, staged by scripts/fetch-bundled-tools.mts through the
+  # runtime's hash-pinned download path; the shell points the server at it via
+  # EXXETA_BUNDLED_TOOLS_DIR so a fresh install never downloads rg at runtime.
+  - from: build/tools
+    to: tools
 asar: true
 npmRebuild: false
 protocols:

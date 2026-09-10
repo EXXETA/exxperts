@@ -43,8 +43,8 @@ function kindOf(name: string): Kind | null {
 	if (name.startsWith("kb_")) return "knowledge";
 	if (name === "delegate_task" || name.startsWith("consult")) return "specialist";
 	if (name === "mcp" || name.startsWith("mcp_") || name.startsWith("graph_")) return "connector";
-	if (name.startsWith("artifact_") || name === "write_markdown_file") return "document";
-	if (["bash", "read", "write", "edit", "ls", "find", "grep", "read_spreadsheet"].includes(name)) return "files";
+	if (name.startsWith("artifact_")) return "document";
+	if (["bash", "read", "write", "edit", "ls", "find", "grep"].includes(name)) return "files";
 	return "other";
 }
 

@@ -19,6 +19,7 @@ process.env.EXXETA_PERSISTENT_AGENTS_ROOT = tempAgentsRoot;
 const {
 	createPersistentAgentFromScaffoldInput,
 	buildPersistentAgentBootContext,
+	assertPersistentAgentBootPromptFitsWindow,
 	createPersistentAgentInstance,
 	createPersistentAgentPiSessionJsonlThreadRuntime,
 	getPersistentAgentRuntimeState,
@@ -151,6 +152,21 @@ try {
 	assertIncludes(boot.systemPrompt, "ALPHA_SENTINEL deep memory", "boot L1b source");
 	assert(!boot.systemPrompt.includes("CONTROL_SENTINEL_DO_NOT_TOUCH"), "boot context must not load control fixture");
 	assert(boot.layers.some((layer: any) => layer.title === "Alpha Smoke Agent Constitution"), "boot layer title should use alpha displayName");
+
+	// Deadlock guard: the boot prompt must fit the room model's usable window.
+	const bootModel = { provider: "openai-compatible", model: "gpt-5.5", label: "GPT 5.5" };
+	assertPersistentAgentBootPromptFitsWindow({ agentId: alphaAgentId, model: bootModel, systemPrompt: boot.systemPrompt, window: { contextWindow: 200000, maxOutputTokens: 8000 } });
+	assertPersistentAgentBootPromptFitsWindow({ agentId: alphaAgentId, model: bootModel, systemPrompt: boot.systemPrompt });
+	assertPersistentAgentBootPromptFitsWindow({ agentId: alphaAgentId, model: bootModel, systemPrompt: boot.systemPrompt, window: { contextWindow: Number.NaN, maxOutputTokens: Number.NaN } });
+	let overflow: any = null;
+	try {
+		assertPersistentAgentBootPromptFitsWindow({ agentId: alphaAgentId, model: bootModel, systemPrompt: boot.systemPrompt, window: { contextWindow: 2000, maxOutputTokens: 1000 } });
+	} catch (error) {
+		overflow = error;
+	}
+	assert(overflow && overflow.code === "memory_overflow" && overflow.statusCode === 413, "an oversized boot prompt should refuse with the memory_overflow code and 413");
+	assert(/do not fit the usable window of GPT 5.5/.test(overflow.message) && /choose Forget/.test(overflow.message) && /open Maintain and run (Memorize|Review)/.test(overflow.message) && /Memory is unchanged/.test(overflow.message), `overflow refusal should name the model, the reachable exit (Forget → Maintain), the layer-matched run, and that memory is untouched (got ${overflow.message})`);
+	assert(overflow.bootEstimatedTokens > overflow.promptTokenBudget && overflow.promptTokenBudget === 1000, "overflow refusal should carry the real numbers (min budget floor applies)");
 
 	const initialRuntime = getPersistentAgentRuntimeState(alphaAgentId);
 	assert(initialRuntime.agentId === alphaAgentId && initialRuntime.state === "idle", "initial alpha runtime should be idle");

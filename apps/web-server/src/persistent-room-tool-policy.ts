@@ -8,22 +8,28 @@ export interface PersistentRoomToolPolicy {
 const PERSISTENT_ROOM_POLICY_SOURCE = "web-server-static-room-web-research";
 const PERSISTENT_ROOM_WORKSPACE_POLICY_SOURCE = "persistent-room-capability-policy-workspace";
 
-export const PERSISTENT_ROOM_READONLY_WORKSPACE_TOOL_NAMES = ["ls", "find", "read"] as const;
-export const PERSISTENT_ROOM_MARKDOWN_WRITE_TOOL_NAME = "write_markdown_file" as const;
-export const PERSISTENT_ROOM_SPREADSHEET_READ_TOOL_NAME = "read_spreadsheet" as const;
+export const PERSISTENT_ROOM_READONLY_WORKSPACE_TOOL_NAMES = ["ls", "find", "grep", "read"] as const;
+export const PERSISTENT_ROOM_BOUNDED_WRITER_TOOL_NAMES = ["write", "edit"] as const;
 export const PERSISTENT_ROOM_LOCAL_FILES_NATIVE_TOOL_NAMES = ["read", "ls", "find", "grep", "write", "edit"] as const;
 export const PERSISTENT_ROOM_BASH_TOOL_NAME = "bash" as const;
-const PERSISTENT_ROOM_LEGACY_STANDARD_WORKSPACE_TOOL_NAMES = [
-	...PERSISTENT_ROOM_READONLY_WORKSPACE_TOOL_NAMES,
-	PERSISTENT_ROOM_MARKDOWN_WRITE_TOOL_NAME,
-] as const;
 export const PERSISTENT_ROOM_WORKSPACE_TOOL_NAMES = [
-	...PERSISTENT_ROOM_LEGACY_STANDARD_WORKSPACE_TOOL_NAMES,
-	PERSISTENT_ROOM_SPREADSHEET_READ_TOOL_NAME,
+	...PERSISTENT_ROOM_READONLY_WORKSPACE_TOOL_NAMES,
+	...PERSISTENT_ROOM_BOUNDED_WRITER_TOOL_NAMES,
 ] as const;
-export const PERSISTENT_ROOM_LOCAL_FILES_TOOL_NAMES = [
+export const PERSISTENT_ROOM_LOCAL_FILES_TOOL_NAMES = [...PERSISTENT_ROOM_LOCAL_FILES_NATIVE_TOOL_NAMES] as const;
+// Retired tool names that may still appear in stored selections and policies.
+// They translate forward instead of failing closed.
+const PERSISTENT_ROOM_LEGACY_MARKDOWN_WRITE_TOOL_NAME = "write_markdown_file";
+const PERSISTENT_ROOM_LEGACY_SPREADSHEET_READ_TOOL_NAME = "read_spreadsheet";
+const PERSISTENT_ROOM_LEGACY_READONLY_WORKSPACE_TOOL_NAMES = ["ls", "find", "read"] as const;
+const PERSISTENT_ROOM_LEGACY_STANDARD_WORKSPACE_TOOL_NAMES = ["ls", "find", "read", PERSISTENT_ROOM_LEGACY_MARKDOWN_WRITE_TOOL_NAME] as const;
+const PERSISTENT_ROOM_LEGACY_SPREADSHEET_STANDARD_WORKSPACE_TOOL_NAMES = [
+	...PERSISTENT_ROOM_LEGACY_STANDARD_WORKSPACE_TOOL_NAMES,
+	PERSISTENT_ROOM_LEGACY_SPREADSHEET_READ_TOOL_NAME,
+] as const;
+const PERSISTENT_ROOM_LEGACY_LOCAL_FILES_TOOL_NAMES = [
 	...PERSISTENT_ROOM_LOCAL_FILES_NATIVE_TOOL_NAMES,
-	PERSISTENT_ROOM_SPREADSHEET_READ_TOOL_NAME,
+	PERSISTENT_ROOM_LEGACY_SPREADSHEET_READ_TOOL_NAME,
 ] as const;
 export const PERSISTENT_ROOM_WEB_RESEARCH_TOOL_NAMES = ["web_search", "fetch_url"] as const;
 // The room's eyes on its own shelf (files core slice): read-only, fenced to
@@ -49,8 +55,6 @@ const PERSISTENT_ROOM_BLOCKED_TOOL_NAMES = [
 	"bash",
 	"edit",
 	"write",
-	"write_markdown_file",
-	"read_spreadsheet",
 	"grep",
 	"find",
 	"ls",
@@ -99,6 +103,12 @@ export function isPersistentRoomLocalFilesToolName(toolName: string): toolName i
 	return PERSISTENT_ROOM_LOCAL_FILES_TOOL_NAME_SET.has(toolName);
 }
 
+function translateLegacyPersistentRoomWorkspaceToolName(toolName: string): string[] {
+	if (toolName === PERSISTENT_ROOM_LEGACY_MARKDOWN_WRITE_TOOL_NAME) return [...PERSISTENT_ROOM_BOUNDED_WRITER_TOOL_NAMES];
+	if (toolName === PERSISTENT_ROOM_LEGACY_SPREADSHEET_READ_TOOL_NAME) return [];
+	return [toolName];
+}
+
 export function normalizePersistentRoomWorkspaceToolNameSubset(rawToolNames: unknown, label = "workspace tool selection"): string[] {
 	return normalizePersistentRoomWorkspaceToolNameSubsetForMode(rawToolNames, "bounded", label);
 }
@@ -106,12 +116,17 @@ export function normalizePersistentRoomWorkspaceToolNameSubset(rawToolNames: unk
 export function normalizePersistentRoomWorkspaceToolNameSubsetForMode(rawToolNames: unknown, workspaceAccessMode: PersistentRoomWorkspaceAccessModeLike, label = persistentRoomWorkspaceToolSelectionLabel(workspaceAccessMode)): string[] {
 	if (!Array.isArray(rawToolNames)) throw new Error(`${label} must be an array of ${workspaceAccessMode === "localFiles" ? "Full access" : "bounded workspace"} tool names`);
 	const allowedToolNames = persistentRoomWorkspaceToolNameSetForMode(workspaceAccessMode);
+	const seenRawNames = new Set<string>();
 	const seen = new Set<string>();
 	for (const rawToolName of rawToolNames) {
-		const toolName = String(rawToolName ?? "").trim();
-		if (!toolName || !allowedToolNames.has(toolName)) throw new Error(`invalid ${workspaceAccessMode === "localFiles" ? "Full access" : "bounded workspace"} tool: ${toolName || "(empty)"}`);
-		if (seen.has(toolName)) throw new Error(`duplicate ${workspaceAccessMode === "localFiles" ? "Full access" : "bounded workspace"} tool: ${toolName}`);
-		seen.add(toolName);
+		const rawName = String(rawToolName ?? "").trim();
+		if (!rawName) throw new Error(`invalid ${workspaceAccessMode === "localFiles" ? "Full access" : "bounded workspace"} tool: (empty)`);
+		if (seenRawNames.has(rawName)) throw new Error(`duplicate ${workspaceAccessMode === "localFiles" ? "Full access" : "bounded workspace"} tool: ${rawName}`);
+		seenRawNames.add(rawName);
+		for (const toolName of translateLegacyPersistentRoomWorkspaceToolName(rawName)) {
+			if (!allowedToolNames.has(toolName)) throw new Error(`invalid ${workspaceAccessMode === "localFiles" ? "Full access" : "bounded workspace"} tool: ${toolName}`);
+			seen.add(toolName);
+		}
 	}
 	return persistentRoomDefaultWorkspaceToolNamesForMode(workspaceAccessMode).filter((toolName) => seen.has(toolName));
 }
@@ -158,18 +173,25 @@ function validSelectedWorkspaceToolNamesOrEmpty(rawToolNames: readonly string[])
 }
 
 export function hasPersistentRoomReadonlyWorkspaceToolBundle(policy: PersistentRoomWorkspaceToolPolicyLike | null | undefined): boolean {
-	return Boolean(policy?.modes?.read === true && hasExactToolBundle(policy.allowedToolNames ?? [], PERSISTENT_ROOM_READONLY_WORKSPACE_TOOL_NAMES));
+	return Boolean(policy?.modes?.read === true && (
+		hasExactToolBundle(policy.allowedToolNames ?? [], PERSISTENT_ROOM_READONLY_WORKSPACE_TOOL_NAMES) ||
+		hasExactToolBundle(policy.allowedToolNames ?? [], PERSISTENT_ROOM_LEGACY_READONLY_WORKSPACE_TOOL_NAMES)
+	));
 }
 
 export function hasPersistentRoomStandardWorkspaceToolBundle(policy: PersistentRoomWorkspaceToolPolicyLike | null | undefined): boolean {
 	return Boolean(policy?.modes?.read === true && (
 		hasExactToolBundle(policy.allowedToolNames ?? [], PERSISTENT_ROOM_WORKSPACE_TOOL_NAMES) ||
-		hasExactToolBundle(policy.allowedToolNames ?? [], PERSISTENT_ROOM_LEGACY_STANDARD_WORKSPACE_TOOL_NAMES)
+		hasExactToolBundle(policy.allowedToolNames ?? [], PERSISTENT_ROOM_LEGACY_STANDARD_WORKSPACE_TOOL_NAMES) ||
+		hasExactToolBundle(policy.allowedToolNames ?? [], PERSISTENT_ROOM_LEGACY_SPREADSHEET_STANDARD_WORKSPACE_TOOL_NAMES)
 	));
 }
 
 function hasPersistentRoomStandardLocalFilesToolBundle(policy: PersistentRoomWorkspaceToolPolicyLike | null | undefined): boolean {
-	return Boolean(policy?.modes?.read === true && hasExactToolBundle(policy.allowedToolNames ?? [], PERSISTENT_ROOM_LOCAL_FILES_TOOL_NAMES));
+	return Boolean(policy?.modes?.read === true && (
+		hasExactToolBundle(policy.allowedToolNames ?? [], PERSISTENT_ROOM_LOCAL_FILES_TOOL_NAMES) ||
+		hasExactToolBundle(policy.allowedToolNames ?? [], PERSISTENT_ROOM_LEGACY_LOCAL_FILES_TOOL_NAMES)
+	));
 }
 
 export function isPersistentRoomWorkspaceToolBundleEnabled(policy: PersistentRoomWorkspaceToolPolicyLike | null | undefined): boolean {

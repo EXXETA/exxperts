@@ -6,9 +6,10 @@ name: SBOM
 #   audit can consume the full dependency inventory without cloning the repo.
 # - A weekly OSV scan over both lockfiles, which draws on a broader database
 #   than Dependabot (including malicious-package reports) and fails loudly.
+# Release-time SBOM attachment lives in release.yml (a release created with
+# the workflow token cannot fire this workflow's release trigger). This
+# workflow owns the scheduled scan and on-demand SBOM artifacts.
 on:
-  release:
-    types: [published]
   schedule:
     - cron: "0 6 * * 1"
   workflow_dispatch:
@@ -21,8 +22,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
-      # Needed to attach the SBOMs to the release on release-published runs.
-      contents: write
+      contents: read
     steps:
       - uses: actions/checkout@v4
 
@@ -31,25 +31,14 @@ jobs:
           node-version: 20
           cache: npm
 
-      - name: Install dependencies
-        run: npm ci
-
-      # Three dependency trees ship to users: the app (root), the runtime,
-      # and the desktop wrapper (not a workspace, but Electron itself is in
-      # every installer, so its tree belongs in the inventory too). Electron
-      # is a devDependency by npm convention, so the desktop SBOM keeps dev
-      # packages in.
-      - name: Install desktop dependencies
-        working-directory: apps/desktop
-        env:
-          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
-        run: npm ci
-
       - name: Generate SBOMs (CycloneDX)
         run: |
-          npx --yes @cyclonedx/cyclonedx-npm@4 --omit dev --output-format JSON --output-file sbom-app.cdx.json
-          cd runtime && npx --yes @cyclonedx/cyclonedx-npm@4 --omit dev --output-format JSON --output-file ../sbom-runtime.cdx.json
-          cd ../apps/desktop && npx --yes @cyclonedx/cyclonedx-npm@4 --output-format JSON --output-file ../../sbom-desktop.cdx.json
+          # All three SBOMs read the lockfiles directly: no installed tree is
+          # needed, so nothing platform-specific (mac-only optionals, runtime
+          # workspace links) can make the inventory fail.
+          npx --yes @cyclonedx/cyclonedx-npm@4 --package-lock-only --omit dev --output-format JSON --output-file sbom-app.cdx.json
+          cd runtime && npx --yes @cyclonedx/cyclonedx-npm@4 --package-lock-only --omit dev --output-format JSON --output-file ../sbom-runtime.cdx.json
+          cd ../apps/desktop && npx --yes @cyclonedx/cyclonedx-npm@4 --package-lock-only --output-format JSON --output-file ../../sbom-desktop.cdx.json
 
       - uses: actions/upload-artifact@v4
         with:
@@ -58,12 +47,6 @@ jobs:
             sbom-app.cdx.json
             sbom-runtime.cdx.json
             sbom-desktop.cdx.json
-
-      - name: Attach SBOMs to the release
-        if: github.event_name == 'release'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release upload "${{ github.event.release.tag_name }}" sbom-app.cdx.json sbom-runtime.cdx.json sbom-desktop.cdx.json --clobber
 
   osv-scan:
     permissions:

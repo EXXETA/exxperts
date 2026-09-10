@@ -202,7 +202,9 @@ try {
 		schemaVersion: 1, policyId: "pol-lifecycle", agentId, conversationId: "lifecycle_thread_a",
 		workspaceAccessMode: "bounded",
 		roots: [{ id: "root-1", displayLabel: "Workspace", path: tempWorkspaceRoot, realpath: tempWorkspaceRoot, basename: path.basename(tempWorkspaceRoot), pathHash: "x", source: "manual", grantedAt: nowIso }],
-		modes: { read: true, write: true }, allowedToolNames: [], deniedRoots: [], denySegments: [], denyFilenameGlobs: [],
+		// write:false is the derived invariant for an empty tool selection; a
+		// stored write:true here would be re-derived to false on read anyway.
+		modes: { read: true, write: false }, allowedToolNames: [], deniedRoots: [], denySegments: [], denyFilenameGlobs: [],
 		createdAt: nowIso, updatedAt: nowIso,
 	});
 	// Nothing under the agent-state side may be involved in a purge.

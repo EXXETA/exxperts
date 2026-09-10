@@ -4,7 +4,6 @@ import type {
 	PersistentRoomWorkspaceDefaultInput,
 	PersistentRoomWorkspaceDefaultResponse,
 	PersistentRoomWorkspacePolicyResponse,
-	PersistentRoomWorkspaceValidateResponse,
 	SystemChooseFolderResponse,
 } from "./types";
 
@@ -50,33 +49,6 @@ export async function fetchPersistentRoomWorkspacePolicy(agentId: string, conver
 	return fetchJson<PersistentRoomWorkspacePolicyResponse>(workspacePolicyUrl(agentId, conversationId), undefined, "Failed to load workspace policy.");
 }
 
-export async function validatePersistentRoomWorkspace(input: {
-	agentId: string;
-	conversationId: string;
-	root: string;
-	displayLabel?: string;
-	workspaceAccessMode?: "bounded" | "localFiles";
-	bashEnabled?: boolean;
-}): Promise<PersistentRoomWorkspaceValidateResponse> {
-	return fetchJson<PersistentRoomWorkspaceValidateResponse>(
-		`/api/persistent-agents/${encodeURIComponent(input.agentId)}/workspace/validate`,
-		{
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({
-				conversationId: input.conversationId,
-				root: input.root,
-				displayLabel: input.displayLabel,
-				workspaceAccessMode: input.workspaceAccessMode,
-				bashEnabled: input.bashEnabled,
-				mode: "read",
-				source: "manual",
-			}),
-		},
-		"Failed to validate workspace."
-	);
-}
-
 export async function clearPersistentRoomWorkspacePolicy(agentId: string, conversationId: string): Promise<PersistentRoomWorkspaceClearResponse> {
 	return fetchJson<PersistentRoomWorkspaceClearResponse>(
 		workspacePolicyUrl(agentId, conversationId),
@@ -99,7 +71,6 @@ export async function savePersistentRoomWorkspaceDefault(agentId: string, input:
 				root: input.root,
 				displayLabel: input.displayLabel,
 				workspaceAccessMode: input.workspaceAccessMode,
-				mode: input.mode ?? "read",
 				toolSelection: input.toolSelection,
 				bashEnabled: input.bashEnabled,
 			}),

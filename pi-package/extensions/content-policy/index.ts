@@ -31,6 +31,9 @@ interface Rule {
 	id: string;
 	pattern: RegExp;
 	reason: string;
+	// When present, a pattern hit is only a candidate: the value it captured
+	// must also pass this check before the rule counts as matched.
+	accept?: (match: RegExpMatchArray) => boolean;
 }
 
 interface MatchResult {
@@ -43,16 +46,84 @@ const DEFAULT_LOG_PATH = productAppStatePath("content-policy-blocks.jsonl");
 const MAX_PREVIEW_CHARS = 500;
 const INTERNAL_COORDINATION_TOOLS = new Set(["start_handoff", "return_handoff", "delegate"]);
 
+// The label rules below look at the value that follows "label: " or
+// "label = ". Ordinary source code puts identifiers, type names and env
+// references there; a leaked credential puts a random-looking string there.
+// Tool arguments are scanned as JSON text, so a double quote inside file
+// content arrives as \" and a newline arrives as \n.
+const SECRET_LABEL = /\b(?:api[_-]?key|access[_-]?token|auth[_-]?token|bearer[_-]?token|refresh[_-]?token|secret[_-]?key|client[_-]?secret)\b/;
+const QUOTED_VALUE = /(?:[rbufRBUF]{1,2})?(?:\\?["']|`)(?<quoted>[^"'`\\\s]+)(?=\\?["']|`)/;
+const BARE_TOKEN_VALUE = /(?<bare>[A-Za-z0-9_./+=:@~-]+)/;
+const BARE_PASSWORD_VALUE = /(?<bare>[A-Za-z0-9_./+=:@~!#$%^*-]+)/;
+
+function labelValuePattern(label: RegExp, bare: RegExp): RegExp {
+	return new RegExp(`${label.source}\\s*[:=]\\s*(?:${QUOTED_VALUE.source}|${bare.source})`, "i");
+}
+
+// Sample values, template references and documentation stand-ins. A word
+// only counts as a stand-in when it is a whole segment of the value
+// (your_api_key_here, sk_test_...), never as a substring of a credential.
+const PLACEHOLDER_WORDS = new Set(["your", "changeme", "change", "redacted", "example", "placeholder", "dummy", "test", "sample", "fake", "secret", "todo", "fixme", "replace", "insert"]);
+const PLACEHOLDER_MARKS = /xxx|\.\.\.|\*\*\*/i;
+const TEMPLATE_REFERENCE = /[<>{}]|\$[{(A-Za-z_]|%[({A-Za-z]/;
+
+function looksLikePlaceholder(value: string): boolean {
+	if (TEMPLATE_REFERENCE.test(value) || PLACEHOLDER_MARKS.test(value) || /^(.)\1*$/.test(value)) return true;
+	return value.split(/[_\-./:@+=~ ]/).some((segment) => PLACEHOLDER_WORDS.has(segment.toLowerCase()));
+}
+
+function hasLettersAndDigits(value: string): boolean {
+	return /[A-Za-z]/.test(value) && /\d/.test(value);
+}
+
+// Identifiers, member paths, file paths, URLs and resource names are code,
+// never credentials. A code piece carries at most two runs of digits
+// (sha256, utf8ToBase64); a credential interleaves digits throughout or is
+// a long hex string.
+function looksLikeCodeReference(value: string): boolean {
+	if (/^(?:[a-z][a-z0-9+.-]*:\/\/|arn:aws:)/i.test(value)) return true;
+	const pieces = value.replace(/^(?:\.{0,2}|~)\//, "").split(/[./]/);
+	return pieces.every((piece) => /^[\w$-]+$/.test(piece) && (piece.match(/\d+/g) ?? []).length <= 2 && !/^[0-9a-f]{16,}$/i.test(piece));
+}
+
+// A quoted literal is already suspicious on its own; a bare value must also
+// fail to read as code before it counts.
+function isSecretShaped(value: string, minLength: number, quoted: boolean): boolean {
+	if (value.length < minLength || !hasLettersAndDigits(value) || looksLikePlaceholder(value)) return false;
+	return quoted || !looksLikeCodeReference(value);
+}
+
+function acceptSecretLabelValue(match: RegExpMatchArray): boolean {
+	const { quoted, bare } = match.groups ?? {};
+	if (quoted !== undefined) return isSecretShaped(quoted, 12, true);
+	if (bare !== undefined) return isSecretShaped(bare, 16, false);
+	return false;
+}
+
+function acceptPasswordValue(match: RegExpMatchArray): boolean {
+	const { quoted, bare } = match.groups ?? {};
+	if (quoted !== undefined) return quoted.length >= 4 && !looksLikePlaceholder(quoted);
+	if (bare !== undefined) return isSecretShaped(bare, 8, false);
+	return false;
+}
+
 const DEFAULT_RULES: Rule[] = [
 	// Block secret-bearing .env files but allow common documentation templates
-	// such as .env.example, .env.sample, .env.template, and .env.dist.
-	{ id: "dot-env", pattern: /\.env(?!\.(?:example|sample|template|dist)\b)(?:$|["'\\/.,}\]\w-])/i, reason: "blocked .env access" },
+	// such as .env.example, .env.sample, .env.template, and .env.dist; a word
+	// character before the dot (process.env, os.environ) is code, not a file.
+	{ id: "dot-env", pattern: /(?<![A-Za-z0-9_])\.env(?!\.(?:example|sample|template|dist)\b)(?:$|["'\\/.,}\]\w-])/i, reason: "blocked .env access" },
 	{ id: "pem-file", pattern: /\.pem(?:$|["'\\/.,}\]])/i, reason: "blocked PEM private-key/certificate file access" },
 	{ id: "id-rsa", pattern: /id_rsa(?:$|["'\\/.,}\]\w-])/i, reason: "blocked SSH private-key access" },
-	{ id: "password-assignment", pattern: /\bpassword\s*=/i, reason: "blocked password assignment/value pattern" },
+	{
+		id: "password-assignment",
+		pattern: labelValuePattern(/\bpassword\b/, BARE_PASSWORD_VALUE),
+		accept: acceptPasswordValue,
+		reason: "blocked password assignment/value pattern",
+	},
 	{
 		id: "secret-label-value",
-		pattern: /\b(?:api[_-]?key|access[_-]?token|auth[_-]?token|bearer[_-]?token|refresh[_-]?token|secret[_-]?key|client[_-]?secret)\b\s*[:=]\s*["']?[A-Za-z0-9_./+=:@-]{8,}/i,
+		pattern: labelValuePattern(SECRET_LABEL, BARE_TOKEN_VALUE),
+		accept: acceptSecretLabelValue,
 		reason: "blocked API key/token-looking argument",
 	},
 	{ id: "openai-key", pattern: /\bsk-[A-Za-z0-9_-]{20,}\b/, reason: "blocked OpenAI-style API key" },
@@ -118,8 +189,16 @@ export function shouldScanTool(toolName: string | undefined): boolean {
 export function scanArguments(args: unknown, rules: Rule[]): MatchResult | null {
 	const text = stableStringify(args);
 	for (const rule of rules) {
-		const match = text.match(rule.pattern);
-		if (match) return { rule, matchedText: match[0] || "" };
+		if (!rule.accept) {
+			const match = text.match(rule.pattern);
+			if (match) return { rule, matchedText: match[0] || "" };
+			continue;
+		}
+		// A rejected candidate must not hide a later hit in the same text.
+		const flags = rule.pattern.flags.includes("g") ? rule.pattern.flags : `${rule.pattern.flags}g`;
+		for (const match of text.matchAll(new RegExp(rule.pattern.source, flags))) {
+			if (rule.accept(match)) return { rule, matchedText: match[0] || "" };
+		}
 	}
 	return null;
 }

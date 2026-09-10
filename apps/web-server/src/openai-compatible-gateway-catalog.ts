@@ -24,9 +24,18 @@ import { effectiveGatewayModel, GATEWAY_EFFORT_INTENSITIES, type EffectiveGatewa
  * own provider entry are preserved, and per-model keys nobody here understands
  * survive on the model they belong to. What this module owns is the provider's
  * name, baseUrl and api, and each model's id, name, input, contextWindow,
- * maxTokens, reasoning and thinkingLevelMap, plus one key inside compat: supportsWebSearch. Compat as a whole is not ours
- * to own, because a model's compat block is where somebody hand-tunes a
- * stubborn deployment, so that block is edited in place rather than replaced.
+ * maxTokens, reasoning, thinkingLevelMap and cost, plus two keys inside compat:
+ * supportsWebSearch and cacheControlFormat. Compat as a whole is not ours to
+ * own, because a model's compat block is where somebody hand-tunes a stubborn
+ * deployment, so that block is edited in place rather than replaced.
+ *
+ * Cost is owned for the same reason maxTokens is: it is a fact the gateway
+ * publishes about itself, refreshed on every reload, and the ledger multiplies
+ * every turn by it. A gateway that stops publishing a price must leave the
+ * model with no price, so the wallet says "no price on file" rather than
+ * billing this year's turns at last year's number. The trade is that a cost
+ * somebody typed into this file by hand for a silent gateway is cleared on the
+ * next save, exactly as a hand-set maxTokens is.
  *
  * The one thing a rewrite cannot preserve is the comments, because the file is
  * re-serialised from parsed values. That is why every mutation takes a
@@ -34,9 +43,10 @@ import { effectiveGatewayModel, GATEWAY_EFFORT_INTENSITIES, type EffectiveGatewa
  */
 
 const OPENAI_COMPATIBLE_API = "openai-completions";
-const MODEL_KEYS_THIS_WRITER_OWNS = ["id", "name", "input", "contextWindow", "maxTokens", "reasoning", "thinkingLevelMap"] as const;
-/** The only key inside a model's `compat` block this writer decides. Everything else in there is somebody else's. */
+const MODEL_KEYS_THIS_WRITER_OWNS = ["id", "name", "input", "contextWindow", "maxTokens", "reasoning", "thinkingLevelMap", "cost"] as const;
+/** The only two keys inside a model's `compat` block this writer decides. Everything else in there is somebody else's. */
 const COMPAT_KEY_THIS_WRITER_OWNS = "supportsWebSearch";
+const COMPAT_CACHE_KEY_THIS_WRITER_OWNS = "cacheControlFormat";
 
 type JsonObject = Record<string, unknown>;
 
@@ -132,9 +142,9 @@ function providersOf(root: JsonObject): JsonObject {
  * One model entry, rebuilt from what this writer decides plus whatever the file
  * already said about that model and this writer does not understand.
  */
-function mergeModelEntry(existing: unknown, next: JsonObject, webSearch: boolean | undefined): JsonObject {
+function mergeModelEntry(existing: unknown, next: JsonObject, webSearch: boolean | undefined, cacheControlFormat: "anthropic" | undefined): JsonObject {
 	const existingCompat = isObject(existing) && isObject(existing.compat) ? existing.compat : undefined;
-	// The compat block, rebuilt as whatever was already there with our one key
+	// The compat block, rebuilt as whatever was already there with our two keys
 	// set or cleared. Unticking the box removes the key rather than writing
 	// false, so a model that never had a compat block does not grow an empty one
 	// and a model that had one keeps everything else in it. `undefined` means no
@@ -142,6 +152,13 @@ function mergeModelEntry(existing: unknown, next: JsonObject, webSearch: boolean
 	const compat: JsonObject = { ...existingCompat };
 	if (webSearch === true) compat[COMPAT_KEY_THIS_WRITER_OWNS] = true;
 	else if (webSearch === false) delete compat[COMPAT_KEY_THIS_WRITER_OWNS];
+	// The cache-marker key has no checkbox and no silence: detection is its
+	// whole story, so a save either writes it or clears it. A hand-set value on
+	// a model the declaration no longer covers is cleared like a stale
+	// hand-set cost, because a marker the deployment stopped honoring fails
+	// every request it rides on.
+	if (cacheControlFormat) compat[COMPAT_CACHE_KEY_THIS_WRITER_OWNS] = cacheControlFormat;
+	else delete compat[COMPAT_CACHE_KEY_THIS_WRITER_OWNS];
 	const withCompat = Object.keys(compat).length > 0 ? { ...next, compat } : next;
 	if (!isObject(existing)) return withCompat;
 	const preserved: JsonObject = {};
@@ -225,7 +242,28 @@ function catalogEntryFromEffective(id: string, name: string, effective: Effectiv
 	// Nothing declared writes nothing, which leaves the runtime registry's own
 	// default in charge, exactly as before this key existed.
 	if (effective.maxTokens) entry.maxTokens = effective.maxTokens;
+	// The published price, in the registry's own field names and unit (USD per
+	// million tokens). Written only where the gateway published one: a model
+	// without this key falls to the registry's zero cost, which the ledger
+	// records as an unpriced turn rather than as a free one.
+	if (effective.cost) {
+		entry.cost = { input: effective.cost.input, output: effective.cost.output, cacheRead: effective.cost.cacheRead, cacheWrite: effective.cost.cacheWrite };
+	}
 	return entry;
+}
+
+/**
+ * Anthropic-style cache markers, only where both halves are certain: the
+ * gateway declared prompt caching for the deployment AND the model is
+ * Claude-family, whose deployments read Anthropic's cache_control blocks.
+ * Verified live: a marker on a GPT deployment is harmlessly ignored, because
+ * it caches on its own, but pointless; one on a deployment that never
+ * declared caching (deepseek behind Bedrock) fails the whole request with a
+ * 500. Nova declares the flag too but is untested, so it is deliberately left
+ * out until a real turn against it proves the markers survive.
+ */
+function compatCacheControlFormat(modelId: string, effective: EffectiveGatewayModel): "anthropic" | undefined {
+	return effective.promptCaching === true && /claude/i.test(modelId) ? "anthropic" : undefined;
 }
 
 /** Every model the gateway needs registered: its room models plus the one that runs Memorize and Review. */
@@ -247,7 +285,7 @@ function gatewayCatalogModels(gateway: OpenAiCompatibleGateway, existingModels: 
 		// a detected fact becomes a working one.
 		const effective = effectiveGatewayModel(roomModel);
 		const entry = catalogEntryFromEffective(roomModel.modelId, roomModel.label ?? roomModel.modelId, effective);
-		models.push(mergeModelEntry(existingById.get(roomModel.modelId), entry, effective.webSearch));
+		models.push(mergeModelEntry(existingById.get(roomModel.modelId), entry, effective.webSearch, compatCacheControlFormat(roomModel.modelId, effective)));
 	}
 	if (gateway.maintenanceModel && !seen.has(gateway.maintenanceModel)) {
 		// A maintenance model that is also a room model was written above with
@@ -261,8 +299,9 @@ function gatewayCatalogModels(gateway: OpenAiCompatibleGateway, existingModels: 
 		const entry = catalogEntryFromEffective(gateway.maintenanceModel, gateway.maintenanceModel, effective);
 		// The approve list has no row for the maintenance model, so nothing here
 		// ever ticked or unticked web search for it. Whatever the file says about
-		// it stays said.
-		models.push(mergeModelEntry(existingById.get(gateway.maintenanceModel), entry, undefined));
+		// it stays said. The cache-marker key is different: it never had a
+		// checkbox anywhere, detection decides it on every entry alike.
+		models.push(mergeModelEntry(existingById.get(gateway.maintenanceModel), entry, undefined, compatCacheControlFormat(gateway.maintenanceModel, effective)));
 	}
 	return models;
 }

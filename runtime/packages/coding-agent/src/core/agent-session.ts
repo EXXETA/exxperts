@@ -787,8 +787,17 @@ export class AgentSession {
 	/**
 	 * Remove all listeners and disconnect from agent.
 	 * Call this when completely done with the session.
+	 *
+	 * Aborts any in-flight LLM call first so a session replaced mid-stream
+	 * does not keep its request running in the background. `agent.abort()`
+	 * only trips the AbortController, so dispose stays synchronous.
 	 */
 	dispose(): void {
+		try {
+			this.agent.abort();
+		} catch {
+			/* dispose must succeed even if abort throws */
+		}
 		this._extensionRunner.invalidate(
 			"This extension ctx is stale after session replacement or reload. Do not use a captured pi or command ctx after ctx.newSession(), ctx.fork(), ctx.switchSession(), or ctx.reload(). For newSession, fork, and switchSession, move post-replacement work into withSession and use the ctx passed to withSession. For reload, do not use the old ctx after await ctx.reload().",
 		);
@@ -1879,27 +1888,32 @@ export class AgentSession {
 		}
 
 		// Case 2: Threshold - context is getting large
-		// For error messages (no usage data), estimate from last successful response.
-		// This ensures sessions that hit persistent API errors (e.g. 529) can still compact.
+		// For error messages or all-zero usage messages, estimate from the last valid response.
+		// This ensures sessions that hit persistent API errors (e.g. 529) or providers that
+		// omit streaming usage can still compact and do not reset context accounting.
 		let contextTokens: number;
-		if (assistantMessage.stopReason === "error") {
+		const directContextTokens = assistantMessage.usage ? calculateContextTokens(assistantMessage.usage) : 0;
+		if (assistantMessage.stopReason === "error" || directContextTokens === 0) {
 			const messages = this.agent.state.messages;
 			const estimate = estimateContextTokens(messages);
-			if (estimate.lastUsageIndex === null) return; // No usage data at all
-			// Verify the usage source is post-compaction. Kept pre-compaction messages
-			// have stale usage reflecting the old (larger) context and would falsely
-			// trigger compaction right after one just finished.
-			const usageMsg = messages[estimate.lastUsageIndex];
-			if (
-				compactionEntry &&
-				usageMsg.role === "assistant" &&
-				(usageMsg as AssistantMessage).timestamp <= new Date(compactionEntry.timestamp).getTime()
-			) {
-				return;
+			// Without provider usage, estimate.tokens is the pure message-size estimate.
+			// Only usage-backed estimates need the stale pre-compaction check.
+			if (estimate.lastUsageIndex !== null) {
+				// Verify the usage source is post-compaction. Kept pre-compaction messages
+				// have stale usage reflecting the old (larger) context and would falsely
+				// trigger compaction right after one just finished.
+				const usageMsg = messages[estimate.lastUsageIndex];
+				if (
+					compactionEntry &&
+					usageMsg.role === "assistant" &&
+					(usageMsg as AssistantMessage).timestamp <= new Date(compactionEntry.timestamp).getTime()
+				) {
+					return;
+				}
 			}
 			contextTokens = estimate.tokens;
 		} else {
-			contextTokens = calculateContextTokens(assistantMessage.usage);
+			contextTokens = directContextTokens;
 		}
 		if (shouldCompact(contextTokens, contextWindow, settings)) {
 			await this._runAutoCompaction("threshold", false);

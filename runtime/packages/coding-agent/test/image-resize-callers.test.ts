@@ -3,7 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("../src/utils/image-resize.js", () => ({
+vi.mock("../src/utils/image-resize.js", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../src/utils/image-resize.js")>()),
 	resizeImage: vi.fn(),
 	formatDimensionNote: vi.fn(() => undefined),
 }));
@@ -22,7 +23,7 @@ describe("image resize callers", () => {
 		testDir = join(tmpdir(), `image-resize-callers-${Date.now()}`);
 		mkdirSync(testDir, { recursive: true });
 		vi.mocked(resizeImage).mockReset();
-		vi.mocked(resizeImage).mockResolvedValue(null);
+		vi.mocked(resizeImage).mockResolvedValue({ failure: "size" });
 	});
 
 	afterEach(() => {

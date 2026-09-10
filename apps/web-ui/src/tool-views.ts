@@ -14,8 +14,6 @@ export const GENERIC_TOOL_VIEWS: Record<string, { icon: string; running: string;
 	ls: { icon: "📁", running: "Listing files", done: "Listed files" },
 	find: { icon: "📁", running: "Finding files", done: "Found files" },
 	grep: { icon: "🔎", running: "Searching files", done: "Searched files" },
-	write_markdown_file: { icon: "📝", running: "Writing document", done: "Wrote document" },
-	read_spreadsheet: { icon: "📊", running: "Reading spreadsheet", done: "Read spreadsheet" },
 	kb_search: { icon: "📚", running: "Searching knowledge base", done: "Searched knowledge base" },
 	artifact_list: { icon: "🗂️", running: "Listing artifacts", done: "Listed artifacts" },
 	artifact_read: { icon: "🗂️", running: "Reading artifact", done: "Read artifact" },

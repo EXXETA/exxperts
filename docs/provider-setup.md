@@ -162,20 +162,22 @@ After loading the model list, Exxperts asks the gateway what it is willing to sa
 
 Three shapes are understood:
 
-- **LiteLLM `/model/info`**: per-model image support, web-search support and token limits. The most complete answer, and the one that wins where sources disagree, because it describes the deployment rather than a catalogue entry.
+- **LiteLLM `/model/info`**: per-model image support, web-search support, token limits, prices and whether the deployment supports prompt caching. The most complete answer, and the one that wins where sources disagree, because it describes the deployment rather than a catalogue entry.
 - **LiteLLM `/models`**: a LiteLLM deployment also states `max_input_tokens` on its ordinary model rows, so context windows fill in from there even when the richer route is unavailable.
-- **OpenRouter `/models`**: modality and `context_length` on the model rows, which fills in image support and the context window. Web search is only ever declared on LiteLLM's `/model/info`, so it stays yours to set here.
+- **OpenRouter `/models`**: modality, `context_length` and prices on the model rows, which fills in image support, the context window and the price. Web search is only ever declared on LiteLLM's `/model/info`, so it stays yours to set here.
 
-A gateway that publishes none of this is not a lesser gateway. The form opens on the defaults, a context window of 128000 shown rather than hidden, and you fill in what you know.
+A gateway that publishes none of this is not a lesser gateway. The form opens on the defaults, a context window of 128000 shown rather than hidden, and you fill in what you know. Prices and caching have no field of their own: they come from detection only, and a price nobody published is shown in the Wallet as "no price on file", never as zero.
 
-**Restricted virtual keys.** A LiteLLM virtual key is often scoped to the `llm_api_routes` group, which does not include the model info route. Such a key gets a `403` naming the allowed routes, and that is a correctly configured company gateway, not a broken one. Detection stays useful: context windows still fill in from `max_input_tokens` on the plain `/models` rows, and the images and web-search ticks are left to you, since no shape available to that key carries them. If you want full detection, the gateway administrator can allow the model info route on virtual keys.
+Detection is not a one-time trip. The server re-reads every saved gateway's declarations shortly after it starts and once a day, so prices, capabilities and effort levels that changed on the platform side show up without a visit to this panel. A gateway that cannot be reached or rejects its key is left exactly as it was, a field the gateway did not answer keeps its previous value, and your own overrides are never touched.
+
+**Restricted virtual keys.** A LiteLLM virtual key is often scoped to the `llm_api_routes` group, which does not include the model info route. Such a key gets a `403` naming the allowed routes, and that is a correctly configured company gateway, not a broken one. Detection stays useful: context windows still fill in from `max_input_tokens` on the plain `/models` rows, while the images and web-search ticks are left to you and prices stay unknown (the Wallet shows "no price on file" for that gateway), since no shape available to that key carries them. If you want full detection, the gateway administrator can allow the model info route on virtual keys.
 
 ### Edit, switch, and remove a gateway
 
 Every gateway's row on the **AI setup** page carries its own menu:
 
 - **Approve models** changes the model set and the two per-model fields. The address and key are untouched.
-- **Edit gateway** owns the name, base URL and API key. Leaving the key field blank keeps the stored key.
+- **Edit gateway** owns the name, base URL and API key. Leaving the key field blank keeps the stored key as long as the address still names the same server; an address on a different host or port asks for the key again, so a stored key is never sent to a server it was not given to (correcting the path, say `/v1` to `/`, does not count). Gateway checks stop at the address you typed and do not follow redirects.
 - **Remove gateway** deletes that gateway's model catalog entry, its stored key, and its profile. Other gateways keep their models and stay signed in.
 
 Removing a gateway is not reversible from inside the app, and it does not migrate rooms. Threads locked to one of its models stop resolving that model and cannot resume until you select a model they can use, so prefer editing a gateway over removing and re-adding one. A gateway added again later gets a new provider id even if you give it the same name, precisely so that rooms still pointing at the removed one do not silently re-attach to a different endpoint.
@@ -293,6 +295,8 @@ You or your organization remain responsible for:
 - tool/function-calling behavior, image support, streaming behavior, and system/developer role compatibility;
 - prompt caching, TTL, reasoning/thinking controls, and related billing semantics;
 - capability validation with non-confidential prompts before relying on a gateway for real work.
+
+One of those the app does handle for you: a Claude model behind a gateway that declares prompt caching gets Anthropic cache markers on its prompt prefix automatically, so long conversations reuse it; nothing to configure, and the Wallet's "Caching saved" figure shows the effect.
 
 The terminal setup command does not fetch `/models`, list available model ids, validate reachability, validate the API key, or automatically approve every model exposed by the gateway. The app's **Add gateway** and **Approve models** steps do fetch the model list and read whatever capabilities the gateway publishes, but neither approves anything on your behalf and neither validates that a model actually works. If a disposable validation room later fails with a non-secret error such as "model not found" or "unknown model", correct the model id in **Approve models**, or rerun the terminal setup with the exact id or alias expected by the gateway.
 

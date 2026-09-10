@@ -6,10 +6,15 @@
  * API therefore never returns one blended "cost": every aggregate is split by
  * source (billed / plan / unattributed) so the UI can say which dollars are
  * real, which are covered by plans, and which are too old to attribute.
+ *
+ * A row stored at zero that moved tokens is priced on the way out, at the
+ * price on file today, and reported as an estimate (priceRow). The ledger
+ * itself is never rewritten.
  */
 
 import type { FastifyInstance } from "fastify";
 import { canonicalModelName } from "../../web-ui/src/model-names.js";
+import { GATEWAY_PROVIDER_ID_PREFIX } from "./openai-compatible-gateways.js";
 import { loadUsage } from "./usage-log.js";
 import type { UsageRow } from "./usage-log.js";
 
@@ -55,11 +60,59 @@ export function modelGroupOf(row: { model?: string; modelLabel?: string; provide
 	return group;
 }
 
+/** A model's price in USD per million tokens, the runtime's own unit. */
+export type UsagePrice = { input: number; output: number; cacheRead: number; cacheWrite: number };
+
 export interface UsageApiDeps {
 	/** Resolve a runtime model for price lookups; undefined when unknown. */
-	findModel: (provider: string, modelId: string) => { cost?: { input: number; cacheRead: number } } | undefined;
+	findModel: (provider: string, modelId: string) => { cost?: UsagePrice } | undefined;
 	/** Rooms that currently exist (non-archived): id → current display name. */
 	liveAgents: () => Map<string, string>;
+	/**
+	 * The name a provider goes by today (a gateway carries the name the person
+	 * gave it); undefined when nothing is registered under the id any more.
+	 */
+	providerDisplayName: (providerId: string) => string | undefined;
+}
+
+/**
+ * Where a row's money came from. "turn" is the cost the ledger stored when
+ * the turn ran; "today" is tokens x the price on file now, for a turn that
+ * ran before its model had a price; "none" is a turn that moved tokens and
+ * still has no price anywhere.
+ */
+export type PricedAt = "turn" | "today" | "none";
+
+function tokensOf(row: UsageRow): number {
+	return row.input + row.output + row.cacheRead + (row.cacheWrite || 0);
+}
+
+/**
+ * A row's effective cost. The ledger is never rewritten: a stored cost above
+ * zero is the turn's own and stays exact. A zero that moved tokens means the
+ * model had no price on file when the turn ran (a gateway whose price was
+ * read later, or never), so it is priced at today's rate and marked as an
+ * estimate. A price block that is all zeros counts as no price at all: a
+ * model declared free looks exactly like a model nobody priced, and the
+ * wallet would rather say "no price" than show a free turn it cannot vouch
+ * for. A zero that moved no tokens is an empty turn, exact at zero.
+ */
+function priceRow(row: UsageRow, priceOf: (row: UsageRow) => UsagePrice | undefined): { cost: number; pricedAt: PricedAt } {
+	if (row.cost > 0 || tokensOf(row) === 0) return { cost: row.cost, pricedAt: "turn" };
+	const price = priceOf(row);
+	if (!price || price.input + price.output + price.cacheRead + price.cacheWrite <= 0) return { cost: 0, pricedAt: "none" };
+	const cost = (row.input * price.input + row.output * price.output + row.cacheRead * price.cacheRead + (row.cacheWrite || 0) * price.cacheWrite) / 1_000_000;
+	return { cost, pricedAt: "today" };
+}
+
+/** Money plus how much of it is read-time estimate or still missing; every aggregate carries it. */
+type PricedTally = { cost: number; turns: number; estimatedTurns: number; unpricedTurns: number };
+const newTally = (): PricedTally => ({ cost: 0, turns: 0, estimatedTurns: 0, unpricedTurns: 0 });
+function tally(agg: PricedTally, priced: { cost: number; pricedAt: PricedAt }): void {
+	agg.cost += priced.cost;
+	agg.turns += 1;
+	if (priced.pricedAt === "today") agg.estimatedTurns += 1;
+	if (priced.pricedAt === "none") agg.unpricedTurns += 1;
 }
 
 function providerOfRow(row: UsageRow): string | undefined {
@@ -89,8 +142,33 @@ function sourceOfRow(row: UsageRow): UsageSource {
 
 
 export function registerUsageApi(app: FastifyInstance, deps: UsageApiDeps): void {
+	// One registry lookup per (provider, model) per request: a ledger has
+	// thousands of rows and a few dozen distinct models.
+	const priceLookup = () => {
+		const cache = new Map<string, UsagePrice | undefined>();
+		return (row: UsageRow): UsagePrice | undefined => {
+			const provider = providerOfRow(row);
+			if (!provider || !row.model) return undefined;
+			const key = provider + "|" + row.model;
+			if (!cache.has(key)) cache.set(key, deps.findModel(provider, row.model)?.cost);
+			return cache.get(key);
+		};
+	};
+
+	// A gateway goes by the name its owner gave it, the legacy single-gateway
+	// id included, so the person's own label wins over the curated table there.
+	const isGateway = (provider: string): boolean => provider === "openai-compatible" || provider.startsWith(GATEWAY_PROVIDER_ID_PREFIX);
+	const sourceDisplayName = (provider: string): string =>
+		(isGateway(provider) ? deps.providerDisplayName(provider) : undefined) ??
+		SOURCE_DISPLAY[provider] ??
+		deps.providerDisplayName(provider) ??
+		// A gateway id nothing answers for any more is a gateway that was
+		// removed; its turns still happened and still cost money.
+		(provider.startsWith(GATEWAY_PROVIDER_ID_PREFIX) ? `Removed gateway (${provider})` : provider);
+
 	app.get("/api/usage", async (req) => {
 		const rows = loadUsage();
+		const priceOf = priceLookup();
 		const now = Date.now();
 		const day = 24 * 3600 * 1000;
 		const hourMs = 3600 * 1000;
@@ -157,10 +235,19 @@ export function registerUsageApi(app: FastifyInstance, deps: UsageApiDeps): void
 			/** est. list-price savings from cache reads, only over rows whose price is known */
 			cacheSavedEst: 0,
 			cacheSavedKnownTurns: 0,
+			/**
+			 * Turns recorded at zero that are priced at today's rate on the way
+			 * out (see priceRow), and turns that moved tokens and still have no
+			 * price anywhere. Counted so the UI can mark the first as estimates
+			 * and say "no price on file" for the second, where a zero would
+			 * otherwise read as a free turn.
+			 */
+			estimatedTurns: 0,
+			unpricedTurns: 0,
 		};
-		const bySource = new Map<string, { source: UsageSource; name: string; cost: number; turns: number }>();
-		const byModel = new Map<string, { cost: number; turns: number; tokens: number }>();
-		const byAgent = new Map<string, { cost: number; turns: number; input: number; output: number; kinds: Record<string, { cost: number; turns: number }> }>();
+		const bySource = new Map<string, PricedTally & { source: UsageSource; name: string }>();
+		const byModel = new Map<string, PricedTally & { tokens: number }>();
+		const byAgent = new Map<string, PricedTally & { input: number; output: number; kinds: Record<string, PricedTally> }>();
 		const activeDays = new Set<number>();
 
 		type Bucket = { label: string; ts?: number; turns: number; tokens: number } & SourceSplit;
@@ -191,51 +278,45 @@ export function registerUsageApi(app: FastifyInstance, deps: UsageApiDeps): void
 
 		for (const r of scoped) {
 			const source = sourceOfRow(r);
+			const priced = priceRow(r, priceOf);
 			totals.input += r.input;
 			totals.output += r.output;
 			totals.cacheRead += r.cacheRead;
 			totals.cacheWrite += r.cacheWrite || 0;
 			totals.turns += 1;
-			totals.cost[source] += r.cost;
+			totals.cost[source] += priced.cost;
+			if (priced.pricedAt === "today") totals.estimatedTurns += 1;
+			if (priced.pricedAt === "none") totals.unpricedTurns += 1;
 
-			const provider = providerOfRow(r);
-			if (provider) {
-				const modelForPrice = deps.findModel(provider, r.model ?? "");
-				const price = modelForPrice?.cost;
-				if (price && price.input > 0) {
-					totals.cacheSavedEst += (r.cacheRead * (price.input - price.cacheRead)) / 1_000_000;
-					totals.cacheSavedKnownTurns += 1;
-				}
+			const price = priceOf(r);
+			if (price && price.input > 0) {
+				totals.cacheSavedEst += (r.cacheRead * (price.input - price.cacheRead)) / 1_000_000;
+				totals.cacheSavedKnownTurns += 1;
 			}
 
+			const provider = providerOfRow(r);
 			const sourceKey = source === "unattributed" ? "unattributed" : `${source}:${provider ?? "unknown"}`;
 			let sourceAgg = bySource.get(sourceKey);
 			if (!sourceAgg) {
-				const name = source === "unattributed" ? "Earlier usage" : (provider && SOURCE_DISPLAY[provider]) || provider || "Unknown";
-				bySource.set(sourceKey, (sourceAgg = { source, name, cost: 0, turns: 0 }));
+				const name = source === "unattributed" ? "Earlier usage" : provider ? sourceDisplayName(provider) : "Unknown";
+				bySource.set(sourceKey, (sourceAgg = { source, name, ...newTally() }));
 			}
-			sourceAgg.cost += r.cost;
-			sourceAgg.turns += 1;
+			tally(sourceAgg, priced);
 
 			if (r.model) {
 				const modelKey = modelGroupOf(r).key;
 				let modelAgg = byModel.get(modelKey);
-				if (!modelAgg) byModel.set(modelKey, (modelAgg = { cost: 0, turns: 0, tokens: 0 }));
-				modelAgg.cost += r.cost;
-				modelAgg.turns += 1;
+				if (!modelAgg) byModel.set(modelKey, (modelAgg = { ...newTally(), tokens: 0 }));
+				tally(modelAgg, priced);
 				modelAgg.tokens += r.input + r.output;
 			}
 
 			let agentAgg = byAgent.get(r.agent);
-			if (!agentAgg) byAgent.set(r.agent, (agentAgg = { cost: 0, turns: 0, input: 0, output: 0, kinds: {} }));
-			agentAgg.cost += r.cost;
-			agentAgg.turns += 1;
+			if (!agentAgg) byAgent.set(r.agent, (agentAgg = { ...newTally(), input: 0, output: 0, kinds: {} }));
+			tally(agentAgg, priced);
 			agentAgg.input += r.input;
 			agentAgg.output += r.output;
-			const kind = r.kind ?? "chat";
-			const kindAgg = (agentAgg.kinds[kind] ??= { cost: 0, turns: 0 });
-			kindAgg.cost += r.cost;
-			kindAgg.turns += 1;
+			tally((agentAgg.kinds[r.kind ?? "chat"] ??= newTally()), priced);
 
 			const rowDate = new Date(r.ts);
 			const dayKeyDate = new Date(r.ts);
@@ -249,7 +330,7 @@ export function registerUsageApi(app: FastifyInstance, deps: UsageApiDeps): void
 					const b = series.buckets[23 - hAgo];
 					b.turns += 1;
 					b.tokens += r.input + r.output;
-					b[source] += r.cost;
+					b[source] += priced.cost;
 				}
 			} else {
 				const idx = dayIndexByMidnight?.get(dayKeyDate.getTime());
@@ -257,7 +338,7 @@ export function registerUsageApi(app: FastifyInstance, deps: UsageApiDeps): void
 					const b = series.buckets[idx];
 					b.turns += 1;
 					b.tokens += r.input + r.output;
-					b[source] += r.cost;
+					b[source] += priced.cost;
 				}
 			}
 		}
@@ -271,7 +352,7 @@ export function registerUsageApi(app: FastifyInstance, deps: UsageApiDeps): void
 			const prevRows = rows.filter((r) => r.ts >= windowStart - windowLen && r.ts < windowStart && modelOk(r) && agentOk(r));
 			previous = { cost: newSplit(), turns: prevRows.length, tokens: 0 };
 			for (const r of prevRows) {
-				previous.cost[sourceOfRow(r)] += r.cost;
+				previous.cost[sourceOfRow(r)] += priceRow(r, priceOf).cost;
 				previous.tokens += r.input + r.output;
 			}
 		}
@@ -305,13 +386,21 @@ export function registerUsageApi(app: FastifyInstance, deps: UsageApiDeps): void
 			series,
 			weekHour,
 			// Full turn log newest first, model/agent-filtered, range-independent
-			// so a filter can surface every matching turn.
-			recent: rows.filter((r) => modelOk(r) && agentOk(r)).slice().reverse(),
+			// so a filter can surface every matching turn. Each row carries its
+			// effective cost and whether that cost is a read-time estimate.
+			recent: rows
+				.filter((r) => modelOk(r) && agentOk(r))
+				.map((r) => {
+					const priced = priceRow(r, priceOf);
+					return { ...r, cost: priced.cost, estimated: priced.pricedAt === "today" };
+				})
+				.reverse(),
 		};
 	});
 
 	app.get("/api/usage/export.csv", async (_req, reply) => {
 		const rows = loadUsage();
+		const priceOf = priceLookup();
 		const esc = (value: unknown): string => {
 			let s = value == null ? "" : String(value);
 			// Spreadsheets execute cells starting with = + - @ or a tab as
@@ -319,9 +408,13 @@ export function registerUsageApi(app: FastifyInstance, deps: UsageApiDeps): void
 			if (/^[=+\-@\t]/.test(s)) s = "'" + s;
 			return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 		};
-		const header = "ts,iso,agent,persona,kind,provider,auth,model,model_label,input,output,cache_read,cache_write,cost_est_usd,tools";
-		const lines = rows.map((r) =>
-			[
+		// cost_est_usd is the same effective cost the wallet shows, and priced_at
+		// says where it came from, so a spreadsheet can tell a stored cost from
+		// a read-time estimate from a turn nobody could price.
+		const header = "ts,iso,agent,persona,kind,provider,auth,model,model_label,input,output,cache_read,cache_write,cost_est_usd,priced_at,tools";
+		const lines = rows.map((r) => {
+			const priced = priceRow(r, priceOf);
+			return [
 				r.ts,
 				new Date(r.ts).toISOString(),
 				esc(r.agent),
@@ -335,10 +428,11 @@ export function registerUsageApi(app: FastifyInstance, deps: UsageApiDeps): void
 				r.output,
 				r.cacheRead,
 				r.cacheWrite || 0,
-				r.cost,
+				priced.cost,
+				priced.pricedAt,
 				esc(r.tools?.join(" ") ?? ""),
-			].join(","),
-		);
+			].join(",");
+		});
 		reply.header("content-type", "text/csv; charset=utf-8");
 		reply.header("content-disposition", 'attachment; filename="exxperts-usage.csv"');
 		return [header, ...lines].join("\n") + "\n";

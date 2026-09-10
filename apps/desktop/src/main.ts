@@ -485,6 +485,37 @@ async function manualUpdateCheck(): Promise<void> {
   }
 }
 
+// Apps that never restart must still learn about releases: after the launch
+// check, the same anonymous version check repeats on this cadence.
+const UPDATE_RECHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
+// Small random spread per tick so long-running installs drift apart instead
+// of hitting the feed in step.
+const UPDATE_RECHECK_JITTER_MS = 5 * 60 * 1000;
+
+let updateRecheckTimer: NodeJS.Timeout | null = null;
+
+// The periodic re-check, same code path as the launch check (checkForUpdate
+// -> onUpdateStateChanged -> tray entry + gear dot), so what it finds looks
+// identical downstream. A self-rescheduling timeout instead of setInterval:
+// the next wait is armed only after the current check settles, so ticks can
+// never stack behind a slow feed. Not armed under smoke - the smoke asserts
+// a deterministic check sequence and quits within seconds.
+function scheduleUpdateRecheck(): void {
+  if (SMOKE || quitting) return;
+  const jitter = Math.round((Math.random() * 2 - 1) * UPDATE_RECHECK_JITTER_MS);
+  updateRecheckTimer = setTimeout(() => {
+    updateRecheckTimer = null;
+    // An open install offer (dialog or running download) or a pending
+    // quit-and-install owns the update state; re-arm and stay out of its way.
+    if (quitting || updaterQuitting || updateOfferOpen) {
+      scheduleUpdateRecheck();
+      return;
+    }
+    void checkForUpdate(app.getVersion()).finally(scheduleUpdateRecheck);
+  }, UPDATE_RECHECK_INTERVAL_MS + jitter);
+  updateRecheckTimer.unref(); // a pending re-check must never keep the app alive
+}
+
 // Tray icon in both states. macOS: flat template glyph (OS inverts black +
 // alpha), badge variant from the same generator. Windows/Linux: the brand
 // tile (payload favicon, one mark everywhere), badged variant from the
@@ -737,11 +768,13 @@ async function boot(): Promise<void> {
   if (!startHidden) showMainWindow();
   closeBootWindow();
 
-  // One anonymous version check per launch, after the app is on screen so it
+  // One anonymous version check at launch, after the app is on screen so it
   // can never delay startup. It asks the release feed for the latest tag and
   // sends nothing about this machine; a failure stays silent (offline is a
-  // normal state). Nothing polls after this.
-  void checkForUpdate(app.getVersion());
+  // normal state). Once it settles - not in parallel with it - the six-hour
+  // re-check cadence starts, so an app that never restarts still hears about
+  // releases.
+  void checkForUpdate(app.getVersion()).finally(scheduleUpdateRecheck);
 
   if (SMOKE) await smokeReport();
 }
@@ -1098,6 +1131,12 @@ if (!gotLock) {
   app.on("before-quit", (event) => {
     if (quitting) return;
     quitting = true;
+    // The re-check timer is unref'd, but a quitting app should not leave a
+    // scheduled network call behind either way.
+    if (updateRecheckTimer) {
+      clearTimeout(updateRecheckTimer);
+      updateRecheckTimer = null;
+    }
     // Updater-driven quit: the server child is already stopped, and the
     // installer's hook rides the NORMAL quit sequence (app.exit would skip
     // the quit event it needs), so this quit must proceed unintercepted.
