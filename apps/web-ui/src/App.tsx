@@ -2834,10 +2834,14 @@ export function App() {
 	// this so it never claims "Reconnecting" while nothing is trying.
 	const [roomReconnectState, setRoomReconnectState] = useState<"idle" | "reconnecting" | "failed">("idle");
 	const [busy, setBusy] = useState(false);
-	// Conversation mode (voice). The controller lives in a ref because the
-	// websocket handler feeds it text and tool events; the state is what the
-	// bar draws in the composer's place. A failure ends the mode and shows one
-	// toast; a missing model also opens the Voice tab, where the download is.
+	// Conversation mode (voice). Desktop app only for now: the shell appends
+	// the user-agent token main.tsx keys its CSS off, and a browser tab gets
+	// neither the button, the shortcut nor the Voice tab. The controller lives
+	// in a ref because the websocket handler feeds it text and tool events; the
+	// state is what the bar draws in the composer's place. A failure ends the
+	// mode and shows one toast; a missing model also opens the Voice tab,
+	// where the download is.
+	const voiceAvailable = navigator.userAgent.includes("ExxpertsDesktop");
 	const [conversation, setConversation] = useState<ConversationState | null>(null);
 	const conversationRef = useRef<Conversation | null>(null);
 	const sendRef = useRef<(text: string) => boolean>(() => false);
@@ -2853,7 +2857,7 @@ export function App() {
 			if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.code === "Space") {
 				event.preventDefault();
 				if (active) conversationActionsRef.current.end();
-				else if (persistentChatRef.current) conversationActionsRef.current.start();
+				else if (persistentChatRef.current && navigator.userAgent.includes("ExxpertsDesktop")) conversationActionsRef.current.start();
 			}
 		};
 		window.addEventListener("keydown", onKey);
@@ -7352,8 +7356,8 @@ export function App() {
 						</div>
 					),
 				},
-				{
-					id: "voice",
+				...(voiceAvailable ? [{
+					id: "voice" as const,
 					label: "Voice",
 					title: "Talk with exxperts and hear it answer",
 					content: (
@@ -7361,7 +7365,7 @@ export function App() {
 							<VoiceSettingsSection />
 						</div>
 					),
-				},
+				}] : []),
 				{
 					id: "connectors",
 					label: "Connectors",
@@ -7620,9 +7624,10 @@ export function App() {
 							onQuickCheckpoint={() => void runQuickCheckpoint()}
 							onOpenFullCheckpoint={() => { setCheckpointQuickRequested(false); setCheckpointQuickBlockedReasons(null); setCheckpointPreviewOpen(true); }}
 						/>
-						{/* Conversation mode. Hidden on a viewing-only device: the
-						    microphone route is a write, so the server would refuse it. */}
-						{remoteClientContext.capability !== "read-only" && (
+						{/* Conversation mode: desktop app only for now, and hidden on a
+						    viewing-only device, where the microphone route is a write the
+						    server would refuse. */}
+						{voiceAvailable && remoteClientContext.capability !== "read-only" && (
 							<button
 								className="icon-btn icon-btn-square composer-voice-btn"
 								aria-label="Start a conversation"
