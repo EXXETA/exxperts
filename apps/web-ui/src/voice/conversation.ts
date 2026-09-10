@@ -99,10 +99,15 @@ export class Conversation {
 		this.finish(null);
 	}
 
-	/** Escape: the room falls silent and listens, the same as talking over it. Nothing to hush while listening. */
-	hush(): void {
-		if (this.ended || !this.turnOpen) return;
+	/**
+	 * Escape: the room falls silent and listens, the same as talking over it.
+	 * Returns false when there was nothing to hush, which the caller takes as
+	 * "leave the conversation": one Escape stops the answer, the next one ends.
+	 */
+	hush(): boolean {
+		if (this.ended || !this.turnOpen) return false;
 		this.interrupt("");
+		return true;
 	}
 
 	// ── Fed by the room's websocket handler ─────────────────────────────────
