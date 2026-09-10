@@ -18,6 +18,7 @@ import { useRemoteClientContext } from "../remote-client-context";
  */
 
 type VoiceLanguage = "auto" | "de" | "en";
+type VoicePatience = "quick" | "normal" | "relaxed";
 type VoiceDownload = {
 	phase: "idle" | "downloading" | "verifying" | "extracting" | "ready" | "error";
 	receivedBytes: number;
@@ -36,7 +37,7 @@ type VoiceModelCard = {
 	download: VoiceDownload;
 };
 type VoicePayload = {
-	settings: { speaker: number; speed: number; language: VoiceLanguage };
+	settings: { speaker: number; speed: number; language: VoiceLanguage; patience: VoicePatience };
 	engine: { available: boolean; message: string | null };
 	speakers: number;
 	models: VoiceModelCard[];
@@ -47,6 +48,11 @@ const SAMPLE = {
 	en: "Hello. This is how exxperts sounds when it talks with you.",
 } as const;
 const SPEEDS = [0.8, 0.9, 1, 1.1, 1.2, 1.3];
+const PATIENCE_HINT: Record<VoicePatience, string> = {
+	quick: "Sends after about a second of silence. For fast talkers who finish their sentences.",
+	normal: "Sends after a short pause, and waits about twice as long when the sentence sounds unfinished, so you can stop to think.",
+	relaxed: "Room to think. A finished sentence still goes after two seconds; an unfinished one can rest for five.",
+};
 
 function megabytes(bytes: number): string {
 	return `${Math.round(bytes / 1_000_000)} MB`;
@@ -241,7 +247,7 @@ export function VoiceSettingsSection() {
 			<h3 className="web-search-fallback-heading">Voice</h3>
 			{remoteClient.remote ? (
 				<p className="ai-setup-copy">
-					Speaker {data.settings.speaker + 1} at {data.settings.speed.toFixed(1)}× speed, language {data.settings.language === "auto" ? "detected per sentence" : data.settings.language === "de" ? "German" : "English"}.
+					Speaker {data.settings.speaker + 1} at {data.settings.speed.toFixed(1)}× speed, language {data.settings.language === "auto" ? "detected per sentence" : data.settings.language === "de" ? "German" : "English"}, {data.settings.patience} pause before sending.
 					Voice is set up on the computer itself.
 				</p>
 			) : (
@@ -270,6 +276,15 @@ export function VoiceSettingsSection() {
 							<option value="en">English</option>
 						</select>
 					</label>
+					<label>
+						Pause before sending
+						<select value={data.settings.patience} disabled={settingsBusy} onChange={(e) => void saveSettings({ patience: e.target.value as VoicePatience })}>
+							<option value="quick">Quick</option>
+							<option value="normal">Normal</option>
+							<option value="relaxed">Relaxed</option>
+						</select>
+					</label>
+					<span className="voice-controls-hint">{PATIENCE_HINT[data.settings.patience]}</span>
 				</div>
 			)}
 			<p>

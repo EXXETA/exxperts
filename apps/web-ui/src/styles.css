@@ -2341,6 +2341,12 @@ strong, b { font-weight: 700; }
 	font-size: 13px;
 	color: var(--muted);
 }
+.voice-controls-hint {
+	flex-basis: 100%;
+	font-size: 12.5px;
+	color: var(--muted);
+	line-height: 1.5;
+}
 .voice-controls select {
 	font: inherit;
 	color: var(--fg);
