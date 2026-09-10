@@ -2216,11 +2216,12 @@ strong, b { font-weight: 700; }
 }
 /* Conversation mode: the bar that takes the text field's place while it is
    on. Same box as the composer; a ring says what the room is doing. */
-.composer-box.conversation-bar {
+.conversation-bar {
+	display: flex;
 	flex-direction: row;
 	align-items: center;
 	gap: 12px;
-	min-height: 58px;
+	min-height: 40px;
 }
 .conversation-ring {
 	flex: 0 0 auto;

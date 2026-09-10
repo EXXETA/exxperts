@@ -1,10 +1,12 @@
 import type { ConversationState, ConversationStatus } from "../voice/conversation";
 
 /**
- * The bar that takes the text field's place while a conversation is on: a
+ * The row that takes the text field's place while a conversation is on: a
  * ring that says what the room is doing, the words it hears you say, and End.
- * The transcript above keeps filling with your messages and the answers; the
- * bar itself never writes anything.
+ * It sits inside the composer's frame, above the same status row the text
+ * field has, so the context pill stays in view. The transcript above keeps
+ * filling with your messages and the answers; the bar itself never writes
+ * anything.
  */
 
 const STATUS_WORD: Record<ConversationStatus, string> = {
@@ -22,7 +24,7 @@ function tail(text: string, max = 160): string {
 export function ConversationBar({ state, onEnd }: { state: ConversationState; onEnd: () => void }) {
 	const word = state.status === "working" && state.detail ? state.detail : STATUS_WORD[state.status];
 	return (
-		<div className={`composer-box conversation-bar ${state.status}`} role="status" aria-live="polite" aria-label="Conversation">
+		<div className={`conversation-bar ${state.status}`} role="status" aria-live="polite" aria-label="Conversation">
 			<span className="conversation-ring" aria-hidden="true" />
 			<span className="conversation-status">{word}</span>
 			<span className="conversation-partial">
