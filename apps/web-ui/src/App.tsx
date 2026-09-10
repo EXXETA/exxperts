@@ -2846,14 +2846,16 @@ export function App() {
 	const conversationRef = useRef<Conversation | null>(null);
 	const sendRef = useRef<(text: string) => boolean>(() => false);
 	const [voiceNotice, setVoiceNotice] = useState<{ text: string; sub?: string } | null>(null);
-	// Escape ends a conversation; Ctrl or Cmd + Shift + Space starts or ends
-	// one from anywhere in a room. The handlers live in a ref so one listener
-	// serves the whole session.
+	// Ctrl or Cmd + Shift + Space starts or ends a conversation from anywhere
+	// in a room. Escape only hushes the room mid-answer, the same as talking
+	// over it: it is pressed for too many other reasons to end the mode, and
+	// ending is what the End button is for. The handlers live in a ref so one
+	// listener serves the whole session.
 	const conversationActionsRef = useRef<{ start: () => void; end: () => void }>({ start: () => {}, end: () => {} });
 	useEffect(() => {
 		const onKey = (event: KeyboardEvent) => {
 			const active = conversationRef.current !== null;
-			if (event.key === "Escape" && active) { conversationActionsRef.current.end(); return; }
+			if (event.key === "Escape" && active) { conversationRef.current?.hush(); return; }
 			if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.code === "Space") {
 				event.preventDefault();
 				if (active) conversationActionsRef.current.end();
@@ -7631,7 +7633,7 @@ export function App() {
 							<button
 								className="icon-btn icon-btn-square composer-voice-btn"
 								aria-label="Start a conversation"
-								title="Talk with this room. What you say is transcribed and the answer is spoken, both on this computer. Talk over it to interrupt. Escape ends; Ctrl or Cmd + Shift + Space starts and ends."
+								title="Talk with this room. What you say is transcribed and the answer is spoken, both on this computer. Talk over it or press Escape to interrupt. Ctrl or Cmd + Shift + Space starts and ends."
 								disabled={!connectedForChrome}
 								onClick={startConversation}
 							><WaveformIcon /></button>

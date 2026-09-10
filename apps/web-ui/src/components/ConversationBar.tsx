@@ -36,7 +36,7 @@ export function ConversationBar({ state, onEnd }: { state: ConversationState; on
 				className="icon-btn icon-btn-square conversation-end"
 				type="button"
 				aria-label="End the conversation"
-				title="End the conversation. Escape does the same. Your questions and the answers stay in the room."
+				title="End the conversation. Ctrl or Cmd + Shift + Space does the same. Your questions and the answers stay in the room."
 				onClick={onEnd}
 			>✕</button>
 		</div>

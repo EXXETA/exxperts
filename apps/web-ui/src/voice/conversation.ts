@@ -99,6 +99,12 @@ export class Conversation {
 		this.finish(null);
 	}
 
+	/** Escape: the room falls silent and listens, the same as talking over it. Nothing to hush while listening. */
+	hush(): void {
+		if (this.ended || !this.turnOpen) return;
+		this.interrupt("");
+	}
+
 	// ── Fed by the room's websocket handler ─────────────────────────────────
 
 	onTurnText(delta: string): void {
