@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import * as XLSX from "xlsx";
+import type { ExtensionContext } from "../src/core/extensions/types.js";
 import { createReadToolDefinition, type ReadOperations } from "../src/core/tools/read.js";
 import { renderSpreadsheetPreview } from "../src/core/tools/spreadsheet-preview.js";
 
@@ -29,7 +30,12 @@ function operationsFor(buffer: Buffer): ReadOperations {
 }
 
 function readToolFor(buffer: Buffer) {
-	return createReadToolDefinition("/workbooks", { operations: operationsFor(buffer) });
+	const tool = createReadToolDefinition("/workbooks", { operations: operationsFor(buffer) });
+	// The definition takes the full tool call signature; these tests only vary the parameters.
+	return {
+		execute: (toolCallId: string, params: Parameters<typeof tool.execute>[1]) =>
+			tool.execute(toolCallId, params, undefined, undefined, {} as ExtensionContext),
+	};
 }
 
 function getTextOutput(result: { content: { type: string; text?: string }[] }): string {

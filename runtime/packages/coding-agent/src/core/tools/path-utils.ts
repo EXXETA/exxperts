@@ -1,6 +1,35 @@
 import { accessSync, constants } from "node:fs";
 import * as os from "node:os";
-import { isAbsolute, resolve as resolvePath } from "node:path";
+import * as nodePath from "node:path";
+import type { PlatformPath } from "node:path";
+import { normalizeWindowsShellPath } from "../../utils/paths.js";
+
+/** Host pieces path resolution depends on. Injectable so tests can emulate Windows with path.win32. */
+export interface PathPlatform {
+	platform: NodeJS.Platform;
+	path: PlatformPath;
+	homedir: () => string;
+	tmpdir: () => string;
+}
+
+function hostPlatform(): PathPlatform {
+	return { platform: process.platform, path: nodePath, homedir: os.homedir, tmpdir: os.tmpdir };
+}
+
+const POSIX_TEMP_ROOT = /^\/(?:var\/)?tmp(?:\/(.*))?$/;
+
+/**
+ * On Windows, map a bare POSIX temp root (/tmp/..., /var/tmp/...) to os.tmpdir().
+ * Our divergence from upstream, which leaves bare /tmp alone: a Git Bash session
+ * resolves /tmp to the user's temp directory, but a native Windows API resolves it
+ * against the current drive (C:\tmp), so the write tool and bash would disagree on
+ * where /tmp is on that machine.
+ */
+function mapPosixTempRoot(filePath: string, platform: PathPlatform): string {
+	const match = filePath.match(POSIX_TEMP_ROOT);
+	if (!match) return filePath;
+	return match[1] ? platform.path.join(platform.tmpdir(), match[1]) : platform.tmpdir();
+}
 
 const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
 const NARROW_NO_BREAK_SPACE = "\u202F";
@@ -36,13 +65,17 @@ function normalizeAtPrefix(filePath: string): string {
 	return filePath.startsWith("@") ? filePath.slice(1) : filePath;
 }
 
-export function expandPath(filePath: string): string {
-	const normalized = normalizeUnicodeSpaces(normalizeAtPrefix(filePath));
+export function expandPath(filePath: string, platform: PathPlatform = hostPlatform()): string {
+	let normalized = normalizeUnicodeSpaces(normalizeAtPrefix(filePath));
+	if (platform.platform === "win32") {
+		// Git Bash, MSYS, Cygwin, and WSL drive paths (upstream #7064, #7547), then bare POSIX temp roots.
+		normalized = mapPosixTempRoot(normalizeWindowsShellPath(normalized), platform);
+	}
 	if (normalized === "~") {
-		return os.homedir();
+		return platform.homedir();
 	}
 	if (normalized.startsWith("~/")) {
-		return os.homedir() + normalized.slice(1);
+		return platform.homedir() + normalized.slice(1);
 	}
 	return normalized;
 }
@@ -51,12 +84,12 @@ export function expandPath(filePath: string): string {
  * Resolve a path relative to the given cwd.
  * Handles ~ expansion and absolute paths.
  */
-export function resolveToCwd(filePath: string, cwd: string): string {
-	const expanded = expandPath(filePath);
-	if (isAbsolute(expanded)) {
+export function resolveToCwd(filePath: string, cwd: string, platform: PathPlatform = hostPlatform()): string {
+	const expanded = expandPath(filePath, platform);
+	if (platform.path.isAbsolute(expanded)) {
 		return expanded;
 	}
-	return resolvePath(cwd, expanded);
+	return platform.path.resolve(cwd, expanded);
 }
 
 export function resolveReadPath(filePath: string, cwd: string): string {

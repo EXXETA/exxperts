@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { canonicalizePath, getCwdRelativePath, isLocalPath } from "../src/utils/paths.js";
+import { canonicalizePath, getCwdRelativePath, isLocalPath, normalizeWindowsShellPath } from "../src/utils/paths.js";
 import { symlinksSupported } from "./utilities.js";
 
 let tempDir: string;
@@ -94,5 +94,27 @@ describe("isLocalPath", () => {
 
 	it("returns false for https: protocol", () => {
 		expect(isLocalPath("https://example.com")).toBe(false);
+	});
+});
+
+describe("normalizeWindowsShellPath", () => {
+	it("converts Git Bash, MSYS, Cygwin, and WSL drive paths", () => {
+		expect(normalizeWindowsShellPath("/c/Users/example/project")).toBe("C:\\Users\\example\\project");
+		expect(normalizeWindowsShellPath("/cygdrive/d/work")).toBe("D:\\work");
+		expect(normalizeWindowsShellPath("/mnt/e/source")).toBe("E:\\source");
+		expect(normalizeWindowsShellPath("/c")).toBe("C:\\");
+	});
+
+	it("leaves other path forms unchanged", () => {
+		for (const path of [
+			"C:/Users/example",
+			"C:\\Users\\example",
+			"//server/share/file",
+			"/c/Users\\example",
+			"relative/file",
+			"/tmp/file",
+		]) {
+			expect(normalizeWindowsShellPath(path)).toBe(path);
+		}
 	});
 });

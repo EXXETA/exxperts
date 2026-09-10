@@ -148,12 +148,17 @@ export function calculateContextTokens(usage: Usage): number {
 
 /**
  * Get usage from an assistant message if available.
- * Skips aborted and error messages as they don't have valid usage data.
+ * Skips aborted, error, and all-zero usage messages as they don't have valid usage data.
  */
 function getAssistantUsage(msg: AgentMessage): Usage | undefined {
 	if (msg.role === "assistant" && "usage" in msg) {
 		const assistantMsg = msg as AssistantMessage;
-		if (assistantMsg.stopReason !== "aborted" && assistantMsg.stopReason !== "error" && assistantMsg.usage) {
+		if (
+			assistantMsg.stopReason !== "aborted" &&
+			assistantMsg.stopReason !== "error" &&
+			assistantMsg.usage &&
+			calculateContextTokens(assistantMsg.usage) > 0
+		) {
 			return assistantMsg.usage;
 		}
 	}
@@ -534,6 +539,20 @@ Use this EXACT format:
 Keep each section concise. Preserve exact file paths, function names, and error messages.`;
 
 /**
+ * Returns an error message when a summarization response cannot safely be persisted.
+ * A length stop contains partial text and must not become a session checkpoint.
+ */
+export function getSummarizationFailure(response: AssistantMessage, label: string): string | undefined {
+	if (response.stopReason === "error") {
+		return `${label} failed: ${response.errorMessage || "Unknown error"}`;
+	}
+	if (response.stopReason === "length") {
+		return `${label} failed: generation hit the token cap and the summary is incomplete`;
+	}
+	return undefined;
+}
+
+/**
  * Generate a summary of the conversation using the LLM.
  * If previousSummary is provided, uses the update prompt to merge.
  */
@@ -587,8 +606,9 @@ export async function generateSummary(
 		completionOptions,
 	);
 
-	if (response.stopReason === "error") {
-		throw new Error(`Summarization failed: ${response.errorMessage || "Unknown error"}`);
+	const failure = getSummarizationFailure(response, "Summarization");
+	if (failure) {
+		throw new Error(failure);
 	}
 
 	const textContent = response.content
@@ -838,8 +858,9 @@ async function generateTurnPrefixSummary(
 			: { maxTokens, signal, apiKey, headers },
 	);
 
-	if (response.stopReason === "error") {
-		throw new Error(`Turn prefix summarization failed: ${response.errorMessage || "Unknown error"}`);
+	const failure = getSummarizationFailure(response, "Turn prefix summarization");
+	if (failure) {
+		throw new Error(failure);
 	}
 
 	return response.content

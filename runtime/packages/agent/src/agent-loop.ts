@@ -161,6 +161,9 @@ async function runLoop(
 	streamFn?: StreamFn,
 ): Promise<void> {
 	let firstTurn = true;
+	// Consecutive length-truncated tool-call messages in this run; bounds the
+	// re-issue retry so a model that keeps hitting the limit cannot spin forever.
+	let truncatedToolCallStreak = 0;
 	// Check for steering messages at start (user may have typed while waiting)
 	let pendingMessages: AgentMessage[] = (await config.getSteeringMessages?.()) || [];
 
@@ -202,8 +205,16 @@ async function runLoop(
 
 			const toolResults: ToolResultMessage[] = [];
 			hasMoreToolCalls = false;
+			truncatedToolCallStreak = toolCalls.length > 0 && message.stopReason === "length" ? truncatedToolCallStreak + 1 : 0;
 			if (toolCalls.length > 0) {
-				const executedToolBatch = await executeToolCalls(currentContext, message, config, signal, emit);
+				// A "length" stop means the output was cut off by the token limit, so
+				// every tool call in the message may carry truncated arguments. Fail
+				// them all instead of executing potentially borked calls. The second
+				// truncated message in a row ends the turn instead of retrying again.
+				const executedToolBatch =
+					message.stopReason === "length"
+						? await failToolCallsFromTruncatedMessage(toolCalls, emit, truncatedToolCallStreak > 1)
+						: await executeToolCalls(currentContext, message, config, signal, emit);
 				toolResults.push(...executedToolBatch.messages);
 				hasMoreToolCalls = !executedToolBatch.terminate;
 
@@ -342,6 +353,41 @@ async function streamAssistantResponse(
 	}
 	await emit({ type: "message_end", message: finalMessage });
 	return finalMessage;
+}
+
+/**
+ * Fail all tool calls from an assistant message that was truncated by the
+ * output token limit. Streamed tool-call arguments are finalized with a
+ * best-effort JSON salvage parser, so a truncated message can yield tool calls
+ * whose arguments parse and validate but are silently incomplete. None of them
+ * are safe to execute; report each as an error so the model can re-issue them.
+ */
+async function failToolCallsFromTruncatedMessage(
+	toolCalls: AgentToolCall[],
+	emit: AgentEventSink,
+	terminate: boolean,
+): Promise<ExecutedToolCallBatch> {
+	const messages: ToolResultMessage[] = [];
+	for (const toolCall of toolCalls) {
+		await emit({
+			type: "tool_execution_start",
+			toolCallId: toolCall.id,
+			toolName: toolCall.name,
+			args: toolCall.arguments,
+		});
+		const finalized: FinalizedToolCallOutcome = {
+			toolCall,
+			result: createErrorToolResult(
+				`Tool call "${toolCall.name}" was not executed: the response hit the output token limit, so its arguments may be truncated. Re-issue the tool call with complete arguments.`,
+			),
+			isError: true,
+		};
+		await emitToolExecutionEnd(finalized, emit);
+		const toolResultMessage = createToolResultMessage(finalized);
+		await emitToolResultMessage(toolResultMessage, emit);
+		messages.push(toolResultMessage);
+	}
+	return { messages, terminate };
 }
 
 /**
@@ -584,6 +630,7 @@ async function executePreparedToolCall(
 	emit: AgentEventSink,
 ): Promise<ExecutedToolCallOutcome> {
 	const updateEvents: Promise<void>[] = [];
+	let acceptingUpdates = true;
 
 	try {
 		const result = await prepared.tool.execute(
@@ -591,6 +638,7 @@ async function executePreparedToolCall(
 			prepared.args as never,
 			signal,
 			(partialResult) => {
+				if (!acceptingUpdates) return;
 				updateEvents.push(
 					Promise.resolve(
 						emit({
@@ -604,14 +652,18 @@ async function executePreparedToolCall(
 				);
 			},
 		);
+		acceptingUpdates = false;
 		await Promise.all(updateEvents);
 		return { result, isError: false };
 	} catch (error) {
+		acceptingUpdates = false;
 		await Promise.all(updateEvents);
 		return {
 			result: createErrorToolResult(error instanceof Error ? error.message : String(error)),
 			isError: true,
 		};
+	} finally {
+		acceptingUpdates = false;
 	}
 }
 

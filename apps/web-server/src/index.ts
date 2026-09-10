@@ -5714,7 +5714,10 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 	// Skills MR-5 telemetry (spec §5): bodies read via read_skill, surfaced per
 	// turn. Mutated by the tool, reported + reset when the next turn's trace opens.
 	const persistentRoomSkillTelemetry = { reads: 0, bodyChars: 0 };
+	// The condense-failure notice is said once per turn (a turn may attempt twice).
+	let lastCompactionNoticeCause: string | undefined;
 	const resetTurnTrace = () => {
+		lastCompactionNoticeCause = undefined;
 		if (persistentRoomSkillTelemetry.reads > 0) {
 			app.log.info({ agentId: persistentAgentIdForSession, skillReads: persistentRoomSkillTelemetry.reads, skillBodyChars: persistentRoomSkillTelemetry.bodyChars }, "persistent-room turn read skill bodies");
 			streamTrace.note("skill_reads", { reads: persistentRoomSkillTelemetry.reads, bodyChars: persistentRoomSkillTelemetry.bodyChars });
@@ -6765,6 +6768,31 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 			// #33: turn frames route through the reattach-aware sender, so a
 			// session stepping back in can replay them and then receive the rest.
 			sendTurnFrame({ type: "event", event: projectAgentEventForWebClient(event) });
+			// A failed auto-compaction used to vanish here: the client ignores the
+			// event, nothing was logged, and the room quietly paid for the same
+			// summary again on every later turn. Say it once per attempt. This is
+			// a notify line rather than an error frame: the error frame ends the
+			// turn on the client (busy off, stream flushed), and the runtime
+			// re-checks compaction at the START of every later prompt, where that
+			// would unlock the composer mid-turn.
+			if (event.type === "compaction_end" && (event as any).errorMessage) {
+				const compactionError = String((event as any).errorMessage);
+				app.log.warn({ agentId: persistentAgentIdForSession, reason: (event as any).reason, err: compactionError }, "auto-compaction failed");
+				// The runtime's own label ("Auto-compaction failed: ") is kept in
+				// the log and dropped from the line, which already says what failed.
+				const compactionCause = compactionError.replace(/^(?:Auto-compaction|Compaction|Context overflow recovery) failed: /, "");
+				// A turn may attempt to condense twice (before and after); the same
+				// cause is said once per turn, while every attempt is still logged.
+				if (compactionCause === lastCompactionNoticeCause) return;
+				lastCompactionNoticeCause = compactionCause;
+				sendTurnFrame({
+					type: "ui_request",
+					kind: "notify",
+					id: `compaction_${Date.now().toString(36)}`,
+					message: `The room could not condense its conversation history: ${compactionCause}. Your memory is unchanged. Try a model with a larger output limit, or start a new conversation.`,
+					level: "error",
+				});
+			}
 			if (event.type === "message_end" && (event as any).message?.role === "assistant") {
 				const msg = (event as any).message;
 				const text = textFromParts(msg.content);

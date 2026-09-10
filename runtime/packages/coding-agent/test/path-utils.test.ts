@@ -1,8 +1,8 @@
 import { mkdtempSync, readdirSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join, resolve, win32 } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { expandPath, resolveReadPath, resolveToCwd } from "../src/core/tools/path-utils.js";
+import { expandPath, type PathPlatform, resolveReadPath, resolveToCwd } from "../src/core/tools/path-utils.js";
 
 describe("path-utils", () => {
 	describe("expandPath", () => {
@@ -33,6 +33,41 @@ describe("path-utils", () => {
 		it("should resolve relative paths against cwd", () => {
 			const result = resolveToCwd("relative/file.txt", "/some/cwd");
 			expect(result).toBe(resolve("/some/cwd", "relative/file.txt"));
+		});
+	});
+
+	describe("resolveToCwd on Windows (path.win32 emulation)", () => {
+		const windows: PathPlatform = {
+			platform: "win32",
+			path: win32,
+			homedir: () => "C:\\Users\\example",
+			tmpdir: () => "C:\\Users\\example\\AppData\\Local\\Temp",
+		};
+		const cwd = "D:\\work";
+
+		it("should map Git Bash, WSL, and Cygwin drive paths to their native drive", () => {
+			expect(resolveToCwd("/c/Users/x", cwd, windows)).toBe("C:\\Users\\x");
+			expect(resolveToCwd("/mnt/c/x", cwd, windows)).toBe("C:\\x");
+			expect(resolveToCwd("/cygdrive/c/x", cwd, windows)).toBe("C:\\x");
+		});
+
+		it("should map bare POSIX temp roots to the host temp directory", () => {
+			expect(resolveToCwd("/tmp/x.js", cwd, windows)).toBe("C:\\Users\\example\\AppData\\Local\\Temp\\x.js");
+			expect(resolveToCwd("/var/tmp/x", cwd, windows)).toBe("C:\\Users\\example\\AppData\\Local\\Temp\\x");
+			expect(resolveToCwd("/tmp", cwd, windows)).toBe("C:\\Users\\example\\AppData\\Local\\Temp");
+		});
+
+		it("should keep tilde, drive-absolute, and relative paths working", () => {
+			expect(resolveToCwd("~/x", cwd, windows)).toBe("C:\\Users\\example/x");
+			expect(resolveToCwd("C:\\x", cwd, windows)).toBe("C:\\x");
+			expect(resolveToCwd("relative/file.txt", cwd, windows)).toBe("D:\\work\\relative\\file.txt");
+		});
+
+		it("should leave those shapes alone off Windows", () => {
+			const linux: PathPlatform = { ...windows, platform: "linux", path: windows.path.posix };
+			expect(resolveToCwd("/c/Users/x", "/work", linux)).toBe("/c/Users/x");
+			expect(resolveToCwd("/tmp/x.js", "/work", linux)).toBe("/tmp/x.js");
+			expect(expandPath("/mnt/c/x")).toBe(process.platform === "win32" ? "C:\\x" : "/mnt/c/x");
 		});
 	});
 
