@@ -45,8 +45,8 @@ import { ConsultDock } from "./components/delegation-card";
 import { TaskRunView } from "./components/task-run-view";
 import { ArtifactViewer } from "./components/ArtifactViewer";
 import { EffortControl } from "./components/EffortControl";
-import { ChevronDownIcon, GearIcon, PaperclipIcon, TrashIcon, WaveformIcon } from "./components/icons";
-import { ConversationBar } from "./components/ConversationBar";
+import { ChevronDownIcon, GearIcon, PaperclipIcon, TrashIcon } from "./components/icons";
+import { VoiceRow } from "./components/voice-row";
 import { Conversation, type ConversationState } from "./voice/conversation";
 import { DEFAULT_TALK_KEY, formatTalkKey, isTalkKeyDown, parseTalkKey, releasesTalkKey, type TalkKey } from "./voice/talk-key";
 // The handoff grammar + queue helpers are the ONE shared source of truth, imported
@@ -3346,13 +3346,15 @@ export function App() {
 	// this so it never claims "Reconnecting" while nothing is trying.
 	const [roomReconnectState, setRoomReconnectState] = useState<"idle" | "reconnecting" | "failed">("idle");
 	const [busy, setBusy] = useState(false);
-	// Conversation mode (voice). Desktop app only for now: the shell appends
-	// the user-agent token main.tsx keys its CSS off, and a browser tab gets
-	// neither the button, the shortcut nor the Voice tab. The controller lives
-	// in a ref because the websocket handler feeds it text and tool events; the
-	// state is what the bar draws in the composer's place. A failure ends the
-	// mode and shows one toast; a missing model also opens the Voice tab,
-	// where the download is.
+	// Voice. Desktop app only for now: the shell appends the user-agent token
+	// main.tsx keys its CSS off, and a browser tab gets neither the talk key
+	// nor the Voice tab. There is no mode to switch on: holding the talk key
+	// in a room opens the microphone, releasing it sends, and that answer is
+	// spoken; a typed message is answered in text. The controller lives in a
+	// ref because the websocket handler feeds it text and tool events; its
+	// state is the small row above the text field while the room listens or
+	// talks. A failure closes it and shows one toast; a missing model also
+	// opens the Voice tab, where the download is.
 	const voiceAvailable = navigator.userAgent.includes("ExxpertsDesktop");
 	const isMac = navigator.userAgent.includes("Macintosh");
 	// The talk key: hold to talk, release to send. Read once from the voice
@@ -3370,36 +3372,31 @@ export function App() {
 	const conversationRef = useRef<Conversation | null>(null);
 	const sendRef = useRef<(text: string) => boolean>(() => false);
 	const [voiceNotice, setVoiceNotice] = useState<{ text: string; sub?: string } | null>(null);
-	// The talk key, held anywhere in a room, starts a conversation if none is
-	// on and opens the microphone; releasing it sends. Escape hushes the room
-	// mid-answer; pressed again with nothing left to hush, it ends the
-	// conversation. Ctrl or Cmd + Shift + Space still starts or ends one. The
-	// handlers live in refs so one set of listeners serves the whole session.
-	const conversationActionsRef = useRef<{ start: () => void; end: () => void }>({ start: () => {}, end: () => {} });
+	// The talk key, held anywhere in a room, opens the microphone; releasing
+	// it sends. Escape hushes the room mid-answer; with nothing to hush it
+	// closes the microphone. The handlers live in refs so one set of
+	// listeners serves the whole session.
+	const voiceStartRef = useRef<() => void>(() => {});
 	useEffect(() => {
 		const desktop = navigator.userAgent.includes("ExxpertsDesktop");
 		// The Fn key has no flag on key events, so its state is kept here.
 		let fnDown = false;
 		const onKeyDown = (event: KeyboardEvent) => {
 			if (event.code === "Fn" || event.key === "Fn") fnDown = true;
-			const active = conversationRef.current !== null;
-			if (event.key === "Escape" && active) { if (!conversationRef.current?.hush()) conversationActionsRef.current.end(); return; }
+			if (event.key === "Escape" && conversationRef.current) {
+				if (!conversationRef.current.hush()) conversationRef.current.end();
+				return;
+			}
 			if (desktop && isTalkKeyDown(event, talkKeyRef.current, fnDown)) {
 				// Swallowed even when it starts nothing, so the combination never
 				// types a character into the field it was pressed over.
 				event.preventDefault();
 				if (event.repeat) return;
-				if (!active) {
+				if (!conversationRef.current) {
 					if (!persistentChatRef.current) return;
-					conversationActionsRef.current.start();
+					voiceStartRef.current();
 				}
 				conversationRef.current?.pressTalk();
-				return;
-			}
-			if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.code === "Space") {
-				event.preventDefault();
-				if (active) conversationActionsRef.current.end();
-				else if (persistentChatRef.current && desktop) conversationActionsRef.current.start();
 			}
 		};
 		const onKeyUp = (event: KeyboardEvent) => {
@@ -5860,8 +5857,14 @@ export function App() {
 		await waitForCurrentTurnToSettle(options.leaveAfter ? 1200 : 2500);
 	}
 
+	// True only while the voice controller is the one sending: that turn is
+	// flagged spoken on the wire and its answer is read aloud; a typed message
+	// is answered in text, and typing while the room still reads a previous
+	// answer aloud hushes it first.
+	const voiceSendRef = useRef(false);
 	const send = (text: string): boolean => {
 		if (busyRef.current || turnCancellingRef.current) return false;
+		if (!voiceSendRef.current) conversationRef.current?.hush();
 		const payload = text.trim();
 		// Ready staged attachments ride THIS message (files UI slice): their
 		// notes join the wire text, their chips join the bubble. A message may
@@ -5910,7 +5913,7 @@ export function App() {
 		// which the effort frame does.
 		// Spoken turns carry a flag so the server can ask for spoken prose; the
 		// hint rides the wire only, never this bubble or the saved thread.
-		ws.send(JSON.stringify({ type: "prompt", text: wireText, ...(conversationRef.current ? { voice: true } : {}) }));
+		ws.send(JSON.stringify({ type: "prompt", text: wireText, ...(voiceSendRef.current ? { voice: true } : {}) }));
 		dispatchStream({ type: "new_turn", now: performance.now() });
 		outputLimitNoticeShownRef.current = false;
 		retrievalActivityIdRef.current = null;
@@ -5926,16 +5929,13 @@ export function App() {
 	};
 	sendRef.current = send;
 
-	function endConversation(): void {
-		conversationRef.current?.end();
-		conversationRef.current = null;
-		setConversation(null);
-	}
-
-	function startConversation(): void {
+	function startVoice(): void {
 		if (conversationRef.current) return;
 		const controller = new Conversation({
-			send: (text) => sendRef.current(text),
+			send: (text) => {
+				voiceSendRef.current = true;
+				try { return sendRef.current(text); } finally { voiceSendRef.current = false; }
+			},
 			// Only a running turn can be stopped; Stop on an idle room would wait for an end that never comes.
 			interrupt: () => { if (busyRef.current) void abortCurrentTurn(); },
 			onState: setConversation,
@@ -5952,7 +5952,7 @@ export function App() {
 		setVoiceNotice(null);
 		void controller.start();
 	}
-	conversationActionsRef.current = { start: startConversation, end: endConversation };
+	voiceStartRef.current = startVoice;
 
 	// The composer @-mention popover (Consult MR-3) resolves a leading mention of
 	// a known room and hands off here instead of the normal send. MR-4 wires it to
@@ -8372,22 +8372,9 @@ export function App() {
 							onQuickCheckpoint={() => void runQuickCheckpoint()}
 							onOpenFullCheckpoint={() => { setCheckpointQuickRequested(false); setCheckpointQuickBlockedReasons(null); setCheckpointPreviewOpen(true); }}
 						/>
-						{/* Conversation mode: desktop app only for now, and hidden on a
-						    viewing-only device, where the microphone route is a write the
-						    server would refuse. */}
-						{voiceAvailable && remoteClientContext.capability !== "read-only" && (
-							<button
-								className="icon-btn icon-btn-square composer-voice-btn"
-								aria-label="Start a conversation"
-								title={`Talk with this room. Hold ${formatTalkKey(talkKeyText, isMac)} and speak, release to send; the answer is spoken. Pressing the key while the room answers cuts in. Escape hushes, Escape again ends. Everything runs on this computer.`}
-								disabled={!connectedForChrome}
-								onClick={startConversation}
-							><WaveformIcon /></button>
-						)}
 					</>
 				) : null
 			}
-			composerReplacement={conversation ? <ConversationBar state={conversation} talkKeyLabel={formatTalkKey(talkKeyText, isMac)} onEnd={endConversation} /> : undefined}
 			connected={connectedForChrome}
 			reconnectState={roomReconnectState}
 			onReconnect={retryRoomReconnectNow}
@@ -8412,7 +8399,10 @@ export function App() {
 			initialDraftValue={composerPrefill || undefined}
 			draftResetKey={composerResetNonce}
 			composerAllowEmptySend={stagedAttachments.some((entry) => entry.status === "ready")}
-			composerStagingSlot={persistentChat && stagedAttachments.length > 0 ? (
+			composerStagingSlot={(conversation || (persistentChat && stagedAttachments.length > 0)) ? (
+				<>
+					{conversation && <VoiceRow state={conversation} talkKeyLabel={formatTalkKey(talkKeyText, isMac)} />}
+					{persistentChat && stagedAttachments.length > 0 ? (
 				<div className="composer-staged" role="status" aria-label="Files attached to your next message">
 					{stagedAttachments.map((staged) => (
 						<span key={staged.stageId} className={`composer-staged-chip${staged.status === "failed" ? " failed" : ""}`}>
@@ -8432,6 +8422,8 @@ export function App() {
 						</span>
 					))}
 				</div>
+			) : undefined}
+				</>
 			) : undefined}
 			composerOnPasteFiles={persistentChat ? stagePastedImages : undefined}
 			mention={persistentChat ? {

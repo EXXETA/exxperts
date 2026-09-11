@@ -2326,54 +2326,53 @@ strong, b { font-weight: 700; }
 .web-search-searxng-status.failed {
 	color: var(--warning);
 }
-/* Conversation mode: the bar that takes the text field's place while it is
-   on. Same box as the composer; a ring says what the room is doing. */
-.conversation-bar {
+/* Voice: one line above the text field while the room listens or talks. A
+   ring says what the room is doing; nothing shows while the microphone is idle. */
+.voice-row {
 	display: flex;
-	flex-direction: row;
 	align-items: center;
-	gap: 12px;
-	min-height: 40px;
+	gap: 10px;
+	min-height: 24px;
+	padding: 0 2px;
 }
-.conversation-ring {
+.voice-ring {
 	flex: 0 0 auto;
-	width: 18px;
-	height: 18px;
+	width: 14px;
+	height: 14px;
 	border-radius: 50%;
 	border: 2px solid var(--fg);
 	box-sizing: border-box;
 }
-.conversation-bar.starting .conversation-ring { opacity: 0.4; }
-.conversation-bar.idle .conversation-ring { opacity: 0.55; }
-.conversation-bar.listening .conversation-ring { animation: conversation-pulse 1.6s ease-in-out infinite; }
-.conversation-bar.working .conversation-ring { border-style: dashed; animation: conversation-spin 2.4s linear infinite; }
-.conversation-bar.speaking .conversation-ring { background: var(--fg); animation: conversation-pulse 0.9s ease-in-out infinite; }
-@keyframes conversation-pulse {
+.voice-row.starting .voice-ring { opacity: 0.4; }
+.voice-row.listening .voice-ring { animation: voice-pulse 1.6s ease-in-out infinite; }
+.voice-row.working .voice-ring { border-style: dashed; animation: voice-spin 2.4s linear infinite; }
+.voice-row.speaking .voice-ring { background: var(--fg); animation: voice-pulse 0.9s ease-in-out infinite; }
+@keyframes voice-pulse {
 	0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--fg) 35%, transparent); }
-	50% { box-shadow: 0 0 0 7px color-mix(in srgb, var(--fg) 0%, transparent); }
+	50% { box-shadow: 0 0 0 6px color-mix(in srgb, var(--fg) 0%, transparent); }
 }
-@keyframes conversation-spin { to { transform: rotate(360deg); } }
-.conversation-status {
+@keyframes voice-spin { to { transform: rotate(360deg); } }
+.voice-status {
 	flex: 0 0 auto;
-	min-width: 84px;
-	font-size: 12px;
+	min-width: 72px;
+	font-size: 11px;
 	font-weight: 700;
 	letter-spacing: 0.08em;
 	text-transform: uppercase;
 	color: var(--muted);
 }
-.conversation-partial {
+.voice-partial {
 	flex: 1 1 auto;
 	min-width: 0;
+	font-size: 13px;
 	color: var(--fg);
 	white-space: nowrap;
 	overflow: hidden;
 	text-overflow: ellipsis;
 }
-.conversation-hint { color: var(--muted); }
-.conversation-end { flex: 0 0 auto; }
+.voice-hint { color: var(--muted); }
 @media (prefers-reduced-motion: reduce) {
-	.conversation-ring { animation: none !important; }
+	.voice-ring { animation: none !important; }
 }
 
 /* Settings › Voice: one card per downloadable model, then the voice controls.

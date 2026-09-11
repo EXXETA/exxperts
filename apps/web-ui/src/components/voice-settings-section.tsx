@@ -337,7 +337,7 @@ export function VoiceSettingsSection({ onTalkKeyChange }: { onTalkKeyChange?: (t
 						</button>
 					</label>
 					<span className="voice-controls-hint">
-						{keyHint ?? "Hold it anywhere in a room and talk; release to send. Pressing it while the room answers cuts the answer off. A key with a modifier, or two modifiers together."}
+						{keyHint ?? "Hold it anywhere in a room and talk; release to send, and the answer is spoken. Typed messages are answered in text. Pressing it while the room speaks cuts the answer off; so does Escape. A key with a modifier, or two modifiers together."}
 					</span>
 				</div>
 			)}

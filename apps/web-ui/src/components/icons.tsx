@@ -72,15 +72,6 @@ export function PaperclipIcon({ size }: { size?: number } = {}) {
  * This is a near-complete ring left open at the bottom, spanning about eleven
  * units, with a needle and a round-capped pivot dot at its centre.
  */
-/** Conversation mode: a short waveform, the same weight as the paperclip beside it. */
-export function WaveformIcon({ size }: { size?: number } = {}) {
-	return (
-		<Icon size={size}>
-			<path d="M1.75 8h.5M4.5 5.5v5M7 3v10M9.5 5.5v5M12 6.5v3M14.25 8h.5" />
-		</Icon>
-	);
-}
-
 export function GaugeIcon({ size = 14 }: { size?: number } = {}) {
 	return (
 		<Icon size={size}>

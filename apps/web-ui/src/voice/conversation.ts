@@ -5,9 +5,12 @@ import { SpeechQueue } from "./speech-queue";
 import { SentenceSplitter } from "./spoken-text";
 
 /**
- * Conversation mode, push-to-talk: hold the talk key and speak, release it
- * and what you said is sent; the answer is spoken as it streams in; press the
- * key while the room answers and it falls silent and listens.
+ * Voice, push-to-talk: hold the talk key and speak, release it and what you
+ * said is sent; the answer is spoken as it streams in; press the key while
+ * the room answers and it falls silent and listens. There is no mode: the
+ * first hold in a room opens the microphone, and a quiet while after the last
+ * answer closes it again, so the microphone is in use only around a
+ * conversation.
  *
  * The controller sits between the talk key, the microphone, the room's normal
  * send path and the speech queue. A hold is sent exactly as if typed, so it
@@ -36,6 +39,8 @@ const SILENCE_MS = 1500;
 /** A hold released while the room was still stopping is retried this often, for up to fifteen seconds: a long answer takes a few seconds to stop. */
 const SEND_RETRY_MS = 300;
 const SEND_RETRIES = 50;
+/** Idle this long, with no key held and nothing being said, and the microphone is released. */
+const IDLE_CLOSE_MS = 90_000;
 
 export class Conversation {
 	private state: ConversationState = { status: "starting", partial: "", detail: null };
@@ -53,6 +58,7 @@ export class Conversation {
 	private turnEnded = false;
 	private silenceTimer: number | null = null;
 	private pendingSend: number | null = null;
+	private idleTimer: number | null = null;
 	private ended = false;
 
 	constructor(private readonly hooks: {
@@ -110,6 +116,7 @@ export class Conversation {
 	pressTalk(): void {
 		if (this.ended || this.held) return;
 		this.held = true;
+		this.clearIdle();
 		if (this.turnOpen) this.interrupt();
 		this.microphone?.setTransmitting(true);
 		if (this.state.status !== "starting") this.set({ status: "listening", partial: "", detail: null });
@@ -125,9 +132,9 @@ export class Conversation {
 	}
 
 	/**
-	 * Escape: the room falls silent, the same as pressing the talk key while
-	 * it answers, but without listening. Returns false when there was nothing
-	 * to hush, which the caller takes as "leave the conversation".
+	 * Escape, or a typed message: the room falls silent, the same as pressing
+	 * the talk key while it answers, but without listening. Returns false when
+	 * there was nothing to hush.
 	 */
 	hush(): boolean {
 		if (this.ended || !this.turnOpen) return false;
@@ -261,6 +268,7 @@ export class Conversation {
 		if (this.ended) return;
 		this.ended = true;
 		this.clearSilence();
+		this.clearIdle();
 		if (this.pendingSend !== null) window.clearTimeout(this.pendingSend);
 		this.pendingSend = null;
 		this.queue.stop();
@@ -269,8 +277,18 @@ export class Conversation {
 		this.hooks.onEnd(failure);
 	}
 
+	private clearIdle(): void {
+		if (this.idleTimer !== null) window.clearTimeout(this.idleTimer);
+		this.idleTimer = null;
+	}
+
 	private set(patch: Partial<ConversationState>): void {
 		this.state = { ...this.state, ...patch };
 		this.hooks.onState(this.state);
+		// Idle starts the clock on letting the microphone go; anything else stops it.
+		this.clearIdle();
+		if (this.state.status === "idle" && !this.held) {
+			this.idleTimer = window.setTimeout(() => { this.idleTimer = null; this.end(); }, IDLE_CLOSE_MS);
+		}
 	}
 }
