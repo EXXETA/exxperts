@@ -27,7 +27,7 @@
  *                      { type: "effort", level, supported }
  *                        (what an effort frame actually took hold as)
  *                      { type: "error", message: string }
- *                      { type: "turn_reattach", turnId, conversationId, settled, userText?, anchorItemId? }
+ *                      { type: "turn_reattach", turnId, conversationId, settled, userText?, anchorItemId?, startedAt? }
  *                        (issue #33: sent right after "ready" when this session
  *                        stepped back into a room whose detached turn is still
  *                        cooking or just landed; the whole turn's event frames
@@ -246,6 +246,8 @@ type DetachedCookingTurnHandle = {
 	releaseReplayBuffer: () => void;
 	/** The last persisted thread item at TURN START: the supersede anchor a reattach hands the client, so completed prior turns can never be mistaken for this turn's debris. `null` means the thread was empty at turn start; `undefined` means unknown (the read failed), which clients treat conservatively. */
 	readonly anchorItemId: string | null | undefined;
+	/** When the turn began (epoch ms), so a restored prompt bubble carries the time it was sent rather than the time it was repaired. */
+	readonly startedAt?: number;
 	/** Record who now owns the room-lock record (an ordinary web-over-web takeover) and how to release it; a previous claimant's release is invoked owner-checked, which only stops its now-pointless heartbeat, and the previous holder, ADOPTER or still-binding CLAIMANT, is told it was displaced through the hook it registered here (an adopter upgrades the hook at adopt time), so no window is ever left silently lock-less. */
 	claim: (connectionId: string, releaseLock: () => void, onDisplaced: () => void) => void;
 	/** Route future turn frames to `sink` and stand the hung-stream watchdog down (somebody is watching again). Returns false for a stale claimant or a settled turn. */
@@ -5526,6 +5528,8 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 	type PersistentWebTurnTerminalReason = "completed" | "cancelled" | "failed" | "disconnect_cancelled";
 	type ActivePersistentWebTurn = {
 		turnId: string;
+		/** When the turn began (epoch ms), from the active-turn record. */
+		startedAt?: number;
 		terminalReason?: PersistentWebTurnTerminalReason;
 		abortPromise?: Promise<void>;
 		promptSettled: boolean;
@@ -5551,7 +5555,9 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 	// is what the close handler needs to land the answer server-side when the
 	// client dies inside that window. Per-connection closure state, cleared
 	// when the next turn begins; error/cancel settles never set it.
-	type SettledTurnLandingSnapshot = { turnId: string; finalAssistantText: string; anchorItemId: string | null | undefined; userText: string };
+	// `startedAt` and `settledAt` stamp the landed items with the turn's own
+	// times, not the moment the close handler ran.
+	type SettledTurnLandingSnapshot = { turnId: string; finalAssistantText: string; anchorItemId: string | null | undefined; userText: string; startedAt?: number; settledAt: number };
 	let settledTurnLandingSnapshot: SettledTurnLandingSnapshot | null = null;
 	// The turn's user-authored prompt text, kept through settle: the consent
 	// variable (activeTurnUserAuthoredText) is deliberately nulled the moment
@@ -5871,11 +5877,16 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 			// The crash-leave that lost the partial can lose the PROMPT too:
 			// land it alongside the answer, so the transcript never shows an
 			// answer to a question that is not there.
+			// The restored prompt is stamped with the turn's start (when it was
+			// sent), the answer with the moment the turn settled; a repair that
+			// runs later must not date the messages by its own clock. No known
+			// start means no stamp rather than a wrong one.
 			const anchorUserText = (options.snapshot ? options.snapshot.userText : detachedCookingHandle?.userText ?? "").trim();
+			const turnStartedAt = options.snapshot ? options.snapshot.startedAt : detachedCookingHandle?.startedAt;
 			if (!tailHasUser && anchorUserText) {
-				items.push({ kind: "user", id: `detached-user-${safeTurnId}`, text: anchorUserText });
+				items.push({ kind: "user", id: `detached-user-${safeTurnId}`, text: anchorUserText, ...(typeof turnStartedAt === "number" ? { ts: turnStartedAt } : {}) });
 			}
-			items.push({ kind: "assistant", id: `detached-assistant-${safeTurnId}`, text: finalText, streaming: false });
+			items.push({ kind: "assistant", id: `detached-assistant-${safeTurnId}`, text: finalText, streaming: false, ts: options.snapshot ? options.snapshot.settledAt : Date.now() });
 			// A partial that landed because the turn FAILED (provider error, or
 			// the detach watchdog hit its deadline) must not read as a finished
 			// answer to someone opening the room later.
@@ -7049,7 +7060,7 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 					send({ type: "error", code: "room_displaced", message: "This room is now open in another window." });
 				},
 			});
-			send({ type: "turn_reattach", turnId: cooking.turnId, conversationId: persistentConversationId, settled: !adopted, ...(cooking.userText ? { userText: cooking.userText } : {}), ...(cooking.anchorItemId !== undefined ? { anchorItemId: cooking.anchorItemId } : {}) });
+			send({ type: "turn_reattach", turnId: cooking.turnId, conversationId: persistentConversationId, settled: !adopted, ...(cooking.userText ? { userText: cooking.userText } : {}), ...(cooking.anchorItemId !== undefined ? { anchorItemId: cooking.anchorItemId } : {}), ...(typeof cooking.startedAt === "number" ? { startedAt: cooking.startedAt } : {}) });
 			for (const frame of cooking.bufferedTurnFrames()) send(frame);
 			// Close the replay window before any live frame can follow (this
 			// whole block is synchronous, so the agent cannot interleave): the
@@ -7223,7 +7234,7 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 				const startedTurn = beginPersistentAgentTurn(persistentAgentIdForSession, persistentConversationId, { connectionId });
 				if (!startedTurn.turnId) throw new Error("persistent-agent turn id was not created");
 				persistentTurnId = startedTurn.turnId;
-				activePersistentWebTurn = { turnId: persistentTurnId, promptSettled: false };
+				activePersistentWebTurn = { turnId: persistentTurnId, promptSettled: false, ...(typeof startedTurn.startedAt === "number" ? { startedAt: startedTurn.startedAt } : {}) };
 				// A new turn owns the anchor from here on: the previous turn's
 				// post-stream landing snapshot must not fire against it.
 				settledTurnLandingSnapshot = null;
@@ -7336,7 +7347,7 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 					if (!detachedFromClient && turn?.terminalReason === "completed") {
 						const settledFinalText = turnTrace.finalAssistantText.trim();
 						settledTurnLandingSnapshot = settledFinalText
-							? { turnId: persistentTurnId, finalAssistantText: settledFinalText, anchorItemId: turnStartAnchorItemId, userText: currentTurnUserTextForLanding }
+							? { turnId: persistentTurnId, finalAssistantText: settledFinalText, anchorItemId: turnStartAnchorItemId, userText: currentTurnUserTextForLanding, ...(typeof activePersistentWebTurn?.startedAt === "number" ? { startedAt: activePersistentWebTurn.startedAt } : {}), settledAt: Date.now() }
 							: null;
 					}
 					if (activePersistentWebTurn?.turnId === persistentTurnId) activePersistentWebTurn = null;
@@ -7645,6 +7656,7 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 				turnId: activePersistentWebTurn?.turnId ?? "",
 				userText: activeTurnUserAuthoredText ?? "",
 				anchorItemId: turnStartAnchorItemId,
+				...(typeof activePersistentWebTurn?.startedAt === "number" ? { startedAt: activePersistentWebTurn.startedAt } : {}),
 				settled: false,
 				claimantConnectionId: null,
 				adopterConnectionId: null,

@@ -491,6 +491,7 @@ try {
 	assert(reattachFrame.settled === false, `a mid-cook reattach should not be settled, got ${JSON.stringify(reattachFrame.settled)}`);
 	assert(reattachFrame.conversationId === conversationId, `turn_reattach should name the cooking conversation, got ${JSON.stringify(reattachFrame.conversationId)}`);
 	assert(String(reattachFrame.userText ?? "").includes(SLOW_MARKER), `turn_reattach should carry the turn's user text, got ${JSON.stringify(reattachFrame.userText)}`);
+	assert(typeof reattachFrame.startedAt === "number" && reattachFrame.startedAt <= Date.now(), `turn_reattach should carry the turn's start time, got ${JSON.stringify(reattachFrame.startedAt)}`);
 	// The replay reaches back to the turn's very first chunk, which streamed
 	// before this connection even existed.
 	await ws2.waitFor((frame) => deltaText(frame).includes("slow part 1. "), "replayed first chunk", reattachIndex);
@@ -523,6 +524,7 @@ try {
 	const landed = landedItems.find((item) => String(item.id ?? "").startsWith("detached-assistant-"));
 	assert(landed?.kind === "assistant" && landed.text === expectedText, `landed assistant item should carry the full answer, got ${JSON.stringify(landed)}`);
 	assert(landed.streaming === false, "landed assistant item must not be marked streaming");
+	assert(typeof landed.ts === "number" && landed.ts >= reattachFrame.startedAt, `landed assistant item should be stamped no earlier than the turn's start, got ${JSON.stringify({ ts: landed.ts, startedAt: reattachFrame.startedAt })}`);
 	assert(!landedItems.some((item) => item.id === "a1-partial"), "the partial assistant tail must be superseded by the landed answer");
 	assert(landedItems.some((item) => item.id === "u1" && item.kind === "user"), "the user's message must survive the landing");
 	assert(landedItems.filter((item) => item.kind === "assistant").length === 1, `exactly one assistant item should remain, got ${JSON.stringify(landedItems.map((item) => item.id))}`);

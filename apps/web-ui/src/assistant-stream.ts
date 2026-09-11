@@ -296,6 +296,26 @@ function finalizeNow(state: AssistantStreamState, effects: AssistantStreamEffect
 	return closedItemId;
 }
 
+/**
+ * Reserve the transcript item for a message that finishes before its first
+ * paint. The host appends the message's tool chips right after dispatching
+ * message_end, and an item that only comes into being at the next tick lands
+ * AFTER them — the sentence the model wrote before calling a tool showed up
+ * below the tool chip, depending on whether a frame had painted in between.
+ * Emitting the (still empty) item here pins its slot above the chips; the
+ * reveal then fills it in place at the usual pace, so timing is unchanged.
+ * Orphan-opened messages keep their quarantine: the authoritative text
+ * decides, exactly as the non-streamed path decides before it buffers — a
+ * replayed answer reserves nothing and reveal()'s gate drops it as before.
+ */
+function reserveItemBeforeDrain(state: AssistantStreamState, effects: AssistantStreamEffect[], now: number, finalText: string): void {
+	if (state.itemId) return;
+	if (!state.openedByMessageStart && isReplayOfRecentFinal(state, finalText, now)) return;
+	state.counter += 1;
+	state.itemId = `stream_${state.counter}_${now.toString(36)}`;
+	effects.push({ kind: "upsert", id: state.itemId, text: state.displayed, streaming: true });
+}
+
 /** Reveal a slice of the buffer according to pacing (or all of it). */
 function reveal(state: AssistantStreamState, effects: AssistantStreamEffect[], now: number, mode: "paced" | "drain", pacing: RevealPacing): void {
 	if (!state.buffer) {
@@ -528,6 +548,7 @@ export function reduceAssistantStream(
 				// text once the buffer empties.
 				state.phase = "draining";
 				state.finalText = action.finalText;
+				reserveItemBeforeDrain(state, effects, action.now, action.finalText);
 				effects.push({ kind: "schedule_tick" });
 				return { state, effects };
 			}
@@ -552,11 +573,12 @@ export function reduceAssistantStream(
 				return { state, effects };
 			}
 			state.phase = "draining";
-			// Carry the boundary through the reveal: reveal() re-checks the
-			// quarantine at first paint and must not drop a legitimate answer.
+			// Carry the boundary through the reveal: the reservation below and
+			// reveal()'s first-paint gate must not drop a legitimate answer.
 			state.openedByMessageStart = wasOpenedByMessageStart;
 			state.finalText = action.finalText;
 			state.buffer = action.finalText;
+			reserveItemBeforeDrain(state, effects, action.now, action.finalText);
 			effects.push({ kind: "schedule_tick" });
 			return { state, effects };
 		}

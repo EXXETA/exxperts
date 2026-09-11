@@ -1243,8 +1243,10 @@ export interface PersistentAgentPurgeResponse {
 }
 
 export type ChatItem =
-	| { kind: "user"; id: string; text: string; attachments?: { name: string; bytes: number; extension: string }[] }
-	| { kind: "assistant"; id: string; text: string; streaming?: boolean }
+	// `ts` (epoch ms) is when the item was born; absent on items written before
+	// the field existed, which then show no date/time on hover.
+	| { kind: "user"; id: string; text: string; ts?: number; attachments?: { name: string; bytes: number; extension: string }[] }
+	| { kind: "assistant"; id: string; text: string; ts?: number; streaming?: boolean }
 	| {
 			kind: "tool";
 			id: string;

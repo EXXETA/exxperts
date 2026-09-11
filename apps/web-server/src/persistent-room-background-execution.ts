@@ -520,7 +520,7 @@ export async function executePersistentRoomBackgroundPrompt(input: PersistentRoo
 			state: thread.state === "active" ? "active" : "standby",
 			origin: thread.origin,
 			model: prepared.modelLock,
-			items: upsertItem(thread.items ?? [], { kind: "user", id: userItemId, text: prompt }),
+			items: upsertItem(thread.items ?? [], { kind: "user", id: userItemId, text: prompt, ts: Date.now() }),
 		}).thread;
 		userItemPersisted = true;
 		const startedTurn = beginPersistentAgentTurn(prepared.roomId, prepared.threadId, { turnId, connectionId });
@@ -575,7 +575,7 @@ export async function executePersistentRoomBackgroundPrompt(input: PersistentRoo
 		state: "standby",
 		origin: current.origin,
 		model: current.model,
-		items: noteItemsOrJustTheItems(upsertItem(current.items ?? [], { kind: "assistant", id: assistantItemId, text: assistantText.trim(), streaming: false })),
+		items: noteItemsOrJustTheItems(upsertItem(current.items ?? [], { kind: "assistant", id: assistantItemId, text: assistantText.trim(), streaming: false, ts: Date.now() })),
 	}, {
 		// The model already ran and its tokens are already spent; this write only lands the paid
 		// answer under the thread's existing lock. A profile switch mid-generation must not turn
