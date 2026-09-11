@@ -1,5 +1,5 @@
 /**
- * The microphone half of conversation mode: capture in the browser, recognise
+ * The microphone half of voice: capture in the browser, recognise
  * on the computer. Frames leave through the audio worklet as 16 kHz PCM and
  * travel over the voice websocket while the talk key is held; partials come
  * back as the words change, and a flush on release answers with one final.

@@ -3388,14 +3388,13 @@ export function App() {
 				return;
 			}
 			if (desktop && isTalkKeyDown(event, talkKeyRef.current, fnDown)) {
-				// Swallowed even when it starts nothing, so the combination never
-				// types a character into the field it was pressed over.
+				// Outside a room the key is an ordinary key.
+				if (!conversationRef.current && !persistentChatRef.current) return;
+				// Swallowed so the combination never types a character into the
+				// field it was pressed over.
 				event.preventDefault();
 				if (event.repeat) return;
-				if (!conversationRef.current) {
-					if (!persistentChatRef.current) return;
-					voiceStartRef.current();
-				}
+				if (!conversationRef.current) voiceStartRef.current();
 				conversationRef.current?.pressTalk();
 			}
 		};

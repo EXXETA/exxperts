@@ -52,7 +52,7 @@ function codeLabel(code: string): string {
 	return code;
 }
 
-/** What the bar and the settings show: symbols on a Mac, words elsewhere. */
+/** What the voice row and the settings show: symbols on a Mac, words elsewhere. */
 export function formatTalkKey(text: string, mac: boolean): string {
 	const key = parseTalkKey(text);
 	if (!key) return text;

@@ -1,4 +1,4 @@
-// Smoke for conversation mode's pure parts: the sentence splitter that turns
+// Smoke for the pure parts of a spoken turn: the sentence splitter that turns
 // a streamed markdown reply into speech, the filler planner that decides what
 // the app says while the model is silent, the language guess, the talk key
 // and the hint the server appends to a spoken turn. No audio, no DOM, no
@@ -57,13 +57,13 @@ const planner = new FillerPlanner();
 planner.startTurn();
 const search = planner.planForTools([{ name: "memory_recall", args: {} }, { name: "web_search", args: { query: "works council remote work" } }], "en");
 assert(search.speak === 'Okay, searching the web for "works council remote work".', `first tool opens with Okay and the query: ${search.speak}`);
-assert(search.label === "Searching the web", "the bar shows the search label");
+assert(search.label === "Searching the web", "the voice row shows the search label");
 assert(planner.planForTools([{ name: "web_search", args: { query: "again" } }], "en").speak === null, "a second search in the same turn says nothing more");
 const page = planner.planForTools([{ name: "fetch_url", args: { url: "https://www.bundesanzeiger.de/x" } }], "en");
 assert(page.speak === "Reading a page from bundesanzeiger.de." && page.label === "Reading a page", `a new kind gets one line without a second Okay: ${page.speak}`);
 planner.onModelText();
 assert(planner.planForTools([{ name: "kb_search", args: {} }], "en").speak === null, "once the model has spoken the app stays quiet");
-assert(planner.planForTools([{ name: "kb_search", args: {} }], "en").label === "Knowledge base", "but the bar still shows what runs");
+assert(planner.planForTools([{ name: "kb_search", args: {} }], "en").label === "Knowledge base", "but the voice row still shows what runs");
 
 planner.startTurn();
 const ack = planner.acknowledgement("de");

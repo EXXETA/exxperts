@@ -660,33 +660,6 @@ export function InRoomChatShellView({
 	// only while assistant text is actually growing on screen.
 	const visiblyStreaming = lastItem?.kind === "assistant" && lastItem.streaming === true && !!lastItem.text;
 	const showThinkingIndicator = busy && items.length > 0 && !visiblyStreaming;
-	// The status row under the text field, also drawn under the conversation bar.
-	const statusSlot = <>
-			{contextHealth ? (
-				<ContextPill
-					status={contextHealth}
-					usage={usage}
-					currentModelLabel={currentModelLabel}
-					currentModelProvider={currentModelProvider}
-					connected={connected}
-					reconnectState={reconnectState}
-				/>
-			) : (
-				<div className="composer-status" aria-label="Chat status">
-					{currentModelLabel && <span title={`current chat model: ${formatModelWithProvider(currentModelLabel ?? "", currentModelProvider)}`}>model <strong>{compactModelLabel(currentModelLabel)}</strong></span>}
-					<span><strong>{usage.turns}</strong> turn{usage.turns === 1 ? "" : "s"}</span>
-					<span>↑ <strong>{fmtTok(usage.input)}</strong></span>
-					<span>↓ <strong>{fmtTok(usage.output)}</strong></span>
-					{usage.cacheRead > 0 && <span>cache <strong>{fmtTok(usage.cacheRead)}</strong></span>}
-					<span><strong>{fmtCost(usage.cost)}</strong></span>
-					{(usage.contextTokens ?? usage.totalTokens) > 0 && <span title="last assistant context">ctx <strong>{fmtTok(usage.contextTokens ?? usage.totalTokens)}</strong></span>}
-					<span className={`composer-connection ${connected ? "live" : ""}`}>{connected ? "online" : reconnectState === "reconnecting" ? "reconnecting…" : "offline"}</span>
-				</div>
-			)}
-			{!connected && reconnectState === "failed" && onReconnect && (
-				<button type="button" className="icon-btn composer-reconnect-btn" title="The automatic reconnect gave up. Try again now. If the server isn't running, start it with: exxperts web" onClick={onReconnect}>Reconnect</button>
-			)}
-		</>;
 	const composerLayoutClass = [
 		"composer-layout",
 		composerRightActions ? "with-actions" : "",
@@ -851,7 +824,32 @@ export function InRoomChatShellView({
 								initialDraftValue={initialDraftValue}
 								draftResetKey={draftResetKey}
 								mention={mention}
-								statusSlot={statusSlot}
+								statusSlot={<>
+									{contextHealth ? (
+										<ContextPill
+											status={contextHealth}
+											usage={usage}
+											currentModelLabel={currentModelLabel}
+											currentModelProvider={currentModelProvider}
+											connected={connected}
+											reconnectState={reconnectState}
+										/>
+									) : (
+										<div className="composer-status" aria-label="Chat status">
+											{currentModelLabel && <span title={`current chat model: ${formatModelWithProvider(currentModelLabel ?? "", currentModelProvider)}`}>model <strong>{compactModelLabel(currentModelLabel)}</strong></span>}
+											<span><strong>{usage.turns}</strong> turn{usage.turns === 1 ? "" : "s"}</span>
+											<span>↑ <strong>{fmtTok(usage.input)}</strong></span>
+											<span>↓ <strong>{fmtTok(usage.output)}</strong></span>
+											{usage.cacheRead > 0 && <span>cache <strong>{fmtTok(usage.cacheRead)}</strong></span>}
+											<span><strong>{fmtCost(usage.cost)}</strong></span>
+											{(usage.contextTokens ?? usage.totalTokens) > 0 && <span title="last assistant context">ctx <strong>{fmtTok(usage.contextTokens ?? usage.totalTokens)}</strong></span>}
+											<span className={`composer-connection ${connected ? "live" : ""}`}>{connected ? "online" : reconnectState === "reconnecting" ? "reconnecting…" : "offline"}</span>
+										</div>
+									)}
+									{!connected && reconnectState === "failed" && onReconnect && (
+										<button type="button" className="icon-btn composer-reconnect-btn" title="The automatic reconnect gave up. Try again now. If the server isn't running, start it with: exxperts web" onClick={onReconnect}>Reconnect</button>
+									)}
+								</>}
 								rightActions={composerRightActions}
 								stagingSlot={composerStagingSlot}
 								allowEmptySend={composerAllowEmptySend}

@@ -1,7 +1,7 @@
 import { GENERIC_TOOL_VIEWS, domainOf } from "../tool-views";
 
 /**
- * The small talk of conversation mode: what the app says on its own behalf
+ * The small talk of a spoken turn: what the app says on its own behalf
  * while the model is silent. Spoken only, never written into the room, which
  * is why it is generated here from things the client already knows (the tool
  * chips) instead of being asked of the model.
@@ -117,7 +117,7 @@ export class FillerPlanner {
 		return list[this.ackIndex++ % list.length];
 	}
 
-	/** What to say, if anything, when these tools start; and the label the bar shows meanwhile. */
+	/** What to say, if anything, when these tools start; and the label the voice row shows meanwhile. */
 	planForTools(calls: ToolCall[], lang: SpokenLanguage): { speak: string | null; label: string | null } {
 		let first: { call: ToolCall; kind: Kind } | null = null;
 		for (const call of calls) {
