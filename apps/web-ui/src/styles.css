@@ -4770,6 +4770,32 @@ strong, b { font-weight: 700; }
  * two do not nest and shrink long user messages. */
 .bubble-col.user > .bubble.user { max-width: 100%; }
 
+/* Action row under a bubble: the copy control and the message time. The
+ * reply's row sits under its last segment, button first; the user's hugs the
+ * right edge under the bubble, time first. */
+.message-actions {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin-top: 6px;
+	min-height: 22px;
+}
+.message-actions.user { align-self: flex-end; }
+.message-actions .message-copy { margin-top: 0; }
+/* When the message was written: quiet, revealed with the row on hover, the
+ * full date and time in its tooltip. */
+.message-time {
+	font-size: 11px;
+	line-height: 1;
+	color: var(--muted);
+	opacity: 0;
+	cursor: default;
+	user-select: none;
+	white-space: nowrap;
+	transition: opacity 120ms ease;
+}
+.bubble-row:hover .message-time { opacity: 1; }
+
 /* Message copy control. Quiet ghost affordance in the app's control language:
  * transparent at rest, faint until hovered/focused. Assistant replies show it
  * always (aligned under the text); user messages reveal it on row hover. */
@@ -4802,9 +4828,9 @@ strong, b { font-weight: 700; }
 .message-copy-assistant:focus-visible { opacity: 1; }
 
 /* User: hidden at rest, revealed when the row is hovered or the button is
- * keyboard-focused; sits at the right edge under the right-aligned bubble. */
+ * keyboard-focused; its action row sits at the right edge under the
+ * right-aligned bubble. */
 .message-copy-user {
-	align-self: flex-end;
 	opacity: 0;
 	pointer-events: none;
 }
@@ -4817,8 +4843,10 @@ strong, b { font-weight: 700; }
 	pointer-events: auto;
 }
 @media (hover: none) {
-	/* Touch devices have no hover: keep the user-message control reachable. */
+	/* Touch devices have no hover: keep the user-message control reachable
+	 * and the message time readable at rest. */
 	.message-copy-user { opacity: 0.55; pointer-events: auto; }
+	.message-time { opacity: 0.55; }
 }
 .user-message-content {
 	white-space: pre-wrap;
@@ -5091,6 +5119,36 @@ strong, b { font-weight: 700; }
 	overflow-x: auto;
 }
 .md pre code { padding: 0; border: none; font-size: inherit; }
+/* Fenced code block (Markdown.tsx `pre`): a header strip above the block
+   carries the language label and a copy control, so nothing sits on top of
+   the code and a long line scrolling sideways never carries them away. The
+   strip shares the block's border and background and reads as its top edge;
+   the copy control is understated at rest, like the reply's. */
+.code-block { margin: 0.6em 0; }
+.code-block > pre { margin: 0; border-top-left-radius: 0; border-top-right-radius: 0; border-top: none; }
+.code-block-tools {
+	display: flex;
+	align-items: center;
+	justify-content: flex-end;
+	gap: 8px;
+	min-height: 24px;
+	padding: 2px 6px 2px 11px;
+	border: 1px solid var(--border-soft);
+	border-bottom: 1px solid var(--border-soft);
+	border-radius: 6px 6px 0 0;
+}
+.code-block-lang {
+	margin-right: auto;
+	font-family: var(--exx-font-mono);
+	font-size: 10.5px;
+	letter-spacing: .04em;
+	color: var(--muted);
+	user-select: none;
+}
+.code-block-copy { margin-top: 0; width: 20px; height: 20px; opacity: 0.55; }
+.code-block-copy:hover,
+.code-block-copy:focus-visible,
+.code-block-copy.is-copied { opacity: 1; }
 .md blockquote {
 	margin: 0.6em 0;
 	padding: 2px 12px;
@@ -5101,6 +5159,86 @@ strong, b { font-weight: 700; }
 .md th, .md td { border: 1px solid var(--border-soft); padding: 4px 8px; }
 .md th { background: transparent; font-weight: 700; }
 .md hr { border: 0; border-top: 1px solid var(--border-soft); margin: 1em 0; }
+/* An inline image (a data: URI or a room-served file) stays inside its
+   column instead of stretching the bubble or the tool result to its natural
+   pixel width; height follows so the aspect ratio holds. */
+.md img,
+.assistant-markdown img { max-width: 100%; height: auto; }
+/* A picture a reply shows from the room's shelf is wrapped in this button
+   (Markdown.tsx) and opens the viewer. The wrapper adds nothing to the
+   picture's box — no padding, border or ground — so the width cap above
+   still governs; the image goes block so no inline baseline gap opens
+   under it. The hover edge and ring are those of a bubble thumbnail: same act. */
+.md-image-button {
+	display: block;
+	max-width: 100%;
+	padding: 0;
+	border: 0;
+	background: none;
+	cursor: pointer;
+	border-radius: 4px;
+}
+.md-image-button img { display: block; }
+.md-image-button:hover { outline: 1px solid var(--exx-plan); }
+.md-image-button:focus-visible { outline: 2px solid var(--exx-plan); outline-offset: 2px; }
+
+/* Hover actions on a chat picture (ImageActions.tsx): copy and download on
+   the picture's top-right corner, for a reply picture and a bubble thumbnail
+   alike. The host takes the picture's width and nothing more — it adds no
+   padding, border or ground — so the corner is the PICTURE's, not the
+   column's, and the width caps above still govern. */
+.image-actions-host {
+	position: relative;
+	display: block;
+	width: fit-content;
+	max-width: 100%;
+	min-width: 0;
+}
+.image-actions {
+	position: absolute;
+	top: 6px;
+	right: 6px;
+	z-index: 2;
+	display: flex;
+	gap: 4px;
+	opacity: 0;
+	transition: opacity 140ms ease;
+}
+/* Hidden at rest; shown while the pointer is over the picture, while a button
+   in the cluster holds focus, and while the tick is still up after the
+   pointer left (the copied state reverts on its own a moment later). */
+.image-actions-host:hover .image-actions,
+.image-actions-host:focus-within .image-actions,
+.image-actions.is-copied { opacity: 1; }
+/* Under ~80px wide the two buttons would cover the whole picture: the
+   cluster then hangs just above it, flush with its right edge (is-narrow
+   comes from the host's measured width). */
+.image-actions-host.is-narrow .image-actions {
+	top: auto;
+	right: 0;
+	bottom: calc(100% + 4px);
+}
+/* Round ghost in the message-copy language, on the panel ground with a hair
+   border so it reads on a light picture as on a dark one. */
+.image-action {
+	margin-top: 0;
+	width: 26px;
+	height: 26px;
+	border: 1px solid var(--border-soft);
+	border-radius: 50%;
+	background: color-mix(in srgb, var(--panel) 88%, #ffffff 12%);
+	color: var(--fg);
+	text-decoration: none;
+}
+.image-action:hover,
+.image-action:focus-visible {
+	background: var(--panel);
+	border-color: var(--exx-plan);
+}
+@media (hover: none) {
+	/* No pointer to hover with: keep the cluster reachable at rest. */
+	.image-actions { opacity: 0.7; }
+}
 
 /* In-chat Mermaid diagrams. Diagrams render on a lightened surface so the
    light-themed SVG stays legible in either app theme. Reuses existing tokens. */
@@ -5111,6 +5249,13 @@ strong, b { font-weight: 700; }
 	background: color-mix(in srgb, var(--panel) 82%, #ffffff 18%);
 	overflow: hidden;
 }
+/* The frame holds the canvas and the expand control side by side, so the
+   control floats over the canvas without being inside it (a click on it is
+   never a click on the toggle, and it stays put while the canvas scrolls). */
+.mermaid-diagram-frame {
+	position: relative;
+}
+/* The canvas toggles the diagram's size in place; the cursor says which way. */
 .mermaid-diagram-canvas {
 	position: relative;
 	min-height: 180px;
@@ -5118,57 +5263,69 @@ strong, b { font-weight: 700; }
 	overflow: auto;
 	display: flex;
 	align-items: center;
-	justify-content: center;
-}
-.mermaid-diagram-canvas-button {
-	width: 100%;
-	border: 0;
-	background: transparent;
-	color: inherit;
-	font: inherit;
-	text-align: inherit;
 	cursor: zoom-in;
 }
-.mermaid-diagram-canvas-button:focus-visible {
+.mermaid-diagram-canvas.enlarged {
+	cursor: zoom-out;
+}
+.mermaid-diagram-canvas:focus-visible {
 	outline: 2px solid var(--fg);
 	outline-offset: -4px;
 }
 .mermaid-diagram-svg {
 	display: block;
 	width: 100%;
+	margin: auto;
 }
+/* The diagram keeps its natural size (mermaid sets it as an inline max-width)
+ * and shrinks to the column when it is wider; a three-node sketch is no longer
+ * blown up to fill a minimum width. Auto margins centre a small one. */
 .mermaid-diagram-canvas svg {
 	display: block;
 	width: 100%;
-	max-width: 960px;
 	height: auto;
-	min-width: 360px;
+	margin: 0 auto;
 }
-.mermaid-diagram-open-indicator {
+/* Enlarged: a narrow drawing fills the column, a wide one goes to its real
+ * pixels (measured after render into --diagram-natural-width) and scrolls in
+ * the canvas. Without a measurement, enlarged is simply the full column. */
+.mermaid-diagram-canvas.enlarged svg {
+	max-width: none !important;
+	width: max(100%, var(--diagram-natural-width, 100%));
+}
+.mermaid-diagram-expand {
 	position: absolute;
 	top: 8px;
 	right: 8px;
-	z-index: 1;
+	z-index: 2;
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
 	width: 28px;
 	height: 28px;
+	padding: 0;
 	border: 1px solid var(--border-soft);
 	border-radius: 6px;
 	background: color-mix(in srgb, var(--panel) 88%, #ffffff 12%);
 	color: var(--fg);
 	font-size: 16px;
 	font-weight: 700;
+	line-height: 1;
+	cursor: pointer;
 	opacity: 0;
 	transform: translateY(-2px);
 	transition: opacity 140ms ease, transform 140ms ease, background 140ms ease;
-	pointer-events: none;
 }
-.mermaid-diagram-canvas-button:hover .mermaid-diagram-open-indicator,
-.mermaid-diagram-canvas-button:focus-visible .mermaid-diagram-open-indicator {
+.mermaid-diagram-frame:hover .mermaid-diagram-expand,
+.mermaid-diagram-expand:focus-visible {
 	opacity: 1;
 	transform: translateY(0);
+}
+.mermaid-diagram-expand:hover,
+.mermaid-diagram-expand:focus-visible {
+	background: var(--fg);
+	color: var(--bg);
+	outline: none;
 }
 .mermaid-diagram-repaired {
 	padding: 7px 12px;
@@ -5188,10 +5345,16 @@ strong, b { font-weight: 700; }
 	font-size: 12px;
 	font-weight: 700;
 }
+.mermaid-diagram-source .code-block { margin: 0; }
+.mermaid-diagram-source .code-block-tools {
+	border-left: 0;
+	border-right: 0;
+	border-top: 1px solid var(--border-soft);
+	border-radius: 0;
+}
 .mermaid-diagram-source pre {
 	margin: 0;
 	border: 0;
-	border-top: 1px solid var(--border-soft);
 	border-radius: 0;
 	max-height: 260px;
 }
@@ -5255,23 +5418,27 @@ strong, b { font-weight: 700; }
 .mermaid-viewer-zoom-value {
 	min-width: 64px;
 }
+/* The body is a flex scroll area: a stage smaller than it sits centred on
+   both axes by its auto margins, a larger one starts at the padding edge and
+   scrolls (auto margins collapse to zero, so nothing is clipped off the left
+   the way justify-content: center would). */
 .mermaid-viewer-body {
 	flex: 1;
 	overflow: auto;
 	padding: 22px;
+	display: flex;
 	background: color-mix(in srgb, var(--panel) 82%, #ffffff 18%);
 }
+/* The stage is the diagram's real pixel width times the zoom, set inline once
+   the svg is measured; until then it takes the body's width so the first
+   paint is a fit-by-width. flex: none keeps the pixel width from shrinking. */
 .mermaid-viewer-stage {
-	min-width: min(720px, 100%);
-	margin: 0 auto;
-	transition: width 140ms ease;
+	flex: none;
+	width: 100%;
+	margin: auto;
 }
 .mermaid-viewer-svg {
-	width: 100%;
-	display: flex;
-	align-items: center;
-	justify-content: center;
-	min-height: 100%;
+	display: block;
 }
 .mermaid-viewer-loading,
 .mermaid-viewer-error {
@@ -5289,12 +5456,13 @@ strong, b { font-weight: 700; }
 .mermaid-viewer-error {
 	color: var(--error);
 }
+/* The svg fills the stage's pixel width; mermaid's inline max-width (its
+   natural size) must not cap it, or zooming past 100% would do nothing. */
 .mermaid-viewer-svg svg {
 	display: block;
-	width: 100% !important;
+	width: 100%;
 	max-width: none !important;
 	height: auto;
-	min-width: 0;
 }
 
 @media (max-width: 720px) {
@@ -5399,6 +5567,12 @@ strong, b { font-weight: 700; }
 	white-space: pre;
 	overflow-wrap: normal;
 }
+/* The wrapper carries the block's vertical margin (see .code-block). */
+.assistant-markdown .code-block { margin: 0.8em 0; }
+.assistant-markdown .code-block-tools { border-radius: 8px 8px 0 0; padding-left: 13px; background: var(--code-bg); }
+/* Same specificity as `.assistant-markdown pre` above, stated after it, so the
+   block joins its header strip here too. */
+.assistant-markdown .code-block > pre { margin: 0; border-top: none; border-top-left-radius: 0; border-top-right-radius: 0; }
 .assistant-markdown table {
 	width: 100%;
 	max-width: 100%;
@@ -10220,46 +10394,129 @@ label.rs-row {
 	border-radius: 0 6px 6px 0;
 }
 /* ── Composer attachment staging (files UI slice) ──────────────────────────
-   The chip row above the textarea: visible proof the drop worked, the honest
-   parse state before the message commits, and ✕ to change your mind. */
+   The row above the textarea: visible proof the drop worked, the honest
+   parse state before the message commits, and ✕ to change your mind. A
+   picture is a thumbnail tile (the same grammar as the bubble thumbnails),
+   any other file a compact card with the bubble's type badge. Tiles and
+   cards share one wrapping row, bottom-aligned: a card is a third of the
+   tile's height, and sitting on the tile's bottom edge it reads as one
+   shelf resting on the textarea instead of a card floating mid-air beside
+   a tall picture; the tile's ✕ overhangs its top corner, where a
+   bottom-aligned card never reaches. */
 .composer-staged {
 	display: flex;
 	flex-wrap: wrap;
-	gap: 6px;
+	align-items: flex-end;
+	gap: 8px;
+	/* Headroom for the tile's ✕, which overhangs the top edge by 8px. */
+	padding: 8px 8px 0 0;
 	margin: 0 0 8px;
 }
-.composer-staged-chip {
+.composer-staged-tile,
+.composer-staged-card {
+	position: relative;
+	border: 1px solid var(--exx-border-soft);
+	border-radius: 8px;
+	background: var(--exx-surface-inset);
+}
+.composer-staged-tile.failed,
+.composer-staged-card.failed {
+	border-color: var(--danger, #d33);
+}
+/* The image tile: a square card on the inset ground with the whole picture
+   CONTAINED inside it (a screenshot is never cropped to a corner). No overflow
+   clip on the tile itself — the ✕ must be free to overhang its corner — so the
+   frame inside carries the clip and the inner padding. */
+.composer-staged-tile {
+	display: block;
+	flex: none;
+	width: 120px;
+	height: 120px;
+	border-radius: 12px;
+}
+/* The frame is a button once the upload has landed (the picture opens the
+   viewer) and a plain span before that; both fill the tile identically. */
+.composer-staged-tile-frame {
+	display: block;
+	width: 100%;
+	height: 100%;
+	padding: 6px;
+	box-sizing: border-box;
+	border: 0;
+	border-radius: inherit;
+	background: none;
+	overflow: hidden;
+	color: inherit;
+	font: inherit;
+}
+button.composer-staged-tile-frame { cursor: pointer; }
+/* The same hover edge as a bubble thumbnail: this is the same act. */
+.composer-staged-tile:has(button.composer-staged-tile-frame:hover) { border-color: var(--exx-plan); }
+button.composer-staged-tile-frame:focus-visible { outline: 2px solid var(--exx-plan); outline-offset: 2px; }
+.composer-staged-tile-img {
+	display: block;
+	width: 100%;
+	height: 100%;
+	object-fit: contain;
+}
+.composer-staged-tile.uploading .composer-staged-tile-img { opacity: .5; }
+.composer-staged-tile-busy {
+	position: absolute;
+	inset: 0;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	border-radius: inherit;
+}
+.composer-staged-tile-alert {
+	position: absolute;
+	left: 4px;
+	bottom: 4px;
+	width: 16px;
+	height: 16px;
+	border-radius: 50%;
+	background: var(--danger, #d33);
+	color: #fff;
+	font-size: 11px;
+	font-weight: 700;
+	line-height: 16px;
+	text-align: center;
+}
+/* The document card: badge · name over a muted state line · ✕. */
+.composer-staged-card {
 	display: inline-flex;
 	align-items: center;
-	gap: 7px;
+	gap: 8px;
 	max-width: 100%;
-	padding: 4px 8px;
-	border: 1px solid var(--exx-border);
-	border-radius: 8px;
+	padding: 6px 8px;
 	font-size: 12px;
-	background: var(--exx-surface-2, transparent);
 }
-.composer-staged-chip.failed {
-	border-color: var(--danger, #d33);
+.composer-staged-card-text {
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+	line-height: 1.3;
 }
 .composer-staged-name {
 	font-weight: 600;
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
-	max-width: 220px;
+	max-width: 200px;
 }
 .composer-staged-note {
 	color: var(--exx-text-muted);
+	font-size: 11px;
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
-	max-width: 260px;
+	max-width: 200px;
 }
-.composer-staged-chip.failed .composer-staged-note {
+.composer-staged-card.failed .composer-staged-note {
 	color: var(--danger, #d33);
 }
 .composer-staged-remove {
+	flex: none;
 	border: none;
 	background: none;
 	color: var(--exx-text-muted);
@@ -10271,12 +10528,70 @@ label.rs-row {
 .composer-staged-remove:hover {
 	color: var(--exx-text);
 }
+/* On a tile the ✕ is a round button riding the top-right corner, painted in
+   the composer box's own ground so it reads as sitting on the card's edge.
+   Always visible: a control that only appears on hover is invisible to touch
+   and easy to miss, and the corner placement keeps it off the picture. */
+.composer-staged-tile .composer-staged-remove {
+	position: absolute;
+	top: -8px;
+	right: -8px;
+	width: 22px;
+	height: 22px;
+	border: 1px solid var(--exx-border);
+	border-radius: 50%;
+	background: var(--panel-2);
+	color: var(--exx-text-muted);
+	font-size: 11px;
+	line-height: 1;
+	padding: 0;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+}
+.composer-staged-tile .composer-staged-remove:hover {
+	color: var(--exx-text);
+	border-color: var(--exx-text);
+}
 .composer-attach-input {
 	display: none;
 }
 /* Attachment chips inside a sent user bubble — same grammar as task chips. */
 .user-attachment-strip {
 	margin-top: 6px;
+}
+/* An image attachment shows its picture above the chip strip: what the room
+   was shown, at a glance, capped in height so a tall screenshot never takes
+   the bubble over and never wider than the bubble. Rounded like the chips;
+   the click opens the viewer exactly as the chip does. */
+.user-attachment-thumbs {
+	display: flex;
+	flex-wrap: wrap;
+	/* Each picture keeps its own height: stretched to the tallest sibling, a
+	 * small image would paint as a strip. */
+	align-items: flex-start;
+	gap: 8px;
+	margin-top: 8px;
+}
+.user-attachment-thumb {
+	display: block;
+	min-width: 0;
+	max-width: 100%;
+	padding: 0;
+	border: 1px solid var(--exx-border-soft);
+	border-radius: 8px;
+	overflow: hidden;
+	background: transparent;
+	cursor: pointer;
+}
+.user-attachment-thumb:hover { border-color: var(--exx-plan); }
+.user-attachment-thumb:focus-visible { outline: 2px solid var(--exx-plan); outline-offset: 2px; }
+.user-attachment-thumb-img {
+	display: block;
+	width: auto;
+	height: auto;
+	max-width: 100%;
+	max-height: 160px;
 }
 /* The attachment chip in a message (taste pass): it opens the file in the
    viewer, exactly as its Files row does, so it carries the same affordance as
@@ -10577,7 +10892,10 @@ label.rs-row {
 	background: transparent;
 }
 .task-file-chip:hover { border-color: var(--exx-plan); }
-.task-file-chip .task-kind {
+/* The staged composer card wears the same badge, so a file looks the same
+   before and after it rides with a message. */
+.task-file-chip .task-kind,
+.composer-staged-card .task-kind {
 	font-size: 10px;
 	font-weight: 700;
 	letter-spacing: .06em;

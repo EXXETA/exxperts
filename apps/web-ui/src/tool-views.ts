@@ -14,6 +14,11 @@ export const GENERIC_TOOL_VIEWS: Record<string, { icon: string; running: string;
 	ls: { icon: "📁", running: "Listing files", done: "Listed files" },
 	find: { icon: "📁", running: "Finding files", done: "Found files" },
 	grep: { icon: "🔎", running: "Searching files", done: "Searched files" },
+	// The room's Files tools (persistent-room-shelf-tools.ts): a chip reading
+	// "Read file" says what happened, where the raw name "read_file" only said
+	// which tool did it.
+	read_file: { icon: "📄", running: "Reading file", done: "Read file" },
+	search_file: { icon: "🔎", running: "Searching file", done: "Searched file" },
 	kb_search: { icon: "📚", running: "Searching knowledge base", done: "Searched knowledge base" },
 	artifact_list: { icon: "🗂️", running: "Listing artifacts", done: "Listed artifacts" },
 	artifact_read: { icon: "🗂️", running: "Reading artifact", done: "Read artifact" },

@@ -2,6 +2,55 @@
 
 User-visible changes per release. Historical private/internal development notes are not part of this public-facing changelog.
 
+## 0.11.2 (2026-09-11)
+
+- Runtime safety fixes pulled from the upstream coding-agent project, none of which change how rooms
+  behave. A reply that hits the model's output limit no longer runs the tool calls it was cut off in;
+  they come back as errors asking the model to re-issue them, and a second cut in a row ends the turn.
+  The edit tool keeps untouched lines byte for byte on a fuzzy match instead of rewriting the whole
+  file through a normalized copy. Tool arguments that already fit a nullable type are no longer
+  coerced into another type. Bash output keeps draining after a command exits while a process it
+  left behind is still writing, bounded to two seconds so a background process cannot hold the room
+  until the command's timeout. A memory summary or branch summary cut off at the output limit is
+  refused instead of being kept as if complete. Threshold compaction still fires when a gateway
+  reports no token usage. A resumed room session whose log lacks a final newline no longer glues the
+  next entry onto the last. Disposing a session aborts the request it still had in flight.
+- A room on a gateway that reports no token usage now measures its context from the conversation
+  size instead of reading the missing usage as nearly nothing. Two things read that measurement:
+  the context chip, which shows it against the Remember checkpoint and may jump once to its honest
+  percentage after this update, and auto-compaction, which triggers at the model's context window
+  and now fires when it should on such gateways. Providers that report usage are unaffected. When
+  the history cannot be condensed, the room says so with a remedy instead of retrying silently.
+- On Windows, a file path written in Git Bash style (/c/Users/...) or a bare /tmp now resolves to
+  where the shell itself would put it, and the write and edit tools report the path they actually
+  used, so the room can find its own files.
+- A reply that runs tools between its paragraphs shows one copy button, under its last paragraph,
+  and copying takes every paragraph of the reply joined by blank lines; tool calls and pictures are
+  left out, and code blocks are copied exactly as shown. Earlier, each paragraph carried its own
+  button.
+- Hovering a message reveals when it was written next to its copy button, as a short relative time
+  ("5 minutes ago", "yesterday"), with the full date and time in its tooltip. A reply shows the time
+  it began. Messages from before this update carry no time and show nothing. A prompt and answer
+  restored after leaving a room mid-turn are dated by when the turn ran, and a tool call cut off by
+  a failed turn settles as stopped instead of spinning on.
+- Pictures in chat. An image attached to a message shows as a picture in the bubble, a document as a
+  chip; a picture inside a reply that comes from the room's Files is shown at the column's width.
+  Every picture opens in the viewer when clicked, and hovering it offers copy (to the clipboard as
+  an image) and download. In the desktop app, right-clicking a picture offers Copy Image and Save
+  Image As. Images in tool results also fit the column.
+- Code blocks carry a strip with their language and a copy button. A mermaid diagram renders at its
+  natural size and shrinks to the column when wider; clicking it enlarges it in place, and its
+  expand control opens a viewer that zooms from the diagram's real size with fit, keyboard steps and
+  pinch around the pointer. The diagram's source panel carries the same strip and copy button.
+- The composer shows a staged picture as a picture card and a staged document as a typed card with
+  its name and page count or size, instead of a text pill. A document pasted from the clipboard
+  attaches under its own name, and a file copied from the file manager no longer types its name
+  into the composer. The composer takes focus when a room opens and after a message is sent.
+- The sentence a room writes before running a tool now always appears above the tool line; it used
+  to land below it depending on timing. Reading or searching one of the room's files reads as such
+  in the tool line, with the file name. A conversation saved while a reply was still streaming
+  opens settled instead of showing an unfinished bubble.
+
 ## 0.11.1 (2026-09-09)
 
 - Writing ordinary code that names credentials no longer trips the content policy. A source file

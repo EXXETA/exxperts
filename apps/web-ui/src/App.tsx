@@ -6,7 +6,7 @@ import { AssetViewerFooter } from "./components/asset-viewer-footer";
 import { ToastStack, type ToastView } from "./components/toast-stack";
 import { readReviseConflicts, reviseConflictSentence } from "../../web-server/src/revise-conflict-notice";
 import { assetDisplayTitle, assetTemplateShortName, projectAssetRows, rowShelfFileName, shelfTruthForRoom, type AssetLedgerRowInput, type AssetRowView, type ShelfFileRowInput } from "./assets-panel";
-import { commitRoomFileDelete, fileToBase64, listRoomFiles, renameRoomFile, saveRoomFileToFolder, stageRoomFileDelete, undoRoomFileDelete, uploadRoomFile, type RoomShelfFile } from "./room-files-api";
+import { commitRoomFileDelete, fileToBase64, listRoomFiles, renameRoomFile, roomFileUrl, saveRoomFileToFolder, stageRoomFileDelete, undoRoomFileDelete, uploadRoomFile, type RoomShelfFile } from "./room-files-api";
 import { chooseSystemFolder, fetchPersistentRoomWorkspaceDefault } from "./persistent-room-workspace-api";
 import { Dashboard } from "./components/Dashboard";
 import { Memory } from "./components/Memory";
@@ -398,8 +398,31 @@ function threadRecordToLocalThread(record: PersistentAgentThreadRecord, fallback
 		displayName: fallbackDisplayName,
 		conversationId: record.threadId,
 		model,
-		items: Array.isArray(record.items) ? record.items as ChatItem[] : [],
+		items: settleLoadedItems(Array.isArray(record.items) ? record.items as ChatItem[] : []),
 	};
+}
+
+/**
+ * A thread on disk can carry a reply mid-flight: the browser saves while an
+ * answer streams (the `streaming` mark lets a reload draw the caret in the
+ * right place), and if that tab died before its next save the mark stays.
+ * Opened later, nothing is streaming any more: such a segment is shown as
+ * settled, and one that never received a character (the slot reserved for
+ * a reply the moment its message ended) is dropped rather than shown as a
+ * permanent "…". A turn still cooking is reattached separately and rebuilds
+ * its tail from the anchor, so this loses nothing live.
+ */
+function settleLoadedItems(items: ChatItem[]): ChatItem[] {
+	const settled: ChatItem[] = [];
+	for (const item of items) {
+		if (item.kind === "assistant" && item.streaming) {
+			if (!String(item.text ?? "").trim()) continue;
+			settled.push({ ...item, streaming: false });
+			continue;
+		}
+		settled.push(item);
+	}
+	return settled;
 }
 
 // Consult MR-5: reconstruct which consult items still show the pending hint when
@@ -452,6 +475,20 @@ function formatDirectResumeError(error: unknown): string {
 	const message = error instanceof Error ? error.message : String(error ?? "");
 	if (/model is not approved/i.test(message)) return DIRECT_RESUME_INCOMPATIBLE_MODEL_MESSAGE;
 	return message || "Could not resume this standby thread.";
+}
+
+/**
+ * A tool call that was in flight when its turn ended will never get a result:
+ * the toolResult event that would settle it is exactly what the abort or the
+ * failure prevented. Left alone it spins forever, in the transcript and on
+ * disk, its bundle keeps claiming the room is still reading, and the reply's
+ * copy button waits on it. Stopped rather than failed, because the tool
+ * itself did nothing wrong.
+ */
+function stopRunningToolItems(items: ChatItem[]): ChatItem[] {
+	return items.some((it) => it.kind === "tool" && it.status === "running")
+		? items.map((it) => (it.kind === "tool" && it.status === "running" ? { ...it, status: "stopped" as const } : it))
+		: items;
 }
 
 function hasUserInput(items: ChatItem[]): boolean {
@@ -1476,7 +1513,23 @@ type StagedAttachment = {
 	/** "34 pages" · "image · stored…" · a parse-failure reason. */
 	parseNote: string;
 	pages?: number;
+	/**
+	 * A local object URL of the picture, set only for images: the composer
+	 * shows a staged picture AS a picture, before the upload has even landed.
+	 * Owned by the entry — every path that drops the entry revokes it
+	 * (releaseStaged), or the blob stays pinned in memory for the page's life.
+	 */
+	previewUrl?: string;
 };
+
+// The extensions the composer previews as a thumbnail tile (the same set the
+// bubble thumbnails use), for a file whose mime type the browser left blank.
+const STAGED_IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"]);
+
+/** Free the preview object URLs of entries leaving the staged row. */
+function releaseStaged(entries: readonly StagedAttachment[]): void {
+	for (const entry of entries) if (entry.previewUrl) URL.revokeObjectURL(entry.previewUrl);
+}
 
 // Export collision (assets contract §5): the three-button flow. Replace is the
 // destructive choice; Keep both auto-suffixes server-side; no filename typing.
@@ -3537,6 +3590,9 @@ export function App() {
 		if (!paneOpen || assetDeleteConfirm || exportCollision || fileDeleteConfirm || saveAsPrompt || roomSettingsOpen) return;
 		function onKeyDown(event: KeyboardEvent) {
 			if (event.key !== "Escape") return;
+			// A dialog that is not in this component's state (the expanded
+			// diagram viewer) owns Escape the same way: one Escape, one layer.
+			if (document.querySelector('[aria-modal="true"]')) return;
 			if (artifactMaximized) setArtifactMaximized(false);
 			else setRightPane(null);
 		}
@@ -3757,6 +3813,10 @@ export function App() {
 	// that window are catch-up for text the user already generated while away,
 	// so the reveal drains instantly instead of re-animating it at reading pace.
 	const reattachReplayDrainRef = useRef(false);
+	// The cooking turn's start, from the turn_reattach frame, for the same
+	// window: segments the replay rebuilds are dated by the turn, not by the
+	// moment this session caught up.
+	const reattachStartedAtRef = useRef<number | null>(null);
 	const streamErrorLineIdRef = useRef<string | null>(null);
 	// One output-limit line per turn. Turn frames replay on reattach (#33), so
 	// the guard has to survive the same message_end arriving twice.
@@ -3816,9 +3876,18 @@ export function App() {
 		const chat = persistentChatRef.current;
 		if (!chat) return;
 		const stageId = nid();
-		setStagedAttachments((s) => [...s, { name: "", stageId, bytes: file.size, extension: file.name.includes(".") ? file.name.slice(file.name.lastIndexOf(".")).toLowerCase() : "", status: "uploading", parseNote: file.name }]);
+		const extension = file.name.includes(".") ? file.name.slice(file.name.lastIndexOf(".")).toLowerCase() : "";
+		// A picture previews from the local bytes right away — the tile does not
+		// wait for the upload, and the shelf route is never asked for a copy of
+		// what the browser already holds.
+		const isImage = file.type.startsWith("image/") || STAGED_IMAGE_EXTENSIONS.has(extension);
+		const previewUrl = isImage ? URL.createObjectURL(file) : undefined;
+		setStagedAttachments((s) => [...s, { name: "", stageId, bytes: file.size, extension, status: "uploading", parseNote: file.name, ...(previewUrl ? { previewUrl } : {}) }]);
 		try {
 			const uploaded = await uploadRoomFile(chat.agentId, file.name, await fileToBase64(file));
+			// The row may have been cleared while the upload was in flight (a room
+			// switch): the entry is gone, so its preview is released here instead.
+			if (previewUrl && !stagedAttachmentsRef.current.some((entry) => entry.stageId === stageId)) URL.revokeObjectURL(previewUrl);
 			setStagedAttachments((s) => s.map((entry) => (entry.stageId === stageId ? {
 				name: uploaded.name,
 				stageId,
@@ -3827,21 +3896,30 @@ export function App() {
 				status: "ready" as const,
 				parseNote: uploaded.parseNote ?? (uploaded.kind === "text" ? "" : uploaded.kind),
 				...(typeof uploaded.pages === "number" ? { pages: uploaded.pages } : {}),
+				...(previewUrl ? { previewUrl } : {}),
 			} : entry)));
 			void refreshRoomFiles();
 		} catch (e) {
+			if (previewUrl) URL.revokeObjectURL(previewUrl);
 			setStagedAttachments((s) => s.filter((entry) => entry.stageId !== stageId));
 			setExportNotice({ kind: "error", text: (e as Error).message || "The file could not be added." });
 		}
 	}, [refreshRoomFiles]);
-	// Community #52: an image pasted into the composer (a screenshot, a copied
-	// picture) stages through the SAME path the 📎 uses — same upload, same
-	// chip, same refusals. The only extra work is a name: clipboard images
-	// arrive as anonymous blobs, so each gets a timestamped one derived from
-	// its mime type before riding the ordinary ingest.
-	const stagePastedImages = useCallback((files: File[]) => {
+	// Community #52: a file pasted into the composer (a screenshot, a copied
+	// picture, a document copied from the file manager) stages through the
+	// SAME path the 📎 uses — same upload, same chip, same refusals. The only
+	// extra work is a name for clipboard images: they arrive as anonymous
+	// blobs (no name, or the browser's placeholder "image.png" that every
+	// screenshot would share), so each gets a timestamped one derived from its
+	// mime type. A file that already carries its own name keeps it.
+	const stagePastedFiles = useCallback((files: File[]) => {
 		const stamp = new Date().toISOString().slice(0, 19).replace(/:/g, "-");
 		files.forEach((file, index) => {
+			const anonymousImage = file.type.startsWith("image/") && (!file.name || /^image\.[a-z0-9]+$/i.test(file.name));
+			if (!anonymousImage) {
+				void stageAttachment(file);
+				return;
+			}
 			const subtype = (file.type.split("/")[1] ?? "").split("+")[0];
 			const extension = subtype === "jpeg" ? "jpg" : subtype || "png";
 			const name = `pasted-image-${stamp}${index > 0 ? `-${index + 1}` : ""}.${extension}`;
@@ -3853,6 +3931,7 @@ export function App() {
 	// through the ONE delete path (stage + immediate commit: undoing an upload
 	// just made needs no undo window of its own).
 	const unstageAttachment = useCallback(async (staged: StagedAttachment) => {
+		releaseStaged([staged]);
 		setStagedAttachments((s) => s.filter((entry) => entry.stageId !== staged.stageId));
 		const chat = persistentChatRef.current;
 		if (!chat || !staged.name) return;
@@ -3935,6 +4014,8 @@ export function App() {
 			// authoritative "the shelf is empty" claim that filters every file
 			// row until (unless) the refetch lands.
 			setRoomFilesKnownFor(null);
+			// The staged row belongs to the room being left; its previews go with it.
+			releaseStaged(stagedAttachmentsRef.current);
 			setStagedAttachments([]);
 		}
 		// This effect is declared before the ref-sync effect below — sync the ref
@@ -4517,7 +4598,7 @@ export function App() {
 			if (next.some((it) => it.id === id && it.kind === "assistant")) {
 				next = next.map((it) => (it.id === id && it.kind === "assistant" ? { ...it, text: u.text, streaming: u.streaming } : it));
 			} else {
-				next = [...next, { kind: "assistant", id, text: u.text, streaming: u.streaming }];
+				next = [...next, { kind: "assistant", id, text: u.text, streaming: u.streaming, ts: reattachStartedAtRef.current ?? Date.now() }];
 			}
 		}
 		return next;
@@ -4954,6 +5035,7 @@ export function App() {
 		// turn_reattach and its replay_done marker must not leave the NEXT
 		// connection's live tokens rendering instantly.
 		reattachReplayDrainRef.current = false;
+		reattachStartedAtRef.current = null;
 		if (!persistentChat) {
 			// Not in a room (or just left one): no reconnect business.
 			cancelScheduledReconnect();
@@ -5134,6 +5216,10 @@ export function App() {
 				setTurnInterruptedNote(null);
 				turnInterruptedNoteRef.current = null;
 				const reattachUserText = typeof msg.userText === "string" ? msg.userText.trim() : "";
+				// When the turn began: the restored prompt and the replayed
+				// segments are dated by it. Absent on the wire means no stamp.
+				const reattachStartedAt = typeof msg.startedAt === "number" && Number.isFinite(msg.startedAt) ? msg.startedAt : null;
+				reattachStartedAtRef.current = reattachStartedAt;
 				// The supersede anchors on TURN IDENTITY, not text: anchorItemId
 				// names the last persisted item at turn start, so only what the
 				// cooking turn itself produced counts as debris. Anchoring on the
@@ -5182,7 +5268,7 @@ export function App() {
 					// text equality, so a repeated prompt cannot fool it.
 					const tailHasUser = s.some((it, i) => i > cut && it.kind === "user");
 					if (reattachUserText && !tailHasUser) {
-						next = [...next, { kind: "user" as const, id: nid(), text: reattachUserText }];
+						next = [...next, { kind: "user" as const, id: nid(), text: reattachUserText, ...(reattachStartedAt === null ? {} : { ts: reattachStartedAt }) }];
 					}
 					return next;
 				};
@@ -5198,6 +5284,8 @@ export function App() {
 				if (isAssistantStreamActive(streamStateRef.current)) {
 					dispatchStream({ type: "tick", now: performance.now(), mode: "drain" });
 				}
+				// Live tokens from here on are dated by the clock again.
+				reattachStartedAtRef.current = null;
 				return;
 			}
 			if (msg.type === "error") {
@@ -5247,9 +5335,11 @@ export function App() {
 				// it is not a transcript-worthy failure.
 				if (roomReconnectStateRef.current === "reconnecting" && typeof msg.message === "string" && msg.message.startsWith("This room is currently ")) return;
 				// The turn is dead server-side; no message_end will follow. Land
-				// whatever streamed and drop the cursor before the error line.
+				// whatever streamed and drop the cursor before the error line, and
+				// settle any tool call the failure cut off (its result is never
+				// coming) so the transcript does not keep a chip running forever.
 				flushAssistantStream();
-				setItems((s) => [...s, { kind: "system", id: nid(), text: msg.message, level: "error" }]);
+				setItems((s) => [...stopRunningToolItems(s), { kind: "system", id: nid(), text: msg.message, level: "error" }]);
 				setBusy(false);
 				busyRef.current = false;
 				if (turnCancellingRef.current) {
@@ -5803,13 +5893,7 @@ export function App() {
 			} else if (!next.some((it) => it.kind === "system" && it.text === reason)) {
 				next = [...next, { kind: "system" as const, id: nid(), text: reason }];
 			}
-			// A tool call that was in flight when the turn ended will never get a
-			// result: the toolResult event that would settle it is exactly what the
-			// abort prevented. Left alone it spins forever, in the transcript and
-			// on disk, and its bundle keeps claiming the room is still reading.
-			// Stopped rather than failed, because nothing went wrong.
-			next = next.map((it) => (it.kind === "tool" && it.status === "running" ? { ...it, status: "stopped" as const } : it));
-			return next;
+			return stopRunningToolItems(next);
 		};
 		itemsRef.current = update(itemsRef.current);
 		setItems(update);
@@ -5900,9 +5984,14 @@ export function App() {
 			kind: "user",
 			id: nid(),
 			text: payload,
+			ts: Date.now(),
 			...(readyAttachments.length > 0 ? { attachments: readyAttachments.map((entry) => ({ name: entry.name, bytes: entry.bytes, extension: entry.extension })) } : {}),
 		}]);
-		if (readyAttachments.length > 0) setStagedAttachments([]);
+		if (readyAttachments.length > 0) {
+			// The bubble shows the shelf copy from here on; the local previews are done.
+			releaseStaged(stagedAttachmentsRef.current);
+			setStagedAttachments([]);
+		}
 		// No effort on the wire here. The level this client holds came from the
 		// server already CLAMPED to the locked model, so echoing it back would
 		// overwrite the room's raw stored preference with a clamped one and
@@ -6202,6 +6291,7 @@ export function App() {
 		});
 		// A chip staged in the composer names this file; keeping it would make
 		// the next Send ask the room to read a file that no longer exists.
+		releaseStaged(stagedAttachmentsRef.current.filter((entry) => entry.name === fileName));
 		setStagedAttachments((s) => s.filter((entry) => entry.name !== fileName));
 		const pane = rightPaneRef.current;
 		if (pane?.kind === "artifactViewer" && pane.artifact?.relativePath === `files/${fileName}`) {
@@ -7890,16 +7980,24 @@ export function App() {
 	// identity stable for the memoised transcript while still calling the
 	// CURRENT openAssetRow (which closes over live right-pane state).
 	openAssetRowRef.current = openAssetRow;
+	// Reads only refs, so it is created once: the reply markdown memoises its
+	// component map on this identity, and a fresh function per shelf refresh
+	// would re-parse every reply in the transcript.
+	const openShelfFileByName = useCallback((name: string) => {
+		const row = assetRowsRef.current.find((candidate) => rowShelfFileName(candidate) === name);
+		if (row) openAssetRowRef.current?.(row);
+	}, []);
 	const attachmentAccess = useMemo(() => ({
-		onOpen: (name: string) => {
-			const row = assetRowsRef.current.find((candidate) => rowShelfFileName(candidate) === name);
-			if (row) openAssetRowRef.current?.(row);
-		},
+		onOpen: openShelfFileByName,
+		// The thumbnail an image attachment shows is the file itself, served
+		// inline by the room files route (the browser carries the session
+		// cookie); no room, no route.
+		...(persistentChat ? { fileUrl: (name: string) => roomFileUrl(persistentChat.agentId, name) } : {}),
 		// Only claim a file is gone once the room's listing has actually loaded.
 		...(persistentChat && roomFilesKnownFor === persistentChat.agentId
 			? { existingNames: new Set(roomShelfFiles.map((file) => file.name)) }
 			: {}),
-	}), [persistentChat?.agentId, roomFilesKnownFor, roomShelfFiles]);
+	}), [openShelfFileByName, persistentChat?.agentId, roomFilesKnownFor, roomShelfFiles]);
 	const selectedAssetTaskId = rightPane?.kind === "artifactViewer" || rightPane?.kind === "taskRun" ? rightPane.taskId : null;
 
 	const empty = items.length === 0;
@@ -8403,28 +8501,58 @@ export function App() {
 					{conversation && <VoiceRow state={conversation} talkKeyLabel={formatTalkKey(talkKeyText, isMac)} />}
 					{persistentChat && stagedAttachments.length > 0 ? (
 				<div className="composer-staged" role="status" aria-label="Files attached to your next message">
-					{stagedAttachments.map((staged) => (
-						<span key={staged.stageId} className={`composer-staged-chip${staged.status === "failed" ? " failed" : ""}`}>
-							<span className="composer-staged-name">{staged.name || staged.parseNote}</span>
-							<span className="composer-staged-note">
-								{staged.status === "uploading" ? "adding…" : staged.parseNote || `${Math.max(1, Math.round(staged.bytes / 1024))} KB`}
+					{stagedAttachments.map((staged) => {
+						// While the upload is in flight the name is not known yet and
+						// parseNote carries the local file name (see stageAttachment).
+						const name = staged.name || staged.parseNote;
+						const note = staged.status === "uploading" ? "adding…" : staged.parseNote || `${Math.max(1, Math.round(staged.bytes / 1024))} KB`;
+						const stateClass = staged.status === "uploading" ? " uploading" : staged.status === "failed" ? " failed" : "";
+						// ✕ only once the upload has settled: removing mid-flight would
+						// leave the landed file on the shelf with nothing pointing at it.
+						const remove = staged.status !== "uploading" && (
+							<button
+								type="button"
+								className="composer-staged-remove"
+								title="Remove this file before sending"
+								aria-label={`Remove ${staged.name}`}
+								onClick={() => void unstageAttachment(staged)}
+							>✕</button>
+						);
+						// A picture is shown as a picture: the tile is the preview, the
+						// name and parse state ride in its tooltip. Once the upload has
+						// landed the picture opens in the viewer exactly like a bubble
+						// thumbnail does (same shelf-row path); until then there is no
+						// shelf file to open, so the frame is a plain span.
+						if (staged.previewUrl) {
+							const image = <img className="composer-staged-tile-img" src={staged.previewUrl} alt={name} />;
+							const openable = staged.status === "ready" && staged.name !== "";
+							return (
+								<span key={staged.stageId} className={`composer-staged-tile${stateClass}`}>
+									{openable
+										? <button type="button" className="composer-staged-tile-frame" title={`${name} — open`} onClick={() => attachmentAccess.onOpen(staged.name)}>{image}</button>
+										: <span className="composer-staged-tile-frame" title={`${name} — ${note}`}>{image}</span>}
+									{staged.status === "uploading" && <span className="composer-staged-tile-busy" aria-hidden="true"><span className="spinner" /></span>}
+									{staged.status === "failed" && <span className="composer-staged-tile-alert" aria-hidden="true">!</span>}
+									{remove}
+								</span>
+							);
+						}
+						return (
+							<span key={staged.stageId} className={`composer-staged-card${stateClass}`}>
+								<span className="task-kind">{staged.extension.replace(/^\./, "").toUpperCase() || "FILE"}</span>
+								<span className="composer-staged-card-text">
+									<span className="composer-staged-name">{name}</span>
+									<span className="composer-staged-note">{note}</span>
+								</span>
+								{remove}
 							</span>
-							{staged.status !== "uploading" && (
-								<button
-									type="button"
-									className="composer-staged-remove"
-									title="Remove this file before sending"
-									aria-label={`Remove ${staged.name}`}
-									onClick={() => void unstageAttachment(staged)}
-								>✕</button>
-							)}
-						</span>
-					))}
+						);
+					})}
 				</div>
 			) : undefined}
 				</>
 			) : undefined}
-			composerOnPasteFiles={persistentChat ? stagePastedImages : undefined}
+			composerOnPasteFiles={persistentChat ? stagePastedFiles : undefined}
 			mention={persistentChat ? {
 				candidates: mentionCandidates,
 				currentRoomId: persistentChat.agentId,

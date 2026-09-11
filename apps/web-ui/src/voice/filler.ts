@@ -44,7 +44,7 @@ function kindOf(name: string): Kind | null {
 	if (name === "delegate_task" || name.startsWith("consult")) return "specialist";
 	if (name === "mcp" || name.startsWith("mcp_") || name.startsWith("graph_")) return "connector";
 	if (name.startsWith("artifact_")) return "document";
-	if (["bash", "read", "write", "edit", "ls", "find", "grep"].includes(name)) return "files";
+	if (["bash", "read", "write", "edit", "ls", "find", "grep", "read_file", "search_file"].includes(name)) return "files";
 	return "other";
 }
 

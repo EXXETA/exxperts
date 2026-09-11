@@ -95,6 +95,18 @@ function wireContextMenu(win: BrowserWindow): void {
       });
       template.push({ type: "separator" });
     }
+    if (params.mediaType === "image") {
+      template.push({ label: "Copy Image", click: () => win.webContents.copyImageAt(params.x, params.y) });
+      // Only a picture the shell can fetch on its own: a blob: or data: source
+      // lives in the page and has no URL the download routine could open.
+      // downloadURL goes through the session's download routine, and with no
+      // will-download handler set that routine is the native save dialog —
+      // the same path the viewer footer's download link takes.
+      if (/^https?:/i.test(params.srcURL)) {
+        template.push({ label: "Save Image As…", click: () => win.webContents.downloadURL(params.srcURL) });
+      }
+      if (params.isEditable || params.selectionText.trim()) template.push({ type: "separator" });
+    }
     if (params.isEditable) {
       template.push(
         { role: "cut", enabled: params.editFlags.canCut },

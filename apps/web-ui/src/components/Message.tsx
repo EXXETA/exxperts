@@ -1,51 +1,16 @@
-import { memo, useCallback, useEffect, useId, useRef, useState } from "react";
+import { memo, useId, useReducer, useState } from "react";
 import type { ChatItem } from "../types";
+import { formatAbsoluteTime, formatRelativeTime } from "../message-time";
+import { CopyButton } from "./CopyButton";
+import { ImageActions } from "./ImageActions";
 import { MarkdownRenderer, looksLikeMarkdown, unwrapOuterMarkdownFence } from "./Markdown";
 import { artifactBasename, artifactKindLabel, isSvgArtifact, taskArtifactUrl } from "../task-stream";
 import { GENERIC_TOOL_VIEWS, domainOf } from "../tool-views";
 
-// Copy a message's text to the clipboard. The button flips to a checkmark for
-// a moment so the click is acknowledged without a toast. On assistant replies
-// it sits permanently below the text (the thing people quote); on the user's
-// own messages it is revealed on hover of the row (occasional need, quiet at
+// The message copy control (CopyButton.tsx): on assistant replies it sits
+// permanently below the text (the thing people quote); on the user's own
+// messages it is revealed on hover of the row (occasional need, quiet at
 // rest) via the .bubble-row:hover rule in styles.css.
-function CopyMessageButton({ text, className }: { text: string; className?: string }) {
-	const [copied, setCopied] = useState(false);
-	const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-	const onCopy = useCallback(() => {
-		// Optional chaining + catch: navigator.clipboard is undefined over plain
-		// http on a LAN IP (not localhost), and a write can be denied; degrade
-		// quietly (the button just does not flip) rather than throw.
-		void navigator.clipboard?.writeText(text).then(() => {
-			setCopied(true);
-			if (timer.current) clearTimeout(timer.current);
-			timer.current = setTimeout(() => setCopied(false), 2000);
-		}).catch(() => {});
-	}, [text]);
-	useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
-	return (
-		<button
-			type="button"
-			className={`message-copy${className ? ` ${className}` : ""}${copied ? " is-copied" : ""}`}
-			onClick={onCopy}
-			title={copied ? "Copied" : "Copy"}
-			aria-label={copied ? "Copied to clipboard" : "Copy message"}
-		>
-			{/* Inline SVG rather than a font glyph: the unicode clipboard/check
-			    characters render as empty boxes in fonts that lack them. */}
-			{copied ? (
-				<svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-					<path d="M3.5 8.5l3 3 6-6.5" />
-				</svg>
-			) : (
-				<svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-					<rect x="5.5" y="5.5" width="8" height="8" rx="1.5" />
-					<path d="M10.5 5.5V4a1.5 1.5 0 0 0-1.5-1.5H4A1.5 1.5 0 0 0 2.5 4v5A1.5 1.5 0 0 0 4 10.5h1.5" />
-				</svg>
-			)}
-		</button>
-	);
-}
 
 /**
  * Compact, single-line preview of a tool call's key argument. Used as
@@ -101,6 +66,14 @@ function summariseToolArgs(name: string, args: any): string {
 	}
 	if (name === "read" || name === "ls" || name === "find" || name === "grep" || name === "edit")
 		return String(args.path ?? "").slice(0, 160);
+	// Files tools take a plain shelf filename (`name`), never a path; a search
+	// names its query first and the file it was fenced to, when it was.
+	if (name === "read_file") return String(args.name ?? "").slice(0, 160);
+	if (name === "search_file") {
+		const query = String(args.query ?? "");
+		const file = typeof args.name === "string" && args.name.trim() ? ` · ${args.name.trim()}` : "";
+		return `${query}${file}`.slice(0, 160);
+	}
 	if (name === "fetch_url") return String(args.url ?? "").slice(0, 160);
 	if (name === "web_search") return String(args.query ?? "").slice(0, 160);
 	if (name.startsWith("kb_")) {
@@ -479,6 +452,12 @@ export interface MessageAttachmentAccess {
 	/** Open this shelf file in the right-pane viewer — the same act as clicking its Files row. */
 	onOpen: (name: string) => void;
 	/**
+	 * The route that serves this shelf file inline, for the thumbnail an
+	 * image attachment shows above its chip. Undefined when there is no room
+	 * to serve from — the chips alone remain.
+	 */
+	fileUrl?: (name: string) => string;
+	/**
 	 * Names still on the room's shelf. A chip whose file is gone must not look
 	 * clickable and lead nowhere: it renders muted and inert instead. Undefined
 	 * while the listing has not loaded — the chip stays clickable rather than
@@ -487,7 +466,49 @@ export interface MessageAttachmentAccess {
 	existingNames?: ReadonlySet<string>;
 }
 
-function MessageImpl({ item, attachmentAccess }: { item: ChatItem; attachmentAccess?: MessageAttachmentAccess }) {
+// The extensions the viewer renders inline as a picture (ArtifactViewer.tsx):
+// only these get a thumbnail in the bubble; every other file stays a chip.
+const THUMBNAIL_EXTENSIONS = new Set([".svg", ".png", ".jpg", ".jpeg", ".gif", ".webp"]);
+
+// The picture an image attachment rode in with, above its chip, opening the
+// viewer like the chip does. A broken image (the bytes were never a picture,
+// or the route refused them) hides itself and leaves the chip as the record.
+function UserAttachmentThumb({ name, src, onOpen }: { name: string; src: string; onOpen: () => void }) {
+	const [broken, setBroken] = useState(false);
+	if (broken) return null;
+	return (
+		<ImageActions src={src} name={name}>
+			<button type="button" className="user-attachment-thumb" title={`${name} — open`} onClick={onOpen}>
+				<img className="user-attachment-thumb-img" src={src} alt={name} loading="lazy" onError={() => setBroken(true)} />
+			</button>
+		</ImageActions>
+	);
+}
+
+// When the message was written, in the action row under it: a relative label
+// ("5 minutes ago") that is revealed with the row on hover, the full date and
+// time as its tooltip. No timer per message: the label is computed from the
+// clock at render, and the row's mouseenter forces a render, so every hover
+// reads fresh. Rendered only for items that carry a `ts` — items from before
+// the field existed show no time rather than a wrong one.
+function MessageTime({ ts }: { ts: number }) {
+	return (
+		<time className="message-time" dateTime={new Date(ts).toISOString()} title={formatAbsoluteTime(ts)}>
+			{formatRelativeTime(ts, Date.now())}
+		</time>
+	);
+}
+
+/**
+ * `copyText` is set by the transcript on exactly one assistant item per reply
+ * (see reply-copy.ts): the whole reply's text, ready to copy. Absent on every
+ * other assistant item, which then shows no copy button. `copyTs` rides with
+ * it: when the reply began, shown next to the button. Plain primitives keep
+ * the memo working.
+ */
+function MessageImpl({ item, attachmentAccess, copyText, copyTs }: { item: ChatItem; attachmentAccess?: MessageAttachmentAccess; copyText?: string; copyTs?: number }) {
+	// Bumped on every hover of the row so the relative time is recomputed.
+	const [, refreshTime] = useReducer((n: number) => n + 1, 0);
 	if (item.kind === "system") {
 		return <div className={`system-line ${item.level === "error" ? "error" : ""}`}>{item.text}</div>;
 	}
@@ -502,8 +523,23 @@ function MessageImpl({ item, attachmentAccess }: { item: ChatItem; attachmentAcc
 	const isUser = item.kind === "user";
 	const assistantText = isUser ? "" : String((item as any).text ?? "");
 	const assistantStreaming = !isUser && Boolean((item as any).streaming);
+	const userTs = isUser && typeof item.ts === "number" && Number.isFinite(item.ts) ? item.ts : undefined;
+	const replyTs = !isUser && typeof copyTs === "number" && Number.isFinite(copyTs) ? copyTs : undefined;
+	const attachmentGone = (name: string) => (attachmentAccess?.existingNames ? !attachmentAccess.existingNames.has(name) : false);
+	// Thumbnails only for pictures known to be on the shelf: a deleted file
+	// has nothing to show (its muted chip already says so), and until the
+	// shelf listing is in nothing is requested, so a room opening does not
+	// fire a request per old image only to hide the ones that are gone.
+	const thumbnails = item.kind === "user" && attachmentAccess?.fileUrl && attachmentAccess.existingNames
+		? (item.attachments ?? []).filter((attachment) => THUMBNAIL_EXTENSIONS.has(attachment.extension.toLowerCase()) && !attachmentGone(attachment.name))
+		: [];
+	// A picture shown as a thumbnail is not repeated as a chip (the picture is
+	// the record); documents keep their chip, and so does a picture since
+	// deleted, whose muted chip is all that is left of it.
+	const thumbnailNames = new Set(thumbnails.map((attachment) => attachment.name));
+	const chipAttachments = (item.kind === "user" ? item.attachments ?? [] : []).filter((attachment) => !thumbnailNames.has(attachment.name));
 	return (
-		<div className={`bubble-row ${isUser ? "user" : ""}`}>
+		<div className={`bubble-row ${isUser ? "user" : ""}`} onMouseEnter={refreshTime}>
 			<div className={`bubble-col ${isUser ? "user" : ""}`}>
 				<div className={`bubble ${isUser ? "user" : ""}`}>
 					{isUser ? (
@@ -516,10 +552,22 @@ function MessageImpl({ item, attachmentAccess }: { item: ChatItem; attachmentAcc
 							    but the user cannot click was the odd one out. A file since
 							    deleted renders muted and inert — the chip stays as the
 							    honest record that it rode with this message. */}
-							{item.attachments && item.attachments.length > 0 && (
+							{thumbnails.length > 0 && (
+								<div className="user-attachment-thumbs">
+									{thumbnails.map((attachment) => (
+										<UserAttachmentThumb
+											key={attachment.name}
+											name={attachment.name}
+											src={attachmentAccess!.fileUrl!(attachment.name)}
+											onOpen={() => attachmentAccess!.onOpen(attachment.name)}
+										/>
+									))}
+								</div>
+							)}
+							{chipAttachments.length > 0 && (
 								<div className="task-artifact-strip user-attachment-strip">
-									{item.attachments.map((attachment) => {
-										const gone = attachmentAccess?.existingNames ? !attachmentAccess.existingNames.has(attachment.name) : false;
+									{chipAttachments.map((attachment) => {
+										const gone = attachmentGone(attachment.name);
 										const openable = Boolean(attachmentAccess) && !gone;
 										const kind = attachment.extension.replace(/^\./, "").toUpperCase() || "FILE";
 										if (!openable) {
@@ -552,14 +600,30 @@ function MessageImpl({ item, attachmentAccess }: { item: ChatItem; attachmentAcc
 						</>
 					) : (
 						<div className="md assistant-markdown">
-							<MarkdownRenderer renderMermaid={!assistantStreaming}>{assistantText || (assistantStreaming ? "…" : "")}</MarkdownRenderer>
+							{/* A picture the reply shows from the room's shelf opens the
+							    viewer through the same onOpen the attachment chips use. */}
+							<MarkdownRenderer renderMermaid={!assistantStreaming} onOpenRoomFile={attachmentAccess?.onOpen}>{assistantText || (assistantStreaming ? "…" : "")}</MarkdownRenderer>
 						</div>
 					)}
 				</div>
+				{/* Action row under the bubble: the user's sits right-aligned, time
+				    before the button, all revealed on hover; the reply's sits under
+				    its last segment (one per reply, once it has settled) with the
+				    button always visible and the reply's start time revealed on
+				    hover. */}
 				{isUser
-					? item.text && <CopyMessageButton text={item.text} className="message-copy-user" />
-					// Shown once the reply has settled, not mid-stream.
-					: assistantText && !assistantStreaming && <CopyMessageButton text={assistantText} className="message-copy-assistant" />}
+					? item.text && (
+						<div className="message-actions user">
+							{userTs !== undefined && <MessageTime ts={userTs} />}
+							<CopyButton text={item.text} className="message-copy-user" />
+						</div>
+					)
+					: copyText && (
+						<div className="message-actions assistant">
+							<CopyButton text={copyText} className="message-copy-assistant" />
+							{replyTs !== undefined && <MessageTime ts={replyTs} />}
+						</div>
+					)}
 			</div>
 		</div>
 	);
