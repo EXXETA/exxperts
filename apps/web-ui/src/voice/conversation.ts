@@ -2,25 +2,25 @@ import { fetchJson } from "../api";
 import { FillerPlanner, guessLanguage, type SpokenLanguage, type ToolCall } from "./filler";
 import { openMicrophone, type Microphone } from "./microphone";
 import { SpeechQueue } from "./speech-queue";
-import { isEcho, looksLikeSpeech, SentenceSplitter } from "./spoken-text";
+import { SentenceSplitter } from "./spoken-text";
 
 /**
- * Conversation mode: listen, send, speak, listen again.
+ * Conversation mode, push-to-talk: hold the talk key and speak, release it
+ * and what you said is sent; the answer is spoken as it streams in; press the
+ * key while the room answers and it falls silent and listens.
  *
- * The controller sits between the microphone, the room's normal send path and
- * the speech queue. A sentence you finish is sent exactly as if typed, so it
+ * The controller sits between the talk key, the microphone, the room's normal
+ * send path and the speech queue. A hold is sent exactly as if typed, so it
  * lands in the room as your message; the answer streams into the room as
- * always and is spoken sentence by sentence as it arrives. The microphone
- * stays open throughout: talk over the room and it falls silent, the turn is
- * stopped, and what you said becomes the next message. Echo cancellation
- * keeps the room's own voice out of the microphone; a word guard catches the
- * rest, so a stray syllable or a leaked sentence never interrupts anything.
+ * always and is spoken sentence by sentence as it arrives. Nothing is decided
+ * from silence: a pause to think is just a pause, and a hold released and
+ * pressed again before its words came back continues the same message.
  *
  * The app's own lines (an "Okay", a "searching the web for …") go through the
  * same queue but never through the room: they are audio and nothing else.
  */
 
-export type ConversationStatus = "starting" | "listening" | "working" | "speaking";
+export type ConversationStatus = "starting" | "idle" | "listening" | "working" | "speaking";
 export type ConversationState = { status: ConversationStatus; partial: string; detail: string | null };
 export type ConversationFailure = { code: string; message: string };
 type VoiceLanguage = "auto" | SpokenLanguage;
@@ -33,7 +33,7 @@ type VoicePayload = {
 
 /** How long the model may stay silent after a send before the app says a word. */
 const SILENCE_MS = 1500;
-/** A sentence finished while the room was still stopping is retried this often, for up to fifteen seconds: a long answer takes a few seconds to stop. */
+/** A hold released while the room was still stopping is retried this often, for up to fifteen seconds: a long answer takes a few seconds to stop. */
 const SEND_RETRY_MS = 300;
 const SEND_RETRIES = 50;
 
@@ -45,6 +45,10 @@ export class Conversation {
 	private microphone: Microphone | null = null;
 	private language: VoiceLanguage = "auto";
 	private turnLanguage: SpokenLanguage = "en";
+	/** The talk key is down. */
+	private held = false;
+	/** Words from a hold whose final arrived while the key was already down again; they lead the next message. */
+	private carry = "";
 	private turnOpen = false;
 	private turnEnded = false;
 	private silenceTimer: number | null = null;
@@ -82,13 +86,16 @@ export class Conversation {
 			this.turnLanguage = this.language === "auto" ? (navigator.language.toLowerCase().startsWith("de") ? "de" : "en") : this.language;
 			const microphone = await openMicrophone({
 				language: this.language,
-				onReady: () => this.set({ status: "listening", partial: "" }),
-				onPartial: (text) => this.onPartial(text),
+				onReady: () => this.set({ status: this.held ? "listening" : "idle", partial: "" }),
+				onPartial: (text) => { if (this.state.status === "listening") this.set({ partial: text }); },
 				onFinal: (text) => this.onFinal(text),
 				onError: (failure) => this.fail(failure),
 			});
 			if (this.ended) { microphone.close(); return; }
 			this.microphone = microphone;
+			// A hold that began while the microphone was opening starts now;
+			// the frames wait in the microphone until the server is ready.
+			if (this.held) microphone.setTransmitting(true);
 		} catch (error) {
 			this.fail({ code: String((error as { code?: string }).code ?? "voice"), message: (error as Error).message });
 		}
@@ -99,14 +106,33 @@ export class Conversation {
 		this.finish(null);
 	}
 
+	/** The talk key went down: the room falls silent if it was answering, and the microphone opens. */
+	pressTalk(): void {
+		if (this.ended || this.held) return;
+		this.held = true;
+		if (this.turnOpen) this.interrupt();
+		this.microphone?.setTransmitting(true);
+		if (this.state.status !== "starting") this.set({ status: "listening", partial: "", detail: null });
+	}
+
+	/** The talk key came up: what was said comes back as one final and is sent. */
+	releaseTalk(): void {
+		if (this.ended || !this.held) return;
+		this.held = false;
+		if (!this.microphone) return;
+		this.microphone.setTransmitting(false);
+		this.microphone.flush();
+	}
+
 	/**
-	 * Escape: the room falls silent and listens, the same as talking over it.
-	 * Returns false when there was nothing to hush, which the caller takes as
-	 * "leave the conversation": one Escape stops the answer, the next one ends.
+	 * Escape: the room falls silent, the same as pressing the talk key while
+	 * it answers, but without listening. Returns false when there was nothing
+	 * to hush, which the caller takes as "leave the conversation".
 	 */
 	hush(): boolean {
 		if (this.ended || !this.turnOpen) return false;
-		this.interrupt("");
+		this.interrupt();
+		this.set({ status: "idle", partial: "", detail: null });
 		return true;
 	}
 
@@ -139,40 +165,33 @@ export class Conversation {
 		const rest = this.splitter.flush();
 		if (rest) this.queue.say(rest);
 		this.turnEnded = true;
-		if (this.queue.idle) this.resumeListening();
+		if (this.queue.idle) this.finishTurn();
 	}
 
 	// ── Internals ───────────────────────────────────────────────────────────
 
-	private onPartial(text: string): void {
+	/** A final only ever follows a release; it is what the hold said. */
+	private onFinal(text: string): void {
 		if (this.ended) return;
-		if (this.turnOpen) {
-			// Talking over the room: the first partial that is clearly a person
-			// speaking, and not the room's own words leaking back, interrupts.
-			if (this.userIsTalking(text)) this.interrupt(text);
+		const spoken = text.trim();
+		if (this.held) {
+			// Pressed again before these words came back: they lead the next message.
+			this.carry = [this.carry, spoken].filter(Boolean).join(" ");
 			return;
 		}
-		if (this.state.status === "listening") this.set({ partial: text });
-	}
-
-	private onFinal(text: string): void {
-		const spoken = text.trim();
-		if (!spoken || this.ended) return;
-		if (this.turnOpen) {
-			if (!this.userIsTalking(spoken)) return;
-			this.interrupt(spoken);
-		}
 		if (this.state.status !== "listening") return;
-		this.turnLanguage = this.language === "auto" ? guessLanguage(spoken, this.turnLanguage) : this.language;
-		this.sendWithRetry(spoken, 0);
+		const message = [this.carry, spoken].filter(Boolean).join(" ");
+		this.carry = "";
+		if (!message) {
+			this.set({ status: "idle", partial: "" });
+			return;
+		}
+		this.turnLanguage = this.language === "auto" ? guessLanguage(message, this.turnLanguage) : this.language;
+		this.sendWithRetry(message, 0);
 	}
 
-	private userIsTalking(text: string): boolean {
-		return looksLikeSpeech(text) && !isEcho(text, this.queue.recentlySpoken);
-	}
-
-	/** The room falls silent, its turn stops if it is still running, and the words already heard stay on the bar. */
-	private interrupt(partial: string): void {
+	/** The room falls silent and its turn stops if the model is still working. */
+	private interrupt(): void {
 		// Stop the model only while it is still working. Once it has finished
 		// and the room is merely reading the rest aloud, there is nothing to
 		// abort, and asking anyway would leave the room waiting for a turn end
@@ -183,10 +202,9 @@ export class Conversation {
 		this.clearSilence();
 		this.queue.clear();
 		if (modelStillWorking) this.hooks.interrupt();
-		this.set({ status: "listening", partial, detail: null });
 	}
 
-	/** A sentence finished just as the room was being stopped may need a moment before the room takes it. */
+	/** A hold released just as the room was being stopped may need a moment before the room takes it. */
 	private sendWithRetry(text: string, attempt: number): void {
 		this.pendingSend = null;
 		if (this.ended || this.state.status !== "listening") return;
@@ -196,8 +214,10 @@ export class Conversation {
 		}
 		if (attempt >= SEND_RETRIES) {
 			// ponytail: fifteen seconds of patience, then the room is busy with
-			// something that is not this conversation; keep listening.
-			this.set({ partial: "" });
+			// something that is not this conversation; the words wait for the
+			// next hold rather than vanish.
+			this.carry = text;
+			this.set({ status: "idle", partial: "" });
 			return;
 		}
 		this.pendingSend = window.setTimeout(() => this.sendWithRetry(text, attempt + 1), SEND_RETRY_MS);
@@ -218,14 +238,14 @@ export class Conversation {
 	private onQueueState(speaking: boolean): void {
 		if (this.ended) return;
 		if (speaking) this.set({ status: "speaking" });
-		else if (this.turnEnded) this.resumeListening();
+		else if (this.turnEnded) this.finishTurn();
 		else if (this.turnOpen) this.set({ status: "working" });
 	}
 
-	private resumeListening(): void {
+	private finishTurn(): void {
 		this.turnOpen = false;
 		this.turnEnded = false;
-		this.set({ status: "listening", partial: "", detail: null });
+		this.set({ status: this.held ? "listening" : "idle", partial: "", detail: null });
 	}
 
 	private clearSilence(): void {

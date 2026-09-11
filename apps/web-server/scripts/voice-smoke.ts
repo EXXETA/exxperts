@@ -26,15 +26,15 @@ const { classifyRemoteRoute } = await import("../src/remote-route-policy.js");
 
 try {
 	// Settings: defaults without a file, validation, persistence.
-	assert(JSON.stringify(voice.readVoiceSettings()) === JSON.stringify({ speaker: 3, speed: 1, language: "auto", patience: "normal" }), "defaults without a file");
-	for (const bad of [{ speaker: 12 }, { speaker: -1 }, { speaker: 1.5 }, { speed: 5 }, { speed: "fast" }, { language: "fr" }, { patience: "forever" }]) {
+	assert(JSON.stringify(voice.readVoiceSettings()) === JSON.stringify({ speaker: 3, speed: 1, language: "auto", talkKey: "Alt+Space" }), "defaults without a file");
+	for (const bad of [{ speaker: 12 }, { speaker: -1 }, { speaker: 1.5 }, { speed: 5 }, { speed: "fast" }, { language: "fr" }, { talkKey: "Space" }, { talkKey: "Alt+" }, { talkKey: "Alt+Space; drop" }]) {
 		let threw = false;
 		try { voice.writeVoiceSettings(bad as never); } catch (e) { threw = e instanceof voice.VoiceSettingsError; }
 		assert(threw, `must refuse ${JSON.stringify(bad)}`);
 	}
 	assert(!fs.existsSync(path.join(tempHome, ".exxperts", "app", "voice.json")), "a refused save writes nothing");
-	const saved = voice.writeVoiceSettings({ speaker: 5, language: "de" });
-	assert(saved.speaker === 5 && saved.speed === 1 && saved.language === "de", "a patch keeps the untouched values");
+	const saved = voice.writeVoiceSettings({ speaker: 5, language: "de", talkKey: "Ctrl+Shift+KeyV" });
+	assert(saved.speaker === 5 && saved.speed === 1 && saved.language === "de" && saved.talkKey === "Ctrl+Shift+KeyV", "a patch keeps the untouched values");
 	assert(JSON.stringify(voice.readVoiceSettings()) === JSON.stringify(saved), "what was written is what is read");
 	assert(fs.existsSync(path.join(tempHome, ".exxperts", "app", "voice.json")), "settings live in ~/.exxperts/app/voice.json");
 
@@ -80,19 +80,6 @@ try {
 	assert(wav.readUInt32LE(40) === 10 && wav.readUInt32LE(4) === 36 + 10, "sizes");
 	assert(wav.readInt16LE(44) === 0 && wav.readInt16LE(46) === 8192 && wav.readInt16LE(48) === -8192, "sample scaling");
 	assert(wav.readInt16LE(50) === 32767 && wav.readInt16LE(52) === -32767, "out-of-range samples clamp");
-
-	// A pause for thought or the end of the sentence: the words decide.
-	for (const unfinished of ["Ich glaube wir sollten das Budget erhöhen und", "Also, ähm", "Das Problem ist,", "I think we should", "and then the", "so basically", "Wir brauchen das für", "mit dem"]) {
-		assert(voice.looksUnfinished(unfinished), `sounds unfinished: ${JSON.stringify(unfinished)}`);
-	}
-	for (const finished of ["Ich glaube wir sollten das Budget erhöhen", "Was kostet das?", "Stopp danke, das reicht mir schon", "Ja", "Nein.", "What does the agreement say about remote work", "Please summarise the document", "Danke, das war alles."]) {
-		assert(!voice.looksUnfinished(finished), `sounds finished: ${JSON.stringify(finished)}`);
-	}
-	assert(!voice.looksUnfinished("Und dann kommt, was?"), "a question mark ends the sentence even after a comma earlier");
-	for (const [setting, pair] of Object.entries(voice.PATIENCE)) {
-		assert(pair.finished < pair.unfinished, `${setting}: an unfinished sentence gets more time than a finished one`);
-	}
-	assert(voice.PATIENCE.quick.finished < voice.PATIENCE.normal.finished && voice.PATIENCE.normal.finished < voice.PATIENCE.relaxed.finished, "patience settings are ordered");
 
 	// Language guess: the pronunciation hint for the speaker.
 	assert(voice.guessLanguage("Der Termin ist morgen und wir sind nicht da.") === "de", "German is German");
@@ -148,9 +135,9 @@ try {
 		assert(/test/i.test(text) && /morgen/i.test(text), `the sentence comes back (heard: ${JSON.stringify(text)})`);
 		console.log(`voice-smoke: round trip OK — spoke ${spoken.seconds.toFixed(1)} s in ${synthMs} ms, heard ${JSON.stringify(text)} in ${decodeMs} ms`);
 
-		// Pauses: a sentence ending mid-thought waits for more; a pause between
-		// two halves joins them; a finished sentence goes after the short wait.
-		// Time is audio pushed, so the figures below are exact.
+		// Push-to-talk: a hold is flushed on release as one final, whatever its
+		// last word; silence alone never produces one; an empty hold yields an
+		// empty final so the client knows the key said nothing.
 		const toPcm = async (say: string): Promise<Buffer> => {
 			const clip = await voice.synthesizeSpeech(say, { language: "de", speaker: 3 });
 			const r = clip.wav.readUInt32LE(24);
@@ -167,45 +154,25 @@ try {
 			}
 			return Buffer.from(out16.buffer);
 		};
-		const silence = (seconds: number) => Buffer.alloc(Math.round(seconds * 16000) * 2);
-		const drive = async (patience: "quick" | "normal" | "relaxed", parts: Array<Buffer>): Promise<Array<{ text: string; atSilence: number }>> => {
-			const finals: Array<{ text: string; atSilence: number }> = [];
-			let pushed = 0;
-			let speechEnd = 0;
-			const s2 = await voice.createRecognitionSession("de", (event) => {
-				if (event.type === "final") finals.push({ text: event.text, atSilence: Math.round((pushed - speechEnd) * 10) / 10 });
-			}, patience);
-			for (const part of parts) {
-				const isSpeech = part.some((b) => b !== 0);
-				for (let offset = 0; offset < part.length; offset += 3200) {
-					s2.pushPcm16(part.subarray(offset, offset + 3200));
-					pushed += Math.min(3200, part.length - offset) / 2 / 16000;
-					if (isSpeech) speechEnd = pushed;
-				}
-			}
-			s2.close();
-			return finals;
-		};
-		const half1 = await toPcm("Ich glaube, wir sollten das Budget erhöhen und");
-		const half2 = await toPcm("dann den Lieferanten informieren.");
-		const whole = await toPcm("Wir sollten das Budget erhöhen.");
-		const normal = voice.PATIENCE.normal;
-
-		const joined = await drive("normal", [half1, silence(normal.finished + 0.6), half2, silence(normal.unfinished + 1)]);
-		assert(joined.length === 1, `a pause for thought does not split the sentence (finals: ${JSON.stringify(joined)})`);
-		assert(/budget/i.test(joined[0].text) && /lieferant/i.test(joined[0].text), `both halves arrive as one message: ${JSON.stringify(joined[0].text)}`);
-
-		const waited = await drive("normal", [half1, silence(normal.unfinished + 1.5)]);
-		assert(waited.length === 1, `an unfinished sentence is still sent once the long pause is over (finals: ${JSON.stringify(waited)})`);
-		assert(waited[0].atSilence >= normal.unfinished - 0.2 && waited[0].atSilence <= normal.unfinished + 1.2, `…after roughly ${normal.unfinished} s of silence, not before (was ${waited[0].atSilence} s)`);
-
-		const prompt = await drive("normal", [whole, silence(normal.unfinished + 1)]);
-		assert(prompt.length === 1, `a finished sentence is sent (finals: ${JSON.stringify(prompt)})`);
-		assert(prompt[0].atSilence >= normal.finished - 0.2 && prompt[0].atSilence < normal.unfinished - 0.3, `…after the short wait of ${normal.finished} s, not the long one (was ${prompt[0].atSilence} s)`);
-
-		const relaxed = await drive("relaxed", [whole, silence(voice.PATIENCE.relaxed.finished + 1)]);
-		assert(relaxed.length === 1 && relaxed[0].atSilence >= voice.PATIENCE.relaxed.finished - 0.2, `relaxed waits longer even for a finished sentence (was ${relaxed[0]?.atSilence} s)`);
-		console.log(`voice-smoke: pauses OK — joined ${JSON.stringify(joined[0].text)}; unfinished sent at ${waited[0].atSilence} s, finished at ${prompt[0].atSilence} s, relaxed at ${relaxed[0].atSilence} s`);
+		const finals: string[] = [];
+		// Read through a function so an assert on the tally does not narrow it to a literal for the next one.
+		const finalsSoFar = () => finals.length;
+		let partialsSeen = 0;
+		const s2 = await voice.createRecognitionSession("de", (event) => { if (event.type === "final") finals.push(event.text); else partialsSeen++; });
+		const push = (buf: Buffer) => { for (let offset = 0; offset < buf.length; offset += 3200) s2.pushPcm16(buf.subarray(offset, offset + 3200)); };
+		push(await toPcm("Ich glaube, wir sollten das Budget erhöhen und"));
+		assert(finalsSoFar() === 0 && partialsSeen > 0, "while the key is held there are partials and no final");
+		s2.flush();
+		assert(finalsSoFar() === 1 && /budget/i.test(finals[0]) && /und\W*$/i.test(finals[0]), `release flushes the hold as one final, last word included: ${JSON.stringify(finals)}`);
+		push(Buffer.alloc(16000 * 2 * 5));
+		assert(finalsSoFar() === 1, "five seconds of silence produce no final on their own");
+		push(await toPcm("dann den Lieferanten informieren."));
+		s2.flush();
+		assert(finalsSoFar() === 2 && /lieferant/i.test(finals[1]) && !/budget/i.test(finals[1]), `the next hold is its own final: ${JSON.stringify(finals[1])}`);
+		s2.flush();
+		assert(finalsSoFar() === 3 && finals[2] === "", "an empty hold yields an empty final");
+		s2.close();
+		console.log(`voice-smoke: push-to-talk OK — finals ${JSON.stringify(finals.slice(0, 2))}`);
 	}
 
 	console.log("voice-smoke: OK");

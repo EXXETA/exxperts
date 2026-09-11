@@ -48,6 +48,7 @@ import { EffortControl } from "./components/EffortControl";
 import { ChevronDownIcon, GearIcon, PaperclipIcon, TrashIcon, WaveformIcon } from "./components/icons";
 import { ConversationBar } from "./components/ConversationBar";
 import { Conversation, type ConversationState } from "./voice/conversation";
+import { DEFAULT_TALK_KEY, formatTalkKey, isTalkKeyDown, parseTalkKey, releasesTalkKey, type TalkKey } from "./voice/talk-key";
 // The handoff grammar + queue helpers are the ONE shared source of truth, imported
 // straight from the server workspace's pure module (no node/server deps; vite
 // bundles it) so transfer here and the checkpoint formatter there agree exactly.
@@ -3353,27 +3354,64 @@ export function App() {
 	// mode and shows one toast; a missing model also opens the Voice tab,
 	// where the download is.
 	const voiceAvailable = navigator.userAgent.includes("ExxpertsDesktop");
+	const isMac = navigator.userAgent.includes("Macintosh");
+	// The talk key: hold to talk, release to send. Read once from the voice
+	// settings on the desktop; the Voice tab reports a change straight back.
+	const [talkKeyText, setTalkKeyText] = useState(DEFAULT_TALK_KEY);
+	const talkKeyRef = useRef<TalkKey>(parseTalkKey(DEFAULT_TALK_KEY)!);
+	useEffect(() => {
+		if (!voiceAvailable) return;
+		void fetchJson<{ settings?: { talkKey?: string } }>("/api/voice/settings")
+			.then((payload) => { if (payload.settings?.talkKey) setTalkKeyText(payload.settings.talkKey); })
+			.catch(() => {});
+	}, []);
+	useEffect(() => { talkKeyRef.current = parseTalkKey(talkKeyText) ?? parseTalkKey(DEFAULT_TALK_KEY)!; }, [talkKeyText]);
 	const [conversation, setConversation] = useState<ConversationState | null>(null);
 	const conversationRef = useRef<Conversation | null>(null);
 	const sendRef = useRef<(text: string) => boolean>(() => false);
 	const [voiceNotice, setVoiceNotice] = useState<{ text: string; sub?: string } | null>(null);
-	// Ctrl or Cmd + Shift + Space starts or ends a conversation from anywhere
-	// in a room. Escape hushes the room mid-answer, the same as talking over
-	// it; pressed again with nothing left to hush, it ends the conversation.
-	// The handlers live in a ref so one listener serves the whole session.
+	// The talk key, held anywhere in a room, starts a conversation if none is
+	// on and opens the microphone; releasing it sends. Escape hushes the room
+	// mid-answer; pressed again with nothing left to hush, it ends the
+	// conversation. Ctrl or Cmd + Shift + Space still starts or ends one. The
+	// handlers live in refs so one set of listeners serves the whole session.
 	const conversationActionsRef = useRef<{ start: () => void; end: () => void }>({ start: () => {}, end: () => {} });
 	useEffect(() => {
-		const onKey = (event: KeyboardEvent) => {
+		const desktop = navigator.userAgent.includes("ExxpertsDesktop");
+		const onKeyDown = (event: KeyboardEvent) => {
 			const active = conversationRef.current !== null;
 			if (event.key === "Escape" && active) { if (!conversationRef.current?.hush()) conversationActionsRef.current.end(); return; }
+			if (desktop && isTalkKeyDown(event, talkKeyRef.current)) {
+				// Swallowed even when it starts nothing, so the combination never
+				// types a character into the field it was pressed over.
+				event.preventDefault();
+				if (event.repeat) return;
+				if (!active) {
+					if (!persistentChatRef.current) return;
+					conversationActionsRef.current.start();
+				}
+				conversationRef.current?.pressTalk();
+				return;
+			}
 			if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.code === "Space") {
 				event.preventDefault();
 				if (active) conversationActionsRef.current.end();
-				else if (persistentChatRef.current && navigator.userAgent.includes("ExxpertsDesktop")) conversationActionsRef.current.start();
+				else if (persistentChatRef.current && desktop) conversationActionsRef.current.start();
 			}
 		};
-		window.addEventListener("keydown", onKey);
-		return () => window.removeEventListener("keydown", onKey);
+		const onKeyUp = (event: KeyboardEvent) => {
+			if (conversationRef.current && releasesTalkKey(event, talkKeyRef.current)) conversationRef.current.releaseTalk();
+		};
+		// Losing the window mid-hold counts as a release: no key-up would come.
+		const onBlur = () => conversationRef.current?.releaseTalk();
+		window.addEventListener("keydown", onKeyDown);
+		window.addEventListener("keyup", onKeyUp);
+		window.addEventListener("blur", onBlur);
+		return () => {
+			window.removeEventListener("keydown", onKeyDown);
+			window.removeEventListener("keyup", onKeyUp);
+			window.removeEventListener("blur", onBlur);
+		};
 	}, []);
 	useEffect(() => {
 		if (!voiceNotice) return;
@@ -8067,7 +8105,7 @@ export function App() {
 					title: "Talk with exxperts and hear it answer",
 					content: (
 						<div className="landing ai-setup-page settings-voice">
-							<VoiceSettingsSection />
+							<VoiceSettingsSection onTalkKeyChange={setTalkKeyText} />
 						</div>
 					),
 				}] : []),
@@ -8337,7 +8375,7 @@ export function App() {
 							<button
 								className="icon-btn icon-btn-square composer-voice-btn"
 								aria-label="Start a conversation"
-								title="Talk with this room. What you say is transcribed and the answer is spoken, both on this computer. Talk over it or press Escape to interrupt; Escape again ends. Ctrl or Cmd + Shift + Space starts and ends."
+								title={`Talk with this room. Hold ${formatTalkKey(talkKeyText, isMac)} and speak, release to send; the answer is spoken. Pressing the key while the room answers cuts in. Escape hushes, Escape again ends. Everything runs on this computer.`}
 								disabled={!connectedForChrome}
 								onClick={startConversation}
 							><WaveformIcon /></button>
@@ -8345,7 +8383,7 @@ export function App() {
 					</>
 				) : null
 			}
-			composerReplacement={conversation ? <ConversationBar state={conversation} onEnd={endConversation} /> : undefined}
+			composerReplacement={conversation ? <ConversationBar state={conversation} talkKeyLabel={formatTalkKey(talkKeyText, isMac)} onEnd={endConversation} /> : undefined}
 			connected={connectedForChrome}
 			reconnectState={roomReconnectState}
 			onReconnect={retryRoomReconnectNow}

@@ -1,14 +1,20 @@
 /**
  * The microphone half of conversation mode: capture in the browser, recognise
  * on the computer. Frames leave through the audio worklet as 16 kHz PCM and
- * travel over the voice websocket; partial and final text comes back. Audio
- * is only sent after the server says it is ready, because the model may be
- * loading on first use and a frame sent before that would be lost.
+ * travel over the voice websocket while the talk key is held; partials come
+ * back as the words change, and a flush on release answers with one final.
+ * Frames captured before the server says it is ready are held back and sent
+ * in order once it is, so a hold that starts the mode loses nothing while the
+ * model loads.
  */
 
 export type MicrophoneFailure = { code: string; message: string };
 
 export type Microphone = {
+	/** Let frames through (the talk key is down) or not. */
+	setTransmitting(on: boolean): void;
+	/** The talk key came up: ask for what was said as one final. */
+	flush(): void;
 	close(): void;
 };
 
@@ -50,15 +56,28 @@ export async function openMicrophone(hooks: {
 	socket.binaryType = "arraybuffer";
 	let ready = false;
 	let closed = false;
+	let transmitting = false;
+	let flushPending = false;
+	/** Frames from a hold that began before the server was ready; at most six seconds. */
+	const held: ArrayBuffer[] = [];
 
 	capture.port.onmessage = (event: MessageEvent<ArrayBuffer>) => {
+		if (!transmitting) return;
 		if (ready && socket.readyState === WebSocket.OPEN) socket.send(event.data);
+		else if (held.length < 60) held.push(event.data);
 	};
+	const sendFlush = () => { if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "flush" })); };
 	socket.onmessage = (event) => {
 		let message: { type?: string; text?: string; code?: string; message?: string };
 		try { message = JSON.parse(String(event.data)); } catch { return; }
 		switch (message.type) {
-			case "ready": ready = true; hooks.onReady(); break;
+			case "ready":
+				ready = true;
+				for (const frame of held) socket.send(frame);
+				held.length = 0;
+				if (flushPending) { flushPending = false; sendFlush(); }
+				hooks.onReady();
+				break;
 			case "partial": hooks.onPartial(String(message.text ?? "")); break;
 			case "final": hooks.onFinal(String(message.text ?? "")); break;
 			case "error": hooks.onError({ code: String(message.code ?? "voice"), message: String(message.message ?? "Voice failed.") }); break;
@@ -69,6 +88,11 @@ export async function openMicrophone(hooks: {
 	};
 
 	return {
+		setTransmitting(on) { transmitting = on; },
+		flush() {
+			if (ready) sendFlush();
+			else flushPending = true;
+		},
 		close() {
 			closed = true;
 			try { socket.close(); } catch {}

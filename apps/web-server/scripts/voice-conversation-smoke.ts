@@ -1,11 +1,13 @@
 // Smoke for conversation mode's pure parts: the sentence splitter that turns
 // a streamed markdown reply into speech, the filler planner that decides what
-// the app says while the model is silent, the language guess, and the hint
-// the server appends to a spoken turn. No audio, no DOM, no models.
+// the app says while the model is silent, the language guess, the talk key
+// and the hint the server appends to a spoken turn. No audio, no DOM, no
+// models.
 //
 // Run: npm run smokes -- voice-conversation   (or tsx this file)
 
-import { cleanForSpeech, isEcho, looksLikeSpeech, SentenceSplitter } from "../../web-ui/src/voice/spoken-text.js";
+import { cleanForSpeech, SentenceSplitter } from "../../web-ui/src/voice/spoken-text.js";
+import { DEFAULT_TALK_KEY, formatTalkKey, isTalkKeyDown, parseTalkKey, releasesTalkKey, serializeTalkKey, talkKeyFromEvent } from "../../web-ui/src/voice/talk-key.js";
 import { FillerPlanner, guessLanguage } from "../../web-ui/src/voice/filler.js";
 import { SPOKEN_CONVERSATION_HINT, withSpokenConversationHint } from "../src/voice.js";
 
@@ -73,14 +75,22 @@ assert(planner.planForTools([{ name: "memory_recall", args: {} }], "de").speak =
 assert(planner.planForTools([{ name: "delegate_task", args: {} }], "de").speak === "Okay, ich gebe das an einen Spezialisten weiter.", "delegation is announced in German");
 assert(planner.planForTools([{ name: "something_new", args: {} }], "en").speak === "Working on it.", "unknown tools get a generic line");
 
-// Barge-in guards: a person talking interrupts; a cough or the room's own echo does not.
-assert(!looksLikeSpeech("hm") && !looksLikeSpeech("ja okay"), "one or two short words are not speech");
-assert(looksLikeSpeech("wait, what about the fourth day"), "three real words are speech");
-const spokenByRoom = 'Okay, searching the web for "works council remote work". Found it. Two points matter for you.';
-assert(isEcho("searching the web for works council", spokenByRoom), "the room's own sentence leaking back is echo");
-assert(isEcho("two points matter for you", spokenByRoom), "a later sentence leaking back is echo too");
-assert(!isEcho("and who signs off on the fourth day", spokenByRoom), "a new question is not echo");
-assert(!isEcho("", spokenByRoom), "nothing heard is not echo");
+// The talk key: parsed, shown, matched on the way down and on the way up, recorded.
+const key = parseTalkKey(DEFAULT_TALK_KEY)!;
+assert(key.alt && !key.ctrl && !key.shift && !key.meta && key.code === "Space", "the default is Alt+Space");
+assert(parseTalkKey("Space") === null && parseTalkKey("Alt+") === null && parseTalkKey("Hyper+Space") === null, "a plain key, a bare modifier and an unknown modifier are not talk keys");
+assert(serializeTalkKey(parseTalkKey("Shift+Ctrl+KeyV")!) === "Ctrl+Shift+KeyV", "modifiers serialise in one order");
+assert(formatTalkKey("Alt+Space", true) === "⌥ Space" && formatTalkKey("Ctrl+Shift+KeyV", false) === "Ctrl+Shift+V" && formatTalkKey("Meta+Digit1", true) === "⌘ 1", "labels read as keys, not codes");
+const press = (o: Partial<{ code: string; key: string; ctrlKey: boolean; altKey: boolean; shiftKey: boolean; metaKey: boolean }>) => ({ code: "", key: "", ctrlKey: false, altKey: false, shiftKey: false, metaKey: false, ...o });
+assert(isTalkKeyDown(press({ code: "Space", altKey: true }), key), "Alt+Space is the talk key going down");
+assert(!isTalkKeyDown(press({ code: "Space", altKey: true, shiftKey: true }), key), "an extra modifier is a different combination");
+assert(!isTalkKeyDown(press({ code: "Space" }), key), "Space alone is typing");
+assert(releasesTalkKey(press({ code: "Space", key: " " }), key), "releasing the key ends the hold");
+assert(releasesTalkKey(press({ code: "AltLeft", key: "Alt" }), key), "releasing a needed modifier ends the hold");
+assert(!releasesTalkKey(press({ code: "ShiftLeft", key: "Shift" }), key), "releasing an unrelated key does not");
+assert(talkKeyFromEvent(press({ code: "KeyV", key: "v", ctrlKey: true, shiftKey: true })) === "Ctrl+Shift+KeyV", "recording a combination");
+assert(talkKeyFromEvent(press({ code: "KeyV", key: "v" })) === null, "a key without a modifier is not recorded");
+assert(talkKeyFromEvent(press({ code: "AltLeft", key: "Alt", altKey: true })) === null, "a modifier alone is not recorded");
 
 // The hint: only on spoken turns, appended, never replacing the text.
 assert(withSpokenConversationHint("hello", false) === "hello", "typed turns are untouched");

@@ -2344,6 +2344,7 @@ strong, b { font-weight: 700; }
 	box-sizing: border-box;
 }
 .conversation-bar.starting .conversation-ring { opacity: 0.4; }
+.conversation-bar.idle .conversation-ring { opacity: 0.55; }
 .conversation-bar.listening .conversation-ring { animation: conversation-pulse 1.6s ease-in-out infinite; }
 .conversation-bar.working .conversation-ring { border-style: dashed; animation: conversation-spin 2.4s linear infinite; }
 .conversation-bar.speaking .conversation-ring { background: var(--fg); animation: conversation-pulse 0.9s ease-in-out infinite; }
@@ -2454,6 +2455,8 @@ strong, b { font-weight: 700; }
 	font-size: 13px;
 	color: var(--muted);
 }
+.voice-key { font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace; }
+.voice-key.recording { border-color: var(--fg); box-shadow: 0 0 0 1px color-mix(in srgb, var(--fg) 30%, transparent); }
 .voice-controls-hint {
 	flex-basis: 100%;
 	font-size: 12.5px;

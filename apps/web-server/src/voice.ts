@@ -90,27 +90,21 @@ export function isVoiceModelInstalled(model: VoiceModel): boolean {
 // ── Settings ────────────────────────────────────────────────────────────────
 
 export type VoiceLanguage = "auto" | "de" | "en";
-export type VoicePatience = "quick" | "normal" | "relaxed";
-export type VoiceSettings = { speaker: number; speed: number; language: VoiceLanguage; patience: VoicePatience };
+export type VoiceSettings = { speaker: number; speed: number; language: VoiceLanguage; talkKey: string };
 
 /** Supertonic 3 ships ten voice styles; the engine reports the same number. */
 export const SPEAKER_COUNT = 10;
 const SPEEDS = { min: 0.7, max: 1.4 };
 const SETTINGS_FILE = "voice.json";
-const DEFAULT_SETTINGS: VoiceSettings = { speaker: 3, speed: 1, language: "auto", patience: "normal" };
+export const DEFAULT_TALK_KEY = "Alt+Space";
+const DEFAULT_SETTINGS: VoiceSettings = { speaker: 3, speed: 1, language: "auto", talkKey: DEFAULT_TALK_KEY };
 
 /**
- * How long a pause has to be before what was said is sent, in seconds of
- * trailing silence. Two figures per setting: a sentence that sounds finished
- * goes after the first; one that sounds unfinished, ending on "und" or a
- * comma or "so", gets the second, which is room to think. People differ in
- * how fast they talk, so the pair is a setting rather than a constant.
+ * The talk key as the client stores it: modifiers in a fixed order, then the
+ * key's code, "Alt+Space" or "Ctrl+Shift+KeyV". At least one modifier, so a
+ * plain letter can never be taken away from typing.
  */
-export const PATIENCE: Record<VoicePatience, { finished: number; unfinished: number }> = {
-	quick: { finished: 1.0, unfinished: 2.2 },
-	normal: { finished: 1.5, unfinished: 3.5 },
-	relaxed: { finished: 2.2, unfinished: 5.0 },
-};
+const TALK_KEY = /^(?:(?:Ctrl|Alt|Shift|Meta)\+){1,4}[A-Za-z0-9]{1,20}$/;
 
 export class VoiceSettingsError extends Error {
 	constructor(message: string) {
@@ -159,11 +153,11 @@ function normalizeSettings(input: Record<string, unknown>): VoiceSettings {
 	if (language !== "auto" && language !== "de" && language !== "en") {
 		throw new VoiceSettingsError("The language must be auto, de or en.");
 	}
-	const patience = String(input.patience ?? "");
-	if (patience !== "quick" && patience !== "normal" && patience !== "relaxed") {
-		throw new VoiceSettingsError("The pause must be quick, normal or relaxed.");
+	const talkKey = String(input.talkKey ?? "");
+	if (!TALK_KEY.test(talkKey)) {
+		throw new VoiceSettingsError("The talk key must be a key with at least one modifier, for example Alt+Space.");
 	}
-	return { speaker, speed: Math.round(speed * 100) / 100, language, patience };
+	return { speaker, speed: Math.round(speed * 100) / 100, language, talkKey };
 }
 
 export function writeVoiceSettings(patch: Partial<Record<keyof VoiceSettings, unknown>>): VoiceSettings {
@@ -381,15 +375,8 @@ async function getRecognizer(): Promise<Loaded> {
 				provider: "cpu",
 				debug: false,
 			},
-			enableEndpoint: true,
-			// The detector only notices a pause; whether the pause ends the
-			// sentence is decided in createRecognitionSession from the words and
-			// the patience setting. Silence with nothing said is no endpoint worth
-			// acting on, so rule 1 is kept out of the way, and a very long
-			// utterance is cut only as a last resort.
-			rule1MinTrailingSilence: 10,
-			rule2MinTrailingSilence: PAUSE_NOTICED_S,
-			rule3MinUtteranceLength: 60,
+			// No endpoint detection: the talk key says when a sentence ends.
+			enableEndpoint: false,
 		});
 		asr = { engine, idle: null, users: 0 };
 	}
@@ -439,100 +426,41 @@ export function wavFromFloat32(samples: Float32Array, sampleRate: number): Buffe
 
 export type RecognitionEvent = { type: "partial"; text: string } | { type: "final"; text: string };
 
-/** Trailing silence at which the detector first reports a pause. */
-const PAUSE_NOTICED_S = 0.8;
-
-// Words a sentence does not end on, in German and English: conjunctions,
-// articles, prepositions, auxiliaries and the sounds people make while they
-// think. A pause after one of these is a pause for thought, not the end.
-const TRAILING_WORDS = new Set([
-	"und", "oder", "aber", "weil", "dass", "wenn", "ob", "also", "dann", "denn", "sondern", "sowie", "wie", "als",
-	"mit", "für", "von", "zu", "zum", "zur", "bei", "nach", "über", "unter", "vor", "in", "im", "an", "am", "auf", "aus", "durch", "gegen", "ohne", "um",
-	"der", "die", "das", "den", "dem", "des", "ein", "eine", "einen", "einem", "einer", "eines", "kein", "keine",
-	"ich", "du", "wir", "ihr", "sie", "es", "man", "mein", "meine", "dein", "unser", "unsere",
-	"ist", "sind", "war", "waren", "wird", "werden", "würde", "würden", "hat", "habe", "haben", "hab", "kann", "können", "könnte", "soll", "sollte", "sollten", "muss", "müssen", "will", "wollen", "möchte", "darf",
-	"sehr", "ganz", "so", "eher", "quasi", "sozusagen", "halt", "eben", "irgendwie", "eigentlich", "vielleicht", "noch", "auch", "mal",
-	"ähm", "äh", "hm", "hmm", "mh", "mhm", "öhm",
-	"and", "or", "but", "because", "that", "if", "when", "while", "whether", "then", "than", "as", "like",
-	"with", "for", "to", "of", "in", "on", "at", "by", "from", "about", "into", "through", "without",
-	"the", "a", "an", "my", "your", "our", "their", "its", "some", "any", "no",
-	"i", "you", "we", "they", "it", "he", "she", "who", "which", "where", "how",
-	"is", "are", "was", "were", "be", "been", "have", "has", "had", "can", "could", "should", "would", "will", "want", "need", "might", "must",
-	"very", "really", "kind", "sort", "just", "also", "basically", "actually", "maybe", "um", "uh", "uhm", "er", "erm",
-]);
-
-/**
- * Whether a pause after these words is a pause for thought. Punctuation from
- * the recogniser is the strongest signal: a full stop or question mark says
- * finished, a comma says more is coming. Otherwise the last word decides.
- */
-export function looksUnfinished(text: string): boolean {
-	const trimmed = text.trim();
-	if (!trimmed) return false;
-	if (/[.!?…]["'”’)]*$/.test(trimmed)) return false;
-	if (/[,;:\-–—]$/.test(trimmed)) return true;
-	const words = trimmed.toLowerCase().replace(/[^\p{L}\p{N}\s']/gu, " ").trim().split(/\s+/);
-	return TRAILING_WORDS.has(words[words.length - 1] ?? "");
-}
-
 export type RecognitionSession = {
 	/** 16 kHz mono signed 16-bit little-endian frames, any length. */
 	pushPcm16(frame: Buffer): void;
-	/** No more audio: flush and emit whatever is left as a final. */
+	/** The talk key came up: decode what is in flight, emit it as one final, and get ready for the next hold. */
+	flush(): void;
+	/** No more audio at all: emit what is left, without preparing for another utterance. */
 	finish(): void;
 	/** Release the stream; call once, after finish or on disconnect. */
 	close(): void;
 };
 
+/** Silence fed after the last frame, so the streaming model's look-ahead lets the last words out. */
+const TAIL_SILENCE_SAMPLES = 16000;
+/** Silence fed in front of every utterance: the model drops the first half second of a stream that starts mid-word. */
+const LEAD_SILENCE_SAMPLES = 8000;
+
 /**
- * One microphone stream. Partials arrive as the words change. A final arrives
- * when a pause has lasted long enough to end the sentence: a short pause after
- * words that sound finished, a longer one after words that sound like more is
- * coming, so a slow speaker can stop to think mid-sentence and carry on, and
- * both halves arrive as one message. Time is counted in audio received, not
- * on the wall clock, so it is deterministic. The half second of silence in
- * front is because the model drops the first half second of a stream that
- * starts mid-word.
+ * One microphone stream, push-to-talk. Frames arrive while the talk key is
+ * held and partials go back as the words change. Releasing the key flushes
+ * what was said as one final, and the stream is made ready for the next
+ * hold. Nothing is decided from silence: the key says when a sentence ends,
+ * so a pause to think is just a pause.
  */
-export async function createRecognitionSession(
-	language: VoiceLanguage,
-	onEvent: (event: RecognitionEvent) => void,
-	patience: VoicePatience = readVoiceSettings().patience,
-): Promise<RecognitionSession> {
+export async function createRecognitionSession(language: VoiceLanguage, onEvent: (event: RecognitionEvent) => void): Promise<RecognitionSession> {
 	const loaded = await getRecognizer();
 	const rec = loaded.engine;
 	const stream = rec.createStream();
 	if (language !== "auto") stream.setOption("language", language);
-	stream.acceptWaveform({ sampleRate: 16000, samples: new Float32Array(8000) });
+	stream.acceptWaveform({ sampleRate: 16000, samples: new Float32Array(LEAD_SILENCE_SAMPLES) });
 	loaded.users++;
-	const wait = PATIENCE[patience];
 	let last = "";
 	let open = true;
-	let audioSeconds = 0;
-	/** Audio time at which the detector first reported the current pause, or null while words are coming. */
-	let pauseNoticedAt: number | null = null;
-	const pump = () => {
+	const decode = (): string => {
 		while (rec.isReady(stream)) rec.decode(stream);
-		const text = String(rec.getResult(stream).text ?? "").trim();
-		if (text !== last) {
-			last = text;
-			pauseNoticedAt = null;
-			if (text) onEvent({ type: "partial", text });
-		}
-		// Silence with nothing said is not a sentence; and the stream is never
-		// reset for it, because that threw away the audio in flight, which was
-		// the first words of whatever came next.
-		if (!text || !rec.isEndpoint(stream)) {
-			pauseNoticedAt = null;
-			return;
-		}
-		pauseNoticedAt ??= audioSeconds;
-		const silence = PAUSE_NOTICED_S + (audioSeconds - pauseNoticedAt);
-		if (silence < (looksUnfinished(text) ? wait.unfinished : wait.finished)) return;
-		onEvent({ type: "final", text });
-		rec.reset(stream);
-		last = "";
-		pauseNoticedAt = null;
+		return String(rec.getResult(stream).text ?? "").trim();
 	};
 	return {
 		pushPcm16(frame) {
@@ -540,16 +468,28 @@ export async function createRecognitionSession(
 			const count = frame.length >> 1;
 			const samples = new Float32Array(count);
 			for (let i = 0; i < count; i++) samples[i] = frame.readInt16LE(i * 2) / 32768;
-			audioSeconds += count / 16000;
 			stream.acceptWaveform({ sampleRate: 16000, samples });
-			pump();
+			const text = decode();
+			if (text !== last) {
+				last = text;
+				if (text) onEvent({ type: "partial", text });
+			}
+		},
+		flush() {
+			if (!open) return;
+			stream.acceptWaveform({ sampleRate: 16000, samples: new Float32Array(TAIL_SILENCE_SAMPLES) });
+			// An empty final still goes out: the client is waiting to learn
+			// whether the hold said anything.
+			onEvent({ type: "final", text: decode() });
+			rec.reset(stream);
+			stream.acceptWaveform({ sampleRate: 16000, samples: new Float32Array(LEAD_SILENCE_SAMPLES) });
+			last = "";
 		},
 		finish() {
 			if (!open) return;
-			stream.acceptWaveform({ sampleRate: 16000, samples: new Float32Array(12800) });
+			stream.acceptWaveform({ sampleRate: 16000, samples: new Float32Array(TAIL_SILENCE_SAMPLES) });
 			stream.inputFinished();
-			while (rec.isReady(stream)) rec.decode(stream);
-			const text = String(rec.getResult(stream).text ?? "").trim();
+			const text = decode();
 			if (text) onEvent({ type: "final", text });
 			last = "";
 		},
@@ -621,7 +561,7 @@ export function registerVoiceApi(app: FastifyInstance): void {
 	app.put("/api/voice/settings", async (req, reply) => {
 		const body = (req.body ?? {}) as Record<string, unknown>;
 		try {
-			writeVoiceSettings({ speaker: body.speaker, speed: body.speed, language: body.language, patience: body.patience });
+			writeVoiceSettings({ speaker: body.speaker, speed: body.speed, language: body.language, talkKey: body.talkKey });
 		} catch (error) {
 			if (error instanceof VoiceSettingsError) return reply.code(400).send({ error: error.message });
 			return reply.code(500).send({ error: (error as Error).message });
@@ -666,10 +606,11 @@ export function registerVoiceApi(app: FastifyInstance): void {
 		}
 	});
 
-	// Binary 16 kHz PCM frames in; JSON partial and final text out. The client
-	// waits for {type:"ready"} before sending audio, because the model may be
-	// loading on first use and a frame sent before the stream exists would be
-	// lost without a trace.
+	// Binary 16 kHz PCM frames in while the talk key is held; JSON partials
+	// back as the words change; {type:"flush"} on release answers with one
+	// final. The client waits for {type:"ready"} before sending audio, because
+	// the model may be loading on first use and a frame sent before the stream
+	// exists would be lost without a trace.
 	app.get("/ws/voice", { websocket: true }, async (socket, req) => {
 		const params = new URLSearchParams(String((req as { url?: string }).url ?? "").split("?")[1] ?? "");
 		const settings = readVoiceSettings();
@@ -677,7 +618,7 @@ export function registerVoiceApi(app: FastifyInstance): void {
 		const send = (payload: unknown) => { try { socket.send(JSON.stringify(payload)); } catch {} };
 		let session: RecognitionSession;
 		try {
-			session = await createRecognitionSession(language, send, settings.patience);
+			session = await createRecognitionSession(language, send);
 		} catch (error) {
 			const code = error instanceof VoiceModelMissingError ? "model_missing" : error instanceof VoiceUnavailableError ? "voice_unavailable" : "error";
 			send({ type: "error", code, message: (error as Error).message });
@@ -691,6 +632,10 @@ export function registerVoiceApi(app: FastifyInstance): void {
 			}
 			let msg: { type?: string } | null = null;
 			try { msg = JSON.parse(raw.toString()); } catch { return; }
+			if (msg?.type === "flush") {
+				session.flush();
+				return;
+			}
 			if (msg?.type === "stop") {
 				session.finish();
 				send({ type: "stopped" });

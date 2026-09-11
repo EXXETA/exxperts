@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { formatTalkKey, talkKeyFromEvent } from "../voice/talk-key";
 import { apiFetch, fetchJson } from "../api";
 import { useRemoteClientContext } from "../remote-client-context";
 
@@ -18,7 +19,6 @@ import { useRemoteClientContext } from "../remote-client-context";
  */
 
 type VoiceLanguage = "auto" | "de" | "en";
-type VoicePatience = "quick" | "normal" | "relaxed";
 type VoiceDownload = {
 	phase: "idle" | "downloading" | "verifying" | "extracting" | "ready" | "error";
 	receivedBytes: number;
@@ -37,7 +37,7 @@ type VoiceModelCard = {
 	download: VoiceDownload;
 };
 type VoicePayload = {
-	settings: { speaker: number; speed: number; language: VoiceLanguage; patience: VoicePatience };
+	settings: { speaker: number; speed: number; language: VoiceLanguage; talkKey: string };
 	engine: { available: boolean; message: string | null };
 	speakers: number;
 	models: VoiceModelCard[];
@@ -48,11 +48,7 @@ const SAMPLE = {
 	en: "Hello. This is how exxperts sounds when it talks with you.",
 } as const;
 const SPEEDS = [0.8, 0.9, 1, 1.1, 1.2, 1.3];
-const PATIENCE_HINT: Record<VoicePatience, string> = {
-	quick: "Sends after about a second of silence. For fast talkers who finish their sentences.",
-	normal: "Sends after a short pause, and waits about twice as long when the sentence sounds unfinished, so you can stop to think.",
-	relaxed: "Room to think. A finished sentence still goes after two seconds; an unfinished one can rest for five.",
-};
+const isMac = navigator.userAgent.includes("Macintosh");
 
 function megabytes(bytes: number): string {
 	return `${Math.round(bytes / 1_000_000)} MB`;
@@ -74,7 +70,7 @@ function downloadLine(download: VoiceDownload): string | null {
 	}
 }
 
-export function VoiceSettingsSection() {
+export function VoiceSettingsSection({ onTalkKeyChange }: { onTalkKeyChange?: (talkKey: string) => void } = {}) {
 	const remoteClient = useRemoteClientContext();
 	const [data, setData] = useState<VoicePayload | null>(null);
 	const [loading, setLoading] = useState(true);
@@ -83,6 +79,9 @@ export function VoiceSettingsSection() {
 	const [busy, setBusy] = useState<string | null>(null);
 	const [error, setError] = useState<string | null>(null);
 	const [playing, setPlaying] = useState(false);
+	/** Recording a new talk key: the next combination pressed becomes it. */
+	const [recordingKey, setRecordingKey] = useState(false);
+	const [keyHint, setKeyHint] = useState<string | null>(null);
 	// One audio context for the tab; browsers cap how many a page may open.
 	const audioContext = useRef<AudioContext | null>(null);
 
@@ -124,11 +123,35 @@ export function VoiceSettingsSection() {
 	}
 
 	const saveSettings = (patch: Partial<VoicePayload["settings"]>) =>
-		request("settings", () => fetchJson<VoicePayload>("/api/voice/settings", {
-			method: "PUT",
-			headers: { "content-type": "application/json" },
-			body: JSON.stringify(patch),
-		}));
+		request("settings", async () => {
+			const next = await fetchJson<VoicePayload>("/api/voice/settings", {
+				method: "PUT",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify(patch),
+			});
+			if (patch.talkKey) onTalkKeyChange?.(next.settings.talkKey);
+			return next;
+		});
+
+	// While recording, the next key press with a modifier becomes the talk key.
+	// Escape gives up; a bare modifier is waited through; a key without one is
+	// refused with a hint, since a plain letter must stay typeable.
+	useEffect(() => {
+		if (!recordingKey) return;
+		const onKey = (event: KeyboardEvent) => {
+			event.preventDefault();
+			event.stopPropagation();
+			if (event.key === "Escape") { setRecordingKey(false); setKeyHint(null); return; }
+			if (["Control", "Alt", "Shift", "Meta"].includes(event.key)) return;
+			const text = talkKeyFromEvent(event);
+			if (!text) { setKeyHint(`Add a modifier, for example ${isMac ? "⌥" : "Alt"}, so typing keeps working.`); return; }
+			setRecordingKey(false);
+			setKeyHint(null);
+			void saveSettings({ talkKey: text });
+		};
+		window.addEventListener("keydown", onKey, true);
+		return () => window.removeEventListener("keydown", onKey, true);
+	}, [recordingKey]);
 
 	const download = (id: string) => request(id, async () => { await fetchJson(`/api/voice/models/${id}/download`, { method: "POST" }); });
 	const remove = (id: string) => request(id, () => fetchJson<VoicePayload>(`/api/voice/models/${id}`, { method: "DELETE" }));
@@ -247,7 +270,7 @@ export function VoiceSettingsSection() {
 			<h3 className="web-search-fallback-heading">Voice</h3>
 			{remoteClient.remote ? (
 				<p className="ai-setup-copy">
-					Speaker {data.settings.speaker + 1} at {data.settings.speed.toFixed(1)}× speed, language {data.settings.language === "auto" ? "detected per sentence" : data.settings.language === "de" ? "German" : "English"}, {data.settings.patience} pause before sending.
+					Speaker {data.settings.speaker + 1} at {data.settings.speed.toFixed(1)}× speed, language {data.settings.language === "auto" ? "detected per sentence" : data.settings.language === "de" ? "German" : "English"}, talk key {formatTalkKey(data.settings.talkKey, isMac)}.
 					Voice is set up on the computer itself.
 				</p>
 			) : (
@@ -277,14 +300,20 @@ export function VoiceSettingsSection() {
 						</select>
 					</label>
 					<label>
-						Pause before sending
-						<select value={data.settings.patience} disabled={settingsBusy} onChange={(e) => void saveSettings({ patience: e.target.value as VoicePatience })}>
-							<option value="quick">Quick</option>
-							<option value="normal">Normal</option>
-							<option value="relaxed">Relaxed</option>
-						</select>
+						Talk key
+						<button
+							type="button"
+							className={`inline-action voice-key${recordingKey ? " recording" : ""}`}
+							disabled={settingsBusy}
+							title="Change the key you hold to talk. Press the new combination after clicking."
+							onClick={() => { setKeyHint(null); setRecordingKey(true); }}
+						>
+							{recordingKey ? "Press a combination…" : formatTalkKey(data.settings.talkKey, isMac)}
+						</button>
 					</label>
-					<span className="voice-controls-hint">{PATIENCE_HINT[data.settings.patience]}</span>
+					<span className="voice-controls-hint">
+						{keyHint ?? "Hold it anywhere in a room and talk; release to send. Pressing it while the room answers cuts the answer off."}
+					</span>
 				</div>
 			)}
 			<p>
