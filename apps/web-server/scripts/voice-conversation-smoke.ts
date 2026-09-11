@@ -7,7 +7,7 @@
 // Run: npm run smokes -- voice-conversation   (or tsx this file)
 
 import { cleanForSpeech, SentenceSplitter } from "../../web-ui/src/voice/spoken-text.js";
-import { DEFAULT_TALK_KEY, formatTalkKey, isTalkKeyDown, parseTalkKey, releasesTalkKey, serializeTalkKey, talkKeyFromEvent } from "../../web-ui/src/voice/talk-key.js";
+import { DEFAULT_TALK_KEY, formatTalkKey, isTalkKeyDown, modifiersOf, modifiersOnlyTalkKey, NO_MODIFIERS, parseTalkKey, releasesTalkKey, serializeTalkKey, talkKeyFromEvent, unionModifiers } from "../../web-ui/src/voice/talk-key.js";
 import { FillerPlanner, guessLanguage } from "../../web-ui/src/voice/filler.js";
 import { SPOKEN_CONVERSATION_HINT, withSpokenConversationHint } from "../src/voice.js";
 
@@ -91,6 +91,27 @@ assert(!releasesTalkKey(press({ code: "ShiftLeft", key: "Shift" }), key), "relea
 assert(talkKeyFromEvent(press({ code: "KeyV", key: "v", ctrlKey: true, shiftKey: true })) === "Ctrl+Shift+KeyV", "recording a combination");
 assert(talkKeyFromEvent(press({ code: "KeyV", key: "v" })) === null, "a key without a modifier is not recorded");
 assert(talkKeyFromEvent(press({ code: "AltLeft", key: "Alt", altKey: true })) === null, "a modifier alone is not recorded");
+
+// Modifiers on their own, the way Handy allows: two or more, completing on the last one's key-down.
+const ctrlAlt = parseTalkKey("Ctrl+Alt")!;
+assert(ctrlAlt.ctrl && ctrlAlt.alt && ctrlAlt.code === "", "Ctrl+Alt is a talk key with no key of its own");
+assert(parseTalkKey("Alt") === null && parseTalkKey("Alt+Alt") === null, "a single modifier is not, nor the same one twice");
+assert(isTalkKeyDown(press({ code: "AltLeft", key: "Alt", ctrlKey: true, altKey: true }), ctrlAlt), "the second modifier going down completes Ctrl+Alt");
+assert(!isTalkKeyDown(press({ code: "ControlLeft", key: "Control", ctrlKey: true }), ctrlAlt), "the first modifier alone does not");
+assert(!isTalkKeyDown(press({ code: "KeyA", key: "a", ctrlKey: true, altKey: true }), ctrlAlt), "a letter typed while both are held does not start a second hold");
+assert(!isTalkKeyDown(press({ code: "AltLeft", key: "Alt", ctrlKey: true, altKey: true, shiftKey: true }), ctrlAlt), "an extra modifier is a different combination");
+assert(releasesTalkKey(press({ code: "ControlLeft", key: "Control" }), ctrlAlt) && !releasesTalkKey(press({ code: "Space", key: " " }), ctrlAlt), "letting go of either modifier ends the hold; other keys do not");
+const fnShift = parseTalkKey("Fn+Shift")!;
+assert(fnShift.fn && fnShift.shift && isTalkKeyDown(press({ code: "ShiftLeft", key: "Shift", shiftKey: true }), fnShift, true), "Fn is a modifier when the browser reports it, tracked by the caller");
+assert(!isTalkKeyDown(press({ code: "ShiftLeft", key: "Shift", shiftKey: true }), fnShift, false), "without Fn, Shift alone is not the key");
+assert(releasesTalkKey(press({ code: "Fn", key: "Fn" }), fnShift), "letting go of Fn ends the hold");
+assert(formatTalkKey("Ctrl+Alt", true) === "⌃ ⌥" && formatTalkKey("Fn+Shift", true) === "fn ⇧" && formatTalkKey("Ctrl+Alt", false) === "Ctrl+Alt", "modifier-only labels");
+// Recording: modifiers gathered while held, taken on release; one alone is refused.
+let heldMods = unionModifiers(NO_MODIFIERS, modifiersOf(press({ code: "ControlLeft", key: "Control", ctrlKey: true })));
+assert(modifiersOnlyTalkKey(heldMods) === null, "one modifier released is not enough");
+heldMods = unionModifiers(heldMods, modifiersOf(press({ code: "AltLeft", key: "Alt", ctrlKey: true, altKey: true })));
+assert(modifiersOnlyTalkKey(heldMods) === "Ctrl+Alt", "two gathered modifiers record as Ctrl+Alt");
+assert(modifiersOnlyTalkKey(unionModifiers(NO_MODIFIERS, modifiersOf(press({ code: "ShiftLeft", key: "Shift", shiftKey: true }), true))) === "Fn+Shift", "Fn gathers with Shift, and leads");
 
 // The hint: only on spoken turns, appended, never replacing the text.
 assert(withSpokenConversationHint("hello", false) === "hello", "typed turns are untouched");

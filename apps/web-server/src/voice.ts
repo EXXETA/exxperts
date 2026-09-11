@@ -100,11 +100,30 @@ export const DEFAULT_TALK_KEY = "Alt+Space";
 const DEFAULT_SETTINGS: VoiceSettings = { speaker: 3, speed: 1, language: "auto", talkKey: DEFAULT_TALK_KEY };
 
 /**
- * The talk key as the client stores it: modifiers in a fixed order, then the
- * key's code, "Alt+Space" or "Ctrl+Shift+KeyV". At least one modifier, so a
- * plain letter can never be taken away from typing.
+ * The talk key as the client stores it: modifiers, then the key's code if
+ * there is one, "Alt+Space", "Ctrl+Alt" or "Fn+Shift". A key needs at least
+ * one modifier, so a plain letter can never be taken away from typing;
+ * modifiers on their own need at least two, so a lone Shift stays a Shift.
  */
-const TALK_KEY = /^(?:(?:Ctrl|Alt|Shift|Meta)\+){1,4}[A-Za-z0-9]{1,20}$/;
+const TALK_KEY_MODIFIERS = new Set(["Ctrl", "Alt", "Shift", "Meta", "Fn"]);
+export function isValidTalkKey(text: string): boolean {
+	if (text.length > 60) return false;
+	const parts = text.split("+");
+	if (parts.some((part) => !part)) return false;
+	const modifiers = new Set<string>();
+	let code: string | null = null;
+	for (const [index, part] of parts.entries()) {
+		if (TALK_KEY_MODIFIERS.has(part)) {
+			if (modifiers.has(part) || code) return false;
+			modifiers.add(part);
+		} else if (index === parts.length - 1 && /^[A-Za-z0-9]{1,20}$/.test(part)) {
+			code = part;
+		} else {
+			return false;
+		}
+	}
+	return code ? modifiers.size >= 1 : modifiers.size >= 2;
+}
 
 export class VoiceSettingsError extends Error {
 	constructor(message: string) {
@@ -154,8 +173,8 @@ function normalizeSettings(input: Record<string, unknown>): VoiceSettings {
 		throw new VoiceSettingsError("The language must be auto, de or en.");
 	}
 	const talkKey = String(input.talkKey ?? "");
-	if (!TALK_KEY.test(talkKey)) {
-		throw new VoiceSettingsError("The talk key must be a key with at least one modifier, for example Alt+Space.");
+	if (!isValidTalkKey(talkKey)) {
+		throw new VoiceSettingsError("The talk key must be a key with a modifier, or two or more modifiers together, for example Alt+Space or Ctrl+Alt.");
 	}
 	return { speaker, speed: Math.round(speed * 100) / 100, language, talkKey };
 }

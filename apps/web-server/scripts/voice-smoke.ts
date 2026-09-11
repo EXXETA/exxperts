@@ -27,7 +27,7 @@ const { classifyRemoteRoute } = await import("../src/remote-route-policy.js");
 try {
 	// Settings: defaults without a file, validation, persistence.
 	assert(JSON.stringify(voice.readVoiceSettings()) === JSON.stringify({ speaker: 3, speed: 1, language: "auto", talkKey: "Alt+Space" }), "defaults without a file");
-	for (const bad of [{ speaker: 12 }, { speaker: -1 }, { speaker: 1.5 }, { speed: 5 }, { speed: "fast" }, { language: "fr" }, { talkKey: "Space" }, { talkKey: "Alt+" }, { talkKey: "Alt+Space; drop" }]) {
+	for (const bad of [{ speaker: 12 }, { speaker: -1 }, { speaker: 1.5 }, { speed: 5 }, { speed: "fast" }, { language: "fr" }, { talkKey: "Space" }, { talkKey: "Alt+" }, { talkKey: "Alt" }, { talkKey: "Alt+Alt" }, { talkKey: "Alt+Space; drop" }]) {
 		let threw = false;
 		try { voice.writeVoiceSettings(bad as never); } catch (e) { threw = e instanceof voice.VoiceSettingsError; }
 		assert(threw, `must refuse ${JSON.stringify(bad)}`);
@@ -36,6 +36,7 @@ try {
 	const saved = voice.writeVoiceSettings({ speaker: 5, language: "de", talkKey: "Ctrl+Shift+KeyV" });
 	assert(saved.speaker === 5 && saved.speed === 1 && saved.language === "de" && saved.talkKey === "Ctrl+Shift+KeyV", "a patch keeps the untouched values");
 	assert(JSON.stringify(voice.readVoiceSettings()) === JSON.stringify(saved), "what was written is what is read");
+	assert(voice.writeVoiceSettings({ talkKey: "Ctrl+Alt" }).talkKey === "Ctrl+Alt" && voice.writeVoiceSettings({ talkKey: "Fn+Shift" }).talkKey === "Fn+Shift", "two modifiers on their own are a talk key");
 	assert(fs.existsSync(path.join(tempHome, ".exxperts", "app", "voice.json")), "settings live in ~/.exxperts/app/voice.json");
 
 	// Catalogue: pinned, checksummed, from one origin.

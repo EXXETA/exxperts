@@ -3378,10 +3378,13 @@ export function App() {
 	const conversationActionsRef = useRef<{ start: () => void; end: () => void }>({ start: () => {}, end: () => {} });
 	useEffect(() => {
 		const desktop = navigator.userAgent.includes("ExxpertsDesktop");
+		// The Fn key has no flag on key events, so its state is kept here.
+		let fnDown = false;
 		const onKeyDown = (event: KeyboardEvent) => {
+			if (event.code === "Fn" || event.key === "Fn") fnDown = true;
 			const active = conversationRef.current !== null;
 			if (event.key === "Escape" && active) { if (!conversationRef.current?.hush()) conversationActionsRef.current.end(); return; }
-			if (desktop && isTalkKeyDown(event, talkKeyRef.current)) {
+			if (desktop && isTalkKeyDown(event, talkKeyRef.current, fnDown)) {
 				// Swallowed even when it starts nothing, so the combination never
 				// types a character into the field it was pressed over.
 				event.preventDefault();
@@ -3400,10 +3403,11 @@ export function App() {
 			}
 		};
 		const onKeyUp = (event: KeyboardEvent) => {
+			if (event.code === "Fn" || event.key === "Fn") fnDown = false;
 			if (conversationRef.current && releasesTalkKey(event, talkKeyRef.current)) conversationRef.current.releaseTalk();
 		};
 		// Losing the window mid-hold counts as a release: no key-up would come.
-		const onBlur = () => conversationRef.current?.releaseTalk();
+		const onBlur = () => { fnDown = false; conversationRef.current?.releaseTalk(); };
 		window.addEventListener("keydown", onKeyDown);
 		window.addEventListener("keyup", onKeyUp);
 		window.addEventListener("blur", onBlur);

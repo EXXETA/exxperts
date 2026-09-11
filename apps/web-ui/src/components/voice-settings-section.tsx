@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { formatTalkKey, talkKeyFromEvent } from "../voice/talk-key";
+import { formatModifiers, formatTalkKey, isModifierEvent, modifiersOf, modifiersOnlyTalkKey, NO_MODIFIERS, talkKeyFromEvent, unionModifiers } from "../voice/talk-key";
 import { apiFetch, fetchJson } from "../api";
 import { useRemoteClientContext } from "../remote-client-context";
 
@@ -133,24 +133,49 @@ export function VoiceSettingsSection({ onTalkKeyChange }: { onTalkKeyChange?: (t
 			return next;
 		});
 
-	// While recording, the next key press with a modifier becomes the talk key.
-	// Escape gives up; a bare modifier is waited through; a key without one is
-	// refused with a hint, since a plain letter must stay typeable.
+	// While recording, a key pressed with a modifier becomes the talk key at
+	// once. Modifiers on their own are gathered while held and become the key
+	// when the first of them is released, so "Ctrl+Alt" or "Fn+Shift" can be
+	// recorded without any other key. Escape gives up; a single modifier is
+	// refused with a hint, since a lone Shift must stay a Shift.
 	useEffect(() => {
 		if (!recordingKey) return;
-		const onKey = (event: KeyboardEvent) => {
-			event.preventDefault();
-			event.stopPropagation();
-			if (event.key === "Escape") { setRecordingKey(false); setKeyHint(null); return; }
-			if (["Control", "Alt", "Shift", "Meta"].includes(event.key)) return;
-			const text = talkKeyFromEvent(event);
-			if (!text) { setKeyHint(`Add a modifier, for example ${isMac ? "⌥" : "Alt"}, so typing keeps working.`); return; }
+		let held = NO_MODIFIERS;
+		let fnDown = false;
+		const finish = (text: string) => {
 			setRecordingKey(false);
 			setKeyHint(null);
 			void saveSettings({ talkKey: text });
 		};
-		window.addEventListener("keydown", onKey, true);
-		return () => window.removeEventListener("keydown", onKey, true);
+		const onKeyDown = (event: KeyboardEvent) => {
+			event.preventDefault();
+			event.stopPropagation();
+			if (event.key === "Escape") { setRecordingKey(false); setKeyHint(null); return; }
+			if (event.code === "Fn" || event.key === "Fn") fnDown = true;
+			if (isModifierEvent(event)) {
+				held = unionModifiers(held, modifiersOf(event, fnDown));
+				setKeyHint(`Holding ${formatModifiers(held, isMac)}. Add a key, or let go to keep just the modifiers.`);
+				return;
+			}
+			const text = talkKeyFromEvent(event, fnDown);
+			if (!text) { setKeyHint(`Add a modifier, for example ${isMac ? "⌥" : "Alt"}, so typing keeps working.`); return; }
+			finish(text);
+		};
+		const onKeyUp = (event: KeyboardEvent) => {
+			event.stopPropagation();
+			if (!isModifierEvent(event)) return;
+			const text = modifiersOnlyTalkKey(held);
+			if (text) { finish(text); return; }
+			held = NO_MODIFIERS;
+			fnDown = false;
+			setKeyHint("Two modifiers together, or one modifier and a key.");
+		};
+		window.addEventListener("keydown", onKeyDown, true);
+		window.addEventListener("keyup", onKeyUp, true);
+		return () => {
+			window.removeEventListener("keydown", onKeyDown, true);
+			window.removeEventListener("keyup", onKeyUp, true);
+		};
 	}, [recordingKey]);
 
 	const download = (id: string) => request(id, async () => { await fetchJson(`/api/voice/models/${id}/download`, { method: "POST" }); });
@@ -312,7 +337,7 @@ export function VoiceSettingsSection({ onTalkKeyChange }: { onTalkKeyChange?: (t
 						</button>
 					</label>
 					<span className="voice-controls-hint">
-						{keyHint ?? "Hold it anywhere in a room and talk; release to send. Pressing it while the room answers cuts the answer off."}
+						{keyHint ?? "Hold it anywhere in a room and talk; release to send. Pressing it while the room answers cuts the answer off. A key with a modifier, or two modifiers together."}
 					</span>
 				</div>
 			)}
