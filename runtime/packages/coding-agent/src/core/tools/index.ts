@@ -10,6 +10,14 @@ export {
 	createLocalBashOperations,
 } from "./bash.js";
 export {
+	applyEditsToNormalizedContent,
+	detectLineEnding,
+	type Edit,
+	normalizeToLF,
+	restoreLineEndings,
+	stripBom,
+} from "./edit-diff.js";
+export {
 	createEditTool,
 	createEditToolDefinition,
 	type EditOperations,
@@ -42,6 +50,7 @@ export {
 	type LsToolInput,
 	type LsToolOptions,
 } from "./ls.js";
+export { resolveReadPath } from "./path-utils.js";
 export {
 	createReadTool,
 	createReadToolDefinition,
@@ -50,6 +59,20 @@ export {
 	type ReadToolInput,
 	type ReadToolOptions,
 } from "./read.js";
+export {
+	DEFAULT_SPREADSHEET_MAX_COLUMNS,
+	DEFAULT_SPREADSHEET_MAX_ROWS,
+	isSpreadsheetPath,
+	MAX_SPREADSHEET_BYTES,
+	MAX_SPREADSHEET_CELL_CHARS,
+	MAX_SPREADSHEET_COLUMNS,
+	MAX_SPREADSHEET_OUTPUT_CHARS,
+	MAX_SPREADSHEET_ROWS,
+	renderSpreadsheetPreview,
+	SpreadsheetPreviewError,
+	type SpreadsheetPreviewErrorCode,
+	type SpreadsheetPreviewOptions,
+} from "./spreadsheet-preview.js";
 export {
 	DEFAULT_MAX_BYTES,
 	DEFAULT_MAX_LINES,

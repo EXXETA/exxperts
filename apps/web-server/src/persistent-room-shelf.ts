@@ -198,6 +198,15 @@ export function moveFileOntoShelf(roomIdRaw: string, sourceAbsolutePath: string,
 	return name;
 }
 
+/** Write a system-composed document onto the shelf under the collision rule. Exclusive create ("wx") so a concurrent claim of the allocated name fails loudly instead of overwriting. Returns the allocated shelf filename. */
+export function writeDocumentOntoShelf(roomIdRaw: string, desiredName: string, content: string, options: PersistentRoomShelfStorageOptions = {}): string {
+	const dir = persistentRoomShelfDirPath(roomIdRaw, options);
+	fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+	const name = allocateShelfFilename(desiredName, (candidate) => fs.existsSync(path.join(dir, candidate)));
+	fs.writeFileSync(path.join(dir, name), content, { mode: 0o600, flag: "wx" });
+	return name;
+}
+
 export interface ShelfAbsorbArtifact {
 	relativePath: string;
 	bytes: number;

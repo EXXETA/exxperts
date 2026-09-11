@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { estimateTokens } from "./token-estimate.js";
 
 export type PromptDiagnosticsSurface = "persistent-room" | "persistent-worker";
 
@@ -144,7 +145,7 @@ type ForbiddenPromptDiagnosticKey = typeof FORBIDDEN_PROMPT_DIAGNOSTIC_KEYS[numb
 const FORBIDDEN_KEY_SET = new Set<string>(FORBIDDEN_PROMPT_DIAGNOSTIC_KEYS);
 
 export function estimateTextTokens(text: string): number {
-	return Math.ceil(text.length / 4);
+	return estimateTokens(text);
 }
 
 export function fingerprintText(text: string): PromptTextFingerprint {

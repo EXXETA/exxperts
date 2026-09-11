@@ -427,11 +427,11 @@ export function RemoteAccessPage() {
 				<label className="rs-row">
 					<div className="rs-row-main">
 						<span className="rs-row-label">Remote access{switching ? " (switching…)" : ""}</span>
-						<span className="rs-row-hint">Your phone talks to this computer directly over your private Tailscale tunnel; nothing goes through a cloud. Turning it off blocks every device until you turn it back on.</span>
+						<span className="rs-row-hint">Your phone talks to this computer directly over your private Tailscale tunnel; nothing goes through a cloud. Turning it off blocks every device until you turn it back on. If this is a company-managed computer, check your company's policy before enabling remote access.</span>
 						{degraded && (
 							<span className="rs-row-hint remote-hint-degraded" role="status">
 								On, but not serving right now: {status.degradedReason || "waiting for the tunnel address"}. Local
-								use is unaffected; it resumes by itself when the tunnel is back.
+								use is unaffected; remote is available again when your VPN is back on.
 							</span>
 						)}
 						{!on && !degraded && tunnelReady && <span className="rs-row-hint">Your tunnel is running.</span>}
@@ -588,6 +588,7 @@ export function RemoteAccessPage() {
 							<div className="rs-row-main">
 								<span className="rs-row-label">{room.displayName}</span>
 								{room.bashEnabled && <span className="rs-row-hint">can run commands on this computer</span>}
+								{!room.bashEnabled && room.writeEnabled && <span className="rs-row-hint">can change files in its workspace</span>}
 							</div>
 							<div className="remote-device-actions">
 								<div className="remote-capability-seg" role="group" aria-label="Remote reachability">

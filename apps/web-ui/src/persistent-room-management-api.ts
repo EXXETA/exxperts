@@ -141,6 +141,37 @@ export function updatePersistentRoomMaintenanceSettings(agentId: PersistentAgent
 	);
 }
 
+export interface PersistentRoomBashSettings {
+	schemaVersion: 1;
+	autoApprove: boolean;
+	updatedAt: string;
+}
+
+export interface PersistentRoomBashSettingsResponse {
+	agentId: PersistentAgentId;
+	settings: PersistentRoomBashSettings;
+}
+
+export function fetchPersistentRoomBashSettings(agentId: PersistentAgentId): Promise<PersistentRoomBashSettingsResponse> {
+	return fetchJson<PersistentRoomBashSettingsResponse>(
+		`/api/persistent-agents/${encodeURIComponent(agentId)}/bash-settings`,
+		undefined,
+		"Failed to load bash approval settings."
+	);
+}
+
+export function updatePersistentRoomBashSettings(agentId: PersistentAgentId, update: { autoApprove?: boolean }): Promise<PersistentRoomBashSettingsResponse> {
+	return fetchJson<PersistentRoomBashSettingsResponse>(
+		`/api/persistent-agents/${encodeURIComponent(agentId)}/bash-settings`,
+		{
+			method: "PUT",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify(update),
+		},
+		"Failed to save bash approval settings."
+	);
+}
+
 // ── Skills MR-5: per-room skill enablement (spec §4/§5) ──────────────────────
 
 export interface PersistentRoomEnabledSkillStatus {

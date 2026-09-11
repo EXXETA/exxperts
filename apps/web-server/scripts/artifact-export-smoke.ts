@@ -115,7 +115,6 @@ try {
 		persistentAgentsRoot: tempAgentsRoot,
 		exxetaStateRoot: path.join(tempHome, ".exxperts", "app"),
 		workspaceAccessMode: "localFiles",
-		mode: "write",
 		displayLabel: "Export Smoke Workspace",
 	});
 	writePersistentRoomDefaultCapabilityPolicy(policy, { persistentAgentsRoot: tempAgentsRoot });
@@ -261,7 +260,6 @@ try {
 		persistentAgentsRoot: tempAgentsRoot,
 		exxetaStateRoot: path.join(tempHome, ".exxperts", "app"),
 		workspaceAccessMode: "localFiles",
-		mode: "write",
 		displayLabel: "Thread Export Workspace",
 	});
 	writePersistentRoomCapabilityPolicy(threadPolicy, { persistentAgentsRoot: tempAgentsRoot });
@@ -275,6 +273,24 @@ try {
 	fs.writeFileSync(path.join(taskDir, "extra.md"), "extra");
 	const fallbackScoped = await exportArtifact("tsk-export1", "tasks/tsk-export1/extra.md", ROOM_WITH_WORKSPACE, "pi_no_override_0001");
 	assert(fallbackScoped.status === 200 && String(fallbackScoped.body?.savedTo ?? "") === path.join(workspaceRealRoot, "extra.md"), `no-override conversation must fall back to the room default, got ${JSON.stringify(fallbackScoped.body)}`);
+
+	// 6) The workspace fence restricts the model's tools, not the user's clicks:
+	//    a room whose selection has no writer tools still exports artifacts when
+	//    the user asks for it.
+	writePersistentRoomDefaultCapabilityPolicy(createPersistentRoomDefaultCapabilityPolicy({
+		agentId: ROOM_WITH_WORKSPACE,
+		root: workspaceRoot,
+		repoRoot,
+		persistentAgentsRoot: tempAgentsRoot,
+		exxetaStateRoot: path.join(tempHome, ".exxperts", "app"),
+		workspaceAccessMode: "localFiles",
+		toolSelection: { kind: "custom", allowedToolNames: ["read", "ls", "find", "grep"] },
+		displayLabel: "Export Smoke Workspace",
+	}), { persistentAgentsRoot: tempAgentsRoot });
+	fs.writeFileSync(path.join(taskDir, "readonly-room.md"), "readonly room export");
+	const readOnlyRoomScoped = await exportArtifact("tsk-export1", "tasks/tsk-export1/readonly-room.md", ROOM_WITH_WORKSPACE);
+	assert(readOnlyRoomScoped.status === 200, `read-only-selection room export must stay allowed, got ${readOnlyRoomScoped.status}: ${JSON.stringify(readOnlyRoomScoped.body)}`);
+	assert(String(readOnlyRoomScoped.body?.savedTo ?? "") === path.join(workspaceRealRoot, "readonly-room.md"), `read-only-selection room export must land in the room workspace, got "${readOnlyRoomScoped.body?.savedTo}"`);
 
 	console.log("artifact export smoke passed");
 } catch (error) {

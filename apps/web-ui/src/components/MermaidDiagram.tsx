@@ -1,10 +1,8 @@
-import { useCallback, useEffect, useId, useMemo, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { CopyButton } from "./CopyButton";
+import { ZOOM_MAX, ZOOM_MIN, fitZoom, parseNaturalSize, scrollToKeepPoint, stepZoom, wheelZoom, type Size } from "../diagram-zoom";
 
 const MAX_MERMAID_CHARS = 12_000;
-const VIEWER_DEFAULT_ZOOM = 1.25;
-const VIEWER_MIN_ZOOM = 0.75;
-const VIEWER_MAX_ZOOM = 3;
-const VIEWER_ZOOM_STEP = 0.25;
 
 type MermaidStatus =
 	| { state: "loading" }
@@ -89,18 +87,65 @@ function errorMessage(error: unknown): string {
 	return "Could not render this Mermaid diagram.";
 }
 
-function clampZoom(value: number): number {
-	return Math.min(VIEWER_MAX_ZOOM, Math.max(VIEWER_MIN_ZOOM, value));
+// Mermaid sizes its svg with `width="100%"` plus an inline `max-width: Npx`
+// that is the width it measured for the drawing; the viewBox carries the
+// aspect. Read once after the svg mounts, so both the in-chat toggle and the
+// viewer scale from real pixels rather than from the column or the window.
+function measureSvg(container: HTMLElement | null): Size | null {
+	const svg = container?.querySelector("svg");
+	if (!svg) return null;
+	return parseNaturalSize({ inlineMaxWidth: svg.style.maxWidth, viewBox: svg.getAttribute("viewBox") });
 }
+
+// The viewer fits the diagram into the body's content box: its client size
+// minus the padding, which is the area the diagram can occupy without scrolling.
+function contentBox(element: HTMLElement): { left: number; top: number; width: number; height: number } {
+	const style = getComputedStyle(element);
+	const paddingLeft = parseFloat(style.paddingLeft) || 0;
+	const paddingTop = parseFloat(style.paddingTop) || 0;
+	const rect = element.getBoundingClientRect();
+	return {
+		left: rect.left + element.clientLeft + paddingLeft,
+		top: rect.top + element.clientTop + paddingTop,
+		width: element.clientWidth - paddingLeft - (parseFloat(style.paddingRight) || 0),
+		height: element.clientHeight - paddingTop - (parseFloat(style.paddingBottom) || 0),
+	};
+}
+
+function isTypingTarget(target: EventTarget | null): boolean {
+	if (!(target instanceof HTMLElement)) return false;
+	return target.isContentEditable || target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT";
+}
+
+// A wheel gesture's anchor: captured when the zoom changes, applied once the
+// diagram has re-laid out at the new size (a scroll set before that would be
+// clamped to the old scroll range).
+type WheelAnchor = {
+	pointer: { x: number; y: number };
+	stageOrigin: { x: number; y: number };
+	scrollLeft: number;
+	scrollTop: number;
+	oldZoom: number;
+	newZoom: number;
+};
 
 export function MermaidDiagram({ chart }: { chart: string }) {
 	const reactId = useId();
 	const source = useMemo(() => chart.trim(), [chart]);
 	const baseId = useMemo(() => `mermaid-${reactId.replace(/[^A-Za-z0-9_-]/g, "")}`, [reactId]);
 	const [status, setStatus] = useState<MermaidStatus>({ state: "loading" });
+	const [enlarged, setEnlarged] = useState(false);
+	const [naturalWidth, setNaturalWidth] = useState<number | null>(null);
+	const canvasRef = useRef<HTMLDivElement | null>(null);
 	const [viewerOpen, setViewerOpen] = useState(false);
-	const [viewerZoom, setViewerZoom] = useState(VIEWER_DEFAULT_ZOOM);
+	const [viewerZoom, setViewerZoom] = useState(1);
+	const [viewerNatural, setViewerNatural] = useState<Size | null>(null);
 	const [viewerStatus, setViewerStatus] = useState<MermaidStatus>({ state: "loading" });
+	const viewerBodyRef = useRef<HTMLDivElement | null>(null);
+	const viewerStageRef = useRef<HTMLDivElement | null>(null);
+	const viewerZoomRef = useRef(viewerZoom);
+	const wheelAnchorRef = useRef<WheelAnchor | null>(null);
+	viewerZoomRef.current = viewerZoom;
 
 	useEffect(() => {
 		let cancelled = false;
@@ -127,6 +172,13 @@ export function MermaidDiagram({ chart }: { chart: string }) {
 		};
 	}, [baseId, source]);
 
+	// The in-chat canvas learns the drawing's real width so "enlarged" can mean
+	// real pixels for a wide diagram, not just "fill the column".
+	useLayoutEffect(() => {
+		if (status.state !== "ready") return;
+		setNaturalWidth(measureSvg(canvasRef.current)?.width ?? null);
+	}, [status]);
+
 	useEffect(() => {
 		if (!viewerOpen || status.state !== "ready") return;
 		let cancelled = false;
@@ -147,47 +199,157 @@ export function MermaidDiagram({ chart }: { chart: string }) {
 		};
 	}, [baseId, source, status.state, viewerOpen]);
 
+	const fitViewer = useCallback((natural: Size | null) => {
+		const body = viewerBodyRef.current;
+		if (!natural || !body) return;
+		const box = contentBox(body);
+		setViewerZoom(fitZoom(natural, { width: box.width, height: box.height }));
+	}, []);
+
+	// Measure the viewer's own svg the moment it mounts and open at fit: the
+	// largest zoom that shows the whole drawing on both axes. Until then the
+	// stage is as wide as the body (the pre-measure fallback in CSS), so the
+	// first paint already lands close to where fit puts it.
+	useLayoutEffect(() => {
+		if (viewerStatus.state !== "ready") return;
+		const natural = measureSvg(viewerStageRef.current);
+		setViewerNatural(natural);
+		fitViewer(natural);
+	}, [fitViewer, viewerStatus]);
+
+	// After a wheel zoom has re-laid out the stage, scroll so the diagram point
+	// that was under the pointer is still under it.
+	useLayoutEffect(() => {
+		const anchor = wheelAnchorRef.current;
+		const body = viewerBodyRef.current;
+		if (!anchor || !body) return;
+		wheelAnchorRef.current = null;
+		const next = scrollToKeepPoint(anchor);
+		body.scrollLeft = next.scrollLeft;
+		body.scrollTop = next.scrollTop;
+	}, [viewerZoom]);
+
+	// Cmd/Ctrl + wheel and trackpad pinch (delivered as a wheel with ctrlKey)
+	// zoom around the pointer; a plain wheel scrolls. The listener is added by
+	// hand because React's onWheel is passive and could not preventDefault the
+	// browser's own page zoom.
+	useEffect(() => {
+		const body = viewerBodyRef.current;
+		if (!viewerOpen || !body) return;
+		const onWheel = (event: WheelEvent) => {
+			if (!(event.ctrlKey || event.metaKey)) return;
+			event.preventDefault();
+			const stage = viewerStageRef.current;
+			if (!stage || !viewerNatural) return;
+			// Line-mode deltas (a few units per notch) would barely move the zoom.
+			const deltaY = event.deltaMode === 1 ? event.deltaY * 16 : event.deltaY;
+			const oldZoom = viewerZoomRef.current;
+			const newZoom = wheelZoom(oldZoom, deltaY);
+			if (newZoom === oldZoom) return;
+			const box = contentBox(body);
+			const stageRect = stage.getBoundingClientRect();
+			wheelAnchorRef.current = {
+				pointer: { x: event.clientX - box.left, y: event.clientY - box.top },
+				stageOrigin: { x: stageRect.left - box.left + body.scrollLeft, y: stageRect.top - box.top + body.scrollTop },
+				scrollLeft: body.scrollLeft,
+				scrollTop: body.scrollTop,
+				oldZoom,
+				newZoom,
+			};
+			setViewerZoom(newZoom);
+		};
+		body.addEventListener("wheel", onWheel, { passive: false });
+		return () => body.removeEventListener("wheel", onWheel);
+	}, [viewerOpen, viewerNatural]);
+
 	useEffect(() => {
 		if (!viewerOpen) return;
 		const onKeyDown = (event: KeyboardEvent) => {
-			if (event.key === "Escape") setViewerOpen(false);
+			if (event.key === "Escape") {
+				setViewerOpen(false);
+				return;
+			}
+			// Modified keys stay the browser's (Cmd+0, Cmd+-), and a key typed
+			// into a field is text, not a zoom command.
+			if (event.metaKey || event.ctrlKey || event.altKey || isTypingTarget(event.target)) return;
+			if (event.key === "+" || event.key === "=") setViewerZoom((value) => stepZoom(value, 1));
+			else if (event.key === "-") setViewerZoom((value) => stepZoom(value, -1));
+			else if (event.key === "0") setViewerZoom(1);
+			else if (event.key === "f" || event.key === "F") fitViewer(viewerNatural);
+			else return;
+			event.preventDefault();
 		};
 		window.addEventListener("keydown", onKeyDown);
 		return () => window.removeEventListener("keydown", onKeyDown);
-	}, [viewerOpen]);
+	}, [fitViewer, viewerNatural, viewerOpen]);
 
 	const openViewer = useCallback(() => {
-		setViewerZoom(VIEWER_DEFAULT_ZOOM);
+		setViewerZoom(1);
+		setViewerNatural(null);
 		setViewerStatus({ state: "loading" });
 		setViewerOpen(true);
 	}, []);
 
-	const zoomOut = useCallback(() => {
-		setViewerZoom((value) => clampZoom(value - VIEWER_ZOOM_STEP));
-	}, []);
-
-	const zoomIn = useCallback(() => {
-		setViewerZoom((value) => clampZoom(value + VIEWER_ZOOM_STEP));
-	}, []);
+	const toggleEnlarged = useCallback(() => setEnlarged((value) => !value), []);
+	const onCanvasKeyDown = useCallback((event: ReactKeyboardEvent<HTMLDivElement>) => {
+		if (event.target !== event.currentTarget) return;
+		if (event.key === "Enter" || event.key === " ") {
+			// Space would otherwise scroll the page; Enter is harmless but symmetric.
+			event.preventDefault();
+			toggleEnlarged();
+		}
+	}, [toggleEnlarged]);
 
 	if (status.state === "ready") {
 		const zoomPercent = Math.round(viewerZoom * 100);
+		const canvasStyle = naturalWidth ? ({ "--diagram-natural-width": `${naturalWidth}px` } as CSSProperties) : undefined;
+		// Before the viewer has measured its svg the stage takes the body's
+		// width (CSS fallback); after, it is the drawing's real pixels times the zoom.
+		const stageStyle = viewerNatural ? { width: `${Math.round(viewerNatural.width * viewerZoom)}px` } : undefined;
 		return (
 			<figure className="mermaid-diagram" aria-label="Rendered Mermaid diagram">
-				<button
-					type="button"
-					className="mermaid-diagram-canvas mermaid-diagram-canvas-button"
-					onClick={openViewer}
-					aria-label="Open expanded diagram"
-					title="Open expanded diagram"
-				>
-					<span className="mermaid-diagram-open-indicator" aria-hidden="true">⤢</span>
-					<span className="mermaid-diagram-svg" dangerouslySetInnerHTML={{ __html: status.svg }} />
-				</button>
+				<div className="mermaid-diagram-frame">
+					{/* The canvas toggles the diagram in place: a narrow drawing grows
+					    to the column, a wide one goes to its real pixels and scrolls.
+					    The expand control beside it is the only way into the viewer;
+					    as a sibling over the canvas, its click never reaches the toggle. */}
+					<div
+						ref={canvasRef}
+						className={`mermaid-diagram-canvas${enlarged ? " enlarged" : ""}`}
+						style={canvasStyle}
+						role="button"
+						tabIndex={0}
+						aria-pressed={enlarged}
+						aria-label={enlarged ? "Shrink diagram" : "Enlarge diagram"}
+						title={enlarged ? "Shrink diagram" : "Enlarge diagram"}
+						onClick={toggleEnlarged}
+						onKeyDown={onCanvasKeyDown}
+					>
+						<span className="mermaid-diagram-svg" dangerouslySetInnerHTML={{ __html: status.svg }} />
+					</div>
+					<button
+						type="button"
+						className="mermaid-diagram-expand"
+						onClick={openViewer}
+						aria-label="Open expanded diagram"
+						title="Open expanded diagram"
+					>
+						⤢
+					</button>
+				</div>
 				{status.repaired && <div className="mermaid-diagram-repaired">Mermaid syntax was auto-corrected for display.</div>}
 				<details className="mermaid-diagram-source">
 					<summary>Mermaid source</summary>
-					<pre><code>{status.renderedSource}</code></pre>
+					{/* The source reads as a code block: the same strip, label and
+					    copy control a fenced block carries, so the diagram's text
+					    can be taken the way any code can. */}
+					<div className="code-block">
+						<div className="code-block-tools">
+							<span className="code-block-lang">mermaid</span>
+							<CopyButton text={status.renderedSource} className="code-block-copy" what="code" />
+						</div>
+						<pre><code>{status.renderedSource}</code></pre>
+					</div>
 				</details>
 				{viewerOpen && (
 					<div className="mermaid-viewer-overlay" role="dialog" aria-modal="true" aria-label="Expanded Mermaid diagram" onClick={() => setViewerOpen(false)}>
@@ -195,14 +357,15 @@ export function MermaidDiagram({ chart }: { chart: string }) {
 							<div className="mermaid-viewer-head">
 								<h2>Diagram</h2>
 								<div className="mermaid-viewer-actions">
-									<button className="icon-btn" type="button" onClick={zoomOut} disabled={viewerZoom <= VIEWER_MIN_ZOOM} aria-label="Zoom out" title="Zoom out">−</button>
-									<button className="icon-btn mermaid-viewer-zoom-value" type="button" onClick={() => setViewerZoom(1)} aria-label="Reset zoom" title="Reset zoom">{zoomPercent}%</button>
-									<button className="icon-btn" type="button" onClick={zoomIn} disabled={viewerZoom >= VIEWER_MAX_ZOOM} aria-label="Zoom in" title="Zoom in">+</button>
-									<button className="icon-btn" type="button" onClick={() => setViewerOpen(false)} aria-label="Close">✕</button>
+									<button className="icon-btn" type="button" onClick={() => setViewerZoom((value) => stepZoom(value, -1))} disabled={viewerZoom <= ZOOM_MIN} aria-label="Zoom out" title="Zoom out (−)">−</button>
+									<button className="icon-btn mermaid-viewer-zoom-value" type="button" onClick={() => setViewerZoom(1)} aria-label="Actual size" title="Actual size (0)">{zoomPercent}%</button>
+									<button className="icon-btn" type="button" onClick={() => setViewerZoom((value) => stepZoom(value, 1))} disabled={viewerZoom >= ZOOM_MAX} aria-label="Zoom in" title="Zoom in (+)">+</button>
+									<button className="icon-btn" type="button" onClick={() => fitViewer(viewerNatural)} disabled={!viewerNatural} aria-label="Fit to window" title="Fit to window (f)">Fit</button>
+									<button className="icon-btn" type="button" onClick={() => setViewerOpen(false)} aria-label="Close" title="Close (Esc)">✕</button>
 								</div>
 							</div>
-							<div className="mermaid-viewer-body">
-								<div className="mermaid-viewer-stage" style={{ width: `${zoomPercent}%` }}>
+							<div className="mermaid-viewer-body" ref={viewerBodyRef}>
+								<div className="mermaid-viewer-stage" ref={viewerStageRef} style={stageStyle}>
 									{viewerStatus.state === "ready" && <div className="mermaid-viewer-svg" dangerouslySetInnerHTML={{ __html: viewerStatus.svg }} />}
 									{viewerStatus.state === "loading" && <div className="mermaid-viewer-loading">Rendering expanded diagram...</div>}
 									{viewerStatus.state === "error" && (

@@ -1,3 +1,8 @@
+import { extractAssessmentSection, extractLabeledBullets } from "./assessment-parsing.js";
+import { analyzeRecentContextIds } from "./recent-context-entries.js";
+import { estimateTokens } from "./token-estimate.js";
+import { ASSESSMENT_MAX_CHARS, ASSESSMENT_TARGET_CHARS, ASSESSMENT_TARGET_WORDS, DISCUSSION_HANDOFF_MAX_CHARS, DISCUSSION_HANDOFF_TARGET_CHARS, DISCUSSION_HANDOFF_TARGET_WORDS } from "./discussion-handoff.js";
+
 export const ABSORB_CONSOLIDATION_WORKER_TYPE = "absorb-consolidation-worker" as const;
 export const ABSORB_DISCUSSION_WORKER_TYPE = "absorb-discussion-worker" as const;
 export const ABSORB_CONSOLIDATION_MODE = "rc_consolidation" as const;
@@ -96,6 +101,8 @@ export interface AbsorbAssessmentPromptInput {
 	model: AbsorbModelLock;
 	sectionPurposeMap?: AbsorbSectionPurposeMap;
 	now?: Date;
+	/** "Reassess" carries the previous assessment's parse warnings so the worker corrects them. */
+	retryFeedback?: string[];
 }
 
 export interface AbsorbProposalPromptInput extends AbsorbAssessmentPromptInput {
@@ -187,10 +194,6 @@ export interface AbsorbCandidateValidationResult {
 
 const MANDATORY_L1B_SECTIONS = ["Chronos", "Deep Memory", "Active Items", "Recent Context"] as const;
 
-function estimateTokens(text: string): number {
-	return Math.ceil(text.length / 4);
-}
-
 export function absorbDiscussionTokenBudget(promptEstimatedTokens: number): AbsorbDiscussionTokenBudget {
 	const state: AbsorbDiscussionTokenBudgetState = promptEstimatedTokens >= ABSORB_DISCUSSION_TOKEN_BUDGET.hardStop
 		? "hard_stop"
@@ -221,6 +224,21 @@ export function extractTopLevelSections(markdown: string): string[] {
 	return sections;
 }
 
+function normalizeSectionBodyLines(body: string): string {
+	return body.split(/\r?\n/).map((line) => line.trimEnd()).join("\n").trim();
+}
+
+export function extractTopLevelSectionBody(markdown: string, title: string): string | null {
+	const pattern = new RegExp(`^##\\s+${title.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*$`, "m");
+	const match = pattern.exec(markdown);
+	if (!match || match.index == null) return null;
+	const start = match.index + match[0].length;
+	const rest = markdown.slice(start);
+	const next = /^##\s+/m.exec(rest);
+	const end = next?.index == null ? markdown.length : start + next.index;
+	return markdown.slice(start, end);
+}
+
 export function extractRecentContextForAbsorb(l1b: string): { before: string; recentContext: string; after: string; exists: boolean; entryIds: string[]; entryCount: number } {
 	const match = /^##\s+Recent Context\s*$/m.exec(l1b);
 	if (!match || match.index == null) return { before: l1b, recentContext: "", after: "", exists: false, entryIds: [], entryCount: 0 };
@@ -229,11 +247,7 @@ export function extractRecentContextForAbsorb(l1b: string): { before: string; re
 	const nextMatch = /^##\s+/m.exec(rest.slice(match[0].length));
 	const end = nextMatch?.index == null ? l1b.length : start + match[0].length + nextMatch.index;
 	const recentContext = l1b.slice(start, end);
-	const entryIds = uniqueStrings(
-		[...recentContext.matchAll(/^###\s+(RC-[^\s|]+).*$/gm)]
-			.map((entry) => entry[1].trim())
-			.filter((id) => !/stub/i.test(id)),
-	);
+	const entryIds = uniqueStrings(analyzeRecentContextIds(recentContext).ids);
 	return {
 		before: l1b.slice(0, start),
 		recentContext,
@@ -349,6 +363,10 @@ Maximize durable signal density. Absorb is not append-only memory growth. It rew
 
 Recent Context entries are chronologically ordered session compressions: the lowest RC number is oldest, the last entry is newest. Read them in order and treat the chain as a trajectory, because later entries supersede earlier ones — a decision recorded early and reversed later must consolidate as the reversal, not the original. When entries conflict, the newer entry wins unless it explicitly defers to the older one.
 
+## Date Stamps
+
+Recent Context entry headings carry an ISO date. That date is the day the checkpoint was approved and saved into memory — a "saved on" date, never the day the described events happened. When you integrate durable material into Deep Memory or Active Items, carry the date with it as a "(saved YYYY-MM-DD)" stamp wherever knowing how old a claim is would matter later — decisions, commitments, preferences, and facts that can go stale. A later Prune memory pass reads these stamps to judge staleness; unstamped material gives it nothing to reason from. When merging material saved on different dates, the merged entry keeps the newest saved-on date. Never invent a date for material that has none, and never present a saved-on date as the date something happened.
+
 ## Must-Keep Material
 
 Recent Context may carry content marked **must-keep** — explicit user remember-requests and operator-named content from checkpoint compression. Integrate must-keep material into the appropriate stable section and carry the **must-keep** marker with it, because the user's explicit request outlives the intake buffer. Never drop it, and keep its commitments, numbers, names, and dates exact. If two must-keep items conflict, keep the newer one and note in the proposal that it superseded the older.
@@ -361,19 +379,23 @@ Recent Context may carry content marked **must-keep** — explicit user remember
 - Do not add, remove, rename, or reorder top-level L1b sections.
 - Preserve mandatory sections: Chronos, Deep Memory, Active Items, Recent Context.
 - Candidate L1b for MVP strict absorb must leave zero Recent Context entries while preserving the Recent Context section.
-- Keep Chronos concise and do not turn it into an operations ledger.
+- Chronos is system-managed: copy the ## Chronos section through unchanged. Never update, reformat, or reword it; a candidate that edits Chronos is rejected.
 `;
 }
 
 export function buildAbsorbAssessmentPrompt(input: AbsorbAssessmentPromptInput): AbsorbAssessmentPromptAssembly {
 	const now = input.now ?? new Date();
 	const metrics = absorbRecentContextMetrics(input.l1b);
+	const retrySection = input.retryFeedback?.length
+		? `## Retry Notice\n\nThe user asked for this assessment again. The previous assessment had these problems:\n\n${input.retryFeedback.map((reason) => `- ${reason}`).join("\n")}\n\nProduce a complete, corrected assessment that resolves every point above while following the Task structure exactly.`
+		: null;
 	const prompt = [
 		absorbConsolidationConstitution().trim(),
 		`## Process Metadata\n\n- Agent id: ${input.agentId}\n- Process type: ${ABSORB_CONSOLIDATION_WORKER_TYPE}\n- Mode: ${ABSORB_CONSOLIDATION_MODE}\n- Trigger time: ${now.toISOString()}\n- System-selected model: ${input.model.provider}/${input.model.model}\n- Writes memory: false\n- Recent Context entries: ${metrics.recentContextEntryCount}`,
 		`## Section Purpose Map\n\n${formatSectionPurposeMap(input.sectionPurposeMap)}`,
 		`## Material: Current L1b Memory State\n\nThe following is the complete current L1b. It includes stable sections and Recent Context. Do not expect or require L1a.\n\n${input.l1b.trim()}`,
-		`## Task: Compact Initial Assessment\n\nProduce a compact absorb assessment. The assessment should help the user decide whether to generate a full Memory Absorption Proposal. Keep it scannable and non-intimidating.\n\nUse exactly this markdown structure:\n\n## Absorb assessment\n\nI found ${metrics.recentContextEntryCount} Recent Context entries. Here is the proposed direction.\n\n### What to remember\n- 3-5 bullets max.\n\n### What to forget\n- 2-4 bullets max.\n\n### What changes in stable memory\n- Deep Memory: 1-3 bullets.\n- Active Items: 1-3 bullets.\n- Recent Context: all entries are expected to be cleared after approval.\n\n### Needs your judgment\n- 0-3 short questions or uncertainty flags. If none, write: None\n\nReturn only the assessment markdown. Do not include Candidate L1b. Do not claim anything has been saved.`,
+		...(retrySection ? [retrySection] : []),
+		`## Task: Compact Initial Assessment\n\nProduce a compact absorb assessment. The assessment should help the user decide whether to generate a full Memory Absorption Proposal. Keep it scannable and non-intimidating.\n\nUse exactly this markdown structure:\n\n## Absorb assessment\n\nI found ${metrics.recentContextEntryCount} Recent Context entries. Here is the proposed direction.\n\n### What to remember\n- 3-5 bullets max.\n\n### What to forget\n- 2-4 bullets max.\n\n### What changes in stable memory\n- Deep Memory: 1-3 bullets.\n- Active Items: 1-3 bullets.\n- Recent Context: all entries are expected to be cleared after approval.\n\n### Needs your judgment\n- 0-3 short questions or uncertainty flags. If none, write: None\n\nKeep the whole assessment under about ${ASSESSMENT_TARGET_WORDS} words (~${ASSESSMENT_TARGET_CHARS} characters); the review screen accepts at most ${ASSESSMENT_MAX_CHARS} characters, and a longer assessment is regenerated rather than shown.\n\nReturn only the assessment markdown. Do not include Candidate L1b. Do not claim anything has been saved.`,
 	].join("\n\n---\n\n") + "\n";
 	return {
 		prompt,
@@ -425,7 +447,7 @@ Use exactly this markdown structure:
 ### Transcript summary
 Briefly summarize the discussion that led to this signoff.
 
-Return only the signoff handoff markdown. Do not generate Candidate L1b. Do not claim memory has been saved.`;
+Keep the whole handoff under about ${DISCUSSION_HANDOFF_TARGET_WORDS} words (~${DISCUSSION_HANDOFF_TARGET_CHARS} characters). It is passed to the proposal operator as written; past ${DISCUSSION_HANDOFF_MAX_CHARS} characters its Transcript summary is trimmed to fit, so keep that section short.\n\nReturn only the signoff handoff markdown. Do not generate Candidate L1b. Do not claim memory has been saved.`;
 	}
 	return `## Task: Absorb Discussion Turn
 
@@ -526,10 +548,10 @@ export function buildAbsorbProposalPrompt(input: AbsorbProposalPromptInput): Abs
 		? `## Optional Signed-Off Assessment Handoff\n\nSource: ${input.assessmentHandoff.source}\n\n${input.assessmentHandoff.text.trim()}`
 		: `## Optional Signed-Off Assessment Handoff\n\nNone. The proposal should follow the direct initial assessment.`;
 	const budgetSection = typeof input.memoryBudgetTokens === "number"
-		? `## Memory Budget\n\n- Advisory memory budget: the whole L1b should stay under ~${input.memoryBudgetTokens} estimated tokens (~${input.memoryBudgetTokens * 4} characters).\n- The budget is a ceiling, not a goal. Never add, expand, or pad content because headroom remains — at any size, the densest faithful memory wins.\n- This is advisory. Never drop must-keep content or violate the constitution to satisfy it.`
+		? `## Memory Budget\n\n- Advisory memory budget: ~${input.memoryBudgetTokens} estimated tokens (~${input.memoryBudgetTokens * 4} characters). It binds on Deep Memory + Active Items: Recent Context does not count toward it — this consolidation clears Recent Context — but what you fold into stable memory does.\n- The budget is a ceiling, not a goal. Never add, expand, or pad content because headroom remains — at any size, the densest faithful memory wins.\n- This is advisory. Never drop must-keep content or violate the constitution to satisfy it.`
 		: null;
 	const retrySection = input.retryFeedback?.length
-		? `## Retry Notice\n\nA previous draft of this proposal was rejected by validation for these reasons:\n\n${input.retryFeedback.map((reason) => `- ${reason}`).join("\n")}\n\nProduce a complete, corrected proposal that resolves every reason above while following the Task structure exactly.`
+		? `## Retry Notice\n\nA previous draft of this proposal was not accepted for these reasons:\n\n${input.retryFeedback.map((reason) => `- ${reason}`).join("\n")}\n\nProduce a complete, corrected proposal that resolves every reason above while following the Task structure exactly.`
 		: null;
 	const prompt = [
 		absorbConsolidationConstitution().trim(),
@@ -539,7 +561,7 @@ export function buildAbsorbProposalPrompt(input: AbsorbProposalPromptInput): Abs
 		`## Material: Signed-Off Initial Assessment\n\n${input.assessmentMarkdown.trim()}`,
 		handoff,
 		...(budgetSection ? [budgetSection] : []),
-		`## Task: Memory Absorption Proposal\n\nProduce a parseable Memory Absorption Proposal plus complete Candidate L1b.\n\nThe Candidate L1b must preserve the exact top-level section topology and order from the source L1b. It must include Chronos, Deep Memory, Active Items, and Recent Context. It must clear all Recent Context entries: no headings starting with \`### RC-\` may remain under Recent Context. Preserve the Recent Context section with this placeholder unless a future system prompt says otherwise:\n\n${ABSORB_EMPTY_RECENT_CONTEXT_PLACEHOLDER}\n\nUse exactly this markdown structure:\n\n## Memory Absorption Proposal\n\n### Mode\nRC_CONSOLIDATION\n\n### Primacy Map\n[Concise summary of what the RC chain represented as a whole.]\n\n### Section-Level Change Log\n| Section | Prior Words | Candidate Words | Action | Rationale |\n|---|---:|---:|---|---|\n\n### Entry-Level Detail\n| Entry / Block | Operation | Target Section | Rationale |\n|---|---|---|---|\n\n### Compression Metrics\n- RC input words: [n]\n- RC removed words: [n]\n- RC removed percent: [x]%\n- Stable memory words before: [n]\n- Stable memory words after: [n]\n- Stable memory delta: [+/- n]\n- Compression ratio: [ratio]\n\n### Warnings\nNone, or concise uncertainty flags.\n\n### Candidate L1b\n[Complete rewritten L1b.]\n\nReturn only the proposal markdown. Do not claim anything has been saved.`,
+		`## Task: Memory Absorption Proposal\n\nProduce a parseable Memory Absorption Proposal plus complete Candidate L1b.\n\nThe Candidate L1b must preserve the exact top-level section topology and order from the source L1b. It must include Chronos, Deep Memory, Active Items, and Recent Context. Copy the ## Chronos section through unchanged from the source L1b: Chronos is system-managed, and a candidate that edits it is rejected. It must clear all Recent Context entries: no headings starting with \`### RC-\` may remain under Recent Context. Preserve the Recent Context section with this placeholder unless a future system prompt says otherwise:\n\n${ABSORB_EMPTY_RECENT_CONTEXT_PLACEHOLDER}\n\nUse exactly this markdown structure:\n\n## Memory Absorption Proposal\n\n### Mode\nRC_CONSOLIDATION\n\n### Primacy Map\n[Concise summary of what the RC chain represented as a whole.]\n\n### Section-Level Change Log\n| Section | Prior Words | Candidate Words | Action | Rationale |\n|---|---:|---:|---|---|\n\n### Entry-Level Detail\n| Entry / Block | Operation | Target Section | Rationale |\n|---|---|---|---|\n\n### Compression Metrics\n- RC input words: [n]\n- RC removed words: [n]\n- RC removed percent: [x]%\n- Stable memory words before: [n]\n- Stable memory words after: [n]\n- Stable memory delta: [+/- n]\n- Compression ratio: [ratio]\n\n### Warnings\nNone, or concise uncertainty flags.\n\n### Candidate L1b\n[Complete rewritten L1b.]\n\nReturn only the proposal markdown. Do not claim anything has been saved.`,
 		...(retrySection ? [retrySection] : []),
 	].join("\n\n---\n\n") + "\n";
 	return {
@@ -585,26 +607,20 @@ function extractBullets(section: string): string[] {
 	return normalized && !/^none\.?$/i.test(normalized) ? [normalized] : [];
 }
 
-function extractPrefixedBullets(section: string, prefix: string): string[] {
-	const lines = section.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-	const prefixPattern = new RegExp(`^[-*•]\\s+${prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*:\\s*(.+)$`, "i");
-	const direct = lines.map((line) => prefixPattern.exec(line)?.[1]?.trim()).filter((value): value is string => Boolean(value));
-	if (direct.length > 0) return direct.flatMap((value) => value.split(/;\s*/)).map((value) => value.trim()).filter(Boolean);
-	return [];
-}
+const STABLE_MEMORY_CHANGE_LABELS = ["Deep Memory", "Active Items", "Recent Context"] as const;
 
 export function parseAbsorbAssessment(raw: string): { fields: AbsorbAssessmentFields; warnings: string[] } {
-	const remember = extractMarkdownSection(raw, "What to remember");
-	const forget = extractMarkdownSection(raw, "What to forget");
-	const changes = extractMarkdownSection(raw, "What changes in stable memory");
-	const judgment = extractMarkdownSection(raw, "Needs your judgment");
+	const remember = extractAssessmentSection(raw, "What to remember");
+	const forget = extractAssessmentSection(raw, "What to forget");
+	const changes = extractAssessmentSection(raw, "What changes in stable memory");
+	const judgment = extractAssessmentSection(raw, "Needs your judgment");
 	const fields: AbsorbAssessmentFields = {
 		whatToRemember: extractBullets(remember),
 		whatToForget: extractBullets(forget),
 		stableMemoryChanges: {
-			deepMemory: extractPrefixedBullets(changes, "Deep Memory"),
-			activeItems: extractPrefixedBullets(changes, "Active Items"),
-			recentContext: extractPrefixedBullets(changes, "Recent Context")[0] ?? "All entries are expected to be cleared after approval.",
+			deepMemory: extractLabeledBullets(changes, "Deep Memory", STABLE_MEMORY_CHANGE_LABELS),
+			activeItems: extractLabeledBullets(changes, "Active Items", STABLE_MEMORY_CHANGE_LABELS),
+			recentContext: extractLabeledBullets(changes, "Recent Context", STABLE_MEMORY_CHANGE_LABELS)[0] ?? "All entries are expected to be cleared after approval.",
 		},
 		needsJudgment: extractBullets(judgment),
 	};
@@ -614,6 +630,12 @@ export function parseAbsorbAssessment(raw: string): { fields: AbsorbAssessmentFi
 	if (fields.stableMemoryChanges.deepMemory.length === 0) warnings.push("assessment missing Deep Memory change bullets");
 	if (fields.stableMemoryChanges.activeItems.length === 0) warnings.push("assessment missing Active Items change bullets");
 	return { fields, warnings };
+}
+
+// Same shape as the checkpoint missing-fields retry: the original prompt plus
+// a notice carrying the validator's own reasons, asked once.
+export function buildAbsorbAssessmentRetryPrompt(prompt: string, reasons: string[]): string {
+	return `${prompt.trimEnd()}\n\n---\n\n## Retry Notice\n\nYour previous assessment was not accepted:\n\n${reasons.map((reason) => `- ${reason}`).join("\n")}\n\nProduce the complete assessment again using exactly the markdown structure from the Task: plain \`### \` headings, and under "What changes in stable memory" plain bullets that start with \`- Deep Memory:\`, \`- Active Items:\` and \`- Recent Context:\`. Stay under ${ASSESSMENT_MAX_CHARS} characters (about ${ASSESSMENT_TARGET_WORDS} words). Return only the assessment markdown.\n`;
 }
 
 function extractCandidateL1b(raw: string): string {
@@ -737,6 +759,15 @@ export function validateAbsorbCandidateL1b(sourceL1b: string, candidateL1b: stri
 	}
 	if (sourceTopLevelSections.join("\n") !== candidateTopLevelSections.join("\n")) {
 		errors.push("Candidate L1b top-level section topology/order differs from source L1b");
+	}
+	// Chronos is system-managed (written by the checkpoint apply path), so a
+	// candidate must carry it through unchanged. Review enforces this with a
+	// byte-exact graft; Absorb takes back a full rewrite, so it verifies here.
+	// Line-normalized so an honest copy is never rejected over whitespace reflow.
+	const sourceChronos = extractTopLevelSectionBody(sourceL1b, "Chronos");
+	const candidateChronos = extractTopLevelSectionBody(candidateL1b, "Chronos");
+	if (sourceChronos != null && candidateChronos != null && normalizeSectionBodyLines(sourceChronos) !== normalizeSectionBodyLines(candidateChronos)) {
+		errors.push("Candidate L1b must carry the Chronos section through unchanged; Chronos is system-managed");
 	}
 	const candidateRecent = extractRecentContextForAbsorb(candidateL1b);
 	if (!candidateRecent.exists) errors.push("Candidate L1b missing Recent Context section");

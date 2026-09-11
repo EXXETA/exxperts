@@ -72,6 +72,51 @@ function workerUsageFromMessageUsage(usage: any): IsolatedPersistentAgentWorkerR
 	};
 }
 
+/**
+ * The worker turn ended without a usable answer. `providerMessage` is the
+ * session's own error text (the provider's HTTP failure, an expired sign-in,
+ * a refused request); callers and the client translate it into a remedy.
+ * It is never the same story as an empty reply.
+ */
+export class IsolatedPersistentAgentWorkerTurnError extends Error {
+	readonly workerLabel: string;
+	readonly stopReason: "error" | "aborted";
+	readonly providerMessage: string | undefined;
+	constructor(workerLabel: string, stopReason: "error" | "aborted", providerMessage: string | undefined) {
+		const detail = providerMessage?.trim() || undefined;
+		super(stopReason === "aborted"
+			? `${workerLabel} was aborted before it answered${detail ? `: ${detail}` : ""}`
+			: `${workerLabel} failed: ${detail ?? "the model returned an error without a message"}`);
+		this.name = "IsolatedPersistentAgentWorkerTurnError";
+		this.workerLabel = workerLabel;
+		this.stopReason = stopReason;
+		this.providerMessage = detail;
+	}
+}
+
+/**
+ * The ONE decision of what a finished worker turn means, kept pure so it is
+ * testable without a session. Order matters: a turn that stopped on "error"
+ * or "aborted" is a failure whatever text it collected (partial text before
+ * a provider error is not a draft), and only a turn that stopped normally
+ * with nothing to show is an "empty reply". Before this existed the session's
+ * error event was discarded and every terminal failure — an expired sign-in
+ * included — reached the user as "empty reply. Try again" (F1).
+ */
+export function isolatedPersistentAgentWorkerFailure(input: {
+	workerLabel: string;
+	text: string;
+	stopReason: string | undefined;
+	errorMessage: string | undefined;
+	emptyTextError: string;
+}): Error | undefined {
+	if (input.stopReason === "error" || input.stopReason === "aborted") {
+		return new IsolatedPersistentAgentWorkerTurnError(input.workerLabel, input.stopReason, input.errorMessage);
+	}
+	if (!input.text.trim()) return new Error(input.emptyTextError);
+	return undefined;
+}
+
 export async function runIsolatedPersistentAgentWorker<TModelLock extends { provider: string; model: string }>(
 	input: IsolatedPersistentAgentWorkerInput<TModelLock>,
 ): Promise<IsolatedPersistentAgentWorkerResult> {
@@ -116,6 +161,7 @@ export async function runIsolatedPersistentAgentWorker<TModelLock extends { prov
 	let text = "";
 	let usage: IsolatedPersistentAgentWorkerResult["usage"];
 	let stopReason: string | undefined;
+	let errorMessage: string | undefined;
 	let truncated = false;
 	try {
 		if (created.session.systemPrompt !== input.workerSystemPrompt) {
@@ -139,6 +185,12 @@ export async function runIsolatedPersistentAgentWorker<TModelLock extends { prov
 			if (typeof event.message.stopReason === "string") {
 				stopReason = event.message.stopReason;
 				if (stopReason === "length") truncated = true;
+			}
+			// The runtime's error termination is an assistant message with
+			// stopReason "error"/"aborted" and the real reason in errorMessage;
+			// keep it so the failure can name itself below.
+			if (typeof event.message.errorMessage === "string" && event.message.errorMessage.trim()) {
+				errorMessage = event.message.errorMessage.trim();
 			}
 			const partText = textFromMessageParts(event.message.content);
 			if (partText) text = [text, partText].filter(Boolean).join("\n\n");
@@ -175,7 +227,8 @@ export async function runIsolatedPersistentAgentWorker<TModelLock extends { prov
 		}
 	}
 
-	if (!text.trim()) throw new Error(input.emptyTextError);
+	const failure = isolatedPersistentAgentWorkerFailure({ workerLabel, text, stopReason, errorMessage, emptyTextError: input.emptyTextError });
+	if (failure) throw failure;
 	const modelMaxOutputTokens = typeof model.maxTokens === "number" && model.maxTokens > 0 ? model.maxTokens : undefined;
 	return { text, usage, stopReason, truncated, ...(modelMaxOutputTokens ? { modelMaxOutputTokens } : {}) };
 }

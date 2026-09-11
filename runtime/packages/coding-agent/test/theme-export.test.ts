@@ -23,8 +23,9 @@ describe("getThemeExportColors", () => {
 	beforeEach(() => {
 		tempRoot = mkdtempSync(join(tmpdir(), "pi-theme-export-"));
 		previousAgentDir = process.env[ENV_AGENT_DIR];
-		process.env[ENV_AGENT_DIR] = join(tempRoot, "agent");
-		mkdirSync(join(process.env[ENV_AGENT_DIR], "themes"), { recursive: true });
+		const agentDir = join(tempRoot, "agent");
+		process.env[ENV_AGENT_DIR] = agentDir;
+		mkdirSync(join(agentDir, "themes"), { recursive: true });
 	});
 
 	afterEach(() => {

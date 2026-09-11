@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
-import type { CSSProperties, KeyboardEvent, MutableRefObject, ReactNode, Ref } from "react";
+import type { ClipboardEvent, CSSProperties, KeyboardEvent, MutableRefObject, ReactNode, Ref } from "react";
 import { Approval } from "./Approval";
 import { ConsultThreadItem, Message, TaskThreadItem, ToolBundle, isBundleableToolItem, type MessageAttachmentAccess } from "./Message";
 import { MentionConsultPopover, MentionConsultPopoverBusy, type MentionSupport } from "./mention-consult-popover";
@@ -8,6 +8,7 @@ import { SidebarDrawerBackdrop } from "../sidebar-collapse";
 import type { ApprovalPreviewData } from "../approval-preview";
 import type { ChatItem, ContextHealthStatus } from "../types";
 import { completeMention, detectMentionQuery, filterMentionCandidates, resolveLeadingMention, type MentionCandidateRoom } from "../mention-popover";
+import { replyCopyTargets } from "../reply-copy";
 import { formatModelWithProvider, modelDisplayName } from "../model-names";
 
 export interface InRoomChatUsage {
@@ -41,6 +42,8 @@ export interface InRoomChatShellViewProps {
 	composerStagingSlot?: ReactNode;
 	/** Files UI slice: staged attachments make an attachments-only send legal. */
 	composerAllowEmptySend?: boolean;
+	/** #52: image files pasted into the textarea are handed here to be staged. */
+	composerOnPasteFiles?: (files: File[]) => void;
 	connected: boolean;
 	/** Room auto-reconnect: "reconnecting" while backoff attempts run, "failed" once capped. */
 	reconnectState?: "idle" | "reconnecting" | "failed";
@@ -295,6 +298,8 @@ interface TranscriptItemsProps {
 	/** Taste pass: a message's attachment chip opens that file in the viewer, like its Files row. */
 	attachmentAccess?: MessageAttachmentAccess;
 	showThinkingIndicator: boolean;
+	/** Turn in flight: the last reply's copy button waits for it to end. */
+	busy: boolean;
 }
 
 /**
@@ -302,16 +307,19 @@ interface TranscriptItemsProps {
  * the SAME tool collapse into one ToolBundle line (interleavings split the
  * run, in order); a single-call run renders exactly as today. Grouping is
  * purely positional over the live items array, so a streaming turn grows its
- * bundle in place as calls land.
+ * bundle in place as calls land. The reply copy buttons are decided over the
+ * same raw array (reply-copy.ts), untouched by the bundling.
  */
 function renderTranscript(
 	items: ChatItem[],
+	busy: boolean,
 	onResolveApproval: TranscriptItemsProps["onResolveApproval"],
 	onApprovalPreview: TranscriptItemsProps["onApprovalPreview"],
 	pendingConsultIds: TranscriptItemsProps["pendingConsultIds"],
 	onOpenTaskArtifact: TranscriptItemsProps["onOpenTaskArtifact"],
 	attachmentAccess: TranscriptItemsProps["attachmentAccess"],
 ): ReactNode[] {
+	const copyTargets = replyCopyTargets(items, busy);
 	const rendered: ReactNode[] = [];
 	for (let index = 0; index < items.length; index++) {
 		const it = items[index];
@@ -336,7 +344,7 @@ function renderTranscript(
 			) : it.kind === "task" ? (
 				<TaskThreadItem key={it.id} item={it} onOpenTaskArtifact={onOpenTaskArtifact} />
 			) : (
-				<Message key={it.id} item={it} attachmentAccess={attachmentAccess} />
+				<Message key={it.id} item={it} attachmentAccess={attachmentAccess} copyText={copyTargets.get(it.id)?.text} copyTs={copyTargets.get(it.id)?.ts} />
 			),
 		);
 	}
@@ -354,6 +362,7 @@ const TranscriptItems = memo(function TranscriptItems({
 	onOpenTaskArtifact,
 	attachmentAccess,
 	showThinkingIndicator,
+	busy,
 }: TranscriptItemsProps) {
 	return (
 		<>
@@ -362,7 +371,7 @@ const TranscriptItems = memo(function TranscriptItems({
 			) : renderItem ? (
 				items.map((it, idx) => renderItem(it, idx, items))
 			) : (
-				renderTranscript(items, onResolveApproval, onApprovalPreview, pendingConsultIds, onOpenTaskArtifact, attachmentAccess)
+				renderTranscript(items, busy, onResolveApproval, onApprovalPreview, pendingConsultIds, onOpenTaskArtifact, attachmentAccess)
 			)}
 			{showThinkingIndicator && (
 				<div className="thinking-row" role="status" aria-label="thinking">
@@ -391,6 +400,8 @@ interface ComposerInputProps {
 	stagingSlot?: ReactNode;
 	/** Files UI slice: ready attachments make an empty-text send legal (the note alone rides). */
 	allowEmptySend?: boolean;
+	/** #52: files pasted into the textarea (images, documents alike) are handed here to be staged. */
+	onPasteFiles?: (files: File[]) => void;
 }
 
 function ComposerInput({
@@ -409,6 +420,7 @@ function ComposerInput({
 	rightActions,
 	stagingSlot,
 	allowEmptySend = false,
+	onPasteFiles,
 }: ComposerInputProps) {
 	const [draft, setDraft] = useState(() => initialDraftValue ?? "");
 	const [caret, setCaret] = useState(0);
@@ -446,6 +458,26 @@ function ComposerInput({
 	useEffect(() => {
 		setDraft(initialDraftValue ?? "");
 		setMentionDismissed(false);
+	}, [draftResetKey]);
+
+	// A room that just opened is there to be typed into: focus the composer
+	// once per draft reset (mount, room change, a sent message) with the caret
+	// after any restored draft. Never when something outside the composer
+	// holds focus (a modal's field, an approval card) so a re-render can't
+	// steal it; the composer's own controls (the Send button just clicked)
+	// hand focus back. Never on touch devices, where focusing pops the
+	// keyboard over the room. The caret goes after the draft this reset
+	// installs (the DOM still shows the previous value at this point).
+	useEffect(() => {
+		const el = textareaNodeRef.current;
+		if (!el) return;
+		if (typeof window.matchMedia === "function" && window.matchMedia("(hover: none)").matches) return;
+		const active = document.activeElement;
+		if (active && active !== document.body && active !== el && !active.closest(".composer-box")) return;
+		el.focus();
+		const end = (initialDraftValue ?? "").length;
+		el.setSelectionRange(end, end);
+		setCaret(end);
 	}, [draftResetKey]);
 
 	// Reset the highlighted row whenever the query changes.
@@ -536,6 +568,27 @@ function ComposerInput({
 		}
 	}
 
+	// #52: a pasted file stages as an attachment, through the exact path the
+	// 📎 uses. Every FILE on the clipboard is taken (a screenshot, a copied
+	// picture, a PDF or spreadsheet copied from the file manager) — what the
+	// room can read is the server's call at upload, which answers with the
+	// same parse note or refusal the 📎 gets. Any plain-text paste is
+	// untouched, and a mixed clipboard (text + file) stages the file AND lets
+	// the text paste normally, so preventDefault fires only when there is no
+	// text for the textarea to receive. A file copied from the file manager
+	// rides with its own name as the text: that name is the file, not a
+	// message, so it is not pasted either.
+	function handleComposerPaste(e: ClipboardEvent<HTMLTextAreaElement>) {
+		if (!onPasteFiles) return;
+		const files = Array.from(e.clipboardData?.files ?? []);
+		if (files.length === 0) return;
+		onPasteFiles(files);
+		const text = e.clipboardData.getData("text/plain").trim();
+		const names = new Set(files.map((file) => file.name));
+		const onlyFileNames = text.split(/\r?\n/).every((line) => names.has(line.trim()));
+		if (!text || onlyFileNames) e.preventDefault();
+	}
+
 	return (
 		<div className="composer-box">
 			{mentionOpen && mentionQuery && (
@@ -558,6 +611,7 @@ function ComposerInput({
 				onClick={(e) => syncCaret(e.currentTarget)}
 				onSelect={(e) => syncCaret(e.currentTarget)}
 				onKeyDown={handleComposerKeyDown}
+				onPaste={handleComposerPaste}
 				placeholder={placeholder}
 				rows={2}
 				spellCheck={false}
@@ -592,6 +646,7 @@ export function InRoomChatShellView({
 	composerRightActions,
 	composerStagingSlot,
 	composerAllowEmptySend,
+	composerOnPasteFiles,
 	connected,
 	reconnectState = "idle",
 	onReconnect,
@@ -775,6 +830,7 @@ export function InRoomChatShellView({
 								onOpenTaskArtifact={onOpenTaskArtifact}
 								attachmentAccess={attachmentAccess}
 								showThinkingIndicator={showThinkingIndicator}
+								busy={busy}
 							/>
 						</div>
 						{showJumpToLatest && (
@@ -833,6 +889,7 @@ export function InRoomChatShellView({
 								rightActions={composerRightActions}
 								stagingSlot={composerStagingSlot}
 								allowEmptySend={composerAllowEmptySend}
+								onPasteFiles={composerOnPasteFiles}
 							/>
 						</div>
 					</div>

@@ -133,6 +133,7 @@ const POLICY: Record<string, RemoteRouteClass> = {
 	"GET /api/persistent-agents/:id/threads/:threadId": "read",
 	"GET /api/persistent-agents/:id/schedules": "read",
 	"GET /api/persistent-agents/:id/maintenance-settings": "read",
+	"GET /api/persistent-agents/:id/bash-settings": "read",
 	"GET /api/persistent-agents/:id/preferred-model": "read",
 	"GET /api/persistent-agents/:id/mcp-connectors": "read",
 	"GET /api/persistent-agents/:id/skill-settings": "read",
@@ -182,6 +183,9 @@ const POLICY: Record<string, RemoteRouteClass> = {
 	// Rooms: capability-widening settings. Loopback only: a phone must never
 	// change a room's tool surface, workspace access, or connector grants.
 	"PUT /api/persistent-agents/:id/maintenance-settings": "local",
+	// Auto-approving bash removes the per-command consent step entirely, so
+	// only the computer's own keyboard may grant it.
+	"PUT /api/persistent-agents/:id/bash-settings": "local",
 	"PUT /api/persistent-agents/:id/mcp-connectors": "local",
 	"PUT /api/persistent-agents/:id/skill-settings": "local",
 	"PUT /api/persistent-agents/:id/workspace-default": "local",

@@ -36,6 +36,15 @@ export function isLocalPath(value: string): boolean {
 	return true;
 }
 
+/** Convert Git Bash, MSYS, Cygwin, and WSL drive paths to a form native Windows APIs accept. */
+export function normalizeWindowsShellPath(filePath: string): string {
+	if (!filePath.startsWith("/") || filePath.startsWith("//") || filePath.includes("\\")) return filePath;
+	const match = filePath.match(/^\/(?:mnt\/|cygdrive\/)?([a-z])(?:\/(.*))?$/i);
+	if (!match) return filePath;
+	const suffix = match[2]?.replaceAll("/", "\\");
+	return `${match[1].toUpperCase()}:\\${suffix ?? ""}`;
+}
+
 function resolveAgainstCwd(filePath: string, cwd: string): string {
 	return isAbsolute(filePath) ? resolvePath(filePath) : resolvePath(cwd, filePath);
 }

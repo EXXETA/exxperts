@@ -803,9 +803,10 @@ export default function (pi: ExtensionAPI) {
 		const wsLabel = wsRoot ? wsRoot.displayLabel || wsRoot.basename : null;
 		const wsMode = wsView?.workspaceAccessMode === "localFiles" ? "Full access" : "Bounded workspace";
 		const wsBash = wsView?.workspaceAccessMode === "localFiles" ? `; bash ${wsView.bashEnabled ? "on" : "off"}` : "";
+		const wsReadOnly = wsView && wsView.writeEnabled !== true && wsView.bashEnabled !== true ? " (read-only)" : "";
 		const wsTools = wsView?.allowedToolNames?.length
-			? `${wsView.allowedToolNames.join(", ")}${wsBash}`
-			: wsView?.workspaceAccessMode === "localFiles" ? `none${wsBash}` : "none";
+			? `${wsView.allowedToolNames.join(", ")}${wsBash}${wsReadOnly}`
+			: wsView?.workspaceAccessMode === "localFiles" ? `none${wsBash}${wsReadOnly}` : `none${wsReadOnly}`;
 		const modelLabel = env.model.label || `${env.model.provider}/${env.model.model}`;
 
 		// Recent-context usage + last checkpoint. Checkpoints (/checkpoint) save
@@ -869,9 +870,7 @@ export default function (pi: ExtensionAPI) {
 					repoRoot: EXXETA_HOME ? path.resolve(EXXETA_HOME) : cwd,
 					root: cwd,
 					workspaceAccessMode,
-					mode: "read",
 					source: "manual",
-					writeEnabled: true,
 				});
 				// Live-default healing (same rule as the web mutation path): a thread
 				// sidecar that merely mirrors the current default is dropped so this
@@ -969,10 +968,11 @@ export default function (pi: ExtensionAPI) {
 			if (isPersistentRoomWorkspaceToolPolicyEnabled(policy) || view.bashEnabled === true) {
 				const modeLabel = view.workspaceAccessMode === "localFiles" ? "Full access" : "Bounded workspace";
 				const bashLabel = view.workspaceAccessMode === "localFiles" ? `; bash ${view.bashEnabled ? "on" : "off"}` : "";
+				const readOnlyLabel = view.writeEnabled !== true && view.bashEnabled !== true ? " (read-only)" : "";
 				workspace = root ? `${root.displayLabel || root.basename} (${modeLabel})` : modeLabel;
 				tools = view.allowedToolNames.length > 0
-					? `${view.allowedToolNames.join(", ")}${bashLabel}`
-					: view.workspaceAccessMode === "localFiles" ? `none${bashLabel}` : "none";
+					? `${view.allowedToolNames.join(", ")}${bashLabel}${readOnlyLabel}`
+					: view.workspaceAccessMode === "localFiles" ? `none${bashLabel}${readOnlyLabel}` : `none${readOnlyLabel}`;
 			}
 		}
 		ctx.ui.setHeader((_tui, theme) => {

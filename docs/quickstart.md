@@ -109,13 +109,16 @@ Try this:
 
 1. Chat normally: ask it to help with something real.
 2. Tell it something worth keeping: *"Remember that I prefer concise summaries."*
-3. When you finish the session, press **Remember** next to the message box. The room distills the conversation into its durable memory, and anything you explicitly asked it to remember is protected through every later compression.
+3. Paste a screenshot straight into the message box with Cmd+V (Ctrl+V on Windows): it stages as an attachment, exactly as if you had added it through Files.
+4. When you finish the session, press **Remember** next to the message box. The room distills the conversation into its durable memory, and anything you explicitly asked it to remember is protected through every later compression.
 
-Nothing enters memory silently. Remember shows you the proposal before it saves, and a room can be set to save clean proposals without that preview; anything questionable always comes back to you. Later, as remembered sessions accumulate, the room offers **Memorize** (consolidating recent context into stable memory) and **Review** (tidying stable memory), both approval-gated the same way. The full story: [Memory](memory.md).
+Nothing enters memory silently. Remember shows you the proposal before it saves, and a room can be set to save clean proposals without that preview; anything questionable always comes back to you. Later, as remembered sessions accumulate, the room offers **Memorize** (consolidating recent context into stable memory) and **Review** (tidying stable memory), both approval-gated the same way. Each room also has a memory budget for its stable memory: the room card, room settings and the Memory page show the same number, and the room only crosses it through a proposal you approve. Remember warns when one more save would fill the room's recent sessions; Memorize then clears them. The full story: [Memory](memory.md).
+
+The app's Settings open with Cmd+, (Ctrl+, on Windows), and a room's settings with Cmd+Shift+, or the gear in the room.
 
 ## 4. Give the room a workspace (optional)
 
-In the room's settings, set a **workspace folder**: the room's file tools then work inside that folder, with per-tool toggles and two access modes (**Full access** or **Bounded workspace**). Shell access is off by default.
+In the room's settings, set a **workspace folder** and pick an access mode. **Full access** works with files like you do, in the folder and beyond. **Bounded workspace** carries the same Read, List, Find, Search, Write and Edit tools fenced to that folder; with write tools on it can edit files there, not only add new ones. Each tool is a toggle, and whether the room can change files follows from what you enabled: with no write tools and no Bash the room says it is read-only. Bash is off by default and Full access only; when on, it asks before each command with a card that shows the command. Details: [Workspace and Bash](workspace-and-bash.md).
 
 macOS note: if the workspace is in a protected folder (Documents, Desktop, Downloads, iCloud Drive), macOS may block directory listing for the terminal that launched Exxperts. Check from that same terminal:
 

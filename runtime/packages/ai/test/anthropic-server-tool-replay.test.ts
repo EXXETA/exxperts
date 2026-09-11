@@ -149,7 +149,7 @@ describe("anthropic server tool replay", () => {
 			messages: [
 				{ role: "user", content: "What is the weather today?", timestamp: Date.now() },
 				assistant,
-				{ role: "toolResult", toolCallId: "toolu_client_1", toolName: "fetch_url", content: [{ type: "text", text: "sunny" }], timestamp: Date.now() },
+				{ role: "toolResult", toolCallId: "toolu_client_1", toolName: "fetch_url", isError: false, content: [{ type: "text", text: "sunny" }], timestamp: Date.now() },
 			],
 		};
 		await streamAnthropic(model, context, { client, onPayload: (params: unknown) => withServerTool(params) } as any).result();
@@ -188,7 +188,7 @@ describe("anthropic server tool replay", () => {
 			messages: [
 				{ role: "user", content: "What is the weather today?", timestamp: Date.now() },
 				searched,
-				{ role: "toolResult", toolCallId: "toolu_client_1", toolName: "fetch_url", content: [{ type: "text", text: "sunny" }], timestamp: Date.now() },
+				{ role: "toolResult", toolCallId: "toolu_client_1", toolName: "fetch_url", isError: false, content: [{ type: "text", text: "sunny" }], timestamp: Date.now() },
 				laterAssistant,
 				{ role: "user", content: "Thanks!", timestamp: Date.now() },
 			],

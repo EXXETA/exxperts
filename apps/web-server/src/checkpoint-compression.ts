@@ -1,3 +1,6 @@
+import { countRecentContextEntries } from "./recent-context-entries.js";
+import { estimateTokens, estimateTokensFromChars } from "./token-estimate.js";
+
 export const CHECKPOINT_COMPRESSION_WORKER_TYPE = "checkpoint-compression-worker" as const;
 
 export type CheckpointCompressionDensity = "compact" | "standard" | "rich";
@@ -241,10 +244,6 @@ Deferred threads with enough resume context to pick up later. If nothing is defe
 `;
 }
 
-function estimateTokens(text: string): number {
-	return Math.ceil(text.length / 4);
-}
-
 function baseDensityTarget(density: CheckpointCompressionDensity): { min?: number; max: number } {
 	if (density === "compact") return { max: 200 };
 	if (density === "rich") return { min: 500, max: 900 };
@@ -292,7 +291,7 @@ export function extractRecentContextSection(l1b: string): { before: string; rece
 		before: l1b.slice(0, start),
 		recentContext,
 		after: l1b.slice(end),
-		entryCount: (recentContext.match(/^###\s+RC-/gm) ?? []).filter((line) => !/stub/i.test(line)).length,
+		entryCount: countRecentContextEntries(recentContext),
 	};
 }
 
@@ -396,7 +395,7 @@ export function buildCheckpointCompressionPrompt(input: CheckpointCompressionPro
 				promptEstimatedTokens: estimateTokens(chosen.prompt),
 				promptTokenBudget: input.promptTokenBudget,
 				transcriptEstimatedTokens: estimateTokens(chosen.rendered.transcript),
-				memoryEstimatedTokens: Math.ceil(memoryMetrics.l1bChars / 4),
+				memoryEstimatedTokens: estimateTokensFromChars(memoryMetrics.l1bChars),
 			});
 		}
 	}

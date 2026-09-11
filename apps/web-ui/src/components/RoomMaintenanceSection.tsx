@@ -6,7 +6,7 @@ import { RsInfo } from "./rs-info";
 const MEMORY_BUDGET_MIN_TOKENS = 10_000;
 const MEMORY_BUDGET_MAX_TOKENS = 50_000;
 
-function fmtTokensK(value: number): string {
+export function fmtTokensK(value: number): string {
 	// Tiny values must not read as "0k": show them plainly.
 	if (value < 950) return `${Math.max(0, Math.round(value))}`;
 	if (value < 9_500) return `${(value / 1000).toFixed(1).replace(/\.0$/, "")}k`;
@@ -99,9 +99,15 @@ export function RoomMaintenanceSection({ status }: { status: PersistentAgentStat
 		}
 	}
 
-	const currentMemoryTokens = status.promptBudget?.l1bEstimatedTokens ?? null;
+	const currentMemoryTokens = status.memoryBudget?.reviewTargetEstimatedTokens ?? null;
 	const usagePercent = budget !== null && currentMemoryTokens !== null ? Math.round((currentMemoryTokens / budget) * 100) : null;
-	const overBudget = usagePercent !== null && usagePercent > 100;
+	// One sentence, one budget: both the percent and the over state compare the
+	// server-computed review-target tokens against the budget ON SCREEN — the
+	// slider value, which may be an unsaved draft. Mixing the server overBudget
+	// flag (frozen at status-fetch time) with a dragged slider value would let
+	// the line read "70% of the budget. Over the ceiling" mid-drag. This is the
+	// same comparison overMemoryBudget makes server-side once the draft saves.
+	const overBudget = budget !== null && currentMemoryTokens !== null && currentMemoryTokens > budget;
 
 	return (
 		<div className="room-maintenance-section">
@@ -148,7 +154,7 @@ export function RoomMaintenanceSection({ status }: { status: PersistentAgentStat
 						Memory budget
 						<span className="memory-budget-value">{budget !== null ? `${fmtTokensK(budget)} tokens` : "…"}</span>
 					</span>
-					<span className="rs-row-hint">How much memory this room aims to keep.</span>
+					<span className="rs-row-hint">The ceiling for this room's deep memory and active items. Recent sessions don't count — Memorize folds them in.</span>
 					<input
 						className="memory-budget-slider"
 						type="range"
@@ -162,7 +168,7 @@ export function RoomMaintenanceSection({ status }: { status: PersistentAgentStat
 					/>
 					{usagePercent !== null && (
 						<p className={`memory-budget-usage${overBudget ? " over" : ""}`}>
-							~{fmtTokensK(currentMemoryTokens!)} tokens in use, {usagePercent}% of the target.{overBudget ? " Consider running Review." : ""}
+							~{fmtTokensK(currentMemoryTokens!)} tokens of deep memory and active items, {usagePercent}% of the budget.{overBudget ? " Over the ceiling — run Review to shrink deep memory and active items." : ""}
 						</p>
 					)}
 				</div>

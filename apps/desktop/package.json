@@ -1,6 +1,6 @@
 {
   "name": "@exxeta/exxperts-desktop",
-  "version": "0.10.1",
+  "version": "0.11.2",
   "private": true,
   "description": "Desktop app shell for exxperts: spawns the local web server and wraps the web UI in a window with a tray.",
   "main": "dist/main.js",
@@ -23,6 +23,6 @@
     "typescript": "^5.5.0"
   },
   "overrides": {
-    "js-yaml": "^4.3.1"
+    "js-yaml": "^4.3.2"
   }
 }

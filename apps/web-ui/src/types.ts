@@ -129,7 +129,6 @@ export interface PersistentRoomCapabilityPolicyView {
 	denySegments: string[];
 	pathAccess?: "workspace-only" | "local-files";
 	writeEnabled: boolean;
-	markdownWriteEnabled?: boolean;
 	bashEnabled?: boolean;
 	nativePiFilesystemToolsEnabled?: boolean;
 }
@@ -151,13 +150,10 @@ export interface PersistentRoomWorkspaceClearResponse extends PersistentRoomWork
 	deleted: boolean;
 }
 
-export type PersistentRoomWorkspaceMode = "read-only" | "read" | "write";
-
 export interface PersistentRoomWorkspaceDefaultInput {
 	root?: string;
 	displayLabel?: string;
 	workspaceAccessMode?: PersistentRoomWorkspaceAccessMode;
-	mode?: PersistentRoomWorkspaceMode;
 	toolSelection?: PersistentRoomWorkspaceToolSelectionView;
 	bashEnabled?: boolean;
 }
@@ -451,6 +447,18 @@ export interface AbsorbDiscussionSignoffResponse {
 	warnings: string[];
 }
 
+// Mirrors the server's MemoryBudgetImpact: before/after review-target tokens
+// plus the server-computed verdicts. Cards render these fields verbatim and
+// never re-derive the comparison. Optional on the responses so the UI stays
+// honest against an older server that doesn't send it.
+export interface MemoryBudgetImpact {
+	budgetTokens: number;
+	reviewTargetEstimatedTokensBefore: number;
+	reviewTargetEstimatedTokensAfter: number;
+	overBudgetBefore: boolean;
+	overBudgetAfter: boolean;
+}
+
 export interface AbsorbProposalResponse {
 	agentId: PersistentAgentId;
 	writesMemory: false;
@@ -463,6 +471,7 @@ export interface AbsorbProposalResponse {
 	fields: AbsorbProposalFields;
 	review?: AbsorbProposalReview;
 	candidateValidation: AbsorbCandidateValidationResult;
+	memoryBudgetImpact?: MemoryBudgetImpact;
 	absorbTelemetry: AbsorbPromptTelemetry;
 	absorbUsage?: AbsorbUsage;
 	warnings: string[];
@@ -474,6 +483,7 @@ export interface AbsorbApprovalResponse {
 	absorbId: string;
 	eventRelPath: string;
 	recentContextEntryCount: number;
+	memoryBudget?: { budgetTokens: number; reviewTargetEstimatedTokens: number; overBudget: boolean };
 	postAbsorb: {
 		returnToLauncher: true;
 	};
@@ -481,6 +491,20 @@ export interface AbsorbApprovalResponse {
 }
 
 export type StructuralReviewAvailabilityReason = "available" | "not_ready" | "invalid_topology" | "error";
+
+export type ReviewHardnessLevel = "light" | "standard" | "deep";
+
+// Server-derived Review pruning depth: numbers and predicates only — the
+// client words the copy (the same split MemoryBudgetImpact uses).
+export interface StructuralReviewHardnessDerivation {
+	level: ReviewHardnessLevel;
+	budgetTokens: number;
+	reviewTargetEstimatedTokens: number;
+	/** 0 when under budget. */
+	overBudgetTokens: number;
+	/** The latest Review ended still over the current budget, with no Memorize rewriting the material since. */
+	previousRunPartial: boolean;
+}
 
 export interface StructuralReviewMemoryMapRow {
 	area: string;
@@ -495,6 +519,8 @@ export interface StructuralReviewAvailability {
 	reviewTargetEstimatedTokens: number;
 	reviewTargetWords: number;
 	memoryMap: StructuralReviewMemoryMapRow[];
+	/** Present when available: the depth the next Review run derives, shown before the run starts. */
+	reviewHardness?: StructuralReviewHardnessDerivation;
 	model?: MaintenanceWorkerModelStatus | null;
 	profile?: MaintenanceWorkerProfileStatus;
 	writesMemory?: false;
@@ -616,6 +642,7 @@ export interface StructuralReviewProposalFields {
 	proposedMemoryMap: string;
 	reviewTargetMetrics: string;
 	warnings: string;
+	droppedMaterial: string;
 	candidateReviewTargetL1b: string;
 }
 
@@ -642,6 +669,14 @@ export interface StructuralReviewProposalReview {
 	metrics: StructuralReviewReviewMetrics;
 }
 
+/** The depth this proposal was actually drafted at, and where it came from. */
+export interface StructuralReviewProposalHardness {
+	applied: ReviewHardnessLevel;
+	derived: StructuralReviewHardnessDerivation;
+	/** True when the per-run picker chose a different level than the derivation. */
+	overridden: boolean;
+}
+
 export interface StructuralReviewProposalResponse {
 	agentId: PersistentAgentId;
 	writesMemory: false;
@@ -655,8 +690,12 @@ export interface StructuralReviewProposalResponse {
 	fields: StructuralReviewProposalFields;
 	review: StructuralReviewProposalReview;
 	candidateValidation: StructuralReviewCandidateValidationResult;
+	memoryBudgetImpact?: MemoryBudgetImpact;
+	reviewHardness?: StructuralReviewProposalHardness;
 	structuralReviewTelemetry: StructuralReviewPromptTelemetry;
 	structuralReviewUsage?: AbsorbUsage;
+	/** Memory-map areas gone from the candidate, computed server-side independent of the disclosure; drives the forget-to-document offer. Absent on older servers. */
+	vanishedAreas?: string[];
 	warnings: string[];
 }
 
@@ -665,6 +704,14 @@ export interface StructuralReviewApprovalResponse {
 	writesMemory: true;
 	structuralReviewId: string;
 	eventRelPath: string;
+	/** False when the audit record could not be written after the memory write; absent on older servers (which threw instead). */
+	auditRecordWritten?: boolean;
+	/** After-write budget verdict measured from the written file (pointer line included) — the saved screen prefers this over the propose-time impact. */
+	memoryBudget?: { budgetTokens: number; reviewTargetEstimatedTokens: number; overBudget: boolean };
+	/** Review-target token delta of what was written (pointer line included) — the saved screen prefers this over the propose-time delta. */
+	reviewTargetEstimatedTokenDelta?: number;
+	/** Present when the user chose forget-to-document at approval: the room's Files document holding the dropped material. */
+	forgetToDocument?: { shelfFileName: string };
 	postStructuralReview: {
 		returnToLauncher: true;
 	};
@@ -1081,6 +1128,10 @@ export interface PersistentAgentStatus {
 		thresholds: { warning: number; pressure: number; hard: number };
 	};
 	memoryBudgetTokens?: number;
+	// Server-computed budget condition. The budget binds on the review target
+	// (Deep Memory + Active Items); render this block, never re-derive the
+	// comparison client-side.
+	memoryBudget?: { budgetTokens: number; reviewTargetEstimatedTokens: number; overBudget: boolean; reviewHardness?: StructuralReviewHardnessDerivation };
 	errors: string[];
 	warnings: string[];
 }
@@ -1192,8 +1243,10 @@ export interface PersistentAgentPurgeResponse {
 }
 
 export type ChatItem =
-	| { kind: "user"; id: string; text: string; attachments?: { name: string; bytes: number; extension: string }[] }
-	| { kind: "assistant"; id: string; text: string; streaming?: boolean }
+	// `ts` (epoch ms) is when the item was born; absent on items written before
+	// the field existed, which then show no date/time on hover.
+	| { kind: "user"; id: string; text: string; ts?: number; attachments?: { name: string; bytes: number; extension: string }[] }
+	| { kind: "assistant"; id: string; text: string; ts?: number; streaming?: boolean }
 	| {
 			kind: "tool";
 			id: string;

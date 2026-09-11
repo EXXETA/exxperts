@@ -109,12 +109,44 @@ try {
 	assert(untaggedCut.candidateValidation.valid === false, "validator backstop should still reject an untagged cut draft");
 	assert(untaggedCut.candidateValidation.errors.some((error: string) => /Candidate L1b is empty/.test(error)), "validator backstop errors should be unchanged");
 
-	// 3. Memorize assessment: generic refusal (small outputs, still honest).
+	// 3. Memorize assessment: generic refusal (small outputs, still honest), and
+	// the truncation check runs BEFORE the assessment regenerate — a cut draft
+	// is missing sections for size reasons, so no retry is attempted.
+	let assessmentCalls = 0;
 	await expectRejects(
-		() => buildAbsorbAssessment(agentId, ABSORB_MODEL, async () => truncatedResult("## Absorb assessment\n\nI found")),
+		() => buildAbsorbAssessment(agentId, ABSORB_MODEL, async () => {
+			assessmentCalls += 1;
+			return truncatedResult("## Absorb assessment\n\nI found");
+		}),
 		/Memorize assessment response was cut off at the model's output limit/,
 		"truncated Memorize assessment",
 	);
+	assert(assessmentCalls === 1, `truncated assessment must not trigger the regenerate (got ${assessmentCalls} calls)`);
+	// 3b. A usable-but-incomplete first draft retries; when the retry is cut
+	// off, the FIRST draft survives with a disclosure — a failed retry never
+	// destroys an assessment the user could have worked with.
+	assessmentCalls = 0;
+	const survived = await buildAbsorbAssessment(agentId, ABSORB_MODEL, async () => {
+		assessmentCalls += 1;
+		if (assessmentCalls === 1) return { text: "## Absorb assessment\n\n### What to remember\n- Keep.\n" };
+		return truncatedResult("## Absorb assessment\n\n### What to remember\n- Keep.\n### What to forget\n- Dr");
+	});
+	assert(assessmentCalls === 2, `incomplete first draft should regenerate once (got ${assessmentCalls} calls)`);
+	assert(survived.assessmentMarkdown.startsWith("## Absorb assessment\n\n### What to remember\n- Keep."), "the first draft should be returned when the retry is truncated");
+	assert(survived.warnings.some((warning) => /could not be regenerated/.test(warning) && /cut off at the model's output limit/.test(warning)), `the failed retry should be disclosed (got ${JSON.stringify(survived.warnings)})`);
+	assert(survived.warnings.some((warning) => /^assessment missing What to forget/.test(warning)), "the first draft keeps its own parse warnings");
+	// 3c. An OVERSIZED first draft is not usable, so a truncated retry still refuses.
+	assessmentCalls = 0;
+	await expectRejects(
+		() => buildAbsorbAssessment(agentId, ABSORB_MODEL, async () => {
+			assessmentCalls += 1;
+			if (assessmentCalls === 1) return { text: `## Absorb assessment\n\n### What to remember\n- ${"long ".repeat(3000)}\n` };
+			return truncatedResult("## Absorb assessment\n\n### What to remember\n- Ke");
+		}),
+		/Memorize assessment response was cut off at the model's output limit/,
+		"truncated retry after an oversized first draft",
+	);
+	assert(assessmentCalls === 2, `oversized first draft should regenerate once before the truncated retry refuses (got ${assessmentCalls} calls)`);
 
 	// 4. Review proposal: same whole-document-rewrite lead as Memorize.
 	const reviewError = await expectRejects(

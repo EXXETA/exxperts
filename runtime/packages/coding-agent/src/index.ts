@@ -254,6 +254,7 @@ export {
 export { createSyntheticSourceInfo } from "./core/source-info.js";
 // Tools
 export {
+	applyEditsToNormalizedContent,
 	type BashOperations,
 	type BashSpawnContext,
 	type BashSpawnHook,
@@ -270,6 +271,10 @@ export {
 	createWriteToolDefinition,
 	DEFAULT_MAX_BYTES,
 	DEFAULT_MAX_LINES,
+	DEFAULT_SPREADSHEET_MAX_COLUMNS,
+	DEFAULT_SPREADSHEET_MAX_ROWS,
+	detectLineEnding,
+	type Edit,
 	type EditOperations,
 	type EditToolDetails,
 	type EditToolInput,
@@ -283,14 +288,28 @@ export {
 	type GrepToolDetails,
 	type GrepToolInput,
 	type GrepToolOptions,
+	isSpreadsheetPath,
 	type LsOperations,
 	type LsToolDetails,
 	type LsToolInput,
 	type LsToolOptions,
+	MAX_SPREADSHEET_BYTES,
+	MAX_SPREADSHEET_CELL_CHARS,
+	MAX_SPREADSHEET_COLUMNS,
+	MAX_SPREADSHEET_OUTPUT_CHARS,
+	MAX_SPREADSHEET_ROWS,
+	normalizeToLF,
 	type ReadOperations,
 	type ReadToolDetails,
 	type ReadToolInput,
 	type ReadToolOptions,
+	renderSpreadsheetPreview,
+	resolveReadPath,
+	restoreLineEndings,
+	SpreadsheetPreviewError,
+	type SpreadsheetPreviewErrorCode,
+	type SpreadsheetPreviewOptions,
+	stripBom,
 	type ToolsOptions,
 	type TruncationOptions,
 	type TruncationResult,
@@ -372,8 +391,20 @@ export {
 // Clipboard utilities
 export { copyToClipboard } from "./utils/clipboard.js";
 export { parseFrontmatter, stripFrontmatter } from "./utils/frontmatter.js";
+// Image utilities
+export {
+	formatDimensionNote,
+	imageOmittedNote,
+	type ImageResizeFailure,
+	type ImageResizeOptions,
+	type ResizedImage,
+	resizeImage,
+} from "./utils/image-resize.js";
+export { detectSupportedImageMimeTypeFromFile } from "./utils/mime.js";
 // Shell utilities
 export { getShellConfig } from "./utils/shell.js";
+// Managed search binaries (hash-pinned fd/ripgrep)
+export { ensureTool, getToolPath } from "./utils/tools-manager.js";
 // Loop strategies (re-exported from @exxeta/exxperts-core)
 export {
 	type LoopStrategy,

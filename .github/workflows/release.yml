@@ -345,6 +345,38 @@ jobs:
   # be aimed at a tag ref, which would satisfy ref_type == 'tag' alone and
   # break the dry-run promise, so manual runs always stop after the smoke
   # matrix regardless of the chosen ref.
+  # SBOMs ride the release pipeline itself: a release created with the
+  # workflow token does not fire other workflows' release triggers, so the
+  # standalone SBOM workflow would never see it. Generation lives here,
+  # attachment happens right after publish.
+  sbom:
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    needs: publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      # The desktop SBOM keeps dev packages in: Electron is a devDependency
+      # by npm convention but ships in every installer.
+      - name: Generate SBOMs (CycloneDX)
+        run: |
+          # All three SBOMs read the lockfiles directly: no installed tree is
+          # needed, so nothing platform-specific (mac-only optionals, runtime
+          # workspace links) can make the inventory fail.
+          npx --yes @cyclonedx/cyclonedx-npm@4 --package-lock-only --omit dev --output-format JSON --output-file sbom-app.cdx.json
+          cd runtime && npx --yes @cyclonedx/cyclonedx-npm@4 --package-lock-only --omit dev --output-format JSON --output-file ../sbom-runtime.cdx.json
+          cd ../apps/desktop && npx --yes @cyclonedx/cyclonedx-npm@4 --package-lock-only --output-format JSON --output-file ../../sbom-desktop.cdx.json
+      - name: Attach SBOMs to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ github.ref_name }}" sbom-app.cdx.json sbom-runtime.cdx.json sbom-desktop.cdx.json --clobber
+
   publish:
     if: github.event_name == 'push' && github.ref_type == 'tag'
     needs: [bare-machine-smoke, desktop-app-mac, desktop-app-windows]

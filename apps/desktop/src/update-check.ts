@@ -1,8 +1,10 @@
 // Update notice (the check layer; updater.ts does one-click installs). One
-// anonymous version check runs once at startup; after that the check only
-// runs when the user picks "Check for Updates..." or opens the Health Check
-// window. Nothing polls on a timer and nothing but the version request leaves
-// the machine, so the no-telemetry story stays true. When the feed's latest
+// anonymous version check runs at startup and repeats every six hours while
+// the app stays open (main.ts owns that timer; apps that never restart must
+// still learn about releases); besides those, the check only runs when the
+// user picks "Check for Updates..." or opens the Health Check window. Nothing
+// but the version request ever leaves the machine, so the no-telemetry story
+// stays true. When the feed's latest
 // release is newer than this build, the tray gains an update entry, the
 // health window a download line, and the app window a settings-menu notice.
 //
@@ -63,7 +65,19 @@ export function isNewerVersion(current: string, latest: string): boolean {
   return false;
 }
 
-export async function checkForUpdate(currentVersion: string): Promise<"update" | "none" | "error"> {
+// One check at a time: launch, the six-hour re-check, the tray item and the
+// Health Check window all funnel through here, and two of them can land in
+// the same moment. A second caller joins the request already in flight
+// instead of racing it - same result, same listener firings, one fetch.
+let inFlight: Promise<"update" | "none" | "error"> | null = null;
+
+export function checkForUpdate(currentVersion: string): Promise<"update" | "none" | "error"> {
+  if (inFlight) return inFlight;
+  inFlight = runCheck(currentVersion).finally(() => { inFlight = null; });
+  return inFlight;
+}
+
+async function runCheck(currentVersion: string): Promise<"update" | "none" | "error"> {
   try {
     const res = await fetch(FEED_URL, {
       signal: AbortSignal.timeout(10_000),

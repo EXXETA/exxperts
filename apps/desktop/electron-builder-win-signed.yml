@@ -13,14 +13,18 @@ win:
   # node.exe, esbuild.exe, recheck.exe); Azure Trusted Signing rejects
   # re-signing them (SignerSign() 0x80004005), so each is excluded via a
   # signExts negative pattern (str.endsWith semantics) and keeps its original
-  # signature. package.mjs --sign-windows preflights the staged payload and
-  # fails with an actionable message if it ever carries an exe not listed
-  # here, so a new payload dependency surfaces before the build instead of as
-  # an opaque Azure error mid-signing.
+  # signature. The bundled rg.exe ships unsigned upstream and stays excluded
+  # too: the same binary a runtime download installs today, kept byte-equal to
+  # its pinned checksum rather than adding an untested signing operation to
+  # the release build. package.mjs --sign-windows preflights the staged
+  # payload and fails with an actionable message if it ever carries an exe
+  # not listed here, so a new payload dependency surfaces before the build
+  # instead of as an opaque Azure error mid-signing.
   signExts:
     - "!node.exe"
     - "!esbuild.exe"
     - "!recheck.exe"
+    - "!rg.exe"
   azureSignOptions:
     publisherName: Exxeta AG
     endpoint: https://weu.codesigning.azure.net/

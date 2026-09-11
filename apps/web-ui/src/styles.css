@@ -676,6 +676,116 @@ strong, b { font-weight: 700; }
 .topbar-actions .icon-btn-danger:focus-visible {
 	box-shadow: 0 0 0 1px color-mix(in srgb, var(--exx-danger) 40%, transparent);
 }
+/* The bash-mode chip: only rooms with Bash on wear it, so its mere presence
+   already says "this room can run commands". The mode rides the color:
+   "asks" stays a quiet neutral pill, "auto" takes the warning wash used by
+   the room-card badges — permissive should be visible at a glance without
+   shouting. All colors are theme tokens, so both themes come for free. */
+.bash-mode-chip-anchor {
+	position: relative;
+	display: flex;
+	flex-shrink: 0;
+}
+/* Dressed like the other topbar actions: flat, borderless, a wash on hover.
+   The two states differ by their text alone — the room owner asked for no
+   alarm color on auto. */
+.bash-mode-chip {
+	display: inline-flex;
+	align-items: center;
+	border: none;
+	border-radius: var(--exx-radius-pill);
+	/* Same 30px box as the .icon-btn-square neighbours: with the row's
+	   align-items center, equal box heights are what guarantee equal
+	   centerlines — the old 4px padding left the chip's smaller line box
+	   riding a touch high next to the trash and gear. */
+	height: 30px;
+	padding: 0 10px;
+	background: transparent;
+	color: var(--fg-soft);
+	font-family: var(--exx-font-mono);
+	font-size: 10.5px;
+	font-weight: 600;
+	line-height: 1.2;
+	white-space: nowrap;
+	cursor: pointer;
+}
+.bash-mode-chip:hover,
+.bash-mode-chip:focus-visible {
+	color: var(--fg);
+	background: color-mix(in srgb, var(--fg) 12%, transparent);
+	outline: none;
+}
+.bash-mode-chip:focus-visible {
+	box-shadow: 0 0 0 1px color-mix(in srgb, var(--fg) 35%, transparent);
+}
+/* Two choices, one popover: hangs below the chip, right-aligned so it never
+   leaves the viewport from the header's right edge. */
+.bash-mode-menu {
+	position: absolute;
+	top: calc(100% + 8px);
+	right: 0;
+	min-width: 216px;
+	background: var(--bg);
+	border: 1px solid var(--border);
+	border-radius: 12px;
+	padding: 6px;
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	box-shadow: var(--exx-shadow-popover);
+	z-index: 30;
+}
+.bash-mode-option {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 10px;
+	border: none;
+	border-radius: 8px;
+	padding: 7px 10px;
+	background: transparent;
+	color: var(--fg-soft);
+	font-size: 12.5px;
+	line-height: 1.3;
+	text-align: left;
+	cursor: pointer;
+}
+.bash-mode-option:hover:not(:disabled),
+.bash-mode-option:focus-visible {
+	background: color-mix(in srgb, var(--fg) 10%, transparent);
+	color: var(--fg);
+	outline: none;
+}
+.bash-mode-option:disabled {
+	color: var(--dim);
+	cursor: not-allowed;
+}
+/* The current mode is marked, not merely highlighted: hover must not be able
+   to impersonate "this is what you have". */
+.bash-mode-option.is-current {
+	color: var(--fg);
+	font-weight: 700;
+}
+.bash-mode-option.is-current::after {
+	content: "✓";
+	font-weight: 700;
+	color: var(--success);
+}
+.bash-mode-option.is-current:disabled { color: var(--dim); }
+.bash-mode-menu-note {
+	margin: 2px 0 4px;
+	padding: 0 10px;
+	color: var(--muted);
+	font-size: 11px;
+	line-height: 1.35;
+}
+.bash-mode-menu-error {
+	margin: 2px 0 4px;
+	padding: 0 10px;
+	color: var(--error);
+	font-size: 11px;
+	line-height: 1.35;
+}
 .theme-toggle {
 	background: transparent;
 	border: 1px solid var(--border);
@@ -958,9 +1068,11 @@ strong, b { font-weight: 700; }
 	padding: 6px 8px;
 	cursor: pointer;
 }
-/* Navigation rows carry their arrow at the right edge. */
-.sidebar-config-menu .menu-item-arrow {
+/* Rows with a shortcut carry the accelerator at the right edge, quiet
+   mono like a macOS menu. */
+.sidebar-config-menu .menu-item-kbd {
 	color: var(--muted);
+	font-family: var(--exx-font-mono);
 }
 .sidebar-config-menu .menu-item:hover,
 .sidebar-config-menu .menu-item:focus-visible {
@@ -3630,6 +3742,12 @@ strong, b { font-weight: 700; }
 .structural-review-map-section {
 	text-align: left;
 }
+.review-hardness-picker {
+	display: flex;
+	gap: 10px;
+	flex-wrap: wrap;
+	margin-top: 8px;
+}
 .absorb-workspace .checkpoint-preview-actions {
 	position: sticky;
 	bottom: -1px;
@@ -4192,6 +4310,39 @@ strong, b { font-weight: 700; }
 	gap: 8px;
 	align-items: stretch;
 }
+/* Shown only when the discussion has hit a wall (error or limit): the exit
+   that always works, explained, next to the error it answers. */
+.absorb-discussion-remedy {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	flex-wrap: wrap;
+	padding: 10px 14px;
+	border: 1px dashed color-mix(in srgb, var(--border-soft) 70%, transparent);
+	border-radius: 12px;
+	color: var(--muted);
+	font-size: 13px;
+}
+.absorb-discussion-remedy .landing-action {
+	align-self: center;
+	font-size: 12px;
+	padding: 6px 12px;
+}
+/* Lives under the textarea (first grid column) and spans the full row on the
+   stacked mobile layout. Tone shifts as the transcript nears its caps. */
+.absorb-discussion-counter {
+	grid-column: 1 / -1;
+	color: var(--muted);
+	font-size: 11px;
+	line-height: 1.4;
+}
+.absorb-discussion-counter.near {
+	color: color-mix(in srgb, var(--fg) 70%, var(--muted));
+}
+.absorb-discussion-counter.full {
+	color: var(--danger);
+}
 /* Generate proposal is the discussion's primary exit; keep it compact but filled. */
 .absorb-discussion-actions .absorb-discussion-generate {
 	font-size: 12px;
@@ -4475,6 +4626,32 @@ strong, b { font-weight: 700; }
  * two do not nest and shrink long user messages. */
 .bubble-col.user > .bubble.user { max-width: 100%; }
 
+/* Action row under a bubble: the copy control and the message time. The
+ * reply's row sits under its last segment, button first; the user's hugs the
+ * right edge under the bubble, time first. */
+.message-actions {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin-top: 6px;
+	min-height: 22px;
+}
+.message-actions.user { align-self: flex-end; }
+.message-actions .message-copy { margin-top: 0; }
+/* When the message was written: quiet, revealed with the row on hover, the
+ * full date and time in its tooltip. */
+.message-time {
+	font-size: 11px;
+	line-height: 1;
+	color: var(--muted);
+	opacity: 0;
+	cursor: default;
+	user-select: none;
+	white-space: nowrap;
+	transition: opacity 120ms ease;
+}
+.bubble-row:hover .message-time { opacity: 1; }
+
 /* Message copy control. Quiet ghost affordance in the app's control language:
  * transparent at rest, faint until hovered/focused. Assistant replies show it
  * always (aligned under the text); user messages reveal it on row hover. */
@@ -4507,9 +4684,9 @@ strong, b { font-weight: 700; }
 .message-copy-assistant:focus-visible { opacity: 1; }
 
 /* User: hidden at rest, revealed when the row is hovered or the button is
- * keyboard-focused; sits at the right edge under the right-aligned bubble. */
+ * keyboard-focused; its action row sits at the right edge under the
+ * right-aligned bubble. */
 .message-copy-user {
-	align-self: flex-end;
 	opacity: 0;
 	pointer-events: none;
 }
@@ -4522,8 +4699,10 @@ strong, b { font-weight: 700; }
 	pointer-events: auto;
 }
 @media (hover: none) {
-	/* Touch devices have no hover: keep the user-message control reachable. */
+	/* Touch devices have no hover: keep the user-message control reachable
+	 * and the message time readable at rest. */
 	.message-copy-user { opacity: 0.55; pointer-events: auto; }
+	.message-time { opacity: 0.55; }
 }
 .user-message-content {
 	white-space: pre-wrap;
@@ -4796,6 +4975,36 @@ strong, b { font-weight: 700; }
 	overflow-x: auto;
 }
 .md pre code { padding: 0; border: none; font-size: inherit; }
+/* Fenced code block (Markdown.tsx `pre`): a header strip above the block
+   carries the language label and a copy control, so nothing sits on top of
+   the code and a long line scrolling sideways never carries them away. The
+   strip shares the block's border and background and reads as its top edge;
+   the copy control is understated at rest, like the reply's. */
+.code-block { margin: 0.6em 0; }
+.code-block > pre { margin: 0; border-top-left-radius: 0; border-top-right-radius: 0; border-top: none; }
+.code-block-tools {
+	display: flex;
+	align-items: center;
+	justify-content: flex-end;
+	gap: 8px;
+	min-height: 24px;
+	padding: 2px 6px 2px 11px;
+	border: 1px solid var(--border-soft);
+	border-bottom: 1px solid var(--border-soft);
+	border-radius: 6px 6px 0 0;
+}
+.code-block-lang {
+	margin-right: auto;
+	font-family: var(--exx-font-mono);
+	font-size: 10.5px;
+	letter-spacing: .04em;
+	color: var(--muted);
+	user-select: none;
+}
+.code-block-copy { margin-top: 0; width: 20px; height: 20px; opacity: 0.55; }
+.code-block-copy:hover,
+.code-block-copy:focus-visible,
+.code-block-copy.is-copied { opacity: 1; }
 .md blockquote {
 	margin: 0.6em 0;
 	padding: 2px 12px;
@@ -4806,6 +5015,86 @@ strong, b { font-weight: 700; }
 .md th, .md td { border: 1px solid var(--border-soft); padding: 4px 8px; }
 .md th { background: transparent; font-weight: 700; }
 .md hr { border: 0; border-top: 1px solid var(--border-soft); margin: 1em 0; }
+/* An inline image (a data: URI or a room-served file) stays inside its
+   column instead of stretching the bubble or the tool result to its natural
+   pixel width; height follows so the aspect ratio holds. */
+.md img,
+.assistant-markdown img { max-width: 100%; height: auto; }
+/* A picture a reply shows from the room's shelf is wrapped in this button
+   (Markdown.tsx) and opens the viewer. The wrapper adds nothing to the
+   picture's box — no padding, border or ground — so the width cap above
+   still governs; the image goes block so no inline baseline gap opens
+   under it. The hover edge and ring are those of a bubble thumbnail: same act. */
+.md-image-button {
+	display: block;
+	max-width: 100%;
+	padding: 0;
+	border: 0;
+	background: none;
+	cursor: pointer;
+	border-radius: 4px;
+}
+.md-image-button img { display: block; }
+.md-image-button:hover { outline: 1px solid var(--exx-plan); }
+.md-image-button:focus-visible { outline: 2px solid var(--exx-plan); outline-offset: 2px; }
+
+/* Hover actions on a chat picture (ImageActions.tsx): copy and download on
+   the picture's top-right corner, for a reply picture and a bubble thumbnail
+   alike. The host takes the picture's width and nothing more — it adds no
+   padding, border or ground — so the corner is the PICTURE's, not the
+   column's, and the width caps above still govern. */
+.image-actions-host {
+	position: relative;
+	display: block;
+	width: fit-content;
+	max-width: 100%;
+	min-width: 0;
+}
+.image-actions {
+	position: absolute;
+	top: 6px;
+	right: 6px;
+	z-index: 2;
+	display: flex;
+	gap: 4px;
+	opacity: 0;
+	transition: opacity 140ms ease;
+}
+/* Hidden at rest; shown while the pointer is over the picture, while a button
+   in the cluster holds focus, and while the tick is still up after the
+   pointer left (the copied state reverts on its own a moment later). */
+.image-actions-host:hover .image-actions,
+.image-actions-host:focus-within .image-actions,
+.image-actions.is-copied { opacity: 1; }
+/* Under ~80px wide the two buttons would cover the whole picture: the
+   cluster then hangs just above it, flush with its right edge (is-narrow
+   comes from the host's measured width). */
+.image-actions-host.is-narrow .image-actions {
+	top: auto;
+	right: 0;
+	bottom: calc(100% + 4px);
+}
+/* Round ghost in the message-copy language, on the panel ground with a hair
+   border so it reads on a light picture as on a dark one. */
+.image-action {
+	margin-top: 0;
+	width: 26px;
+	height: 26px;
+	border: 1px solid var(--border-soft);
+	border-radius: 50%;
+	background: color-mix(in srgb, var(--panel) 88%, #ffffff 12%);
+	color: var(--fg);
+	text-decoration: none;
+}
+.image-action:hover,
+.image-action:focus-visible {
+	background: var(--panel);
+	border-color: var(--exx-plan);
+}
+@media (hover: none) {
+	/* No pointer to hover with: keep the cluster reachable at rest. */
+	.image-actions { opacity: 0.7; }
+}
 
 /* In-chat Mermaid diagrams. Diagrams render on a lightened surface so the
    light-themed SVG stays legible in either app theme. Reuses existing tokens. */
@@ -4816,6 +5105,13 @@ strong, b { font-weight: 700; }
 	background: color-mix(in srgb, var(--panel) 82%, #ffffff 18%);
 	overflow: hidden;
 }
+/* The frame holds the canvas and the expand control side by side, so the
+   control floats over the canvas without being inside it (a click on it is
+   never a click on the toggle, and it stays put while the canvas scrolls). */
+.mermaid-diagram-frame {
+	position: relative;
+}
+/* The canvas toggles the diagram's size in place; the cursor says which way. */
 .mermaid-diagram-canvas {
 	position: relative;
 	min-height: 180px;
@@ -4823,57 +5119,69 @@ strong, b { font-weight: 700; }
 	overflow: auto;
 	display: flex;
 	align-items: center;
-	justify-content: center;
-}
-.mermaid-diagram-canvas-button {
-	width: 100%;
-	border: 0;
-	background: transparent;
-	color: inherit;
-	font: inherit;
-	text-align: inherit;
 	cursor: zoom-in;
 }
-.mermaid-diagram-canvas-button:focus-visible {
+.mermaid-diagram-canvas.enlarged {
+	cursor: zoom-out;
+}
+.mermaid-diagram-canvas:focus-visible {
 	outline: 2px solid var(--fg);
 	outline-offset: -4px;
 }
 .mermaid-diagram-svg {
 	display: block;
 	width: 100%;
+	margin: auto;
 }
+/* The diagram keeps its natural size (mermaid sets it as an inline max-width)
+ * and shrinks to the column when it is wider; a three-node sketch is no longer
+ * blown up to fill a minimum width. Auto margins centre a small one. */
 .mermaid-diagram-canvas svg {
 	display: block;
 	width: 100%;
-	max-width: 960px;
 	height: auto;
-	min-width: 360px;
+	margin: 0 auto;
 }
-.mermaid-diagram-open-indicator {
+/* Enlarged: a narrow drawing fills the column, a wide one goes to its real
+ * pixels (measured after render into --diagram-natural-width) and scrolls in
+ * the canvas. Without a measurement, enlarged is simply the full column. */
+.mermaid-diagram-canvas.enlarged svg {
+	max-width: none !important;
+	width: max(100%, var(--diagram-natural-width, 100%));
+}
+.mermaid-diagram-expand {
 	position: absolute;
 	top: 8px;
 	right: 8px;
-	z-index: 1;
+	z-index: 2;
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
 	width: 28px;
 	height: 28px;
+	padding: 0;
 	border: 1px solid var(--border-soft);
 	border-radius: 6px;
 	background: color-mix(in srgb, var(--panel) 88%, #ffffff 12%);
 	color: var(--fg);
 	font-size: 16px;
 	font-weight: 700;
+	line-height: 1;
+	cursor: pointer;
 	opacity: 0;
 	transform: translateY(-2px);
 	transition: opacity 140ms ease, transform 140ms ease, background 140ms ease;
-	pointer-events: none;
 }
-.mermaid-diagram-canvas-button:hover .mermaid-diagram-open-indicator,
-.mermaid-diagram-canvas-button:focus-visible .mermaid-diagram-open-indicator {
+.mermaid-diagram-frame:hover .mermaid-diagram-expand,
+.mermaid-diagram-expand:focus-visible {
 	opacity: 1;
 	transform: translateY(0);
+}
+.mermaid-diagram-expand:hover,
+.mermaid-diagram-expand:focus-visible {
+	background: var(--fg);
+	color: var(--bg);
+	outline: none;
 }
 .mermaid-diagram-repaired {
 	padding: 7px 12px;
@@ -4893,10 +5201,16 @@ strong, b { font-weight: 700; }
 	font-size: 12px;
 	font-weight: 700;
 }
+.mermaid-diagram-source .code-block { margin: 0; }
+.mermaid-diagram-source .code-block-tools {
+	border-left: 0;
+	border-right: 0;
+	border-top: 1px solid var(--border-soft);
+	border-radius: 0;
+}
 .mermaid-diagram-source pre {
 	margin: 0;
 	border: 0;
-	border-top: 1px solid var(--border-soft);
 	border-radius: 0;
 	max-height: 260px;
 }
@@ -4960,23 +5274,27 @@ strong, b { font-weight: 700; }
 .mermaid-viewer-zoom-value {
 	min-width: 64px;
 }
+/* The body is a flex scroll area: a stage smaller than it sits centred on
+   both axes by its auto margins, a larger one starts at the padding edge and
+   scrolls (auto margins collapse to zero, so nothing is clipped off the left
+   the way justify-content: center would). */
 .mermaid-viewer-body {
 	flex: 1;
 	overflow: auto;
 	padding: 22px;
+	display: flex;
 	background: color-mix(in srgb, var(--panel) 82%, #ffffff 18%);
 }
+/* The stage is the diagram's real pixel width times the zoom, set inline once
+   the svg is measured; until then it takes the body's width so the first
+   paint is a fit-by-width. flex: none keeps the pixel width from shrinking. */
 .mermaid-viewer-stage {
-	min-width: min(720px, 100%);
-	margin: 0 auto;
-	transition: width 140ms ease;
+	flex: none;
+	width: 100%;
+	margin: auto;
 }
 .mermaid-viewer-svg {
-	width: 100%;
-	display: flex;
-	align-items: center;
-	justify-content: center;
-	min-height: 100%;
+	display: block;
 }
 .mermaid-viewer-loading,
 .mermaid-viewer-error {
@@ -4994,12 +5312,13 @@ strong, b { font-weight: 700; }
 .mermaid-viewer-error {
 	color: var(--error);
 }
+/* The svg fills the stage's pixel width; mermaid's inline max-width (its
+   natural size) must not cap it, or zooming past 100% would do nothing. */
 .mermaid-viewer-svg svg {
 	display: block;
-	width: 100% !important;
+	width: 100%;
 	max-width: none !important;
 	height: auto;
-	min-width: 0;
 }
 
 @media (max-width: 720px) {
@@ -5104,6 +5423,12 @@ strong, b { font-weight: 700; }
 	white-space: pre;
 	overflow-wrap: normal;
 }
+/* The wrapper carries the block's vertical margin (see .code-block). */
+.assistant-markdown .code-block { margin: 0.8em 0; }
+.assistant-markdown .code-block-tools { border-radius: 8px 8px 0 0; padding-left: 13px; background: var(--code-bg); }
+/* Same specificity as `.assistant-markdown pre` above, stated after it, so the
+   block joins its header strip here too. */
+.assistant-markdown .code-block > pre { margin: 0; border-top: none; border-top-left-radius: 0; border-top-right-radius: 0; }
 .assistant-markdown table {
 	width: 100%;
 	max-width: 100%;
@@ -6615,7 +6940,7 @@ strong, b { font-weight: 700; }
 }
 .src-row {
 	display: grid;
-	grid-template-columns: 12px minmax(200px, auto) 90px 1fr;
+	grid-template-columns: 12px minmax(200px, auto) minmax(90px, max-content) 1fr;
 	gap: 12px;
 	align-items: baseline;
 	padding: 8px 0;
@@ -6642,6 +6967,23 @@ strong, b { font-weight: 700; }
 .src-chip.billed { color: var(--fg); border-color: var(--fg); }
 .src-money { font-family: var(--exx-font-mono); font-size: 12.5px; font-weight: 700; text-align: right; white-space: nowrap; }
 .src-meta { color: var(--muted); font-size: 12px; }
+/* Removed gateways fold behind one quiet row; the caret is the whole affordance
+   and the header stays exactly as loud as its neighbours. */
+.src-row-fold {
+	width: 100%;
+	background: transparent;
+	color: inherit;
+	font: inherit;
+	text-align: left;
+	cursor: pointer;
+	border: none;
+	border-radius: 6px;
+}
+.src-row.src-row-fold { border-top: 1px solid var(--divider); }
+.src-row-fold:hover { background: var(--panel-2); }
+.src-row-fold:focus-visible { outline: 1px solid var(--fg); outline-offset: -2px; }
+.src-row-inner { padding-left: 14px; }
+.fold-caret { color: var(--muted); font-size: 10px; align-self: center; }
 .src-note {
 	font-size: 12.5px;
 	color: var(--muted);
@@ -6678,6 +7020,10 @@ strong, b { font-weight: 700; }
 	padding: 0 6px 8px 12px;
 	border-bottom: 1px solid var(--border-soft);
 }
+/* Retired rooms fold: the header toggles, it does not filter, and it is no
+   louder than the rows above it. */
+.bar-row .fold-caret { margin-right: 6px; }
+.bar-fold-row { padding-left: 14px; }
 .kind-chip {
 	font-family: var(--exx-font-display);
 	font-size: 9px;
@@ -6757,6 +7103,14 @@ strong, b { font-weight: 700; }
 	border-radius: 12px;
 	border-left: 3px solid var(--exx-plan);
 }
+
+.approval-command {
+	margin: 6px 0 2px;
+	max-height: 180px;
+	overflow: auto;
+	white-space: pre-wrap;
+	word-break: break-all;
+}
 .approval-card.delegate .approval-question {
 	display: block;
 	margin: 2px 0 0;
@@ -6830,6 +7184,15 @@ strong, b { font-weight: 700; }
 }
 .approval-input:focus { outline: none; border-color: var(--fg); }
 .approval-buttons { display: flex; gap: 8px; flex-wrap: wrap; }
+/* Keyboard approval: a pending card may focus its Approve button
+   programmatically, and script-moved focus does not reliably match
+   :focus-visible — so the ring rides plain :focus. Whenever an approval
+   button holds focus the ring MUST be visible, because an unseen focus
+   would turn a stray Enter into a silent approval. */
+.approval-buttons button:focus {
+	outline: 2px solid var(--exx-focus);
+	outline-offset: 2px;
+}
 .btn-primary:hover { background: color-mix(in srgb, var(--fg) 88%, var(--bg)); }
 .btn-primary {
 	background: var(--fg);
@@ -7481,6 +7844,16 @@ strong, b { font-weight: 700; }
 	max-width: 960px;
 	height: min(800px, 90vh);
 	max-height: none;
+	border-color: var(--border);
+	border-radius: 22px;
+	box-shadow: 0 24px 80px color-mix(in srgb, #000 26%, transparent);
+}
+/* Only the room settings dialog borrows the main Settings backdrop (soft
+   translucent blur instead of the solid dim); the shared overlay class also
+   serves create-room and configure-profile, which keep the app's dim. */
+.room-settings-overlay:has(> .rs-shell) {
+	background: color-mix(in srgb, var(--bg) 72%, transparent);
+	backdrop-filter: blur(10px);
 }
 .room-settings-layout {
 	display: flex;
@@ -7490,32 +7863,33 @@ strong, b { font-weight: 700; }
 .room-settings-nav {
 	width: 190px;
 	flex-shrink: 0;
-	border-right: 1px solid var(--border-soft);
-	padding: 14px 10px;
+	border-right: 1px solid var(--exx-divider);
+	padding: 16px 12px;
 	display: flex;
 	flex-direction: column;
-	gap: 2px;
+	gap: 4px;
 }
+/* The rail items speak the main Settings nav's language: fg text at rest, a
+   wash on hover, the inverted fill for the current section. */
 .rs-nav-item {
 	display: block;
 	width: 100%;
 	text-align: left;
 	background: none;
 	border: none;
-	border-radius: 8px;
-	color: var(--muted);
+	border-radius: 6px;
+	color: var(--fg);
 	font: inherit;
-	font-size: 13.5px;
-	padding: 8px 12px;
+	font-size: 14px;
+	padding: 8px 10px;
 	cursor: pointer;
 }
 .rs-nav-item:hover {
-	color: var(--fg);
+	background: color-mix(in srgb, currentColor 10%, transparent);
 }
 .rs-nav-item.active {
-	color: var(--fg);
-	font-weight: 700;
-	background: color-mix(in srgb, var(--fg) 7%, transparent);
+	background: var(--fg);
+	color: var(--bg);
 }
 .rs-nav-spacer {
 	flex: 1;
@@ -7610,11 +7984,30 @@ strong, b { font-weight: 700; }
 	flex-direction: column;
 	gap: 18px;
 }
+.rs-shell .room-settings-head {
+	border-bottom-color: var(--exx-divider);
+}
 .rs-shell .room-settings-body {
 	flex: 1;
 	min-width: 0;
 	display: block;
-	padding: 20px 24px 26px;
+	padding: 18px 28px 30px;
+}
+/* Quiet scrollbar, same recipe as the Settings overlay pane; the global
+   fg-colored thumb read as chrome inside the calm modal. */
+.rs-shell .room-settings-body::-webkit-scrollbar {
+	width: 8px;
+}
+.rs-shell .room-settings-body::-webkit-scrollbar-thumb {
+	background: var(--border);
+	border-radius: 4px;
+}
+.rs-shell .room-settings-body::-webkit-scrollbar-thumb:hover {
+	background: var(--fg-soft);
+}
+.rs-shell .room-settings-body::-webkit-scrollbar-track {
+	background: transparent;
+	margin-bottom: 18px;
 }
 .room-settings-status {
 	font-size: 10px;
@@ -7670,7 +8063,8 @@ strong, b { font-weight: 700; }
 .rs-pane-sub {
 	margin: -8px 0 4px;
 	color: var(--muted);
-	font-size: 12.5px;
+	font-size: 13px;
+	line-height: 1.5;
 }
 .rs-info-anchor {
 	position: relative;
@@ -9856,46 +10250,129 @@ label.rs-row {
 	border-radius: 0 6px 6px 0;
 }
 /* ── Composer attachment staging (files UI slice) ──────────────────────────
-   The chip row above the textarea: visible proof the drop worked, the honest
-   parse state before the message commits, and ✕ to change your mind. */
+   The row above the textarea: visible proof the drop worked, the honest
+   parse state before the message commits, and ✕ to change your mind. A
+   picture is a thumbnail tile (the same grammar as the bubble thumbnails),
+   any other file a compact card with the bubble's type badge. Tiles and
+   cards share one wrapping row, bottom-aligned: a card is a third of the
+   tile's height, and sitting on the tile's bottom edge it reads as one
+   shelf resting on the textarea instead of a card floating mid-air beside
+   a tall picture; the tile's ✕ overhangs its top corner, where a
+   bottom-aligned card never reaches. */
 .composer-staged {
 	display: flex;
 	flex-wrap: wrap;
-	gap: 6px;
+	align-items: flex-end;
+	gap: 8px;
+	/* Headroom for the tile's ✕, which overhangs the top edge by 8px. */
+	padding: 8px 8px 0 0;
 	margin: 0 0 8px;
 }
-.composer-staged-chip {
+.composer-staged-tile,
+.composer-staged-card {
+	position: relative;
+	border: 1px solid var(--exx-border-soft);
+	border-radius: 8px;
+	background: var(--exx-surface-inset);
+}
+.composer-staged-tile.failed,
+.composer-staged-card.failed {
+	border-color: var(--danger, #d33);
+}
+/* The image tile: a square card on the inset ground with the whole picture
+   CONTAINED inside it (a screenshot is never cropped to a corner). No overflow
+   clip on the tile itself — the ✕ must be free to overhang its corner — so the
+   frame inside carries the clip and the inner padding. */
+.composer-staged-tile {
+	display: block;
+	flex: none;
+	width: 120px;
+	height: 120px;
+	border-radius: 12px;
+}
+/* The frame is a button once the upload has landed (the picture opens the
+   viewer) and a plain span before that; both fill the tile identically. */
+.composer-staged-tile-frame {
+	display: block;
+	width: 100%;
+	height: 100%;
+	padding: 6px;
+	box-sizing: border-box;
+	border: 0;
+	border-radius: inherit;
+	background: none;
+	overflow: hidden;
+	color: inherit;
+	font: inherit;
+}
+button.composer-staged-tile-frame { cursor: pointer; }
+/* The same hover edge as a bubble thumbnail: this is the same act. */
+.composer-staged-tile:has(button.composer-staged-tile-frame:hover) { border-color: var(--exx-plan); }
+button.composer-staged-tile-frame:focus-visible { outline: 2px solid var(--exx-plan); outline-offset: 2px; }
+.composer-staged-tile-img {
+	display: block;
+	width: 100%;
+	height: 100%;
+	object-fit: contain;
+}
+.composer-staged-tile.uploading .composer-staged-tile-img { opacity: .5; }
+.composer-staged-tile-busy {
+	position: absolute;
+	inset: 0;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	border-radius: inherit;
+}
+.composer-staged-tile-alert {
+	position: absolute;
+	left: 4px;
+	bottom: 4px;
+	width: 16px;
+	height: 16px;
+	border-radius: 50%;
+	background: var(--danger, #d33);
+	color: #fff;
+	font-size: 11px;
+	font-weight: 700;
+	line-height: 16px;
+	text-align: center;
+}
+/* The document card: badge · name over a muted state line · ✕. */
+.composer-staged-card {
 	display: inline-flex;
 	align-items: center;
-	gap: 7px;
+	gap: 8px;
 	max-width: 100%;
-	padding: 4px 8px;
-	border: 1px solid var(--exx-border);
-	border-radius: 8px;
+	padding: 6px 8px;
 	font-size: 12px;
-	background: var(--exx-surface-2, transparent);
 }
-.composer-staged-chip.failed {
-	border-color: var(--danger, #d33);
+.composer-staged-card-text {
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+	line-height: 1.3;
 }
 .composer-staged-name {
 	font-weight: 600;
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
-	max-width: 220px;
+	max-width: 200px;
 }
 .composer-staged-note {
 	color: var(--exx-text-muted);
+	font-size: 11px;
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
-	max-width: 260px;
+	max-width: 200px;
 }
-.composer-staged-chip.failed .composer-staged-note {
+.composer-staged-card.failed .composer-staged-note {
 	color: var(--danger, #d33);
 }
 .composer-staged-remove {
+	flex: none;
 	border: none;
 	background: none;
 	color: var(--exx-text-muted);
@@ -9907,12 +10384,70 @@ label.rs-row {
 .composer-staged-remove:hover {
 	color: var(--exx-text);
 }
+/* On a tile the ✕ is a round button riding the top-right corner, painted in
+   the composer box's own ground so it reads as sitting on the card's edge.
+   Always visible: a control that only appears on hover is invisible to touch
+   and easy to miss, and the corner placement keeps it off the picture. */
+.composer-staged-tile .composer-staged-remove {
+	position: absolute;
+	top: -8px;
+	right: -8px;
+	width: 22px;
+	height: 22px;
+	border: 1px solid var(--exx-border);
+	border-radius: 50%;
+	background: var(--panel-2);
+	color: var(--exx-text-muted);
+	font-size: 11px;
+	line-height: 1;
+	padding: 0;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+}
+.composer-staged-tile .composer-staged-remove:hover {
+	color: var(--exx-text);
+	border-color: var(--exx-text);
+}
 .composer-attach-input {
 	display: none;
 }
 /* Attachment chips inside a sent user bubble — same grammar as task chips. */
 .user-attachment-strip {
 	margin-top: 6px;
+}
+/* An image attachment shows its picture above the chip strip: what the room
+   was shown, at a glance, capped in height so a tall screenshot never takes
+   the bubble over and never wider than the bubble. Rounded like the chips;
+   the click opens the viewer exactly as the chip does. */
+.user-attachment-thumbs {
+	display: flex;
+	flex-wrap: wrap;
+	/* Each picture keeps its own height: stretched to the tallest sibling, a
+	 * small image would paint as a strip. */
+	align-items: flex-start;
+	gap: 8px;
+	margin-top: 8px;
+}
+.user-attachment-thumb {
+	display: block;
+	min-width: 0;
+	max-width: 100%;
+	padding: 0;
+	border: 1px solid var(--exx-border-soft);
+	border-radius: 8px;
+	overflow: hidden;
+	background: transparent;
+	cursor: pointer;
+}
+.user-attachment-thumb:hover { border-color: var(--exx-plan); }
+.user-attachment-thumb:focus-visible { outline: 2px solid var(--exx-plan); outline-offset: 2px; }
+.user-attachment-thumb-img {
+	display: block;
+	width: auto;
+	height: auto;
+	max-width: 100%;
+	max-height: 160px;
 }
 /* The attachment chip in a message (taste pass): it opens the file in the
    viewer, exactly as its Files row does, so it carries the same affordance as
@@ -10213,7 +10748,10 @@ label.rs-row {
 	background: transparent;
 }
 .task-file-chip:hover { border-color: var(--exx-plan); }
-.task-file-chip .task-kind {
+/* The staged composer card wears the same badge, so a file looks the same
+   before and after it rides with a message. */
+.task-file-chip .task-kind,
+.composer-staged-card .task-kind {
 	font-size: 10px;
 	font-weight: 700;
 	letter-spacing: .06em;
@@ -12447,12 +12985,19 @@ button.model-picker-group-head.kb-active {
 	outline: none;
 	border-color: color-mix(in srgb, var(--success) 40%, var(--border-soft));
 }
+/* VPN deliberately off is a calm fact, not a warning: plain grey in both
+   themes (the vars resolve per theme), no amber nag. */
 .remote-on-pill.paused {
-	border-color: color-mix(in srgb, var(--warning) 30%, var(--border-soft));
-	background: color-mix(in srgb, var(--warning) 9%, transparent);
+	border-color: var(--border-soft);
+	background: transparent;
+	color: var(--muted);
+}
+.remote-on-pill.paused:hover,
+.remote-on-pill.paused:focus-visible {
+	border-color: var(--border);
 }
 .remote-on-pill.paused .remote-on-dot {
-	background: var(--warning);
+	background: var(--muted);
 }
 .menu-item-state {
 	color: var(--muted);
@@ -13770,4 +14315,197 @@ html.desktop-app-mac .settings-overlay .landing {
 	html.sidebar-collapsed:not(.desktop-app-mac) .app .topbar {
 		padding-left: 84px;
 	}
+}
+
+/* Room settings at the main Settings' density (visual pass 2026-08-31) ----
+   The room settings modal speaks the Settings overlay's quiet grammar:
+   hairline row rhythm instead of boxes, sentence-case action pills,
+   tracked-caps group labels, outcomes as plain colored sentences. Everything
+   is scoped to .rs-shell so the full-page borrowers of the rs-* control
+   language (remote devices, web search, archived rooms) keep their scale.
+   Appended after the base rules on purpose: same-specificity overrides here
+   must win on order. */
+.rs-shell .rs-row {
+	padding: 6px 0;
+	min-height: 46px;
+}
+.rs-shell .rs-row ~ .rs-row {
+	border-top-color: color-mix(in srgb, var(--border-soft) 55%, transparent);
+}
+.rs-shell .rs-row-label {
+	font-weight: 500;
+}
+.rs-shell .rs-row-hint {
+	font-size: 12px;
+	line-height: 1.4;
+}
+/* Sentence case on the action pills, like the Settings modal lifts the
+   uppercase transform from its inline actions; the pill shape stays. */
+.rs-shell .rs-btn {
+	font-size: 12.5px;
+	letter-spacing: normal;
+	text-transform: none;
+}
+/* Errors as plain colored sentences, no card: the boxed treatment read
+   heavier than the pane itself and the color already carries the meaning. */
+.rs-shell .checkpoint-proposal-error {
+	border: none;
+	border-radius: 0;
+	background: transparent;
+	padding: 0;
+}
+/* One hint scale across the panes (the settings modal's 12px), instead of
+   the full-page views' 11px small print. */
+.rs-shell .workspaces-empty-state,
+.rs-shell .workspaces-session-note,
+.rs-shell .workspaces-warnings,
+.rs-shell .workspaces-success,
+.rs-shell .workspaces-error,
+.rs-shell .workspace-summary-note,
+.rs-shell .room-schedules-help,
+.rs-shell .room-schedules-summary,
+.rs-shell .room-schedules-job-meta {
+	font-size: 12px;
+}
+/* One tracked-caps recipe for every group label in the panes, matching the
+   Settings tables' header treatment. */
+.rs-shell .workspace-summary-facts dt,
+.rs-shell .workspace-tool-group-label,
+.rs-shell .workspaces-field > strong,
+.rs-shell .workspaces-tool-options > strong,
+.rs-shell .room-schedules-recurrence legend,
+.rs-shell .room-schedules-save-summary span {
+	font-size: 10.5px;
+	font-weight: 600;
+	letter-spacing: 0.12em;
+	text-transform: uppercase;
+	color: color-mix(in srgb, var(--muted) 78%, transparent);
+}
+/* Workspace pane: the saved-state summary reads as a plain block, not a
+   card — the folder line and the facts carry the structure themselves. */
+.rs-shell .workspace-summary-card {
+	border: none;
+	border-radius: 0;
+	padding: 0;
+}
+/* The mode segments and tool rows sit on the soft divider palette. */
+.rs-shell .workspace-mode-segments {
+	border-color: var(--border-soft);
+}
+.rs-shell .workspace-mode-segment {
+	font-size: 12.5px;
+	font-weight: 500;
+	padding: 7px 14px;
+}
+.rs-shell .workspace-mode-segment + .workspace-mode-segment {
+	border-left-color: var(--border-soft);
+}
+.rs-shell .workspaces-default-form .workspaces-tool-row {
+	border-bottom-color: color-mix(in srgb, var(--border-soft) 55%, transparent);
+}
+.rs-shell .workspaces-default-form .workspace-tool-groups .workspaces-tool-row:hover {
+	background: color-mix(in srgb, var(--fg) 3%, transparent);
+}
+/* The Bash block keeps a subtle raised distinction, but neutral: a power
+   tool's home, not a warning. */
+.rs-shell .workspace-power-user {
+	border-color: var(--border-soft);
+	background: color-mix(in srgb, var(--panel-2) 55%, transparent);
+}
+/* Skills + connectors: bordered row-cards flatten to the shared divider
+   rhythm; the picker keeps its outline as a boundary but loses the fill. */
+.rs-shell .room-skills-rows {
+	gap: 0;
+	margin-top: 4px;
+}
+.rs-shell .room-skills-row {
+	border: none;
+	border-radius: 0;
+	padding: 8px 0;
+}
+.rs-shell .room-skills-row + .room-skills-row {
+	border-top: 1px solid color-mix(in srgb, var(--border-soft) 55%, transparent);
+}
+.rs-shell .room-skills-picker {
+	background: transparent;
+	border-color: var(--border-soft);
+}
+.rs-shell .room-skills-picker-list {
+	gap: 0;
+}
+/* The drifted-skill review gate keeps its warning identity, softened from a
+   full-strength outline to a tinted one. */
+.rs-shell .room-skills-review {
+	border-color: color-mix(in srgb, var(--exx-warning, #c47f00) 45%, transparent);
+}
+/* Scheduled tasks: the form, recurrence fieldset and preset panel run
+   without boxes; the field structure carries them. */
+.rs-shell .room-schedules-form,
+.rs-shell .room-schedules-recurrence,
+.rs-shell .room-schedules-preset-panel {
+	border: none;
+	border-radius: 0;
+	background: transparent;
+	padding: 0;
+}
+.rs-shell .room-schedules-recurrence legend {
+	padding: 0;
+}
+.rs-shell .room-schedules-field span,
+.rs-shell .room-schedules-checkbox span {
+	font-weight: 600;
+}
+/* The what-will-be-saved summary is a quiet labeled sentence, not an
+   amber alert box. */
+.rs-shell .room-schedules-save-summary {
+	border: none;
+	border-radius: 0;
+	background: transparent;
+	padding: 0;
+}
+/* Choice chips rest transparent at chip weight; the selected one keeps the
+   app's filled-selection treatment from the base rules. */
+.rs-shell .room-schedules-mode-button,
+.rs-shell .room-schedules-submode-button,
+.rs-shell .room-schedules-day-chip {
+	background: transparent;
+	font-weight: 500;
+}
+.rs-shell .room-schedules-mode-button.active,
+.rs-shell .room-schedules-submode-button.active,
+.rs-shell .room-schedules-day-chip.active {
+	background: var(--fg);
+}
+/* Task cards flatten to divider-separated entries. */
+.rs-shell .room-schedules-list {
+	gap: 0;
+}
+.rs-shell .room-schedules-job {
+	border: none;
+	border-radius: 0;
+	padding: 12px 0;
+}
+.rs-shell .room-schedules-job + .room-schedules-job {
+	border-top: 1px solid color-mix(in srgb, var(--border-soft) 55%, transparent);
+}
+/* Status reads as colored caps text rather than an outlined pill, the way
+   the Settings tables show provenance as muted text instead of chips. */
+.rs-shell .room-schedules-record-state,
+.rs-shell .room-schedules-run-status {
+	border: none;
+	border-radius: 0;
+	padding: 0;
+}
+/* The edit form's separator drops to the shared hairline strength. */
+.rs-shell .workspaces-default-form {
+	border-top-color: color-mix(in srgb, var(--border-soft) 55%, transparent);
+}
+/* The access-mode fact beside the folder name reads as quiet caps text,
+   not an outlined pill. */
+.rs-shell .workspace-summary-mode {
+	border: none;
+	border-radius: 0;
+	padding: 0;
+	font-weight: 600;
+	letter-spacing: 0.08em;
 }

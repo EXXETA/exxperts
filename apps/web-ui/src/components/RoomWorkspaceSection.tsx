@@ -4,11 +4,12 @@ import { chooseSystemFolder, clearPersistentRoomWorkspaceDefault, fetchPersisten
 import { useRemoteClientContext } from "../remote-client-context";
 
 const BOUNDED_WORKSPACE_TOOL_OPTIONS = [
+	{ name: "read", label: "Read" },
 	{ name: "ls", label: "List" },
 	{ name: "find", label: "Find" },
-	{ name: "read", label: "Read" },
-	{ name: "read_spreadsheet", label: "Spreadsheet read" },
-	{ name: "write_markdown_file", label: "Markdown write" },
+	{ name: "grep", label: "Search" },
+	{ name: "write", label: "Write" },
+	{ name: "edit", label: "Edit" },
 ] as const;
 
 const LOCAL_FILES_TOOL_OPTIONS = [
@@ -18,10 +19,9 @@ const LOCAL_FILES_TOOL_OPTIONS = [
 	{ name: "grep", label: "Search" },
 	{ name: "write", label: "Write" },
 	{ name: "edit", label: "Edit" },
-	{ name: "read_spreadsheet", label: "Spreadsheet read" },
 ] as const;
 
-const READ_TOOL_NAMES = new Set(["read", "ls", "find", "grep", "read_spreadsheet"]);
+const READ_TOOL_NAMES = new Set(["ls", "find", "grep", "read"]);
 
 interface WorkspaceToolOption {
 	name: string;
@@ -56,10 +56,19 @@ function formatWorkspaceToolName(toolName: string): string {
 		case "read": return "Read";
 		case "write": return "Write";
 		case "edit": return "Edit";
-		case "read_spreadsheet": return "Spreadsheet read";
-		case "write_markdown_file": return "Markdown write";
 		default: return toolName;
 	}
+}
+
+const WRITER_TOOL_NAMES = new Set(["write", "edit"]);
+
+/** The honest capability sentence, derived from what is actually enabled:
+ * no writer tools and no Bash means the room cannot change anything; no
+ * writer tools with Bash on means Bash is the remaining way to modify files. */
+function workspaceHonestyNote(input: { toolNames: readonly string[]; localFiles: boolean; bashEnabled: boolean }): string | null {
+	if (input.toolNames.some((name) => WRITER_TOOL_NAMES.has(name))) return null;
+	if (input.localFiles && input.bashEnabled) return "Write tools are off, but Bash can still modify files.";
+	return "With this setup the room is read-only: it can see files here but cannot change anything.";
 }
 
 function accessModeLabel(mode: PersistentRoomWorkspaceAccessMode): string {
@@ -69,7 +78,7 @@ function accessModeLabel(mode: PersistentRoomWorkspaceAccessMode): string {
 function accessModeHint(mode: PersistentRoomWorkspaceAccessMode): string {
 	return mode === "localFiles"
 		? "The room works with files like you do, in this folder and beyond it, and can create, edit and overwrite. Bash is available in this mode."
-		: "The room stays inside this folder. It can read everything here but only add new Markdown files, so your existing documents cannot be changed.";
+		: "The room stays inside this folder. It can read everything here, and with write tools enabled it can create and edit files inside it.";
 }
 
 function WorkspaceDefaultPolicySummary({ policy, warnings, setupDisabled, onSetWorkspace }: { policy: PersistentRoomCapabilityPolicyView | null; warnings: string[]; setupDisabled: boolean; onSetWorkspace: () => void }) {
@@ -89,6 +98,7 @@ function WorkspaceDefaultPolicySummary({ policy, warnings, setupDisabled, onSetW
 	const workspaceToolsEnabled = policy.allowedToolNames.length > 0;
 	const isLocalFiles = policy.workspaceAccessMode === "localFiles";
 	const toolNames = workspaceToolsEnabled ? policy.allowedToolNames.map(formatWorkspaceToolName).join(", ") : "None";
+	const honestyNote = workspaceHonestyNote({ toolNames: policy.allowedToolNames, localFiles: isLocalFiles, bashEnabled: policy.bashEnabled === true });
 	return (
 		<div className="workspaces-policy-summary">
 			<div className="workspace-summary-card">
@@ -109,6 +119,7 @@ function WorkspaceDefaultPolicySummary({ policy, warnings, setupDisabled, onSetW
 						</div>
 					)}
 				</dl>
+				{honestyNote && <p className="workspace-summary-note">{honestyNote}</p>}
 				<p className="workspace-summary-note">
 					The full local path stays on this machine and is not shown here.{showFolderClue ? ` Folder: ${folderName}.` : ""}
 				</p>
@@ -129,6 +140,10 @@ export function RoomWorkspaceSection({ status, onDirtyChange }: { status: Persis
 	const [loading, setLoading] = useState(false);
 	const [saving, setSaving] = useState(false);
 	const [choosingFolder, setChoosingFolder] = useState(false);
+	// The bash auto-approve preference saves the moment it is toggled, outside
+	// the draft/save cycle above: it only changes whether the live session's
+	// approval guard asks, which reads the stored value fresh on every call,
+	// so no policy save or session rebind is involved.
 	// The native folder chooser opens a dialog on the computer; from a remote
 	// device that can only confuse (the server refuses it anyway), so the
 	// button hides and the typed-path input stands alone.
@@ -216,7 +231,6 @@ export function RoomWorkspaceSection({ status, onDirtyChange }: { status: Persis
 			const response = await savePersistentRoomWorkspaceDefault(status.id, {
 				root: root || undefined,
 				workspaceAccessMode: draftAccessMode,
-				mode: "read",
 				toolSelection,
 				bashEnabled: draftAccessMode === "localFiles" && draftBashEnabled,
 			});
@@ -309,6 +323,7 @@ export function RoomWorkspaceSection({ status, onDirtyChange }: { status: Persis
 	}
 
 	const activeToolGroups = workspaceToolGroupsForMode(draftAccessMode);
+	const draftHonestyNote = workspaceHonestyNote({ toolNames: draftToolNames, localFiles: draftAccessMode === "localFiles", bashEnabled: draftAccessMode === "localFiles" && draftBashEnabled });
 	const savedRoot = policy?.roots[0] ?? null;
 	const savedFolderLabel = savedRoot ? (savedRoot.displayLabel || savedRoot.basename) : null;
 
@@ -386,6 +401,7 @@ export function RoomWorkspaceSection({ status, onDirtyChange }: { status: Persis
 									</div>
 								))}
 							</div>
+							{draftHonestyNote && <p className="workspaces-session-note">{draftHonestyNote}</p>}
 							{draftAccessMode === "bounded" && <p className="workspaces-session-note">Bash is available in Full access mode.</p>}
 						</div>
 						{draftAccessMode === "localFiles" && (
@@ -395,6 +411,9 @@ export function RoomWorkspaceSection({ status, onDirtyChange }: { status: Persis
 									<input className="workspaces-tool-switch" type="checkbox" checked={draftBashEnabled} disabled={saving} onChange={() => { setDraftBashEnabled((current) => !current); setError(null); setMessage(null); }} aria-label="Bash shell access" />
 								</label>
 								<p className="workspaces-session-note">Power-user tool, off by default. Gives the room shell command access when enabled.</p>
+								{draftBashEnabled && (
+									<p className="workspaces-session-note">Whether commands ask for approval is switched from the chat header ("Bash: asks" / "Bash: auto").</p>
+								)}
 							</div>
 						)}
 						<div className="workspace-form-actions">

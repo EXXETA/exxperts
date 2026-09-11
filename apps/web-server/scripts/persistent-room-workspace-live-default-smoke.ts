@@ -119,7 +119,6 @@ try {
 		workspaceAccessMode: "bounded",
 		displayLabel: "Workspace A",
 		source: "manual",
-		mode: "read",
 	});
 	writePersistentRoomDefaultCapabilityPolicy(defaultA, storage);
 	assert(fs.existsSync(persistentRoomWorkspaceDefaultPath(agentId, storage)), "room default A should be written");
@@ -142,10 +141,10 @@ try {
 	const effectiveA = resolvePersistentRoomEffectiveWorkspacePolicy(agentId, threadA, storage);
 	assert(effectiveA.source === "room-default", `thread A effective source should be room-default, got ${effectiveA.source}`);
 	assert(effectiveA.workspaceAccessMode === "bounded", "thread A should follow bounded room default");
-	assert(effectiveA.allowedToolNames.join(",") === "ls,find,read,write_markdown_file,read_spreadsheet", "thread A should expose exact bounded workspace bundle");
+	assert(effectiveA.allowedToolNames.join(",") === "ls,find,grep,read,write,edit", "thread A should expose exact bounded workspace bundle");
 	assert(effectiveA.workspaceToolsEnabled === true, "workspace tools should be enabled from the live default");
 	assert(effectiveA.bashEnabled === false, "bash must remain disabled under bounded default");
-	assert(persistentRoomRuntimeCwdForEffectiveWorkspacePolicy(effectiveA, runtimeCwd) === runtimeCwd, "bounded effective policy should preserve fallback runtime cwd");
+	assert(persistentRoomRuntimeCwdForEffectiveWorkspacePolicy(effectiveA, runtimeCwd) === fs.realpathSync.native(workspaceA), "bounded effective policy should use its workspace as the runtime cwd");
 	const bootPromptA = readPersistentAgentBootPromptSnapshot(agentId, writeA.thread.runtime);
 	assert(bootPromptA.includes("Workspace label: Workspace A"), "boot prompt should include workspace A label");
 	assert(crypto.createHash("sha256").update(bootPromptA, "utf-8").digest("hex") === writeA.thread.runtime.bootPromptSha256, "boot prompt hash should match runtime metadata");
@@ -162,15 +161,14 @@ try {
 		workspaceAccessMode: "localFiles",
 		displayLabel: "Workspace B",
 		source: "manual",
-		mode: "read",
-		toolSelection: { kind: "custom", allowedToolNames: ["read", "ls", "read_spreadsheet"] },
+		toolSelection: { kind: "custom", allowedToolNames: ["read", "ls", "grep"] },
 		bashEnabled: true,
 	});
 	writePersistentRoomDefaultCapabilityPolicy(defaultB, storage);
 	const effectiveAfterChange = resolvePersistentRoomEffectiveWorkspacePolicy(agentId, threadA, storage);
 	assert(effectiveAfterChange.source === "room-default", "mid-conversation default change should keep resolving from the room default");
 	assert(effectiveAfterChange.workspaceAccessMode === "localFiles", "thread A should pick up Local files mode from the changed default");
-	assert(effectiveAfterChange.allowedToolNames.join(",") === "read,ls,read_spreadsheet", "thread A should pick up the changed default's tool subset");
+	assert(effectiveAfterChange.allowedToolNames.join(",") === "read,ls,grep", "thread A should pick up the changed default's tool subset");
 	assert(effectiveAfterChange.bashEnabled === true, "thread A should pick up the changed default's bash setting");
 	assert(effectiveAfterChange.policy?.roots[0]?.realpath === fs.realpathSync.native(workspaceB), "thread A should pick up workspace B root");
 	assert(persistentRoomRuntimeCwdForEffectiveWorkspacePolicy(effectiveAfterChange, runtimeCwd) === fs.realpathSync.native(workspaceB), "local-files effective policy should use workspace B as runtime cwd");
@@ -197,7 +195,6 @@ try {
 		workspaceAccessMode: "bounded",
 		displayLabel: "Override A",
 		source: "manual",
-		mode: "read",
 	});
 	writePersistentRoomCapabilityPolicy(overridePolicy, storage);
 	const effectiveOverride = resolvePersistentRoomEffectiveWorkspacePolicy(agentId, threadA, storage);
@@ -238,7 +235,7 @@ try {
 	assert(!fs.existsSync(persistentRoomWorkspacePolicyPath(agentId, threadB, storage)), "thread B creation must not write a mirror sidecar");
 	const bootPromptB = readPersistentAgentBootPromptSnapshot(agentId, writeB.thread.runtime);
 	assert(bootPromptB.includes("Workspace label: Workspace B"), "new thread boot prompt should use the current room default");
-	assert(bootPromptB.includes("Workspace tools: read, ls, read_spreadsheet"), "new thread boot prompt should list the current default's tools");
+	assert(bootPromptB.includes("Workspace tools: read, ls, grep"), "new thread boot prompt should list the current default's tools");
 	assert(bootPromptB.includes("Bash/shell access: enabled"), "new thread boot prompt should reflect the current default's bash setting");
 
 	console.log("persistent-room workspace live-default smoke passed");

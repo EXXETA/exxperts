@@ -34,7 +34,7 @@ const {
 	writeApprovedCheckpoint,
 	writePersistentAgentThread,
 } = await import("../src/persistent-agents.js");
-const { ABSORB_CONSOLIDATION_WORKER_TYPE, ABSORB_EMPTY_RECENT_CONTEXT_PLACEHOLDER } = await import("../src/absorb-consolidation.js");
+const { ABSORB_CONSOLIDATION_WORKER_TYPE, ABSORB_EMPTY_RECENT_CONTEXT_PLACEHOLDER, extractTopLevelSectionBody } = await import("../src/absorb-consolidation.js");
 const { buildRoomMemory, readConversationTranscript, readMemoryEventDiff, readMemorySnapshotAt } = await import("../src/memory-api.js");
 
 const agentId = "memory-provenance-smoke-room";
@@ -72,7 +72,11 @@ function checkpointRequest(title: string) {
 }
 
 function candidateL1b(): string {
-	return `<!-- exxeta:l1b schema_version=1 -->\n\n## Chronos\n\n- Current scaffold timestamp: 2026-05-18T00:00:00.000Z\n- Persistent agent id: ${agentId}\n- Lifecycle state: ready\n- Last checkpoint: cp_smoke\n- Last consolidation: none\n\n## Deep Memory\n\n- Synthetic user validates memory provenance receipts.\n- The provenance smoke durable understanding is consolidated.\n\n## Active Items\n\n### High Priority\n\n- Keep provenance read-only.\n\n## Recent Context\n\n${ABSORB_EMPTY_RECENT_CONTEXT_PLACEHOLDER}\n`;
+	// Chronos is system-managed: a faithful candidate carries the source's
+	// Chronos through unchanged, so the fixture splices it from the live L1b.
+	const chronos = extractTopLevelSectionBody(readL1b(), "Chronos");
+	if (chronos == null) throw new Error("source L1b should have a Chronos section");
+	return `<!-- exxeta:l1b schema_version=1 -->\n\n## Chronos\n\n${chronos.trim()}\n\n## Deep Memory\n\n- Synthetic user validates memory provenance receipts.\n- The provenance smoke durable understanding is consolidated.\n\n## Active Items\n\n### High Priority\n\n- Keep provenance read-only.\n\n## Recent Context\n\n${ABSORB_EMPTY_RECENT_CONTEXT_PLACEHOLDER}\n`;
 }
 
 function absorbRequest(recentContextEntryCount: number) {

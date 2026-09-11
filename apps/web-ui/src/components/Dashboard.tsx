@@ -23,6 +23,18 @@ interface UsageRow {
 	cacheRead: number;
 	cacheWrite: number;
 	cost: number;
+	/** the cost is tokens x today's price, for a turn stored at zero before its model had a price */
+	estimated: boolean;
+}
+
+/** Money plus how much of it is a read-time estimate or still missing; every aggregate carries it. */
+interface Priced {
+	cost: number;
+	turns: number;
+	/** turns stored at zero and priced at today's rate on the way out */
+	estimatedTurns: number;
+	/** turns that moved tokens and still have no price anywhere */
+	unpricedTurns: number;
 }
 
 interface SeriesBucket extends SourceSplit {
@@ -48,13 +60,15 @@ interface UsagePayload {
 		cost: SourceSplit;
 		cacheSavedEst: number;
 		cacheSavedKnownTurns: number;
+		estimatedTurns: number;
+		unpricedTurns: number;
 		cacheHitRate: number;
 		activeDays: number;
 	};
 	previous: { cost: SourceSplit; turns: number; tokens: number } | null;
-	sources: { source: UsageSource; name: string; cost: number; turns: number }[];
-	byAgent: { agent: string; retired: boolean; cost: number; turns: number; input: number; output: number; kinds: Record<string, { cost: number; turns: number }> }[];
-	byModel: { id: string; label: string; rawIds: number; cost: number; turns: number; tokens: number }[];
+	sources: (Priced & { source: UsageSource; name: string })[];
+	byAgent: (Priced & { agent: string; retired: boolean; input: number; output: number; kinds: Record<string, Priced> })[];
+	byModel: (Priced & { id: string; label: string; rawIds: number; tokens: number })[];
 	series: { kind: "hourly" | "daily"; buckets: SeriesBucket[] };
 	weekHour: number[][];
 	recent: UsageRow[];
@@ -111,6 +125,42 @@ function totalCost(split: SourceSplit): number {
 	return split.billed + split.plan + split.unattributed;
 }
 
+/**
+ * Money in three states. Exact money is plain; money that includes turns
+ * priced at today's rate is an estimate and wears the ≈; a zero standing for
+ * turns nobody could price is an unknown bill, not a free one, and says so.
+ * Only billed sources ever earn the plain form: everything else on the page
+ * is list-price value and estimated by nature.
+ */
+function fmtPriced(p: Priced, exact: boolean): string {
+	if (p.cost === 0 && p.unpricedTurns > 0) return "no price on file";
+	return exact && p.estimatedTurns === 0 ? fmtCost(p.cost) : fmtEst(p.cost);
+}
+
+/** The caveat beside the money: how many turns are priced today, how many not at all. */
+function pricingNote(p: Priced): string | undefined {
+	const parts: string[] = [];
+	if (p.estimatedTurns > 0) parts.push(`${p.estimatedTurns.toLocaleString()} turn${p.estimatedTurns === 1 ? "" : "s"} priced at today's rate`);
+	if (p.unpricedTurns > 0) parts.push(`${p.unpricedTurns.toLocaleString()} turn${p.unpricedTurns === 1 ? "" : "s"} without a price`);
+	return parts.length ? parts.join(", ") : undefined;
+}
+
+function turnsNote(turns: number): string {
+	return `${turns.toLocaleString()} turn${turns === 1 ? "" : "s"}`;
+}
+
+/** One tally over many; the three states survive the sum untouched. */
+function sumPriced(rows: Priced[]): Priced {
+	return rows.reduce(
+		(acc, p) => ({ cost: acc.cost + p.cost, turns: acc.turns + p.turns, estimatedTurns: acc.estimatedTurns + p.estimatedTurns, unpricedTurns: acc.unpricedTurns + p.unpricedTurns }),
+		{ cost: 0, turns: 0, estimatedTurns: 0, unpricedTurns: 0 },
+	);
+}
+
+// The server names a source row this way when its gateway id no longer
+// answers for anything; the client folds those rows behind one quiet header.
+const REMOVED_GATEWAY_PREFIX = "Removed gateway (";
+
 /** Short source name for the recent-turns table. */
 const PROVIDER_SHORT: Record<string, string> = {
 	"openai-codex": "ChatGPT",
@@ -157,6 +207,8 @@ function sourceCell(row: UsageRow): string {
 export function Dashboard() {
 	const [data, setData] = useState<UsagePayload | null>(null);
 	const [recentOpen, setRecentOpen] = useState(false);
+	const [removedOpen, setRemovedOpen] = useState(false);
+	const [retiredOpen, setRetiredOpen] = useState(false);
 	const [agentsExpanded, setAgentsExpanded] = useState(false);
 	const [modelsExpanded, setModelsExpanded] = useState(false);
 	const [range, setRange] = useState<Range>("all");
@@ -186,6 +238,16 @@ export function Dashboard() {
 
 	const t = data.totals;
 	const est = totalCost(t.cost);
+	// Only billed rows can turn a zero into a wrong bill or an estimate into
+	// exact money; plan and older rows are estimates already and say so in
+	// their own words.
+	const billed: Priced = sumPriced(data.sources.filter((s) => s.source === "billed"));
+	const billedNote = pricingNote(billed);
+	// Rows whose gateway no longer exists fold behind one row; the stacked bar
+	// above keeps every segment, history is not rewritten.
+	const liveSources = data.sources.filter((s) => !s.name.startsWith(REMOVED_GATEWAY_PREFIX));
+	const removedSources = data.sources.filter((s) => s.name.startsWith(REMOVED_GATEWAY_PREFIX));
+	const removedSum = sumPriced(removedSources);
 	const buckets = data.series.buckets;
 	const unit = data.series.kind === "hourly" ? "hour" : "day";
 	const activityTitle = range === "24h" ? "Last 24 hours" : range === "7d" ? "Last 7 days" : range === "30d" ? "Last 30 days" : "All time";
@@ -206,6 +268,21 @@ export function Dashboard() {
 	// statuses the server joins in; retired/archived rooms fall back to the
 	// recorded label or id, exactly as before.
 	const nameOf = (id: string): string => (id === "hivemind:memory" ? "HiveMind" : data.agentNames?.[id] ?? agentLabel(id));
+
+	// Retired rooms (archived and deleted alike) sit folded under the active
+	// ones; the memory chat is a live surface and always counts as active.
+	const isActiveRoom = (a: UsagePayload["byAgent"][number]): boolean => !a.retired || a.agent === "hivemind:memory";
+	const activeRooms = data.byAgent.filter(isActiveRoom);
+	const retiredRooms = data.byAgent.filter((a) => !isActiveRoom(a));
+	const retiredSum = sumPriced(retiredRooms);
+	const roomRow = (a: UsagePayload["byAgent"][number]): BarListRow => ({
+		key: a.agent,
+		name: nameOf(a.agent),
+		tag: a.agent === "hivemind:memory" ? "memory chat" : a.retired ? "retired" : undefined,
+		cost: a.cost,
+		detail: `${fmtPriced(a, false)}, ${turnsNote(a.turns)}`,
+		subDetail: a.agent === "hivemind:memory" ? pricingNote(a) : [backgroundKindsNote(a.kinds), pricingNote(a)].filter(Boolean).join("; ") || undefined,
+	});
 
 	return (
 		<div className="dashboard">
@@ -233,10 +310,13 @@ export function Dashboard() {
 					</div>
 				</div>
 				<div className="kpis">
-					<div className="kpi" title="Real pay-per-token spend on API keys. Everything else on this page is an estimate at public API list prices.">
+					<div className="kpi" title="Pay-per-token usage on API keys and gateways, at the provider's or gateway's published rates. Everything else on this page is an estimate at public API list prices.">
 						<div className="label">Billed spend</div>
-						<div className="value">{fmtCost(t.cost.billed)}</div>
-						<div className="hint">{t.cost.billed === 0 ? "no pay-per-token usage" : "pay-per-token API usage"}{data.previous ? ` (${delta(t.cost.billed, data.previous.cost.billed) ?? "no change"} vs prior)` : ""}</div>
+						<div className="value">{fmtPriced(billed, true)}</div>
+						<div className="hint">
+							{billed.cost === 0 ? (billedNote ?? "no pay-per-token usage") : `pay-per-token API usage${billedNote ? ` (${billedNote})` : ""}`}
+							{data.previous ? ` (${delta(t.cost.billed, data.previous.cost.billed) ?? "no change"} vs prior)` : ""}
+						</div>
 					</div>
 					<div className="kpi" title="What this usage would have cost at public API list prices. It ran on subscriptions you already pay for (ChatGPT, Copilot, Claude plans).">
 						<div className="label">Covered by plans</div>
@@ -270,24 +350,36 @@ export function Dashboard() {
 									<div key={i} className={`seg-${s.source}`} style={{ width: `${est > 0 ? (s.cost / est) * 100 : 0}%` }} />
 								))}
 							</div>
-							{data.sources.map((s, i) => (
-								<div key={i} className="src-row">
-									<span className={`src-dot seg-${s.source}`} />
-									<span className="src-name">
-										{s.name}
-										<span className={`src-chip ${s.source}`}>{s.source === "unattributed" ? "unattributed" : s.source}</span>
-									</span>
-									<span className="src-money">{s.source === "billed" ? fmtCost(s.cost) : fmtEst(s.cost)}</span>
-									<span className="src-meta">
-										{s.turns.toLocaleString()} turn{s.turns === 1 ? "" : "s"}
-										{s.source === "plan" ? ", included in your subscription" : ""}
-										{s.source === "unattributed" ? ", recorded before provider tracking" : ""}
-									</span>
-								</div>
+							{liveSources.map((s, i) => (
+								<SourceRow key={i} s={s} />
 							))}
+							{removedSources.length > 0 && (
+								<>
+									<button
+										type="button"
+										className="src-row src-row-fold"
+										aria-expanded={removedOpen}
+										onClick={() => setRemovedOpen((v) => !v)}
+									>
+										<span className="fold-caret" aria-hidden="true">{removedOpen ? "▾" : "▸"}</span>
+										<span className="src-name">
+											Removed gateways
+											<span className="src-chip billed">billed</span>
+										</span>
+										<span className="src-money">{fmtPriced(removedSum, removedSources.every((s) => s.source === "billed"))}</span>
+										<span className="src-meta">
+											{turnsNote(removedSum.turns)} across {removedSources.length} gateway{removedSources.length === 1 ? "" : "s"}
+											{removedSum.cost > 0 && pricingNote(removedSum) ? ` (${pricingNote(removedSum)})` : ""}
+										</span>
+									</button>
+									{removedOpen && removedSources.map((s, i) => <SourceRow key={i} s={s} indented />)}
+								</>
+							)}
 							<div className="src-note">
-								Estimated values use public API list prices. Memory upkeep, HiveMind answers and scheduled runs
-								are recorded from July 2026; earlier upkeep was never persisted and is not included.
+								Estimated values use public API list prices. Gateway turns use the rates the gateway publishes; turns
+								from before a price was on file are priced at today's rate and marked ≈. Memory upkeep, HiveMind
+								answers and scheduled runs are recorded from July 2026; earlier upkeep was never persisted and is
+								not included.
 							</div>
 						</>
 					)}
@@ -321,25 +413,26 @@ export function Dashboard() {
 			</section>
 
 			<section className="dash-section">
-				<div className="dash-section-label">Exxperts</div>
+				<div className="dash-section-label">Rooms</div>
 				<div className="chart-block">
-					<div className="sub bar-list-sub">Share of est. value. Select an exxpert to scope the whole page.</div>
+					<div className="sub bar-list-sub">Share of est. value. Select a room to scope the whole page.</div>
 					{data.byAgent.length === 0 && <div className="sub">No usage recorded yet. Send a prompt.</div>}
 					<BarList
-						rows={data.byAgent.map((a) => ({
-							key: a.agent,
-							name: nameOf(a.agent),
-							tag: a.agent === "hivemind:memory" ? "memory chat" : a.retired ? "retired" : undefined,
-							cost: a.cost,
-							detail: `${fmtEst(a.cost)}, ${a.turns.toLocaleString()} turn${a.turns === 1 ? "" : "s"}`,
-							subDetail: a.agent === "hivemind:memory" ? undefined : backgroundKindsNote(a.kinds),
-						}))}
+						rows={activeRooms.map(roomRow)}
 						shareBase={est}
 						selected={agent}
 						onSelect={(key) => setAgent(agent === key ? "all" : key)}
 						expanded={agentsExpanded}
 						onToggleExpanded={() => setAgentsExpanded((v) => !v)}
-						collapseNoun="exxperts"
+						collapseNoun="rooms"
+						fold={retiredRooms.length > 0 ? {
+							label: `Retired rooms (${retiredRooms.length})`,
+							detail: `${fmtPriced(retiredSum, false)}, ${turnsNote(retiredSum.turns)}`,
+							cost: retiredSum.cost,
+							rows: retiredRooms.map(roomRow),
+							open: retiredOpen,
+							onToggle: () => setRetiredOpen((v) => !v),
+						} : undefined}
 					/>
 				</div>
 			</section>
@@ -354,7 +447,8 @@ export function Dashboard() {
 							key: m.id,
 							name: m.label,
 							cost: m.cost,
-							detail: `${fmtEst(m.cost)}, ${m.turns.toLocaleString()} turn${m.turns === 1 ? "" : "s"}`,
+							detail: `${fmtPriced(m, false)}, ${turnsNote(m.turns)}`,
+							subDetail: pricingNote(m),
 						}))}
 						shareBase={est}
 						selected={model}
@@ -399,7 +493,7 @@ export function Dashboard() {
 							<thead>
 								<tr>
 									<th>When</th>
-									<th>Exxpert</th>
+									<th>Room</th>
 									<th>Model</th>
 									<th>Source</th>
 									<th>Kind</th>
@@ -418,12 +512,12 @@ export function Dashboard() {
 										<td><span className="kind-chip">{KIND_LABELS[r.kind ?? "chat"] ?? r.kind}</span></td>
 										<td>{fmtTok(r.input)}</td>
 										<td>{fmtTok(r.output)}</td>
-										<td>{r.authType === "api_key" ? fmtCost(r.cost) : fmtEst(r.cost)}</td>
+										<td>{fmtPriced(rowPriced(r), r.authType === "api_key")}</td>
 									</tr>
 								))}
 								{data.recent.length === 0 && (
 									<tr>
-										<td colSpan={8}>{agent !== "all" ? "No turns for this exxpert." : "No turns yet."}</td>
+										<td colSpan={8}>{agent !== "all" ? "No turns for this room." : "No turns yet."}</td>
 									</tr>
 								)}
 							</tbody>
@@ -437,15 +531,41 @@ export function Dashboard() {
 	);
 }
 
-/** "plus upkeep ≈ $0.12 over 6 runs" line under an exxpert with background kinds. */
-function backgroundKindsNote(kinds: Record<string, { cost: number; turns: number }>): string | undefined {
+/** One source line; removed gateways reuse it indented under their fold. */
+function SourceRow({ s, indented }: { s: UsagePayload["sources"][number]; indented?: boolean }) {
+	return (
+		<div className={`src-row${indented ? " src-row-inner" : ""}`}>
+			<span className={`src-dot seg-${s.source}`} />
+			<span className="src-name">
+				{s.name}
+				<span className={`src-chip ${s.source}`}>{s.source === "unattributed" ? "unattributed" : s.source}</span>
+			</span>
+			<span className="src-money">{fmtPriced(s, s.source === "billed")}</span>
+			<span className="src-meta">
+				{turnsNote(s.turns)}
+				{s.source === "billed" && s.cost > 0 && pricingNote(s) ? ` (${pricingNote(s)})` : ""}
+				{s.source === "plan" ? ", included in your subscription" : ""}
+				{s.source === "unattributed" ? ", recorded before provider tracking" : ""}
+			</span>
+		</div>
+	);
+}
+
+/** "incl. upkeep ≈ $0.12 over 6 runs" line under an exxpert with background kinds. */
+function backgroundKindsNote(kinds: Record<string, Priced>): string | undefined {
 	const parts: string[] = [];
 	for (const kind of ["upkeep", "consult", "scheduled", "hivemind", "cli"]) {
 		const k = kinds[kind];
 		if (!k || k.turns === 0) continue;
-		parts.push(`${kind} ${fmtEst(k.cost)} over ${k.turns} run${k.turns === 1 ? "" : "s"}`);
+		parts.push(`${kind} ${fmtPriced(k, false)} over ${k.turns} run${k.turns === 1 ? "" : "s"}`);
 	}
 	return parts.length ? `incl. ${parts.join(", ")}` : undefined;
+}
+
+/** One ledger row as the three-state money helper sees it. */
+function rowPriced(r: UsageRow): Priced {
+	const moved = r.input + r.output + r.cacheRead + (r.cacheWrite || 0) > 0;
+	return { cost: r.cost, turns: 1, estimatedTurns: r.estimated ? 1 : 0, unpricedTurns: r.cost === 0 && moved && !r.estimated ? 1 : 0 };
 }
 
 interface BarListRow {
@@ -457,6 +577,16 @@ interface BarListRow {
 	subDetail?: string;
 }
 
+/** Rows folded behind one quiet header row below the list; no rows, no fold. */
+interface BarListFold {
+	label: string;
+	detail: string;
+	cost: number;
+	rows: BarListRow[];
+	open: boolean;
+	onToggle: () => void;
+}
+
 function BarList({
 	rows,
 	shareBase,
@@ -465,6 +595,7 @@ function BarList({
 	expanded,
 	onToggleExpanded,
 	collapseNoun,
+	fold,
 }: {
 	rows: BarListRow[];
 	shareBase: number;
@@ -473,38 +604,63 @@ function BarList({
 	expanded: boolean;
 	onToggleExpanded: () => void;
 	collapseNoun: string;
+	fold?: BarListFold;
 }) {
 	const collapsible = rows.length > BAR_COLLAPSE_LIMIT + 1;
 	const visible = collapsible && !expanded ? rows.filter((r, i) => i < BAR_COLLAPSE_LIMIT || r.key === selected) : rows;
+	const pct = (cost: number) => (shareBase > 0 ? (cost / shareBase) * 100 : 0);
+	// A selected folded row keeps the fold open so the active filter never hides.
+	const foldSelected = fold != null && fold.rows.some((r) => r.key === selected);
+	const foldOpen = fold != null && (fold.open || foldSelected);
+	const renderRow = (r: BarListRow, folded = false) => {
+		const sharePct = pct(r.cost);
+		const isSelected = selected === r.key;
+		return (
+			<div key={r.key} className={folded ? "bar-fold-row" : undefined}>
+				<button
+					type="button"
+					className={`bar-row${isSelected ? " selected" : ""}${selected !== "all" && !isSelected ? " dim" : ""}`}
+					aria-pressed={isSelected}
+					onClick={() => onSelect(r.key)}
+				>
+					<div className="name">
+						{r.name}
+						{r.tag && <span className="bar-tag">{r.tag}</span>}
+					</div>
+					<div className="bar-track"><div className="bar-fill" style={{ width: `${sharePct}%` }} /></div>
+					<div className="pct">{sharePct.toFixed(1)}%</div>
+					<div className="num">{r.detail}</div>
+				</button>
+				{r.subDetail && <div className="bar-subdetail">{r.subDetail}</div>}
+			</div>
+		);
+	};
 	return (
 		<>
-			{visible.map((r) => {
-				const sharePct = shareBase > 0 ? (r.cost / shareBase) * 100 : 0;
-				const isSelected = selected === r.key;
-				return (
-					<div key={r.key}>
-						<button
-							type="button"
-							className={`bar-row${isSelected ? " selected" : ""}${selected !== "all" && !isSelected ? " dim" : ""}`}
-							aria-pressed={isSelected}
-							onClick={() => onSelect(r.key)}
-						>
-							<div className="name">
-								{r.name}
-								{r.tag && <span className="bar-tag">{r.tag}</span>}
-							</div>
-							<div className="bar-track"><div className="bar-fill" style={{ width: `${sharePct}%` }} /></div>
-							<div className="pct">{sharePct.toFixed(1)}%</div>
-							<div className="num">{r.detail}</div>
-						</button>
-						{r.subDetail && <div className="bar-subdetail">{r.subDetail}</div>}
-					</div>
-				);
-			})}
+			{visible.map((r) => renderRow(r))}
 			{collapsible && (
 				<button type="button" className="bar-row-more" onClick={onToggleExpanded}>
 					{expanded ? `Show top ${collapseNoun} only` : `Show all ${rows.length} ${collapseNoun}`}
 				</button>
+			)}
+			{fold && fold.rows.length > 0 && (
+				<>
+					<button
+						type="button"
+						className={`bar-row bar-row-fold${selected !== "all" && !foldSelected ? " dim" : ""}`}
+						aria-expanded={foldOpen}
+						onClick={fold.onToggle}
+					>
+						<div className="name">
+							<span className="fold-caret" aria-hidden="true">{foldOpen ? "▾" : "▸"}</span>
+							{fold.label}
+						</div>
+						<div className="bar-track"><div className="bar-fill" style={{ width: `${pct(fold.cost)}%` }} /></div>
+						<div className="pct">{pct(fold.cost).toFixed(1)}%</div>
+						<div className="num">{fold.detail}</div>
+					</button>
+					{foldOpen && fold.rows.map((r) => renderRow(r, true))}
+				</>
 			)}
 		</>
 	);

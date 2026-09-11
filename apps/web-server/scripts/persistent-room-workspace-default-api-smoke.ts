@@ -130,7 +130,7 @@ try {
 	assert(putDefault.body?.policy?.pathAccess === "local-files", "Local files default should expose local-files path access");
 	assert(putDefault.body?.policy?.nativePiFilesystemToolsEnabled === true, "Local files default should expose native Pi filesystem tools");
 	assert(putDefault.body?.policy?.bashEnabled === false, "Local files default should keep bash disabled");
-	assert(putDefault.body?.policy?.allowedToolNames?.join(",") === "read,ls,find,grep,write,edit,read_spreadsheet", "Local files default should expose fixed W5 tool set");
+	assert(putDefault.body?.policy?.allowedToolNames?.join(",") === "read,ls,find,grep,write,edit", "Local files default should expose fixed W5 tool set");
 	assertNoPathLeak(putDefault.body, "PUT default", [tempHome, tempAgentsRoot, repoRoot, workspaceRoot, agentRoot]);
 	assert(fs.existsSync(defaultPath), "PUT should write runtime/workspace-default.json");
 	assert(!fs.existsSync(sentinelSidecarPath), "PUT default must not create workspace-policies/room_default.json");
@@ -160,7 +160,7 @@ try {
 	});
 	assert(noRootUpdate.status === 200, `PUT no-root default update should succeed, got ${noRootUpdate.status}: ${JSON.stringify(noRootUpdate.body)}`);
 	assert(noRootUpdate.body?.policy?.workspaceAccessMode === "localFiles", "no-root default update should preserve existing workspace access mode when omitted");
-	assert(noRootUpdate.body?.policy?.allowedToolNames?.join(",") === "read,ls,find,grep,write,edit,read_spreadsheet", "no-root Local files update should keep fixed W5 tools");
+	assert(noRootUpdate.body?.policy?.allowedToolNames?.join(",") === "read,ls,find,grep,write,edit", "no-root Local files update should keep fixed W5 tools");
 	assertNoPathLeak(noRootUpdate.body, "PUT no-root default update", [tempHome, tempAgentsRoot, repoRoot, workspaceRoot, agentRoot]);
 
 	const enableBashNoRoot = await requestJson(`/api/persistent-agents/${encodedAgentId}/workspace-default`, {
@@ -171,6 +171,7 @@ try {
 	assert(enableBashNoRoot.body?.policy?.workspaceAccessMode === "localFiles", "bash enable update should preserve Local files mode");
 	assert(enableBashNoRoot.body?.policy?.allowedToolNames?.length === 0, "bash enable update should allow ordinary Local files tools to be all off");
 	assert(enableBashNoRoot.body?.policy?.bashEnabled === true, "bash enable update should expose explicit bash enabled");
+	assert(enableBashNoRoot.body?.policy?.writeEnabled === false, "bash without writer tools must not report write capability — bash reach is its own flag");
 	assertNoPathLeak(enableBashNoRoot.body, "PUT no-root bash enable", [tempHome, tempAgentsRoot, repoRoot, workspaceRoot, agentRoot]);
 
 	const invalidLocalFilesToolSelection = await requestJson(`/api/persistent-agents/${encodedAgentId}/workspace-default`, {
@@ -181,16 +182,33 @@ try {
 	assertNoPathLeak(invalidLocalFilesToolSelection.body, "invalid Local files bash tool selection", [tempHome, tempAgentsRoot, repoRoot, workspaceRoot, agentRoot]);
 	const invalidLocalFilesBoundedToolSelection = await requestJson(`/api/persistent-agents/${encodedAgentId}/workspace-default`, {
 		method: "PUT",
-		body: JSON.stringify({ workspaceAccessMode: "localFiles", mode: "read-only", toolSelection: { kind: "custom", allowedToolNames: ["read", "write_markdown_file"] } }),
+		body: JSON.stringify({ workspaceAccessMode: "localFiles", mode: "read-only", toolSelection: { kind: "custom", allowedToolNames: ["read", "unknown_tool"] } }),
 	});
 	assert(invalidLocalFilesBoundedToolSelection.status === 400, `Local files bounded-only tool selection should reject, got ${invalidLocalFilesBoundedToolSelection.status}: ${JSON.stringify(invalidLocalFilesBoundedToolSelection.body)}`);
 	assertNoPathLeak(invalidLocalFilesBoundedToolSelection.body, "invalid Local files bounded-only tool selection", [tempHome, tempAgentsRoot, repoRoot, workspaceRoot, agentRoot]);
 	const invalidBoundedToolSelection = await requestJson(`/api/persistent-agents/${encodedAgentId}/workspace-default`, {
 		method: "PUT",
-		body: JSON.stringify({ workspaceAccessMode: "bounded", mode: "read-only", toolSelection: { kind: "custom", allowedToolNames: ["read", "grep"] } }),
+		body: JSON.stringify({ workspaceAccessMode: "bounded", mode: "read-only", toolSelection: { kind: "custom", allowedToolNames: ["read", "bash"] } }),
 	});
-	assert(invalidBoundedToolSelection.status === 400, `bounded grep tool selection should reject, got ${invalidBoundedToolSelection.status}: ${JSON.stringify(invalidBoundedToolSelection.body)}`);
-	assertNoPathLeak(invalidBoundedToolSelection.body, "invalid bounded grep tool selection", [tempHome, tempAgentsRoot, repoRoot, workspaceRoot, agentRoot]);
+	assert(invalidBoundedToolSelection.status === 400, `bounded bash tool selection should reject, got ${invalidBoundedToolSelection.status}: ${JSON.stringify(invalidBoundedToolSelection.body)}`);
+	assertNoPathLeak(invalidBoundedToolSelection.body, "invalid bounded bash tool selection", [tempHome, tempAgentsRoot, repoRoot, workspaceRoot, agentRoot]);
+
+	// Compat: older clients still send a workspace mode string. Garbage keeps
+	// failing loudly, but a valid value is discarded — write capability derives
+	// from the tool selection alone (the mode:"read-only" bodies above prove
+	// the accept-and-ignore half).
+	const invalidMode = await requestJson(`/api/persistent-agents/${encodedAgentId}/workspace-default`, {
+		method: "PUT",
+		body: JSON.stringify({ workspaceAccessMode: "localFiles", mode: "garbage" }),
+	});
+	assert(invalidMode.status === 400, `invalid legacy mode string should still reject, got ${invalidMode.status}: ${JSON.stringify(invalidMode.body)}`);
+	const readOnlySelection = await requestJson(`/api/persistent-agents/${encodedAgentId}/workspace-default`, {
+		method: "PUT",
+		body: JSON.stringify({ workspaceAccessMode: "localFiles", mode: "read-only", toolSelection: { kind: "custom", allowedToolNames: ["read", "ls", "find", "grep"] }, bashEnabled: false }),
+	});
+	assert(readOnlySelection.status === 200, `PUT read-only selection should succeed, got ${readOnlySelection.status}: ${JSON.stringify(readOnlySelection.body)}`);
+	assert(readOnlySelection.body?.policy?.writeEnabled === false, "a selection without writer tools must report writeEnabled false");
+	assert(readOnlySelection.body?.policy?.modes?.write === false, "modes.write mirrors the derived writer presence");
 
 	// Live workspace defaults: a mutation applies to the RUNNING conversation
 	// from its next message. A thread sidecar that merely mirrors the current
@@ -220,7 +238,7 @@ try {
 	assert(changedDefault.body?.policy?.workspaceAccessMode === "bounded", "explicit changed default should save bounded workspace mode");
 	assert(changedDefault.body?.policy?.pathAccess === "workspace-only", "explicit bounded default should expose workspace-only path access");
 	assert(changedDefault.body?.policy?.bashEnabled === false, "explicit bounded default should force bash disabled even when requested");
-	assert(changedDefault.body?.policy?.writeEnabled === true, "bounded default should enable bounded Markdown workspace write");
+	assert(changedDefault.body?.policy?.writeEnabled === true, "the standard bounded bundle includes writer tools, so writeEnabled derives true");
 	assert(Array.isArray(changedDefault.body?.warnings) && changedDefault.body.warnings.length === 0, "live default change should report no warnings");
 	assert(!fs.existsSync(legacySidecarPath), "changing the default should release the active thread's mirror sidecar so the thread follows the live default");
 	const liveResolution = resolvePersistentRoomCapabilityPolicy(agentId, legacyThreadId, { persistentAgentsRoot: tempAgentsRoot });

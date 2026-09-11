@@ -71,7 +71,7 @@ async function runPermissionSmoke(): Promise<void> {
 			EXXETA_PERSISTENT_ROOM_AGENT: undefined,
 			EXXETA_PERSISTENT_ROOM_WORKSPACE_TOOLS: undefined,
 		});
-		for (const toolName of ["read", "ls", "find", "write_markdown_file", "read_spreadsheet"]) {
+		for (const toolName of ["read", "ls", "find", "grep", "write", "edit"]) {
 			const result = await businessHandler({ toolName, input: {} }, { cwd: tmp });
 			assert(result?.block === true, `business persona without persistent-room markers should block ${toolName}`);
 		}
@@ -81,13 +81,13 @@ async function runPermissionSmoke(): Promise<void> {
 			EXXETA_PERSISTENT_ROOM_SESSION: "1",
 			EXXETA_PERSISTENT_ROOM_AGENT: "wolfgang",
 			EXXETA_PERSISTENT_ROOM_WORKSPACE_ACCESS_MODE: "bounded",
-			EXXETA_PERSISTENT_ROOM_WORKSPACE_TOOLS: "ls,find,read,write_markdown_file,read_spreadsheet",
+			EXXETA_PERSISTENT_ROOM_WORKSPACE_TOOLS: "ls,find,grep,read,write,edit",
 		});
-		for (const toolName of ["ls", "find", "read", "write_markdown_file", "read_spreadsheet"]) {
+		for (const toolName of ["ls", "find", "grep", "read", "write", "edit"]) {
 			const result = await persistentRoomHandler({ toolName, input: {} }, { cwd: tmp });
 			assert(!result?.block, `selected persistent-room workspace marker should allow ${toolName}`);
 		}
-		for (const toolName of ["grep", "write", "edit", "bash"]) {
+		for (const toolName of ["bash", "write_markdown_file", "read_spreadsheet"]) {
 			const result = await persistentRoomHandler({ toolName, input: {} }, { cwd: tmp });
 			assert(result?.block === true, `selected persistent-room workspace marker should still block ${toolName}`);
 		}
@@ -110,7 +110,7 @@ async function runPermissionSmoke(): Promise<void> {
 			EXXETA_PERSISTENT_ROOM_SESSION: "1",
 			EXXETA_PERSISTENT_ROOM_AGENT: "wolfgang",
 			EXXETA_PERSISTENT_ROOM_WORKSPACE_ACCESS_MODE: "bounded",
-			EXXETA_PERSISTENT_ROOM_WORKSPACE_TOOLS: "ls,find,read,grep",
+			EXXETA_PERSISTENT_ROOM_WORKSPACE_TOOLS: "ls,find,read,write_markdown_file",
 		});
 		assert((await badBundleHandler({ toolName: "read", input: {} }, { cwd: tmp }))?.block === true, "invalid persistent-room workspace tool bundle should not allow read");
 
@@ -119,9 +119,9 @@ async function runPermissionSmoke(): Promise<void> {
 			EXXETA_PERSISTENT_ROOM_SESSION: "1",
 			EXXETA_PERSISTENT_ROOM_AGENT: "wolfgang",
 			EXXETA_PERSISTENT_ROOM_WORKSPACE_ACCESS_MODE: "localFiles",
-			EXXETA_PERSISTENT_ROOM_WORKSPACE_TOOLS: "read,ls,find,grep,write,edit,read_spreadsheet",
+			EXXETA_PERSISTENT_ROOM_WORKSPACE_TOOLS: "read,ls,find,grep,write,edit",
 		});
-		for (const toolName of ["read", "ls", "find", "grep", "write", "edit", "read_spreadsheet"]) {
+		for (const toolName of ["read", "ls", "find", "grep", "write", "edit"]) {
 			const result = await localFilesHandler({ toolName, input: {} }, { cwd: tmp });
 			assert(!result?.block, `local-files persistent-room marker should allow ${toolName}`);
 		}
@@ -150,15 +150,15 @@ try {
 		workspaceLabel: "workspace",
 		rootCount: 1,
 		pathAccess: "workspace-only",
-		availableToolNames: ["ls", "find", "read", "write_markdown_file", "read_spreadsheet"],
+		availableToolNames: ["ls", "find", "grep", "read", "write", "edit"],
 		writeEnabled: true,
 		bashEnabled: false,
 		nativePiFilesystemToolsEnabled: false,
 	});
 	assert(capabilityL2.includes("## Active workspace capability"), "active workspace tools should add L2 capability snippet");
 	assert(capabilityL2.includes("Workspace mode: Bounded workspace"), "bounded capability snippet should name bounded mode");
-	assert(capabilityL2.includes("Workspace tools: ls, find, read, write_markdown_file, read_spreadsheet"), "capability snippet should list workspace tools");
-	assert(capabilityL2.includes("Write scope: Markdown files only inside the selected workspace via write_markdown_file"), "capability snippet should state bounded Markdown write scope");
+	assert(capabilityL2.includes("Workspace tools: ls, find, grep, read, write, edit"), "capability snippet should list workspace tools");
+	assert(capabilityL2.includes("Write scope: files inside the selected workspace only, via the write and edit tools"), "capability snippet should state the bounded write scope");
 	assert(capabilityL2.includes("Bash/shell access: disabled"), "capability snippet should state bash disabled");
 	assert(!capabilityL2.includes("/tmp/") && !capabilityL2.includes("/Users/"), "capability snippet should not include raw full paths");
 	const localFilesCapabilityL2 = persistentAgentRuntimeEnvelope(new Date("2026-05-27T00:00:00.000Z"), {
@@ -166,7 +166,7 @@ try {
 		workspaceLabel: "workspace",
 		rootCount: 1,
 		pathAccess: "local-files",
-		availableToolNames: ["read", "ls", "find", "grep", "write", "edit", "read_spreadsheet"],
+		availableToolNames: ["read", "ls", "find", "grep", "write", "edit"],
 		writeEnabled: true,
 		bashEnabled: false,
 		nativePiFilesystemToolsEnabled: true,
@@ -188,6 +188,19 @@ try {
 	});
 	assert(localFilesBashCapabilityL2.includes("Workspace tools: none"), "bash-only capability snippet should allow ordinary file tools to be off");
 	assert(localFilesBashCapabilityL2.includes("Bash/shell access: enabled"), "local-files capability snippet should reflect explicit bash enabled");
+	assert(localFilesBashCapabilityL2.includes("- Write/edit tools: disabled. Bash is enabled and can still modify files."), "writers-off bash-on snippet must state that Bash can still modify files");
+	const localFilesReadOnlyCapabilityL2 = persistentAgentRuntimeEnvelope(new Date("2026-05-27T00:00:00.000Z"), {
+		workspaceAccessMode: "localFiles",
+		workspaceLabel: "workspace",
+		rootCount: 1,
+		pathAccess: "local-files",
+		availableToolNames: ["read", "ls", "find", "grep"],
+		writeEnabled: false,
+		bashEnabled: false,
+		nativePiFilesystemToolsEnabled: true,
+	});
+	assert(localFilesReadOnlyCapabilityL2.includes("- Write access: disabled. If asked to change files, say the room is read-only up front; do not attempt workarounds."), "writers-off bash-off snippet must lead with the read-only truth");
+	assert(!localFilesReadOnlyCapabilityL2.includes("can still modify files"), "a truly read-only snippet must not mention Bash modifying files");
 	await runPermissionSmoke();
 
 	const included = componentFromText({
@@ -254,13 +267,13 @@ try {
 	assert(capabilityPolicy.included === false, "capability-policy component should remain excluded from prompt totals");
 	assert(capabilityPolicy.source && !("path" in capabilityPolicy.source), "capability-policy source must not use source.path");
 
-	const activeToolNames = ["ls", "find", "read", "write_markdown_file", "read_spreadsheet"];
+	const activeToolNames = ["ls", "find", "grep", "read", "write", "edit"];
 	const activeCapabilityPolicy = componentFromText({
 		id: "persistent-room:capability-policy-active",
 		type: "capability-policy",
 		text: [
 			"rootCount=1",
-			"allowedTools=ls,find,read,write_markdown_file,read_spreadsheet",
+			"allowedTools=ls,find,grep,read,write,edit",
 			"writeEnabled=true",
 			"denySegments=.git,.exxeta,.exxperts,node_modules",
 		].join("\n"),
@@ -285,7 +298,7 @@ try {
 		included: false,
 		excludedReason: "tool_registry_snapshot_not_counted_in_prompt_totals",
 		source: { "function": "AgentSession.getActiveToolNames" },
-		metadata: { activeToolCount: 5, activeToolNames },
+		metadata: { activeToolCount: 6, activeToolNames },
 	});
 	const registeredToolsComponent = componentFromText({
 		id: "persistent-room:registered-tools-active",
@@ -431,16 +444,16 @@ try {
 		model: { provider: "openai-codex", model: "gpt-5.5", label: "GPT-5.5" },
 		isolation: { rawSystemPrompt: true, noTools: false, noContextFiles: true, noSkills: true, noPromptTemplates: true, noThemes: true },
 		components: [activeCapabilityPolicy, activeToolsComponent, registeredToolsComponent, ...providerSchemaComponents],
-		totals: { activeToolCount: 5, providerToolSchemaBytes: providerSchemaBytes },
+		totals: { activeToolCount: 6, providerToolSchemaBytes: providerSchemaBytes },
 	});
 	assert(activeManifest.isolation?.noTools === false, "active workspace tools manifest should not claim noTools isolation");
-	assert(activeManifest.totals.activeToolCount === 5, "active workspace tools manifest should report active tool count");
+	assert(activeManifest.totals.activeToolCount === 6, "active workspace tools manifest should report active tool count");
 	assert(activeManifest.totals.providerToolSchemaBytes && activeManifest.totals.providerToolSchemaBytes > 0, "active workspace tools manifest should report provider schema bytes");
 	const activeToolComponent = activeManifest.components.find((component) => component.id === "persistent-room:active-tools-active");
-	assert((activeToolComponent?.metadata?.activeToolNames as string[] | undefined)?.join(",") === "ls,find,read,write_markdown_file,read_spreadsheet", "active diagnostics should list workspace tools");
+	assert((activeToolComponent?.metadata?.activeToolNames as string[] | undefined)?.join(",") === "ls,find,grep,read,write,edit", "active diagnostics should list workspace tools");
 	const registeredToolComponent = activeManifest.components.find((component) => component.id === "persistent-room:registered-tools-active");
-	assert((registeredToolComponent?.metadata?.registeredToolNames as string[] | undefined)?.join(",") === "ls,find,read,write_markdown_file,read_spreadsheet", "registered diagnostics should list workspace tools");
-	assert(activeManifest.components.filter((component) => component.type === "provider-tool-schema").length === 5, "active diagnostics should include provider schemas for workspace tools");
+	assert((registeredToolComponent?.metadata?.registeredToolNames as string[] | undefined)?.join(",") === "ls,find,grep,read,write,edit", "registered diagnostics should list workspace tools");
+	assert(activeManifest.components.filter((component) => component.type === "provider-tool-schema").length === 6, "active diagnostics should include provider schemas for workspace tools");
 	assert(activeCapabilityPolicy.included === false, "active capability-policy component should remain excluded from prompt totals");
 	const activeSerialized = JSON.stringify(activeManifest);
 	assert(!activeSerialized.includes("/tmp/") && !activeSerialized.includes("/Users/") && !activeSerialized.includes("personalized-agents"), "active diagnostics must not include raw root/repo/persistent-agent paths");

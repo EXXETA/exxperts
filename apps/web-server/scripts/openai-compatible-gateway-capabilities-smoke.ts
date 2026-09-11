@@ -335,14 +335,24 @@ try {
 		res.setHeader("content-type", "application/json");
 		if (req.url?.startsWith("/model/info")) {
 			res.end(JSON.stringify({ data: [
-				{ model_name: "chatty", model_info: { mode: "chat", max_input_tokens: 200000, max_output_tokens: 64000, supports_reasoning: true } },
+				// Prices as LiteLLM publishes them: USD per single token, the cache
+				// prices nullable. 2e-7 is the live figure that must land as 0.2, not
+				// as 0.19999999999999998.
+				{ model_name: "chatty", model_info: { mode: "chat", max_input_tokens: 200000, max_output_tokens: 64000, supports_reasoning: true, input_cost_per_token: 2e-7, output_cost_per_token: 1.2e-6, cache_read_input_token_cost: 2e-8, cache_creation_input_token_cost: 2.5e-7 } },
 				{ model_name: "embedder", model_info: { mode: "embedding", max_input_tokens: 8192 } },
 				{ model_name: "quiet", model_info: {} },
 				{ model_name: "bad-cap", model_info: { mode: "chat", max_output_tokens: -5 } },
+				{ model_name: "half-priced", model_info: { mode: "chat", input_cost_per_token: 2e-7 } },
+				{ model_name: "no-cache-price", model_info: { mode: "chat", input_cost_per_token: 3e-6, output_cost_per_token: 1.5e-5, cache_read_input_token_cost: null } },
+				{ model_name: "free", model_info: { mode: "chat", input_cost_per_token: 0, output_cost_per_token: 0 } },
+				// The caching declaration, nullable like the effort flags: only a
+				// real boolean is an answer.
+				{ model_name: "claude-cached", model_info: { mode: "chat", supports_prompt_caching: true } },
+				{ model_name: "claude-undeclared", model_info: { mode: "chat", supports_prompt_caching: null } },
 			] }));
 			return;
 		}
-		res.end(JSON.stringify({ data: [{ id: "chatty" }, { id: "embedder" }, { id: "quiet" }, { id: "bad-cap" }] }));
+		res.end(JSON.stringify({ data: [{ id: "chatty" }, { id: "embedder" }, { id: "quiet" }, { id: "bad-cap" }, { id: "half-priced" }, { id: "no-cache-price" }, { id: "free" }, { id: "claude-cached" }, { id: "claude-undeclared" }] }));
 	});
 	await new Promise<void>((resolve) => litellm.listen(0, "127.0.0.1", resolve));
 	const litellmPort = (litellm.address() as any).port;
@@ -355,6 +365,16 @@ try {
 	const quiet = litellmModels.find((model) => model.id === "quiet")!;
 	assert(quiet.maxTokens === undefined && quiet.mode === undefined, `silence must stay silence, got ${JSON.stringify(quiet)}`);
 	assert(litellmModels.find((model) => model.id === "bad-cap")!.maxTokens === undefined, "a non-positive cap is not a declaration");
+	// The price arrives in the runtime's unit, per million tokens, exactly.
+	assert(JSON.stringify(chatty.cost) === JSON.stringify({ input: 0.2, output: 1.2, cacheRead: 0.02, cacheWrite: 0.25 }), `LiteLLM's per-token prices must land as exact per-million figures, got ${JSON.stringify(chatty.cost)}`);
+	assert(quiet.cost === undefined, `a row with no price declares none, got ${JSON.stringify(quiet.cost)}`);
+	assert(litellmModels.find((model) => model.id === "half-priced")!.cost === undefined, "an input price without an output price is not a price");
+	const noCachePrice = litellmModels.find((model) => model.id === "no-cache-price")!;
+	assert(JSON.stringify(noCachePrice.cost) === JSON.stringify({ input: 3, output: 15, cacheRead: 3, cacheWrite: 3 }), `a missing cache price falls back to the input price, got ${JSON.stringify(noCachePrice.cost)}`);
+	assert(JSON.stringify(litellmModels.find((model) => model.id === "free")!.cost) === JSON.stringify({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }), "a declared zero price is a price");
+	assert(litellmModels.find((model) => model.id === "claude-cached")!.promptCaching === true, "a declared prompt-caching support must be detected");
+	assert(litellmModels.find((model) => model.id === "claude-undeclared")!.promptCaching === undefined, "a null caching flag is not a declaration");
+	assert(quiet.promptCaching === undefined, "silence about caching stays silence");
 
 	const openrouter = createServer((req, res) => {
 		res.setHeader("content-type", "application/json");
@@ -364,14 +384,89 @@ try {
 			return;
 		}
 		res.end(JSON.stringify({ data: [
-			{ id: "router-model", context_length: 1000000, top_provider: { context_length: 400000, max_completion_tokens: 32000 } },
+			// OpenRouter prices are per-token decimals as strings; the cache
+			// write price is the one this shape most often leaves out.
+			{ id: "router-model", context_length: 1000000, top_provider: { context_length: 400000, max_completion_tokens: 32000 }, pricing: { prompt: "0.0000002", completion: "0.0000012", input_cache_read: "0.00000002" } },
+			// The auto router publishes -1 for a price it cannot know.
+			{ id: "auto-router", pricing: { prompt: "-1", completion: "-1" } },
+			{ id: "no-pricing" },
 		] }));
 	});
 	await new Promise<void>((resolve) => openrouter.listen(0, "127.0.0.1", resolve));
 	const orPort = (openrouter.address() as any).port;
 	const orModels = (await detect.discoverGatewayModels(`http://127.0.0.1:${orPort}`, "test-key")).models;
 	openrouter.close();
-	assert(orModels[0].maxTokens === 32000, `OpenRouter's top_provider.max_completion_tokens must be detected, got ${JSON.stringify(orModels[0])}`);
+	const routerModel = orModels.find((model) => model.id === "router-model")!;
+	assert(routerModel.maxTokens === 32000, `OpenRouter's top_provider.max_completion_tokens must be detected, got ${JSON.stringify(routerModel)}`);
+	assert(JSON.stringify(routerModel.cost) === JSON.stringify({ input: 0.2, output: 1.2, cacheRead: 0.02, cacheWrite: 0.2 }), `OpenRouter's pricing strings must be read per million with the cache write falling back to input, got ${JSON.stringify(routerModel.cost)}`);
+	assert(orModels.find((model) => model.id === "auto-router")!.cost === undefined, "a negative price is not a price");
+	assert(orModels.find((model) => model.id === "no-pricing")!.cost === undefined, "a row without a pricing block declares none");
+	assert(orModels.every((model) => model.promptCaching === undefined), "the /models row shapes never declare caching");
+
+	// ---- the price reaches the registry, and only where one was published ----
+	// This is the link the wallet lives on: the registry's cost is what the
+	// provider multiplies every turn by, and a model with none multiplies by
+	// zero, which the ledger records as an unpriced turn.
+	const pricedGateway = gateways.writeOpenAiCompatibleGateway({
+		id: "gateway-priced",
+		providerId: "gateway-priced",
+		label: "Priced gateway",
+		baseUrl: "https://priced.example.invalid/v1",
+		roomModels: [
+			{ modelId: "priced", detected: { cost: { input: 0.2, output: 1.2, cacheRead: 0.02, cacheWrite: 0.25 } } },
+			{ modelId: "silent", detected: {} },
+		],
+		maintenanceModel: "priced",
+	});
+	catalog.writeGatewayProviderEntry(pricedGateway, modelsPath);
+	const pricedRegistry = ModelRegistry.create(AuthStorage.create());
+	assert(JSON.stringify(pricedRegistry.find("gateway-priced", "priced")!.cost) === JSON.stringify({ input: 0.2, output: 1.2, cacheRead: 0.02, cacheWrite: 0.25 }), `a published price must reach the registry as written, got ${JSON.stringify(pricedRegistry.find("gateway-priced", "priced")!.cost)}`);
+	const silentEntry = JSON.parse(fs.readFileSync(modelsPath, "utf-8")).providers["gateway-priced"].models.find((model: any) => model.id === "silent");
+	assert(!("cost" in silentEntry), `a silent gateway writes no cost key, got ${JSON.stringify(silentEntry)}`);
+	assert(JSON.stringify(pricedRegistry.find("gateway-priced", "silent")!.cost) === JSON.stringify({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }), "a model with no price reaches the registry at the zero default, never at somebody else's number");
+
+	// ---- cache markers: declared caching on a claude id, and nowhere else ----
+	// The marker key is written only where both halves are certain: the gateway
+	// declared prompt caching AND the model is Claude-family. A marker on a
+	// model that never declared caching has been seen failing the whole request,
+	// so a silent model's entry must stay byte-identical to what it always was.
+	// Pre-seed a hand-tuned compat key beside where ours will go, and a stale
+	// hand-set marker on the gpt model that must not survive the save.
+	fs.writeFileSync(modelsPath, JSON.stringify({ providers: { "gateway-cached": { name: "Cached", baseUrl: "https://cached.example.invalid/v1", api: "openai-completions", models: [
+		{ id: "claude-sonnet-cached", name: "claude-sonnet-cached", compat: { handTuned: true } },
+		{ id: "gpt-cached", name: "gpt-cached", compat: { cacheControlFormat: "anthropic" } },
+	] } } }), { mode: 0o600 });
+	const cachedGateway = gateways.writeOpenAiCompatibleGateway({
+		id: "gateway-cached",
+		providerId: "gateway-cached",
+		label: "Cached",
+		baseUrl: "https://cached.example.invalid/v1",
+		roomModels: [
+			{ modelId: "claude-sonnet-cached", detected: { promptCaching: true } },
+			{ modelId: "gpt-cached", detected: { promptCaching: true } },
+			{ modelId: "deepseek-silent", detected: {} },
+		],
+		maintenanceModel: "claude-sonnet-cached",
+	});
+	catalog.writeGatewayProviderEntry(cachedGateway, modelsPath);
+	const cachedModels = JSON.parse(fs.readFileSync(modelsPath, "utf-8")).providers["gateway-cached"].models;
+	const cachedEntry = (id: string) => cachedModels.find((model: any) => model.id === id);
+	assert(cachedEntry("claude-sonnet-cached").compat?.cacheControlFormat === "anthropic", `a declared claude model gets the marker key, got ${JSON.stringify(cachedEntry("claude-sonnet-cached"))}`);
+	assert(cachedEntry("claude-sonnet-cached").compat?.handTuned === true, `a hand-tuned compat key survives beside ours, got ${JSON.stringify(cachedEntry("claude-sonnet-cached").compat)}`);
+	assert(!("compat" in cachedEntry("gpt-cached")), `a declared non-claude model gets no marker, and a stale hand-set one is cleared, got ${JSON.stringify(cachedEntry("gpt-cached"))}`);
+	assert(JSON.stringify(cachedEntry("deepseek-silent")) === JSON.stringify({ id: "deepseek-silent", name: "deepseek-silent", contextWindow: gateways.GATEWAY_DEFAULT_CONTEXT_WINDOW }), `a silent model's entry stays exactly what it always was, got ${JSON.stringify(cachedEntry("deepseek-silent"))}`);
+	// The last link: the marker reaches the registry's compat, which is the only
+	// thing the request layer reads before it puts cache_control on the wire.
+	const cachedRegistry = ModelRegistry.create(AuthStorage.create());
+	assert((cachedRegistry.find("gateway-cached", "claude-sonnet-cached")!.compat as any)?.cacheControlFormat === "anthropic", `the marker must reach the registry, got ${JSON.stringify(cachedRegistry.find("gateway-cached", "claude-sonnet-cached")!.compat)}`);
+	assert((cachedRegistry.find("gateway-cached", "deepseek-silent")!.compat as any)?.cacheControlFormat === undefined, "a silent model reaches the registry without the marker, so no request ever carries one");
+	// A withdrawn declaration takes the key with it on the next save.
+	catalog.writeGatewayProviderEntry(gateways.writeOpenAiCompatibleGateway({
+		...cachedGateway,
+		roomModels: cachedGateway.roomModels.map((model) => (model.modelId === "claude-sonnet-cached" ? { modelId: model.modelId, detected: { promptCaching: false } } : model)),
+	}), modelsPath);
+	const revokedEntry = JSON.parse(fs.readFileSync(modelsPath, "utf-8")).providers["gateway-cached"].models.find((model: any) => model.id === "claude-sonnet-cached");
+	assert(revokedEntry.compat?.cacheControlFormat === undefined && revokedEntry.compat?.handTuned === true, `a withdrawn declaration clears the marker and touches nothing else in compat, got ${JSON.stringify(revokedEntry.compat)}`);
 
 	fs.rmSync(tempHome, { recursive: true, force: true });
 	console.log("openai-compatible gateway capabilities smoke passed");

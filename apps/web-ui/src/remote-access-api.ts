@@ -94,6 +94,7 @@ export interface RemoteRoomRow {
 	displayName: string;
 	exposed: boolean;
 	bashEnabled: boolean;
+	writeEnabled: boolean;
 }
 
 export async function fetchRemoteRooms(): Promise<RemoteRoomRow[]> {

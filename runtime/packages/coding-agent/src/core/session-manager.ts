@@ -440,6 +440,8 @@ export function loadEntriesFromFile(filePath: string): FileEntry[] {
 
 	const content = readFileSync(filePath, "utf8");
 	const entries: FileEntry[] = [];
+	// A last record without its newline would glue the next appended entry onto it.
+	const unterminated = content.length > 0 && !content.endsWith("\n");
 	const lines = content.trim().split("\n");
 
 	for (const line of lines) {
@@ -452,13 +454,20 @@ export function loadEntriesFromFile(filePath: string): FileEntry[] {
 		}
 	}
 
-	// Validate session header
+	// Validate session header before repairing the file.
 	if (entries.length === 0) return entries;
 	const header = entries[0];
 	if (header.type !== "session" || typeof (header as any).id !== "string") {
 		return [];
 	}
 
+	if (unterminated) {
+		try {
+			appendFileSync(filePath, "\n");
+		} catch {
+			// Read-only file: nothing can be appended to it anyway, so leaving it alone is safe.
+		}
+	}
 	return entries;
 }
 

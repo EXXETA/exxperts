@@ -307,6 +307,153 @@ describe("agentLoop with AgentMessage", () => {
 		}
 	});
 
+	it("should not execute tool calls from a length-truncated assistant message", async () => {
+		const toolSchema = Type.Object({ value: Type.String() });
+		const executed: string[] = [];
+		const tool: AgentTool<typeof toolSchema, { value: string }> = {
+			name: "echo",
+			label: "Echo",
+			description: "Echo tool",
+			parameters: toolSchema,
+			async execute(_toolCallId, params) {
+				executed.push(params.value);
+				return {
+					content: [{ type: "text", text: `echoed: ${params.value}` }],
+					details: { value: params.value },
+				};
+			},
+		};
+
+		const context: AgentContext = {
+			systemPrompt: "",
+			messages: [],
+			tools: [tool],
+		};
+
+		const config: AgentLoopConfig = {
+			model: createModel(),
+			convertToLlm: identityConverter,
+		};
+
+		let callIndex = 0;
+		const streamFn = () => {
+			const stream = new MockAssistantStream();
+			queueMicrotask(() => {
+				if (callIndex === 0) {
+					// Output hit the token limit mid tool call. The salvage parser can
+					// produce arguments that validate but are silently truncated, so
+					// nothing in this message may execute.
+					const message = createAssistantMessage(
+						[{ type: "toolCall", id: "tool-1", name: "echo", arguments: { value: "hel" } }],
+						"length",
+					);
+					stream.push({ type: "done", reason: "length", message });
+				} else {
+					const message = createAssistantMessage([{ type: "text", text: "done" }]);
+					stream.push({ type: "done", reason: "stop", message });
+				}
+				callIndex++;
+			});
+			return stream;
+		};
+
+		const events: AgentEvent[] = [];
+		const stream = agentLoop([createUserMessage("echo something")], context, config, undefined, streamFn);
+		for await (const event of stream) {
+			events.push(event);
+		}
+
+		// The tool must never execute with potentially truncated arguments.
+		expect(executed).toEqual([]);
+
+		const toolEnd = events.find((e) => e.type === "tool_execution_end");
+		expect(toolEnd).toBeDefined();
+		if (toolEnd?.type === "tool_execution_end") {
+			expect(toolEnd.isError).toBe(true);
+			const text = toolEnd.result.content.find((c: { type: string }) => c.type === "text");
+			expect(text && "text" in text ? text.text : "").toContain("output token limit");
+		}
+
+		// The loop continues so the model can re-issue the tool call.
+		expect(callIndex).toBe(2);
+		const messages = await stream.result();
+		expect(messages[messages.length - 1].role).toBe("assistant");
+	});
+
+	it("should end the turn after two consecutive length-truncated tool-call messages", async () => {
+		const toolSchema = Type.Object({ value: Type.String() });
+		const executed: string[] = [];
+		const tool: AgentTool<typeof toolSchema, { value: string }> = {
+			name: "echo",
+			label: "Echo",
+			description: "Echo tool",
+			parameters: toolSchema,
+			async execute(_toolCallId, params) {
+				executed.push(params.value);
+				return {
+					content: [{ type: "text", text: `echoed: ${params.value}` }],
+					details: { value: params.value },
+				};
+			},
+		};
+
+		const context: AgentContext = {
+			systemPrompt: "",
+			messages: [],
+			tools: [tool],
+		};
+
+		const config: AgentLoopConfig = {
+			model: createModel(),
+			convertToLlm: identityConverter,
+		};
+
+		// The first two responses hit the token limit mid tool call. A third
+		// request must never be made; if it is, answer plainly so the test fails
+		// on the count instead of spinning.
+		let requestCount = 0;
+		const streamFn = () => {
+			const stream = new MockAssistantStream();
+			queueMicrotask(() => {
+				requestCount++;
+				if (requestCount <= 2) {
+					const message = createAssistantMessage(
+						[{ type: "toolCall", id: `tool-${requestCount}`, name: "echo", arguments: { value: "hel" } }],
+						"length",
+					);
+					stream.push({ type: "done", reason: "length", message });
+				} else {
+					const message = createAssistantMessage([{ type: "text", text: "giving up" }]);
+					stream.push({ type: "done", reason: "stop", message });
+				}
+			});
+			return stream;
+		};
+
+		const events: AgentEvent[] = [];
+		const stream = agentLoop([createUserMessage("echo something")], context, config, undefined, streamFn);
+		for await (const event of stream) {
+			events.push(event);
+		}
+
+		expect(executed).toEqual([]);
+		expect(requestCount).toBe(2);
+
+		const toolEnds = events.filter((e) => e.type === "tool_execution_end");
+		expect(toolEnds).toHaveLength(2);
+		for (const toolEnd of toolEnds) {
+			if (toolEnd.type === "tool_execution_end") {
+				expect(toolEnd.isError).toBe(true);
+			}
+		}
+		expect(events.filter((e) => e.type === "turn_end")).toHaveLength(2);
+		expect(events[events.length - 1]?.type).toBe("agent_end");
+
+		// Both error results stay in the transcript so the session can surface them.
+		const messages = await stream.result();
+		expect(messages.map((m) => m.role)).toEqual(["user", "assistant", "toolResult", "assistant", "toolResult"]);
+	});
+
 	it("should execute mutated beforeToolCall args without revalidation", async () => {
 		const toolSchema = Type.Object({ value: Type.String() });
 		const executed: Array<string | number> = [];

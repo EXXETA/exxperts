@@ -35,7 +35,7 @@ assert.equal(workspaceWriteWithoutMarker?.block, true, "write_markdown_file is b
 process.env.EXXETA_PERSISTENT_ROOM_SESSION = "1";
 process.env.EXXETA_PERSISTENT_ROOM_AGENT = "wolfgang";
 process.env.EXXETA_PERSISTENT_ROOM_WORKSPACE_ACCESS_MODE = "bounded";
-process.env.EXXETA_PERSISTENT_ROOM_WORKSPACE_TOOLS = "ls,find,read,write_markdown_file,read_spreadsheet";
+process.env.EXXETA_PERSISTENT_ROOM_WORKSPACE_TOOLS = "ls,find,grep,read,write,edit";
 toolCallHandler = undefined;
 registerPermissions({
 	on(name: string, handler: any) {
@@ -43,16 +43,16 @@ registerPermissions({
 	},
 } as any);
 assert.ok(toolCallHandler, "permissions registered persistent-room tool_call handler");
-for (const toolName of ["ls", "find", "read", "write_markdown_file", "read_spreadsheet"]) {
+for (const toolName of ["ls", "find", "grep", "read", "write", "edit"]) {
 	const result = await toolCallHandler!({ toolName, input: {} }, ctx);
 	assert.equal(result, undefined, `selected persistent room can use bounded workspace tool ${toolName}`);
 }
-for (const toolName of ["grep", "write", "edit", "bash"]) {
+for (const toolName of ["bash", "write_markdown_file", "read_spreadsheet"]) {
 	const result = await toolCallHandler!({ toolName, input: {} }, ctx);
 	assert.equal(result?.block, true, `selected persistent room still blocks ${toolName}`);
 }
 
-process.env.EXXETA_PERSISTENT_ROOM_WORKSPACE_TOOLS = "ls,read_spreadsheet";
+process.env.EXXETA_PERSISTENT_ROOM_WORKSPACE_TOOLS = "ls,grep";
 toolCallHandler = undefined;
 registerPermissions({
 	on(name: string, handler: any) {
@@ -60,11 +60,11 @@ registerPermissions({
 	},
 } as any);
 assert.ok(toolCallHandler, "permissions registered custom subset workspace tool_call handler");
-for (const toolName of ["ls", "read_spreadsheet"]) {
+for (const toolName of ["ls", "grep"]) {
 	const result = await toolCallHandler!({ toolName, input: {} }, ctx);
 	assert.equal(result, undefined, `selected persistent room can use custom subset tool ${toolName}`);
 }
-for (const toolName of ["find", "read", "write_markdown_file", "grep", "write", "edit", "bash"]) {
+for (const toolName of ["find", "read", "write_markdown_file", "read_spreadsheet", "write", "edit", "bash"]) {
 	const result = await toolCallHandler!({ toolName, input: {} }, ctx);
 	assert.equal(result?.block, true, `custom subset persistent room blocks ${toolName}`);
 }
@@ -92,7 +92,7 @@ assert.ok(toolCallHandler, "permissions registered duplicate workspace bundle to
 const duplicateBundleReadResult = await toolCallHandler!({ toolName: "read", input: {} }, ctx);
 assert.equal(duplicateBundleReadResult?.block, true, "duplicate workspace tool bundle should not allow read");
 
-process.env.EXXETA_PERSISTENT_ROOM_WORKSPACE_TOOLS = "ls,find,read,grep";
+process.env.EXXETA_PERSISTENT_ROOM_WORKSPACE_TOOLS = "ls,find,read,write_markdown_file";
 toolCallHandler = undefined;
 registerPermissions({
 	on(name: string, handler: any) {
@@ -101,10 +101,10 @@ registerPermissions({
 } as any);
 assert.ok(toolCallHandler, "permissions registered invalid workspace bundle tool_call handler");
 const invalidBundleReadResult = await toolCallHandler!({ toolName: "read", input: {} }, ctx);
-assert.equal(invalidBundleReadResult?.block, true, "invalid workspace tool bundle should not allow read");
+assert.equal(invalidBundleReadResult?.block, true, "workspace tool bundle naming retired tools should fail closed at the gate");
 
 process.env.EXXETA_PERSISTENT_ROOM_WORKSPACE_ACCESS_MODE = "localFiles";
-process.env.EXXETA_PERSISTENT_ROOM_WORKSPACE_TOOLS = "read,ls,find,grep,write,edit,read_spreadsheet";
+process.env.EXXETA_PERSISTENT_ROOM_WORKSPACE_TOOLS = "read,ls,find,grep,write,edit";
 toolCallHandler = undefined;
 registerPermissions({
 	on(name: string, handler: any) {
@@ -112,7 +112,7 @@ registerPermissions({
 	},
 } as any);
 assert.ok(toolCallHandler, "permissions registered local-files workspace tool_call handler");
-for (const toolName of ["read", "ls", "find", "grep", "write", "edit", "read_spreadsheet"]) {
+for (const toolName of ["read", "ls", "find", "grep", "write", "edit"]) {
 	const result = await toolCallHandler!({ toolName, input: {} }, ctx);
 	assert.equal(result, undefined, `local-files persistent room can use ${toolName}`);
 }
@@ -154,7 +154,7 @@ delete process.env.EXXETA_PERSISTENT_ROOM_BASH_ENABLED;
 delete process.env.EXXETA_PERSISTENT_ROOM_EXECUTION_CONTEXT;
 process.env.EXXETA_PERSISTENT_ROOM_WORKSPACE_ACCESS_MODE = "localFiles";
 const localFilesMarkdownWriteResult = await toolCallHandler!({ toolName: "write_markdown_file", input: {} }, ctx);
-assert.equal(localFilesMarkdownWriteResult?.block, true, "local-files persistent room should not allow bounded-only write_markdown_file");
+assert.equal(localFilesMarkdownWriteResult?.block, true, "local-files persistent room should not allow retired write_markdown_file");
 
 process.env.EXXETA_PERSISTENT_ROOM_WORKSPACE_TOOLS = "read,grep";
 toolCallHandler = undefined;

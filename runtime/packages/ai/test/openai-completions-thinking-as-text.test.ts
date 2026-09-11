@@ -36,6 +36,7 @@ const compat = {
 	vercelGatewayRouting: {},
 	zaiToolStream: false,
 	supportsStrictMode: true,
+	supportsWebSearch: false,
 	cacheControlFormat: undefined,
 	sendSessionAffinityHeaders: false,
 	supportsOpenAIPromptCacheRetention: true,

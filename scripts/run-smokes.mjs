@@ -68,7 +68,11 @@ function runSmoke(name) {
 // with it. That exact signature gets one retry; a genuine failure repeats
 // and still fails, and the retry is said out loud rather than hidden.
 function isInterferenceFailure(result) {
-	return result.code !== 0 && result.output.includes("EPERM: operation not permitted, open") && result.output.includes("node_modules");
+	if (result.code === 0) return false;
+	if (result.output.includes("EPERM: operation not permitted, open")) return true;
+	// The same agent can also deny process.cwd() at spawn, so a smoke's server
+	// never comes up. uv_cwd only ever fails when something outside us blocks it.
+	return result.output.includes("process.cwd failed with error operation not permitted");
 }
 
 const results = [];
