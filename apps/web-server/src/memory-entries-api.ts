@@ -23,6 +23,8 @@ import {
 	entryTokens,
 	ENTRY_KINDS,
 	findEntryLocation,
+	findEntryVersion,
+	findStructuralLine,
 	formatEntryId,
 	MEMORY_ACTIVE_ITEMS_TOPIC,
 	restoreEntry,
@@ -38,6 +40,7 @@ import {
 import {
 	deleteArchivedEntry,
 	loadMemoryDocument,
+	memoryEntryAlreadyInCoreError,
 	memoryEntryUnknownError,
 	memoryRoomBusy,
 	MEMORY_ROOM_BUSY_SENTENCE,
@@ -149,6 +152,9 @@ function requireText(raw: unknown): string {
 	const text = typeof raw === "string" ? raw.replace(/\s+$/, "") : "";
 	if (!text.trim()) throw badRequest("An entry needs some text.");
 	if (text.length > ENTRY_TEXT_MAX_CHARS) throw badRequest("That entry is too long to keep in memory. Shorten it and try again.");
+	// A heading line would become a topic and cut the note in two; a comment
+	// line is how the file writes ids, and a pasted one claims another note's.
+	if (findStructuralLine(text) !== null) throw badRequest("A note cannot contain a heading line or a hidden comment; write it as plain text.", "memory_entry_text_structural");
 	return text;
 }
 
@@ -315,7 +321,9 @@ export function registerMemoryEntryRoutes(app: FastifyInstance, deps: MemoryEntr
 
 	// A restore may take the room over budget. That is allowed and disclosed:
 	// the person asked for this entry back, and the budget line says where the
-	// room now stands.
+	// room now stands. A note the core already holds — in this version or
+	// another — is not put in beside itself: that is a conflict, with its own
+	// sentence, and the archive row stays where it is.
 	app.post("/api/persistent-agents/:id/memory/archive/:entryId/restore", async (req, reply) => {
 		try {
 			const id = roomId(req);
@@ -323,6 +331,7 @@ export function registerMemoryEntryRoutes(app: FastifyInstance, deps: MemoryEntr
 			const load = loadMemoryDocument(id);
 			const archived = load.archive.find((entry) => entry.id === entryId);
 			if (!archived) throw memoryEntryUnknownError(true);
+			if (findEntryVersion(load.doc, entryId)) throw memoryEntryAlreadyInCoreError();
 			const next = restoreEntry(load.doc, archived);
 			const write = writeMemoryDocument(id, next, {
 				why: "user_edit",

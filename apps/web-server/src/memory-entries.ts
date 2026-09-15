@@ -390,6 +390,13 @@ function parseSectionTopics(sectionText: string, section: MemorySection, eol: st
  * has never been migrated parses fine, with every bullet and paragraph an entry
  * whose id is still empty. Sections this module does not own are carried
  * verbatim with their original position.
+ *
+ * THE COUNTER RULE: the id counter is the `<!-- entries: next=N -->` line when
+ * the file has one. When it does not — a hand edit dropped it, a tool rewrote
+ * the section — a file that already carries entry ids must not start again at
+ * 1, because the next add would mint an id the file already has. The counter
+ * is recovered from the ids themselves: one past the highest number any entry
+ * carries. A file with no ids at all starts at 1, as before.
  */
 export function parseMemoryDocument(l1b: string): MemoryDocument {
 	const eol = firstEol(l1b) ?? "\n";
@@ -408,13 +415,14 @@ export function parseMemoryDocument(l1b: string): MemoryDocument {
 	}
 	const deepParsed = deep ? parseSectionTopics(deep.text, "Deep Memory", eol) : { topics: [], nextEntryNumber: null };
 	const activeParsed = active ? parseSectionTopics(active.text, "Active Items", eol) : { topics: [], nextEntryNumber: null };
+	const topics = [...deepParsed.topics, ...activeParsed.topics];
 	return {
 		preamble,
 		chronos,
-		topics: [...deepParsed.topics, ...activeParsed.topics],
+		topics,
 		recentContext,
 		otherSections,
-		nextEntryNumber: deepParsed.nextEntryNumber ?? 1,
+		nextEntryNumber: deepParsed.nextEntryNumber ?? highestEntryNumber(topics.flatMap((topic) => topic.entries.map((entry) => entry.id))) + 1,
 	};
 }
 
@@ -431,6 +439,26 @@ export function formatEntryId(n: number): string {
 
 /** The version suffix an archived older text carries: `m-0031-v1`, then `-v2`. */
 const VERSIONED_ENTRY_ID = /^(.*)-v(\d+)$/;
+
+/** The entry an id names: `m-0031-v1` is an older text of `m-0031`; an id without a version suffix is its own base. */
+export function entryBaseId(id: string): string {
+	return VERSIONED_ENTRY_ID.exec(id)?.[1] ?? id;
+}
+
+/**
+ * The highest number any of these ids carries, versions counted under their
+ * base (`m-0031-v2` counts as 31); 0 when none of them is an entry id. This is
+ * what a counter is recovered from, and what the store lifts a counter above
+ * when the archive holds a higher number than the core file knows of.
+ */
+export function highestEntryNumber(ids: Iterable<string>): number {
+	let highest = 0;
+	for (const id of ids) {
+		const n = entryNumber(entryBaseId(id));
+		if (n !== null && n > highest) highest = n;
+	}
+	return highest;
+}
 
 /**
  * THE ID RULE for an entry's older text on its way to the archive: it keeps the
@@ -702,6 +730,30 @@ export function renderMemoryDocument(doc: MemoryDocument, mode: MemoryRenderMode
 	return doc.preamble + parts.join("");
 }
 
+const RC_METADATA_LINE = /^[ \t]*<!--\s*rc_metadata:[\s\S]*?-->[ \t]*$/;
+
+/**
+ * The room's boot read of its memory, less the checkpoint provenance
+ * comments: every remembered conversation carries an `rc_metadata` line
+ * (checkpoint id, session id, conversation id, model, approval instant) that
+ * the product's own readers join on and the model has no use for — sixty
+ * tokens a conversation of ids in a prompt that promises the mechanism stays
+ * invisible. Only the boot strips it: the context render itself is what every
+ * save's fingerprint measures, and changing it would make every earlier save
+ * read as stale to undo. The blank line the comment sat between is folded so
+ * the heading still stands one blank line above the body.
+ */
+export function stripRecentContextMetadata(text: string): string {
+	const eol = text.includes("\r\n") ? "\r\n" : "\n";
+	const lines = text.split(/\r?\n/);
+	const out: string[] = [];
+	for (let i = 0; i < lines.length; i++) {
+		if (!RC_METADATA_LINE.test(lines[i])) { out.push(lines[i]); continue; }
+		if (isBlank(out[out.length - 1] ?? "x") && isBlank(lines[i + 1] ?? "x")) i++;
+	}
+	return out.join(eol);
+}
+
 /**
  * Has this file been through migration? True as soon as it carries the id
  * counter or a single entry metadata line — the two things only the storage
@@ -935,15 +987,38 @@ export function appendToArchive(text: string, entries: MemoryEntry[], meta: Arra
 	return head + archiveBlocks(archived, eol);
 }
 
-/** Takes one entry back out — what a restore does before it re-inserts. Any text above the first entry is kept. */
+/**
+ * Every id the archive text holds, in file order — what a writer unions with
+ * its own run's rows before it mints a versioned id (`nextVersionedEntryId`),
+ * so a second run that supersedes the same entry does not mint the `-v1` the
+ * first run already wrote.
+ */
+export function archiveIdsTaken(text: string): string[] {
+	return parseArchive(text).map((entry) => entry.id);
+}
+
+/**
+ * Takes one entry back out — what a restore does before it re-inserts. Any text
+ * above the first entry is kept.
+ *
+ * When two rows claim one id (a run that minted its versioned ids against its
+ * own rows only, before the archive was consulted), the NEWEST row goes — the
+ * last one appended. The archive is append-only, so the last row with an id is
+ * the one the latest save wrote, and an undo takes back the rows the latest save
+ * added: taking the first would put an older save's row back in the memory and
+ * leave the undone save's row behind. A restore is served by the same choice,
+ * because it is the newest text that was in memory most recently.
+ */
 export function removeFromArchive(text: string, id: string): { text: string; entry?: ArchivedEntry } {
 	const eol = firstEol(text) ?? "\n";
 	const entries = parseArchive(text);
-	const entry = entries.find((e) => e.id === id);
-	if (!entry) return { text };
+	let at = -1;
+	for (let i = entries.length - 1; i >= 0; i--) if (entries[i].id === id) { at = i; break; }
+	if (at < 0) return { text };
+	const entry = entries[at];
 	const firstMeta = splitLines(text).findIndex((line) => ENTRY_META_LINE.test(line));
 	const head = firstMeta > 0 ? splitLines(text).slice(0, firstMeta).join(eol) + eol : archivePreamble(eol);
-	return { text: head + archiveBlocks(entries.filter((e) => e !== entry), eol), entry };
+	return { text: head + archiveBlocks(entries.filter((_, i) => i !== at), eol), entry };
 }
 
 /** Per-topic counts and archived-month range: what the context render's pointer lines are built from. */
@@ -961,9 +1036,28 @@ export function archiveIndex(entries: ArchivedEntry[]): ArchiveIndex {
 	return index;
 }
 
-/** Puts an archived entry back into its topic, at the end; a topic that is gone is created. */
-export function restoreEntry(doc: MemoryDocument, archived: ArchivedEntry): MemoryDocument {
-	const next = cloneDocument(doc);
+/**
+ * The core entry that is a version of this id, if there is one: the id itself,
+ * or one sharing its base (`m-0031` and `m-0031-v1` are one note at two times).
+ * THE ONE-PLACE RULE of a restore reads this: a note is in the core once or not
+ * at all, so an archived row whose note is already in memory — the newer text
+ * it was superseded by, or a copy an earlier fault left on both sides — is
+ * refused rather than pushed in beside it, where two rows with one address
+ * would make every later edit a coin toss.
+ */
+export function findEntryVersion(doc: MemoryDocument, id: string): { entry: MemoryEntry; topic: MemoryTopic } | undefined {
+	const base = entryBaseId(id);
+	if (!base) return undefined;
+	for (const topic of doc.topics) {
+		const entry = topic.entries.find((e) => entryBaseId(e.id) === base);
+		if (entry) return { entry, topic };
+	}
+	return undefined;
+}
+
+/** Restores one row into a document already copied: the one-place rule, then the push and the counter. */
+function restoreInto(next: MemoryDocument, archived: ArchivedEntry): void {
+	if (findEntryVersion(next, archived.id)) throw new Error(`a restore was not checked: "${archived.id}" is already in memory`);
 	const topic = topicFor(next, archived.section, archived.topic);
 	const entry: MemoryEntry = { id: archived.id, kind: archived.kind, saved: archived.saved, pinned: archived.pinned, text: archived.text };
 	if (archived.from) entry.from = archived.from;
@@ -971,29 +1065,30 @@ export function restoreEntry(doc: MemoryDocument, archived: ArchivedEntry): Memo
 	if (archived.updated) entry.updated = archived.updated;
 	if (archived.refs !== undefined) entry.refs = archived.refs;
 	topic.entries.push(entry);
-	const n = entryNumber(entry.id);
+	const n = entryNumber(entryBaseId(entry.id));
 	if (n !== null && n >= next.nextEntryNumber) next.nextEntryNumber = n + 1;
+}
+
+/**
+ * Puts an archived entry back into its topic, at the end; a topic that is gone
+ * is created. Throws when a version of the entry is already in the core (see
+ * `findEntryVersion`): callers check first and answer with their own sentence.
+ */
+export function restoreEntry(doc: MemoryDocument, archived: ArchivedEntry): MemoryDocument {
+	const next = cloneDocument(doc);
+	restoreInto(next, archived);
 	return next;
 }
 
 /**
  * `restoreEntry` for many at once, with ONE copy of the document: a run that
  * puts hundreds of budget rows back before ranking them again would otherwise
- * copy a large memory once per row on every keep.
+ * copy a large memory once per row on every keep. Same refusal, row by row,
+ * against the document as the earlier rows have left it.
  */
 export function restoreEntries(doc: MemoryDocument, archived: readonly ArchivedEntry[]): MemoryDocument {
 	const next = cloneDocument(doc);
-	for (const row of archived) {
-		const topic = topicFor(next, row.section, row.topic);
-		const entry: MemoryEntry = { id: row.id, kind: row.kind, saved: row.saved, pinned: row.pinned, text: row.text };
-		if (row.from) entry.from = row.from;
-		if (row.status) entry.status = row.status;
-		if (row.updated) entry.updated = row.updated;
-		if (row.refs !== undefined) entry.refs = row.refs;
-		topic.entries.push(entry);
-		const n = entryNumber(entry.id);
-		if (n !== null && n >= next.nextEntryNumber) next.nextEntryNumber = n + 1;
-	}
+	for (const row of archived) restoreInto(next, row);
 	return next;
 }
 
@@ -1009,12 +1104,34 @@ export type MemoryUserEdit =
 	| { op: "add"; topic: string; kind: EntryKind; text: string; saved: string };
 
 /**
+ * A line the file would read as structure rather than as the note's words: a
+ * heading (one or more `#` and then a space or the end of the line, so a
+ * `#hashtag` mid-line or at its start is still a word) or the opening of a
+ * comment (`<!--`, which is how the file writes an entry's metadata and its id
+ * counter). Leading whitespace does not hide either. A note carrying one would
+ * corrupt the file it is written into: a `### X` line mints a topic and cuts
+ * the note in two, and a pasted `<!-- e: id=… -->` line claims an id another
+ * note has. `null` when every line is plain text.
+ */
+const STRUCTURAL_LINE = /^\s*(?:#+(?:\s|$)|<!--)/;
+
+export function findStructuralLine(text: string): string | null {
+	return splitLines(text).find((line) => STRUCTURAL_LINE.test(line)) ?? null;
+}
+
+/**
  * One user edit from the Memory pane, applied to a copy. Nothing here involves
  * a model; the route turns the result into a normal write (snapshot, event
  * record, Chronos stamp). A delete hands the entry back so the caller can
- * archive it with why=user.
+ * archive it with why=user. An add or an edit whose text carries a structural
+ * line (`findStructuralLine`) throws: the route refuses it first with its own
+ * sentence, and this is the backstop for any other caller.
  */
 export function applyUserEdit(doc: MemoryDocument, edit: MemoryUserEdit): { doc: MemoryDocument; archived?: MemoryEntry } {
+	if (edit.op === "add" || edit.op === "edit") {
+		const structural = findStructuralLine(edit.text);
+		if (structural !== null) throw new Error(`a note's text was not checked: it carries a structural line ${JSON.stringify(structural)}`);
+	}
 	const next = cloneDocument(doc);
 	if (edit.op === "add") {
 		const topic = topicFor(next, edit.kind === "item" ? "Active Items" : "Deep Memory", edit.topic);

@@ -202,6 +202,18 @@ try {
 	const badKind = await requestJson(`${room}/memory/entries`, jsonBody("POST", { topic: "Commercial terms", kind: "rumour", text: "- Nope." }));
 	assert(badKind.status === 400, "an unknown kind must be refused");
 
+	// A note is words: a heading line would mint a topic and cut the note in
+	// two, a pasted metadata comment would claim another note's id. Both are
+	// refused with one sentence and one code, and nothing is written.
+	const l1bBeforeStructural = fs.readFileSync(l1bPath, "utf-8");
+	for (const text of ["## A heading", "- fine\n### A topic", "<!-- e: id=m-0001 kind=fact saved=2026-01-01 -->\n- A pasted note.", "   # indented", "# "]) {
+		const structural = await requestJson(`${room}/memory/entries`, jsonBody("POST", { topic: "Commercial terms", kind: "fact", text }));
+		assert(structural.status === 400 && structural.body?.code === "memory_entry_text_structural" && /heading line or a hidden comment/.test(String(structural.body?.error ?? "")), `an add with a structural line is refused with its sentence and code, got ${structural.status}: ${JSON.stringify(structural.body)} for ${JSON.stringify(text)}`);
+	}
+	const structuralEdit = await requestJson(`${room}/memory/entries/${addedId}`, jsonBody("PUT", { text: "- fine\n## A heading" }));
+	assert(structuralEdit.status === 400 && structuralEdit.body?.code === "memory_entry_text_structural", `an edit with a structural line is refused the same way, got ${structuralEdit.status}: ${JSON.stringify(structuralEdit.body)}`);
+	assert(fs.readFileSync(l1bPath, "utf-8") === l1bBeforeStructural, "a refused text writes nothing");
+
 	// --- 3. Edit text, pin, move, status -------------------------------------
 	const edited = await requestJson(`${room}/memory/entries/${addedId}`, jsonBody("PUT", { text: "- Payment terms are 45 days net." }));
 	assert(edited.status === 200 && edited.body.entry.text === "- Payment terms are 45 days net.", `the edit should come back applied, got ${JSON.stringify(edited.body)}`);
@@ -337,6 +349,31 @@ try {
 	assert(stillAtCeiling.body.settings.memoryBudgetTokens === 80_000, "a refused budget must not have been stored");
 	const listedAtCeiling = await requestJson(`${room}/memory/entries`);
 	assert(listedAtCeiling.body.budget.budgetTokens === 80_000, "the entries list reads the room's own budget");
+
+	// --- 7b. A restore never puts a note in beside itself ---------------------
+	// The archive can hold a row whose note is still in the core: an older
+	// text of it (`-v1`), or a copy an earlier fault left on both sides. Such a
+	// restore is a conflict, with its own sentence and code; the row stays in
+	// the archive, addressable, and the notes file is not touched.
+	const entriesPath = path.join(agentsRoot, roomId, "L1b", "archive", "entries.md");
+	const stray = (id: string, text: string) => `<!-- e: id=${id} kind=fact saved=2026-08-30 archived=2026-09-14 why=superseded topic="Commercial terms" section="Deep Memory" -->\n${text}\n\n`;
+	fs.writeFileSync(entriesPath, fs.readFileSync(entriesPath, "utf-8") + stray(nordwind.id, "- A copy of the Nordwind note that never left the core.") + stray(`${nordwind.id}-v1`, "- The Nordwind note as it read before."), { mode: 0o600 });
+	const l1bBeforeConflict = fs.readFileSync(l1bPath, "utf-8");
+	assert(fs.readFileSync(l1bPath, "utf-8").includes(`id=${nordwind.id} `), "the fixture note is in the core");
+	for (const id of [nordwind.id, `${nordwind.id}-v1`]) {
+		const conflict = await requestJson(`${room}/memory/archive/${id}/restore`, { method: "POST" });
+		assert(conflict.status === 409 && conflict.body?.code === "memory_entry_already_in_core" && conflict.body?.error === "This note is already in memory.", `restoring a note the core holds is a conflict with its sentence, got ${conflict.status}: ${JSON.stringify(conflict.body)} for ${id}`);
+	}
+	assert(fs.readFileSync(l1bPath, "utf-8") === l1bBeforeConflict, "a refused restore writes nothing to the notes file");
+	const conflictArchive = await requestJson(`${room}/memory/archive?limit=50`);
+	assert(conflictArchive.body.entries.length === 2 && conflictArchive.body.entries.every((e: any) => e.id === nordwind.id || e.id === `${nordwind.id}-v1`), `both rows stay in the archive, got ${JSON.stringify(conflictArchive.body.entries.map((e: any) => e.id))}`);
+	const stillOne = await requestJson(`${room}/memory/entries`);
+	assert(allEntries(stillOne.body).filter((e: any) => e.id === nordwind.id || e.id === `${nordwind.id}-v1`).length === 1, "the core holds the note once");
+	for (const id of [nordwind.id, `${nordwind.id}-v1`]) {
+		const cleared = await requestJson(`${room}/memory/archive/${id}`, { method: "DELETE" });
+		assert(cleared.status === 200 && cleared.body.deleted?.id === id, `the stray row can still be deleted for good, got ${cleared.status}: ${JSON.stringify(cleared.body)}`);
+	}
+	assert((await requestJson(`${room}/memory/archive?limit=50`)).body.entries.length === 0, "and the archive is empty again");
 
 	// --- 8. The pane while the room is in a conversation ----------------------
 	// The field failure: with a turn in flight, the read-only Memory pane asked

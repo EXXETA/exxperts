@@ -2,6 +2,29 @@
 
 User-visible changes per release. Historical private/internal development notes are not part of this public-facing changelog.
 
+## 0.12.1 (2026-09-15)
+
+- Memorize: A save is no longer refused when you remembered a conversation while the card was open. The
+  save keeps that conversation waiting and says so on the saved screen. A conversation whose reading
+  stops at the time limit is not asked again, so one slow conversation costs eight minutes at most.
+- Memorize: The room now reads the day each note was saved and the day each conversation took place, so
+  a conversation read late never overrides what a newer one already settled.
+- Review: A tidy can no longer return a longer note. The rule is now a few characters of slack over the
+  note it replaces instead of half again its length. Notes a tidy reworded no longer count as freshly
+  touched, so the budget rule takes the least recently touched note first as it says.
+- Archive: A note rewritten in two different saves keeps two distinct archived versions, and Undo takes
+  back exactly the row its save added. Restoring a note the memory already holds is refused with a
+  sentence instead of adding it twice.
+- Memory: A note cannot contain a heading line or a hidden comment, whether typed by hand, proposed by a
+  Memorize or by a Review. A memory file that lost its id counter recovers it from the ids it holds.
+- Saving without a second look: A Review that would archive, merge or close anything, and a Memorize
+  that would close an open item or let a conversation go, now wait for you, as the setting's own words
+  promise. A note a Memorize replaces is its ordinary work and stays on the fast path.
+- Memory tab: The room card says "saved 2h ago" instead of "memorized", because the stamp is the newest
+  save of any kind, the same fact the Home card shows.
+- Docs: The memory pages and the README describe notes, topics, the archive, the budget, undo and the
+  upgrade from 0.11.2 instead of the retired whole-text Memorize and Review.
+
 ## 0.12.0 (2026-09-15)
 
 - Notes: Your rooms now remember in notes, grouped by topic, with an archive and a memory budget. Each

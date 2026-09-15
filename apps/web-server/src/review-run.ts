@@ -24,7 +24,7 @@
 // applier (review-ops.ts), the entry model (memory-entries.ts), the files
 // (memory-entries-store.ts), and the worker itself (the route injects it).
 
-import { hasActiveAbsorbRun, parseRunKeepRequest, type AbsorbRunArchiveRow, type AbsorbRunBudget, type AbsorbRunDemotion, type AbsorbRunEntryCard } from "./absorb-run.js";
+import { hasActiveAbsorbRun, parseRunKeepRequest, rebaseOntoDisk, type AbsorbRunArchiveRow, type AbsorbRunBudget, type AbsorbRunDemotion, type AbsorbRunEntryCard } from "./absorb-run.js";
 import { recordMaintenanceWorkerCalls } from "./maintenance-diagnostics.js";
 import {
 	cloneDocument,
@@ -165,6 +165,8 @@ export interface ReviewRunApprovalResponse {
 	archivedForBudget: number;
 	/** The limit the card raised, written to the room's settings by this save. Absent when the save was made against the saved limit. */
 	budgetRaisedTo?: number;
+	/** Conversations remembered while the run was open: the save was rebased onto the file with them, and they stay waiting. Empty when none. */
+	rebasedOnto: string[];
 	warnings: string[];
 }
 
@@ -339,6 +341,8 @@ interface RunSlot {
 	model: PersistentAgentModelLock;
 	savedDate: string;
 	sourceFingerprint: L1bSourceFingerprint;
+	/** The file the run read, so an approve can tell a Remember that landed meanwhile from any other change. */
+	sourceL1b: string;
 	/** The document as it stands after the groups landed — what keep/budget/edit recompute from. */
 	postTidyDoc: MemoryDocument | null;
 	/** The document as it will be written: post-tidy, post-demotion, keeps pinned. */
@@ -472,6 +476,7 @@ export function startReviewRun(agentIdRaw: string, input: ReviewRunStartInput): 
 		model: input.model,
 		savedDate: now.toISOString().slice(0, 10),
 		sourceFingerprint: { algorithm: "sha256", value: "" },
+		sourceL1b: "",
 		postTidyDoc: null,
 		candidateDoc: null,
 		tidyArchive: [],
@@ -511,7 +516,12 @@ async function performRun(slot: RunSlot, input: ReviewRunStartInput, nowFn: () =
 	const loaded = loadMemoryDocument(agentId, { migrate: "in-memory", now: nowFn() });
 	if (loaded.pendingMigration) run.migration = { pending: true, entriesAssigned: loaded.pendingMigration.entriesAssigned };
 	let doc = loaded.doc;
-	slot.sourceFingerprint = fingerprintL1bSource(createPersistentAgentInstance(agentId).readL1b());
+	// The ids the room's archive already holds, read once with the memory: a
+	// note tidied in an earlier save has its `-v1` row there, and this run's
+	// version of it must be `-v2`, or two rows would claim one address.
+	const archiveIdsOnDisk = loaded.archive.map((row) => row.id);
+	slot.sourceL1b = createPersistentAgentInstance(agentId).readL1b();
+	slot.sourceFingerprint = fingerprintL1bSource(slot.sourceL1b);
 
 	const chosen = chooseReviewTopics(doc, input.topics ?? [], guidance.topics);
 	run.topics = chosen.map((topic) => topic.title);
@@ -680,7 +690,7 @@ async function performRun(slot: RunSlot, input: ReviewRunStartInput, nowFn: () =
 			return;
 		}
 		await serialize(() => {
-			const applied = applyReviewOps(doc, ops, { savedDate: slot.savedDate, takenArchiveIds: slot.tidyArchive.map((append) => append.entry.id) });
+			const applied = applyReviewOps(doc, ops, { savedDate: slot.savedDate, takenArchiveIds: [...archiveIdsOnDisk, ...slot.tidyArchive.map((append) => append.entry.id)] });
 			doc = applied.doc;
 			for (const row of applied.archive) slot.tidyArchive.push({ ...row, archived: slot.savedDate });
 			run.changes.push(...applied.changes.map((change) => withDuplicatePartner(runChange(change), duplicatePairs)));
@@ -972,11 +982,25 @@ export function approveReviewRun(agentIdRaw: string, runId: string, now = new Da
 	const run = slot.run;
 	// The staleness check comes first, and it is what refuses a second approve:
 	// the first one wrote the file, so the source this run was built on is no
-	// longer the source on disk.
-	assertAbsorbSourceFingerprintCurrent(slot.sourceFingerprint, createPersistentAgentInstance(agentId).readL1b(), "review");
+	// longer the source on disk. One change is absorbed rather than refused: a
+	// conversation remembered while the card was open, which a tidy never
+	// touches — the write then takes the disk's Recent Context and Chronos with
+	// the run's own notes, the same rebase a Memorize save makes.
+	const diskL1b = createPersistentAgentInstance(agentId).readL1b();
+	let rebase = null as ReturnType<typeof rebaseOntoDisk>;
+	if (fingerprintL1bSource(diskL1b).value !== slot.sourceFingerprint.value) {
+		rebase = rebaseOntoDisk(slot.sourceL1b, diskL1b);
+		if (!rebase) assertAbsorbSourceFingerprintCurrent(slot.sourceFingerprint, diskL1b, "review");
+	}
 	requireReady(slot);
-	const candidate = slot.candidateDoc;
-	if (!candidate) throw productError("This review has nothing to save.", "review_run_empty");
+	const candidateDoc = slot.candidateDoc;
+	if (!candidateDoc) throw productError("This review has nothing to save.", "review_run_empty");
+	const candidate = cloneDocument(candidateDoc);
+	if (rebase) {
+		candidate.recentContext = rebase.disk.recentContext;
+		candidate.chronos = rebase.disk.chronos;
+	}
+	const rebasedOnto = rebase?.newSessionIds ?? [];
 
 	// What leaves the core, each with the reason it left. A note the user kept is
 	// not among them: it is back in the candidate instead.
@@ -1058,6 +1082,7 @@ export function approveReviewRun(agentIdRaw: string, runId: string, now = new Da
 			overBudget: written.budget.overBudget,
 		},
 		topicsTidied: new Set(run.changes.map((change) => change.topic)).size,
+		rebasedOnto,
 		notesChanged: run.changes.length,
 		archivedEntries: archiveAppend.length,
 		archivedForBudget: archiveAppend.filter((append) => append.why === "budget").length,

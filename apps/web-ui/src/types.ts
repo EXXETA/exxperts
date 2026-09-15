@@ -505,6 +505,8 @@ export interface AbsorbApprovalResponse {
 	archivedForBudget?: number;
 	/** The card raised the limit and this save wrote the room setting; the new value. */
 	budgetRaisedTo?: number;
+	/** Conversations remembered while the run was open: the save was rebased onto the file with them, and they stay waiting. */
+	rebasedOnto?: string[];
 }
 
 // ── Memory v2 (api contract 2026-09-13) ────────────────────────────────────
@@ -850,6 +852,8 @@ export interface ReviewRunApprovalResponse {
 	archivedForBudget: number;
 	/** The card raised the limit and this save wrote the room setting; the new value. */
 	budgetRaisedTo?: number;
+	/** Conversations remembered while the run was open; the save kept them waiting. */
+	rebasedOnto?: string[];
 	warnings: string[];
 }
 

@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import { estimateTokens } from "./token-estimate.js";
 import type { MemoryMapRow } from "./memory-shape.js";
-import { listAreas, MEMORY_ARCHIVE_ENTRIES_FILE, parseMemoryDocument, renderMemoryContext, reviewTargetTokens } from "./memory-entries.js";
+import { listAreas, MEMORY_ARCHIVE_ENTRIES_FILE, parseMemoryDocument, renderMemoryContext, reviewTargetTokens, stripRecentContextMetadata } from "./memory-entries.js";
 import { settleMemoryBudget } from "./memory-entries-store.js";
 import { analyzeRecentContextIds, countRecentContextEntries } from "./recent-context-entries.js";
 import { createRequire } from "node:module";
@@ -4708,8 +4708,10 @@ export function buildPersistentAgentBootContext(contract: PersistentAgentBootCon
 	// model, and every topic with archived entries carries its pointer line, so
 	// a demotion is disclosure instead of forgetting. A file that has never been
 	// migrated renders to itself byte for byte, so this line changes nothing for
-	// a room that has not opted into entries yet.
-	const l1b = renderMemoryContext(fs.readFileSync(l1bPath, "utf-8"), readMemoryArchiveTextForBoot(instance, meta));
+	// a room that has not opted into entries yet. The checkpoint provenance
+	// comments of the remembered conversations are stripped here, at the boot
+	// alone, for the same reason the entry comments are.
+	const l1b = stripRecentContextMetadata(renderMemoryContext(fs.readFileSync(l1bPath, "utf-8"), readMemoryArchiveTextForBoot(instance, meta)));
 	const l2 = persistentAgentRuntimeEnvelope(new Date(), normalizedContract.workspaceCapability, normalizedContract.enabledSkillsIndex);
 	const displayName = String(meta.displayName ?? "").trim() || instance.agentId;
 	const layers: PersistentAgentPromptLayer[] = [

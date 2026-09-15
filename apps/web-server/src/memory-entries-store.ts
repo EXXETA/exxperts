@@ -27,6 +27,7 @@ import {
 	appendToArchive,
 	archiveIndex,
 	cloneDocument,
+	highestEntryNumber,
 	isMigratedMemoryDocument,
 	MEMORY_ARCHIVE_ENTRIES_FILE,
 	migrateMemoryDocument,
@@ -226,6 +227,8 @@ export interface LoadMemoryDocumentOptions {
 export const MEMORY_ROOM_BUSY_SENTENCE = "This room is in the middle of a turn. Wait for it to finish, then change the memory.";
 export const MEMORY_ENTRY_UNKNOWN_SENTENCE = "That entry is not in this room's memory any more.";
 export const MEMORY_ARCHIVED_ENTRY_UNKNOWN_SENTENCE = "That entry is not in this room's archive any more.";
+/** A restore of a note the core already holds, in this or an older version: nothing is put in beside it. */
+export const MEMORY_ENTRY_ALREADY_IN_CORE_SENTENCE = "This note is already in memory.";
 
 function productError(message: string, code: string, statusCode = 400): Error {
 	const error = new Error(message);
@@ -240,6 +243,11 @@ export function memoryRoomBusyError(): Error {
 
 export function memoryEntryUnknownError(archived = false): Error {
 	return productError(archived ? MEMORY_ARCHIVED_ENTRY_UNKNOWN_SENTENCE : MEMORY_ENTRY_UNKNOWN_SENTENCE, "memory_entry_unknown");
+}
+
+/** A conflict, not a bad request: the archive row is real, the core just holds the note already. */
+export function memoryEntryAlreadyInCoreError(): Error {
+	return productError(MEMORY_ENTRY_ALREADY_IN_CORE_SENTENCE, "memory_entry_already_in_core", 409);
 }
 
 // --- disk primitives (the house pattern: one small atomic writer per module) --
@@ -542,20 +550,37 @@ function fallbackSavedDate(doc: MemoryDocument, now: Date): string {
 	return isoDay(now);
 }
 
+/**
+ * The counter the room's next id comes from, as the store hands it out: never
+ * below one past the highest number the ARCHIVE holds. The parser recovers a
+ * missing counter from the core file's own ids (the counter rule), but the
+ * archive is the other half of a room's memory and it can carry a number the
+ * core no longer does — an entry that left the core, or the versions of one —
+ * and an id minted below it would come back as a duplicate the day the row is
+ * restored. Lifting the counter is safe in every case: ids only ever go up, and
+ * a counter that is already ahead is left where it is.
+ */
+function parseWithCounterAboveArchive(l1b: string, archive: ArchivedEntry[]): MemoryDocument {
+	const doc = parseMemoryDocument(l1b);
+	doc.nextEntryNumber = Math.max(doc.nextEntryNumber, highestEntryNumber(archive.map((entry) => entry.id)) + 1);
+	return doc;
+}
+
 export function loadMemoryDocument(agentIdRaw: string, options: LoadMemoryDocumentOptions = {}): MemoryDocumentLoad {
 	const files = roomFiles(agentIdRaw);
 	const now = options.now ?? new Date();
 	const raw = readL1bOrThrow(files);
+	const archive = parseArchive(readArchiveText(files));
 	if (isMigratedMemoryDocument(raw) || options.migrate === false) {
-		const doc = parseMemoryDocument(raw);
-		return { doc, archive: parseArchive(readArchiveText(files)), budget: memoryBudgetState(files.agentId, doc), migrated: false };
+		const doc = parseWithCounterAboveArchive(raw, archive);
+		return { doc, archive, budget: memoryBudgetState(files.agentId, doc), migrated: false };
 	}
-	const parsed = parseMemoryDocument(raw);
+	const parsed = parseWithCounterAboveArchive(raw, archive);
 	const migrated = migrateMemoryDocument(parsed, { fallbackSaved: fallbackSavedDate(parsed, now) });
 	if (options.migrate === "in-memory") {
 		return {
 			doc: migrated.doc,
-			archive: parseArchive(readArchiveText(files)),
+			archive,
 			budget: memoryBudgetState(files.agentId, migrated.doc),
 			migrated: false,
 			pendingMigration: { entriesAssigned: migrated.assigned },
@@ -570,8 +595,8 @@ export function loadMemoryDocument(agentIdRaw: string, options: LoadMemoryDocume
 	// Re-read what actually landed: the document the caller holds must be the
 	// document on disk, stamped Chronos line included, or its next write would
 	// silently revert it.
-	const doc = parseMemoryDocument(fs.readFileSync(files.l1bPath, "utf-8"));
-	return { doc, archive: parseArchive(readArchiveText(files)), budget: migration.budget, migrated: true, migration };
+	const doc = parseWithCounterAboveArchive(fs.readFileSync(files.l1bPath, "utf-8"), archive);
+	return { doc, archive, budget: migration.budget, migrated: true, migration };
 }
 
 // --- write -------------------------------------------------------------------

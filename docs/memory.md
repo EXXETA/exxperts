@@ -9,123 +9,138 @@ exxperts has two memory systems, one per surface:
 
 | Surface | Memory | Where | Who writes it |
 | --- | --- | --- | --- |
-| **Persistent rooms (web)** | The room's L1b memory file, grown through Remember → Memorize → Review | `~/.exxperts/app/personalized-agents/<id>/` | Only you, through approval screens |
+| **Persistent rooms (web)** | The room's notes, grown through Remember → Memorize → Review | `~/.exxperts/app/personalized-agents/<id>/` | Only you, through approval screens |
 | **CLI (ExxCode)** | Context files + a fact store + session compaction | repo `AGENTS.md`, `~/.exxperts/app/memory.jsonl` | You directly, or the model with your approval |
 
 The room memory engine is the product's core; the CLI layers are
 conveniences for the coding workspace.
 
-## Room memory: the L1b lifecycle
+## Room memory: notes, topics, archive
 
-Each room boots from its own memory file with four sections:
-**Chronos** (temporal spine), **Deep Memory** (consolidated
-understanding), **Active Items** (live threads), and **Recent Context**
-(a chronological buffer of per-session compressions).
+A room remembers in **notes**, grouped by **topic**, plus a list of
+**open items** (the loops it is still carrying). Every note carries the
+day it was saved, whether you pinned it, and the conversation it came
+from. The notes and open items are what the room reads on every turn.
+Beside them sit two more things:
 
-Nothing enters or leaves this file without you:
+- **Waiting conversations**: the conversations you have remembered but
+  not yet memorized, kept in recent memory as short summaries.
+- **The archive**: notes that left the room's memory. Nothing is
+  deleted; a note that leaves is archived with the reason it left, and
+  the room can read its archive by itself when a question is about an
+  older period (the chat shows a "Read archived notes" chip with what
+  it looked for).
 
-1. **Remember**: at the end of a work session (the room shows a
-   context meter so you know when it's worth doing), a compression
-   worker proposes a Recent Context entry at your chosen density. You
-   can add a steering note; anything you explicitly asked the agent to
-   remember is marked **must-keep** and survives every compression
-   budget. You review the proposal and approve or discard it. The
-   default Remember button runs a fast path at standard density and
-   shows you the proposal before saving; a room set to remember
-   without preview saves warning-free proposals straight away and
-   falls back to the preview for anything questionable.
-   "Remember with options…" always opens the full preview. When a
-   proposal had to be kept within what the next step accepts, the
-   proposal screen says exactly what was shortened. Recent Context has
-   a cap: Remember warns when one more save would fill it, and after
-   that you Memorize before remembering again.
-2. **Memorize**: once several remembered sessions accumulate, an
-   assessment proposes what to merge into stable memory and what to
-   forget. You can discuss it before approving the consolidated
-   rewrite. Must-keep content carries through with its marker; later
-   entries supersede earlier ones. The proposal states its effect on
-   the room's memory budget (below), and an outcome that would leave
-   the room over budget is never applied without your approval.
-3. **Review**: a review of stable memory only (Deep Memory + Active
-   Items) that tightens and reorganizes without growing it. Must-keep
-   entries are only removed at your explicit direction, and any such
-   removal is called out in the proposal, never silent. This is where
-   the memory budget binds: the proposal names every drop and every
-   compression before the candidate text, and a candidate that comes
-   back over budget is drafted once more with the reasons; what still
-   does not fit returns as a disclosed partial for you to decide on.
-   The assessment that opens a Review has a **Reassess** button when
-   it reads wrong: the model is asked again with the reasons, and
-   nothing is saved. Before a Review removes material you can tick
-   **save to Files**: the full text goes to the room's Files and a
-   must-keep pointer to it stays in memory. Nothing is exported unless
-   you choose it, and a failed save never touches memory.
+Nothing enters or leaves memory without you:
 
-Every approved change archives the previous memory file and writes an
-event record with content fingerprints, so you can always see what
-changed, when, and from what.
+1. **Remember**: at the end of a conversation (the room shows a context
+   meter so you know when it is worth doing), a worker proposes a short
+   summary of what happened. You can add a steering note; anything you
+   explicitly asked the room to remember is carried through and becomes
+   a pinned note when it is memorized. The default Remember button shows
+   you the proposal before saving; a room set to remember without the
+   preview saves clean proposals straight away and shows you anything
+   questionable. "Remember with options…" always opens the full preview.
+   Remember warns when the list of waiting conversations is nearly full
+   and asks you to Memorize before remembering more.
+2. **Memorize**: turns the waiting conversations into lasting notes, one
+   conversation at a time. A first read says what the conversations hold
+   and what needs your call; **Discuss first** lets you answer before
+   anything runs. The card fills in as each conversation is read, with
+   what it added or changed; you can edit a note on the card and keep
+   any note the room should not let go. A conversation whose reading
+   fails stays waiting for next time, with the reason beside it. When
+   the memory is over its budget, the card shows which notes would move
+   to the archive; **Keep** marks one that must stay, and you can raise
+   the budget from the card so that everything fits.
+3. **Review**: tidies the notes you already have, topic by topic. Its
+   first read lists what the room finds by itself ("Says the same twice",
+   "Topics that look the same") and what looks stale or could be shorter.
+   You choose a depth: wording only, or wording plus moving what is
+   finished or stale to the archive; the room recommends one. The card
+   shows each topic's before and after. Review never rewrites the memory
+   as one block of text, so it completes on any model.
 
-Rooms also have a per-room **Automatic memory maintenance** toggle
-(default off). When on, Memorize and Review proposals apply
-automatically only when they are structurally clean, carry no
-must-keep removals, and do not leave the room over its memory budget;
-anything else falls back to the manual review above, where the card
-states the impact and you decide.
+Every save archives the previous memory file and writes an event record
+with content fingerprints. **History** shows every change with "What
+changed": the notes a save added, updated, moved or archived, an updated
+note with its old text struck above the new. Any Memorize or Review save
+can be **undone** while it is the latest change, from the saved screen
+or from History: Undo puts the previous memory back byte for byte, takes
+back the archive rows that save added, and lowers a budget that save
+raised.
+
+### Editing memory by hand
+
+Room settings → **Memory** shows the room's notes by topic with a search
+box. You can add, edit, move, pin and delete notes by hand; deleting
+sends a note to the archive, where you can **Restore** it or **Delete
+for good**. Editing stays open while the room is open in a chat; only a
+running answer blocks it. Every hand edit is recorded in History like
+any other change.
+
+The **Memory** tab is the cross-room view: how full each room's memory
+is, its topics, its full memory as the room reads it, the growth graph
+save by save (click a point to read the memory as it was then), the
+waiting conversations and the memorized ones, which open as they were
+stored.
+
+### Saving without a second look
+
+Two per-room toggles, off by default, under "Saving without a second
+look": **Remember: save without the preview** and **Memorize: save a
+clean update without the card**. A clean update is one with nothing for
+you to weigh. An update that archives notes, crosses the memory budget
+or leaves a conversation unfinished always waits for you, and you can
+always see what changed afterwards in History.
 
 ## The memory budget
 
-Every room has a memory budget. It measures **Deep Memory plus Active
-Items**, the stable memory a Review rewrites, in estimated tokens
-(about four characters per token); Chronos and Recent Context are not
-counted, because Recent Context is intake that Memorize clears and
-Chronos is system-managed. The default is 20,000 tokens, adjustable in
-the room's settings between 10,000 and 50,000 (`memoryBudgetTokens`).
+Every room has a memory budget. It measures the notes and open items
+the room reads on every turn, in estimated tokens (about four
+characters per token); waiting conversations do not count. The default
+is 20,000 tokens, adjustable in Room settings between 10,000 and
+80,000 (`memoryBudgetTokens`). Tokens appear only next to that slider;
+everywhere else the room says how full its memory is.
 
-The room card, the room's settings and the Memory page all show the
-same number and the same verdict, above or within. A room above its budget
-keeps working; the card badge says "memory above budget" and points you
-to Review.
+The budget is enforced when memory is saved: when a Memorize or Review
+would leave the room over it, the lowest-ranked notes move to the
+archive (pinned notes never; working-style notes last; the least
+recently touched first), the card lists them, and you decide: keep,
+raise the budget, or save as proposed. A room can be above its budget
+in between, for instance after hand edits; it keeps working, reads in a
+neutral colour everywhere, and the next Memorize or Review resolves it.
 
-A room crosses its budget only through a proposal you approve. The
-proposal names every drop and every compression first, the impact card
-shows before and after, and the automatic path never applies an
-outcome that leaves the room over. You can always approve an
-over-budget outcome knowingly, and there is always a working way back
-under: the next Review derives its pruning depth from how far over the
-room is.
+One refusal can meet you at the door: a room whose memory and setup no
+longer fit the usable window of its model refuses to start a
+conversation rather than failing on the first reply. Memory is
+unchanged and nothing is sent to the model. The way out is spelled out
+in the message: open Room settings, Session, and choose **Forget** (it
+closes the session without using a model and unlocks the room); then
+from Home open Maintain and run **Memorize** if the room has waiting
+conversations, or **Review** to tidy its notes; or open the room again
+with a larger-context model.
 
-Every refusal along the way says what happened, that your memory is
-unchanged, and what to do next. One refusal can meet you at the door:
-a room whose memory and setup no longer fit the usable window of its
-model refuses to start a conversation rather than failing on the first
-reply. Memory is unchanged and nothing is sent to the model. The way
-out is spelled out in the message: open Room settings, Session, and
-choose **Forget** (it closes the session without using a model and
-unlocks the room); then from Home open Maintain and run **Memorize**
-if most of the room's memory is recent sessions, or **Review** if most
-of it is long-term; or open the room again with a larger-context
-model. A room that was close to its limit before 0.11.0 can meet this
-refusal for the first time after updating: that is the new check
-working, not new damage.
-
-Memory entries carry the date they were saved ("saved on", never the
-date the described events happened). Review reads that age as a prior:
-older material is the first place it looks for tightening, but age
-alone never deletes anything, unstamped material is never treated as
-old, and a drop made partly for age says so next to its date.
-
-If you tuned `memoryBudgetTokens` before 0.11.0, note that the number
-was then read against the whole memory file; it now measures Deep
-Memory and Active Items only, so the same number binds less tightly
-than it did.
+**Upgrading from 0.11.2:** a room keeps everything it has. Its notes
+migrate on the first save, the old "(saved …)" stamps become dates,
+working-style notes are filed as practices, and the memory budget starts
+at the room's size, so the first Memorize never moves anything to the
+archive by surprise. Room settings says so under the slider; lower the
+budget whenever you want. The memory file stays readable by 0.11.2 if
+you go back.
 
 **What the workers are:** ephemeral, tool-less model processes with
-locked models. They propose text; they cannot write files, browse, or
-touch memory. Only the approval endpoint writes.
+locked models. They propose short lists of changes; they cannot write
+files, browse, or touch memory. Only the approval endpoint writes, and
+no reply the workers give is larger than a few thousand tokens, so
+Memorize and Review complete on a company gateway with a 16k output
+cap.
 
-**What to say in chat:** just ask the agent to remember things in your
+**What to say in chat:** just ask the room to remember things in your
 own words. There are no magic phrases: explicit remember-requests are
-detected and protected regardless of phrasing.
+detected and protected regardless of phrasing. To make the room forget
+something, open Room settings → Memory and delete or edit the note;
+there is no chat-side forget yet.
 
 ## CLI memory (ExxCode)
 

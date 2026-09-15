@@ -58,9 +58,9 @@ const {
 // A call that never came back is asked again after a pause. The pause is the one
 // thing here that is real time rather than behaviour, so it is zeroed.
 setReviewTidyRetryPauseForTests(0);
-const { beginPersistentAgentTurn, createPersistentAgentFromScaffoldInput, createPersistentAgentPiSessionJsonlThreadRuntime, finishPersistentAgentTurn, writePersistentAgentThread } = await import("../src/persistent-agents.js");
+const { beginPersistentAgentTurn, buildPersistentAgentCheckpointTranscriptSource, createPersistentAgentFromScaffoldInput, createPersistentAgentPiSessionJsonlThreadRuntime, finishPersistentAgentTurn, parseCheckpointApprovalRequest, writeApprovedCheckpoint, writePersistentAgentThread } = await import("../src/persistent-agents.js");
 const { IsolatedPersistentAgentWorkerTurnError } = await import("../src/persistent-agent-worker-runtime.js");
-const { readArchive } = await import("../src/memory-entries-store.js");
+const { appendArchive, readArchive } = await import("../src/memory-entries-store.js");
 const { readPersistentRoomMaintenanceSettings, writePersistentRoomMaintenanceSettings } = await import("../src/persistent-room-maintenance-settings.js");
 const { undoMemorySave } = await import("../src/memory-undo.js");
 const { buildRoomMemoryHistory } = await import("../src/memory-api.js");
@@ -195,6 +195,22 @@ function createRoom(displayName: string, fixture: (agentId: string) => string = 
 	const l1bPath = path.join(root, agentId, "L1b", "current.md");
 	fs.writeFileSync(l1bPath, fixture(agentId), { mode: 0o600 });
 	return { agentId, l1bPath };
+}
+
+/**
+ * A Remember while a tidy's card is open, through the real checkpoint write:
+ * a thread with one transcript item, a checkpoint proposal built from the file
+ * as it stands, and the approved entry written the way the product writes it.
+ */
+function rememberMeanwhile(agentId: string, marker: string, now: Date) {
+	const conversationId = `c_${Math.random().toString(36).slice(2, 8)}`;
+	const item = { kind: "user", id: "u1", text: `Synthetic transcript for ${conversationId}.` };
+	writePersistentAgentThread(agentId, conversationId, { state: "active", origin: "home", model: MODEL, items: [item] });
+	const l1b = fs.readFileSync(path.join(root, agentId, "L1b", "current.md"), "utf-8");
+	const source = buildPersistentAgentCheckpointTranscriptSource({ agentId, conversationId, l1b, legacyItems: [item] }).source;
+	const approvedRecentContext = `### RC-DRAFT | OPEN | ${now.toISOString().slice(0, 10)} | Remembered while the tidy was open\n\n**Session arc:** One conversation was remembered while a tidy was open.\n\n**Body:**\n- ${marker} The thing this conversation settled.\n\n**Parked:**\nNone\n`;
+	const parsed = parseCheckpointApprovalRequest({ conversationId, model: MODEL, density: "compact", proposal: { agentId, conversationId, sessionId: null, writesMemory: false, source }, approvedRecentContext }, agentId);
+	return writeApprovedCheckpoint(parsed.request, parsed.warnings, now, { runtimeCwd: threadCwd });
 }
 
 /** Where a fixture thread's Pi runtime keeps its session file; under the temp home, so it goes with it. */
@@ -408,6 +424,19 @@ try {
 	// =====================================================================
 	const roomA = createRoom("Review Run Smoke Room");
 	writePersistentRoomMaintenanceSettings(roomA.agentId, { memoryBudgetTokens: TIGHT_BUDGET });
+	// An earlier save already put a previous version of the first note in the
+	// archive. This run rewords that note again, and its row must be the NEXT
+	// version: two rows claiming one address would make a restore a coin toss.
+	const SEEDED_ARCHIVE_ID = `${entryId(1)}-v1`;
+	const SEEDED_ARCHIVED_ON = "2026-09-01";
+	appendArchive(roomA.agentId, [{
+		entry: { id: SEEDED_ARCHIVE_ID, kind: "fact", saved: "2024-02-02", from: "RC-0002", pinned: false, text: "- Note 1 of the Commercial terms arrangement as an earlier tidy left it." },
+		why: "superseded",
+		topic: REFUSED_TOPIC,
+		section: "Deep Memory",
+		archived: SEEDED_ARCHIVED_ON,
+	}], new Date(`${SEEDED_ARCHIVED_ON}T09:00:00.000Z`));
+	assert(readArchive(roomA.agentId).map((row) => row.id).join("|") === SEEDED_ARCHIVE_ID, "the seeded archive holds the one earlier version");
 	const fixtureBytes = fs.readFileSync(roomA.l1bPath, "utf-8");
 
 	// --- 1. What the room says before anything starts -------------------------
@@ -573,7 +602,7 @@ try {
 	assert(new RegExp(`id=${entryId(901)}\\b`).test(written), `the note ${entryId(901)} should still carry its id, and it does not`);
 	assert(/from=RC-0002/.test(written), "the notes still say which conversation they came from");
 	const shortenedMeta = written.slice(written.indexOf(`id=${shortened.id} `), written.indexOf(`id=${shortened.id} `) + 160);
-	assert(new RegExp(`updated=${RUN_DAY}`).test(shortenedMeta), `a note the review reworded should be stamped with the day it was approved, and ${shortened.id} is not: ${JSON.stringify(shortenedMeta)}`);
+	assert(!/updated=/.test(shortenedMeta), `a note the review reworded is not stamped as touched — the budget ranks by that stamp, and a tidy's wording is not new information — but ${shortened.id} is: ${JSON.stringify(shortenedMeta)}`);
 	// The topic the doomed group held is untouched by the TIDY, note for note:
 	// nothing of it was reworded, merged or judged stale. The limit rule still
 	// applies to it like to every topic, so a note of it may leave for budget.
@@ -590,10 +619,16 @@ try {
 	assert(noteCountIn(written, DOOMED_TOPIC) + doomedRows.length === NOTES_PER_TOPIC, `every note of "${DOOMED_TOPIC}" is either still in memory or in the archive for budget, got ${noteCountIn(written, DOOMED_TOPIC)} + ${doomedRows.length}`);
 	assert(!run.changes.some((change) => change.topic === DOOMED_TOPIC), "no change names the topic the tidy could not reach");
 
-	// The archive rows, each with the reason it left.
-	const archive = readArchive(roomA.agentId);
-	assert(archive.length === approved.archivedEntries, `the archive should hold exactly what the approval counted, got ${archive.length} against ${approved.archivedEntries}`);
+	// The archive rows, each with the reason it left; the seeded row from the
+	// earlier save is still there, once, and this save's rows sit beside it.
+	assert(run.changes.some((change) => change.kind === "shortened" && change.id === entryId(1)), `this smoke's -v2 proof needs the first note reworded, got ${JSON.stringify(run.changes.filter((change) => change.kind === "shortened").map((change) => change.id))}`);
+	const wholeArchive = readArchive(roomA.agentId);
+	const seededRows = wholeArchive.filter((row) => row.id === SEEDED_ARCHIVE_ID);
+	assert(seededRows.length === 1 && seededRows[0].archived === SEEDED_ARCHIVED_ON, `the earlier save's row is still in the archive, once and as it was, got ${JSON.stringify(seededRows)}`);
+	const archive = wholeArchive.filter((row) => row.id !== SEEDED_ARCHIVE_ID);
+	assert(archive.length === approved.archivedEntries, `the archive should hold exactly what the approval counted beside the seeded row, got ${archive.length} against ${approved.archivedEntries}`);
 	assert(archive.some((row) => row.why === "superseded" && /-v1$/.test(row.id)), `the words a tidy replaced go to the archive under a versioned id, got ${JSON.stringify(archive.map((row) => `${row.id}:${row.why}`))}`);
+	assert(archive.some((row) => row.id === `${entryId(1)}-v2` && row.why === "superseded"), `a note whose earlier version an older save already archived gets the next version, never a second -v1, got ${JSON.stringify(archive.filter((row) => row.id.startsWith(entryId(1))).map((row) => row.id))}`);
 	assert(archive.some((row) => row.why === "stale"), "a note the tidy judged stale leaves with that reason");
 	assert(archive.some((row) => row.why === "done"), "the finished item leaves as done");
 	assert(!archive.some((row) => row.id === archivedByTidy.id), "the note the person kept did not go to the archive");
@@ -615,7 +650,7 @@ try {
 	const undone = undoMemorySave(roomA.agentId, approved.saveId, new Date(`${RUN_DAY}T09:10:00.000Z`));
 	assert(undone.undone.saveId === approved.saveId && undone.undone.kind === "review", `the undo should say which save it took back, got ${JSON.stringify(undone.undone)}`);
 	assert(fs.readFileSync(roomA.l1bPath, "utf-8") === beforeApproval, "undo puts the file back byte for byte — it is the previous file, not a reconstruction of it");
-	assert(readArchive(roomA.agentId).length === 0, `the undo should take back exactly this save's archive rows, and ${readArchive(roomA.agentId).length} are left`);
+	assert(readArchive(roomA.agentId).map((row) => row.id).join("|") === SEEDED_ARCHIVE_ID, `the undo should take back exactly this save's archive rows and leave the earlier save's, got ${JSON.stringify(readArchive(roomA.agentId).map((row) => row.id))}`);
 	// The limit this save raised goes back down with it.
 	assert(undone.limitLoweredTo === TIGHT_BUDGET && readPersistentRoomMaintenanceSettings(roomA.agentId).memoryBudgetTokens === TIGHT_BUDGET, `undoing a save that raised the limit lowers it again and says so, got ${JSON.stringify({ limitLoweredTo: undone.limitLoweredTo, setting: readPersistentRoomMaintenanceSettings(roomA.agentId).memoryBudgetTokens })}`);
 	assert(undone.memoryBudget.budgetTokens === TIGHT_BUDGET && undone.memoryBudget.overBudget === true, `the undo's budget block is measured against the lowered limit, got ${JSON.stringify(undone.memoryBudget)}`);
@@ -739,6 +774,44 @@ try {
 	assert(readArchive(roomD.agentId).some((row) => row.id === "m-0301" && row.why === "duplicate"), "the twin is in the archive as a duplicate");
 
 	resetReviewRunsForTests();
+
+	// =====================================================================
+	// Room rebase: a Remember while the card is open does not stale the save.
+	// =====================================================================
+	// A tidy never touches Recent Context, so a conversation remembered while
+	// its card was open is absorbed at approve: the write takes the file's
+	// Recent Context and Chronos with the run's own notes, names the
+	// conversation, and undo puts back the file as the Remember left it.
+	resetReviewRunsForTests();
+	const roomR = createRoom("Review Rebase Room");
+	const startedR = startReviewRun(roomR.agentId, { depth: "wording", model: MODEL, generate, resolveModelWindow: () => MODEL_WINDOW, now: RUN_CLOCK });
+	const runR = await settle(roomR.agentId, startedR.runId, "room rebase");
+	assert(runR.state === "ready", `the rebase room's run should end ready, got ${runR.state}${runR.error ? ` with error ${JSON.stringify(runR.error)}` : ""}`);
+	const rcIdsIn = (text: string) => [...text.matchAll(/^###\s+(RC-\d+)\s*\|/gm)].map((m) => m[1]);
+	const beforeRememberR = fs.readFileSync(roomR.l1bPath, "utf-8");
+	const MEANWHILE_R = "TIDY-REMEMBERED-MEANWHILE";
+	const rememberedR = rememberMeanwhile(roomR.agentId, MEANWHILE_R, new Date(`${RUN_DAY}T09:03:00.000Z`));
+	const afterRememberR = fs.readFileSync(roomR.l1bPath, "utf-8");
+	const newIdsR = rcIdsIn(afterRememberR).filter((id) => !rcIdsIn(beforeRememberR).includes(id));
+	assert(newIdsR.length === 1 && afterRememberR.includes(MEANWHILE_R), `the Remember appended one conversation while the tidy was open, got ${JSON.stringify(newIdsR)}`);
+	const approvedR = approveReviewRun(roomR.agentId, startedR.runId, APPROVED_AT);
+	assert(JSON.stringify(approvedR.rebasedOnto) === JSON.stringify(newIdsR), `the approval names the conversation remembered meanwhile, got ${JSON.stringify(approvedR.rebasedOnto)}`);
+	const writtenR = fs.readFileSync(roomR.l1bPath, "utf-8");
+	assert(writtenR.includes(MEANWHILE_R) && JSON.stringify(rcIdsIn(writtenR)) === JSON.stringify(rcIdsIn(afterRememberR)), "the written file keeps every remembered conversation, the new one included");
+	assert(new RegExp(`^- Last checkpoint: ${rememberedR.checkpointId}$`, "m").test(writtenR) && new RegExp(`^- Last structural review: ${approvedR.reviewId}$|^- Last review: ${approvedR.reviewId}$`, "m").test(writtenR) || writtenR.includes(approvedR.reviewId), "Chronos keeps the Remember's stamp and takes the tidy's beside it");
+	const undoneR = undoMemorySave(roomR.agentId, approvedR.saveId, new Date(`${RUN_DAY}T09:10:00.000Z`));
+	assert(undoneR.undone.saveId === approvedR.saveId, "the undo names the rebased save");
+	assert(fs.readFileSync(roomR.l1bPath, "utf-8") === afterRememberR, "undo puts back the file as the Remember left it, byte for byte");
+	// Any other change still makes the run stale: a note edited by hand under a Remember.
+	resetReviewRunsForTests();
+	const startedR2 = startReviewRun(roomR.agentId, { depth: "wording", model: MODEL, generate, resolveModelWindow: () => MODEL_WINDOW, now: RUN_CLOCK });
+	await settle(roomR.agentId, startedR2.runId, "room rebase, second run");
+	fs.writeFileSync(roomR.l1bPath, fs.readFileSync(roomR.l1bPath, "utf-8").replace(/^- (?=[^\n]*\.$)/m, "- Edited by hand: "), { mode: 0o600 });
+	rememberMeanwhile(roomR.agentId, "TIDY-REMEMBERED-AGAIN", new Date(`${RUN_DAY}T09:12:00.000Z`));
+	expectThrows(() => approveReviewRun(roomR.agentId, startedR2.runId, APPROVED_AT), /stale/i, "approving over a note edited by hand, with a Remember on top");
+	cancelReviewRun(roomR.agentId, startedR2.runId, new Date(`${RUN_DAY}T09:13:00.000Z`));
+	resetReviewRunsForTests();
+
 	console.log(`review-run-smoke: OK (${calls.length + callsD.length} scripted model calls)`);
 } catch (error) {
 	console.error(error instanceof Error ? error.stack || error.message : error);

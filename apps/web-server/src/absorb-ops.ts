@@ -74,6 +74,15 @@ export interface AreaRow {
 	kind: EntryKind;
 	pinned: boolean;
 	saved: string;
+	/** YYYY-MM-DD of the last update or supersede, when a fold has rewritten it. The prompt shows it beside the saved date so a fold can tell which of the two is newer: the entry or the session. */
+	updated?: string;
+	/**
+	 * The saved date is a floor, not the day the point was learned: an entry no
+	 * conversation wrote (one that came through the upgrade from a memory
+	 * without ids, or one typed by hand) carries the day it was given its id,
+	 * and may be far older. The prompt writes it as "in memory since".
+	 */
+	since?: true;
 	tokens: number;
 	firstLine: string;
 	/** The whole note, so an add that repeats it can be refused. Nothing else reads it. */
@@ -262,7 +271,8 @@ export interface FoldPromptInput {
 	areas: AreaRow[];
 	assessmentMarkdown: string;
 	guidance?: FoldGuidance;
-	session: { id: string; text: string };
+	/** The one session, with the day it was remembered (its heading's date) when the caller knows it: the prompt states it so the fold can weigh the session against the entries' own dates. */
+	session: { id: string; text: string; date?: string };
 	sessionIndex: number;
 	sessionCount: number;
 	now?: Date;
@@ -311,7 +321,11 @@ Maximize durable signal density. A fold is not append-only memory growth. It fol
 
 ## Reading the Session in Order
 
-A session is a chronological compression of one working stretch: Session arc, then Body, then Parked. Read it in order and treat it as a trajectory, because later entries supersede earlier ones — a decision recorded early in the session and reversed later in it folds as the reversal, not as the original, and the reversal is a supersede of the entry that carries the old decision, never a second entry beside it. The same holds against memory: this session is newer than everything already in memory, so where it conflicts with an existing entry it wins, unless it explicitly defers to the older one.
+A session is a chronological compression of one working stretch: Session arc, then Body, then Parked. Read it in order and treat it as a trajectory, because later entries supersede earlier ones — a decision recorded early in the session and reversed later in it folds as the reversal, not as the original, and the reversal is a supersede of the entry that carries the old decision, never a second entry beside it.
+
+## Dates Decide What Is Newer
+
+Against memory, dates decide, not the order of folding: a session can reach you after a later one has already been folded. Every entry's address carries the day it was saved and, when a later fold rewrote it, the day it was updated; the task below names the day this session is from. This session is newer than every entry saved or updated BEFORE its date, so where it conflicts with such an entry it wins, unless it explicitly defers to the older one. An entry saved or updated AFTER this session's date already knows more than this session does: never supersede or update it with this session's older information. An entry that reads "in memory since" a day carries no saved date at all, only the day it was given its id: it is older than this session unless it also carries an updated date after the session's, and this session wins against it as against any older entry. Where the older point still matters beside the newer one, add it as its own entry and say in your narrative that it is the earlier state; otherwise leave the newer entry alone.
 
 ## Date Stamps
 
@@ -323,7 +337,7 @@ A session may carry content marked **must-keep** — explicit user remember-requ
 
 ## Pinned Entries
 
-A pinned entry is the user's own, and says so in its address: it reads \`[m-0032 · pinned]\`. A fold never updates, supersedes, closes or unpins one; where the session changes what a pinned entry says, add the newer point beside it and say so in your narrative, and the user decides. Pinning and unpinning are things only the user asks for: emit pin or unpin only when the session itself records that request, and quote the line that records it.
+A pinned entry is the user's own, and says so in its address: it reads \`[m-0032 · pinned · saved …]\`. A fold never updates, supersedes, closes or unpins one; where the session changes what a pinned entry says, add the newer point beside it and say so in your narrative, and the user decides. Pinning and unpinning are things only the user asks for: emit pin or unpin only when the session itself records that request, and quote the line that records it.
 
 ## Boundaries
 
@@ -349,9 +363,50 @@ A pinned entry is the user's own, and says so in its address: it reads \`[m-0032
 function renderAddressLegend(areas: AreaRow[]): string {
 	if (areas.length === 0) return "Core memory holds no entries yet. Every operation is an add.";
 	return [
-		`Every entry of the memory above opens with its own id in square brackets: \`- [m-0031] The Nordwind contract renews annually…\` is the entry \`m-0031\`. An entry written as \`- [m-0032 · pinned] …\` is pinned — it is the user's own, and a fold may only add beside it.`,
-		`The brackets are the address, not part of the entry's words. Copy an id exactly as it stands there, address only the ids that memory carries (there are ${areas.length}), and never write a bracketed id into the text of an operation.`,
+		`Every entry of the memory above opens with its own id in square brackets, followed by its dates: \`- [m-0031 · saved 2026-08-02] The Nordwind contract renews annually…\` is the entry \`m-0031\`, saved into memory on 2026-08-02. \`[m-0031 · saved 2026-08-02 · updated 2026-09-01]\` says a later fold rewrote it on 2026-09-01, so the entry is as new as that day. \`[m-0033 · in memory since 2026-09-12]\` says the entry was in memory by that day and no conversation wrote it — it came with the room or was typed by hand, and may be far older than that day; read it as older than the session unless an updated date says otherwise. An entry written as \`- [m-0032 · pinned · saved …] …\` is pinned — it is the user's own, and a fold may only add beside it.`,
+		`The brackets are the address, not part of the entry's words. Copy the id alone — \`m-0031\`, never the dates or the pin marker — exactly as it stands there, address only the ids that memory carries (there are ${areas.length}), and never write a bracketed id into the text of an operation.`,
 	].join("\n\n");
+}
+
+/**
+ * The address as the memory render writes it at the start of an entry's first
+ * line — `[m-0031]`, or `[m-0031 · pinned]` — anchored to the line so a bracket
+ * inside an entry's own words is never mistaken for one.
+ */
+function entryAddressPattern(id: string): RegExp {
+	const escaped = id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+	return new RegExp(`^(\\s*(?:[-*+]|\\d+[.)])?\\s*)\\[${escaped}( · pinned)?\\]`, "m");
+}
+
+function entryDatesLabel(area: AreaRow): string {
+	const parts: string[] = [];
+	if (area.saved) parts.push(area.since ? `in memory since ${area.saved}` : `saved ${area.saved}`);
+	if (area.updated) parts.push(`updated ${area.updated}`);
+	return parts.join(" · ");
+}
+
+/**
+ * The memory render with each entry's dates written into its address:
+ * `[m-0031 · saved 2026-08-02]`, `[m-0031 · saved 2026-08-02 · updated
+ * 2026-09-01]`, and `[m-0032 · pinned · saved …]` for a pinned one.
+ *
+ * The fold is the one reader that has to weigh an entry's age against a
+ * session's, because a session that failed in one run is folded in a later one
+ * after sessions newer than it have already landed. The render itself is the
+ * entry model's, shared by every other reader of the addresses (Review, the
+ * room's own boot), so the dates are dressed onto the addresses HERE, from the
+ * same area map the validator judges the reply against, and the validator goes
+ * on reading bare ids. Each address is replaced once, at the line it opens; an
+ * entry the map has no date for keeps its address as it was.
+ */
+function withEntryDates(coreContext: string, areas: AreaRow[]): string {
+	let out = coreContext;
+	for (const area of areas) {
+		const dates = area.id ? entryDatesLabel(area) : "";
+		if (!dates) continue;
+		out = out.replace(entryAddressPattern(area.id), (_match, prefix: string, pinned: string | undefined) => `${prefix}[${area.id}${pinned ?? ""} · ${dates}]`);
+	}
+	return out;
 }
 
 /** The guidance the user signed off, rendered as instructions the fold must honour. */
@@ -386,10 +441,11 @@ function foldTaskSection(input: FoldPromptInput): string {
 		`- \`{"op":"pin","id":"<entry id>","because":"<the line of the session that asks for it>"}\` and \`{"op":"unpin","id":"<entry id>","because":"<the line>"}\` — only when the session records the user asking for it. "because" quotes that line as it appears in the session; an operation whose quote is not in the session is refused.`,
 		`- \`{"op":"drop","reason":"<why nothing here is durable>"}\` — the session is chatter, a repeat of what memory already holds, or work whose result is already an entry. The session is consolidated and memory does not change; the reason is disclosed to the user, so write it for them in one sentence: call this a conversation, never a session or an RC number, and never name "Deep Memory" or "Active Items". A drop travels alone: it cannot appear beside any other operation.`,
 	];
+	const dated = input.session.date ? `This conversation is from ${input.session.date}: it is newer than every entry saved or updated before that day, and older than every entry saved or updated after it. ` : "";
 	return [
 		"## Task: Fold This Session Into Memory (operations)",
-		`You do not rewrite memory. You emit operations against the entries of the memory above, each named by the id in its first line; the system applies them and builds the candidate. An entry you do not name is copied through unchanged — its text, its provenance and its saved-on date survive without any effort on your part, so name only what this session changes.`,
-		`Operation shapes (copy an entry id exactly as it stands in its brackets, without them):\n\n${shapes.join("\n")}`,
+		`${dated}You do not rewrite memory. You emit operations against the entries of the memory above, each named by the id in its first line; the system applies them and builds the candidate. An entry you do not name is copied through unchanged — its text, its provenance and its saved-on date survive without any effort on your part, so name only what this session changes.`,
+		`Operation shapes (copy the id alone from an entry's brackets — without the brackets, the dates or the pin marker):\n\n${shapes.join("\n")}`,
 		`Rules: at most ${FOLD_MAX_OPS} operations for this session — a fold is a handful of decisions, and a session that seems to need more is a session whose durable core you have not found yet; each "text" is at most ${FOLD_MAX_TEXT_WORDS} words and is written the way its topic is written (a bullet starting "- " unless the topic's entries are paragraphs), carrying no bracketed id of its own; one operation per entry id; every id is one the memory above carries; pinned entries take no update, supersede, close or unpin. An operation that breaks a rule is refused with its reason and this session is asked for again, so prefer fewer, exact operations.`,
 		`Answer with the narrative and then the operations: at most three lines saying what this session leaves behind and what you chose to do with it, then exactly one \`\`\`json fence holding \`{"ops": [ ... ]}\`. Nothing follows the fence. An empty list is not an answer — choose add, update, supersede, close, pin or unpin, or say the session holds nothing durable with drop. Do not claim anything has been saved.`,
 	].join("\n\n");
@@ -397,24 +453,32 @@ function foldTaskSection(input: FoldPromptInput): string {
 
 /**
  * The fold prompt: constitution, the memory as the room reads it with every
- * entry's address in its own first line, the legend that reads those addresses,
- * the assessment, the signed-off guidance, and the ONE session. Sections are
- * joined the way the other maintenance prompts join them.
+ * entry's address and dates in its own first line, the legend that reads those
+ * addresses, the assessment, the signed-off guidance, the process metadata, and
+ * the ONE session. Sections are joined the way the other maintenance prompts
+ * join them.
  *
- * `areas` is the map the validator judges the reply against; the prompt itself
- * only counts it, because the addresses are in the memory render.
+ * The order is the prompt cache's: everything that is the same from one fold
+ * of a run to the next — the constitution, the memory as it stood, the legend,
+ * the assessment and the guidance — comes first, and the parts that change
+ * with every call (the metadata's trigger time and session counter, the
+ * session itself) come after them, so a provider that caches a prompt prefix
+ * reuses the memory instead of re-reading it once per session.
+ *
+ * `areas` is the map the validator judges the reply against; the prompt reads
+ * it for the dates it writes into the addresses and for the count.
  */
 export function buildFoldPrompt(input: FoldPromptInput): FoldPromptAssembly {
 	const now = input.now ?? new Date();
 	const guidance = input.guidance ?? { pin: [], drop: [], corrections: [], topics: [], instructions: [] };
 	const prompt = [
 		absorbFoldConstitution().trim(),
-		`## Process Metadata\n\n- Agent id: ${input.agentId}\n- Process type: ${ABSORB_FOLD_WORKER_TYPE}\n- Mode: ${ABSORB_FOLD_MODE}\n- Trigger time: ${now.toISOString()}\n- System-selected model: ${input.model.provider}/${input.model.model}\n- Writes memory: false\n- Session being folded: ${input.session.id} (${input.sessionIndex} of ${input.sessionCount})\n- Entries in core memory: ${input.areas.length}`,
-		`## Material: Core Memory As The Room Reads It\n\nThis is the memory as it stands after every earlier fold in this run — Deep Memory and Active Items, the two sections a fold changes. Entry metadata is stripped; each entry carries its own address in its first line, which is how you name a piece of it.\n\n${input.coreContext.trim()}`,
+		`## Material: Core Memory As The Room Reads It\n\nThis is the memory as it stands after every earlier fold in this run — Deep Memory and Active Items, the two sections a fold changes. Entry metadata is stripped; each entry carries its own address and its dates in its first line, which is how you name a piece of it and how you tell whether it is older or newer than the session.\n\n${withEntryDates(input.coreContext.trim(), input.areas)}`,
 		`## Material: Entries You Can Address\n\n${renderAddressLegend(input.areas)}`,
 		`## Material: Signed-Off Assessment\n\n${input.assessmentMarkdown.trim() || "None."}`,
 		`## Material: The User's Instructions From The Discussion\n\n${renderFoldGuidance(guidance)}`,
-		`## Material: The Session To Fold (${input.sessionIndex} of ${input.sessionCount})\n\nThis is the only session you fold. Earlier sessions of this run are already in the memory above; later ones are folded after you.\n\n${input.session.text.trim()}`,
+		`## Process Metadata\n\n- Agent id: ${input.agentId}\n- Process type: ${ABSORB_FOLD_WORKER_TYPE}\n- Mode: ${ABSORB_FOLD_MODE}\n- Trigger time: ${now.toISOString()}\n- System-selected model: ${input.model.provider}/${input.model.model}\n- Writes memory: false\n- Session being folded: ${input.session.id} (${input.sessionIndex} of ${input.sessionCount})${input.session.date ? `\n- Session date: ${input.session.date}` : ""}\n- Entries in core memory: ${input.areas.length}`,
+		`## Material: The Session To Fold (${input.sessionIndex} of ${input.sessionCount})\n\nThis is the only session you fold. Earlier sessions of this run are already in the memory above; later ones are folded after you.${input.session.date ? ` This session is from ${input.session.date}.` : ""}\n\n${input.session.text.trim()}`,
 		foldTaskSection(input),
 	].join("\n\n---\n\n") + "\n";
 	return {
@@ -588,7 +652,9 @@ export function parseFoldOps(reply: string): ParsedFoldOps {
 // --- Validation --------------------------------------------------------------
 
 function nearestEntryId(id: string, areas: AreaRow[]): string | undefined {
-	const wanted = id.toLowerCase().replace(/[^a-z0-9]/g, "");
+	// An id copied with its whole address — "m-0031 · saved 2026-08-02" — names
+	// the entry before the first separator.
+	const wanted = id.split("·")[0].toLowerCase().replace(/[^a-z0-9]/g, "");
 	if (!wanted) return undefined;
 	for (const area of areas) if (area.id.toLowerCase().replace(/[^a-z0-9]/g, "") === wanted) return area.id;
 	return undefined;
@@ -671,6 +737,22 @@ function refuseTextShape(text: string, topic: string, areas: AreaRow[], label: s
 	if (topicWantsBullets(topic, areas) && !BULLET_START.test(firstLineOf(text))) {
 		refusals.push(`${label}: the entries of "${topic}" are bullets, so the text must start with "- "`);
 	}
+	const structural = splitTextLines(text).find((line) => STRUCTURAL_LINE.test(line));
+	if (structural !== undefined) {
+		refusals.push(`${label}: the text carries a heading or a comment line (${JSON.stringify(structural.trim())}); an entry is plain text`);
+	}
+}
+
+/**
+ * A heading line or a comment line inside an entry is not an entry: written
+ * into the memory file it would open a topic or forge a metadata line. The
+ * same rule the entry model applies to a hand edit (`findStructuralLine`),
+ * kept here as its twin because this module does not import that one.
+ */
+const STRUCTURAL_LINE = /^\s*(?:#+(?:\s|$)|<!--)/;
+
+function splitTextLines(text: string): string[] {
+	return text.split(/\r?\n/);
 }
 
 function refuseTopicTitle(title: string, label: string, refusals: string[]): void {
