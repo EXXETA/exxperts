@@ -24,8 +24,7 @@ const root = fs.mkdtempSync(path.join(os.tmpdir(), "exxeta-memory-budget-"));
 process.env.EXXETA_PERSISTENT_AGENTS_ROOT = root;
 
 const { buildMemoryBudgetImpact, createPersistentAgentFromScaffoldInput, getPersistentAgentStatus, readPersistentAgentReviewTargetEstimatedTokens, reviewTargetEstimatedTokensFromL1b } = await import("../src/persistent-agents.js");
-const { overMemoryBudget, writePersistentRoomMaintenanceSettings, MEMORY_BUDGET_MIN_TOKENS } = await import("../src/persistent-room-maintenance-settings.js");
-const { buildStructuralReviewProposalPrompt } = await import("../src/structural-review.js");
+const { overMemoryBudget, persistentRoomMaintenanceSettingsPath, readPersistentRoomMaintenanceSettings, writePersistentRoomMaintenanceSettings, MEMORY_BUDGET_MAX_TOKENS, MEMORY_BUDGET_MIN_TOKENS } = await import("../src/persistent-room-maintenance-settings.js");
 const { buildAbsorbProposalPrompt, buildSectionPurposeMap } = await import("../src/absorb-consolidation.js");
 const { getAbsorbModelLock } = await import("../src/persistent-agent-ai-profiles.js");
 const { estimateTokens } = await import("../src/token-estimate.js");
@@ -113,19 +112,11 @@ try {
 	assert(cross.overBudgetBefore === false && cross.overBudgetAfter === true, "a fat candidate crosses the ceiling");
 	assert(cross.overBudgetAfter === overMemoryBudget(overTokens, budget) && cross.overBudgetBefore === overMemoryBudget(slimTokens, budget), "impact verdicts are the one predicate, not a re-derivation");
 
-	// --- Prompt budget lines: each worker hears the denominator it can act on ---
-	const reviewPrompt = buildStructuralReviewProposalPrompt({
-		agentId,
-		sourceReviewTargetL1b: "## Deep Memory\n\n- One durable fact.\n\n## Active Items\n\n- One thread.\n",
-		model: { provider: "openai-compatible", model: "gpt-5.5", label: "GPT-5.5" },
-		assessmentMarkdown: "## Review assessment\n\nAssessment fixture.",
-		memoryBudgetTokens: budget,
-	}).prompt;
-	assert(reviewPrompt.includes("## Memory Budget"), "review proposal prompt should carry a budget section when a budget is set");
-	assert(!/whole L1b/i.test(reviewPrompt), "review budget line must not describe a whole-L1b ceiling to a worker that cannot see the whole L1b");
-	assert(/review target \(Deep Memory \+ Active Items/.test(reviewPrompt), "review budget line should bind on the review target the worker holds");
-	assert(reviewPrompt.includes("ceiling, not a goal"), "review budget line keeps the ceiling-not-target constitution");
-
+	// --- The Memorize prompt hears the denominator it can act on --------------
+	// Review no longer hears a budget at all: the run enforces it deterministically
+	// after the tidy, by rank, and review-run-smoke pins that. Memorize still
+	// rewrites a whole document, so its prompt must name the denominator it can
+	// act on.
 	const sectionPurposeMap = buildSectionPurposeMap(JSON.parse(fs.readFileSync(path.join(root, agentId, "section_registry.json"), "utf-8")));
 	const absorbPrompt = buildAbsorbProposalPrompt({
 		agentId,
@@ -140,6 +131,29 @@ try {
 	assert(/binds on Deep Memory \+ Active Items/.test(absorbPrompt), "absorb budget line should name the binding denominator");
 	assert(/Recent Context does not count toward it/.test(absorbPrompt), "absorb budget line should say RC clears rather than counting");
 	assert(absorbPrompt.includes("ceiling, not a goal"), "absorb budget line keeps the ceiling-not-target constitution");
+
+	// --- The setting's range: the ceiling is 80k, and it is enforced ---------
+	// Raised from 50k with memory v2, because the server now enforces the budget
+	// exactly on every maintenance write: a large room must be able to keep what
+	// it has. A number outside the range is REFUSED, never quietly clamped —
+	// storing a budget nobody asked for would silently decide what a room forgets.
+	assert(MEMORY_BUDGET_MAX_TOKENS === 80_000, `the memory budget ceiling should be 80000, got ${MEMORY_BUDGET_MAX_TOKENS}`);
+	assert(writePersistentRoomMaintenanceSettings(agentId, { memoryBudgetTokens: MEMORY_BUDGET_MAX_TOKENS }).memoryBudgetTokens === 80_000, "the ceiling itself must be settable");
+	for (const refused of [MEMORY_BUDGET_MAX_TOKENS + 1, MEMORY_BUDGET_MIN_TOKENS - 1]) {
+		let threw = "";
+		try {
+			writePersistentRoomMaintenanceSettings(agentId, { memoryBudgetTokens: refused });
+		} catch (error) {
+			threw = (error as Error).message;
+		}
+		assert(/must be between 10000 and 80000 tokens/.test(threw), `${refused} must be refused with a sentence, got ${JSON.stringify(threw)}`);
+	}
+	assert(readPersistentRoomMaintenanceSettings(agentId).memoryBudgetTokens === 80_000, "a refused budget must not have been stored");
+	// A hand-edited or older file still READS as a usable budget: clamping is the
+	// read path's job, refusing is the write path's.
+	const settingsPath = persistentRoomMaintenanceSettingsPath(agentId);
+	fs.writeFileSync(settingsPath, JSON.stringify({ ...JSON.parse(fs.readFileSync(settingsPath, "utf-8")), memoryBudgetTokens: 250_000 }, null, 2));
+	assert(readPersistentRoomMaintenanceSettings(agentId).memoryBudgetTokens === 80_000, "an out-of-range budget on disk reads as the ceiling");
 
 	fs.rmSync(root, { recursive: true, force: true });
 	console.log("memory budget smoke passed");

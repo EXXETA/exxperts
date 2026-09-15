@@ -51,14 +51,18 @@ function assertCanonicalScaffoldDirs(agentRoot: string): void {
 		"events",
 		"events/checkpoint",
 		"events/absorb",
-		"events/structural-review",
+		"events/review",
 	]) {
 		assertDir(agentRoot, rel);
 	}
+	// A new room gets no events/structural-review: nothing writes there any
+	// more, and the directory exists only in rooms that ran the Review the run
+	// replaced.
+	assert(!fs.existsSync(path.join(agentRoot, "events", "structural-review")), "scaffolding must not create events/structural-review");
 }
 
 function assertNoMutationEventFiles(agentRoot: string): void {
-	for (const rel of ["events/checkpoint", "events/absorb", "events/structural-review"]) {
+	for (const rel of ["events/checkpoint", "events/absorb", "events/review"]) {
 		const dir = path.join(agentRoot, rel);
 		const eventJsonFiles = fs.existsSync(dir) ? fs.readdirSync(dir).filter((name) => name.endsWith(".json")) : [];
 		assert(eventJsonFiles.length === 0, `scaffolding must not create mutation event JSON files in ${rel}`);

@@ -65,7 +65,15 @@ const assessmentMarkdown = `## Absorb assessment\n\nI found 5 Recent Context ent
 
 const discussionReply = "The durable signal is the discussion workflow boundary; repeated smoke details can be cleared.";
 
-const signoffMarkdown = `## Absorb discussion signoff\n\n### User guidance\n- Preserve the backend-only discussion operator boundary.\n\n### Learn / memorize\n- Discussion signoff should hand off to a separate proposal operator.\n\n### Clear / forget\n- Repeated smoke-test details can be cleared.\n\n### Update existing memory\n- Sharpen absorb workflow state around deliberative discussion.\n\n### Needs judgment\n- None\n\n### Transcript summary\nThe discussion confirmed that signoff should produce a bounded handoff, not a Candidate L1b.\n`;
+// Memory v2: the sign-off is structured, because every fold call carries it.
+const signoffMarkdown = `## Memorize discussion signoff\n\n### Pin\n- m-0007\n\n### Drop\n- RC-0003 — the user asked to forget the tooling detour\n\n### Corrections\n- Preserve the backend-only discussion operator boundary.\n\n### Topics\n- create: Operator boundaries\n\n### Instructions\n- Keep discussion and proposal operators separate.\n`;
+
+// The handoff TRIMMER is section-aware and its shed order names the prose
+// sections a sign-off used to carry. A v2 sign-off is a bounded list and never
+// reaches the cap, so the trim family below drives the trimmer with a
+// prose-shaped handoff on purpose: it is the shape the shed order is written
+// for, and the step accepts whatever a worker returns.
+const legacySignoffMarkdown = `## Absorb discussion signoff\n\n### User guidance\n- Preserve the backend-only discussion operator boundary.\n\n### Learn / memorize\n- Discussion signoff should hand off to a separate proposal operator.\n\n### Clear / forget\n- Repeated smoke-test details can be cleared.\n\n### Update existing memory\n- Sharpen absorb workflow state around deliberative discussion.\n\n### Needs judgment\n- None\n\n### Transcript summary\nThe discussion confirmed that signoff should produce a bounded handoff, not a Candidate L1b.\n`;
 
 function candidateL1b(): string {
 	// Chronos is system-managed: a faithful candidate carries the source's
@@ -150,15 +158,20 @@ try {
 		],
 	}, ABSORB_MODEL, async (prompt, model) => {
 		signoffGeneratorCalled = true;
-		assert(prompt.includes("## Task: Absorb Discussion Signoff Handoff"), "signoff builder should pass signoff task to generator");
-		assert(prompt.includes("Keep the whole handoff under about"), "signoff prompt should state an output budget");
+		assert(prompt.includes("## Task: Memorize Discussion Signoff"), "signoff builder should pass the structured signoff task to generator");
+		assert(prompt.includes("### Pin") && prompt.includes("### Drop") && prompt.includes("### Corrections"), "signoff prompt should ask for the structured sections the fold reads");
 		assert(model.provider === ABSORB_MODEL.provider && model.model === ABSORB_MODEL.model, "discussion signoff should use system-selected absorb model");
 		return { text: signoffMarkdown, usage: { input: 20, output: 15, totalTokens: 35, cost: 0 } };
 	});
 	assert(signoffGeneratorCalled, "discussion signoff should call generator");
 	assert(signoffResponse.writesMemory === false, "discussion signoff should be non-mutating");
 	assert(signoffResponse.assessmentHandoff.source === "discussion_signoff", "signoff should return discussion_signoff handoff source");
-	assert(signoffResponse.assessmentHandoff.text.includes("## Absorb discussion signoff"), "signoff should return handoff markdown");
+	assert(signoffResponse.assessmentHandoff.text.includes("## Memorize discussion signoff"), "signoff should return handoff markdown");
+	// The same sign-off read as the fields every fold call honours.
+	assert(signoffResponse.guidance.pin.join(",") === "m-0007", `signoff should return the pins the user asked for, got ${JSON.stringify(signoffResponse.guidance.pin)}`);
+	assert(signoffResponse.guidance.drop.length === 1 && signoffResponse.guidance.drop[0].session === "RC-0003" && /tooling detour/.test(signoffResponse.guidance.drop[0].reason), `signoff should return the dropped session with its reason, got ${JSON.stringify(signoffResponse.guidance.drop)}`);
+	assert(JSON.stringify(signoffResponse.guidance.topics) === JSON.stringify([{ create: "Operator boundaries" }]), `signoff should return topic changes in the wire shape, got ${JSON.stringify(signoffResponse.guidance.topics)}`);
+	assert(signoffResponse.guidance.corrections.length === 1 && signoffResponse.guidance.instructions.length === 1, `signoff should return corrections and instructions, got ${JSON.stringify(signoffResponse.guidance)}`);
 	assert(readL1b() === sourceL1b, "discussion signoff must not mutate L1b");
 
 	const proposalResponse = await buildAbsorbProposal({
@@ -180,7 +193,7 @@ try {
 
 	// 1. An oversized handoff is trimmed section-aware (Transcript summary
 	// first, Needs judgment never) and disclosed, and /propose accepts it.
-	const oversizedSignoff = signoffMarkdown.replace(
+	const oversizedSignoff = legacySignoffMarkdown.replace(
 		"The discussion confirmed that signoff should produce a bounded handoff, not a Candidate L1b.",
 		`The discussion ran long. ${"Every turn restated the same operator-boundary point in new words. ".repeat(160)}`,
 	).replace("### Needs judgment\n- None", "### Needs judgment\n- NEEDS_JUDGMENT_SENTINEL: should stale follow-ups be cleared or kept?");

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 
 import {
+	assertPersistentAgentAcceptsSession,
 	buildPersistentAgentBootContext,
 	clearPersistentAgentUnseenLandedAnswerForBind,
 	createPersistentAgentInstance,
@@ -97,7 +98,7 @@ function main() {
 	const status = getPersistentAgentStatus(agentId);
 	if (!status.exists) throw new Error(`persistent agent not found: ${agentId}`);
 	if (isPersistentAgentArchived(status)) throw new Error(`persistent agent is archived: ${agentId}`);
-	if (status.status !== "ready") throw new Error(`persistent agent is not ready: ${status.status}`);
+	assertPersistentAgentAcceptsSession(status);
 
 	const runtime = getPersistentAgentRuntimeState(status.id);
 	const threadId = String(input?.threadId || runtime.activeThreadId || makeThreadId()).trim();

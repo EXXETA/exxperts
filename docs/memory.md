@@ -82,8 +82,8 @@ Chronos is system-managed. The default is 20,000 tokens, adjustable in
 the room's settings between 10,000 and 50,000 (`memoryBudgetTokens`).
 
 The room card, the room's settings and the Memory page all show the
-same number and the same verdict, over or under. An over-budget room
-keeps working; the card badge says "memory over budget" and points you
+same number and the same verdict, above or within. A room above its budget
+keeps working; the card badge says "memory above budget" and points you
 to Review.
 
 A room crosses its budget only through a proposal you approve. The

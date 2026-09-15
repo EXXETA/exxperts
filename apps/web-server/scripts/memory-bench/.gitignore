@@ -1,0 +1,8 @@
+synthetic-*.md
+*-proposal.md
+assessment.md
+home/
+workspace/
+*.log
+*.jsonl
+*.json

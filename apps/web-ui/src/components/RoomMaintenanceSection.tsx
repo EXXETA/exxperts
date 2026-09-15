@@ -1,10 +1,30 @@
 import { useEffect, useRef, useState } from "react";
 import type { PersistentAgentStatus } from "../types";
 import { fetchPersistentRoomMaintenanceSettings, updatePersistentRoomMaintenanceSettings } from "../persistent-room-management-api";
+import { AUTOMATIC_APPLY_SETTING_LABEL } from "../memory-v2-copy";
+import {
+	AUTOMATIC_APPLY_INFO,
+	budgetSettledHint,
+	MEMORY_LIMIT_HINT,
+	MEMORY_LIMIT_LABEL,
+	MEMORY_OVER_LIMIT_SENTENCE,
+	memoryFullShort,
+	memoryPercentFull,
+	memoryUsageTitle,
+	REMEMBER_WITHOUT_PREVIEW_INFO,
+	REMEMBER_WITHOUT_PREVIEW_LABEL,
+	ROOM_MEMORY_SUB,
+	ROOM_MEMORY_TOGGLES_FOOTNOTE,
+	ROOM_MEMORY_TOGGLES_TITLE,
+} from "../memory-surface-copy";
 import { RsInfo } from "./rs-info";
+import { RoomMemoryEntriesSection, RoomMemoryHistorySection } from "./room-memory-entries";
 
 const MEMORY_BUDGET_MIN_TOKENS = 10_000;
-const MEMORY_BUDGET_MAX_TOKENS = 50_000;
+// The ceiling the server enforces on every memory write. It rose with the
+// entry model: a large room can now choose to carry its memory instead of
+// watching two thirds of it move to the archive on the first update.
+const MEMORY_BUDGET_MAX_TOKENS = 80_000;
 
 export function fmtTokensK(value: number): string {
 	// Tiny values must not read as "0k": show them plainly.
@@ -18,9 +38,24 @@ export function RoomMaintenanceSection({ status }: { status: PersistentAgentStat
 	const [quickApply, setQuickApply] = useState<boolean | null>(null);
 	const [budget, setBudget] = useState<number | null>(null);
 	const [savedBudget, setSavedBudget] = useState<number | null>(null);
+	// The budget the settle chose when this room came to 0.12, when it resized
+	// it; the hint under the slider shows only while the budget still is that.
+	const [budgetSettledTo, setBudgetSettledTo] = useState<number | null>(null);
 	const [saving, setSaving] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const budgetSaveTimer = useRef<number | null>(null);
+	// What the room's memory measures right now. The room status carries it too,
+	// but that arrives on a poll; the notes pane re-reads it after every write
+	// and after an Undo, so the line below never lags what is on screen.
+	const [liveTokens, setLiveTokens] = useState<number | null>(null);
+	// Bumped by an Undo: the notes, the archive and the usage line are all a
+	// reading of one file, so when that file goes back they are all read again.
+	const [reloadKey, setReloadKey] = useState(0);
+	// Bumped when a note is deleted from the archive for good, so the history below shows it.
+	const [historyKey, setHistoryKey] = useState(0);
+	// Bumped by an Undo too: a save that raised the limit takes the raise back
+	// with it, and the slider must show the limit the room now has.
+	const [settingsReloadKey, setSettingsReloadKey] = useState(0);
 
 	useEffect(() => {
 		let cancelled = false;
@@ -28,6 +63,7 @@ export function RoomMaintenanceSection({ status }: { status: PersistentAgentStat
 		setQuickApply(null);
 		setBudget(null);
 		setSavedBudget(null);
+		setBudgetSettledTo(null);
 		setError(null);
 		fetchPersistentRoomMaintenanceSettings(status.id)
 			.then((response) => {
@@ -36,6 +72,7 @@ export function RoomMaintenanceSection({ status }: { status: PersistentAgentStat
 				setQuickApply(response.settings.quickCheckpointAutoApply);
 				setBudget(response.settings.memoryBudgetTokens);
 				setSavedBudget(response.settings.memoryBudgetTokens);
+				setBudgetSettledTo(typeof response.settings.memoryBudgetSettledTo === "number" ? response.settings.memoryBudgetSettledTo : null);
 			})
 			.catch((e) => {
 				if (!cancelled) setError((e as Error).message);
@@ -43,7 +80,7 @@ export function RoomMaintenanceSection({ status }: { status: PersistentAgentStat
 		return () => {
 			cancelled = true;
 		};
-	}, [status.id]);
+	}, [status.id, settingsReloadKey]);
 
 	// Debounced budget save: the slider updates locally on every tick and
 	// persists once the user settles for half a second.
@@ -99,14 +136,14 @@ export function RoomMaintenanceSection({ status }: { status: PersistentAgentStat
 		}
 	}
 
-	const currentMemoryTokens = status.memoryBudget?.reviewTargetEstimatedTokens ?? null;
-	const usagePercent = budget !== null && currentMemoryTokens !== null ? Math.round((currentMemoryTokens / budget) * 100) : null;
-	// One sentence, one budget: both the percent and the over state compare the
-	// server-computed review-target tokens against the budget ON SCREEN — the
+	const currentMemoryTokens = liveTokens ?? status.memoryBudget?.reviewTargetEstimatedTokens ?? null;
+	const usagePercent = budget !== null && currentMemoryTokens !== null ? memoryPercentFull(currentMemoryTokens, budget) : null;
+	// One sentence, one limit: both the percent and the over state compare the
+	// server-computed review-target tokens against the limit ON SCREEN — the
 	// slider value, which may be an unsaved draft. Mixing the server overBudget
 	// flag (frozen at status-fetch time) with a dragged slider value would let
-	// the line read "70% of the budget. Over the ceiling" mid-drag. This is the
-	// same comparison overMemoryBudget makes server-side once the draft saves.
+	// the line read "70% full · Above its budget" mid-drag. This is the same
+	// comparison overMemoryBudget makes server-side once the draft saves.
 	const overBudget = budget !== null && currentMemoryTokens !== null && currentMemoryTokens > budget;
 
 	return (
@@ -114,13 +151,14 @@ export function RoomMaintenanceSection({ status }: { status: PersistentAgentStat
 			<header className="rs-pane-head">
 				<h3>Memory</h3>
 			</header>
-			<p className="rs-pane-sub">How this room saves and maintains what it learns.</p>
-			<p className="rs-row-footnote">The two toggles below are off by default. Seeing what gets saved is how you decide what your room remembers.</p>
+			<p className="rs-pane-sub">{ROOM_MEMORY_SUB}</p>
+			<h4 className="memory-note-group-head">{ROOM_MEMORY_TOGGLES_TITLE}</h4>
+			<p className="rs-row-footnote">{ROOM_MEMORY_TOGGLES_FOOTNOTE}</p>
 			<label className="rs-row">
 				<div className="rs-row-main">
 					<span className="rs-row-label">
-						Apply Maintain results without final review
-						<RsInfo text="When you finish a Memorize or Review session and approve its plan, the changes are written straight to memory instead of being shown one last time. Changes to memory marked as must-keep are always shown first, and you can always see what changed afterwards in the room's Memory view." />
+						{AUTOMATIC_APPLY_SETTING_LABEL}
+						<RsInfo text={AUTOMATIC_APPLY_INFO} />
 					</span>
 				</div>
 				<input
@@ -129,14 +167,14 @@ export function RoomMaintenanceSection({ status }: { status: PersistentAgentStat
 					checked={fastPath === true}
 					disabled={fastPath === null || saving}
 					onChange={(e) => void toggleFastPath(e.target.checked)}
-					aria-label="Apply Maintain results without final review"
+					aria-label={AUTOMATIC_APPLY_SETTING_LABEL}
 				/>
 			</label>
 			<label className="rs-row">
 				<div className="rs-row-main">
 					<span className="rs-row-label">
-						Remember without preview
-						<RsInfo text="Remember normally shows you what it is about to save from the conversation. With this on, the save happens without that preview. If a save looks incomplete, the preview comes back and you decide." />
+						{REMEMBER_WITHOUT_PREVIEW_LABEL}
+						<RsInfo text={REMEMBER_WITHOUT_PREVIEW_INFO} />
 					</span>
 				</div>
 				<input
@@ -145,16 +183,16 @@ export function RoomMaintenanceSection({ status }: { status: PersistentAgentStat
 					checked={quickApply === true}
 					disabled={quickApply === null || saving}
 					onChange={(e) => void toggleQuickApply(e.target.checked)}
-					aria-label="Remember without preview"
+					aria-label={REMEMBER_WITHOUT_PREVIEW_LABEL}
 				/>
 			</label>
 			<div className="rs-row memory-budget-row">
 				<div className="rs-row-main">
 					<span className="rs-row-label">
-						Memory budget
+						{MEMORY_LIMIT_LABEL}
 						<span className="memory-budget-value">{budget !== null ? `${fmtTokensK(budget)} tokens` : "…"}</span>
 					</span>
-					<span className="rs-row-hint">The ceiling for this room's deep memory and active items. Recent sessions don't count — Memorize folds them in.</span>
+					<span className="rs-row-hint">{MEMORY_LIMIT_HINT}</span>
 					<input
 						className="memory-budget-slider"
 						type="range"
@@ -164,16 +202,25 @@ export function RoomMaintenanceSection({ status }: { status: PersistentAgentStat
 						value={budget ?? MEMORY_BUDGET_MIN_TOKENS}
 						disabled={budget === null}
 						onChange={(e) => setBudget(Number(e.target.value))}
-						aria-label="Memory budget in tokens"
+						aria-label={`${MEMORY_LIMIT_LABEL} in tokens`}
 					/>
 					{usagePercent !== null && (
-						<p className={`memory-budget-usage${overBudget ? " over" : ""}`}>
-							~{fmtTokensK(currentMemoryTokens!)} tokens of deep memory and active items, {usagePercent}% of the budget.{overBudget ? " Over the ceiling — run Review to shrink deep memory and active items." : ""}
+						// The percent is the sentence; the two token numbers behind it are
+						// one hover away, which is the only place this pane says "tokens"
+						// other than beside the slider itself.
+						<p className="memory-budget-usage" title={memoryUsageTitle(currentMemoryTokens!, budget!)}>
+							{memoryFullShort(usagePercent)}{overBudget ? ` · ${MEMORY_OVER_LIMIT_SENTENCE}` : ""}
 						</p>
+					)}
+					{budgetSettledTo !== null && savedBudget === budgetSettledTo && (
+						<span className="rs-row-hint">{budgetSettledHint(savedBudget)}</span>
 					)}
 				</div>
 			</div>
 			{error && <div className="room-maintenance-error">{error}</div>}
+			<RoomMemoryEntriesSection key={reloadKey} status={status} onMemoryTokens={setLiveTokens} onArchiveDeleted={() => setHistoryKey((key) => key + 1)} />
+			{/* The history re-reads itself after an Undo and keeps what that undo said, so it is not remounted; a note deleted for good re-reads it too. */}
+			<RoomMemoryHistorySection status={status} reloadKey={historyKey} onUndone={() => { setReloadKey((key) => key + 1); setSettingsReloadKey((key) => key + 1); }} />
 		</div>
 	);
 }

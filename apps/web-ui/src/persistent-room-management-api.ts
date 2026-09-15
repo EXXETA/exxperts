@@ -113,6 +113,10 @@ export interface PersistentRoomMaintenanceSettings {
 	fastPathSecondApproval: boolean;
 	quickCheckpointAutoApply: boolean;
 	memoryBudgetTokens: number;
+	/** the budget has met the room's own memory once: a room from 0.11.2 with the default budget started at its size, every other room kept what it had */
+	memoryBudgetSettled?: boolean;
+	/** the budget the settle chose when it resized this room's budget on coming to 0.12; absent otherwise */
+	memoryBudgetSettledTo?: number;
 	updatedAt: string;
 }
 

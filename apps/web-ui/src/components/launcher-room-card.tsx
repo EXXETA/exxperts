@@ -91,26 +91,29 @@ export function PersistentAgentCard({ status, modelStatus, aiProfileStatus, thre
 	const hasActiveThread = live || hasStandbyThread || preparedBoundaryThread;
 	const state = hasStandbyThread ? "standby" : live ? "live" : status?.status ?? "missing";
 	const stateLabel = state === "needs_absorb" ? "ready to memorize" : state;
+	// A room due for Memorize stays open until it holds as many remembered
+	// sessions as the server accepts; only then is entering blocked.
+	const rememberedSessions = status?.recentContext?.fullEntries ?? 0;
+	const sessionBlockCap = status?.recentContext?.blockCap ?? 20;
+	const entryBlocked = state === "needs_absorb" && rememberedSessions >= sessionBlockCap;
 	const label = status?.displayName || thread?.displayName || status?.id || "Room";
 	const memory = status?.memoryStatus;
 	const memoryLevel = memory?.recentContextLevel ?? "unknown";
 	const memoryHardCap = memory?.recentContextHardCap;
 	const memoryMeterReady = !!memory && typeof memoryHardCap === "number" && Number.isFinite(memoryHardCap) && memoryHardCap > 0;
-	const memoryFill = memoryMeterReady ? Math.min(Math.max((memory!.recentContextCount ?? 0) / memoryHardCap!, 0), 1) : 0;
+	const memoryFill = memoryMeterReady ? Math.min(Math.max((memory!.recentContextCount ?? 0) / sessionBlockCap, 0), 1) : 0;
 	const overMemoryBudget = status?.memoryBudget?.overBudget === true;
 	const maintenanceSeverity: "none" | "soft" | "hard" =
 		memoryLevel === "hard_cap"
-			? "hard"
+			? (entryBlocked ? "hard" : "soft")
 			: memoryLevel === "approaching_soft_cap" || memoryLevel === "at_soft_cap"
 				? "soft"
 				: state === "needs_absorb"
 					? "soft"
-					: overMemoryBudget
-						? "soft"
-						: "none";
+					: "none";
 	const maintenanceState = state === "ready" || state === "needs_absorb";
 	const showMaintenanceBadge = maintenanceState && maintenanceSeverity !== "none";
-	const badgeLabel = showMaintenanceBadge ? (maintenanceSeverity === "hard" ? "maintenance required" : overMemoryBudget && memoryLevel !== "approaching_soft_cap" && memoryLevel !== "at_soft_cap" && state !== "needs_absorb" ? "memory over budget" : "needs maintenance") : stateLabel;
+	const badgeLabel = showMaintenanceBadge ? (entryBlocked ? "memorize now" : memoryLevel === "hard_cap" ? "memorize due" : "memorize soon") : stateLabel;
 	const badgeClass = showMaintenanceBadge ? `mem-${maintenanceSeverity}` : state;
 	const showBadge = showMaintenanceBadge || state !== "ready";
 	const memoryCheckpoint = checkpointAgo(memory?.lastCheckpointAt);
@@ -283,7 +286,7 @@ export function PersistentAgentCard({ status, modelStatus, aiProfileStatus, thre
 			setSwitchResumeBusy(false);
 		}
 	}
-	const canEnter = !!status && state === "ready" && !preparedBoundaryThread && roomModels.length > 0 && !!draftModel && !lockedElsewhere && !purging;
+	const canEnter = !!status && (state === "ready" || (state === "needs_absorb" && !entryBlocked)) && !preparedBoundaryThread && roomModels.length > 0 && !!draftModel && !lockedElsewhere && !purging;
 	// The picker stays reachable when the ACTIVE profile offers nothing (its
 	// provider signed out) as long as any ready profile has room models — that
 	// is exactly when reaching another provider matters most (community #9).
@@ -294,9 +297,9 @@ export function PersistentAgentCard({ status, modelStatus, aiProfileStatus, thre
 	// not a state shown anywhere else on the card.
 	const enterDisabledReason = purging
 		? purgeNote
-		: state === "needs_absorb"
-		? "This room needs to memorize its recent sessions first. Use Maintain, then enter."
-		: state === "ready"
+		: entryBlocked
+		? `This room is holding ${rememberedSessions} remembered conversations, as many as it can hold. Memorize them first: use Maintain, then enter.`
+		: state === "ready" || state === "needs_absorb"
 			? roomModels.length === 0 && switchableModelsAvailable
 				? "Pick a model from another profile to enter."
 				: "Enter persistent chat"
@@ -337,7 +340,7 @@ export function PersistentAgentCard({ status, modelStatus, aiProfileStatus, thre
 								? <span className="persistent-agent-badge locked" title={lockNote}>🔒 {lockShort}</span>
 								: backgroundReady
 									? <span className="persistent-agent-badge ready" title="A response finished after you left this room. Resume to read it.">response ready</span>
-									: showBadge && <span className={`persistent-agent-badge ${badgeClass}`} title={badgeLabel === "memory over budget" ? "This room's deep memory and active items are larger than the budget set in its room settings. Use Maintain → Review to tighten them; the room keeps working meanwhile." : badgeLabel === "needs maintenance" ? "This room's memory is getting large. Use Maintain when convenient; the room keeps working meanwhile." : badgeLabel === "maintenance required" ? "This room's memory needs maintenance before it degrades further. Use Maintain." : undefined}>{badgeLabel}</span>}
+									: showBadge && <span className={`persistent-agent-badge ${badgeClass}`} title={badgeLabel === "memorize soon" ? `${rememberedSessions} conversations are waiting to be memorized. Use Maintain → Memorize when convenient; the room keeps working meanwhile.` : badgeLabel === "memorize due" ? `${rememberedSessions} conversations are waiting to be memorized. Use Maintain → Memorize; chatting and Remember keep working until the room holds ${sessionBlockCap}.` : badgeLabel === "memorize now" ? `This room holds ${rememberedSessions} remembered conversations, as many as it can. Memorize them (Maintain → Memorize) to enter it again.` : undefined}>{badgeLabel}</span>}
 						{status?.exists && onOpenSettings && <button className="card-gear-btn" aria-label="Room settings" title={purging ? purgeNote : "Room settings"} disabled={purging} onClick={onOpenSettings}>⚙</button>}
 					</div>
 				</div>
@@ -345,25 +348,25 @@ export function PersistentAgentCard({ status, modelStatus, aiProfileStatus, thre
 				<div className={`persistent-agent-meta ${memoryLevel}`}>
 				{memory ? (
 					memoryMeterReady ? (
-						<div className="memory-meter" title={`How much recent conversation this room is holding (${memory.recentContextCount} of ${memory.recentContextHardCap}). Filling up is normal. Run Maintain to fold it into long-term memory.`}>
+						<div className="memory-meter" title={`Conversations you remembered but have not memorized yet: ${memory.recentContextCount} of the ${sessionBlockCap} this room can hold. Memorize turns them into lasting notes.`}>
 							<div className="memory-meter-head">
 								<span className="memory-meter-checkpoint" title={memoryCheckpoint?.title}>{memoryCheckpoint ? `memory saved ${memoryCheckpoint.label}` : "no memories saved yet"}</span>
-								<span className="memory-meter-label">{memory.recentContextCount} / {memory.recentContextHardCap}</span>
+								<span className="memory-meter-label">{memory.recentContextCount === 0 ? "nothing waiting" : `${memory.recentContextCount} ${memory.recentContextCount === 1 ? "conversation" : "conversations"} waiting`}</span>
 							</div>
 							<div
 								className="memory-meter-track"
 								role="progressbar"
 								aria-valuemin={0}
-								aria-valuemax={memory.recentContextHardCap}
+								aria-valuemax={sessionBlockCap}
 								aria-valuenow={memory.recentContextCount}
-								aria-label={`Recent context memory: ${memory.recentContextCount} of ${memory.recentContextHardCap} (soft cap ${memory.recentContextSoftCap})`}
+								aria-label={`Conversations waiting to be memorized: ${memory.recentContextCount} of ${sessionBlockCap}`}
 							>
 								<div className="memory-meter-fill" style={{ width: `${memoryFill * 100}%` }} />
 							</div>
 						</div>
 					) : (
 						<div className="memory-meter-checkpoint" title={memoryCheckpoint?.title}>
-							Recent Context {memory.recentContextCount} / {memory.recentContextHardCap} · {memoryCheckpoint ? `memory saved ${memoryCheckpoint.label}` : "no memories saved yet"}
+							{memory.recentContextCount} {memory.recentContextCount === 1 ? "conversation" : "conversations"} waiting · {memoryCheckpoint ? `memory saved ${memoryCheckpoint.label}` : "no memories saved yet"}
 						</div>
 					)
 				) : (
@@ -417,7 +420,7 @@ export function PersistentAgentCard({ status, modelStatus, aiProfileStatus, thre
 					)}
 				</div>
 				<div className="persistent-agent-secondary-actions">
-					<button className="inline-action" disabled={!canMaintain} title={canMaintain ? `Fold ${label}'s recent activity into long-term memory. Routine housekeeping, not an error.` : maintainDisabledReason} onClick={() => status && onMaintain({ agentId: status.id, displayName: label })}>Maintain</button>
+					<button className="inline-action" disabled={!canMaintain} title={canMaintain ? `Memorize the remembered conversations, or tidy what ${label} knows.` : maintainDisabledReason} onClick={() => status && onMaintain({ agentId: status.id, displayName: label })}>Maintain</button>
 					{status && (status.errors.length > 0 || status.warnings.length > 0) && <button className="inline-action" title={expanded ? "Hide the details" : "Show what needs attention"} onClick={() => setExpanded((v) => !v)}>{expanded ? "Hide" : "Details"}</button>}
 				</div>
 				{state !== "missing" && (

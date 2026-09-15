@@ -171,6 +171,23 @@ describe("Agent", () => {
 		expect(seenMaxTokens).toBeUndefined();
 	});
 
+	it("forwards an explicit maxRetries to the stream function and omits it by default", async () => {
+		let seenMaxRetries: number | undefined | null = null;
+		const capture = (options?: { maxRetries?: number }) => {
+			seenMaxRetries = options?.maxRetries;
+			throw new Error("capture only");
+		};
+
+		const singleShot = new Agent({ maxRetries: 0, streamFn: (_model, _context, options) => capture(options) });
+		await singleShot.prompt("hello");
+		expect(seenMaxRetries).toBe(0);
+
+		seenMaxRetries = null;
+		const defaulted = new Agent({ streamFn: (_model, _context, options) => capture(options) });
+		await defaulted.prompt("hello");
+		expect(seenMaxRetries).toBeUndefined();
+	});
+
 	it("should await async subscribers before prompt resolves", async () => {
 		const barrier = createDeferred();
 		const agent = new Agent({

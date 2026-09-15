@@ -51,6 +51,29 @@ export interface CreateAgentSessionOptions {
 	 * and inherits the server's default).
 	 */
 	maxTokens?: number;
+	/**
+	 * Explicit client-side retry cap forwarded to providers on every request.
+	 * When omitted, the configured provider-retry setting applies (and below
+	 * that, each SDK's own default of two retries). Set to 0 for single-shot
+	 * sessions: a client retry restarts the whole generation rather than
+	 * resuming it, so a long reply is paid for again from the first token.
+	 */
+	maxRetries?: number;
+	/**
+	 * Per-session auto-compaction switch. When omitted, the global compaction
+	 * setting decides, exactly as before. When set, it overrides that setting
+	 * for this session ONLY and is never persisted — a throwaway single-shot
+	 * session can turn compaction off without changing what the user's
+	 * interactive sessions do.
+	 */
+	autoCompaction?: boolean;
+	/**
+	 * Per-session automatic retry switch for retryable provider failures
+	 * (overloaded, rate limited, a stream that drops mid-reply). When omitted,
+	 * the global retry setting decides, exactly as before. When set, it
+	 * overrides that setting for this session ONLY and is never persisted.
+	 */
+	autoRetry?: boolean;
 	/** Thinking level. Default: from settings, else 'medium' (clamped to model capabilities) */
 	thinkingLevel?: ThinkingLevel;
 	/** Models available for cycling (Ctrl+P in interactive mode) */
@@ -344,6 +367,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			tools: [],
 		},
 		maxTokens: options.maxTokens,
+		maxRetries: options.maxRetries,
 		convertToLlm: convertToLlmWithBlockImages,
 		streamFn: async (model, context, options) => {
 			const auth = await modelRegistry.getApiKeyAndHeaders(model);
@@ -425,6 +449,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		loopStrategy: options.loopStrategy,
 		contextPolicy: options.contextPolicy,
 		rawSystemPrompt: options.rawSystemPrompt,
+		autoCompaction: options.autoCompaction,
+		autoRetry: options.autoRetry,
 	});
 	const extensionsResult = resourceLoader.getExtensions();
 

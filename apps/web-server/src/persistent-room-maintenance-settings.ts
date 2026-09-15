@@ -27,18 +27,26 @@ import { DEFAULT_PERSISTENT_ROOM_AGENTS_ROOT, persistentAgentRootPath } from "./
  * Chronos is system-managed and near-constant, so counting either would nudge
  * the wrong process. It drives the settings meter, the room-card badge, and
  * the memory-page bar (all through `overMemoryBudget` below), the budget
- * section in the absorb / structural-review proposal prompts, the fast-path
- * refusal of over-budget-after outcomes, and Review's pruning depth + retry
- * loop (through `deriveReviewHardness` below). It never hard-gates a manual
+ * section in the Memorize and Review proposal prompts, and the fast-path
+ * refusal of over-budget-after outcomes. It never hard-gates a manual
  * approval: a user can always approve an over-budget outcome — disclosed —
  * and there is always a working way back under.
  * Estimated tokens ≈ chars / 4, the same estimate used everywhere else.
+ *
+ * `memoryBudgetSettled` says the budget has met the room's own memory file
+ * once (settleMemoryBudget in memory-entries-store.ts): a room that came from
+ * 0.11.2 with the default budget starts at its own size, every other room
+ * keeps what it has, and either way the question is asked exactly once.
+ * Written by the settle only; absent on disk reads as not yet settled.
  */
 export interface PersistentRoomMaintenanceSettings {
 	schemaVersion: 1;
 	fastPathSecondApproval: boolean;
 	quickCheckpointAutoApply: boolean;
 	memoryBudgetTokens: number;
+	memoryBudgetSettled: boolean;
+	/** the budget the settle chose when it resized the room's budget; absent when the settle left the budget alone */
+	memoryBudgetSettledTo?: number;
 	updatedAt: string;
 }
 
@@ -47,8 +55,18 @@ export interface PersistentRoomMaintenanceSettingsStorageOptions {
 }
 
 export const MEMORY_BUDGET_MIN_TOKENS = 10_000;
-export const MEMORY_BUDGET_MAX_TOKENS = 50_000;
+// The ceiling, raised from 50k with memory v2 (decision 2026-09-12): the
+// server now enforces the budget deterministically on every maintenance write,
+// so a large room's first v2 run would archive two thirds of its memory unless
+// its owner can set a budget that keeps what is there. The DEFAULT stays 20k —
+// the ceiling is headroom for rooms that have earned it, not a new normal.
+export const MEMORY_BUDGET_MAX_TOKENS = 80_000;
 export const MEMORY_BUDGET_DEFAULT_TOKENS = 20_000;
+
+/** A budget as the cards say it — "20k", "52k" — the web UI's fmtTokenLimit, for the sentences the server writes. */
+export function formatTokenLimit(tokens: number): string {
+	return `${Math.round(tokens / 1000)}k`;
+}
 
 // The ONE over-budget comparison. Every surface — server status, meters,
 // badges, bars, and the enforcement loop — calls this; never re-derive
@@ -57,30 +75,21 @@ export function overMemoryBudget(reviewTargetEstimatedTokens: number, budgetToke
 	return reviewTargetEstimatedTokens > budgetTokens;
 }
 
-export type ReviewHardnessLevel = "light" | "standard" | "deep";
-
-export const REVIEW_HARDNESS_LEVELS: readonly ReviewHardnessLevel[] = ["light", "standard", "deep"] as const;
-
-// Over budget by more than this fraction of the budget derives deep pruning.
-// The percentage is tuning; the shape (agreed 2026-08-25) is the decision:
-// light = under budget, standard = modestly over, deep = far over or a
-// previous run already ended still-over. Thresholds are measured in the same
-// chars/4 estimated tokens as the budget itself.
-export const REVIEW_HARDNESS_DEEP_OVERAGE_RATIO = 0.25;
-
-// The ONE hardness derivation, next to the ONE budget predicate so their
-// denominators can never drift apart. `previousRunPartial` means the latest
-// Review ended still over the current budget with no Memorize rewriting the
-// material since — that run's depth was not enough, so the next derives deep.
-export function deriveReviewHardness(reviewTargetEstimatedTokens: number, budgetTokens: number, previousRunPartial: boolean): ReviewHardnessLevel {
-	if (!overMemoryBudget(reviewTargetEstimatedTokens, budgetTokens)) return "light";
-	if (previousRunPartial) return "deep";
-	return reviewTargetEstimatedTokens - budgetTokens > budgetTokens * REVIEW_HARDNESS_DEEP_OVERAGE_RATIO ? "deep" : "standard";
-}
-
+// READ path only: a hand-edited or older file must still yield a usable budget.
 function clampMemoryBudgetTokens(value: unknown): number {
 	const num = typeof value === "number" && Number.isFinite(value) ? Math.round(value) : MEMORY_BUDGET_DEFAULT_TOKENS;
 	return Math.min(MEMORY_BUDGET_MAX_TOKENS, Math.max(MEMORY_BUDGET_MIN_TOKENS, num));
+}
+
+// WRITE path: a budget outside the range is refused, never quietly clamped.
+// The budget is now enforced exactly on every maintenance write, so storing a
+// number the caller did not ask for would silently decide what a room forgets.
+function assertMemoryBudgetInRange(value: number): number {
+	const num = Math.round(value);
+	if (num < MEMORY_BUDGET_MIN_TOKENS || num > MEMORY_BUDGET_MAX_TOKENS) {
+		throw new Error(`The memory budget must be between ${MEMORY_BUDGET_MIN_TOKENS} and ${MEMORY_BUDGET_MAX_TOKENS} tokens.`);
+	}
+	return num;
 }
 
 const DEFAULT_SETTINGS: PersistentRoomMaintenanceSettings = {
@@ -88,6 +97,7 @@ const DEFAULT_SETTINGS: PersistentRoomMaintenanceSettings = {
 	fastPathSecondApproval: false,
 	quickCheckpointAutoApply: false,
 	memoryBudgetTokens: MEMORY_BUDGET_DEFAULT_TOKENS,
+	memoryBudgetSettled: false,
 	updatedAt: "",
 };
 
@@ -115,6 +125,8 @@ export function readPersistentRoomMaintenanceSettings(agentIdRaw: string, option
 			// review-first until the room explicitly opts in.
 			quickCheckpointAutoApply: raw.quickCheckpointAutoApply === true,
 			memoryBudgetTokens: clampMemoryBudgetTokens(raw.memoryBudgetTokens),
+			memoryBudgetSettled: raw.memoryBudgetSettled === true,
+			...(typeof raw.memoryBudgetSettledTo === "number" && Number.isFinite(raw.memoryBudgetSettledTo) ? { memoryBudgetSettledTo: Math.round(raw.memoryBudgetSettledTo) } : {}),
 			updatedAt: typeof raw.updatedAt === "string" ? raw.updatedAt : "",
 		};
 	} catch {
@@ -122,17 +134,21 @@ export function readPersistentRoomMaintenanceSettings(agentIdRaw: string, option
 	}
 }
 
-export function writePersistentRoomMaintenanceSettings(agentIdRaw: string, input: { fastPathSecondApproval?: unknown; quickCheckpointAutoApply?: unknown; memoryBudgetTokens?: unknown }, options: PersistentRoomMaintenanceSettingsStorageOptions = {}, now = new Date()): PersistentRoomMaintenanceSettings {
+export function writePersistentRoomMaintenanceSettings(agentIdRaw: string, input: { fastPathSecondApproval?: unknown; quickCheckpointAutoApply?: unknown; memoryBudgetTokens?: unknown; memoryBudgetSettled?: unknown; memoryBudgetSettledTo?: unknown }, options: PersistentRoomMaintenanceSettingsStorageOptions = {}, now = new Date()): PersistentRoomMaintenanceSettings {
 	if (input?.fastPathSecondApproval !== undefined && typeof input.fastPathSecondApproval !== "boolean") throw new Error("fastPathSecondApproval must be a boolean");
 	if (input?.quickCheckpointAutoApply !== undefined && typeof input.quickCheckpointAutoApply !== "boolean") throw new Error("quickCheckpointAutoApply must be a boolean");
 	if (input?.memoryBudgetTokens !== undefined && (typeof input.memoryBudgetTokens !== "number" || !Number.isFinite(input.memoryBudgetTokens))) throw new Error("memoryBudgetTokens must be a number");
+	if (input?.memoryBudgetSettled !== undefined && typeof input.memoryBudgetSettled !== "boolean") throw new Error("memoryBudgetSettled must be a boolean");
+	if (input?.memoryBudgetSettledTo !== undefined && (typeof input.memoryBudgetSettledTo !== "number" || !Number.isFinite(input.memoryBudgetSettledTo))) throw new Error("memoryBudgetSettledTo must be a number");
 	const current = readPersistentRoomMaintenanceSettings(agentIdRaw, options);
 	const settingsPath = persistentRoomMaintenanceSettingsPath(agentIdRaw, options);
 	const settings: PersistentRoomMaintenanceSettings = {
 		schemaVersion: 1,
 		fastPathSecondApproval: input?.fastPathSecondApproval !== undefined ? input.fastPathSecondApproval as boolean : current.fastPathSecondApproval,
 		quickCheckpointAutoApply: input?.quickCheckpointAutoApply !== undefined ? input.quickCheckpointAutoApply as boolean : current.quickCheckpointAutoApply,
-		memoryBudgetTokens: input?.memoryBudgetTokens !== undefined ? clampMemoryBudgetTokens(input.memoryBudgetTokens) : current.memoryBudgetTokens,
+		memoryBudgetTokens: input?.memoryBudgetTokens !== undefined ? assertMemoryBudgetInRange(input.memoryBudgetTokens as number) : current.memoryBudgetTokens,
+		memoryBudgetSettled: input?.memoryBudgetSettled !== undefined ? input.memoryBudgetSettled as boolean : current.memoryBudgetSettled,
+		...((input?.memoryBudgetSettledTo !== undefined ? input.memoryBudgetSettledTo as number : current.memoryBudgetSettledTo) !== undefined ? { memoryBudgetSettledTo: (input?.memoryBudgetSettledTo !== undefined ? input.memoryBudgetSettledTo as number : current.memoryBudgetSettledTo) } : {}),
 		updatedAt: now.toISOString(),
 	};
 	fs.mkdirSync(path.dirname(settingsPath), { recursive: true, mode: 0o700 });
