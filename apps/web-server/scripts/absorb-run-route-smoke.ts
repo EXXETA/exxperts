@@ -423,6 +423,7 @@ try {
 	const approved = await requestJson(`${room}/absorb/approve`, jsonBody("POST", { runId }));
 	assert(approved.status === 200, `POST absorb/approve should return 200, got ${approved.status}: ${JSON.stringify(approved.body)}`);
 	assert(typeof approved.body.absorbId === "string" && approved.body.absorbId.length > 0, `an approval should name the write it made, got ${JSON.stringify(approved.body.absorbId)}`);
+	assert(Array.isArray(approved.body.rebasedOnto) && approved.body.rebasedOnto.length === 0, `the approval carries the conversations remembered meanwhile through the route, empty here, got ${JSON.stringify(approved.body.rebasedOnto)}`);
 	assert(approved.body.writesMemory === true, `an approval is the one write of the run, got ${JSON.stringify(approved.body.writesMemory)}`);
 	assert(Array.isArray(approved.body.foldedSessions) && approved.body.foldedSessions.length === SESSION_COUNT, `the saved screen should name every session that went into memory, got ${JSON.stringify(approved.body.foldedSessions)}`);
 	assert(Array.isArray(approved.body.remainingSessions) && approved.body.remainingSessions.length === 0, `nothing failed, so nothing should be waiting for the next update, got ${JSON.stringify(approved.body.remainingSessions)}`);

@@ -272,6 +272,64 @@ try {
 	const gapAfterThree = chronosGap(fs.readFileSync(l1bPath, "utf-8"));
 	assert(gapAfterOneWrite === 1 && gapAfterThree === 1, `the Chronos stamp must not add a blank line per write, got ${gapAfterOneWrite} then ${gapAfterThree}`);
 
+	// --- 11. A room that lost its counter never mints an id it already has ---
+	// The file carries ids and no `<!-- entries: next=N -->` line: the next id
+	// is one past the highest in the file, and once the archive holds a higher
+	// number (an entry that left, or a version of one), one past THAT — the
+	// archive is the other half of the room's memory and a restore would bring
+	// the number back.
+	const counterRoom = createPersistentAgentFromScaffoldInput({
+		displayName: "Memory Entries Counter Smoke Room",
+		userName: "Synthetic User",
+		preferredUserAddress: "Synthetic User",
+	}).agent.agentId;
+	const counterL1bPath = path.join(root, counterRoom, "L1b", "current.md");
+	const COUNTERLESS_L1B = `<!-- exxeta:l1b schema_version=1 -->
+
+## Chronos
+
+- Persistent agent id: ${counterRoom}
+- Lifecycle state: ready
+
+## Deep Memory
+
+### Commercial terms
+
+<!-- e: id=m-0001 kind=fact saved=2026-08-20 -->
+- The first note.
+
+<!-- e: id=m-0003 kind=fact saved=2026-08-20 -->
+- The third note.
+
+## Active Items
+
+<!-- e: id=m-0002 kind=item saved=2026-08-20 status=open -->
+- The second note is an open item.
+
+## Recent Context
+
+No checkpointed sessions yet.
+`;
+	fs.writeFileSync(counterL1bPath, COUNTERLESS_L1B, { mode: 0o600 });
+	const counterless = loadMemoryDocument(counterRoom);
+	assert(counterless.migrated === false && fs.readFileSync(counterL1bPath, "utf-8") === COUNTERLESS_L1B, "a file that carries ids is migrated already: the load writes nothing");
+	assert(counterless.doc.nextEntryNumber === 4, `with no counter line the next id is one past the highest in the file, got ${counterless.doc.nextEntryNumber}`);
+	const addedFour = applyUserEdit(counterless.doc, { op: "add", topic: "Commercial terms", kind: "fact", text: "- The fourth note.", saved: "2026-09-15" }).doc;
+	assert(findEntryLocation(addedFour, "m-0004")?.entry.text === "- The fourth note.", "the add mints m-0004, not a second m-0001");
+	writeMemoryDocument(counterRoom, addedFour, { why: "user_edit", snapshotLabel: "edit", operation: "add", entryId: "m-0004" });
+	const writtenFour = fs.readFileSync(counterL1bPath, "utf-8");
+	assert(writtenFour.includes("<!-- entries: next=5 -->") && writtenFour.includes("id=m-0004"), "the write puts the counter back into the file, past the new id");
+
+	// The archive holds a version of a note the file has never numbered that high.
+	appendArchive(counterRoom, [{ entry: { id: "m-0007-v1", kind: "fact", saved: "2026-07-01", pinned: false, text: "- An older text of a note that left long ago." }, why: "superseded", topic: "Commercial terms", section: "Deep Memory" }], new Date("2026-09-13T12:00:00.000Z"));
+	const aboveArchive = loadMemoryDocument(counterRoom);
+	assert(aboveArchive.doc.nextEntryNumber === 8, `the counter is lifted past the archive's highest base number, got ${aboveArchive.doc.nextEntryNumber}`);
+	const addedEight = applyUserEdit(aboveArchive.doc, { op: "add", topic: "Commercial terms", kind: "fact", text: "- The note after the archive's number.", saved: "2026-09-15" }).doc;
+	assert(findEntryLocation(addedEight, "m-0008")?.entry.text === "- The note after the archive's number.", "the add mints m-0008: a restore of m-0007's text can never meet a duplicate");
+	writeMemoryDocument(counterRoom, addedEight, { why: "user_edit", snapshotLabel: "edit", operation: "add", entryId: "m-0008" });
+	assert(fs.readFileSync(counterL1bPath, "utf-8").includes("<!-- entries: next=9 -->"), "and the file carries the lifted counter from here on");
+	assert(loadMemoryDocument(counterRoom, { migrate: false }).doc.nextEntryNumber === 9 && loadMemoryDocument(counterRoom, { migrate: "in-memory" }).doc.nextEntryNumber === 9, "every way of loading agrees on the counter");
+
 	console.log("memory-entries-store-smoke: OK");
 } catch (error) {
 	console.error(error instanceof Error ? error.stack || error.message : error);

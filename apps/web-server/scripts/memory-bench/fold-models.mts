@@ -54,10 +54,11 @@ export function sessionFromPrompt(prompt: string): string {
 }
 
 /**
- * The entry's address as the memory render writes it: `- [m-0031] …`, and
- * `- [m-0032 · pinned] …` for a pinned one.
+ * The entry's address as the fold prompt writes it: `- [m-0031 · saved
+ * 2026-08-02] …`, `- [m-0032 · pinned · saved …] …` for a pinned one, and
+ * `· updated 2026-09-01` after the saved date once a fold rewrote it.
  */
-const ENTRY_ADDRESS = /^(?:\s*(?:[-*+]|\d+[.)])\s+)?\[([^\]\s·]+)(\s+·\s+pinned)?\]\s*([\s\S]*)$/;
+const ENTRY_ADDRESS = /^(?:\s*(?:[-*+]|\d+[.)])\s+)?\[([^\]\s·]+)((?:\s+·\s+[^\]·]+)*)\]\s*([\s\S]*)$/;
 
 /** The addressable entries, read back off the memory the prompt carries. */
 export function areasFromPrompt(prompt: string): PromptArea[] {
@@ -70,7 +71,7 @@ export function areasFromPrompt(prompt: string): PromptArea[] {
 		const heading = /^###\s+(.+?)\s*$/.exec(line);
 		if (heading) { topic = heading[1]; continue; }
 		const row = ENTRY_ADDRESS.exec(line.trim());
-		if (row) rows.push({ id: row[1], topic, pinned: Boolean(row[2]), firstLine: row[3] });
+		if (row) rows.push({ id: row[1], topic, pinned: /·\s+pinned\b/.test(row[2]), firstLine: row[3] });
 	}
 	return rows;
 }

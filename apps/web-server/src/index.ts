@@ -1900,6 +1900,8 @@ function browserSafeAbsorbApprovalResponse(result: AbsorbRunApprovalResponse) {
 		archivedForBudget: result.archivedForBudget,
 		// The limit the card raised, now the room's own; absent when it was not raised.
 		...(result.budgetRaisedTo === undefined ? {} : { budgetRaisedTo: result.budgetRaisedTo }),
+		// Conversations remembered while the run was open, which the save kept waiting.
+		rebasedOnto: result.rebasedOnto,
 	};
 }
 

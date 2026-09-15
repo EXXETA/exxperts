@@ -26,6 +26,7 @@ const {
 	parseReviewOps,
 	renderReviewGroupContext,
 	REVIEW_GROWTH_REFUSAL,
+	REVIEW_GROWTH_SLACK_CHARS,
 	REVIEW_MAX_OPS,
 	REVIEW_MAX_TEXT_CHARS,
 	REVIEW_TRIGGER_PROMPT,
@@ -36,7 +37,7 @@ const {
 	validateReviewOps,
 } = await import("../src/review-ops.js");
 const { emptyReviewGuidance } = await import("../src/review-guidance.js");
-const { parseArchive, renderArchive, appendToArchive, renderMemoryDocument } = await import("../src/memory-entries.js");
+const { parseArchive, renderArchive, appendToArchive, renderMemoryDocument, demoteToBudget } = await import("../src/memory-entries.js");
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -157,12 +158,21 @@ const grownNote = grownApplied.doc.topics[0].entries.find((e) => e.id === "m-003
 assert((grownNote?.text.length ?? 0) > source.text.length, "without the growth refusal, a tidy really does make the note longer — which is the whole reason for it");
 
 assert(validateReviewOps([{ op: "update", id: "m-0031", text: "- The Nordwind contract renews annually; legal signs before June." }], NOTES, "tidy").length === 0, "a genuinely shorter update passes");
-// A merge is measured against its members TAKEN TOGETHER, not against the first.
+// The boundary, exactly: the note plus the slack passes, so a comma or an
+// article never refuses a genuine rewording; one character more is refused,
+// so growth always is. The slack is a fixed count, never a share of the note.
+const atSlack = `- ${"x".repeat(source.text.length + REVIEW_GROWTH_SLACK_CHARS - 2)}`;
+assert(atSlack.length === source.text.length + REVIEW_GROWTH_SLACK_CHARS, "the fixture sits exactly at the slack");
+assert(validateReviewOps([{ op: "update", id: "m-0031", text: atSlack }], NOTES, "tidy").length === 0, `an update ${REVIEW_GROWTH_SLACK_CHARS} characters longer than the note it replaces passes`);
+const pastSlack = validateReviewOps([{ op: "update", id: "m-0031", text: `${atSlack}x` }], NOTES, "tidy");
+assert(pastSlack.length === 1 && refusalMatching(pastSlack, new RegExp(REVIEW_GROWTH_REFUSAL)), `one character past the slack is refused for growth and nothing else, got ${JSON.stringify(pastSlack)}`);
+assert(refusalMatching(pastSlack, new RegExp(`at most ${REVIEW_GROWTH_SLACK_CHARS} characters longer`)), `the refusal says what the rule is, got ${JSON.stringify(pastSlack)}`);
+// A merge is measured against its members TAKEN TOGETHER, not against the first, with the same slack.
 const mergeSources = noteOf("m-0031").text.length + noteOf("m-0032").text.length;
-const mergeFits = `- ${"x".repeat(Math.floor(mergeSources * 1.2))}`;
-assert(validateReviewOps([{ op: "merge", ids: ["m-0031", "m-0032"], text: mergeFits }], NOTES, "tidy").length === 0, "a merge shorter than its members together passes");
-const mergeGrows = `- ${"x".repeat(mergeSources * 2)}`;
-assert(refusalMatching(validateReviewOps([{ op: "merge", ids: ["m-0031", "m-0032"], text: mergeGrows }], NOTES, "tidy"), new RegExp(REVIEW_GROWTH_REFUSAL)), "a merge that outgrows its members together is refused");
+const mergeAtSlack = `- ${"x".repeat(mergeSources + REVIEW_GROWTH_SLACK_CHARS - 2)}`;
+assert(validateReviewOps([{ op: "merge", ids: ["m-0031", "m-0032"], text: mergeAtSlack }], NOTES, "tidy").length === 0, "a merge at its members together plus the slack passes");
+assert(refusalMatching(validateReviewOps([{ op: "merge", ids: ["m-0031", "m-0032"], text: `${mergeAtSlack}x` }], NOTES, "tidy"), new RegExp(REVIEW_GROWTH_REFUSAL)), "a merge one character past its members together is refused");
+assert(refusalMatching(validateReviewOps([{ op: "merge", ids: ["m-0031", "m-0032"], text: `- ${"x".repeat(mergeSources * 2)}` }], NOTES, "tidy"), new RegExp(REVIEW_GROWTH_REFUSAL)), "a merge that outgrows its members together is refused");
 
 // --- 3. A pinned note is the user's own --------------------------------------
 
@@ -191,6 +201,9 @@ assert(refusalMatching(validateReviewOps([{ op: "close", id: "m-0031" }], NOTES,
 assert(refusalMatching(validateReviewOps([{ op: "update", id: "m-0031", text: `- ${"x".repeat(REVIEW_MAX_TEXT_CHARS + 1)}` }], NOTES, "tidy"), /at most 2000/), "a note has a ceiling of its own");
 assert(refusalMatching(validateReviewOps([{ op: "update", id: "m-0031", text: "The contract renews annually." }], NOTES, "tidy"), /must start with "- "/), "a bullet topic keeps its bullets");
 assert(refusalMatching(validateReviewOps([{ op: "update", id: "m-0031", text: "- [m-0031] renews annually." }], NOTES, "tidy"), /bracketed id/), "the address never travels into a note's words");
+assert(refusalMatching(validateReviewOps([{ op: "update", id: "m-0031", text: "- renews annually.\n### Terms" }], NOTES, "tidy"), /heading or a comment line/), "a heading line inside a tidy's text is refused");
+assert(refusalMatching(validateReviewOps([{ op: "update", id: "m-0031", text: "- renews annually.\n<!-- e: id=m-0001 kind=fact saved=2026-01-01 -->" }], NOTES, "tidy"), /heading or a comment line/), "a comment line inside a tidy's text is refused");
+assert(validateReviewOps([{ op: "update", id: "m-0031", text: "- renews annually #q3." }], NOTES, "tidy").length === 0, "a hashtag inside a line is a word, not a heading");
 assert(refusalMatching(validateReviewOps([{ op: "pin", id: "m-0031" }], NOTES, "tidy"), /carries "because"/), "a pin says why");
 assert(refusalMatching(validateReviewOps([{ op: "move", id: "m-0031", topic: "Commercial terms" }], NOTES, "tidy"), /already under/), "a move that moves nothing is refused");
 assert(refusalMatching(validateReviewOps([{ op: "move", id: "m-0031", topic: "### Commercial" }], NOTES, "tidy"), /without "#"/), "a topic title carries no heading marks");
@@ -222,7 +235,7 @@ const commercial = applied.doc.topics.find((topic) => topic.title === "Commercia
 const updated = commercial.entries.find((e) => e.id === "m-0031")!;
 assert(updated.text === "- Nordwind renews annually; legal signs before June.", "an update writes the new words");
 assert(updated.saved === "2026-07-08" && updated.from === "RC-0003" && updated.kind === "fact", "an update keeps the note's id, its date, where it came from and its kind");
-assert(updated.updated === "2026-09-14", "an update stamps the day the review was approved");
+assert(updated.updated === undefined, `an update stamps nothing on the note: a tidy's wording is not new information, and the budget ranks by that stamp (got updated=${JSON.stringify(updated.updated)})`);
 assert(!commercial.entries.some((e) => e.id === "m-0032"), "an archived note leaves the core");
 assert(!commercial.entries.some((e) => e.id === "m-0033"), "a merged-away note leaves the core");
 
@@ -281,6 +294,37 @@ try {
 	threw = /not validated/.test((error as Error).message);
 }
 assert(threw, "applying ops the validator never saw must throw, not half-apply");
+
+// --- 6b. A tidy never reorders the budget --------------------------------------
+// The budget pass archives the least recently touched note first. A tidy that
+// stamped the notes it reworded would send the notes it left alone out of
+// memory ahead of them — the wrong way round: the tidy just judged the reworded
+// ones worth keeping and said nothing about the rest.
+
+function budgetFixture(): MemoryDocument {
+	const doc = fixture();
+	doc.topics = [{
+		section: "Deep Memory",
+		title: "Commercial terms",
+		heading: "### Commercial terms",
+		intro: "",
+		entries: [
+			entry("m-0031", "fact", LONG, { saved: "2024-01-10" }),
+			entry("m-0032", "fact", "- Invoices go out on the first working day of the month.", { saved: "2025-01-10" }),
+			entry("m-0034", "fact", "- Summaries are sent on Fridays.", { saved: "2026-01-10" }),
+		],
+	}];
+	return doc;
+}
+const tidiedOldest = applyReviewOps(budgetFixture(), [{ op: "update", id: "m-0031", text: "- Nordwind renews annually; legal signs before June." }], { savedDate: "2026-09-14" });
+const leavingOrder = demoteToBudget(tidiedOldest.doc, 0, { today: "2026-09-14" }).demoted.map((e) => e.id);
+assert(leavingOrder.join("|") === "m-0031|m-0032|m-0034", `the oldest note, shortened by the tidy, still leaves first, got ${JSON.stringify(leavingOrder)}`);
+// Red-without: stamp the shortened note the way a fold's update is stamped, and
+// the ranking inverts — the note the tidy just kept would be the last to go.
+const stampedDoc = tidiedOldest.doc;
+stampedDoc.topics[0].entries.find((e) => e.id === "m-0031")!.updated = "2026-09-14";
+const stampedOrder = demoteToBudget(stampedDoc, 0, { today: "2026-09-14" }).demoted.map((e) => e.id);
+assert(stampedOrder[stampedOrder.length - 1] === "m-0031", `with the stamp the tidy would invert the budget's order, which is the whole reason it does not stamp, got ${JSON.stringify(stampedOrder)}`);
 
 // --- 7. Groups ---------------------------------------------------------------
 
@@ -407,7 +451,7 @@ const into = foldApplied.doc.topics.find((topic) => topic.title === "Nordwind in
 assert(into.entries.map((e) => e.id).join("|") === "m-0061|m-0062|m-0063", `the folded topic's notes are appended after the target's own, got ${JSON.stringify(into.entries.map((e) => e.id))}`);
 const movedNote = into.entries[2];
 assert(movedNote.pinned === true && movedNote.saved === "2026-05-02" && movedNote.refs === 3 && movedNote.from === "RC-0003" && movedNote.kind === "fact", `a moved note keeps its pin, its date, its refs, where it came from and its kind, got ${JSON.stringify(movedNote)}`);
-assert(movedNote.text.endsWith("a mismatch stops the run.") && movedNote.updated === "2026-09-14", "the update on a note of the folded topic still applied after the fold, by id");
+assert(movedNote.text.endsWith("a mismatch stops the run.") && movedNote.updated === undefined, "the update on a note of the folded topic still applied after the fold, by id, and stamped nothing");
 assert(into.entries[0].updated === undefined && into.entries[1].updated === undefined, "the fold stamps nothing on the notes it moves or the notes it moves them beside");
 const foldRow = foldApplied.changes.find((change) => change.kind === "topic_folded")!;
 assert(JSON.stringify(foldRow) === JSON.stringify({ id: "m-0063", section: "Deep Memory", topic: "Nordwind integration", kind: "topic_folded", before: "Nordwind integrations", after: "Nordwind integration", notesMoved: 1 }), `a fold is one change row naming the first note moved, got ${JSON.stringify(foldRow)}`);

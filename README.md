@@ -42,32 +42,32 @@ Both builds are signed. The macOS app is notarized by Apple and opens clean; the
 
 ## See it
 
-![A three-act tour: ask and the room searches the live web; Remember proposes what to keep and you edit the proposal before approving it; the memory page links the saved memory back to the exact conversation it came from](docs/assets/exxperts-demo.gif)
+![A three-act tour: ask and the room searches the live web; Remember proposes what to keep and you edit the proposal before approving it; the memory page shows the room's notes by topic and every conversation it memorized](docs/assets/exxperts-demo.gif)
 
-Every memory shows **where it came from**: click any remembered fact and the exact conversation it was learned from opens. The growth chart is clickable time travel: pick a day, read everything your AI knew then.
+Every note shows **when it was saved** and which conversation it came from, and every memorized conversation opens as it was stored. The growth chart is clickable time travel: pick a day, read everything your AI knew then.
 
 ![The exxperts launcher: seven persistent rooms from Agent frameworks to Research: local AI and Trip: Japan 2026, each with its own governed memory](docs/assets/exxperts-rooms.png)
 
 ![The approval gate: a memory proposal shows exactly what the room will remember, and nothing is saved until you approve it](docs/assets/exxperts-checkpoint.png)
 
-![The memory page: composition by token weight, recent sessions, and a provenance receipt on the saved memory - open the conversation it was learned from](docs/assets/exxperts-memory.png)
+![The memory page: how full each room's memory is, its notes by topic, its waiting and memorized conversations, and the growth graph with the budget line](docs/assets/exxperts-memory.png)
 
 ## How a room grows
 
 **Work.** A room replaces a chat thread: it is the durable place where you set up your exxpert's tools, folders, connections, and skills - and the exxpert in it searches the web, reads pages, writes documents, decks and web pages, and runs background tasks. Which tools each room may use is your call.
 
-**Remember.** At the end of a session, the room proposes what is worth keeping. You steer it, edit it, or reject it; nothing enters memory without you.
+**Remember.** At the end of a conversation, the room proposes what is worth keeping. You steer it, edit it, or reject it; nothing enters memory without you.
 
-**Memorize.** After several sessions, the room consolidates its notes into durable long-term memory, and you review the update before it is written. This is how a room stops being a tool and starts becoming a colleague: session by session, it knows more of your work.
+**Memorize.** The room turns remembered conversations into lasting notes, grouped by topic, and shows you what it will keep before anything is saved. Notes that no longer fit move to an archive the room can still read, never to the bin. This is how a room stops being a tool and starts becoming a colleague: conversation by conversation, it knows more of your work.
 
 Every memory traces back to the conversation it came from, and everything a room is lives as plain files on your machine. Switch AI providers anytime, and you keep the colleague.
 
 ## Why exxperts
 
 - **Memory is opt-in, not automatic.** The AI remembers only what you explicitly approve: every proposed memory passes a review gate before it's written.
-- **Every memory has a receipt.** Each fact links back to the conversation it came from, and time travel shows exactly what your AI knew on any given day.
+- **Every memory has a receipt.** Each note carries the day it was saved and the conversation it came from, every change is in History with what changed, and time travel shows exactly what your AI knew on any given day.
 - **You can see what the model saw.** The full context behind any answer is inspectable, so replies can be audited rather than taken on faith.
-- **Memory you can correct.** Inspect, maintain, and reset what's remembered; wrong facts don't fossilize.
+- **Memory you can correct.** Edit, move, pin, archive or restore any note by hand, and undo the last memory save; wrong facts don't fossilize.
 - **Everything lives on your machine.** Memory, conversations, credentials, and the files you attach or a room creates: plain files on your disk, under your control. No cloud account, no telemetry; nothing leaves your machine unless you send it. The optional remote mode (off by default) only ever serves your own paired devices over your private tunnel; there is no cloud in between.
 - **No provider lock-in.** Claude, ChatGPT, Gemini, Mistral, or any OpenAI-compatible endpoint, including local models; switching keeps everything your AI has learned, and a provider outage never strands your work.
 

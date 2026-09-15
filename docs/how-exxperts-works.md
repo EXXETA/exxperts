@@ -58,14 +58,21 @@ to actual memory.
 
 ## L1b: the memory file
 
-Each room owns one Markdown file (`L1b/current.md`) with four fixed
-sections:
+Each room owns one Markdown file (`L1b/current.md`), readable by you,
+with four fixed sections:
 
-- **Chronos**: a concise temporal spine of the agent's history.
-- **Deep Memory**: consolidated durable understanding.
-- **Active Items**: unresolved live state worth carrying forward.
-- **Recent Context**: a chronological intake buffer of per-session
-  compressions (`RC-0001`, `RC-0002`, …), newest last.
+- **Chronos**: a concise temporal spine of the room's history.
+- **Notes**: lasting understanding, grouped by topic. Every note carries
+  a hidden line with its id, the day it was saved, whether it is pinned
+  and the conversation it came from; the room reads the notes without
+  that line.
+- **Open items**: unresolved loops worth carrying forward.
+- **Waiting conversations**: the conversations you remembered but have
+  not yet memorized, newest last.
+
+Notes that leave memory go to the archive beside the file
+(`L1b/archive/entries.md`), each with the reason it left; the room can
+read its archive on demand.
 
 ## The memory lifecycle
 
@@ -76,38 +83,41 @@ system **writes**, never the worker.
 ### Remember: end of a work session
 
 Freezes the active thread and asks a compression worker to distill it
-into a proposed Recent Context entry. The default Remember button
+into a proposed summary of the conversation. The default Remember button
 runs a fast path at standard density and shows you the proposal before
 it is saved; a room can be set to apply warning-free proposals without
 that preview. "Remember with options…" opens the full flow, where you
 choose a density (compact/standard/rich) and can add an optional
 steering note. Things
-you explicitly asked the agent to remember are marked **must-keep** and
-survive every compression budget. The worker prompt is measured against
+you explicitly asked the agent to remember are carried through and
+become pinned notes when the conversation is memorized. The worker prompt is measured against
 the model's context window before the call; oversized transcripts are
 reduced with declared elisions (never silently truncated) or refused
-with guidance. On approval, the entry is appended, the thread closes at
+with guidance. On approval, the summary joins the waiting conversations, the thread closes at
 a clean boundary, and the previous memory file is archived. Remember
-warns when one more save would fill the room's Recent Context; the
+warns when one more save would fill the room's waiting list; the
 budget behavior behind that is in [`memory.md`](memory.md).
 
 ### Memorize (absorb): consolidating the buffer
 
-Once several Recent Context entries accumulate, Memorize reads the chain
-*in chronological order* (later entries supersede earlier ones) and
-proposes a rewritten L1b: durable material merged into Deep Memory and
-Active Items, the buffer cleared, must-keep content carried over with
-its marker. The goal is stable memory that gets **denser, not merely
-larger**. You see an assessment first, can discuss it, and approve the
-final proposal. The proposal states its effect on the room's memory
-budget, and an outcome that leaves the room over budget is never
-applied without your approval ([`memory.md`](memory.md)).
+Once conversations are waiting, Memorize reads them *in chronological
+order* (later conversations supersede earlier ones), one at a time: for
+each, a worker proposes a short list of changes to the notes (add,
+update, supersede, close an open item, or let the conversation go with
+a reason), the system applies them to a working copy and fills in the
+ids, dates and provenance. Anything you asked the room to remember
+becomes a pinned note. The goal is memory that gets **denser, not
+merely larger**. You see a first read, can discuss it, and the card
+shows what each conversation added or changed before you save. The
+memory budget is the system's own arithmetic on the result: what would
+not fit is listed for the archive, and you keep, raise or save
+([`memory.md`](memory.md)).
 
 ### Review: tightening stable memory
 
-Review works on Deep Memory and Active Items (Chronos and Recent
-Context are withheld and grafted back byte-exact), and it works on
-NOTES rather than on prose: every note is addressable, so a review is a
+Review works on the notes and open items (Chronos and the waiting
+conversations are withheld and grafted back byte-exact), and it works
+on notes rather than on prose: every note is addressable, so a review is a
 short list of operations against notes named by id, a group of topics
 at a time. That is what keeps a tidy honest — a note nobody names is
 never touched, so ids, saved-on dates and pins survive by construction;

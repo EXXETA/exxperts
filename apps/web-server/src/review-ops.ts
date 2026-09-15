@@ -29,6 +29,7 @@ import {
 	cloneDocument,
 	entryTokens,
 	findEntryLocation,
+	findStructuralLine,
 	memoryAreaId,
 	MEMORY_SECTIONS,
 	nextVersionedEntryId,
@@ -68,12 +69,13 @@ export const REVIEW_MAX_OPS = 24;
 /** The longest a note may be after a tidy — the same ceiling a person's own edit has. */
 export const REVIEW_MAX_TEXT_CHARS = 2000;
 /**
- * How much of what it replaces an operation's text may be. Review exists to
- * make memory smaller; a "tidy" that returns a longer note has misunderstood
- * the job, and half a percent of slack keeps a genuinely equal rewording from
- * being refused over a comma.
+ * How much longer than what it replaces an operation's text may be, in
+ * characters. Review exists to make memory smaller; a "tidy" that returns a
+ * longer note has misunderstood the job. The slack is a fixed handful of
+ * characters rather than a share of the source, so a genuinely equal rewording
+ * is never refused over a comma or an article, and growth always is.
  */
-export const REVIEW_GROWTH_LIMIT = 1.5;
+export const REVIEW_GROWTH_SLACK_CHARS = 12;
 export const REVIEW_TOPIC_TITLE_MIN_CHARS = 2;
 export const REVIEW_TOPIC_TITLE_MAX_CHARS = 60;
 
@@ -694,15 +696,16 @@ function refuseTopicTitle(title: string, label: string, refusals: string[]): voi
 /**
  * The one sentence the whole feature turns on: Review makes notes shorter. The
  * measure is characters, because that is what the room pays for and what the
- * estimator counts; the allowance is a multiple rather than an equality so a
- * genuine rewording is never refused over punctuation.
+ * estimator counts; the rule is source plus `REVIEW_GROWTH_SLACK_CHARS`, so a
+ * genuine rewording is never refused over punctuation and nothing longer than
+ * that ever passes. A merge is measured against its members taken together.
  */
 export const REVIEW_GROWTH_REFUSAL = "Review makes notes shorter";
 
 function refuseGrowth(text: string, sourceChars: number, label: string, refusals: string[]): void {
-	const limit = Math.floor(sourceChars * REVIEW_GROWTH_LIMIT);
+	const limit = sourceChars + REVIEW_GROWTH_SLACK_CHARS;
 	if (text.length > limit) {
-		refusals.push(`${label}: ${REVIEW_GROWTH_REFUSAL} — the new text is ${text.length} characters against ${sourceChars} it replaces; say the same point in fewer words`);
+		refusals.push(`${label}: ${REVIEW_GROWTH_REFUSAL} — the new text is ${text.length} characters against ${sourceChars} it replaces, and may be at most ${REVIEW_GROWTH_SLACK_CHARS} characters longer than that; say the same point in fewer words`);
 	}
 }
 
@@ -715,6 +718,13 @@ function refuseTextShape(text: string, topic: string, notes: readonly ReviewNote
 	}
 	if (/\[[A-Za-z][\w-]*\]/.test(firstLineOf(text))) {
 		refusals.push(`${label}: the text carries a bracketed id; the brackets are the system's address for a note, never part of its words`);
+	}
+	// A heading line or a comment line inside a note is not a note: written
+	// into the file it would open a topic or forge a metadata line, so the
+	// same rule the hand-edit route applies holds for a tidy's text.
+	const structural = findStructuralLine(text);
+	if (structural !== null) {
+		refusals.push(`${label}: the text carries a heading or a comment line (${JSON.stringify(structural.trim())}); a note is plain text`);
 	}
 }
 
@@ -928,7 +938,7 @@ export interface AppliedReview {
 export interface ReviewApplyContext {
 	/** YYYY-MM-DD — the approval date the whole run is stamped with. */
 	savedDate: string;
-	/** Ids the archive already holds in this run, so a second version of one note is `-v2`. */
+	/** Ids the archive already holds — on disk from earlier saves and in this run so far — so a second version of one note is `-v2`, never a second `-v1`. */
 	takenArchiveIds?: readonly string[];
 }
 
@@ -949,7 +959,15 @@ export function applyReviewOps(doc: MemoryDocument, ops: readonly ReviewOp[], ct
 		if (!found) throw new Error(`ops were not validated: unknown note "${id}"`);
 		return found;
 	};
-	/** The words a note is losing, kept as that note's previous version. */
+	/**
+	 * The words a note is losing, kept as that note's previous version. The note
+	 * itself is NOT stamped `updated`: a tidy's rewording is not new information,
+	 * and the budget pass archives the least recently touched note first — a
+	 * stamp here would let a tidy push the notes it left alone out of memory
+	 * ahead of the ones it rewrote. Memorize stamps, because a fold's update
+	 * carries something the room learned; the archived `-vN` row, dated the day
+	 * it left, is the record of the tidy.
+	 */
 	const supersede = (entry: MemoryEntry, topic: MemoryTopic, text: string) => {
 		const id = nextVersionedEntryId(entry.id, taken);
 		taken.push(id);
@@ -972,7 +990,6 @@ export function applyReviewOps(doc: MemoryDocument, ops: readonly ReviewOp[], ct
 				const before = entry.text;
 				supersede(entry, topic, before);
 				entry.text = op.text;
-				entry.updated = ctx.savedDate;
 				changes.push({ id: entry.id, section: topic.section, topic: topic.title, kind: "shortened", before, after: op.text });
 				break;
 			}
@@ -991,7 +1008,6 @@ export function applyReviewOps(doc: MemoryDocument, ops: readonly ReviewOp[], ct
 				}
 				survivor.entry.text = op.text;
 				survivor.entry.pinned = pinned;
-				survivor.entry.updated = ctx.savedDate;
 				changes.push({ id: survivorId, section: survivor.topic.section, topic: survivor.topic.title, kind: "merged", before, after: op.text, mergedFrom: [...op.ids] });
 				break;
 			}

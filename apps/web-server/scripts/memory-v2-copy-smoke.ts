@@ -156,15 +156,28 @@ function run(overrides: Partial<AbsorbRun> = {}): AbsorbRun {
 
 // 5. The fast path: a clean run passes, and each thing a person would weigh blocks it.
 {
-	assert(absorbRunFastPathBlockers(run()).length === 0, "a clean run needs no second look");
-	assert(absorbRunFastPathBlockers(run({ warnings: ["proposal missing Section-level change log"] })).length === 1, "a meaningful warning blocks");
-	assert(absorbRunFastPathBlockers(run({ warnings: ["no memory has been written"] })).length === 0, "the status line the server always sends is not a warning");
-	assert(absorbRunFastPathBlockers(run({ demotion: demotion([row({ phase: "before" })]) }))[0] === "1 note would move to the archive to stay within the budget", "a note leaving, before or after the read, falls to the card");
-	assert(absorbRunFastPathBlockers(run({ demotion: demotion([row(), row({ id: "m-2" })]) }))[0].startsWith("2 notes would move"), "the count is the server's leaving count");
-	assert(absorbRunFastPathBlockers(run({ demotion: demotion([row({ leaving: false, kept: true })]) })).length === 0, "a list where nothing leaves any more does not block");
-	assert(absorbRunFastPathBlockers(run({ budget: budget({ after: 21_000, overBudgetAfter: true }) }))[0].includes("above its budget"), "a budget crossing is never automatic");
-	assert(absorbRunFastPathBlockers(run({ sessions: [session(), session({ id: "RC-0008", outcome: "failed", reason: "The model took too long to answer." })] }))[0].includes("did not finish"), "an unfinished session falls to the card");
-	assert(absorbRunFastPathBlockers(run({ sessions: [session(), session({ id: "RC-0008", outcome: "dropped", reason: "small talk" })] })).length === 0, "a dropped session is a finished session");
+	// A clean fold adds, updates and replaces. One that closed an open item, or
+	// one the model judged not worth keeping, is a judgement a person sees.
+	const folded = (overrides: Partial<AbsorbRunSession> = {}): AbsorbRunSession => session({ summary: { added: 2, updated: 1, superseded: 0, closed: 0 }, ...overrides });
+	const clean = (overrides: Partial<AbsorbRun> = {}): AbsorbRun => run({ sessions: [folded()], ...overrides });
+	assert(absorbRunFastPathBlockers(clean()).length === 0, "a clean run needs no second look");
+	assert(absorbRunFastPathBlockers(clean({ warnings: ["proposal missing Section-level change log"] })).length === 1, "a meaningful warning blocks");
+	assert(absorbRunFastPathBlockers(clean({ warnings: ["no memory has been written"] })).length === 0, "the status line the server always sends is not a warning");
+	assert(absorbRunFastPathBlockers(clean({ demotion: demotion([row({ phase: "before" })]) }))[0] === "1 note would move to the archive to stay within the budget", "a note leaving, before or after the read, falls to the card");
+	assert(absorbRunFastPathBlockers(clean({ demotion: demotion([row(), row({ id: "m-2" })]) }))[0].startsWith("2 notes would move"), "the count is the server's leaving count");
+	assert(absorbRunFastPathBlockers(clean({ demotion: demotion([row({ leaving: false, kept: true })]) })).length === 0, "a list where nothing leaves any more does not block");
+	assert(absorbRunFastPathBlockers(clean({ budget: budget({ after: 21_000, overBudgetAfter: true }) }))[0].includes("above its budget"), "a budget crossing is never automatic");
+	assert(absorbRunFastPathBlockers(clean({ sessions: [folded(), folded({ id: "RC-0008", outcome: "failed", reason: "The model took too long to answer." })] }))[0].includes("did not finish"), "an unfinished session falls to the card");
+	const dropped = absorbRunFastPathBlockers(clean({ sessions: [folded(), folded({ id: "RC-0008", outcome: "dropped", reason: "small talk" })] }));
+	assert(dropped.join("|") === "1 conversation would be dropped as nothing to keep", `a conversation the model judged not worth keeping is a judgement a person sees (got: ${dropped.join("|")})`);
+	assert(absorbRunFastPathBlockers(clean({ sessions: [folded({ outcome: "dropped" }), folded({ id: "RC-0008", outcome: "dropped" })] }))[0] === "2 conversations would be dropped as nothing to keep", "two dropped conversations read in the plural");
+	// A closed item blocks, counted from the summary when that is all the run
+	// carries, and from the rows when it carries them; a replace does not.
+	const bySummary = absorbRunFastPathBlockers(clean({ sessions: [session()] }));
+	assert(bySummary.join("|") === "1 open item would be closed", `a fold that closed an item waits for a person, and one that replaced a note does not (got: ${bySummary.join("|")})`);
+	const byRows = absorbRunFastPathBlockers(clean({ sessions: [folded({ changes: [{ kind: "superseded", id: "m-1", topic: "Pricing" }, { kind: "superseded", id: "m-2", topic: "Pricing" }, { kind: "closed", id: "m-3", topic: "Active Items" }, { kind: "closed", id: "m-4", topic: "Active Items" }, { kind: "added", id: "m-5", topic: "Pricing" }] })] }));
+	assert(byRows.join("|") === "2 open items would be closed", `the rows are counted when the run carries them, two read in the plural, and the replaced rows do not block (got: ${byRows.join("|")})`);
+	assert(absorbRunFastPathBlockers(clean({ sessions: [folded({ changes: [{ kind: "added", id: "m-5", topic: "Pricing" }, { kind: "updated", id: "m-6", topic: "Pricing" }, { kind: "pinned", id: "m-7", topic: "Pricing" }] })] })).length === 0, "an add, a plain update and a pin are the fast path's own business");
 }
 
 // 6. What stays behind, and what the saved screen states.
@@ -174,6 +187,9 @@ function run(overrides: Partial<AbsorbRun> = {}): AbsorbRun {
 	assert(absorbRunFailedSessionNote(run({ sessions: [session({ outcome: "failed" }), session({ id: "RC-0008", outcome: "failed" })] })) === "2 conversations keep waiting for the next update.", "two failures read in the plural");
 	const saved = absorbRunSavedSentence({ foldedSessions: ["RC-0007", "RC-0008"], remainingSessions: ["RC-0009"], archivedEntries: 5 });
 	assert(saved === "2 conversations became lasting notes. 1 conversation keeps waiting for the next update. 5 notes moved to the archive.", `the saved screen states all three numbers (got: ${saved})`);
+	const meanwhile = absorbRunSavedSentence({ foldedSessions: ["RC-0007"], remainingSessions: [], archivedEntries: 0, rebasedOnto: ["RC-0009"] });
+	assert(meanwhile === "1 conversation became lasting notes. 1 conversation remembered meanwhile stays waiting.", `a conversation remembered during the run is named as still waiting (got: ${meanwhile})`);
+	assert(absorbRunSavedSentence({ foldedSessions: ["RC-0007"], remainingSessions: [], archivedEntries: 0, rebasedOnto: [] }).endsWith("lasting notes."), "an empty rebase list says nothing");
 	assert(absorbRunSavedSentence({ foldedSessions: ["RC-0007"], remainingSessions: [], archivedEntries: 0 }) === "1 conversation became lasting notes.", "a clean run says only what happened");
 	const topics = absorbRunSavedSentence({ foldedSessions: ["RC-0007"], remainingSessions: [], archivedEntries: 0, newTopics: 2 });
 	assert(topics === "1 conversation became lasting notes. 2 new topics.", `topics the update created are counted (got: ${topics})`);
@@ -281,7 +297,7 @@ function run(overrides: Partial<AbsorbRun> = {}): AbsorbRun {
 	);
 	assert(isEntryIdMigrationNotice("this room's memory was given entry ids before this update"), "the server's own note about it is recognised");
 	assert(!isEntryIdMigrationNotice("proposal missing Section-level change log"), "and nothing else is mistaken for it");
-	const migratingClean = run({ migration: { pending: true, entriesAssigned: 1_240 }, warnings: ["This room's memory was given entry ids before this update; that change is in its history and can be rolled back from it."] });
+	const migratingClean = run({ sessions: [session({ summary: { added: 2, updated: 1, superseded: 0, closed: 0 } })], migration: { pending: true, entriesAssigned: 1_240 }, warnings: ["This room's memory was given entry ids before this update; that change is in its history and can be rolled back from it."] });
 	assert(absorbRunFastPathBlockers(migratingClean).length === 0, "an otherwise clean update is still applied automatically while the ids are assigned");
 }
 
@@ -428,16 +444,28 @@ function run(overrides: Partial<AbsorbRun> = {}): AbsorbRun {
 	assert(archiveLimitSummary({ budget: tidy().budget, demotion: demotion([]) }).fitsSentence === "Everything fits. Memory is 88% full after saving.", "a tidy with nothing leaving says everything fits");
 
 	// The gate: anything a person would want to weigh keeps the tidy on the card.
-	assert(reviewRunFastPathBlockers(tidy()).length === 0, "a clean tidy needs no second look");
-	assert(reviewRunFastPathBlockers(tidy({ demotion: demotion([row()], { overageTokens: 300 }) }))[0] === "1 note would move to the archive to stay within the budget", "a note leaving for the budget blocks");
-	assert(reviewRunFastPathBlockers(tidy({ budget: budget({ after: 21_000, overBudgetAfter: true }) })).includes("saving would leave memory above its budget"), "crossing the budget blocks");
-	assert(reviewRunFastPathBlockers(tidy({ leftAsIs: [{ topics: ["Hiring", "Payments"], reason: "The room's answer for these was cut off." }] })).includes("2 topics were left as they were"), "a topic the tidy could not do blocks");
-	assert(reviewRunFastPathBlockers(tidy({ warnings: ["A pinned note was rewritten."] })).length === 1, "a warning blocks");
+	// A tidy that only reworded, moved or pinned notes is clean; one that sent a
+	// note to the archive, merged notes, closed an item or folded a topic is
+	// not, whatever the budget says.
+	const wordingOnly = (overrides: Partial<ReviewRun> = {}): ReviewRun => tidy({ changes: [change({ kind: "shortened" }), change({ id: "m-0032", kind: "moved", before: "Payments", after: "Hiring" }), change({ id: "m-0033", kind: "pinned" })], ...overrides });
+	assert(reviewRunFastPathBlockers(wordingOnly()).length === 0, "a clean tidy needs no second look");
+	assert(reviewRunFastPathBlockers(wordingOnly({ demotion: demotion([row()], { overageTokens: 300 }) }))[0] === "1 note would move to the archive to stay within the budget", "a note leaving for the budget blocks");
+	assert(reviewRunFastPathBlockers(wordingOnly({ budget: budget({ after: 21_000, overBudgetAfter: true }) })).includes("saving would leave memory above its budget"), "crossing the budget blocks");
+	assert(reviewRunFastPathBlockers(wordingOnly({ leftAsIs: [{ topics: ["Hiring", "Payments"], reason: "The room's answer for these was cut off." }] })).includes("2 topics were left as they were"), "a topic the tidy could not do blocks");
+	assert(reviewRunFastPathBlockers(wordingOnly({ warnings: ["A pinned note was rewritten."] })).length === 1, "a warning blocks");
+	// The tidy's own judgements, each named: the fixture archives one note as
+	// stale, merges two into one and closes one item.
+	const judged = reviewRunFastPathBlockers(tidy());
+	assert(judged.join("|") === "1 note would move to the archive|2 notes would be merged|1 open item would be closed", `a tidy that archived, merged or closed waits for a person, with each reason named (got: ${judged.join("|")})`);
+	assert(reviewRunFastPathBlockers(wordingOnly({ changes: [change({ kind: "archived", why: "duplicate" }), change({ id: "m-0032", kind: "archived", why: "finished" })] }))[0] === "2 notes would move to the archive", "an archive blocks whatever its reason, and two read in the plural");
+	assert(reviewRunFastPathBlockers(wordingOnly({ changes: [folded] })).join("|") === "1 topic would be folded into another", `a fold is a judgement a person sees (got: ${reviewRunFastPathBlockers(wordingOnly({ changes: [folded] })).join("|")})`);
+	const plural = reviewRunFastPathBlockers(wordingOnly({ changes: [folded, change({ id: "m-0061", topic: "Legal", kind: "topic_folded", before: "Contracts", after: "Legal", notesMoved: 1 }), change({ id: "m-0070", kind: "closed", why: "done" }), change({ id: "m-0071", kind: "closed", why: "done" }), change({ id: "m-0080", kind: "merged", mergedFrom: ["m-0080", "m-0081", "m-0082"] })] }));
+	assert(plural.join("|") === "3 notes would be merged|2 open items would be closed|2 topics would be folded into another", `a merge counts the notes it took in, and two of each read in the plural (got: ${plural.join("|")})`);
 	assert(reviewRunGuidanceSummary(tidy()) === null, "nothing asked for, nothing listed back");
 	const asked = reviewRunGuidanceSummary(tidy({ guidance: { keepAsIs: ["The pricing note"], shorten: [], remove: [], answers: [], instructions: [], topics: [] } }));
 	assert(asked?.keepAsIs[0] === "The pricing note", "what the person asked for comes back on the card");
 
-	for (const text of [sentence, group, depth(false, false), reviewSavedSentence(counts, 90, false), reviewRunProgressLine(tidy({ state: "tidying" })), reviewBar.countsLine, reviewBar.overflowLabel]) {
+	for (const text of [sentence, group, depth(false, false), reviewSavedSentence(counts, 90, false), reviewRunProgressLine(tidy({ state: "tidying" })), reviewBar.countsLine, reviewBar.overflowLabel, ...judged]) {
 		assert(!/token|area|pass\b|draft|fold|prune/i.test(text), `no engine words on the Review screens (got: ${text})`);
 		assert(!text.includes("—"), `no em-dash in product copy (got: ${text})`);
 	}
@@ -461,7 +489,7 @@ function run(overrides: Partial<AbsorbRun> = {}): AbsorbRun {
 	assert(noteRowMeta({ kind: "fact", saved: "2026-09-12", pinned: true }) === "fact · saved 12 Sep · pinned", `a note's meta (got: ${noteRowMeta({ kind: "fact", saved: "2026-09-12", pinned: true })})`);
 	assert(memoryArchiveReason("budget") === "to make room" && memoryArchiveReason("done") === "finished" && memoryArchiveReason("superseded") === "replaced", "the archive says why in plain words");
 	assert(archiveRowMeta("2026-09-13", "budget") === "archived 13 Sep · to make room", `an archived row (got: ${archiveRowMeta("2026-09-13", "budget")})`);
-	assert(roomMemoryFactsLine({ notes: 953, waiting: 10, lastMemorizedAt: Date.now() - 86_400_000 }) === "953 notes · 10 conversations waiting · memorized 1d ago", `a room's one line (got: ${roomMemoryFactsLine({ notes: 953, waiting: 10, lastMemorizedAt: Date.now() - 86_400_000 })})`);
+	assert(roomMemoryFactsLine({ notes: 953, waiting: 10, lastMemorizedAt: Date.now() - 86_400_000 }) === "953 notes · 10 conversations waiting · saved 1d ago", `a room's one line (got: ${roomMemoryFactsLine({ notes: 953, waiting: 10, lastMemorizedAt: Date.now() - 86_400_000 })})`);
 	assert(allRoomsFactsLine({ rooms: 3, notes: 1_204, waiting: 12 }) === "3 rooms · 1,204 notes · 12 conversations waiting", `the cross-room line (got: ${allRoomsFactsLine({ rooms: 3, notes: 1_204, waiting: 12 })})`);
 	const viewed = new Date(2026, 8, 12, 9, 0).getTime();
 	const changedNext = new Date(2026, 8, 14, 9, 0).getTime();

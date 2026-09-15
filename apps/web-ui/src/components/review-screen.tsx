@@ -27,6 +27,7 @@ import {
 	reviewChangeCounts,
 	reviewChangeKindLabel,
 	reviewDepthSentence,
+	rememberedMeanwhileSentence,
 	reviewRunFullPercent,
 	reviewRunGuidanceSummary,
 	reviewRunProgressLine,
@@ -372,7 +373,7 @@ export interface ReviewUndoState {
 	limitLoweredTo?: number;
 }
 
-export function ReviewSavedScreen({ roomName, counts, percent, over, archivedEntries, archivedForBudget, limitRaised = false, warnings, undo, onUndo, onReturn, returnLabel }: {
+export function ReviewSavedScreen({ roomName, counts, percent, over, archivedEntries, archivedForBudget, limitRaised = false, rebasedOnto, warnings, undo, onUndo, onReturn, returnLabel }: {
 	roomName: string;
 	counts: ReviewChangeCounts;
 	percent: number;
@@ -381,6 +382,8 @@ export function ReviewSavedScreen({ roomName, counts, percent, over, archivedEnt
 	archivedForBudget: number;
 	/** The card raised the limit and this save wrote it to the room. */
 	limitRaised?: boolean;
+	/** Conversations remembered while the card was open; the save kept them waiting. */
+	rebasedOnto?: string[];
 	warnings: string[];
 	undo: ReviewUndoState;
 	onUndo: () => void;
@@ -388,6 +391,7 @@ export function ReviewSavedScreen({ roomName, counts, percent, over, archivedEnt
 	returnLabel: string;
 }) {
 	const budgetLine = reviewSavedArchiveSentence(archivedForBudget);
+	const meanwhileLine = rememberedMeanwhileSentence(rebasedOnto);
 	return (
 		<div className="checkpoint-proposal-page checkpoint-saved-page absorb-saved-state review-saved">
 			<div className="checkpoint-input-heading">
@@ -397,6 +401,7 @@ export function ReviewSavedScreen({ roomName, counts, percent, over, archivedEnt
 				{undo.done && undo.limitLoweredTo !== undefined && <p>{LIMIT_LOWERED_ON_UNDO_SENTENCE(undo.limitLoweredTo)}</p>}
 				{!undo.done && budgetLine && <p>{budgetLine}</p>}
 				{!undo.done && limitRaised && <p>{LIMIT_RAISED_ON_SAVE_SENTENCE}</p>}
+				{!undo.done && meanwhileLine && <p>{meanwhileLine}</p>}
 			</div>
 			{!undo.done && (
 				<div className="absorb-review-strip">

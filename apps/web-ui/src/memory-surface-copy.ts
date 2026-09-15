@@ -110,7 +110,9 @@ export function waitingConversationsPhrase(count: number): string {
 export function roomMemoryFactsLine(room: { notes: number; waiting: number; lastMemorizedAt: number | null }): string {
 	const parts = [notesPhrase(room.notes), waitingConversationsPhrase(room.waiting)];
 	const ago = fmtMemoryAgo(room.lastMemorizedAt);
-	if (ago) parts.push(`memorized ${ago}`);
+	// The stamp is the newest save of any kind (a Remember or a Memorize), the
+	// same fact the Home card calls "memory saved", so it reads "saved" here too.
+	if (ago) parts.push(`saved ${ago}`);
 	return parts.join(" · ");
 }
 

@@ -64,7 +64,7 @@ const DOC: MemoryDocument = {
 			intro: "",
 			entries: [
 				entry("m-0001", "fact", "- The Nordwind contract renews annually; legal signs before June."),
-				entry("m-0002", "fact", "- The quarterly report is due on the 10th working day of the quarter."),
+				entry("m-0002", "fact", "- The quarterly report is due on the 10th working day of the quarter.", { updated: "2026-09-01" }),
 			],
 		},
 		{
@@ -103,6 +103,7 @@ function areasFrom(doc: MemoryDocument): AreaRow[] {
 			kind: e.kind,
 			pinned: e.pinned,
 			saved: e.saved,
+			...(e.updated ? { updated: e.updated } : {}),
 			tokens: estimateTokens(e.text),
 			firstLine: e.text.split("\n")[0],
 			text: e.text,
@@ -113,6 +114,7 @@ function areasFrom(doc: MemoryDocument): AreaRow[] {
 const AREAS = areasFrom(DOC);
 const PINNED = "m-0003";
 const SESSION_ID = "RC-0007";
+const SESSION_DATE = "2026-09-08";
 const PIN_REQUEST = "Please keep the one-page rule pinned; I never want it rewritten.";
 const SESSION_TEXT = `### RC-0007 | CHECKPOINTED | 2026-09-08 | Renewal and reporting rhythm
 
@@ -134,7 +136,7 @@ Went through the Nordwind renewal, the reporting rhythm and what is left open be
 
 - The vendor follow-up waits until the renewal lands.
 `;
-const SESSION = { id: SESSION_ID, text: SESSION_TEXT };
+const SESSION = { id: SESSION_ID, text: SESSION_TEXT, date: SESSION_DATE };
 const CTX = { sessionId: SESSION_ID, savedDate: "2026-09-12", nextEntryNumber: 7 };
 
 const ASSESSMENT = `## Memorize assessment
@@ -158,6 +160,29 @@ const GUIDANCE: FoldGuidance = {
 
 // --- 1. The prompt -----------------------------------------------------------
 
+{
+	// An entry no conversation wrote (the upgrade or a hand edit gave it its id)
+	// reads "in memory since", so the fold treats its date as a floor on its age.
+	const sinceAreas = AREAS.map((area, i) => (i === 0 ? { ...area, since: true as const } : area));
+	const { prompt } = buildFoldPrompt({
+		agentId: "room-smoke",
+		model: { provider: "gateway", model: "fold-model" },
+		coreContext: renderMemoryDocument(DOC, "context", { entryIds: true, sections: MEMORY_SECTIONS }).trim(),
+		areas: sinceAreas,
+		assessmentMarkdown: ASSESSMENT,
+		guidance: GUIDANCE,
+		session: SESSION,
+		sessionIndex: 2,
+		sessionCount: 3,
+		now: new Date("2026-09-12T09:00:00.000Z"),
+	});
+	const first = sinceAreas[0];
+	assert(prompt.includes(`[${first.id} · in memory since ${first.saved}]`), `an entry without a conversation of origin reads "in memory since" (${first.id})`);
+	assert(!prompt.includes(`[${first.id} · saved`), "and not as saved on that day");
+	assert(prompt.includes(`[${sinceAreas[1].id} · saved ${sinceAreas[1].saved}`), "an entry a conversation wrote still reads saved");
+	assert(prompt.includes('reads "in memory since"'), "the constitution tells the fold how to read such a date");
+}
+
 /** The memory as a fold reads it: the two sections it can change, every entry carrying its own address. */
 const CORE_CONTEXT = renderMemoryDocument(DOC, "context", { entryIds: true, sections: MEMORY_SECTIONS }).trim();
 
@@ -178,6 +203,7 @@ const CORE_CONTEXT = renderMemoryDocument(DOC, "context", { entryIds: true, sect
 		"# exxperts Memorize Fold Constitution",
 		"## Governing Principle",
 		"later entries supersede earlier ones",
+		"## Dates Decide What Is Newer",
 		"## Date Stamps",
 		"## Must-Keep Material",
 		"sensitive-material restraint",
@@ -190,14 +216,29 @@ const CORE_CONTEXT = renderMemoryDocument(DOC, "context", { entryIds: true, sect
 		"## Material: The Session To Fold (2 of 3)",
 		"## Task: Fold This Session Into Memory (operations)",
 	]) assert(prompt.includes(part), `the prompt carries "${part}"`);
-	assert(prompt.includes("- [m-0003 · pinned] **must-keep** Send commercial summaries as one page, numbers first."), "a pinned entry carries its address and its pin in its own first line");
-	assert(prompt.includes("- [m-0001] The Nordwind contract renews annually; legal signs before June."), "an unpinned entry carries its address and no pin marker");
+	assert(prompt.includes("- [m-0003 · pinned · saved 2026-08-21] **must-keep** Send commercial summaries as one page, numbers first."), "a pinned entry carries its address, its pin and its saved date in its own first line");
+	assert(prompt.includes("- [m-0001 · saved 2026-07-08] The Nordwind contract renews annually; legal signs before June."), "an unpinned entry carries its address and its saved date, and no pin marker");
+	assert(prompt.includes("- [m-0002 · saved 2026-07-08 · updated 2026-09-01] The quarterly report is due on the 10th working day of the quarter."), "an entry a fold rewrote carries the day it was updated beside the day it was saved");
+	// The dates are the fold's, dressed onto the render it was given: the render
+	// itself still writes the bare address, and every other reader keeps it.
+	assert(CORE_CONTEXT.includes("- [m-0001] The Nordwind") && !CORE_CONTEXT.includes("saved 2026"), "the entry model's render is untouched; the dates are the prompt's own");
+	assert(prompt.includes(`This conversation is from ${SESSION_DATE}: it is newer than every entry saved or updated before that day, and older than every entry saved or updated after it.`), "the task states the day the conversation is from, and what that means against the entries' dates");
+	assert(prompt.includes(`- Session date: ${SESSION_DATE}`) && prompt.includes(`This session is from ${SESSION_DATE}.`), "the metadata and the session material carry the date too");
+	assert(prompt.includes("never supersede or update it with this session's older information"), "the constitution forbids rolling a newer entry back with an older conversation");
+	assert(!prompt.includes("this session is newer than everything already in memory"), "the old rule — the session is newer than everything — is gone");
+	// The prompt cache's order: what is the same from one fold to the next comes
+	// first, and the per-call metadata (trigger time, session counter) sits after
+	// the memory, the legend, the assessment and the guidance, just before the session.
+	const at = (heading: string) => { const index = prompt.indexOf(heading); assert(index >= 0, `the prompt carries "${heading}"`); return index; };
+	assert(at("## Material: Core Memory As The Room Reads It") < at("## Material: Entries You Can Address") && at("## Material: Entries You Can Address") < at("## Material: Signed-Off Assessment") && at("## Material: The User's Instructions From The Discussion") < at("## Process Metadata") && at("## Process Metadata") < at("## Material: The Session To Fold (2 of 3)") && at("## Material: The Session To Fold (2 of 3)") < at("## Task: Fold This Session Into Memory"), "the per-call metadata comes after everything that is the same from one fold to the next, so the memory prefix can be cached");
+	assert(prompt.includes("- Trigger time: 2026-09-12T09:00:00.000Z"), "the metadata still carries the trigger time");
 	assert(AREAS.every((area) => prompt.includes(`[${area.id}`)), "every entry of the memory is addressable from the prompt");
 	// Each entry is ADDRESSED once. A prompt that listed them again beside the
 	// memory paid for the room's whole memory twice — 26k tokens of rows on a
 	// room at its budget — to say what each entry's own first line now says.
 	assert(AREAS.every((area) => prompt.split(`[${area.id}`).length === 2), `every entry carries exactly one address (${AREAS.filter((area) => prompt.split(`[${area.id}`).length !== 2).map((area) => area.id).join(", ")})`);
 	assert(prompt.includes("is the entry `m-0031`") && prompt.includes("pinned") && prompt.includes(`there are ${AREAS.length}`), "the legend reads the inline addresses, the pinned marker and how many entries there are");
+	assert(prompt.includes("saved into memory on 2026-08-02") && prompt.includes("says a later fold rewrote it on 2026-09-01") && prompt.includes("Copy the id alone — `m-0031`, never the dates or the pin marker"), "the legend explains the saved and updated dates and says to copy the id alone");
 	for (const shape of ['"op":"add"', '"op":"update"', '"op":"supersede"', '"op":"close"', '"op":"pin"', '"op":"unpin"', '"op":"drop"']) assert(prompt.includes(shape), `the task shows the ${shape} shape`);
 	assert(prompt.includes(`at most ${FOLD_MAX_OPS} operations`) && prompt.includes(`at most ${FOLD_MAX_TEXT_WORDS} words`), "the task states the bounds the validator enforces");
 	assert(prompt.includes("at most three lines") && prompt.includes("exactly one ```json fence"), "the task asks for a three-line narrative and exactly one fence");
@@ -211,8 +252,14 @@ const CORE_CONTEXT = renderMemoryDocument(DOC, "context", { entryIds: true, sect
 	// A fold with no discussion still gets a rendered instruction block, never an empty section.
 	const bare = buildFoldPrompt({ agentId: "room-smoke", model: { provider: "gateway", model: "fold-model" }, coreContext: "## Deep Memory\n", areas: AREAS, assessmentMarkdown: ASSESSMENT, session: SESSION, sessionIndex: 1, sessionCount: 1 });
 	assert(bare.prompt.includes("The user signed off without further instructions."), "no guidance renders as a sentence, not as a hole");
+	// A session whose date the caller does not know states no date, rather than an empty one.
+	const undated = buildFoldPrompt({ agentId: "room-smoke", model: { provider: "gateway", model: "fold-model" }, coreContext: CORE_CONTEXT, areas: AREAS, assessmentMarkdown: ASSESSMENT, session: { id: SESSION_ID, text: SESSION_TEXT }, sessionIndex: 1, sessionCount: 1 });
+	assert(!undated.prompt.includes("This conversation is from") && !undated.prompt.includes("Session date:"), "no date renders as no sentence");
+	// The ceiling moved from 3000 to 3300 when the legend and the constitution
+	// learned to read an "in memory since" date; the prompt's fixed part is
+	// still a fraction of any memory it wraps.
 	const bareAssembly = buildFoldPrompt({ agentId: "room-smoke", model: { provider: "gateway", model: "fold-model" }, coreContext: CORE_CONTEXT, areas: AREAS, assessmentMarkdown: ASSESSMENT, session: SESSION, sessionIndex: 1, sessionCount: 1 });
-	assert(estimateTokens(bareAssembly.prompt) - estimateTokens(CORE_CONTEXT) - estimateTokens(SESSION_TEXT) < 3000, `everything the prompt adds to the memory and the session is bounded (~${estimateTokens(bareAssembly.prompt) - estimateTokens(CORE_CONTEXT) - estimateTokens(SESSION_TEXT)} tokens)`);
+	assert(estimateTokens(bareAssembly.prompt) - estimateTokens(CORE_CONTEXT) - estimateTokens(SESSION_TEXT) < 3300, `everything the prompt adds to the memory and the session is bounded (~${estimateTokens(bareAssembly.prompt) - estimateTokens(CORE_CONTEXT) - estimateTokens(SESSION_TEXT)} tokens)`);
 	console.log(`1. prompt: ${telemetry.promptChars} chars, ~${telemetry.promptEstimatedTokens} estimated tokens, ${telemetry.areaCount} addressable entries`);
 	if (process.env.ABSORB_OPS_SMOKE_PRINT_PROMPT) console.log(`\n----- rendered fold prompt -----\n${prompt}----- end -----\n`);
 }
@@ -246,10 +293,16 @@ const CORE_CONTEXT = renderMemoryDocument(DOC, "context", { entryIds: true, sect
 		sessionCount: 10,
 		now: new Date("2026-09-12T09:00:00.000Z"),
 	});
-	const ceiling = Math.round(1.2 * (coreTokens + 3000));
-	console.log(`1a. prompt on a generated ${areas.length}-entry room at its 20k budget: ~${big.telemetry.promptEstimatedTokens} estimated tokens against a ceiling of ${ceiling} (core ${coreTokens}, session ~${estimateTokens(session)})`);
-	assert(big.telemetry.promptEstimatedTokens < ceiling, `a fold prompt is the memory plus a frame, not the memory twice: ~${big.telemetry.promptEstimatedTokens} tokens against 1.2 × (${coreTokens} + 3000) = ${ceiling}`);
-	assert(areas.every((area) => big.prompt.split(`[${area.id}]`).length <= 2), "no entry of a real-sized room is addressed twice");
+	// The one per-entry cost the prompt pays on top of the memory: each address
+	// carries its saved date (and an updated date once a fold rewrote it), so a
+	// conversation folded late can tell an older entry from a newer one. Five
+	// tokens an entry; on a room of real-sized entries a few percent of the memory.
+	const datesTokens = areas.length * estimateTokens(" · saved 2026-09-12");
+	const ceiling = Math.round(1.2 * (coreTokens + 3000 + datesTokens));
+	console.log(`1a. prompt on a generated ${areas.length}-entry room at its 20k budget: ~${big.telemetry.promptEstimatedTokens} estimated tokens against a ceiling of ${ceiling} (core ${coreTokens}, dates ~${datesTokens}, session ~${estimateTokens(session)})`);
+	assert(big.telemetry.promptEstimatedTokens < ceiling, `a fold prompt is the memory plus its dates plus a frame, not the memory twice: ~${big.telemetry.promptEstimatedTokens} tokens against 1.2 × (${coreTokens} + 3000 + ${datesTokens}) = ${ceiling}`);
+	assert(areas.every((area) => big.prompt.split(`[${area.id} `).length + big.prompt.split(`[${area.id}]`).length <= 3), "no entry of a real-sized room is addressed twice");
+	assert(areas.every((area) => big.prompt.includes(`[${area.id} · saved ${area.saved}`)), "every entry of a real-sized room carries its saved date in its address");
 }
 
 // --- 2. Reading the reply ----------------------------------------------------
@@ -328,6 +381,8 @@ const without = (refusals: string[], rule: RegExp) => refusals.filter((line) => 
 		assert(/ops were not validated: unknown entry "m-9999"/.test(threw), `red-without: applying it cannot resolve the entry (${threw})`);
 		const near = refuse([{ op: "close", id: "M-0005" }]);
 		assert(near.some((line) => /did you mean "m-0005"/.test(line)), `a near-miss id is named with the id it meant (${near.join("; ")})`);
+		const withDates = refuse([{ op: "close", id: "m-0005 · saved 2026-07-08" }]);
+		assert(withDates.some((line) => /did you mean "m-0005"/.test(line)), `an id copied with its dates is refused naming the bare id (${withDates.join("; ")})`);
 	}
 
 	// 3c. Drop combined with other ops — red-without: the session is both dropped and folded.
@@ -371,6 +426,9 @@ const without = (refusals: string[], rule: RegExp) => refusals.filter((line) => 
 
 	const notBullet = refuse([{ op: "add", topic: "Commercial terms", kind: "fact", text: "The renewal window moved to April." }]);
 	assert(notBullet.length === 1 && /must start with "- "/.test(notBullet[0]), `text that does not start as a bullet is refused where the topic is bullets (${notBullet[0]})`);
+	assert(validateFoldOps([{ op: "add", topic: "Commercial terms", kind: "fact", text: "- Renews annually.\n### Terms" }], AREAS, SESSION).some((line) => /heading or a comment line/.test(line)), "a heading line inside an entry's text is refused");
+	assert(validateFoldOps([{ op: "add", topic: "Commercial terms", kind: "fact", text: "- Renews annually.\n<!-- e: id=m-0001 kind=fact saved=2026-01-01 -->" }], AREAS, SESSION).some((line) => /heading or a comment line/.test(line)), "a comment line inside an entry's text is refused");
+	assert(!validateFoldOps([{ op: "add", topic: "Commercial terms", kind: "fact", text: "- Renews annually #q3." }], AREAS, SESSION).some((line) => /heading or a comment line/.test(line)), "a hashtag inside a line is a word, not a heading");
 	const PROSE_AREAS: AreaRow[] = [{ id: "m-0100", topic: "Context", section: "Deep Memory", kind: "fact", pinned: false, saved: "2026-06-01", tokens: 20, firstLine: "The room exists to keep the renewal cycle honest.", text: "The room exists to keep the renewal cycle honest." }];
 	assert(validateFoldOps([{ op: "add", topic: "Context", kind: "fact", text: "The counterparty moved the notice window." }], PROSE_AREAS, SESSION).length === 0, "a paragraph is accepted where the topic's entries are paragraphs");
 	assert(validateFoldOps([{ op: "update", id: "m-0100", text: "- A bullet is accepted there too." }], PROSE_AREAS, SESSION).length === 0, "a bullet is accepted in a paragraph topic as well");

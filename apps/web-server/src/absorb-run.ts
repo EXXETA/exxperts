@@ -36,7 +36,7 @@ import {
 	type FoldOp,
 	type FoldRecord,
 } from "./absorb-ops.js";
-import { extractRecentContextForAbsorb, recentContextSessions, recentContextWithout, type AbsorbModelLock, type AbsorbRecentContextSession } from "./absorb-consolidation.js";
+import { ABSORB_EMPTY_RECENT_CONTEXT_PLACEHOLDER, extractRecentContextForAbsorb, parseRecentContextBlocks, recentContextSessions, recentContextWithout, type AbsorbModelLock, type AbsorbRecentContextSession } from "./absorb-consolidation.js";
 import {
 	cloneDocument,
 	demoteToBudget,
@@ -46,6 +46,7 @@ import {
 	memoryTopicAddress,
 	memoryTopicAddressKey,
 	nextVersionedEntryId,
+	parseMemoryDocument,
 	renderMemoryDocument,
 	restoreEntries,
 	reviewTargetTokens,
@@ -55,6 +56,7 @@ import {
 } from "./memory-entries.js";
 import {
 	loadMemoryDocument,
+	readArchive,
 	settleMemoryBudget,
 	writeMemoryDocument,
 	type MemoryArchiveAppend,
@@ -218,6 +220,14 @@ export interface AbsorbRunApprovalResponse extends AbsorbApprovalResponse {
 	archivedForBudget: number;
 	/** The limit the card raised, written to the room's settings by this save. Absent when the save was made against the saved limit. */
 	budgetRaisedTo?: number;
+	/**
+	 * Conversations remembered while this update was open, in the order they
+	 * were saved: the save kept them waiting rather than refusing. Empty when
+	 * the file was as the update left it. The saved screen says "N conversations
+	 * remembered meanwhile stay waiting" from this; `recentContextEntryCount`
+	 * counts them too.
+	 */
+	rebasedOnto: string[];
 }
 
 // --- Bounds and sentences ------------------------------------------------------
@@ -251,21 +261,22 @@ export const ABSORB_FOLD_CONNECTION_LOST = "The connection to the model dropped 
 export const ABSORB_FOLD_WORKER_FAILED = "The model could not add this session this time, so it waits for the next update.";
 
 /**
- * The same three causes when the second call failed the same way as the first.
+ * The two causes that are asked again, when the second call failed the same
+ * way as the first.
  *
  * A call that never came back is asked again, so the sentence a person reads
  * has to say which of the two happened. "Twice" is the whole difference: it
  * says the thing was tried again rather than given up on, and it says a second
  * ask will not be what fixes it. These end on the cause alone, so the screen
- * adds "It stays for next time." to them as it does to every other cause.
+ * adds "It stays for next time." to them as it does to every other cause. A
+ * timeout has no twice wording: a call that ran the whole eight minutes is not
+ * asked for another eight, so its one-off sentence is the only one.
  */
-export const ABSORB_FOLD_TIMED_OUT_TWICE = "The model did not answer within the time limit, twice.";
 export const ABSORB_FOLD_CONNECTION_LOST_TWICE = "The connection dropped twice while memorizing this conversation.";
 export const ABSORB_FOLD_WORKER_FAILED_TWICE = "The model could not add this conversation, twice.";
 
 /** One cause, in its one-off wording and in its twice wording. */
 const FOLD_FAILURE_TWICE = new Map<string, string>([
-	[ABSORB_FOLD_TIMED_OUT, ABSORB_FOLD_TIMED_OUT_TWICE],
 	[ABSORB_FOLD_CONNECTION_LOST, ABSORB_FOLD_CONNECTION_LOST_TWICE],
 	[ABSORB_FOLD_WORKER_FAILED, ABSORB_FOLD_WORKER_FAILED_TWICE],
 ]);
@@ -286,6 +297,19 @@ function foldFailureSentence(error: unknown): string {
 		return error.stopReason === "aborted" ? ABSORB_FOLD_TIMED_OUT : ABSORB_FOLD_CONNECTION_LOST;
 	}
 	return ABSORB_FOLD_WORKER_FAILED;
+}
+
+/**
+ * Whether a failed call is worth asking again. A dropped connection, an
+ * expired sign-in or a provider error said nothing about the session, and
+ * asking again usually lands. A turn the eight-minute ceiling stopped is the
+ * opposite: the model had the whole ceiling and did not finish, so a second ask
+ * is another eight minutes spent the same way, and the run would take a quarter
+ * of an hour on one session before it moved on. That session waits for next
+ * time after one call.
+ */
+function foldFailureRetryable(error: unknown): boolean {
+	return !(error instanceof IsolatedPersistentAgentWorkerTurnError && error.stopReason === "aborted");
 }
 
 /**
@@ -404,6 +428,30 @@ function coreContextOf(doc: MemoryDocument): string {
 }
 
 /**
+ * The area map with each entry's `updated` date beside its `saved` one. The
+ * entry model's map carries the saved date only; the fold prompt writes both
+ * into the addresses, because a session folded late (its call failed last run)
+ * has to be weighed against entries that a newer session has since rewritten,
+ * and the day of that rewrite is the date that decides.
+ */
+function areasWithDates(doc: MemoryDocument) {
+	const updatedById = new Map<string, string>();
+	const fromById = new Map<string, string>();
+	for (const topic of doc.topics) for (const entry of topic.entries) {
+		if (!entry.id) continue;
+		if (entry.updated) updatedById.set(entry.id, entry.updated);
+		if (entry.from) fromById.set(entry.id, entry.from);
+	}
+	return listAreas(doc).map((row) => {
+		const updated = updatedById.get(row.id);
+		// No conversation wrote it: the saved date is the day the upgrade or a
+		// hand edit gave it an id, which is a floor on its age, not its age.
+		const since = fromById.has(row.id) ? {} : { since: true as const };
+		return updated ? { ...row, updated, ...since } : { ...row, ...since };
+	});
+}
+
+/**
  * The Retry Notice, the same shape every maintenance worker's retry takes: the
  * original prompt, the reasons as they were named, then the ask again. One
  * refused reply per session earns one of these, and never two notices stacked
@@ -452,6 +500,10 @@ interface RunSlot {
 	model: AbsorbModelLock;
 	savedDate: string;
 	sourceFingerprint: L1bSourceFingerprint;
+	/** The file as it stood when the run read it — what approve compares the file on disk against, section by section, when the fingerprint no longer matches. */
+	sourceL1b: string;
+	/** The ids the room's archive already held when the run started, so a version id this run mints is unique across runs and not only within this one. */
+	archiveIds: string[];
 	/** The limit before the first read raised it; the save records it as where the raise came from. */
 	limitRaisedFrom: number | undefined;
 	sessionsById: Map<string, AbsorbRecentContextSession>;
@@ -569,6 +621,8 @@ export function startAbsorbRun(input: AbsorbRunStartInput): AbsorbRun {
 		model: input.model,
 		savedDate: now.toISOString().slice(0, 10),
 		sourceFingerprint: { algorithm: "sha256", value: "" },
+		sourceL1b: "",
+		archiveIds: [],
 		limitRaisedFrom: input.limitRaisedFrom !== undefined && input.limitRaisedFrom < savedBudgetTokens ? input.limitRaisedFrom : undefined,
 		sessionsById: new Map(),
 		postFoldDoc: null,
@@ -613,6 +667,12 @@ async function performRun(slot: RunSlot, input: AbsorbRunStartInput, nowFn: () =
 	// which sessions are waiting.
 	const currentL1b = createPersistentAgentInstance(agentId).readL1b();
 	slot.sourceFingerprint = fingerprintL1bSource(currentL1b);
+	slot.sourceL1b = currentL1b;
+	// The archive's ids are read once, here: an entry rewritten in an earlier
+	// run already has its `-v1` row there, and the row this run archives for the
+	// same entry must be `-v2`, not a second `-v1` that a restore could not tell
+	// from the first.
+	slot.archiveIds = readArchive(agentId).map((entry) => entry.id);
 	const sessions = recentContextSessions(extractRecentContextForAbsorb(currentL1b).recentContext);
 	for (const session of sessions) slot.sessionsById.set(session.id, session);
 	const dropReasons = new Map(guidance.drop.map((drop) => [drop.session.toUpperCase(), drop.reason]));
@@ -665,7 +725,7 @@ async function performRun(slot: RunSlot, input: AbsorbRunStartInput, nowFn: () =
 		run.progress.current = { id: view.id, title: view.title };
 		touch(slot, nowFn());
 
-		const areas = listAreas(doc);
+		const areas = areasWithDates(doc);
 		const assembly = buildFoldPrompt({
 			agentId,
 			model: input.model,
@@ -673,7 +733,7 @@ async function performRun(slot: RunSlot, input: AbsorbRunStartInput, nowFn: () =
 			areas,
 			assessmentMarkdown: input.assessmentMarkdown,
 			guidance,
-			session: { id: session.id, text: session.text },
+			session: { id: session.id, text: session.text, date: session.date },
 			sessionIndex: index,
 			sessionCount: run.progress.total,
 			now: nowFn(),
@@ -705,11 +765,13 @@ async function performRun(slot: RunSlot, input: AbsorbRunStartInput, nowFn: () =
 		let failed: string | null = null;
 		// THE RULE, for one session: two calls — the first, and one retry of a
 		// reply the memory refused. A call that never came back at all (a dropped
-		// connection, a sign-in that expired, a turn stopped at its ceiling) buys
-		// ONE call on top of that, once per session, after a short pause, with the
-		// same prompt — because a call that never came back said nothing about
-		// this session, and asking again usually lands. So a session costs at most
-		// three calls, and never more than one retry of either kind.
+		// connection, a sign-in that expired) buys ONE call on top of that, once
+		// per session, after a short pause, with the same prompt — because a call
+		// that never came back said nothing about this session, and asking again
+		// usually lands. A turn stopped at its eight-minute ceiling is the one
+		// failure that is NOT asked again: the second ask would be another eight
+		// minutes, and the session waits for next time after one. So a session
+		// costs at most three calls, and never more than one retry of either kind.
 		let maxAttempts = 2;
 		let retriedAfterThrow = false;
 		let firstThrowSentence = "";
@@ -728,6 +790,7 @@ async function performRun(slot: RunSlot, input: AbsorbRunStartInput, nowFn: () =
 				// A cancelled run is not a failure to retry: the session goes back to
 				// waiting, untouched, and the loop stops below.
 				if (slot.controller.signal.aborted) { failed = sentence; break; }
+				if (!foldFailureRetryable(error)) { failed = sentence; break; }
 				if (!retriedAfterThrow) {
 					retriedAfterThrow = true;
 					maxAttempts = 3;
@@ -850,7 +913,10 @@ function foldChanges(record: FoldRecord, where: Map<string, { section: MemorySec
  * — `m-0031-v1`, then `-v2` — because the archive is addressable (a restore
  * looks an entry up by id) and two rows claiming one address would make a
  * restore a coin toss. The suffix reads as what it is: an older version of that
- * entry, kept, findable, and restorable beside the one that replaced it.
+ * entry, kept, findable, and restorable beside the one that replaced it. The
+ * taken ids are the archive's as it stood when the run started PLUS this run's
+ * own rows: an entry rewritten in two runs gets `-v1` in the first and `-v2` in
+ * the second, never `-v1` twice.
  */
 function collectSupersededArchive(slot: RunSlot, record: FoldRecord, doc: MemoryDocument, where: Map<string, { section: MemorySection; topic: string }>): void {
 	const entryById = new Map(doc.topics.flatMap((topic) => topic.entries.map((entry) => [entry.id, entry] as const)));
@@ -859,7 +925,7 @@ function collectSupersededArchive(slot: RunSlot, record: FoldRecord, doc: Memory
 		const current = entryById.get(change.id);
 		slot.supersededArchive.push({
 			entry: {
-				id: nextVersionedEntryId(change.id, slot.supersededArchive.map((append) => append.entry.id)),
+				id: nextVersionedEntryId(change.id, [...slot.archiveIds, ...slot.supersededArchive.map((append) => append.entry.id)]),
 				kind: current?.kind ?? "fact",
 				saved: current?.saved ?? slot.savedDate,
 				pinned: false,
@@ -1136,13 +1202,70 @@ export function cancelAbsorbRun(agentIdRaw: string, runId: string, now = new Dat
 
 // --- Approval --------------------------------------------------------------------
 
+/** The file on disk read as the run's source plus what Remember appended meanwhile. */
+export interface ApproveRebase {
+	/** The document on disk: the write takes its Recent Context and its Chronos. */
+	disk: MemoryDocument;
+	/** The conversations remembered since the run read its source, in the order they were saved. */
+	newSessionIds: string[];
+}
+
+/** The two sections a fold changes, as the file stores them — metadata comments and the id counter included, so a pin or a hand edit counts as a change. */
+function coreSectionsAsStored(doc: MemoryDocument): string {
+	return renderMemoryDocument(doc, "storage", { sections: MEMORY_SECTIONS });
+}
+
+/** The prose above the first Recent Context block, with the empty-section placeholder taken out: a Remember removes that line when it appends the first block. */
+function recentContextHead(recentContext: string): string {
+	return parseRecentContextBlocks(recentContext).head.split(/\r?\n/).filter((line) => line.trim() !== ABSORB_EMPTY_RECENT_CONTEXT_PLACEHOLDER).join("\n").trim();
+}
+
+/**
+ * Whether the file on disk is the run's source plus conversations remembered
+ * meanwhile, and nothing else.
+ *
+ * Remember stays allowed while a memory update is open — a room with a backlog
+ * of conversations must never be locked out of saving the one it is in — and a
+ * Remember touches the file in exactly two places: it appends one block to the
+ * end of Recent Context and it stamps its own Chronos lines. So the file is
+ * accepted when Deep Memory and Active Items are byte for byte the run's
+ * source, the preamble and every other section are unchanged, every block the
+ * source had is still there in its place, and what follows them is one or more
+ * new blocks with ids the run never saw. Chronos is not compared: it is
+ * bookkeeping, and the write takes the disk's. Any other difference — an edit
+ * in Room settings, another update's save, an undo — is null, and the caller
+ * refuses with the honest "stale".
+ */
+export function rebaseOntoDisk(sourceL1b: string, diskL1b: string): ApproveRebase | null {
+	const source = parseMemoryDocument(sourceL1b);
+	const disk = parseMemoryDocument(diskL1b);
+	if (coreSectionsAsStored(source) !== coreSectionsAsStored(disk)) return null;
+	if (source.preamble !== disk.preamble) return null;
+	if (JSON.stringify(source.otherSections) !== JSON.stringify(disk.otherSections)) return null;
+	if (recentContextHead(source.recentContext) !== recentContextHead(disk.recentContext)) return null;
+	const before = parseRecentContextBlocks(source.recentContext).blocks;
+	const after = parseRecentContextBlocks(disk.recentContext).blocks;
+	if (after.length <= before.length) return null;
+	for (let i = 0; i < before.length; i++) if (before[i].id !== after[i].id || before[i].text !== after[i].text) return null;
+	const known = new Set(before.map((block) => block.id));
+	const appended = after.slice(before.length);
+	if (appended.some((block) => block.stub || known.has(block.id))) return null;
+	return { disk, newSessionIds: appended.map((block) => block.id) };
+}
+
 /**
  * ONE write: the candidate document (post-fold, post-demotion, keeps pinned),
  * Recent Context with the folded, dropped and skipped sessions taken out and
  * the failed and pending ones kept, everything that left the core appended to
  * the archive with its reason, Chronos stamped, and the run's own account in
- * the absorb event record. Anything else that changed the file since the run
- * started makes the run stale, and nothing is written.
+ * the absorb event record.
+ *
+ * A file that changed since the run started is read again before anything is
+ * refused: when the only change is conversations remembered meanwhile, the
+ * write is rebased onto the file as it stands — the disk's Recent Context less
+ * what this run folded, the disk's Chronos, the run's own Deep Memory and
+ * Active Items — and the new conversations stay waiting for next time. Any
+ * other change makes the run stale, and nothing is written.
  */
 export function approveAbsorbRun(agentIdRaw: string, runId: string, now = new Date()): AbsorbRunApprovalResponse {
 	const agentId = createPersistentAgentInstance(agentIdRaw).agentId;
@@ -1151,15 +1274,25 @@ export function approveAbsorbRun(agentIdRaw: string, runId: string, now = new Da
 	// The staleness check comes first, and it is what refuses a second approve:
 	// the first one wrote the file, so the source this run was built on is no
 	// longer the source on disk, and saying "stale" is the truth rather than a
-	// special case about runs that were already saved.
-	assertAbsorbSourceFingerprintCurrent(slot.sourceFingerprint, createPersistentAgentInstance(agentId).readL1b(), "proposal");
+	// special case about runs that were already saved. The one change that is
+	// not staleness is a Remember in the meantime, which the write absorbs.
+	const diskL1b = createPersistentAgentInstance(agentId).readL1b();
+	let rebase: ApproveRebase | null = null;
+	if (fingerprintL1bSource(diskL1b).value !== slot.sourceFingerprint.value) {
+		rebase = rebaseOntoDisk(slot.sourceL1b, diskL1b);
+		if (!rebase) assertAbsorbSourceFingerprintCurrent(slot.sourceFingerprint, diskL1b, "proposal");
+	}
 	requireReady(slot);
 	const candidate = slot.candidateDoc;
 	if (!candidate) throw productError("This memory update has nothing to save.", "absorb_run_empty");
 
 	const removed = new Set(run.sessions.filter((session) => session.outcome === "folded" || session.outcome === "dropped" || session.outcome === "skipped").map((session) => session.id));
 	const doc = cloneDocument(candidate);
-	doc.recentContext = recentContextWithout(candidate.recentContext, removed);
+	doc.recentContext = recentContextWithout(rebase ? rebase.disk.recentContext : candidate.recentContext, removed);
+	// The Remember stamped its own Chronos lines; the write stamps the
+	// consolidation lines on top of those, not on top of the source's.
+	if (rebase) doc.chronos = rebase.disk.chronos;
+	const rebasedOnto = rebase?.newSessionIds ?? [];
 
 	// What leaves the core, each with the reason it left. The budget rows are
 	// the last pass's, pre-pass entries included: one the user kept, by id or
@@ -1256,7 +1389,9 @@ export function approveAbsorbRun(agentIdRaw: string, runId: string, now = new Da
 		updatedL1bPath: written.updatedL1bPath,
 		eventRecordPath: written.eventRecordPath,
 		eventRelPath: written.eventRelPath,
-		recentContextEntryCount: remainingSessions.length,
+		// What the file holds now: the run's failed and pending sessions, plus any
+		// remembered while it was open.
+		recentContextEntryCount: recentContextSessions(doc.recentContext).length,
 		memoryBudget: {
 			budgetTokens: written.budget.budgetTokens,
 			reviewTargetEstimatedTokens: written.budget.reviewTargetTokens,
@@ -1269,6 +1404,7 @@ export function approveAbsorbRun(agentIdRaw: string, runId: string, now = new Da
 		archivedEntries: archiveAppend.length,
 		archivedForBudget: archiveAppend.filter((append) => append.why === "budget").length,
 		...(budgetRaisedTo === undefined ? {} : { budgetRaisedTo }),
+		rebasedOnto,
 	};
 }
 
