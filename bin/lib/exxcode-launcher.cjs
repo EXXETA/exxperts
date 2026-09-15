@@ -3,6 +3,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { ensureProductAppUserDirs, productAppStatePath, ensureCliLauncherStateDir } = require("./product-state-paths.cjs");
+const stateProfiles = require("./state-profiles.cjs");
 const roomLock = require("./room-lock.cjs");
 const roomPicker = require("./room-picker.cjs");
 
@@ -373,6 +374,35 @@ async function runCreateRoom(root, env) {
 
 async function main(argv = process.argv.slice(2), command = path.basename(process.argv[1] || "exxperts-cli")) {
   const root = path.resolve(__dirname, "..", "..");
+
+  // Exxperts home: point this process at the resolved home (default login
+  // home, or the moved location / EXXPERTS_DATA_DIR) first — the profile
+  // pointer below is then read inside it. A pending home move is NOT
+  // executed here: that is the restarting supervisor's job, and a web server
+  // may still be running against the current trees.
+  try {
+    if (fs.existsSync(stateProfiles.homeMoveIntentPath(os.homedir()))) {
+      console.error("\n  A move of the exxperts data folder is still pending; it completes the next time exxperts web or the desktop app starts. This CLI runs against the current location.\n");
+    }
+    stateProfiles.adoptStateHome(os.homedir());
+  } catch (err) {
+    console.error(`\n  ${err.message}\n`);
+    process.exit(1);
+  }
+
+  // Data profiles: the CLI follows the same active-profile pointer the web
+  // launcher and desktop shell use. Overriding this process's own HOME before
+  // ANYTHING resolves a state path (os.homedir() reads env per call) points
+  // every read — rooms, locks, picker, provider setup — and every spawned
+  // runtime child at the profile's tree. This must precede the setup/package
+  // branch below, or `exxperts setup` would write provider auth into the
+  // standard ~/.exxperts while a profile is loaded.
+  const realHome = os.homedir();
+  const activeProfile = stateProfiles.readActiveProfile(realHome);
+  if (activeProfile !== null) {
+    Object.assign(process.env, stateProfiles.serverEnvForProfile(realHome, activeProfile));
+    console.error(`\n  Data profile "${activeProfile}" is loaded — this CLI runs against it. Switch profiles in Settings → Profiles.\n`);
+  }
 
   // Product setup and package-manager commands should not require an agent
   // file, banner, theme, or extension wrapper. Route them directly to the

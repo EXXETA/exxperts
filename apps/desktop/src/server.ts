@@ -58,7 +58,33 @@ export function nodeBinary(): string {
 export function stateHome(): string {
   const scratch = process.env.EXXPERTS_DESKTOP_SCRATCH_HOME;
   if (scratch && scratch.trim()) return path.resolve(scratch.trim());
+  // The exxperts home can be relocated: EXXPERTS_DATA_DIR pins it for
+  // operators; otherwise the pointer written by Settings → Profiles → Move
+  // names it — same contract as the CLI/web launchers (state-profiles.cjs).
+  const dataDir = process.env.EXXPERTS_DATA_DIR;
+  if (dataDir && dataDir.trim()) return path.resolve(dataDir.trim());
+  try {
+    const pointed = JSON.parse(fs.readFileSync(path.join(os.homedir(), ".exxperts.home.json"), "utf8")) as { dir?: unknown };
+    if (typeof pointed.dir === "string" && pointed.dir.trim()) return path.resolve(pointed.dir.trim());
+  } catch {
+    // No pointer: the login home.
+  }
   return os.homedir();
+}
+
+// Data-profile helpers shared with the CLI launcher (plain CJS in the server
+// payload). Lazy: an older payload without the module only matters when a
+// profile is actually in play.
+type StateProfilesModule = {
+  SWITCH_EXIT_CODE: number;
+  readActiveProfile: (home: string) => string | null;
+  serverEnvForProfile: (home: string, name: string | null) => Record<string, string>;
+  activeTokenPath: (home: string) => string;
+  adoptStateHome?: (loginHome: string, env: NodeJS.ProcessEnv) => { home: string; source: string };
+  performPendingHomeMove?: (loginHome: string) => { to: string; mode: string } | null;
+};
+export function stateProfilesModule(): StateProfilesModule {
+  return require(path.join(serverRoot(), "bin", "lib", "state-profiles.cjs")) as StateProfilesModule;
 }
 
 export function serverEnv(): NodeJS.ProcessEnv {
@@ -68,6 +94,9 @@ export function serverEnv(): NodeJS.ProcessEnv {
     EXXETA_HOME: root,
     NODE_ENV: process.env.NODE_ENV || "production",
     PORT: String(PORT),
+    // The desktop shell performs profile switches (main.ts watchdog); the
+    // switch route refuses on servers that run without a supervisor.
+    EXXPERTS_SWITCH_SUPERVISED: "1",
   };
   const scratch = process.env.EXXPERTS_DESKTOP_SCRATCH_HOME;
   if (scratch && scratch.trim()) {
@@ -75,6 +104,31 @@ export function serverEnv(): NodeJS.ProcessEnv {
     env.HOME = home;
     env.USERPROFILE = home;
     env.EXXPERTS_CODING_AGENT_DIR = path.join(home, ".exxperts", "agent");
+  }
+  // Exxperts home and data profiles, resolved on every start: a pending home
+  // move (recorded by the server before it exited) is executed first, while
+  // nothing has the trees open; then the active-profile pointer decides
+  // which state tree inside the home the server runs against.
+  let profiles: StateProfilesModule | null = null;
+  try {
+    profiles = stateProfilesModule();
+  } catch {
+    // Payload without the module: standard profile at the login home only.
+  }
+  if (profiles) {
+    // Scratch mode (dev/tests) already relocated everything above and wins;
+    // it must never execute a real pending move or adopt the real home.
+    if (!(scratch && scratch.trim())) {
+      profiles.performPendingHomeMove?.(os.homedir());
+      // Points the server CHILD at the resolved home (the shell's own env
+      // stays untouched); a bad location throws its actionable message here
+      // rather than silently starting against the login home.
+      profiles.adoptStateHome?.(os.homedir(), env);
+      env.EXXPERTS_HOME_MOVE_SUPERVISED = "1";
+      env.EXXPERTS_LOGIN_HOME = os.homedir();
+    }
+    env.EXXPERTS_REAL_HOME = stateHome();
+    Object.assign(env, profiles.serverEnvForProfile(stateHome(), profiles.readActiveProfile(stateHome())));
   }
   // The packaged app ships ripgrep as the "tools" extraResource; pointing the
   // server at it makes a fresh install grep-ready without a runtime download.
@@ -272,7 +326,13 @@ export class ServerHandle {
   async authToken(): Promise<string> {
     const envToken = process.env.EXXPERTS_AUTH_TOKEN?.trim();
     if (envToken) return envToken;
-    const tokenFile = path.join(stateHome(), ".exxperts", "app", "auth-token");
+    let tokenFile = path.join(stateHome(), ".exxperts", "app", "auth-token");
+    try {
+      // The token belongs to the ACTIVE profile's tree, standard or named.
+      tokenFile = stateProfilesModule().activeTokenPath(stateHome());
+    } catch {
+      // Payload without the module: standard profile only.
+    }
     for (let i = 0; i < 20; i++) {
       try {
         const token = fs.readFileSync(tokenFile, "utf8").trim();

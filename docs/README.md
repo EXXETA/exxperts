@@ -10,6 +10,7 @@ This is the canonical index for documentation in this repository. Treat this pag
 - [Workspace and Bash](workspace-and-bash.md): the two access modes, per-tool toggles, derived read-only, the bounded fence, and Bash asks/auto with the approval card.
 - [Provider setup and AI profiles](provider-setup.md): connecting a provider: in-app sign-in for Claude / ChatGPT Plus/Pro, and the OpenAI-compatible gateway path.
 - [Web search](web-search.md): built-in DuckDuckGo backend and its limits; SearXNG setup for heavy use or blocked networks, keeping it running, and configuration reference.
+- [Data profiles](data-profiles.md): running more than one complete state world on one machine (private setup vs. curated demo), switching between them, what the standard `.exxperts` tree guarantees, and moving the whole data folder from Settings (cloud-synced folder across computers, Docker volume via `EXXPERTS_DATA_DIR`).
 - [Wallet](wallet.md): what rooms spend, where gateway prices come from, the approximation mark and "no price on file", caching savings, and the CSV export.
 - [Security](../SECURITY.md): threat model, supported deployments, release integrity, and vulnerability reporting.
 - [MCP client support](mcp.md): MCP connectors: transports, config locations, and commands.
@@ -33,6 +34,7 @@ Current storage roots:
 | --- | --- |
 | `~/.exxperts/app/` | Product/app state: persistent rooms, conversations, feature config, usage, artifacts, and related app data. |
 | `~/.exxperts/agent/` | Embedded runtime provider/auth/model/session state. |
+| `~/.exxperts-<name>/` | Additional [data profiles](data-profiles.md), each a self-contained `.exxperts` tree; the standard `~/.exxperts` never moves. |
 
 If another active doc conflicts with this table, treat this table as the newer source until that doc is refreshed. Archived docs may intentionally contain stale commands, storage roots, provider assumptions, or links.
 

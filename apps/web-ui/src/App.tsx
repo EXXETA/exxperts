@@ -22,6 +22,7 @@ import { SettingsOverlay, type SettingsSection } from "./components/settings-ove
 import { WhatsNewDialog } from "./components/whats-new-dialog";
 import { useRemoteClientContext } from "./remote-client-context";
 import { RemoteAccessPage } from "./components/remote-access-page";
+import { StateProfileSection } from "./components/state-profile-section";
 import { ConnectorsPage } from "./components/ConnectorsPage";
 import { WebSearchSettingsSection } from "./components/web-search-settings-section";
 import { SkillsPage } from "./components/SkillsPage";
@@ -8404,6 +8405,19 @@ export function App() {
 					content: (
 						<div className="landing ai-setup-page remote-access-shell">
 							<RemoteAccessPage />
+						</div>
+					),
+				}]),
+				// Local-only like Remote access: switching restarts this computer's
+				// server and rotates the sign-in token, which a remote device can
+				// neither survive nor complete.
+				...(remoteClient ? [] : [{
+					id: "profile" as const,
+					label: "Profiles",
+					title: "Which exxperts data profile this computer runs",
+					content: (
+						<div className="landing ai-setup-page">
+							<StateProfileSection />
 						</div>
 					),
 				}]),

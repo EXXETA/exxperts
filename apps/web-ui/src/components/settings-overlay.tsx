@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from "react";
 import { useEscapeKey } from "./use-escape-key";
 
-export type SettingsSection = "ai-setup" | "web-search" | "connectors" | "skills" | "remote";
+export type SettingsSection = "ai-setup" | "web-search" | "connectors" | "skills" | "remote" | "profile";
 
 export type SettingsOverlaySectionDef = { id: SettingsSection; label: string; title?: string; content: ReactNode };
 

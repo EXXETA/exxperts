@@ -291,9 +291,32 @@ export function defaultPersistentRoomForbiddenRoots(input: {
 	const agentId = requiredWorkspaceAgentId(input.agentId);
 	const persistentAgentsRoot = input.persistentAgentsRoot ?? DEFAULT_PERSISTENT_ROOM_AGENTS_ROOT;
 	const exxetaStateRoot = input.exxetaStateRoot ?? defaultExxetaStateRoot();
+	// With a data profile active this server runs under an overridden HOME,
+	// so the roots above all point inside the profile — the REAL ~/.exxperts
+	// (the standard profile's tokens, wallet, rooms) must stay forbidden too,
+	// or a room could be granted it as a workspace. The supervisor passes the
+	// real home; without a profile the extra entries dedupe away.
+	// With EXXPERTS_DATA_DIR set, EXXPERTS_REAL_HOME is the data dir, not the
+	// user's login home — but that login home may still hold a dormant
+	// ~/.exxperts from before the relocation (old wallet, provider keys), so
+	// it must stay forbidden too. os.userInfo() resolves the login home from
+	// the OS account, immune to our HOME/USERPROFILE indirection.
+	let loginHome: string | undefined;
+	try {
+		loginHome = os.userInfo().homedir || undefined;
+	} catch {
+		// No account record (some containers): nothing extra to forbid.
+	}
+	const realHomeRoots: PersistentRoomWorkspaceForbiddenRootInput[] = [process.env.EXXPERTS_REAL_HOME?.trim(), loginHome]
+		.filter((home): home is string => Boolean(home))
+		.flatMap((home) => [
+			{ kind: "exxeta-state-root" as const, path: path.join(home, ".exxperts", "app") },
+			{ kind: "persistent-agents-root" as const, path: path.join(home, ".exxperts", "app", "personalized-agents") },
+		]);
 	return [
 		{ kind: "repo-root", path: input.repoRoot },
 		{ kind: "exxeta-state-root", path: exxetaStateRoot },
+		...realHomeRoots,
 		{ kind: "persistent-agents-root", path: persistentAgentsRoot },
 		{ kind: "persistent-agent-root", path: persistentAgentRootPath(agentId, persistentAgentsRoot) },
 	];

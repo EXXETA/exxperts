@@ -29,7 +29,7 @@ if (build.status !== 0) process.exit(build.status ?? 1);
 
 const env = { ...process.env };
 if (!realState && !env.EXXPERTS_DESKTOP_SCRATCH_HOME) {
-  const scratch = path.join(os.homedir(), ".exxperts-desktop-scratch");
+  const scratch = path.join(os.homedir(), ".exxperts.desktop-scratch");
   fs.mkdirSync(scratch, { recursive: true });
   env.EXXPERTS_DESKTOP_SCRATCH_HOME = scratch;
   console.log(`[desktop dev] scratch state home: ${scratch}`);
