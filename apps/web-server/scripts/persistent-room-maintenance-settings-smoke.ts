@@ -51,14 +51,26 @@ try {
 	}
 	assert(quickThrew, "non-boolean quick-checkpoint auto-apply should be rejected");
 
-	// Memory budget: partial writes merge, values clamp to 10k–50k.
+	// Memory budget: partial writes merge; a value outside 10k–80k is REFUSED,
+	// not clamped (memory v2) — the budget is enforced exactly on every
+	// maintenance write, so storing a number nobody asked for would silently
+	// decide what the room forgets. Clamping stays on the read path, where an
+	// older or hand-edited file must still yield a usable budget.
 	const withBudget = writePersistentRoomMaintenanceSettings(agentId, { memoryBudgetTokens: 30_000 });
 	assert(withBudget.memoryBudgetTokens === 30_000, "budget write should persist");
 	assert(withBudget.fastPathSecondApproval === true, "budget-only write should preserve the toggle");
 	assert(withBudget.quickCheckpointAutoApply === true, "budget-only write should preserve quick-checkpoint auto-apply");
 	assert(readPersistentRoomMaintenanceSettings(agentId).memoryBudgetTokens === 30_000, "reread should see the persisted budget");
-	assert(writePersistentRoomMaintenanceSettings(agentId, { memoryBudgetTokens: 5_000 }).memoryBudgetTokens === 10_000, "budget should clamp up to 10k");
-	assert(writePersistentRoomMaintenanceSettings(agentId, { memoryBudgetTokens: 90_000 }).memoryBudgetTokens === 50_000, "budget should clamp down to 50k");
+	for (const refused of [5_000, 90_000]) {
+		let rangeThrew = "";
+		try {
+			writePersistentRoomMaintenanceSettings(agentId, { memoryBudgetTokens: refused });
+		} catch (error) {
+			rangeThrew = (error as Error).message;
+		}
+		assert(/must be between 10000 and 80000 tokens/.test(rangeThrew), `a budget of ${refused} should be refused with a sentence, got ${JSON.stringify(rangeThrew)}`);
+	}
+	assert(readPersistentRoomMaintenanceSettings(agentId).memoryBudgetTokens === 30_000, "a refused budget must not have been stored");
 	let budgetThrew = false;
 	try {
 		writePersistentRoomMaintenanceSettings(agentId, { memoryBudgetTokens: "big" as unknown as number });

@@ -25,13 +25,12 @@ export const ASSESSMENT_TARGET_CHARS = 7000;
 export const ASSESSMENT_TARGET_WORDS = 1200;
 export const DISCUSSION_HANDOFF_TRIM_MARKER = "_(trimmed to fit the handoff limit)_";
 
-// Shed orders, lowest-signal first. Both twins keep "User guidance" and "Needs
+// The shed order, lowest-signal first. It keeps "User guidance" and "Needs
 // judgment" off the list: the first is the user's own steer, the second is
 // where the worker parks what it could not resolve. If shedding everything
 // sheddable still does not fit, the tail cut below is the last resort and the
 // disclosure says exactly that.
 export const ABSORB_HANDOFF_SHED_ORDER = ["Transcript summary", "Update existing memory", "Clear / forget", "Learn / memorize"] as const;
-export const STRUCTURAL_REVIEW_HANDOFF_SHED_ORDER = ["Transcript summary", "Reorganize", "Prune or tighten", "Preserve"] as const;
 export const HANDOFF_PROTECTED_SECTIONS = ["User guidance", "Needs judgment"] as const;
 
 export interface DiscussionHandoffFit {

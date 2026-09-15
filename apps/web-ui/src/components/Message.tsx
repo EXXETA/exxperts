@@ -74,6 +74,11 @@ function summariseToolArgs(name: string, args: any): string {
 		const file = typeof args.name === "string" && args.name.trim() ? ` · ${args.name.trim()}` : "";
 		return `${query}${file}`.slice(0, 160);
 	}
+	if (name === "memory_recall") {
+		const query = String(args.query ?? "").trim();
+		const topic = typeof args.topic === "string" && args.topic.trim() ? args.topic.trim() : "";
+		return (query && topic ? `${query} · ${topic}` : query || topic).slice(0, 160);
+	}
 	if (name === "fetch_url") return String(args.url ?? "").slice(0, 160);
 	if (name === "web_search") return String(args.query ?? "").slice(0, 160);
 	if (name.startsWith("kb_")) {

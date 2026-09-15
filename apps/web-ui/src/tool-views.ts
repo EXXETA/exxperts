@@ -19,6 +19,7 @@ export const GENERIC_TOOL_VIEWS: Record<string, { icon: string; running: string;
 	// which tool did it.
 	read_file: { icon: "📄", running: "Reading file", done: "Read file" },
 	search_file: { icon: "🔎", running: "Searching file", done: "Searched file" },
+	memory_recall: { icon: "🗄️", running: "Reading archived notes", done: "Read archived notes" },
 	kb_search: { icon: "📚", running: "Searching knowledge base", done: "Searched knowledge base" },
 	artifact_list: { icon: "🗂️", running: "Listing artifacts", done: "Listed artifacts" },
 	artifact_read: { icon: "🗂️", running: "Reading artifact", done: "Read artifact" },

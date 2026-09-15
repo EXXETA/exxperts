@@ -33,7 +33,6 @@ const {
 
 const agentId = "mutation-redaction-smoke-room";
 const { ABSORB_CONSOLIDATION_WORKER_TYPE, ABSORB_EMPTY_RECENT_CONTEXT_PLACEHOLDER } = await import("../src/absorb-consolidation.js");
-const { extractStructuralReviewSourceParts, STRUCTURAL_REVIEW_MODE, STRUCTURAL_REVIEW_WORKER_TYPE } = await import("../src/structural-review.js");
 
 const model = { provider: "openai-compatible", model: "gpt-5.5", label: "GPT-5.5" };
 const agentRoot = path.join(persistentAgentsRoot, agentId);
@@ -194,109 +193,6 @@ function absorbApprovalBody(sourceL1b: string) {
 	};
 }
 
-function structuralReviewSourceL1b(): string {
-	return `<!-- exxeta:l1b schema_version=1 -->
-
-## Chronos
-
-- Current scaffold timestamp: 2026-05-30T12:00:00.000Z
-- Persistent agent id: mutation-redaction-smoke-room
-- Lifecycle state: ready
-
-## Deep Memory
-
-### Collaboration and Workflow
-
-- The synthetic user prefers scoped GitLab MRs with explicit cleanup steps.
-- The synthetic user is learning collaborative Git/GitLab workflows.
-
-### Product Direction
-
-- Persistent-agent memory maintenance should feel calm, lean, and signal-first.
-- Duplicate product-direction wording repeats calm, lean, and signal-first memory maintenance.
-
-## Active Items
-
-### Current Focus
-
-- Validate route-level Structural Review approval response redaction.
-- Preserve exact split and graft invariants for Chronos and Recent Context.
-
-### Parked
-
-- Revisit shared Maintain workspace polish later.
-
-## Recent Context
-
-### RC-0001 | OPEN | 2026-05-30 | API redaction structural review
-
-**Session arc:** This RC entry must survive Structural Review approval exactly.
-
-**Body:**
-- Recent Context remains untouched.
-
-**Parked:**
-None.
-`;
-}
-
-const structuralReviewCandidate = `## Deep Memory
-
-### Collaboration and Workflow
-
-- The synthetic user prefers scoped GitLab MRs with explicit cleanup steps and is learning collaborative Git/GitLab workflows.
-
-### Product Direction
-
-- Persistent-agent memory maintenance should feel calm, lean, and signal-first.
-
-## Active Items
-
-### Current Focus
-
-- Validate route-level Structural Review approval response redaction while preserving split/graft invariants.
-
-### Parked
-
-- Revisit shared Maintain workspace polish later.
-`;
-
-function structuralReviewApprovalBody(sourceL1b: string) {
-	const parts = extractStructuralReviewSourceParts(sourceL1b);
-	return {
-		proposal: {
-			agentId: agentId,
-			writesMemory: false,
-			process: {
-				type: STRUCTURAL_REVIEW_WORKER_TYPE,
-				mode: STRUCTURAL_REVIEW_MODE,
-				model: { provider: "openai-codex", model: "gpt-5.5", label: "GPT-5.5" },
-			},
-			source: {
-				l1bFingerprint: fingerprintL1bSource(sourceL1b),
-				reviewTargetFingerprint: fingerprintL1bSource(parts.sourceReviewTargetL1b),
-				chronosFingerprint: fingerprintL1bSource(parts.preservedChronos),
-				recentContextFingerprint: fingerprintL1bSource(parts.preservedRecentContext),
-				generatedAt: "2026-05-30T12:30:00.000Z",
-			},
-			fields: {
-				summary: "Tighten durable workflow/product signal.",
-				candidateReviewTargetL1b: structuralReviewCandidate,
-			},
-			review: {
-				metrics: {
-					reviewTargetWordsBefore: 70,
-					reviewTargetWordsAfter: 50,
-					reviewTargetEstimatedTokensBefore: 100,
-					reviewTargetEstimatedTokensAfter: 80,
-					reviewTargetEstimatedTokenDelta: -20,
-				},
-			},
-		},
-		approvedCandidateReviewTargetL1b: structuralReviewCandidate,
-	};
-}
-
 async function waitForServer(server: ChildProcessWithoutNullStreams): Promise<void> {
 	const deadline = Date.now() + 15000;
 	let lastError = "server did not respond";
@@ -312,6 +208,18 @@ async function waitForServer(server: ChildProcessWithoutNullStreams): Promise<vo
 		await new Promise((resolve) => setTimeout(resolve, 150));
 	}
 	throw new Error(`server did not become ready: ${lastError}`);
+}
+
+/** A route that is expected to refuse: the status is the assertion, and the body carries the sentence. */
+async function postJsonExpectingStatus(pathname: string, body: unknown, status: number): Promise<any> {
+	const response = await authedFetch(`${baseUrl}${pathname}`, {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify(body),
+	});
+	const text = await response.text();
+	if (response.status !== status) throw new Error(`${pathname} should have answered ${status}, got ${response.status}: ${text}`);
+	return text ? JSON.parse(text) : null;
 }
 
 async function postJson(pathname: string, body: unknown): Promise<any> {
@@ -373,20 +281,26 @@ try {
 	assert(checkpointResponse.conversationId === "c_api_redaction_checkpoint", "checkpoint response should include conversation id");
 	assertBrowserSafeApprovalResponse("checkpoint", checkpointResponse, "events/checkpoint/");
 
+	// Memorize is a RUN now (memory v2): its approval names the run the server
+	// built and folded, never a whole memory the client hands back. The retired
+	// body is refused here rather than dropped, because a client that still
+	// sends it must be told what to do instead of having its memory rewritten
+	// from something the server never produced. The browser-safety of the run's
+	// own approval response is pinned by absorb-run-route-smoke, which drives
+	// the route that exists.
 	writeL1b(absorbSourceL1b());
 	const sourceAbsorbL1b = readL1b();
-	const absorbResponse = await postJson(`/api/persistent-agents/${encodeURIComponent(agentId)}/absorb/approve`, absorbApprovalBody(sourceAbsorbL1b));
-	assert(absorbResponse.writesMemory === true, "absorb response should report memory write");
-	assert(absorbResponse.agentId === agentId, "absorb response should include agent id");
-	assert(absorbResponse.recentContextEntryCount === 0, "absorb response should include result Recent Context count");
-	assertBrowserSafeApprovalResponse("absorb", absorbResponse, "events/absorb/");
+	const retiredAbsorb = await postJsonExpectingStatus(`/api/persistent-agents/${encodeURIComponent(agentId)}/absorb/approve`, absorbApprovalBody(sourceAbsorbL1b), 400);
+	assert(/runId is required/.test(String(retiredAbsorb?.error ?? "")), `the retired whole-document approval should be refused with what to do instead, got ${JSON.stringify(retiredAbsorb)}`);
+	assert(readL1b() === sourceAbsorbL1b, "a refused approval writes nothing");
 
-	writeL1b(structuralReviewSourceL1b());
-	const sourceStructuralReviewL1b = readL1b();
-	const structuralReviewResponse = await postJson(`/api/persistent-agents/${encodeURIComponent(agentId)}/structural-review/approve`, structuralReviewApprovalBody(sourceStructuralReviewL1b));
-	assert(structuralReviewResponse.writesMemory === true, "structural-review response should report memory write");
-	assert(structuralReviewResponse.agentId === agentId, "structural-review response should include agent id");
-	assertBrowserSafeApprovalResponse("structural-review", structuralReviewResponse, "events/structural-review/");
+	// Review is a RUN now too, and the route that took a whole rewritten memory
+	// from the client is gone rather than retired: a client that still posts one
+	// meets a 404 and writes nothing. The browser-safety of the run's own
+	// approval response is pinned by review-run-route-smoke.
+	const beforeRetiredReview = readL1b();
+	await postJsonExpectingStatus(`/api/persistent-agents/${encodeURIComponent(agentId)}/structural-review/approve`, { proposal: { agentId } }, 404);
+	assert(readL1b() === beforeRetiredReview, "a route that no longer exists writes nothing");
 
 	console.log("persistent mutation API redaction smoke passed");
 } catch (error) {

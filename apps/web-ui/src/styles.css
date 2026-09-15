@@ -3770,14 +3770,7 @@ strong, b { font-weight: 700; }
  * normal flow on short viewports, so the top card never clips unscrollably. */
 .maintain-workspace-main {
 	display: flex;
-}
-.maintain-workspace-main .maintain-choice-grid {
-	margin: auto;
-}
-.maintain-chooser-note {
-	color: var(--muted);
-	font-size: 13px;
-	margin: 8px 0 0;
+	align-items: flex-start;
 }
 .maintain-confirm-backdrop { z-index: 60; }
 .maintain-confirm-card {
@@ -3794,103 +3787,390 @@ strong, b { font-weight: 700; }
 	margin: 0;
 	line-height: 1.55;
 }
-.maintain-choice-grid {
-	width: min(900px, 100%);
-	display: grid;
-	grid-template-columns: repeat(2, minmax(260px, 1fr));
-	gap: 18px;
+/* The header's text and button line up with the 900px column the cards use,
+ * instead of hugging the window edge while the cards sit in the middle. */
+/* The chooser is laid out like Home: one left-aligned column, the page title
+ * in the display face, one line under it, the content starting on the same
+ * left edge as the title. */
+.maintain-workspace .absorb-workspace-header,
+.maintain-workspace .absorb-workspace-main {
+	padding-inline: max(32px, calc((100% - 960px) / 2));
 }
-.maintain-choice-card {
-	min-height: 340px;
-	border: 1px solid color-mix(in srgb, var(--border) 52%, transparent);
-	border-radius: 18px;
-	padding: 26px;
-	background: transparent;
+.maintain-workspace .absorb-workspace-header {
+	padding-block: 34px 26px;
+	align-items: center;
+}
+.maintain-workspace .absorb-workspace-header h1 {
+	font-family: "Bandeins Strange Variable", "Bandeins Strange", "Sen", sans-serif;
+	font-variation-settings: "wght" 820;
+	font-size: clamp(32px, 4.2vw, 48px);
+	letter-spacing: -0.025em;
+	line-height: 1;
+	margin: 0 0 10px;
+}
+.maintain-workspace .absorb-workspace-header p:not(.card-kicker) {
+	max-width: none;
+	font-size: 15px;
+}
+.maintain-workspace .absorb-workspace-header .landing-action {
+	margin-top: 0;
+}
+.maintain-workspace .absorb-workflow-card {
+	width: 100%;
+	padding-top: 0;
+}
+.absorb-workspace.maintain-workspace .checkpoint-proposal-heading h2,
+.absorb-workspace.maintain-workspace .checkpoint-generating-state h2 {
+	margin-top: 0;
+	font-family: "Bandeins Strange Variable", "Bandeins Strange", "Sen", sans-serif;
+	font-variation-settings: "wght" 820;
+	font-size: 28px;
+	line-height: 1.1;
+	letter-spacing: -0.02em;
+}
+/* On the card, each conversation is one row that opens to its notes. */
+.absorb-run-conversation > summary {
+	list-style: none;
+	cursor: pointer;
 	display: flex;
 	flex-direction: column;
+	gap: 4px;
+	padding: 12px 0;
+}
+.absorb-run-conversation > summary::-webkit-details-marker { display: none; }
+.absorb-run-conversation > summary .absorb-run-session-head {
+	display: flex;
 	justify-content: space-between;
-	gap: 24px;
+	gap: 16px;
 }
-.maintain-choice-card.primary {
-	border-color: color-mix(in srgb, var(--success) 42%, var(--border));
-}
-.maintain-choice-card h2 {
-	font-family: "Bandeins Strange", "Sen", sans-serif;
-	font-size: clamp(30px, 4vw, 44px);
-	line-height: 0.98;
-	letter-spacing: -0.02em;
-	margin: 8px 0 12px;
-}
-.maintain-choice-card p:not(.card-kicker) {
+.absorb-run-conversation > summary .absorb-run-session-state::before {
+	content: "▸ ";
 	color: var(--muted);
-	line-height: 1.55;
-	margin: 0;
 }
-.maintain-choice-card .landing-action {
-	align-self: flex-start;
+.absorb-run-conversation[open] > summary .absorb-run-session-state::before {
+	content: "▾ ";
 }
-.maintain-choice-footer {
+.absorb-run-conversation.plain {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	padding: 12px 0;
+}
+.absorb-run-conversation.plain .absorb-run-session-head {
+	display: flex;
+	justify-content: space-between;
+	gap: 16px;
+}
+.absorb-run-conversation-body {
+	padding: 0 0 12px;
+}
+.absorb-run-change.compact {
+	display: flex;
+	align-items: baseline;
+	gap: 10px;
+	flex-wrap: wrap;
+}
+.absorb-run-change.compact .absorb-run-change-line {
+	color: var(--muted);
+	font-size: 13.5px;
+}
+/* The archive section starts closed: one line and a Show. */
+.absorb-run-archive > summary {
+	list-style: none;
+	cursor: pointer;
+	display: flex;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: 16px;
+}
+.absorb-run-archive > summary::-webkit-details-marker { display: none; }
+.absorb-run-archive > summary h3 { margin: 0; }
+.absorb-run-archive-toggle {
+	font-family: var(--exx-font-display);
+	font-size: 12px;
+	font-weight: 700;
+	letter-spacing: 0.1em;
+	text-transform: uppercase;
+	color: var(--fg-soft);
+}
+.absorb-run-archive[open] .absorb-run-archive-toggle::after { content: ""; }
+.absorb-run-archive[open] > summary .absorb-run-archive-toggle { display: none; }
+.absorb-run-archive > p { margin-top: 12px; }
+/* Editing a note on the card: the same textarea and buttons as Room settings. */
+.absorb-run-note-editor {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	margin: 6px 0;
+}
+.absorb-run-note-editor textarea {
+	width: 100%;
+	font: inherit;
+	font-size: 14px;
+	line-height: 1.5;
+	padding: 10px 12px;
+	border: 1px solid var(--border);
+	border-radius: 10px;
+	background: var(--panel-2);
+	color: var(--fg);
+	resize: vertical;
+}
+.absorb-run-change { text-align: left; }
+.absorb-run-change-edit {
+	display: inline-block;
+	margin-top: 4px;
+}
+/* The discussion: the first read on the left, the chat on the right, one
+ * wider column so both have room. */
+.maintain-workspace:has(.absorb-discussion-page) .absorb-workspace-header,
+.maintain-workspace .absorb-workspace-main:has(.absorb-discussion-page) {
+	padding-inline: 32px;
+}
+.maintain-workspace .absorb-discussion-page {
+	max-width: none;
+}
+.absorb-discussion-split {
+	flex: 1;
+	min-height: 0;
+	display: grid;
+	grid-template-columns: minmax(280px, 2fr) minmax(0, 3fr);
+	gap: 40px;
+}
+/* The composer is the room's prompt box: one rounded panel with the text,
+ * the counter and the send arrow inside it, the two actions on a row below. */
+.absorb-discussion-composer {
+	display: flex;
+	flex-direction: column;
+	align-items: stretch;
+	gap: 12px;
+}
+.absorb-discussion-box {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	background: var(--panel-2);
+	border: 1px solid var(--border);
+	border-radius: 18px;
+	padding: 12px 12px 10px;
+}
+.absorb-discussion-box:focus-within {
+	border-color: var(--fg);
+	box-shadow: 0 0 0 1px color-mix(in srgb, var(--fg) 30%, transparent);
+}
+.absorb-discussion-box textarea {
+	width: 100%;
+	/* Text wraps, so a horizontal scrollbar can only be a rounding artefact at
+	   some zoom levels; never draw one. */
+	overflow-x: hidden;
+	color: var(--fg);
+	font: inherit;
+	background: transparent;
+	border: none;
+	border-radius: 0;
+	padding: 2px 6px;
+	font-size: 14px;
+	line-height: 1.45;
+	min-height: 46px;
+	max-height: 40vh;
+	resize: none;
+}
+.absorb-discussion-box textarea:focus {
+	border: none;
+	box-shadow: none;
+	outline: none;
+}
+.absorb-discussion-box-bottom {
 	display: flex;
 	align-items: center;
 	justify-content: space-between;
-	gap: 12px;
-	flex-wrap: wrap;
+	gap: 10px;
 }
-.maintain-choice-status {
-	font-size: 12.5px;
-	color: var(--muted);
-}
-.structural-review-map-grid {
-	display: grid;
-	grid-template-columns: repeat(2, minmax(0, 1fr));
-	gap: 18px;
-}
-.structural-review-map-diff th.n,
-.structural-review-map-diff td.n {
-	text-align: right;
-	font-variant-numeric: tabular-nums;
-	white-space: nowrap;
-}
-.structural-review-map-diff td.neg { color: var(--success); }
-.structural-review-map-diff td.pos { color: var(--warning); }
-.structural-review-map-diff-total td { font-weight: 700; border-top: 1px solid var(--border); }
-.structural-review-map-grid h4 {
-	margin: 0 0 10px;
-	font-family: "Bandeins Strange", "Sen", sans-serif;
-	font-size: 13px;
-	letter-spacing: 0.08em;
-	text-transform: uppercase;
-	color: var(--muted);
-}
-.structural-review-memory-map-block {
-	display: grid;
-	gap: 8px;
-}
-.structural-review-memory-map .absorb-change-table td:nth-child(2),
-.structural-review-memory-map .absorb-change-table td:nth-child(3),
-.structural-review-memory-map .absorb-change-table td:nth-child(4) {
-	text-align: right;
-	font-variant-numeric: tabular-nums;
-}
-.structural-review-map-total {
-	display: flex;
-	justify-content: flex-end;
-	gap: 8px;
-	flex-wrap: wrap;
-	color: var(--muted);
+.absorb-discussion-box-bottom .absorb-discussion-counter {
+	grid-column: auto;
+	margin: 0;
 	font-size: 12px;
 }
-.structural-review-map-total strong {
-	color: var(--fg);
-}
-.structural-review-map-section {
-	text-align: left;
-}
-.review-hardness-picker {
+.absorb-discussion-actions {
 	display: flex;
+	flex-direction: row;
+	justify-content: flex-end;
+	gap: 10px;
+}
+.absorb-discussion-composer .absorb-discussion-actions .absorb-discussion-generate {
+	padding: 11px 16px;
+}
+.absorb-discussion-transcript .absorb-discussion-messages {
+	/* Full width of the panel, so the person's bubble sits at the right edge
+	   under the composer's edge, as in the room's chat. */
+	max-width: none;
+}
+/* The run card's heading and its step line run the full column, like the header's. */
+.absorb-workspace .absorb-run-card .checkpoint-proposal-heading,
+.absorb-workspace .absorb-run-card .checkpoint-proposal-heading p {
+	max-width: none;
+}
+.absorb-discussion-split .absorb-discussion-panel {
+	min-height: 0;
+}
+.absorb-discussion-aside {
+	min-height: 0;
+	overflow-y: auto;
+	padding: 10px 24px 0 0;
+	border-right: 1px solid var(--border-soft);
+	text-align: left;
+	display: flex;
+	flex-direction: column;
+	gap: 18px;
+}
+.absorb-discussion-aside .absorb-assessment-section {
+	padding: 0;
+	border: 0;
+	background: transparent;
+}
+.absorb-discussion-aside .absorb-assessment-section h3 {
+	font-size: 12px;
+	letter-spacing: 0.1em;
+	text-transform: uppercase;
+	color: var(--muted);
+	margin: 0 0 8px;
+}
+.absorb-discussion-aside li,
+.absorb-discussion-aside p {
+	font-size: 13.5px;
+	line-height: 1.5;
+}
+.absorb-discussion-aside-label {
+	margin: 0;
+	font-size: 12.5px;
+	line-height: 1.5;
+	color: var(--muted);
+	padding-bottom: 12px;
+	border-bottom: 1px solid var(--border-soft);
+}
+@media (max-width: 900px) {
+	.absorb-discussion-split { grid-template-columns: 1fr; }
+	.absorb-discussion-aside { border-right: 0; padding-right: 0; max-height: 40vh; }
+}
+.maintain-workspace .absorb-workspace-header.compact {
+	padding-block: 12px;
+}
+.maintain-workspace .absorb-workspace-header.compact h1 {
+	font-size: 22px;
+	margin: 0;
+}
+.maintain-chooser-column {
+	width: 100%;
+	display: flex;
+	flex-direction: column;
+	gap: 14px;
+	margin-top: 2px;
+}
+/* The room's state is the line under the title: the numbers are the only bold words. */
+.maintain-workspace .absorb-workspace-header p.maintain-status {
+	color: var(--fg-soft);
+	font-size: 16px;
+}
+.maintain-status strong {
+	color: var(--fg);
+	font-weight: 700;
+}
+/* The two actions are rows of one list, and each whole row is the button:
+ * nothing is drawn inside a row, the recommended one carries a tag and a
+ * filled "Start". */
+.maintain-actions {
+	border: 1px solid var(--border-soft);
+	border-radius: 16px;
+	background: color-mix(in srgb, var(--panel) 82%, transparent);
+	overflow: hidden;
+	display: flex;
+	flex-direction: column;
+}
+.maintain-action {
+	appearance: none;
+	font: inherit;
+	color: inherit;
+	text-align: left;
+	background: transparent;
+	border: 0;
+	cursor: pointer;
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 28px;
+	padding: 24px 26px;
+	transition: background 120ms ease;
+}
+.maintain-action + .maintain-action {
+	border-top: 1px solid var(--border-soft);
+}
+.maintain-action:hover:not(:disabled),
+.maintain-action:focus-visible {
+	background: color-mix(in srgb, var(--fg) 4%, transparent);
+	outline: none;
+}
+.maintain-action:disabled {
+	cursor: default;
+	opacity: 0.6;
+}
+.maintain-action-body {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	min-width: 0;
+}
+.maintain-action-head {
+	display: flex;
+	align-items: center;
 	gap: 10px;
 	flex-wrap: wrap;
-	margin-top: 8px;
+}
+.maintain-action-title {
+	font-family: "Bandeins Strange Variable", "Bandeins Strange", "Sen", sans-serif;
+	font-variation-settings: "wght" 820;
+	font-size: 22px;
+	line-height: 1;
+	letter-spacing: -0.02em;
+}
+.maintain-action-text {
+	color: var(--muted);
+	font-size: 14px;
+	line-height: 1.5;
+	max-width: 58ch;
+}
+.maintain-action-tag {
+	font-family: var(--exx-font-display);
+	font-size: 11px;
+	font-weight: 700;
+	letter-spacing: 0.12em;
+	text-transform: uppercase;
+	color: var(--fg);
+	border: 1px solid color-mix(in srgb, var(--fg) 30%, transparent);
+	border-radius: 999px;
+	padding: 3px 9px;
+}
+.maintain-action-go {
+	flex: 0 0 auto;
+	font-family: var(--exx-font-display);
+	font-weight: 700;
+	font-size: 13px;
+	letter-spacing: 0.1em;
+	text-transform: uppercase;
+	color: var(--fg-soft);
+	border: 1px solid var(--border);
+	border-radius: var(--exx-radius-control);
+	padding: 11px 16px;
+	white-space: nowrap;
+}
+.maintain-action.recommended .maintain-action-go {
+	background: var(--exx-action-primary-bg);
+	border-color: var(--exx-action-primary-bg);
+	color: var(--exx-action-primary-fg);
+}
+.maintain-footnote {
+	margin: 0;
+	color: var(--muted);
+	font-size: 13px;
+	line-height: 1.5;
 }
 .absorb-workspace .checkpoint-preview-actions {
 	position: sticky;
@@ -4127,7 +4407,8 @@ strong, b { font-weight: 700; }
 	max-width: none;
 	margin: 0;
 }
-.absorb-proposal-page .absorb-review-strip {
+.absorb-proposal-page .absorb-review-strip,
+.absorb-saved-state .absorb-review-strip {
 	justify-content: flex-start;
 }
 .absorb-assessment-page .checkpoint-preview-actions,
@@ -4212,38 +4493,395 @@ strong, b { font-weight: 700; }
 	color: var(--muted);
 	background: color-mix(in srgb, var(--muted) 14%, transparent);
 }
-.structural-review-action-pill {
-	display: inline-flex;
-	align-items: center;
-	border-radius: 999px;
-	padding: 2px 8px;
-	font-size: 12px;
-	font-weight: 700;
-	white-space: nowrap;
-}
-.structural-review-action-pill.remove {
-	color: var(--exx-pill-drop);
-	background: color-mix(in srgb, var(--exx-pill-drop) 16%, transparent);
-}
-.structural-review-action-pill.compress {
-	color: var(--exx-pill-update);
-	background: color-mix(in srgb, var(--exx-pill-update) 16%, transparent);
-}
-.structural-review-action-pill.reorganize {
-	color: var(--exx-pill-reorganize);
-	background: color-mix(in srgb, var(--exx-pill-reorganize) 17%, transparent);
-}
-.structural-review-action-pill.preserve {
-	color: var(--success);
-	background: color-mix(in srgb, var(--success) 16%, transparent);
-}
-.structural-review-action-pill.neutral {
-	color: var(--muted);
-	background: color-mix(in srgb, var(--muted) 14%, transparent);
-}
 .absorb-raw-markdown-disclosure {
 	border-top: 1px solid var(--border-soft);
 	padding-top: 10px;
+}
+
+/* Memorize v2: the run screen and its card. Sessions land one at a time, so
+   the list is the screen's spine — quiet rows, one state sentence each. */
+.absorb-run-progress {
+	width: 100%;
+	max-width: 760px;
+	margin: 0 auto;
+}
+.absorb-run-sessions,
+.absorb-run-entries {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+	display: grid;
+	gap: 2px;
+	width: 100%;
+	text-align: left;
+}
+.absorb-run-session,
+.absorb-run-entry {
+	border-top: 1px solid color-mix(in srgb, var(--border-soft) 38%, transparent);
+	padding: 10px 0;
+	display: grid;
+	gap: 3px;
+}
+.absorb-run-session-head {
+	display: flex;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: 12px;
+}
+.absorb-run-session-head strong {
+	font-size: 14px;
+	line-height: 1.25;
+	min-width: 0;
+}
+.absorb-run-session-date,
+.absorb-run-entry-date {
+	color: var(--muted);
+	font-size: 12px;
+	font-variant-numeric: tabular-nums;
+	flex-shrink: 0;
+}
+.absorb-run-session-state {
+	color: var(--muted);
+	font-size: 12.5px;
+	line-height: 1.45;
+}
+.absorb-run-session.folding .absorb-run-session-state { color: var(--fg); }
+.absorb-run-session.failed .absorb-run-session-state { color: var(--warning); }
+.absorb-run-change-groups {
+	display: grid;
+	gap: 18px;
+}
+.absorb-run-change-group {
+	display: grid;
+	gap: 6px;
+}
+.absorb-run-change {
+	display: grid;
+	gap: 4px;
+	padding: 6px 0 6px 12px;
+	border-left: 2px solid color-mix(in srgb, var(--border-soft) 42%, transparent);
+}
+.absorb-run-change-label,
+.memory-entry-kind {
+	font-family: "Bandeins Strange", "Sen", sans-serif;
+	font-size: 10px;
+	font-weight: 700;
+	letter-spacing: 0.12em;
+	text-transform: uppercase;
+	color: var(--muted);
+}
+.absorb-run-change-topic,
+.absorb-run-entry-topic,
+.memory-entry-topic {
+	font-size: 13px;
+	font-weight: 600;
+}
+.absorb-run-change-text,
+.memory-entry-text {
+	font-size: 13.5px;
+	line-height: 1.5;
+	margin: 0;
+}
+.absorb-run-change-diff {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 14px;
+}
+.absorb-run-change-side-label {
+	font-family: "Bandeins Strange", "Sen", sans-serif;
+	font-size: 10px;
+	font-weight: 700;
+	letter-spacing: 0.12em;
+	text-transform: uppercase;
+	color: var(--muted);
+}
+.absorb-run-entry {
+	grid-template-columns: minmax(0, 1fr) auto;
+	align-items: start;
+	gap: 12px;
+}
+.absorb-run-entry-main {
+	display: grid;
+	gap: 3px;
+	min-width: 0;
+}
+.absorb-run-entry-meta {
+	display: flex;
+	align-items: baseline;
+	gap: 10px;
+	flex-wrap: wrap;
+}
+.absorb-run-entry-line {
+	margin: 0;
+	font-size: 13.5px;
+	line-height: 1.5;
+}
+.absorb-run-entry-keep {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	font-size: 12.5px;
+	cursor: pointer;
+	flex-shrink: 0;
+}
+/* What the person asked for, read back beside what the update did. */
+.absorb-run-guidance-block {
+	display: grid;
+	gap: 4px;
+	margin-top: 10px;
+}
+.absorb-run-guidance-block strong {
+	font-family: "Bandeins Strange", "Sen", sans-serif;
+	font-size: 10px;
+	font-weight: 700;
+	letter-spacing: 0.12em;
+	text-transform: uppercase;
+	color: var(--muted);
+}
+.absorb-run-guidance-block ul {
+	margin: 0;
+	padding-left: 18px;
+	display: grid;
+	gap: 3px;
+	font-size: 13.5px;
+	line-height: 1.5;
+}
+.absorb-run-guidance-tag {
+	margin-left: 8px;
+	font-family: "Bandeins Strange", "Sen", sans-serif;
+	font-size: 10px;
+	font-weight: 700;
+	letter-spacing: 0.12em;
+	text-transform: uppercase;
+	color: var(--muted);
+}
+
+/* The run this room never finished, and the one action that clears it. */
+.absorb-run-conflict-note {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 14px;
+	flex-wrap: wrap;
+}
+
+/* An archive list is read topic by topic: closed rows carry the count, and the
+   search box is the way past them to a single entry. */
+.absorb-run-entry-list {
+	display: grid;
+	gap: 2px;
+	width: 100%;
+}
+.absorb-run-entry-search {
+	width: 100%;
+	max-width: 320px;
+	margin-bottom: 8px;
+}
+.absorb-run-entry-group {
+	border-top: 1px solid color-mix(in srgb, var(--border-soft) 38%, transparent);
+	display: grid;
+	gap: 4px;
+	padding: 8px 0;
+}
+.absorb-run-entry-group-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	flex-wrap: wrap;
+}
+.absorb-run-entry-group-toggle {
+	appearance: none;
+	background: none;
+	border: 0;
+	padding: 0;
+	color: inherit;
+	font: inherit;
+	font-size: 13.5px;
+	text-align: left;
+	cursor: pointer;
+	display: inline-flex;
+	align-items: baseline;
+	gap: 8px;
+	min-width: 0;
+}
+.absorb-run-entry-group-toggle:hover { color: var(--accent); }
+.absorb-run-entry-group-caret {
+	color: var(--muted);
+	font-size: 11px;
+	flex-shrink: 0;
+}
+.absorb-run-entry-group .absorb-run-entries { padding-left: 18px; }
+.absorb-run-entry-more {
+	justify-self: start;
+	margin-left: 18px;
+}
+.absorb-run-budget-actions {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	flex-wrap: wrap;
+	margin-top: 4px;
+}
+/* The closed archive section carries its one line of counts under the heading;
+   once open, the bar says the same thing and the line steps aside. */
+.absorb-run-archive > summary { flex-wrap: wrap; }
+.absorb-run-archive-summary-line {
+	flex-basis: 100%;
+	color: var(--muted);
+	font-size: 13px;
+	font-variant-numeric: tabular-nums;
+}
+.absorb-run-archive[open] > summary .absorb-run-archive-summary-line { display: none; }
+.absorb-run-archive-explanation {
+	color: var(--fg-soft);
+	font-size: 13.5px;
+	margin: 4px 0 18px;
+}
+/* The limit bar: the filled part is the limit and keeps its width; the grey
+   part is what leaves because of it, to the same scale, and never wider than
+   the limit itself. The only meter on either card. */
+.archive-limit-bar {
+	display: grid;
+	gap: 8px;
+	margin-top: 12px;
+}
+.archive-limit-bar-label {
+	font-family: "Bandeins Strange", "Sen", sans-serif;
+	font-size: 10px;
+	font-weight: 700;
+	letter-spacing: 0.12em;
+	text-transform: uppercase;
+	color: var(--muted);
+}
+.archive-limit-bar-track {
+	display: flex;
+	align-items: stretch;
+	width: 100%;
+	height: 30px;
+	gap: 3px;
+}
+.archive-limit-bar-fill {
+	position: relative;
+	flex: 0 0 55%;
+	max-width: 55%;
+	border-radius: 6px;
+	overflow: hidden;
+	background: color-mix(in srgb, var(--exx-plan) 18%, var(--panel-2));
+	border: 1px solid color-mix(in srgb, var(--exx-plan) 40%, var(--border-soft));
+	display: flex;
+	align-items: center;
+	justify-content: center;
+}
+.archive-limit-bar.fits .archive-limit-bar-fill {
+	flex-basis: 100%;
+	max-width: 100%;
+}
+.archive-limit-bar-level {
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	left: 0;
+	width: calc(var(--archive-level, 100) * 1%);
+	background: color-mix(in srgb, var(--exx-plan) 55%, var(--panel-2));
+}
+.archive-limit-bar-over {
+	position: relative;
+	flex: 0 0 calc(55% * var(--archive-over, 0));
+	min-width: 6px;
+	border-radius: 6px;
+	background: color-mix(in srgb, var(--border-soft) 70%, var(--panel-2));
+	border: 1px dashed var(--border);
+	display: flex;
+	align-items: center;
+}
+.archive-limit-bar-text {
+	position: relative;
+	font-size: 12px;
+	line-height: 1;
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
+	padding: 0 8px;
+	color: var(--fg);
+}
+/* A narrow grey part lets its label spill to the right, where the track is empty. */
+.archive-limit-bar-over .archive-limit-bar-text {
+	color: var(--fg-soft);
+	min-width: max-content;
+}
+.archive-limit-bar-counts {
+	margin: 0;
+	font-size: 13.5px;
+	font-variant-numeric: tabular-nums;
+}
+.archive-limit-bar-ceiling {
+	color: var(--muted);
+	font-size: 12.5px;
+}
+/* A row opens to its whole note on a click of its text; the checkbox stays put. */
+.absorb-run-entry-open {
+	appearance: none;
+	background: none;
+	border: 0;
+	padding: 0;
+	color: inherit;
+	font: inherit;
+	text-align: left;
+	cursor: pointer;
+	display: grid;
+	gap: 3px;
+	width: 100%;
+	min-width: 0;
+}
+.absorb-run-entry-open:hover .absorb-run-entry-line { color: var(--accent); }
+.absorb-run-entry-line { display: block; }
+.absorb-run-entry-full {
+	font-size: 13.5px;
+	line-height: 1.5;
+}
+.absorb-run-entry.kept .absorb-run-entry-main { color: var(--muted); }
+.absorb-run-entry.kept .absorb-run-entry-line { color: var(--muted); }
+.absorb-run-entry-tag,
+.absorb-run-change-tag {
+	margin-left: 8px;
+	font-family: "Bandeins Strange", "Sen", sans-serif;
+	font-size: 10px;
+	font-weight: 700;
+	letter-spacing: 0.12em;
+	text-transform: uppercase;
+	color: var(--warning);
+}
+/* The first read of a room already over its limit: what memorizing now would
+   do, and the two other ways out, before anything runs. */
+.absorb-over-limit-block {
+	border-left: 2px solid var(--warning);
+	padding: 6px 0 6px 14px;
+	display: grid;
+	gap: 8px;
+	text-align: left;
+}
+.absorb-over-limit-block h3 {
+	margin: 0;
+	font-family: "Bandeins Strange", "Sen", sans-serif;
+	font-size: 18px;
+	line-height: 1.15;
+}
+.absorb-over-limit-block p {
+	margin: 0;
+	line-height: 1.5;
+}
+.absorb-over-limit-actions {
+	display: flex;
+	gap: 10px;
+	flex-wrap: wrap;
+}
+@media (max-width: 720px) {
+	.absorb-run-change-diff { grid-template-columns: minmax(0, 1fr); }
+	.archive-limit-bar-track { height: 26px; }
+	.archive-limit-bar-fill { flex-basis: 50%; max-width: 50%; }
+	.archive-limit-bar-over { flex-basis: calc(50% * var(--archive-over, 0)); }
+	.absorb-over-limit-actions .landing-action { flex: 1 1 auto; }
+	.absorb-run-budget-actions .landing-action { flex: 1 1 auto; }
 }
 .absorb-approval-note,
 .absorb-help-note {
@@ -4412,26 +5050,6 @@ strong, b { font-weight: 700; }
 .absorb-discussion-message.assistant pre code {
 	white-space: inherit;
 }
-.absorb-discussion-composer {
-	display: grid;
-	grid-template-columns: minmax(0, 1fr) auto auto;
-	gap: 10px;
-	align-items: end;
-}
-.absorb-discussion-composer textarea {
-	width: 100%;
-	resize: vertical;
-	min-height: 64px;
-	border: 1px solid color-mix(in srgb, var(--border-soft) 48%, transparent);
-	border-radius: 12px;
-	padding: 14px 16px;
-	background: transparent;
-	color: var(--fg);
-	font: inherit;
-	font-size: 15px;
-	line-height: 1.55;
-	box-shadow: none;
-}
 .absorb-discussion-send {
 	width: 44px;
 	height: 44px;
@@ -4447,12 +5065,6 @@ strong, b { font-weight: 700; }
 .absorb-discussion-send:disabled {
 	opacity: 0.35;
 	cursor: not-allowed;
-}
-.absorb-discussion-actions {
-	display: flex;
-	flex-direction: column;
-	gap: 8px;
-	align-items: stretch;
 }
 /* Shown only when the discussion has hit a wall (error or limit): the exit
    that always works, explained, next to the error it answers. */
@@ -4487,7 +5099,7 @@ strong, b { font-weight: 700; }
 .absorb-discussion-counter.full {
 	color: var(--danger);
 }
-/* Generate proposal is the discussion's primary exit; keep it compact but filled. */
+/* Drafting the update is the discussion's primary exit; keep it compact but filled. */
 .absorb-discussion-actions .absorb-discussion-generate {
 	font-size: 12px;
 	padding: 6px 12px;
@@ -4498,11 +5110,6 @@ strong, b { font-weight: 700; }
 	gap: 8px;
 	color: var(--muted);
 	font-style: italic;
-}
-.absorb-discussion-composer textarea:focus {
-	outline: none;
-	border-color: color-mix(in srgb, #7aa7ff 55%, var(--border-soft));
-	box-shadow: 0 0 0 3px color-mix(in srgb, #7aa7ff 16%, transparent);
 }
 .landing-action {
 	align-self: flex-start;
@@ -6596,6 +7203,9 @@ strong, b { font-weight: 700; }
 .mem-comp-seg.durable { background: var(--fg); opacity: 0.4; }
 .mem-comp-seg.recent { background: var(--exx-plan); }
 .mem-comp-seg.chronos { background: var(--muted); }
+/* Open items sit between the notes and the waiting conversations, so they read
+   as a third band of the same bar rather than a second colour for either. */
+.mem-comp-seg.items { background: var(--fg); opacity: 0.75; }
 .mem-card-comp { margin: 8px 0 2px; }
 .mem-comp-bar-mini { height: 7px; border-radius: 4px; }
 .mem-comp-legend { display: flex; flex-wrap: wrap; gap: 18px; margin-top: 9px; color: var(--muted); font-size: 12px; }
@@ -6606,6 +7216,16 @@ strong, b { font-weight: 700; }
 .mem-comp-legend .sw.durable { background: var(--fg); opacity: 0.4; }
 .mem-comp-legend .sw.recent { background: var(--exx-plan); }
 .mem-comp-legend .sw.chronos { background: var(--muted); }
+.mem-comp-legend .sw.items { background: var(--fg); opacity: 0.75; }
+.mem-comp-legend .sw.budget { height: 0; border-top: 1px dashed var(--muted); border-radius: 0; background: transparent; }
+/* How full one room's memory is: the sentence, then the bar it is read from. */
+.mem-page-sub { margin: 0 0 14px; }
+.mem-glance-legend { margin-top: 10px; }
+.mem-full { display: grid; gap: 6px; }
+.mem-full-line { display: flex; gap: 8px; align-items: baseline; font-size: 12.5px; color: var(--fg-soft); }
+.mem-full-line .over { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; }
+.mem-card-facts { color: var(--muted); font-size: 12px; }
+.mem-detail-full { max-width: 520px; margin: 10px 0 16px; }
 .mem-measured {
 	font-family: var(--exx-font-display); font-size: 10px; font-weight: 700; letter-spacing: 0.1em;
 	text-transform: uppercase; color: var(--success);
@@ -6615,9 +7235,9 @@ strong, b { font-weight: 700; }
 /* Memory-map rows are read-only (not filter buttons), so drop the pointer. */
 .bar-row-static { cursor: default; }
 .bar-row-static:hover { background: transparent; }
-/* Memory-map rows: give the name room to wrap (labels can be a bit long). */
-.mem-map-row { grid-template-columns: minmax(0, 1fr) 110px 56px 78px; align-items: center; }
-.mem-map-row .name { white-space: normal; line-height: 1.35; }
+/* Topic rows: one column (the row is its line), with room for the name to wrap. */
+.mem-map-row { grid-template-columns: minmax(0, 1fr); align-items: center; }
+.mem-map-row .name { white-space: normal; line-height: 1.35; font-weight: 600; color: var(--fg-soft); }
 /* The collapsed Recent Context row — warm tint + amber bar (see per-session on the right). */
 /* The pending-sessions accent lives on the bar only — a permanent row tint
    used to read as a stuck selection next to the too-subtle selected style. */
@@ -6653,6 +7273,14 @@ strong, b { font-weight: 700; }
 .mem-prov { font-size: 12px; color: var(--fg-soft); background: color-mix(in srgb, var(--exx-plan) 8%, transparent); border-radius: 6px; padding: 6px 10px; }
 .mem-prov-link { background: none; border: none; padding: 0; font: inherit; color: var(--fg); cursor: pointer; text-decoration: underline; }
 .mem-prov-link:hover { color: var(--exx-plan); }
+/* The memorized-conversations fold under the waiting list. */
+.mem-memorized { margin-top: 14px; }
+.mem-memorized > summary { cursor: pointer; list-style: none; font-size: 13px; font-weight: 600; color: var(--fg-soft); padding: 6px 0; }
+.mem-memorized > summary::-webkit-details-marker { display: none; }
+.mem-memorized > summary::before { content: "▸ "; color: var(--muted); }
+.mem-memorized[open] > summary::before { content: "▾ "; }
+.mem-memorized > summary:hover { color: var(--fg); }
+.mem-memorized-gone { color: var(--muted); }
 /* Reading-panel header actions (full screen + back). */
 .mem-panel-actions { display: flex; gap: 8px; align-items: center; }
 /* Conversation transcript: the stored thread behind a receipt, read-only. */
@@ -6693,6 +7321,8 @@ strong, b { font-weight: 700; }
 .mem-hist-details { margin-left: auto; flex: 0 0 auto; }
 .mem-hist-more { background: none; border: 1px solid var(--border-soft); border-radius: 6px; padding: 3px 10px; margin-top: 8px; font: inherit; font-size: 11.5px; color: var(--muted); cursor: pointer; }
 .mem-hist-more:hover { color: var(--fg); border-color: var(--fg); }
+.mem-hist-date { flex: 0 0 96px; }
+.mem-hist-undone { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
 /* Time travel: the memory-growth curve itself is the control (click to place the
    viewing line); the banner announces past mode above everything it changes. */
 .mem-tt-banner { font-size: 12.5px; color: var(--fg-soft); background: color-mix(in srgb, var(--exx-plan) 8%, transparent); border-left: 3px solid var(--exx-plan); border-radius: 6px; padding: 7px 11px; margin-bottom: 8px; }
@@ -6727,6 +7357,16 @@ strong, b { font-weight: 700; }
 .mem-diff-line.del { background: color-mix(in srgb, var(--error) 9%, transparent); }
 .mem-diff-line.del .mem-diff-text { text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--error) 55%, transparent); }
 .mem-diff-line.del .mem-diff-mark { color: var(--error); }
+/* the note view: one row per note that changed, its label after the text */
+.mem-diff-totals { color: var(--muted); font-size: 12px; padding: 0 2px; }
+.mem-diff-sec-sum { color: var(--dim); white-space: nowrap; }
+.mem-diff-note-row { align-items: baseline; }
+.mem-diff-note-row .mem-diff-text { flex: 1 1 auto; }
+.mem-diff-line.upd { color: var(--fg); }
+.mem-diff-label { flex: 0 0 auto; color: var(--dim); font-size: 10.5px; white-space: nowrap; user-select: none; }
+.mem-diff-word { border-radius: 3px; padding: 0 1px; }
+.mem-diff-word.add { background: color-mix(in srgb, var(--success) 28%, transparent); }
+.mem-diff-word.del { background: color-mix(in srgb, var(--error) 24%, transparent); }
 .mem-growth { margin-top: 12px; color: var(--dim); }
 .mem-growth .sparkline { color: var(--exx-plan); margin-bottom: 4px; }
 /* Catch-up digest banner. */
@@ -6855,19 +7495,29 @@ strong, b { font-weight: 700; }
 .mem-vitals-strip .mem-g { flex: 1 1 0; min-width: 0; }
 .mem-vitals-strip .mem-g + .mem-g { border-left: 1px solid var(--border-soft); padding-left: 24px; }
 .mem-detail-section { margin-top: 34px; }
-/* Click-to-read memory map */
+/* Click-to-read topic rows: a quiet hover, a tinted selection that stays on hover. */
 .mem-map-row { cursor: pointer; }
+.mem-map-row.bar-row-static:hover { background: var(--panel-2); }
 .mem-map-row:hover .name { color: var(--fg); }
-.mem-map-row:focus-visible { outline: 1px solid var(--fg); outline-offset: 2px; }
-.mem-map-row.mem-map-sel { background: color-mix(in srgb, var(--exx-plan) 8%, transparent); border-radius: 6px; }
+.mem-map-row:focus-visible { outline: 1px solid var(--fg); outline-offset: -2px; }
+.mem-map-row.mem-map-sel, .mem-map-row.mem-map-sel.bar-row-static:hover { background: color-mix(in srgb, var(--exx-plan) 8%, transparent); }
 .mem-map-row.mem-map-sel .name { color: var(--fg); font-weight: 700; }
 /* Card title row with an inline "as of" chip (chart-head defaults to column). */
 .chart-head.mem-head-row { flex-direction: row; align-items: center; gap: 10px; }
 /* The chart is focusable (arrow keys step through time); keep the ring subtle. */
 .mem-chart svg:focus { outline: none; }
 .mem-chart svg:focus-visible { outline: 1px solid var(--exx-plan); outline-offset: 3px; }
-.mem-area-content { max-height: 420px; overflow: auto; font-size: 13px; line-height: 1.55; color: var(--fg-soft); }
+.mem-area-content { font-size: 13px; line-height: 1.55; color: var(--fg-soft); }
 .mem-area-content :first-child { margin-top: 0; }
+.mem-area-content :last-child { margin-bottom: 0; }
+/* The reading panel keeps pace with the topics list: it sticks to the top of
+   the viewport and its text scrolls inside it, so a long list of topics and a
+   short scroll box never read as two unrelated heights. The full-screen
+   overlay renders the same body without this class and scrolls itself. */
+.mem-reading-block { position: sticky; top: 16px; align-self: flex-start; max-height: calc(100vh - 32px); }
+.mem-reading-block .mem-area-content, .mem-reading-block .mem-learned { flex: 1 1 auto; min-height: 0; overflow: auto; padding-right: 4px; }
+.mem-reading-block .mem-learned > * { flex-shrink: 0; }
+.mem-reading-block .mem-tr { flex: 1 1 auto; max-height: none; }
 .mem-review-btn {
 	appearance: none; cursor: pointer; font: inherit;
 	font-family: var(--exx-font-display); font-weight: 700; font-size: 12px; letter-spacing: 0.04em;
@@ -7504,14 +8154,7 @@ strong, b { font-weight: 700; }
 	.absorb-workspace-main {
 		padding: 18px 18px 32px;
 	}
-	.absorb-discussion-composer {
-		grid-template-columns: 1fr;
-	}
-	.absorb-discussion-actions {
-		flex-direction: row;
-		justify-content: flex-end;
-	}
-	.absorb-discussion-message {
+			.absorb-discussion-message {
 		max-width: 92%;
 	}
 	.landing-shell.with-product-sidebar {
@@ -7578,15 +8221,6 @@ strong, b { font-weight: 700; }
 }
 
 @media (max-width: 760px) {
-	.maintain-choice-grid {
-		grid-template-columns: 1fr;
-	}
-	.maintain-choice-card {
-		min-height: 260px;
-	}
-	.structural-review-map-grid {
-		grid-template-columns: 1fr;
-	}
 	.absorb-workspace-header h1 {
 		font-size: clamp(26px, 8vw, 36px);
 	}
@@ -9151,8 +9785,178 @@ label.rs-row {
 	font-size: 12px;
 	font-variant-numeric: tabular-nums;
 }
-.memory-budget-usage.over {
-	color: var(--warning);
+
+/* Room settings → Memory: the entries and the archive, under the budget meter. */
+.room-memory-entries {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	margin-top: 18px;
+	border-top: 1px solid var(--border-soft);
+	padding-top: 16px;
+}
+.room-memory-entries .memory-archive-head {
+	margin-top: 18px;
+	border-top: 1px solid var(--border-soft);
+	padding-top: 16px;
+}
+.memory-topic {
+	display: grid;
+	gap: 4px;
+}
+.memory-topic-head {
+	display: flex;
+	align-items: baseline;
+	gap: 8px;
+	padding-top: 10px;
+	width: 100%;
+	background: none;
+	border: none;
+	text-align: left;
+	cursor: pointer;
+	color: inherit;
+	font: inherit;
+}
+.memory-topic-caret {
+	color: var(--muted);
+	font-size: 11px;
+}
+.memory-topic-title {
+	font-family: "Bandeins Strange", "Sen", sans-serif;
+	font-size: 14px;
+	font-weight: 700;
+}
+.memory-notes-search {
+	margin: 10px 0 4px;
+	width: 100%;
+}
+.memory-note-group-head {
+	margin: 16px 0 0;
+	font-size: 11px;
+	letter-spacing: 0.12em;
+	text-transform: uppercase;
+	color: var(--muted);
+}
+.room-memory-history {
+	margin-top: 18px;
+	border-top: 1px solid var(--border-soft);
+	padding-top: 16px;
+}
+.room-memory-history .rs-pane-head {
+	margin-bottom: 14px;
+}
+.memory-history-status {
+	margin: 10px 0 0;
+	color: var(--fg-soft);
+	font-size: 13px;
+}
+.memory-history-rows {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+	display: grid;
+	gap: 2px;
+}
+.memory-history-row {
+	display: flex;
+	align-items: baseline;
+	gap: 10px;
+	padding: 7px 0;
+	border-top: 1px solid color-mix(in srgb, var(--border-soft) 38%, transparent);
+	font-size: 12.5px;
+}
+.memory-history-when {
+	flex: 0 0 104px;
+	color: var(--muted);
+	font-variant-numeric: tabular-nums;
+}
+.memory-history-what { color: var(--fg-soft); min-width: 0; }
+.memory-history-undone {
+	font-size: 10px;
+	letter-spacing: 0.12em;
+	text-transform: uppercase;
+	color: var(--muted);
+}
+.memory-history-row .rs-quiet { margin-left: auto; }
+/* "What changed" sits at the row's end beside Undo, and its fold wraps to a
+   full-width line under the row on both surfaces. */
+.memory-history-row, .mem-hist-row { flex-wrap: wrap; }
+.memory-history-row .rs-quiet ~ .rs-quiet { margin-left: 0; }
+.mem-hist-row .memory-history-toggle { margin-left: auto; flex: 0 0 auto; }
+.memory-history-change { flex: 1 0 100%; min-width: 0; }
+.memory-history-change .mem-diff-note { color: var(--muted); font-size: 12.5px; }
+.memory-topic-count {
+	color: var(--muted);
+	font-size: 12px;
+	font-variant-numeric: tabular-nums;
+}
+.memory-entries {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+	display: grid;
+	gap: 2px;
+}
+.memory-entry {
+	border-top: 1px solid color-mix(in srgb, var(--border-soft) 38%, transparent);
+	padding: 10px 0;
+	display: grid;
+	gap: 5px;
+}
+.memory-entry-meta {
+	display: flex;
+	align-items: baseline;
+	gap: 10px;
+	flex-wrap: wrap;
+}
+.memory-entry-saved,
+.memory-entry-origin {
+	color: var(--muted);
+	font-size: 12px;
+	font-variant-numeric: tabular-nums;
+}
+.memory-entry-pin,
+.memory-entry-done {
+	font-family: "Bandeins Strange", "Sen", sans-serif;
+	font-size: 10px;
+	font-weight: 700;
+	letter-spacing: 0.12em;
+	text-transform: uppercase;
+	color: var(--exx-plan, var(--fg));
+}
+.memory-entry-actions,
+.memory-entry-move,
+.memory-entry-confirm {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	flex-wrap: wrap;
+}
+.memory-entry-confirm span {
+	font-size: 12.5px;
+	color: var(--muted);
+}
+.memory-entry-edit,
+.memory-entry-add {
+	display: grid;
+	gap: 8px;
+}
+.memory-entry-edit textarea,
+.memory-entry-add textarea,
+.memory-entry-add select,
+.memory-entry-move select {
+	font: inherit;
+	font-size: 13px;
+	color: var(--fg);
+	background: var(--panel);
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	padding: 8px 10px;
+	width: 100%;
+}
+.memory-entry-move select {
+	width: auto;
+	min-width: 160px;
 }
 
 /* Room settings: workspace empty state — names what stays locked without a folder. */
@@ -14620,3 +15424,21 @@ html.desktop-app-mac .settings-overlay .landing {
 	font-weight: 600;
 	letter-spacing: 0.08em;
 }
+
+/* Review: the depth picker borrows the chooser's rows; the picked row shows a check. */
+.review-depth-section .maintain-actions { margin-top: 12px; }
+.review-depth-option .maintain-action-go { min-width: 28px; text-align: right; }
+.review-depth-option.selected { background: color-mix(in srgb, var(--fg) 5%, transparent); }
+.review-depth-option.selected .maintain-action-title { text-decoration: underline; text-underline-offset: 4px; }
+/* Review card: the changes of one topic open together; a note leaving carries the reason it left. */
+.review-change-note { margin: 6px 0 0; font-size: 13.5px; color: var(--fg-soft); }
+.review-topic-group > summary { cursor: pointer; }
+.review-topic-group .absorb-run-conversation-body { display: grid; gap: 12px; padding-top: 10px; }
+.review-change + .review-change { border-top: 1px solid var(--border); padding-top: 12px; }
+.review-change-reason { font-size: 12.5px; color: var(--fg-soft); text-transform: lowercase; }
+.review-change-leaving { opacity: 0.8; }
+.review-run-topics { margin-top: 12px; }
+
+/* Memorize and Review while they work: the card's headline carries the progress and a small spinner. */
+.absorb-run-card-working { display: flex; align-items: center; gap: 10px; }
+.absorb-run-card-working .spinner { width: 18px; height: 18px; flex: none; }

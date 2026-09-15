@@ -1,3 +1,9 @@
+// NOTE (memory v2): the proposal half of this smoke covers a construction no
+// route reaches any more. The whole-document Memorize is retired from the
+// product — propose starts a run and approve writes it (absorb-run.ts) — and
+// stays here as the baseline the fold is measured against, so the size and
+// refusal claims keep something to be compared with.
+
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -88,11 +94,15 @@ try {
 	});
 	assert(fs.existsSync(l1bPath), "scaffold should create L1b/current.md");
 
-	setRecentContextEntries(4);
+	setRecentContextEntries(0);
 	const unavailable = getAbsorbAvailability(agentId);
-	assert(!unavailable.available, "4 RC entries should keep absorb unavailable");
-	assert(unavailable.reason === "insufficient_recent_context", "4 RC entries should fail the minimum gate");
-	assert(unavailable.recentContextEntryCount === 4, "availability should report 4 RC entries");
+	assert(!unavailable.available, "0 RC entries should keep absorb unavailable");
+	assert(unavailable.reason === "insufficient_recent_context", "0 RC entries should fail the minimum gate");
+	assert(unavailable.recentContextEntryCount === 0, "availability should report 0 RC entries");
+
+	// One conversation is enough: the v2 run folds them one at a time.
+	setRecentContextEntries(1);
+	assert(getAbsorbAvailability(agentId).available, "1 RC entry should make absorb available");
 
 	setRecentContextEntries(5);
 	const available = getAbsorbAvailability(agentId);
