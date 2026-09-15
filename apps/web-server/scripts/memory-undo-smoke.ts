@@ -59,6 +59,12 @@ const ASSESSMENT = [
 
 /** The archive row this room already had: an undo must leave it exactly where it is. */
 const OLD_ARCHIVE_ID = "m-0009";
+/**
+ * An older text of the note this run supersedes, archived by an earlier save
+ * under the id the run's own row may claim again. An undo takes back the row
+ * the LATEST save added — the newest row with that id — and never this one.
+ */
+const OLD_VERSION_ID = "m-0002-v1";
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -351,10 +357,17 @@ try {
 		why: "user",
 		topic: "Commercial terms",
 		section: "Deep Memory",
+	}, {
+		entry: { id: OLD_VERSION_ID, kind: "fact", saved: "2026-08-01", pinned: false, text: "- The delivery window is eight weeks from the day the order is signed." },
+		why: "superseded",
+		topic: "Commercial terms",
+		section: "Deep Memory",
 	}], new Date("2026-09-01T09:00:00.000Z"));
 
 	const beforeSave = fs.readFileSync(roomA.l1bPath, "utf-8");
 	const archiveBeforeSave = fs.readFileSync(path.join(root, roomA.agentId, "L1b", "archive", "entries.md"), "utf-8");
+	const archiveIdsBeforeSave = archiveIds(roomA.agentId);
+	const rowsWithId = (ids: string[], id: string) => ids.filter((candidate) => candidate === id).length;
 	const recentContextBefore = (beforeSave.match(/^### RC-\d+/gm) ?? []).length;
 	assert(recentContextBefore === 2, `the fixture carries two conversations in Recent Context, got ${recentContextBefore}`);
 
@@ -366,6 +379,9 @@ try {
 	assert(!/^### RC-0001 \|/m.test(afterSave), "the folded conversation leaves Recent Context when the save lands");
 	assert(save.archived.length === 2, `this run archives the superseded text and the finished item, and its record names ${save.archived.length}`);
 	assert(archiveIds(roomA.agentId).includes(OLD_ARCHIVE_ID), "the older archive row is still in the archive after the save");
+	const supersededRowId = save.archived.find((id) => id.startsWith("m-0002-v"));
+	assert(supersededRowId, `the run's superseded row is a version of m-0002, got ${JSON.stringify(save.archived)}`);
+	assert(rowsWithId(archiveIds(roomA.agentId), OLD_VERSION_ID) >= 1 && archiveIds(roomA.agentId).indexOf(OLD_VERSION_ID) < archiveIds(roomA.agentId).lastIndexOf(supersededRowId!), "the older version sits above the save's own row in the archive");
 
 	// --- Refusals that must not write anything --------------------------------
 	expectRefusal(() => undoMemorySave(roomA.agentId, "absorb_20260101_000000Z_nosuch", UNDONE_AT), "memory_undo_unknown", /not in this room's memory history/, "an id the room has never recorded");
@@ -405,10 +421,13 @@ try {
 	assert(undone.limitLoweredTo === MEMORY_BUDGET_DEFAULT_TOKENS && readPersistentRoomMaintenanceSettings(roomA.agentId).memoryBudgetTokens === MEMORY_BUDGET_DEFAULT_TOKENS, `undoing a save that raised the limit puts the limit back, got ${JSON.stringify({ limitLoweredTo: undone.limitLoweredTo, setting: readPersistentRoomMaintenanceSettings(roomA.agentId).memoryBudgetTokens })}`);
 	assert(undone.memoryBudget.budgetTokens === MEMORY_BUDGET_DEFAULT_TOKENS, `the undo's budget block is measured after the limit went back down, got ${JSON.stringify(undone.memoryBudget)}`);
 
-	// Exactly the rows that save appended, and not one more.
+	// Exactly the rows that save appended, and not one more: a row whose id an
+	// earlier save had already used loses the save's copy (the newest) and
+	// keeps the earlier one.
 	const archiveAfterUndo = archiveIds(roomA.agentId);
-	for (const id of save.archived) assert(!archiveAfterUndo.includes(id), `the undo takes the row this save appended (${id}) back out of the archive`);
+	for (const id of save.archived) assert(rowsWithId(archiveAfterUndo, id) === rowsWithId(archiveIdsBeforeSave, id), `the undo takes the row this save appended (${id}) back out of the archive, and only that one`);
 	assert(archiveAfterUndo.includes(OLD_ARCHIVE_ID), "the undo leaves archive rows it did not write alone");
+	assert(rowsWithId(archiveAfterUndo, OLD_VERSION_ID) === 1 && readArchive(roomA.agentId).find((row) => row.id === OLD_VERSION_ID)?.text.includes("eight weeks"), "the older version of the superseded note is the one still there, its text intact");
 	assert(fs.readFileSync(path.join(root, roomA.agentId, "L1b", "archive", "entries.md"), "utf-8") === archiveBeforeSave, "the archive file is what it was before the save");
 
 	// The record, and the history the Memory tab renders.

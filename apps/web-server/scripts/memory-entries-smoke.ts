@@ -19,29 +19,35 @@ import { fileURLToPath } from "node:url";
 const {
 	applyUserEdit,
 	appendToArchive,
+	archiveIdsTaken,
 	archiveIndex,
 	demoteToBudget,
+	entryBaseId,
 	entryMetadataLine,
 	entryTokens,
 	findEntry,
 	findEntryLocation,
+	findEntryVersion,
+	findStructuralLine,
 	formatEntryId,
+	highestEntryNumber,
 	listAreas,
 	memoryAreaId,
 	memoryDocumentEol,
 	memoryTopicAddress,
 	MEMORY_SECTIONS,
 	migrateMemoryDocument,
+	nextVersionedEntryId,
 	parseArchive,
 	parseMemoryDocument,
 	rankEntriesForDemotion,
 	removeFromArchive,
 	renderArchive,
 	renderMemoryDocument,
+	restoreEntries,
 	restoreEntry,
 	reviewTargetTokens,
-	savedStampDatesIn,
-} = await import("../src/memory-entries.js");
+	savedStampDatesIn, renderMemoryContext, stripRecentContextMetadata } = await import("../src/memory-entries.js");
 const { estimateTokens } = await import("../src/token-estimate.js");
 
 type Doc = ReturnType<typeof parseMemoryDocument>;
@@ -117,6 +123,15 @@ The room is used for weekly planning and keeps its notes short. (saved 2026-08-1
 	assert(doc.preamble === "<!-- exxeta:l1b schema_version=1 -->\n\n", "the preamble is everything before the first top-level section, verbatim");
 	assert(doc.chronos.startsWith("## Chronos\n\n\n\n\n- Current scaffold"), "Chronos is carried verbatim, blank runs included");
 	assert(doc.recentContext.startsWith("## Recent Context") && doc.recentContext.includes("rc_metadata") && doc.recentContext.endsWith("Continued.\n"), "Recent Context is carried verbatim and untouched");
+	{
+		const boot = stripRecentContextMetadata(renderMemoryContext(PROSE_ROOM));
+		assert(!boot.includes("rc_metadata"), "the boot read carries no checkpoint provenance comment");
+		assert(boot.includes("### RC-0001") && boot.includes("Continued."), "the boot read keeps every remembered conversation's heading and body");
+		assert(boot.includes("### RC-0001 | OPEN | 2026-07-12 | A first session\n\n**Session arc:** Opened as an intro."), "the blank line the comment sat between is folded, so the heading stands one blank line above the body");
+		assert(renderMemoryContext(PROSE_ROOM).includes("rc_metadata"), "the context render itself keeps the comment, because every save's fingerprint measures it");
+		const crlf = stripRecentContextMetadata(PROSE_ROOM.replace(/\n/g, "\r\n"));
+		assert(!crlf.includes("rc_metadata") && crlf.includes("### RC-0001 | OPEN | 2026-07-12 | A first session\r\n\r\n**Session arc:** Opened as an intro."), "a CRLF file strips the same way and keeps its line endings");
+	}
 	assert(doc.otherSections.length === 0 && doc.nextEntryNumber === 1, "an unmigrated file has no other sections and no counter yet");
 
 	const deep = doc.topics.filter((t) => t.section === "Deep Memory");
@@ -346,12 +361,18 @@ Durable understanding consolidated across sessions. Newer saved-on stamps win on
 			if (!fs.existsSync(file)) continue;
 			// Read only. Nothing under HOME is ever written by this smoke.
 			const raw = fs.readFileSync(file, "utf8");
-			const { doc: migrated, assigned } = migrateMemoryDocument(parseMemoryDocument(raw), { fallbackSaved: FALLBACK_SAVED });
+			// A room the app has already saved on 0.12 carries its ids: migration
+			// assigns one to each entry that has none, less the scaffold's template
+			// paragraph it drops, so the count is bounded by the unmarked entries.
+			const parsed = parseMemoryDocument(raw);
+			const unmarked = parsed.topics.reduce((sum, topic) => sum + topic.entries.filter((entry) => !entry.id).length, 0);
+			const { doc: migrated, assigned } = migrateMemoryDocument(parsed, { fallbackSaved: FALLBACK_SAVED });
 			const storage = renderMemoryDocument(migrated, "storage");
 			const again = renderMemoryDocument(parseMemoryDocument(storage), "storage");
 			assert(again === storage, `${room}: the migrated file round-trips byte for byte (${firstDifference(storage, again)})`);
 			assert(migrateMemoryDocument(parseMemoryDocument(storage), { fallbackSaved: FALLBACK_SAVED }).assigned === 0, `${room}: migration is idempotent`);
-			assert(assigned === entryCount(migrated), `${room}: every entry came out of migration with an id`);
+			assert(assigned <= unmarked, `${room}: migration assigned no more ids than there were entries without one (${assigned} of ${unmarked})`);
+			assert(migrated.topics.every((topic) => topic.entries.every((entry) => entry.id)), `${room}: every entry came out of migration with an id`);
 			assert(migrated.recentContext === parseMemoryDocument(raw).recentContext, `${room}: Recent Context is byte-identical after migration`);
 			read++;
 		}
@@ -657,6 +678,125 @@ const RANKING_DOC = `<!-- exxeta:l1b schema_version=1 -->
 	assert(shape.entries[0].text === "- A bullet with a wrapped line\n  that continues here.\n  - and a sub-bullet.", `the entry holds its lines exactly (${JSON.stringify(shape.entries[0].text)})`);
 	const looseStorage = renderMemoryDocument(loose, "storage");
 	assert(renderMemoryDocument(parseMemoryDocument(looseStorage), "storage") === looseStorage, "a multi-line entry round-trips byte for byte");
+}
+
+// --- 9. An archive id claimed twice: the newest row is the one that goes ------
+
+// A run that minted its versioned ids against its own rows only wrote a second
+// `m-0031-v1` under the first. Undo takes back the rows the latest save added,
+// so a removal by id must take the LAST row appended, never the first — and a
+// writer that unions the archive's ids with its own mints `-v2` instead.
+{
+	const older = { id: "m-0031-v1", kind: "fact" as const, saved: "2026-01-01", pinned: false, text: "- The first text this entry had." };
+	const newer = { ...older, text: "- The text the latest save replaced." };
+	const meta = { why: "superseded" as const, topic: "Ranking", section: "Deep Memory" as const };
+	const first = appendToArchive("", [older], [{ ...meta, archived: "2026-08-01" }]);
+	const twice = appendToArchive(first, [newer], [{ ...meta, archived: "2026-09-01" }]);
+	assert(archiveIdsTaken(twice).join(" ") === "m-0031-v1 m-0031-v1", `every id the archive holds is reported, duplicates included (${archiveIdsTaken(twice).join(" ")})`);
+	assert(nextVersionedEntryId("m-0031", archiveIdsTaken(twice)) === "m-0031-v2", "a writer that consults the archive mints the next version, not the one already taken");
+	assert(nextVersionedEntryId("m-0031", [...archiveIdsTaken(twice), "m-0031-v2"]) === "m-0031-v3", "and its own run's rows count on top of the archive's");
+
+	const removed = removeFromArchive(twice, "m-0031-v1");
+	assert(removed.entry?.text === newer.text && removed.entry.archived === "2026-09-01", `removing a duplicated id takes the newest row, the last one appended (${JSON.stringify(removed.entry)})`);
+	const left = parseArchive(removed.text);
+	assert(left.length === 1 && left[0].text === older.text && left[0].archived === "2026-08-01", "the older row stays exactly where it was");
+	assert(removed.text === first, "and the archive is byte for byte the file from before the second row landed");
+	assert(removeFromArchive(removed.text, "m-0031-v1").entry?.text === older.text, "a second removal takes the row that is left");
+	console.log("  archive: a duplicated id is removed newest first");
+}
+
+// --- 10. A file without its counter recovers it from the ids it carries -------
+
+const COUNTERLESS_DOC = `<!-- exxeta:l1b schema_version=1 -->
+
+## Deep Memory
+
+### Ranking
+
+<!-- e: id=m-0001 kind=fact saved=2026-01-01 -->
+- The first note.
+
+<!-- e: id=m-0003 kind=fact saved=2026-01-01 -->
+- The third note; the second is in the archive.
+
+## Active Items
+
+<!-- e: id=m-0002 kind=item saved=2026-01-01 status=open -->
+- An open item, numbered before the third note.
+`;
+
+{
+	const doc = parseMemoryDocument(COUNTERLESS_DOC);
+	assert(doc.nextEntryNumber === 4, `a file with ids and no counter recovers one past its highest id, got ${doc.nextEntryNumber}`);
+	const added = applyUserEdit(doc, { op: "add", topic: "Ranking", kind: "fact", text: "- Added after the counter went missing.", saved: "2026-09-15" }).doc;
+	assert(findEntry(added, "m-0004")?.text === "- Added after the counter went missing.", "the next add mints m-0004, not a second m-0001");
+	assert(renderMemoryDocument(added, "storage").includes("<!-- entries: next=5 -->"), "and the render writes the counter back into the file");
+	assert(parseMemoryDocument(PROSE_ROOM).nextEntryNumber === 1, "a file with no ids at all still starts at 1");
+	assert(parseMemoryDocument(RANKING_DOC).nextEntryNumber === 9, "a file that has its counter keeps it, whatever its ids say");
+
+	assert(entryBaseId("m-0031-v2") === "m-0031" && entryBaseId("m-0031") === "m-0031" && entryBaseId("") === "", "an id's base is the id without its version suffix");
+	assert(highestEntryNumber(["m-0003", "m-0007-v1", "m-0002-v4", "RC-0009", ""]) === 7, "the highest number counts versions under their base and ignores what is not an entry id");
+	assert(highestEntryNumber([]) === 0, "no ids, no number");
+	console.log("  counter: recovered from the ids when the line is missing");
+}
+
+// --- 11. A note's text is words, never structure ----------------------------
+
+{
+	assert(findStructuralLine("## Heading") === "## Heading", "a heading line is structural");
+	assert(findStructuralLine("- fine\n### Topic\n- also fine") === "### Topic", "a heading inside the text is found, and reported as the line it is");
+	assert(findStructuralLine("- fine\r\n## Topic") === "## Topic", "under CRLF too");
+	assert(findStructuralLine("   ## Indented") === "   ## Indented", "leading whitespace does not hide a heading");
+	assert(findStructuralLine("# ") === "# ", "a lone hash and a space is a heading with no title");
+	assert(findStructuralLine("#") === "#", "a lone hash at the end of its line is too");
+	assert(findStructuralLine("<!-- e: id=m-0001 kind=fact saved=2026-01-01 -->\n- A pasted note.") === "<!-- e: id=m-0001 kind=fact saved=2026-01-01 -->", "a pasted metadata comment is structural: it would claim another note's id");
+	assert(findStructuralLine("- fine\n  <!-- entries: next=1 -->") === "  <!-- entries: next=1 -->", "so is a counter line, indented or not");
+	assert(findStructuralLine("- The launch is tagged #q4 and #launch.") === null, "a hashtag inside a line is a word");
+	assert(findStructuralLine("#q4 opens the line and is still a word.") === null, "a hashtag at the start of a line is a word: no space follows the hash");
+	assert(findStructuralLine("- ## not a heading: the bullet comes first") === null, "hashes after a bullet are words, as the file's own parser reads them");
+	assert(findStructuralLine("- A bullet\n  that wraps\n  - and nests.") === null, "plain notes, wrapped and nested, have no structural line");
+	assert(findStructuralLine("") === null, "nothing has none");
+
+	const base = parseMemoryDocument(RANKING_DOC);
+	for (const text of ["## Heading", "- ok\n### Topic", "<!-- e: id=m-0001 kind=fact saved=2026-01-01 -->", "  # indented"]) {
+		let refused = false;
+		try { applyUserEdit(base, { op: "add", topic: "Ranking", kind: "fact", text, saved: "2026-09-15" }); } catch { refused = true; }
+		assert(refused, `an add with a structural line is refused at the model too (${JSON.stringify(text)})`);
+		refused = false;
+		try { applyUserEdit(base, { op: "edit", id: "m-0001", text }); } catch { refused = true; }
+		assert(refused, `and so is an edit (${JSON.stringify(text)})`);
+	}
+	assert(findEntry(applyUserEdit(base, { op: "add", topic: "Ranking", kind: "fact", text: "- Tagged #q4.", saved: "2026-09-15" }).doc, "m-0009")?.text === "- Tagged #q4.", "a hashtag is still added");
+	assert(findEntry(applyUserEdit(base, { op: "edit", id: "m-0001", text: "#q4 leads the line." }).doc, "m-0001")?.text === "#q4 leads the line.", "and still edited in");
+	console.log("  text: headings and comments are refused, hashtags are words");
+}
+
+// --- 12. A restore puts a note in the core once, never beside itself ---------
+
+{
+	const doc = parseMemoryDocument(RANKING_DOC);
+	const row = (id: string) => ({ id, kind: "fact" as const, saved: "2026-01-01", pinned: false, text: "- A copy that never left.", archived: "2026-09-01", why: "user" as const, topic: "Ranking", section: "Deep Memory" as const });
+	const refuses = (fn: () => unknown, label: string) => {
+		try { fn(); } catch { return; }
+		throw new Error(`${label}: expected a refusal`);
+	};
+	assert(findEntryVersion(doc, "m-0001")?.entry.id === "m-0001", "the note itself is a version of its id");
+	assert(findEntryVersion(doc, "m-0001-v1")?.entry.id === "m-0001", "an older text's id names the note in the core by its base");
+	assert(findEntryVersion(doc, "m-9999") === undefined && findEntryVersion(doc, "") === undefined, "an id no note shares, or no id, names nothing");
+	refuses(() => restoreEntry(doc, row("m-0001")), "restoring a row whose id is in the core");
+	refuses(() => restoreEntry(doc, row("m-0001-v1")), "restoring an older text while the note is in the core");
+	refuses(() => restoreEntries(doc, [row("m-0100"), row("m-0001")]), "a batch with one row already in the core");
+	refuses(() => restoreEntries(doc, [row("m-0100"), row("m-0100-v1")]), "a batch that would put two versions of one note in");
+	assert(!findEntry(doc, "m-0100"), "a refused batch leaves the source untouched");
+
+	// The other way round: an older text that was restored while the note was
+	// out of the core is the note's one place now, and the newer text waits.
+	const withOlder = restoreEntry(applyUserEdit(doc, { op: "delete", id: "m-0001" }).doc, row("m-0001-v1"));
+	assert(findEntry(withOlder, "m-0001-v1") && !findEntry(withOlder, "m-0001"), "an older text restores fine when the note is out of the core");
+	refuses(() => restoreEntry(withOlder, row("m-0001")), "restoring the newer text beside the older one");
+	assert(findEntry(restoreEntry(applyUserEdit(withOlder, { op: "delete", id: "m-0001-v1" }).doc, row("m-0001")), "m-0001"), "and it restores once the older one has left");
+	assert(restoreEntry(doc, row("m-0100-v3")).nextEntryNumber === 101, "a restored version lifts the counter past its base");
+	console.log("  restore: one note, one place");
 }
 
 console.log("memory-entries smoke passed");

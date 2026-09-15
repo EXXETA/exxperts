@@ -110,9 +110,9 @@ Try this:
 1. Chat normally: ask it to help with something real.
 2. Tell it something worth keeping: *"Remember that I prefer concise summaries."*
 3. Paste a screenshot straight into the message box with Cmd+V (Ctrl+V on Windows): it stages as an attachment, exactly as if you had added it through Files.
-4. When you finish the session, press **Remember** next to the message box. The room distills the conversation into its durable memory, and anything you explicitly asked it to remember is protected through every later compression.
+4. When you finish the session, press **Remember** next to the message box. The room keeps a short summary of the conversation, and anything you explicitly asked it to remember becomes a pinned note when the conversation is memorized.
 
-Nothing enters memory silently. Remember shows you the proposal before it saves, and a room can be set to save clean proposals without that preview; anything questionable always comes back to you. Later, as remembered sessions accumulate, the room offers **Memorize** (consolidating recent context into stable memory) and **Review** (tidying stable memory), both approval-gated the same way. Each room also has a memory budget for its stable memory: the room card, room settings and the Memory page show the same number, and the room only crosses it through a proposal you approve. Remember warns when one more save would fill the room's recent sessions; Memorize then clears them. The full story: [Memory](memory.md).
+Nothing enters memory silently. Remember shows you the proposal before it saves, and a room can be set to save clean proposals without that preview; anything questionable always comes back to you. Later, as remembered conversations accumulate, the room offers **Memorize** (turning them into lasting notes, grouped by topic) and **Review** (tidying the notes it has), both approval-gated the same way, and both undoable. Each room also has a memory budget for its notes: Room settings and the Memory page show how full the memory is, and notes that would not fit move to an archive the room can still read, only when you save. Remember warns when one more save would fill the room's waiting list; Memorize then clears it. The full story: [Memory](memory.md).
 
 The app's Settings open with Cmd+, (Ctrl+, on Windows), and a room's settings with Cmd+Shift+, or the gear in the room.
 
@@ -135,7 +135,7 @@ If that fails with `Operation not permitted`, grant your terminal access in Syst
 | `~/.exxperts/app/` | Product state: rooms (memory, events, threads), schedules, usage, artifacts, feature config. |
 | `~/.exxperts/agent/` | Runtime state: provider credentials, model config, CLI sessions. |
 
-Each room is a self-contained folder under `~/.exxperts/app/personalized-agents/<room-id>/`: its constitution, durable memory, full event history with content fingerprints, and saved threads, all in plain files you can read.
+Each room is a self-contained folder under `~/.exxperts/app/personalized-agents/<room-id>/`: its constitution, durable memory and archive, full event history with content fingerprints, and saved threads, all in plain files you can read.
 
 ## Back up and move your rooms
 

@@ -1798,6 +1798,7 @@ function ReviewWorkflowShell({ state, loadingMessage, waitingMessage, keepIds, o
 							over={savedOver}
 							archivedEntries={state.approvalResult.archivedEntries}
 							archivedForBudget={state.approvalResult.archivedForBudget}
+							rebasedOnto={state.approvalResult.rebasedOnto}
 							limitRaised={state.approvalResult.budgetRaisedTo !== undefined}
 							warnings={[
 								...(state.fastPathApplied ? ["This room saves memory updates on its own, so these changes were saved without a second look."] : []),

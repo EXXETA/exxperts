@@ -326,12 +326,21 @@ export function absorbRunMigrationSentence(run: AbsorbRun): string | null {
 	return `This update also gives the room's ${fmtTokenCount(run.migration.entriesAssigned)} entries their ids, so they can be edited one by one. Nothing changes in what the room remembers.`;
 }
 
+/** How many of a session's changes are of one kind, from the rows when the run carries them and from the summary's count otherwise. */
+function absorbSessionChangeCount(session: AbsorbRunSession, kind: "closed"): number {
+	if (session.changes) return session.changes.filter((change) => change.kind === kind).length;
+	return session.summary?.[kind] ?? 0;
+}
+
 /**
  * Automatic maintenance for a v2 run (the contract's client fast path): apply
- * only when there is nothing for a person to weigh. Anything archived, any
- * crossing of the budget, any session that did not finish, and any warning
- * falls to the card with the reason named. The room setting is checked by the
- * caller; this is the run's own verdict.
+ * only when there is nothing for a person to weigh. Anything archived for the
+ * budget, any open item a fold closed, any crossing of the budget, any session
+ * that did not finish, any conversation the model judged not worth keeping,
+ * and any warning falls to the card with the reason named. An add, an update
+ * and a replace are the fast path's own business: a fold's ordinary work,
+ * each with its old words kept in the archive and its row in History. The
+ * room setting is checked by the caller; this is the run's own verdict.
  */
 export function absorbRunFastPathBlockers(run: AbsorbRun): string[] {
 	const blockers: string[] = [];
@@ -343,6 +352,14 @@ export function absorbRunFastPathBlockers(run: AbsorbRun): string[] {
 			: `${leaving} notes would move to the archive to stay within the budget`);
 	}
 	if (run.budget.overBudgetAfter) blockers.push("saving would leave memory above its budget");
+	const closed = run.sessions.reduce((sum, session) => sum + absorbSessionChangeCount(session, "closed"), 0);
+	if (closed > 0) blockers.push(closed === 1 ? "1 open item would be closed" : `${closed} open items would be closed`);
+	const dropped = run.sessions.filter((session) => session.outcome === "dropped").length;
+	if (dropped > 0) {
+		blockers.push(dropped === 1
+			? "1 conversation would be dropped as nothing to keep"
+			: `${dropped} conversations would be dropped as nothing to keep`);
+	}
 	const unfinished = run.sessions.filter((session) => session.outcome !== "folded" && session.outcome !== "dropped");
 	if (unfinished.length > 0) {
 		blockers.push(unfinished.length === 1
@@ -365,12 +382,24 @@ export function absorbRunNewTopics(run: AbsorbRun): number {
 }
 
 /** What the saved screen says once the run is written. */
-export function absorbRunSavedSentence(result: { foldedSessions?: string[]; remainingSessions?: string[]; archivedEntries?: number; archivedForBudget?: number; newTopics?: number }): string {
+/**
+ * A conversation remembered while a Memorize or Review card was open was never
+ * part of that save: the save kept it, and it waits like a conversation that
+ * failed. Null when none was.
+ */
+export function rememberedMeanwhileSentence(rebasedOnto: string[] | undefined): string | null {
+	const rebased = rebasedOnto?.length ?? 0;
+	if (rebased === 0) return null;
+	return rebased === 1 ? "1 conversation remembered meanwhile stays waiting." : `${rebased} conversations remembered meanwhile stay waiting.`;
+}
+
+export function absorbRunSavedSentence(result: { foldedSessions?: string[]; remainingSessions?: string[]; archivedEntries?: number; archivedForBudget?: number; newTopics?: number; rebasedOnto?: string[] }): string {
 	const folded = result.foldedSessions?.length ?? 0;
 	const remaining = result.remainingSessions?.length ?? 0;
 	const archived = result.archivedEntries ?? 0;
 	const archivedForBudget = result.archivedForBudget ?? 0;
 	const newTopics = result.newTopics ?? 0;
+	const meanwhile = rememberedMeanwhileSentence(result.rebasedOnto);
 	const parts: string[] = [];
 	// A room already at its ceiling can spend a whole update making room and add
 	// nothing: "0 sessions were saved into memory" reads as a failure when what
@@ -381,12 +410,14 @@ export function absorbRunSavedSentence(result: { foldedSessions?: string[]; rema
 			? "1 note moved to the archive to keep memory within its budget."
 			: `${archivedForBudget} notes moved to the archive to keep memory within its budget.`);
 		if (remaining > 0) parts.push(remaining === 1 ? "1 conversation keeps waiting for the next update." : `${remaining} conversations keep waiting for the next update.`);
+		if (meanwhile) parts.push(meanwhile);
 		return parts.join(" ");
 	}
 	parts.push(folded === 1 ? "1 conversation became lasting notes." : `${folded} conversations became lasting notes.`);
 	if (newTopics > 0) parts.push(newTopics === 1 ? "1 new topic." : `${newTopics} new topics.`);
 	if (remaining > 0) parts.push(remaining === 1 ? "1 conversation keeps waiting for the next update." : `${remaining} conversations keep waiting for the next update.`);
 	if (archived > 0) parts.push(archived === 1 ? "1 note moved to the archive." : `${archived} notes moved to the archive.`);
+	if (meanwhile) parts.push(meanwhile);
 	return parts.join(" ");
 }
 
@@ -812,9 +843,12 @@ export function reviewRunArchiveCount(run: ReviewRun): number {
 
 /**
  * Automatic maintenance for a tidy: apply only when there is nothing for a
- * person to weigh. Anything leaving for the archive, any crossing of the limit,
- * any topic the tidy could not do, and any warning falls to the card with the
- * reason named.
+ * person to weigh. Anything leaving for the archive — for the budget, or
+ * because the tidy judged it stale, duplicate or finished — any merge, any
+ * closed item, any topic folded into another, any crossing of the limit, any
+ * topic the tidy could not do, and any warning falls to the card with the
+ * reason named. A note worded better, moved or pinned is the fast path's own
+ * business: nothing leaves and nothing is judged.
  */
 export function reviewRunFastPathBlockers(run: ReviewRun): string[] {
 	const blockers: string[] = [];
@@ -826,6 +860,13 @@ export function reviewRunFastPathBlockers(run: ReviewRun): string[] {
 			: `${leaving} notes would move to the archive to stay within the budget`);
 	}
 	if (run.budget.overBudgetAfter) blockers.push("saving would leave memory above its budget");
+	const counts = reviewChangeCounts(run.changes);
+	if (counts.archived > 0) blockers.push(counts.archived === 1 ? "1 note would move to the archive" : `${counts.archived} notes would move to the archive`);
+	// A merge row is the note that survives; the notes it took in are the ones a person would want to see go.
+	const merged = run.changes.filter((change) => change.kind === "merged").reduce((sum, change) => sum + (change.mergedFrom?.length ?? 2), 0);
+	if (merged > 0) blockers.push(merged === 1 ? "1 note would be merged" : `${merged} notes would be merged`);
+	if (counts.closed > 0) blockers.push(counts.closed === 1 ? "1 open item would be closed" : `${counts.closed} open items would be closed`);
+	if (counts.topic_folded > 0) blockers.push(counts.topic_folded === 1 ? "1 topic would be folded into another" : `${counts.topic_folded} topics would be folded into another`);
 	const leftAsIs = run.leftAsIs.reduce((sum, group) => sum + group.topics.length, 0);
 	if (leftAsIs > 0) {
 		blockers.push(leftAsIs === 1 ? "1 topic was left as it was" : `${leftAsIs} topics were left as they were`);

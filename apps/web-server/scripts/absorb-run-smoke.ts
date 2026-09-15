@@ -16,7 +16,10 @@
 // is stale because the first one changed the file the run was built on. And it
 // pins what a failed fold SAYS: each cause the worker can fail with reaches the
 // card as one sentence about this session and what becomes of it, while the
-// provider's own words stay in the room's diagnostics.
+// provider's own words stay in the room's diagnostics. The later rooms pin the
+// 0.12.1 fixes: a conversation folded late is weighed by its date, a Remember
+// while the update is open does not stale the save, and an archived version id
+// is unique across runs.
 //
 // Offline: no server, no provider, no network, no port.
 
@@ -46,7 +49,7 @@ const {
 	ABSORB_FOLD_CONNECTION_LOST_TWICE,
 	ABSORB_FOLD_REFUSED_TWICE,
 	ABSORB_FOLD_RETRY_PAUSE_MS,
-	ABSORB_FOLD_TIMED_OUT_TWICE,
+	ABSORB_FOLD_TIMED_OUT,
 	ABSORB_FOLD_WORKER_FAILED_TWICE,
 	ABSORB_RUN_RETENTION_MS,
 	approveAbsorbRun,
@@ -64,9 +67,11 @@ const {
 // A call that never came back is asked again after a pause. The pause is the
 // one thing here that is real time rather than behaviour, so it is zeroed.
 setAbsorbFoldRetryPauseForTests(0);
-const { beginPersistentAgentTurn, createPersistentAgentFromScaffoldInput, createPersistentAgentPiSessionJsonlThreadRuntime, finishPersistentAgentTurn, reviewTargetEstimatedTokensFromL1b, writePersistentAgentThread } = await import("../src/persistent-agents.js");
+const { beginPersistentAgentTurn, buildPersistentAgentCheckpointTranscriptSource, createPersistentAgentFromScaffoldInput, createPersistentAgentPiSessionJsonlThreadRuntime, finishPersistentAgentTurn, parseCheckpointApprovalRequest, reviewTargetEstimatedTokensFromL1b, writeApprovedCheckpoint, writePersistentAgentThread } = await import("../src/persistent-agents.js");
 const { IsolatedPersistentAgentWorkerTurnError } = await import("../src/persistent-agent-worker-runtime.js");
-const { readArchive } = await import("../src/memory-entries-store.js");
+const { appendArchive, readArchive } = await import("../src/memory-entries-store.js");
+const { undoMemorySave } = await import("../src/memory-undo.js");
+const { extractRecentContextForAbsorb, recentContextSessions } = await import("../src/absorb-consolidation.js");
 const { readPersistentRoomMaintenanceSettings, writePersistentRoomMaintenanceSettings } = await import("../src/persistent-room-maintenance-settings.js");
 
 const MODEL = { provider: "openai-compatible", model: "gpt-5.5", label: "GPT-5.5" };
@@ -131,11 +136,14 @@ interface FixtureEntry {
 	status?: "open" | "done";
 	updated?: string;
 	refs?: number;
+	/** The conversation that wrote it; a note without one reads "in memory since" its date in the fold prompt. */
+	from?: string;
 	text: string;
 }
 
 function renderFixtureEntry(entry: FixtureEntry): string {
 	const fields = [`id=${entry.id}`, `kind=${entry.kind}`, `saved=${entry.saved}`];
+	if (entry.from) fields.push(`from=${entry.from}`);
 	if (entry.pinned) fields.push("pinned=true");
 	if (entry.status) fields.push(`status=${entry.status}`);
 	if (entry.updated) fields.push(`updated=${entry.updated}`);
@@ -198,10 +206,10 @@ function memoryFixture(input: { agentId: string; fillerCount: number; markedEntr
 	}
 	if (input.markedEntries) {
 		workingStyle.push(
-			{ id: entryId(101), kind: "practice", saved: "2026-09-01", updated: "2026-09-11", refs: 6, text: `- ${UPDATE_TARGET} Commercial summaries go out as one page, numbers first.` },
-			{ id: entryId(102), kind: "practice", saved: "2026-09-01", updated: "2026-09-11", refs: 6, text: `- ${SUPERSEDE_TARGET} The delivery window is six weeks from the day the order is signed.` },
+			{ id: entryId(101), kind: "practice", saved: "2026-09-01", from: "RC-0001", updated: "2026-09-11", refs: 6, text: `- ${UPDATE_TARGET} Commercial summaries go out as one page, numbers first.` },
+			{ id: entryId(102), kind: "practice", saved: "2026-09-01", from: "RC-0001", updated: "2026-09-11", refs: 6, text: `- ${SUPERSEDE_TARGET} The delivery window is six weeks from the day the order is signed.` },
 		);
-		activeItems.push({ id: entryId(201), kind: "item", status: "open", saved: "2026-09-01", updated: "2026-09-11", refs: 4, text: `- ${CLOSE_TARGET} Chase the vendor for the signed addendum.` });
+		activeItems.push({ id: entryId(201), kind: "item", status: "open", saved: "2026-09-01", from: "RC-0001", updated: "2026-09-11", refs: 4, text: `- ${CLOSE_TARGET} Chase the vendor for the signed addendum.` });
 	}
 	activeItems.push({ id: entryId(202), kind: "item", status: "open", saved: "2026-08-20", updated: "2026-09-10", refs: 1, text: "- Confirm the invoicing day with finance before the quarter closes." });
 
@@ -293,6 +301,24 @@ fs.mkdirSync(threadCwd, { recursive: true });
  * which makes it the one seam that fails a save AFTER its raise without
  * touching the disk; `finish` ends the turn.
  */
+/**
+ * A Remember while an update is open, through the real checkpoint write and
+ * not an imitation of it: a thread with one transcript item, a checkpoint
+ * proposal built from the file as it stands, and the approved entry written
+ * the way the product writes it — the next RC id, the rc_metadata line, the
+ * Chronos checkpoint stamp.
+ */
+function rememberMeanwhile(agentId: string, marker: string, now: Date) {
+	const conversationId = `c_${Math.random().toString(36).slice(2, 8)}`;
+	const item = { kind: "user", id: "u1", text: `Synthetic transcript for ${conversationId}.` };
+	writePersistentAgentThread(agentId, conversationId, { state: "active", origin: "home", model: MODEL, items: [item] });
+	const l1b = fs.readFileSync(path.join(root, agentId, "L1b", "current.md"), "utf-8");
+	const source = buildPersistentAgentCheckpointTranscriptSource({ agentId, conversationId, l1b, legacyItems: [item] }).source;
+	const approvedRecentContext = `### RC-DRAFT | OPEN | ${now.toISOString().slice(0, 10)} | Remembered while the update was open\n\n**Session arc:** One conversation was remembered while a memory update was open.\n\n**Body:**\n- ${marker} The thing this conversation settled.\n\n**Parked:**\nNone\n`;
+	const parsed = parseCheckpointApprovalRequest({ conversationId, model: MODEL, density: "compact", proposal: { agentId, conversationId, sessionId: null, writesMemory: false, source }, approvedRecentContext }, agentId);
+	return writeApprovedCheckpoint(parsed.request, parsed.warnings, now, { runtimeCwd: threadCwd });
+}
+
 function beginTurn(agentId: string, threadId: string): { finish: () => void } {
 	writePersistentAgentThread(agentId, threadId, {
 		state: "active",
@@ -313,6 +339,9 @@ interface PromptArea {
 	id: string;
 	topic: string;
 	pinned: boolean;
+	/** The dates the address carries: the day the entry was saved, and the day a fold last rewrote it. */
+	saved?: string;
+	updated?: string;
 	firstLine: string;
 }
 
@@ -348,10 +377,12 @@ function sessionIdFromPrompt(prompt: string): string {
 
 /**
  * The entries this prompt says may be addressed, read back the way a model
- * reads them: off the memory itself, where every entry opens with its own id —
- * `- [m-0031] …`, and `- [m-0032 · pinned] …` for a pinned one.
+ * reads them: off the memory itself, where every entry opens with its own id
+ * and its dates — `- [m-0031 · saved 2026-08-02] …`, `- [m-0032 · pinned ·
+ * saved …] …` for a pinned one, and `· updated 2026-09-01` after the saved
+ * date once a fold rewrote it.
  */
-const ENTRY_ADDRESS = /^(?:\s*(?:[-*+]|\d+[.)])\s+)?\[([^\]\s·]+)(\s+·\s+pinned)?\]\s*([\s\S]*)$/;
+const ENTRY_ADDRESS = /^(?:\s*(?:[-*+]|\d+[.)])\s+)?\[([^\]\s·]+)((?:\s+·\s+[^\]·]+)*)\]\s*([\s\S]*)$/;
 
 function areasFromPrompt(prompt: string): PromptArea[] {
 	const rows: PromptArea[] = [];
@@ -362,7 +393,11 @@ function areasFromPrompt(prompt: string): PromptArea[] {
 		const heading = /^###\s+(.+?)\s*$/.exec(line);
 		if (heading) { topic = heading[1]; continue; }
 		const row = ENTRY_ADDRESS.exec(line.trim());
-		if (row) rows.push({ id: row[1], topic, pinned: Boolean(row[2]), firstLine: row[3] });
+		if (!row) continue;
+		// A note no conversation wrote reads "in memory since" its date instead of "saved".
+		const saved = /·\s+(?:saved|in memory since)\s+(\d{4}-\d{2}-\d{2})/.exec(row[2])?.[1];
+		const updated = /·\s+updated\s+(\d{4}-\d{2}-\d{2})/.exec(row[2])?.[1];
+		rows.push({ id: row[1], topic, pinned: /·\s+pinned\b/.test(row[2]), ...(saved ? { saved } : {}), ...(updated ? { updated } : {}), firstLine: row[3] });
 	}
 	return rows;
 }
@@ -718,6 +753,7 @@ try {
 	assert(budgetRows > 0 && approval.archivedForBudget === budgetRows, `the saved screen can say how many entries the BUDGET took, apart from superseded texts and finished items, got ${approval.archivedForBudget} against ${budgetRows} budget rows of ${archiveA.length}`);
 	assert(approval.archivedForBudget < approval.archivedEntries, `the budget count is its own number, not a copy of the total, and both read ${approval.archivedForBudget}`);
 	assert(approval.recentContextEntryCount === 3, `the approval reports how many sessions the room still holds, got ${approval.recentContextEntryCount}`);
+	assert(JSON.stringify(approval.rebasedOnto) === "[]", `nothing was remembered while this update was open, and the approval says so with an empty list, got ${JSON.stringify(approval.rebasedOnto)}`);
 	assert(approval.memoryBudget.overBudget === false, "an approved write that the budget pass held to the room's budget is not over it");
 	assert(getAbsorbRun(roomA.agentId, startedA.runId).state === "saved", "an approved run reads as saved");
 
@@ -890,12 +926,17 @@ try {
 	assert(runD.sessions.every((session) => session.outcome === "failed"), `all three folds failed, got ${JSON.stringify(runD.sessions.map((session) => session.outcome))}`);
 
 	// --- 13. Each cause, its own sentence ------------------------------------------
-	// Each of these fails the same way on both calls, so each reads as the pair
-	// it was: the cause, and that asking again did not help.
-	assert(sessionView(runD, "RC-0001").reason === ABSORB_FOLD_TIMED_OUT_TWICE, `a turn stopped at its ceiling twice reads as the time limit, got "${sessionView(runD, "RC-0001").reason}"`);
+	// A dropped connection and any other failure are asked again, and each of
+	// those fails the same way on both calls, so it reads as the pair it was:
+	// the cause, and that asking again did not help. A turn stopped at its
+	// eight-minute ceiling is NOT asked again — the second ask would be another
+	// eight minutes spent the same way — so it reads as the one call it cost.
+	assert(sessionView(runD, "RC-0001").reason === ABSORB_FOLD_TIMED_OUT, `a turn stopped at its ceiling reads as the time limit, once, got "${sessionView(runD, "RC-0001").reason}"`);
+	assert(sessionView(runD, "RC-0001").attempts === 1 && callsFor(callsD, "RC-0001").length === 1, `a turn stopped at its ceiling costs one call and is not asked again, got ${callsFor(callsD, "RC-0001").length} call(s) and ${sessionView(runD, "RC-0001").attempts} attempt(s)`);
+	assert(callsFor(callsD, "RC-0002").length > 0, "and the run moves on to the next session");
 	assert(sessionView(runD, "RC-0002").reason === ABSORB_FOLD_CONNECTION_LOST_TWICE, `a connection that dropped twice reads as the connection, got "${sessionView(runD, "RC-0002").reason}"`);
 	assert(sessionView(runD, "RC-0003").reason === ABSORB_FOLD_WORKER_FAILED_TWICE, `any other failure still says what became of the session, got "${sessionView(runD, "RC-0003").reason}"`);
-	assert(runD.sessions.every((session) => session.attempts === 2), `every one of them was asked twice, got ${JSON.stringify(runD.sessions.map((session) => session.attempts))}`);
+	assert(runD.sessions.filter((session) => session.id !== "RC-0001").every((session) => session.attempts === 2), `the other two were asked twice, got ${JSON.stringify(runD.sessions.map((session) => session.attempts))}`);
 	const reasonsD = runD.sessions.map((session) => session.reason ?? "");
 	assert(reasonsD.every((reason) => /^[A-Z]/.test(reason) && /\.$/.test(reason) && !/worker|terminated|abort|480|stack/i.test(reason)), `every reason is a sentence about the memory, not the runtime's own: ${JSON.stringify(reasonsD)}`);
 	assert(new Set(reasonsD).size === 3, `three causes read as three sentences, got ${JSON.stringify(reasonsD)}`);
@@ -907,11 +948,11 @@ try {
 	// --- 14. The raw message survives where it is meant to: the diagnostics ---------
 	const diagnosticsDir = path.join(root, roomD.agentId, "events", "maintenance-diagnostics");
 	const records = fs.readdirSync(diagnosticsDir).filter((name) => name.endsWith(".json")).map((name) => JSON.parse(fs.readFileSync(path.join(diagnosticsDir, name), "utf-8")));
-	assert(records.length === 6, `each failed fold call writes its own diagnostics record, and three sessions asked twice make six, got ${records.length}`);
-	assert(records.filter((record) => record.outcome === "retried").length === 3, `the call that was asked again is marked as retried, got ${JSON.stringify(records.map((record) => record.outcome))}`);
+	assert(records.length === 5, `each failed fold call writes its own diagnostics record: one for the timeout and two each for the two sessions asked twice, got ${records.length}`);
+	assert(records.filter((record) => record.outcome === "retried").length === 2, `the call that was asked again is marked as retried, and the timeout is not, got ${JSON.stringify(records.map((record) => record.outcome))}`);
 	assert(records.filter((record) => record.outcome === "error").length === 3, `the call that ended it keeps the failure outcome, got ${JSON.stringify(records.map((record) => record.outcome))}`);
-	assert(records.filter((record) => record.attempt === 2).length === 3, `a retried call is recorded as the second attempt, got ${JSON.stringify(records.map((record) => record.attempt))}`);
-	assert(records.filter((record) => record.errorClass === "IsolatedPersistentAgentWorkerTurnError").length === 4, `a typed turn failure is recorded as what it was, got ${JSON.stringify(records.map((record) => record.errorClass))}`);
+	assert(records.filter((record) => record.attempt === 2).length === 2, `a retried call is recorded as the second attempt, got ${JSON.stringify(records.map((record) => record.attempt))}`);
+	assert(records.filter((record) => record.errorClass === "IsolatedPersistentAgentWorkerTurnError").length === 3, `a typed turn failure is recorded as what it was, got ${JSON.stringify(records.map((record) => record.errorClass))}`);
 	assert(records.some((record) => String(record.errorSentence ?? "").includes(DROPPED_CONNECTION_DETAIL)), `the provider's own words are kept for the report, and no record carries "${DROPPED_CONNECTION_DETAIL}": ${JSON.stringify(records.map((record) => record.errorSentence))}`);
 	assert(records.some((record) => String(record.errorSentence ?? "").includes(WORKER_TIMEOUT_DETAIL)), `the ceiling's own words are kept too, got ${JSON.stringify(records.map((record) => record.errorSentence))}`);
 	assert(records.every((record) => !JSON.stringify(record).includes("FOLD-")), "a diagnostics record still carries nothing of the room's own memory");
@@ -1055,22 +1096,24 @@ try {
 	// =====================================================================
 	// Room eight: a call that never came back is asked once more.
 	// =====================================================================
-	// A fold call that throws, or is stopped at its ceiling, has said nothing
-	// about the conversation it was given: the line was bad, a sign-in had
-	// expired, the provider had a moment. Spending that conversation's one
-	// chance on it — which is what the field saw — is the failure this room
-	// pins shut. THE RULE: two calls per conversation, the first and one retry
-	// of a reply the memory refused; a call that never came back buys ONE more
-	// on top of that, once per conversation, with the same prompt, after a
-	// pause. Three calls in all, and never more.
+	// A fold call that throws has said nothing about the conversation it was
+	// given: the line was bad, a sign-in had expired, the provider had a
+	// moment. Spending that conversation's one chance on it — which is what
+	// the field saw — is the failure this room pins shut. THE RULE: two calls
+	// per conversation, the first and one retry of a reply the memory refused;
+	// a call that never came back buys ONE more on top of that, once per
+	// conversation, with the same prompt, after a pause. Three calls in all,
+	// and never more. The one exception is a turn stopped at its eight-minute
+	// ceiling: it is not asked again, because the second ask would be another
+	// eight minutes, and the conversation waits for next time after one call.
 	const sessionsH = [
 		fixtureSession("RC-0001", "2026-09-11", "The call that dropped once", "The first call never came back; the second one did.", ["Something durable was said here."]),
-		fixtureSession("RC-0002", "2026-09-11", "The call that was stopped once", "The first call ran past its ceiling; the second one did not.", ["A second durable thing."]),
+		fixtureSession("RC-0002", "2026-09-11", "The call that was stopped", "The call ran past its ceiling, and there is no second one.", ["A second durable thing."]),
 		fixtureSession("RC-0003", "2026-09-11", "The call that failed both times", "Neither call came back.", ["A third durable thing."]),
 		fixtureSession("RC-0004", "2026-09-11", "The reply that was cut", "The reply did come back, cut at the output limit.", ["A fourth durable thing."]),
 		fixtureSession("RC-0005", "2026-09-12", "Refused, then dropped, then answered", "It took every call it is allowed.", ["A fifth durable thing."]),
 		fixtureSession("RC-0006", "2026-09-12", "Dropped, then refused twice", "Every call it is allowed, and still nothing to fold.", ["A sixth durable thing."]),
-		fixtureSession("RC-0007", "2026-09-12", "Stopped, then dropped", "Two calls, and two different things went wrong.", ["A seventh durable thing."]),
+		fixtureSession("RC-0007", "2026-09-12", "Stopped, with a dropped call scripted after it", "The ceiling stops it, and the second call is never made.", ["A seventh durable thing."]),
 	];
 	const roomH = createRoom("Absorb Run Retry Smoke Room", (agentId) => memoryFixture({ agentId, fillerCount: 6, markedEntries: false, sessions: sessionsH }));
 	const callsH: WorkerCall[] = [];
@@ -1109,17 +1152,18 @@ try {
 	assert(!rh1Calls[1].prompt.includes("## Retry Notice"), "there is nothing to put in a Retry Notice when the first call never answered, and this retry carries one");
 	assert(rh1.summary?.added === 1, `the second call's operations are the ones that land, got ${JSON.stringify(rh1.summary)}`);
 
-	// --- 23. A turn stopped at its ceiling is asked again too ---------------------
+	// --- 23. A turn stopped at its ceiling is NOT asked again ---------------------
 	const rh2 = sessionView(runH, "RC-0002");
-	assert(rh2.outcome === "folded" && rh2.attempts === 2, `a turn stopped at its ceiling is asked again like any other, got "${rh2.outcome}" after ${rh2.attempts} attempt(s)`);
-	assert(callsFor(callsH, "RC-0002").length === 2, `and asked exactly once more, got ${callsFor(callsH, "RC-0002").length} call(s)`);
+	assert(rh2.outcome === "failed" && rh2.reason === ABSORB_FOLD_TIMED_OUT && rh2.attempts === 1, `a turn stopped at its ceiling waits for next time after one call, got "${rh2.outcome}" / "${rh2.reason}" after ${rh2.attempts} attempt(s)`);
+	assert(callsFor(callsH, "RC-0002").length === 1, `and is not asked again, got ${callsFor(callsH, "RC-0002").length} call(s)`);
+	assert(callsFor(callsH, "RC-0003").length > 0, "and the run moves on to the next conversation");
 
 	// --- 24. Both calls failing reads as both calls failing -----------------------
 	const rh3 = sessionView(runH, "RC-0003");
 	assert(rh3.outcome === "failed" && rh3.reason === ABSORB_FOLD_WORKER_FAILED_TWICE, `a conversation whose two calls both failed says so once, got "${rh3.outcome}" / "${rh3.reason}"`);
 	assert(callsFor(callsH, "RC-0003").length === 2, `and stops at two, got ${callsFor(callsH, "RC-0003").length} call(s)`);
 	const rh7 = sessionView(runH, "RC-0007");
-	assert(rh7.reason === ABSORB_FOLD_CONNECTION_LOST, `two calls that failed in two different ways read as the second one, not as "twice", got "${rh7.reason}"`);
+	assert(rh7.reason === ABSORB_FOLD_TIMED_OUT && callsFor(callsH, "RC-0007").length === 1, `a turn stopped at its ceiling is not asked again whatever would have followed, got "${rh7.reason}" after ${callsFor(callsH, "RC-0007").length} call(s)`);
 
 	// --- 25. A reply that came back cut is not asked again ------------------------
 	// The model answered; it answered too much. Asking the same question again
@@ -1146,8 +1190,8 @@ try {
 	const recordsH = fs.readdirSync(diagnosticsH).filter((name) => name.endsWith(".json")).map((name) => JSON.parse(fs.readFileSync(path.join(diagnosticsH, name), "utf-8")));
 	assert(recordsH.length === callsH.length, `one record per call made, got ${recordsH.length} records for ${callsH.length} calls`);
 	const outcomesH = recordsH.map((record) => record.outcome).sort();
-	assert(outcomesH.filter((outcome) => outcome === "retried").length === 6, `each of the six calls that never came back and was asked again is annotated as retried, got ${JSON.stringify(outcomesH)}`);
-	assert(outcomesH.filter((outcome) => outcome === "error").length === 2, `the call that ended a conversation keeps the failure outcome, got ${JSON.stringify(outcomesH)}`);
+	assert(outcomesH.filter((outcome) => outcome === "retried").length === 4, `each of the four calls that never came back and was asked again is annotated as retried, and the two timeouts are not, got ${JSON.stringify(outcomesH)}`);
+	assert(outcomesH.filter((outcome) => outcome === "error").length === 3, `the call that ended a conversation keeps the failure outcome, the two timeouts among them, got ${JSON.stringify(outcomesH)}`);
 	assert(recordsH.filter((record) => record.outcome === "retried").every((record) => record.errorClass), `a retried record still carries the class of the failure that caused it, got ${JSON.stringify(recordsH.filter((record) => record.outcome === "retried").map((record) => record.errorClass))}`);
 	assert(recordsH.every((record) => !JSON.stringify(record).includes("FOLD-")), "a diagnostics record still carries nothing of the room's own memory");
 
@@ -1188,7 +1232,150 @@ try {
 	assert(fs.readFileSync(roomI.l1bPath, "utf-8") === l1bBeforeI, "a run cancelled between two calls leaves the room's memory byte for byte as it was");
 	setAbsorbFoldRetryPauseForTests(0);
 
-	// --- 29. The propose body's limitRaisedFrom: a whole number a room may hold, or nothing ---
+	// =====================================================================
+	// Room ten: a conversation folded late is weighed by its date.
+	// =====================================================================
+	// The field failure this pins: a conversation from the 3rd fails its fold,
+	// a conversation from the 8th folds and rewrites the price, and the next
+	// update folds the 3rd — which used to be told it was "newer than
+	// everything already in memory" and could roll the 8th's price back. What
+	// the model does with that cannot be asserted here; the material can: the
+	// late fold's prompt names the day the conversation is from, and every
+	// entry's address carries the day it was saved and the day a fold last
+	// rewrote it, so the 45k note reads as newer than the conversation.
+	const PRICE_45K = "FOLD-PRICE-45K";
+	const sessionsJ = [
+		fixtureSession("RC-0007", "2026-09-03", "The older pricing chat", "The price was discussed at the old number.", ["The volume price is 40k, as it has been."]),
+		fixtureSession("RC-0009", "2026-09-08", "The newer pricing chat", "The price moved.", ["The volume price is now 45k."]),
+	];
+	const roomJ = createRoom("Absorb Run Dates Smoke Room", (agentId) => memoryFixture({ agentId, fillerCount: 6, markedEntries: true, sessions: sessionsJ }));
+	const callsJ1: WorkerCall[] = [];
+	const scriptsJ1: Record<string, Script> = {
+		"RC-0007": () => { throw new Error(EMPTY_WORKER_SENTENCE); },
+		"RC-0009": ({ areas }) => reply("The price moved to 45k.", [{ op: "supersede", id: addressOf(areas, SUPERSEDE_TARGET), text: foldText(PRICE_45K) }]),
+	};
+	const startedJ1 = startAbsorbRun({ agentId: roomJ.agentId, assessmentMarkdown: ASSESSMENT, model: MODEL, generate: scriptedGenerate(scriptsJ1, callsJ1), now: RUN_CLOCK });
+	const runJ1 = await settle(roomJ.agentId, startedJ1.runId, "the tenth room's first run");
+	assert(runJ1.state === "ready" && sessionView(runJ1, "RC-0007").outcome === "failed" && sessionView(runJ1, "RC-0009").outcome === "folded", `the older conversation fails and the newer one folds, got ${JSON.stringify(runJ1.sessions.map((session) => [session.id, session.outcome]))}`);
+
+	// --- 29. Every fold prompt carries the conversation's date and the entries' dates ---
+	const firstJ = callsFor(callsJ1, "RC-0007")[0].prompt;
+	assert(firstJ.includes("This conversation is from 2026-09-03: it is newer than every entry saved or updated before that day, and older than every entry saved or updated after it."), "the task names the day the conversation is from, read off its own heading");
+	assert(callsFor(callsJ1, "RC-0009")[0].prompt.includes("This conversation is from 2026-09-08:"), "each conversation's prompt names that conversation's day");
+	const priceIdJ = addressOf(areasFromPrompt(firstJ), SUPERSEDE_TARGET);
+	assert(firstJ.includes(`[${priceIdJ} · saved 2026-09-01 · updated 2026-09-11] ${SUPERSEDE_TARGET}`), `an entry's address carries the saved and updated dates the file holds, and the prompt reads ${JSON.stringify(/\[m-0102[^\]]*\]/.exec(firstJ)?.[0])}`);
+	assert(areasFromPrompt(firstJ).every((row) => row.saved), "every entry of the memory carries a saved date in its address");
+	assert(!firstJ.includes("this session is newer than everything already in memory"), "the rule that the session is newer than everything is gone from the constitution");
+	approveAbsorbRun(roomJ.agentId, startedJ1.runId, APPROVED_AT);
+	const writtenJ1 = fs.readFileSync(roomJ.l1bPath, "utf-8");
+	assert(/^###\s+RC-0007\s*\|/m.test(writtenJ1) && !/^###\s+RC-0009\s*\|/m.test(writtenJ1) && writtenJ1.includes(PRICE_45K), "the older conversation waits for next time, and the newer one's price is in memory");
+	resetAbsorbRunsForTests();
+
+	// --- 30. The next update folds the older conversation against the dated memory ---
+	const callsJ2: WorkerCall[] = [];
+	const scriptsJ2: Record<string, Script> = {
+		"RC-0007": () => reply("Memory already holds a newer price than this conversation names.", [{ op: "drop", reason: "The price this conversation names was replaced by a later one that memory already holds." }]),
+	};
+	const startedJ2 = startAbsorbRun({ agentId: roomJ.agentId, assessmentMarkdown: ASSESSMENT, model: MODEL, generate: scriptedGenerate(scriptsJ2, callsJ2), now: RUN_CLOCK });
+	const runJ2 = await settle(roomJ.agentId, startedJ2.runId, "the tenth room's second run");
+	assert(runJ2.state === "ready" && sessionView(runJ2, "RC-0007").outcome === "dropped", `the late fold is the only one, got ${JSON.stringify(runJ2.sessions.map((session) => [session.id, session.outcome]))}`);
+	const lateJ = callsFor(callsJ2, "RC-0007")[0].prompt;
+	assert(lateJ.includes("This conversation is from 2026-09-03:"), "the late fold's prompt names the day the conversation is from");
+	const priceRowJ = areasFromPrompt(lateJ).find((row) => row.firstLine.includes(PRICE_45K));
+	assert(priceRowJ?.id === priceIdJ && priceRowJ.saved === "2026-09-01" && priceRowJ.updated === RUN_DAY, `the 45k note keeps its id and its saved date and carries the day the newer conversation's fold rewrote it, got ${JSON.stringify(priceRowJ)}`);
+	assert(lateJ.includes(`[${priceIdJ} · saved 2026-09-01 · updated ${RUN_DAY}] ${PRICE_45K}`), `the address reads as one line, got ${JSON.stringify(/\[m-0102[^\]]*\]/.exec(lateJ)?.[0])}`);
+	assert(!lateJ.includes(SUPERSEDE_TARGET), "the older text is gone from the memory the late fold reads");
+	assert(lateJ.includes("An entry saved or updated AFTER this session's date already knows more than this session does: never supersede or update it with this session's older information."), "the constitution tells the late fold not to roll a newer entry back");
+	resetAbsorbRunsForTests();
+
+	// =====================================================================
+	// Room eleven: a Remember while the update is open does not stale the save.
+	// =====================================================================
+	// Remember stays allowed while an update is open, so a room with a backlog
+	// is never locked out of saving the conversation it is in — and the save
+	// used to refuse "stale" for exactly that, because the file was no longer
+	// the one the run read. The save is rebased instead: the run's Deep Memory
+	// and Active Items, the file's Recent Context less what the run folded,
+	// the file's Chronos. The Remember here is the product's own checkpoint
+	// write, so the block it appends is the real shape.
+	const MEANWHILE = "FOLD-REMEMBERED-MEANWHILE";
+	const roomK = createRoom("Absorb Run Rebase Smoke Room", (agentId) => memoryFixture({ agentId, fillerCount: 6, markedEntries: false, sessions: sessionsE }));
+	const scriptsK: Record<string, Script> = {
+		"RC-0001": () => reply("One durable line.", [{ op: "add", topic: "Commercial terms", kind: "fact", text: foldText("FOLD-REBASE-ADD") }]),
+		"RC-0002": () => reply("One more.", [{ op: "add", topic: "Commercial terms", kind: "fact", text: foldText("FOLD-REBASE-SECOND") }]),
+		"RC-0003": () => reply("And another.", [{ op: "add", topic: "Commercial terms", kind: "fact", text: foldText("FOLD-REBASE-THIRD") }]),
+	};
+	const startedK = startAbsorbRun({ agentId: roomK.agentId, assessmentMarkdown: ASSESSMENT, model: MODEL, generate: scriptedGenerate(scriptsK, []), now: RUN_CLOCK });
+	const readyK = await settle(roomK.agentId, startedK.runId, "the eleventh room's run");
+	assert(readyK.state === "ready", `the eleventh room's run should end ready, got "${readyK.state}"${readyK.error ? ` with "${readyK.error}"` : ""}`);
+	const rememberedK = rememberMeanwhile(roomK.agentId, MEANWHILE, new Date(`${RUN_DAY}T09:03:00.000Z`));
+	const l1bAfterRememberK = fs.readFileSync(roomK.l1bPath, "utf-8");
+	assert(/^###\s+RC-0002\s*\|/m.test(l1bAfterRememberK) && l1bAfterRememberK.includes(MEANWHILE) && rememberedK.recentContextEntryCount === 2, "the Remember appended a second conversation to the file while the update was open");
+
+	// --- 31. The save lands, rebased onto the file as it stands -----------------
+	const approvalK = approveAbsorbRun(roomK.agentId, startedK.runId, APPROVED_AT);
+	assert(JSON.stringify(approvalK.rebasedOnto) === JSON.stringify(["RC-0002"]), `the approval names the conversation remembered meanwhile, got ${JSON.stringify(approvalK.rebasedOnto)}`);
+	assert(JSON.stringify(approvalK.foldedSessions) === JSON.stringify(["RC-0001"]) && JSON.stringify(approvalK.remainingSessions) === "[]" && approvalK.recentContextEntryCount === 1, `the run's own account is unchanged and the file's count includes what was remembered meanwhile, got ${JSON.stringify({ folded: approvalK.foldedSessions, remaining: approvalK.remainingSessions, count: approvalK.recentContextEntryCount })}`);
+	const writtenK = fs.readFileSync(roomK.l1bPath, "utf-8");
+	assert(!/^###\s+RC-0001\s*\|/m.test(writtenK), "the folded conversation left Recent Context");
+	const keptK = recentContextSessions(extractRecentContextForAbsorb(writtenK).recentContext);
+	const rememberedBlockK = recentContextSessions(extractRecentContextForAbsorb(l1bAfterRememberK).recentContext).find((session) => session.id === "RC-0002");
+	assert(keptK.length === 1 && keptK[0].id === "RC-0002" && keptK[0].text === rememberedBlockK?.text, `the remembered conversation is in the written file exactly as the Remember wrote it, got ${JSON.stringify(keptK.map((session) => session.id))}`);
+	assert(writtenK.includes("FOLD-REBASE-ADD"), "what the fold added is in the written memory");
+	assert(new RegExp(`^- Last checkpoint: ${rememberedK.checkpointId}$`, "m").test(writtenK) && new RegExp(`^- Last consolidation: ${approvalK.absorbId}$`, "m").test(writtenK), "Chronos keeps the Remember's stamp and takes the save's beside it");
+	assert(getAbsorbRun(roomK.agentId, startedK.runId).state === "saved", "the rebased run reads as saved");
+
+	// --- 32. Undo puts back the file the save replaced, byte for byte -------------
+	const undoneK = undoMemorySave(roomK.agentId, approvalK.saveId, new Date(`${RUN_DAY}T09:06:00.000Z`));
+	assert(fs.readFileSync(roomK.l1bPath, "utf-8") === l1bAfterRememberK, "undo restores the file as it stood after the Remember and before the save, byte for byte");
+	assert(undoneK.recentContextCount === 2, `both conversations are back, got ${undoneK.recentContextCount}`);
+	resetAbsorbRunsForTests();
+
+	// --- 33. Any other change keeps the honest refusal ---------------------------
+	const startedK2 = startAbsorbRun({ agentId: roomK.agentId, assessmentMarkdown: ASSESSMENT, model: MODEL, generate: scriptedGenerate(scriptsK, []), now: RUN_CLOCK });
+	const readyK2 = await settle(roomK.agentId, startedK2.runId, "the eleventh room's second run");
+	assert(readyK2.state === "ready" && readyK2.sessions.length === 2, `the second run folds both conversations, got "${readyK2.state}" over ${readyK2.sessions.length} session(s)`);
+	const editedK = fs.readFileSync(roomK.l1bPath, "utf-8").replace("Confirm the invoicing day with finance", "Confirm the invoicing day with legal");
+	assert(editedK !== fs.readFileSync(roomK.l1bPath, "utf-8"), "the hand edit changes an entry");
+	fs.writeFileSync(roomK.l1bPath, editedK);
+	expectThrows(() => approveAbsorbRun(roomK.agentId, startedK2.runId, APPROVED_AT), /stale/i, "approving over an entry edited by hand");
+	rememberMeanwhile(roomK.agentId, "FOLD-REMEMBERED-AGAIN", new Date(`${RUN_DAY}T09:07:00.000Z`));
+	expectThrows(() => approveAbsorbRun(roomK.agentId, startedK2.runId, APPROVED_AT), /stale/i, "approving over an entry edited by hand, with a Remember on top");
+	assert(getAbsorbRun(roomK.agentId, startedK2.runId).state === "ready" && fs.readdirSync(path.join(root, roomK.agentId, "events", "absorb")).length === 1, "a refused approval writes nothing and leaves the run ready");
+	cancelAbsorbRun(roomK.agentId, startedK2.runId, new Date(`${RUN_DAY}T09:08:00.000Z`));
+	resetAbsorbRunsForTests();
+
+	// =====================================================================
+	// Room twelve: an archived version id is unique across runs.
+	// =====================================================================
+	// The archive is addressable: a restore looks a row up by id. A run used
+	// to mint version ids against its own rows only, so an entry rewritten in
+	// two runs got `-v1` twice, and an undo of the second save could take the
+	// first run's row instead of its own.
+	const OLDER_VERSION = "FOLD-OLDER-VERSION";
+	const roomL = createRoom("Absorb Run Version Id Smoke Room", (agentId) => memoryFixture({ agentId, fillerCount: 6, markedEntries: true, sessions: sessionsE }));
+	appendArchive(roomL.agentId, [{ entry: { id: `${entryId(102)}-v1`, kind: "practice", saved: "2026-09-01", pinned: false, text: `- ${OLDER_VERSION} The delivery window is eight weeks from the day the order is signed.` }, why: "superseded", topic: "Working style", section: "Deep Memory", archived: "2026-09-11" }], new Date(`${RUN_DAY}T08:00:00.000Z`));
+	assert(readArchive(roomL.agentId).map((entry) => entry.id).join() === `${entryId(102)}-v1`, "the archive already holds the first version of the entry from an earlier run");
+	const scriptsL: Record<string, Script> = {
+		"RC-0001": ({ areas }) => reply("The window moved again.", [{ op: "update", id: addressOf(areas, SUPERSEDE_TARGET), text: foldText("FOLD-NEWER-VERSION") }]),
+	};
+	const startedL = startAbsorbRun({ agentId: roomL.agentId, assessmentMarkdown: ASSESSMENT, model: MODEL, generate: scriptedGenerate(scriptsL, []), now: RUN_CLOCK });
+	const readyL = await settle(roomL.agentId, startedL.runId, "the twelfth room's run");
+	assert(readyL.state === "ready" && sessionView(readyL, "RC-0001").outcome === "folded", `the twelfth room's fold should land, got "${readyL.state}" / "${sessionView(readyL, "RC-0001").outcome}"`);
+
+	// --- 34. The second rewrite is -v2, and undo takes back exactly that row ------
+	const approvalL = approveAbsorbRun(roomL.agentId, startedL.runId, APPROVED_AT);
+	const archiveL = readArchive(roomL.agentId);
+	assert(JSON.stringify(archiveL.map((entry) => entry.id)) === JSON.stringify([`${entryId(102)}-v1`, `${entryId(102)}-v2`]), `the text this run replaced is archived as the entry's second version, got ${JSON.stringify(archiveL.map((entry) => entry.id))}`);
+	assert(archiveL[1].why === "superseded" && archiveL[1].text.includes(SUPERSEDE_TARGET), `the -v2 row carries the text the update replaced, got ${JSON.stringify(archiveL[1])}`);
+	const recordL = JSON.parse(fs.readFileSync(path.join(root, roomL.agentId, "events", "absorb", `${approvalL.absorbId}.json`), "utf-8"));
+	assert(JSON.stringify(recordL.run.archived.map((row: any) => row.id)) === JSON.stringify([`${entryId(102)}-v2`]), `the record names the row this save appended, got ${JSON.stringify(recordL.run.archived)}`);
+	undoMemorySave(roomL.agentId, approvalL.saveId, new Date(`${RUN_DAY}T09:06:00.000Z`));
+	const archiveAfterUndoL = readArchive(roomL.agentId);
+	assert(archiveAfterUndoL.length === 1 && archiveAfterUndoL[0].id === `${entryId(102)}-v1` && archiveAfterUndoL[0].text.includes(OLDER_VERSION), `undo takes back exactly the row this save appended and leaves the earlier run's, got ${JSON.stringify(archiveAfterUndoL.map((entry) => entry.id))}`);
+	resetAbsorbRunsForTests();
+
+	// --- 35. The propose body's limitRaisedFrom: a whole number a room may hold, or nothing ---
 	assert(parseAbsorbRunProposeRequest({ assessmentMarkdown: ASSESSMENT, limitRaisedFrom: 20_000 }).limitRaisedFrom === 20_000, "a propose body carrying the limit the first read raised from keeps it");
 	assert(!("limitRaisedFrom" in parseAbsorbRunProposeRequest({ assessmentMarkdown: ASSESSMENT })), "a body without it says nothing");
 	for (const bogus of ["20000", 20_000.5, 9_000, 90_000, NaN, null, { tokens: 20_000 }]) {
