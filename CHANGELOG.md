@@ -4,80 +4,55 @@ User-visible changes per release. Historical private/internal development notes 
 
 ## 0.12.0 (2026-09-15)
 
-- Memory is now kept as notes in topics, each with the day it was saved and whether you pinned it, and every
-  memory screen speaks the same language: conversations you remembered, notes, topics, open items, the
-  archive, and how full the memory is against its budget. Tokens appear only next to the budget slider.
-- Memorize turns remembered conversations into lasting notes one conversation at a time. The first read
-  says what the conversations hold and what needs your call; Discuss first lets you answer before anything
-  runs; then the card fills in as each conversation is read, with what it added or changed, and nothing is
-  saved until you press Save to memory. You can edit a note on the card, keep any note the room should not
-  let go, and read what goes to the archive. A conversation whose reading fails is retried once and, if it
-  fails again, stays for next time with the reason beside it. The memory budget is kept by the room, not the model:
-  what does not fit moves to the archive, never gets deleted, and the card shows the list with Keep.
-- The archive list on the card is one list for the whole run under a budget bar: the filled part is the
-  budget, the grey part is what leaves because of it. Kept notes stay in the list marked kept, the notes that
-  leave instead of them are marked so, each topic can be kept whole for this run, every row opens to the
-  whole note, and the rows are ordered by what leaves first. The card's "raise the budget" is applied with
-  the save, not before it, so Cancel and Back leave the room's budget alone. A room already above its budget is
-  told so on the first read, with the choice to raise the budget or to Review first before anything runs.
-- Memorize files a note under an existing topic when the title it proposes is the same topic in other
-  words, so topics are not written twice; a conversation that opens a new topic says so on the card. A note
-  that says what a note already in memory says is refused, and the existing note is updated instead.
-- The Review first read lists what the room finds by itself, before any model reads the notes: "Says the
-  same twice" names pairs of notes that are copies or near-copies of each other, and "Topics that look the
-  same" names two topics that carry one subject. Both go into the tidy, which can merge the notes, archive
-  one as duplicate, or fold one topic into the other; the card shows a folded topic with how many notes
-  moved.
-- Rooms from 0.11.2 migrate clean: the old "(saved …)" stamps leave the note text once the date is taken
-  from them, and notes that read like practices (working style, preferences, "Always…", "Never…") are filed
-  as practices, which leave last when the budget rule runs.
-- A room that comes from 0.11.2 keeps what it has: on its first read under 0.12 its memory budget is set to its
-  current size plus a quarter (at least the default, at most the ceiling), so the first Memorize never moves
-  anything to the archive by surprise; Room settings says so under the slider, and the slider lowers it
-  whenever you want.
-- The memory budget follows the save it belongs to: a save that fails after raising the budget puts the old budget
-  back and says so, and undoing a save that raised the budget lowers it again unless it was changed by hand
-  in between. When everything fits after a raise, the card says "Nothing goes to the archive" and shows
-  no rows.
-- Review reads the notes you already have and tidies them: shorter wording, duplicates merged, contradictions
-  resolved, finished or stale notes moved to the archive. It works note by note, so every note keeps its date
-  and its pin, and the card shows each topic's before and after with Edit. Two ways to tidy: wording only,
-  or wording plus moving what is finished or stale to the archive; the room recommends one. The budget rule
-  applies to a Review save as well. A Review no longer rewrites the memory as one block of text and no
-  longer stops at the model's output limit: the notes are handed over in parts sized to the model.
-- Every Memorize or Review save can be undone while it is still the latest change to the room's memory,
-  from the saved screen or from Room settings → Memory → History. Undo puts the previous memory back byte
-  for byte and takes back the archive rows that save added.
-- A room can read its own archive. Under a topic with archived notes the room's memory says how many older
-  notes there are and from when; the room reads them when a question is about that older period, and the
-  chat shows a "Read archived notes" chip with what it looked for and the note read back underneath.
-- Room settings → Memory lists a room's notes by topic with a search box, Notes and Open items, the archive
-  with the reason each note left, Restore and Delete for good (a deletion is written to History and cannot
-  be undone), the memory budget with how full the memory is, and History with Undo. The notes stay editable
-  while the room is open in a chat; only a running answer blocks an edit. The two saving toggles read as one
-  group, "Saving without a second look", saying what each one skips.
-- The Memory tab shows each room by how full its memory is, its notes and waiting conversations, its topics,
-  and a Full memory panel that reads the notes and open items the way the room reads them, beside the topic
-  list. The memory growth graph is back, save by save, with the room's budget drawn as a dashed line and
-  every size in the "20k" shape; it counts the memory the way the meter does, so the two never disagree.
-  A memory above its budget is said in a neutral colour everywhere, on the room card, the tab and the
-  settings, because it is a state the next Memorize or Review resolves, not an error.
-- History says what each change did: every Memorize, Review, hand edit and undo row has "What changed",
-  which lists, topic by topic, the notes that save added, updated (old text struck above the new, changed
-  words marked), moved, pinned or archived with the reason, and the waiting conversations that left, in
-  Room settings → Memory → History and on the Memory tab, with a full-screen view. Every recorded write,
-  hand edits and undos included, counts in the room's chain of stored copies, so a diff and a past moment
-  never skip one.
-- The Memory tab reads a room's memory as it was at any save: click a point on the growth graph and the
-  Topics list, the Full memory panel and History describe that moment until Back to today. Under the
-  waiting conversations, "Memorized conversations" lists every conversation the room already turned into
-  notes and opens each as it was stored while its file exists. The expanded room's line leads with the day
-  its memory began.
-- The room card says what is waiting ("3 conversations waiting", "memorize soon", "memorize now") and Maintain
-  opens a chooser that recommends Memorize or Review in one line each.
-- Maintenance model calls (the first read, the discussion, each Memorize or Review part) run with a small,
-  fixed reasoning budget and a single attempt per call, so a company gateway with a 16k output cap completes
-  them; the failures reported on 0.11.2 rooms (25-minute runs, drafts rejected, "terminated") no longer occur.
+- Notes: Your rooms now remember in notes, grouped by topic, with an archive and a memory budget. Each
+  note carries the day it was saved and whether you pinned it. Every memory screen uses the same words:
+  conversations you remembered, notes, topics, open items, the archive, and how full the memory is.
+  Tokens appear only next to the budget slider.
+- Memorize: Memorize works one conversation at a time and shows you what it will keep before anything is
+  saved. The first read says what the conversations hold and what needs your call; Discuss first lets you
+  answer before anything runs. The card fills in as each conversation is read, with what it added or
+  changed; you can edit a note on the card and keep any note the room should not let go. A conversation
+  whose reading fails is retried once and otherwise stays for next time with the reason beside it. A note
+  is filed under an existing topic when the proposed title is the same topic in other words, and a note
+  that repeats one already in memory updates that note instead of being written twice.
+- Archive: When the memory is over its budget, notes move to the archive instead of being deleted, and
+  the card shows which ones. Keep marks a note that must stay and another leaves in its place; every row
+  opens to the whole note; a topic can be kept whole for the run. Raising the budget from the card applies
+  with the save, so Cancel leaves the room alone; when everything fits, the card says so and shows no
+  rows. The room reads its archive by itself when a question is about an older period, and the chat shows
+  a "Read archived notes" chip with what it looked for.
+- Review: Review tidies the notes you have, topic by topic, and shows each topic's before and after. Its
+  first read lists what the room finds by itself: "Says the same twice" for notes that are copies of each
+  other and "Topics that look the same" for two topics that carry one subject. Two depths, wording only or
+  wording plus moving what is finished or stale to the archive, and the room recommends one. The tidy can
+  merge notes, archive duplicates and fold one topic into another. Review no longer rewrites the memory
+  as one block of text and no longer stops at the model's output limit.
+- Undo: Any Memorize or Review save can be undone while it is the latest change, from the saved screen
+  or from History. Undo puts the previous memory back byte for byte, takes back the archive rows that
+  save added, and lowers a budget that save raised.
+- Room settings: Room settings → Memory shows a room's notes by topic, its archive, its budget and its
+  history. Notes and open items with a search box; add, edit, move, pin and delete by hand; the archive
+  with the reason each note left, Restore and Delete for good; the budget slider with how full the memory
+  is; History with Undo. Editing stays open while the room is open in a chat; only a running answer blocks
+  it. The two saving toggles read as one group, "Saving without a second look", saying what each skips.
+- History: Every change in History has "What changed", listing the notes that save added, updated,
+  moved or archived. An updated note shows its old text struck above the new with the changed words
+  marked; an archived note carries its reason. On Room settings and the Memory tab, with a full-screen
+  view.
+- Memory tab: The Memory tab shows how full each room's memory is, its topics, and its full memory as
+  the room reads it. The growth graph is back, save by save, with the budget drawn as a dashed line; click
+  a point to read the memory as it was then. Memorized conversations are listed under the waiting ones
+  and open as they were stored. A memory above its budget reads in a neutral colour everywhere, because
+  the next Memorize or Review resolves it.
+- Upgrading: A room from 0.11.2 keeps everything it has. Its notes migrate on the first save, the old
+  "(saved …)" stamps become dates, working-style notes are filed as practices, and the memory budget
+  starts at the room's size so the first Memorize never moves anything to the archive by surprise. Room
+  settings says so under the slider; lower it whenever you want.
+- Rooms: The room card says what is waiting, and Maintain recommends Memorize or Review in one line each.
+- Gateways: Memorize and Review complete on a company gateway with a 16k output cap. Every maintenance
+  call runs with a small fixed reasoning budget and a single attempt, and no reply is larger than a few
+  thousand tokens; the failures reported on 0.11.2 rooms (25-minute runs, drafts rejected, "terminated")
+  no longer occur.
 
 ## 0.11.2 (2026-09-11)
 
