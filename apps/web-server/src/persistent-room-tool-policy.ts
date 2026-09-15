@@ -36,6 +36,11 @@ export const PERSISTENT_ROOM_WEB_RESEARCH_TOOL_NAMES = ["web_search", "fetch_url
 // personalized-agents/<roomId>/files/, default-on for every room — a dropped
 // or room-made file is vouched-for content, the fetch_url trust class.
 export const PERSISTENT_ROOM_SHELF_TOOL_NAMES = ["read_file", "search_file"] as const;
+// The room's read of its own archived notes: read-only, fenced to this room's
+// own archive file, default-on for every room — the other half of the pointer
+// line a demoted topic carries in context. Every OTHER memory_* name stays
+// blocked; this bundle is the single, named exception.
+export const PERSISTENT_ROOM_MEMORY_TOOL_NAMES = ["memory_recall"] as const;
 // Single proxy tool from pi-mcp-adapter; which servers it can reach is
 // governed by the user's mcp.json config, not by tool names.
 export const PERSISTENT_ROOM_MCP_TOOL_NAMES = ["mcp"] as const;
@@ -250,6 +255,7 @@ export function getPersistentRoomToolPolicy(agentId: string, input: { workspaceT
 	const allowedToolNames = [
 		...PERSISTENT_ROOM_WEB_RESEARCH_TOOL_NAMES,
 		...PERSISTENT_ROOM_SHELF_TOOL_NAMES,
+		...PERSISTENT_ROOM_MEMORY_TOOL_NAMES,
 		...PERSISTENT_ROOM_MCP_TOOL_NAMES,
 		...workspaceToolNames,
 		...bashToolNames,
@@ -261,4 +267,22 @@ export function getPersistentRoomToolPolicy(agentId: string, input: { workspaceT
 		blockedToolNames: PERSISTENT_ROOM_BLOCKED_TOOL_NAMES.filter((toolName) => !allowedSet.has(toolName)),
 		policySource: workspaceToolsEnabled ? PERSISTENT_ROOM_WORKSPACE_POLICY_SOURCE : PERSISTENT_ROOM_POLICY_SOURCE,
 	};
+}
+
+/**
+ * Does a tool the session actually registered break the policy? A blocked name
+ * is either exact or a `name_*` prefix, and the allowlist ALWAYS wins: a
+ * prefix exists to keep a family out wholesale, while a name on the allowlist
+ * was put there deliberately, tool by tool. Without that order `memory_recall`
+ * — the one memory tool every room has — would be read as a leak by the
+ * `memory_*` prefix that keeps the rest of that family out.
+ *
+ * Every caller that enforces the blocked list goes through here, so the family
+ * rule and its exceptions are decided in exactly one place.
+ */
+export function persistentRoomBlockedToolLeaks(policy: PersistentRoomToolPolicy, sessionToolNames: readonly string[]): string[] {
+	const allowedSet = new Set<string>(policy.allowedToolNames);
+	const matchesBlockedToolName = (blocked: string, toolName: string): boolean =>
+		blocked.endsWith("*") ? toolName.startsWith(blocked.slice(0, -1)) : toolName === blocked;
+	return sessionToolNames.filter((toolName) => !allowedSet.has(toolName) && policy.blockedToolNames.some((blocked) => matchesBlockedToolName(blocked, toolName)));
 }

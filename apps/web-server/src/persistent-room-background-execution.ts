@@ -27,6 +27,7 @@ import {
 import { buildPersistentRoomRestoredLiveThreadContext } from "./persistent-room-resume-context.js";
 import {
 	getPersistentRoomToolPolicy,
+	PERSISTENT_ROOM_MEMORY_TOOL_NAMES,
 	PERSISTENT_ROOM_SHELF_TOOL_NAMES,
 } from "./persistent-room-tool-policy.js";
 import {
@@ -391,13 +392,13 @@ function createPersistentRoomPermissionsExtension(roomId: string, workspaceToolN
 	};
 }
 
-/** Shelf tools are live-session custom tools; no shelf tool object is ever
- * registered for a background run, so their names would sit inert in the
- * allowlist. The mcp proxy IS registered here (room-scoped extension), so it
- * stays. */
+/** Shelf tools and the memory archive read are live-session custom tools; no
+ * such tool object is ever registered for a background run, so their names
+ * would sit inert in the allowlist. The mcp proxy IS registered here
+ * (room-scoped extension), so it stays. */
 export function persistentRoomBackgroundSessionToolNames(allowedToolNames: readonly string[]): string[] {
-	const shelfToolNames = new Set<string>(PERSISTENT_ROOM_SHELF_TOOL_NAMES);
-	return allowedToolNames.filter((toolName) => !shelfToolNames.has(toolName));
+	const liveOnlyToolNames = new Set<string>([...PERSISTENT_ROOM_SHELF_TOOL_NAMES, ...PERSISTENT_ROOM_MEMORY_TOOL_NAMES]);
+	return allowedToolNames.filter((toolName) => !liveOnlyToolNames.has(toolName));
 }
 
 async function createPersistentRoomBackgroundSession(input: {

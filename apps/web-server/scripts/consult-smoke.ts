@@ -67,8 +67,18 @@ function snapshotTree(dir: string): Map<string, string> {
 	return entries;
 }
 
-function assertTreesIdentical(before: Map<string, string>, after: Map<string, string>, label: string): void {
-	assert(before.size === after.size, `${label}: file count changed (${before.size} -> ${after.size})`);
+/**
+ * The consulted room is promised it records NO trace of having been consulted,
+ * so its tree must come back byte-identical, file count included. The ASKING
+ * room's own run is its own business — a consult is billed to it and leaves it
+ * the numbers of the call — so there the allowance names exactly where a new
+ * file may appear, and everything else still has to be untouched.
+ */
+function assertTreesIdentical(before: Map<string, string>, after: Map<string, string>, label: string, allowNewUnder?: string): void {
+	const added = [...after.keys()].filter((rel) => !before.has(rel));
+	const unexpected = allowNewUnder ? added.filter((rel) => !rel.split(path.sep).join("/").startsWith(allowNewUnder)) : added;
+	assert(unexpected.length === 0, `${label}: file(s) appeared after consult: ${unexpected.join(", ") || `count ${before.size} -> ${after.size}`}`);
+	assert(after.size - added.length === before.size, `${label}: file count changed (${before.size} -> ${after.size})`);
 	for (const [rel, hash] of before) {
 		assert(after.get(rel) === hash, `${label}: file changed or missing after consult: ${rel}`);
 	}
@@ -145,7 +155,7 @@ try {
 	assert(response.warnings.some((warning: string) => /no trace/.test(warning)), "consult response should state the no-trace property");
 
 	assertTreesIdentical(targetBefore, snapshotTree(targetRoot), "target room");
-	assertTreesIdentical(askerBefore, snapshotTree(askerRoot), "asking room");
+	assertTreesIdentical(askerBefore, snapshotTree(askerRoot), "asking room", "events/maintenance-diagnostics/");
 
 	// Overflow wire (MR-2): resolveModelWindow arms the same guard through
 	// buildConsultAnswer — refusal happens before the worker ever runs.

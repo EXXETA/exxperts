@@ -17,3 +17,7 @@ AGENTS.md
 
 # Private working docs kept outside the repo
 *-private/
+
+# Bench and generator scratch: run folders hold full copies of whatever room
+# was benched, real memory included
+scratch/

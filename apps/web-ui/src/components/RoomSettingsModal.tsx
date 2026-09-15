@@ -14,7 +14,7 @@ function roomStatusLabel(status: PersistentAgentStatus["status"]): string {
 	return status === "needs_absorb" ? "ready to memorize" : status;
 }
 
-type SettingsPane = "workspace" | "memory" | "skills" | "connectors" | "schedules" | "session" | "danger";
+export type SettingsPane = "workspace" | "memory" | "skills" | "connectors" | "schedules" | "session" | "danger";
 
 const PANES: { id: SettingsPane; label: string }[] = [
 	{ id: "workspace", label: "Workspace" },
@@ -52,10 +52,12 @@ function highlightMention(text: string, name: string): ReactNode {
 	return parts.length > 0 ? parts : text;
 }
 
-export function RoomSettingsModal({ status, onClose, onArchive, onPurge, onRefresh, onMementoApplied, onMementoForget, onOpenSkillsLibrary }: { status: PersistentAgentStatus; onClose: () => void; onArchive: (agentId: PersistentAgentId, confirmation: string) => Promise<PersistentAgentArchiveResponse>; onPurge: (agentId: PersistentAgentId, confirmation: string) => Promise<PersistentAgentPurgeResponse>; onRefresh: () => void; onMementoApplied?: () => void; onMementoForget?: () => void; onOpenSkillsLibrary?: () => void }) {
+export function RoomSettingsModal({ status, onClose, onArchive, onPurge, onRefresh, onMementoApplied, onMementoForget, onOpenSkillsLibrary, initialPane }: { status: PersistentAgentStatus; onClose: () => void; onArchive: (agentId: PersistentAgentId, confirmation: string) => Promise<PersistentAgentArchiveResponse>; onPurge: (agentId: PersistentAgentId, confirmation: string) => Promise<PersistentAgentPurgeResponse>; onRefresh: () => void; onMementoApplied?: () => void; onMementoForget?: () => void; onOpenSkillsLibrary?: () => void; initialPane?: SettingsPane }) {
 	const workspaceDirtyRef = useRef(false);
 	const handleWorkspaceDirtyChange = useCallback((dirty: boolean) => { workspaceDirtyRef.current = dirty; }, []);
-	const [pane, setPane] = useState<SettingsPane>("workspace");
+	// Callers that open the modal at a particular pane (the Memory tab's link
+	// into this room's memory) say so once; the nav owns it from then on.
+	const [pane, setPane] = useState<SettingsPane>(initialPane ?? "workspace");
 	const currentName = status.displayName || status.id;
 	const [editingName, setEditingName] = useState(false);
 	const [nameDraft, setNameDraft] = useState("");

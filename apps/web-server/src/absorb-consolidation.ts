@@ -1,5 +1,5 @@
 import { extractAssessmentSection, extractLabeledBullets } from "./assessment-parsing.js";
-import { analyzeRecentContextIds } from "./recent-context-entries.js";
+import { analyzeRecentContextIds, isStubRecentContextId } from "./recent-context-entries.js";
 import { estimateTokens } from "./token-estimate.js";
 import { ASSESSMENT_MAX_CHARS, ASSESSMENT_TARGET_CHARS, ASSESSMENT_TARGET_WORDS, DISCUSSION_HANDOFF_MAX_CHARS, DISCUSSION_HANDOFF_TARGET_CHARS, DISCUSSION_HANDOFF_TARGET_WORDS } from "./discussion-handoff.js";
 
@@ -7,7 +7,7 @@ export const ABSORB_CONSOLIDATION_WORKER_TYPE = "absorb-consolidation-worker" as
 export const ABSORB_DISCUSSION_WORKER_TYPE = "absorb-discussion-worker" as const;
 export const ABSORB_CONSOLIDATION_MODE = "rc_consolidation" as const;
 export const ABSORB_DISCUSSION_MODE = "rc_consolidation_discussion" as const;
-export const MIN_ABSORB_RECENT_CONTEXT_ENTRIES = 5;
+export const MIN_ABSORB_RECENT_CONTEXT_ENTRIES = 1;
 export const ABSORB_EMPTY_RECENT_CONTEXT_PLACEHOLDER = "No checkpointed sessions yet.";
 export const ABSORB_DISCUSSION_TOKEN_BUDGET = {
 	softWarning: 75000,
@@ -103,6 +103,14 @@ export interface AbsorbAssessmentPromptInput {
 	now?: Date;
 	/** "Reassess" carries the previous assessment's parse warnings so the worker corrects them. */
 	retryFeedback?: string[];
+	/**
+	 * Memory v2: the material the assessment reads INSTEAD of the whole L1b —
+	 * the topic map (one line per entry) plus the sessions waiting. A 20k core
+	 * costs about 8k tokens this way instead of 68k, and the assessment's job
+	 * (which sessions hold what, and where it would go) needs the addresses, not
+	 * every entry's full text. Absent, the whole L1b is carried as before.
+	 */
+	memoryMaterial?: string;
 }
 
 export interface AbsorbProposalPromptInput extends AbsorbAssessmentPromptInput {
@@ -123,6 +131,8 @@ export interface AbsorbDiscussionPromptInput extends AbsorbAssessmentPromptInput
 	userMessage?: string;
 	sourceFingerprint: AbsorbSourceFingerprint;
 	mode: "turn" | "signoff";
+	/** Memory v2: the Task the sign-off answers, when it is the structured one the fold reads. */
+	signoffTask?: string;
 }
 
 export interface AbsorbAssessmentPromptAssembly {
@@ -258,6 +268,92 @@ export function extractRecentContextForAbsorb(l1b: string): { before: string; re
 	};
 }
 
+// --- Recent Context sessions ---------------------------------------------------
+
+export interface AbsorbRecentContextSession {
+	id: string;
+	title: string;
+	date: string;
+	/** The block as it stands in Recent Context, heading line included. */
+	text: string;
+	tokens: number;
+}
+
+const ISO_DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
+const RC_HEADING_LINE = /^###\s+(RC-[^\s|]+).*$/gm;
+
+interface RecentContextBlock {
+	id: string;
+	/** Stub blocks are placeholders, never sessions: they are carried through untouched. */
+	stub: boolean;
+	text: string;
+}
+
+interface ParsedRecentContext {
+	/** The `## Recent Context` heading and any prose above the first block, verbatim. */
+	head: string;
+	blocks: RecentContextBlock[];
+}
+
+function headingFields(heading: string): string[] {
+	return heading.replace(/^###\s+/, "").split("|").map((part) => part.trim()).filter(Boolean);
+}
+
+/**
+ * The room's remembered sessions, in the order they were saved. Every `### RC-`
+ * heading opens a block; a stub id opens a placeholder, which is a block this
+ * run carries through rather than a session it folds — the same predicate the
+ * entry counter uses, so the two can never disagree about what a session is.
+ */
+export function parseRecentContextBlocks(recentContext: string): ParsedRecentContext {
+	const matches = Array.from(recentContext.matchAll(RC_HEADING_LINE));
+	if (matches.length === 0) return { head: recentContext, blocks: [] };
+	const head = recentContext.slice(0, matches[0].index ?? 0);
+	const blocks = matches.map((match, i) => {
+		const start = match.index ?? 0;
+		const end = i + 1 < matches.length ? (matches[i + 1].index ?? recentContext.length) : recentContext.length;
+		const id = match[1].trim();
+		return { id, stub: isStubRecentContextId(id), text: recentContext.slice(start, end).trimEnd() };
+	});
+	return { head, blocks };
+}
+
+export function recentContextSessions(recentContext: string): AbsorbRecentContextSession[] {
+	return parseRecentContextBlocks(recentContext).blocks
+		.filter((block) => !block.stub)
+		.map((block) => {
+			const heading = block.text.split(/\r?\n/)[0] ?? "";
+			const fields = headingFields(heading);
+			const date = fields.find((field) => ISO_DATE_ONLY.test(field)) ?? "";
+			const title = fields.slice(1).filter((field) => field !== date && !/^(OPEN|CLOSED)$/i.test(field)).join(" | ") || block.id;
+			return { id: block.id, title, date, text: block.text, tokens: estimateTokens(block.text) };
+		});
+}
+
+/**
+ * An emptied Recent Context section: the heading it already had, then the ONE
+ * placeholder. Everything that empties the section — the v1 candidate
+ * normalizer and the v2 run alike — writes it through here, so the sentence a
+ * room shows when it has nothing remembered has one author.
+ */
+export function absorbRecentContextPlaceholderSection(head: string): string {
+	return `${head.trimEnd() || "## Recent Context"}\n\n${ABSORB_EMPTY_RECENT_CONTEXT_PLACEHOLDER}\n`;
+}
+
+/**
+ * The Recent Context section with the given sessions taken out. Stub blocks and
+ * anything above the first block survive verbatim; a section left with no
+ * session at all gets the product's own placeholder, through the one function
+ * that writes it.
+ */
+export function recentContextWithout(recentContext: string, removedIds: Set<string>): string {
+	const parsed = parseRecentContextBlocks(recentContext);
+	const kept = parsed.blocks.filter((block) => block.stub || !removedIds.has(block.id));
+	const head = parsed.head.trimEnd() || "## Recent Context";
+	if (kept.filter((block) => !block.stub).length === 0) return `${absorbRecentContextPlaceholderSection(head).trimEnd()}\n`;
+	return `${head}\n\n${kept.map((block) => block.text).join("\n\n")}\n`;
+}
+
 export function absorbRecentContextMetrics(l1b: string): AbsorbRecentContextMetrics {
 	const recent = extractRecentContextForAbsorb(l1b);
 	return {
@@ -295,7 +391,9 @@ export function absorbAvailabilityFromL1b(l1b: string, scaffoldReady = true): Ab
 			reason: "insufficient_recent_context",
 			recentContextEntryCount: recent.entryCount,
 			minimumRecentContextEntries: MIN_ABSORB_RECENT_CONTEXT_ENTRIES,
-			message: `Absorb requires at least ${MIN_ABSORB_RECENT_CONTEXT_ENTRIES} Recent Context entries. Current count: ${recent.entryCount}.`,
+			message: recent.entryCount === 0
+				? "This room has no conversations waiting to be memorized. If you were in the middle of an update, it was saved from another window."
+				: `Memorize needs at least ${MIN_ABSORB_RECENT_CONTEXT_ENTRIES} waiting conversations; this room has ${recent.entryCount}.`,
 		};
 	}
 	return {
@@ -393,9 +491,11 @@ export function buildAbsorbAssessmentPrompt(input: AbsorbAssessmentPromptInput):
 		absorbConsolidationConstitution().trim(),
 		`## Process Metadata\n\n- Agent id: ${input.agentId}\n- Process type: ${ABSORB_CONSOLIDATION_WORKER_TYPE}\n- Mode: ${ABSORB_CONSOLIDATION_MODE}\n- Trigger time: ${now.toISOString()}\n- System-selected model: ${input.model.provider}/${input.model.model}\n- Writes memory: false\n- Recent Context entries: ${metrics.recentContextEntryCount}`,
 		`## Section Purpose Map\n\n${formatSectionPurposeMap(input.sectionPurposeMap)}`,
-		`## Material: Current L1b Memory State\n\nThe following is the complete current L1b. It includes stable sections and Recent Context. Do not expect or require L1a.\n\n${input.l1b.trim()}`,
+		input.memoryMaterial?.trim()
+			? `## Material: This Room's Memory\n\n${input.memoryMaterial.trim()}`
+			: `## Material: Current L1b Memory State\n\nThe following is the complete current L1b. It includes stable sections and Recent Context. Do not expect or require L1a.\n\n${input.l1b.trim()}`,
 		...(retrySection ? [retrySection] : []),
-		`## Task: Compact Initial Assessment\n\nProduce a compact absorb assessment. The assessment should help the user decide whether to generate a full Memory Absorption Proposal. Keep it scannable and non-intimidating.\n\nUse exactly this markdown structure:\n\n## Absorb assessment\n\nI found ${metrics.recentContextEntryCount} Recent Context entries. Here is the proposed direction.\n\n### What to remember\n- 3-5 bullets max.\n\n### What to forget\n- 2-4 bullets max.\n\n### What changes in stable memory\n- Deep Memory: 1-3 bullets.\n- Active Items: 1-3 bullets.\n- Recent Context: all entries are expected to be cleared after approval.\n\n### Needs your judgment\n- 0-3 short questions or uncertainty flags. If none, write: None\n\nKeep the whole assessment under about ${ASSESSMENT_TARGET_WORDS} words (~${ASSESSMENT_TARGET_CHARS} characters); the review screen accepts at most ${ASSESSMENT_MAX_CHARS} characters, and a longer assessment is regenerated rather than shown.\n\nReturn only the assessment markdown. Do not include Candidate L1b. Do not claim anything has been saved.`,
+		`## Task: Compact Initial Assessment\n\nProduce a compact absorb assessment. The assessment should help the user decide whether to generate a full Memory Absorption Proposal. Keep it scannable and non-intimidating. Write for a business user: call each Recent Context entry a conversation and name it by its date and title, never by its RC number; do not use the words "entry", "session", "Deep Memory" or "Active Items" in the bullets.\n\nUse exactly this markdown structure:\n\n## Absorb assessment\n\nI found ${metrics.recentContextEntryCount} Recent Context entries. Here is the proposed direction.\n\n### What to remember\n- 3-5 bullets max.\n\n### What to forget\n- 2-4 bullets max.\n\n### What changes in stable memory\n- Deep Memory: 1-3 bullets.\n- Active Items: 1-3 bullets.\n- Recent Context: all entries are expected to be cleared after approval.\n\n### Needs your judgment\n- 0-3 short questions or uncertainty flags. If none, write: None\n\nKeep the whole assessment under about ${ASSESSMENT_TARGET_WORDS} words (~${ASSESSMENT_TARGET_CHARS} characters); the review screen accepts at most ${ASSESSMENT_MAX_CHARS} characters, and a longer assessment is regenerated rather than shown.\n\nReturn only the assessment markdown. Do not include Candidate L1b. Do not claim anything has been saved.`,
 	].join("\n\n---\n\n") + "\n";
 	return {
 		prompt,
@@ -455,6 +555,8 @@ Reply to the user's latest message as the absorb discussion operator. Help them 
 
 Keep the reply focused on the memory-maintenance task. Ask focused clarification questions only when useful. Do not generate the official Candidate L1b. Do not claim memory has been saved. Do not mention tools, sessions, checkpoints, or ordinary chat persistence.
 
+Write for a business user, in their words: call the Recent Context entries conversations and name them by date and title, never by RC number; say "notes" for Deep Memory entries and "open items" for Active Items, and never use the words "entry", "session", "Deep Memory" or "Active Items". Keep the reply short: confirm what the update will do in a few lines, and ask at most one question. You cannot start, draft, generate or save anything yourself, and nothing happens until the person presses Continue: never say you will proceed, generate or hand off. When they have nothing more to add, end with: "Press Continue when you are ready."
+
 Return only the assistant discussion message.`;
 }
 
@@ -509,7 +611,7 @@ ${formatAbsorbDiscussionTranscript(input.messages)}`,
 ${input.userMessage.trim()}` : `## Latest User Message
 
 None.`,
-		absorbDiscussionTask(input.mode),
+		input.mode === "signoff" && input.signoffTask ? input.signoffTask : absorbDiscussionTask(input.mode),
 	];
 	const promptWithoutBudget = promptParts.join("\n\n---\n\n") + "\n";
 	const budget = absorbDiscussionTokenBudget(estimateTokens(promptWithoutBudget));

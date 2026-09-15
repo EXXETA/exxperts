@@ -27,11 +27,11 @@ const {
 	createPersistentAgentFromScaffoldInput,
 	buildAbsorbAssessment,
 	buildAbsorbProposal,
-	buildStructuralReviewProposal,
 	buildCheckpointProposal,
 	buildConsultAnswer,
 	writePersistentAgentThread,
 } = await import("../src/persistent-agents.js");
+const { getReviewRun, startReviewRun } = await import("../src/review-run.js");
 const { ABSORB_EMPTY_RECENT_CONTEXT_PLACEHOLDER } = await import("../src/absorb-consolidation.js");
 const { getAbsorbModelLock, getStructuralReviewModelLock } = await import("../src/persistent-agent-ai-profiles.js");
 
@@ -75,6 +75,51 @@ const assessmentFixture = `## Absorb assessment\n\nI found 5 Recent Context entr
 
 // A draft that was cut mid-document: proposal head present, Candidate L1b gone.
 const cutAbsorbDraft = `## Memory Absorption Proposal\n\n### Mode\nRC_CONSOLIDATION\n\n### Primacy Map\nThe RC chain captures truncation-guard work.\n\n### Section-Level Change Log\n| Section | Prior Words | Candidate Words | Action | Rationale |\n|---|---:|---:|---|---|\n| Deep Memory | 20 | 28 | sharpen | Preserve durable direction. |\n\n### Entry-Level`;
+
+/** A room whose memory is notes with ids and dates — what a Review run reads. */
+function reviewMemoryFixture(agentId: string): string {
+	return [
+		"<!-- exxeta:l1b schema_version=1 -->",
+		"",
+		"## Chronos",
+		"",
+		`- Persistent agent id: ${agentId}`,
+		"- Lifecycle state: ready",
+		"",
+		"## Deep Memory",
+		"",
+		"<!-- entries: next=2000 -->",
+		"",
+		"### Commercial terms",
+		"",
+		"<!-- e: id=m-0001 kind=fact saved=2026-07-08 from=RC-0002 refs=0 -->",
+		"- The contract renews annually, legal signs before June, and the escalation path runs through the account owner first.",
+		"",
+		"<!-- e: id=m-0002 kind=fact saved=2026-08-21 from=RC-0002 refs=0 -->",
+		"- Send commercial summaries as one page, numbers first, with the rate table underneath and nothing else attached.",
+		"",
+		"## Active Items",
+		"",
+		"<!-- e: id=m-0900 kind=item status=open saved=2026-09-01 updated=2026-09-11 refs=4 from=RC-0002 -->",
+		"- Chase the vendor for the signed addendum.",
+		"",
+		"## Recent Context",
+		"",
+		"No checkpointed sessions yet.",
+		"",
+	].join("\n");
+}
+
+async function settleReviewRun(agentId: string, runId: string) {
+	const deadline = Date.now() + 60_000;
+	let run = getReviewRun(agentId, runId);
+	while (run.state === "prepass" || run.state === "tidying" || run.state === "budget") {
+		assert(Date.now() < deadline, `a scripted tidy answers in milliseconds, yet the run stayed in "${run.state}"`);
+		await new Promise((resolve) => setTimeout(resolve, 5));
+		run = getReviewRun(agentId, runId);
+	}
+	return run;
+}
 
 const truncatedResult = (text: string) => ({
 	text,
@@ -148,13 +193,25 @@ try {
 	);
 	assert(assessmentCalls === 2, `oversized first draft should regenerate once before the truncated retry refuses (got ${assessmentCalls} calls)`);
 
-	// 4. Review proposal: same whole-document-rewrite lead as Memorize.
-	const reviewError = await expectRejects(
-		() => buildStructuralReviewProposal({ agentId, assessmentMarkdown: "## Prune memory assessment\n\nSynthetic." }, STRUCTURAL_REVIEW_MODEL, async () => truncatedResult("## Structural Review Proposal\n\n### Summary\ncut")),
-		/too large to rewrite in one response/,
-		"truncated Review proposal",
-	);
-	assert(/the Review draft was cut off/.test(reviewError.message), "Review refusal should name the process");
+	// 4. Review tidy: a cut reply costs the group it was tidying and nothing
+	// else — the notes are left exactly as they were, the card says the reply
+	// was cut with the numbers the provider reported, and no structure
+	// complaint is invented for what is an output limit.
+	createPersistentAgentFromScaffoldInput({ displayName: "Worker Truncation Review Room", userName: "Synthetic User", preferredUserAddress: "Synthetic User" });
+	const reviewRoomId = "worker-truncation-review-room";
+	fs.writeFileSync(path.join(root, reviewRoomId, "L1b", "current.md"), reviewMemoryFixture(reviewRoomId), { mode: 0o600 });
+	const startedReview = startReviewRun(reviewRoomId, {
+		depth: "tidy",
+		model: STRUCTURAL_REVIEW_MODEL,
+		resolveModelWindow: () => ({ contextWindow: 400_000, maxOutputTokens: 42_666 }),
+		generate: async () => truncatedResult("Here is the tidy.\n\n```json\n{ \"ops\": [ { \"op\": \"upd"),
+	});
+	const reviewRun = await settleReviewRun(reviewRoomId, startedReview.runId);
+	assert(reviewRun.changes.length === 0, "a cut tidy changes nothing");
+	const leftAsIs = reviewRun.leftAsIs.map((row) => row.reason).join(" | ");
+	assert(/was cut off at the model's output limit/.test(leftAsIs), `the Review card should name the cut, got: ${leftAsIs}`);
+	assert(/42666/.test(leftAsIs), "the Review card should carry the real token numbers");
+	assert(!/topology|missing Recent Context|is not a note of this group/.test(leftAsIs), "a cut reply must not surface as a structure complaint");
 
 	// 5. Checkpoint: a truncated first attempt refuses immediately — the
 	// missing-fields retry must NOT run (it would re-roll the same dice).

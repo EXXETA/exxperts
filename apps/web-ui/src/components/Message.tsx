@@ -71,6 +71,7 @@ const GENERIC_TOOL_VIEWS: Record<string, { icon: string; running: string; done: 
 	// which tool did it.
 	read_file: { icon: "📄", running: "Reading file", done: "Read file" },
 	search_file: { icon: "🔎", running: "Searching file", done: "Searched file" },
+	memory_recall: { icon: "🗄️", running: "Reading archived notes", done: "Read archived notes" },
 	kb_search: { icon: "📚", running: "Searching knowledge base", done: "Searched knowledge base" },
 	artifact_list: { icon: "🗂️", running: "Listing artifacts", done: "Listed artifacts" },
 	artifact_read: { icon: "🗂️", running: "Reading artifact", done: "Read artifact" },
@@ -106,6 +107,11 @@ function summariseToolArgs(name: string, args: any): string {
 		const query = String(args.query ?? "");
 		const file = typeof args.name === "string" && args.name.trim() ? ` · ${args.name.trim()}` : "";
 		return `${query}${file}`.slice(0, 160);
+	}
+	if (name === "memory_recall") {
+		const query = String(args.query ?? "").trim();
+		const topic = typeof args.topic === "string" && args.topic.trim() ? args.topic.trim() : "";
+		return (query && topic ? `${query} · ${topic}` : query || topic).slice(0, 160);
 	}
 	if (name === "fetch_url") return String(args.url ?? "").slice(0, 160);
 	if (name === "web_search") return String(args.query ?? "").slice(0, 160);

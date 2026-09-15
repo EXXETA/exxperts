@@ -116,6 +116,13 @@ export interface AgentOptions {
 	 * and inherits the server's default).
 	 */
 	maxTokens?: number;
+	/**
+	 * Explicit per-request client-side retry cap forwarded to the stream
+	 * function. When omitted, each provider SDK applies its own default (two
+	 * retries). Set to 0 for single-shot requests, where a retry would restart
+	 * a whole generation instead of resuming it.
+	 */
+	maxRetries?: number;
 }
 
 class PendingMessageQueue {
@@ -194,6 +201,8 @@ export class Agent {
 	public maxRetryDelayMs?: number;
 	/** Optional explicit per-response output-token cap forwarded to the stream function. */
 	public maxTokens?: number;
+	/** Optional explicit client-side retry cap forwarded to the stream function. */
+	public maxRetries?: number;
 	/** Tool execution strategy for assistant messages that contain multiple tool calls. */
 	public toolExecution: ToolExecutionMode;
 	/**
@@ -220,6 +229,7 @@ export class Agent {
 		this.maxRetryDelayMs = options.maxRetryDelayMs;
 		this.toolExecution = options.toolExecution ?? "parallel";
 		this.maxTokens = options.maxTokens;
+		this.maxRetries = options.maxRetries;
 	}
 
 	/**
@@ -428,6 +438,7 @@ export class Agent {
 		return {
 			model: this._state.model,
 			maxTokens: this.maxTokens,
+			maxRetries: this.maxRetries,
 			reasoning: this._state.thinkingLevel === "off" ? undefined : this._state.thinkingLevel,
 			sessionId: this.sessionId,
 			onPayload: this.onPayload,

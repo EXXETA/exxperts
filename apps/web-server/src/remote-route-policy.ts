@@ -114,6 +114,7 @@ const POLICY: Record<string, RemoteRouteClass> = {
 	"GET /api/memory/rooms/:id": "read",
 	"GET /api/memory/rooms/:id/area": "read",
 	"GET /api/memory/rooms/:id/conversation": "read",
+	"GET /api/memory/rooms/:id/conversations": "read",
 	"GET /api/memory/rooms/:id/event-diff": "read",
 	"GET /api/memory/rooms/:id/snapshot": "read",
 
@@ -126,13 +127,28 @@ const POLICY: Record<string, RemoteRouteClass> = {
 	"GET /api/persistent-agents/:id/background-runs": "read",
 	"GET /api/persistent-agents/:id/reattach-buffer-stats": "read",
 	"GET /api/persistent-agents/:id/absorb/status": "read",
-	"GET /api/persistent-agents/:id/structural-review/status": "read",
+	// A Memorize run is progress and numbers about the room's own memory, so
+	// watching one is a read like any other room read; changing or approving it
+	// is a write.
+	"GET /api/persistent-agents/:id/absorb/runs/:runId": "read",
+	// The same for a Review run: what it costs and what it changed are numbers
+	// about the room's own memory, so watching one is a read; changing or
+	// approving it is a write.
+	"GET /api/persistent-agents/:id/review/status": "read",
+	"GET /api/persistent-agents/:id/review/runs/:runId": "read",
 	"GET /api/persistent-agents/:id/files": "read",
 	"GET /api/persistent-agents/:id/files/:name": "read",
 	"GET /api/persistent-agents/:id/tasks": "read",
 	"GET /api/persistent-agents/:id/threads/:threadId": "read",
 	"GET /api/persistent-agents/:id/schedules": "read",
 	"GET /api/persistent-agents/:id/maintenance-settings": "read",
+	// Numbers about this room's maintenance runs — no prompt, reply or memory
+	// text — so a read-only device may look at them like any other room read.
+	"GET /api/persistent-agents/:id/maintenance-diagnostics": "read",
+	"GET /api/persistent-agents/:id/maintenance-diagnostics/export": "read",
+	"GET /api/persistent-agents/:id/memory/entries": "read",
+	"GET /api/persistent-agents/:id/memory/archive": "read",
+	"GET /api/persistent-agents/:id/memory/history": "read",
 	"GET /api/persistent-agents/:id/bash-settings": "read",
 	"GET /api/persistent-agents/:id/preferred-model": "read",
 	"GET /api/persistent-agents/:id/mcp-connectors": "read",
@@ -154,13 +170,32 @@ const POLICY: Record<string, RemoteRouteClass> = {
 	"POST /api/persistent-agents/:id/absorb/discuss": "write",
 	"POST /api/persistent-agents/:id/absorb/discuss/signoff": "write",
 	"POST /api/persistent-agents/:id/absorb/propose": "write",
+	"POST /api/persistent-agents/:id/absorb/runs/:runId/keep": "write",
+	"POST /api/persistent-agents/:id/absorb/runs/:runId/edit": "write",
+	"POST /api/persistent-agents/:id/absorb/runs/:runId/budget": "write",
+	"POST /api/persistent-agents/:id/absorb/runs/:runId/cancel": "write",
+	"POST /api/persistent-agents/:id/review/runs": "write",
+	"POST /api/persistent-agents/:id/review/runs/:runId/keep": "write",
+	"POST /api/persistent-agents/:id/review/runs/:runId/budget": "write",
+	"POST /api/persistent-agents/:id/review/runs/:runId/edit": "write",
+	"POST /api/persistent-agents/:id/review/runs/:runId/cancel": "write",
+	"POST /api/persistent-agents/:id/review/runs/:runId/approve": "write",
 	"POST /api/persistent-agents/:id/checkpoint/approve": "write",
 	"POST /api/persistent-agents/:id/checkpoint/propose": "write",
-	"POST /api/persistent-agents/:id/structural-review/approve": "write",
-	"POST /api/persistent-agents/:id/structural-review/assess": "write",
-	"POST /api/persistent-agents/:id/structural-review/discuss": "write",
-	"POST /api/persistent-agents/:id/structural-review/discuss/signoff": "write",
-	"POST /api/persistent-agents/:id/structural-review/propose": "write",
+	// Review v2: reading the room's notes and talking the tidy over. Both run
+	// the model, so both are interaction, exactly like their Memorize twins.
+	"POST /api/persistent-agents/:id/review/assess": "write",
+	"POST /api/persistent-agents/:id/review/discuss": "write",
+	"POST /api/persistent-agents/:id/review/discuss/signoff": "write",
+	// Editing entries changes what the room knows, not what it may do: a
+	// full-capability phone can fix a memory the same way it can approve one.
+	"POST /api/persistent-agents/:id/memory/entries": "write",
+	"PUT /api/persistent-agents/:id/memory/entries/:entryId": "write",
+	"DELETE /api/persistent-agents/:id/memory/entries/:entryId": "write",
+	"POST /api/persistent-agents/:id/memory/archive/:entryId/restore": "write",
+	"DELETE /api/persistent-agents/:id/memory/archive/:entryId": "write",
+	// Taking back the latest save is the same right as approving it.
+	"POST /api/persistent-agents/:id/memory/undo": "write",
 	"POST /api/persistent-agents/:id/files": "write",
 	"POST /api/persistent-agents/:id/files/:name/delete": "write",
 	"POST /api/persistent-agents/:id/files/:name/delete/commit": "write",

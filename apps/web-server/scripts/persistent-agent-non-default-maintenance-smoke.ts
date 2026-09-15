@@ -12,14 +12,10 @@ const {
 	createPersistentAgentFromScaffoldInput,
 	fingerprintL1bSource,
 	getAbsorbAvailability,
-	getStructuralReviewAvailability,
 	parseAbsorbApprovalRequest,
-	parseStructuralReviewApprovalRequest,
 	writeApprovedAbsorb,
-	writeApprovedStructuralReview,
 } = await import("../src/persistent-agents.js");
 const { ABSORB_CONSOLIDATION_WORKER_TYPE, ABSORB_EMPTY_RECENT_CONTEXT_PLACEHOLDER } = await import("../src/absorb-consolidation.js");
-const { extractStructuralReviewSourceParts, STRUCTURAL_REVIEW_MODE, STRUCTURAL_REVIEW_WORKER_TYPE } = await import("../src/structural-review.js");
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -45,6 +41,9 @@ function absorbEventCount(agentRoot: string): number {
 	return fileCount(path.join(agentRoot, "events", "absorb"), (name) => name.endsWith(".json"));
 }
 
+// Nothing writes here any more — the Review this counted was replaced by the
+// run — so a room that gains one of these files has gained it from somewhere
+// it should not have.
 function structuralReviewEventCount(agentRoot: string): number {
 	return fileCount(path.join(agentRoot, "events", "structural-review"), (name) => name.endsWith(".json"));
 }
@@ -97,14 +96,12 @@ function rcEntry(index: number): string {
 }
 
 function selectedSourceL1b(agentId: string): string {
-	return `<!-- exxeta:l1b schema_version=1 -->\n\n## Chronos\n\n- Current scaffold timestamp: 2026-05-30T10:00:00.000Z\n- Persistent agent id: ${agentId}\n- Lifecycle state: ready\n- Last checkpoint: cp_selected_maintenance_smoke\n- Last consolidation: none\n\n## Deep Memory\n\n### Collaboration\n\n- This selected room validates non-default maintenance targeting.\n- Stable memory should change only under the selected room root.\n\n## Active Items\n\n### Current Focus\n\n- Prove selected Absorb and Structural Review write boundaries.\n\n### Parked\n\n- Keep provider-dependent workflows out of this smoke.\n\n## Recent Context\n\n${Array.from({ length: 5 }, (_, i) => rcEntry(i + 1)).join("\n")}\n`;
+	return `<!-- exxeta:l1b schema_version=1 -->\n\n## Chronos\n\n- Current scaffold timestamp: 2026-05-30T10:00:00.000Z\n- Persistent agent id: ${agentId}\n- Lifecycle state: ready\n- Last checkpoint: cp_selected_maintenance_smoke\n- Last consolidation: none\n\n## Deep Memory\n\n### Collaboration\n\n- This selected room validates non-default maintenance targeting.\n- Stable memory should change only under the selected room root.\n\n## Active Items\n\n### Current Focus\n\n- Prove selected Memorize write boundaries.\n\n### Parked\n\n- Keep provider-dependent workflows out of this smoke.\n\n## Recent Context\n\n${Array.from({ length: 5 }, (_, i) => rcEntry(i + 1)).join("\n")}\n`;
 }
 
 function absorbCandidateL1b(agentId: string): string {
-	return `<!-- exxeta:l1b schema_version=1 -->\n\n## Chronos\n\n- Current scaffold timestamp: 2026-05-30T10:00:00.000Z\n- Persistent agent id: ${agentId}\n- Lifecycle state: ready\n- Last checkpoint: cp_selected_maintenance_smoke\n- Last consolidation: none\n\n## Deep Memory\n\n### Collaboration\n\n- This selected room validates non-default maintenance targeting.\n- Selected Absorb consolidated durable insight into stable memory without touching the control room.\n\n### Maintenance Boundaries\n\n- Persistent-agent maintenance writes must target the route-selected room root.\n\n## Active Items\n\n### Current Focus\n\n- Prove selected Absorb and Structural Review write boundaries.\n- Review the selected room structural-review candidate after absorb.\n\n### Parked\n\n- Keep provider-dependent workflows out of this smoke.\n\n## Recent Context\n\n${ABSORB_EMPTY_RECENT_CONTEXT_PLACEHOLDER}\n`;
+	return `<!-- exxeta:l1b schema_version=1 -->\n\n## Chronos\n\n- Current scaffold timestamp: 2026-05-30T10:00:00.000Z\n- Persistent agent id: ${agentId}\n- Lifecycle state: ready\n- Last checkpoint: cp_selected_maintenance_smoke\n- Last consolidation: none\n\n## Deep Memory\n\n### Collaboration\n\n- This selected room validates non-default maintenance targeting.\n- Selected Absorb consolidated durable insight into stable memory without touching the control room.\n\n### Maintenance Boundaries\n\n- Persistent-agent maintenance writes must target the route-selected room root.\n\n## Active Items\n\n### Current Focus\n\n- Prove selected Memorize write boundaries.\n- Keep the selected room the only room a maintenance write touches.\n\n### Parked\n\n- Keep provider-dependent workflows out of this smoke.\n\n## Recent Context\n\n${ABSORB_EMPTY_RECENT_CONTEXT_PLACEHOLDER}\n`;
 }
-
-const structuralCandidateReviewTarget = `## Deep Memory\n\n### Collaboration\n\n- This selected room validates non-default maintenance targeting and selected Absorb consolidated durable insight into stable memory.\n\n### Maintenance Boundaries\n\n- Persistent-agent maintenance writes must target the route-selected room root.\n\n## Active Items\n\n### Current Focus\n\n- Prove selected Absorb and Structural Review write boundaries.\n\n### Parked\n\n- Keep provider-dependent workflows out of this smoke.\n`;
 
 function absorbProposal(agentId: string, sourceL1b = readText(path.join(tempAgentsRoot, agentId, "L1b", "current.md"))) {
 	return {
@@ -139,50 +136,6 @@ function absorbProposal(agentId: string, sourceL1b = readText(path.join(tempAgen
 			sectionPurposeCount: 4,
 		},
 		absorbUsage: { input: 1, output: 1, totalTokens: 2, cost: 0 },
-	};
-}
-
-function structuralReviewProposal(agentId: string, sourceL1b = readText(path.join(tempAgentsRoot, agentId, "L1b", "current.md"))) {
-	const parts = extractStructuralReviewSourceParts(sourceL1b);
-	return {
-		agentId,
-		writesMemory: false,
-		process: {
-			type: STRUCTURAL_REVIEW_WORKER_TYPE,
-			mode: STRUCTURAL_REVIEW_MODE,
-			model: { provider: "fixture-provider", model: "fixture-structural-review", label: "Fixture Structural Review" },
-		},
-		source: {
-			l1bFingerprint: fingerprintL1bSource(sourceL1b),
-			reviewTargetFingerprint: fingerprintL1bSource(parts.sourceReviewTargetL1b),
-			chronosFingerprint: fingerprintL1bSource(parts.preservedChronos),
-			recentContextFingerprint: fingerprintL1bSource(parts.preservedRecentContext),
-			generatedAt: "2026-05-30T12:00:00.000Z",
-		},
-		fields: {
-			summary: "Tighten selected-room maintenance boundary signal.",
-			candidateReviewTargetL1b: structuralCandidateReviewTarget,
-		},
-		review: {
-			metrics: {
-				reviewTargetWordsBefore: 60,
-				reviewTargetWordsAfter: 45,
-				reviewTargetEstimatedTokensBefore: 90,
-				reviewTargetEstimatedTokensAfter: 70,
-				reviewTargetEstimatedTokenDelta: -20,
-			},
-		},
-		structuralReviewTelemetry: {
-			chars: parts.sourceReviewTargetL1b.length,
-			bytes: Buffer.byteLength(parts.sourceReviewTargetL1b, "utf-8"),
-			words: 60,
-			estimatedTokens: 90,
-			memoryMap: [{ area: "Deep Memory", words: 30, estimatedTokens: 45 }],
-			promptChars: 400,
-			promptEstimatedTokens: 100,
-			sectionDescriptionCount: 4,
-		},
-		structuralReviewUsage: { input: 1, output: 1, totalTokens: 2, cost: 0 },
 	};
 }
 
@@ -244,49 +197,6 @@ try {
 	assert(!serializedAbsorbEvent.includes(selectedRoot), "selected absorb event JSON must not include selected absolute root");
 	assert(!serializedAbsorbEvent.includes(controlRoot), "selected absorb event JSON must not include default absolute root");
 	assertSnapshotUnchanged(controlRoot, controlBaseline, "selected absorb control room");
-
-	const beforeStructuralSnapshot = snapshot(selectedRoot);
-	const structuralAvailability = getStructuralReviewAvailability(agentId);
-	assert(structuralAvailability.available, "non-default structural-review availability should read selected L1b");
-	assert(structuralAvailability.reviewTargetEstimatedTokens > 0, "non-default structural-review availability should compute selected review target");
-
-	expectThrows(
-		() => parseStructuralReviewApprovalRequest({ proposal: { ...structuralReviewProposal(agentId), agentId: controlAgentId } }, agentId),
-		/proposal agentId does not match/i,
-		"structural-review proposal/route agentId mismatch should reject",
-	);
-	assertSnapshotUnchanged(selectedRoot, beforeStructuralSnapshot, "structural-review mismatch selected room");
-	assertSnapshotUnchanged(controlRoot, controlBaseline, "structural-review mismatch control room");
-
-	const selectedRegistryBeforeStructural = registrySnapshot(selectedRoot);
-	const defaultRegistryBeforeStructural = registrySnapshot(controlRoot);
-	const parsedStructural = parseStructuralReviewApprovalRequest({ proposal: structuralReviewProposal(agentId) }, agentId);
-	const structuralResult = writeApprovedStructuralReview(parsedStructural.request, parsedStructural.warnings, new Date("2026-05-30T12:00:00.000Z"));
-	const afterStructuralSelected = snapshot(selectedRoot);
-	assert(structuralResult.agentId === agentId, "structural-review approval response should identify selected room");
-	assert(afterStructuralSelected.l1b !== beforeStructuralSnapshot.l1b, "selected L1b/current.md should change after structural review approval");
-	assert(afterStructuralSelected.archiveCount === beforeStructuralSnapshot.archiveCount + 1, "selected archive count should increase after structural review approval");
-	assert(afterStructuralSelected.structuralReviewEventCount === beforeStructuralSnapshot.structuralReviewEventCount + 1, "selected structural-review event count should increase");
-	assert(structuralResult.eventRelPath, "structural-review approval response should carry eventRelPath");
-	assert(structuralResult.eventRecordPath === path.join(selectedRoot, structuralResult.eventRelPath), "structural-review event response path should be selected-root relative");
-	const structuralEvent = readJson(structuralResult.eventRecordPath);
-	assert(structuralEvent.agentId === agentId, "selected structural-review event should record selected room id");
-	assert(structuralEvent.archivedL1bPath == null, "selected structural-review event should not persist top-level archive path");
-	assert(structuralEvent.updatedL1bPath == null, "selected structural-review event should not persist top-level updated L1b path");
-	assert(isRelativePath(structuralEvent.paths?.archivedL1bRelPath), "selected structural-review event archive path should be relative");
-	assert(structuralEvent.paths?.updatedL1bRelPath === "L1b/current.md", "selected structural-review event updated path should be selected-root relative");
-	assert(structuralEvent.paths?.eventRelPath === structuralResult.eventRelPath, "selected structural-review event path should be selected-root relative");
-	const serializedStructuralEvent = JSON.stringify(structuralEvent);
-	assert(!serializedStructuralEvent.includes(tempAgentsRoot), "selected structural-review event JSON must not include temp root");
-	assert(!serializedStructuralEvent.includes(selectedRoot), "selected structural-review event JSON must not include selected absolute root");
-	assert(!serializedStructuralEvent.includes(controlRoot), "selected structural-review event JSON must not include default absolute root");
-	const selectedRegistryAfterStructural = registrySnapshot(selectedRoot);
-	const defaultRegistryAfterStructural = registrySnapshot(controlRoot);
-	assert(selectedRegistryAfterStructural.content === selectedRegistryBeforeStructural.content, "selected section_registry.json content should remain unchanged by structural review");
-	assert(selectedRegistryAfterStructural.mtimeMs === selectedRegistryBeforeStructural.mtimeMs, "selected section_registry.json timestamp should remain unchanged by structural review");
-	assert(defaultRegistryAfterStructural.content === defaultRegistryBeforeStructural.content, "default section_registry.json content should remain unchanged by structural review");
-	assert(defaultRegistryAfterStructural.mtimeMs === defaultRegistryBeforeStructural.mtimeMs, "default section_registry.json timestamp should remain unchanged by structural review");
-	assertSnapshotUnchanged(controlRoot, controlBaseline, "selected structural-review control room");
 
 	fs.rmSync(tempAgentsRoot, { recursive: true, force: true });
 	fs.rmSync(tempHome, { recursive: true, force: true });

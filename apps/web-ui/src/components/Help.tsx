@@ -29,9 +29,10 @@ export function Help({ onClose }: Props) {
 							when the room's model can actually reason. Forget, the bin icon at the top of
 							the room, closes the current conversation without remembering it and is also
 							available in Room Settings. Maintain, on the room card, opens Memorize and
-							Review, which turn remembered sessions into lasting memory and tidy it; you sign
-							off every rewrite. Room Settings holds the rest: workspace access, memory budget,
-							schedules, and delete.
+							Review: Memorize turns the conversations a room has remembered into notes, and
+							Review tidies the notes it has. You sign off both before anything is saved.
+							Room Settings holds the rest: workspace access, the room's notes and archive,
+							its memory budget and history, schedules, and delete.
 						</p>
 					</section>
 
@@ -47,10 +48,10 @@ export function Help({ onClose }: Props) {
 					<section>
 						<h3>Memory and Wallet</h3>
 						<p>
-							The Memory page shows what your rooms know, and HiveMind answers questions
-							across all of it. The Wallet tracks spend, including background work like
-							memory upkeep and scheduled runs, split into billed API spend and
-							plan-covered usage, with a CSV export.
+							The Memory page shows what your rooms remember and how full their memory is,
+							and HiveMind answers questions across all of it. The Wallet tracks spend,
+							including background work like memory upkeep and scheduled runs, split into
+							billed API spend and plan-covered usage, with a CSV export.
 						</p>
 					</section>
 

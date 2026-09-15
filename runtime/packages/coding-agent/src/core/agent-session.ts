@@ -183,6 +183,18 @@ export interface AgentSessionConfig {
 	contextPolicy?: ContextPolicy;
 	/** Exact system prompt for isolated runtimes; bypasses normal system prompt construction. */
 	rawSystemPrompt?: string;
+	/**
+	 * Session-local auto-compaction switch. Undefined means "follow the global
+	 * setting", which is the behaviour every session had before this existed.
+	 * A value set here is never written to settings, so an isolated runtime can
+	 * be single-shot without changing the user's interactive sessions.
+	 */
+	autoCompaction?: boolean;
+	/**
+	 * Session-local automatic-retry switch for retryable provider failures.
+	 * Undefined means "follow the global setting". Never persisted.
+	 */
+	autoRetry?: boolean;
 }
 
 export interface ExtensionBindings {
@@ -320,6 +332,10 @@ export class AgentSession {
 
 	// Per-agent context policy
 	private _contextPolicy?: ContextPolicy;
+	// Session-local overrides of the global compaction/retry switches; undefined
+	// means the global setting decides, as it always did.
+	private _autoCompactionOverride?: boolean;
+	private _autoRetryOverride?: boolean;
 	private _rawSystemPrompt?: string;
 	private _baseSystemPromptOptions!: BuildSystemPromptOptions;
 
@@ -338,6 +354,8 @@ export class AgentSession {
 		this._baseToolsOverride = config.baseToolsOverride;
 		this._sessionStartEvent = config.sessionStartEvent ?? { type: "session_start", reason: "startup" };
 		this._contextPolicy = config.contextPolicy;
+		this._autoCompactionOverride = config.autoCompaction;
+		this._autoRetryOverride = config.autoRetry;
 		this._rawSystemPrompt = config.rawSystemPrompt;
 
 		// Install loop strategy if provided
@@ -513,8 +531,7 @@ export class AgentSession {
 			return;
 		}
 
-		const settings = this.settingsManager.getRetrySettings();
-		if (!settings.enabled) {
+		if (!this.autoRetryEnabled) {
 			return;
 		}
 
@@ -1837,7 +1854,7 @@ export class AgentSession {
 	 */
 	private async _checkCompaction(assistantMessage: AssistantMessage, skipAbortedCheck = true): Promise<void> {
 		const settings = this.settingsManager.getCompactionSettings();
-		if (!settings.enabled) return;
+		if (!this.autoCompactionEnabled) return;
 
 		// Skip if message was aborted (user cancelled) - unless skipAbortedCheck is false
 		if (skipAbortedCheck && assistantMessage.stopReason === "aborted") return;
@@ -1915,7 +1932,7 @@ export class AgentSession {
 		} else {
 			contextTokens = directContextTokens;
 		}
-		if (shouldCompact(contextTokens, contextWindow, settings)) {
+		if (shouldCompact(contextTokens, contextWindow, { ...settings, enabled: this.autoCompactionEnabled })) {
 			await this._runAutoCompaction("threshold", false);
 		}
 	}
@@ -2104,12 +2121,19 @@ export class AgentSession {
 	 * Toggle auto-compaction setting.
 	 */
 	setAutoCompactionEnabled(enabled: boolean): void {
+		// A session created with an explicit switch keeps that switch session-local:
+		// toggling it must not rewrite the user's global setting from a throwaway
+		// runtime. Sessions without one persist the choice exactly as before.
+		if (this._autoCompactionOverride !== undefined) {
+			this._autoCompactionOverride = enabled;
+			return;
+		}
 		this.settingsManager.setCompactionEnabled(enabled);
 	}
 
 	/** Whether auto-compaction is enabled */
 	get autoCompactionEnabled(): boolean {
-		return this.settingsManager.getCompactionEnabled();
+		return this._autoCompactionOverride ?? this.settingsManager.getCompactionEnabled();
 	}
 
 	async bindExtensions(bindings: ExtensionBindings): Promise<void> {
@@ -2512,7 +2536,7 @@ export class AgentSession {
 	 */
 	private async _handleRetryableError(message: AssistantMessage): Promise<boolean> {
 		const settings = this.settingsManager.getRetrySettings();
-		if (!settings.enabled) {
+		if (!this.autoRetryEnabled) {
 			this._resolveRetry();
 			return false;
 		}
@@ -2615,13 +2639,19 @@ export class AgentSession {
 
 	/** Whether auto-retry is enabled */
 	get autoRetryEnabled(): boolean {
-		return this.settingsManager.getRetryEnabled();
+		return this._autoRetryOverride ?? this.settingsManager.getRetryEnabled();
 	}
 
 	/**
 	 * Toggle auto-retry setting.
 	 */
 	setAutoRetryEnabled(enabled: boolean): void {
+		// As with compaction: a session created with an explicit switch keeps it
+		// session-local instead of rewriting the user's global setting.
+		if (this._autoRetryOverride !== undefined) {
+			this._autoRetryOverride = enabled;
+			return;
+		}
 		this.settingsManager.setRetryEnabled(enabled);
 	}
 

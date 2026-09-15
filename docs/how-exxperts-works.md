@@ -103,16 +103,21 @@ final proposal. The proposal states its effect on the room's memory
 budget, and an outcome that leaves the room over budget is never
 applied without your approval ([`memory.md`](memory.md)).
 
-### Review (structural review): tightening stable memory
+### Review: tightening stable memory
 
-Reviews only Deep Memory and Active Items (Chronos and Recent Context
-are withheld from the worker and grafted back byte-exact). It improves
-signal density and coherence; claims keep their sources, and
-**must-keep** entries can only be removed on your explicit direction;
-any such removal is named in the proposal's warnings, never silent.
-The room's memory budget binds here: an over-budget candidate is
-drafted once more with the reasons, and what still does not fit
-returns as a disclosed partial for you to decide on
+Review works on Deep Memory and Active Items (Chronos and Recent
+Context are withheld and grafted back byte-exact), and it works on
+NOTES rather than on prose: every note is addressable, so a review is a
+short list of operations against notes named by id, a group of topics
+at a time. That is what keeps a tidy honest — a note nobody names is
+never touched, so ids, saved-on dates and pins survive by construction;
+a pinned note may be worded better and nothing else; an update or merge
+whose text outgrows what it replaced is refused, so "tidy" can never
+mean "write more"; and nothing is deleted, because the archive is the
+only exit and every row carries the reason it left. A group whose call
+fails costs that group alone, named on the card. The room's memory
+budget is the server's own arithmetic after the tidy — by rank,
+disclosed and reversible — and nothing is written until you approve
 ([`memory.md`](memory.md)).
 
 ### Safety rails

@@ -273,6 +273,11 @@ export interface AbsorbAvailability {
 	profile?: MaintenanceWorkerProfileStatus;
 	writesMemory?: false;
 	error?: string;
+	/** Memorize v2 adds the session list, the budget and the pre-pass verdict; a v1 server sends none of them. */
+	version?: 2;
+	sessions?: { id: string; title: string; date: string; tokens: number }[];
+	budget?: BudgetState;
+	prepass?: { demotionRequired: boolean; entriesOverBudget: number };
 }
 
 export interface AbsorbAssessmentFields {
@@ -441,6 +446,8 @@ export interface AbsorbDiscussionSignoffResponse {
 		source: "discussion_signoff";
 		text: string;
 	};
+	/** The same sign-off as the fields every fold honours; absent on a server that still answers v1. */
+	guidance?: FoldGuidance;
 	absorbDiscussionTelemetry: AbsorbDiscussionPromptTelemetry;
 	absorbDiscussionUsage?: AbsorbUsage;
 	tokenBudget: AbsorbDiscussionTokenBudget;
@@ -481,6 +488,8 @@ export interface AbsorbApprovalResponse {
 	agentId: PersistentAgentId;
 	writesMemory: true;
 	absorbId: string;
+	/** This save under the name the undo route takes; absent on older servers. */
+	saveId?: string;
 	eventRelPath: string;
 	recentContextEntryCount: number;
 	memoryBudget?: { budgetTokens: number; reviewTargetEstimatedTokens: number; overBudget: boolean };
@@ -488,234 +497,418 @@ export interface AbsorbApprovalResponse {
 		returnToLauncher: true;
 	};
 	warnings: string[];
+	/** Memorize v2: which sessions were written into memory, which stay for the next update, and how many entries went to the archive. */
+	foldedSessions?: string[];
+	remainingSessions?: string[];
+	archivedEntries?: number;
+	/** How many of those left for the budget alone (pre-pass plus post-fold demotions), so the saved screen can say so even when nothing folded. */
+	archivedForBudget?: number;
+	/** The card raised the limit and this save wrote the room setting; the new value. */
+	budgetRaisedTo?: number;
 }
 
-export type StructuralReviewAvailabilityReason = "available" | "not_ready" | "invalid_topology" | "error";
+// ── Memory v2 (api contract 2026-09-13) ────────────────────────────────────
+// One entry of the room's memory as every screen shows it. Estimated tokens
+// are the product's chars/4, computed by the server; the client never
+// re-derives a size or a budget verdict.
 
-export type ReviewHardnessLevel = "light" | "standard" | "deep";
+export type EntryKind = "event" | "fact" | "practice" | "item";
 
-// Server-derived Review pruning depth: numbers and predicates only — the
-// client words the copy (the same split MemoryBudgetImpact uses).
-export interface StructuralReviewHardnessDerivation {
-	level: ReviewHardnessLevel;
+export interface EntryCard {
+	id: string;
+	section: "Deep Memory" | "Active Items";
+	topic: string;
+	kind: EntryKind;
+	/** YYYY-MM-DD */
+	saved: string;
+	/** The session this entry came from, in the server's own id vocabulary; screens word it as a date. */
+	from?: string;
+	pinned: boolean;
+	status?: "open" | "done";
+	updated?: string;
+	refs?: number;
+	tokens: number;
+	/** Full markdown text of the entry, without its metadata line. */
+	text: string;
+}
+
+/**
+ * One row of the archive list on the Memorize and Review cards. The list is
+ * stable for the life of a run: a row that stops leaving stays on the list and
+ * says so, instead of vanishing under the person's hand.
+ */
+export type ArchiveRow = EntryCard & {
+	/** The current computation moves it to the archive. */
+	leaving: boolean;
+	/** The person kept it, by id or by topic; pinned on Save. */
+	kept: boolean;
+	/** It entered the list because of a keep, an edit or a limit change after the first computation: a replacement. Cleared when it stops leaving. */
+	instead: boolean;
+	/** "before": left before any conversation was read (the room was already over); "after": left to make room for what was read. Diagnostics only; the screens never show it. */
+	phase: "before" | "after";
+	/** Position in the demotion order, 0 leaves first. Rows within a topic come rank ascending; topics keep document order. */
+	rank: number;
+};
+
+/** The archive list and the keep sets of a run, as both engines report them. */
+export interface RunDemotion {
+	/** Every note this run ever proposed for the archive, in a stable order: rows are never removed for the life of the run. */
+	entries: ArchiveRow[];
+	keepIds: string[];
+	/** Topics the person protected for this run: no note of these topics leaves. "Deep Memory/Nordwind integration", section and title. */
+	keepTopics: string[];
+	overageTokens: number;
+	/** The counts the card shows; computed by the server, never in the browser. */
+	counts: { leaving: number; kept: number; instead: number; staying?: number };
+}
+
+/** Where a run leaves the memory limit. */
+export interface RunBudget {
+	before: number;
+	after: number;
+	/** The limit this run is computed against: the room's setting, or the value chosen on the card. */
 	budgetTokens: number;
-	reviewTargetEstimatedTokens: number;
-	/** 0 when under budget. */
-	overBudgetTokens: number;
-	/** The latest Review ended still over the current budget, with no Memorize rewriting the material since. */
-	previousRunPartial: boolean;
+	/** The room's saved setting; differs from budgetTokens when the card raised it and Save has not happened yet. */
+	savedBudgetTokens: number;
+	overBudgetAfter: boolean;
+	ceilingTokens: number;
 }
 
-export interface StructuralReviewMemoryMapRow {
-	area: string;
-	words: number;
-	estimatedTokens: number;
+export interface ArchivedEntryCard extends EntryCard {
+	/** YYYY-MM-DD */
+	archived: string;
+	/** "stale" and "duplicate" are Review's own reasons; the other four are older than it. */
+	why: "budget" | "superseded" | "done" | "user" | "stale" | "duplicate";
 }
 
-export interface StructuralReviewAvailability {
+export interface BudgetState {
+	reviewTargetTokens: number;
+	budgetTokens: number;
+	overBudget: boolean;
+}
+
+/** The structured sign-off of a memory discussion: what the user asked for, in fields the run honours. */
+export interface FoldGuidance {
+	pin: string[];
+	drop: { session: string; reason: string }[];
+	corrections: string[];
+	topics: ({ create: string } | { merge: string[]; into: string })[];
+	instructions: string[];
+}
+
+/** What a person agreed in the Review discussion, carried into the tidy as instructions. */
+export interface ReviewGuidance {
+	/** Notes or topics to leave exactly as they are. */
+	keepAsIs: string[];
+	/** Notes or topics to make shorter. */
+	shorten: string[];
+	/** Notes or topics to move to the archive, with the person's reason when given. */
+	remove: string[];
+	/** Answers the person gave to the first read's questions. */
+	answers: string[];
+	/** Any other instruction, one sentence each. */
+	instructions: string[];
+	/** Topic titles the tidy should cover; empty means every topic the first read flagged. */
+	topics: string[];
+}
+
+/** How far the tidy goes: wording only, or wording plus what is finished or stale. */
+export type ReviewDepth = "wording" | "tidy";
+
+/** Why a review cannot start, when it cannot. */
+export type ReviewAvailabilityReason = "available" | "room_busy" | "not_migrated" | "no_notes" | "run_active";
+
+export interface ReviewAvailability {
 	available: boolean;
-	reason: StructuralReviewAvailabilityReason;
+	reason: ReviewAvailabilityReason;
 	message: string;
-	reviewTargetEstimatedTokens: number;
-	reviewTargetWords: number;
-	memoryMap: StructuralReviewMemoryMapRow[];
-	/** Present when available: the depth the next Review run derives, shown before the run starts. */
-	reviewHardness?: StructuralReviewHardnessDerivation;
-	model?: MaintenanceWorkerModelStatus | null;
-	profile?: MaintenanceWorkerProfileStatus;
-	writesMemory?: false;
-	error?: string;
+	topics: number;
+	notes: number;
+	budgetTokens: number;
+	reviewTargetTokens: number;
+	overBudget: boolean;
+	/** Which of the two tidies the screen offers first. */
+	recommendedDepth: ReviewDepth;
 }
 
-export interface StructuralReviewSourceMetadata {
-	l1bFingerprint: L1bSourceFingerprint;
-	reviewTargetFingerprint: L1bSourceFingerprint;
-	chronosFingerprint: L1bSourceFingerprint;
-	recentContextFingerprint: L1bSourceFingerprint;
-	generatedAt: string;
+/**
+ * The first read, in fields. The three lists are what the screen shows;
+ * `topics` is the machine-read list the tidy works from and is never shown.
+ */
+export interface ReviewAssessmentFields {
+	couldBeShorter: string[];
+	staleOrContradicts: string[];
+	needsYourCall: string[];
+	topics: string[];
+	/** Notes that say the same thing twice, as sentences; the machine finds them, not the model. Absent on an older server. */
+	saysTheSameTwice?: string[];
+	/** The same pairs by id and topic, for the tidy; never shown. */
+	duplicateNotes?: { ids: [string, string]; topics: [string, string] }[];
+	/** Two topic titles that look like one topic, as sentences. Absent on an older server. */
+	topicsThatLookTheSame?: string[];
+	/** The same pairs by title, for the tidy; never shown. */
+	lookAlikeTopics?: { a: string; b: string }[];
 }
 
-export interface StructuralReviewAssessmentFields {
-	looksHealthy: string[];
-	staleOrDriftProne: string[];
-	couldBeDenser: string[];
-	structureOpportunities: string[];
-	proposedDirection: string;
+export interface ReviewAssessmentResponse {
+	agentId: PersistentAgentId;
+	writesMemory: false;
+	availability: ReviewAvailability;
+	assessmentMarkdown: string;
+	fields: ReviewAssessmentFields;
+	warnings: string[];
+	source: { l1bFingerprint: L1bSourceFingerprint };
 }
 
-export interface StructuralReviewPromptTelemetry {
-	chars: number;
-	bytes: number;
-	words: number;
-	estimatedTokens: number;
-	memoryMap: StructuralReviewMemoryMapRow[];
-	promptChars: number;
-	promptEstimatedTokens: number;
-	sectionDescriptionCount: number;
-}
+export type ReviewDiscussionTokenBudgetState = "ok" | "soft_warning" | "hard_stop";
 
-export type StructuralReviewDiscussionRole = "user" | "assistant";
-
-export interface StructuralReviewDiscussionMessage {
-	role: StructuralReviewDiscussionRole;
-	content: string;
-}
-
-export type StructuralReviewDiscussionTokenBudgetState = "ok" | "soft_warning" | "hard_stop";
-
-export interface StructuralReviewDiscussionTokenBudget {
+export interface ReviewDiscussionTokenBudget {
 	promptEstimatedTokens: number;
 	softWarningTokens: number;
 	hardStopTokens: number;
-	state: StructuralReviewDiscussionTokenBudgetState;
+	state: ReviewDiscussionTokenBudgetState;
 	canContinue: boolean;
 	canSignOff: boolean;
 }
 
-export interface StructuralReviewDiscussionPromptTelemetry extends StructuralReviewPromptTelemetry {
-	discussionMessageCount: number;
-	userMessageChars: number;
-}
-
-export interface StructuralReviewAssessmentHandoff {
-	source: "direct_assessment" | "discussion_signoff";
-	text: string;
-}
-
-export interface StructuralReviewAssessmentResponse {
+export interface ReviewDiscussionTurnResponse {
 	agentId: PersistentAgentId;
 	writesMemory: false;
-	process: {
-		type: "structural-review-worker";
-		mode: "stc_diagnostic";
-		model: { provider: string; model: string; label?: string };
-	};
-	availability: StructuralReviewAvailability;
-	source: StructuralReviewSourceMetadata;
-	assessmentMarkdown: string;
-	fields: StructuralReviewAssessmentFields;
-	structuralReviewTelemetry: StructuralReviewPromptTelemetry;
-	structuralReviewUsage?: AbsorbUsage;
+	message: { role: "assistant"; content: string };
+	tokenBudget: ReviewDiscussionTokenBudget;
 	warnings: string[];
 }
 
-export interface StructuralReviewDiscussionTurnResponse {
+export interface ReviewDiscussionSignoffResponse {
 	agentId: PersistentAgentId;
 	writesMemory: false;
-	process: {
-		type: "structural-review-discussion-worker";
-		mode: "stc_diagnostic";
-		model: { provider: string; model: string; label?: string };
-	};
-	availability: StructuralReviewAvailability;
-	source: StructuralReviewSourceMetadata & { checkedAt: string };
-	message: StructuralReviewDiscussionMessage;
-	structuralReviewDiscussionTelemetry: StructuralReviewDiscussionPromptTelemetry;
-	structuralReviewDiscussionUsage?: AbsorbUsage;
-	tokenBudget: StructuralReviewDiscussionTokenBudget;
+	guidance: ReviewGuidance;
+	signoffMarkdown: string;
 	warnings: string[];
 }
 
-export interface StructuralReviewDiscussionSignoffResponse {
+export type AbsorbRunState = "prepass" | "folding" | "budget" | "ready" | "approving" | "saved" | "cancelled" | "failed";
+
+export type AbsorbRunSessionOutcome = "pending" | "folding" | "folded" | "dropped" | "failed" | "skipped";
+
+export type AbsorbRunChangeKind = "added" | "updated" | "superseded" | "closed" | "pinned";
+
+export interface AbsorbRunChange {
+	kind: AbsorbRunChangeKind;
+	id: string;
+	topic: string;
+	before?: string;
+	after?: string;
+	/** An add that created its topic in this run: the first note under a title the memory did not have. */
+	newTopic?: true;
+}
+
+export interface AbsorbRunSession {
+	id: string;
+	title: string;
+	date: string;
+	outcome: AbsorbRunSessionOutcome;
+	/** dropped: why nothing was kept; failed: the product sentence; skipped: the user's own instruction. */
+	reason?: string;
+	summary?: { added: number; updated: number; superseded: number; closed: number };
+	changes?: AbsorbRunChange[];
+	attempts: number;
+}
+
+export interface AbsorbRun {
+	runId: string;
 	agentId: PersistentAgentId;
-	writesMemory: false;
-	process: {
-		type: "structural-review-discussion-worker";
-		mode: "stc_diagnostic";
-		model: { provider: string; model: string; label?: string };
-	};
-	availability: StructuralReviewAvailability;
-	source: StructuralReviewSourceMetadata & { checkedAt: string };
-	assessmentHandoff: StructuralReviewAssessmentHandoff & { source: "discussion_signoff" };
-	structuralReviewDiscussionTelemetry: StructuralReviewDiscussionPromptTelemetry;
-	structuralReviewDiscussionUsage?: AbsorbUsage;
-	tokenBudget: StructuralReviewDiscussionTokenBudget;
+	state: AbsorbRunState;
+	startedAt: string;
+	updatedAt: string;
+	progress: { folded: number; total: number; current?: { id: string; title: string } };
+	sessions: AbsorbRunSession[];
+	/** Entries archived before any model call, because the room was already over its budget. Diagnostics and the older smokes; the card reads `demotion` alone. */
+	prepass: { demoted: EntryCard[] };
+	budget: RunBudget;
+	/** The archive list, stable for the run, with the keep sets and the counts the card shows. */
+	demotion: RunDemotion;
+	candidate: { sourceFingerprint: L1bSourceFingerprint; estimatedTokens: number } | null;
+	/** The sign-off this run was started with, echoed so the card can list it; null when nothing was asked for. */
+	guidance: FoldGuidance | null;
+	/**
+	 * A room whose memory had no entry ids: the run gave them in memory and the
+	 * approval write performs the migration. A note for the card, never a blocker
+	 * — it must not keep an otherwise clean update off the automatic path.
+	 */
+	migration: { pending: boolean; entriesAssigned: number } | null;
 	warnings: string[];
+	usage?: { input?: number; output?: number; totalTokens?: number; cost?: number };
+	/** failed: one product sentence. */
+	error?: string;
 }
 
-export interface StructuralReviewProposalFields {
-	mode: string;
-	summary: string;
-	sectionLevelChangeLog: string;
-	subsectionEntryDetail: string;
-	stalenessFlags: string;
-	proposedMemoryMap: string;
-	reviewTargetMetrics: string;
-	warnings: string;
-	droppedMaterial: string;
-	candidateReviewTargetL1b: string;
+/** The 202 answer to a v2 propose: the run to poll, not a finished draft. */
+export interface AbsorbRunStart {
+	runId: string;
 }
 
-export interface StructuralReviewCandidateValidationResult {
-	valid: boolean;
-	warnings: string[];
-	errors: string[];
-	sourceTopLevelSections: string[];
-	candidateTopLevelSections: string[];
+/** Memorize v2 extras on absorb/status; absent on a server that still answers v1. */
+export interface AbsorbStatusV2Fields {
+	version?: 2;
+	sessions?: { id: string; title: string; date: string; tokens: number }[];
+	budget?: BudgetState;
+	prepass?: { demotionRequired: boolean; entriesOverBudget: number };
 }
 
-export interface StructuralReviewReviewMetrics {
-	reviewTargetWordsBefore: number;
-	reviewTargetWordsAfter: number;
-	reviewTargetEstimatedTokensBefore: number;
-	reviewTargetEstimatedTokensAfter: number;
-	reviewTargetEstimatedTokenDelta: number;
-	sourceMemoryMap: StructuralReviewMemoryMapRow[];
-	candidateMemoryMap: StructuralReviewMemoryMapRow[];
+// ── Review v2 ──────────────────────────────────────────────────────────────
+// Review tidies notes that are already in memory: it says the same things in
+// fewer words and, at the deeper setting, moves what is finished or stale to
+// the archive. Every note keeps its id, its date and its pin.
+
+export type ReviewRunState = "prepass" | "tidying" | "budget" | "ready" | "approving" | "saved" | "cancelled" | "failed";
+
+export type ReviewRunChangeKind = "shortened" | "merged" | "archived" | "closed" | "moved" | "pinned" | "topic_folded";
+
+export interface ReviewRunChange {
+	id: string;
+	section: "Deep Memory" | "Active Items";
+	topic: string;
+	kind: ReviewRunChangeKind;
+	/** The note's words before, or — for a move — the topic it came from; for a fold, the topic folded away. */
+	before?: string;
+	/** The note's words after, or — for a move — the topic it now sits under; for a fold, the topic that took its notes. */
+	after?: string;
+	/** archived and closed: the reason the archive row carries. */
+	why?: string;
+	/** merged: the notes that became this one, the surviving id first. */
+	mergedFrom?: string[];
+	/** topic_folded: how many notes the fold moved; the row's id is the first of them. */
+	notesMoved?: number;
+	/** archived as duplicate: the note that already says it, and the topic it sits under. */
+	duplicateOf?: { id: string; topic: string };
 }
 
-export interface StructuralReviewProposalReview {
-	summary: string;
-	metrics: StructuralReviewReviewMetrics;
+/** A group of topics whose tidy never came back in a form the memory could accept. */
+export interface ReviewRunLeftAsIs {
+	topics: string[];
+	reason: string;
 }
 
-/** The depth this proposal was actually drafted at, and where it came from. */
-export interface StructuralReviewProposalHardness {
-	applied: ReviewHardnessLevel;
-	derived: StructuralReviewHardnessDerivation;
-	/** True when the per-run picker chose a different level than the derivation. */
-	overridden: boolean;
+/** The structured sign-off of the Review discussion, echoed back on the run. */
+export interface ReviewGuidance {
+	keepAsIs: string[];
+	shorten: string[];
+	remove: string[];
+	answers: string[];
+	instructions: string[];
+	topics: string[];
 }
 
-export interface StructuralReviewProposalResponse {
+export interface ReviewRun {
+	runId: string;
 	agentId: PersistentAgentId;
-	writesMemory: false;
-	process: {
-		type: "structural-review-worker";
-		mode: "stc_diagnostic";
-		model: { provider: string; model: string; label?: string };
-	};
-	availability: StructuralReviewAvailability;
-	source: StructuralReviewSourceMetadata;
-	fields: StructuralReviewProposalFields;
-	review: StructuralReviewProposalReview;
-	candidateValidation: StructuralReviewCandidateValidationResult;
-	memoryBudgetImpact?: MemoryBudgetImpact;
-	reviewHardness?: StructuralReviewProposalHardness;
-	structuralReviewTelemetry: StructuralReviewPromptTelemetry;
-	structuralReviewUsage?: AbsorbUsage;
-	/** Memory-map areas gone from the candidate, computed server-side independent of the disclosure; drives the forget-to-document offer. Absent on older servers. */
-	vanishedAreas?: string[];
+	state: ReviewRunState;
+	depth: ReviewDepth;
+	startedAt: string;
+	updatedAt: string;
+	/** Groups finished of groups planned, and the topic the run is on now. */
+	progress: { group: number; groups: number; label?: string };
+	/** The topics this run set out to tidy, in document order. */
+	topics: string[];
+	changes: ReviewRunChange[];
+	leftAsIs: ReviewRunLeftAsIs[];
+	budget: RunBudget;
+	/** The archive list, stable for the run, with the keep sets and the counts the card shows. */
+	demotion: RunDemotion;
+	candidate: { sourceFingerprint: L1bSourceFingerprint; estimatedTokens: number } | null;
+	/** What the person agreed in the discussion; null when nothing was asked for. */
+	guidance: ReviewGuidance | null;
+	/**
+	 * A room whose memory had no note ids: the run gave them in memory and the
+	 * approval write performs the migration. A note for the card, never a blocker.
+	 */
+	migration: { pending: boolean; entriesAssigned: number } | null;
 	warnings: string[];
+	usage?: { input?: number; output?: number; totalTokens?: number; cost?: number };
+	/** failed: one product sentence. */
+	error?: string;
 }
 
-export interface StructuralReviewApprovalResponse {
+/** The 202 answer to starting a review: the run to poll. */
+export interface ReviewRunStart {
+	runId: string;
+}
+
+export interface ReviewRunApprovalResponse {
 	agentId: PersistentAgentId;
 	writesMemory: true;
-	structuralReviewId: string;
+	reviewId: string;
+	/** This save under the name the undo route takes — the same value as `reviewId`. */
+	saveId: string;
 	eventRelPath: string;
-	/** False when the audit record could not be written after the memory write; absent on older servers (which threw instead). */
-	auditRecordWritten?: boolean;
-	/** After-write budget verdict measured from the written file (pointer line included) — the saved screen prefers this over the propose-time impact. */
-	memoryBudget?: { budgetTokens: number; reviewTargetEstimatedTokens: number; overBudget: boolean };
-	/** Review-target token delta of what was written (pointer line included) — the saved screen prefers this over the propose-time delta. */
-	reviewTargetEstimatedTokenDelta?: number;
-	/** Present when the user chose forget-to-document at approval: the room's Files document holding the dropped material. */
-	forgetToDocument?: { shelfFileName: string };
-	postStructuralReview: {
-		returnToLauncher: true;
-	};
+	memoryBudget: { budgetTokens: number; reviewTargetEstimatedTokens: number; overBudget: boolean };
+	topicsTidied: number;
+	notesChanged: number;
+	archivedEntries: number;
+	/** How many of those left for the budget alone, so the saved screen can say so. */
+	archivedForBudget: number;
+	/** The card raised the limit and this save wrote the room setting; the new value. */
+	budgetRaisedTo?: number;
 	warnings: string[];
+}
+
+/** What a room says about Review before anything starts. */
+export interface ReviewStatusResponse {
+	agentId: PersistentAgentId;
+	available: boolean;
+	/** Why not, in the product's own words; absent when it is available. */
+	reason?: string;
+	topics: number;
+	notes: number;
+	budget: BudgetState;
+	/** "tidy" when the memory is over its limit, else "wording". */
+	recommendedDepth: ReviewDepth;
+	writesMemory: false;
+}
+
+export interface MemoryEntriesTopicGroup {
+	section: "Deep Memory" | "Active Items";
+	title: string;
+	entries: EntryCard[];
+}
+
+export interface MemoryEntriesResponse {
+	budget: BudgetState;
+	/** A room in a conversation reads its memory but cannot be written to; the reason is the server's own sentence. */
+	readOnly?: boolean;
+	reason?: string;
+	topics: MemoryEntriesTopicGroup[];
+	archive: { count: number; byTopic: { section: string; topic: string; count: number; earliest: string; latest: string }[] };
+}
+
+export interface MemoryArchiveResponse {
+	entries: ArchivedEntryCard[];
+	/** The archived stamp to pass back as `before` for the next page. */
+	next?: string;
+}
+
+export interface MemoryEntryWriteResponse {
+	entry: EntryCard;
+	budget: BudgetState;
+}
+
+export interface MemoryEntryDeleteResponse {
+	archived: ArchivedEntryCard;
+	budget: BudgetState;
+}
+
+/** What the server answers when the room's latest Memorize or Review save is taken back. */
+export interface MemoryUndoResponse {
+	agentId: PersistentAgentId;
+	/** The undo's own id in the room's memory history. */
+	undoId: string;
+	undone: { saveId: string; kind: "memorize" | "review"; approvedAt: string };
+	memoryBudget: { budgetTokens: number; reviewTargetEstimatedTokens: number; overBudget: boolean };
+	/** Conversations back in Recent Context now the save is taken back. */
+	recentContextCount: number;
+	/** The save had raised the limit and nobody changed it since: the undo put it back to this. */
+	limitLoweredTo?: number;
 }
 
 export type CheckpointTranscriptRuntimeKind = "transcript-recap-v1" | "pi-session-jsonl";
@@ -1108,7 +1301,7 @@ export interface PersistentAgentStatus {
 	l1a: { path: string; exists: boolean; bytes?: number };
 	l1b: { path: string; exists: boolean; bytes?: number; sections: string[]; missingSections: string[] };
 	sectionRegistry: { path: string; exists: boolean; missingSections: string[] };
-	recentContext: { fullEntries: number; softCap: number; hardCap: number };
+	recentContext: { fullEntries: number; softCap: number; hardCap: number; blockCap?: number };
 	memoryStatus: {
 		recentContextCount: number;
 		recentContextSoftCap: number;
@@ -1131,7 +1324,7 @@ export interface PersistentAgentStatus {
 	// Server-computed budget condition. The budget binds on the review target
 	// (Deep Memory + Active Items); render this block, never re-derive the
 	// comparison client-side.
-	memoryBudget?: { budgetTokens: number; reviewTargetEstimatedTokens: number; overBudget: boolean; reviewHardness?: StructuralReviewHardnessDerivation };
+	memoryBudget?: { budgetTokens: number; reviewTargetEstimatedTokens: number; overBudget: boolean };
 	errors: string[];
 	warnings: string[];
 }

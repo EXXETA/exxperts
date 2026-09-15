@@ -63,14 +63,17 @@ import { createWebUiContext } from "./web-ui-context.js";
 import { cancelProviderLogin, logoutProvider, ProviderAuthError, providerLoginState, saveProviderApiKey, startProviderLogin } from "./provider-auth.js";
 import { builtInProfileIdForProvider, deleteCustomAiProfile, isCustomAiProfileId, isReservedCustomProfileProvider, readCustomAiProfiles, writeCustomAiProfile } from "./custom-ai-profiles.js";
 import { ConsultPromptOverflowError } from "./consult.js";
-import { appendPersistentAgentThreadPendingHandoff, archivePersistentAgent, getPersistentAgentLifecycleCounts, listArchivedPersistentAgents, purgePersistentAgent, restorePersistentAgent, sweepPersistentAgentPurgeTombstones, beginPersistentAgentTurn, buildAbsorbAssessment, buildAbsorbDiscussionSignoff, buildAbsorbDiscussionTurn, buildAbsorbProposal, buildCheckpointProposal, buildConsultAnswer, buildPersistentAgentBootContext, buildPersistentAgentCurrentIdentitySection, buildPersistentRoomCurrentWorkspaceSection, buildStructuralReviewAssessment, buildStructuralReviewDiscussionSignoff, buildStructuralReviewDiscussionTurn, buildStructuralReviewProposal, createPersistentAgentFromScaffoldInput, createPersistentAgentPiSessionJsonlThreadRuntime, createPersistentRoomAutoDeclinedQuestionLog, clearPersistentAgentThreadPendingHandoffs, clearPersistentAgentUnseenLandedAnswerForBind, deletePersistentAgentThread, PERSISTENT_AGENT_L1A_DEFAULT_MODE_ID, PERSISTENT_AGENT_L1A_MODES, discardEmptyPreparedBoundaryThread, finishPersistentAgentTurn, getAbsorbAvailability, getPersistentAgentActiveTurnState, getPersistentAgentRuntimeState, getPersistentAgentStatus, getPersistentAgentThread, getStructuralReviewAvailability, isPersistentAgentArchived, listPersistentAgents, markPersistentAgentTurnCancelling, openPersistentAgentPiSessionManager, parseAbsorbApprovalRequest, parseCheckpointApprovalRequest, parseStructuralReviewApprovalRequest, readPersistentAgentBootPromptSnapshot, readPersistentAgentReviewTargetEstimatedTokens, recordPersistentAgentUnseenLandedAnswer, renamePersistentAgent, validatePersistentAgentId, writeApprovedAbsorb, writeApprovedCheckpoint, writeApprovedStructuralReview, writePersistentAgentMementoBoundary, writePersistentAgentRuntimeState, writePersistentAgentThread, parseAssessmentRetryFeedback, assertPersistentAgentBootPromptFitsWindow, PersistentAgentMemoryOverflowError } from "./persistent-agents.js";
+import { exportMaintenanceDiagnostics, listMaintenanceDiagnostics, MAINTENANCE_DIAGNOSTICS_DEFAULT_LIMIT, MAINTENANCE_DIAGNOSTICS_KEEP } from "./maintenance-diagnostics.js";
+import { appendPersistentAgentThreadPendingHandoff, archivePersistentAgent, assertPersistentAgentAcceptsCheckpoint, assertPersistentAgentAcceptsSession, createPersistentAgentInstance, getPersistentAgentLifecycleCounts, listArchivedPersistentAgents, purgePersistentAgent, restorePersistentAgent, sweepPersistentAgentPurgeTombstones, beginPersistentAgentTurn, buildAbsorbAssessment, buildAbsorbDiscussionSignoff, buildAbsorbDiscussionTurn, buildCheckpointProposal, buildConsultAnswer, buildPersistentAgentBootContext, buildPersistentAgentCurrentIdentitySection, buildPersistentRoomCurrentWorkspaceSection, createPersistentAgentFromScaffoldInput, createPersistentAgentPiSessionJsonlThreadRuntime, createPersistentRoomAutoDeclinedQuestionLog, clearPersistentAgentThreadPendingHandoffs, clearPersistentAgentUnseenLandedAnswerForBind, deletePersistentAgentThread, PERSISTENT_AGENT_L1A_DEFAULT_MODE_ID, PERSISTENT_AGENT_L1A_MODES, discardEmptyPreparedBoundaryThread, finishPersistentAgentTurn, getAbsorbAvailability, getPersistentAgentActiveTurnState, getPersistentAgentRuntimeState, getPersistentAgentStatus, getPersistentAgentThread, isPersistentAgentArchived, listPersistentAgents, markPersistentAgentTurnCancelling, openPersistentAgentPiSessionManager, parseCheckpointApprovalRequest, readPersistentAgentBootPromptSnapshot, readPersistentAgentReviewTargetEstimatedTokens, recordPersistentAgentUnseenLandedAnswer, renamePersistentAgent, validatePersistentAgentId, writeApprovedCheckpoint, writePersistentAgentMementoBoundary, writePersistentAgentRuntimeState, writePersistentAgentThread, parseAssessmentRetryFeedback, assertPersistentAgentBootPromptFitsWindow, PersistentAgentMemoryOverflowError } from "./persistent-agents.js";
 import { buildPersistentRoomRestoredLiveThreadContext } from "./persistent-room-resume-context.js";
 import {
 	getPersistentRoomToolPolicy,
 	normalizePersistentRoomWorkspaceToolSelectionInput,
+	persistentRoomBlockedToolLeaks,
 } from "./persistent-room-tool-policy.js";
 import { assertPersistentRoomWorkspaceDefaultMutable, createPersistentRoomCapabilityPolicy, createPersistentRoomDefaultCapabilityPolicy, deletePersistentRoomCapabilityPolicy, deletePersistentRoomDefaultCapabilityPolicy, missingPersistentRoomWorkspaceRootWarnings, normalizePersistentRoomWorkspaceAccessModeInput, persistentRoomCapabilityPolicyView, persistentRoomRuntimeCwdForEffectiveWorkspacePolicy, PersistentRoomWorkspacePolicyError, PERSISTENT_ROOM_WORKSPACE_DEFAULT_STORAGE_SOURCE, PERSISTENT_ROOM_WORKSPACE_POLICY_STORAGE_SOURCE, readPersistentRoomCapabilityPolicy, readPersistentRoomDefaultCapabilityPolicy, releasePersistentRoomThreadWorkspaceMirror, resolvePersistentRoomCapabilityPolicy, resolvePersistentRoomEffectiveWorkspacePolicy, updatePersistentRoomCapabilityPolicyWorkspaceSettings, writePersistentRoomCapabilityPolicy, writePersistentRoomDefaultCapabilityPolicy } from "./persistent-room-workspace-policy.js";
 import { MEMORY_BUDGET_DEFAULT_TOKENS, overMemoryBudget, readPersistentRoomMaintenanceSettings, writePersistentRoomMaintenanceSettings } from "./persistent-room-maintenance-settings.js";
+import { settleMemoryBudget } from "./memory-entries-store.js";
 import { createPersistentRoomBashApprovalExtension, createPersistentRoomBashApprovalGuard } from "./persistent-room-bash-approval.js";
 import { migratePersistentRoomBashAutoApproveDefaults, readPersistentRoomBashSettings, writePersistentRoomBashSettings } from "./persistent-room-bash-settings.js";
 import { readPersistentRoomPreferredModel, writePersistentRoomPreferredModel } from "./persistent-room-preferred-model.js";
@@ -84,6 +87,7 @@ import { buildSpecialistHandoffBlock } from "./specialist-handoff.js";
 import { reviseConflictNotice } from "./revise-conflict-notice.js";
 import { SHELF_READ_MAX_FILE_BYTES, cachedShelfPageCount, readShelfFileText, sniffShelfFileBuffer } from "./persistent-room-shelf-reading.js";
 import { createPersistentRoomShelfTools } from "./persistent-room-shelf-tools.js";
+import { createPersistentRoomMemoryRecallTool } from "./persistent-room-memory-recall-tool.js";
 import { migrateTaskArtifactsToShelves } from "./persistent-room-shelf-migration.js";
 import { appendTaskLedgerExport, clearTaskLedgerRecordRemoved, createTaskLedgerRecord, finalizeTaskLedgerRecord, listTaskLedgerRecords, markTaskLedgerRecordDeleted, markTaskLedgerRecordRemoved, markTaskLedgerRecordViewed, markTaskLedgerRecordsAwayNoticed, resolveIterateSourceFromLedger, selectTaskLedgerAwayNotices, selectTaskLedgerReseedRows, sweepOrphanedTaskLedgerRecords } from "./persistent-room-task-ledger.js";
 import { abortSpecialistTask, bindSpecialistSink, emitSpecialistDelta, registerSpecialistTask, removeSpecialistTask, runningSpecialistCount, sendSpecialistFrame, unbindSpecialistSink } from "./persistent-room-specialist-registry.js";
@@ -155,7 +159,15 @@ import JSZip from "jszip";
 import { appendUsage, resolveUsageAuthType } from "./usage-log.js";
 import type { UsageKind, UsageRow } from "./usage-log.js";
 import { importHistoricalSessionUsage } from "./usage-import.js";
-import { buildMemoryAskContext, buildMemoryDigest, buildMemoryOverview, buildRoomMemory, readConversationTranscript, readMemoryArea, readMemoryEventDiff, readMemorySnapshotAt, searchMemory } from "./memory-api.js";
+import { buildMemoryAskContext, buildMemoryDigest, buildMemoryOverview, buildRoomMemory, buildRoomMemoryHistory, listMemoryConversations, MEMORY_EVENT_DIFF_KINDS, readConversationTranscript, readMemoryArea, readMemoryEventDiff, readMemoryNotesView, readMemorySnapshotAt, searchMemory } from "./memory-api.js";
+import { registerMemoryEntryRoutes } from "./memory-entries-api.js";
+import { registerReviewAssessRoutes } from "./review-assess-routes.js";
+import { undoMemorySave } from "./memory-undo.js";
+import { absorbRunStatusFields, approveAbsorbRun, cancelAbsorbRun, editAbsorbRunEntry, getAbsorbRun, keepAbsorbRunEntries, parseAbsorbRunProposeRequest, setAbsorbRunBudget, startAbsorbRun, type AbsorbRunApprovalResponse } from "./absorb-run.js";
+import { FOLD_TRIGGER_PROMPT } from "./absorb-ops.js";
+import { registerReviewRunRoutes } from "./review-run-routes.js";
+import { hasActiveReviewRun } from "./review-run.js";
+import { REVIEW_TRIGGER_PROMPT } from "./review-ops.js";
 import { searxngSetupStatus, startSearxngSetup } from "./searxng-setup.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -1785,12 +1797,17 @@ function getUsablePersistentAgentStatusForNormalUse(idRaw: string) {
 	return status;
 }
 
-function getReadyPersistentAgentStatusForLifecycle(idRaw: string) {
+// Remember's route gate. A room that is merely due for Memorize still saves
+// sessions; only the block cap refuses, with Memorize named as the way out.
+// The refusal is the engine's own sentence so every surface translates one
+// message, not one per door.
+function getPersistentAgentStatusForCheckpoint(idRaw: string) {
 	const status = getUsablePersistentAgentStatusForNormalUse(idRaw);
-	if (status.status !== "ready") {
-		const error = new Error(`persistent agent is not ready: ${status.status}`);
-		(error as any).statusCode = 409;
-		throw error;
+	try {
+		assertPersistentAgentAcceptsCheckpoint(status);
+	} catch (e) {
+		(e as any).statusCode = 409;
+		throw e;
 	}
 	return status;
 }
@@ -1827,7 +1844,10 @@ function persistentAgentNormalUseErrorReply(reply: any, error: unknown) {
 	// A machine-readable code rides along when the error carries one (e.g.
 	// memory_overflow), so HTTP callers can branch like the ws client does.
 	const code = typeof (error as any).code === "string" ? (error as any).code : undefined;
-	return reply.code(statusCode).send({ error: message, ...(code ? { code } : {}) });
+	// Structured detail (e.g. the refused operations' reasons) rides beside the
+	// sentence for benches and logs; the UI reads only the sentence.
+	const details = (error as any).details !== undefined ? (error as any).details : undefined;
+	return reply.code(statusCode).send({ error: message, ...(code ? { code } : {}), ...(details !== undefined ? { details } : {}) });
 }
 
 function browserSafeCheckpointApprovalResponse(result: ReturnType<typeof writeApprovedCheckpoint>) {
@@ -1859,35 +1879,26 @@ function browserSafeMementoBoundaryResponse(result: ReturnType<typeof writePersi
 	};
 }
 
-function browserSafeAbsorbApprovalResponse(result: ReturnType<typeof writeApprovedAbsorb>) {
+function browserSafeAbsorbApprovalResponse(result: AbsorbRunApprovalResponse) {
 	return {
 		agentId: result.agentId,
 		writesMemory: result.writesMemory,
 		absorbId: result.absorbId,
+		// The id the undo route takes, under the one name both approvals use.
+		saveId: result.saveId,
 		eventRelPath: result.eventRelPath,
 		recentContextEntryCount: result.recentContextEntryCount,
 		memoryBudget: result.memoryBudget,
 		postAbsorb: result.postAbsorb,
 		warnings: result.warnings,
-	};
-}
-
-function browserSafeStructuralReviewApprovalResponse(result: ReturnType<typeof writeApprovedStructuralReview>) {
-	return {
-		agentId: result.agentId,
-		writesMemory: result.writesMemory,
-		structuralReviewId: result.structuralReviewId,
-		eventRelPath: result.eventRelPath,
-		auditRecordWritten: result.auditRecordWritten,
-		// After-write budget verdict from the written file — with the pointer
-		// line included, the propose-time impact can differ from what was saved.
-		memoryBudget: result.memoryBudget,
-		reviewTargetEstimatedTokenDelta: result.reviewTargetEstimatedTokenDelta,
-		// The saved screen names the forget-to-document file from this field; an
-		// export the response hides would be a silent one.
-		...(result.forgetToDocument ? { forgetToDocument: result.forgetToDocument } : {}),
-		postStructuralReview: result.postStructuralReview,
-		warnings: result.warnings,
+		// What the saved screen says: what went into memory, what is waiting for
+		// the next update, and how much moved to the archive.
+		foldedSessions: result.foldedSessions,
+		remainingSessions: result.remainingSessions,
+		archivedEntries: result.archivedEntries,
+		archivedForBudget: result.archivedForBudget,
+		// The limit the card raised, now the room's own; absent when it was not raised.
+		...(result.budgetRaisedTo === undefined ? {} : { budgetRaisedTo: result.budgetRaisedTo }),
 	};
 }
 
@@ -2276,10 +2287,38 @@ app.delete("/api/persistent-agents/:id/workspace-policy", async (req, reply) => 
 		return reply.code(payload.statusCode).send(payload.body);
 	}
 });
+// The numbers behind this room's maintenance runs: sizes, timings, stop
+// reasons, which expected markers each reply carried, how the validator judged
+// it. Never a prompt, a reply, or a line of the room's memory — so a user can
+// send a failing run to be looked at without sending their memory with it.
+app.get("/api/persistent-agents/:id/maintenance-diagnostics", async (req, reply) => {
+	const idRaw = String((req.params as any).id ?? "").trim();
+	try {
+		const status = getUsablePersistentAgentStatusForNormalUse(idRaw);
+		const query = (req.query ?? {}) as any;
+		const requested = Number(query.limit);
+		const limit = Number.isFinite(requested) && requested > 0 ? Math.min(Math.floor(requested), MAINTENANCE_DIAGNOSTICS_KEEP) : MAINTENANCE_DIAGNOSTICS_DEFAULT_LIMIT;
+		const records = listMaintenanceDiagnostics(createPersistentAgentInstance(status.id).rootDir, limit);
+		return { agentId: status.id, limit, recordCount: records.length, records };
+	} catch (e) {
+		return persistentAgentNormalUseErrorReply(reply, e);
+	}
+});
+// The same records as one document, for attaching to a report.
+app.get("/api/persistent-agents/:id/maintenance-diagnostics/export", async (req, reply) => {
+	const idRaw = String((req.params as any).id ?? "").trim();
+	try {
+		const status = getUsablePersistentAgentStatusForNormalUse(idRaw);
+		return exportMaintenanceDiagnostics(createPersistentAgentInstance(status.id).rootDir, status.id);
+	} catch (e) {
+		return persistentAgentNormalUseErrorReply(reply, e);
+	}
+});
 app.get("/api/persistent-agents/:id/maintenance-settings", async (req, reply) => {
 	const idRaw = String((req.params as any).id ?? "").trim();
 	try {
 		const status = getUsablePersistentAgentStatusForNormalUse(idRaw);
+		settleMemoryBudget(status.id);
 		const settings = readPersistentRoomMaintenanceSettings(status.id);
 		return { agentId: status.id, settings };
 	} catch (e) {
@@ -2293,6 +2332,36 @@ app.put("/api/persistent-agents/:id/maintenance-settings", async (req, reply) =>
 		const body = (req.body ?? {}) as any;
 		const settings = writePersistentRoomMaintenanceSettings(status.id, { fastPathSecondApproval: body.fastPathSecondApproval, quickCheckpointAutoApply: body.quickCheckpointAutoApply, memoryBudgetTokens: body.memoryBudgetTokens });
 		return { agentId: status.id, settings };
+	} catch (e) {
+		return persistentAgentNormalUseErrorReply(reply, e);
+	}
+});
+// The room's memory, entry by entry: list, add, edit, pin, move, close,
+// delete to the archive, restore, and the room's own memory history.
+registerMemoryEntryRoutes(app, {
+	usableRoom: (idRaw) => getUsablePersistentAgentStatusForNormalUse(idRaw),
+	errorReply: (reply, error) => persistentAgentNormalUseErrorReply(reply, error),
+	history: (idRaw) => buildRoomMemoryHistory(idRaw),
+});
+// Taking back the room's latest memory save: the file from before it, put back
+// byte for byte. Every other refusal lives in the undo itself; the room lock is
+// checked here, where it is read, exactly as Memento checks it.
+app.post("/api/persistent-agents/:id/memory/undo", async (req, reply) => {
+	const idRaw = String((req.params as any).id ?? "").trim();
+	try {
+		const status = getUsablePersistentAgentStatusForNormalUse(idRaw);
+		// A scheduled background run or a CLI session is working this room now;
+		// putting an earlier memory back underneath them is the one thing undo
+		// must never do. The room's own web session is not in the way: undo is
+		// offered from that session.
+		const roomLockState = activeRoomLock(status.id);
+		if (roomLockState?.surface === "scheduler" || roomLockState?.surface === "cli") {
+			const error = new Error(`This room is ${roomLockBusyStatus(roomLockState)}. Wait for that to finish, then undo.`);
+			(error as any).statusCode = 409;
+			(error as any).code = "memory_undo_room_busy";
+			throw error;
+		}
+		return undoMemorySave(status.id, (req.body as any)?.saveId);
 	} catch (e) {
 		return persistentAgentNormalUseErrorReply(reply, e);
 	}
@@ -2566,12 +2635,15 @@ app.get("/api/persistent-agents/:id/absorb/status", async (req, reply) => {
 		const id = status.id;
 		const selection = activeAbsorbModelSelection();
 		const availability = getAbsorbAvailability(id);
+		// The v2 block: what this room would fold, what its memory costs now, and
+		// whether anything has to leave before a single model call is made.
+		const v2 = absorbRunStatusFields(id);
 		try {
 			const registry = getWebChatModelRegistry();
 			const model = resolveAbsorbModel(registry, selection.modelLock);
-			return { ...availability, model: modelStatusPayload(model), profile: profileStatusPayload(selection.profile), writesMemory: false };
+			return { ...availability, ...v2, model: modelStatusPayload(model), profile: profileStatusPayload(selection.profile), writesMemory: false };
 		} catch (e) {
-			return reply.code(400).send({ ...availability, model: null, profile: profileStatusPayload(selection.profile), writesMemory: false, error: (e as Error).message });
+			return reply.code(400).send({ ...availability, ...v2, model: null, profile: profileStatusPayload(selection.profile), writesMemory: false, error: (e as Error).message });
 		}
 	} catch (e) {
 		return persistentAgentNormalUseErrorReply(reply, e);
@@ -2610,107 +2682,125 @@ app.post("/api/persistent-agents/:id/absorb/discuss/signoff", async (req, reply)
 		return persistentAgentNormalUseErrorReply(reply, e);
 	}
 });
+// Review v2: the first read of the room's notes and the discussion about it.
+// Same three calls Memorize makes, on the same maintenance model, and none of
+// them writes anything.
+registerReviewAssessRoutes(app, {
+	room: (idRaw) => getPersistentAgentStatusForMaintenance(idRaw),
+	reviewRunActive: (agentId) => hasActiveReviewRun(agentId),
+	errorReply: (reply, error) => persistentAgentNormalUseErrorReply(reply, error),
+	modelLock: () => activeAbsorbModelSelection().modelLock,
+	generate: (agentId, prompt, modelLock, options) => runIsolatedLifecycleWorker(prompt, modelLock, resolveAbsorbModel, "review worker", "Produce the Review first read now.", "the Review worker produced no text", { agent: agentId, kind: "upkeep" }, options),
+	resolveModelWindow: (modelLock) => consultModelWindow(modelLock),
+});
+// Memorize v2: propose no longer drafts. It starts a RUN — the server folds the
+// room's sessions one at a time and the client polls what it did — so the
+// answer is the run's id, not a document, and the request returns in
+// milliseconds instead of minutes.
 app.post("/api/persistent-agents/:id/absorb/propose", async (req, reply) => {
 	const idRaw = String((req.params as any).id ?? "").trim();
 	try {
 		const status = getPersistentAgentStatusForMaintenance(idRaw);
 		const id = status.id;
 		const selection = activeAbsorbModelSelection();
-		return await buildAbsorbProposal({ ...(req.body ?? {} as any), agentId: id }, selection.modelLock, async (prompt, modelLock) => runIsolatedLifecycleWorker(prompt, modelLock, resolveAbsorbModel, "absorb worker", "Produce the Memory Absorption Proposal now.", "absorb proposal worker produced no text", { agent: id, kind: "upkeep" }), { resolveModelWindow: consultModelWindow });
+		const availability = getAbsorbAvailability(id);
+		if (!availability.available) throw new Error(availability.message);
+		const request = parseAbsorbRunProposeRequest(req.body ?? {});
+		const run = startAbsorbRun({
+			agentId: id,
+			assessmentMarkdown: request.assessmentMarkdown,
+			guidance: request.guidance,
+			...(request.sourceFingerprint ? { sourceFingerprint: request.sourceFingerprint } : {}),
+			...(request.limitRaisedFrom === undefined ? {} : { limitRaisedFrom: request.limitRaisedFrom }),
+			model: selection.modelLock,
+			resolveModelWindow: consultModelWindow,
+			generate: (prompt, modelLock, options) => runIsolatedLifecycleWorker(prompt, modelLock, resolveAbsorbModel, "memorize fold worker", FOLD_TRIGGER_PROMPT, "the fold worker produced no text", { agent: id, kind: "upkeep" }, options),
+		});
+		return reply.code(202).send({ runId: run.runId });
 	} catch (e) {
 		return persistentAgentNormalUseErrorReply(reply, e);
 	}
 });
+app.get("/api/persistent-agents/:id/absorb/runs/:runId", async (req, reply) => {
+	const idRaw = String((req.params as any).id ?? "").trim();
+	try {
+		const status = getPersistentAgentStatusForMaintenance(idRaw);
+		return getAbsorbRun(status.id, String((req.params as any).runId ?? "").trim());
+	} catch (e) {
+		return persistentAgentNormalUseErrorReply(reply, e);
+	}
+});
+// Keep takes `{ keepIds?, keepTopics? }` — either or both, a missing field
+// leaving that set as it was.
+app.post("/api/persistent-agents/:id/absorb/runs/:runId/keep", async (req, reply) => {
+	const idRaw = String((req.params as any).id ?? "").trim();
+	try {
+		const status = getPersistentAgentStatusForMaintenance(idRaw);
+		const body = (req.body ?? {}) as any;
+		return keepAbsorbRunEntries(status.id, String((req.params as any).runId ?? "").trim(), {
+			...(body.keepIds === undefined ? {} : { keepIds: body.keepIds }),
+			...(body.keepTopics === undefined ? {} : { keepTopics: body.keepTopics }),
+		});
+	} catch (e) {
+		return persistentAgentNormalUseErrorReply(reply, e);
+	}
+});
+app.post("/api/persistent-agents/:id/absorb/runs/:runId/edit", async (req, reply) => {
+	const idRaw = String((req.params as any).id ?? "").trim();
+	try {
+		const status = getPersistentAgentStatusForMaintenance(idRaw);
+		return editAbsorbRunEntry(status.id, String((req.params as any).runId ?? "").trim(), (req.body as any)?.entryId, (req.body as any)?.text);
+	} catch (e) {
+		return persistentAgentNormalUseErrorReply(reply, e);
+	}
+});
+// The limit on the run only; the room's setting follows on approve.
+app.post("/api/persistent-agents/:id/absorb/runs/:runId/budget", async (req, reply) => {
+	const idRaw = String((req.params as any).id ?? "").trim();
+	try {
+		const status = getPersistentAgentStatusForMaintenance(idRaw);
+		return setAbsorbRunBudget(status.id, String((req.params as any).runId ?? "").trim(), (req.body as any)?.budgetTokens);
+	} catch (e) {
+		return persistentAgentNormalUseErrorReply(reply, e);
+	}
+});
+app.post("/api/persistent-agents/:id/absorb/runs/:runId/cancel", async (req, reply) => {
+	const idRaw = String((req.params as any).id ?? "").trim();
+	try {
+		const status = getPersistentAgentStatusForMaintenance(idRaw);
+		return cancelAbsorbRun(status.id, String((req.params as any).runId ?? "").trim());
+	} catch (e) {
+		return persistentAgentNormalUseErrorReply(reply, e);
+	}
+});
+// Approve is the run's approve. The whole-document approval it replaces is
+// retired: a body without a runId has no run to write, and says so.
 app.post("/api/persistent-agents/:id/absorb/approve", async (req, reply) => {
 	const idRaw = String((req.params as any).id ?? "").trim();
 	try {
 		const status = getPersistentAgentStatusForMaintenance(idRaw);
-		const id = status.id;
-		const parsed = parseAbsorbApprovalRequest(req.body ?? {}, id);
-		const result = writeApprovedAbsorb(parsed.request, parsed.warnings);
+		const runId = String((req.body as any)?.runId ?? "").trim();
+		if (!runId) throw new Error("runId is required: start Memorize again to build a memory update this room can save.");
+		const result = approveAbsorbRun(status.id, runId);
 		return browserSafeAbsorbApprovalResponse(result);
 	} catch (e) {
 		return persistentAgentNormalUseErrorReply(reply, e);
 	}
 });
-app.get("/api/persistent-agents/:id/structural-review/status", async (req, reply) => {
-	const idRaw = String((req.params as any).id ?? "").trim();
-	try {
-		const status = getPersistentAgentStatusForMaintenance(idRaw);
-		const id = status.id;
-		const selection = activeStructuralReviewModelSelection();
-		const availability = getStructuralReviewAvailability(id);
-		try {
-			const registry = getWebChatModelRegistry();
-			const model = resolveStructuralReviewModel(registry, selection.modelLock);
-			return { ...availability, model: modelStatusPayload(model), profile: profileStatusPayload(selection.profile), writesMemory: false };
-		} catch (e) {
-			return reply.code(400).send({ ...availability, model: null, profile: profileStatusPayload(selection.profile), writesMemory: false, error: (e as Error).message });
-		}
-	} catch (e) {
-		return persistentAgentNormalUseErrorReply(reply, e);
-	}
-});
-app.post("/api/persistent-agents/:id/structural-review/assess", async (req, reply) => {
-	const idRaw = String((req.params as any).id ?? "").trim();
-	try {
-		const status = getPersistentAgentStatusForMaintenance(idRaw);
-		const id = status.id;
-		const selection = activeStructuralReviewModelSelection();
-		return await buildStructuralReviewAssessment(id, selection.modelLock, async (prompt, modelLock) => runIsolatedLifecycleWorker(prompt, modelLock, resolveStructuralReviewModel, "structural review worker", "Produce the Prune memory assessment now.", "structural review assessment worker produced no text", { agent: id, kind: "upkeep" }), { resolveModelWindow: consultModelWindow, retryFeedback: parseAssessmentRetryFeedback((req.body as any)?.retryFeedback) });
-	} catch (e) {
-		return persistentAgentNormalUseErrorReply(reply, e);
-	}
-});
-app.post("/api/persistent-agents/:id/structural-review/discuss", async (req, reply) => {
-	const idRaw = String((req.params as any).id ?? "").trim();
-	try {
-		const status = getPersistentAgentStatusForMaintenance(idRaw);
-		const id = status.id;
-		const selection = activeStructuralReviewModelSelection();
-		return await buildStructuralReviewDiscussionTurn({ ...(req.body ?? {} as any), agentId: id }, selection.modelLock, async (prompt, modelLock) => runIsolatedLifecycleWorker(prompt, modelLock, resolveStructuralReviewModel, "structural review worker", "Produce the Prune memory discussion response now.", "structural review discussion worker produced no text", { agent: id, kind: "upkeep" }), { resolveModelWindow: consultModelWindow });
-	} catch (e) {
-		return persistentAgentNormalUseErrorReply(reply, e);
-	}
-});
-app.post("/api/persistent-agents/:id/structural-review/discuss/signoff", async (req, reply) => {
-	const idRaw = String((req.params as any).id ?? "").trim();
-	try {
-		const status = getPersistentAgentStatusForMaintenance(idRaw);
-		const id = status.id;
-		const selection = activeStructuralReviewModelSelection();
-		return await buildStructuralReviewDiscussionSignoff({ ...(req.body ?? {} as any), agentId: id }, selection.modelLock, async (prompt, modelLock) => runIsolatedLifecycleWorker(prompt, modelLock, resolveStructuralReviewModel, "structural review worker", "Produce the Prune memory discussion signoff handoff now.", "structural review discussion signoff worker produced no text", { agent: id, kind: "upkeep" }), { resolveModelWindow: consultModelWindow });
-	} catch (e) {
-		return persistentAgentNormalUseErrorReply(reply, e);
-	}
-});
-app.post("/api/persistent-agents/:id/structural-review/propose", async (req, reply) => {
-	const idRaw = String((req.params as any).id ?? "").trim();
-	try {
-		const status = getPersistentAgentStatusForMaintenance(idRaw);
-		const id = status.id;
-		const selection = activeStructuralReviewModelSelection();
-		return await buildStructuralReviewProposal({ ...(req.body ?? {} as any), agentId: id }, selection.modelLock, async (prompt, modelLock) => runIsolatedLifecycleWorker(prompt, modelLock, resolveStructuralReviewModel, "structural review worker", "Produce the Prune memory proposal now.", "structural review proposal worker produced no text", { agent: id, kind: "upkeep" }), { resolveModelWindow: consultModelWindow });
-	} catch (e) {
-		return persistentAgentNormalUseErrorReply(reply, e);
-	}
-});
-app.post("/api/persistent-agents/:id/structural-review/approve", async (req, reply) => {
-	const idRaw = String((req.params as any).id ?? "").trim();
-	try {
-		const status = getPersistentAgentStatusForMaintenance(idRaw);
-		const id = status.id;
-		const parsed = parseStructuralReviewApprovalRequest(req.body ?? {}, id);
-		const result = writeApprovedStructuralReview(parsed.request, parsed.warnings);
-		return browserSafeStructuralReviewApprovalResponse(result);
-	} catch (e) {
-		return persistentAgentNormalUseErrorReply(reply, e);
-	}
+// Review v2: the run that tidies a room's notes a group of topics at a time,
+// keeping every note's id, date and pin. Registered beside the Memorize run's
+// routes, on the same room checks and the same error envelope.
+registerReviewRunRoutes(app, {
+	maintenanceRoom: (idRaw) => getPersistentAgentStatusForMaintenance(idRaw),
+	errorReply: (reply, error) => persistentAgentNormalUseErrorReply(reply, error),
+	modelLock: () => activeStructuralReviewModelSelection().modelLock,
+	resolveModelWindow: consultModelWindow,
+	generate: (agentId, prompt, modelLock, options) => runIsolatedLifecycleWorker(prompt, modelLock, resolveStructuralReviewModel, "review tidy worker", REVIEW_TRIGGER_PROMPT, "the review tidy worker produced no text", { agent: agentId, kind: "upkeep" }, options),
 });
 app.post("/api/persistent-agents/:id/checkpoint/propose", async (req, reply) => {
 	const idRaw = String((req.params as any).id ?? "").trim();
 	try {
-		const status = getReadyPersistentAgentStatusForLifecycle(idRaw);
+		const status = getPersistentAgentStatusForCheckpoint(idRaw);
 		const id = status.id;
 		const body = (req.body ?? {}) as any;
 		const conversationId = String(body.conversationId ?? "").trim();
@@ -2732,6 +2822,9 @@ app.post("/api/persistent-agents/:id/checkpoint/propose", async (req, reply) => 
 				cwd: runtimeCwd,
 				agentDir: getAgentDir(),
 				modelRegistry: registry,
+				// A single-shot transform: reasoning tokens would count against the
+				// output cap and starve the compression fields themselves.
+				thinkingLevel: "low",
 			});
 			recordWorkerUsage(id, "upkeep", modelLock, workerResult.usage);
 			return workerResult;
@@ -2750,7 +2843,7 @@ app.post("/api/persistent-agents/:id/checkpoint/propose", async (req, reply) => 
 app.post("/api/persistent-agents/:id/checkpoint/approve", async (req, reply) => {
 	const idRaw = String((req.params as any).id ?? "").trim();
 	try {
-		const status = getReadyPersistentAgentStatusForLifecycle(idRaw);
+		const status = getPersistentAgentStatusForCheckpoint(idRaw);
 		const parsed = parseCheckpointApprovalRequest(req.body ?? {}, status.id);
 		const effectiveWorkspacePolicy = resolvePersistentRoomEffectiveWorkspacePolicy(status.id, parsed.request.conversationId);
 		const runtimeCwd = persistentRoomRuntimeCwdForEffectiveWorkspacePolicy(effectiveWorkspacePolicy, REPO_ROOT);
@@ -3543,6 +3636,12 @@ function resolveStructuralReviewModel(registry: ModelRegistry, modelLock: { prov
 	return resolveConfiguredWorkerModel(registry, modelLock, "structural review model");
 }
 
+// A maintenance call is one prompt and one reply on a model that is generating
+// at a few dozen tokens a second; eight minutes is far past the slowest healthy
+// run and well short of a user giving up. Past it the step fails with a reason
+// instead of holding the room open on a stream that is not coming back.
+const MAINTENANCE_WORKER_TIMEOUT_MS = 8 * 60 * 1000;
+
 async function runIsolatedLifecycleWorker<TModelLock extends { provider: string; model: string }>(
 	prompt: string,
 	modelLock: TModelLock,
@@ -3551,6 +3650,12 @@ async function runIsolatedLifecycleWorker<TModelLock extends { provider: string;
 	triggerPrompt: string,
 	emptyTextError: string,
 	attribution?: { agent: string; kind: UsageKind },
+	// A step that can be cancelled (the Memorize run) passes its signal, and a
+	// step with its own ceiling passes that; everything else keeps the shared
+	// maintenance timeout and no abort hook, exactly as before. A mechanical
+	// step (fold, ops proposal) asks for reasoning off: single-shot transforms
+	// whose reasoning tokens would count against the output cap and starve the reply.
+	options?: { signal?: AbortSignal; timeoutMs?: number; thinkingLevel?: "low" },
 ) {
 	const result = await runIsolatedPersistentAgentWorker({
 		workerSystemPrompt: prompt,
@@ -3562,6 +3667,9 @@ async function runIsolatedLifecycleWorker<TModelLock extends { provider: string;
 		cwd: REPO_ROOT,
 		agentDir: getAgentDir(),
 		modelRegistry: getWebChatModelRegistry(),
+		timeoutMs: options?.timeoutMs ?? MAINTENANCE_WORKER_TIMEOUT_MS,
+		...(options?.signal ? { signal: options.signal } : {}),
+		...(options?.thinkingLevel ? { thinkingLevel: options.thinkingLevel } : {}),
 	});
 	if (attribution) recordWorkerUsage(attribution.agent, attribution.kind, modelLock, result.usage);
 	return result;
@@ -5008,6 +5116,8 @@ function filterMemoryOverviewForRemote(overview: ReturnType<typeof buildMemoryOv
 		totals: {
 			rooms: rooms.length,
 			l1bTokens: rooms.reduce((sum, r) => sum + r.l1bTokens, 0),
+			notes: rooms.reduce((sum, r) => sum + r.notes, 0),
+			noteTopics: rooms.reduce((sum, r) => sum + r.noteTopics, 0),
 			checkpoints: rooms.reduce((sum, r) => sum + r.checkpoints, 0),
 			recentContextBacklog: rooms.reduce((sum, r) => sum + r.recentContextBacklog, 0),
 			roomsNeedingAbsorb: rooms.filter((r) => r.needsAbsorb).length,
@@ -5044,6 +5154,7 @@ app.get("/api/memory/room-memory", async (req, reply) => {
 		return {
 			generatedAt: overview.generatedAt,
 			rooms: overview.rooms.map((room) => {
+				settleMemoryBudget(room.id);
 				const settings = readPersistentRoomMaintenanceSettings(room.id);
 				// series is oldest → newest; every point carries the measured
 				// Deep Memory size after that event (`consolidated`).
@@ -5279,9 +5390,32 @@ app.get("/api/memory/rooms/:id/conversation", async (req, reply) => {
 	}
 });
 
-// What a Learn/Review actually changed (read-only) — powers "What changed" on
-// the Memory history timeline. Before = the event's own archived snapshot;
-// after = the next recorded state in the archive chain (or today's document).
+// Every conversation the room has kept (read-only) — powers the memorized
+// conversations list in the Memory view: one row per checkpoint record,
+// newest first, saying whether it still waits and whether it can be opened.
+app.get("/api/memory/rooms/:id/conversations", async (req, reply) => {
+	const raw = String((req.params as { id: string }).id ?? "");
+	let id: string;
+	try {
+		id = validatePersistentAgentId(raw);
+	} catch {
+		return reply.code(400).send({ error: "Invalid room id." });
+	}
+	const status = getPersistentAgentStatus(id);
+	if (!status.exists) return reply.code(404).send({ error: "Room not found." });
+	if (isPersistentAgentArchived(status)) return reply.code(410).send({ error: "Room is archived." });
+	try {
+		return { conversations: listMemoryConversations(id) };
+	} catch (e) {
+		app.log.warn({ err: (e as Error).message }, "failed to list memory conversations");
+		return reply.code(500).send({ error: "Failed to read this room's memory." });
+	}
+});
+
+// What a history row actually changed (read-only) — powers "What changed" on
+// the memory history: a Memorize, a Review, a hand edit, the migration or an
+// undo. Before = the record's own archived snapshot; after = the next recorded
+// state in the archive chain (or today's document).
 app.get("/api/memory/rooms/:id/event-diff", async (req, reply) => {
 	const raw = String((req.params as { id: string }).id ?? "");
 	let id: string;
@@ -5294,8 +5428,8 @@ app.get("/api/memory/rooms/:id/event-diff", async (req, reply) => {
 	if (!status.exists) return reply.code(404).send({ error: "Room not found." });
 	if (isPersistentAgentArchived(status)) return reply.code(410).send({ error: "Room is archived." });
 	const q = (req.query as { kind?: string; event?: string } | undefined) ?? {};
-	const kind = String(q.kind ?? "");
-	if (kind !== "learn" && kind !== "review") return reply.code(400).send({ error: "Which kind of event?" });
+	const kind = MEMORY_EVENT_DIFF_KINDS.find((known) => known === String(q.kind ?? ""));
+	if (!kind) return reply.code(400).send({ error: "Which kind of event?" });
 	const event = String(q.event ?? "").slice(0, 120);
 	if (!event.trim()) return reply.code(400).send({ error: "Which event?" });
 	try {
@@ -5309,7 +5443,10 @@ app.get("/api/memory/rooms/:id/event-diff", async (req, reply) => {
 });
 
 // The room's memory as it was at a past moment (read-only) — powers time
-// travel in the Memory view, from the recorded archive chain only.
+// travel in the Memory view, from the recorded archive chain only. With
+// `view=notes` it is the memory as the room reads it instead: notes and open
+// items only, in the words a person reads — today's file, or with `at` the
+// recorded state at that moment.
 app.get("/api/memory/rooms/:id/snapshot", async (req, reply) => {
 	const raw = String((req.params as { id: string }).id ?? "");
 	let id: string;
@@ -5321,7 +5458,20 @@ app.get("/api/memory/rooms/:id/snapshot", async (req, reply) => {
 	const status = getPersistentAgentStatus(id);
 	if (!status.exists) return reply.code(404).send({ error: "Room not found." });
 	if (isPersistentAgentArchived(status)) return reply.code(410).send({ error: "Room is archived." });
-	const at = Number((req.query as { at?: string } | undefined)?.at);
+	const query = (req.query as { at?: string; view?: string } | undefined) ?? {};
+	if (query.view === "notes") {
+		const notesAt = query.at === undefined ? undefined : Number(query.at);
+		if (notesAt !== undefined && (!Number.isFinite(notesAt) || notesAt <= 0)) return reply.code(400).send({ error: "Which moment?" });
+		try {
+			const notes = readMemoryNotesView(id, notesAt);
+			if (!notes) return reply.code(404).send({ error: notesAt === undefined ? "No stored memory for this room." : "No stored memory for that moment." });
+			return notes;
+		} catch (e) {
+			app.log.warn({ err: (e as Error).message }, "failed to read memory notes view");
+			return reply.code(500).send({ error: "Failed to read this room's memory." });
+		}
+	}
+	const at = Number(query.at);
 	if (!Number.isFinite(at) || at <= 0) return reply.code(400).send({ error: "Which moment?" });
 	try {
 		const snapshot = readMemorySnapshotAt(id, at);
@@ -5372,7 +5522,7 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 	socket.on("message", holdFrameUntilListener);
 
 	const status = getUsablePersistentAgentStatusForNormalUse(persistentAgentIdRaw);
-	if (status.status !== "ready") throw new Error(`persistent agent is not ready: ${status.status}`);
+	assertPersistentAgentAcceptsSession(status);
 	// Remote devices: a hidden room's socket fails exactly like a
 	// nonexistent room's (same thrown shape as the unknown-room path above),
 	// and capability is re-derived from the device record at attach, with
@@ -6524,6 +6674,10 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 		// the room's own files/ folder by the tools themselves — deliberately
 		// OUTSIDE the workspace grant plumbing and its mismatch check above.
 		const persistentRoomShelfTools = createPersistentRoomShelfTools({ roomId: persistentAgentId });
+		// The room's read of its own archived notes: default-on beside the shelf
+		// pair, fenced to this room's own archive, and read-only — a pointer line
+		// the room cannot follow is just a regret.
+		const persistentRoomMemoryTools = [createPersistentRoomMemoryRecallTool({ roomId: persistentAgentId })];
 		// Live room state is STATE, not an event: regenerated for every request
 		// via before_agent_start (which replaces the system prompt per turn), so
 		// something that changed mid-session is reflected on the very next
@@ -6725,10 +6879,11 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 			// tools) and added to the allowlist explicitly, since customTools are
 			// allowlist-filtered.
 			...(persistentRoomToolPolicy ? { tools: [...persistentRoomToolPolicy.allowedToolNames, ...persistentRoomSkillTools.map((tool) => tool.name), ...persistentRoomDelegateTools.map((tool) => tool.name)] } : {}),
-			// Shelf tools ride beside skills/delegation: appended AFTER the
-			// workspace-policy mismatch check (they are not workspace tools); their
-			// names are already in the policy allowlist (default-on lane).
-			...(persistentRoomCustomTools.length + persistentRoomSkillTools.length + persistentRoomDelegateTools.length + persistentRoomShelfTools.length > 0 ? { customTools: [...persistentRoomCustomTools, ...persistentRoomSkillTools, ...persistentRoomDelegateTools, ...persistentRoomShelfTools] } : {}),
+			// Shelf tools and the archived-notes read ride beside skills/delegation:
+			// appended AFTER the workspace-policy mismatch check (they are not
+			// workspace tools); their names are already in the policy allowlist
+			// (default-on lane).
+			...(persistentRoomCustomTools.length + persistentRoomSkillTools.length + persistentRoomDelegateTools.length + persistentRoomShelfTools.length + persistentRoomMemoryTools.length > 0 ? { customTools: [...persistentRoomCustomTools, ...persistentRoomSkillTools, ...persistentRoomDelegateTools, ...persistentRoomShelfTools, ...persistentRoomMemoryTools] } : {}),
 		});
 		session = created.session;
 		sessionDisposed = false;
@@ -6746,13 +6901,8 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 		// session's actual registered tools (extensions included, so after bind)
 		// so a leaked tool fails the bind instead of quietly riding along.
 		if (persistentRoomToolPolicy) {
-			const sessionToolNames = session.getActiveToolNames();
-			const matchesBlockedToolName = (blocked: string, toolName: string): boolean =>
-				blocked.endsWith("*") ? toolName.startsWith(blocked.slice(0, -1)) : toolName === blocked;
-			for (const blockedToolName of persistentRoomToolPolicy.blockedToolNames) {
-				const leaked = sessionToolNames.find((toolName) => matchesBlockedToolName(blockedToolName, toolName));
-				if (leaked) throw new Error(`persistent-room blocked tool leaked into session: ${leaked}`);
-			}
+			const leaked = persistentRoomBlockedToolLeaks(persistentRoomToolPolicy, session.getActiveToolNames());
+			if (leaked.length > 0) throw new Error(`persistent-room blocked tool leaked into session: ${leaked[0]}`);
 		}
 		// The room's sticky effort outlives the connection AND the session: a
 		// rebind (workspace/MCP settings, adopted turn) rebuilds the session at

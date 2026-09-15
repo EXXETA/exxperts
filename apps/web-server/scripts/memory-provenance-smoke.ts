@@ -170,13 +170,16 @@ try {
 	let diff = readMemoryEventDiff(agentId, "learn", learnEvent.id!);
 	assert(diff, "learn diff should resolve from the stored snapshots");
 	assert(diff.afterBasis === "current" && diff.afterVerified === true, `latest learn should diff against today's verified document, got ${JSON.stringify({ afterBasis: diff.afterBasis, afterVerified: diff.afterVerified })}`);
-	// Split-then-diff: each change sits under its own section, never mislabeled.
-	const rcDiff = diff.sections.find((s) => s.section === "Recent sessions");
-	assert(rcDiff && rcDiff.beforeText.includes("Hand-added entry without a record 3"), "the consolidated sessions should diff under Recent sessions");
-	assert(rcDiff.afterTokens < rcDiff.beforeTokens, "the Learn should shrink the Recent sessions section");
-	const deepDiff = diff.sections.find((s) => s.section === "Deep Memory");
-	assert(deepDiff && deepDiff.afterText.includes("provenance smoke durable understanding is consolidated"), "the consolidated knowledge should diff under Deep Memory");
-	assert(diff.sections.every((s) => !s.afterText.includes("Hand-added entry without a record 3")), "no after side should still hold the consolidated session");
+	// The diff speaks in notes: neither side has entry ids yet, so both are
+	// paired the way the first migrating save would number them. The
+	// candidate's Deep Memory is prose under no heading, which is the implicit
+	// "General" topic; the consolidated sessions leave the waiting list.
+	assert(diff.notes === true && !("sections" in diff), `an unmigrated room's Learn still reads as notes, got ${JSON.stringify({ notes: diff.notes, sections: diff.sections })}`);
+	const consolidatedTitles = [CHECKPOINT_TITLE, ...[2, 3, 4, 5].map((i) => `Hand-added entry without a record ${i}`)];
+	assert(JSON.stringify(diff.conversations) === JSON.stringify({ left: consolidatedTitles, joined: [] }), `the consolidated sessions left the waiting list, in document order, got ${JSON.stringify(diff.conversations)}`);
+	const deepDiff = diff.topics.find((t) => t.section === "General");
+	assert(deepDiff && deepDiff.changes.some((c) => String(c.after ?? "").includes("provenance smoke durable understanding is consolidated")), `the consolidated knowledge lands under the topic it went into, got ${JSON.stringify(diff.topics)}`);
+	assert(diff.topics.every((t) => t.changes.every((c) => !String(c.after ?? "").includes("Hand-added entry without a record 3"))), "no row's after side still holds the consolidated session");
 	assert(readMemoryEventDiff(agentId, "learn", "ab_20990101T000000Z_zzzzzz") === null, "unknown event id must resolve to null");
 
 	const cp2 = checkpointRequest("Post-learn session");
@@ -196,7 +199,7 @@ try {
 	// RC-0001. The consolidated checkpoint must NOT borrow the new entry's
 	// title (false provenance); with no record title left, it goes quiet.
 	assert(d.history[0].title === "Post-learn session", `newest checkpoint should carry the live entry's title, got ${JSON.stringify(d.history[0])}`);
-	assert(d.history[2].kind === "checkpoint" && d.history[2].title === null, `consolidated checkpoint must not borrow a reused RC id's title, got ${JSON.stringify(d.history[2])}`);
+	assert(d.history[2].kind === "checkpoint" && d.history[2].title === CHECKPOINT_TITLE, `consolidated checkpoint keeps the title its own record stored and never borrows a reused RC id's, got ${JSON.stringify(d.history[2])}`);
 	assert(d.recentSessions.length === 1 && d.recentSessions[0].approvedAt === T3, `post-learn session should carry its own receipt ${T3}, got ${JSON.stringify(d.recentSessions[0]?.approvedAt)}`);
 
 	// 4. A hand-added impostor reusing a consolidated (or live) RC label must
@@ -209,7 +212,7 @@ try {
 	assert(impostor && impostor.approvedAt === null, `impostor reusing RC-0001 must get no receipt, got ${JSON.stringify(impostor?.approvedAt)}`);
 	assert(genuine && genuine.approvedAt === T3, "the genuine entry keeps its receipt next to the impostor");
 	assert(d.history[0].title === "Post-learn session", "history keeps the genuine title with an impostor present");
-	assert(d.history[2].title === null, `consolidated checkpoint must not borrow the impostor's title, got ${JSON.stringify(d.history[2].title)}`);
+	assert(d.history[2].title === CHECKPOINT_TITLE, `consolidated checkpoint must not borrow the impostor's title, got ${JSON.stringify(d.history[2].title)}`);
 
 	// 4b. Time travel resolves each moment to the recorded state that was live
 	// then: before the first checkpoint the entry isn't there yet; between the
