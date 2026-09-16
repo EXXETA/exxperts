@@ -452,7 +452,11 @@ export function getAgentDir(): string {
 	if (envDir) {
 		return expandTildePath(envDir);
 	}
-	return join(homedir(), CONFIG_DIR_NAME, "agent");
+	// Without the override: the config dir sits in the exxperts state tree,
+	// which EXXPERTS_STATE_HOME relocates for a loaded data profile or a moved
+	// data folder; unset, it is the login home.
+	const stateHome = process.env.EXXPERTS_STATE_HOME?.trim();
+	return join(stateHome ? resolve(stateHome) : homedir(), CONFIG_DIR_NAME, "agent");
 }
 
 /** Get path to user's custom themes directory */

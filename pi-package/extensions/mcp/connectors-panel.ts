@@ -127,8 +127,8 @@ async function loadRows(): Promise<{ rows: ConnectorRow[]; configKey: string }> 
 async function dropCacheEntry(name: string): Promise<void> {
 	const fs = await import("node:fs");
 	const path = await import("node:path");
-	const os = await import("node:os");
-	const agentDir = process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".exxperts", "agent");
+	const { stateHome } = await import("../../product-state-paths.js");
+	const agentDir = process.env.PI_CODING_AGENT_DIR || path.join(stateHome(), ".exxperts", "agent");
 	const cachePath = path.join(agentDir, "mcp-cache.json");
 	try {
 		const cache = JSON.parse(fs.readFileSync(cachePath, "utf-8"));

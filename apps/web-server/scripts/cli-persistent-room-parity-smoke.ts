@@ -5,6 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { smokeHomeEnv } from "./smoke-server-process.js";
 
 const require = createRequire(import.meta.url);
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
@@ -98,8 +99,7 @@ function runBootstrap(input: any): { ok: true; boot: any } | { ok: false; messag
 	const result = spawnSync(process.execPath, [require.resolve("tsx/cli"), path.join(repoRoot, "bin", "lib", "persistent-room-bootstrap.ts")], {
 		cwd: repoRoot,
 		env: {
-			...process.env,
-			HOME: tempHome, USERPROFILE: tempHome,
+			...smokeHomeEnv(tempHome),
 			EXXETA_HOME: repoRoot,
 			EXXETA_PERSISTENT_AGENTS_ROOT: tempAgentsRoot,
 		},

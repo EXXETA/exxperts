@@ -134,6 +134,54 @@ The helper writes generated SearXNG settings to `~/.exxperts/app/searxng/setting
 | `.exxperts-cache/web-server.log` | Fastify pino logs, request/response, extension probes. |
 | `.exxperts-cache/web-ui.log` | Vite output. |
 
+## Data profiles
+
+Full user guide: [data-profiles.md](data-profiles.md). Operational summary:
+
+The standard profile is `~/.exxperts`: it never moves, has no name, and
+cannot be deleted. Additional profiles (demos, talks) are self-contained
+directories at `~/.exxperts-<name>`, each with its own `.exxperts` state tree
+nested inside; every `~/.exxperts-<name>` directory counts as a profile,
+including hand-made ones and raw copies (`cp -r ~/.exxperts
+~/.exxperts-snapshot`), which are normalized into the nested layout on first
+load. Which profile is loaded is recorded in
+`~/.exxperts/app/run/active-profile.json`; the supervisor (the `exxperts web`
+launcher, the desktop shell, or the dev harness) reads it on every server
+start and, for a non-standard profile, starts the server with
+`EXXPERTS_STATE_HOME` pointed at the profile directory. That one variable
+names the folder holding the `.exxperts` tree and is the whole indirection:
+`HOME` is never touched, so the Playwright browser cache, `~/.agents/skills`,
+`~/.config/mcp/mcp.json`, the OrbStack/Docker binaries and the git/ssh/gcloud
+dotfiles a room's tools read all keep resolving against the login home.
+Switching happens in
+Settings → Profiles: the server updates the pointer and exits with code 75,
+the supervisor restarts it, and the open page signs itself into the new
+session. The CLI reads the pointer at launch and announces which profile it
+runs against. A server started without one of these supervisors refuses to
+switch (the route answers 409) instead of exiting into nothing.
+
+The whole state family (standard tree plus profiles) lives in one data
+folder, default the login home. Settings → Profiles moves it: the server
+records a move intent and exits with code 75; the supervisor executes the
+move between legs (`performPendingHomeMove`) and writes the new location to
+`~/.exxperts.home.json`. The move is copy-first: sources are deleted only
+after every copy landed, so an interruption leaves a complete copy and the
+next start finishes the job. A target that already holds exxperts data is
+adopted as-is (nothing moved or merged). A pointer naming an unreachable
+folder refuses startup with the reason instead of silently starting empty.
+A move sets the same `EXXPERTS_STATE_HOME` and likewise leaves `HOME` alone:
+what moves is the exxperts data, not the home.
+`EXXPERTS_DATA_DIR` pins the folder for containers/automation and disables
+the in-app move; the directory is created on first use, an unusable path
+refuses startup, and relative paths resolve against the launch cwd, so use
+absolute paths in production. Both mechanisms are honored by all launchers,
+the desktop app, and the dev harness. `EXXPERTS_DATA_DIR` is the operator
+knob; `EXXPERTS_STATE_HOME` is internal plumbing the launchers set from it and
+is not a supported way to configure an install. Use cases and examples:
+[data-profiles.md](data-profiles.md#where-exxperts-keeps-its-data).
+Smokes: `npm run smoke:state-home-move` and `npm run smoke:data-dir`
+(in `apps/web-server`).
+
 ## Storage layout
 
 | Path | What | Persists across reinstalls? |
@@ -155,6 +203,8 @@ The helper writes generated SearXNG settings to `~/.exxperts/app/searxng/setting
 | `~/.exxperts/app/searxng/settings.yml` | Generated local SearXNG settings | yes |
 | `~/.exxperts/agent/mcp.json` | MCP server config (also `~/.config/mcp/mcp.json`, project `.mcp.json`) | yes |
 | `~/.exxperts/agent/` | Embedded runtime provider/auth/model/session state | yes |
+| `~/.exxperts/app/run/active-profile.json` | Pointer to the loaded data profile (Settings → Profiles; absent = the standard `~/.exxperts`) | no (transient) |
+| `~/.exxperts-<name>/` | Additional data profiles, each a self-contained `.exxperts` tree; the standard `~/.exxperts` never moves | yes |
 | `~/.exxeta/` | Legacy alpha/prototype product state only, if present | yes (legacy) |
 | `.exxperts-cache/*.log` | Dev process logs | no (gitignored) |
 | `.exxeta-cache/` | Legacy local cache only, if present | no (gitignored) |

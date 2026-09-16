@@ -21,9 +21,9 @@ jobs:
       # Smokes and typecheck don't need the headless browser; skip the ~150 MB download.
       EXXETA_SKIP_BROWSER_INSTALL: "1"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 20
           cache: npm
@@ -76,9 +76,9 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: latest
 
@@ -125,9 +125,9 @@ jobs:
     env:
       EXXETA_SKIP_BROWSER_INSTALL: "1"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
@@ -149,9 +149,9 @@ jobs:
     env:
       EXXETA_SKIP_BROWSER_INSTALL: "1"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
@@ -193,9 +193,9 @@ jobs:
     env:
       EXXETA_SKIP_BROWSER_INSTALL: "1"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
@@ -341,9 +341,9 @@ jobs:
     env:
       EXXETA_SKIP_BROWSER_INSTALL: "1"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
@@ -496,9 +496,9 @@ jobs:
     env:
       EXXETA_SKIP_BROWSER_INSTALL: "1"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm

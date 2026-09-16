@@ -9,6 +9,20 @@ export const SMOKE_AUTH_TOKEN = "exxperts-smoke-pinned-auth-token";
 export const SMOKE_SERVER_AUTH_ENV = { EXXPERTS_AUTH_TOKEN: SMOKE_AUTH_TOKEN } as const;
 export const SMOKE_AUTH_HEADERS = { "X-Exxperts-Auth": SMOKE_AUTH_TOKEN } as const;
 
+// The environment for a launcher or server a smoke starts against a temp home.
+// A temp HOME alone is not enough: the launchers resolve the exxperts data
+// folder from EXXPERTS_DATA_DIR and EXXPERTS_STATE_HOME ahead of the home, so
+// a developer who has either exported would otherwise have the smoke write
+// into their real data folder. Both are dropped here, along with the agent dir
+// the supervisors derive from them.
+export function smokeHomeEnv(tempHome: string, extra: Record<string, string | undefined> = {}): Record<string, string | undefined> {
+	const env: Record<string, string | undefined> = { ...process.env, HOME: tempHome, USERPROFILE: tempHome, ...extra };
+	delete env.EXXPERTS_DATA_DIR;
+	delete env.EXXPERTS_STATE_HOME;
+	delete env.EXXPERTS_CODING_AGENT_DIR;
+	return env;
+}
+
 // init.headers is deliberately narrowed to a plain object: a Headers instance
 // would spread to {} and silently drop the auth header. Explicit caller
 // headers win over the auth header, which is what a negative test wants.

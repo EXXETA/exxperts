@@ -65,6 +65,10 @@ try {
 		assert(status === 0, `doctor --profile clone: expected exit 0, got ${status}:\n${output}`);
 		assertIncludes(output, "install type: clone", "doctor --profile clone (install-type line)");
 		assertIncludes(output, "Runtime and state", "doctor --profile clone (section header)");
+		// Doctor says which tree it just judged: the data folder it resolved the
+		// way the launchers do, and the profile loaded inside it.
+		assertIncludes(output, `Data folder: ${tempHome}`, "doctor --profile clone (data folder line)");
+		assertIncludes(output, "Loaded profile: standard", "doctor --profile clone (loaded profile line)");
 		assertIncludes(output, "Clone (source install)", "doctor --profile clone (clone section)");
 		assertIncludes(output, "Optional features", "doctor --profile clone (section header)");
 		assertIncludes(output, "Network", "doctor --profile clone (section header)");

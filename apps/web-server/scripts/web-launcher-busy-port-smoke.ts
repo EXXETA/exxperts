@@ -15,6 +15,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { smokeHomeEnv } from "./smoke-server-process.js";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "exxeta-web-launcher-busy-port-home-"));
@@ -37,7 +38,7 @@ function runLauncher(port: number): Promise<{ status: number | null; output: str
 	return new Promise((resolve, reject) => {
 		const child = spawn(process.execPath, [path.join(repoRoot, "bin", "exxperts.cjs"), "web", "--no-open", "--port", String(port)], {
 			cwd: tempHome,
-			env: { ...process.env, HOME: tempHome, USERPROFILE: tempHome },
+			env: smokeHomeEnv(tempHome),
 			stdio: ["ignore", "pipe", "pipe"],
 		});
 		let output = "";
@@ -101,7 +102,7 @@ function listeningPort(server: http.Server | net.Server): number {
 
 	const child = spawn(process.execPath, [path.join(repoRoot, "bin", "exxperts.cjs"), "web", "--no-open", "--port", String(port)], {
 		cwd: tempHome,
-		env: { ...process.env, HOME: tempHome, USERPROFILE: tempHome },
+		env: smokeHomeEnv(tempHome),
 		stdio: ["ignore", "pipe", "pipe"],
 	});
 	let output = "";

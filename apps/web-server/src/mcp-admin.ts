@@ -8,8 +8,8 @@
  */
 
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
+import { stateHome } from "../../../pi-package/product-state-paths.js";
 
 // Non-literal specifiers so tsc never resolves into the adapter's raw .ts
 // sources (same pattern as mcp-status.ts).
@@ -31,7 +31,7 @@ export class McpAdminError extends Error {
 
 function ensureAgentDirEnv(): void {
 	if (!process.env.PI_CODING_AGENT_DIR) {
-		process.env.PI_CODING_AGENT_DIR = path.join(os.homedir(), ".exxperts", "agent");
+		process.env.PI_CODING_AGENT_DIR = path.join(stateHome(), ".exxperts", "agent");
 	}
 }
 
