@@ -9,7 +9,7 @@ import path from "node:path";
 import fs from "node:fs";
 import os from "node:os";
 import { app, BrowserWindow, dialog, Menu, nativeImage, shell, Tray } from "electron";
-import { payloadVersion, PORT, probePort, SERVER_ORIGIN, ServerHandle, serverRoot, takeOverPort } from "./server";
+import { payloadVersion, PORT, probePort, SERVER_ORIGIN, ServerHandle, serverRoot, stateHome, stateProfilesModule, takeOverPort } from "./server";
 import { bootWindowOpen, bootWindowWasShown, closeBootWindow, setBootStatus, showBootWindow } from "./boot-window";
 import { showHealthCheck, showTextWindow } from "./health";
 import { loadWindowState, trackWindowState } from "./window-state";
@@ -641,8 +641,48 @@ function surfaceCrash(message: string, tail: string): void {
   void showHealthCheck(mainWindow ?? undefined);
 }
 
+// Data profiles: a switch exits the server with a sentinel code after
+// updating the active-profile pointer. Nothing to swap: server.start()
+// resolves the pointer through serverEnv() and lands on the new profile;
+// this shell only restarts and signs the window back in.
+function isProfileSwitchExit(code: number): boolean {
+  try {
+    return code === stateProfilesModule().SWITCH_EXIT_CODE;
+  } catch {
+    return false;
+  }
+}
+
+async function handleProfileSwitch(): Promise<void> {
+  try {
+    const target = stateProfilesModule().readActiveProfile(stateHome());
+    console.error(`[profile] switching to ${target === null ? "the standard profile" : `"${target}"`}`);
+  } catch {
+    // Log-only lookup; the restart below is what matters.
+  }
+  try {
+    server.start();
+    await server.waitReady(60_000);
+    // The auth token lives inside the profile, so the switch rotated it; the
+    // window must sign in again rather than reconnect with the stale cookie.
+    authToken = await server.authToken();
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      await mainWindow.loadURL(`${SERVER_ORIGIN}/auth/session?token=${encodeURIComponent(authToken)}`);
+      showMainWindow();
+    }
+  } catch (err) {
+    surfaceCrash("The exxperts server did not come back after a profile switch.", `${err instanceof Error ? err.message : String(err)}\n\n${server.logTail()}`);
+  }
+}
+
 async function handleServerCrash(code: number | null, signal: string | null): Promise<void> {
   if (quitting) return;
+  // A profile switch is not a crash: handle it before the watchdog counters
+  // so it never consumes the single allowed automatic restart.
+  if (code !== null && isProfileSwitchExit(code)) {
+    await handleProfileSwitch();
+    return;
+  }
   const now = Date.now();
   if (now - lastCrashAt > WATCHDOG_RESET_MS) watchdogRestarts = 0;
   lastCrashAt = now;

@@ -20,13 +20,18 @@ const os = require("node:os");
 const path = require("node:path");
 const { productAppStatePath } = require("./product-state-paths.cjs");
 
-const LOCK_DIR = productAppStatePath(".room-locks");
+// Resolved per call, not at require time: the CLI launcher points HOME at
+// the active data profile AFTER requiring this module, and web and CLI must
+// agree on where a room's lock lives.
+function lockDir() {
+	return productAppStatePath(".room-locks");
+}
 const WEB_TTL_MS = 90_000;
 const SCHEDULER_TTL_MS = 90_000;
 
 function lockPath(agentId) {
 	const safe = String(agentId).replace(/[^a-zA-Z0-9_-]+/g, "_");
-	return path.join(LOCK_DIR, `${safe}.json`);
+	return path.join(lockDir(), `${safe}.json`);
 }
 
 function readLock(agentId) {
@@ -88,7 +93,7 @@ function canTakeOver(existing, owner) {
 // record and either refuses (held by another active owner) or, if the existing
 // lock is ours or stale, takes it over.
 function tryAcquire(agentId, owner) {
-	fs.mkdirSync(LOCK_DIR, { recursive: true, mode: 0o700 });
+	fs.mkdirSync(lockDir(), { recursive: true, mode: 0o700 });
 	const file = lockPath(agentId);
 	const now = Date.now();
 	const record = {

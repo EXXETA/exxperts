@@ -50,9 +50,18 @@ try {
 	const workspaceRoot = path.join(tmp, "workspace");
 	const defaultWorkspaceRoot = path.join(tmp, "default-workspace");
 	const repoChild = path.join(repoRoot, "docs");
-	for (const dir of [repoRoot, homeRoot, exxetaStateRoot, persistentAgentsRoot, agentRoot, workspaceRoot, defaultWorkspaceRoot, repoChild]) {
+	// The whole state family of the home this server runs under: the agent
+	// folder holds the sign-in and provider secrets, and every sibling
+	// .exxperts-<name> is another profile's tree with its own.
+	const stateAgentRoot = path.join(homeRoot, ".exxperts", "agent");
+	const siblingProfileRoot = path.join(homeRoot, ".exxperts-other");
+	for (const dir of [repoRoot, homeRoot, exxetaStateRoot, persistentAgentsRoot, agentRoot, workspaceRoot, defaultWorkspaceRoot, repoChild, stateAgentRoot, siblingProfileRoot]) {
 		fs.mkdirSync(dir, { recursive: true });
 	}
+	// What a supervisor tells the server: the real home, whatever HOME the
+	// loaded profile points at. Pinned here so the smoke judges this tree and
+	// not whatever home the machine running it happens to have.
+	process.env.EXXPERTS_REAL_HOME = homeRoot;
 
 	const baseInput = {
 		agentId: agentId,
@@ -210,6 +219,10 @@ try {
 	expectPolicyError(() => createPersistentRoomCapabilityPolicy({ ...baseInput, root: persistentAgentsRoot }), "forbidden_root", "persistent agents root");
 	expectPolicyError(() => createPersistentRoomCapabilityPolicy({ ...baseInput, root: agentRoot }), "forbidden_root", "agent root");
 	expectPolicyError(() => createPersistentRoomCapabilityPolicy({ ...baseInput, root: exxetaStateRoot }), "forbidden_root", "exxeta state root");
+	expectPolicyError(() => createPersistentRoomCapabilityPolicy({ ...baseInput, root: stateAgentRoot }), "under_forbidden_root", "the agent folder of the state tree");
+	expectPolicyError(() => createPersistentRoomCapabilityPolicy({ ...baseInput, root: path.join(homeRoot, ".exxperts") }), "forbidden_root", "the whole state tree");
+	expectPolicyError(() => createPersistentRoomCapabilityPolicy({ ...baseInput, root: siblingProfileRoot }), "forbidden_root", "another profile's tree");
+	expectPolicyError(() => createPersistentRoomCapabilityPolicy({ ...baseInput, root: homeRoot }), "ancestor_of_forbidden_root", "a folder holding the whole state family");
 
 	const symlinkToRepo = path.join(tmp, "repo-link");
 	try {

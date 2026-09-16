@@ -87,7 +87,10 @@ export async function clearPersistentRoomWorkspaceDefault(agentId: string): Prom
 	);
 }
 
-export async function chooseSystemFolder(): Promise<SystemChooseFolderResponse> {
+/** What the folder is for; the server turns it into the line the native dialog shows. */
+export type SystemChooseFolderPurpose = "workspace" | "data-folder";
+
+export async function chooseSystemFolder(purpose: SystemChooseFolderPurpose = "workspace"): Promise<SystemChooseFolderResponse> {
 	return fetchJson<SystemChooseFolderResponse>(
 		"/api/system/choose-folder",
 		{
@@ -96,7 +99,7 @@ export async function chooseSystemFolder(): Promise<SystemChooseFolderResponse> 
 				"Content-Type": "application/json",
 				"X-Exxperts-Local-Action": "choose-folder",
 			},
-			body: "{}",
+			body: JSON.stringify({ purpose }),
 		},
 		"Folder chooser failed. Enter the path manually."
 	);

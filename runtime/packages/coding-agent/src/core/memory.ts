@@ -14,7 +14,7 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import type { ExtensionUIContext } from "./extensions/types.js";
 
 // ---------------------------------------------------------------------------
@@ -54,7 +54,14 @@ export interface SessionSummary {
 // Constants
 // ---------------------------------------------------------------------------
 
-const DEFAULT_MEMORY_FILE = join(homedir(), ".exxperts", "app", "memory.jsonl");
+// The exxperts state tree lives under EXXPERTS_STATE_HOME when a data profile
+// is loaded or the data folder was moved, and under the login home otherwise.
+// Read per call: the variable is set before the process starts, but a test or
+// an embedder can change it between stores.
+function defaultMemoryFile(): string {
+	const stateHome = process.env.EXXPERTS_STATE_HOME?.trim();
+	return join(stateHome ? resolve(stateHome) : homedir(), ".exxperts", "app", "memory.jsonl");
+}
 const MEMORY_MARKER = "<!-- exxeta:memory -->";
 const MAX_DUMP_ALL = 200; // inject all if below this count
 
@@ -67,7 +74,7 @@ export class MemoryStore {
 	private readonly readOnly: boolean;
 
 	constructor(options?: MemoryStoreOptions) {
-		this.filePath = options?.filePath ?? DEFAULT_MEMORY_FILE;
+		this.filePath = options?.filePath ?? defaultMemoryFile();
 		this.readOnly = options?.readOnly ?? false;
 	}
 

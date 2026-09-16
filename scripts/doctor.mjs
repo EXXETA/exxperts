@@ -89,6 +89,35 @@ const section = (title) => console.log(`\n${title}`);
 
 const isWindows = process.platform === "win32";
 
+// Doctor has to look at the tree the APP runs against, not at whatever
+// ~/.exxperts happens to be there. So it adopts the exxperts home the way the
+// launchers do (EXXPERTS_DATA_DIR, then the moved-folder pointer) and then
+// follows the active-profile pointer, the same two steps `exxperts cli` takes.
+// Both only move EXXPERTS_STATE_HOME: HOME is left alone, which is why the
+// browser cache and the shared MCP config further down still resolve against
+// the login home, exactly as they do for a running server.
+const loginHome = os.homedir();
+// The folder that holds every profile: what Settings calls the data folder.
+let dataFolder = loginHome;
+let loadedProfile = null;
+let stateHomeProblem = null;
+try {
+	const stateProfiles = require(path.join(root, "bin", "lib", "state-profiles.cjs"));
+	stateProfiles.adoptStateHome(loginHome);
+	dataFolder = stateProfiles.resolveStateHome(loginHome).home;
+	loadedProfile = stateProfiles.readActiveProfile(dataFolder);
+	Object.assign(process.env, stateProfiles.serverEnvForProfile(dataFolder, loadedProfile));
+} catch (err) {
+	// An unreachable data folder is a real finding, not a reason to crash the
+	// health check; it is reported with the state dirs below.
+	stateHomeProblem = err.message;
+}
+function stateHome() {
+	const fromEnv = process.env.EXXPERTS_STATE_HOME;
+	if (fromEnv && fromEnv.trim()) return path.resolve(fromEnv.trim());
+	return loginHome;
+}
+
 // npm version: only meaningful for the clone workflow. Under `npm run doctor`
 // the parent npm always sets npm_config_user_agent; fall back to spawning npm
 // when run directly.
@@ -140,7 +169,12 @@ section("Runtime and state");
 
 // --- ~/.exxperts state dirs (report only: the app creates them on first run) --
 {
-	const stateRoot = path.join(os.homedir(), ".exxperts");
+	// Where the data is and which profile is loaded, said before anything is
+	// judged: every ~/.exxperts line below is about THIS tree.
+	ok(`Data folder: ${dataFolder}`);
+	ok(`Loaded profile: ${loadedProfile ?? "standard"}`, path.join(stateHome(), ".exxperts"));
+	if (stateHomeProblem !== null) bad(`the exxperts data folder could not be resolved: ${stateHomeProblem}`, "reconnect the folder it names, or remove ~/.exxperts.home.json to start over from your home folder");
+	const stateRoot = path.join(stateHome(), ".exxperts");
 	const dirs = [stateRoot, path.join(stateRoot, "app"), path.join(stateRoot, "agent")].filter((p) => fs.existsSync(p));
 	if (dirs.length === 0) {
 		ok("~/.exxperts state not created yet", "the first run creates it");
@@ -154,7 +188,7 @@ section("Runtime and state");
 			}
 		});
 		if (blocked.length === 0) {
-			ok(`~/.exxperts state dirs writable (${dirs.map((p) => path.relative(os.homedir(), p)).join(", ")})`);
+			ok(`~/.exxperts state dirs writable (${dirs.map((p) => path.relative(stateHome(), p)).join(", ")})`);
 		} else {
 			bad(
 				`state dirs not writable by this user: ${blocked.join(", ")} (usually left behind by a sudo'd run)`,
@@ -418,7 +452,7 @@ section("Optional features");
 	let provider = String(process.env.EXXETA_SEARCH_PROVIDER ?? "").trim();
 	let baseUrl = String(process.env.EXXETA_SEARCH_BASE_URL ?? "").trim();
 	try {
-		const shared = JSON.parse(fs.readFileSync(path.join(os.homedir(), ".exxperts", "app", "web-search.json"), "utf-8"));
+		const shared = JSON.parse(fs.readFileSync(path.join(stateHome(), ".exxperts", "app", "web-search.json"), "utf-8"));
 		provider = provider || String(shared.provider ?? "");
 		baseUrl = baseUrl || String(shared.baseUrl ?? "");
 	} catch {
@@ -536,7 +570,7 @@ if (isWindows) {
 	})();
 	const files = [
 		path.join(os.homedir(), ".config", "mcp", "mcp.json"),
-		path.join(os.homedir(), ".exxperts", "agent", "mcp.json"),
+		path.join(stateHome(), ".exxperts", "agent", "mcp.json"),
 		...(cwd ? [path.join(cwd, ".mcp.json")] : []),
 	];
 	const servers = new Set();

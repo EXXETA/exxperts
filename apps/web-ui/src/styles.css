@@ -14216,6 +14216,78 @@ button.model-picker-group-head.kb-active {
 	padding: 6px 28px 30px;
 	gap: 16px;
 }
+/* Profiles: rows wrap and the create input shrinks inside the pane. Without
+   this, the input's width:100% inside the flex actions (and a long armed
+   hint's max-content in the section grid) push the pane into the horizontal
+   scroll above, which no settings row should ever cause. */
+.state-profiles .rs-row {
+	flex-wrap: wrap;
+}
+.state-profiles .rs-row-main {
+	flex: 1 1 240px;
+}
+.state-profiles .rs-pane-actions {
+	flex-wrap: wrap;
+	justify-content: flex-end;
+	min-width: 0;
+}
+.state-profiles .launcher-path-input {
+	width: auto;
+	flex: 1 1 160px;
+	min-width: 0;
+}
+/* The profiles read as a short list, not as a ruled table: the shared row
+   rhythm draws a line under every row, and a pane that is almost all rows
+   ends up striped. The headings and the section gap separate the groups,
+   the way the other settings panes separate theirs. */
+.state-profiles .rs-row ~ .rs-row {
+	border-top: none;
+}
+/* The folder a profile lives in, under its name: a fact to recognise, not a
+   sentence to read, so it is set in the code face and kept quiet. */
+.state-profiles .state-profile-folder {
+	font-family: var(--exx-font-mono);
+	font-size: 12px;
+	opacity: 0.85;
+}
+/* An armed delete is the one decision here that removes something: the
+   whole row lights up with the danger-notice tint, so confirm-or-cancel is unmissable
+   instead of one red line of text. The extra class in the selector outranks
+   the settings-overlay row-rhythm rule further down, whose zero side padding
+   would press the text against the tinted border. */
+.state-profiles .rs-row.rs-row-armed {
+	border: 1px solid color-mix(in srgb, var(--error) 55%, var(--border));
+	background: color-mix(in srgb, var(--error) 8%, transparent);
+	border-radius: 8px;
+	padding: 14px 16px;
+	margin: 6px 0;
+}
+/* Moving the data folder copies first and deletes nothing, and a switch
+   only restarts against another tree, so their second step asks in the
+   ordinary voice: the same framed row, in the ordinary border colour and
+   with no tint, and its question in the ordinary text colour. Red stays
+   for the one step that really does remove something. */
+.state-profiles .rs-row.rs-row-asking {
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	padding: 14px 16px;
+	margin: 6px 0;
+}
+.state-profiles .state-profile-asking {
+	color: var(--fg);
+	margin-top: 4px;
+}
+/* The one action the framed question is asking for, filled the way the app
+   fills a primary button; Keep it stays the quiet way out beside it. */
+.state-profiles .rs-btn.rs-btn-primary {
+	background: var(--fg);
+	border-color: var(--fg);
+	color: var(--bg);
+}
+.state-profiles .rs-btn.rs-btn-primary:hover:not(:disabled),
+.state-profiles .rs-btn.rs-btn-primary:focus-visible {
+	background: color-mix(in srgb, var(--fg) 88%, var(--bg));
+}
 /* The mac desktop app pads full-page landings 60px down to clear the
    traffic lights; the modal pane floats well below them, so it keeps the
    modal's own inset (the desktop rule is more specific than the pair

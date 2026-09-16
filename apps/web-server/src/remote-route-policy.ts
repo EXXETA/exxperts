@@ -279,6 +279,15 @@ const POLICY: Record<string, RemoteRouteClass> = {
 	"GET /api/task-store/gc": "read",
 	"POST /api/task-store/gc": "local",
 	"POST /api/system/choose-folder": "local",
+	// Data profiles are the computer's alone: a switch restarts the server and
+	// rotates the auth token, which would sever the remote device's own
+	// session mid-handshake, and the listing exposes home-directory names.
+	"GET /api/settings/state-profile": "local",
+	"POST /api/settings/state-profile/create": "local",
+	"POST /api/settings/state-profile/delete": "local",
+	"POST /api/settings/state-profile/switch": "local",
+	"POST /api/settings/state-home/plan": "local",
+	"POST /api/settings/state-home/apply": "local",
 };
 
 export function classifyRemoteRoute(method: string, routeUrl: string): RemoteRouteClass | null {

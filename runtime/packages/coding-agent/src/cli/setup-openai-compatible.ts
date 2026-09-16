@@ -8,7 +8,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { createInterface, type Interface } from "node:readline/promises";
 import chalk from "chalk";
 import { getAgentDir, getModelsPath } from "../config.js";
@@ -171,7 +171,11 @@ function inspectSimpleProvider(provider: JsonObject, conflicts: string[]): void 
 }
 
 function getOpenAiCompatibleAppPolicyPath(): string {
-	return join(homedir(), ".exxperts", "app", OPENAI_COMPATIBLE_POLICY_FILE_NAME);
+	// Same contract as everywhere else: EXXPERTS_STATE_HOME names the folder
+	// that holds the .exxperts tree (a loaded profile, a moved data folder),
+	// and the login home answers when it is unset.
+	const stateHome = process.env.EXXPERTS_STATE_HOME?.trim();
+	return join(stateHome ? resolve(stateHome) : homedir(), ".exxperts", "app", OPENAI_COMPATIBLE_POLICY_FILE_NAME);
 }
 
 function inspectAppPolicyConfig(state: JsonFileState, changes: string[], conflicts: string[]): void {

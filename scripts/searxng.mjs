@@ -19,7 +19,16 @@ const BASE_URL = `http://127.0.0.1:${PORT}`;
 //   docker inspect --format '{{index .RepoDigests 0}}' searxng/searxng:latest
 // then paste the new digest here. Override with SEARXNG_IMAGE if needed.
 const IMAGE = process.env.SEARXNG_IMAGE || "searxng/searxng@sha256:cb6d9bdb1ffa3937c5959dd576fbbc80d3dbb13ca6d1b2c8b8ca5f49e9dfb9c7";
-const CONFIG_DIR = path.join(os.homedir(), ".exxperts", "app", "searxng");
+// The exxperts state tree: EXXPERTS_STATE_HOME names the folder that holds it
+// (a loaded data profile, a moved data folder), the login home when unset. The
+// docker lookups below stay on the login home on purpose: OrbStack and Docker
+// Desktop install into the person's home, not into the exxperts data.
+function stateHome() {
+	const fromEnv = process.env.EXXPERTS_STATE_HOME;
+	if (fromEnv && fromEnv.trim()) return path.resolve(fromEnv.trim());
+	return os.homedir();
+}
+const CONFIG_DIR = path.join(stateHome(), ".exxperts", "app", "searxng");
 const SETTINGS_FILE = path.join(CONFIG_DIR, "settings.yml");
 
 const isWindows = process.platform === "win32";
@@ -136,7 +145,7 @@ async function waitUntilReady() {
 // command refusing to do the one job it was asked to do, on a machine with no
 // backend configured at all.
 function ensureSearchConfig() {
-	const cfgDir = path.join(os.homedir(), ".exxperts", "app");
+	const cfgDir = path.join(stateHome(), ".exxperts", "app");
 	const cfgFile = path.join(cfgDir, "web-search.json");
 	fs.mkdirSync(cfgDir, { recursive: true });
 	let existing = null;

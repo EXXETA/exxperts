@@ -1,4 +1,4 @@
-import { chooseLocalFolder, chooseMacosFolder, type LocalFolderPickerRunner } from "../src/local-folder-picker.js";
+import { chooseLocalFolder, chooseMacosFolder, folderPickerPrompt, type LocalFolderPickerRunner } from "../src/local-folder-picker.js";
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -137,6 +137,77 @@ async function main(): Promise<void> {
 	const windowsGarbledRunner: LocalFolderPickerRunner = async () => ({ stdout: "At line:1 char:3 parse error\r\n", stderr: "" });
 	const windowsGarbled = await chooseLocalFolder({ platform: "win32", runner: windowsGarbledRunner });
 	assert(!windowsGarbled.ok && windowsGarbled.supported === true && windowsGarbled.code === "choose_folder_failed", `garbled windows output should fail safely: ${JSON.stringify(windowsGarbled)}`);
+
+	// The purpose picks the prompt, and only the two known purposes get one of
+	// their own: anything else lands on the workspace wording rather than
+	// putting a client's text into a native dialog.
+	assert(folderPickerPrompt("workspace") === "Choose workspace folder", `workspace purpose should keep the workspace prompt, got ${folderPickerPrompt("workspace")}`);
+	assert(folderPickerPrompt("data-folder") === "Choose the exxperts data folder", `data-folder purpose should name the data folder, got ${folderPickerPrompt("data-folder")}`);
+	for (const unknown of [undefined, null, "", "toString", "constructor", "Data-Folder", 7, { purpose: "data-folder" }]) {
+		assert(folderPickerPrompt(unknown) === "Choose workspace folder", `unknown purpose ${JSON.stringify(unknown)} should fall back to the workspace prompt`);
+	}
+
+	// Each platform must carry the chosen prompt into its own dialog.
+	let promptedMacArgs: string[] = [];
+	await chooseMacosFolder({
+		platform: "darwin",
+		prompt: folderPickerPrompt("data-folder"),
+		runner: async (_command, args) => {
+			promptedMacArgs = args;
+			return { stdout: "/Users/example/Data\n", stderr: "" };
+		},
+	});
+	assert(promptedMacArgs[1]?.includes('with prompt "Choose the exxperts data folder"'), `osascript should carry the data-folder prompt, got ${promptedMacArgs[1]}`);
+
+	let promptedLinuxArgs: string[] = [];
+	await chooseLocalFolder({
+		platform: "linux",
+		prompt: folderPickerPrompt("data-folder"),
+		runner: async (_command, args) => {
+			promptedLinuxArgs = args;
+			return { stdout: "/home/example/Data\n", stderr: "" };
+		},
+	});
+	assert(promptedLinuxArgs.includes("--title=Choose the exxperts data folder"), `zenity should carry the data-folder title, got ${promptedLinuxArgs.join(" ")}`);
+
+	let promptedWindowsArgs: string[] = [];
+	await chooseLocalFolder({
+		platform: "win32",
+		prompt: folderPickerPrompt("data-folder"),
+		runner: async (_command, args) => {
+			promptedWindowsArgs = args;
+			return { stdout: "OK:C:\\Users\\example\\Data\r\n", stderr: "" };
+		},
+	});
+	const promptedIndex = promptedWindowsArgs.indexOf("-EncodedCommand");
+	const promptedScript = Buffer.from(promptedWindowsArgs[promptedIndex + 1], "base64").toString("utf16le");
+	assert(promptedScript.includes("$dialog.Description = 'Choose the exxperts data folder'"), `powershell should carry the data-folder description, got ${promptedScript}`);
+	assert(!promptedScript.includes('"'), `the data-folder script must stay free of double quotes: ${promptedScript}`);
+
+	// A quote in a prompt stays inside its string on every platform.
+	let quotedMacArgs: string[] = [];
+	await chooseMacosFolder({
+		platform: "darwin",
+		prompt: 'Choose "the" folder',
+		runner: async (_command, args) => {
+			quotedMacArgs = args;
+			return { stdout: "/Users/example/Data\n", stderr: "" };
+		},
+	});
+	assert(quotedMacArgs[1] === 'POSIX path of (choose folder with prompt "Choose \\"the\\" folder")', `osascript should escape a quoted prompt, got ${quotedMacArgs[1]}`);
+
+	let quotedWindowsArgs: string[] = [];
+	await chooseLocalFolder({
+		platform: "win32",
+		prompt: "Choose Anna's folder",
+		runner: async (_command, args) => {
+			quotedWindowsArgs = args;
+			return { stdout: "OK:C:\\Users\\example\\Data\r\n", stderr: "" };
+		},
+	});
+	const quotedIndex = quotedWindowsArgs.indexOf("-EncodedCommand");
+	const quotedScript = Buffer.from(quotedWindowsArgs[quotedIndex + 1], "base64").toString("utf16le");
+	assert(quotedScript.includes("$dialog.Description = 'Choose Anna''s folder'"), `powershell should double an apostrophe in the prompt, got ${quotedScript}`);
 
 	console.log("system choose-folder smoke passed");
 }

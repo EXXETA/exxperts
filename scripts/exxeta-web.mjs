@@ -6,6 +6,7 @@
 import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -72,6 +73,23 @@ function forceKillPid(pid) {
   }
 }
 
+// npm run dev is a tree (npm → tsx watch → server). Killing just the npm
+// process orphans tsx watch, which keeps watching and later spawns a
+// competing server; the services run in their own process group (below) so
+// the whole tree can be ended at once.
+function killTree(pid) {
+  if (!pid) return;
+  if (isWindows) {
+    forceKillPid(pid);
+    return;
+  }
+  try {
+    process.kill(-Number(pid), "SIGKILL");
+  } catch {
+    forceKillPid(pid);
+  }
+}
+
 function killStalePortListeners() {
   for (const port of DEV_PORTS) {
     const pids = listeningPids(port);
@@ -109,13 +127,13 @@ function waitForUrl(url, attempts = 20, delayMs = 500) {
 // The server mints its client auth token before it listens, so once /healthz
 // answers the token file exists. Opening the Vite origin through
 // /auth/session (proxied to the server) sets the cookie on localhost:5173.
-function readAuthToken() {
+function readAuthToken(home) {
   const fromEnv = (process.env.EXXPERTS_AUTH_TOKEN || "").trim();
   if (fromEnv) return fromEnv;
   try {
-    // Mirrors productAppStatePath("auth-token") in the web server; this dev
-    // script cannot import the TS helper, so the two must move together.
-    return fs.readFileSync(path.join(os.homedir(), ".exxperts", "app", "auth-token"), "utf8").trim() || null;
+    // The token belongs to the ACTIVE profile's tree, standard or named,
+    // inside the home the running server leg was started against.
+    return fs.readFileSync(stateProfiles.activeTokenPath(home), "utf8").trim() || null;
   } catch {
     return null;
   }
@@ -131,6 +149,36 @@ function openBrowser(url) {
   }
 }
 
+// Profile switching (Settings → Profiles): the server exits with a sentinel
+// after updating the active-profile pointer; some supervisor must restart it
+// against the pointer. In dev that supervisor is this harness, because tsx
+// watch cannot do it (it only reruns on file changes). ~/.exxperts itself never
+// moves; a profile runs via env indirection at ~/.exxperts-<name>.
+const stateProfiles = createRequire(import.meta.url)(path.join(EXXETA_HOME, "bin", "lib", "state-profiles.cjs"));
+
+// Exxperts home: the login home anchors the pointer and move intents, and
+// stays the home every child sees. A stranded move completes here, then this
+// process (and every child) resolves its STATE against the resolved home.
+const loginHome = os.homedir();
+// The environment this harness was STARTED with, before any adopt repoints
+// its state home in place: every server leg is built from this copy, so a leg
+// can never inherit the home an earlier leg was pointed at.
+const baseEnv = { ...process.env };
+// A move that cannot run leaves the old home intact and the pointer still
+// naming it, so the harness starts there and says why; only an unusable home
+// is fatal.
+try {
+  stateProfiles.performPendingHomeMove(loginHome);
+} catch (err) {
+  console.error(`\ncould not move the exxperts data: ${err.message}\ncontinuing with the current location…`);
+}
+try {
+  stateProfiles.adoptStateHome(loginHome);
+} catch (err) {
+  console.error(err.message);
+  process.exit(1);
+}
+
 killStalePortListeners();
 await new Promise((r) => setTimeout(r, 1000));
 
@@ -139,19 +187,38 @@ fs.mkdirSync(cacheDir, { recursive: true });
 const serverLog = path.join(cacheDir, "web-server.log");
 const uiLog = path.join(cacheDir, "web-ui.log");
 
-function startDevService(relCwd, logPath) {
+function startDevService(relCwd, logPath, env = process.env) {
   const logFd = fs.openSync(logPath, "w");
   const cwd = path.join(EXXETA_HOME, relCwd);
   // npm on Windows is a .cmd shim, which Node only spawns through a shell.
   const child = isWindows
-    ? spawn("npm run dev", { cwd, stdio: ["ignore", logFd, logFd], shell: true })
-    : spawn("npm", ["run", "dev"], { cwd, stdio: ["ignore", logFd, logFd] });
+    ? spawn("npm run dev", { cwd, stdio: ["ignore", logFd, logFd], shell: true, env })
+    : spawn("npm", ["run", "dev"], { cwd, stdio: ["ignore", logFd, logFd], env, detached: true });
   child.on("spawn", () => fs.closeSync(logFd));
   return child;
 }
 
+// This harness IS the switch supervisor for dev runs; the marker tells the
+// switch route so (it refuses on unsupervised servers). Each server start
+// builds its environment from baseEnv, adopts the exxperts home into that own
+// copy, and resolves the active-profile pointer inside it: a leg started from
+// a repointed process.env would run against the home the data just left.
+function serverLeg() {
+  const env = {
+    ...baseEnv,
+    EXXPERTS_SWITCH_SUPERVISED: "1",
+    EXXPERTS_HOME_MOVE_SUPERVISED: "1",
+    EXXPERTS_LOGIN_HOME: loginHome,
+  };
+  const { home } = stateProfiles.adoptStateHome(loginHome, env);
+  env.EXXPERTS_REAL_HOME = home;
+  Object.assign(env, stateProfiles.serverEnvForProfile(home, stateProfiles.readActiveProfile(home)));
+  return { env, home };
+}
+
 console.log(`starting web server  → ${serverLog}`);
-const serverChild = startDevService(path.join("apps", "web-server"), serverLog);
+let leg = serverLeg();
+let serverChild = startDevService(path.join("apps", "web-server"), serverLog, leg.env);
 
 console.log(`starting Vite UI     → ${uiLog}`);
 const uiChild = startDevService(path.join("apps", "web-ui"), uiLog);
@@ -162,10 +229,7 @@ function cleanup() {
   cleanedUp = true;
   console.log(`\nstopping (PIDs: ${serverChild.pid}, ${uiChild.pid})`);
   for (const child of [serverChild, uiChild]) {
-    if (child.pid && child.exitCode === null) {
-      if (isWindows) forceKillPid(child.pid);
-      else child.kill("SIGTERM");
-    }
+    if (child.pid && child.exitCode === null) killTree(child.pid);
   }
   killStalePortListeners();
 }
@@ -178,6 +242,13 @@ process.on("SIGTERM", () => {
   cleanup();
   process.exit(143);
 });
+// The service trees run in their own process groups (killTree), so they no
+// longer die with this harness's group: a closed terminal (SIGHUP) must tear
+// them down explicitly or they linger on :8787/:5173.
+process.on("SIGHUP", () => {
+  cleanup();
+  process.exit(129);
+});
 
 await waitForUrl("http://localhost:8787/healthz");
 await waitForUrl("http://localhost:5173/");
@@ -186,13 +257,59 @@ console.log(`
   ✓ web server  http://localhost:8787  (logs: ${serverLog})
   ✓ web UI      http://localhost:5173  (logs: ${uiLog})
 `);
-const authToken = readAuthToken();
+const authToken = readAuthToken(leg.home);
 if (!authToken) console.log("No auth token at ~/.exxperts/app/auth-token; the browser will show the sign-in hint page.");
 console.log("Opening browser…");
 openBrowser(authToken ? `http://localhost:5173/auth/session?token=${encodeURIComponent(authToken)}` : "http://localhost:5173");
 
+// Switch watcher: the pointer changing plus a dead server means a profile
+// switch is waiting for its restart. The old npm/tsx-watch tree is torn down
+// first so a watch-triggered restart can never race the new one.
+// ponytail: 1s poll; event-driven detection if this ever feels slow.
+let lastActive = stateProfiles.readActiveProfile(leg.home);
+let switching = false;
+const switchWatcher = setInterval(() => {
+  void (async () => {
+    if (switching) return;
+    // A home-move intent plus a dead server means a move is waiting for its
+    // restart, exactly like a changed pointer means a profile switch. The
+    // pointer that matters is the one in the home the running leg was started
+    // against, which an executed move has not left yet.
+    const movePending = fs.existsSync(stateProfiles.homeMoveIntentPath(loginHome));
+    const active = stateProfiles.readActiveProfile(leg.home);
+    if (active === lastActive && !movePending) return;
+    // Latch BEFORE the first await: the healthz probe can outlast a whole
+    // tick, and an unlatched second tick would kill the fresh server tree.
+    switching = true;
+    try {
+      if (await waitForUrl("http://localhost:8787/healthz", 1, 0)) return;
+      if (serverChild.pid && serverChild.exitCode === null) killTree(serverChild.pid);
+      for (const pid of listeningPids(8787)) forceKillPid(pid);
+      if (movePending) {
+        try {
+          stateProfiles.performPendingHomeMove(loginHome);
+          console.log("\nmoving where exxperts keeps its data; restarting the web server…");
+        } catch (err) {
+          console.error(`\ncould not move the exxperts data: ${err.message}\ncontinuing with the current location…`);
+        }
+      } else {
+        console.log(`\nswitching to ${active === null ? "the standard profile (.exxperts)" : `profile "${active}"`}; restarting the web server…`);
+      }
+      // The next leg adopts the home the pointer names now: the new one after a
+      // move that ran, the intact old one after a move that failed.
+      leg = serverLeg();
+      lastActive = stateProfiles.readActiveProfile(leg.home);
+      serverChild = startDevService(path.join("apps", "web-server"), serverLog, leg.env);
+    } finally {
+      switching = false;
+    }
+  })().catch((err) => {
+    console.error(`\ncould not restart the web server: ${err.message}`);
+  });
+}, 500);
+
 console.log("\nPress Ctrl+C to stop both.");
-await Promise.all([
-  new Promise((r) => serverChild.on("exit", r)),
-  new Promise((r) => uiChild.on("exit", r)),
-]);
+// The UI child is the harness's lifetime anchor: the server child is
+// replaced on every profile switch, so its exit is not an ending.
+await new Promise((r) => uiChild.on("exit", r));
+clearInterval(switchWatcher);

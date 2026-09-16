@@ -18,8 +18,8 @@
  *   .pi/mcp.json               project override
  */
 
-import * as os from "node:os";
 import * as path from "node:path";
+import { stateHome } from "../../product-state-paths.js";
 import { ensureRoomScopedMcpGrantsMigration, prepareRoomScopedMcpSessionCache, roomScopedMcpToolRegistration, type RegisteredToolLike, type RoomScopeRegistrationOptions } from "./room-scope.js";
 
 // Kept non-literal so tsc never resolves the specifiers into raw .ts sources,
@@ -56,7 +56,7 @@ async function registerMcpExtension(pi: unknown, roomScopeId: string | null, sco
 	// The adapter resolves its agent-global config dir from PI_CODING_AGENT_DIR
 	// (defaulting to ~/.pi/agent); point it at the exxperts agent dir instead.
 	if (!process.env.PI_CODING_AGENT_DIR) {
-		process.env.PI_CODING_AGENT_DIR = path.join(os.homedir(), ".exxperts", "agent");
+		process.env.PI_CODING_AGENT_DIR = path.join(stateHome(), ".exxperts", "agent");
 	}
 	if (roomScopeId) {
 		// Whichever room door registers first after the update runs the

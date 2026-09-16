@@ -130,7 +130,7 @@ import {
 	resolveScheduledPromptBackgroundExecutionLoopOptionsFromEnv,
 	startScheduledPromptBackgroundExecutionLoop,
 } from "./scheduled-prompt-background-execution-loop.js";
-import { chooseLocalFolder } from "./local-folder-picker.js";
+import { chooseLocalFolder, folderPickerPrompt } from "./local-folder-picker.js";
 
 // Import extension factories directly. This is the most reliable way to
 // register them with the SDK runtime.
@@ -145,7 +145,7 @@ import fetchUrlExt from "../../../pi-package/extensions/fetch_url/index.js";
 import toolResultAgingExt, { readAgedToolResultMarker } from "../../../pi-package/extensions/tool-result-aging/index.js";
 import { addPersistentRoomScheduleJob, listPersistentRoomScheduleJobs, removePersistentRoomScheduleJob, summarizePersistentRoomScheduleJobs, updatePersistentRoomScheduleJob } from "../../../pi-package/extensions/schedule-prompt/index.js";
 import type { AddPersistentRoomScheduleJobInput, PersistentRoomScheduleJob, PersistentRoomScheduleSummary, PersistentRoomScheduleType, UpdatePersistentRoomScheduleJobInput } from "../../../pi-package/extensions/schedule-prompt/index.js";
-import { ensureProductAppStateRoot, ensureProductAppUserDirs, productAppStatePath, productAppStateRoot } from "../../../pi-package/product-state-paths.js";
+import { ensureProductAppStateRoot, ensureProductAppUserDirs, productAppStatePath, productAppStateRoot, stateHome } from "../../../pi-package/product-state-paths.js";
 import { createRemoteModeManager, isAllowedTunnelPeerAddress, isRemoteTestModeEnabled } from "./remote-mode.js";
 import { createRemoteDeviceStore, REMOTE_DEVICE_TTL_MS } from "./remote-devices.js";
 import { classifyRemoteRoute } from "./remote-route-policy.js";
@@ -197,6 +197,43 @@ const roomLock = createRequire(import.meta.url)(path.join(REPO_ROOT, "bin", "lib
 function activeRoomLock(agentId: string): { surface: string; acquiredAt: number } | null {
 	const lock = roomLock.readLock(agentId);
 	return lock && roomLock.isActive(lock) ? { surface: lock.surface, acquiredAt: lock.acquiredAt } : null;
+}
+
+// Data profiles. The standard profile IS ~/.exxperts and never moves; other
+// profiles live at ~/.exxperts-<name> and are activated via a pointer file
+// plus env indirection, the same CJS module the launcher, desktop shell, and
+// dev harness use. When a profile is active, THIS process runs with an
+// overridden HOME, so profile management must address the REAL home, which
+// the supervisor passes in EXXPERTS_REAL_HOME.
+const stateProfiles = createRequire(import.meta.url)(path.join(REPO_ROOT, "bin", "lib", "state-profiles.cjs")) as {
+	SWITCH_EXIT_CODE: number;
+	validateNewProfileName: (name: string) => string | null;
+	readActiveProfile: (home: string) => string | null;
+	listProfiles: (home: string) => { name: string }[];
+	createProfile: (home: string, name: string) => void;
+	deleteProfile: (home: string, name: string) => void;
+	prepareSwitch: (home: string, target: string | null) => string;
+	resolveStateHome: (loginHome: string, env?: NodeJS.ProcessEnv) => { home: string; source: "env" | "setting" | "default" };
+	planHomeMove: (currentHome: string, target: string) => { dir: string; mode: "migrate" | "adopt"; moving: string[] };
+	prepareHomeMove: (loginHome: string, currentHome: string, target: string) => { dir: string; mode: "migrate" | "adopt"; moving: string[]; token: string };
+};
+function stateProfileRealHome(): string {
+	return process.env.EXXPERTS_REAL_HOME?.trim() || os.homedir();
+}
+// Where the exxperts-home pointer and move intents live: the OS login home.
+// This process may run under a repointed HOME (moved home, active profile),
+// so the supervisor passes the login home in; os.userInfo() is the
+// env-independent fallback for servers started some other way.
+function stateProfileLoginHome(): string {
+	const fromEnv = process.env.EXXPERTS_LOGIN_HOME?.trim();
+	if (fromEnv) return fromEnv;
+	try {
+		const fromAccount = os.userInfo().homedir;
+		if (fromAccount) return fromAccount;
+	} catch {
+		// No account record (some containers): fall through.
+	}
+	return os.homedir();
 }
 
 function roomLockBusyStatus(lock: Pick<RoomLockRecord, "surface"> | null | undefined): string {
@@ -1117,7 +1154,10 @@ app.post("/api/system/choose-folder", async (req, reply) => {
 	if (!isLocalSystemChooseFolderRequest(req)) {
 		return reply.code(403).send({ error: "Folder chooser is only available from the local Exxperts app.", code: "local_request_required", supported: false, cancelled: false });
 	}
-	const result = await chooseLocalFolder();
+	// The client says what the folder is for, not what the dialog should say:
+	// an unknown purpose is not an error, it just gets the workspace prompt.
+	const purpose = (req.body as { purpose?: unknown } | null | undefined)?.purpose;
+	const result = await chooseLocalFolder({ prompt: folderPickerPrompt(purpose) });
 	if (result.ok) return { supported: result.supported, cancelled: result.cancelled, path: result.path };
 	const statusCode = result.code === "unsupported_platform" ? 501 : result.code === "folder_chooser_unavailable" ? 503 : 500;
 	return reply.code(statusCode).send({ error: result.error, code: result.code, supported: result.supported, cancelled: result.cancelled });
@@ -4238,6 +4278,144 @@ app.put("/api/settings/web-search", async (req, reply) => {
 		return reply.code(500).send({ error: (e as Error).message });
 	}
 	return webSearchSettingsPayload();
+});
+// Data profiles: which state tree this computer runs. The standard profile
+// is always ~/.exxperts (never renamed, never deletable, has no name);
+// switching just updates the pointer and restarts the server, and the
+// supervisor (exxperts web launcher, desktop shell, dev harness) reads the
+// pointer on every start and points the server's env at the profile.
+function stateProfilePayload() {
+	const home = stateProfileRealHome();
+	const active = stateProfiles.readActiveProfile(home);
+	return {
+		active,
+		profiles: stateProfiles.listProfiles(home).filter((p) => p.name !== active),
+		home: stateHomePayload(),
+	};
+}
+// The exxperts home: where the whole state family (standard tree + profiles)
+// lives, and whether the in-app move is available. Moving needs a supervisor
+// that executes the recorded move between server legs, and is refused while
+// EXXPERTS_DATA_DIR pins the location: the operator owns it then.
+function stateHomePayload() {
+	const loginHome = stateProfileLoginHome();
+	let source: "env" | "setting" | "default" = "default";
+	try {
+		source = stateProfiles.resolveStateHome(loginHome, process.env).source;
+	} catch {
+		source = "setting";
+	}
+	const reason = source === "env"
+		? "The location is pinned by the EXXPERTS_DATA_DIR environment variable; unset it to move the folder from here."
+		: !process.env.EXXPERTS_HOME_MOVE_SUPERVISED
+			? "Moving needs the app to run under 'exxperts web', the desktop app, or the dev harness."
+			: null;
+	return {
+		dir: stateProfileRealHome(),
+		defaultDir: loginHome,
+		source,
+		canMove: reason === null,
+		...(reason === null ? {} : { reason }),
+	};
+}
+function stateHomeMoveRefusal(): string | null {
+	if (!process.env.EXXPERTS_SWITCH_SUPERVISED || !process.env.EXXPERTS_HOME_MOVE_SUPERVISED) {
+		return "Moving the exxperts data needs the app to run under 'exxperts web', the desktop app, or the dev harness. This server process has no supervisor to perform the move.";
+	}
+	if (stateHomePayload().source === "env") {
+		return "The data location is pinned by the EXXPERTS_DATA_DIR environment variable. Unset it (where exxperts is started) to move the folder from here.";
+	}
+	return null;
+}
+app.get("/api/settings/state-profile", async () => stateProfilePayload());
+app.post("/api/settings/state-profile/create", async (req, reply) => {
+	const name = String((req.body as { name?: unknown } | null)?.name ?? "");
+	const invalid = stateProfiles.validateNewProfileName(name);
+	if (invalid) return reply.code(400).send({ error: invalid });
+	try {
+		stateProfiles.createProfile(stateProfileRealHome(), name);
+	} catch (e) {
+		return reply.code(409).send({ error: (e as Error).message });
+	}
+	return stateProfilePayload();
+});
+app.post("/api/settings/state-profile/delete", async (req, reply) => {
+	const name = String((req.body as { name?: unknown } | null)?.name ?? "");
+	try {
+		stateProfiles.deleteProfile(stateProfileRealHome(), name);
+	} catch (e) {
+		return reply.code(409).send({ error: (e as Error).message });
+	}
+	return stateProfilePayload();
+});
+app.post("/api/settings/state-profile/switch", async (req, reply) => {
+	// The restart happens OUTSIDE this process. Without a supervisor that
+	// knows the protocol (exxperts web launcher, desktop shell, dev harness,
+	// which all set this marker), exiting would just leave a dead app. Refuse
+	// while we can still say why.
+	if (!process.env.EXXPERTS_SWITCH_SUPERVISED) {
+		return reply.code(409).send({ error: "Switching needs the app to run under 'exxperts web', the desktop app, or the dev harness. This server process has no supervisor to perform the switch." });
+	}
+	const rawName = (req.body as { name?: unknown } | null)?.name ?? null;
+	const name = rawName === null ? null : String(rawName);
+	let nextToken: string;
+	try {
+		// Points the app at the target and returns its sign-in token (minted
+		// now if the profile never ran): the reply carries the new sign-in
+		// link so the open page follows the restart on its own. An env-pinned
+		// token never rotates.
+		const minted = stateProfiles.prepareSwitch(stateProfileRealHome(), name);
+		nextToken = process.env.EXXPERTS_AUTH_TOKEN?.trim() || minted;
+	} catch (e) {
+		return reply.code(409).send({ error: (e as Error).message });
+	}
+	// Reply first, exit after it flushes. app.close() waits for in-flight
+	// replies and runs the onClose hook (scheduler loops); the unref'd timer
+	// is the ceiling in case a keep-alive or WS socket refuses to drain. It
+	// is tight on purpose: the whole switch must finish inside the
+	// connection banner's 12s sustained-outage grace, so every donated
+	// second here is a second closer to a false alarm.
+	setTimeout(() => process.exit(stateProfiles.SWITCH_EXIT_CODE), 750).unref();
+	setImmediate(() => {
+		void app.close().finally(() => process.exit(stateProfiles.SWITCH_EXIT_CODE));
+	});
+	return { ok: true, restarting: true, target: name, signInPath: `/auth/session?token=${encodeURIComponent(nextToken)}` };
+});
+// Moving the exxperts home: /plan validates a candidate folder and returns
+// what a confirmation must disclose (mode "migrate" moves the whole family
+// there; mode "adopt" means the folder already holds exxperts data (the
+// other-computer case for a cloud-synced folder) and is used as-is, nothing
+// moved or merged). /apply re-validates, records the move for the supervisor
+// to execute between legs, and exits with the same sentinel a profile switch
+// uses; the reply carries the sign-in link the restarted leg will honor.
+app.post("/api/settings/state-home/plan", async (req, reply) => {
+	const refusal = stateHomeMoveRefusal();
+	if (refusal) return reply.code(409).send({ error: refusal });
+	const dir = String((req.body as { dir?: unknown } | null)?.dir ?? "");
+	try {
+		return stateProfiles.planHomeMove(stateProfileRealHome(), dir);
+	} catch (e) {
+		return reply.code(409).send({ error: (e as Error).message });
+	}
+});
+app.post("/api/settings/state-home/apply", async (req, reply) => {
+	const refusal = stateHomeMoveRefusal();
+	if (refusal) return reply.code(409).send({ error: refusal });
+	const dir = String((req.body as { dir?: unknown } | null)?.dir ?? "");
+	let token: string;
+	try {
+		token = stateProfiles.prepareHomeMove(stateProfileLoginHome(), stateProfileRealHome(), dir).token;
+	} catch (e) {
+		return reply.code(409).send({ error: (e as Error).message });
+	}
+	const nextToken = process.env.EXXPERTS_AUTH_TOKEN?.trim() || token;
+	// Reply first, exit after it flushes, on the same timing rationale as the
+	// profile-switch route above.
+	setTimeout(() => process.exit(stateProfiles.SWITCH_EXIT_CODE), 750).unref();
+	setImmediate(() => {
+		void app.close().finally(() => process.exit(stateProfiles.SWITCH_EXIT_CODE));
+	});
+	return { ok: true, restarting: true, signInPath: `/auth/session?token=${encodeURIComponent(nextToken)}` };
 });
 app.get("/api/persistent-agent-ai-profiles/gateways", async () => {
 	const read = readOpenAiCompatibleGateways();
@@ -8551,7 +8729,7 @@ app.post("/api/persistent-agents/:id/files/:name/save", async (req, reply) => {
 	// not silently create second truths inside it. Compare realpaths: targetDir
 	// was resolved above, so the state root must be resolved the same way
 	// (macOS /var vs /private/var would otherwise defeat the prefix check).
-	let stateRoot = path.join(os.homedir(), ".exxperts");
+	let stateRoot = path.join(stateHome(), ".exxperts");
 	try {
 		stateRoot = fs.realpathSync.native(stateRoot);
 	} catch {

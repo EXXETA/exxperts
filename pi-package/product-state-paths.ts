@@ -2,8 +2,25 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+/**
+ * The folder that holds the `.exxperts` tree, and the ONLY thing a data
+ * profile or a moved data folder relocates.
+ *
+ * EXXPERTS_STATE_HOME names it: the moved folder for the standard profile in a
+ * moved data folder, `<home>/.exxperts-<name>` for a loaded profile. Unset, it
+ * is the login home, which is what every install that never touched either
+ * feature runs with. HOME is deliberately NOT part of this: the browser cache,
+ * `~/.agents/skills`, `~/.config/mcp`, the container tools and every dotfile a
+ * spawned tool reads stay with the person, not with the profile.
+ */
+export function stateHome(): string {
+	const fromEnv = process.env.EXXPERTS_STATE_HOME;
+	if (fromEnv && fromEnv.trim()) return path.resolve(fromEnv.trim());
+	return os.homedir();
+}
+
 export function productAppStateRoot(): string {
-	return path.join(os.homedir(), ".exxperts", "app");
+	return path.join(stateHome(), ".exxperts", "app");
 }
 
 export function productAppStatePath(...segments: string[]): string {

@@ -5,8 +5,22 @@
 // directly when no server is up, so "make it off" always works.
 const fs = require("node:fs");
 const http = require("node:http");
+const os = require("node:os");
+const path = require("node:path");
 const readline = require("node:readline");
-const { productAppStatePath } = require("./product-state-paths.cjs");
+const stateProfiles = require("./state-profiles.cjs");
+
+// Everything here must address the ACTIVE data profile's tree (standard
+// ~/.exxperts or ~/.exxperts-<name>/.exxperts) inside the data folder the
+// running server uses: its token and state live there. The data folder is
+// resolved, not read off HOME: a moved folder leaves the login home alone.
+function dataFolder() {
+  return stateProfiles.resolveStateHome(os.homedir()).home;
+}
+
+function activeAppPath(...segments) {
+  return path.join(path.dirname(stateProfiles.activeTokenPath(dataFolder())), ...segments);
+}
 
 const DEFAULT_PORT = Number(process.env.PORT || 8787);
 
@@ -30,7 +44,7 @@ function readAuthToken() {
   const fromEnv = String(process.env.EXXPERTS_AUTH_TOKEN || "").trim();
   if (fromEnv) return fromEnv;
   try {
-    return fs.readFileSync(productAppStatePath("auth-token"), "utf8").trim() || null;
+    return fs.readFileSync(activeAppPath("auth-token"), "utf8").trim() || null;
   } catch {
     return null;
   }
@@ -185,6 +199,14 @@ async function cmdEnable(port, token) {
 }
 
 async function main(argv, invokedAs) {
+  // Exxperts home: the running server's state (token, remote-mode file)
+  // lives under the resolved home; address the same tree.
+  try {
+    stateProfiles.adoptStateHome(os.homedir());
+  } catch (err) {
+    console.error(err.message);
+    process.exit(1);
+  }
   const args = [...argv];
   let port = DEFAULT_PORT;
   const portIndex = args.indexOf("--port");
@@ -207,7 +229,7 @@ async function main(argv, invokedAs) {
   if (command === "disable" && !running) {
     // Offline disable: delete the state file so the next boot is plain OFF.
     try {
-      fs.unlinkSync(productAppStatePath("remote-mode.json"));
+      fs.unlinkSync(activeAppPath("remote-mode.json"));
       console.log("Remote mode is OFF on disk (the server did not answer on this port).");
       console.log("If the app is still running somewhere, restart it to be sure remote is fully off.");
     } catch (err) {

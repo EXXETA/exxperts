@@ -33,7 +33,7 @@ if (rgProbe.status !== 0) {
   process.exit(1);
 }
 console.log(`[smoke:packaged] bundled ripgrep runs: ${rgProbe.stdout.split("\n")[0]}`);
-const scratch = path.join(os.homedir(), ".exxperts-desktop-scratch");
+const scratch = path.join(os.homedir(), ".exxperts.desktop-scratch");
 fs.mkdirSync(scratch, { recursive: true });
 const child = spawn(binary, process.argv.slice(2).includes("--hidden") ? ["--hidden"] : [], {
   stdio: "inherit",

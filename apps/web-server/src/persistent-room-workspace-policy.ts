@@ -10,7 +10,7 @@ import {
 	persistentRoomWorkspaceToolNamesForSelection,
 	persistentRoomWorkspaceToolSelectionViewForPolicy,
 } from "./persistent-room-tool-policy.js";
-import { productAppStatePath, productAppStateRoot } from "../../../pi-package/product-state-paths.js";
+import { productAppStatePath, productAppStateRoot, stateHome } from "../../../pi-package/product-state-paths.js";
 
 export type PersistentRoomWorkspaceAccessMode = "bounded" | "localFiles";
 export type PersistentRoomWorkspaceRootSource = "manual" | "query-param" | "runtime-state" | "admin-dev";
@@ -291,9 +291,59 @@ export function defaultPersistentRoomForbiddenRoots(input: {
 	const agentId = requiredWorkspaceAgentId(input.agentId);
 	const persistentAgentsRoot = input.persistentAgentsRoot ?? DEFAULT_PERSISTENT_ROOM_AGENTS_ROOT;
 	const exxetaStateRoot = input.exxetaStateRoot ?? defaultExxetaStateRoot();
+	// With a data profile active the roots above point inside the profile, so
+	// the REAL ~/.exxperts (the standard profile's tokens, wallet, rooms) must
+	// stay forbidden too, or a room could be granted it as a workspace. Three
+	// homes are asked, and a machine without any of this dedupes them into one:
+	// the state home (the folder this server's own tree sits in: the profile
+	// dir while a profile is loaded, the moved folder after a move), the home
+	// the supervisor named, and the login home. The login home matters even
+	// when the data moved: it can still hold a dormant ~/.exxperts from before
+	// the relocation (old wallet, provider keys). os.userInfo() resolves it
+	// from the OS account, so it answers even where HOME is unusual.
+	let loginHome: string | undefined;
+	try {
+		loginHome = os.userInfo().homedir || undefined;
+	} catch {
+		// No account record (some containers): nothing extra to forbid.
+	}
+	// The forbidden area is the WHOLE state tree, not just its app folder:
+	// ~/.exxperts also holds the coding agent's auth.json and provider tokens.
+	// And every sibling ~/.exxperts-<name> is another data profile's tree with
+	// its own tokens and wallet. To a server running under one profile's HOME
+	// the others are ordinary folders, so they are listed and forbidden by
+	// name. Deny segments cannot do this: ".exxperts" matches that segment
+	// exactly and never ".exxperts-demo".
+	const realHomeRoots: PersistentRoomWorkspaceForbiddenRootInput[] = [];
+	const seenHomes = new Set<string>();
+	for (const home of [stateHome(), process.env.EXXPERTS_REAL_HOME?.trim(), loginHome, os.homedir()]) {
+		if (!home || seenHomes.has(home)) continue;
+		seenHomes.add(home);
+		realHomeRoots.push(
+			{ kind: "exxeta-state-root", path: path.join(home, ".exxperts") },
+			{ kind: "persistent-agents-root", path: path.join(home, ".exxperts", "app", "personalized-agents") },
+		);
+		let entries: string[] = [];
+		try {
+			entries = fs.readdirSync(home);
+		} catch {
+			// No readable home: the standard tree above is still forbidden.
+		}
+		for (const entry of entries) {
+			if (!entry.startsWith(".exxperts-") || entry.length === ".exxperts-".length) continue;
+			const profileDir = path.join(home, entry);
+			try {
+				if (!fs.statSync(profileDir).isDirectory()) continue;
+			} catch {
+				continue;
+			}
+			realHomeRoots.push({ kind: "exxeta-state-root", path: profileDir });
+		}
+	}
 	return [
 		{ kind: "repo-root", path: input.repoRoot },
 		{ kind: "exxeta-state-root", path: exxetaStateRoot },
+		...realHomeRoots,
 		{ kind: "persistent-agents-root", path: persistentAgentsRoot },
 		{ kind: "persistent-agent-root", path: persistentAgentRootPath(agentId, persistentAgentsRoot) },
 	];

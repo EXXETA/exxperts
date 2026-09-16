@@ -15,6 +15,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { getAgentDir } from "@exxeta/exxperts-runtime";
+import { stateHome } from "../../../pi-package/product-state-paths.js";
 
 /** The canonical user skills store — the Pi loader's user dir. */
 export function agentSkillsDir(): string {
@@ -39,7 +40,7 @@ export function sharedAgentsSkillsDir(): string {
  * the canonical store (see `migrateLegacyUserSkills`).
  */
 export function legacyUserSkillsDir(): string {
-	return path.join(os.homedir(), ".exxperts", "app", "skills");
+	return path.join(stateHome(), ".exxperts", "app", "skills");
 }
 
 /**

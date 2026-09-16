@@ -36,8 +36,8 @@
  */
 
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
+import { stateHome } from "../../product-state-paths.js";
 import {
 	effectiveGrantedMcpConnectors,
 	ensurePersistentRoomMcpGrantsMigration,
@@ -113,7 +113,7 @@ const ROOM_SETTINGS_SENTENCE = "Room settings control which connectors this room
  */
 function ensureAgentDirEnv(): void {
 	if (!process.env.PI_CODING_AGENT_DIR) {
-		process.env.PI_CODING_AGENT_DIR = path.join(os.homedir(), ".exxperts", "agent");
+		process.env.PI_CODING_AGENT_DIR = path.join(stateHome(), ".exxperts", "agent");
 	}
 }
 
