@@ -2,6 +2,10 @@
 
 User-visible changes per release. Historical private/internal development notes are not part of this public-facing changelog.
 
+## 0.12.2 (2026-09-16)
+
+- Memory: The Memory tab and memory reads no longer stall on a room whose memory file carries a long run of blank lines.
+
 ## 0.12.1 (2026-09-15)
 
 - Memorize: A save is no longer refused when you remembered a conversation while the card was open. The

@@ -51,9 +51,30 @@ function normalizeText(text: string): string {
  * this way, and the graft that puts Chronos and Recent Context back reads the
  * same rule; a second rule there would fail the byte-equality check on memory
  * the splitter faithfully kept.
+ *
+ * Written as two scans rather than the regex it used to be
+ * (`/(\r?\n\s*)+$/`): that pattern's nested quantifiers made a run of blank
+ * lines followed by content cost time exponential in the run's length — a
+ * room whose Chronos carried thirty blank lines, as every stamp before 0.12.0
+ * left one, took seconds per read and the Memory tab minutes. The rule is the
+ * same to the byte: the trailing whitespace run is found from the end, and the
+ * cut sits at its first line break (`\n`, or `\r\n` as one), so a trailing
+ * space on a content line stays, a lone trailing `\r` stays, and whitespace
+ * before that first break is content too. `\s` is the same class the regex
+ * read, so every character JavaScript calls whitespace counts.
  */
 export function trimSectionTrailingBlankLines(text: string): string {
-	return text.replace(/(\r?\n\s*)+$/, "");
+	let start = text.length;
+	while (start > 0 && isWhitespaceCharacter(text[start - 1])) start -= 1;
+	for (let at = start; at < text.length; at += 1) {
+		if (text[at] === "\n" || (text[at] === "\r" && text[at + 1] === "\n")) return text.slice(0, at);
+	}
+	return text;
+}
+
+/** Whether one character is in the class `\s` names: the regex's own reading of whitespace. */
+function isWhitespaceCharacter(character: string): boolean {
+	return /\s/.test(character);
 }
 
 export function extractTopLevelSectionBlocks(markdown: string): Array<{ title: string; body: string }> {
