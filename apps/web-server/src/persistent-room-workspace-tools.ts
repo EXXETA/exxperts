@@ -338,6 +338,31 @@ export function resolvePersistentRoomWorkspacePath(
 	};
 }
 
+/**
+ * Resolve an existing regular file without creating directories or following
+ * symlinks. Workspace editors use this narrower guard than the general write
+ * tool, whose resolver intentionally supports creating new files.
+ */
+export function resolvePersistentRoomWorkspaceExistingFile(
+	policy: PersistentRoomCapabilityPolicy,
+	rawPath: string,
+): PersistentRoomWorkspaceToolGuardResult {
+	const guarded = resolvePersistentRoomWorkspacePath(policy, rawPath, "read");
+	const runtime = createRuntime(policy);
+	if (!runtime) throw new PersistentRoomWorkspaceToolError("workspace_unavailable", "No selected workspace is available for this room.");
+	if (guarded.lstat.isSymbolicLink() || !guarded.lstat.isFile() || !guarded.stat.isFile()) {
+		throw new PersistentRoomWorkspaceToolError("not_file", "Path is not a regular file in selected workspace.");
+	}
+	const parentAbsolutePath = path.dirname(guarded.absolutePath);
+	const parentRelativePath = normalizeSlashes(path.relative(runtime.rootRealpath, parentAbsolutePath) || ".");
+	assertNoSymlinkAncestors(runtime, parentRelativePath);
+	const parentRealpath = safeRealpath(parentAbsolutePath);
+	if (!parentRealpath || !sameOrDescendant(parentRealpath, runtime.rootRealpath)) {
+		throw new PersistentRoomWorkspaceToolError("outside_workspace", "Path is outside the selected workspace.");
+	}
+	return guarded;
+}
+
 function nearestExistingAncestor(startPath: string, rootRealpath: string): { absolutePath: string; lstat: fs.Stats } {
 	let current = startPath;
 	while (sameOrDescendant(current, rootRealpath)) {

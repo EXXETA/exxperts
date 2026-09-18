@@ -2,6 +2,12 @@
 
 User-visible changes per release. Historical private/internal development notes are not part of this public-facing changelog.
 
+## 0.13.0 (2026-09-18)
+
+- Workspace files: Persistent rooms now show a policy-bound, recursive workspace browser with directory navigation and Markdown file opening in the right pane.
+- Markdown editor: Markdown files open in a TipTap editor with rich formatting, tables, task lists, find-in-file search, preview, autosave and revision-conflict handling.
+- Security: Workspace reads and writes stay within the effective room workspace policy, with protected paths, UTF-8 validation, size limits and atomic revision-checked saves.
+
 ## 0.12.1 (2026-09-15)
 
 - Memorize: A save is no longer refused when you remembered a conversation while the card was open. The

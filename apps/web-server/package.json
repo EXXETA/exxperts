@@ -23,6 +23,8 @@
     "smoke:persistent-room-task-ledger": "tsx scripts/persistent-room-task-ledger-smoke.ts",
     "smoke:persistent-room-task-list-api": "tsx scripts/persistent-room-task-list-api-smoke.ts",
     "smoke:persistent-room-workspace-policy": "tsx scripts/persistent-room-workspace-policy-smoke.ts",
+    "smoke:persistent-room-workspace-files": "tsx scripts/persistent-room-workspace-files-smoke.ts",
+    "smoke:persistent-room-workspace-markdown-files": "tsx scripts/persistent-room-workspace-markdown-files-smoke.ts",
     "smoke:specialist-task-ingest": "tsx scripts/specialist-task-ingest-smoke.ts",
     "smoke:task-store-gc": "tsx scripts/task-store-gc-smoke.ts",
     "smoke:persistent-room-workspace-default-api": "tsx scripts/persistent-room-workspace-default-api-smoke.ts",

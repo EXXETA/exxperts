@@ -27,7 +27,7 @@ function sessionModelLabel(status: PersistentAgentStatus): { name: string; title
 	return { name: modelDisplayName(input) || model.model, title: modelTooltipName(input) || model.model };
 }
 
-export function RoomSessionSection({ status, onRefresh, onMementoApplied, onMementoForget }: { status: PersistentAgentStatus; onRefresh: () => void; onMementoApplied?: () => void; onMementoForget?: () => void }) {
+export function RoomSessionSection({ status, onRefresh, onMementoApplied, onMementoForget, onBeforeMemento }: { status: PersistentAgentStatus; onRefresh: () => void; onMementoApplied?: () => void; onMementoForget?: () => void; onBeforeMemento?: (continueAction: () => void) => boolean }) {
 	const [confirming, setConfirming] = useState(false);
 	const [submitting, setSubmitting] = useState(false);
 	const [message, setMessage] = useState<string | null>(null);
@@ -43,6 +43,7 @@ export function RoomSessionSection({ status, onRefresh, onMementoApplied, onMeme
 
 	async function submitMemento(): Promise<void> {
 		if (!activeThread) return;
+		if (onBeforeMemento && !onBeforeMemento(() => { void submitMemento(); })) return;
 		setSubmitting(true);
 		setError(null);
 		setMessage(null);

@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
-import type { ClipboardEvent, CSSProperties, KeyboardEvent, MutableRefObject, ReactNode, Ref } from "react";
+import type { ClipboardEvent, CSSProperties, KeyboardEvent, MutableRefObject, PointerEvent as ReactPointerEvent, ReactNode, Ref } from "react";
 import { Approval } from "./Approval";
 import { ConsultThreadItem, Message, TaskThreadItem, ToolBundle, isBundleableToolItem, type MessageAttachmentAccess } from "./Message";
 import { MentionConsultPopover, MentionConsultPopoverBusy, type MentionSupport } from "./mention-consult-popover";
@@ -24,6 +24,8 @@ export interface InRoomChatUsage {
 
 export interface InRoomChatShellViewProps {
 	sidebar: ReactNode;
+	/** Desktop-only sidebar drag handle; mobile keeps the rail as an overlay. */
+	sidebarResizable?: boolean;
 	/** Phone-only affordance (hidden by CSS above the breakpoint): the rail
 	 *  is a drawer there, so the topbar carries a direct way home. */
 	onHome?: () => void;
@@ -633,6 +635,7 @@ function ComposerInput({
 
 export function InRoomChatShellView({
 	sidebar,
+	sidebarResizable = false,
 	onHome,
 	withPreview = false,
 	activeDisplay,
@@ -683,6 +686,9 @@ export function InRoomChatShellView({
 }: InRoomChatShellViewProps) {
 	const messagesElRef = useRef<HTMLDivElement | null>(null);
 	const dockElRef = useRef<HTMLDivElement | null>(null);
+	const sidebarResizeStartRef = useRef<{ clientX: number; width: number } | null>(null);
+	const [sidebarWidth, setSidebarWidth] = useState(260);
+	const [sidebarResizing, setSidebarResizing] = useState(false);
 	const autoFollowRef = useRef(true);
 	const lastItemIdRef = useRef<string | null>(null);
 	const lastScrollTopRef = useRef(0);
@@ -699,6 +705,39 @@ export function InRoomChatShellView({
 		"composer-layout",
 		composerRightActions ? "with-actions" : "",
 	].filter(Boolean).join(" ");
+	const clampSidebarWidth = (width: number): number => Math.min(420, Math.max(220, width));
+	const startSidebarResize = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+		if (event.pointerType === "mouse" && event.button !== 0) return;
+		event.preventDefault();
+		event.currentTarget.setPointerCapture(event.pointerId);
+		sidebarResizeStartRef.current = { clientX: event.clientX, width: sidebarWidth };
+		setSidebarResizing(true);
+	}, [sidebarWidth]);
+	const moveSidebarResize = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+		const start = sidebarResizeStartRef.current;
+		if (!start) return;
+		setSidebarWidth(clampSidebarWidth(start.width + event.clientX - start.clientX));
+	}, []);
+	const finishSidebarResize = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+		if (sidebarResizeStartRef.current) {
+			try { event.currentTarget.releasePointerCapture(event.pointerId); } catch {}
+		}
+		sidebarResizeStartRef.current = null;
+		setSidebarResizing(false);
+	}, []);
+	const keySidebarResize = useCallback((event: KeyboardEvent<HTMLDivElement>) => {
+		if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+			event.preventDefault();
+			setSidebarWidth((width) => clampSidebarWidth(width + (event.key === "ArrowRight" ? 16 : -16)));
+		} else if (event.key === "Home") {
+			event.preventDefault();
+			setSidebarWidth(220);
+		} else if (event.key === "End") {
+			event.preventDefault();
+			setSidebarWidth(420);
+		}
+	}, []);
+	const appStyle = sidebarResizable ? ({ "--sidebar-width": `${sidebarWidth}px` } as CSSProperties) : undefined;
 
 	const setMessagesNode = useCallback((node: HTMLDivElement | null) => {
 		messagesElRef.current = node;
@@ -790,9 +829,26 @@ export function InRoomChatShellView({
 	}, [empty, items, lastItem, showThinkingIndicator]);
 
 	return (
-		<div className="app">
+		<div className={`app${sidebarResizable ? " sidebar-resizable" : ""}`} style={appStyle}>
 			<SidebarDrawerBackdrop />
 			{sidebar}
+			{sidebarResizable && (
+				<div
+					className={`sidebar-resizer${sidebarResizing ? " is-dragging" : ""}`}
+					role="separator"
+					aria-orientation="vertical"
+					aria-label="Resize sidebar"
+					aria-valuemin={220}
+					aria-valuemax={420}
+					aria-valuenow={sidebarWidth}
+					tabIndex={0}
+					onKeyDown={keySidebarResize}
+					onPointerDown={startSidebarResize}
+					onPointerMove={moveSidebarResize}
+					onPointerUp={finishSidebarResize}
+					onPointerCancel={finishSidebarResize}
+				/>
+			)}
 
 			<div ref={workbenchRef} className={`workbench ${withPreview ? "with-preview" : ""} ${workbenchClassName ?? ""}`.trim()} style={workbenchStyle}>
 				<main className="main">

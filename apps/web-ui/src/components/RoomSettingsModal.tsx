@@ -52,7 +52,7 @@ function highlightMention(text: string, name: string): ReactNode {
 	return parts.length > 0 ? parts : text;
 }
 
-export function RoomSettingsModal({ status, onClose, onArchive, onPurge, onRefresh, onMementoApplied, onMementoForget, onOpenSkillsLibrary, initialPane }: { status: PersistentAgentStatus; onClose: () => void; onArchive: (agentId: PersistentAgentId, confirmation: string) => Promise<PersistentAgentArchiveResponse>; onPurge: (agentId: PersistentAgentId, confirmation: string) => Promise<PersistentAgentPurgeResponse>; onRefresh: () => void; onMementoApplied?: () => void; onMementoForget?: () => void; onOpenSkillsLibrary?: () => void; initialPane?: SettingsPane }) {
+export function RoomSettingsModal({ status, onClose, onArchive, onPurge, onRefresh, onMementoApplied, onMementoForget, onBeforeMemento, onOpenSkillsLibrary, initialPane }: { status: PersistentAgentStatus; onClose: () => void; onArchive: (agentId: PersistentAgentId, confirmation: string) => Promise<PersistentAgentArchiveResponse | null>; onPurge: (agentId: PersistentAgentId, confirmation: string) => Promise<PersistentAgentPurgeResponse | null>; onRefresh: () => void; onMementoApplied?: () => void; onMementoForget?: () => void; onBeforeMemento?: (continueAction: () => void) => boolean; onOpenSkillsLibrary?: () => void; initialPane?: SettingsPane }) {
 	const workspaceDirtyRef = useRef(false);
 	const handleWorkspaceDirtyChange = useCallback((dirty: boolean) => { workspaceDirtyRef.current = dirty; }, []);
 	// Callers that open the modal at a particular pane (the Memory tab's link
@@ -141,14 +141,16 @@ export function RoomSettingsModal({ status, onClose, onArchive, onPurge, onRefre
 		onClose();
 		onOpenSkillsLibrary?.();
 	}
-	async function archiveAndClose(agentId: PersistentAgentId, confirmation: string): Promise<PersistentAgentArchiveResponse> {
+	async function archiveAndClose(agentId: PersistentAgentId, confirmation: string): Promise<PersistentAgentArchiveResponse | null> {
 		const response = await onArchive(agentId, confirmation);
+		if (!response) return null;
 		onRefresh();
 		onClose();
 		return response;
 	}
-	async function purgeAndClose(agentId: PersistentAgentId, confirmation: string): Promise<PersistentAgentPurgeResponse> {
+	async function purgeAndClose(agentId: PersistentAgentId, confirmation: string): Promise<PersistentAgentPurgeResponse | null> {
 		const response = await onPurge(agentId, confirmation);
+		if (!response) return null;
 		onRefresh();
 		onClose();
 		return response;
@@ -237,7 +239,7 @@ export function RoomSettingsModal({ status, onClose, onArchive, onPurge, onRefre
 							<RoomScheduledTasksSection status={status} />
 						</section>
 						<section className="room-settings-section" hidden={pane !== "session"}>
-							<RoomSessionSection status={status} onRefresh={onRefresh} onMementoApplied={onMementoApplied} onMementoForget={onMementoForget} />
+							<RoomSessionSection status={status} onRefresh={onRefresh} onMementoApplied={onMementoApplied} onMementoForget={onMementoForget} onBeforeMemento={onBeforeMemento} />
 						</section>
 						<section className="room-settings-section" hidden={pane !== "danger"}>
 							<RoomDangerZone status={status} visible={pane === "danger"} onArchive={archiveAndClose} onPurge={purgeAndClose} />
