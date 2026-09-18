@@ -72,6 +72,8 @@ import {
 	persistentRoomBlockedToolLeaks,
 } from "./persistent-room-tool-policy.js";
 import { assertPersistentRoomWorkspaceDefaultMutable, createPersistentRoomCapabilityPolicy, createPersistentRoomDefaultCapabilityPolicy, deletePersistentRoomCapabilityPolicy, deletePersistentRoomDefaultCapabilityPolicy, missingPersistentRoomWorkspaceRootWarnings, normalizePersistentRoomWorkspaceAccessModeInput, persistentRoomCapabilityPolicyView, persistentRoomRuntimeCwdForEffectiveWorkspacePolicy, PersistentRoomWorkspacePolicyError, PERSISTENT_ROOM_WORKSPACE_DEFAULT_STORAGE_SOURCE, PERSISTENT_ROOM_WORKSPACE_POLICY_STORAGE_SOURCE, readPersistentRoomCapabilityPolicy, readPersistentRoomDefaultCapabilityPolicy, releasePersistentRoomThreadWorkspaceMirror, resolvePersistentRoomCapabilityPolicy, resolvePersistentRoomEffectiveWorkspacePolicy, updatePersistentRoomCapabilityPolicyWorkspaceSettings, writePersistentRoomCapabilityPolicy, writePersistentRoomDefaultCapabilityPolicy } from "./persistent-room-workspace-policy.js";
+import { listPersistentRoomWorkspaceFiles } from "./persistent-room-workspace-files.js";
+import { PersistentRoomWorkspaceMarkdownError, readWorkspaceMarkdownFile, writeWorkspaceMarkdownFile } from "./persistent-room-workspace-markdown-files.js";
 import { MEMORY_BUDGET_DEFAULT_TOKENS, overMemoryBudget, readPersistentRoomMaintenanceSettings, writePersistentRoomMaintenanceSettings } from "./persistent-room-maintenance-settings.js";
 import { settleMemoryBudget } from "./memory-entries-store.js";
 import { createPersistentRoomBashApprovalExtension, createPersistentRoomBashApprovalGuard } from "./persistent-room-bash-approval.js";
@@ -2305,6 +2307,55 @@ app.get("/api/persistent-agents/:id/workspace-policy", async (req, reply) => {
 		};
 	} catch (e) {
 		const payload = persistentRoomWorkspaceErrorPayload(e);
+		return reply.code(payload.statusCode).send(payload.body);
+	}
+});
+app.get("/api/persistent-agents/:id/workspace-files", async (req, reply) => {
+	const idRaw = String((req.params as any).id ?? "").trim();
+	try {
+		const status = getUsablePersistentAgentStatusForNormalUse(idRaw);
+		const query = (req.query ?? {}) as any;
+		const conversationId = String(query.conversationId ?? "").trim();
+		if (!conversationId) throw new Error("conversationId is required");
+		const requestedPath = String(query.path ?? "");
+		const effectivePolicy = resolvePersistentRoomEffectiveWorkspacePolicy(status.id, conversationId);
+		return {
+			agentId: status.id,
+			conversationId,
+			...listPersistentRoomWorkspaceFiles(effectivePolicy.policy, requestedPath),
+		};
+	} catch (e) {
+		const payload = persistentRoomWorkspaceErrorPayload(e);
+		return reply.code(payload.statusCode).send(payload.body);
+	}
+});
+app.get("/api/persistent-agents/:id/workspace-markdown", async (req, reply) => {
+	const idRaw = String((req.params as any).id ?? "").trim();
+	try {
+		const status = getUsablePersistentAgentStatusForNormalUse(idRaw);
+		const query = (req.query ?? {}) as any;
+		const conversationId = String(query.conversationId ?? "").trim();
+		if (!conversationId) throw new Error("conversationId is required");
+		const filePath = String(query.path ?? "");
+		return { agentId: status.id, conversationId, ...readWorkspaceMarkdownFile(status.id, conversationId, filePath) };
+	} catch (e) {
+		const payload = persistentRoomWorkspaceErrorPayload(e);
+		if (e instanceof PersistentRoomWorkspaceMarkdownError && e.currentRevision) payload.body.currentRevision = e.currentRevision;
+		return reply.code(payload.statusCode).send(payload.body);
+	}
+});
+app.put("/api/persistent-agents/:id/workspace-markdown", async (req, reply) => {
+	const idRaw = String((req.params as any).id ?? "").trim();
+	try {
+		const status = getUsablePersistentAgentStatusForNormalUse(idRaw);
+		const query = (req.query ?? {}) as any;
+		const conversationId = String(query.conversationId ?? "").trim();
+		if (!conversationId) throw new Error("conversationId is required");
+		const body = (req.body ?? {}) as any;
+		return { agentId: status.id, conversationId, ...writeWorkspaceMarkdownFile(status.id, conversationId, query.path, body.content, body.revision) };
+	} catch (e) {
+		const payload = persistentRoomWorkspaceErrorPayload(e);
+		if (e instanceof PersistentRoomWorkspaceMarkdownError && e.currentRevision) payload.body.currentRevision = e.currentRevision;
 		return reply.code(payload.statusCode).send(payload.body);
 	}
 });

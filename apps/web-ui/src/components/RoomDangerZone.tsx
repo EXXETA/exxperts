@@ -19,8 +19,8 @@ function lifecycleCountsLine(counts: PersistentAgentLifecycleCounts): string {
 export function RoomDangerZone({ status, visible, onArchive, onPurge }: {
 	status: PersistentAgentStatus;
 	visible: boolean;
-	onArchive: (agentId: PersistentAgentId, confirmation: string) => Promise<PersistentAgentArchiveResponse>;
-	onPurge: (agentId: PersistentAgentId, confirmation: string) => Promise<PersistentAgentPurgeResponse>;
+	onArchive: (agentId: PersistentAgentId, confirmation: string) => Promise<PersistentAgentArchiveResponse | null>;
+	onPurge: (agentId: PersistentAgentId, confirmation: string) => Promise<PersistentAgentPurgeResponse | null>;
 }) {
 	const [counts, setCounts] = useState<PersistentAgentLifecycleCounts | null>(null);
 	const [countsFailed, setCountsFailed] = useState(false);
@@ -60,7 +60,8 @@ export function RoomDangerZone({ status, visible, onArchive, onPurge }: {
 		setSubmitting("purge");
 		setError(null);
 		try {
-			await onPurge(status.id, `DELETE ${status.id} FOREVER`);
+			const response = await onPurge(status.id, `DELETE ${status.id} FOREVER`);
+			if (!response) setSubmitting(null);
 		} catch (e) {
 			setError((e as Error).message || "Failed to delete room.");
 			setSubmitting(null);
@@ -72,7 +73,8 @@ export function RoomDangerZone({ status, visible, onArchive, onPurge }: {
 		setSubmitting("archive");
 		setError(null);
 		try {
-			await onArchive(status.id, `DELETE ${status.id}`);
+			const response = await onArchive(status.id, `DELETE ${status.id}`);
+			if (!response) setSubmitting(null);
 		} catch (e) {
 			setError((e as Error).message || "Failed to archive room.");
 			setSubmitting(null);
