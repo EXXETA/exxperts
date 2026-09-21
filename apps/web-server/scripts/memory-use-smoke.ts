@@ -260,8 +260,8 @@ try {
 	});
 
 	await section("8. the write is atomic and private", () => {
-		const mode = fs.statSync(sidecarPath).mode & 0o777;
-		check("the sidecar is mode 0600", mode === 0o600);
+		// Windows has no file modes to read back, so the check runs where they exist.
+		if (process.platform !== "win32") check("the sidecar is mode 0600", (fs.statSync(sidecarPath).mode & 0o777) === 0o600);
 		const leftovers = fs.readdirSync(runtimeDir).filter((name) => name.startsWith(MEMORY_USE_FILE) && name !== MEMORY_USE_FILE);
 		check("no temp file is left in runtime/", leftovers.length === 0);
 	});

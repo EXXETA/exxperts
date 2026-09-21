@@ -34,6 +34,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { estimateTokens } from "../../src/token-estimate.js";
 import type { ArchivedEntry, MemoryDocument, MemoryEntry } from "../../src/memory-entries.js";
@@ -2423,7 +2424,7 @@ export function localDay(now = new Date()): string {
 
 /** Where a run's results land by default: beside the bench, in a directory of its own. */
 export function resultsDir(): string {
-	return path.join(new URL(".", import.meta.url).pathname, "results");
+	return path.join(fileURLToPath(new URL(".", import.meta.url)), "results");
 }
 
 // --- Printing ----------------------------------------------------------------
@@ -2467,7 +2468,7 @@ import type { AddressInfo } from "node:net";
 
 import { authedFetch, SMOKE_AUTH_HEADERS, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer } from "../smoke-server-process.js";
 
-const benchScriptsDir = new URL(".", import.meta.url).pathname;
+const benchScriptsDir = fileURLToPath(new URL(".", import.meta.url));
 const webServerDir = path.resolve(benchScriptsDir, "..", "..");
 const repoRoot = path.resolve(webServerDir, "..", "..");
 
