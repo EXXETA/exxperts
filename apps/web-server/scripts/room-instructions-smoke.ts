@@ -259,7 +259,8 @@ try {
 	// Anything that is not a regular file is never opened: a pipe would block the whole server.
 	fs.rmSync(file, { force: true });
 	const mkfifo = createRequire(import.meta.url)("node:child_process") as typeof import("node:child_process");
-	const fifo = mkfifo.spawnSync("mkfifo", [file]);
+	// A Windows runner may carry a mkfifo that makes a plain file, so the pipe case runs only where pipes exist.
+	const fifo = process.platform === "win32" ? { status: null } : mkfifo.spawnSync("mkfifo", [file]);
 	if (fifo.status === 0) {
 		assert(readPersistentRoomInstructions(agentId).unreadable === "it is not a file", "a pipe at the path reads as unreadable without being opened");
 		assert(buildPersistentRoomCurrentInstructionsSection(agentId, bootedWithText.systemPrompt) === "", "and the per-turn section stays silent for it");
