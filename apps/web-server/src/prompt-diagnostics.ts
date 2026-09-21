@@ -6,6 +6,7 @@ export type PromptDiagnosticsSurface = "persistent-room" | "persistent-worker";
 export type PromptComponentType =
 	| "persistent-l0"
 	| "persistent-l1a"
+	| "persistent-instructions"
 	| "persistent-l1b"
 	| "persistent-l2"
 	| "persistent-boot"

@@ -24,7 +24,7 @@
 // applier (review-ops.ts), the entry model (memory-entries.ts), the files
 // (memory-entries-store.ts), and the worker itself (the route injects it).
 
-import { hasActiveAbsorbRun, parseRunKeepRequest, rebaseOntoDisk, type AbsorbRunArchiveRow, type AbsorbRunBudget, type AbsorbRunDemotion, type AbsorbRunEntryCard } from "./absorb-run.js";
+import { hasActiveAbsorbRun, memoryUseForRanking, parseRunKeepRequest, rebaseOntoDisk, type AbsorbRunArchiveRow, type AbsorbRunBudget, type AbsorbRunDemotion, type AbsorbRunEntryCard, type RankedArchiveAppend } from "./absorb-run.js";
 import { recordMaintenanceWorkerCalls } from "./maintenance-diagnostics.js";
 import {
 	cloneDocument,
@@ -47,9 +47,8 @@ import {
 	memoryRoomBusy,
 	settleMemoryBudget,
 	writeMemoryDocument,
-	type MemoryArchiveAppend,
 } from "./memory-entries-store.js";
-import { findDuplicateNotePairs, findLookAlikeTopics } from "./memory-duplicates.js";
+import { conflictPromptLine, findLookAlikeTopics, findNotePairs, type DuplicateNotePair } from "./memory-duplicates.js";
 import { IsolatedPersistentAgentWorkerTurnError } from "./persistent-agent-worker-runtime.js";
 import {
 	assertAbsorbSourceFingerprintCurrent,
@@ -80,6 +79,7 @@ import {
 	type ReviewArchiveRow,
 	type ReviewChange,
 	type ReviewChangeKind,
+	type ReviewConflictPair,
 	type ReviewDepth,
 	type ReviewGroupTopic,
 	type ReviewOp,
@@ -113,6 +113,10 @@ export interface ReviewRunChange {
 	notesMoved?: number;
 	/** archived as duplicate: the note that already says it, as the machine paired them at the start of the run. */
 	duplicateOf?: { id: string; topic: string };
+	/** merged, when the merge resolved a pair the machine found disagreeing: which value replaced which and why. */
+	reason?: string;
+	/** merged, for the same rows: the member of the pair that left, and the topic it sat under. */
+	conflictWith?: { id: string; topic: string };
 }
 
 /** A group whose call never produced something the memory could accept. */
@@ -347,8 +351,9 @@ interface RunSlot {
 	postTidyDoc: MemoryDocument | null;
 	/** The document as it will be written: post-tidy, post-demotion, keeps pinned. */
 	candidateDoc: MemoryDocument | null;
-	tidyArchive: MemoryArchiveAppend[];
-	demotionArchive: MemoryArchiveAppend[];
+	/** Rows the tidy set aside; the member of a disagreeing pair a merge resolved carries the merged row's reason. */
+	tidyArchive: RankedArchiveAppend[];
+	demotionArchive: RankedArchiveAppend[];
 	/** The archive list, by note id, for the life of the run: rows are added and re-flagged, never removed. */
 	archiveRows: Map<string, ReviewRunArchiveRow>;
 	idleSince: number | null;
@@ -464,7 +469,7 @@ export function startReviewRun(agentIdRaw: string, input: ReviewRunStartInput): 
 		changes: [],
 		leftAsIs: [],
 		budget: { before: 0, after: 0, budgetTokens: savedBudgetTokens, savedBudgetTokens, overBudgetAfter: false, ceilingTokens: MEMORY_BUDGET_MAX_TOKENS },
-		demotion: { entries: [], keepIds: [], keepTopics: [], overageTokens: 0, counts: { leaving: 0, kept: 0, instead: 0, staying: 0 } },
+		demotion: { entries: [], keepIds: [], keepTopics: [], overageTokens: 0, protectedOpenItems: 0, counts: { leaving: 0, kept: 0, instead: 0, staying: 0 } },
 		candidate: null,
 		guidance: reviewGuidanceIsEmpty(guidance) ? null : guidance,
 		migration: null,
@@ -529,13 +534,14 @@ async function performRun(slot: RunSlot, input: ReviewRunStartInput, nowFn: () =
 
 	// What the machine finds on its own, computed here on the migrated-in-memory
 	// document and never taken from the client: the pairs of notes that say one
-	// thing and the pairs of topics that look like one. The two topics of every
-	// pair are BONDED for the planning below, so a pair always reaches one call;
-	// each group is then handed the pairs it holds.
-	const duplicatePairs = findDuplicateNotePairs(doc);
+	// thing, the pairs that disagree, and the pairs of topics that look like
+	// one. The two topics of every pair are BONDED for the planning below, so a
+	// pair always reaches one call; each group is then handed the pairs it holds.
+	const { duplicates: duplicatePairs, conflicts: conflictPairs } = findNotePairs(doc);
 	const lookAlikePairs = findLookAlikeTopics(doc);
 	const bonds: ReviewTopicBond[] = [
 		...duplicatePairs.filter((pair) => pair.a.section === pair.b.section && pair.a.topic !== pair.b.topic).map((pair): ReviewTopicBond => [pair.a.topic, pair.b.topic]),
+		...conflictPairs.filter((pair) => pair.a.topic !== pair.b.topic).map((pair): ReviewTopicBond => [pair.a.topic, pair.b.topic]),
 		...lookAlikePairs.map((pair): ReviewTopicBond => [pair.a, pair.b]),
 	];
 
@@ -595,6 +601,12 @@ async function performRun(slot: RunSlot, input: ReviewRunStartInput, nowFn: () =
 		const noteIds = new Set(notes.map((note) => note.id));
 		const groupTitles = new Set(readNotes.topics.map((topic) => topic.title));
 		const duplicateNotes = duplicatePairs.filter((pair) => noteIds.has(pair.a.id) && noteIds.has(pair.b.id)).map((pair): { ids: [string, string] } => ({ ids: [pair.a.id, pair.b.id] }));
+		// A disagreeing pair reaches the prompt as one line with both dates and
+		// both first lines, and the validator and the applier as the pair itself;
+		// the run's own day is the day every date in those words is written against.
+		const conflictsHere = conflictPairs.filter((pair) => noteIds.has(pair.a.id) && noteIds.has(pair.b.id));
+		const conflictNotes = conflictsHere.map((pair): { ids: [string, string]; line: string } => ({ ids: [pair.a.id, pair.b.id], line: conflictPromptLine(pair, slot.savedDate) }));
+		const conflictContext: ReviewConflictPair[] = conflictsHere.map((pair) => ({ ids: [pair.a.id, pair.b.id], newer: pair.newer, texts: [pair.a.text, pair.b.text], dates: [pair.a.date, pair.b.date] }));
 		const lookAlikeTopics = lookAlikePairs.filter((pair) => groupTitles.has(pair.a) && groupTitles.has(pair.b));
 
 		const assembly = buildReviewGroupPrompt({
@@ -607,6 +619,7 @@ async function performRun(slot: RunSlot, input: ReviewRunStartInput, nowFn: () =
 			groupIndex: group.index,
 			groupCount: planned.length,
 			duplicateNotes,
+			conflictNotes,
 			lookAlikeTopics,
 			now: nowFn(),
 		});
@@ -673,7 +686,7 @@ async function performRun(slot: RunSlot, input: ReviewRunStartInput, nowFn: () =
 			}
 			const parsed = parseReviewOps(generated.text);
 			ops = parsed.ops;
-			refusals = parsed.problems.length > 0 ? parsed.problems : validateReviewOps(parsed.ops, notes, run.depth, readNotes.allTitles, { group: readNotes.topics, memoryTopics: readNotes.memoryTopics });
+			refusals = parsed.problems.length > 0 ? parsed.problems : validateReviewOps(parsed.ops, notes, run.depth, readNotes.allTitles, { group: readNotes.topics, memoryTopics: readNotes.memoryTopics, conflictNotes: conflictContext, today: slot.savedDate });
 			if (refusals.length === 0) {
 				diagnostics.annotate({ outcome: "accepted" });
 				break;
@@ -690,7 +703,7 @@ async function performRun(slot: RunSlot, input: ReviewRunStartInput, nowFn: () =
 			return;
 		}
 		await serialize(() => {
-			const applied = applyReviewOps(doc, ops, { savedDate: slot.savedDate, takenArchiveIds: [...archiveIdsOnDisk, ...slot.tidyArchive.map((append) => append.entry.id)] });
+			const applied = applyReviewOps(doc, ops, { savedDate: slot.savedDate, takenArchiveIds: [...archiveIdsOnDisk, ...slot.tidyArchive.map((append) => append.entry.id)], conflictNotes: conflictContext });
 			doc = applied.doc;
 			for (const row of applied.archive) slot.tidyArchive.push({ ...row, archived: slot.savedDate });
 			run.changes.push(...applied.changes.map((change) => withDuplicatePartner(runChange(change), duplicatePairs)));
@@ -741,6 +754,8 @@ function runChange(change: ReviewChange): ReviewRunChange {
 		...(change.why ? { why: change.why } : {}),
 		...(change.mergedFrom ? { mergedFrom: [...change.mergedFrom] } : {}),
 		...(change.notesMoved === undefined ? {} : { notesMoved: change.notesMoved }),
+		...(change.reason ? { reason: change.reason } : {}),
+		...(change.conflictWith ? { conflictWith: { ...change.conflictWith } } : {}),
 	};
 }
 
@@ -749,7 +764,7 @@ function runChange(change: ReviewChange): ReviewRunChange {
  * member of the first machine-found pair holding it. A duplicate the model
  * found on its own has no pair, and the row says nothing more.
  */
-function withDuplicatePartner(change: ReviewRunChange, pairs: ReturnType<typeof findDuplicateNotePairs>): ReviewRunChange {
+function withDuplicatePartner(change: ReviewRunChange, pairs: readonly DuplicateNotePair[]): ReviewRunChange {
 	if (change.kind !== "archived" || change.why !== "duplicate") return change;
 	const pair = pairs.find((candidate) => candidate.a.id === change.id || candidate.b.id === change.id);
 	if (!pair) return change;
@@ -822,14 +837,14 @@ function recomputeDemotion(slot: RunSlot): void {
 		doc = restoreEntry(doc, { ...append.entry, archived: append.archived ?? slot.savedDate, why: append.why, topic: append.topic, section: append.section });
 	}
 	const where = addressBook(doc);
-	const demoted = demoteToBudget(doc, budgetTokens, { keepIds, keepTopics, today: slot.savedDate });
+	const demoted = demoteToBudget(doc, budgetTokens, { keepIds, keepTopics, today: slot.savedDate, use: memoryUseForRanking(run.agentId) });
 	const candidate = cloneDocument(demoted.doc);
 	// Keeping by id IS pinning: the note the user kept is the user's own from
 	// here on, and no later run's budget pass takes it either. A protected topic
 	// is protected today only, so its notes are not pinned.
 	for (const topic of candidate.topics) for (const entry of topic.entries) if (keep.has(entry.id)) entry.pinned = true;
 	slot.candidateDoc = candidate;
-	slot.demotionArchive = demoted.demoted.map((entry) => ({ entry, why: "budget" as const, topic: where.get(entry.id)?.topic ?? MEMORY_ACTIVE_ITEMS_TOPIC, section: where.get(entry.id)?.section ?? "Deep Memory", archived: slot.savedDate }));
+	slot.demotionArchive = demoted.demoted.map((entry) => ({ entry, why: "budget" as const, topic: where.get(entry.id)?.topic ?? MEMORY_ACTIVE_ITEMS_TOPIC, section: where.get(entry.id)?.section ?? "Deep Memory", archived: slot.savedDate, reason: entry.reason }));
 	const after = reviewTargetTokens(candidate);
 
 	// The stable list. A row entering after the run was ready is leaving in the
@@ -849,9 +864,9 @@ function recomputeDemotion(slot: RunSlot): void {
 			// stayed because it was kept itself, and its keep was taken back: that row
 			// simply leaves again. `kept` still says what the last pass decided.
 			const reentering = !row.leaving && !row.kept;
-			Object.assign(row, card, { rank });
+			Object.assign(row, card, { rank, reason: entry.reason });
 			if (reentering && instead) row.instead = true;
-		} else slot.archiveRows.set(entry.id, { ...card, leaving: true, kept: false, instead, phase: "after", rank });
+		} else slot.archiveRows.set(entry.id, { ...card, leaving: true, kept: false, instead, phase: "after", rank, reason: entry.reason });
 	});
 	for (const row of slot.archiveRows.values()) {
 		if (leaving.has(row.id)) {
@@ -865,6 +880,7 @@ function recomputeDemotion(slot: RunSlot): void {
 	run.demotion.keepIds = keepIds;
 	run.demotion.keepTopics = keepTopics;
 	run.demotion.overageTokens = demoted.overageTokens;
+	run.demotion.protectedOpenItems = demoted.protectedOpenItems;
 	publishArchiveList(slot, doc);
 	run.budget = { ...run.budget, after, budgetTokens, overBudgetAfter: overMemoryBudget(after, budgetTokens), ceilingTokens: MEMORY_BUDGET_MAX_TOKENS };
 	run.candidate = { sourceFingerprint: slot.sourceFingerprint, estimatedTokens: estimateTokens(renderMemoryDocument(candidate, "context")) };
@@ -1005,7 +1021,7 @@ export function approveReviewRun(agentIdRaw: string, runId: string, now = new Da
 	// What leaves the core, each with the reason it left. A note the user kept is
 	// not among them: it is back in the candidate instead.
 	const kept = new Set(run.demotion.keepIds);
-	const archiveAppend: MemoryArchiveAppend[] = [
+	const archiveAppend: RankedArchiveAppend[] = [
 		...slot.tidyArchive.filter((append) => append.why === "superseded" || !kept.has(append.entry.id)),
 		...slot.demotionArchive,
 	];
@@ -1044,9 +1060,9 @@ export function approveReviewRun(agentIdRaw: string, runId: string, now = new Da
 					runId: run.runId,
 					depth: run.depth,
 					topics: [...run.topics],
-					changes: run.changes.map((change) => ({ id: change.id, kind: change.kind, topic: change.topic, section: change.section, ...(change.why ? { why: change.why } : {}), ...(change.mergedFrom ? { mergedFrom: [...change.mergedFrom] } : {}) })),
+					changes: run.changes.map((change) => ({ id: change.id, kind: change.kind, topic: change.topic, section: change.section, ...(change.why ? { why: change.why } : {}), ...(change.mergedFrom ? { mergedFrom: [...change.mergedFrom] } : {}), ...(change.reason ? { reason: change.reason } : {}), ...(change.conflictWith ? { conflictWith: { ...change.conflictWith } } : {}) })),
 					leftAsIs: run.leftAsIs.map((left) => ({ topics: [...left.topics], reason: left.reason })),
-					archived: archiveAppend.map((append) => ({ id: append.entry.id, why: append.why, topic: append.topic, section: append.section })),
+					archived: archiveAppend.map((append) => ({ id: append.entry.id, why: append.why, topic: append.topic, section: append.section, ...(append.reason ? { reason: append.reason } : {}) })),
 					budget: { before: run.budget.before, after: run.budget.after, budgetTokens: run.budget.budgetTokens, overBudgetAfter: run.budget.overBudgetAfter, ...(budgetRaisedTo === undefined ? {} : { raisedFrom }) },
 					...(run.migration?.pending ? { migration: { entriesAssigned: run.migration.entriesAssigned } } : {}),
 				},

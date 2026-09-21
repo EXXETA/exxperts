@@ -1326,7 +1326,9 @@ export type MemoryNoteChangeKind = "added" | "archived" | "updated" | "moved" | 
  * after, every other change carries both. `from` names the topic a note came
  * from when it moved (an updated note that also moved is one row, change
  * "updated", with `from` set). `why` is the archive reason when the record's
- * own archived rows carry it.
+ * own archived rows carry it; `reason` is what the ranking saw, in a person's
+ * words, when the budget took the note, or which value replaced which when a
+ * save superseded it.
  */
 export interface MemoryNoteChange {
 	id: string;
@@ -1335,6 +1337,7 @@ export interface MemoryNoteChange {
 	after?: string;
 	from?: string;
 	why?: ArchiveReason;
+	reason?: string;
 }
 
 /** One topic's rows in the change view, named the way the change view names topics. */
@@ -1440,23 +1443,58 @@ function changeViewTopicName(topic: MemoryTopic, deepTitles: ReadonlySet<string>
 	return topic.section === "Active Items" && deepTitles.has(topic.title) ? `${topic.title}${OPEN_ITEMS_SUFFIX}` : topic.title;
 }
 
-/** The archive reasons a record's rows carry, keyed by entry id; a `-vN` archive id maps to its entry id, an exact row wins over a versioned one. */
-function archivedReasonsOf(rows: ReadonlyArray<{ id?: unknown; why?: unknown }> | undefined): Map<string, ArchiveReason> {
-	const out = new Map<string, ArchiveReason>();
-	const versioned = new Map<string, ArchiveReason>();
+/** One value of a record's archived rows, keyed by entry id; a `-vN` archive id maps to its entry id, an exact row wins over a versioned one. */
+function archivedRowValuesOf<R extends { id?: unknown }, T>(rows: ReadonlyArray<R> | undefined, valueOf: (row: R) => T | undefined): Map<string, T> {
+	const out = new Map<string, T>();
+	const versioned = new Map<string, T>();
 	for (const row of rows ?? []) {
 		const id = typeof row.id === "string" ? row.id : "";
-		const why = ARCHIVE_REASONS.find((known) => known === row.why);
-		if (!id || !why) continue;
+		const value = valueOf(row);
+		if (!id || value === undefined) continue;
 		const match = /^(.*)-v\d+$/.exec(id);
 		if (match) {
-			if (!versioned.has(match[1])) versioned.set(match[1], why);
+			if (!versioned.has(match[1])) versioned.set(match[1], value);
 		} else if (!out.has(id)) {
-			out.set(id, why);
+			out.set(id, value);
 		}
 	}
-	for (const [id, why] of versioned) if (!out.has(id)) out.set(id, why);
+	for (const [id, value] of versioned) if (!out.has(id)) out.set(id, value);
 	return out;
+}
+
+/** The archive reasons a record's rows carry, keyed by entry id. */
+function archivedReasonsOf(rows: ReadonlyArray<{ id?: unknown; why?: unknown }> | undefined): Map<string, ArchiveReason> {
+	return archivedRowValuesOf(rows, (row: { why?: unknown }) => ARCHIVE_REASONS.find((known) => known === row.why));
+}
+
+/**
+ * The words a record's archived rows carry, keyed by each row's own id: what
+ * the ranking saw on a row the budget took, or which value replaced which on
+ * a `-vN` row a save superseded. A versioned id is kept as it is, not folded
+ * into its entry's id, so an updated note finds its own superseded versions
+ * and a note that left by another door never wears a version's words.
+ */
+function rankingReasonsOf(rows: ReadonlyArray<{ id?: unknown; reason?: unknown }> | undefined): Map<string, string> {
+	const out = new Map<string, string>();
+	for (const row of rows ?? []) {
+		const id = typeof row.id === "string" ? row.id : "";
+		const reason = typeof row.reason === "string" ? row.reason.trim() : "";
+		if (id && reason && !out.has(id)) out.set(id, reason);
+	}
+	return out;
+}
+
+/** The reason on the highest `-vN` row of one note: the version this save superseded, when the save said why. */
+function supersededReasonOf(id: string, reasons: ReadonlyMap<string, string> | undefined): string | undefined {
+	if (!reasons) return undefined;
+	const prefix = `${id}-v`;
+	let best: { version: number; reason: string } | undefined;
+	for (const [key, reason] of reasons) {
+		if (!key.startsWith(prefix) || !/^\d+$/.test(key.slice(prefix.length))) continue;
+		const version = Number(key.slice(prefix.length));
+		if (!best || version > best.version) best = { version, reason };
+	}
+	return best?.reason;
 }
 
 /** A note's text as the pairing compares it: the "(saved …)" stamps off, whitespace collapsed. */
@@ -1480,7 +1518,7 @@ interface IndexedEntry {
 export function diffNotesOf(
 	beforeRaw: string,
 	afterRaw: string,
-	opts: { fallbackSaved: string; archivedWhy?: ReadonlyMap<string, ArchiveReason>; archivedWhyByText?: ReadonlyMap<string, ArchiveReason> },
+	opts: { fallbackSaved: string; archivedWhy?: ReadonlyMap<string, ArchiveReason>; archivedWhyByText?: ReadonlyMap<string, ArchiveReason>; archivedReason?: ReadonlyMap<string, string> },
 ): { topics: MemoryEventTopicDiff[]; conversations: MemoryEventDiff["conversations"] } | null {
 	let docs: [MemoryDocument, MemoryDocument];
 	try {
@@ -1546,14 +1584,17 @@ export function diffNotesOf(
 		const textBefore = text(was.entry);
 		const textAfter = text(entry);
 		const reworded = comparableNoteText(textBefore) !== comparableNoteText(textAfter);
+		// A save that superseded the note said why when the two texts disagreed
+		// on a value; the words sit on the version row this save archived.
+		const reason = reworded ? supersededReasonOf(id, opts.archivedReason) : undefined;
 		if (was.topic !== topic) {
 			rowsByTopic.get(topic)!.push(
 				reworded
-					? { id, change: "updated", before: textBefore, after: textAfter, from: was.topic }
+					? { id, change: "updated", before: textBefore, after: textAfter, from: was.topic, ...(reason ? { reason } : {}) }
 					: { id, change: "moved", after: textAfter, from: was.topic },
 			);
 		} else if (reworded) {
-			rowsByTopic.get(topic)!.push({ id, change: "updated", before: textBefore, after: textAfter });
+			rowsByTopic.get(topic)!.push({ id, change: "updated", before: textBefore, after: textAfter, ...(reason ? { reason } : {}) });
 		} else if (was.entry.pinned !== entry.pinned) {
 			rowsByTopic.get(topic)!.push({ id, change: entry.pinned ? "pinned" : "unpinned", before: textBefore, after: textAfter });
 		} else if ((was.entry.status === "done") !== (entry.status === "done")) {
@@ -1565,7 +1606,8 @@ export function diffNotesOf(
 		// The reason by the note's id first; a note the pairing could not give its
 		// recorded id (a side that had none) is looked up by what it says instead.
 		const why = opts.archivedWhy?.get(id) ?? opts.archivedWhyByText?.get(comparableNoteText(entry.text));
-		rowsByTopic.get(topic)!.push({ id, change: "archived", before: text(entry), ...(why ? { why } : {}) });
+		const reason = opts.archivedReason?.get(id);
+		rowsByTopic.get(topic)!.push({ id, change: "archived", before: text(entry), ...(why ? { why } : {}), ...(reason ? { reason } : {}) });
 	}
 	const topics: MemoryEventTopicDiff[] = [];
 	for (const [section, changes] of rowsByTopic) if (changes.length) topics.push({ section, changes });
@@ -1661,7 +1703,11 @@ export function readMemoryEventDiff(id: string, kind: MemoryEventDiffKind, event
 	// why a note left: Memorize and Review keep them under `run`, a hand
 	// delete on the edit record itself. A side without ids is migrated in
 	// memory as of this record's day, the way the save itself migrated it.
-	const archivedWhy = archivedReasonsOf("run" in record ? record.run?.archived : "archived" in record ? record.archived : undefined);
+	const archivedRows = "run" in record ? record.run?.archived : "archived" in record ? record.archived : undefined;
+	const archivedWhy = archivedReasonsOf(archivedRows);
+	// The rows the budget took say what the ranking saw, and a superseded
+	// version says which value replaced which; the others carry no such words.
+	const archivedReason = rankingReasonsOf(archivedRows);
 	// The room's archive knows every note that left and why, by its text: the
 	// fallback for a note whose recorded id the pairing could not recover.
 	const archivedWhyByText = new Map<string, ArchiveReason>();
@@ -1670,7 +1716,7 @@ export function readMemoryEventDiff(id: string, kind: MemoryEventDiffKind, event
 	} catch {
 		// an unreadable archive costs the reason words, not the change view
 	}
-	const paired = diffNotesOf(beforeRaw, afterRaw, { fallbackSaved: new Date(ts).toISOString().slice(0, 10), archivedWhy, archivedWhyByText });
+	const paired = diffNotesOf(beforeRaw, afterRaw, { fallbackSaved: new Date(ts).toISOString().slice(0, 10), archivedWhy, archivedWhyByText, archivedReason });
 	// Legacy: a side that does not parse into topics. Split first, diff per
 	// section: pair the two sides by section name (after side's order wins,
 	// before-only sections appended) and keep only the sections whose text

@@ -64,12 +64,14 @@ function ReadSection({ title, items, wide }: { title: string; items: string[]; w
  */
 export function ReviewFirstReadSections({ fields, compact = false }: { fields: ReviewAssessmentFields; compact?: boolean }) {
 	const saysTheSameTwice = fields.saysTheSameTwice ?? [];
+	const disagree = fields.disagree ?? [];
 	const topicsThatLookTheSame = fields.topicsThatLookTheSame ?? [];
 	return (
 		<>
 			<ReadSection title="Could be shorter" items={fields.couldBeShorter} wide={!compact} />
 			<ReadSection title="Looks stale or contradicts itself" items={fields.staleOrContradicts} wide={!compact} />
 			{saysTheSameTwice.length > 0 && <ReadSection title="Says the same twice" items={saysTheSameTwice} wide={!compact} />}
+			{disagree.length > 0 && <ReadSection title="Disagrees with itself" items={disagree} wide={!compact} />}
 			{topicsThatLookTheSame.length > 0 && <ReadSection title="Topics that look the same" items={topicsThatLookTheSame} wide={!compact} />}
 			{fields.needsYourCall.length > 0 && <ReadSection title="Needs your call" items={fields.needsYourCall} wide={!compact} />}
 		</>
@@ -180,6 +182,9 @@ function ChangeRow({ change, busy, onEditEntry }: { change: ReviewChange; busy: 
 				</div>
 				{change.kind === "merged" && (change.mergedFrom?.length ?? 0) > 1 && (
 					<p className="review-change-note">{change.mergedFrom!.length} notes became this one.</p>
+				)}
+				{change.kind === "merged" && change.reason && (
+					<p className="review-change-note review-change-reason-line">{change.reason}</p>
 				)}
 			</div>
 		);

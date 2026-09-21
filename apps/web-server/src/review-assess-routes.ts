@@ -232,7 +232,7 @@ export function registerReviewAssessRoutes(app: FastifyInstance, deps: ReviewAss
 			const notes = readNotes(id, model, deps);
 			assertAvailable(notes.availability);
 			const request = parseDiscussionRequest(req.body ?? {});
-			const assembly = buildReviewDiscussionTurnPrompt({ ...notes.promptInput, ...request, saysTheSameTwice: notes.findings.saysTheSameTwice, topicsThatLookTheSame: notes.findings.topicsThatLookTheSame });
+			const assembly = buildReviewDiscussionTurnPrompt({ ...notes.promptInput, ...request, saysTheSameTwice: notes.findings.saysTheSameTwice, disagree: notes.findings.disagree, topicsThatLookTheSame: notes.findings.topicsThatLookTheSame });
 			refuseOversizedMaintenancePrompt({
 				agentId: id,
 				processLabel: "Review discussion",
@@ -264,7 +264,7 @@ export function registerReviewAssessRoutes(app: FastifyInstance, deps: ReviewAss
 			const notes = readNotes(id, model, deps);
 			assertAvailable(notes.availability);
 			const request = parseDiscussionRequest(req.body ?? {});
-			const assembly = buildReviewSignoffPrompt({ ...notes.promptInput, ...request, saysTheSameTwice: notes.findings.saysTheSameTwice, topicsThatLookTheSame: notes.findings.topicsThatLookTheSame });
+			const assembly = buildReviewSignoffPrompt({ ...notes.promptInput, ...request, saysTheSameTwice: notes.findings.saysTheSameTwice, disagree: notes.findings.disagree, topicsThatLookTheSame: notes.findings.topicsThatLookTheSame });
 			refuseOversizedMaintenancePrompt({
 				agentId: id,
 				processLabel: "Review discussion summary",

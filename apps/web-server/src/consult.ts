@@ -56,6 +56,15 @@ export interface ConsultPromptInput {
 	priorExchanges?: ConsultPriorExchange[];
 	l0: string;
 	l1a: string;
+	/**
+	 * The room's standing-instructions layer, already rendered (see
+	 * persistent-room-instructions.ts). Sits where the boot prompt puts it,
+	 * between the constitution and the memory. Absent → the prompt is
+	 * byte-identical to a consult of a room without instructions.
+	 */
+	instructions?: string;
+	/** With the global text in the layer: each part's size, for the refusal only. */
+	instructionsParts?: ConsultInstructionsParts;
 	l1b: string;
 	model: { provider: string; model: string; label?: string };
 	promptTokenBudget?: number;
@@ -65,6 +74,7 @@ export interface ConsultPromptInput {
 export interface ConsultPromptTelemetry {
 	l0Chars: number;
 	l1aChars: number;
+	instructionsChars?: number;
 	l1bChars: number;
 	questionChars: number;
 	promptChars: number;
@@ -78,15 +88,35 @@ export interface ConsultPromptAssembly {
 	warnings: string[];
 }
 
+/** When the global text is part of the consulted room's layer: each part's size, so the sentence can say which text to shorten. */
+export interface ConsultInstructionsParts {
+	roomEstimatedTokens: number | null;
+	globalEstimatedTokens: number | null;
+}
+
+function consultInstructionsRefusalSentence(layerEstimatedTokens: number | undefined, parts: ConsultInstructionsParts | undefined): string {
+	if (layerEstimatedTokens == null) return "";
+	const global = parts?.globalEstimatedTokens ?? null;
+	const room = parts?.roomEstimatedTokens ?? null;
+	if (global == null) {
+		return ` The consulted room's instructions are ~${layerEstimatedTokens} of those tokens: shortening them in that room's Room settings → Instructions is the lighter way under when its memory fits.`;
+	}
+	if (room == null) {
+		return ` The global instructions are ~${layerEstimatedTokens} of those tokens: shortening them in Settings → Instructions, or switching them off for that room in its Room settings → Instructions, is the lighter way under when its memory fits.`;
+	}
+	return ` The consulted room's instructions and the global instructions are ~${layerEstimatedTokens} of those tokens together (~${room} that room's, ~${global} global): shortening either (that room's Room settings → Instructions, Settings → Instructions), or switching the global instructions off for that room, is the lighter way under when its memory fits.`;
+}
+
 export class ConsultPromptOverflowError extends Error {
 	readonly statusCode = 413;
 	readonly promptEstimatedTokens: number;
 	readonly promptTokenBudget: number;
-	constructor(input: { targetAgentId: string; model: { provider: string; model: string }; promptEstimatedTokens: number; promptTokenBudget: number }) {
+	constructor(input: { targetAgentId: string; model: { provider: string; model: string }; promptEstimatedTokens: number; promptTokenBudget: number; instructionsEstimatedTokens?: number; instructionsParts?: ConsultInstructionsParts }) {
 		super(
 			`the consult prompt for ${input.targetAgentId} is too large for the locked consult model ${input.model.provider}/${input.model.model}: ` +
 				`~${input.promptEstimatedTokens} estimated tokens exceeds the ~${input.promptTokenBudget}-token prompt budget. ` +
-				`The consulted room's memory is the prompt material and cannot be elided honestly: run Review on that room to shrink its memory, or switch to a larger-context profile, then consult again. Nothing was consulted and no memory has been written.`,
+				`The consulted room's memory is the prompt material and cannot be elided honestly: run Review on that room to shrink its memory, or switch to a larger-context profile, then consult again. Nothing was consulted and no memory has been written.` +
+				consultInstructionsRefusalSentence(input.instructionsEstimatedTokens, input.instructionsParts),
 		);
 		this.promptEstimatedTokens = input.promptEstimatedTokens;
 		this.promptTokenBudget = input.promptTokenBudget;
@@ -100,7 +130,7 @@ export class ConsultPromptOverflowError extends Error {
  * consult of a room's memory. The consulted room is not activated: no session,
  * no thread, no lock, no memory write, no trace in the room.
  */
-export function consultEnvelope(input: { targetDisplayName: string; fromRoomDisplayName?: string; model: { provider: string; model: string; label?: string }; now: Date }): string {
+export function consultEnvelope(input: { targetDisplayName: string; fromRoomDisplayName?: string; model: { provider: string; model: string; label?: string }; now: Date; instructions?: boolean }): string {
 	const asker = input.fromRoomDisplayName ? `from the user working in room ${input.fromRoomDisplayName}` : "from the local user";
 	return `# Consult Envelope
 
@@ -112,7 +142,7 @@ export function consultEnvelope(input: { targetDisplayName: string; fromRoomDisp
 You are ${input.targetDisplayName}, answering a one-shot consult addressed to you ${asker}.
 
 - You are not in a live session. No conversation with your own user is happening, and none is started by this consult.
-- Answer strictly from your constitution and memory above. If your memory does not cover the question, say so plainly instead of guessing.
+- Answer strictly from your constitution${input.instructions ? ", instructions" : ""} and memory above. If your memory does not cover the question, say so plainly instead of guessing.
 - You have no tools and no workspace access.
 - Nothing you say is written to your memory. This consult leaves no trace in your room.
 - Do not claim actions, start tasks, make commitments on your user's behalf, or bring up your own open items unless the question asks about them.
@@ -165,8 +195,9 @@ export function buildConsultPrompt(input: ConsultPromptInput): ConsultPromptAsse
 		[
 			input.l0.trim(),
 			input.l1a.trim(),
+			...(input.instructions?.trim() ? [input.instructions.trim()] : []),
 			input.l1b.trim(),
-			consultEnvelope({ targetDisplayName: input.targetDisplayName, fromRoomDisplayName: input.fromRoomDisplayName, model: input.model, now }).trim(),
+			consultEnvelope({ targetDisplayName: input.targetDisplayName, fromRoomDisplayName: input.fromRoomDisplayName, model: input.model, now, ...(input.instructions?.trim() ? { instructions: true } : {}) }).trim(),
 			...(priorSection ? [priorSection] : []),
 			questionSection,
 		].join("\n\n---\n\n") + "\n";
@@ -178,6 +209,8 @@ export function buildConsultPrompt(input: ConsultPromptInput): ConsultPromptAsse
 			model: input.model,
 			promptEstimatedTokens,
 			promptTokenBudget: input.promptTokenBudget,
+			...(input.instructions?.trim() ? { instructionsEstimatedTokens: estimateTokens(input.instructions.trim()) } : {}),
+			...(input.instructionsParts ? { instructionsParts: input.instructionsParts } : {}),
 		});
 	}
 
@@ -186,6 +219,7 @@ export function buildConsultPrompt(input: ConsultPromptInput): ConsultPromptAsse
 		telemetry: {
 			l0Chars: input.l0.length,
 			l1aChars: input.l1a.length,
+			...(input.instructions?.trim() ? { instructionsChars: input.instructions.length } : {}),
 			l1bChars: input.l1b.length,
 			questionChars: question.length,
 			promptChars: prompt.length,

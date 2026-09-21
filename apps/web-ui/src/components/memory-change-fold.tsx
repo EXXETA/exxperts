@@ -50,6 +50,8 @@ interface NoteChange {
 	after?: string;
 	from?: string;
 	why?: string;
+	/** archived to make room: what the ranking saw, in a person's words; updated by a save that superseded the note: which value replaced which. */
+	reason?: string;
 }
 
 interface ChangeTopic {
@@ -133,7 +135,7 @@ function NoteRow({ row }: { row: NoteChange }) {
 			<div className="mem-diff-line del mem-diff-note-row">
 				<span className="mem-diff-mark">−</span>
 				<span className="mem-diff-text">{before || " "}</span>
-				<span className="mem-diff-label">{archivedLabel(row.why)}</span>
+				<span className="mem-diff-label">{archivedLabel(row.why, row.reason)}</span>
 			</div>
 		);
 	}
@@ -150,6 +152,12 @@ function NoteRow({ row }: { row: NoteChange }) {
 					<WordLine tokens={tokens} side="add" />
 					{row.from ? <span className="mem-diff-label">{movedLabel(row.from)}</span> : null}
 				</div>
+				{row.reason ? (
+					<div className="mem-diff-line mem-diff-note-row">
+						<span className="mem-diff-mark"> </span>
+						<span className="mem-diff-text">{row.reason}</span>
+					</div>
+				) : null}
 			</>
 		);
 	}

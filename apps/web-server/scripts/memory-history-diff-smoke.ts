@@ -11,6 +11,8 @@
 // says which still wait, and stops offering a transcript whose file is gone.
 // Fourth, the first save of a room that still carries "(saved …)" stamps and
 // no entry ids reads as the one note it added, not as every line rewritten.
+// Fifth, a note the budget pass archived says why in the ranking's own words,
+// the same words the save's record carries, and no other archived row does.
 //
 // The writers are the real ones: the checkpoint gate, a scripted Memorize run,
 // the entries store, the undo. The first half runs in-process; the second
@@ -50,13 +52,15 @@ const { approveAbsorbRun, getAbsorbRun, startAbsorbRun } = await import("../src/
 const {
 	buildPersistentAgentCheckpointTranscriptSource,
 	createPersistentAgentFromScaffoldInput,
+	createPersistentAgentInstance,
 	parseCheckpointApprovalRequest,
 	writeApprovedCheckpoint,
 	writePersistentAgentThread,
 } = await import("../src/persistent-agents.js");
+const { MEMORY_BUDGET_MIN_TOKENS, writePersistentRoomMaintenanceSettings } = await import("../src/persistent-room-maintenance-settings.js");
 const { applyUserEdit } = await import("../src/memory-entries.js");
 const { loadMemoryDocument, writeMemoryDocument } = await import("../src/memory-entries-store.js");
-const { buildRoomMemoryHistory, listMemoryConversations, readMemoryEventDiff, readMemoryNotesView, readMemorySnapshotAt } = await import("../src/memory-api.js");
+const { buildRoomMemoryHistory, diffNotesOf, listMemoryConversations, readMemoryEventDiff, readMemoryNotesView, readMemorySnapshotAt } = await import("../src/memory-api.js");
 const { undoMemorySave } = await import("../src/memory-undo.js");
 
 const MODEL = { provider: "openai-compatible", model: "gpt-5.5", label: "GPT-5.5" };
@@ -73,16 +77,21 @@ const UNDO_AT = at("09:20");
 // The second room's two writes.
 const CP3_AT = at("10:00");
 const SAVE3_AT = at("10:05");
+// The third room's two writes.
+const CP4_AT = at("11:00");
+const SAVE4_AT = at("11:05");
 
 const TITLE_1 = "Addendum signed";
 const TITLE_2 = "Reporting rhythm agreed";
 const TITLE_3 = "Invoice day settled";
+const TITLE_4 = "Warehouse lease renewed";
 const ORIGINAL_STYLE_TEXT = "- Commercial summaries go out as one page, numbers first.";
 const EDITED_TEXT = "- Commercial summaries go out as one page, numbers first and no preamble.";
 const SAVE1_NOTE = "- The signed addendum of 2026-09-11 is what the delivery window now follows, and the vendor has it on file.";
 const SAVE1_SUPERSEDED_TEXT = "- The delivery window is four weeks from the day the order is signed, as the signed addendum sets it out.";
 const SAVE2_NOTE = "- The reporting pack goes out on the first working day of the month, one page, numbers first.";
 const SAVE3_NOTE = "- Invoices go out on the first working day of the month, finance confirmed it.";
+const SAVE4_NOTE = "- The warehouse lease runs another three years from October at the rent already in the plan.";
 
 const ASSESSMENT = ["## What these sessions leave behind", "", "- One commercial fact changed and one item was finished."].join("\n");
 
@@ -168,6 +177,46 @@ function legacyMemoryFixture(agentId: string): string {
 	].join("\n");
 }
 
+/** How many supplier notes the full room carries; each is a few hundred characters, so the review target sits well over the budget floor. */
+const FULL_ROOM_NOTES = 170;
+
+/** A room's memory over the budget floor: many unpinned fact notes, none of them ever recalled, all saved months before the run. */
+function fullMemoryFixture(agentId: string): string {
+	const cities = ["Hamburg", "Lyon", "Porto", "Gdansk", "Turin", "Ghent", "Malmo"];
+	const notes: string[] = [];
+	for (let n = 1; n <= FULL_ROOM_NOTES; n += 1) {
+		const id = `m-${String(n).padStart(4, "0")}`;
+		const saved = `2026-0${2 + (n % 3)}-${String(1 + (n % 27)).padStart(2, "0")}`;
+		const city = cities[n % cities.length];
+		notes.push(entryLine(id, "fact", saved, `- Supplier ${n} ships from ${city} on a ${n % 2 ? "weekly" : "fortnightly"} cadence, invoices net ${30 + (n % 4) * 15} days, and the contact of record is the account lead named in the onboarding pack; the volume schedule for supplier ${n} was agreed in the spring review and holds until the next renewal, with a ${5 + (n % 6)} percent rebate once the quarterly volume clears the threshold in the schedule.`));
+	}
+	return [
+		"<!-- exxeta:l1b schema_version=1 -->",
+		"",
+		"## Chronos",
+		"",
+		`- Persistent agent id: ${agentId}`,
+		"- Lifecycle state: ready",
+		"- Last checkpoint: none",
+		"- Last consolidation: none",
+		"",
+		"## Deep Memory",
+		"",
+		"<!-- entries: next=300 -->",
+		"",
+		"### Suppliers",
+		"",
+		...notes,
+		"## Active Items",
+		"",
+		entryLine("m-0201", "item", "2026-09-01", "- Confirm the lease renewal terms with the landlord's agent.", "status=open"),
+		"## Recent Context",
+		"",
+		"No checkpointed sessions yet.",
+		"",
+	].join("\n");
+}
+
 function approvedEntry(title: string, body: string[]): string {
 	return [
 		`### RC-DRAFT | CLOSED | 2026-09-11 | ${title}`,
@@ -226,11 +275,14 @@ const FOLD_OPS_1 = [
 ];
 const FOLD_OPS_2 = [{ op: "add", topic: "Commercial terms", kind: "fact", text: SAVE2_NOTE }];
 const FOLD_OPS_3 = [{ op: "add", topic: "Commercial terms", kind: "fact", text: SAVE3_NOTE }];
+/** The full room's save: one add; the budget pass does the rest. */
+const FOLD_OPS_4 = [{ op: "add", topic: "Suppliers", kind: "fact", text: SAVE4_NOTE }];
 
 const scriptedGenerate: AbsorbRunGenerate = async (prompt) => {
 	if (prompt.includes(TITLE_1)) return foldReply(FOLD_OPS_1);
 	if (prompt.includes(TITLE_2)) return foldReply(FOLD_OPS_2);
 	if (prompt.includes(TITLE_3)) return foldReply(FOLD_OPS_3);
+	if (prompt.includes(TITLE_4)) return foldReply(FOLD_OPS_4);
 	return { text: "I have folded that discussion into memory for you.", usage: { input: 2400, output: 40, totalTokens: 2440 } };
 };
 
@@ -353,6 +405,7 @@ try {
 	assert(superseded && superseded.change === "updated" && superseded.section === "Commercial terms" && superseded.before === "- The delivery window is six weeks from the day the order is signed." && superseded.after === SAVE1_SUPERSEDED_TEXT && superseded.from === undefined, `the superseded note is one updated row with its old and new text, got ${JSON.stringify(superseded)}`);
 	const closed = save1Rows.find((row) => row.id === "m-0201");
 	assert(closed && closed.change === "archived" && closed.section === "Active Items" && closed.why === "done" && closed.before === "- Chase the vendor for the signed addendum." && closed.after === undefined, `the finished item is archived with the reason the record carries, got ${JSON.stringify(closed)}`);
+	assert(closed.reason === undefined, `a note that did not leave by budget carries no ranking words, got ${JSON.stringify(closed)}`);
 	assert(JSON.stringify(save1Diff.conversations) === JSON.stringify({ left: [TITLE_1], joined: [] }), `the folded conversation left the waiting list, got ${JSON.stringify(save1Diff.conversations)}`);
 	assert(save1Rows.every((row) => !String(row.before ?? "").includes("no preamble") && !String(row.after ?? "").includes("no preamble")), "the first save's diff does not contain the hand edit");
 	assert(save1Rows.every((row) => !String(row.before ?? "").includes("<!--") && !String(row.after ?? "").includes("<!--")), "no row carries a metadata comment");
@@ -396,6 +449,24 @@ try {
 	const save3Rows = rowsOf(save3Diff);
 	assert(save3Rows.length === 1 && save3Rows[0].change === "added" && save3Rows[0].section === "Commercial terms" && save3Rows[0].after === SAVE3_NOTE, `exactly one added row and no updated rows, got ${JSON.stringify(save3Rows)}`);
 	assert(JSON.stringify(save3Diff.conversations) === JSON.stringify({ left: [TITLE_3], joined: [] }), `the folded conversation left, got ${JSON.stringify(save3Diff.conversations)}`);
+
+	// 6c. A room over its budget: the save's budget pass moves notes to the
+	//     archive, and each of those rows in the diff says why in the words the
+	//     ranking used — the same words the save's record carries on disk.
+	const fullRoom = createPersistentAgentFromScaffoldInput({ displayName: "Memory History Diff Smoke Full Room", userName: "Synthetic User", preferredUserAddress: "Synthetic User" }).agent.agentId;
+	fs.writeFileSync(l1bPathOf(fullRoom), fullMemoryFixture(fullRoom), { mode: 0o600 });
+	writePersistentRoomMaintenanceSettings(fullRoom, { memoryBudgetTokens: MEMORY_BUDGET_MIN_TOKENS });
+	remember(TITLE_4, ["The landlord's agent confirmed the warehouse lease runs another three years from October."], CP4_AT, fullRoom);
+	const save4 = await memorize(SAVE4_AT, fullRoom);
+	assert(readL1b(fullRoom).includes(SAVE4_NOTE), "the full room's save adds its note");
+	const save4Diff = readMemoryEventDiff(fullRoom, "learn", save4);
+	assert(save4Diff && save4Diff.notes === true && save4Diff.afterBasis === "current", `the full room's diff speaks in notes, got ${JSON.stringify(save4Diff && { notes: save4Diff.notes, afterBasis: save4Diff.afterBasis })}`);
+	const budgetRows = rowsOf(save4Diff).filter((row) => row.change === "archived" && row.why === "budget");
+	assert(budgetRows.length >= 1, `the budget pass archived at least one note, got ${JSON.stringify(rowsOf(save4Diff).filter((row) => row.change === "archived").slice(0, 3))}`);
+	assert(budgetRows.every((row) => typeof row.reason === "string" && row.reason.trim().length > 0 && row.reason.includes("never recalled")), `every budget row carries the ranking's reason, and no seeded note was ever recalled, got ${JSON.stringify(budgetRows.slice(0, 3))}`);
+	const save4Record = JSON.parse(fs.readFileSync(createPersistentAgentInstance(fullRoom).absorbEventRecordPath(save4), "utf-8"));
+	const recordedReasons = new Map<string, string>((save4Record.run.archived as Array<{ id: string; reason?: string }>).map((row) => [row.id, row.reason ?? ""]));
+	assert(budgetRows.every((row) => recordedReasons.get(String(row.id)) === row.reason), `the diff's reason is the record's, word for word, got ${JSON.stringify(budgetRows.slice(0, 3).map((row) => ({ id: row.id, diff: row.reason, record: recordedReasons.get(String(row.id)) })))}`);
 
 	// 7. The notes view of a past moment.
 	const betweenEditAndNext = readMemoryNotesView(agentId, EDIT_AT.getTime() + 60_000);
@@ -449,6 +520,40 @@ try {
 	assert(notesNow.status === 200 && notesNow.body?.basis === "current" && notesNow.body.boundaryTs === null && Array.isArray(notesNow.body.topics) && typeof notesNow.body.content === "string", `today's notes view keeps its shape and gains topics, got ${notesNow.status}: ${JSON.stringify(notesNow.body && { basis: notesNow.body.basis, boundaryTs: notesNow.body.boundaryTs })}`);
 	const badMoment = await requestJson(`${room}/snapshot?view=notes&at=then`);
 	assert(badMoment.status === 400, `a moment that is not a number is 400, got ${badMoment.status}`);
+
+	// 10. An updated row takes its reason from the version row the save
+	//     archived: the highest `-vN` of that note among the record's archived
+	//     rows, and nothing when no versioned row carries one.
+	const pairedDoc = (window: string) => [
+		"<!-- exxeta:l1b schema_version=1 -->",
+		"",
+		"## Chronos",
+		"",
+		"- Lifecycle state: ready",
+		"",
+		"## Deep Memory",
+		"",
+		"<!-- entries: next=300 -->",
+		"",
+		"### Commercial terms",
+		"",
+		entryLine("m-0002", "fact", "2026-09-01", `- The delivery window is ${window} weeks from the day the order is signed.`),
+		"## Active Items",
+		"",
+		"## Recent Context",
+		"",
+		"",
+	].join("\n");
+	const WINDOW_REASON = "8 (saved 13 Sep) replaces 6 (saved 1 Sep); the newer date decides";
+	const versioned = diffNotesOf(pairedDoc("6"), pairedDoc("8"), { fallbackSaved: RUN_DAY, archivedReason: new Map([["m-0002-v1", "an older version's words"], ["m-0002-v2", WINDOW_REASON], ["m-0002-v10", "not a higher version: v10 is read as ten, so it wins"]]) });
+	const versionedRow = versioned && rowsOf(versioned).find((row) => row.id === "m-0002");
+	assert(versionedRow?.change === "updated" && versionedRow.reason === "not a higher version: v10 is read as ten, so it wins", `an updated row takes the reason of the note's highest version row, by number and not by text, got ${JSON.stringify(versionedRow)}`);
+	const twoVersions = diffNotesOf(pairedDoc("6"), pairedDoc("8"), { fallbackSaved: RUN_DAY, archivedReason: new Map([["m-0002-v1", "an older version's words"], ["m-0002-v2", WINDOW_REASON]]) });
+	const twoVersionsRow = twoVersions && rowsOf(twoVersions).find((row) => row.id === "m-0002");
+	assert(twoVersionsRow?.change === "updated" && twoVersionsRow.reason === WINDOW_REASON, `with -v1 and -v2 the updated row carries the -v2 reason, got ${JSON.stringify(twoVersionsRow)}`);
+	const unversioned = diffNotesOf(pairedDoc("6"), pairedDoc("8"), { fallbackSaved: RUN_DAY, archivedReason: new Map([["m-0002", "the ranking's words for a row the budget took"], ["m-0003-v1", WINDOW_REASON]]) });
+	const unversionedRow = unversioned && rowsOf(unversioned).find((row) => row.id === "m-0002");
+	assert(unversionedRow?.change === "updated" && !("reason" in unversionedRow), `without a versioned row of its own the updated row carries no reason, whatever other rows say, got ${JSON.stringify(unversionedRow)}`);
 
 	console.log("memory-history-diff smoke: PASS");
 } catch (error) {

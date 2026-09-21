@@ -295,11 +295,12 @@ try {
 }
 assert(threw, "applying ops the validator never saw must throw, not half-apply");
 
-// --- 6b. A tidy never reorders the budget --------------------------------------
-// The budget pass archives the least recently touched note first. A tidy that
-// stamped the notes it reworded would send the notes it left alone out of
+// --- 6b. A tidy never stamps a note as touched --------------------------------
+// The budget pass ranks by a score in which a recent touch keeps a note. A tidy
+// that stamped the notes it reworded would send the notes it left alone out of
 // memory ahead of them — the wrong way round: the tidy just judged the reworded
-// ones worth keeping and said nothing about the rest.
+// ones worth keeping and said nothing about the rest. (A shortened note does
+// score a little higher for its size; that is the size term, not a stamp.)
 
 function budgetFixture(): MemoryDocument {
 	const doc = fixture();
@@ -318,7 +319,7 @@ function budgetFixture(): MemoryDocument {
 }
 const tidiedOldest = applyReviewOps(budgetFixture(), [{ op: "update", id: "m-0031", text: "- Nordwind renews annually; legal signs before June." }], { savedDate: "2026-09-14" });
 const leavingOrder = demoteToBudget(tidiedOldest.doc, 0, { today: "2026-09-14" }).demoted.map((e) => e.id);
-assert(leavingOrder.join("|") === "m-0031|m-0032|m-0034", `the oldest note, shortened by the tidy, still leaves first, got ${JSON.stringify(leavingOrder)}`);
+assert(leavingOrder[leavingOrder.length - 1] === "m-0034" && leavingOrder.indexOf("m-0031") < leavingOrder.indexOf("m-0034"), `the note touched this year still leaves last, and the oldest note, shortened by the tidy, still leaves before it, got ${JSON.stringify(leavingOrder)}`);
 // Red-without: stamp the shortened note the way a fold's update is stamped, and
 // the ranking inverts — the note the tidy just kept would be the last to go.
 const stampedDoc = tidiedOldest.doc;
@@ -465,5 +466,82 @@ assert(FOLD_DOC.topics.some((topic) => topic.title === "Nordwind integrations") 
 let foldThrew = false;
 try { applyReviewOps(foldFixture(), [{ op: "merge_topics", from: "No such topic", into: "Nordwind integration" }], { savedDate: "2026-09-14" }); } catch (error) { foldThrew = /not validated/.test((error as Error).message); }
 assert(foldThrew, "a fold the validator never saw throws rather than half-applying");
+
+// --- 10. Notes that disagree ------------------------------------------------------
+// Two notes that share their words but not a value are one point with two
+// values, never twins. The validator refuses an archive-as-duplicate of
+// either member, and a merge of the two whose text keeps the older value
+// while the dates decide; the applier says on the merged row, and on the
+// archive row of the member that left, which value replaced which and why.
+
+const OLDER_TEXT = "- The Nordwind maintenance contract renews automatically on 1 June.";
+const NEWER_TEXT = "- The Nordwind maintenance contract renews automatically on 1 July.";
+/** The fixture with the disagreeing pair under a topic of its own, the older note first. */
+function conflictFixture(): MemoryDocument {
+	const doc = fixture();
+	const active = doc.topics.pop()!;
+	doc.topics.push(
+		{ section: "Deep Memory", title: "Maintenance renewals", heading: "### Maintenance renewals", intro: "", entries: [entry("m-0081", "fact", OLDER_TEXT, { saved: "2026-06-02" }), entry("m-0082", "fact", NEWER_TEXT, { saved: "2026-09-14" })] },
+		active,
+	);
+	return doc;
+}
+const CONFLICT_DOC = conflictFixture();
+const CONFLICT_NOTES = reviewGroupNotes(CONFLICT_DOC.topics.map(reviewGroupTopic));
+const DECIDED = { ids: ["m-0081", "m-0082"] as [string, string], newer: "b" as const, texts: [OLDER_TEXT, NEWER_TEXT] as [string, string], dates: ["2026-06-02", "2026-09-14"] as [string, string] };
+const UNDECIDED = { ...DECIDED, newer: null, dates: ["2026-09-14", "2026-09-14"] as [string, string] };
+const judge = (ops: ReviewOp[], pair: typeof DECIDED | typeof UNDECIDED = DECIDED, depth: "wording" | "tidy" = "tidy") => validateReviewOps(ops, CONFLICT_NOTES, depth, undefined, { conflictNotes: [pair], today: "2026-09-14" });
+
+// The archive: neither member is a duplicate of the other.
+const ARCHIVE_REFUSAL = `m-0081 and m-0082 disagree, they are not twins; merge them keeping the newer text, or leave both`;
+assert(judge([{ op: "archive", id: "m-0081", why: "duplicate" }]).join("|") === `op 1 (archive): ${ARCHIVE_REFUSAL}`, `archiving the older member as a duplicate is refused in the words the spec fixed, got ${JSON.stringify(judge([{ op: "archive", id: "m-0081", why: "duplicate" }]))}`);
+assert(judge([{ op: "archive", id: "m-0082", why: "duplicate" }]).join("|") === `op 1 (archive): ${ARCHIVE_REFUSAL}`, "archiving the newer member as a duplicate is refused in the same words, the ids in document order");
+assert(judge([{ op: "archive", id: "m-0081", why: "stale" }]).length === 0, "archiving a member as stale is the model's own call and passes");
+assert(judge([{ op: "archive", id: "m-0032", why: "duplicate" }]).length === 0, "a note outside the pair is archived as a duplicate as before");
+
+// The merge: the newer value stands when the dates decide.
+const MERGE_REFUSAL = `op 1 (merge): the merged text keeps 1 June, but m-0082 (saved 14 Sep) is newer; keep 1 July or say why in the narrative`;
+assert(judge([{ op: "merge", ids: ["m-0082", "m-0081"], text: OLDER_TEXT }]).join("|") === MERGE_REFUSAL, `a merge whose text keeps the older value is refused in the words the spec fixed, got ${JSON.stringify(judge([{ op: "merge", ids: ["m-0082", "m-0081"], text: OLDER_TEXT }]))}`);
+assert(judge([{ op: "merge", ids: ["m-0081", "m-0082"], text: "- Nordwind maintenance renews automatically on 1 June." }]).join("|") === MERGE_REFUSAL, "the refusal holds whichever member survives and however the words are shortened: the value is what is judged");
+assert(judge([{ op: "merge", ids: ["m-0082", "m-0081"], text: NEWER_TEXT }]).length === 0, "a merge keeping the newer value passes");
+assert(judge([{ op: "merge", ids: ["m-0081", "m-0082"], text: "- The Nordwind maintenance contract renewed on 1 June and renews on 1 July." }]).length === 0, "a merge that carries both values keeps the newer one and passes");
+assert(judge([{ op: "merge", ids: ["m-0082", "m-0081"], text: OLDER_TEXT }], UNDECIDED).length === 0 && judge([{ op: "merge", ids: ["m-0082", "m-0081"], text: NEWER_TEXT }], UNDECIDED).length === 0, "with equal dates nothing decides, and a merge keeping either value passes");
+assert(judge([{ op: "merge", ids: ["m-0082", "m-0081"], text: OLDER_TEXT }], DECIDED, "wording").join("|") === MERGE_REFUSAL, "at depth wording the merge is open and the same rule holds");
+assert(judge([{ op: "merge", ids: ["m-0082", "m-0032"], text: "- Invoices go out on the first working day; the contract renews on 1 July." }]).length === 0, "a merge that joins one member with a note outside the pair is not judged by the pair");
+assert(validateReviewOps([{ op: "archive", id: "m-0081", why: "duplicate" }], CONFLICT_NOTES, "tidy").length === 0, "a caller that hands the validator no pairs gets the validator it had");
+
+// The prompt: one line per pair with both days and both first lines, at either depth, and the rule that every pair is dealt with.
+const CONFLICT_LINE = `m-0081 (saved 2 Jun) says "The Nordwind maintenance contract renews automatically on 1 June."; m-0082 (saved 14 Sep) says "The Nordwind maintenance contract renews automatically on 1 July.": the newer date decides; merge them keeping the newer text, or say in the narrative why both stay`;
+const CONFLICT_RULE = `Every pair listed under "Notes That Disagree" is dealt with: merge them keeping the newer text, or say in the narrative why both stay.`;
+const conflictPrompt = { conflictNotes: [{ ids: ["m-0081", "m-0082"] as [string, string], line: CONFLICT_LINE }] };
+const disagreeing = buildReviewGroupPrompt({ ...base, notes: CONFLICT_NOTES, ...findings, ...conflictPrompt, depth: "tidy" });
+assert(disagreeing.prompt.includes(`## Material: Notes That Disagree\n\n- ${CONFLICT_LINE}`), "at depth tidy a disagreeing pair is listed as one line, in the words the run builds");
+assert(disagreeing.prompt.includes(`Every pair listed under "Notes That Say The Same Twice" is dealt with: merge them, or archive one as duplicate, or say in the narrative why both stay. ${CONFLICT_RULE}`), "the task asks for every disagreeing pair to be dealt with, right after the twins' rule");
+assert(disagreeing.prompt.indexOf("## Material: Notes That Say The Same Twice") < disagreeing.prompt.indexOf("## Material: Notes That Disagree") && disagreeing.prompt.indexOf("## Material: Notes That Disagree") < disagreeing.prompt.indexOf("## Material: Topics That Look The Same"), "the disagreeing pairs sit after the twins and before the look-alike topics");
+const disagreeingWording = buildReviewGroupPrompt({ ...base, notes: CONFLICT_NOTES, ...conflictPrompt, depth: "wording" });
+assert(disagreeingWording.prompt.includes(`## Material: Notes That Disagree\n\n- ${CONFLICT_LINE}`) && disagreeingWording.prompt.includes(CONFLICT_RULE), "at depth wording the pair is listed with the same line and the same rule: a merge is open at either depth");
+assert(!disagreeingWording.prompt.includes("Notes That Say The Same Twice"), "the disagree rule stands on its own when there are no twins");
+assert(!withFindings.prompt.includes("Notes That Disagree"), "a group with no disagreeing pair carries neither the section nor the rule");
+
+// Applying: the merged row and the archive row of the member that left say why.
+const REASON = `1 July (saved 14 Sep) replaces 1 June (saved 2 Jun); the newer date decides`;
+const resolved = applyReviewOps(conflictFixture(), [{ op: "merge", ids: ["m-0082", "m-0081"], text: NEWER_TEXT }], { savedDate: "2026-09-14", conflictNotes: [DECIDED] });
+const resolvedRow = resolved.changes.find((change) => change.kind === "merged")!;
+assert(resolvedRow.id === "m-0082" && resolvedRow.reason === REASON && JSON.stringify(resolvedRow.conflictWith) === JSON.stringify({ id: "m-0081", topic: "Maintenance renewals" }), `a merge that resolves a disagreeing pair carries the reason and names the member that left with its topic, got ${JSON.stringify(resolvedRow)}`);
+const resolvedById = new Map(resolved.archive.map((row) => [row.entry.id, row]));
+assert(resolvedById.get("m-0081")?.why === "superseded" && resolvedById.get("m-0081")?.reason === REASON, `the member that left is in the archive as superseded with the same reason, got ${JSON.stringify(resolvedById.get("m-0081"))}`);
+assert(resolvedById.get("m-0082-v1")?.why === "superseded" && resolvedById.get("m-0082-v1")?.reason === undefined, "the survivor's previous words carry no reason: they lost to nothing");
+const olderSurvives = applyReviewOps(conflictFixture(), [{ op: "merge", ids: ["m-0081", "m-0082"], text: NEWER_TEXT }], { savedDate: "2026-09-14", conflictNotes: [DECIDED] });
+assert(olderSurvives.changes[0].id === "m-0081" && olderSurvives.changes[0].reason === REASON && olderSurvives.changes[0].conflictWith?.id === "m-0082" && olderSurvives.archive.find((row) => row.entry.id === "m-0082")?.reason === REASON, `when the older note survives with the newer text the reason is the same and the newer member is the one that left, got ${JSON.stringify(olderSurvives.changes[0])}`);
+// With equal dates the merged text itself says which value stands.
+const undecidedNewer = applyReviewOps(conflictFixture(), [{ op: "merge", ids: ["m-0082", "m-0081"], text: NEWER_TEXT }], { savedDate: "2026-09-14", conflictNotes: [UNDECIDED] });
+assert(undecidedNewer.changes[0].reason === `1 July replaces 1 June (both saved 14 Sep)`, `an undecided pair resolved to the second value says so with both days as one, got ${JSON.stringify(undecidedNewer.changes[0].reason)}`);
+const undecidedOlder = applyReviewOps(conflictFixture(), [{ op: "merge", ids: ["m-0081", "m-0082"], text: OLDER_TEXT }], { savedDate: "2026-09-14", conflictNotes: [UNDECIDED] });
+assert(undecidedOlder.changes[0].reason === `1 June replaces 1 July (both saved 14 Sep)`, `an undecided pair resolved to the first value says that, not the other way round, got ${JSON.stringify(undecidedOlder.changes[0].reason)}`);
+// A merge of notes that are no pair says nothing more, and neither does a caller that hands over no pairs.
+const plainMerge = applyReviewOps(conflictFixture(), [{ op: "merge", ids: ["m-0041", "m-0032"], text: "- Summaries go out as one page, numbers first; invoices on the first working day." }], { savedDate: "2026-09-14", conflictNotes: [DECIDED] });
+assert(plainMerge.changes[0].reason === undefined && plainMerge.changes[0].conflictWith === undefined && plainMerge.archive.every((row) => row.reason === undefined), "a merge outside the pair carries no reason and no partner");
+const unaware = applyReviewOps(conflictFixture(), [{ op: "merge", ids: ["m-0082", "m-0081"], text: NEWER_TEXT }], { savedDate: "2026-09-14" });
+assert(unaware.changes[0].reason === undefined && unaware.archive.every((row) => row.reason === undefined), "without the pairs the applier is the applier it was");
 
 console.log("review-ops-smoke: OK");

@@ -25,7 +25,7 @@ function entry(overrides: Partial<EntryCard> = {}): EntryCard {
 
 /** One row of the stable archive list: leaving, not kept, not a replacement, unless said otherwise. */
 function row(overrides: Partial<ArchiveRow> = {}): ArchiveRow {
-	return { ...entry(), leaving: true, kept: false, instead: false, phase: "after", rank: 0, ...overrides };
+	return { ...entry(), leaving: true, kept: false, instead: false, phase: "after", rank: 0, reason: "", ...overrides };
 }
 
 /** The demotion block the way the server sends it: the counts come from the rows, never from the browser. */
@@ -35,6 +35,7 @@ function demotion(rows: ArchiveRow[], overrides: Partial<Omit<RunDemotion, "entr
 		keepIds: rows.filter((candidate) => candidate.kept).map((candidate) => candidate.id),
 		keepTopics: [],
 		overageTokens: 0,
+		protectedOpenItems: 0,
 		counts: {
 			leaving: rows.filter((candidate) => candidate.leaving).length,
 			kept: rows.filter((candidate) => candidate.kept).length,

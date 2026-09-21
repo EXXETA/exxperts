@@ -23,6 +23,7 @@ import { WhatsNewDialog } from "./components/whats-new-dialog";
 import { useRemoteClientContext } from "./remote-client-context";
 import { RemoteAccessPage } from "./components/remote-access-page";
 import { StateProfileSection } from "./components/state-profile-section";
+import { GlobalInstructionsSection } from "./components/GlobalInstructionsSection";
 import { ConnectorsPage } from "./components/ConnectorsPage";
 import { WebSearchSettingsSection } from "./components/web-search-settings-section";
 import { SkillsPage } from "./components/SkillsPage";
@@ -3072,7 +3073,15 @@ export function App() {
 	// Settings item) starts on the section list, a targeted open goes straight
 	// to its section.
 	const [settingsOverlay, setSettingsOverlay] = useState<{ section: SettingsSection; mobileNav: boolean } | null>(null);
+	// Settings → Instructions holds a free-text draft and the overlay renders
+	// only the active section, so every way out of that section (close,
+	// another section, a fresh open over it) asks once before the draft goes,
+	// the way the room modal asks for the room's own text.
+	const globalInstructionsDirtyRef = useRef(false);
+	const handleGlobalInstructionsDirtyChange = useCallback((dirty: boolean) => { globalInstructionsDirtyRef.current = dirty; }, []);
+	const confirmLeavingGlobalInstructions = (verb: "Close" | "Leave"): boolean => !globalInstructionsDirtyRef.current || window.confirm(`The global instructions have unsaved changes. ${verb} without saving them?`);
 	const openSettings = (section?: SettingsSection): void => {
+		if (!(settingsOverlay && section === settingsOverlay.section) && !confirmLeavingGlobalInstructions("Leave")) return;
 		setSettingsOverlay(section ? { section, mobileNav: false } : { section: "ai-setup", mobileNav: true });
 		// Opening settings re-asks for sign-in and profile state, so the pane
 		// never needs a refresh control of its own: it is simply current when
@@ -8367,8 +8376,8 @@ export function App() {
 			key={settingsOverlay.mobileNav ? "nav" : "section"}
 			active={settingsOverlay.section}
 			initialMobileNav={settingsOverlay.mobileNav}
-			onSelect={(section) => setSettingsOverlay({ section, mobileNav: false })}
-			onClose={() => setSettingsOverlay(null)}
+			onSelect={(section) => { if (section === settingsOverlay.section || confirmLeavingGlobalInstructions("Leave")) setSettingsOverlay({ section, mobileNav: false }); }}
+			onClose={() => { if (confirmLeavingGlobalInstructions("Close")) setSettingsOverlay(null); }}
 			sections={[
 				{
 					id: "ai-setup",
@@ -8389,6 +8398,16 @@ export function App() {
 					),
 				},
 				{
+					id: "instructions",
+					label: "Instructions",
+					title: "Guidance every room follows before its own instructions",
+					content: (
+						<div className="landing ai-setup-page">
+							<GlobalInstructionsSection onDirtyChange={handleGlobalInstructionsDirtyChange} />
+						</div>
+					),
+				},
+				{
 					id: "connectors",
 					label: "Connectors",
 					title: "External tools your rooms can reach",
@@ -8398,7 +8417,7 @@ export function App() {
 						</div>
 					),
 				},
-				{ id: "skills", label: "Skills", title: "Reusable instructions your rooms can follow", content: <SkillsPage /> },
+				{ id: "skills", label: "Skills", title: "Reusable know-how your rooms can pick up", content: <SkillsPage /> },
 				...(remoteClient ? [] : [{
 					id: "remote" as const,
 					label: "Remote access",

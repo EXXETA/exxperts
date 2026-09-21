@@ -2,6 +2,42 @@
 
 User-visible changes per release. Historical private/internal development notes are not part of this public-facing changelog.
 
+## 0.13.0
+
+- Memory: Your room can now find a detail you mentioned once, even months ago. It looks through its
+  notes, its archive and the conversations you had it Memorize, and it finds things however they
+  were phrased: different forms of a word, and dates and numbers written in different ways, lead to
+  the same result. In a public benchmark of 50 questions about long histories, a room answered as
+  many correctly as the same model with the entire history pasted in (43 against 41, a tie at this
+  size), using about a fifth of the tokens per question. Method, costs and limits are in
+  docs/memory.md.
+- Rooms: You can now give a room standing instructions that it follows in every conversation. How to
+  answer, what to prefer, what to avoid. Write them in Room settings → Instructions. A change
+  applies from the room's next message, also in a conversation that is already open and in scheduled
+  runs. Where a note in memory disagrees with your instructions about how to work, the instructions
+  apply; memory still decides what is true.
+- Rooms: You can also write instructions once and have all your rooms follow them. Write them in
+  Settings → Instructions. Each room can switch them off, and where the two disagree, the room's own
+  instructions win. Nothing changes for any room until you write them.
+- Memory: Rooms no longer say things like "let me check my memory" or "I found this in my archive"
+  before they answer. They just tell you what they know, and say plainly when they do not know. If
+  you ask where something comes from, they tell you which conversation or note, and its date.
+- Memorize: When a room's memory is full, the notes it actually uses stay, and the ones it never
+  needed leave first. What moves to the archive is chosen by what a note is worth: its kind, whether
+  the room ever looked it up, how recently it was touched, and its size. Open items never leave, and
+  every proposed move says why in one sentence.
+- Memory: When you tell a room that a date or a number has changed, its memory now keeps the new
+  value. Before, a note that differed only in a date or a number could be mistaken for one the room
+  already had, and the old value stayed. Memorize and Review now show which value replaced which and
+  why: "1 July (saved 14 Sep) replaces 1 June (saved 2 Jun); the newer date decides".
+- Memory: Your existing rooms get these improvements the next time you open them. Nothing a room has
+  learned is touched, and its previous setup is kept beside the change. Working-style notes written
+  in German are now recognised as well as English ones when an older memory is brought over.
+
+## 0.12.2 (2026-09-16)
+
+- Memory: The Memory tab and memory reads no longer stall on a room whose memory file carries a long run of blank lines.
+
 ## 0.12.1 (2026-09-15)
 
 - Memorize: A save is no longer refused when you remembered a conversation while the card was open. The

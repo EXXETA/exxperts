@@ -4,6 +4,7 @@ import { renamePersistentRoom } from "../persistent-room-management-api";
 import { RoomSessionSection } from "./RoomSessionSection";
 import { RoomWorkspaceSection } from "./RoomWorkspaceSection";
 import { RoomMaintenanceSection } from "./RoomMaintenanceSection";
+import { RoomInstructionsSection } from "./RoomInstructionsSection";
 import { RoomSkillsSection } from "./RoomSkillsSection";
 import { RoomConnectorsSection } from "./RoomConnectorsSection";
 import { RoomScheduledTasksSection } from "./RoomScheduledTasksSection";
@@ -14,11 +15,12 @@ function roomStatusLabel(status: PersistentAgentStatus["status"]): string {
 	return status === "needs_absorb" ? "ready to memorize" : status;
 }
 
-export type SettingsPane = "workspace" | "memory" | "skills" | "connectors" | "schedules" | "session" | "danger";
+export type SettingsPane = "workspace" | "memory" | "instructions" | "skills" | "connectors" | "schedules" | "session" | "danger";
 
 const PANES: { id: SettingsPane; label: string }[] = [
 	{ id: "workspace", label: "Workspace" },
 	{ id: "memory", label: "Memory" },
+	{ id: "instructions", label: "Instructions" },
 	{ id: "skills", label: "Skills" },
 	{ id: "connectors", label: "Connectors" },
 	{ id: "schedules", label: "Scheduled tasks" },
@@ -55,6 +57,16 @@ function highlightMention(text: string, name: string): ReactNode {
 export function RoomSettingsModal({ status, onClose, onArchive, onPurge, onRefresh, onMementoApplied, onMementoForget, onOpenSkillsLibrary, initialPane }: { status: PersistentAgentStatus; onClose: () => void; onArchive: (agentId: PersistentAgentId, confirmation: string) => Promise<PersistentAgentArchiveResponse>; onPurge: (agentId: PersistentAgentId, confirmation: string) => Promise<PersistentAgentPurgeResponse>; onRefresh: () => void; onMementoApplied?: () => void; onMementoForget?: () => void; onOpenSkillsLibrary?: () => void; initialPane?: SettingsPane }) {
 	const workspaceDirtyRef = useRef(false);
 	const handleWorkspaceDirtyChange = useCallback((dirty: boolean) => { workspaceDirtyRef.current = dirty; }, []);
+	const instructionsDirtyRef = useRef(false);
+	const handleInstructionsDirtyChange = useCallback((dirty: boolean) => { instructionsDirtyRef.current = dirty; }, []);
+	// The one question before closing over an unsaved draft, naming the pane
+	// that holds it; each pane reports its own flag, this reads them all.
+	function confirmLeavingUnsaved(): boolean {
+		const unsaved = [workspaceDirtyRef.current ? "The workspace section" : null, instructionsDirtyRef.current ? "The instructions" : null].filter((label): label is string => label !== null);
+		if (unsaved.length === 0) return true;
+		const subject = unsaved.length === 1 ? unsaved[0] : `${unsaved[0]} and ${unsaved[1].toLowerCase()}`;
+		return window.confirm(`${subject} ${unsaved.length === 1 && unsaved[0] === "The workspace section" ? "has" : "have"} unsaved changes. Close without saving them?`);
+	}
 	// Callers that open the modal at a particular pane (the Memory tab's link
 	// into this room's memory) say so once; the nav owns it from then on.
 	const [pane, setPane] = useState<SettingsPane>(initialPane ?? "workspace");
@@ -129,7 +141,7 @@ export function RoomSettingsModal({ status, onClose, onArchive, onPurge, onRefre
 			else cancelNameEdit();
 			return;
 		}
-		if (workspaceDirtyRef.current && !window.confirm("The workspace section has unsaved changes. Close without saving them?")) return;
+		if (!confirmLeavingUnsaved()) return;
 		onClose();
 	}
 	useEscapeKey(requestClose);
@@ -137,7 +149,7 @@ export function RoomSettingsModal({ status, onClose, onArchive, onPurge, onRefre
 	// unsaved-workspace gate as any other close: the modal owns the closing,
 	// the parent callback only navigates afterwards.
 	function openSkillsLibraryThroughClose(): void {
-		if (workspaceDirtyRef.current && !window.confirm("The workspace section has unsaved changes. Close without saving them?")) return;
+		if (!confirmLeavingUnsaved()) return;
 		onClose();
 		onOpenSkillsLibrary?.();
 	}
@@ -226,6 +238,9 @@ export function RoomSettingsModal({ status, onClose, onArchive, onPurge, onRefre
 						</section>
 						<section className="room-settings-section" hidden={pane !== "memory"}>
 							<RoomMaintenanceSection status={status} />
+						</section>
+						<section className="room-settings-section" hidden={pane !== "instructions"}>
+							<RoomInstructionsSection status={status} onDirtyChange={handleInstructionsDirtyChange} />
 						</section>
 						<section className="room-settings-section" hidden={pane !== "skills"}>
 							<RoomSkillsSection status={status} onOpenSkillsLibrary={onOpenSkillsLibrary ? openSkillsLibraryThroughClose : undefined} />

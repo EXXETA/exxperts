@@ -19,7 +19,9 @@
 // provider's own words stay in the room's diagnostics. The later rooms pin the
 // 0.12.1 fixes: a conversation folded late is weighed by its date, a Remember
 // while the update is open does not stale the save, and an archived version id
-// is unique across runs.
+// is unique across runs. The rebase room also pins what the record says about
+// the entries it folded or dropped: which Remember wrote each and which
+// conversation it was made from, and nothing for an entry written by hand.
 //
 // Offline: no server, no provider, no network, no port.
 
@@ -70,6 +72,7 @@ setAbsorbFoldRetryPauseForTests(0);
 const { beginPersistentAgentTurn, buildPersistentAgentCheckpointTranscriptSource, createPersistentAgentFromScaffoldInput, createPersistentAgentPiSessionJsonlThreadRuntime, finishPersistentAgentTurn, parseCheckpointApprovalRequest, reviewTargetEstimatedTokensFromL1b, writeApprovedCheckpoint, writePersistentAgentThread } = await import("../src/persistent-agents.js");
 const { IsolatedPersistentAgentWorkerTurnError } = await import("../src/persistent-agent-worker-runtime.js");
 const { appendArchive, readArchive } = await import("../src/memory-entries-store.js");
+const { readMemoryEventDiff } = await import("../src/memory-api.js");
 const { undoMemorySave } = await import("../src/memory-undo.js");
 const { extractRecentContextForAbsorb, recentContextSessions } = await import("../src/absorb-consolidation.js");
 const { readPersistentRoomMaintenanceSettings, writePersistentRoomMaintenanceSettings } = await import("../src/persistent-room-maintenance-settings.js");
@@ -193,12 +196,16 @@ function memoryFixture(input: { agentId: string; fillerCount: number; markedEntr
 	const activeItems: FixtureEntry[] = [];
 
 	if (input.markedEntries) {
+		// The oldest AND the largest of the fixture: past a year every note is
+		// simply old to the ranking, and among notes worth the same the larger
+		// leaves first, so its size is what puts it at the front.
+		const detail = "Detail of the oldest arrangement, written out past the length of every filler, so that its size and not only its age puts it first. ";
 		commercial.push({
 			id: entryId(1),
 			kind: "fact",
 			saved: "2020-01-01",
 			refs: 0,
-			text: `- ${DEMOTED_FIRST} The oldest arrangement of all, kept only until the budget needs the room, which is what makes it the first entry any budget pass takes.`,
+			text: `- ${DEMOTED_FIRST} The oldest arrangement of all, kept only until the budget needs the room, which is what makes it the first entry any budget pass takes. ${detail.repeat(7)}`.trimEnd(),
 		});
 	}
 	for (let n = 2; n <= input.fillerCount + 1; n++) {
@@ -1339,10 +1346,37 @@ try {
 	assert(editedK !== fs.readFileSync(roomK.l1bPath, "utf-8"), "the hand edit changes an entry");
 	fs.writeFileSync(roomK.l1bPath, editedK);
 	expectThrows(() => approveAbsorbRun(roomK.agentId, startedK2.runId, APPROVED_AT), /stale/i, "approving over an entry edited by hand");
-	rememberMeanwhile(roomK.agentId, "FOLD-REMEMBERED-AGAIN", new Date(`${RUN_DAY}T09:07:00.000Z`));
+	const rememberedAgainK = rememberMeanwhile(roomK.agentId, "FOLD-REMEMBERED-AGAIN", new Date(`${RUN_DAY}T09:07:00.000Z`));
 	expectThrows(() => approveAbsorbRun(roomK.agentId, startedK2.runId, APPROVED_AT), /stale/i, "approving over an entry edited by hand, with a Remember on top");
 	assert(getAbsorbRun(roomK.agentId, startedK2.runId).state === "ready" && fs.readdirSync(path.join(root, roomK.agentId, "events", "absorb")).length === 1, "a refused approval writes nothing and leaves the run ready");
 	cancelAbsorbRun(roomK.agentId, startedK2.runId, new Date(`${RUN_DAY}T09:08:00.000Z`));
+	resetAbsorbRunsForTests();
+
+	// --- 33b. The record names the conversation of every entry it folded or dropped ---
+	// The room now holds one entry written by hand and two the product's own
+	// Remember wrote. A Recent Context id is handed back to a later conversation
+	// once a save empties the section, so the record carries what the entry's
+	// own rc_metadata line says: which Remember wrote it and which conversation
+	// it was made from. The search index reads these instead of guessing from
+	// timestamps. An entry written by hand names nothing, and its row says nothing.
+	const scriptsK3: Record<string, Script> = {
+		"RC-0001": scriptsK["RC-0001"],
+		"RC-0002": scriptsK["RC-0002"],
+		"RC-0003": () => reply("Nothing new here.", [{ op: "drop", reason: "Memory already holds what this conversation went over." }]),
+	};
+	const startedK3 = startAbsorbRun({ agentId: roomK.agentId, assessmentMarkdown: ASSESSMENT, model: MODEL, generate: scriptedGenerate(scriptsK3, []), now: RUN_CLOCK });
+	const readyK3 = await settle(roomK.agentId, startedK3.runId, "the eleventh room's third run");
+	assert(readyK3.state === "ready" && sessionView(readyK3, "RC-0001").outcome === "folded" && sessionView(readyK3, "RC-0002").outcome === "folded" && sessionView(readyK3, "RC-0003").outcome === "dropped", `the third run folds two conversations and drops the last, got ${JSON.stringify(readyK3.sessions.map((session) => [session.id, session.outcome, session.reason]))}`);
+	const approvalK3 = approveAbsorbRun(roomK.agentId, startedK3.runId, new Date(`${RUN_DAY}T09:09:00.000Z`));
+	const recordK3 = JSON.parse(fs.readFileSync(path.join(root, roomK.agentId, "events", "absorb", `${approvalK3.absorbId}.json`), "utf-8"));
+	const rowsK3 = new Map((recordK3.run.sessions as Array<{ id: string; outcome: string; conversationId?: string; checkpointId?: string }>).map((row) => [row.id, row]));
+	for (const [id, remembered, outcome] of [["RC-0002", rememberedK, "folded"], ["RC-0003", rememberedAgainK, "dropped"]] as const) {
+		const row = rowsK3.get(id);
+		assert(row?.outcome === outcome && row.conversationId === remembered.conversationId && row.checkpointId === remembered.checkpointId, `the ${outcome} row ${id} names the conversation its Remember was made from (${remembered.conversationId}) and the checkpoint event that wrote it (${remembered.checkpointId}), got ${JSON.stringify(row)}`);
+		assert(fs.existsSync(path.join(root, roomK.agentId, "events", "checkpoint", `${row.checkpointId}.json`)), `the checkpoint the row names is a record on disk, and ${row.checkpointId} is not`);
+	}
+	const handWrittenRow = rowsK3.get("RC-0001");
+	assert(handWrittenRow?.outcome === "folded" && !("conversationId" in handWrittenRow) && !("checkpointId" in handWrittenRow), `an entry written by hand carries no rc_metadata line, so its row names nothing and holds no empty keys, got ${JSON.stringify(handWrittenRow)}`);
 	resetAbsorbRunsForTests();
 
 	// =====================================================================
@@ -1375,7 +1409,52 @@ try {
 	assert(archiveAfterUndoL.length === 1 && archiveAfterUndoL[0].id === `${entryId(102)}-v1` && archiveAfterUndoL[0].text.includes(OLDER_VERSION), `undo takes back exactly the row this save appended and leaves the earlier run's, got ${JSON.stringify(archiveAfterUndoL.map((entry) => entry.id))}`);
 	resetAbsorbRunsForTests();
 
-	// --- 35. The propose body's limitRaisedFrom: a whole number a room may hold, or nothing ---
+	// =====================================================================
+	// Room thirteen: a supersede whose texts disagree on a value says why.
+	// =====================================================================
+	// The old text says 6 weeks and the new one 8: not a rewording but a
+	// changed value, and the newer day decides. The reason rides on the card's
+	// change row, on the version row the record archives, and on History's
+	// updated row; a supersede that only rewords carries none anywhere.
+	const sessionsM = [fixtureSession("RC-0001", "2026-09-12", "The window moved", "The delivery window was changed.", ["The delivery window is now 8 weeks from signature."])];
+	const roomM = createRoom("Absorb Run Conflict Reason Smoke Room", (agentId) => memoryFixture({ agentId, fillerCount: 6, markedEntries: true, sessions: sessionsM }).replace("six weeks from the day the order is signed", "6 weeks from the day the order is signed"));
+	assert(fs.readFileSync(roomM.l1bPath, "utf-8").includes(`${SUPERSEDE_TARGET} The delivery window is 6 weeks`), "the thirteenth room's fixture writes the window as a number");
+	const WINDOW_8 = `- ${SUPERSEDE_TARGET} The delivery window is 8 weeks from the day the order is signed.`;
+	const REWORDED = `- ${UPDATE_TARGET} Commercial summaries always go out as one page, numbers first.`;
+	const WINDOW_REASON = "8 (saved 12 Sep) replaces 6 (saved 11 Sep); the newer date decides";
+	const scriptsM: Record<string, Script> = {
+		"RC-0001": ({ areas }) => reply("The window moved, and the summaries rule is said again.", [
+			{ op: "supersede", id: addressOf(areas, SUPERSEDE_TARGET), text: WINDOW_8 },
+			{ op: "supersede", id: addressOf(areas, UPDATE_TARGET), text: REWORDED },
+		]),
+	};
+	const startedM = startAbsorbRun({ agentId: roomM.agentId, assessmentMarkdown: ASSESSMENT, model: MODEL, generate: scriptedGenerate(scriptsM, []), now: RUN_CLOCK });
+	const readyM = await settle(roomM.agentId, startedM.runId, "the thirteenth room's run");
+	assert(readyM.state === "ready" && sessionView(readyM, "RC-0001").outcome === "folded", `the thirteenth room's fold should land, got "${readyM.state}" / "${sessionView(readyM, "RC-0001").outcome}"${sessionView(readyM, "RC-0001").reason ? ` because "${sessionView(readyM, "RC-0001").reason}"` : ""}`);
+
+	// --- 35. The reason on the card row, in the record and in History ------------
+	const changesM = sessionView(readyM, "RC-0001").changes ?? [];
+	const windowChange = changesM.find((change) => change.kind === "superseded" && change.id === entryId(102));
+	const rewordedChange = changesM.find((change) => change.kind === "superseded" && change.id === entryId(101));
+	assert(windowChange?.reason === WINDOW_REASON, `the superseded row whose texts disagree on a value carries the reason, with the conversation's own day as the newer one and the entry's updated day as the older, got ${JSON.stringify(windowChange)}`);
+	assert(rewordedChange && !("reason" in rewordedChange), `a supersede that only rewords carries no reason, got ${JSON.stringify(rewordedChange)}`);
+	const approvalM = approveAbsorbRun(roomM.agentId, startedM.runId, APPROVED_AT);
+	const recordM = JSON.parse(fs.readFileSync(path.join(root, roomM.agentId, "events", "absorb", `${approvalM.absorbId}.json`), "utf-8"));
+	const archivedM = recordM.run.archived as Array<{ id: string; why: string; reason?: string }>;
+	const windowRow = archivedM.find((row) => row.id === `${entryId(102)}-v1`);
+	const rewordedRow = archivedM.find((row) => row.id === `${entryId(101)}-v1`);
+	assert(windowRow?.why === "superseded" && windowRow.reason === WINDOW_REASON, `the record's version row carries the same reason, word for word, got ${JSON.stringify(windowRow)}`);
+	assert(rewordedRow?.why === "superseded" && !("reason" in rewordedRow), `the reworded text's version row carries none, got ${JSON.stringify(rewordedRow)}`);
+	const diffM = readMemoryEventDiff(roomM.agentId, "learn", approvalM.absorbId);
+	assert(diffM?.notes === true, `History reads the save note by note, got ${JSON.stringify(diffM && { notes: diffM.notes })}`);
+	const rowsM = diffM.topics.flatMap((topic) => topic.changes);
+	const windowHistory = rowsM.find((row) => row.id === entryId(102));
+	const rewordedHistory = rowsM.find((row) => row.id === entryId(101));
+	assert(windowHistory?.change === "updated" && windowHistory.after === WINDOW_8 && windowHistory.reason === WINDOW_REASON, `History's updated row carries the reason from the version row this save archived, got ${JSON.stringify(windowHistory)}`);
+	assert(rewordedHistory?.change === "updated" && !("reason" in rewordedHistory), `History's reworded row carries none, got ${JSON.stringify(rewordedHistory)}`);
+	resetAbsorbRunsForTests();
+
+	// --- 36. The propose body's limitRaisedFrom: a whole number a room may hold, or nothing ---
 	assert(parseAbsorbRunProposeRequest({ assessmentMarkdown: ASSESSMENT, limitRaisedFrom: 20_000 }).limitRaisedFrom === 20_000, "a propose body carrying the limit the first read raised from keeps it");
 	assert(!("limitRaisedFrom" in parseAbsorbRunProposeRequest({ assessmentMarkdown: ASSESSMENT })), "a body without it says nothing");
 	for (const bogus of ["20000", 20_000.5, 9_000, 90_000, NaN, null, { tokens: 20_000 }]) {
