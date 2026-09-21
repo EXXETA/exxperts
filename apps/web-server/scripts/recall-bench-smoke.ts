@@ -1668,31 +1668,37 @@ try {
 	assert(jsonlIds(lmeAll).length === lmeIds.length, `the refused run left the file as it was, and it now holds ${jsonlIds(lmeAll).length} line(s)`);
 	pass(`an existing --out without --resume is refused with a sentence naming --resume, and the file is untouched`);
 
-	// (f) An interrupt: the adapter is started without a wrapper process so the
-	// signal reaches it, sent SIGINT once its first answer is printed, and must
-	// leave with 130, the answers so far in the file and a meta that says partial.
-	const lmeInt = path.join(home, "lme-interrupted.jsonl");
-	const interrupted = await new Promise<{ code: number | null; signal: NodeJS.Signals | null; stdout: string }>((resolve) => {
-		const child = spawn(process.execPath, ["--import", "tsx", adapterScript, "--scripted", "--data", lmeData, "--out", lmeInt], { cwd: webServerDir, env: { ...process.env }, stdio: ["ignore", "pipe", "pipe"] });
-		let stdout = "";
-		let sent = false;
-		child.stdout.on("data", (chunk) => {
-			stdout += String(chunk);
-			if (!sent && /answered in \d+s/.test(stdout)) {
-				sent = true;
-				child.kill("SIGINT");
-			}
+	// On Windows a kill is a termination, never a signal the child can catch, so
+	// the interrupt case runs where SIGINT reaches a process.
+	if (process.platform !== "win32") {
+		// (f) An interrupt: the adapter is started without a wrapper process so the
+		// signal reaches it, sent SIGINT once its first answer is printed, and must
+		// leave with 130, the answers so far in the file and a meta that says partial.
+		const lmeInt = path.join(home, "lme-interrupted.jsonl");
+		const interrupted = await new Promise<{ code: number | null; signal: NodeJS.Signals | null; stdout: string }>((resolve) => {
+			const child = spawn(process.execPath, ["--import", "tsx", adapterScript, "--scripted", "--data", lmeData, "--out", lmeInt], { cwd: webServerDir, env: { ...process.env }, stdio: ["ignore", "pipe", "pipe"] });
+			let stdout = "";
+			let sent = false;
+			child.stdout.on("data", (chunk) => {
+				stdout += String(chunk);
+				if (!sent && /answered in \d+s/.test(stdout)) {
+					sent = true;
+					child.kill("SIGINT");
+				}
+			});
+			child.stderr.on("data", (chunk) => { stdout += String(chunk); });
+			child.on("exit", (code, signal) => resolve({ code, signal, stdout }));
 		});
-		child.stderr.on("data", (chunk) => { stdout += String(chunk); });
-		child.on("exit", (code, signal) => resolve({ code, signal, stdout }));
-	});
-	assert(interrupted.code === 130, `an interrupted run leaves with 130, and it left with code ${interrupted.code}, signal ${interrupted.signal}:\n${interrupted.stdout.slice(-800)}`);
-	assert(/^interrupted: \d+ answered/m.test(interrupted.stdout), `an interrupted run says so, and printed:\n${interrupted.stdout.slice(-600)}`);
-	assert(fs.existsSync(`${lmeInt}.meta.json`), `an interrupted run leaves its meta behind, and ${lmeInt}.meta.json is not there`);
-	const intMeta = readMeta(lmeInt);
-	assert(intMeta.partial === true, `the meta of an interrupted run says partial, and it says partial=${intMeta.partial}`);
-	assert(jsonlIds(lmeInt).length >= 1 && jsonlIds(lmeInt).length === intMeta.rows.filter((row) => row.hypothesis !== null).length && jsonlIds(lmeInt).length < lmeIds.length, `the interrupted run's file holds the answers it got before the interrupt, one line per answered row and fewer than the ${lmeIds.length} instances, and it holds ${jsonlIds(lmeInt).length} line(s) against ${intMeta.rows.length} row(s)`);
-	pass(`an interrupt leaves with 130, ${jsonlIds(lmeInt).length} answer(s) in the file and a meta that says partial`);
+		assert(interrupted.code === 130, `an interrupted run leaves with 130, and it left with code ${interrupted.code}, signal ${interrupted.signal}:\n${interrupted.stdout.slice(-800)}`);
+		assert(/^interrupted: \d+ answered/m.test(interrupted.stdout), `an interrupted run says so, and printed:\n${interrupted.stdout.slice(-600)}`);
+		assert(fs.existsSync(`${lmeInt}.meta.json`), `an interrupted run leaves its meta behind, and ${lmeInt}.meta.json is not there`);
+		const intMeta = readMeta(lmeInt);
+		assert(intMeta.partial === true, `the meta of an interrupted run says partial, and it says partial=${intMeta.partial}`);
+		assert(jsonlIds(lmeInt).length >= 1 && jsonlIds(lmeInt).length === intMeta.rows.filter((row) => row.hypothesis !== null).length && jsonlIds(lmeInt).length < lmeIds.length, `the interrupted run's file holds the answers it got before the interrupt, one line per answered row and fewer than the ${lmeIds.length} instances, and it holds ${jsonlIds(lmeInt).length} line(s) against ${intMeta.rows.length} row(s)`);
+		pass(`an interrupt leaves with 130, ${jsonlIds(lmeInt).length} answer(s) in the file and a meta that says partial`);
+	} else {
+		pass("the interrupt case is not run on Windows, where a kill delivers no SIGINT");
+	}
 
 	// (f) The provider ends the ROOM'S OWN turn: the turn still ends the way
 	// every turn ends, with no text in it, and taken as an answer it would be an

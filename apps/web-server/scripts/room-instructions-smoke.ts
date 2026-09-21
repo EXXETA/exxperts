@@ -241,21 +241,26 @@ try {
 	} finally {
 		fs.rmdirSync(file);
 	}
-	// A link that leads nowhere is present, not absent: unreadable, and a save replaces it.
-	fs.symlinkSync(path.join(path.dirname(file), "no-such-target.md"), file);
-	assert(readPersistentRoomInstructions(agentId).unreadable === "it is a link that points nowhere", "a dangling link reads as unreadable, not as none");
-	assert(buildPersistentRoomCurrentInstructionsSection(agentId, bootedWithText.systemPrompt) === "", "and the per-turn section stays silent for it");
-	assert(savePersistentRoomInstructions(agentId, "replaced the link").text === "replaced the link", "a save replaces the link with the file");
-	assert(fs.lstatSync(file).isFile(), "and what sits there now is a plain file");
-	// A link to a folder is a link, not a folder: unreadable to read, replaceable to write.
-	fs.rmSync(file);
-	fs.symlinkSync(path.join(tempAgentsRoot, agentId, "L1b"), file);
-	assert(readPersistentRoomInstructions(agentId).unreadable === "it is a folder, not a file", "a link to a folder reads as unreadable");
-	assert(savePersistentRoomInstructions(agentId, "replaced the folder link").text === "replaced the folder link" && fs.lstatSync(file).isFile(), "and a save replaces the link rather than refusing it as a folder");
+	// A link at the path: on Windows a rename cannot replace a link and a link needs
+	// a privilege to create, so these two cases run where links are ordinary files.
+	if (process.platform !== "win32") {
+		// A link that leads nowhere is present, not absent: unreadable, and a save replaces it.
+		fs.symlinkSync(path.join(path.dirname(file), "no-such-target.md"), file);
+		assert(readPersistentRoomInstructions(agentId).unreadable === "it is a link that points nowhere", "a dangling link reads as unreadable, not as none");
+		assert(buildPersistentRoomCurrentInstructionsSection(agentId, bootedWithText.systemPrompt) === "", "and the per-turn section stays silent for it");
+		assert(savePersistentRoomInstructions(agentId, "replaced the link").text === "replaced the link", "a save replaces the link with the file");
+		assert(fs.lstatSync(file).isFile(), "and what sits there now is a plain file");
+		// A link to a folder is a link, not a folder: unreadable to read, replaceable to write.
+		fs.rmSync(file);
+		fs.symlinkSync(path.join(tempAgentsRoot, agentId, "L1b"), file);
+		assert(readPersistentRoomInstructions(agentId).unreadable === "it is a folder, not a file", "a link to a folder reads as unreadable");
+		assert(savePersistentRoomInstructions(agentId, "replaced the folder link").text === "replaced the folder link" && fs.lstatSync(file).isFile(), "and a save replaces the link rather than refusing it as a folder");
+	}
 	// Anything that is not a regular file is never opened: a pipe would block the whole server.
-	fs.rmSync(file);
+	fs.rmSync(file, { force: true });
 	const mkfifo = createRequire(import.meta.url)("node:child_process") as typeof import("node:child_process");
-	const fifo = mkfifo.spawnSync("mkfifo", [file]);
+	// A Windows runner may carry a mkfifo that makes a plain file, so the pipe case runs only where pipes exist.
+	const fifo = process.platform === "win32" ? { status: null } : mkfifo.spawnSync("mkfifo", [file]);
 	if (fifo.status === 0) {
 		assert(readPersistentRoomInstructions(agentId).unreadable === "it is not a file", "a pipe at the path reads as unreadable without being opened");
 		assert(buildPersistentRoomCurrentInstructionsSection(agentId, bootedWithText.systemPrompt) === "", "and the per-turn section stays silent for it");
