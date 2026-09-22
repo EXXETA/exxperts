@@ -8,13 +8,15 @@
 import path from "node:path";
 import fs from "node:fs";
 import os from "node:os";
-import { app, BrowserWindow, dialog, Menu, nativeImage, shell, Tray } from "electron";
+import { app, BrowserWindow, dialog, Menu, nativeImage, nativeTheme, shell, Tray } from "electron";
 import { payloadVersion, PORT, probePort, SERVER_ORIGIN, ServerHandle, serverRoot, stateHome, stateProfilesModule, takeOverPort } from "./server";
 import { bootWindowOpen, bootWindowWasShown, closeBootWindow, setBootStatus, showBootWindow } from "./boot-window";
 import { showHealthCheck, showTextWindow } from "./health";
 import { loadWindowState, trackWindowState } from "./window-state";
 import { checkForUpdate, getAvailableUpdate, getUpdateSnapshot, isNewerVersion, onUpdateStateChanged, openUpdatePage } from "./update-check";
 import { checkViaUpdater, downloadUpdate, installPlan, quitAndInstallNow, smokeSetFeed, updaterAvailability } from "./updater";
+import { openUpdatePanel } from "./update-panel";
+import { timeLeftText } from "./update-time-left";
 
 const SMOKE = process.env.EXXPERTS_DESKTOP_SMOKE === "1";
 
@@ -339,59 +341,85 @@ async function offerManualUpdate(version: string): Promise<void> {
 }
 
 // The one-click path: verified download (electron-updater checks the sha512
-// from the release metadata), then quit, install, relaunch. Honest progress
-// in a small window instead of a frozen dialog; closing it cancels the
-// download. Any failure lands on the manual fallback dialog.
+// from the release metadata), then quit, install, relaunch. The whole of it
+// shows in the update panel (update-panel.ts): checking, then the download
+// with its bytes and a time left computed from the transfer's own recent
+// rate, then installing and reopening. Closing the panel during the download
+// cancels it; once the download is complete the panel loses its close
+// control, because the quit is under way (the quit itself still closes it,
+// as it closes every window). The Dock and taskbar mirror the percent. Any
+// failure lands on the manual fallback dialog; a cancel stays quiet.
 async function offerOneClickUpdate(version: string): Promise<void> {
-  const { response } = await dialog.showMessageBox({
+  // Under the smoke the native dialogs would block the run: the offer is
+  // taken as "Install and restart" and the fallback dialog below is skipped,
+  // so the smoke can watch the panel open and then close on the error path.
+  const response = SMOKE ? 0 : (await dialog.showMessageBox({
     type: "info",
     title: "exxperts",
     message: `exxperts v${version} is available.`,
-    detail: "exxperts downloads the update, then restarts to install it.",
+    detail: "The update downloads, then exxperts closes and reopens by itself. Your rooms, conversations and settings stay as they are.",
     buttons: ["Install and restart", "Later"],
     defaultId: 0,
     cancelId: 1,
-  });
+  })).response;
   if (response !== 0) return;
-  // The heading no longer claims a download is running before one is: the
-  // check can take seconds behind a slow proxy, and "Starting the
-  // download..." made that look like a stalled transfer.
-  const progressWin = showTextWindow("exxperts update", `Updating to exxperts v${version}`, "Checking for the update...", mainWindow ?? undefined);
+  // The panel opens in its checking state: the check can take seconds behind
+  // a slow proxy, and a heading that claimed a download before one ran made
+  // that look like a stalled transfer.
+  const panel = openUpdatePanel({ version, parent: mainWindow ?? undefined });
   let cancelDownload: (() => void) | null = null;
-  progressWin.on("closed", () => cancelDownload?.());
-  const setProgress = (text: string) => {
-    if (progressWin.isDestroyed()) return;
-    void progressWin.webContents.executeJavaScript(
-      `document.querySelector("pre").textContent = ${JSON.stringify(text)}; true`,
-    ).catch(() => undefined);
+  panel.window.on("closed", () => cancelDownload?.());
+  // Under the smoke, a moment with the panel on screen before the download
+  // step: against a dev build the step fails at once and closes the panel,
+  // and the smoke reads the checking state in between.
+  if (SMOKE) await new Promise((r) => setTimeout(r, 1500));
+  const setDockProgress = (value: number) => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.setProgressBar(value);
   };
-  // Rate from the transfer itself (bytes since the first progress event over
-  // the time since it), so a slow line reads as slow instead of as stuck.
-  let firstProgressAt = 0;
-  let firstProgressBytes = 0;
-  const outcome = await downloadUpdate(app.getVersion(), {
-    onProgress: (percent, transferred, total) => {
-      const mb = (n: number) => Math.max(1, Math.round(n / (1024 * 1024)));
-      if (!firstProgressAt) {
-        firstProgressAt = Date.now();
-        firstProgressBytes = transferred;
-      }
-      const seconds = (Date.now() - firstProgressAt) / 1000;
-      const moved = transferred - firstProgressBytes;
-      const rate = seconds >= 1 && moved > 0 ? `, ${(moved / (1024 * 1024) / seconds).toFixed(1)} MB/s` : "";
-      setProgress(`Downloading... ${Math.floor(percent)}% (${mb(transferred)} of ${mb(total)} MB${rate})`);
-    },
-    registerCancel: (cancel) => { cancelDownload = cancel; },
-  });
-  if (outcome === "ready") {
-    setProgress("Download complete. Restarting to install...");
-    updaterQuitting = true;
-    await server.stop();
-    quitAndInstallNow();
-    return;
+  // The rate comes from the transfer itself over a sliding window of the
+  // last few seconds of progress samples (moved = newest minus oldest sample,
+  // over the seconds between them), so a slow line reads as slow, and a
+  // stall lets the time slot go empty instead of trusting an old average.
+  const RATE_WINDOW_MS = 5000;
+  const samples: { at: number; transferred: number }[] = [];
+  let totalBytes = 0;
+  // The Dock bar rides the quit out only on the install path (indeterminate);
+  // every other exit of this function clears it.
+  let dockBarKept = false;
+  try {
+    const outcome = await downloadUpdate(app.getVersion(), {
+      onProgress: (percent, transferred, total) => {
+        const now = Date.now();
+        totalBytes = total;
+        samples.push({ at: now, transferred });
+        while (samples.length > 1 && now - (samples[0]?.at ?? now) > RATE_WINDOW_MS) samples.shift();
+        const oldest = samples[0] ?? { at: now, transferred };
+        const timeLeft = timeLeftText({
+          movedBytes: transferred - oldest.transferred,
+          seconds: (now - oldest.at) / 1000,
+          remainingBytes: total - transferred,
+        });
+        panel.setDownloading(transferred, total, timeLeft);
+        setDockProgress(Math.min(1, Math.max(0, percent / 100)));
+      },
+      registerCancel: (cancel) => { cancelDownload = cancel; },
+    });
+    if (outcome === "ready") {
+      panel.setInstalling(totalBytes);
+      setDockProgress(2); // indeterminate while the install and the reopen run
+      dockBarKept = true;
+      updaterQuitting = true;
+      await server.stop();
+      quitAndInstallNow();
+      return;
+    }
+    panel.close();
+    setDockProgress(-1); // before the fallback dialog, not after it
+    if (outcome === "cancelled") return; // the user changed their mind; stay quiet
+    if (SMOKE) return; // the fallback dialog would block the smoke
+  } finally {
+    if (!dockBarKept) setDockProgress(-1);
   }
-  if (!progressWin.isDestroyed()) progressWin.close();
-  if (outcome === "cancelled") return; // the user changed their mind; stay quiet
   const { response: fallback } = await dialog.showMessageBox({
     type: "warning",
     title: "exxperts",
@@ -816,6 +844,31 @@ async function boot(): Promise<void> {
   void checkForUpdate(app.getVersion()).finally(scheduleUpdateRecheck);
 
   if (SMOKE) await smokeReport();
+  else if (!app.isPackaged && process.env.EXXPERTS_DESKTOP_PANEL_DEMO) void panelDemo();
+}
+
+// Screenshot hook for the update panel, dev runs only (a packaged app never
+// sets the variable and the gate above also requires an unpackaged app):
+// EXXPERTS_DESKTOP_PANEL_DEMO=checking|downloading|installing opens the panel
+// in that state through its own setters, EXXPERTS_DESKTOP_PANEL_THEME=dark|light
+// pins the theme, EXXPERTS_DESKTOP_PANEL_SHOT=<file> captures it and quits.
+// The update flow itself is not run; the version shown is the one the launch
+// check found (the fake feed's), else the running one.
+async function panelDemo(): Promise<void> {
+  const state = process.env.EXXPERTS_DESKTOP_PANEL_DEMO;
+  const theme = process.env.EXXPERTS_DESKTOP_PANEL_THEME;
+  if (theme === "dark" || theme === "light") nativeTheme.themeSource = theme;
+  await checkForUpdate(app.getVersion());
+  const panel = openUpdatePanel({ version: getAvailableUpdate()?.version ?? app.getVersion(), parent: mainWindow ?? undefined });
+  const mb = 1024 * 1024;
+  if (state === "downloading") panel.setDownloading(18 * mb, 59 * mb, "about 10 seconds left");
+  else if (state === "installing") panel.setInstalling(59 * mb);
+  else panel.setChecking();
+  const shot = process.env.EXXPERTS_DESKTOP_PANEL_SHOT;
+  if (!shot) return;
+  await new Promise((r) => setTimeout(r, 1500)); // let the page load, render and show
+  if (!panel.window.isDestroyed()) fs.writeFileSync(shot, (await panel.window.webContents.capturePage()).toPNG());
+  app.quit();
 }
 
 // Automated end-to-end check: prints what the window actually landed on and
@@ -995,6 +1048,75 @@ async function smokeReport(): Promise<void> {
       : `fail(gear=${String(dotPresent)},row=${String(rowLabel)})`;
   }
   const updateNoticeUiOk = updateNoticeUi === "ok" || updateNoticeUi === "not-exercised";
+  // The update panel, end to end under the fake feed: the install offer
+  // (its native dialog is skipped under the smoke) must open the panel as a
+  // child of the app window with the spec's title and size, its first state
+  // line must read "Checking for the update" (a DOM read), and because a
+  // download cannot run against a dev build the flow lands on the error
+  // path: the panel closes, the fallback dialog is skipped under the smoke,
+  // and the Dock/taskbar bar ends cleared (-1), observed by wrapping the app
+  // window's own setProgressBar for the duration. No panel at all is a hard
+  // failure (the rest of the block has nothing to read).
+  let updatePanel = "not-exercised";
+  if (process.env.EXXPERTS_DESKTOP_EXPECT_UPDATE === "1") {
+    const progressBars: number[] = [];
+    const realSetProgressBar = win.setProgressBar.bind(win);
+    const recordingSetProgressBar: typeof win.setProgressBar = (progress, options) => {
+      progressBars.push(progress);
+      realSetProgressBar(progress, options);
+    };
+    win.setProgressBar = recordingSetProgressBar;
+    const flow = offerUpdate("9.9.9");
+    const findPanel = () => BrowserWindow.getAllWindows().find((w) => !w.isDestroyed() && w.getTitle() === "exxperts update" && w.getParentWindow() === win);
+    let panel: BrowserWindow | undefined;
+    for (let i = 0; i < 60 && !panel; i++) {
+      panel = findPanel(); // first look before any wait: a window closed at once is still seen
+      if (!panel) await new Promise((r) => setTimeout(r, 50));
+    }
+    if (!panel) smokeFail('update panel: no child window titled "exxperts update" appeared within 3 s of the install offer');
+    const contentSize = panel.getContentSize();
+    // The read is raced against a short timer: a window closed before its
+    // page has loaded leaves executeJavaScript pending for ever.
+    let stateLine: unknown = "";
+    for (let i = 0; i < 40 && !stateLine && !panel.isDestroyed(); i++) {
+      stateLine = await Promise.race([
+        panel.webContents
+          .executeJavaScript(`(() => { const s = document.getElementById("state"); return s ? s.textContent : ""; })()`)
+          .catch(() => ""),
+        new Promise<string>((r) => setTimeout(() => r(""), 500)),
+      ]);
+      if (!stateLine) await new Promise((r) => setTimeout(r, 50));
+    }
+    await flow;
+    await new Promise((r) => setTimeout(r, 300)); // let the close land
+    const closed = panel.isDestroyed() || !BrowserWindow.getAllWindows().includes(panel);
+    win.setProgressBar = realSetProgressBar;
+    const barCleared = progressBars.length > 0 && progressBars[progressBars.length - 1] === -1;
+    // The installing panel must keep honouring a programmatic close: both
+    // install paths quit the app by closing every window through the normal
+    // close event, so a panel that refused that close would keep the app
+    // open on "Reopening" for ever. A second panel goes to its installing
+    // state; it must still be closable on every platform (setClosable(false)
+    // makes the quit's close a no-op on macOS and cancels the quit on
+    // Windows). Then it is closed the way the quit closes it: on macOS it
+    // must be gone; on Windows and Linux a close before the app's own quit
+    // is the user's and must be refused, and the quit's release is read from
+    // Electron's source, not exercised here. The smoke's own quit below
+    // cannot stand in for this: under the smoke before-quit ends in
+    // app.exit, which closes no window.
+    const installingPanel = openUpdatePanel({ version: "9.9.9", parent: win });
+    installingPanel.setInstalling(59 * 1024 * 1024);
+    await new Promise((r) => setTimeout(r, 600));
+    const closableOff = installingPanel.window.isClosable();
+    installingPanel.window.close();
+    await new Promise((r) => setTimeout(r, 300));
+    const installingClosed = process.platform === "darwin" ? installingPanel.window.isDestroyed() : !installingPanel.window.isDestroyed();
+    if (!installingPanel.window.isDestroyed()) installingPanel.window.destroy();
+    updatePanel = contentSize[0] === 440 && contentSize[1] === 184 && stateLine === "Checking for the update" && closed && barCleared && closableOff && installingClosed
+      ? "ok"
+      : `fail(size=${contentSize.join("x")},state=${JSON.stringify(stateLine)},closed=${closed ? "yes" : "no"},dockBar=${progressBars.join(",") || "never-set"},installClosable=${closableOff ? "ok" : "wrong"},installClose=${installingClosed ? "ok" : "vetoed"})`;
+  }
+  const updatePanelOk = updatePanel === "ok" || updatePanel === "not-exercised";
   // S5 acceptance evidence: EXXPERTS_DESKTOP_SHOT_MATRIX=<dir> captures the
   // sidebar states at 80/100/125% zoom in REAL Electron (zoom via the real
   // webContents zoom factor, clicks via the real input pipeline).
@@ -1135,8 +1257,8 @@ async function smokeReport(): Promise<void> {
   }
   const ok = landedUrl.startsWith(SERVER_ORIGIN) && !landedUrl.includes("token=") && healthOk && trayIconOk && stateOk && dragOk
     && contextOk && spellOk && deepLinkOk && notifOk && payload !== "unknown" && bootVisibleOk && bootFeedbackOk && loginItemPresent
-    && updateLogicOk && updateConsistent && updaterFlowOk && updateNoticeUiOk && notifyE2EOk && watchdogOk && appMenuOk && sidebarToggleOk && matrixFailure === null;
-  console.log(`DESKTOP_SMOKE ${ok ? "OK" : "FAIL"} url=${landedUrl} initialUrl=${url} title=${title} tray=${tray ? "yes" : "no"} trayIcon=${trayIconOk ? "ok" : "empty"} health=${healthOk ? "ok" : "fail"} windowState=${stateOk ? "ok" : "missing"} dragRegion=${dragRegion} contextMenu=${contextOk ? `ok(${smokeContextMenuItems})` : "none"} spellcheck=${spellOk ? "on" : "off"} deepLink=${deepLinkOk ? "ok" : "fail"} notifications=${String(notifPerm)} payload=${payload} bootWindow=${bootWindow}${hiddenExpected ? "(hidden expected)" : ""} bootFeedback=${bootFeedbackOk ? "ok" : "fail"} loginItem=${loginItemPresent ? "present" : "missing"} appMenu=${appMenuOk ? "ok" : "fail"} updateLogic=${updateLogicOk ? "ok" : "fail"} updateCheck=${updateCheck}${updateConsistent ? "" : "(tray inconsistent)"} updaterFlow=${updaterFlow} updateNoticeUi=${updateNoticeUi} sidebarToggle=${sidebarToggleOk ? "ok" : "fail"}${matrixFailure ? ` matrix=fail(${matrixFailure})` : ""} notifyE2E=${notifyE2EOk ? "ok" : `fail(hook=${String(notifyHook)},badge=${badgeSet ? "set" : "unset"},cleared=${badgeCleared ? "yes" : "no"})`} watchdog=${watchdogOk ? "ok" : "fail"}`);
+    && updateLogicOk && updateConsistent && updaterFlowOk && updateNoticeUiOk && updatePanelOk && notifyE2EOk && watchdogOk && appMenuOk && sidebarToggleOk && matrixFailure === null;
+  console.log(`DESKTOP_SMOKE ${ok ? "OK" : "FAIL"} url=${landedUrl} initialUrl=${url} title=${title} tray=${tray ? "yes" : "no"} trayIcon=${trayIconOk ? "ok" : "empty"} health=${healthOk ? "ok" : "fail"} windowState=${stateOk ? "ok" : "missing"} dragRegion=${dragRegion} contextMenu=${contextOk ? `ok(${smokeContextMenuItems})` : "none"} spellcheck=${spellOk ? "on" : "off"} deepLink=${deepLinkOk ? "ok" : "fail"} notifications=${String(notifPerm)} payload=${payload} bootWindow=${bootWindow}${hiddenExpected ? "(hidden expected)" : ""} bootFeedback=${bootFeedbackOk ? "ok" : "fail"} loginItem=${loginItemPresent ? "present" : "missing"} appMenu=${appMenuOk ? "ok" : "fail"} updateLogic=${updateLogicOk ? "ok" : "fail"} updateCheck=${updateCheck}${updateConsistent ? "" : "(tray inconsistent)"} updaterFlow=${updaterFlow} updateNoticeUi=${updateNoticeUi} updatePanel=${updatePanel} sidebarToggle=${sidebarToggleOk ? "ok" : "fail"}${matrixFailure ? ` matrix=fail(${matrixFailure})` : ""} notifyE2E=${notifyE2EOk ? "ok" : `fail(hook=${String(notifyHook)},badge=${badgeSet ? "set" : "unset"},cleared=${badgeCleared ? "yes" : "no"})`} watchdog=${watchdogOk ? "ok" : "fail"}`);
   if (!ok) process.exitCode = 1;
   app.quit();
 }

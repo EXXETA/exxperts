@@ -11,7 +11,7 @@
 // Usage (repo root):
 //   npx tsx apps/web-server/scripts/synthetic-corpus-generate.ts
 //     [--out apps/web-server/scripts/fixtures/synthetic-room-corpus.json]
-//     [--model anthropic/claude-opus-5] [--per-section 60] [--sections 12]
+//     [--model anthropic/claude-opus-5-5] [--per-section 60] [--sections 12]
 //     [--seed 1] [--label corpus-1] [--dry-run] [--force] [--resume]
 //
 // --dry-run prints the plan and the first section's full prompt and makes no
@@ -65,7 +65,7 @@ interface Args {
 function parseArgs(argv: string[]): Args {
 	const args: Args = {
 		out: DEFAULT_OUT,
-		model: { provider: "anthropic", model: "claude-opus-5" },
+		model: { provider: "anthropic", model: "claude-opus-5-5" },
 		perSection: 60,
 		sections: CORPUS_SECTION_THEMES.length,
 		seed: 1,

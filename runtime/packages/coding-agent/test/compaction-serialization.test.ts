@@ -77,3 +77,45 @@ describe("serializeConversation", () => {
 		expect(result).toContain(longText);
 	});
 });
+
+describe("serializeConversation and thinking blocks", () => {
+	it("omits thinking blocks and keeps text and tool calls", () => {
+		const thinkingText = "private reasoning that must not be quoted back";
+		const messages: Message[] = [
+			{
+				role: "user",
+				content: [{ type: "text", text: "Rename the file." }],
+				timestamp: Date.now(),
+			},
+			{
+				role: "assistant",
+				content: [
+					{ type: "thinking", thinking: thinkingText },
+					{ type: "text", text: "Renaming now." },
+					{ type: "toolCall", id: "tc1", name: "bash", arguments: { command: "mv a b" } },
+				],
+				api: "anthropic",
+				provider: "anthropic",
+				model: "test",
+				usage: {
+					input: 0,
+					output: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 0,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				stopReason: "toolUse",
+				timestamp: Date.now(),
+			},
+		];
+
+		const result = serializeConversation(messages);
+
+		expect(result).not.toContain(thinkingText);
+		expect(result).not.toContain("[Assistant thinking]");
+		expect(result).toContain("[User]: Rename the file.");
+		expect(result).toContain("[Assistant]: Renaming now.");
+		expect(result).toContain('[Assistant tool calls]: bash(command="mv a b")');
+	});
+});

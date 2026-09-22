@@ -118,6 +118,11 @@ try {
 	});
 	assert(reservedGateway.status === 400, "gateway provider must be rejected for custom profiles");
 	// Built-in providers take a catalog override instead: identity stays, models change, reset restores.
+	// The curated Claude picker is read before the override so the reset check follows the array
+	// rather than a fixed count.
+	const curated = await requestJson("/api/persistent-agent-ai-profile");
+	const curatedRoomModels = curated.body?.profiles?.find((profile: any) => profile.id === "anthropic")?.processes?.persistentRoom?.models?.length;
+	assert(curated.status === 200 && typeof curatedRoomModels === "number" && curatedRoomModels > 1, `the curated Claude catalog should be readable before the override, got ${curated.status}: ${JSON.stringify(curatedRoomModels)}`);
 	const overridden = await requestJson("/api/persistent-agent-ai-profiles/custom", {
 		method: "PUT",
 		body: JSON.stringify({ providerId: "anthropic", roomModels: ["claude-opus-4-8"], learnModel: "claude-opus-4-8", reviewMemoryModel: "claude-opus-4-8" }),
@@ -131,7 +136,7 @@ try {
 	const resetOverride = await requestJson("/api/persistent-agent-ai-profiles/custom/custom-anthropic", { method: "DELETE" });
 	assert(resetOverride.status === 200, `override reset should succeed, got ${resetOverride.status}`);
 	const resetAnthropic = resetOverride.body.profiles.find((profile: any) => profile.id === "anthropic");
-	assert(resetAnthropic?.overridden === false && resetAnthropic?.processes?.persistentRoom?.models?.length === 7, "reset should restore the curated catalog");
+	assert(resetAnthropic?.overridden === false && resetAnthropic?.processes?.persistentRoom?.models?.length === curatedRoomModels, "reset should restore the curated catalog");
 	const badModel = await requestJson("/api/persistent-agent-ai-profiles/custom", {
 		method: "PUT",
 		body: JSON.stringify({ providerId: "groq", roomModels: ["definitely-not-a-model"], learnModel: suggested, reviewMemoryModel: suggested }),

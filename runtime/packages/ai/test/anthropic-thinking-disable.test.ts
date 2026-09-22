@@ -125,6 +125,15 @@ describe("Anthropic thinking disable payload", () => {
 		expect(payload.output_config).toBeUndefined();
 	});
 
+	it("sends thinking.type=disabled and no output_config for Claude Opus 5 when thinking is off", async () => {
+		// Opus 5 accepts "disabled" only without an effort beside it; a
+		// disabled request must never carry output_config.
+		const payload = await capturePayload(getModel("anthropic", "claude-opus-5"));
+
+		expect(payload.thinking).toEqual({ type: "disabled" });
+		expect(payload.output_config).toBeUndefined();
+	});
+
 	it("uses adaptive thinking for Claude Opus 4.7 when reasoning is enabled", async () => {
 		const payload = await capturePayload(getModel("anthropic", "claude-opus-4-7"), { reasoning: "high" });
 

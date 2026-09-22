@@ -154,11 +154,11 @@ try {
 	assert(assessmentResponse.source.generatedAt, "assessment response should include source generation timestamp");
 
 	const altAssessmentResponse = await buildAbsorbAssessment(agentId, CHATGPT_CODEX_ABSORB_MODEL, async (prompt, model) => {
-		assert(prompt.includes("System-selected model: openai-codex/gpt-5.6-sol"), "ChatGPT Plus/Pro absorb prompt should use profile-mapped model metadata");
-		assert(model.provider === "openai-codex" && model.model === "gpt-5.6-sol", "ChatGPT Plus/Pro absorb assessment should pass profile-mapped model to generator");
+		assert(prompt.includes("System-selected model: openai-codex/gpt-6-sol"), "ChatGPT Plus/Pro absorb prompt should use profile-mapped model metadata");
+		assert(model.provider === "openai-codex" && model.model === "gpt-6-sol", "ChatGPT Plus/Pro absorb assessment should pass profile-mapped model to generator");
 		return { text: assessmentFixture };
 	});
-	assert(altAssessmentResponse.process.model.provider === "openai-codex" && altAssessmentResponse.process.model.model === "gpt-5.6-sol", "ChatGPT Plus/Pro absorb response should report profile-mapped process model");
+	assert(altAssessmentResponse.process.model.provider === "openai-codex" && altAssessmentResponse.process.model.model === "gpt-6-sol", "ChatGPT Plus/Pro absorb response should report profile-mapped process model");
 
 
 	// --- Assessment parser tolerance: markdown variants carry the same content ---

@@ -2,7 +2,31 @@
 
 User-visible changes per release. Historical private/internal development notes are not part of this public-facing changelog.
 
-## 0.13.0
+## 0.13.1 (2026-09-23)
+
+- Models: Claude Opus 5.5, Claude Fable 5.1, GPT-6 Sol, GPT-6 Luna, GPT-6 Astra and Grok 4.7 are
+  available. Opus 5.5 and Fable 5.1 come to the Claude subscription, Sol and Luna to the ChatGPT
+  subscription, Astra, Sol and Luna to OpenAI API keys and Grok 4.7 to xAI API keys; they appear in
+  every room's model picker after the update.
+- Defaults: New rooms, Memorize and Review run on Claude Opus 5.5 in the Claude profile and on GPT-6
+  Sol in the ChatGPT profile. Existing rooms keep the model they were started on.
+- Thinking: The newest Claude models always think, so on Opus 5.5 and Fable 5.1 the dial starts at
+  low instead of off. Their reasoning is tied to the conversation it was produced in: after a room
+  change (new instructions, a new file, a new tool) the older reasoning is dropped quietly instead
+  of failing the turn. On every Claude 5 model, "thinking off" and the automatic retry after a
+  rejected conversation no longer send a setting the model refuses.
+- Long conversations: The summary written when a conversation is trimmed to make room no longer
+  quotes the model's own reasoning, which the newest Claude models refuse to see repeated. A refused
+  summary is reported instead of being kept.
+- Desktop: Updating the app shows a small panel with what is happening (downloading, installing,
+  reopening), and the app cannot be closed by accident halfway through an install. The bundled Node
+  runtime moves to 24.21.0.
+- Docs: The memory page walks through one recall from an old conversation, step by step. What was
+  said, what was asked months later, why the words met, what the chat shows while it searches, what
+  the recall costs, and what a word search cannot do.
+- Command line: The default model for xAI keys is Grok 4.7.
+
+## 0.13.0 (2026-09-21)
 
 - Memory: Your room can now find a detail you mentioned once, even months ago. It looks through its
   notes, its archive and the conversations you had it Memorize, and it finds things however they

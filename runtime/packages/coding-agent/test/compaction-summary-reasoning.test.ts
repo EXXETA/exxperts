@@ -149,3 +149,91 @@ describe("generateSummary reasoning options", () => {
 		expect(completeSimpleMock.mock.calls[0][2]).not.toHaveProperty("reasoning");
 	});
 });
+
+function splitTurnPreparation(): CompactionPreparation {
+	return {
+		firstKeptEntryId: "entry-keep",
+		messagesToSummarize: [],
+		turnPrefixMessages: messages,
+		isSplitTurn: true,
+		tokensBefore: 100,
+		fileOps: { read: new Set(), written: new Set(), edited: new Set() },
+		settings: { enabled: true, reserveTokens: 2000, keepRecentTokens: 20 },
+	};
+}
+
+describe("turn prefix summarization prompt", () => {
+	beforeEach(() => {
+		completeSimpleMock.mockReset();
+		completeSimpleMock.mockResolvedValue(mockSummaryResponse);
+	});
+
+	it("frames the prefix as earlier context with the instructions after it", async () => {
+		await compact(splitTurnPreparation(), createModel(false), "test-key");
+
+		expect(completeSimpleMock).toHaveBeenCalledTimes(1);
+		const prompt = completeSimpleMock.mock.calls[0][1].messages[0].content[0].text as string;
+		expect(prompt.startsWith("# Conversation\n")).toBe(true);
+		expect(prompt).toContain("\n# Instructions\n");
+		expect(prompt).toContain("Later messages are stored separately");
+		expect(prompt).toContain("[User]: Summarize this.");
+		expect(prompt).not.toContain("<conversation>");
+	});
+});
+
+describe("summaries that did not end with a summary", () => {
+	beforeEach(() => {
+		completeSimpleMock.mockReset();
+		completeSimpleMock.mockResolvedValue(mockSummaryResponse);
+	});
+
+	it("reports a refused history summary with the provider's reason", async () => {
+		completeSimpleMock.mockResolvedValueOnce({
+			...mockSummaryResponse,
+			stopReason: "error",
+			errorMessage: "the model refused to answer this request",
+			content: [],
+		});
+
+		await expect(generateSummary(messages, createModel(false), 2000, "test-key")).rejects.toThrow(
+			"Summarization failed: the model refused to answer this request",
+		);
+	});
+
+	it("reports a refused split-turn summary with the provider's reason", async () => {
+		completeSimpleMock.mockResolvedValueOnce({
+			...mockSummaryResponse,
+			stopReason: "error",
+			errorMessage: "the model refused to answer this request",
+			content: [],
+		});
+
+		await expect(compact(splitTurnPreparation(), createModel(false), "test-key")).rejects.toThrow(
+			"Turn prefix summarization failed: the model refused to answer this request",
+		);
+	});
+
+	it("reports a cancelled summary", async () => {
+		completeSimpleMock.mockResolvedValueOnce({
+			...mockSummaryResponse,
+			stopReason: "aborted",
+			content: [{ type: "text", text: "partial" }],
+		});
+
+		await expect(generateSummary(messages, createModel(false), 2000, "test-key")).rejects.toThrow(
+			"Summarization failed: the request was cancelled",
+		);
+	});
+
+	it("reports a summary that ended in a tool call", async () => {
+		completeSimpleMock.mockResolvedValueOnce({
+			...mockSummaryResponse,
+			stopReason: "toolUse",
+			content: [{ type: "text", text: "partial" }],
+		});
+
+		await expect(compact(splitTurnPreparation(), createModel(false), "test-key")).rejects.toThrow(
+			"Turn prefix summarization failed: the model ended with toolUse instead of a summary",
+		);
+	});
+});

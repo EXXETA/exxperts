@@ -70,6 +70,74 @@ with the day each was saved beside it: dates decide, and the newer one
 wins. When neither the notes nor a search carry what you asked for, the
 room says so in one sentence instead of guessing.
 
+### One recall, worked through
+
+In March, in a conversation the room has since memorized, you wrote:
+"Gschwendtner's invoice, 55.000 euros, went out by bank transfer on
+12.03.2025, reference RE-2025-0347." The Memorize that followed kept
+one note under the topic Suppliers: "Gschwendtner: roofing, invoices
+paid on time so far." The amount, the day and the reference are not in
+the note. They are in the conversation, and the conversation is kept.
+
+In September, in a fresh conversation, you ask: "When did we pay the
+Gschwendtner invoices, and how much was it?"
+
+The note in front of the room says nothing about a day or an amount,
+and its instructions tell it to look before it says it does not know.
+It searches its memory for "Gschwendtner invoices paid". While it does,
+the chat shows a chip, **Reading archived notes**, with the words it
+looked for under it; when the rows are in, the chip reads **Read
+archived notes**. Nothing is written or restored by that read.
+
+What comes back is a short list of rows, ten at most unless the room
+asks for more, never more than twenty-five, grouped by where they were
+found: Notes, Archive, Conversations. Each row carries its date and
+where it came from: "from a conversation on 2025-03-12", or "archived
+2025-06-02, replaced by a newer note". A note row is the whole note; a
+conversation row is the message itself, up to about 1,200 characters.
+Here the Suppliers note comes first, and the March message is a few
+rows below it with the day, the amount and the reference. The room
+answers "On 12 March 2025, 55,000 euros, reference RE-2025-0347" and
+says nothing about having searched; ask where that comes from and it
+names the conversation and its date.
+
+Why the words met, although you never wrote them the same way twice:
+
+- **Rare words weigh most.** "Gschwendtner" appears in two rows of the
+  whole memory, "invoices" in many. A row with the rare word ranks far
+  above a row with only the common one. This is why a name, a reference
+  number or an unusual term is the best thing to ask with.
+- **Word forms meet.** "invoices" finds "invoice", "ordered" finds
+  "orders". A word of five letters or more also finds the words that
+  start with it: "roofer" finds "roofing". Case and accents never
+  matter.
+- **Dates meet in the forms people write.** "12.03.2025", "2025-03-12"
+  and "March 12, 2025" are the same day; "March 2025" and "2025-03" find
+  every row from that month; "Q3" finds "third quarter".
+- **Numbers meet in the forms people write.** "55.000", "55,000" and
+  "55k" are the same number.
+
+What the recall costs. The rows enter the conversation like any other
+tool result: the context meter goes up by their size, and they stay
+in the conversation until it ends, so every later turn of that
+conversation carries them and the wallet counts them each time. The
+room caps the list at about eight percent of the model's window, so one
+recall never crowds out the conversation; on a 128k model that is at
+most about 10,000 tokens, and in practice a handful of rows is far less.
+
+What it cannot do. It matches words, not meaning. "The roofer" does not
+find "Gschwendtner", "bill" does not find "invoice", and "paid the
+bill" does not find "settled the invoice". That is search by meaning,
+and it is left out on purpose: it needs a second model or a downloaded
+index, costs tokens or disk on every save, and its misses are harder to
+explain than a word that was not there. The room is told to search
+again in other words before it concludes something is not there; you
+can help it the same way, by asking with the name, the number or the
+date you remember. It also does not search a conversation you have not
+memorized: one you remembered and not yet memorized is still in the
+room's recent memory and needs no search, and one you never remembered
+is not kept for searching at all.
+
 Nothing enters or leaves memory without you:
 
 1. **Remember**: at the end of a conversation (the room shows a context
@@ -257,8 +325,7 @@ The limits of this result:
 - The benchmark is personal chat with a scripted user who Remembers
   everything, not project work.
 - It was measured with Memorize on Claude Sonnet 5. The Claude
-  profile's default runs Memorize on Opus 5, which costs more per
-  conversation and was not measured.
+  profile's default runs Memorize on Opus 5.5, which was not measured.
 - Personal preferences are weak with and without memory, because a
   Memorize is tuned for how work is done, not for personal taste.
 

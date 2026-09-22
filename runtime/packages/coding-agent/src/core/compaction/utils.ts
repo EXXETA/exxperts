@@ -105,6 +105,11 @@ function truncateForSummary(text: string, maxChars: number): string {
  *
  * Tool results are truncated to keep the summarization request within
  * reasonable token budgets. Full content is not needed for summarization.
+ *
+ * Thinking blocks are left out. The summary runs on the room's own model,
+ * and the newest models refuse a request that quotes their reasoning back
+ * to them at volume; the visible text and the tool calls carry what a
+ * summary needs.
  */
 export function serializeConversation(messages: Message[]): string {
 	const parts: string[] = [];
@@ -121,14 +126,11 @@ export function serializeConversation(messages: Message[]): string {
 			if (content) parts.push(`[User]: ${content}`);
 		} else if (msg.role === "assistant") {
 			const textParts: string[] = [];
-			const thinkingParts: string[] = [];
 			const toolCalls: string[] = [];
 
 			for (const block of msg.content) {
 				if (block.type === "text") {
 					textParts.push(block.text);
-				} else if (block.type === "thinking") {
-					thinkingParts.push(block.thinking);
 				} else if (block.type === "toolCall") {
 					const args = block.arguments as Record<string, unknown>;
 					const argsStr = Object.entries(args)
@@ -138,9 +140,6 @@ export function serializeConversation(messages: Message[]): string {
 				}
 			}
 
-			if (thinkingParts.length > 0) {
-				parts.push(`[Assistant thinking]: ${thinkingParts.join("\n")}`);
-			}
 			if (textParts.length > 0) {
 				parts.push(`[Assistant]: ${textParts.join("\n")}`);
 			}

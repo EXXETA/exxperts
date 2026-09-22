@@ -97,6 +97,12 @@ const PAIRING_400 = new Error(
 	'400 {"type":"error","error":{"type":"invalid_request_error","message":"messages.7.content.4: unexpected `tool_use_id` found in `web_search_tool_result` blocks: srvtoolu_01XYTs8cD9XeoCHn8Skr9tbq. Each `web_search_tool_result` block must have a corresponding `server_tool_use` block before it."}}',
 );
 
+// The binding check on Claude Fable 5.1: a thinking block replayed under a
+// different prefix (system prompt, tools, earlier messages).
+const BINDING_400 = new Error(
+	'400 {"type":"error","error":{"type":"invalid_request_error","message":"messages.4.content.0: Invalid signature in thinking block. The block is bound to a different conversation."}}',
+);
+
 describe("anthropic verbatim capture fidelity", () => {
 	it("records citations and keeps whitespace-only text blocks in the raw copy", async () => {
 		const model = getModel("anthropic", "claude-haiku-4-5")!;
@@ -117,6 +123,7 @@ describe("anthropic thinking validation recovery", () => {
 	it("recognizes both known history refusals and nothing else", () => {
 		expect(isResentHistoryRefusal(VALIDATION_400)).toBe(true);
 		expect(isResentHistoryRefusal(PAIRING_400)).toBe(true);
+		expect(isResentHistoryRefusal(BINDING_400)).toBe(true);
 		expect(isResentHistoryRefusal(new Error("overloaded_error"))).toBe(false);
 		expect(isResentHistoryRefusal(new Error("400 invalid_request_error: tools are malformed"))).toBe(false);
 		// A refusal naming the server blocks outside an invalid_request_error is
@@ -155,6 +162,129 @@ describe("anthropic thinking validation recovery", () => {
 		expect(stripped.messages.length).toBe(3);
 		// The original is untouched.
 		expect(params.messages[1].content.length).toBe(5);
+	});
+
+	it("keeps the thinking object exactly as it was when asked to", () => {
+		const thinking = { type: "adaptive", display: "summarized", block_binding: { prefix_mismatch_behavior: "drop_block" } };
+		const params: any = {
+			thinking,
+			messages: [
+				{ role: "user", content: "hi" },
+				{ role: "assistant", content: [{ type: "thinking", thinking: "t", signature: "s" }, { type: "text", text: "Answer." }] },
+			],
+		};
+		const kept = stripValidatedHistoryFromParams(params, { keepThinking: true });
+		expect(kept.thinking).toEqual(thinking);
+		expect(kept.messages[1].content.map((block: any) => block.type)).toEqual(["text"]);
+		// The one-argument shape and an explicit false both still disable.
+		expect(stripValidatedHistoryFromParams(params).thinking).toEqual({ type: "disabled" });
+		expect(stripValidatedHistoryFromParams(params, { keepThinking: false }).thinking).toEqual({ type: "disabled" });
+	});
+
+	it("recovers a Fable 5.1 turn with thinking still adaptive, since disabled is a 400 there", async () => {
+		const model = getModel("anthropic", "claude-fable-5-1")!;
+		const done = sse([
+			messageStart("msg_recovered"),
+			{ type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+			{ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Recovered." } },
+			{ type: "content_block_stop", index: 0 },
+			messageDelta("end_turn"),
+		]);
+		const { client, calls } = createSequencedClient([BINDING_400, done]);
+		const context: Context = {
+			messages: [
+				{ role: "user", content: "hi", timestamp: Date.now() },
+				{
+					role: "assistant",
+					content: [{ type: "thinking", thinking: "t", thinkingSignature: "sig" }, { type: "text", text: "First." }],
+					api: "anthropic-messages", provider: "anthropic", model: "claude-fable-5-1",
+					usage: {} as any, stopReason: "stop", timestamp: Date.now(),
+				} as any,
+				{ role: "user", content: "again", timestamp: Date.now() },
+			],
+		};
+		const result = await streamAnthropic(model, context, { client, thinkingEnabled: true, effort: "high" } as any).result();
+
+		expect(calls.length).toBe(2);
+		// The first request thought adaptively with the binding flag; the retry
+		// keeps that object exactly and only strips the blocks.
+		expect(calls[0].thinking.type).toBe("adaptive");
+		expect(calls[1].thinking).toEqual(calls[0].thinking);
+		expect(calls[1].thinking.type).toBe("adaptive");
+		expect(calls[1].thinking.block_binding).toEqual({ prefix_mismatch_behavior: "drop_block" });
+		const retryBlocks = calls[1].messages.flatMap((m: any) => (Array.isArray(m.content) ? m.content.map((b: any) => b.type) : []));
+		expect(retryBlocks).not.toContain("thinking");
+		expect(retryBlocks).not.toContain("redacted_thinking");
+		expect(result.stopReason).toBe("stop");
+		expect(result.diagnostics?.filter((d) => d.type === "anthropic-history-validation-recovery").length).toBe(1);
+	});
+
+	it("recovers an Opus 5.5 turn the same way: thinking stays adaptive and the binding field stays on the retry", async () => {
+		const model = getModel("anthropic", "claude-opus-5-5")!;
+		const done = sse([
+			messageStart("msg_recovered"),
+			{ type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+			{ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Recovered." } },
+			{ type: "content_block_stop", index: 0 },
+			messageDelta("end_turn"),
+		]);
+		const { client, calls } = createSequencedClient([BINDING_400, done]);
+		const context: Context = {
+			messages: [
+				{ role: "user", content: "hi", timestamp: Date.now() },
+				{
+					role: "assistant",
+					content: [{ type: "thinking", thinking: "t", thinkingSignature: "sig" }, { type: "text", text: "First." }],
+					api: "anthropic-messages", provider: "anthropic", model: "claude-opus-5-5",
+					usage: {} as any, stopReason: "stop", timestamp: Date.now(),
+				} as any,
+				{ role: "user", content: "again", timestamp: Date.now() },
+			],
+		};
+		const result = await streamAnthropic(model, context, { client, thinkingEnabled: true, effort: "high" } as any).result();
+
+		expect(calls.length).toBe(2);
+		expect(calls[0].thinking.type).toBe("adaptive");
+		expect(calls[1].thinking).toEqual(calls[0].thinking);
+		expect(calls[1].thinking.type).toBe("adaptive");
+		expect(calls[1].thinking.block_binding).toEqual({ prefix_mismatch_behavior: "drop_block" });
+		const retryBlocks = calls[1].messages.flatMap((m: any) => (Array.isArray(m.content) ? m.content.map((b: any) => b.type) : []));
+		expect(retryBlocks).not.toContain("thinking");
+		expect(retryBlocks).not.toContain("redacted_thinking");
+		expect(result.stopReason).toBe("stop");
+		expect(result.diagnostics?.filter((d) => d.type === "anthropic-history-validation-recovery").length).toBe(1);
+	});
+
+	it("still recovers a Claude 4.x turn with thinking disabled", async () => {
+		const model = getModel("anthropic", "claude-sonnet-4-5")!;
+		const done = sse([
+			messageStart("msg_recovered"),
+			{ type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+			{ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Recovered." } },
+			{ type: "content_block_stop", index: 0 },
+			messageDelta("end_turn"),
+		]);
+		const { client, calls } = createSequencedClient([VALIDATION_400, done]);
+		const context: Context = {
+			messages: [
+				{ role: "user", content: "hi", timestamp: Date.now() },
+				{
+					role: "assistant",
+					content: [{ type: "thinking", thinking: "t", thinkingSignature: "sig" }, { type: "text", text: "First." }],
+					api: "anthropic-messages", provider: "anthropic", model: "claude-sonnet-4-5",
+					usage: {} as any, stopReason: "stop", timestamp: Date.now(),
+				} as any,
+				{ role: "user", content: "again", timestamp: Date.now() },
+			],
+		};
+		const result = await streamAnthropic(model, context, { client, thinkingEnabled: true, thinkingBudgetTokens: 2048 } as any).result();
+
+		expect(calls.length).toBe(2);
+		expect(calls[0].thinking.type).toBe("enabled");
+		expect(calls[1].thinking).toEqual({ type: "disabled" });
+		const retryBlocks = calls[1].messages.flatMap((m: any) => (Array.isArray(m.content) ? m.content.map((b: any) => b.type) : []));
+		expect(retryBlocks).not.toContain("thinking");
+		expect(result.stopReason).toBe("stop");
 	});
 
 	it("refuses to resend a raw copy whose search pairing is broken", async () => {

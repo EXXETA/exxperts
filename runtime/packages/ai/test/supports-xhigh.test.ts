@@ -26,7 +26,7 @@ describe("getSupportedThinkingLevels", () => {
 		expect(getSupportedThinkingLevels(model!)).toContain("xhigh");
 	});
 
-	it.each(["gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra"] as const)(
+	it.each(["gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-6-sol", "gpt-6-luna"] as const)(
 		"includes xhigh and max for %s models",
 		(modelId) => {
 			const model = getModel("openai-codex", modelId);
@@ -41,6 +41,17 @@ describe("getSupportedThinkingLevels", () => {
 		expect(model).toBeDefined();
 		expect(getSupportedThinkingLevels(model!)).toContain("xhigh");
 		expect(getSupportedThinkingLevels(model!)).toContain("max");
+	});
+
+	it("carries the GPT-6 family to xhigh and max on the API route and never offers off", () => {
+		const model = getModel("openai", "gpt-6-astra");
+		expect(model).toBeDefined();
+		const levels = getSupportedThinkingLevels(model!);
+		expect(levels).toContain("xhigh");
+		expect(levels).toContain("max");
+		// Astra has no "none" effort: an "off" here would reach the wire as
+		// reasoning.effort "none", which the model rejects.
+		expect(levels).not.toContain("off");
 	});
 
 	it("does not include max for the generation below 5.6", () => {

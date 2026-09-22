@@ -50,6 +50,13 @@ const NAME_CASES: Array<{ model?: string; modelLabel?: string; provider?: string
 	{ model: "claude-haiku-4.5", name: "Claude Haiku 4.5" },
 	{ model: "claude-opus-5", name: "Claude Opus 5" },
 	{ model: "claude-fable-5", name: "Claude Fable 5" },
+	// The 0.13.1 catalogue rows: the prettifier already produces them; pinned so they cannot drift.
+	{ model: "claude-fable-5-1", name: "Claude Fable 5.1" },
+	{ model: "gpt-6-astra", name: "GPT-6 Astra" },
+	{ model: "claude-opus-5-5", name: "Claude Opus 5.5" },
+	{ model: "gpt-6-sol", name: "GPT-6 Sol" },
+	{ model: "gpt-6-luna", name: "GPT-6 Luna" },
+	{ model: "grok-4.7", name: "Grok 4.7" },
 	{ model: "all-team-models", name: "All Team Models" },
 	// Provider id supplies the provider display name when there is no label.
 	{ model: "gpt-5.5", provider: "openai-codex", name: "GPT-5.5", providerName: "ChatGPT Plus/Pro" },

@@ -53,7 +53,7 @@ async function capture<TApi extends Api>(
 }
 
 describe("adaptive thinking reaches the provider as an effort", () => {
-	it.each(["claude-opus-5", "claude-fable-5", "claude-sonnet-5"] as const)(
+	it.each(["claude-opus-5", "claude-fable-5", "claude-fable-5-1", "claude-opus-5-5", "claude-opus-4-8", "claude-sonnet-5"] as const)(
 		"%s sends output_config effort, never a thinking budget",
 		async (modelId) => {
 			const model = getModel("anthropic", modelId);
