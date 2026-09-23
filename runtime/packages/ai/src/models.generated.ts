@@ -9980,7 +9980,7 @@ export const MODELS = {
 				cacheRead: 0.1,
 				cacheWrite: 0,
 			},
-			contextWindow: 353000,
+			contextWindow: 272000,
 			maxTokens: 128000,
 		} satisfies Model<"openai-codex-responses">,
 		"gpt-5.6-sol": {
@@ -9998,7 +9998,7 @@ export const MODELS = {
 				cacheRead: 0.4,
 				cacheWrite: 0,
 			},
-			contextWindow: 353000,
+			contextWindow: 272000,
 			maxTokens: 128000,
 		} satisfies Model<"openai-codex-responses">,
 		"gpt-5.6-terra": {
@@ -10016,7 +10016,7 @@ export const MODELS = {
 				cacheRead: 0.25,
 				cacheWrite: 0,
 			},
-			contextWindow: 353000,
+			contextWindow: 272000,
 			maxTokens: 128000,
 		} satisfies Model<"openai-codex-responses">,
 		"gpt-6-astra": {
@@ -10034,7 +10034,7 @@ export const MODELS = {
 				cacheRead: 1,
 				cacheWrite: 0,
 			},
-			contextWindow: 353000,
+			contextWindow: 272000,
 			maxTokens: 128000,
 		} satisfies Model<"openai-codex-responses">,
 		"gpt-6-luna": {
@@ -10052,7 +10052,7 @@ export const MODELS = {
 				cacheRead: 0.01,
 				cacheWrite: 0,
 			},
-			contextWindow: 353000,
+			contextWindow: 272000,
 			maxTokens: 128000,
 		} satisfies Model<"openai-codex-responses">,
 		"gpt-6-sol": {
@@ -10070,7 +10070,7 @@ export const MODELS = {
 				cacheRead: 0.2,
 				cacheWrite: 0,
 			},
-			contextWindow: 353000,
+			contextWindow: 272000,
 			maxTokens: 128000,
 		} satisfies Model<"openai-codex-responses">,
 	},

@@ -968,6 +968,16 @@ export interface PersistentAgentThreadWriteOptions {
 	 * scheduled runs and room entry keep full enforcement.
 	 */
 	allowInactiveProfileModel?: boolean;
+	/**
+	 * A standby write that parks a conversation which is no longer the room's
+	 * current one leaves the runtime pointer alone: the thread file is written,
+	 * the pointer stays on the newer conversation. Set by the server-side
+	 * landing of a finished turn and by a standby save from the client, both
+	 * of which can land after the person moved on to another conversation.
+	 * An idle room still takes the pointer (the landing makes it resumable),
+	 * and a write to the current conversation behaves as always.
+	 */
+	keepRuntimeIfMoved?: boolean;
 }
 
 export interface PersistentAgentActiveTurnState {
@@ -2962,7 +2972,9 @@ export function writePersistentAgentRuntimeState(agentIdRaw: string, input: Part
 	}
 	if (input.state !== "idle") {
 		if (!model) throw new Error("runtime model is required for active or standby runtime state");
-		if (!options.allowInactiveProfileModel) assertActiveProfilePersistentRoomModel(model, "persistent-agent runtime state");
+		// No curated-list check here: the model must equal the active thread's
+		// immutable lock (below), and that lock was gated when the thread was
+		// created. A conversation keeps its model after the model leaves the list.
 		const thread = getPersistentAgentThread(instance.agentId, activeThreadId!);
 		if (!thread || thread.state === "closed") throw persistentAgentConflictError("persistent-agent runtime activeThread is missing or closed");
 		if (!persistentAgentModelLocksEqual(model, thread.model)) {
@@ -3167,7 +3179,10 @@ export function writePersistentAgentThread(agentIdRaw: string, threadIdRaw: stri
 		: readConsultHandoffQueue(existing?.pendingHandoffs);
 	const model = normalizeRuntimeModel(input.model ?? existing?.model);
 	if (!model) throw new Error("thread model is required");
-	if (!options.allowInactiveProfileModel) assertActiveProfilePersistentRoomModel(model, "persistent-agent thread writes");
+	// The curated list gates a NEW lock only. An existing thread keeps the
+	// model it started on even after that model left the list (its lock is
+	// immutable below anyway); a fresh thread must start on a curated model.
+	if (!existing && !options.allowInactiveProfileModel) assertActiveProfilePersistentRoomModel(model, "persistent-agent thread writes");
 	if (existing && !persistentAgentModelLocksEqual(model, existing.model)) {
 		throw persistentAgentConflictError(`persistent-agent thread model lock is immutable; create a fresh runtime boundary to change ${persistentAgentModelLockLabel(existing.model)} to ${persistentAgentModelLockLabel(model)}`);
 	}
@@ -3199,6 +3214,13 @@ export function writePersistentAgentThread(agentIdRaw: string, threadIdRaw: stri
 	const file = instance.runtimeThreadPath(threadId);
 	ensureDir(path.dirname(file));
 	fs.writeFileSync(file, JSON.stringify(thread, null, 2) + "\n", { mode: 0o600, flag: "w" });
+	// The room moved on to another conversation while this one was being
+	// written (a turn that landed after the switch, a late standby save):
+	// the answer is kept in the conversation it belongs to and the pointer
+	// stays where the person went, so the next message there is not refused.
+	if (options.keepRuntimeIfMoved && existingRuntime.state !== "idle" && existingRuntime.activeThreadId !== threadId) {
+		return { thread, runtime: existingRuntime };
+	}
 	const runtime = writePersistentAgentRuntimeState(instance.agentId, { state, activeThreadId: threadId, model }, { allowInFlightActiveThread: true, ...(options.allowInactiveProfileModel ? { allowInactiveProfileModel: true } : {}) });
 	return { thread, runtime };
 }
@@ -5521,7 +5543,7 @@ export function parseCheckpointApprovalRequest(raw: any, agentIdRaw: string): { 
 	const savedThread = getPersistentAgentThread(instance.agentId, conversationId);
 	if (savedThread) {
 		const activeProfileId = readPersistentAgentAiProfileState().profileId;
-		const expectedCheckpointModel = withResolvedCheckpointModelLabel(resolveCheckpointModelLockForProfile(activeProfileId, savedThread.model), savedThread.model);
+		const expectedCheckpointModel = withResolvedCheckpointModelLabel(resolveCheckpointModelLockForProfile(activeProfileId, savedThread.model, { existingLock: true }), savedThread.model);
 		assertModelLockMatches(model, expectedCheckpointModel, "checkpoint approval/saved thread");
 		if (proposalProcessModel) assertModelLockMatches(proposalProcessModel, expectedCheckpointModel, "checkpoint proposal/saved thread");
 	}
@@ -5816,6 +5838,13 @@ export function writeReviewRunEventRecord(input: {
 
 export interface CheckpointApprovalWriteOptions {
 	runtimeCwd?: string;
+	/**
+	 * Model lock for the fresh post-checkpoint thread. Callers pass this when
+	 * the old thread's lock is no longer on the active profile's curated list,
+	 * so the next conversation starts on a current model. When omitted the
+	 * fresh thread inherits the old thread's model.
+	 */
+	freshModel?: PersistentAgentModelLock;
 }
 
 export interface PersistentAgentMementoBoundaryWriteOptions {
@@ -5890,7 +5919,7 @@ export function writeApprovedCheckpoint(request: CheckpointApprovalAcceptedReque
 	const freshWrite = writePersistentAgentThread(instance.agentId, freshThreadId, {
 		state: "standby",
 		origin: "checkpoint",
-		model: oldThread.model,
+		model: normalizeRuntimeModel(options.freshModel) ?? oldThread.model,
 		items: [],
 	}, {
 		createRuntime: ({ model }) => createPersistentAgentPiSessionJsonlThreadRuntime({
@@ -7014,7 +7043,11 @@ export async function buildCheckpointProposal(raw: any, generate: (prompt: strin
 	if (!modelProvider || !modelId) throw new Error("model.provider and model.model are required");
 	const requestedRoomModel = { provider: modelProvider, model: modelId, label: modelLabel || undefined };
 	const activeProfileId = readPersistentAgentAiProfileState().profileId;
-	const model = withResolvedCheckpointModelLabel(resolveCheckpointModelLockForProfile(activeProfileId, requestedRoomModel), requestedRoomModel);
+	// A saved conversation's own lock is inherited as it is, list or no list;
+	// only a model no saved thread carries has to be on the curated list.
+	const savedThreadForProposal = getPersistentAgentThread(instance.agentId, conversationId);
+	const existingLock = Boolean(savedThreadForProposal && persistentAgentModelLocksEqual(savedThreadForProposal.model, requestedRoomModel));
+	const model = withResolvedCheckpointModelLabel(resolveCheckpointModelLockForProfile(activeProfileId, requestedRoomModel, { existingLock }), requestedRoomModel);
 
 	const densityRaw = String(raw?.density ?? "").trim();
 	if (!isCheckpointDensity(densityRaw)) throw new Error("density must be compact, standard, or rich");

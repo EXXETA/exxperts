@@ -1765,9 +1765,11 @@ async function generateModels() {
 			baseUrl: CODEX_BASE_URL,
 			reasoning: true,
 			input: ["text", "image"],
-			// mirrors the API row, 2026-09-22
+			// the backend's own window (GET backend-api/codex/models, 2026-09-23:
+			// every served model reports context_window 272000); output mirrors
+			// the API row, 2026-09-22
 			cost: { input: 4, output: 20, cacheRead: 0.4, cacheWrite: 0 },
-			contextWindow: 353000,
+			contextWindow: 272000,
 			maxTokens: CODEX_MAX_TOKENS,
 		},
 		{
@@ -1779,7 +1781,7 @@ async function generateModels() {
 			reasoning: true,
 			input: ["text", "image"],
 			cost: { input: 1, output: 6, cacheRead: 0.1, cacheWrite: 0 },
-			contextWindow: 353000,
+			contextWindow: 272000,
 			maxTokens: CODEX_MAX_TOKENS,
 		},
 		{
@@ -1791,13 +1793,14 @@ async function generateModels() {
 			reasoning: true,
 			input: ["text", "image"],
 			cost: { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0 },
-			contextWindow: 353000,
+			contextWindow: 272000,
 			maxTokens: CODEX_MAX_TOKENS,
 		},
 		// GPT-6 Astra on the ChatGPT subscription endpoint: served on a Plus plan
 		// on 2026-09-22 (scripts/codex-model-probe.ts answered 200, served model
-		// gpt-6-astra, no context-window header), so the window and output mirror
-		// the 5.6 rows and the cost mirrors the openai API row. Astra has no
+		// gpt-6-astra), so the window is the 272000 the backend serves for every
+		// model, the output mirrors the 5.6 rows and the cost mirrors the openai
+		// API row. Astra has no
 		// "none" effort, so off is pinned to null here (the family rule below only
 		// pins it on the Responses APIs); the rule adds xhigh, max and minimal.
 		{
@@ -1810,13 +1813,14 @@ async function generateModels() {
 			thinkingLevelMap: { off: null },
 			input: ["text", "image"],
 			cost: { input: 10, output: 50, cacheRead: 1, cacheWrite: 0 },
-			contextWindow: 353000,
+			contextWindow: 272000,
 			maxTokens: CODEX_MAX_TOKENS,
 		},
 		// GPT-6 Sol and Luna on the ChatGPT subscription endpoint: served on a
 		// Plus plan on 2026-09-22 (scripts/codex-model-probe.ts answered 200 for
-		// both); costs mirror the openai API rows, window and output mirror the
-		// 5.6 rows; unlike Astra they take effort none, so off stays and the
+		// both); costs mirror the openai API rows, the window is the 272000 the
+		// backend serves, the output mirrors the 5.6 rows; unlike Astra they
+		// take effort none, so off stays and the
 		// family rule adds minimal, xhigh and max.
 		{
 			id: "gpt-6-sol",
@@ -1827,7 +1831,7 @@ async function generateModels() {
 			reasoning: true,
 			input: ["text", "image"],
 			cost: { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 0 },
-			contextWindow: 353000,
+			contextWindow: 272000,
 			maxTokens: CODEX_MAX_TOKENS,
 		},
 		{
@@ -1839,7 +1843,7 @@ async function generateModels() {
 			reasoning: true,
 			input: ["text", "image"],
 			cost: { input: 0.1, output: 0.5, cacheRead: 0.01, cacheWrite: 0 },
-			contextWindow: 353000,
+			contextWindow: 272000,
 			maxTokens: CODEX_MAX_TOKENS,
 		},
 		{

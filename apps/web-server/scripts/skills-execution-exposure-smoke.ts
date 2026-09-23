@@ -152,6 +152,9 @@ async function runTurn(agentId: string, conversationId: string): Promise<void> {
 		// socket on the first tool result races the turn's own finish, whose
 		// final write moves the room's active thread back under the next
 		// conversation's feet and its prompt is refused as not current.
+		// Since 0.13.2 a landing after the switch leaves the pointer alone
+		// (keepRuntimeIfMoved, pinned by conversation-switch-race-smoke); the
+		// wait stays because it is harmless.
 		if (capturedToolResults.length > before && frames.some((frame) => frame?.type === "event" && frame?.event?.type === "agent_end")) {
 			try { socket.close(); } catch {}
 			return;

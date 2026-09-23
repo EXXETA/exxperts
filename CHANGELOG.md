@@ -2,6 +2,25 @@
 
 User-visible changes per release. Historical private/internal development notes are not part of this public-facing changelog.
 
+## 0.13.2 (2026-09-23)
+
+- Models: the Claude picker adds Haiku 4.5 and follows Anthropic's order, the ChatGPT picker
+  follows OpenAI's order. Opus 5.5 and GPT-6 Sol stay the recommended defaults; GPT-5.5 leaves the
+  ChatGPT picker, and rooms already on it continue.
+- AI setup: the Claude and ChatGPT profiles always offer the current curated models after an
+  update. A custom model list saved earlier on one of these two profiles is dropped on the first
+  start, Memorize and Review move to the current defaults, and gateways keep their own lists.
+- Rooms: a conversation keeps the model it started on even after that model leaves the list. New
+  conversations pick from the current list.
+- Rooms: switching to another conversation in the instant an answer finishes no longer refuses
+  the next message. The finished answer is kept in the conversation it belongs to.
+- Windows: saving room or global instructions works when the instructions file is a link. The
+  link is replaced by a plain file, as on macOS and Linux.
+- Memory: a date written with slashes, and a day written without its year, now find the same
+  notes as the other date spellings. Slash dates read day first, as in Europe.
+- ChatGPT: rooms on the GPT-6 and GPT-5.6 models now count their context against the 272k window
+  the subscription serves, so the context reading and automatic compaction match the backend.
+
 ## 0.13.1 (2026-09-23)
 
 - Models: Claude Opus 5.5, Claude Fable 5.1, GPT-6 Sol, GPT-6 Luna, GPT-6 Astra and Grok 4.7 are

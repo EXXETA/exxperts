@@ -119,7 +119,7 @@ try {
 			assert(tokens.includes("2026-07-11"), `"${spelling}" folds to the one day token (${tokens.join(",")})`);
 		}
 		assert(tokenize("11. Juli 2026", "de").includes("juli"), "the month word survives the fold, because a person who searches for Juli means it");
-		assert(tokenize("2026-07-11", "de").join(",") === "2026-07-11,2026-07,2026", `a day stays one token, is never cut into its numbers, and carries its month and its year (${tokenize("2026-07-11", "de").join(",")})`);
+		assert(tokenize("2026-07-11", "de").join(",") === "2026-07-11,2026-07,2026,07-11", `a day stays one token, is never cut into its numbers, and carries its month, its year and its month-and-day (${tokenize("2026-07-11", "de").join(",")})`);
 		assert(normalizeSearchText("32.07.2026").includes("32.07.2026") && !/2026-07-32/u.test(normalizeSearchText("32.07.2026")), "a day that does not exist is left exactly as it was written");
 		const dated = buildIndex([note("d-de", "Zahlungen", "2026-07-11", "Die Zahlung war am 11. Juli 2026 fällig.")]);
 		assert(ids(search(dated, "11.07.2026")) === "d-de", "a question written the numeric way finds a note written the long way");
@@ -334,14 +334,45 @@ try {
 			const found = search(days, question).map((hit) => hit.doc.id).sort().join(",");
 			assert(found === "s-de,s-dotted,s-en,s-iso", `"${question}" reaches all four spellings of the same day (${found})`);
 		}
-		assert(tokenize("11.07.2026", "de").join(",") === "2026-07-11,2026-07,2026", `a numeric day carries its month and its year (${tokenize("11.07.2026", "de").join(",")})`);
-		assert(tokenize("11. Juli 2026", "de").join(",") === "2026-07-11,2026-07,2026,juli", `a worded day carries them and keeps its month word (${tokenize("11. Juli 2026", "de").join(",")})`);
+		assert(tokenize("11.07.2026", "de").join(",") === "2026-07-11,2026-07,2026,07-11", `a numeric day carries its month, its year and its month-and-day (${tokenize("11.07.2026", "de").join(",")})`);
+		assert(tokenize("11. Juli 2026", "de").join(",") === "2026-07-11,2026-07,2026,07-11,juli", `a worded day carries them and keeps its month word (${tokenize("11. Juli 2026", "de").join(",")})`);
 		assert(tokenize("Juli 2026", "de").join(",") === "2026-07,2026,juli", `a month beside a year is the month token without a day (${tokenize("Juli 2026", "de").join(",")})`);
 		assert(tokenize("Juli", "de").join(",") === "juli", `a month name on its own is still just a word (${tokenize("Juli", "de").join(",")})`);
 		assert(ids(search(days, "Juli")) !== "", "and a question that is only that word still reaches the notes that carry it");
 		assert(tokenize("2026-07", "de").join(",") === "2026-07,2026", `a month written the short way carries its year (${tokenize("2026-07", "de").join(",")})`);
 		assert(JSON.stringify(parseSearchDate("2026-07")) === JSON.stringify({ from: "2026-07-01", to: "2026-07-31" }) && parseSearchDate("Juli 2026") === null, "reading a date for a filter is unchanged: a month is a span, and a month without a day is not a date");
 		pass("every date spelling folds to its day, its month and its year, and a month beside a year is a month");
+	}
+
+	// --- 14b. Slash dates, read the European way ----------------------------
+	{
+		assert(tokenize("12/03/2025", "de").includes("2025-03-12"), `12/03/2025 is the twelfth of March (${tokenize("12/03/2025", "de").join(",")})`);
+		assert(tokenize("03/12/2025", "en").includes("2025-12-03"), `03/12/2025 is the third of December, never March (${tokenize("03/12/2025", "en").join(",")})`);
+		assert(normalizeSearchText("13/13/2025").includes("13/13/2025") && normalizeSearchText("12/03/25").includes("12/03/25"), "an impossible day and a two-digit year are left as written");
+		assert(!/\d{4}-\d{2}-\d{2}/u.test(normalizeSearchText("13/13/2025 12/03/25")), "and neither becomes a day token");
+		const slashed = buildIndex([note("sl-de", "Zahlungen", "2026-07-11", "Die Zahlung war am 11. Juli 2026 fällig.")]);
+		assert(ids(search(slashed, "11/07/2026")) === "sl-de", "a question written with slashes finds a note written the long way");
+		assert(JSON.stringify(parseSearchDate("11/07/2026")) === JSON.stringify({ from: "2026-07-11", to: "2026-07-11" }), "a filter reads the slash form as the one-day span");
+		pass("a date written with slashes reads day, month, year, and only that way");
+	}
+
+	// --- 14c. A day written without its year --------------------------------
+	{
+		for (const spelling of ["12. März", "12 March", "12th of March", "March 12", "March 12th", "12.03."]) {
+			const tokens = tokenize(spelling, "de");
+			assert(tokens.includes("03-12"), `"${spelling}" carries its month-and-day (${tokens.join(",")})`);
+			assert(!tokens.some((token) => /^\d{4}/u.test(token)), `"${spelling}" invents no year (${tokens.join(",")})`);
+		}
+		assert(tokenize("12. März", "de").includes("marz") || tokenize("12. März", "de").includes("maerz") || tokenize("12. März", "de").includes("märz"), `the month word survives the fold (${tokenize("12. März", "de").join(",")})`);
+		const yearless = buildIndex([note("y-de", "Zahlungen", "2026-07-11", "Die Zahlung war am 11. Juli 2026 fällig.")]);
+		for (const question of ["11. Juli", "July 11", "11.07."]) assert(ids(search(yearless, question)) === "y-de", `"${question}" finds the note that names the day with its year`);
+		assert(tokenize("11. Juli 2026", "de").join(",") === "2026-07-11,2026-07,2026,07-11,juli", `a day with its year keeps its full-date tokens and is not read twice (${tokenize("11. Juli 2026", "de").join(",")})`);
+		assert(tokenize("Juli 2026 12 Personen", "de").join(",") === "2026-07,2026,juli,12,person", `a number after a folded month is not read as its day (${tokenize("Juli 2026 12 Personen", "de").join(",")})`);
+		assert(normalizeSearchText("30.02.").includes("30.02.") && !tokenize("30.02.", "de").includes("02-30"), "a day that exists in no month is left as written");
+		assert(tokenize("29.02.", "de").includes("02-29"), "a leap day is a day in some year");
+		assert(tokenize("pages 03-12", "en").join(",") === "page,03-12", `a numeric range written like a month-and-day becomes that one token, the accepted choice (${tokenize("pages 03-12", "en").join(",")})`);
+		assert(tokenize("07-2026", "en").join(",") === "07,2026", `a month beside a year with a hyphen stays two numbers (${tokenize("07-2026", "en").join(",")})`);
+		pass("a day written without its year meets the note that wrote it with one");
 	}
 
 	// --- 15. The note nobody dated ------------------------------------------

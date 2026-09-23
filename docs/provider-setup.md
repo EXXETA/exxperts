@@ -304,35 +304,37 @@ Capability values that were auto-detected are still the gateway's claims, not ve
 
 ## Current ChatGPT/Codex process-model policy
 
-The provider catalog may contain more `openai-codex` models than the product approves. Persistent-room workflows use the architect-approved process/model policy in `apps/web-server/src/persistent-agent-ai-profiles.ts`.
+The provider catalog may contain more `openai-codex` models than the product approves. Persistent-room workflows use the curated process/model policy in `apps/web-server/src/persistent-agent-ai-profiles.ts`.
 
 Current `chatgpt-codex` mapping:
 
 | Process | Approved provider/model |
 | --- | --- |
-| Persistent-room conversation | `openai-codex/gpt-5.5` |
+| Persistent-room conversation | `openai-codex/gpt-6-sol`, `openai-codex/gpt-6-astra`, `openai-codex/gpt-6-luna`, `openai-codex/gpt-5.6-sol`, `openai-codex/gpt-5.6-terra`, `openai-codex/gpt-5.6-luna` |
 | Remember (checkpoint compression) | Inherits the selected persistent-room model |
-| Memorize (absorb recent context) | `openai-codex/gpt-5.5` |
-| Review (structural review) | `openai-codex/gpt-5.5` |
+| Memorize (absorb recent context) | `openai-codex/gpt-6-sol` |
+| Review (structural review) | `openai-codex/gpt-6-sol` |
 
-Model-policy editing is not a user/admin feature today. Any editable policy needs a separate product design for storage, schema, validation, merge behavior, thread-lock safety, and rollback.
+`gpt-6-sol` is the default/recommended model. The list follows the order of OpenAI's Codex app.
+
+The room list of these two profiles is fixed by the release; AI setup lets you choose which curated model runs Memorize and which runs Review. A conversation keeps the model it started on even after a list change; new conversations pick from the current list.
 
 ## Current Claude/Anthropic process-model policy
 
-The provider catalog may contain more `anthropic` models than the product approves. Persistent-room workflows use the architect-approved process/model policy in `apps/web-server/src/persistent-agent-ai-profiles.ts`.
+The provider catalog may contain more `anthropic` models than the product approves. Persistent-room workflows use the curated process/model policy in `apps/web-server/src/persistent-agent-ai-profiles.ts`.
 
 Current `anthropic` mapping:
 
 | Process | Approved provider/model |
 | --- | --- |
-| Persistent-room conversation | `anthropic/claude-opus-4-8`, `anthropic/claude-sonnet-5`, `anthropic/claude-fable-5`, `anthropic/claude-opus-4-6`, `anthropic/claude-opus-4-7`, `anthropic/claude-sonnet-4-6` |
+| Persistent-room conversation | `anthropic/claude-opus-5-5`, `anthropic/claude-fable-5-1`, `anthropic/claude-sonnet-5`, `anthropic/claude-haiku-4-5`, `anthropic/claude-opus-5`, `anthropic/claude-opus-4-8`, `anthropic/claude-fable-5`, `anthropic/claude-sonnet-4-6`, `anthropic/claude-opus-4-7`, `anthropic/claude-opus-4-6` |
 | Remember (checkpoint compression) | Inherits the selected persistent-room model |
-| Memorize (absorb recent context) | `anthropic/claude-opus-4-8` |
-| Review (structural review) | `anthropic/claude-opus-4-8` |
+| Memorize (absorb recent context) | `anthropic/claude-opus-5-5` |
+| Review (structural review) | `anthropic/claude-opus-5-5` |
 
-`claude-opus-4-8` is the default/recommended model. `claude-sonnet-5` and `claude-fable-5` are approved as additional persistent-room conversation choices.
+`claude-opus-5-5` is the default/recommended model. The list follows Anthropic's tier order, newest first inside a tier.
 
-Model-policy editing is not a user/admin feature today. Any editable policy needs a separate product design for storage, schema, validation, merge behavior, thread-lock safety, and rollback.
+The room list of these two profiles is fixed by the release; AI setup lets you choose which curated model runs Memorize and which runs Review. A conversation keeps the model it started on even after a list change; new conversations pick from the current list.
 
 ### Maintainer checklist for newly released provider models
 

@@ -117,26 +117,54 @@ try {
 		body: JSON.stringify({ providerId: "openai-compatible", roomModels: ["x"], learnModel: "x", reviewMemoryModel: "x" }),
 	});
 	assert(reservedGateway.status === 400, "gateway provider must be rejected for custom profiles");
-	// Built-in providers take a catalog override instead: identity stays, models change, reset restores.
-	// The curated Claude picker is read before the override so the reset check follows the array
-	// rather than a fixed count.
-	const curated = await requestJson("/api/persistent-agent-ai-profile");
-	const curatedRoomModels = curated.body?.profiles?.find((profile: any) => profile.id === "anthropic")?.processes?.persistentRoom?.models?.length;
-	assert(curated.status === 200 && typeof curatedRoomModels === "number" && curatedRoomModels > 1, `the curated Claude catalog should be readable before the override, got ${curated.status}: ${JSON.stringify(curatedRoomModels)}`);
-	const overridden = await requestJson("/api/persistent-agent-ai-profiles/custom", {
+	// The Claude and ChatGPT profiles carry no custom model list: their room list
+	// is the curated one, and the only choice is which curated model runs
+	// Memorize and which runs Review.
+	const reservedBuiltIn = await requestJson("/api/persistent-agent-ai-profiles/custom", {
 		method: "PUT",
 		body: JSON.stringify({ providerId: "anthropic", roomModels: ["claude-opus-4-8"], learnModel: "claude-opus-4-8", reviewMemoryModel: "claude-opus-4-8" }),
 	});
-	assert(overridden.status === 200, `built-in override should be accepted, got ${overridden.status}: ${JSON.stringify(overridden.body)}`);
-	const overriddenAnthropic = overridden.body.profiles.find((profile: any) => profile.id === "anthropic");
-	assert(overriddenAnthropic?.overridden === true, "anthropic should report overridden");
-	assert(overriddenAnthropic?.kind === "builtin", "override keeps builtin kind");
-	assert(overriddenAnthropic?.processes?.persistentRoom?.models?.length === 1, "override should narrow the room catalog");
-	assert(!overridden.body.profiles.some((profile: any) => profile.id === "custom-anthropic"), "override must not add a separate profile row");
-	const resetOverride = await requestJson("/api/persistent-agent-ai-profiles/custom/custom-anthropic", { method: "DELETE" });
-	assert(resetOverride.status === 200, `override reset should succeed, got ${resetOverride.status}`);
-	const resetAnthropic = resetOverride.body.profiles.find((profile: any) => profile.id === "anthropic");
-	assert(resetAnthropic?.overridden === false && resetAnthropic?.processes?.persistentRoom?.models?.length === curatedRoomModels, "reset should restore the curated catalog");
+	assert(reservedBuiltIn.status === 400, `a built-in provider must be rejected for custom profiles, got ${reservedBuiltIn.status}`);
+	const curated = await requestJson("/api/persistent-agent-ai-profile");
+	const curatedAnthropic = curated.body?.profiles?.find((profile: any) => profile.id === "anthropic");
+	const curatedRoomModels: number = curatedAnthropic?.processes?.persistentRoom?.models?.length;
+	assert(curated.status === 200 && typeof curatedRoomModels === "number" && curatedRoomModels > 1, `the curated Claude catalog should be readable, got ${curated.status}: ${JSON.stringify(curatedRoomModels)}`);
+	assert(curatedAnthropic.kind === "builtin" && curatedAnthropic.maintenanceModels?.custom === false && !("overridden" in curatedAnthropic), "a built-in row reports maintenanceModels.custom false and no overridden field");
+	const purposeModel = (profile: any, token: string) => profile?.requiredModels?.find((model: any) => String(model.purpose ?? "").split("/").includes(token))?.model;
+	const chosen = await requestJson("/api/persistent-agent-ai-profiles/builtin/anthropic/maintenance-models", {
+		method: "PUT",
+		body: JSON.stringify({ learnModel: "claude-sonnet-5", reviewMemoryModel: "claude-opus-5" }),
+	});
+	assert(chosen.status === 200, `a curated Memorize and Review choice should be accepted, got ${chosen.status}: ${JSON.stringify(chosen.body)}`);
+	const chosenAnthropic = chosen.body.profiles.find((profile: any) => profile.id === "anthropic");
+	assert(purposeModel(chosenAnthropic, "absorb") === "claude-sonnet-5" && purposeModel(chosenAnthropic, "structural-review") === "claude-opus-5", `requiredModels should carry the chosen models, got ${JSON.stringify(chosenAnthropic?.requiredModels)}`);
+	assert(chosenAnthropic.maintenanceModels?.custom === true, "a saved choice reports maintenanceModels.custom true");
+	assert(chosenAnthropic.processes.persistentRoom.models.length === curatedRoomModels, "the choice leaves the curated room list alone");
+	const notCurated = await requestJson("/api/persistent-agent-ai-profiles/builtin/anthropic/maintenance-models", {
+		method: "PUT",
+		body: JSON.stringify({ learnModel: "claude-opus-4-5", reviewMemoryModel: "claude-opus-5" }),
+	});
+	assert(notCurated.status === 400 && /claude-opus-4-5/.test(String(notCurated.body?.error)), `a model outside the curated list must be refused by name, got ${notCurated.status}: ${JSON.stringify(notCurated.body)}`);
+	const notBuiltIn = await requestJson("/api/persistent-agent-ai-profiles/builtin/custom-groq/maintenance-models", {
+		method: "PUT",
+		body: JSON.stringify({ learnModel: "x", reviewMemoryModel: "x" }),
+	});
+	assert(notBuiltIn.status === 404, `a non-built-in id must 404, got ${notBuiltIn.status}`);
+	const explicitDefaults = await requestJson("/api/persistent-agent-ai-profiles/builtin/anthropic/maintenance-models", {
+		method: "PUT",
+		body: JSON.stringify({ learnModel: "claude-opus-5-5", reviewMemoryModel: "claude-opus-5-5" }),
+	});
+	assert(explicitDefaults.status === 200 && explicitDefaults.body.profiles.find((profile: any) => profile.id === "anthropic")?.maintenanceModels?.custom === false, `choosing exactly the defaults saves no preference, got ${explicitDefaults.status}`);
+	const chosenAgain = await requestJson("/api/persistent-agent-ai-profiles/builtin/anthropic/maintenance-models", {
+		method: "PUT",
+		body: JSON.stringify({ learnModel: "claude-sonnet-5", reviewMemoryModel: "claude-opus-5-5" }),
+	});
+	assert(chosenAgain.status === 200 && chosenAgain.body.profiles.find((profile: any) => profile.id === "anthropic")?.maintenanceModels?.custom === true, "a choice that differs from the defaults in one model is a preference");
+	const defaults = await requestJson("/api/persistent-agent-ai-profiles/builtin/anthropic/maintenance-models", { method: "DELETE" });
+	assert(defaults.status === 200, `back to the defaults should succeed, got ${defaults.status}`);
+	const defaultAnthropic = defaults.body.profiles.find((profile: any) => profile.id === "anthropic");
+	assert(defaultAnthropic.maintenanceModels?.custom === false && purposeModel(defaultAnthropic, "absorb") === "claude-opus-5-5" && purposeModel(defaultAnthropic, "structural-review") === "claude-opus-5-5", `the defaults should be back, got ${JSON.stringify(defaultAnthropic?.requiredModels)}`);
+	assert(defaultAnthropic.processes.persistentRoom.models.length === curatedRoomModels, "the room list count equals the curated count throughout");
 	const badModel = await requestJson("/api/persistent-agent-ai-profiles/custom", {
 		method: "PUT",
 		body: JSON.stringify({ providerId: "groq", roomModels: ["definitely-not-a-model"], learnModel: suggested, reviewMemoryModel: suggested }),

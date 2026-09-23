@@ -111,6 +111,29 @@ function safeCreateAuthStorage(): AuthStorage | null {
 	}
 }
 
+// The saved pointer as written, without resolving it: null when no file exists
+// or the file does not parse. Used to decide whether a pointer is stale.
+export function readSavedPersistentAgentAiProfileId(): string | null {
+	try {
+		if (!fs.existsSync(PERSISTENT_AGENT_AI_PROFILE_FILE)) return null;
+		const raw = JSON.parse(fs.readFileSync(PERSISTENT_AGENT_AI_PROFILE_FILE, "utf-8"));
+		const profileId = String(raw?.profileId ?? raw?.id ?? "").trim();
+		return profileId || null;
+	} catch {
+		return null;
+	}
+}
+
+// Drops the explicit choice: the state becomes "auto" and follows the signed-in
+// provider. Called when the profile the pointer names no longer exists, so the
+// pointer never stays stale from the app's own actions. Returns true when a
+// file was removed.
+export function clearSavedPersistentAgentAiProfileState(): boolean {
+	if (!fs.existsSync(PERSISTENT_AGENT_AI_PROFILE_FILE)) return false;
+	fs.rmSync(PERSISTENT_AGENT_AI_PROFILE_FILE, { force: true });
+	return true;
+}
+
 export function getActivePersistentAgentAiProfileId(): PersistentAgentAiProfileId {
 	return readPersistentAgentAiProfileState().profileId;
 }

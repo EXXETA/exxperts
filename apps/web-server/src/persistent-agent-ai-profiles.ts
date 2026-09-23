@@ -1,3 +1,4 @@
+import { readBuiltInAiProfilePreferences, type BuiltInAiProfilePreference } from "./built-in-ai-profile-preferences.js";
 import { isCustomAiProfileId, readCustomAiProfiles } from "./custom-ai-profiles.js";
 import {
 	GATEWAY_PROVIDER_ID_PREFIX,
@@ -76,14 +77,14 @@ export const PERSISTENT_AGENT_AI_PROFILES = {
 		providerLabel: "ChatGPT Plus/Pro",
 		description: "ChatGPT subscription profile for persistent-agent room and maintenance workflows.",
 		processes: {
+			// The order OpenAI's Codex app uses; the first entry is the default.
 			persistentRoom: [
 				{ provider: "openai-codex", model: "gpt-6-sol" },
-				{ provider: "openai-codex", model: "gpt-5.6-sol" },
-				{ provider: "openai-codex", model: "gpt-5.6-luna" },
-				{ provider: "openai-codex", model: "gpt-5.6-terra" },
-				{ provider: "openai-codex", model: "gpt-5.5" },
 				{ provider: "openai-codex", model: "gpt-6-astra" },
 				{ provider: "openai-codex", model: "gpt-6-luna" },
+				{ provider: "openai-codex", model: "gpt-5.6-sol" },
+				{ provider: "openai-codex", model: "gpt-5.6-terra" },
+				{ provider: "openai-codex", model: "gpt-5.6-luna" },
 			],
 			checkpoint: { kind: "inheritPersistentRoom" },
 			absorb: { provider: "openai-codex", model: "gpt-6-sol" },
@@ -97,16 +98,18 @@ export const PERSISTENT_AGENT_AI_PROFILES = {
 		providerLabel: "Anthropic / Claude",
 		description: "Claude subscription profile for persistent-agent room and maintenance workflows.",
 		processes: {
+			// Anthropic's tier order, newest first inside a tier; the first entry is the default.
 			persistentRoom: [
 				{ provider: "anthropic", model: "claude-opus-5-5" },
-				{ provider: "anthropic", model: "claude-opus-5" },
 				{ provider: "anthropic", model: "claude-fable-5-1" },
-				{ provider: "anthropic", model: "claude-opus-4-8" },
 				{ provider: "anthropic", model: "claude-sonnet-5" },
+				{ provider: "anthropic", model: "claude-haiku-4-5" },
+				{ provider: "anthropic", model: "claude-opus-5" },
+				{ provider: "anthropic", model: "claude-opus-4-8" },
 				{ provider: "anthropic", model: "claude-fable-5" },
-				{ provider: "anthropic", model: "claude-opus-4-6" },
-				{ provider: "anthropic", model: "claude-opus-4-7" },
 				{ provider: "anthropic", model: "claude-sonnet-4-6" },
+				{ provider: "anthropic", model: "claude-opus-4-7" },
+				{ provider: "anthropic", model: "claude-opus-4-6" },
 			],
 			checkpoint: { kind: "inheritPersistentRoom" },
 			absorb: { provider: "anthropic", model: "claude-opus-5-5" },
@@ -155,23 +158,24 @@ function gatewayAiProfiles(): PersistentAgentAiProfile[] {
 	return readOpenAiCompatibleGateways().gateways.map(persistentAgentAiProfileFromGateway);
 }
 
-function isBuiltInPersistentAgentAiProfileId(value: string): value is BuiltInPersistentAgentAiProfileId {
+export function isBuiltInPersistentAgentAiProfileId(value: string): value is BuiltInPersistentAgentAiProfileId {
 	return Object.prototype.hasOwnProperty.call(PERSISTENT_AGENT_AI_PROFILES, value);
 }
 
-// A user-approved catalog override swaps the built-in profile's model policy;
-// identity (id, label, provider) stays the built-in's so nothing downstream
-// changes. Removing the override returns the curated catalog.
-function withBuiltInOverride(profile: PersistentAgentAiProfile, overrides: Record<string, { providerId: string; roomModels: string[]; learnModel: string; reviewMemoryModel: string }>): PersistentAgentAiProfile {
-	const override = overrides[profile.id];
-	if (!override) return { ...profile };
+// A built-in profile's room list is always the curated one, so every curated
+// addition and default move is visible right after an update. The one saved
+// preference is which curated model runs Memorize and which runs Review; a
+// chosen model that has since left the curated list falls back silently to
+// the curated default.
+function withBuiltInPreference(profile: PersistentAgentAiProfile, preference: BuiltInAiProfilePreference | undefined): PersistentAgentAiProfile {
+	if (!preference) return { ...profile };
+	const curated = (modelId: string | undefined) => Boolean(modelId) && profile.processes.persistentRoom.some((lock) => lock.model === modelId);
 	return {
 		...profile,
 		processes: {
-			persistentRoom: override.roomModels.map((model) => ({ provider: profile.providerId, model })),
-			checkpoint: { kind: "inheritPersistentRoom" },
-			absorb: { provider: profile.providerId, model: override.learnModel },
-			structuralReview: { provider: profile.providerId, model: override.reviewMemoryModel },
+			...profile.processes,
+			absorb: curated(preference.learnModel) ? { provider: profile.providerId, model: preference.learnModel! } : profile.processes.absorb,
+			structuralReview: curated(preference.reviewMemoryModel) ? { provider: profile.providerId, model: preference.reviewMemoryModel! } : profile.processes.structuralReview,
 		},
 	};
 }
@@ -179,10 +183,10 @@ function withBuiltInOverride(profile: PersistentAgentAiProfile, overrides: Recor
 export function getAvailablePersistentAgentAiProfiles(): PersistentAgentAiProfile[] {
 	// Order matters: auto-follow picks the first signed-in profile, so built-ins
 	// keep priority over saved gateways and user-created custom profiles.
-	const customRead = readCustomAiProfiles();
-	const profiles: PersistentAgentAiProfile[] = Object.values(PERSISTENT_AGENT_AI_PROFILES).map((profile) => withBuiltInOverride(profile, customRead.overridesByBuiltInProfileId));
+	const preferences = readBuiltInAiProfilePreferences().profiles;
+	const profiles: PersistentAgentAiProfile[] = Object.values(PERSISTENT_AGENT_AI_PROFILES).map((profile) => withBuiltInPreference(profile, preferences[profile.id]));
 	profiles.push(...gatewayAiProfiles());
-	profiles.push(...customRead.profiles);
+	profiles.push(...readCustomAiProfiles().profiles);
 	return profiles;
 }
 
@@ -194,7 +198,7 @@ export function isPersistentAgentAiProfileId(value: string): value is Persistent
 
 export function getPersistentAgentAiProfile(profileId: PersistentAgentAiProfileId): PersistentAgentAiProfile {
 	if (isBuiltInPersistentAgentAiProfileId(profileId)) {
-		return withBuiltInOverride(PERSISTENT_AGENT_AI_PROFILES[profileId], readCustomAiProfiles().overridesByBuiltInProfileId);
+		return withBuiltInPreference(PERSISTENT_AGENT_AI_PROFILES[profileId], readBuiltInAiProfilePreferences().profiles[profileId]);
 	}
 	const gatewayRead = readOpenAiCompatibleGateways();
 	const gateway = gatewayRead.gateways.find((candidate) => candidate.id === profileId);
@@ -227,10 +231,14 @@ export function getCheckpointModelPolicy(profileId: PersistentAgentAiProfileId =
 		: { kind: "inheritPersistentRoom" };
 }
 
-export function resolveCheckpointModelLockForProfile(profileId: PersistentAgentAiProfileId, persistentRoomModel: PersistentAgentModelLock): PersistentAgentModelLock {
+// The curated list gates a NEW lock. A saved conversation keeps the model it
+// started on even after that model left the list, and Remember on it inherits
+// that same lock: callers pass existingLock for a model a saved thread already
+// carries, and the curated check applies only to a lock nothing carries yet.
+export function resolveCheckpointModelLockForProfile(profileId: PersistentAgentAiProfileId, persistentRoomModel: PersistentAgentModelLock, options: { existingLock?: boolean } = {}): PersistentAgentModelLock {
 	const policy = getCheckpointModelPolicy(profileId);
 	if (policy.kind === "inheritPersistentRoom") {
-		assertPersistentRoomModelForActiveProfile(profileId, persistentRoomModel.provider, persistentRoomModel.model, "checkpoint compression inherited persistent-room model");
+		if (!options.existingLock) assertPersistentRoomModelForActiveProfile(profileId, persistentRoomModel.provider, persistentRoomModel.model, "checkpoint compression inherited persistent-room model");
 		return cloneModelLock(persistentRoomModel);
 	}
 	return cloneModelLock(policy.model);

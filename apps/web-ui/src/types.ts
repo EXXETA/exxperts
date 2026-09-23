@@ -174,7 +174,8 @@ export interface PersistentAgentAiProfileStatus {
 	id: string;
 	label: string;
 	kind: "builtin" | "gateway" | "custom";
-	overridden?: boolean;
+	// Built-in rows only: whether a saved Memorize and Review choice is in force.
+	maintenanceModels?: { custom: boolean };
 	active: boolean;
 	ready: boolean;
 	message: string | null;

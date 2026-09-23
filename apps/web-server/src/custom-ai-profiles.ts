@@ -10,12 +10,14 @@ export const CUSTOM_AI_PROFILE_ID_PREFIX = "custom-";
 const CUSTOM_AI_PROFILES_VERSION = 1;
 
 // A gateway's model policy is owned by the gateway store, which already gives
-// it a profile of its own; everything else may carry a custom entry. For
-// built-in providers the entry acts as an OVERRIDE of the curated catalog (the
-// built-in profile keeps its id/label), for any other provider it creates a
-// standalone custom profile. Lazy because this module and the profiles module
-// import each other; bindings resolve by call time.
+// it a profile of its own, and a built-in profile's room list is the curated
+// list of the release (its Memorize and Review choice lives in
+// built-in-ai-profile-preferences.json); every other provider may carry a
+// custom entry, which creates a standalone custom profile. Lazy because this
+// module and the profiles module import each other; bindings resolve by call
+// time.
 export function isReservedCustomProfileProvider(providerId: string, gatewayProviderIds?: ReadonlySet<string>): boolean {
+	if (builtInProfileIdForProvider(providerId)) return true;
 	// The default gateway's provider id is reserved even before any gateway is
 	// saved, so a custom profile can never claim the name a later gateway setup
 	// needs back.
@@ -31,6 +33,7 @@ function savedGatewayProviderIds(): ReadonlySet<string> {
 }
 
 // The built-in profile id a provider belongs to, or null for regular providers.
+// The first-start migration and the delete handler use it.
 export function builtInProfileIdForProvider(providerId: string): string | null {
 	for (const profile of Object.values(PERSISTENT_AGENT_AI_PROFILES)) {
 		if (profile.providerId === providerId) return profile.id;
@@ -50,8 +53,6 @@ export type CustomAiProfileEntry = {
 export type CustomAiProfilesReadResult = {
 	profiles: PersistentAgentAiProfile[];
 	entries: CustomAiProfileEntry[];
-	// Built-in catalog overrides, keyed by the built-in profile id.
-	overridesByBuiltInProfileId: Record<string, CustomAiProfileEntry>;
 	errors: string[];
 	path: string;
 };
@@ -122,7 +123,7 @@ export function customAiProfileFromEntry(entry: CustomAiProfileEntry): Persisten
 }
 
 export function readCustomAiProfiles(filePath = CUSTOM_AI_PROFILES_FILE): CustomAiProfilesReadResult {
-	const result: CustomAiProfilesReadResult = { profiles: [], entries: [], overridesByBuiltInProfileId: {}, errors: [], path: filePath };
+	const result: CustomAiProfilesReadResult = { profiles: [], entries: [], errors: [], path: filePath };
 	let raw: unknown;
 	try {
 		if (!fs.existsSync(filePath)) return result;
@@ -152,11 +153,7 @@ export function readCustomAiProfiles(filePath = CUSTOM_AI_PROFILES_FILE): Custom
 		result.entries.push(entry);
 	}
 	result.entries.sort((a, b) => a.id.localeCompare(b.id));
-	for (const entry of result.entries) {
-		const builtInProfileId = builtInProfileIdForProvider(entry.providerId);
-		if (builtInProfileId) result.overridesByBuiltInProfileId[builtInProfileId] = entry;
-		else result.profiles.push(customAiProfileFromEntry(entry));
-	}
+	for (const entry of result.entries) result.profiles.push(customAiProfileFromEntry(entry));
 	return result;
 }
 

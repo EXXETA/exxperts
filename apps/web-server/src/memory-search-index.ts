@@ -266,15 +266,40 @@ const LETTER_RUNS = /\p{L}+/gu;
 function foldedDate(iso: string | null, year: number, month: number, source: string): string {
 	const words = source.match(LETTER_RUNS);
 	const day = iso ? `${iso} ` : "";
-	return ` ${day}${year}-${pad2(month)} ${year}${words ? ` ${words.join(" ")} ` : " "}`;
+	// A day carries its month-and-day as a fourth token, so a question that
+	// names the day without its year still meets the note that has one.
+	const monthDay = iso ? ` ${iso.slice(5)}` : "";
+	return ` ${day}${year}-${pad2(month)} ${year}${monthDay}${words ? ` ${words.join(" ")} ` : " "}`;
+}
+
+/**
+ * A day written without its year is the month-and-day token alone, plus its
+ * words: "12. März" becomes `03-12 März`. Only a day that exists in that
+ * month in some year qualifies (a leap day passes).
+ */
+function foldedDayWithoutYear(month: number, day: number, source: string): string | null {
+	if (month < 1 || month > 12 || day < 1 || day > daysInMonth(2000, month)) return null;
+	const words = source.match(LETTER_RUNS);
+	return ` ${pad2(month)}-${pad2(day)}${words ? ` ${words.join(" ")} ` : " "}`;
 }
 
 const ISO_MONTH_PATTERN = /(?<![\p{L}\d-])(\d{4})-(\d{1,2})(?![\p{L}\d-])/gu;
 const ISO_DATE_PATTERN = /(?<![\p{L}\d-])(\d{4})-(\d{1,2})-(\d{1,2})(?![\p{L}\d-])/gu;
 const DOTTED_DATE_PATTERN = /(?<![\p{L}\d.])(\d{1,2})\.\s?(\d{1,2})\.\s?(\d{4})(?![\p{L}\d-])/gu;
+// Day, month, year, read the European way and no other: 03/12/2025 is the
+// third of December. A two-digit year is not read.
+const SLASH_DATE_PATTERN = /(?<![\p{L}\d/])(\d{1,2})\/(\d{1,2})\/(\d{4})(?![\p{L}\d/])/gu;
 const DAY_MONTH_YEAR_PATTERN = /(?<![\p{L}\d])(\d{1,2})(?:\.|st|nd|rd|th)?\s+(?:of\s+)?(\p{L}+)\.?\s+(\d{4})(?![\p{L}\d-])/giu;
 const MONTH_DAY_YEAR_PATTERN = /(?<![\p{L}\d])(\p{L}+)\.?\s+(\d{1,2})(?:\.|st|nd|rd|th)?\s*,?\s+(\d{4})(?![\p{L}\d-])/giu;
 const MONTH_YEAR_PATTERN = /(?<![\p{L}\d])(\p{L}+)\.?\s+(\d{4})(?![\p{L}\d-])/giu;
+// A day without its year. Each refuses a following four-digit number, so a
+// day with a year that the rules above declined (an impossible day) is not
+// half-read here. The lookbehinds refuse the hyphen and the digit-space the
+// folds above leave in front of a month-and-day and its month word, so a
+// date folded once is never read a second time from its own output.
+const DAY_MONTHWORD_PATTERN = /(?<![\p{L}\d-])(\d{1,2})(?:\.|st|nd|rd|th)?\s+(?:of\s+)?(\p{L}+)(?![\p{L}\d])(?!\s*,?\s*\d{4})/giu;
+const MONTHWORD_DAY_PATTERN = /(?<![\p{L}\d])(?<!\d\s)(\p{L}+)\s+(\d{1,2})(?:st|nd|rd|th)?(?![\p{L}\d])(?!\s*,?\s*\d{4})/giu;
+const DOTTED_DAY_MONTH_PATTERN = /(?<![\p{L}\d.])(\d{1,2})\.(\d{1,2})\.(?!\s?\d)/gu;
 const SHORT_QUARTER_PATTERN = /(?<![\p{L}\d])[qQ]([1-4])(?![\p{L}\d])/gu;
 const NUMBERED_QUARTER_PATTERN = /(?<![\p{L}\d])([1-4])\.?\s*(quartals?|quarter)(?![\p{L}])/giu;
 const WORDED_QUARTER_PATTERN = /(?<![\p{L}\d])(\p{L}+)\s+(quartals?|quarter)(?![\p{L}])/giu;
@@ -308,6 +333,10 @@ export function normalizeSearchText(text: string): string {
 		const iso = isoDate(Number(year), Number(month), Number(day));
 		return iso ? foldedDate(iso, Number(year), Number(month), match) : match;
 	});
+	folded = folded.replace(SLASH_DATE_PATTERN, (match, day: string, month: string, year: string) => {
+		const iso = isoDate(Number(year), Number(month), Number(day));
+		return iso ? foldedDate(iso, Number(year), Number(month), match) : match;
+	});
 	folded = folded.replace(DAY_MONTH_YEAR_PATTERN, (match, day: string, monthWord: string, year: string) => {
 		const month = MONTH_NUMBERS[foldWordVariants(monthWord)[0]];
 		if (month === undefined) return match;
@@ -326,6 +355,19 @@ export function normalizeSearchText(text: string): string {
 		const number = Number(year);
 		return number >= 1000 && number <= 9999 ? foldedDate(null, number, month, match) : match;
 	});
+
+	// A day without its year, after every rule that reads one with a year.
+	folded = folded.replace(DAY_MONTHWORD_PATTERN, (match, day: string, monthWord: string) => {
+		const month = MONTH_NUMBERS[foldWordVariants(monthWord)[0]];
+		if (month === undefined) return match;
+		return foldedDayWithoutYear(month, Number(day), match) ?? match;
+	});
+	folded = folded.replace(MONTHWORD_DAY_PATTERN, (match, monthWord: string, day: string) => {
+		const month = MONTH_NUMBERS[foldWordVariants(monthWord)[0]];
+		if (month === undefined) return match;
+		return foldedDayWithoutYear(month, Number(day), match) ?? match;
+	});
+	folded = folded.replace(DOTTED_DAY_MONTH_PATTERN, (match, day: string, month: string) => foldedDayWithoutYear(Number(month), Number(day), match) ?? match);
 
 	// Ordinals come off before the quarters read their number, so "3rd quarter"
 	// and "3. Quartal" arrive at the quarter rule looking the same.
@@ -351,10 +393,12 @@ export function normalizeSearchText(text: string): string {
 
 // --- Tokenising --------------------------------------------------------------
 
-// A folded day and a folded month each stay one token; everything else is a run
-// of letters and digits. The alternation is ordered, so the scanner sees the day
-// before the month and the month before the bare 2026.
-const TOKEN_SCAN = /\d{4}-\d{2}-\d{2}|\d{4}-\d{2}|[\p{L}\p{N}]+/gu;
+// A folded day, a folded month and a folded month-and-day each stay one token;
+// everything else is a run of letters and digits. The alternation is ordered,
+// so the scanner sees the day before the month, the month before the
+// month-and-day, and all of them before the bare 2026. The month-and-day shape
+// refuses digits on either side, so 07-2026 stays a 07 and a 2026.
+const TOKEN_SCAN = /\d{4}-\d{2}-\d{2}|\d{4}-\d{2}|(?<!\d)\d{2}-\d{2}(?!\d)|[\p{L}\p{N}]+/gu;
 
 /** A token that carries a digit is a date or a number and is never stemmed. */
 const HAS_DIGIT = /\d/;

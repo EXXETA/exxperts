@@ -61,7 +61,9 @@ import websocket from "@fastify/websocket";
 import { createAgentSession, clampThinkingLevel, getThinkingLevelLadder, resolveThinkingLevelRung, DefaultResourceLoader, getAgentDir, SessionManager, CoordinationManager, AuthStorage, ModelRegistry, defaultModelPerProvider, isApiKeyLoginProvider, listGitHubCopilotModels } from "@exxeta/exxperts-runtime";
 import { createWebUiContext } from "./web-ui-context.js";
 import { cancelProviderLogin, logoutProvider, ProviderAuthError, providerLoginState, saveProviderApiKey, startProviderLogin } from "./provider-auth.js";
-import { builtInProfileIdForProvider, deleteCustomAiProfile, isCustomAiProfileId, isReservedCustomProfileProvider, readCustomAiProfiles, writeCustomAiProfile } from "./custom-ai-profiles.js";
+import { clearBuiltInAiProfilePreference, readBuiltInAiProfilePreferences, writeBuiltInAiProfilePreference } from "./built-in-ai-profile-preferences.js";
+import { migrateBuiltInAiProfiles } from "./built-in-ai-profile-migration.js";
+import { deleteCustomAiProfile, isCustomAiProfileId, isReservedCustomProfileProvider, readCustomAiProfiles, writeCustomAiProfile } from "./custom-ai-profiles.js";
 import { ConsultPromptOverflowError } from "./consult.js";
 import { exportMaintenanceDiagnostics, listMaintenanceDiagnostics, MAINTENANCE_DIAGNOSTICS_DEFAULT_LIMIT, MAINTENANCE_DIAGNOSTICS_KEEP } from "./maintenance-diagnostics.js";
 import { appendPersistentAgentThreadPendingHandoff, archivePersistentAgent, assertPersistentAgentAcceptsCheckpoint, assertPersistentAgentAcceptsSession, createPersistentAgentInstance, parsePersistentAgentL1aMarker, planPersistentAgentConstitutionUpgrade, upgradePersistentAgentConstitution, PERSISTENT_AGENT_L1A_TEMPLATE_VERSION, getPersistentAgentLifecycleCounts, listArchivedPersistentAgents, purgePersistentAgent, restorePersistentAgent, sweepPersistentAgentPurgeTombstones, beginPersistentAgentTurn, buildAbsorbAssessment, buildAbsorbDiscussionSignoff, buildAbsorbDiscussionTurn, buildCheckpointProposal, buildConsultAnswer, buildPersistentAgentBootContext, buildPersistentAgentCurrentIdentitySection, buildPersistentRoomCurrentWorkspaceSection, createPersistentAgentFromScaffoldInput, createPersistentAgentPiSessionJsonlThreadRuntime, createPersistentRoomAutoDeclinedQuestionLog, clearPersistentAgentThreadPendingHandoffs, clearPersistentAgentUnseenLandedAnswerForBind, deletePersistentAgentThread, PERSISTENT_AGENT_L1A_DEFAULT_MODE_ID, PERSISTENT_AGENT_L1A_MODES, discardEmptyPreparedBoundaryThread, finishPersistentAgentTurn, getAbsorbAvailability, getPersistentAgentActiveTurnState, getPersistentAgentRuntimeState, getPersistentAgentStatus, getPersistentAgentThread, getPersistentRoomInstructionsView, savePersistentRoomGlobalInstructionsEnabled, isPersistentAgentArchived, listPersistentAgents, markPersistentAgentTurnCancelling, openPersistentAgentPiSessionManager, parseCheckpointApprovalRequest, readPersistentAgentBootPromptSnapshot, readPersistentAgentReviewTargetEstimatedTokens, recordPersistentAgentUnseenLandedAnswer, renamePersistentAgent, validatePersistentAgentId, writeApprovedCheckpoint, writePersistentAgentMementoBoundary, writePersistentAgentRuntimeState, writePersistentAgentThread, parseAssessmentRetryFeedback, assertPersistentAgentBootPromptFitsWindow, PersistentAgentMemoryOverflowError } from "./persistent-agents.js";
@@ -97,7 +99,7 @@ import { assessTaskStoreGc, collectProtectedTaskIds, executeTaskStoreGc } from "
 import { getSpecialistTemplate, SPECIALIST_TASK_CAPS } from "./specialist-templates.js";
 import { generateTaskArtifactThumbnails } from "./task-artifact-thumbnails.js";
 import { createPersistentRoomWorkspaceTools } from "./persistent-room-workspace-tools.js";
-import { assertPersistentRoomModelForActiveProfile, DEFAULT_PERSISTENT_AGENT_AI_PROFILE_ID, getAbsorbModelLock, getAvailablePersistentAgentAiProfiles, getConsultModelLock, getPersistentAgentAiProfile, getPersistentRoomModelLocks, getStructuralReviewModelLock, isPersistentAgentAiProfileId, isPersistentRoomModelForProfile, OPENAI_COMPATIBLE_AI_PROFILE_ID, OPENAI_COMPATIBLE_PROVIDER_ID } from "./persistent-agent-ai-profiles.js";
+import { assertPersistentRoomModelForActiveProfile, DEFAULT_PERSISTENT_AGENT_AI_PROFILE_ID, getAbsorbModelLock, isBuiltInPersistentAgentAiProfileId, PERSISTENT_AGENT_AI_PROFILES, getAvailablePersistentAgentAiProfiles, getConsultModelLock, getPersistentAgentAiProfile, getPersistentRoomModelLocks, getStructuralReviewModelLock, isPersistentAgentAiProfileId, isPersistentRoomModelForProfile, OPENAI_COMPATIBLE_AI_PROFILE_ID, OPENAI_COMPATIBLE_PROVIDER_ID } from "./persistent-agent-ai-profiles.js";
 import { deleteOpenAiCompatibleGateway, findOpenAiCompatibleGateway, GATEWAY_DEFAULT_CONTEXT_WINDOW, GATEWAY_MAX_CONTEXT_WINDOW, GATEWAY_MIN_CONTEXT_WINDOW, GATEWAY_PROVIDER_ID_PREFIX, GatewayStoreUnreadableError, mintGatewayProviderId, effectiveGatewayModel, parseGatewayContextWindow, parseGatewayDetectedSnapshot, readOpenAiCompatibleGateways, writeOpenAiCompatibleGateway, type GatewayModelDetected, type GatewayRoomModel, type OpenAiCompatibleGateway } from "./openai-compatible-gateways.js";
 import { ModelCatalogUnreadableError, readCatalogProviderIds, readGatewayProviderBaseUrl, removeGatewayProviderEntry, writeGatewayProviderEntry } from "./openai-compatible-gateway-catalog.js";
 import { discoverGatewayModels, GatewayDiscoveryError, isNonChatGatewayMode, normalizeGatewayBaseUrl } from "./openai-compatible-gateway-detect.js";
@@ -112,7 +114,7 @@ import { componentFromText, createPromptAssemblyManifest, estimateTextTokens } f
 import { listPromptAssemblyManifests, recordPromptAssemblyManifest } from "./prompt-diagnostics-store.js";
 import type { PromptComponentType, PromptDiagnosticsModel, PromptDiagnosticsSurface, RedactedPromptComponent } from "./prompt-diagnostics.js";
 import type { PersistentAgentAiProfileId, PersistentAgentAiProfile } from "./persistent-agent-ai-profiles.js";
-import { readPersistentAgentAiProfileState, writePersistentAgentAiProfileState } from "./persistent-agent-ai-profile-state.js";
+import { clearSavedPersistentAgentAiProfileState, readPersistentAgentAiProfileState, readSavedPersistentAgentAiProfileId, writePersistentAgentAiProfileState } from "./persistent-agent-ai-profile-state.js";
 import type { PersistentAgentAiProfileStateSource } from "./persistent-agent-ai-profile-state.js";
 import { registerKnowledgeApi } from "./knowledge-api.js";
 import { projectAgentEventForWebClient } from "./web-client-event-projection.js";
@@ -2202,6 +2204,11 @@ app.put("/api/persistent-agents/:id/threads/:threadId", async (req, reply) => {
 				model,
 				cwd: runtimeCwd,
 			}),
+			// An active save is how a conversation is switched to and moves the
+			// pointer; a standby save parks a conversation (the room-exit save,
+			// a late debounced persist) and must never steal the pointer from a
+			// newer one.
+			...(body.state === "standby" ? { keepRuntimeIfMoved: true } : {}),
 		});
 	} catch (e) {
 		return persistentAgentNormalUseErrorReply(reply, e);
@@ -2272,7 +2279,7 @@ app.post("/api/persistent-agents/:id/memento", async (req, reply) => {
 		// selection first, then the profile's models, preferring configured
 		// auth). When nothing is available the fresh thread inherits the old
 		// lock — Memento itself never invokes a model, so it still succeeds.
-		const freshModel = resolveMementoFreshThreadModel(status.id, conversationId);
+		const freshModel = resolveBoundaryFreshThreadModel(status.id, conversationId);
 		let result;
 		try {
 			result = writePersistentAgentMementoBoundary(status.id, conversationId, new Date(), { runtimeCwd, ...(freshModel ? { freshModel } : {}) });
@@ -2946,7 +2953,10 @@ app.post("/api/persistent-agents/:id/checkpoint/approve", async (req, reply) => 
 		const parsed = parseCheckpointApprovalRequest(req.body ?? {}, status.id);
 		const effectiveWorkspacePolicy = resolvePersistentRoomEffectiveWorkspacePolicy(status.id, parsed.request.conversationId);
 		const runtimeCwd = persistentRoomRuntimeCwdForEffectiveWorkspacePolicy(effectiveWorkspacePolicy, REPO_ROOT);
-		const result = writeApprovedCheckpoint(parsed.request, parsed.warnings, new Date(), { runtimeCwd });
+		// The fresh post-checkpoint thread starts on a curated model when the old
+		// lock has left the list; the old conversation itself keeps its lock.
+		const freshModel = resolveBoundaryFreshThreadModel(status.id, parsed.request.conversationId);
+		const result = writeApprovedCheckpoint(parsed.request, parsed.warnings, new Date(), { runtimeCwd, ...(freshModel ? { freshModel } : {}) });
 		return browserSafeCheckpointApprovalResponse(result);
 	} catch (e) {
 		return persistentAgentNormalUseErrorReply(reply, e);
@@ -3134,14 +3144,15 @@ const WEB_CHAT_MODEL_LABELS: Record<string, Record<string, string>> = {
 	},
 	anthropic: {
 		"claude-opus-5-5": "Opus 5.5",
-		"claude-opus-5": "Opus 5",
 		"claude-fable-5-1": "Fable 5.1",
-		"claude-opus-4-8": "Opus 4.8",
 		"claude-sonnet-5": "Sonnet 5",
+		"claude-haiku-4-5": "Haiku 4.5",
+		"claude-opus-5": "Opus 5",
+		"claude-opus-4-8": "Opus 4.8",
 		"claude-fable-5": "Fable 5",
-		"claude-opus-4-6": "Opus 4.6",
-		"claude-opus-4-7": "Opus 4.7",
 		"claude-sonnet-4-6": "Sonnet 4.6",
+		"claude-opus-4-7": "Opus 4.7",
+		"claude-opus-4-6": "Opus 4.6",
 	},
 };
 const DEFAULT_AGENT_SESSION_MAX_TOKENS_CAP = 32000;
@@ -3188,8 +3199,10 @@ type PersistentAgentAiProfileDiagnostic = {
 	id: PersistentAgentAiProfileId;
 	label: string;
 	kind: "builtin" | "gateway" | "custom";
-	// Built-in profile whose curated catalog is replaced by a user override.
-	overridden: boolean;
+	// Built-in rows only: whether a saved Memorize and Review choice is in
+	// force, so the UI can offer the way back to the curated defaults. The
+	// effective models are the absorb and structural-review requiredModels.
+	maintenanceModels?: { custom: boolean };
 	provider: {
 		id: string;
 		configured: boolean;
@@ -3495,7 +3508,12 @@ function savedGatewayIds(): Set<string> {
 	return new Set(readOpenAiCompatibleGateways().gateways.map((gateway) => gateway.id));
 }
 
-function buildPersistentAgentAiProfileDiagnostic(registry: ModelRegistry, profileId: PersistentAgentAiProfileId, activeProfileId: PersistentAgentAiProfileId = DEFAULT_PERSISTENT_AGENT_AI_PROFILE_ID, resolvedProfile?: PersistentAgentAiProfile, overridden = false, gatewayIds?: ReadonlySet<string>): PersistentAgentAiProfileDiagnostic {
+// Built-in profiles with a saved Memorize and Review choice.
+function savedMaintenanceProfileIds(): Set<string> {
+	return new Set(Object.keys(readBuiltInAiProfilePreferences().profiles));
+}
+
+function buildPersistentAgentAiProfileDiagnostic(registry: ModelRegistry, profileId: PersistentAgentAiProfileId, activeProfileId: PersistentAgentAiProfileId = DEFAULT_PERSISTENT_AGENT_AI_PROFILE_ID, resolvedProfile?: PersistentAgentAiProfile, gatewayIds?: ReadonlySet<string>, customMaintenanceProfileIds?: ReadonlySet<string>): PersistentAgentAiProfileDiagnostic {
 	// Resolve once and thread through: profile resolution hits the profile
 	// files on disk, and this builder runs for every profile per status call.
 	const profile: PersistentAgentAiProfile = resolvedProfile ?? getPersistentAgentAiProfile(profileId);
@@ -3525,14 +3543,15 @@ function buildPersistentAgentAiProfileDiagnostic(registry: ModelRegistry, profil
 	if (!structuralReviewReady) issues.push(`${profile.label} structural-review model is not ready.`);
 
 	const ready = providerAuth.configured && requiredModels.every(profileModelReady) && persistentRoomReady && checkpointReady && absorbReady && structuralReviewReady;
+	// Gateway-ness is a fact of the store now, not of one reserved id: any
+	// saved gateway is a gateway, and the row menu offers the gateway actions
+	// for whichever one it belongs to.
+	const kind = isCustomAiProfileId(profile.id) ? "custom" : (gatewayIds ?? savedGatewayIds()).has(profile.id) ? "gateway" : "builtin";
 	return {
 		id: profile.id,
 		label: profile.label,
-		// Gateway-ness is a fact of the store now, not of one reserved id: any
-		// saved gateway is a gateway, and the row menu offers the gateway actions
-		// for whichever one it belongs to.
-		kind: isCustomAiProfileId(profile.id) ? "custom" : (gatewayIds ?? savedGatewayIds()).has(profile.id) ? "gateway" : "builtin",
-		overridden,
+		kind,
+		...(kind === "builtin" ? { maintenanceModels: { custom: (customMaintenanceProfileIds ?? savedMaintenanceProfileIds()).has(profile.id) } } : {}),
 		provider: {
 			id: profile.providerId,
 			configured: providerAuth.configured,
@@ -3558,12 +3577,14 @@ function buildPersistentAgentAiProfileDiagnostic(registry: ModelRegistry, profil
 function buildPersistentAgentAiProfileSelectionStatus(registry = getWebChatModelRegistry()): PersistentAgentAiProfileSelectionStatus {
 	const state = readPersistentAgentAiProfileState();
 	const customProfileRead = readCustomAiProfiles();
-	// One gateway-store read for the whole status, not one per profile row.
+	// One gateway-store read and one preference-file read for the whole
+	// status, not one per profile row.
 	const gatewayIds = savedGatewayIds();
+	const customMaintenanceProfileIds = savedMaintenanceProfileIds();
 	const profiles = getAvailablePersistentAgentAiProfiles().map((profile) =>
-		buildPersistentAgentAiProfileDiagnostic(registry, profile.id, state.profileId, profile, Boolean(customProfileRead.overridesByBuiltInProfileId[profile.id]), gatewayIds),
+		buildPersistentAgentAiProfileDiagnostic(registry, profile.id, state.profileId, profile, gatewayIds, customMaintenanceProfileIds),
 	);
-	const activeProfile = profiles.find((profile) => profile.id === state.profileId) ?? buildPersistentAgentAiProfileDiagnostic(registry, DEFAULT_PERSISTENT_AGENT_AI_PROFILE_ID, state.profileId, undefined, false, gatewayIds);
+	const activeProfile = profiles.find((profile) => profile.id === state.profileId) ?? buildPersistentAgentAiProfileDiagnostic(registry, DEFAULT_PERSISTENT_AGENT_AI_PROFILE_ID, state.profileId, undefined, gatewayIds, customMaintenanceProfileIds);
 	return {
 		activeProfileId: state.profileId,
 		activeProfile,
@@ -3602,13 +3623,15 @@ function resolveSelectedWebChatModel(registry: ModelRegistry, activeProfileId = 
 }
 
 /**
- * Model lock for the fresh post-Memento thread, or null to inherit the old
- * thread's lock. Continuity wins when the old lock is still provided by the
- * active profile. Otherwise pick a currently-available room model: the saved
- * room selection first, then the profile's room models, preferring ones with
- * configured auth. Best-effort by design — Memento must never fail on this.
+ * Model lock for the fresh thread after a Forget or a Remember, or null to
+ * inherit the old thread's lock. Continuity wins when the old lock is still
+ * on the active profile's curated list. Otherwise pick a currently-available
+ * room model: the saved room selection first, then the profile's room models,
+ * preferring ones with configured auth, so a new conversation always starts
+ * on a curated model. Best-effort by design: neither boundary may fail on
+ * this.
  */
-function resolveMementoFreshThreadModel(agentId: string, conversationId: string): ReturnType<typeof getPersistentRoomModelLocks>[number] | null {
+function resolveBoundaryFreshThreadModel(agentId: string, conversationId: string): ReturnType<typeof getPersistentRoomModelLocks>[number] | null {
 	try {
 		const oldThread = getPersistentAgentThread(agentId, conversationId);
 		if (!oldThread) return null;
@@ -3638,22 +3661,25 @@ function resolveSelectedPersistentRoomModel(registry: ModelRegistry, activeProfi
 	return model && registry.hasConfiguredAuth(model) ? model : undefined;
 }
 
-function assertPersistentAgentSavedThreadCanResume(agentId: string, conversationId: string | undefined, provider: string, modelId: string): void {
-	if (!conversationId) return;
+// A saved conversation resumes on the model it is locked to, whether or not
+// that model is still on the active profile's curated list: the list gates a
+// NEW conversation. Returns true when the request continues a saved thread.
+function assertPersistentAgentSavedThreadCanResume(agentId: string, conversationId: string | undefined, provider: string, modelId: string): boolean {
+	if (!conversationId) return false;
 	const thread = getPersistentAgentThread(agentId, conversationId);
-	if (!thread) return;
-	assertPersistentAgentRoomModelApproved(thread.model.provider, thread.model.model, { conversationId, processLabel: "persistent-agent saved thread" });
+	if (!thread) return false;
 	if (thread.model.provider !== provider || thread.model.model !== modelId) {
 		throw new Error(`saved persistent-agent thread is locked to ${thread.model.provider}/${thread.model.model}; start fresh to use ${provider}/${modelId}`);
 	}
+	return true;
 }
 
 function resolvePersistentAgentQueryModel(registry: ModelRegistry, params: URLSearchParams, options: { agentId: string; conversationId?: string }) {
 	const provider = String(params.get("modelProvider") ?? params.get("provider") ?? "").trim();
 	const modelId = String(params.get("model") ?? params.get("modelId") ?? "").trim();
 	if (!provider || !modelId) throw new Error("persistent-agent sessions require selected modelProvider/provider and model/modelId query params");
-	assertPersistentAgentSavedThreadCanResume(options.agentId, options.conversationId, provider, modelId);
-	assertPersistentAgentRoomModelApproved(provider, modelId, { conversationId: options.conversationId, processLabel: "persistent-agent rooms" });
+	const resumesSavedThread = assertPersistentAgentSavedThreadCanResume(options.agentId, options.conversationId, provider, modelId);
+	if (!resumesSavedThread) assertPersistentAgentRoomModelApproved(provider, modelId, { conversationId: options.conversationId, processLabel: "persistent-agent rooms" });
 	const model = registry.find(provider, modelId);
 	if (!model) throw new Error(`model not found: ${provider}/${modelId}`);
 	if (!registry.hasConfiguredAuth(model)) throw new Error(`provider not connected: ${provider}`);
@@ -3939,6 +3965,33 @@ app.put("/api/persistent-agent-ai-profiles/custom", async (req, reply) => {
 		return reply.code(400).send({ error: (e as Error).message });
 	}
 	return buildPersistentAgentAiProfileSelectionStatus(registry);
+});
+// The one preference a built-in profile keeps: which curated model runs
+// Memorize and which runs Review. The room list is the curated list of the
+// release and cannot be edited; both choices must come from it.
+app.put("/api/persistent-agent-ai-profiles/builtin/:profileId/maintenance-models", async (req, reply) => {
+	const profileId = String((req.params as any).profileId ?? "").trim();
+	if (!isBuiltInPersistentAgentAiProfileId(profileId)) return reply.code(404).send({ error: `not a built-in profile: ${profileId}` });
+	const body = (req.body ?? {}) as any;
+	const learnModel = String(body.learnModel ?? "").trim();
+	const reviewMemoryModel = String(body.reviewMemoryModel ?? "").trim();
+	if (!learnModel || !reviewMemoryModel) return reply.code(400).send({ error: "learnModel and reviewMemoryModel are required" });
+	const curated = PERSISTENT_AGENT_AI_PROFILES[profileId].processes.persistentRoom;
+	for (const modelId of [learnModel, reviewMemoryModel]) {
+		if (!curated.some((lock) => lock.model === modelId)) return reply.code(400).send({ error: `model is not on the curated ${PERSISTENT_AGENT_AI_PROFILES[profileId].label} list: ${modelId}` });
+	}
+	// Choosing exactly the curated defaults is no preference: nothing is stored,
+	// so the way back to the defaults is offered only when something differs.
+	const defaults = PERSISTENT_AGENT_AI_PROFILES[profileId].processes;
+	if (learnModel === defaults.absorb.model && reviewMemoryModel === defaults.structuralReview.model) clearBuiltInAiProfilePreference(profileId);
+	else writeBuiltInAiProfilePreference(profileId, { learnModel, reviewMemoryModel });
+	return buildPersistentAgentAiProfileSelectionStatus();
+});
+app.delete("/api/persistent-agent-ai-profiles/builtin/:profileId/maintenance-models", async (req, reply) => {
+	const profileId = String((req.params as any).profileId ?? "").trim();
+	if (!isBuiltInPersistentAgentAiProfileId(profileId)) return reply.code(404).send({ error: `not a built-in profile: ${profileId}` });
+	clearBuiltInAiProfilePreference(profileId);
+	return buildPersistentAgentAiProfileSelectionStatus();
 });
 // Saved OpenAI-compatible gateways (LiteLLM, vLLM, OpenRouter, company
 // proxies), plural: each one is its own AI profile with its own base URL, key
@@ -4284,6 +4337,9 @@ function gatewayDeleteHandler(gatewayId: string, reply: any) {
 		return reply.code(500).send({ error: (e as Error).message });
 	}
 	forgetGatewayProviderLabel(gateway.providerId);
+	// The explicit choice pointed at this gateway: drop it, so the state follows
+	// the signed-in provider instead of reporting an unknown profile forever.
+	if (readSavedPersistentAgentAiProfileId() === gatewayId) clearSavedPersistentAgentAiProfileState();
 	return buildPersistentAgentAiProfileSelectionStatus();
 }
 // How the app's own web_search tool runs. Settable, and it takes effect on the
@@ -4545,15 +4601,12 @@ app.delete("/api/persistent-agent-ai-profiles/custom/:profileId", async (req, re
 	const entry = readCustomAiProfiles().entries.find((candidate) => candidate.id === profileId);
 	if (!entry || !deleteCustomAiProfile(profileId)) return reply.code(404).send({ error: `custom profile not found: ${profileId}` });
 	// Removing a provider means disconnecting it: drop the stored credential too.
-	// A built-in catalog override is different — deleting it just restores the
-	// curated models, the provider stays signed in.
-	// If the deleted profile was active, readPersistentAgentAiProfileState falls
-	// back to the first signed-in profile on the next read.
-	if (!builtInProfileIdForProvider(entry.providerId)) {
-		try {
-			AuthStorage.create().logout(entry.providerId);
-		} catch {}
-	}
+	try {
+		AuthStorage.create().logout(entry.providerId);
+	} catch {}
+	// The explicit choice pointed at this profile: drop it, so the state follows
+	// the signed-in provider instead of reporting an unknown profile forever.
+	if (readSavedPersistentAgentAiProfileId() === profileId) clearSavedPersistentAgentAiProfileState();
 	return buildPersistentAgentAiProfileSelectionStatus();
 });
 // Remove the OpenAI-compatible gateway: reverses the setup writes (app policy
@@ -6395,6 +6448,10 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 			// lands the paid answer under the thread's existing lock (same
 			// reasoning as the scheduled-background landing write).
 			allowInactiveProfileModel: true,
+			// The person may have moved to another conversation in the instant
+			// the answer finished: the answer lands in this one, the room stays
+			// on the newer one, and the next message there is not refused.
+			keepRuntimeIfMoved: true,
 		});
 		if (watched) return;
 		// Slice 3: nobody was connected to see this landing — record the unseen
@@ -7879,7 +7936,16 @@ ${lines.join("\n")}`;
 					// refuses while this room is in detachedCookingRooms, and a
 					// reattach (#33) binds to the SETTLED handle from here on.
 					const cookingHandle = detachedFromClient ? detachedCookingHandle : null;
-					const watchedByAdopter = !!(cookingHandle && cookingHandle.adopterConnectionId);
+					// Two different questions. Adopted: a session claimed the cooking
+					// turn and is watching it live, so the settle hands it the signal
+					// and its lock and the replay buffer follow the adoption rules
+					// below; a claimant still mid-bind is NOT adopted yet and needs
+					// the buffer kept for its settled replay. Watched: adopted, or a
+					// newer session on this very conversation (mid-bind included),
+					// which decides only how the answer lands (no parking, no unseen
+					// marker for a conversation somebody is inside).
+					const adoptedByLiveSession = !!(cookingHandle && cookingHandle.adopterConnectionId);
+					const watchedByAdopter = adoptedByLiveSession || newerSessionWatchesThisConversation();
 					if (cookingHandle) {
 						// Settle the handle FIRST, synchronously with the landing:
 						// a connection consulting the registry after this line binds
@@ -7900,6 +7966,12 @@ ${lines.join("\n")}`;
 						settledTurnLandingSnapshot = settledFinalText
 							? { turnId: persistentTurnId, finalAssistantText: settledFinalText, anchorItemId: turnStartAnchorItemId, userText: currentTurnUserTextForLanding, ...(typeof activePersistentWebTurn?.startedAt === "number" ? { startedAt: activePersistentWebTurn.startedAt } : {}), settledAt: Date.now() }
 							: null;
+						// The client can leave between the last frame and this settle
+						// (the turn already read "completed", so the close handler did
+						// not detach it, and it found no snapshot to land). Land now,
+						// or the answer would exist nowhere and the conversation would
+						// never be parked.
+						if (settledTurnLandingSnapshot && socket.readyState !== socket.OPEN) landSettledTurnIfUnpersisted();
 					}
 					if (activePersistentWebTurn?.turnId === persistentTurnId) activePersistentWebTurn = null;
 					// Detached settle: this connection's ownership ends here — the
@@ -7913,7 +7985,7 @@ ${lines.join("\n")}`;
 						detachedCookingRooms.delete(persistentAgentIdForSession);
 						if (persistentRoomLiveSessions.get(persistentAgentIdForSession) === liveSessionHandle) persistentRoomLiveSessions.delete(persistentAgentIdForSession);
 						releaseRoomLockNow();
-						if (watchedByAdopter) {
+						if (adoptedByLiveSession) {
 							// #33: hand the adopter the settle signal so it rebinds
 							// its session against the landed history.
 							try { adopterOnSettled?.(); } catch (error) { app.log.warn({ err: error }, "adopted-turn settle callback failed"); }
@@ -7940,7 +8012,7 @@ ${lines.join("\n")}`;
 					// exception is a claimant still alive mid-bind, whose settled
 					// replay needs the buffer; its phase two releases it after
 					// replaying (and its disconnect drops the closure either way).
-					const keepReplayBufferForPendingClaim = !!(cookingHandle && cookingHandle.claimantConnectionId && !watchedByAdopter);
+					const keepReplayBufferForPendingClaim = !!(cookingHandle && cookingHandle.claimantConnectionId && !adoptedByLiveSession);
 					if (!keepReplayBufferForPendingClaim) releaseTurnFrameBuffer();
 				}
 			}
@@ -8178,6 +8250,36 @@ ${lines.join("\n")}`;
 		);
 	}
 
+	// Only a newer session on THIS conversation is watching a landing (a
+	// reload, a second tab on the same conversation). A newer session on
+	// another conversation means the person left this one for another:
+	// nobody is looking at it, so the landing parks it as standby and records
+	// the unseen marker like any landing nobody watched.
+	const newerSessionWatchesThisConversation = (): boolean => {
+		const otherLiveSession = persistentRoomLiveSessions.get(persistentAgentIdForSession);
+		return !!otherLiveSession && otherLiveSession !== liveSessionHandle && otherLiveSession.conversationId === persistentConversationId;
+	};
+
+	// Lands the settled answer the client never persisted: from the close
+	// handler when the client dies inside the persist window, and from the
+	// settle path itself when the client had already left between the last
+	// frame and the settle (the close handler ran before the snapshot
+	// existed, so nobody else would land it). Idempotent: a thread that
+	// already carries the answer is left alone.
+	const landSettledTurnIfUnpersisted = (): void => {
+		const closeLandingSnapshot = settledTurnLandingSnapshot;
+		settledTurnLandingSnapshot = null;
+		if (!closeLandingSnapshot) return;
+		try {
+			const persisted = getPersistentAgentThread(persistentAgentIdForSession, persistentConversationId);
+			if (persisted && persisted.state !== "closed" && !threadItemsCarryAssistantText(persisted.items, closeLandingSnapshot.finalAssistantText)) {
+				landDetachedTurnOutcome(closeLandingSnapshot.turnId, "completed", { snapshot: closeLandingSnapshot, watchedByAdopter: newerSessionWatchesThisConversation() });
+			}
+		} catch (error) {
+			app.log.warn({ err: error }, "failed to land the settled turn answer on close");
+		}
+	};
+
 	socket.on("close", () => {
 		app.log.info("ws client disconnected");
 		// A consult answer that was never transferred is re-derivable: kill the
@@ -8290,20 +8392,7 @@ ${lines.join("\n")}`;
 		// a newer connection already took the room over (reload), the landing
 		// still writes the answer but keeps the room's state and records no
 		// marker, exactly like a watched adopter landing.
-		const closeLandingSnapshot = settledTurnLandingSnapshot;
-		settledTurnLandingSnapshot = null;
-		if (closeLandingSnapshot) {
-			try {
-				const persisted = getPersistentAgentThread(persistentAgentIdForSession, persistentConversationId);
-				if (persisted && persisted.state !== "closed" && !threadItemsCarryAssistantText(persisted.items, closeLandingSnapshot.finalAssistantText)) {
-					const otherLiveSession = persistentRoomLiveSessions.get(persistentAgentIdForSession);
-					const watchedByNewerSession = !!otherLiveSession && otherLiveSession !== liveSessionHandle;
-					landDetachedTurnOutcome(closeLandingSnapshot.turnId, "completed", { snapshot: closeLandingSnapshot, watchedByAdopter: watchedByNewerSession });
-				}
-			} catch (error) {
-				app.log.warn({ err: error }, "failed to land the settled turn answer on close");
-			}
-		}
+		landSettledTurnIfUnpersisted();
 		void disposeSessionAfterAbortIfNeeded("disconnect_cancelled").catch((error) => {
 			app.log.warn({ err: error }, "persistent-room disconnect cleanup failed");
 			if (!sessionDisposed && session) {
@@ -9136,6 +9225,16 @@ try {
 	for (const migrationError of shelfMigration.errors) app.log.warn(`shelf migration: ${migrationError}`);
 } catch (e) {
 	app.log.warn({ err: (e as Error).message }, "shelf migration failed; task-store artifacts stay in place until the next boot");
+}
+
+// Built-in AI profile migration (0.13.2): a custom model list saved earlier on
+// the Claude or ChatGPT profile is dropped so the curated list shows, and a
+// saved active-profile pointer that names a profile which no longer exists is
+// cleared. Idempotent; a failure logs and never blocks the start.
+try {
+	migrateBuiltInAiProfiles({ log: (message) => app.log.info(message) });
+} catch (e) {
+	app.log.warn({ err: (e as Error).message }, "built-in AI profile migration failed; the saved files stay as they are");
 }
 
 // Per-room MCP update-day migration: before the server accepts traffic, every
