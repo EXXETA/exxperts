@@ -153,8 +153,8 @@ export function ConfigureProfileModal({ providerId, providerName, existingProfil
 	providerId: string;
 	providerName: string;
 	existingProfile?: PersistentAgentAiProfileStatus;
-	// Built-in profiles are edited through the same modal but cannot be removed,
-	// only reset from the row menu.
+	// A saved custom profile may be removed from here; the built-in profiles
+	// never open this modal, their room list is the curated one.
 	allowRemove?: boolean;
 	onClose: () => void;
 	onSaved: () => void;
@@ -302,6 +302,104 @@ export function ConfigureProfileModal({ providerId, providerName, existingProfil
 							</div>
 						</>
 					)}
+				</div>
+			</div>
+		</div>
+	);
+}
+
+/**
+ * The one choice a built-in profile keeps: which curated model runs Memorize
+ * and which runs Review. Rooms use the curated list as it is, so there is no
+ * checkbox list and no catalogue fetch: the options are the row's curated
+ * room models, already in the status.
+ */
+export function MaintenanceModelsModal({ profile, onClose, onSaved }: { profile: PersistentAgentAiProfileStatus; onClose: () => void; onSaved: () => void }) {
+	const options = profile.processes?.persistentRoom.models ?? [];
+	// The first curated entry is the default for rooms, Memorize and Review alike.
+	const defaultModel = options[0]?.model ?? "";
+	const currentForPurpose = (token: string) =>
+		profile.requiredModels.find((model) => (model.purpose ?? "").split("/").includes(token))?.model ?? defaultModel;
+	const [learnModel, setLearnModel] = useState(currentForPurpose("absorb"));
+	const [reviewMemoryModel, setReviewMemoryModel] = useState(currentForPurpose("structural-review"));
+	const [saving, setSaving] = useState(false);
+	const [resetting, setResetting] = useState(false);
+	const [saveError, setSaveError] = useState<string | null>(null);
+	useEscapeKey(onClose, true);
+	const url = `/api/persistent-agent-ai-profiles/builtin/${encodeURIComponent(profile.id)}/maintenance-models`;
+
+	async function save() {
+		setSaving(true);
+		setSaveError(null);
+		try {
+			await fetchJson(url, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ learnModel, reviewMemoryModel }) });
+			onSaved();
+			onClose();
+		} catch (e) {
+			setSaveError((e as Error).message);
+		} finally {
+			setSaving(false);
+		}
+	}
+
+	async function backToDefaults() {
+		setResetting(true);
+		setSaveError(null);
+		try {
+			await fetchJson(url, { method: "DELETE" });
+			onSaved();
+			onClose();
+		} catch (e) {
+			setSaveError((e as Error).message);
+		} finally {
+			setResetting(false);
+		}
+	}
+
+	const optionName = (model: { provider: string; model: string; label?: string }) =>
+		modelDisplayName({ model: model.model, modelLabel: model.label, provider: model.provider }) || model.model;
+	const busy = saving || resetting;
+	const canSave = Boolean(learnModel) && Boolean(reviewMemoryModel) && !busy;
+
+	return (
+		<div className="room-settings-overlay configure-profile-overlay" role="dialog" aria-modal="true" aria-label={`${profile.label}: Memorize and Review`} onClick={onClose}>
+			<div className="room-settings-modal configure-profile-modal maintenance-models-modal" onClick={(e) => e.stopPropagation()}>
+				<div className="room-settings-head">
+					<div className="room-settings-title-block">
+						<div className="room-settings-title-row">
+							<h2>{`${profile.label}: Memorize and Review`}</h2>
+						</div>
+					</div>
+					<button className="icon-btn" onClick={onClose} aria-label="Close">Close</button>
+				</div>
+				<div className="room-settings-body configure-profile-body">
+					<p className="ai-setup-copy">Rooms use the curated models. Choose which of them run Memorize and Review.</p>
+					<div className="configure-profile-field">
+						<h3>Memorize</h3>
+						<select className="configure-profile-select" value={learnModel} onChange={(e) => setLearnModel(e.target.value)} aria-label="Memorize model" title="The model that turns remembered sessions into lasting memory">
+							{options.map((model) => (
+								<option key={model.model} value={model.model}>{optionName(model)}{model.model === defaultModel ? " (default)" : ""}</option>
+							))}
+						</select>
+					</div>
+					<div className="configure-profile-field">
+						<h3>Review</h3>
+						<select className="configure-profile-select" value={reviewMemoryModel} onChange={(e) => setReviewMemoryModel(e.target.value)} aria-label="Review model" title="The model that reviews and tidies long-term memory">
+							{options.map((model) => (
+								<option key={model.model} value={model.model}>{optionName(model)}{model.model === defaultModel ? " (default)" : ""}</option>
+							))}
+						</select>
+					</div>
+					{saveError && <div className="checkpoint-proposal-error">{saveError}</div>}
+					<div className="create-room-actions">
+						<button className="landing-action" disabled={!canSave} onClick={() => void save()}>{saving ? "Saving…" : "Save"}</button>
+						<button className="inline-action" disabled={busy} onClick={onClose}>Cancel</button>
+						{profile.maintenanceModels?.custom && (
+							<button className="ai-profile-foot-link maintenance-models-defaults" disabled={busy} onClick={() => void backToDefaults()} title="Drop the saved choice; the curated defaults run Memorize and Review">
+								{resetting ? "Resetting…" : "Back to the defaults"}
+							</button>
+						)}
+					</div>
 				</div>
 			</div>
 		</div>

@@ -33,7 +33,7 @@ import { CONNECT_DEADLINE_MS, createConnectionHealthState, msUntilWarn, OPEN_DWE
 import { MarkdownRenderer } from "./components/Markdown";
 import { RoomsGuide } from "./components/RoomsGuide";
 import { RoomSettingsModal } from "./components/RoomSettingsModal";
-import { AddProviderPanel, ApiKeyForm, ConfigureProfileModal, GatewayApproveModelsModal, GatewayConfigModal, useProviderLogin } from "./components/add-provider-panel";
+import { AddProviderPanel, ApiKeyForm, ConfigureProfileModal, GatewayApproveModelsModal, GatewayConfigModal, MaintenanceModelsModal, useProviderLogin } from "./components/add-provider-panel";
 import { apiFetch, fetchJson } from "./api";
 import { canonicalModelName, modelDisplayName, modelTooltipName } from "./model-names";
 import type { ApprovalPreviewData } from "./approval-preview";
@@ -755,6 +755,7 @@ function AiProfileSwitcherSection({ status, onSelect, onRefresh, onRefreshAuth }
 	const [error, setError] = useState<string | null>(null);
 	const [modelsOpenId, setModelsOpenId] = useState<string | null>(null);
 	const [editProfile, setEditProfile] = useState<PersistentAgentAiProfileStatus | null>(null);
+	const [maintenanceProfile, setMaintenanceProfile] = useState<PersistentAgentAiProfileStatus | null>(null);
 	// Which gateway the modal is for: gateways are plural now, so "open" is not
 	// enough to know whose base URL or model set is being edited.
 	const [gatewayEdit, setGatewayEdit] = useState<{ id: string; label: string } | null>(null);
@@ -870,18 +871,6 @@ function AiProfileSwitcherSection({ status, onSelect, onRefresh, onRefreshAuth }
 	// A key row is a transient surface like the menu above it, and closes the
 	// same way. Without this it could only be escaped by reloading the page.
 	useEscapeKey(() => setKeyProfileId(null), keyProfileId !== null);
-	// Resetting a built-in override restores the curated catalog; the provider
-	// stays signed in.
-	async function resetBuiltInModels(profile: PersistentAgentAiProfileStatus) {
-		setError(null);
-		try {
-			await fetchJson(`/api/persistent-agent-ai-profiles/custom/${encodeURIComponent(`custom-${profile.provider.id}`)}`, { method: "DELETE" });
-			onRefresh();
-			onRefreshAuth();
-		} catch (e) {
-			setError((e as Error).message);
-		}
-	}
 	// Removing a provider disconnects it: profile, approved models, and the
 	// stored credential all go. Built-ins cannot be removed, only signed out.
 	async function removeProfile(profile: PersistentAgentAiProfileStatus) {
@@ -1045,8 +1034,13 @@ function AiProfileSwitcherSection({ status, onSelect, onRefresh, onRefreshAuth }
 																		    "N room models" collapse control, so without the Hide branch
 																		    the opened panel would be uncloseable. */}
 																		<button className="ai-profile-menu-item" role="menuitem" onClick={() => { setModelsOpenId(modelsOpen ? null : profile.id); closeMenu(); }}>{modelsOpen ? "Hide models" : "View models"}</button>
-																		{profile.kind !== "gateway" && (
+																		{profile.kind === "custom" && (
 																			<button className="ai-profile-menu-item" role="menuitem" onClick={() => { setEditProfile(profile); closeMenu(); }} title="Choose which models rooms may use">Approve models</button>
+																		)}
+																		{/* A built-in row's room list is the curated one of the release; the
+																		    only choice is which curated model runs Memorize and Review. */}
+																		{profile.kind === "builtin" && (
+																			<button className="ai-profile-menu-item" role="menuitem" onClick={() => { setMaintenanceProfile(profile); closeMenu(); }} title="Choose which curated models run Memorize and Review">Memorize and Review models</button>
 																		)}
 																		{profile.kind === "gateway" && (
 																			<>
@@ -1055,9 +1049,6 @@ function AiProfileSwitcherSection({ status, onSelect, onRefresh, onRefreshAuth }
 																				<button className="ai-profile-menu-item" role="menuitem" onClick={() => { setGatewayApproveId(profile.id); closeMenu(); }} title="Choose which models rooms may use">Approve models</button>
 																				<button className="ai-profile-menu-item" role="menuitem" onClick={() => { setGatewayEdit({ id: profile.id, label: profile.label }); closeMenu(); }} title="Change the gateway URL or API key">Edit gateway</button>
 																			</>
-																		)}
-																		{profile.kind === "builtin" && profile.overridden && (
-																			<button className="ai-profile-menu-item" role="menuitem" onClick={() => { closeMenu(); void resetBuiltInModels(profile); }} title="Drop the custom model list and restore the built-in catalog">Reset to curated models</button>
 																		)}
 																		{providerAcceptsApiKey(profile.provider.id) && profile.provider.configured && (
 																			<button className="ai-profile-menu-item" role="menuitem" onClick={() => { setKeyProfileId(profile.id); closeMenu(); }}>Replace API key</button>
@@ -1127,6 +1118,13 @@ function AiProfileSwitcherSection({ status, onSelect, onRefresh, onRefreshAuth }
 					existingProfile={editProfile}
 					allowRemove={editProfile.kind === "custom"}
 					onClose={() => setEditProfile(null)}
+					onSaved={() => { onRefresh(); onRefreshAuth(); }}
+				/>
+			)}
+			{maintenanceProfile && (
+				<MaintenanceModelsModal
+					profile={maintenanceProfile}
+					onClose={() => setMaintenanceProfile(null)}
 					onSaved={() => { onRefresh(); onRefreshAuth(); }}
 				/>
 			)}

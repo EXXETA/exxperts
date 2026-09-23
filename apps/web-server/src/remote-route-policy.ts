@@ -74,6 +74,8 @@ const POLICY: Record<string, RemoteRouteClass> = {
 	"PUT /api/persistent-agent-ai-profile": "write",
 	"PUT /api/persistent-agent-ai-profiles/custom": "local",
 	"DELETE /api/persistent-agent-ai-profiles/custom/:profileId": "local",
+	"PUT /api/persistent-agent-ai-profiles/builtin/:profileId/maintenance-models": "local",
+	"DELETE /api/persistent-agent-ai-profiles/builtin/:profileId/maintenance-models": "local",
 	"GET /api/persistent-agent-ai-profiles/gateways": "read",
 	"POST /api/persistent-agent-ai-profiles/gateways": "local",
 	"GET /api/persistent-agent-ai-profiles/gateways/:gatewayId": "read",

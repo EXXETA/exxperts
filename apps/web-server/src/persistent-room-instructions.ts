@@ -203,6 +203,19 @@ function writeInstructionsFile(file: string, raw: unknown, whose: string, now: D
 	const tmp = `${file}.tmp-${process.pid}-${now.getTime()}`;
 	try {
 		fs.writeFileSync(tmp, `${text}\n`, { mode: 0o600 });
+		// Windows cannot rename over a symbolic link: the link itself goes first
+		// (never its target), then the rename lands the plain file, as the
+		// design says a save does on every platform. A failed unlink surfaces
+		// like any other failed write.
+		if (process.platform === "win32") {
+			let link = false;
+			try {
+				link = fs.lstatSync(file).isSymbolicLink();
+			} catch {
+				link = false; // absent: nothing in the way
+			}
+			if (link) fs.unlinkSync(file);
+		}
 		fs.renameSync(tmp, file);
 	} catch (error) {
 		fs.rmSync(tmp, { force: true });

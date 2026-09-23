@@ -214,28 +214,30 @@ try {
 	assert(
 		JSON.stringify(roomModelKeys(roomModelStatus.body)) === JSON.stringify([
 			"anthropic/claude-opus-5-5",
-			"anthropic/claude-opus-5",
 			"anthropic/claude-fable-5-1",
-			"anthropic/claude-opus-4-8",
 			"anthropic/claude-sonnet-5",
+			"anthropic/claude-haiku-4-5",
+			"anthropic/claude-opus-5",
+			"anthropic/claude-opus-4-8",
 			"anthropic/claude-fable-5",
-			"anthropic/claude-opus-4-6",
-			"anthropic/claude-opus-4-7",
 			"anthropic/claude-sonnet-4-6",
+			"anthropic/claude-opus-4-7",
+			"anthropic/claude-opus-4-6",
 		]),
 		`room model options should match approved Claude order, got ${JSON.stringify(roomModelKeys(roomModelStatus.body))}`,
 	);
 	assert(
 		JSON.stringify(compactRoomModelLabels(roomModelStatus.body)) === JSON.stringify([
 			"Opus 5.5",
-			"Opus 5",
 			"Fable 5.1",
-			"Opus 4.8",
 			"Sonnet 5",
+			"Haiku 4.5",
+			"Opus 5",
+			"Opus 4.8",
 			"Fable 5",
-			"Opus 4.6",
-			"Opus 4.7",
 			"Sonnet 4.6",
+			"Opus 4.7",
+			"Opus 4.6",
 		]),
 		`room model picker labels should be friendly Claude labels, got ${JSON.stringify(compactRoomModelLabels(roomModelStatus.body))}`,
 	);

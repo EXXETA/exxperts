@@ -1622,6 +1622,10 @@ strong, b { font-weight: 700; }
 }
 .add-provider-key-form input { flex: 1; }
 .configure-profile-modal { max-width: 560px; }
+/* Two selects and a sentence: narrower than the approval editor it replaces on built-in rows. */
+.maintenance-models-modal { max-width: 440px; }
+/* Going back to the defaults destroys nothing: the plain link, in the remove link's place. */
+.maintenance-models-defaults { margin-left: auto; }
 .configure-profile-body {
 	display: grid;
 	gap: 18px;

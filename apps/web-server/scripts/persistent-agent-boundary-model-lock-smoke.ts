@@ -189,9 +189,10 @@ try {
 	assert(checkpointOldAfter.model.model === modelA.model, "old checkpoint source model lock should not mutate");
 	assert(runtimeSessionRelPath(checkpointOldAfter) === checkpointOldSessionPath, "old checkpoint source runtime should not mutate");
 
-	// Scheduled runs must land their paid answer even when the active profile loses the thread's
-	// model mid-generation: the final assistant write is boundary-exempt via
-	// allowInactiveProfileModel while ungated writes stay fully enforced.
+	// A conversation keeps the model it started on after that model leaves the
+	// active profile's list: writes to the existing thread land as they are (a
+	// scheduled run's paid answer, a resume), and only a NEW thread on the
+	// delisted model is refused.
 	const { writePersistentAgentAiProfileState } = await import("../src/persistent-agent-ai-profile-state.js");
 	const profileSwitchThreadId = "sched_profile_switch_0001";
 	writePiThread(profileSwitchThreadId, "standby", "home", modelA, [{ kind: "user", id: "sched-user", text: "scheduled prompt" }]);
@@ -206,12 +207,15 @@ try {
 		{ kind: "assistant", id: "sched-assistant", text: "paid scheduled answer", streaming: false },
 	];
 	expectThrows(
-		() => writePersistentAgentThread(agentId, profileSwitchThreadId, { state: "standby", origin: "home", model: modelA, items: finalWriteItems }),
-		/profile|model/i,
-		"ungated thread write should still hit the active-profile model gate",
+		() => writePiThread("c_new_on_delisted_model", "active", "launcher", modelA, []),
+		/model is not approved/i,
+		"a NEW thread on the delisted model should be refused",
 	);
-	const landed = writePersistentAgentThread(agentId, profileSwitchThreadId, { state: "standby", origin: "home", model: modelA, items: finalWriteItems }, { allowInactiveProfileModel: true });
+	assert(getPersistentAgentThread(agentId, "c_new_on_delisted_model") === null, "the refused thread must not exist");
+	const landed = writePersistentAgentThread(agentId, profileSwitchThreadId, { state: "standby", origin: "home", model: modelA, items: finalWriteItems });
 	assert(landed.thread.items.some((item: any) => item.id === "sched-assistant"), "paid scheduled answer should land despite the profile switch");
+	const resumed = writePersistentAgentThread(agentId, profileSwitchThreadId, { state: "active", origin: "launcher", model: modelA, items: finalWriteItems });
+	assert(resumed.thread.state === "active" && resumed.runtime.model?.model === modelA.model, "the existing conversation resumes on its own model after the list change");
 	fs.writeFileSync(path.join(smokeAppDir, "openai-compatible-ai-profile.json"), fullProfileJson);
 	writePersistentAgentAiProfileState("openai-compatible");
 

@@ -241,11 +241,24 @@ try {
 	} finally {
 		fs.rmdirSync(file);
 	}
-	// A link at the path: on Windows a rename cannot replace a link and a link needs
-	// a privilege to create, so these two cases run where links are ordinary files.
-	if (process.platform !== "win32") {
+	// A link at the path: a save replaces it with a plain file on every platform
+	// (on Windows the link is removed before the rename). Creating a link needs
+	// a privilege on Windows, so the two cases are skipped there when the
+	// runner cannot create one.
+	const linkCreated = (() => {
+		try {
+			fs.symlinkSync(path.join(path.dirname(file), "no-such-target.md"), file);
+			return true;
+		} catch (error) {
+			if (process.platform === "win32" && ((error as NodeJS.ErrnoException).code === "EPERM" || (error as NodeJS.ErrnoException).code === "UNKNOWN")) {
+				console.log("room-instructions-smoke: this runner cannot create a link; the two link cases are skipped");
+				return false;
+			}
+			throw error;
+		}
+	})();
+	if (linkCreated) {
 		// A link that leads nowhere is present, not absent: unreadable, and a save replaces it.
-		fs.symlinkSync(path.join(path.dirname(file), "no-such-target.md"), file);
 		assert(readPersistentRoomInstructions(agentId).unreadable === "it is a link that points nowhere", "a dangling link reads as unreadable, not as none");
 		assert(buildPersistentRoomCurrentInstructionsSection(agentId, bootedWithText.systemPrompt) === "", "and the per-turn section stays silent for it");
 		assert(savePersistentRoomInstructions(agentId, "replaced the link").text === "replaced the link", "a save replaces the link with the file");
