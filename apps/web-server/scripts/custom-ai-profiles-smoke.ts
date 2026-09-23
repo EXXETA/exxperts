@@ -136,7 +136,9 @@ try {
 
 	// The one preference that survives: which curated model runs Memorize and Review.
 	preferences.writeBuiltInAiProfilePreference("anthropic", { learnModel: "claude-sonnet-5", reviewMemoryModel: "claude-opus-5-5" });
-	assert(fs.existsSync(preferencesPath) && (fs.statSync(preferencesPath).mode & 0o777) === 0o600, "the preference file is written with mode 0600");
+	assert(fs.existsSync(preferencesPath), "the preference file is written");
+	// Windows has no POSIX file modes, so the mode check runs where modes exist.
+	if (process.platform !== "win32") assert((fs.statSync(preferencesPath).mode & 0o777) === 0o600, "the preference file is written with mode 0600");
 	const preferred = profiles.getPersistentAgentAiProfile("anthropic");
 	assert(preferred.processes.absorb.model === "claude-sonnet-5" && preferred.processes.structuralReview.model === "claude-opus-5-5", "the preference picks Memorize and Review");
 	assert(preferred.processes.persistentRoom.length === curatedRoomModels && preferred.id === "anthropic" && preferred.label === "Claude", "the preference leaves the room list and the identity alone");
