@@ -64,7 +64,7 @@ import { cancelProviderLogin, logoutProvider, ProviderAuthError, providerLoginSt
 import { builtInProfileIdForProvider, deleteCustomAiProfile, isCustomAiProfileId, isReservedCustomProfileProvider, readCustomAiProfiles, writeCustomAiProfile } from "./custom-ai-profiles.js";
 import { ConsultPromptOverflowError } from "./consult.js";
 import { exportMaintenanceDiagnostics, listMaintenanceDiagnostics, MAINTENANCE_DIAGNOSTICS_DEFAULT_LIMIT, MAINTENANCE_DIAGNOSTICS_KEEP } from "./maintenance-diagnostics.js";
-import { appendPersistentAgentThreadPendingHandoff, archivePersistentAgent, assertPersistentAgentAcceptsCheckpoint, assertPersistentAgentAcceptsSession, createPersistentAgentInstance, getPersistentAgentLifecycleCounts, listArchivedPersistentAgents, purgePersistentAgent, restorePersistentAgent, sweepPersistentAgentPurgeTombstones, beginPersistentAgentTurn, buildAbsorbAssessment, buildAbsorbDiscussionSignoff, buildAbsorbDiscussionTurn, buildCheckpointProposal, buildConsultAnswer, buildPersistentAgentBootContext, buildPersistentAgentCurrentIdentitySection, buildPersistentRoomCurrentWorkspaceSection, createPersistentAgentFromScaffoldInput, createPersistentAgentPiSessionJsonlThreadRuntime, createPersistentRoomAutoDeclinedQuestionLog, clearPersistentAgentThreadPendingHandoffs, clearPersistentAgentUnseenLandedAnswerForBind, deletePersistentAgentThread, PERSISTENT_AGENT_L1A_DEFAULT_MODE_ID, PERSISTENT_AGENT_L1A_MODES, discardEmptyPreparedBoundaryThread, finishPersistentAgentTurn, getAbsorbAvailability, getPersistentAgentActiveTurnState, getPersistentAgentRuntimeState, getPersistentAgentStatus, getPersistentAgentThread, isPersistentAgentArchived, listPersistentAgents, markPersistentAgentTurnCancelling, openPersistentAgentPiSessionManager, parseCheckpointApprovalRequest, readPersistentAgentBootPromptSnapshot, readPersistentAgentReviewTargetEstimatedTokens, recordPersistentAgentUnseenLandedAnswer, renamePersistentAgent, validatePersistentAgentId, writeApprovedCheckpoint, writePersistentAgentMementoBoundary, writePersistentAgentRuntimeState, writePersistentAgentThread, parseAssessmentRetryFeedback, assertPersistentAgentBootPromptFitsWindow, PersistentAgentMemoryOverflowError } from "./persistent-agents.js";
+import { appendPersistentAgentThreadPendingHandoff, archivePersistentAgent, assertPersistentAgentAcceptsCheckpoint, assertPersistentAgentAcceptsSession, createPersistentAgentInstance, parsePersistentAgentL1aMarker, planPersistentAgentConstitutionUpgrade, upgradePersistentAgentConstitution, PERSISTENT_AGENT_L1A_TEMPLATE_VERSION, getPersistentAgentLifecycleCounts, listArchivedPersistentAgents, purgePersistentAgent, restorePersistentAgent, sweepPersistentAgentPurgeTombstones, beginPersistentAgentTurn, buildAbsorbAssessment, buildAbsorbDiscussionSignoff, buildAbsorbDiscussionTurn, buildCheckpointProposal, buildConsultAnswer, buildPersistentAgentBootContext, buildPersistentAgentCurrentIdentitySection, buildPersistentRoomCurrentWorkspaceSection, createPersistentAgentFromScaffoldInput, createPersistentAgentPiSessionJsonlThreadRuntime, createPersistentRoomAutoDeclinedQuestionLog, clearPersistentAgentThreadPendingHandoffs, clearPersistentAgentUnseenLandedAnswerForBind, deletePersistentAgentThread, PERSISTENT_AGENT_L1A_DEFAULT_MODE_ID, PERSISTENT_AGENT_L1A_MODES, discardEmptyPreparedBoundaryThread, finishPersistentAgentTurn, getAbsorbAvailability, getPersistentAgentActiveTurnState, getPersistentAgentRuntimeState, getPersistentAgentStatus, getPersistentAgentThread, getPersistentRoomInstructionsView, savePersistentRoomGlobalInstructionsEnabled, isPersistentAgentArchived, listPersistentAgents, markPersistentAgentTurnCancelling, openPersistentAgentPiSessionManager, parseCheckpointApprovalRequest, readPersistentAgentBootPromptSnapshot, readPersistentAgentReviewTargetEstimatedTokens, recordPersistentAgentUnseenLandedAnswer, renamePersistentAgent, validatePersistentAgentId, writeApprovedCheckpoint, writePersistentAgentMementoBoundary, writePersistentAgentRuntimeState, writePersistentAgentThread, parseAssessmentRetryFeedback, assertPersistentAgentBootPromptFitsWindow, PersistentAgentMemoryOverflowError } from "./persistent-agents.js";
 import { buildPersistentRoomRestoredLiveThreadContext } from "./persistent-room-resume-context.js";
 import {
 	getPersistentRoomToolPolicy,
@@ -78,6 +78,8 @@ import { createPersistentRoomBashApprovalExtension, createPersistentRoomBashAppr
 import { migratePersistentRoomBashAutoApproveDefaults, readPersistentRoomBashSettings, writePersistentRoomBashSettings } from "./persistent-room-bash-settings.js";
 import { readPersistentRoomPreferredModel, writePersistentRoomPreferredModel } from "./persistent-room-preferred-model.js";
 import { isRoomEffortLevel, readPersistentRoomEffortChoice, writePersistentRoomEffortChoice, type RoomEffortLevel } from "./persistent-room-effort-settings.js";
+import { buildPersistentRoomCurrentInstructionsSection, readGlobalInstructions, writeGlobalInstructions, ROOM_INSTRUCTIONS_MAX_CHARS } from "./persistent-room-instructions.js";
+import { assertPersistentRoomNotHeldByAnotherProcess, fingerprintPersistentAgentBootContextInstructions, savePersistentRoomInstructions } from "./persistent-agents.js";
 import { approvePersistentRoomSkillExecution, computeSkillStatuses, disablePersistentRoomSkill, effectiveEnabledSkills, enablePersistentRoomSkill, isValidSkillName, readPersistentRoomSkillSettings, revokePersistentRoomSkillExecution } from "./persistent-room-skill-settings.js";
 import { buildEnabledSkillsIndexSection, createReadSkillTool } from "./persistent-room-skill-tool.js";
 import { buildSpecialistTemplatesIndexSection, createDelegateTaskTool, userAuthoredPromptText } from "./persistent-room-delegate-tool.js";
@@ -1178,6 +1180,7 @@ function safeDiagnosticIdPart(value: string): string {
 function persistentLayerComponentType(layerId: string): PromptComponentType {
 	if (layerId === "l0") return "persistent-l0";
 	if (layerId === "l1a") return "persistent-l1a";
+	if (layerId === "instructions") return "persistent-instructions";
 	if (layerId === "l1b") return "persistent-l1b";
 	if (layerId === "l2") return "persistent-l2";
 	return "append-system";
@@ -1244,7 +1247,17 @@ function recordPersistentRoomPromptDiagnostics(input: {
 			type: persistentLayerComponentType(layer.id),
 			text: layer.content,
 			source: { "function": layer.id === "l0" ? "persistentAgentPlatformKernel" : layer.id === "l2" ? "persistentAgentRuntimeEnvelope" : "buildPersistentAgentBootContext" },
-			metadata: { layerId: layer.id, title: layer.title },
+			metadata: {
+				layerId: layer.id,
+				title: layer.title,
+				// The instructions layer is one prompt piece made of up to two
+				// texts; the parts say which one a number belongs to.
+				...(layer.id === "instructions" ? {
+					includesGlobal: input.bootContext.instructionsParts.includesGlobal,
+					...(input.bootContext.instructionsParts.globalEstimatedTokens != null ? { globalEstimatedTokens: input.bootContext.instructionsParts.globalEstimatedTokens } : {}),
+					...(input.bootContext.instructionsParts.roomEstimatedTokens != null ? { roomEstimatedTokens: input.bootContext.instructionsParts.roomEstimatedTokens } : {}),
+				} : {}),
+			},
 		}));
 	}
 	components.push(componentFromText({
@@ -2214,12 +2227,7 @@ app.post("/api/persistent-agents/:id/memento", async (req, reply) => {
 		// A scheduled background run or a CLI session is actively writing this
 		// room's thread; closing it under their feet silently loses their output.
 		// The room's own live web session is fine: it is quiesced below.
-		const roomLockState = activeRoomLock(status.id);
-		if (roomLockState?.surface === "scheduler" || roomLockState?.surface === "cli") {
-			const error = new Error(`the room is ${roomLockBusyStatus(roomLockState)}; forget this conversation when that finishes`);
-			(error as any).statusCode = 409;
-			throw error;
-		}
+		assertPersistentRoomNotHeldByAnotherProcess(status.id, "forget this conversation");
 		const body = (req.body ?? {}) as any;
 		const requestedConversationId = String(body.conversationId ?? "").trim();
 		// A stale conversationId from an old status snapshot must not make the
@@ -2456,6 +2464,54 @@ app.put("/api/persistent-agents/:id/preferred-model", async (req, reply) => {
 		const preferred = writePersistentRoomPreferredModel(status.id, { provider: body.provider, model: body.model ?? body.modelId });
 		return { agentId: status.id, preferredModel: { provider: preferred.provider, model: preferred.model } };
 	} catch (e) {
+		return persistentAgentNormalUseErrorReply(reply, e);
+	}
+});
+// Room settings → Instructions: the user's standing text for how the room
+// works. GET reads it back with the cap the pane counts against; PUT stores
+// the text (empty = none) and answers with what was stored. The write refuses
+// a room held by a scheduler or CLI session (409) and text over the cap (400),
+// each with the remedy in the sentence; a refusal leaves the previous text.
+app.get("/api/persistent-agents/:id/instructions", async (req, reply) => {
+	const idRaw = String((req.params as any).id ?? "").trim();
+	try {
+		const status = getUsablePersistentAgentStatusForNormalUse(idRaw);
+		return { agentId: status.id, ...getPersistentRoomInstructionsView(status.id), maxChars: ROOM_INSTRUCTIONS_MAX_CHARS };
+	} catch (e) {
+		return persistentAgentNormalUseErrorReply(reply, e);
+	}
+});
+// The room's switch for the global instructions; the reply is the
+// same view the GET returns, so the pane re-renders from one shape.
+app.put("/api/persistent-agents/:id/instructions/global", async (req, reply) => {
+	const idRaw = String((req.params as any).id ?? "").trim();
+	try {
+		const status = getUsablePersistentAgentStatusForNormalUse(idRaw);
+		const body = (req.body ?? {}) as any;
+		return { agentId: status.id, ...savePersistentRoomGlobalInstructionsEnabled(status.id, body.enabled), maxChars: ROOM_INSTRUCTIONS_MAX_CHARS };
+	} catch (e) {
+		const statusCode = (e as any).statusCode;
+		if (statusCode >= 500) {
+			app.log.error({ err: e }, "persistent-room global-instructions switch failed");
+			return reply.code(statusCode).send({ error: "Changing the switch failed because of a server error. The room's setting is unchanged. Check the server logs for details." });
+		}
+		return persistentAgentNormalUseErrorReply(reply, e);
+	}
+});
+app.put("/api/persistent-agents/:id/instructions", async (req, reply) => {
+	const idRaw = String((req.params as any).id ?? "").trim();
+	try {
+		const status = getUsablePersistentAgentStatusForNormalUse(idRaw);
+		const body = (req.body ?? {}) as any;
+		savePersistentRoomInstructions(status.id, body.text);
+		return { agentId: status.id, ...getPersistentRoomInstructionsView(status.id), maxChars: ROOM_INSTRUCTIONS_MAX_CHARS };
+	} catch (e) {
+		const statusCode = (e as any).statusCode;
+		if (statusCode >= 500) {
+			app.log.error({ err: e }, "persistent-room instructions save failed");
+			const removing = typeof (req.body as any)?.text === "string" && !(req.body as any).text.trim();
+			return reply.code(statusCode).send({ error: `${removing ? "Removing" : "Saving"} the instructions failed because of a server error. The previous instructions are unchanged. Check the server logs for details.` });
+		}
 		return persistentAgentNormalUseErrorReply(reply, e);
 	}
 });
@@ -3071,8 +3127,15 @@ const WEB_CHAT_PROVIDER_LABELS: Record<string, string> = {
 	openrouter: "OpenRouter",
 };
 const WEB_CHAT_MODEL_LABELS: Record<string, Record<string, string>> = {
+	"openai-codex": {
+		"gpt-6-astra": "GPT-6 Astra",
+		"gpt-6-sol": "GPT-6 Sol",
+		"gpt-6-luna": "GPT-6 Luna",
+	},
 	anthropic: {
+		"claude-opus-5-5": "Opus 5.5",
 		"claude-opus-5": "Opus 5",
+		"claude-fable-5-1": "Fable 5.1",
 		"claude-opus-4-8": "Opus 4.8",
 		"claude-sonnet-5": "Sonnet 5",
 		"claude-fable-5": "Fable 5",
@@ -4244,6 +4307,22 @@ function webSearchSettingsPayload() {
 		unreadable: settings.unreadable ?? null,
 	};
 }
+// The global instructions: one text under the app's state folder,
+// read and written by the same store as a room's text (same cap, same
+// refusals, same three states). Which rooms follow it is each room's switch.
+app.get("/api/settings/instructions", async () => ({ instructions: readGlobalInstructions(), maxChars: ROOM_INSTRUCTIONS_MAX_CHARS }));
+app.put("/api/settings/instructions", async (req, reply) => {
+	try {
+		const body = (req.body ?? {}) as any;
+		return { instructions: writeGlobalInstructions(body.text), maxChars: ROOM_INSTRUCTIONS_MAX_CHARS };
+	} catch (e) {
+		const statusCode = (e as any).statusCode;
+		if (statusCode === 400) return reply.code(400).send({ error: (e as Error).message });
+		app.log.error({ err: e }, "global instructions save failed");
+		const removing = typeof (req.body as any)?.text === "string" && !(req.body as any).text.trim();
+		return reply.code(500).send({ error: `${removing ? "Removing" : "Saving"} the global instructions failed because of a server error. The previous text is unchanged. Check the server logs for details.` });
+	}
+});
 app.get("/api/settings/web-search", async () => webSearchSettingsPayload());
 // The one-time What's new window after an update. The GET can record: a
 // machine with no acknowledgement yet (fresh install, or the first run of the
@@ -5665,6 +5744,70 @@ app.get("/api/memory/rooms/:id/snapshot", async (req, reply) => {
 	}
 });
 
+// Rooms that were written before the current constitution template keep the
+// words they were scaffolded with until something re-renders them, and the only
+// thing that did was the operator runner — so a room nobody ran a script for
+// never learned what a later template teaches. This is that re-render on the
+// room's next open, with the same archive copy and event record the runner
+// writes, taken BEFORE the room lock and under the open's own gate: a room that
+// is merely selected — which is every room the web UI opens, because it saves
+// the thread active before it opens the socket — is re-rendered, while a room
+// with a turn in flight or held by another surface is not.
+//
+// It never costs the user the open. A room mid-turn, locked, archived or
+// unreadable is opened exactly as it is and catches up at a later open, and the
+// reason is said once per room per process rather than on every connect.
+const constitutionUpgradeOnOpenSaidFor = new Set<string>();
+
+/** The reason a room opened on its old constitution, said once per room per process. */
+function noteConstitutionUpgradeSkippedOnOpen(agentId: string, reason: string): void {
+	if (constitutionUpgradeOnOpenSaidFor.has(agentId)) return;
+	constitutionUpgradeOnOpenSaidFor.add(agentId);
+	app.log.warn({ agentId, reason }, "room opened without upgrading its constitution");
+}
+
+function upgradePersistentRoomConstitutionOnOpen(agentId: string): void {
+	try {
+		const instance = createPersistentAgentInstance(agentId);
+		const meta = instance.readAgentJson();
+		if (!meta) return;
+		const l1a = instance.readL1a(meta);
+		// A constitution with no template marker at all was not written by this
+		// template — a hand-written file, an import, a shape from somewhere else.
+		// It is nobody's to re-render silently. The marker's presence is read here
+		// rather than taken from the plan, which reads a missing marker as the
+		// first generation and would upgrade it.
+		if (!/<!--\s*exxeta:persistent-agent:l1a\b/.test(l1a)) {
+			noteConstitutionUpgradeSkippedOnOpen(agentId, "the constitution carries no template marker");
+			return;
+		}
+		const marker = parsePersistentAgentL1aMarker(l1a);
+		if (marker.templateVersion > PERSISTENT_AGENT_L1A_TEMPLATE_VERSION) {
+			noteConstitutionUpgradeSkippedOnOpen(agentId, `the constitution is template v${marker.templateVersion}, newer than the v${PERSISTENT_AGENT_L1A_TEMPLATE_VERSION} this build writes`);
+			return;
+		}
+		const plan = planPersistentAgentConstitutionUpgrade(agentId);
+		// Silent on the ordinary path: a room already on the current template
+		// opens without a word about it.
+		if (plan.action !== "upgrade" || plan.toTemplateVersion !== PERSISTENT_AGENT_L1A_TEMPLATE_VERSION) return;
+		const result = upgradePersistentAgentConstitution(agentId, { gate: "on-open" });
+		if (result.upgradeId) {
+			app.log.info({
+				agentId,
+				fromTemplateVersion: result.plan.fromTemplateVersion,
+				toTemplateVersion: result.plan.toTemplateVersion,
+				archivedL1a: result.archivedL1aRelPath,
+				eventRecord: result.eventRecordRelPath,
+			}, "room constitution upgraded on open");
+		}
+	} catch (error) {
+		// The room opens either way: an upgrade refused because the room is
+		// mid-turn or locked is a later open's job, and nothing here may cost
+		// this one.
+		noteConstitutionUpgradeSkippedOnOpen(agentId, (error as Error).message);
+	}
+}
+
 app.get("/ws", { websocket: true }, async (socket, req) => {
 	const rawUrl = (req as any).url ?? (req as any).raw?.url ?? "";
 	const params = new URLSearchParams(rawUrl.split("?")[1] ?? "");
@@ -5803,6 +5946,10 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 			try { socket.close(); } catch {}
 			return;
 		}
+		// The last moment the constitution can be re-rendered for this open: the
+		// upgrade refuses while the lock is held, and the boot prompt below is
+		// built from the file this leaves behind.
+		upgradePersistentRoomConstitutionOnOpen(persistentAgentIdForSession);
 		const acquired = roomLock.tryAcquire(persistentAgentIdForSession, roomLockOwner);
 		if (!acquired.ok) {
 			claimedCookingTurn = null;
@@ -6856,30 +7003,61 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 		// the room's own files/ folder by the tools themselves — deliberately
 		// OUTSIDE the workspace grant plumbing and its mismatch check above.
 		const persistentRoomShelfTools = createPersistentRoomShelfTools({ roomId: persistentAgentId });
-		// The room's read of its own archived notes: default-on beside the shelf
-		// pair, fenced to this room's own archive, and read-only — a pointer line
-		// the room cannot follow is just a regret.
-		const persistentRoomMemoryTools = [createPersistentRoomMemoryRecallTool({ roomId: persistentAgentId })];
+		// The room's own tools, said in one line each. A tool declares that line
+		// itself, as its promptSnippet; the runtime renders those snippets into
+		// the default system prompt's tool section, which a room never gets — a
+		// room serves a raw prompt of its own, so a tool it HAS was a tool it was
+		// never told about in words, only in the schema on the wire. This stanza
+		// closes that: the snippet's own words, nothing copied from the tool's
+		// description, one line per room tool that carries one. A list where
+		// nothing carries a snippet renders nothing at all, heading included.
+		const buildRoomToolsSection = (tools: readonly { name: string; promptSnippet?: string }[]): string => {
+			const lines = tools
+				.filter((tool) => typeof tool?.promptSnippet === "string" && tool.promptSnippet.trim().length > 0)
+				.map((tool) => `- ${tool.name}: ${(tool.promptSnippet as string).trim()}`);
+			if (lines.length === 0) return "";
+			return `
+
+## Room tools
+
+${lines.join("\n")}`;
+		};
 		// Live room state is STATE, not an event: regenerated for every request
 		// via before_agent_start (which replaces the system prompt per turn), so
 		// something that changed mid-session is reflected on the very next
-		// request — never stale, never accumulated. Three sections ride here: the
-		// current-identity stanza (agent.json is the live name authority; the
-		// frozen boot snapshot cannot learn about a rename), the enabled-skills
+		// request: never stale, never accumulated. Six sections ride here, in the
+		// order the code appends them: the current-identity stanza (agent.json is
+		// the live name authority; the frozen boot snapshot cannot learn about a
+		// rename), the current-instructions section (the thread record carries the
+		// fingerprint of the instructions it booted with; the builder speaks only
+		// when the file differs from it), the current-workspace stanza (the boot
+		// snapshot froze the workspace facts at thread creation; the default
+		// applies live now, so the model is told the CURRENT workspace every turn
+		// and can never claim a stale one mid-conversation), the enabled-skills
 		// index (skills MR-5, spec §5 — recomputed per turn so a skill enabled
 		// mid-session is listed on the very next message, matching read_skill's
-		// per-call enforcement of the live set), the current-workspace stanza
-		// (the boot snapshot froze the workspace facts at thread creation; the
-		// default applies live now, so the model is told the CURRENT workspace
-		// every turn and can never claim a stale one mid-conversation), and the
-		// shelf manifest (a file created or deleted mid-session shows up
-		// immediately).
+		// per-call enforcement of the live set), the shelf manifest (a file
+		// created or deleted mid-session shows up immediately), and the room-tools
+		// stanza (one line per room tool that carries one, so the tools a turn is
+		// given are also named in words).
 		// Each section is best-effort on its own: a build failure drops that
 		// section for the turn, never the turn itself.
 		const liveRoomStateExtForSession = async (pi: any) => {
 			pi.on("before_agent_start", async (event: { systemPrompt: string }) => {
 				let systemPrompt = event.systemPrompt;
 				systemPrompt += buildPersistentAgentCurrentIdentitySection(persistentAgentId);
+				// Instructions edited since this thread booted: the thread record
+				// carries the fingerprint it booted with (a legacy record without it
+				// falls back to the marker in the frozen prompt), the builder
+				// compares it with the file now and speaks only when they differ.
+				// A connection that built its own boot context at connect (no snapshot-
+				// backed record yet) knows what it booted with just as well.
+				const bootedFingerprint = persistentRoomThreadRuntime?.kind === "pi-session-jsonl"
+					? persistentRoomThreadRuntime.instructionsFingerprint
+					: persistentRoomBootContext ? fingerprintPersistentAgentBootContextInstructions(persistentRoomBootContext) : undefined;
+				systemPrompt += buildPersistentRoomCurrentInstructionsSection(persistentAgentId, event.systemPrompt, {
+					...(bootedFingerprint !== undefined ? { bootedFingerprint } : {}),
+				});
 				try {
 					systemPrompt += buildPersistentRoomCurrentWorkspaceSection(resolvePersistentRoomEffectiveWorkspacePolicy(persistentAgentId, persistentConversationId));
 				} catch (error) {
@@ -6891,6 +7069,15 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 					if (section) systemPrompt += section;
 				} catch (error) {
 					app.log.warn({ err: (error as Error).message }, "shelf manifest build failed");
+				}
+				// Last of the per-turn stanzas, and per-turn for the same reason the
+				// others are: the room's tool set is resolved at bind, so the words
+				// that name it belong beside the state they describe rather than in
+				// the frozen boot prompt.
+				try {
+					systemPrompt += buildRoomToolsSection([...persistentRoomMemoryTools, ...persistentRoomShelfTools]);
+				} catch (error) {
+					app.log.warn({ err: (error as Error).message }, "room tools section build failed");
 				}
 				return systemPrompt !== event.systemPrompt ? { systemPrompt } : undefined;
 			});
@@ -6922,8 +7109,12 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 		// refuse to start here, with the remedy, instead of failing on turn one.
 		// What it measures is the boot prompt plus the specialist index, not the
 		// full per-turn prompt: the per-turn hooks append more (identity,
-		// workspace, skills and shelf stanzas) that rides in the headroom this
-		// check leaves, unmeasured by it. Every way a room comes alive (new
+		// workspace, skills, shelf and room-tools stanzas, and the current-instructions
+		// section, the one append that is user-sized: up to the 8,000-character
+		// cap when saved through the pane, and whatever a hand-written file holds,
+		// since the read takes the file cap or no cap) that rides in the headroom
+		// this check leaves, unmeasured by it.
+		// Every way a room comes alive (new
 		// thread, resume, after Remember or Forget) passes through this connect,
 		// so this is the single guard point.
 		if (persistentRoomRawSystemPrompt != null) {
@@ -6938,6 +7129,33 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 		const persistentRoomSessionManager = persistentRoomThreadRuntime?.kind === "pi-session-jsonl"
 			? openPersistentAgentPiSessionManager(persistentAgentId, persistentRoomThreadRuntime, persistentRoomRuntimeCwd)
 			: undefined;
+		// The room's read of its own memory: default-on beside the shelf pair,
+		// fenced to this room's own notes, archive and memorized conversations,
+		// and read-only — a pointer line the room cannot follow is just a regret.
+		// It is built here rather than up with the shelf pair because it reads a
+		// folded conversation's transcript through the session manager, so it
+		// needs the SAME working directory the room's own session was opened
+		// with, or it would resolve a session file the room never wrote.
+		const persistentRoomMemoryTools = [createPersistentRoomMemoryRecallTool({
+			roomId: persistentAgentId,
+			runtimeCwd: persistentRoomRuntimeCwd,
+			// How much of the room's context one recall may spend is a share of
+			// the window of the model the room is answering on RIGHT NOW: the live
+			// session's own model once it is bound, and the model this connect
+			// resolved until then, looked up in the catalogue exactly as the
+			// boot-fit and compaction paths look it up. A model nobody can find
+			// says null, and the tool falls back to its fixed budget.
+			resolveWindow: () => {
+				const liveModel = (session as any)?.model;
+				const provider = String(liveModel?.provider ?? persistentRoomModel.provider);
+				const modelId = String(liveModel?.id ?? persistentRoomModel.model);
+				try {
+					return modelContextWindow(getWebChatModelRegistry().find(provider, modelId)) ?? null;
+				} catch {
+					return null;
+				}
+			},
+		})];
 		const permissionsExtForSession = async (pi: any) => {
 			const previousPersistentRoomSession = process.env.EXXETA_PERSISTENT_ROOM_SESSION;
 			const previousPersistentRoomAgent = process.env.EXXETA_PERSISTENT_ROOM_AGENT;

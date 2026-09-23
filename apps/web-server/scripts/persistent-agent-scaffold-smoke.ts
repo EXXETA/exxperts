@@ -136,7 +136,7 @@ function assertGenericAgent(agentId: string, expected: { displayName: string; us
 	assertIncludes(l1a, `refer to the user as **${expected.preferredAddress}**`, `${agentId}: L1a preferred address instruction`);
 	const expectedMode = expected.mode ?? "default";
 	assert(meta.mode === expectedMode, `${agentId}: agent.json mode should be ${expectedMode}`);
-	assertIncludes(l1a, `template_version=2 mode=${expectedMode}`, `${agentId}: L1a template version marker`);
+	assertIncludes(l1a, `template_version=3 mode=${expectedMode}`, `${agentId}: L1a template version marker`);
 	assertIncludes(l1a, `l1a-mode-begin id=${expectedMode}`, `${agentId}: L1a mode slot begin marker`);
 	assertIncludes(l1a, "l1a-mode-end", `${agentId}: L1a mode slot end marker`);
 	assertIncludes(l1a, MODE_BODY_SENTINELS[expectedMode], `${agentId}: L1a mode body should match ${expectedMode} preset`);

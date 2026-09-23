@@ -161,6 +161,7 @@ function main() {
 				bootPromptSnapshotRelPath: threadRuntime.bootPromptSnapshotRelPath,
 				bootPromptSha256: threadRuntime.bootPromptSha256,
 				l1bFingerprint: threadRuntime.l1bFingerprint,
+				...(threadRuntime.instructionsFingerprint !== undefined ? { instructionsFingerprint: threadRuntime.instructionsFingerprint } : {}),
 				createdAt: threadRuntime.createdAt,
 				...(threadRuntime.leafId ? { leafId: threadRuntime.leafId } : {}),
 				bootPromptSnapshot,

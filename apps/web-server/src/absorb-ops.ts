@@ -25,7 +25,8 @@
 // definitions, and TypeScript's structural typing makes the two compatible
 // without this module importing it. Sizes go through the ONE estimator.
 
-import { noteTextsLookAlike } from "./memory-duplicates.js";
+import { classifyNotePair, conflictReason, conflictValuePairs, noteTextsLookAlike } from "./memory-duplicates.js";
+import { dayWords } from "./memory-entries.js";
 import { estimateTokens } from "./token-estimate.js";
 
 export const ABSORB_FOLD_WORKER_TYPE = "absorb-fold-worker" as const;
@@ -774,6 +775,21 @@ function sessionQuoteHaystack(session: { text: string }): string {
 	return normalizeLine(session.text);
 }
 
+/** Today as the local YYYY-MM-DD: the day the person reading a refusal's date words is in. The validator carries no clock of its own. */
+function localDay(date = new Date()): string {
+	return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+/** The first note, in document order, that a text says again or contradicts, and which of the two it does. */
+function twinNoteOf(text: string, areas: AreaRow[]): { area: AreaRow; kind: "duplicate" | "conflict" } | undefined {
+	for (const area of areas) {
+		if (!area.id) continue;
+		const kind = classifyNotePair(text, area.text);
+		if (kind !== "different") return { area, kind };
+	}
+	return undefined;
+}
+
 /**
  * Refusals, each a named reason the model can act on, one line per problem,
  * naming the op's position and the entry it addressed. An empty list means the
@@ -828,12 +844,19 @@ export function validateFoldOps(ops: FoldOp[], areas: AreaRow[], session: { id: 
 				refusals.push(`${label}: ${FOLD_ACTIVE_ITEMS_TOPIC} holds open loops only; a ${op.kind} belongs under a Deep Memory topic`);
 			}
 			refuseTextShape(op.text, op.topic, areas, label, refusals);
-			// A point memory already holds is updated, never repeated. The areas are
-			// read off the run's WORKING COPY before every fold, so a note added by
-			// conversation 3 is among the areas conversation 7 is judged against
-			// without any further work: the twin check sees this run's own adds.
-			const twin = areas.find((area) => area.id && noteTextsLookAlike(op.text, area.text));
-			if (twin) refusals.push(`${label}: this says what note "${twin.id}" under "${twin.topic}" already says — update "${twin.id}" if the point changed, or leave it out`);
+			// A point memory already holds is updated, never repeated; a point whose
+			// value changed (a date, a number, a negation) is superseded, never added
+			// beside the old value. The areas are read off the run's WORKING COPY
+			// before every fold, so a note added by conversation 3 is among the
+			// areas conversation 7 is judged against without any further work: the
+			// twin check sees this run's own adds.
+			const twin = twinNoteOf(op.text, areas);
+			if (twin?.kind === "conflict") {
+				const pairs = conflictValuePairs(twin.area.text, op.text).map((pair) => `${pair.older || "nothing"} → ${pair.newer || "nothing"}`).join(", ");
+				refusals.push(`${label}: this changes what note "${twin.area.id}" under "${twin.area.topic}" says (${pairs}): supersede "${twin.area.id}" if this session is newer than it (saved ${dayWords(twin.area.updated ?? twin.area.saved, localDay())}), otherwise leave it out and say in the narrative that memory already holds a later value`);
+			} else if (twin) {
+				refusals.push(`${label}: this says what note "${twin.area.id}" under "${twin.area.topic}" already says — update "${twin.area.id}" if the point changed, or leave it out`);
+			}
 			const earlier = addsSoFar.find((add) => noteTextsLookAlike(op.text, add.text));
 			if (earlier) refusals.push(`${label}: this says what op ${earlier.index + 1} (add) already says — keep one of them`);
 			addsSoFar.push({ index, text: op.text });
@@ -887,7 +910,8 @@ export interface FoldRecord {
 	dropped?: { reason: string };
 	added: { id: string; topic: string; kind: EntryKind; text: string }[];
 	updated: { id: string; before: string; after: string }[];
-	superseded: { id: string; before: string; after: string }[];
+	/** `reason` says which value replaced which and why, when the old and the new text disagree on a date, a number or a negation; a mere rewording carries none. */
+	superseded: { id: string; before: string; after: string; reason?: string }[];
 	closed: { id: string; text: string }[];
 	pinned: string[];
 	unpinned: string[];
@@ -904,6 +928,16 @@ export interface FoldApplyContext {
 	sessionId: string;
 	/** YYYY-MM-DD — the approval date the whole run is stamped with. */
 	savedDate: string;
+	/** YYYY-MM-DD: the day the session is from, as its heading names it and the fold prompt says "this session is from"; absent when the heading carries no date. A superseded row's reason names it as the newer day. */
+	sessionDate?: string;
+	/**
+	 * The day a conversation of this run is from, by its Recent Context id. A
+	 * note this same run added carries the run's day as its saved day, which is
+	 * after every conversation the run folds; a supersede's reason dates such a
+	 * note by the conversation that said it instead, so the two days it names
+	 * are the two conversations', not a fold day against a conversation.
+	 */
+	sessionDateOf?: (sessionId: string) => string | undefined;
 	nextEntryNumber: number;
 }
 
@@ -1014,10 +1048,18 @@ export function applyFoldOps(doc: MemoryDocument, ops: FoldOp[], ctx: FoldApplyC
 			case "supersede": {
 				const { entry } = entryAt(op.id);
 				const before = entry.text;
+				// The day the old text stood on, read before the touch stamps the run's
+				// day over it; a note stamped with this run's own day is dated by the
+				// conversation it came from.
+				const stood = entry.updated ?? entry.saved;
+				const olderDate = (stood === ctx.savedDate && entry.from && ctx.sessionDateOf?.(entry.from)) || stood;
 				entry.text = op.text;
 				touch(entry);
 				pinIfMustKeep(entry);
-				record.superseded.push({ id: op.id, before, after: op.text });
+				// Two texts that disagree on a value say why the newer one won: the
+				// session's day against the entry's. A rewording says nothing.
+				const reason = classifyNotePair(before, op.text) === "conflict" ? conflictReason(before, op.text, olderDate, ctx.sessionDate ?? ctx.savedDate, ctx.savedDate) : undefined;
+				record.superseded.push({ id: op.id, before, after: op.text, ...(reason ? { reason } : {}) });
 				break;
 			}
 			case "close": {

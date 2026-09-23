@@ -27,6 +27,7 @@
 import {
 	applyUserEdit,
 	cloneDocument,
+	dayWords,
 	entryTokens,
 	findEntryLocation,
 	findStructuralLine,
@@ -42,6 +43,7 @@ import {
 	type MemoryTopic,
 } from "./memory-entries.js";
 import { nearDuplicateTopicTitle } from "./absorb-ops.js";
+import { conflictReason, conflictValuePairs, noteValueTokens } from "./memory-duplicates.js";
 import { reviewGuidanceIsEmpty, type ReviewGuidance } from "./review-guidance.js";
 import { estimateTokens } from "./token-estimate.js";
 
@@ -321,6 +323,8 @@ export interface ReviewGroupPromptInput {
 	groupCount: number;
 	/** Pairs of notes in THIS group that say one thing, by id, as the machine found them. */
 	duplicateNotes?: readonly { ids: readonly [string, string] }[];
+	/** Pairs of notes in THIS group that disagree, by id, each with the line the prompt carries for it: the run builds the line from the pair's dates and first lines. */
+	conflictNotes?: readonly { ids: readonly [string, string]; line: string }[];
 	/** Pairs of topics in THIS group that look like one topic, as the machine found them. */
 	lookAlikeTopics?: readonly { a: string; b: string }[];
 	/** Reasons a previous reply was refused, repeated as a Retry Notice. */
@@ -417,15 +421,19 @@ function reviewOpShapes(depth: ReviewDepth): string[] {
 
 /**
  * The machine's findings for this group, one section each: the pairs of
- * notes that say one thing, and the pairs of topics that look like one. Each
- * line says what to do about the pair; at depth wording the archive is not
- * open, so the line offers the merge alone.
+ * notes that say one thing, the pairs that disagree, and the pairs of topics
+ * that look like one. Each line says what to do about the pair; at depth
+ * wording the archive is not open, so the duplicates line offers the merge
+ * alone, while a disagreeing pair is merged at either depth.
  */
 function groupFindingsSections(input: ReviewGroupPromptInput): string[] {
 	const sections: string[] = [];
 	if (input.duplicateNotes?.length) {
 		const remedy = DEPTH_OPS[input.depth].includes("archive") ? "merge them into one note, or archive one of them as duplicate" : "merge them into one note";
 		sections.push(`## Material: Notes That Say The Same Twice\n\n${input.duplicateNotes.map((pair) => `- ${pair.ids[0]} and ${pair.ids[1]} say the same thing: ${remedy}.`).join("\n")}`);
+	}
+	if (input.conflictNotes?.length) {
+		sections.push(`## Material: Notes That Disagree\n\n${input.conflictNotes.map((pair) => `- ${pair.line}`).join("\n")}`);
 	}
 	if (input.lookAlikeTopics?.length && DEPTH_OPS[input.depth].includes("merge_topics")) {
 		sections.push(`## Material: Topics That Look The Same\n\n${input.lookAlikeTopics.map((pair) => `- "${pair.a}" and "${pair.b}" look like one topic: fold the one with fewer notes into the other with merge_topics, unless they are two subjects after all.`).join("\n")}`);
@@ -442,12 +450,15 @@ function reviewTaskSection(input: ReviewGroupPromptInput): string {
 			? `Every pair listed under "Notes That Say The Same Twice" is dealt with: merge them, or archive one as duplicate, or say in the narrative why both stay.`
 			: `Every pair listed under "Notes That Say The Same Twice" is dealt with: merge them, or say in the narrative why both stay.`
 		: "";
+	const conflictsLine = input.conflictNotes?.length
+		? `Every pair listed under "Notes That Disagree" is dealt with: merge them keeping the newer text, or say in the narrative why both stay.`
+		: "";
 	return [
 		"## Task: Tidy These Notes (operations)",
 		`You do not rewrite the memory. You emit operations against the notes above, each named by the id in its first line; the system applies them and puts the result to the user. A note you do not name is copied through unchanged — its words, its date and its pin survive without any effort on your part, so name only what you are actually improving.`,
 		depthLine,
 		`Operation shapes (copy a note id exactly as it stands in its brackets, without them):\n\n${reviewOpShapes(input.depth).join("\n")}`,
-		`Rules: at most ${REVIEW_MAX_OPS} operations for this group; each "text" is at most ${REVIEW_MAX_TEXT_CHARS} characters, is written the way its topic is written (a bullet starting "- " unless the topic's notes are paragraphs), and carries no bracketed id of its own; one operation per note; every id is one of the notes above; a pinned note takes no archive and no close. An operation that breaks a rule is refused with its reason and this group is asked for again, so prefer fewer, exact operations.${duplicatesLine ? ` ${duplicatesLine}` : ""}`,
+		`Rules: at most ${REVIEW_MAX_OPS} operations for this group; each "text" is at most ${REVIEW_MAX_TEXT_CHARS} characters, is written the way its topic is written (a bullet starting "- " unless the topic's notes are paragraphs), and carries no bracketed id of its own; one operation per note; every id is one of the notes above; a pinned note takes no archive and no close. An operation that breaks a rule is refused with its reason and this group is asked for again, so prefer fewer, exact operations.${duplicatesLine ? ` ${duplicatesLine}` : ""}${conflictsLine ? ` ${conflictsLine}` : ""}`,
 		`Answer with the narrative and then the operations: at most three lines saying what you tidied and why, then exactly one \`\`\`json fence holding \`{"ops": [ ... ]}\`. Nothing follows the fence. An empty list is a valid answer when these notes are already as short as they can be — say so in the narrative and return \`{"ops": []}\`. Do not claim anything has been saved.`,
 	].join("\n\n");
 }
@@ -745,6 +756,52 @@ export interface ReviewMemoryTopic {
 export interface ReviewValidationContext {
 	group?: readonly ReviewGroupTopic[];
 	memoryTopics?: readonly ReviewMemoryTopic[];
+	/** The pairs of notes in this group that disagree, as the machine paired them at the start of the run. */
+	conflictNotes?: readonly ReviewConflictPair[];
+	/** YYYY-MM-DD, the day a refusal writes its dates against; left out, the current day. */
+	today?: string;
+}
+
+/**
+ * A pair of notes the machine found disagreeing, as the validator and the
+ * applier read it: ids, texts and dates in document order, and which member
+ * carries the later date; null when the dates are equal and nothing decides.
+ */
+export interface ReviewConflictPair {
+	ids: readonly [string, string];
+	newer: "a" | "b" | null;
+	texts: readonly [string, string];
+	dates: readonly [string, string];
+}
+
+interface ConflictMember {
+	id: string;
+	text: string;
+	date: string;
+}
+
+/** The pair's members with the older first, the newer second; document order when nothing decides. */
+function conflictMembers(pair: ReviewConflictPair): [ConflictMember, ConflictMember] {
+	const a = { id: pair.ids[0], text: pair.texts[0], date: pair.dates[0] };
+	const b = { id: pair.ids[1], text: pair.texts[1], date: pair.dates[1] };
+	return pair.newer === "a" ? [b, a] : [a, b];
+}
+
+/**
+ * The values a merged text kept from the older note where the newer note says
+ * otherwise: every value pair whose older tokens the merged text carries and
+ * whose newer tokens it does not. Empty when the merged text follows the
+ * newer note, or carries both.
+ */
+function keptOlderValues(olderText: string, newerText: string, mergedText: string): Array<{ older: string; newer: string }> {
+	const merged = new Set(noteValueTokens(mergedText));
+	const carries = (spelling: string) => noteValueTokens(spelling).every((token) => merged.has(token));
+	return conflictValuePairs(olderText, newerText).filter((pair) => carries(pair.older) && !carries(pair.newer));
+}
+
+/** One side of the kept values as the refusal names it; a side with no value there reads as "nothing". */
+function valuesNamed(pairs: ReadonlyArray<{ older: string; newer: string }>, side: "older" | "newer"): string {
+	return pairs.map((pair) => pair[side] || "nothing").join(", ");
 }
 
 /** The group's topics as the notes name them, when the caller gave no richer view. */
@@ -773,6 +830,8 @@ export function validateReviewOps(ops: readonly ReviewOp[], notes: readonly Revi
 	const groupTopics: readonly ReviewMemoryTopic[] = context.group ?? groupTopicsOf(notes);
 	const memoryTopics: readonly ReviewMemoryTopic[] = context.memoryTopics ?? groupTopics;
 	const memoryTitles = [...topics, ...memoryTopics.map((topic) => topic.title)];
+	const conflicts: readonly ReviewConflictPair[] = context.conflictNotes ?? [];
+	const today = context.today ?? new Date().toISOString().slice(0, 10);
 	/** The topics already folded away by an earlier op of this reply, by the op that did it. */
 	const folded = new Map<string, number>();
 
@@ -853,6 +912,18 @@ export function validateReviewOps(ops: readonly ReviewOp[], notes: readonly Revi
 			if (sections.size > 1) refusals.push(`${label}: a merge joins notes of one section; these are in ${[...sections].join(" and ")}`);
 			refuseTextShape(op.text, rows[0].topic, notes, label, refusals);
 			refuseGrowth(op.text, rows.reduce((sum, row) => sum + row.text.length, 0), label, refusals);
+			// A merge of two notes that disagree keeps the newer value: a merged
+			// text that carries the older one where the newer note says otherwise
+			// would make the room believe the value it had already moved past.
+			// When the dates are equal nothing decides, and either text stands.
+			const conflict = conflicts.find((pair) => pair.ids.every((id) => op.ids.includes(id)));
+			if (conflict && conflict.newer !== null) {
+				const [older, newer] = conflictMembers(conflict);
+				const kept = keptOlderValues(older.text, newer.text, op.text);
+				if (kept.length > 0) {
+					refusals.push(`${label}: the merged text keeps ${valuesNamed(kept, "older")}, but ${newer.id} (saved ${dayWords(newer.date, today)}) is newer; keep ${valuesNamed(kept, "newer")} or say why in the narrative`);
+				}
+			}
 			return;
 		}
 		const note = claim(op.id, label);
@@ -871,8 +942,15 @@ export function validateReviewOps(ops: readonly ReviewOp[], notes: readonly Revi
 					refusals.push(`${label}: "${op.id}" is a ${note.kind} under "${note.topic}", not an open item; only an open item is closed — archive it as stale if it no longer holds`);
 				}
 				return;
-			case "archive":
+			case "archive": {
+				// Two notes that disagree are not twins: archiving one as a duplicate
+				// would drop a value without saying which one stands.
+				if (op.why === "duplicate") {
+					const pair = conflicts.find((candidate) => candidate.ids.includes(op.id));
+					if (pair) refusals.push(`${label}: ${pair.ids[0]} and ${pair.ids[1]} disagree, they are not twins; merge them keeping the newer text, or leave both`);
+				}
 				return;
+			}
 			case "pin": {
 				if (!normalizeLine(op.because ?? "")) {
 					refusals.push(`${label}: pin carries "because" — one line saying why this note must never be tidied away`);
@@ -918,6 +996,10 @@ export interface ReviewChange {
 	mergedFrom?: string[];
 	/** topic_folded: how many notes moved with the fold. */
 	notesMoved?: number;
+	/** merged, when the merge resolved a pair the machine found disagreeing: which value replaced which and why, as the card and History show it. */
+	reason?: string;
+	/** merged, for the same rows: the member of the pair that left, and the topic it sat under. */
+	conflictWith?: { id: string; topic: string };
 }
 
 /** One note on its way out of the core, with the address a restore needs. */
@@ -926,6 +1008,8 @@ export interface ReviewArchiveRow {
 	why: ArchiveReason;
 	topic: string;
 	section: MemorySection;
+	/** Why the note left, when a merge resolved a pair that disagreed: the member that left carries the merged row's own reason. */
+	reason?: string;
 }
 
 export interface AppliedReview {
@@ -940,6 +1024,23 @@ export interface ReviewApplyContext {
 	savedDate: string;
 	/** Ids the archive already holds — on disk from earlier saves and in this run so far — so a second version of one note is `-v2`, never a second `-v1`. */
 	takenArchiveIds?: readonly string[];
+	/** The pairs of notes in this group that disagree, as the validator saw them, so a merge that resolves one can say why. */
+	conflictNotes?: readonly ReviewConflictPair[];
+}
+
+/**
+ * What a merge that joins both members of a disagreeing pair says about it:
+ * the reason the newer value replaced the older, and the member that left.
+ * With equal dates nothing but the merged text itself decides, so the value
+ * it kept is the one said to stand. A merge whose survivor is neither member
+ * names the first member as the one that left.
+ */
+function resolvedConflict(pair: ReviewConflictPair, mergedText: string, survivorId: string, topicOf: (id: string) => string, today: string): { reason: string; conflictWith: { id: string; topic: string } } | undefined {
+	let [older, newer] = conflictMembers(pair);
+	if (pair.newer === null && keptOlderValues(older.text, newer.text, mergedText).length > 0) [older, newer] = [newer, older];
+	const left = pair.ids.find((id) => id !== survivorId);
+	if (!left) return undefined;
+	return { reason: conflictReason(older.text, newer.text, older.date, newer.date, today), conflictWith: { id: left, topic: topicOf(left) } };
 }
 
 /**
@@ -978,9 +1079,9 @@ export function applyReviewOps(doc: MemoryDocument, ops: readonly ReviewOp[], ct
 			section: topic.section,
 		});
 	};
-	const takeOut = (entry: MemoryEntry, topic: MemoryTopic, why: ArchiveReason) => {
+	const takeOut = (entry: MemoryEntry, topic: MemoryTopic, why: ArchiveReason, reason?: string) => {
 		topic.entries.splice(topic.entries.indexOf(entry), 1);
-		archive.push({ entry: { ...entry }, why, topic: topic.title, section: topic.section });
+		archive.push({ entry: { ...entry }, why, topic: topic.title, section: topic.section, ...(reason ? { reason } : {}) });
 	};
 
 	for (const op of ops) {
@@ -1001,14 +1102,20 @@ export function applyReviewOps(doc: MemoryDocument, ops: readonly ReviewOp[], ct
 				const survivor = locate(survivorId);
 				const before = survivor.entry.text;
 				const pinned = survivor.entry.pinned || others.some((id) => locate(id).entry.pinned);
+				// A merge that joins both members of a pair the machine found
+				// disagreeing says why, on its own row and on the archive row of
+				// the member that left; read before anything leaves, so the topic
+				// of the leaving member is still where it was.
+				const conflict = (ctx.conflictNotes ?? []).find((pair) => pair.ids.every((id) => op.ids.includes(id)));
+				const resolved = conflict ? resolvedConflict(conflict, op.text, survivorId, (id) => locate(id).topic.title, ctx.savedDate) : undefined;
 				supersede(survivor.entry, survivor.topic, before);
 				for (const id of others) {
 					const member = locate(id);
-					takeOut(member.entry, member.topic, "superseded");
+					takeOut(member.entry, member.topic, "superseded", resolved && conflict!.ids.includes(id) ? resolved.reason : undefined);
 				}
 				survivor.entry.text = op.text;
 				survivor.entry.pinned = pinned;
-				changes.push({ id: survivorId, section: survivor.topic.section, topic: survivor.topic.title, kind: "merged", before, after: op.text, mergedFrom: [...op.ids] });
+				changes.push({ id: survivorId, section: survivor.topic.section, topic: survivor.topic.title, kind: "merged", before, after: op.text, mergedFrom: [...op.ids], ...(resolved ? { reason: resolved.reason, conflictWith: resolved.conflictWith } : {}) });
 				break;
 			}
 			case "archive": {

@@ -6,3 +6,5 @@ workspace/
 *.log
 *.jsonl
 *.json
+data/
+results/

@@ -71,7 +71,7 @@ Every memory traces back to the conversation it came from, and everything a room
 - **Everything lives on your machine.** Memory, conversations, credentials, and the files you attach or a room creates: plain files on your disk, under your control. No cloud account, no telemetry; nothing leaves your machine unless you send it. The optional remote mode (off by default) only ever serves your own paired devices over your private tunnel; there is no cloud in between.
 - **No provider lock-in.** Claude, ChatGPT, Gemini, Mistral, or any OpenAI-compatible endpoint, including local models; switching keeps everything your AI has learned, and a provider outage never strands your work.
 
-Most local AI tools are chat interfaces with hidden state. exxperts is built around governed memory: lean by design, and the more you work with it, the sharper it gets.
+Most local AI tools are chat interfaces with hidden state. exxperts is built around governed memory: lean by design, and the more you work with it, the sharper it gets. How well a room answers from that memory, against having the whole history in the prompt, is measured in [docs/memory.md](docs/memory.md#how-well-it-works-measured).
 
 ## Install
 

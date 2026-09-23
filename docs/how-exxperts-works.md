@@ -39,22 +39,52 @@ built on top in `apps/` and `pi-package/`.
 | Web app | `exxperts web` | The primary product: persistent rooms with the full memory lifecycle. |
 | CLI/TUI | `exxperts cli` | The coding workspace (ExxCode) with repo access; rooms are also reachable from the CLI. |
 
-## Anatomy of a room: four prompt layers
+## Anatomy of a room: the prompt layers
 
-A room's system prompt is assembled from four layers (in
-`apps/web-server/src/persistent-agents.ts`), ordered deliberately:
-primacy for identity, recency for runtime state.
+A room's system prompt is assembled from four code-owned layers plus the
+user's optional instructions (in `apps/web-server/src/persistent-agents.ts`),
+ordered deliberately: primacy for identity, recency for runtime state.
 
 | Layer | Content | Ownership | Updates |
 | --- | --- | --- | --- |
 | **L0**, platform kernel | Identity, privacy, style rules | Code | Auto-ships with every release |
 | **L1a**, constitution | Per-agent charter and mode preset, versioned | Scaffolded at creation | Explicit migration path (see [`l1a-constitution-upgrade.md`](l1a-constitution-upgrade.md)) |
+| **Instructions** | The user's standing guidance: the global instructions every room follows (`~/.exxperts/app/instructions.md`), then this room's own (`instructions.md`) | **User-owned, edited directly** | Settings → Instructions and Room settings → Instructions, any time; absent until written |
 | **L1b**, durable memory | The agent's long-term memory file | **User-governed** | Only through approved memory workflows |
 | **L2**, runtime envelope | Session metadata, workspace grants | Code | Auto-ships; read last |
 
-L1b is the layer that grows. L0, L1a, and L2 are kept deliberately lean
-so a fresh room starts with a small prompt and the memory budget belongs
-to actual memory.
+Instructions are what a person would otherwise repeat at the start of
+every conversation: how to answer, what to prefer, what to avoid. They
+sit between the constitution and the memory and outrank the
+constitution's working-style preset; the kernel's rules and the user's
+latest message still come first. Against the room's memory the line is
+drawn by kind: where a note disagrees with the instructions about how to
+work (language, format, style, when to ask), the instructions apply, and
+memory still decides what is true. A room without instructions boots
+exactly as it did before the layer existed. An edit reaches every open
+web conversation of the room on its next message: the conversation's
+frozen boot prompt keeps the text it started with, its thread record
+remembers which text that was, and a per-turn section carries the
+current text whenever the file differs from that record. Room settings
+refuses a text over 8,000 characters, and the layer is counted under the
+constitution's share of the boot budget.
+
+The global instructions are the same kind of text, written once in
+Settings → Instructions and followed by every room before its own: the
+working style a person would otherwise repeat in every room. Each room
+has one switch for them, on by default, in its Room settings →
+Instructions, where the global text is also shown read-only; a room
+switched off follows only its own text. Where the global instructions
+and a room's own disagree, the room's own apply, and the prompt says so
+in one sentence. Both texts are one layer in the prompt, each with its
+own 8,000-character cap, both counted under the constitution's share. A
+global edit, a room edit or a flip of the switch reaches every open
+web conversation the same way: on its next message, told what changed. Each
+data profile carries its own global text.
+
+L1b is the layer that grows. L0, L1a, instructions, and L2 are kept
+deliberately lean so a fresh room starts with a small prompt and the
+memory budget belongs to actual memory.
 
 ## L1b: the memory file
 
@@ -119,15 +149,15 @@ Review works on the notes and open items (Chronos and the waiting
 conversations are withheld and grafted back byte-exact), and it works
 on notes rather than on prose: every note is addressable, so a review is a
 short list of operations against notes named by id, a group of topics
-at a time. That is what keeps a tidy honest — a note nobody names is
+at a time. That is what keeps a tidy honest: a note nobody names is
 never touched, so ids, saved-on dates and pins survive by construction;
 a pinned note may be worded better and nothing else; an update or merge
 whose text outgrows what it replaced is refused, so "tidy" can never
 mean "write more"; and nothing is deleted, because the archive is the
 only exit and every row carries the reason it left. A group whose call
 fails costs that group alone, named on the card. The room's memory
-budget is the server's own arithmetic after the tidy — by rank,
-disclosed and reversible — and nothing is written until you approve
+budget is the server's own arithmetic after the tidy (by rank,
+disclosed and reversible), and nothing is written until you approve
 ([`memory.md`](memory.md)).
 
 ### Safety rails
@@ -140,7 +170,10 @@ disclosed and reversible — and nothing is written until you approve
 - Every write archives the prior L1b (copy-on-write) and records an
   event with SHA-256 fingerprints, so history is reconstructable.
 
-See [`memory.md`](memory.md) for the user-facing walkthrough.
+See [`memory.md`](memory.md) for the user-facing walkthrough. How well a
+room answers from its memory, against having the whole history in the
+prompt, is measured there under
+[How well it works, measured](memory.md#how-well-it-works-measured).
 
 ## Models and AI profiles
 

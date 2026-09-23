@@ -187,3 +187,40 @@ describe("Anthropic raw SSE parsing", () => {
 		expect(result.content).toEqual([{ type: "text", text: "Hello" }]);
 	});
 });
+
+describe("Anthropic refusal stop reason", () => {
+	it("ends as an error that says the model refused", async () => {
+		const model = getModel("anthropic", "claude-haiku-4-5");
+		const context: Context = {
+			messages: [{ role: "user", content: "Say hello.", timestamp: Date.now() }],
+		};
+		const response = createSseResponse([
+			minimalAnthropicEvents[0],
+			{
+				event: "message_delta",
+				data: JSON.stringify({
+					type: "message_delta",
+					delta: { stop_reason: "refusal" },
+					usage: {
+						input_tokens: 12,
+						output_tokens: 0,
+						cache_read_input_tokens: 0,
+						cache_creation_input_tokens: 0,
+					},
+				}),
+			},
+			{
+				event: "message_stop",
+				data: JSON.stringify({ type: "message_stop" }),
+			},
+		]);
+
+		const stream = streamAnthropic(model, context, {
+			client: createFakeAnthropicClient(response),
+		});
+		const result = await stream.result();
+
+		expect(result.stopReason).toBe("error");
+		expect(result.errorMessage).toBe("the model refused to answer this request");
+	});
+});

@@ -18,7 +18,7 @@
 // is given and returns text, which is what makes it testable without a room.
 
 import { extractAssessmentSection } from "./assessment-parsing.js";
-import { duplicateNoteSentence, findDuplicateNotePairs, findLookAlikeTopics, lookAlikeTopicSentence, type LookAlikeTopicPair } from "./memory-duplicates.js";
+import { conflictNoteSentence, duplicateNoteSentence, findLookAlikeTopics, findNotePairs, lookAlikeTopicSentence, type LookAlikeTopicPair } from "./memory-duplicates.js";
 import type { MemoryDocument } from "./memory-entries.js";
 import { emptyReviewGuidance, type ReviewGuidance } from "./review-guidance.js";
 import { estimateTokens } from "./token-estimate.js";
@@ -125,6 +125,10 @@ export interface ReviewAssessmentFields {
 	saysTheSameTwice: string[];
 	/** Machine-read: the pairs behind those sentences, by id and topic. Never shown. */
 	duplicateNotes: { ids: [string, string]; topics: [string, string] }[];
+	/** The machine's own finding, shown: one sentence per pair of notes that share their words but disagree on a date, a number or a negation. */
+	disagree: string[];
+	/** Machine-read: the pairs behind those sentences, by id and topic. Never shown. */
+	conflictNotes: { ids: [string, string]; topics: [string, string] }[];
 	/** The machine's own finding, shown: one sentence per pair of topics that name one subject. */
 	topicsThatLookTheSame: string[];
 	/** Machine-read: the pairs behind those sentences. Never shown. */
@@ -135,22 +139,29 @@ export interface ReviewAssessmentFields {
 
 /**
  * What the machine finds in a memory without asking a model: the notes that
- * say one thing and the topics that name one subject. The first read and the
- * discussion both carry it; the run computes the same pairs again at prepass.
+ * say one thing, the notes that disagree with each other, and the topics that
+ * name one subject. The first read and the discussion both carry it; the run
+ * computes the same pairs again at prepass.
  */
 export interface ReviewMachineFindings {
 	saysTheSameTwice: string[];
 	duplicateNotes: { ids: [string, string]; topics: [string, string] }[];
+	disagree: string[];
+	conflictNotes: { ids: [string, string]; topics: [string, string] }[];
 	topicsThatLookTheSame: string[];
 	lookAlikeTopics: LookAlikeTopicPair[];
 }
 
-export function reviewMachineFindings(doc: MemoryDocument): ReviewMachineFindings {
-	const pairs = findDuplicateNotePairs(doc);
+/** `today` (YYYY-MM-DD) decides whether a year is written in the disagree sentences; left out, it is the local day. */
+export function reviewMachineFindings(doc: MemoryDocument, today?: string): ReviewMachineFindings {
+	// One walk over the pairs for both lists: on a large memory the walk is what the first read costs.
+	const { duplicates: pairs, conflicts } = findNotePairs(doc);
 	const lookAlike = findLookAlikeTopics(doc);
 	return {
 		saysTheSameTwice: pairs.map(duplicateNoteSentence),
 		duplicateNotes: pairs.map((pair) => ({ ids: [pair.a.id, pair.b.id], topics: [pair.a.topic, pair.b.topic] })),
+		disagree: conflicts.map((pair) => conflictNoteSentence(pair, today)),
+		conflictNotes: conflicts.map((pair) => ({ ids: [pair.a.id, pair.b.id], topics: [pair.a.topic, pair.b.topic] })),
 		topicsThatLookTheSame: lookAlike.map(lookAlikeTopicSentence),
 		lookAlikeTopics: lookAlike.map((pair) => ({ a: pair.a, b: pair.b })),
 	};
@@ -162,13 +173,15 @@ export function reviewMachineFindings(doc: MemoryDocument): ReviewMachineFinding
  * them), so the tidy is handed the pair whether or not the model named it.
  */
 export function withMachineFindings(fields: ReviewAssessmentFields, findings: ReviewMachineFindings, knownTopics: readonly string[]): ReviewAssessmentFields {
-	const wanted = new Set([...findings.duplicateNotes.flatMap((pair) => pair.topics), ...findings.lookAlikeTopics.flatMap((pair) => [pair.a, pair.b])]);
+	const wanted = new Set([...findings.duplicateNotes.flatMap((pair) => pair.topics), ...findings.conflictNotes.flatMap((pair) => pair.topics), ...findings.lookAlikeTopics.flatMap((pair) => [pair.a, pair.b])]);
 	const topics = [...fields.topics];
 	for (const title of knownTopics) if (wanted.has(title) && !topics.includes(title)) topics.push(title);
 	return {
 		...fields,
 		saysTheSameTwice: [...findings.saysTheSameTwice],
 		duplicateNotes: findings.duplicateNotes.map((pair) => ({ ids: [...pair.ids] as [string, string], topics: [...pair.topics] as [string, string] })),
+		disagree: [...findings.disagree],
+		conflictNotes: findings.conflictNotes.map((pair) => ({ ids: [...pair.ids] as [string, string], topics: [...pair.topics] as [string, string] })),
 		topicsThatLookTheSame: [...findings.topicsThatLookTheSame],
 		lookAlikeTopics: findings.lookAlikeTopics.map((pair) => ({ a: pair.a, b: pair.b })),
 		topics,
@@ -199,6 +212,7 @@ export interface ReviewDiscussionPromptInput extends ReviewAssessmentPromptInput
 	userMessage?: string;
 	/** The machine's findings, as the first read showed them, so the discussion can talk about them. */
 	saysTheSameTwice?: string[];
+	disagree?: string[];
 	topicsThatLookTheSame?: string[];
 }
 
@@ -450,7 +464,7 @@ export function parseReviewAssessment(raw: string, knownTopics: string[] = []): 
 	if (unknown.length > 0) warnings.push(`the first read named ${unknown.length === 1 ? "a topic" : "topics"} this room does not have: ${unknown.map((title) => `"${title}"`).join(", ")}`);
 	// The machine's findings are not the model's to write: they are filled in
 	// by the route from the memory itself (withMachineFindings).
-	return { fields: { couldBeShorter, staleOrContradicts, needsYourCall, saysTheSameTwice: [], duplicateNotes: [], topicsThatLookTheSame: [], lookAlikeTopics: [], topics }, warnings };
+	return { fields: { couldBeShorter, staleOrContradicts, needsYourCall, saysTheSameTwice: [], duplicateNotes: [], disagree: [], conflictNotes: [], topicsThatLookTheSame: [], lookAlikeTopics: [], topics }, warnings };
 }
 
 /**
@@ -572,6 +586,7 @@ Write only what the person actually asked for in the discussion. Do not invent t
 function machineFindingsMaterial(input: ReviewDiscussionPromptInput): string[] {
 	const sections: string[] = [];
 	if (input.saysTheSameTwice?.length) sections.push(`## Material: Notes That Say The Same Twice\n\n${input.saysTheSameTwice.map((line) => `- ${line}`).join("\n")}`);
+	if (input.disagree?.length) sections.push(`## Material: Notes That Disagree\n\n${input.disagree.map((line) => `- ${line}`).join("\n")}`);
 	if (input.topicsThatLookTheSame?.length) sections.push(`## Material: Topics That Look The Same\n\n${input.topicsThatLookTheSame.map((line) => `- ${line}`).join("\n")}`);
 	return sections;
 }

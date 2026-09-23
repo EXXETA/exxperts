@@ -63,7 +63,7 @@ const { IsolatedPersistentAgentWorkerTurnError } = await import("../src/persiste
 const { appendArchive, readArchive } = await import("../src/memory-entries-store.js");
 const { readPersistentRoomMaintenanceSettings, writePersistentRoomMaintenanceSettings } = await import("../src/persistent-room-maintenance-settings.js");
 const { undoMemorySave } = await import("../src/memory-undo.js");
-const { buildRoomMemoryHistory } = await import("../src/memory-api.js");
+const { buildRoomMemoryHistory, readMemoryEventDiff } = await import("../src/memory-api.js");
 
 const MODEL = { provider: "openai-compatible", model: "gpt-5.5", label: "GPT-5.5" };
 const RUN_DAY = "2026-09-14";
@@ -258,6 +258,52 @@ function memoryFixtureD(agentId: string): string {
 		`### Delivery practice\n\n${[note("m-0301", TWIN_B), note("m-0302", "- Deliveries are confirmed in writing the same day they land.")].map(renderFixtureEntry).join("\n")}`,
 		`### ${FOLD_INTO}\n\n${[note("m-0401", "- Nordwind's orders arrive over the nightly feed at two in the morning."), note("m-0402", "- Retries are attempted three times, ten minutes apart, before the feed is declared down.")].map(renderFixtureEntry).join("\n")}`,
 		`### ${FOLD_FROM}\n\n${[note(FOLD_FROM_NOTE, FOLD_FROM_TEXT, { pinned: true })].map(renderFixtureEntry).join("\n")}`,
+	];
+	const items: FixtureEntry[] = [{ id: entryId(901), kind: "item", status: "open", saved: "2026-08-20", refs: 1, text: `- ${KEEP_ITEM_MARKER} Confirm the invoicing day with finance before the quarter closes.` }];
+	return [
+		"<!-- exxeta:l1b schema_version=1 -->",
+		"",
+		"## Chronos",
+		"",
+		`- Persistent agent id: ${agentId}`,
+		"- Lifecycle state: ready",
+		"- Last checkpoint: cp_20260912_0001",
+		"- Last checkpoint at: 2026-09-12T09:00:00.000Z",
+		"- Last consolidation: none",
+		"",
+		"## Deep Memory",
+		"",
+		"<!-- entries: next=2000 -->",
+		"",
+		blocks.join("\n"),
+		"## Active Items",
+		"",
+		items.map(renderFixtureEntry).join("\n"),
+		"## Recent Context",
+		"",
+		"No checkpointed sessions yet.",
+		"",
+	].join("\n");
+}
+
+// --- The fixture for what memory says differently --------------------------------
+
+/** The two notes that disagree: the same nine words, a different date, under two topics with the wall between them. */
+const CONFLICT_OLD = "- The Nordwind maintenance contract renews automatically on 1 June.";
+const CONFLICT_NEW = "- The Nordwind maintenance contract renews automatically on 1 July.";
+const CONFLICT_OLD_DAY = "2026-06-02";
+const CONFLICT_NEW_DAY = "2026-09-14";
+/** The topic holding a true pair of twins, elsewhere in the same room. */
+const TWINS_TOPIC = "Signing route";
+
+function memoryFixtureE(agentId: string): string {
+	const note = (id: string, text: string, extra: Partial<FixtureEntry> = {}): FixtureEntry => ({ id, kind: "fact", saved: "2026-06-01", refs: 0, text, ...extra });
+	const wall = Array.from({ length: NOTES_PER_TOPIC }, (_, i) => fixtureNote(WALL_TOPIC, 201 + i));
+	const blocks = [
+		`### Commercial terms\n\n${[note("m-0101", CONFLICT_OLD, { saved: CONFLICT_OLD_DAY }), note("m-0102", "- Invoices go out on the first working day of the month.")].map(renderFixtureEntry).join("\n")}`,
+		`### ${WALL_TOPIC}\n\n${wall.map(renderFixtureEntry).join("\n")}`,
+		`### Delivery practice\n\n${[note("m-0301", CONFLICT_NEW, { saved: CONFLICT_NEW_DAY }), note("m-0302", "- Deliveries are confirmed in writing the same day they land.")].map(renderFixtureEntry).join("\n")}`,
+		`### ${TWINS_TOPIC}\n\n${[note("m-0401", TWIN_A), note("m-0402", TWIN_B)].map(renderFixtureEntry).join("\n")}`,
 	];
 	const items: FixtureEntry[] = [{ id: entryId(901), kind: "item", status: "open", saved: "2026-08-20", refs: 1, text: `- ${KEEP_ITEM_MARKER} Confirm the invoicing day with finance before the quarter closes.` }];
 	return [
@@ -535,7 +581,10 @@ try {
 	assert(keepReviewRunEntries(roomA.agentId, run.runId, { keepTopics: ["Deep Memory/No such topic"] }).demotion.keepTopics.length === 0, "a topic no listed row is under is dropped");
 	// Back to one keep: the rows that entered for the budget row's keep stay
 	// listed as rows that stay; the one that entered for the tidy note's keep
-	// still leaves in its stead, because that keep stands.
+	// still leaves in its stead, because that keep stands — unless the topic
+	// keep above covered it too: a row whose own keep was taken back simply
+	// leaves again, in nobody's stead, and the ranking decides which topic the
+	// tidy note's replacement comes from.
 	const oneKeep = keepReviewRunEntries(roomA.agentId, run.runId, { keepIds: [archivedByTidy.id], keepTopics: [] });
 	const enteredForBudgetRow = replacements.filter((row) => !listed.includes(row.id));
 	assert(enteredForBudgetRow.length > 0, "keeping the budget row made at least one new row enter the list");
@@ -544,7 +593,10 @@ try {
 		assert(row && !row.leaving && !row.instead && !row.kept, `a replacement whose keep was taken back stays on the list as a row that stays, got ${JSON.stringify(row)}`);
 	}
 	assert(oneKeep.demotion.entries.find((row) => row.id === budgetRow.id)?.leaving === true && oneKeep.demotion.counts.kept === 0, "the row leaves again once its keep is taken back");
-	assert(oneKeep.demotion.counts.instead === oneKeep.demotion.entries.filter((row) => row.leaving && row.instead).length && oneKeep.demotion.counts.instead === replacements.length - enteredForBudgetRow.length, `the rows leaving in the tidy note's stead are still counted, got ${JSON.stringify(oneKeep.demotion.counts)}`);
+	const enteredForTidyNote = replacements.filter((row) => listed.includes(row.id));
+	const stillInstead = enteredForTidyNote.filter((row) => !(row.section === budgetRow.section && row.topic === budgetRow.topic));
+	assert(enteredForTidyNote.every((row) => oneKeep.demotion.entries.find((candidate) => candidate.id === row.id)?.leaving === true), "the rows that entered for the tidy note's keep leave again once the topic keep is gone");
+	assert(oneKeep.demotion.counts.instead === oneKeep.demotion.entries.filter((row) => row.leaving && row.instead).length && oneKeep.demotion.counts.instead === stillInstead.length, `the rows leaving in the tidy note's stead that no topic keep covered are still counted, got ${JSON.stringify(oneKeep.demotion.counts)} against ${JSON.stringify(stillInstead.map((row) => row.id))}`);
 
 	// Edit: the person's words on a note the review rewrote.
 	const shortened = run.changes.find((change) => change.kind === "shortened")!;
@@ -776,6 +828,97 @@ try {
 	resetReviewRunsForTests();
 
 	// =====================================================================
+	// Room five: two notes that share their words but not their date, under
+	// two topics with the wall between them, reach one call as a pair that
+	// DISAGREES, never as twins. The scripted worker first archives the older
+	// member as a duplicate, which the memory refuses in its own words; on
+	// the retry it merges the two keeping the newer text, and the merged row,
+	// the record and History all say which value replaced which and why. A
+	// true pair of twins elsewhere in the room is still archived as one.
+	// =====================================================================
+	const DISAGREE_HEADING = "## Material: Notes That Disagree";
+	const CONFLICT_LINE = `m-0101 (saved 2 Jun) says "The Nordwind maintenance contract renews automatically on 1 June."; m-0301 (saved 14 Sep) says "The Nordwind maintenance contract renews automatically on 1 July.": the newer date decides; merge them keeping the newer text, or say in the narrative why both stay`;
+	const CONFLICT_RULE = `Every pair listed under "Notes That Disagree" is dealt with: merge them keeping the newer text, or say in the narrative why both stay.`;
+	const ARCHIVE_AS_DUPLICATE_REFUSAL = `op 1 (archive): m-0101 and m-0301 disagree, they are not twins; merge them keeping the newer text, or leave both`;
+	const KEEPS_OLDER_REFUSAL = `op 1 (merge): the merged text keeps 1 June, but m-0301 (saved 14 Sep) is newer; keep 1 July or say why in the narrative`;
+	const CONFLICT_REASON = "1 July (saved 14 Sep) replaces 1 June (saved 2 Jun); the newer date decides";
+	/** A worker for this fixture: the disagreeing pair's call is answered by `first` once and by the resolving merge on the retry; twins are archived as before. */
+	function disagreeWorker(calls: WorkerCall[], first: unknown): ReviewRunGenerate {
+		return async (prompt) => {
+			const notes = notesFromPrompt(prompt);
+			const topics = [...new Set(notes.map((note) => note.topic))];
+			const key = topics.join("|");
+			const attempt = calls.filter((call) => call.key === key).length + 1;
+			calls.push({ key, topics, attempt, prompt });
+			// The twins may ride in the same call as the pair that disagrees, so
+			// their archive rides along with whatever the pair's answer is.
+			const duplicate = DUPLICATE_LINE.exec(prompt);
+			const twins = duplicate ? [{ op: "archive", id: duplicate[2], why: "duplicate" }] : [];
+			if (prompt.includes(DISAGREE_HEADING)) {
+				if (attempt === 1) return reply("Two notes say one thing; the older one goes.", [first, ...twins]);
+				return reply("The two notes disagree on the date; the newer one stands.", [{ op: "merge", ids: ["m-0301", "m-0101"], text: CONFLICT_NEW }, ...twins]);
+			}
+			if (duplicate) return reply("Two notes say one thing; the later one goes to the archive as a duplicate.", twins);
+			return reply("These notes are already as short as they can be.", []);
+		};
+	}
+	const roomE = createRoom("Review Disagree Smoke Room", memoryFixtureE);
+	writePersistentRoomMaintenanceSettings(roomE.agentId, { memoryBudgetTokens: RAISED_BUDGET });
+	const callsE: WorkerCall[] = [];
+	const startedE = startReviewRun(roomE.agentId, { depth: "tidy", model: MODEL, generate: disagreeWorker(callsE, { op: "archive", id: "m-0101", why: "duplicate" }), resolveModelWindow: () => smallWindow, now: RUN_CLOCK });
+	const runE = await settle(roomE.agentId, startedE.runId, "room five");
+	assert(runE.state === "ready" && runE.leftAsIs.length === 0, `room five's run should end ready with every group accepted, got ${runE.state} ${JSON.stringify(runE.leftAsIs)}${runE.error ? ` with error ${JSON.stringify(runE.error)}` : ""}`);
+
+	// Bonding and the prompt: the pair's two topics are one call across the wall, asked twice, and the pair is never listed as twins.
+	const disagreeCallsE = callsE.filter((call) => call.prompt.includes(DISAGREE_HEADING));
+	assert(disagreeCallsE.length === 2 && disagreeCallsE[0].topics.includes("Commercial terms") && disagreeCallsE[0].topics.includes("Delivery practice") && !disagreeCallsE[0].topics.includes(WALL_TOPIC), `the two topics holding the disagreeing pair reach one call without the wall, and that call is asked twice, got ${JSON.stringify(callsE.map((call) => `${call.key}#${call.attempt}`))}`);
+	assert(disagreeCallsE[0].prompt.includes(`${DISAGREE_HEADING}\n\n- ${CONFLICT_LINE}`), `the call carries the pair as one line with both days and both first lines, in the words the spec fixed, got ${JSON.stringify(disagreeCallsE[0].prompt.split(DISAGREE_HEADING)[1]?.slice(0, 400))}`);
+	assert(disagreeCallsE[0].prompt.includes(CONFLICT_RULE), "the call asks for every disagreeing pair to be dealt with");
+	assert(!disagreeCallsE[0].prompt.includes("m-0101 and m-0301 say the same thing"), "a disagreeing pair is never listed as saying the same thing");
+	assert(callsE.filter((call) => call.prompt.includes(DISAGREE_HEADING) && call.attempt === 1).length === 1, "only the call holding the pair carries the finding");
+	assert(/## Retry Notice/.test(disagreeCallsE[1].prompt) && disagreeCallsE[1].prompt.includes(ARCHIVE_AS_DUPLICATE_REFUSAL), `the retry names the refusal of the archive-as-duplicate in the words the memory refuses by, got ${JSON.stringify(disagreeCallsE[1].prompt.split("## Retry Notice")[1]?.slice(0, 400))}`);
+
+	// The card's rows.
+	const resolvedRowE = runE.changes.find((change) => change.kind === "merged" && change.id === "m-0301");
+	assert(resolvedRowE?.reason === CONFLICT_REASON && JSON.stringify(resolvedRowE.conflictWith) === JSON.stringify({ id: "m-0101", topic: "Commercial terms" }), `the merged row says which value replaced which and names the member that left with its topic, got ${JSON.stringify(resolvedRowE)}`);
+	assert(runE.changes.filter((change) => change.id !== "m-0301").every((change) => change.reason === undefined && change.conflictWith === undefined), `no other row carries a reason or a partner, got ${JSON.stringify(runE.changes.filter((change) => change.reason || change.conflictWith))}`);
+	const twinRowE = runE.changes.find((change) => change.kind === "archived" && change.id === "m-0402");
+	assert(twinRowE?.why === "duplicate" && JSON.stringify(twinRowE.duplicateOf) === JSON.stringify({ id: "m-0401", topic: TWINS_TOPIC }), `the true twins elsewhere are still archived as a duplicate naming the other twin, got ${JSON.stringify(twinRowE)}`);
+
+	// The write, the record and History.
+	const approvedE = approveReviewRun(roomE.agentId, runE.runId, APPROVED_AT);
+	const writtenE = fs.readFileSync(roomE.l1bPath, "utf-8");
+	assert(writtenE.includes(CONFLICT_NEW) && !writtenE.includes(CONFLICT_OLD), "the newer text stands in the file and the older is gone from it");
+	const archiveE = readArchive(roomE.agentId);
+	assert(archiveE.some((row) => row.id === "m-0101" && row.why === "superseded") && !archiveE.some((row) => row.id === "m-0101" && row.why === "duplicate"), `the older member is in the archive as superseded, never as a duplicate, got ${JSON.stringify(archiveE.map((row) => `${row.id}:${row.why}`))}`);
+	const recordE = JSON.parse(fs.readFileSync(path.join(root, roomE.agentId, "events", "review", `${approvedE.reviewId}.json`), "utf-8"));
+	const recordedMergeE = recordE.run.changes.find((change: any) => change.kind === "merged" && change.id === "m-0301");
+	assert(recordedMergeE?.reason === CONFLICT_REASON && JSON.stringify(recordedMergeE.conflictWith) === JSON.stringify({ id: "m-0101", topic: "Commercial terms" }), `the record's merged row carries the reason and the member that left, got ${JSON.stringify(recordedMergeE)}`);
+	const recordedLeftE = recordE.run.archived.find((row: any) => row.id === "m-0101");
+	assert(recordedLeftE?.why === "superseded" && recordedLeftE.reason === CONFLICT_REASON, `the record's archived row for the member that left carries why and the same reason, got ${JSON.stringify(recordedLeftE)}`);
+	assert(recordE.run.archived.filter((row: any) => row.id !== "m-0101" && row.why !== "budget").every((row: any) => row.reason === undefined), `no other row the tidy set aside carries a reason, got ${JSON.stringify(recordE.run.archived.filter((row: any) => row.reason))}`);
+	const diffE = readMemoryEventDiff(roomE.agentId, "review", approvedE.reviewId);
+	assert(diffE, "History can read this save's change view");
+	const historyRowE = diffE!.topics.flatMap((topic) => topic.changes).find((row) => row.id === "m-0101");
+	assert(historyRowE?.change === "archived" && historyRowE.why === "superseded" && historyRowE.reason === CONFLICT_REASON, `History shows the member that left as archived, superseded, with the reason the record carries, got ${JSON.stringify(historyRowE)}`);
+	resetReviewRunsForTests();
+
+	// Room six: the same room, where the first answer merges the pair keeping
+	// the OLDER value; the memory refuses that too, in its own words, and the
+	// retry's merge keeping the newer text is accepted.
+	const roomF = createRoom("Review Disagree Older Value Smoke Room", memoryFixtureE);
+	writePersistentRoomMaintenanceSettings(roomF.agentId, { memoryBudgetTokens: RAISED_BUDGET });
+	const callsF: WorkerCall[] = [];
+	const startedF = startReviewRun(roomF.agentId, { depth: "tidy", model: MODEL, generate: disagreeWorker(callsF, { op: "merge", ids: ["m-0301", "m-0101"], text: CONFLICT_OLD }), resolveModelWindow: () => smallWindow, now: RUN_CLOCK });
+	const runF = await settle(roomF.agentId, startedF.runId, "room six");
+	assert(runF.state === "ready" && runF.leftAsIs.length === 0, `room six's run should end ready with every group accepted, got ${runF.state} ${JSON.stringify(runF.leftAsIs)}${runF.error ? ` with error ${JSON.stringify(runF.error)}` : ""}`);
+	const disagreeCallsF = callsF.filter((call) => call.prompt.includes(DISAGREE_HEADING));
+	assert(disagreeCallsF.length === 2 && /## Retry Notice/.test(disagreeCallsF[1].prompt) && disagreeCallsF[1].prompt.includes(KEEPS_OLDER_REFUSAL), `the retry names the refusal of the merge that kept the older value in the words the memory refuses by, got ${JSON.stringify(disagreeCallsF[1]?.prompt.split("## Retry Notice")[1]?.slice(0, 400))}`);
+	assert(runF.changes.find((change) => change.kind === "merged" && change.id === "m-0301")?.reason === CONFLICT_REASON, "the accepted merge on the retry carries the reason like any other");
+	assert(fs.readFileSync(roomF.l1bPath, "utf-8").includes(CONFLICT_OLD), "nothing is written before an approval, whatever was refused");
+	resetReviewRunsForTests();
+
+	// =====================================================================
 	// Room rebase: a Remember while the card is open does not stale the save.
 	// =====================================================================
 	// A tidy never touches Recent Context, so a conversation remembered while
@@ -812,7 +955,7 @@ try {
 	cancelReviewRun(roomR.agentId, startedR2.runId, new Date(`${RUN_DAY}T09:13:00.000Z`));
 	resetReviewRunsForTests();
 
-	console.log(`review-run-smoke: OK (${calls.length + callsD.length} scripted model calls)`);
+	console.log(`review-run-smoke: OK (${calls.length + callsD.length + callsE.length + callsF.length} scripted model calls)`);
 } catch (error) {
 	console.error(error instanceof Error ? error.stack || error.message : error);
 	console.error(`temp home preserved for inspection: ${tempHome}`);

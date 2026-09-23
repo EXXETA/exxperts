@@ -25,6 +25,7 @@ import {
 	type PersistentAgentThreadRecord,
 } from "./persistent-agents.js";
 import { buildPersistentRoomRestoredLiveThreadContext } from "./persistent-room-resume-context.js";
+import { buildPersistentRoomCurrentInstructionsSection } from "./persistent-room-instructions.js";
 import {
 	getPersistentRoomToolPolicy,
 	PERSISTENT_ROOM_MEMORY_TOOL_NAMES,
@@ -48,6 +49,18 @@ import fetchUrlExt from "../../../pi-package/extensions/fetch_url/index.js";
 import toolResultAgingExt from "../../../pi-package/extensions/tool-result-aging/index.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+/**
+ * The frozen boot snapshot plus the per-turn "Current instructions" section
+ * when the room's instructions changed since that snapshot: the same
+ * section the web hook appends every turn, so a scheduled run follows the
+ * instructions in force now, not the ones the thread booted with. Returns
+ * the snapshot untouched when nothing changed or the file cannot be read.
+ */
+function withCurrentInstructions(roomId: string, runtime: { instructionsFingerprint?: string | null }, frozenSystemPrompt: string): string {
+	const options = runtime.instructionsFingerprint !== undefined ? { bootedFingerprint: runtime.instructionsFingerprint } : {};
+	return `${frozenSystemPrompt}${buildPersistentRoomCurrentInstructionsSection(roomId, frozenSystemPrompt, options)}`;
+}
 const REPO_ROOT = process.env.EXXETA_HOME ? path.resolve(process.env.EXXETA_HOME) : path.resolve(__dirname, "..", "..", "..");
 const SCHEDULED_ITEM_ID_PATTERN = /[^a-zA-Z0-9_-]+/g;
 const LEGACY_RUNTIME_NOT_SUPPORTED = "legacy_runtime_not_supported";
@@ -256,7 +269,7 @@ function backgroundWorkspaceCapability(effectiveWorkspacePolicy: ReturnType<type
 	return { ...capability, bashEnabled: false };
 }
 
-function preparePersistentRoomBackgroundExecution(input: PersistentRoomBackgroundExecutionInput, modelLock: PersistentAgentModelLock): PreparedPersistentRoomBackgroundExecution {
+export function preparePersistentRoomBackgroundExecution(input: PersistentRoomBackgroundExecutionInput, modelLock: PersistentAgentModelLock): PreparedPersistentRoomBackgroundExecution {
 	const roomId = String(input.roomId ?? "").trim();
 	if (!roomId) throw new Error("persistent-room background execution room id is required");
 	const fallbackCwd = input.cwd ?? REPO_ROOT;
@@ -289,7 +302,7 @@ function preparePersistentRoomBackgroundExecution(input: PersistentRoomBackgroun
 			thread: write.thread,
 			runtimeCwd,
 			sessionManager: openPersistentAgentPiSessionManager(roomId, write.thread.runtime, runtimeCwd),
-			rawSystemPrompt: readPersistentAgentBootPromptSnapshot(roomId, write.thread.runtime),
+			rawSystemPrompt: withCurrentInstructions(roomId, write.thread.runtime, readPersistentAgentBootPromptSnapshot(roomId, write.thread.runtime)),
 			...(promptPrefix ? { promptPrefix } : {}),
 			...(workspaceCapability ? { workspaceCapability } : {}),
 		};
@@ -316,7 +329,10 @@ function preparePersistentRoomBackgroundExecution(input: PersistentRoomBackgroun
 			thread,
 			runtimeCwd,
 			sessionManager: openPersistentAgentPiSessionManager(roomId, thread.runtime, runtimeCwd),
-			rawSystemPrompt: readPersistentAgentBootPromptSnapshot(roomId, thread.runtime),
+			// A resumed thread runs on its frozen boot snapshot; the instructions
+			// the user changed since ride the same per-turn section the web hook
+			// appends, so a scheduled turn follows the current text too.
+			rawSystemPrompt: withCurrentInstructions(roomId, thread.runtime, readPersistentAgentBootPromptSnapshot(roomId, thread.runtime)),
 			...(promptPrefix ? { promptPrefix } : {}),
 			...(workspaceCapability ? { workspaceCapability } : {}),
 		};

@@ -2,6 +2,66 @@
 
 User-visible changes per release. Historical private/internal development notes are not part of this public-facing changelog.
 
+## 0.13.1 (2026-09-23)
+
+- Models: Claude Opus 5.5, Claude Fable 5.1, GPT-6 Sol, GPT-6 Luna, GPT-6 Astra and Grok 4.7 are
+  available. Opus 5.5 and Fable 5.1 come to the Claude subscription, Sol and Luna to the ChatGPT
+  subscription, Astra, Sol and Luna to OpenAI API keys and Grok 4.7 to xAI API keys; they appear in
+  every room's model picker after the update.
+- Defaults: New rooms, Memorize and Review run on Claude Opus 5.5 in the Claude profile and on GPT-6
+  Sol in the ChatGPT profile. Existing rooms keep the model they were started on.
+- Thinking: The newest Claude models always think, so on Opus 5.5 and Fable 5.1 the dial starts at
+  low instead of off. Their reasoning is tied to the conversation it was produced in: after a room
+  change (new instructions, a new file, a new tool) the older reasoning is dropped quietly instead
+  of failing the turn. On every Claude 5 model, "thinking off" and the automatic retry after a
+  rejected conversation no longer send a setting the model refuses.
+- Long conversations: The summary written when a conversation is trimmed to make room no longer
+  quotes the model's own reasoning, which the newest Claude models refuse to see repeated. A refused
+  summary is reported instead of being kept.
+- Desktop: Updating the app shows a small panel with what is happening (downloading, installing,
+  reopening), and the app cannot be closed by accident halfway through an install. The bundled Node
+  runtime moves to 24.21.0.
+- Docs: The memory page walks through one recall from an old conversation, step by step. What was
+  said, what was asked months later, why the words met, what the chat shows while it searches, what
+  the recall costs, and what a word search cannot do.
+- Command line: The default model for xAI keys is Grok 4.7.
+
+## 0.13.0 (2026-09-21)
+
+- Memory: Your room can now find a detail you mentioned once, even months ago. It looks through its
+  notes, its archive and the conversations you had it Memorize, and it finds things however they
+  were phrased: different forms of a word, and dates and numbers written in different ways, lead to
+  the same result. In a public benchmark of 50 questions about long histories, a room answered as
+  many correctly as the same model with the entire history pasted in (43 against 41, a tie at this
+  size), using about a fifth of the tokens per question. Method, costs and limits are in
+  docs/memory.md.
+- Rooms: You can now give a room standing instructions that it follows in every conversation. How to
+  answer, what to prefer, what to avoid. Write them in Room settings → Instructions. A change
+  applies from the room's next message, also in a conversation that is already open and in scheduled
+  runs. Where a note in memory disagrees with your instructions about how to work, the instructions
+  apply; memory still decides what is true.
+- Rooms: You can also write instructions once and have all your rooms follow them. Write them in
+  Settings → Instructions. Each room can switch them off, and where the two disagree, the room's own
+  instructions win. Nothing changes for any room until you write them.
+- Memory: Rooms no longer say things like "let me check my memory" or "I found this in my archive"
+  before they answer. They just tell you what they know, and say plainly when they do not know. If
+  you ask where something comes from, they tell you which conversation or note, and its date.
+- Memorize: When a room's memory is full, the notes it actually uses stay, and the ones it never
+  needed leave first. What moves to the archive is chosen by what a note is worth: its kind, whether
+  the room ever looked it up, how recently it was touched, and its size. Open items never leave, and
+  every proposed move says why in one sentence.
+- Memory: When you tell a room that a date or a number has changed, its memory now keeps the new
+  value. Before, a note that differed only in a date or a number could be mistaken for one the room
+  already had, and the old value stayed. Memorize and Review now show which value replaced which and
+  why: "1 July (saved 14 Sep) replaces 1 June (saved 2 Jun); the newer date decides".
+- Memory: Your existing rooms get these improvements the next time you open them. Nothing a room has
+  learned is touched, and its previous setup is kept beside the change. Working-style notes written
+  in German are now recognised as well as English ones when an older memory is brought over.
+
+## 0.12.2 (2026-09-16)
+
+- Memory: The Memory tab and memory reads no longer stall on a room whose memory file carries a long run of blank lines.
+
 ## 0.12.1 (2026-09-15)
 
 - Memorize: A save is no longer refused when you remembered a conversation while the card was open. The

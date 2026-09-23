@@ -440,8 +440,8 @@ const RANKING_DOC = `<!-- exxeta:l1b schema_version=1 -->
 
 ## Active Items
 
-<!-- e: id=m-0007 kind=item saved=2026-01-01 status=open -->
-- An open item, ranked like a fact.
+<!-- e: id=m-0007 kind=item saved=2026-01-01 status=done -->
+- A done item, ranked like a fact.
 
 ## Recent Context
 
@@ -453,17 +453,21 @@ const RANKING_DOC = `<!-- exxeta:l1b schema_version=1 -->
 	assert(doc.nextEntryNumber === 9 && entryCount(doc) === 8, "a hand-written storage file parses with its counter and its eight entries");
 	assert(renderMemoryDocument(doc, "storage") === RANKING_DOC, `a canonical hand-written file is already a fixed point (${firstDifference(RANKING_DOC, renderMemoryDocument(doc, "storage"))})`);
 
-	const ranked = rankEntriesForDemotion(doc).map((e) => e.id);
+	// The order is a score (kind + use + recency − size, see DEMOTION_SCORE),
+	// measured to a fixed day so the pin does not drift with the calendar.
+	const rankedEntries = rankEntriesForDemotion(doc, { today: "2026-09-12" });
+	const ranked = rankedEntries.map((e) => e.id);
 	assert(!ranked.includes("m-0006"), "a pinned entry is not in the demotion order at all");
-	assert(ranked.join(" ") === "m-0001 m-0007 m-0002 m-0003 m-0004 m-0008 m-0005", `the demotion order is lowest value first (${ranked.join(" ")})`);
+	assert(ranked.join(" ") === "m-0007 m-0001 m-0003 m-0004 m-0008 m-0005 m-0002", `the demotion order is lowest value first (${ranked.join(" ")})`);
 	// Each rule, named on its own pair.
-	assert(ranked.indexOf("m-0005") === ranked.length - 1, "a practice ranks above every fact and item: it goes last");
-	assert(ranked.indexOf("m-0007") < ranked.indexOf("m-0003"), "an item ranks like a fact, by the same keys");
+	for (const fact of ["m-0001", "m-0003", "m-0004", "m-0008"]) assert(ranked.indexOf(fact) < ranked.indexOf("m-0005"), `a practice ranks above a fact of the same use: ${fact} leaves before it`);
+	assert(ranked.indexOf("m-0007") === 0, "a done item ranks like a fact less the fact's weight: it goes first");
 	assert(ranked.indexOf("m-0003") < ranked.indexOf("m-0004"), "the more recently touched entry ranks higher");
 	assert(ranked.indexOf("m-0001") < ranked.indexOf("m-0002"), "more refs ranks higher");
-	assert(ranked.indexOf("m-0004") < ranked.indexOf("m-0008"), "on equal update and refs, the oldest saved-on is demoted first");
-	assert(ranked.indexOf("m-0001") < ranked.indexOf("m-0007"), "the last tie-break is the id");
-	assert(rankEntriesForDemotion(doc).map((e) => e.id).join(" ") === ranked.join(" "), "the order is deterministic");
+	assert(ranked.indexOf("m-0005") < ranked.indexOf("m-0002"), "enough use lifts a fact past a practice never recalled");
+	assert(ranked.indexOf("m-0004") < ranked.indexOf("m-0008"), "on a tie of score and size, the oldest saved-on is demoted first");
+	assert(rankedEntries.every((e) => typeof e.score === "number" && e.reason.length > 0), "every ranked entry carries its score and a reason");
+	assert(rankEntriesForDemotion(doc, { today: "2026-09-12" }).map((e) => e.id).join(" ") === ranked.join(" "), "the order is deterministic");
 	assert(entryTokens(findEntry(doc, "m-0001")!) === estimateTokens(findEntry(doc, "m-0001")!.text), "an entry's size goes through the ONE estimator");
 }
 
@@ -484,7 +488,7 @@ const RANKING_DOC = `<!-- exxeta:l1b schema_version=1 -->
 	}
 	assert(fold.includes("- [m-0001] Never updated, never referenced."), "a bullet entry carries its id after the bullet");
 	assert(fold.includes("- [m-0006 · pinned] **must-keep** The reporting deadline is the fifth working day."), "a pinned entry says so in its own address");
-	assert(fold.includes("- [m-0007] An open item, ranked like a fact."), "an Active Items entry is addressed the same way");
+	assert(fold.includes("- [m-0007] A done item, ranked like a fact."), "an Active Items entry is addressed the same way");
 	assert(listAreas(doc).every((row) => fold.split(`[${row.id}`).length === 2), "every entry is addressed exactly once");
 
 	// Red-without: the room's own render is untouched — no addresses, and the
@@ -531,7 +535,10 @@ const RANKING_DOC = `<!-- exxeta:l1b schema_version=1 -->
 	const impossible = demoteToBudget(withPins, 10, { keepIds, today: "2026-09-12" });
 	assert(impossible.overageTokens > 0, "a budget the pins alone exceed is reported as an overage, not silently met");
 	assert(reviewTargetTokens(impossible.doc) === 10 + impossible.overageTokens, "the overage is exactly what the room is still over by");
-	assert(impossible.doc.topics.every((t) => t.entries.every((e) => e.pinned || keepIds.includes(e.id))), "what is left when the budget cannot be met is exactly the pinned and the kept");
+	const openItem = (e: { kind: string; status?: string }) => e.kind === "item" && e.status === "open";
+	assert(impossible.doc.topics.every((t) => t.entries.every((e) => e.pinned || keepIds.includes(e.id) || openItem(e))), "what is left when the budget cannot be met is exactly the pinned, the kept and the open items");
+	assert(impossible.protectedOpenItems === impossible.doc.topics.flatMap((t) => t.entries).filter((e) => openItem(e) && !e.pinned && !keepIds.includes(e.id)).length && impossible.protectedOpenItems > 0, `the open items the protection alone kept are counted (${impossible.protectedOpenItems})`);
+	assert(result.protectedOpenItems === 0, "a budget that was reached counts no protected open item");
 
 	// What this run saved today goes last, so a fold's own material is not archived by the same run.
 	const today = "2026-09-12";

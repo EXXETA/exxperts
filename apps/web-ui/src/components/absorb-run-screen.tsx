@@ -8,6 +8,7 @@ import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import type { AbsorbRun, AbsorbRunSession, ArchiveRow, RunBudget, RunDemotion } from "../types";
 import { MarkdownRenderer } from "./Markdown";
 import { meaningfulMaintenanceWarnings } from "../maintenance-warnings";
+import { protectedOpenItemsSentence } from "../memory-surface-copy";
 import { ARCHIVE_EXPLANATION, absorbRunFailedSessionNote, absorbRunGuidanceSummary, absorbRunNotesChanged, absorbRunProgressLine, absorbRunReadCount, absorbRunSessionLine, archiveHeading, archiveLimitSummary, archiveRowTag, archiveTopicGroupSummary, automaticApplyNeedsReviewSentence, changeKindLabel, entryFirstLine, entryGroupPage, entryKindLabel, entryOriginSentence, filterEntriesByText, groupEntriesByTopic, isEntryIdMigrationNotice, KEEP_TOPIC_LABEL, MEMORY_LIMIT_BAR_LABEL, NEW_TOPIC_TAG, showMoreLabel, topicKept, topicLabel } from "../memory-v2-copy";
 
 /** The words of a note, editable in place: the textarea holds the text without its bullet marker. */
@@ -65,6 +66,7 @@ function ChangeRow({ change, onEdit }: { change: NonNullable<AbsorbRunSession["c
 						{errorLine}
 					</div>
 				</div>
+				{change.reason && <p className="absorb-run-change-reason">{change.reason}</p>}
 			</details>
 		);
 	}
@@ -108,6 +110,7 @@ function EntryRow({ row, keptById, keptByTopic, onToggleKeep }: { row: ArchiveRo
 						<span className="absorb-run-entry-date">{origin ?? `saved ${row.saved}`}</span>
 						{tag && <span className="absorb-run-entry-tag">{tag}</span>}
 					</span>
+					{row.reason && <span className="absorb-run-entry-reason">{row.reason}</span>}
 					{!open && <span className="absorb-run-entry-line">{entryFirstLine(row.text)}</span>}
 				</button>
 				{open && <div className="absorb-run-entry-full"><MarkdownRenderer>{row.text}</MarkdownRenderer></div>}
@@ -267,6 +270,9 @@ export function ArchiveSection({ budget, demotion, keepIds, keepTopics, busy, on
 	// so, the bar shows where the limit sits, and the rows that would all read
 	// "stays" are not listed. A kept row stays kept on the server, harmlessly.
 	const nothingLeaves = demotion.counts.leaving === 0 && demotion.overageTokens <= 0;
+	// Open items never leave on their own. When the limit is still not met
+	// after everything else went, the card says what their protection cost.
+	const protectedOpenItems = demotion.overageTokens > 0 ? protectedOpenItemsSentence(demotion.protectedOpenItems) : "";
 	return (
 		<details className="absorb-proposal-section absorb-run-archive">
 			<summary>
@@ -275,6 +281,7 @@ export function ArchiveSection({ budget, demotion, keepIds, keepTopics, busy, on
 				<span className="absorb-run-archive-summary-line">{summary.fitsSentence ?? summary.countsLine}</span>
 			</summary>
 			<ArchiveLimitBar budget={budget} demotion={demotion} busy={busy} onRaiseBudget={onRaiseBudget} />
+			{protectedOpenItems && <p className="absorb-run-archive-explanation">{protectedOpenItems}</p>}
 			{!nothingLeaves && <p className="absorb-run-archive-explanation">{ARCHIVE_EXPLANATION}</p>}
 			{!nothingLeaves && <EntryList entries={demotion.entries} keepIds={keepIds} keepTopics={keepTopics} listId="going to the archive" busy={busy} onToggleKeep={onToggleKeep} onToggleKeepTopic={onToggleKeepTopic} />}
 		</details>
@@ -299,7 +306,7 @@ export function placeholderAbsorbRun(agentId: AbsorbRun["agentId"], sessions: { 
 		sessions: sessions.map((session) => ({ id: session.id, title: session.title, date: session.date, outcome: "pending" as const, attempts: 0 })),
 		prepass: { demoted: [] },
 		budget: { before: 0, after: 0, budgetTokens: 0, savedBudgetTokens: 0, overBudgetAfter: false, ceilingTokens: 0 },
-		demotion: { entries: [], keepIds: [], keepTopics: [], overageTokens: 0, counts: { leaving: 0, kept: 0, instead: 0 } },
+		demotion: { entries: [], keepIds: [], keepTopics: [], overageTokens: 0, protectedOpenItems: 0, counts: { leaving: 0, kept: 0, instead: 0 } },
 		candidate: null,
 		guidance: null,
 		migration: null,

@@ -4611,6 +4611,16 @@ strong, b { font-weight: 700; }
 	gap: 10px;
 	flex-wrap: wrap;
 }
+.absorb-run-entry-reason,
+.absorb-run-change-reason {
+	color: var(--muted);
+	font-size: 12px;
+	line-height: 1.4;
+}
+/* The reason under a superseded row's Before/After pair: a paragraph, so its own margin is set. */
+.absorb-run-change-reason {
+	margin: 6px 0 0;
+}
 .absorb-run-entry-line {
 	margin: 0;
 	font-size: 13.5px;
@@ -10145,6 +10155,80 @@ label.rs-row {
 	display: flex;
 	flex-direction: column;
 	gap: 8px;
+}
+/* Room settings → Instructions: one textarea, its counter, Save and Remove. */
+.room-instructions-section {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+}
+.room-instructions-textarea {
+	min-height: 220px;
+	resize: vertical;
+	font-size: 13px;
+	line-height: 1.5;
+}
+.room-instructions-foot {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 16px;
+	flex-wrap: wrap;
+}
+.room-instructions-count {
+	color: var(--muted);
+	font-size: 12px;
+	line-height: 1.4;
+}
+.room-instructions-count.over {
+	color: var(--error);
+}
+/* The one per-room control for the instructions for every room: the same
+   switch row as the workspace tools, with its state said under the title;
+   under it, the every-room text folded to one line and shown read-only. */
+.room-instructions-global-row {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 16px;
+	padding: 10px 12px;
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	cursor: pointer;
+}
+.room-instructions-global-main {
+	display: flex;
+	flex-direction: column;
+	gap: 3px;
+	min-width: 0;
+}
+.room-instructions-global-title {
+	font-size: 13px;
+	line-height: 1.3;
+}
+.room-instructions-global {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+.room-instructions-global-toggle {
+	margin-left: 0;
+	align-self: flex-start;
+	font-size: 12px;
+}
+.room-instructions-global-text {
+	margin: 0;
+	padding: 10px 12px;
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	font: inherit;
+	font-size: 13px;
+	line-height: 1.5;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+	color: var(--muted);
+	max-height: 260px;
+	overflow: auto;
 }
 .room-session-confirm {
 	display: grid;

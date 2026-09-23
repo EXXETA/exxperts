@@ -393,9 +393,23 @@ export function topicChangeSummary(counts: NoteChangeCounts): string {
 	return parts.join(" · ");
 }
 
-/** After an archived note's struck text: "archived", or "archived · to make room" when the record says why. */
-export function archivedLabel(why: string | null | undefined): string {
-	return why ? `archived · ${memoryArchiveReason(why)}` : "archived";
+/**
+ * After an archived note's struck text: "archived", or "archived · to make room"
+ * when the record says why, and "archived · to make room · not touched since
+ * 2 Mar, never recalled" when it also says what the ranking saw.
+ */
+export function archivedLabel(why: string | null | undefined, reason?: string | null): string {
+	const parts = ["archived"];
+	if (why) parts.push(memoryArchiveReason(why));
+	if (reason?.trim()) parts.push(reason.trim());
+	return parts.join(" · ");
+}
+
+/** On the card's archive section, when open items were left in place while the limit was still not met. */
+export function protectedOpenItemsSentence(count: number): string {
+	if (count <= 0) return "";
+	if (count === 1) return "1 open item is kept; close it to free room.";
+	return `${count.toLocaleString()} open items are kept; close them to free room.`;
 }
 
 /** After a note that changed topic: moved from "Team and roles". */

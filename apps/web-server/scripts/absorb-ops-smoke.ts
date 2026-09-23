@@ -40,6 +40,7 @@ const {
 	reviewTargetTokens,
 	listAreas,
 } = await import("../src/memory-entries.js");
+const { conflictReason } = await import("../src/memory-duplicates.js");
 const { execFileSync } = await import("node:child_process");
 const { fileURLToPath } = await import("node:url");
 
@@ -301,7 +302,23 @@ const CORE_CONTEXT = renderMemoryDocument(DOC, "context", { entryIds: true, sect
 	const ceiling = Math.round(1.2 * (coreTokens + 3000 + datesTokens));
 	console.log(`1a. prompt on a generated ${areas.length}-entry room at its 20k budget: ~${big.telemetry.promptEstimatedTokens} estimated tokens against a ceiling of ${ceiling} (core ${coreTokens}, dates ~${datesTokens}, session ~${estimateTokens(session)})`);
 	assert(big.telemetry.promptEstimatedTokens < ceiling, `a fold prompt is the memory plus its dates plus a frame, not the memory twice: ~${big.telemetry.promptEstimatedTokens} tokens against 1.2 × (${coreTokens} + 3000 + ${datesTokens}) = ${ceiling}`);
-	assert(areas.every((area) => big.prompt.split(`[${area.id} `).length + big.prompt.split(`[${area.id}]`).length <= 3), "no entry of a real-sized room is addressed twice");
+	// The frame's own instructions quote example addresses (`[m-0031 · saved …]`),
+	// and a room of this size has notes with those ids, so the count is against
+	// the same prompt — same areas, same instructions — built on an empty memory
+	// text: the memory adds each address exactly once.
+	const frame = buildFoldPrompt({
+		agentId: "room-smoke",
+		model: { provider: "gateway", model: "fold-model" },
+		coreContext: "## Deep Memory\n",
+		areas,
+		assessmentMarkdown: ASSESSMENT,
+		session: { id: sessionId, text: session },
+		sessionIndex: 1,
+		sessionCount: 10,
+		now: new Date("2026-09-12T09:00:00.000Z"),
+	}).prompt;
+	const addressed = (text: string, id: string) => text.split(`[${id} `).length + text.split(`[${id}]`).length - 2;
+	assert(areas.every((area) => addressed(big.prompt, area.id) - addressed(frame, area.id) === 1), "no entry of a real-sized room is addressed twice");
 	assert(areas.every((area) => big.prompt.includes(`[${area.id} · saved ${area.saved}`)), "every entry of a real-sized room carries its saved date in its address");
 }
 
@@ -526,8 +543,52 @@ const without = (refusals: string[], rule: RegExp) => refusals.filter((line) => 
 		const again = validateFoldOps([{ op: "add", topic: "Counterparties", kind: "fact", text: NEW_POINT }], nextAreas, { id: "RC-0011", text: "### RC-0011\n\nA later conversation." });
 		assert(again.length === 1 && again[0] === twinSentence(1, foldEntryId(7), "Counterparties"), `a later conversation's add of the same point is refused against the note the earlier fold added (${again.join("; ")})`);
 		assert(validateFoldOps([{ op: "add", topic: "Counterparties", kind: "fact", text: NEW_POINT }], AREAS, SESSION).length === 0, "against the areas as they were before that fold the same add is accepted");
+
+		// A note that shares its words but not its value is a conflict, not a
+		// twin: the refusal names both values and the note's day, and asks for a
+		// supersede when the session is newer. The duplicate sentence is untouched.
+		// The note's day is written as day words ("2 Jun"), with the year only when
+		// it is not the year the smoke runs in; the pin reads the day and lets the
+		// year be, so it holds whatever year it is.
+		const conflictSentence = (n: number, id: string, topic: string, pairs: string) => `op ${n} (add): this changes what note "${id}" under "${topic}" says (${pairs}): supersede "${id}" if this session is newer than it (saved DAY), otherwise leave it out and say in the narrative that memory already holds a later value`;
+		const withDayAs = (line: string, day: string) => line.replace(new RegExp(`\\(saved ${day}(?: 2026)?\\)`), "(saved DAY)");
+		const JUNE = "- The Nordwind maintenance contract renews automatically on 1 June.";
+		const JULY = "- The Nordwind maintenance contract renews automatically on 1 July.";
+		const areaRow = (id: string, text: string, saved: string, extra: Partial<AreaRow> = {}): AreaRow => ({ id, topic: "Commercial terms", section: "Deep Memory", kind: "fact", pinned: false, saved, tokens: estimateTokens(text), firstLine: text, text, ...extra });
+		const CONFLICT_AREAS = [...AREAS, areaRow("m-0300", JUNE, "2026-06-02"), areaRow("m-0301", "- Nordwind contract renews on 1 June.", "2026-06-02", { updated: "2026-06-20" })];
+		const july = validateFoldOps([{ op: "add", topic: "Commercial terms", kind: "fact", text: JULY }], CONFLICT_AREAS, SESSION);
+		assert(july.length === 1 && withDayAs(july[0], "2 Jun") === conflictSentence(1, "m-0300", "Commercial terms", "1 June → 1 July"), `green-with: the nine-word shape with a changed date is refused as a conflict, naming both values and the note's day (${july.join("; ")})`);
+		assert(!july.some((line) => /already says/.test(line)), `a conflict is never called a repeat (${july.join("; ")})`);
+		const juneAgain = validateFoldOps([{ op: "add", topic: "Commercial terms", kind: "fact", text: JUNE }], CONFLICT_AREAS, SESSION);
+		assert(juneAgain.length === 1 && juneAgain[0] === twinSentence(1, "m-0300", "Commercial terms"), `a genuine repeat keeps the duplicate sentence word for word (${juneAgain.join("; ")})`);
+		const shortJuly = validateFoldOps([{ op: "add", topic: "Commercial terms", kind: "fact", text: "- Nordwind contract renews on 1 July." }], CONFLICT_AREAS, SESSION);
+		assert(shortJuly.length === 1 && withDayAs(shortJuly[0], "20 Jun") === conflictSentence(1, "m-0301", "Commercial terms", "1 June → 1 July"), `green-with: the short shape under the six-word floor is refused as a conflict, and the day named is the note's updated day (${shortJuly.join("; ")})`);
+		const shortDamage = applyFoldOps({ ...DOC, topics: [{ ...DOC.topics[0], entries: [...DOC.topics[0].entries, entry("m-0301", "fact", "- Nordwind contract renews on 1 June.")] }, ...DOC.topics.slice(1)] }, [{ op: "add", topic: "Commercial terms", kind: "fact", text: "- Nordwind contract renews on 1 July." }], CTX);
+		assert(shortDamage.doc.topics[0].entries.filter((e) => /Nordwind contract renews on 1 (June|July)/.test(e.text)).length === 2, "red-without: applying it leaves the room with both dates side by side");
+		// The reason on a superseded row: the entry's own day (its updated day
+		// when it has one, read before the supersede stamps the run's day) against
+		// the day the session is from; a supersede that only rewords carries none.
+		const CONFLICT_DOC: MemoryDocument = { ...DOC, topics: [{ ...DOC.topics[0], entries: [...DOC.topics[0].entries, entry("m-0300", "fact", JUNE, { saved: "2026-06-02" })] }, ...DOC.topics.slice(1)] };
+		const dated = applyFoldOps(CONFLICT_DOC, [
+			{ op: "supersede", id: "m-0300", text: JULY },
+			{ op: "supersede", id: "m-0002", text: "- The quarterly report is due on the 5th working day of the quarter." },
+			{ op: "supersede", id: "m-0004", text: "- Decisions are written down on the day they are taken." },
+		], { ...CTX, sessionDate: SESSION_DATE });
+		assert(dated.record.superseded[0].reason === conflictReason(JUNE, JULY, "2026-06-02", SESSION_DATE, CTX.savedDate) && dated.record.superseded[0].reason === "1 July (saved 8 Sep) replaces 1 June (saved 2 Jun); the newer date decides", `a supersede whose texts disagree on a date carries the reason, with the session's day as the newer one (${JSON.stringify(dated.record.superseded[0].reason)})`);
+		assert(dated.record.superseded[1].reason === "5th (saved 8 Sep) replaces 10th (saved 1 Sep); the newer date decides", `the older day is the entry's updated day, read before the supersede restamps it (${JSON.stringify(dated.record.superseded[1].reason)})`);
+		assert(dated.record.superseded[2].reason === undefined && !("reason" in dated.record.superseded[2]), `a supersede that only rewords carries no reason (${JSON.stringify(dated.record.superseded[2])})`);
+		// A note this same run added carries the run's day: the reason dates it by
+		// the conversation it came from, so two conversations are compared; without
+		// that lookup the fold day would stand against the conversation and read backwards.
+		const SAME_RUN_DOC: MemoryDocument = { ...DOC, topics: [{ ...DOC.topics[0], entries: [...DOC.topics[0].entries, entry("m-0300", "fact", JUNE, { saved: CTX.savedDate, from: "RC-0002" })] }, ...DOC.topics.slice(1)] };
+		const sameRun = applyFoldOps(SAME_RUN_DOC, [{ op: "supersede", id: "m-0300", text: JULY }], { ...CTX, sessionDate: SESSION_DATE, sessionDateOf: (id) => (id === "RC-0002" ? "2026-09-04" : undefined) });
+		assert(sameRun.record.superseded[0].reason === "1 July (saved 8 Sep) replaces 1 June (saved 4 Sep); the newer date decides", `a note added earlier in this run is dated by its own conversation, not by the run's day (${JSON.stringify(sameRun.record.superseded[0].reason)})`);
+		const backwards = applyFoldOps(SAME_RUN_DOC, [{ op: "supersede", id: "m-0300", text: JULY }], { ...CTX, sessionDate: SESSION_DATE });
+		assert(backwards.record.superseded[0].reason === "1 July replaces 1 June (saved 12 Sep); the conversation of 8 Sep was folded after it", `without the lookup the run's day stands and the sentence says the fold order decided (${JSON.stringify(backwards.record.superseded[0].reason)})`);
+		const undated = applyFoldOps(CONFLICT_DOC, [{ op: "supersede", id: "m-0300", text: JULY }], CTX);
+		assert(undated.record.superseded[0].reason === "1 July (saved 12 Sep) replaces 1 June (saved 2 Jun); the newer date decides", `a session without a day of its own is dated by the run's day (${JSON.stringify(undated.record.superseded[0].reason)})`);
 	}
-	console.log("3. refusals: every server rule green-with, and red-without for pinned protection, unknown id, drop-with-others, pin-without-because, near-duplicate topics and repeated notes");
+	console.log("3. refusals: every server rule green-with, and red-without for pinned protection, unknown id, drop-with-others, pin-without-because, near-duplicate topics, repeated notes and contradicted values");
 }
 
 // --- 4. Application ----------------------------------------------------------

@@ -34,6 +34,22 @@ describe("clampThinkingLevel", () => {
 		expect(clampThinkingLevel(model!, "off")).toBe("minimal");
 	});
 
+	it("settles a stored off on a Fable row onto the cheapest thinking rung, which reaches the provider as effort low", () => {
+		// The Fable family rejects thinking disabled with a 400, so its map pins
+		// off to null. A room that stored "off" before that lands on "minimal":
+		// the Anthropic rows leave minimal unmapped, so it is the lowest rung
+		// listed, and the provider folds it onto effort "low".
+		const model = getModel("anthropic", "claude-fable-5-1");
+		expect(getSupportedThinkingLevels(model!)).toEqual(["minimal", "low", "medium", "high", "xhigh", "max"]);
+		expect(clampThinkingLevel(model!, "off")).toBe("minimal");
+	});
+
+	it("settles a stored off on the Opus 5.5 row the same way, since that model cannot stop thinking either", () => {
+		const model = getModel("anthropic", "claude-opus-5-5");
+		expect(getSupportedThinkingLevels(model!)).toEqual(["minimal", "low", "medium", "high", "xhigh", "max"]);
+		expect(clampThinkingLevel(model!, "off")).toBe("minimal");
+	});
+
 	it("keeps a reachable level exactly as asked", () => {
 		const model = getModel("anthropic", "claude-opus-5");
 		for (const level of ["off", "low", "medium", "high", "xhigh", "max"] as const) {

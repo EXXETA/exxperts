@@ -61,6 +61,7 @@ import {
 	writeMemoryDocument,
 	type MemoryArchiveAppend,
 } from "./memory-entries-store.js";
+import { emptyMemoryUse, readMemoryUse, type MemoryUse } from "./memory-use.js";
 import { recordMaintenanceWorkerCalls } from "./maintenance-diagnostics.js";
 import { IsolatedPersistentAgentWorkerTurnError } from "./persistent-agent-worker-runtime.js";
 import {
@@ -107,6 +108,8 @@ export interface AbsorbRunChange {
 	after?: string;
 	/** The add that opened a topic the memory did not have: the card tags it "new topic". Absent otherwise. */
 	newTopic?: true;
+	/** superseded: which value replaced which and why, when the old and the new text disagree on a date, a number or a negation. */
+	reason?: string;
 }
 
 /** Which pass sent a note to the archive: before any conversation was read (the room was already over), or to make room for what was read. Diagnostics and the smokes read it; the card does not. */
@@ -128,6 +131,8 @@ export interface AbsorbRunArchiveRow extends AbsorbRunEntryCard {
 	phase: AbsorbRunArchivePhase;
 	/** Position in the demotion order, 0 leaving first. Rows within a topic are sorted by it. */
 	rank: number;
+	/** Why the ranking put it here, in a person's words: "not touched since 2 Mar, never recalled, 280 tokens". */
+	reason: string;
 }
 
 export interface AbsorbRunDemotion {
@@ -137,6 +142,8 @@ export interface AbsorbRunDemotion {
 	/** Topics the person protected for this run, as "Section/Title": no note of these leaves. Matched case-insensitively, trimmed. */
 	keepTopics: string[];
 	overageTokens: number;
+	/** Open items the pass left in place while the limit was still not met: they are protected outright, and this is what the protection cost. 0 when the limit was met. */
+	protectedOpenItems: number;
 	/** The numbers the card shows; computed here, never in the browser. */
 	counts: { leaving: number; kept: number; instead: number; staying: number };
 }
@@ -390,6 +397,20 @@ export function absorbRunUnknownError(): Error {
 	return productError("That memory update is no longer open. Start Memorize again.", "absorb_run_unknown", 404);
 }
 
+// --- The ranking's inputs and outputs ---------------------------------------------
+
+/** An archive append that came out of the ranking carries the reason the ranking gave; a superseded text carries one when the old and the new text disagree on a value, and a closed item carries none. */
+export type RankedArchiveAppend = MemoryArchiveAppend & { reason?: string };
+
+/** The room's recall counter, as the budget pass ranks by it. A counter that cannot be read must not stop a save: it reads as no use. */
+export function memoryUseForRanking(agentId: string): MemoryUse {
+	try {
+		return readMemoryUse(agentId);
+	} catch {
+		return emptyMemoryUse();
+	}
+}
+
 // --- Cards ---------------------------------------------------------------------
 
 function entryCard(entry: MemoryEntry, section: MemorySection, topic: string): AbsorbRunEntryCard {
@@ -512,10 +533,11 @@ interface RunSlot {
 	/** The document as it will be written: post-fold, post-demotion, keeps pinned. */
 	candidateDoc: MemoryDocument | null;
 	/** What the prepass took, so the folds read a memory under its limit. Every recompute puts these back and ranks them again; what still leaves is in `demotionArchive`. */
-	prepassArchive: MemoryArchiveAppend[];
-	supersededArchive: MemoryArchiveAppend[];
+	prepassArchive: RankedArchiveAppend[];
+	/** The texts the folds replaced; a row whose old and new text disagree on a value carries the reason the new one won. */
+	supersededArchive: RankedArchiveAppend[];
 	closedArchive: MemoryArchiveAppend[];
-	demotionArchive: MemoryArchiveAppend[];
+	demotionArchive: RankedArchiveAppend[];
 	/** The archive list, by note id, for the life of the run: rows are added and re-flagged, never removed. */
 	archiveRows: Map<string, AbsorbRunArchiveRow>;
 	/**
@@ -609,7 +631,7 @@ export function startAbsorbRun(input: AbsorbRunStartInput): AbsorbRun {
 		sessions: [],
 		prepass: { demoted: [] },
 		budget: { before: 0, after: 0, budgetTokens: savedBudgetTokens, savedBudgetTokens, overBudgetAfter: false, ceilingTokens: MEMORY_BUDGET_MAX_TOKENS },
-		demotion: { entries: [], keepIds: [], keepTopics: [], overageTokens: 0, counts: { leaving: 0, kept: 0, instead: 0, staying: 0 } },
+		demotion: { entries: [], keepIds: [], keepTopics: [], overageTokens: 0, protectedOpenItems: 0, counts: { leaving: 0, kept: 0, instead: 0, staying: 0 } },
 		candidate: null,
 		guidance: input.guidance && foldGuidanceAsked(input.guidance) ? foldGuidanceToWire(input.guidance) : null,
 		migration: null,
@@ -697,14 +719,15 @@ async function performRun(slot: RunSlot, input: AbsorbRunStartInput, nowFn: () =
 	run.budget.before = reviewTargetTokens(doc);
 	if (run.budget.before > budgetTokens) {
 		const where = addressBook(doc);
-		const demoted = demoteToBudget(doc, budgetTokens, { today: slot.savedDate });
+		const demoted = demoteToBudget(doc, budgetTokens, { today: slot.savedDate, use: memoryUseForRanking(agentId) });
 		run.prepass.demoted = demoted.demoted.map((entry) => entryCard(entry, where.get(entry.id)?.section ?? "Deep Memory", where.get(entry.id)?.topic ?? "General"));
-		slot.prepassArchive = demoted.demoted.map((entry) => ({ entry, why: "budget" as const, topic: where.get(entry.id)?.topic ?? "General", section: where.get(entry.id)?.section ?? "Deep Memory", archived: slot.savedDate }));
+		slot.prepassArchive = demoted.demoted.map((entry) => ({ entry, why: "budget" as const, topic: where.get(entry.id)?.topic ?? "General", section: where.get(entry.id)?.section ?? "Deep Memory", archived: slot.savedDate, reason: entry.reason }));
+		run.demotion.protectedOpenItems = demoted.protectedOpenItems;
 		// These rows open the archive list, and they open it before a single
 		// fold runs: the card can show what the room's own size costs while the
 		// conversations are still being read. Their rank is their place in this
 		// order for now; the pass after the folds ranks them again with the rest.
-		run.prepass.demoted.forEach((card, rank) => slot.archiveRows.set(card.id, { ...card, leaving: true, kept: false, instead: false, phase: "before", rank }));
+		demoted.demoted.forEach((entry, rank) => slot.archiveRows.set(entry.id, { ...run.prepass.demoted[rank], leaving: true, kept: false, instead: false, phase: "before", rank, reason: entry.reason }));
 		publishArchiveList(slot, doc);
 		doc = demoted.doc;
 	}
@@ -842,7 +865,7 @@ async function performRun(slot: RunSlot, input: AbsorbRunStartInput, nowFn: () =
 			continue;
 		}
 
-		const applied = applyFoldOps(doc, ops, { sessionId: session.id, savedDate: slot.savedDate, nextEntryNumber });
+		const applied = applyFoldOps(doc, ops, { sessionId: session.id, savedDate: slot.savedDate, nextEntryNumber, ...(session.date ? { sessionDate: session.date } : {}), sessionDateOf: (id) => slot.sessionsById.get(id)?.date || undefined });
 		doc = applied.doc;
 		nextEntryNumber = applied.nextEntryNumber;
 		const where = addressBook(doc);
@@ -900,7 +923,7 @@ function foldChanges(record: FoldRecord, where: Map<string, { section: MemorySec
 			return { kind: "added" as const, id: added.id, topic: added.topic, after: added.text, ...(newTopic ? { newTopic: true as const } : {}) };
 		}),
 		...record.updated.map((change) => ({ kind: "updated" as const, id: change.id, topic: topicOf(change.id), before: change.before, after: change.after })),
-		...record.superseded.map((change) => ({ kind: "superseded" as const, id: change.id, topic: topicOf(change.id), before: change.before, after: change.after })),
+		...record.superseded.map((change) => ({ kind: "superseded" as const, id: change.id, topic: topicOf(change.id), before: change.before, after: change.after, ...(change.reason ? { reason: change.reason } : {}) })),
 		...record.closed.map((closed) => ({ kind: "closed" as const, id: closed.id, topic: topicOf(closed.id), before: closed.text })),
 		...record.pinned.map((id) => ({ kind: "pinned" as const, id, topic: topicOf(id) })),
 	];
@@ -920,7 +943,9 @@ function foldChanges(record: FoldRecord, where: Map<string, { section: MemorySec
  */
 function collectSupersededArchive(slot: RunSlot, record: FoldRecord, doc: MemoryDocument, where: Map<string, { section: MemorySection; topic: string }>): void {
 	const entryById = new Map(doc.topics.flatMap((topic) => topic.entries.map((entry) => [entry.id, entry] as const)));
-	for (const change of [...record.updated, ...record.superseded]) {
+	// An update's row never carries a reason; a supersede's does when the two texts disagree on a value.
+	const replaced: FoldRecord["superseded"] = [...record.updated, ...record.superseded];
+	for (const change of replaced) {
 		const address = where.get(change.id);
 		const current = entryById.get(change.id);
 		slot.supersededArchive.push({
@@ -936,6 +961,7 @@ function collectSupersededArchive(slot: RunSlot, record: FoldRecord, doc: Memory
 			topic: address?.topic ?? "General",
 			section: address?.section ?? "Deep Memory",
 			archived: slot.savedDate,
+			...(change.reason ? { reason: change.reason } : {}),
 		});
 	}
 }
@@ -1016,7 +1042,7 @@ function recomputeDemotion(slot: RunSlot): void {
 	// exactly as the prepass took them, being the least recently touched.
 	const doc = restoreEntries(slot.postFoldDoc, slot.prepassArchive.map((append) => ({ ...append.entry, archived: append.archived ?? slot.savedDate, why: append.why, topic: append.topic, section: append.section })));
 	const where = addressBook(doc);
-	const demoted = demoteToBudget(doc, budgetTokens, { keepIds, keepTopics, today: slot.savedDate });
+	const demoted = demoteToBudget(doc, budgetTokens, { keepIds, keepTopics, today: slot.savedDate, use: memoryUseForRanking(run.agentId) });
 	const candidate = cloneDocument(demoted.doc);
 	// Keeping by id IS pinning: the entry the user kept is the user's own from
 	// here on, and no later run's budget pass takes it either. A protected topic
@@ -1024,7 +1050,7 @@ function recomputeDemotion(slot: RunSlot): void {
 	// forever — so its entries are not pinned.
 	for (const topic of candidate.topics) for (const entry of topic.entries) if (keep.has(entry.id)) entry.pinned = true;
 	slot.candidateDoc = candidate;
-	slot.demotionArchive = demoted.demoted.map((entry) => ({ entry, why: "budget" as const, topic: where.get(entry.id)?.topic ?? "General", section: where.get(entry.id)?.section ?? "Deep Memory", archived: slot.savedDate }));
+	slot.demotionArchive = demoted.demoted.map((entry) => ({ entry, why: "budget" as const, topic: where.get(entry.id)?.topic ?? "General", section: where.get(entry.id)?.section ?? "Deep Memory", archived: slot.savedDate, reason: entry.reason }));
 	const after = reviewTargetTokens(candidate);
 
 	// The stable list. A row entering after the run was ready is leaving in the
@@ -1046,9 +1072,9 @@ function recomputeDemotion(slot: RunSlot): void {
 			// stayed because it was kept itself, and its keep was taken back: that row
 			// simply leaves again. `kept` still says what the last pass decided.
 			const reentering = !row.leaving && !row.kept;
-			Object.assign(row, card, { rank });
+			Object.assign(row, card, { rank, reason: entry.reason });
 			if (reentering && instead) row.instead = true;
-		} else slot.archiveRows.set(entry.id, { ...card, leaving: true, kept: false, instead, phase: "after", rank });
+		} else slot.archiveRows.set(entry.id, { ...card, leaving: true, kept: false, instead, phase: "after", rank, reason: entry.reason });
 	});
 	for (const row of slot.archiveRows.values()) {
 		if (leaving.has(row.id)) {
@@ -1062,6 +1088,7 @@ function recomputeDemotion(slot: RunSlot): void {
 	run.demotion.keepIds = keepIds;
 	run.demotion.keepTopics = keepTopics;
 	run.demotion.overageTokens = demoted.overageTokens;
+	run.demotion.protectedOpenItems = demoted.protectedOpenItems;
 	publishArchiveList(slot, doc);
 	run.budget = { ...run.budget, after, budgetTokens, overBudgetAfter: overMemoryBudget(after, budgetTokens), ceilingTokens: MEMORY_BUDGET_MAX_TOKENS };
 	run.candidate = { sourceFingerprint: slot.sourceFingerprint, estimatedTokens: estimateTokens(renderMemoryDocument(candidate, "context")) };
@@ -1298,7 +1325,7 @@ export function approveAbsorbRun(agentIdRaw: string, runId: string, now = new Da
 	// the last pass's, pre-pass entries included: one the user kept, by id or
 	// by topic, or one a raised limit made room for, is back in the candidate
 	// instead and is not among them.
-	const archiveAppend: MemoryArchiveAppend[] = [
+	const archiveAppend: RankedArchiveAppend[] = [
 		...slot.demotionArchive,
 		...slot.supersededArchive,
 		...slot.closedArchive,
@@ -1344,16 +1371,26 @@ export function approveAbsorbRun(agentIdRaw: string, runId: string, now = new Da
 				usage: run.usage,
 				run: {
 					runId: run.runId,
-					sessions: run.sessions.map((session) => ({
-						id: session.id,
-						outcome: session.outcome,
-						attempts: session.attempts,
-						...(session.reason ? { reason: session.reason } : {}),
-						...(session.summary ? { summary: session.summary } : {}),
-					})),
+					// The record names the conversation each entry was, from the names
+					// the checkpoint gate stamped into the entry: a Recent Context id is
+					// handed back to a later conversation once this save empties the
+					// section, and the search index reads these two instead of guessing
+					// from timestamps which conversation a folded entry was.
+					sessions: run.sessions.map((session) => {
+						const remembered = slot.sessionsById.get(session.id);
+						return {
+							id: session.id,
+							outcome: session.outcome,
+							attempts: session.attempts,
+							...(session.reason ? { reason: session.reason } : {}),
+							...(session.summary ? { summary: session.summary } : {}),
+							...(remembered?.conversationId ? { conversationId: remembered.conversationId } : {}),
+							...(remembered?.checkpointId ? { checkpointId: remembered.checkpointId } : {}),
+						};
+					}),
 					foldedSessions,
 					remainingSessions,
-					archived: archiveAppend.map((append) => ({ id: append.entry.id, why: append.why, topic: append.topic, section: append.section })),
+					archived: archiveAppend.map((append) => ({ id: append.entry.id, why: append.why, topic: append.topic, section: append.section, ...(append.reason ? { reason: append.reason } : {}) })),
 					budget: { before: run.budget.before, after: run.budget.after, budgetTokens: run.budget.budgetTokens, overBudgetAfter: run.budget.overBudgetAfter, ...(recordsRaise ? { raisedFrom } : {}) },
 					...(run.migration?.pending ? { migration: { entriesAssigned: run.migration.entriesAssigned } } : {}),
 				},

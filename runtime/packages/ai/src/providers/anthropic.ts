@@ -69,7 +69,13 @@ function getCacheControl(
 }
 
 // Stealth mode: Mimic Claude Code's tool naming exactly
-const claudeCodeVersion = "2.1.75";
+// Anthropic gates new models on the subscription path by this version. On
+// 2026-09-22 the subscription refused claude-opus-5-5 on 2.1.251 with "Claude
+// Code 2.1.251 does not support this model; version 2.1.280 or newer is
+// required" (error_code claude_code_version_too_old); earlier the same day
+// 2.1.75 was refused for Fable 5.1 with "does not support this model" and
+// 2.1.251 was the fix. Upstream Pi main still advertises 2.1.251.
+const claudeCodeVersion = "2.1.280";
 
 // Claude Code 2.x tool names (canonical casing)
 // Source: https://cchistory.mariozechner.at/data/prompts-2.1.11.md
@@ -165,6 +171,9 @@ export type AnthropicThinkingDisplay = "summarized" | "omitted";
 
 const FINE_GRAINED_TOOL_STREAMING_BETA = "fine-grained-tool-streaming-2025-05-14";
 const INTERLEAVED_THINKING_BETA = "interleaved-thinking-2025-05-14";
+// Unlocks thinking.block_binding on the models that bind thinking blocks to
+// their prefix (see usesThinkingBlockBinding).
+const THINKING_BINDING_CONTROLS_BETA = "thinking-binding-controls-2026-08-01";
 
 function getAnthropicCompat(model: Model<"anthropic-messages">): Required<AnthropicMessagesCompat> {
 	return {
@@ -539,6 +548,8 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 			const turnRawContent: Record<string, any>[] = [];
 			/** The recovery below fires at most once per turn. */
 			let recoveredThinkingValidation = false;
+			/** The thinking-off self-healing below fires at most once per turn. */
+			let recoveredThinkingOff = false;
 			// Recomputed wherever the sums are, so a caller reading mid-stream sees
 			// a context number that agrees with the tokens counted so far.
 			const refreshContextTokens = () => {
@@ -566,11 +577,38 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 					// search citations for this one request; the user keeps a room
 					// that answers. Anything else, and the second failure surfaces
 					// exactly as the first would have.
-					if (recoveredThinkingValidation || !isResentHistoryRefusal(requestError)) throw requestError;
-					recoveredThinkingValidation = true;
-					appendAssistantMessageDiagnostic(output, createAssistantMessageDiagnostic("anthropic-history-validation-recovery", requestError, { model: model.id }));
-					params = stripValidatedHistoryFromParams(params);
-					response = await client.messages.create({ ...params, stream: true }, requestOptions).asResponse();
+					//
+					// Thinking stays as it was on a model that thinks adaptively:
+					// Fable 5 and 5.1 return 400 for disabled (adaptive thinking is
+					// always on), and the documentation says to omit thinking or
+					// send adaptive. Budget models keep today's disabled.
+					if (!recoveredThinkingValidation && isResentHistoryRefusal(requestError)) {
+						recoveredThinkingValidation = true;
+						appendAssistantMessageDiagnostic(output, createAssistantMessageDiagnostic("anthropic-history-validation-recovery", requestError, { model: model.id }));
+						params = stripValidatedHistoryFromParams(params, { keepThinking: supportsAdaptiveThinking(model) });
+						response = await client.messages.create({ ...params, stream: true }, requestOptions).asResponse();
+					} else if (
+						!recoveredThinkingOff &&
+						(params.thinking as { type?: string } | undefined)?.type === "disabled" &&
+						isThinkingOffUnsupportedRefusal(requestError)
+					) {
+						// Self-healing for a model that cannot have thinking off. The
+						// catalogue withholds "off" for the Fable and Mythos families,
+						// but a stale hand-written row or a model newer than the
+						// catalogue can still send disabled, and the API names the
+						// remedy in its refusal: adaptive thinking with an effort. The
+						// retry takes the lowest effort, the closest thing to off the
+						// model has. No blanket mapping of off to low: a model that
+						// accepts disabled keeps it, because off is cheaper than low.
+						// Any other error, and a second one of these in the same turn,
+						// surfaces unchanged.
+						recoveredThinkingOff = true;
+						appendAssistantMessageDiagnostic(output, createAssistantMessageDiagnostic("anthropic-thinking-off-unsupported", requestError, { model: model.id }));
+						params = withLowestAdaptiveThinking(params, model);
+						response = await client.messages.create({ ...params, stream: true }, requestOptions).asResponse();
+					} else {
+						throw requestError;
+					}
 				}
 				await options?.onResponse?.({ status: response.status, headers: headersToRecord(response.headers) }, model);
 				if (!started) {
@@ -611,6 +649,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 							output.usage.input + output.usage.output + output.usage.cacheRead + output.usage.cacheWrite;
 						refreshContextTokens();
 						calculateCost(model, output.usage);
+						recordInputTransformations(output, model, event.message);
 					} else if (event.type === "content_block_start") {
 						if (event.content_block.type === "text") {
 							const block: Block = {
@@ -762,6 +801,12 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 						if (event.delta.stop_reason) {
 							rawStopReason = event.delta.stop_reason;
 							output.stopReason = mapStopReason(event.delta.stop_reason);
+							// A refusal is a 200 whose stop reason says the model declined.
+							// It maps to "error", and without a sentence here the caller
+							// would only see the generic message from the throw below.
+							if (event.delta.stop_reason === "refusal" && output.errorMessage === undefined) {
+								output.errorMessage = "the model refused to answer this request";
+							}
 						}
 						// Only update usage fields if present (not null).
 						// Preserves input_tokens from message_start when proxies omit it in message_delta.
@@ -845,7 +890,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 			} // end of the pause_turn continuation loop
 
 			if (output.stopReason === "aborted" || output.stopReason === "error") {
-				throw new Error("An unknown error occurred");
+				throw new Error(output.errorMessage ?? "An unknown error occurred");
 			}
 
 			// The raw copy is only kept when parsing actually lost something: a
@@ -897,6 +942,51 @@ function supportsAdaptiveThinking(model: Model<"anthropic-messages">): boolean {
 		modelId.includes("sonnet-4-6") ||
 		modelId.includes("sonnet-4.6")
 	);
+}
+
+/**
+ * Whether a model binds every thinking block to the exact prefix it was
+ * produced under: the system prompt, the tools array and all earlier
+ * messages. True for direct Anthropic requests to Claude Fable 5.1 and
+ * Mythos 5.1 (ids "claude-fable-5-1" and "claude-mythos-5-1", the dotted
+ * spelling "5.1" too, with or without a date suffix) and to Claude Opus 5.5
+ * (id "claude-opus-5-5", released 2026-09-22), which is bound the same way
+ * and takes the same beta and field. The Opus pattern stops at the minor
+ * version, so "claude-opus-5" is not matched.
+ *
+ * This app rebuilds the system prompt with live room state on every turn and
+ * replays every signed thinking block, so on these models a prefix change
+ * between turns is routine and a replayed block would fail the request with
+ * a 400. Anthropic enforces the check by default for accounts created on or
+ * after 2026-08-31 and has announced enforcement for all accounts on later
+ * models, so this predicate is the one place to widen when that happens.
+ *
+ * Never for Bedrock or Vertex (separate provider files, untouched) and not
+ * for Copilot or the Cloudflare gateway (they may not forward the beta), which
+ * the provider check below excludes.
+ *
+ * The subscription (OAuth) path takes the beta header and the field as well:
+ * the probe (apps/web-server/scripts/anthropic-binding-probe.ts) confirmed on
+ * 2026-09-22 that a subscription token answers 200 with both, and that a
+ * replayed block under a changed prefix is dropped and reported in
+ * input_transformations (thinking_dropped, prefix_binding_mismatch). The
+ * probe imports this predicate through the package's "./anthropic" subpath
+ * (the root barrel stays free of provider modules so that no SDK loads on
+ * import), so it and the provider share the one rule.
+ */
+export function usesThinkingBlockBinding(model: Model<"anthropic-messages">): boolean {
+	if (model.provider !== "anthropic") return false;
+	return /claude-(fable|mythos)-5[-.]1(?:$|[^0-9])|claude-opus-5[-.]5(?:$|[^0-9])/.test(model.id);
+}
+
+/**
+ * The documented remedy on a binding model: the API drops each thinking block
+ * whose prefix no longer matches (and every thinking block after it),
+ * unbilled, answers normally, and lists the drops in input_transformations.
+ * Cast at the call sites: the SDK types lag the field.
+ */
+function thinkingBlockBindingParam(): { block_binding: { prefix_mismatch_behavior: "drop_block" } } {
+	return { block_binding: { prefix_mismatch_behavior: "drop_block" } };
 }
 
 /**
@@ -991,6 +1081,11 @@ function createClient(
 	}
 	if (needsInterleavedBeta) {
 		betaFeatures.push(INTERLEAVED_THINKING_BETA);
+	}
+	// Reaches the anthropic-beta header on the API-key path below and on the
+	// OAuth path, which joins its own betas with this list.
+	if (usesThinkingBlockBinding(model)) {
+		betaFeatures.push(THINKING_BINDING_CONTROLS_BETA);
 	}
 
 	if (model.provider === "cloudflare-ai-gateway") {
@@ -1145,6 +1240,12 @@ function buildParams(
 			if (supportsAdaptiveThinking(model)) {
 				// Adaptive thinking: Claude decides when and how much to think.
 				params.thinking = { type: "adaptive", display };
+				if (usesThinkingBlockBinding(model)) {
+					// A stale block is dropped by the API instead of failing the
+					// turn; the drop is recorded on the way back (see
+					// recordInputTransformations).
+					Object.assign(params.thinking, thinkingBlockBindingParam());
+				}
 				if (options.effort) {
 					// The Anthropic SDK types can lag newly supported effort values such
 					// as "xhigh" and "max".
@@ -1474,18 +1575,60 @@ export function isResentHistoryRefusal(error: unknown): boolean {
 }
 
 /**
- * The same request with nothing left for a history validator to check:
- * thinking declared off, every thinking block removed, and every server tool
- * block (the search calls and results the provider itself wove into earlier
- * answers) removed with them. What remains is plain text and tool-call pairs,
- * the shape every effort-off conversation sends all day. An assistant message
- * left with no blocks at all is dropped whole rather than sent empty.
+ * The provider's refusal of a request that declared thinking off, on a model
+ * where off does not exist. The measured message on Claude Fable 5:
+ * '"thinking.type.disabled" is not supported for this model. Use
+ * "thinking.type.adaptive" and "output_config.effort" to control thinking
+ * behavior.' The match is kept to the two phrases that carry the meaning, so
+ * a rewording of the rest still heals.
  */
-export function stripValidatedHistoryFromParams<T extends { messages: any[]; thinking?: unknown }>(params: T): T {
+export function isThinkingOffUnsupportedRefusal(error: unknown): boolean {
+	const message = error instanceof Error ? error.message : String(error);
+	if (!/invalid_request_error/i.test(message)) return false;
+	return /thinking\.type\.disabled/i.test(message) && /not supported/i.test(message);
+}
+
+/**
+ * The same request with thinking on at the lowest effort: adaptive thinking
+ * (with the binding flag where the model binds its blocks) and effort "low".
+ * Temperature goes with it, since it is incompatible with thinking and a
+ * disabled request may have carried one.
+ */
+export function withLowestAdaptiveThinking<T extends { thinking?: unknown; temperature?: unknown }>(
+	params: T,
+	model: Model<"anthropic-messages">,
+): T {
+	const { temperature: _temperature, ...rest } = params;
+	return {
+		...rest,
+		thinking: { type: "adaptive", ...(usesThinkingBlockBinding(model) ? thinkingBlockBindingParam() : {}) },
+		output_config: { effort: "low" },
+	} as unknown as T;
+}
+
+/**
+ * The same request with nothing left for a history validator to check:
+ * every thinking block removed, and every server tool block (the search calls
+ * and results the provider itself wove into earlier answers) removed with
+ * them. What remains is plain text and tool-call pairs, the shape every
+ * effort-off conversation sends all day. An assistant message left with no
+ * blocks at all is dropped whole rather than sent empty.
+ *
+ * Thinking is declared off unless keepThinking is set, in which case the
+ * thinking object stays exactly as it was in the failed request (adaptive,
+ * same display, same block_binding). Fable 5 and 5.1 return 400 for disabled
+ * (adaptive thinking is always on), and the documentation says to omit
+ * thinking or send adaptive; the caller passes keepThinking for every model
+ * that thinks adaptively.
+ */
+export function stripValidatedHistoryFromParams<T extends { messages: any[]; thinking?: unknown }>(
+	params: T,
+	options?: { keepThinking?: boolean },
+): T {
 	const stripped = new Set(["thinking", "redacted_thinking", "server_tool_use", "web_search_tool_result"]);
 	return {
 		...params,
-		thinking: { type: "disabled" },
+		thinking: options?.keepThinking ? params.thinking : { type: "disabled" },
 		messages: params.messages
 			.map((message: any) => {
 				if (message?.role !== "assistant" || !Array.isArray(message.content)) return message;
@@ -1494,6 +1637,36 @@ export function stripValidatedHistoryFromParams<T extends { messages: any[]; thi
 			})
 			.filter((message: any) => message?.role !== "assistant" || !Array.isArray(message.content) || message.content.length > 0),
 	};
+}
+
+/**
+ * What the API changed in the prompt before answering, recorded as a
+ * diagnostic. On a binding model with the drop flag set, each thinking block
+ * whose prefix no longer matched arrives listed in the message's top-level
+ * input_transformations (in the stream: inside message_start), as
+ * { type: "thinking_dropped", path: "messages.4.content.0",
+ * reason: "prefix_binding_mismatch" }.
+ *
+ * The stored history and the message content are NOT changed. Removing the
+ * dropped blocks from the stored history would rewrite the wire prefix from
+ * that message on and invalidate the whole prompt cache (another fork measured
+ * over 100k cached tokens rewritten per turn); a successful drop_block
+ * response proves the server tolerates the stale block and drops it again
+ * each time at cache-read price, so history stays verbatim.
+ */
+function recordInputTransformations(output: AssistantMessage, model: Model<"anthropic-messages">, message: unknown): void {
+	const transformations = (message as { input_transformations?: unknown } | undefined)?.input_transformations;
+	if (!Array.isArray(transformations) || transformations.length === 0) return;
+	const dropped = transformations
+		.filter((entry): entry is Record<string, unknown> => !!entry && typeof entry === "object")
+		.map((entry) => ({ type: entry.type, path: entry.path, reason: entry.reason }));
+	if (dropped.length === 0) return;
+	const count = dropped.length;
+	const error = new Error(`the API dropped ${count} thinking block${count === 1 ? "" : "s"} bound to a different prefix`);
+	appendAssistantMessageDiagnostic(
+		output,
+		createAssistantMessageDiagnostic("anthropic-thinking-dropped", error, { model: model.id, dropped }),
+	);
 }
 
 /**

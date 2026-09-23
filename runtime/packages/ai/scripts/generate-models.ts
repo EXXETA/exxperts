@@ -147,6 +147,10 @@ const OPENAI_RESPONSES_NONE_REASONING_MODELS = new Set([
 	"gpt-5.4-mini",
 	"gpt-5.4-nano",
 	"gpt-5.5",
+	// GPT-6 Sol and Luna take reasoning.effort "none" (developers.openai.com,
+	// 2026-09-22); gpt-6-astra does not.
+	"gpt-6-sol",
+	"gpt-6-luna",
 ]);
 
 function mergeThinkingLevelMap(model: Model<any>, map: NonNullable<Model<any>["thinkingLevelMap"]>): void {
@@ -245,18 +249,44 @@ function getTogetherThinkingLevelMap(
 	return { ...TOGETHER_TOGGLE_REASONING_LEVEL_MAP };
 }
 
-function supportsOpenAiXhigh(modelId: string): boolean {
-	return (
-		modelId.includes("gpt-5.2") ||
-		modelId.includes("gpt-5.3") ||
-		modelId.includes("gpt-5.4") ||
-		modelId.includes("gpt-5.5") ||
-		modelId.includes("gpt-5.6")
-	);
+/**
+ * The generation an OpenAI model id names: "gpt-5.6-luna" is 5.6, "gpt-6-astra"
+ * is 6.0. A gateway may put a prefix in front (openai/, us.openai.) and a
+ * variant a suffix behind (-codex, -luna, -mini, :batch); the generation sits
+ * between them. An id that names no generation returns undefined, and no
+ * family rule fires for it.
+ */
+function parseOpenAiGeneration(modelId: string): { major: number; minor: number } | undefined {
+	const match = /(?:^|[^a-z0-9])gpt-(\d+)(?:\.(\d+))?(?=$|[^a-z0-9])/.exec(modelId.toLowerCase());
+	if (!match) return undefined;
+	return { major: Number(match[1]), minor: match[2] === undefined ? 0 : Number(match[2]) };
 }
 
+// xhigh starts at GPT-5.2 and holds for every generation from 6 on.
+function supportsOpenAiXhigh(modelId: string): boolean {
+	const generation = parseOpenAiGeneration(modelId);
+	if (!generation) return false;
+	return generation.major >= 6 || (generation.major === 5 && generation.minor >= 2);
+}
+
+// max starts at GPT-5.6 and holds for every generation from 6 on.
 function supportsOpenAiMax(modelId: string): boolean {
-	return modelId.includes("gpt-5.6");
+	const generation = parseOpenAiGeneration(modelId);
+	if (!generation) return false;
+	return generation.major >= 6 || (generation.major === 5 && generation.minor >= 6);
+}
+
+// The GPT-5 line and everything after it: the Responses API route and the
+// Copilot API choice both start here.
+function isOpenAiGenerationFiveOrLater(modelId: string): boolean {
+	const generation = parseOpenAiGeneration(modelId);
+	return generation !== undefined && generation.major >= 5;
+}
+
+// The GPT-6 line and everything after it: the maker's ladder starts at low.
+function isOpenAiGenerationSixOrLater(modelId: string): boolean {
+	const generation = parseOpenAiGeneration(modelId);
+	return generation !== undefined && generation.major >= 6;
 }
 
 function isGoogleThinkingApi(model: Model<any>): boolean {
@@ -282,7 +312,7 @@ function applyThinkingLevelMetadata(model: Model<any>): void {
 	const shapedAtConstruction = model.thinkingLevelMap !== undefined;
 	if (
 		(model.api === "openai-responses" || model.api === "azure-openai-responses") &&
-		model.id.startsWith("gpt-5")
+		isOpenAiGenerationFiveOrLater(model.id)
 	) {
 		mergeThinkingLevelMap(model, { off: null });
 	}
@@ -320,6 +350,29 @@ function applyThinkingLevelMetadata(model: Model<any>): void {
 			}
 		}
 	}
+	// The Fable and Mythos families take adaptive thinking only, always on.
+	// Anthropic's per-model table states that a request with thinking.type
+	// "disabled" is a 400 for them, unchanged from Fable 5, and the subscription
+	// confirmed it on 2026-09-22: '"thinking.type.disabled" is not supported for
+	// this model. Use "thinking.type.adaptive" and "output_config.effort" to
+	// control thinking behavior.' Opus 5.5 (released 2026-09-22) is the third
+	// family member whose thinking cannot be disabled, with the same 400 and
+	// the same remedy; see its what's-new page,
+	// platform.claude.com/docs/en/models/opus-5-5/whats-new. Opus 5, Sonnet 5
+	// and the rest accept disabled and keep "off".
+	// models.dev publishes the same effort ladder for Opus 5 and Fable 5,
+	// so the ladder cannot be the rule; the family is, on every provider that
+	// carries it (Bedrock and Vertex prefixes and the gateways' dotted spellings
+	// included), the way the GPT-5.6 rows pin off to null above. The Opus 5.5
+	// pattern requires the minor version to end there, so claude-opus-5 stays
+	// untouched.
+	// A room that already stores "off" for one of these models is settled by
+	// clampThinkingLevel (src/models.ts) to "minimal", the cheapest thinking
+	// rung it lists (the Anthropic rows leave minimal unmapped), and the
+	// provider sends that as effort "low", the same rung the dial shows as low.
+	if (/claude-(fable|mythos)-|claude-opus-5[-.]5(?:$|[^0-9])/.test(model.id.toLowerCase())) {
+		mergeThinkingLevelMap(model, { off: null });
+	}
 	if (model.api === "openai-completions" && model.id.includes("deepseek-v4")) {
 		mergeThinkingLevelMap(model, DEEPSEEK_V4_THINKING_LEVEL_MAP);
 	}
@@ -336,6 +389,13 @@ function applyThinkingLevelMetadata(model: Model<any>): void {
 		mergeThinkingLevelMap(model, { minimal: null, low: null, medium: null, high: "default" });
 	}
 	if (model.provider === "openai-codex" && supportsOpenAiXhigh(model.id)) {
+		mergeThinkingLevelMap(model, { minimal: "low" });
+	}
+	// From GPT-6 on, models.dev states the effort ladder as low to max, so
+	// "minimal" is not an effort the model takes. Folding it onto low, on
+	// every provider, is what the Codex rows above already do and keeps the
+	// picker's ladder equal to the maker's.
+	if (isOpenAiGenerationSixOrLater(model.id)) {
 		mergeThinkingLevelMap(model, { minimal: "low" });
 	}
 	if (model.provider === "openai-codex" && model.id === "gpt-5.1-codex-mini") {
@@ -996,8 +1056,8 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 
 				// Claude 4.x models route to Anthropic Messages API
 				const isCopilotClaude4 = /^claude-(haiku|sonnet|opus)-4([.\-]|$)/.test(modelId);
-				// gpt-5 models require responses API, others use completions
-				const needsResponsesApi = modelId.startsWith("gpt-5") || modelId.startsWith("oswe");
+				// From GPT-5 on the models need the Responses API, others use completions
+				const needsResponsesApi = isOpenAiGenerationFiveOrLater(modelId) || modelId.startsWith("oswe");
 
 				const api: Api = isCopilotClaude4
 					? "anthropic-messages"
@@ -1075,8 +1135,12 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 		}
 
 		// Process Kimi For Coding models
-		if (data["kimi-for-coding"]?.models) {
-			const kimiModels = data["kimi-for-coding"].models as Record<string, ModelsDevModel>;
+		// models.dev split "kimi-for-coding" into one provider per domain in
+		// September 2026 (kimi.com and kimi.ai). This registry keeps the kimi.com
+		// base below, so it reads that entry, after the old key while it exists.
+		const kimiSource = data["kimi-for-coding"] ?? data["kimi-code-plan-cn"];
+		if (kimiSource?.models) {
+			const kimiModels = kimiSource.models as Record<string, ModelsDevModel>;
 			const hasCanonicalModel = Object.prototype.hasOwnProperty.call(kimiModels, "kimi-for-coding");
 
 			const kimiAliases = new Set(["k2p5", "k2p6"]);
@@ -1701,7 +1765,8 @@ async function generateModels() {
 			baseUrl: CODEX_BASE_URL,
 			reasoning: true,
 			input: ["text", "image"],
-			cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
+			// mirrors the API row, 2026-09-22
+			cost: { input: 4, output: 20, cacheRead: 0.4, cacheWrite: 0 },
 			contextWindow: 353000,
 			maxTokens: CODEX_MAX_TOKENS,
 		},
@@ -1726,6 +1791,54 @@ async function generateModels() {
 			reasoning: true,
 			input: ["text", "image"],
 			cost: { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0 },
+			contextWindow: 353000,
+			maxTokens: CODEX_MAX_TOKENS,
+		},
+		// GPT-6 Astra on the ChatGPT subscription endpoint: served on a Plus plan
+		// on 2026-09-22 (scripts/codex-model-probe.ts answered 200, served model
+		// gpt-6-astra, no context-window header), so the window and output mirror
+		// the 5.6 rows and the cost mirrors the openai API row. Astra has no
+		// "none" effort, so off is pinned to null here (the family rule below only
+		// pins it on the Responses APIs); the rule adds xhigh, max and minimal.
+		{
+			id: "gpt-6-astra",
+			name: "GPT-6 Astra",
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			baseUrl: CODEX_BASE_URL,
+			reasoning: true,
+			thinkingLevelMap: { off: null },
+			input: ["text", "image"],
+			cost: { input: 10, output: 50, cacheRead: 1, cacheWrite: 0 },
+			contextWindow: 353000,
+			maxTokens: CODEX_MAX_TOKENS,
+		},
+		// GPT-6 Sol and Luna on the ChatGPT subscription endpoint: served on a
+		// Plus plan on 2026-09-22 (scripts/codex-model-probe.ts answered 200 for
+		// both); costs mirror the openai API rows, window and output mirror the
+		// 5.6 rows; unlike Astra they take effort none, so off stays and the
+		// family rule adds minimal, xhigh and max.
+		{
+			id: "gpt-6-sol",
+			name: "GPT-6 Sol",
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			baseUrl: CODEX_BASE_URL,
+			reasoning: true,
+			input: ["text", "image"],
+			cost: { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 0 },
+			contextWindow: 353000,
+			maxTokens: CODEX_MAX_TOKENS,
+		},
+		{
+			id: "gpt-6-luna",
+			name: "GPT-6 Luna",
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			baseUrl: CODEX_BASE_URL,
+			reasoning: true,
+			input: ["text", "image"],
+			cost: { input: 0.1, output: 0.5, cacheRead: 0.01, cacheWrite: 0 },
 			contextWindow: 353000,
 			maxTokens: CODEX_MAX_TOKENS,
 		},

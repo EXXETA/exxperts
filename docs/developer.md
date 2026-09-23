@@ -86,10 +86,20 @@ After code changes, rebuild/repack/reinstall only when you need to test installe
 
 **Persistent rooms (web)** boot from four code-assembled layers (L0
 platform kernel, L1a constitution, L1b durable memory, L2 runtime
-envelope) built in `apps/web-server/src/persistent-agents.ts`. No
-Markdown prompt files are involved; the code is the source of truth.
-See [`how-exxperts-works.md`](how-exxperts-works.md) for the layer
-model.
+envelope) built in `apps/web-server/src/persistent-agents.ts`, plus the
+user's optional instructions layer between L1a and L1b
+(`persistent-room-instructions.ts`: the room's file and the global file
+under the app's state folder, read and written by the same code;
+`composePersistentRoomInstructions`, the ONE composition of the two into
+the layer, its fingerprint marker, and the per-turn "Current
+instructions" section that carries an edit or a flip of the switch into
+an already-open conversation; `persistent-room-global-instructions-setting.ts`:
+the per-room switch, absent meaning on;
+`persistent-room-instructions-text.ts`: the browser-safe text rules,
+normalization, validation, the cap, the marker grammar, shared with
+both panes). No Markdown
+prompt files are involved; the code is the source of truth. See
+[`how-exxperts-works.md`](how-exxperts-works.md) for the layer model.
 
 **Memory lifecycle workers** (checkpoint, shown as “Remember” in the UI; absorb, shown as “Memorize”; the note tidy, shown as “Review”) each carry a
 platform-owned constitution defined next to their prompt assembly:

@@ -26,10 +26,117 @@ Beside them sit two more things:
 - **Waiting conversations**: the conversations you have remembered but
   not yet memorized, kept in recent memory as short summaries.
 - **The archive**: notes that left the room's memory. Nothing is
-  deleted; a note that leaves is archived with the reason it left, and
-  the room can read its archive by itself when a question is about an
-  older period (the chat shows a "Read archived notes" chip with what
-  it looked for).
+  deleted; a note that leaves is archived with the reason it left.
+
+The room can **search what it has written down and what it was told**,
+by itself, when a question is about something that is no longer in
+front of it: the notes in its memory, the notes in its archive, and the
+conversations it has memorized, transcript and all. So a detail that
+was said once and never made it into a note is still answerable: the
+conversation kept it. That holds for every conversation you have
+memorized, including the ones a Memorize took no notes from. A Memorize
+decides what is worth keeping in front of the room every turn, not what
+stays findable, so a row the room recalls from such a conversation says
+**(no notes taken)**: the transcript is all memory kept of it. A
+conversation you have remembered but not yet memorized is still in the
+room's recent memory, so it is already in view and needs no search; one
+you never remembered is not searched at all. The chat shows a chip with
+what the room looked for.
+
+The search takes words, names, dates or numbers rather than a literal
+text, in German or English, and the two spellings meet: **Überweisung**
+finds **Ueberweisung**, **1.6.2026** finds **2026-06-01**, and
+**55.000** finds **55,000**. It can be narrowed to one topic, to a date
+range, and to the parts of the memory it may read: the notes, the
+archive, the conversations, or any of them together. It is read-only:
+reading a note back does not put it back in memory, which only a
+Memorize or a Review you approve does.
+
+The search works in any language written with spaces between words. It
+folds case and accents for all of them, and digits, ISO dates and the
+beginnings of words match everywhere. Word forms, month names written as
+words, spelling variants such as **ü** and **ue**, and the filler words
+it ignores exist for German and English so far. Languages written
+without spaces are handled poorly. Only German and English were measured.
+
+The room is told, every turn, which tools of its own it has and what
+each one is for, and its own instructions tell it to look things up
+before it says it does not know. A topic whose notes have moved to the
+archive carries one line where the room reads its memory (how many
+there are, which months they span, and which tool reads them), so the
+room can see there is more and knows how to get at it. What a search
+brings back is the room's own past words, weighed rather than obeyed,
+with the day each was saved beside it: dates decide, and the newer one
+wins. When neither the notes nor a search carry what you asked for, the
+room says so in one sentence instead of guessing.
+
+### One recall, worked through
+
+In March, in a conversation the room has since memorized, you wrote:
+"Gschwendtner's invoice, 55.000 euros, went out by bank transfer on
+12.03.2025, reference RE-2025-0347." The Memorize that followed kept
+one note under the topic Suppliers: "Gschwendtner: roofing, invoices
+paid on time so far." The amount, the day and the reference are not in
+the note. They are in the conversation, and the conversation is kept.
+
+In September, in a fresh conversation, you ask: "When did we pay the
+Gschwendtner invoices, and how much was it?"
+
+The note in front of the room says nothing about a day or an amount,
+and its instructions tell it to look before it says it does not know.
+It searches its memory for "Gschwendtner invoices paid". While it does,
+the chat shows a chip, **Reading archived notes**, with the words it
+looked for under it; when the rows are in, the chip reads **Read
+archived notes**. Nothing is written or restored by that read.
+
+What comes back is a short list of rows, ten at most unless the room
+asks for more, never more than twenty-five, grouped by where they were
+found: Notes, Archive, Conversations. Each row carries its date and
+where it came from: "from a conversation on 2025-03-12", or "archived
+2025-06-02, replaced by a newer note". A note row is the whole note; a
+conversation row is the message itself, up to about 1,200 characters.
+Here the Suppliers note comes first, and the March message is a few
+rows below it with the day, the amount and the reference. The room
+answers "On 12 March 2025, 55,000 euros, reference RE-2025-0347" and
+says nothing about having searched; ask where that comes from and it
+names the conversation and its date.
+
+Why the words met, although you never wrote them the same way twice:
+
+- **Rare words weigh most.** "Gschwendtner" appears in two rows of the
+  whole memory, "invoices" in many. A row with the rare word ranks far
+  above a row with only the common one. This is why a name, a reference
+  number or an unusual term is the best thing to ask with.
+- **Word forms meet.** "invoices" finds "invoice", "ordered" finds
+  "orders". A word of five letters or more also finds the words that
+  start with it: "roofer" finds "roofing". Case and accents never
+  matter.
+- **Dates meet in the forms people write.** "12.03.2025", "2025-03-12"
+  and "March 12, 2025" are the same day; "March 2025" and "2025-03" find
+  every row from that month; "Q3" finds "third quarter".
+- **Numbers meet in the forms people write.** "55.000", "55,000" and
+  "55k" are the same number.
+
+What the recall costs. The rows enter the conversation like any other
+tool result: the context meter goes up by their size, and they stay
+in the conversation until it ends, so every later turn of that
+conversation carries them and the wallet counts them each time. The
+room caps the list at about eight percent of the model's window, so one
+recall never crowds out the conversation; on a 128k model that is at
+most about 10,000 tokens, and in practice a handful of rows is far less.
+
+What it cannot do. It matches words, not meaning. "The roofer" does not
+find "Gschwendtner", "bill" does not find "invoice", and "paid the
+bill" does not find "settled the invoice". That is search by meaning,
+and it is left out on purpose: it needs a second model or a downloaded
+index, costs tokens or disk on every save, and its misses are harder to
+explain than a word that was not there. The room is told to search
+again in other words before it concludes something is not there; you
+can help it the same way, by asking with the name, the number or the
+date you remember. It also does not search a conversation you have not
+memorized: one you remembered and not yet memorized is still in the
+room's recent memory and needs no search, and one you never remembered
+is not kept for searching at all.
 
 Nothing enters or leaves memory without you:
 
@@ -54,12 +161,21 @@ Nothing enters or leaves memory without you:
    to the archive; **Keep** marks one that must stay, and you can raise
    the budget from the card so that everything fits.
 3. **Review**: tidies the notes you already have, topic by topic. Its
-   first read lists what the room finds by itself ("Says the same twice",
-   "Topics that look the same") and what looks stale or could be shorter.
-   You choose a depth: wording only, or wording plus moving what is
-   finished or stale to the archive; the room recommends one. The card
-   shows each topic's before and after. Review never rewrites the memory
-   as one block of text, so it completes on any model.
+   first read lists what the room finds by itself: notes that say the
+   same thing twice, notes that disagree with each other (the same words
+   with another date, number or negation), and topics that look the
+   same; and what looks stale or could be shorter. You choose a depth:
+   wording only, or wording plus moving what is finished or stale to the
+   archive; the room recommends one. The card shows each topic's before
+   and after. Review never rewrites the memory as one block of text, so
+   it completes on any model.
+
+A Memorize whose conversation changes a value the memory already holds
+is told to replace the note rather than add a second one (a number that
+opens a note, such as a ticket or invoice number, is its name and never
+counts as a changed value), and the card
+says which value replaced which and why: "1 July (saved 14 Sep)
+replaces 1 June (saved 2 Jun); the newer date decides".
 
 Every save archives the previous memory file and writes an event record
 with content fingerprints. **History** shows every change with "What
@@ -104,12 +220,27 @@ is 20,000 tokens, adjustable in Room settings between 10,000 and
 everywhere else the room says how full its memory is.
 
 The budget is enforced when memory is saved: when a Memorize or Review
-would leave the room over it, the lowest-ranked notes move to the
-archive (pinned notes never; working-style notes last; the least
-recently touched first), the card lists them, and you decide: keep,
-raise the budget, or save as proposed. A room can be above its budget
-in between, for instance after hand edits; it keeps working, reads in a
-neutral colour everywhere, and the next Memorize or Review resolves it.
+would leave the room over it, the notes worth the least move to the
+archive, the card lists them, and you decide: keep, raise the budget,
+or save as proposed. Pinned notes never move, and neither do open
+items; a room with more open items than its budget can hold says so on
+the card ("N open items are kept; close them to free room") rather
+than moving one out. Among the rest, what a note is worth comes from
+four things: what kind of note it is (a working-style note is worth the
+most, a fact less, an event or a closed item the least), whether the
+room ever looked it up, how recently it was touched, and how much room
+it takes, so that between two notes worth the same the larger one
+leaves first. Use counts a lot: a fact the room has recalled about
+three times ranks with a working-style note it never recalled, and
+about seven recalls lift it past. A room migrated from an older
+memory starts with one saved day for every note, so there, among
+notes of one kind the room has not looked up, size is what orders
+them until they are touched
+again. Every note the card proposes to move says why in one sentence,
+in the terms that decided it: "not touched since 2 Mar, never
+recalled". A room can be above its budget in between,
+for instance after hand edits; it keeps working, reads in a neutral
+colour everywhere, and the next Memorize or Review resolves it.
 
 One refusal can meet you at the door: a room whose memory and setup no
 longer fit the usable window of its model refuses to start a
@@ -141,6 +272,67 @@ own words. There are no magic phrases: explicit remember-requests are
 detected and protected regardless of phrasing. To make the room forget
 something, open Room settings → Memory and delete or edit the note;
 there is no chat-side forget yet.
+
+## How well it works, measured
+
+A room answers as well as a model that has the whole history in view,
+with about a fifth of the tokens per question.
+
+That was measured on LongMemEval-S, a public benchmark of long chat
+histories, on a fixed sample of 50 questions (seed 1). Every question
+comes with a history of its own, about 48 conversations and 115,000
+tokens. For the room, the conversations are Remembered and Memorized
+in the order they were said, and the question is asked in a fresh
+conversation. For the comparison, the whole history is pasted into the
+prompt with the question after it, and there is no memory at all.
+Claude Sonnet 5 answers, runs Memorize and judges, on the benchmark's
+own judging templates.
+
+| | Room memory | Full history in the prompt |
+| --- | --- | --- |
+| Correct of 50 | 43 | 41 |
+| Tokens per question | about 33,000 | about 168,000 |
+| Tokens to build the memory, once per history | about 1.15M | none |
+| Cost per question | about 6 cents | about 42 cents |
+| Cost to build the memory, once per history | about 3.23 dollars, about 7 cents per conversation | nothing |
+
+43 against 41 correct on 50 questions, which at this sample size is a
+tie. The two cost rows are in dollars at API prices; someone on a
+subscription pays no per-token price.
+
+By type of question, room memory first and the full history second:
+
+- a fact the user said once: 9 of 9 and 9 of 9
+- a fact the assistant said once: 9 of 9 and 9 of 9
+- temporal reasoning: 8 of 8 and 7 of 8
+- across many sessions: 7 of 8 and 6 of 8
+- knowledge updates: 6 of 8 and 6 of 8
+- personal preferences: 4 of 8 and 4 of 8
+
+**A projection, not a measurement.** Each history was asked one
+question. Multiplying that one question, the two approaches cost the
+same after about 9 questions to one history. This assumes that every
+question costs the same and that nothing is cached between questions;
+questions asked minutes apart would make the full-history side cheaper.
+
+The limits of this result:
+
+- It is 50 questions. A difference under about 7 questions is within
+  chance.
+- The sample was also the one used during development, so a fresh
+  sample is the clean confirmation.
+- The same model answers and judges.
+- The benchmark is personal chat with a scripted user who Remembers
+  everything, not project work.
+- It was measured with Memorize on Claude Sonnet 5. The Claude
+  profile's default runs Memorize on Opus 5.5, which was not measured.
+- Personal preferences are weak with and without memory, because a
+  Memorize is tuned for how work is done, not for personal taste.
+
+A history that outgrows the model's window cannot be pasted in at all.
+
+How to run it again is in the bench's own
+[README](../apps/web-server/scripts/memory-bench/README.md#published-results).
 
 ## CLI memory (ExxCode)
 

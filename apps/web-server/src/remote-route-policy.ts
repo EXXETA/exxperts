@@ -151,6 +151,8 @@ const POLICY: Record<string, RemoteRouteClass> = {
 	"GET /api/persistent-agents/:id/memory/history": "read",
 	"GET /api/persistent-agents/:id/bash-settings": "read",
 	"GET /api/persistent-agents/:id/preferred-model": "read",
+	"GET /api/persistent-agents/:id/instructions": "read",
+	"GET /api/settings/instructions": "read",
 	"GET /api/persistent-agents/:id/mcp-connectors": "read",
 	"GET /api/persistent-agents/:id/skill-settings": "read",
 	"GET /api/persistent-agents/:id/workspace-default": "read",
@@ -213,6 +215,14 @@ const POLICY: Record<string, RemoteRouteClass> = {
 	"POST /api/persistent-agents/:id/tasks/:taskId/viewed": "write",
 	"PUT /api/persistent-agents/:id/threads/:threadId": "write",
 	"PUT /api/persistent-agents/:id/preferred-model": "write",
+	// The room's standing instructions are prompt text the user owns, like a
+	// memory note edited by hand: they change what the room is told, never
+	// what it may do, so a full-capability device may save them.
+	"PUT /api/persistent-agents/:id/instructions": "write",
+	// The global text and a room's switch for it change what rooms are told,
+	// never what they may do: the same class as the room's own text.
+	"PUT /api/settings/instructions": "write",
+	"PUT /api/persistent-agents/:id/instructions/global": "write",
 	"DELETE /api/persistent-agents/:id/threads/:threadId": "write",
 
 	// Rooms: capability-widening settings. Loopback only: a phone must never

@@ -51,8 +51,8 @@ try {
 	assert(profiles.SCHEDULED_ROOM_MODEL_POLICY_KEY === "scheduledRoom", "scheduledRoom policy key should be exported");
 
 	const expectedBuiltInModels: Record<BuiltInPersistentAgentAiProfileId, PersistentAgentModelLock> = {
-		"chatgpt-codex": { provider: "openai-codex", model: "gpt-5.6-sol" },
-		anthropic: { provider: "anthropic", model: "claude-opus-5" },
+		"chatgpt-codex": { provider: "openai-codex", model: "gpt-6-sol" },
+		anthropic: { provider: "anthropic", model: "claude-opus-5-5" },
 	};
 
 	for (const [profileId, expected] of Object.entries(expectedBuiltInModels) as Array<[BuiltInPersistentAgentAiProfileId, PersistentAgentModelLock]>) {

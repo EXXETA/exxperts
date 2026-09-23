@@ -550,6 +550,8 @@ export type ArchiveRow = EntryCard & {
 	phase: "before" | "after";
 	/** Position in the demotion order, 0 leaves first. Rows within a topic come rank ascending; topics keep document order. */
 	rank: number;
+	/** Why the ranking put it here, in a person's words: "not touched since 2 Mar, never recalled, 280 tokens". */
+	reason: string;
 };
 
 /** The archive list and the keep sets of a run, as both engines report them. */
@@ -560,6 +562,8 @@ export interface RunDemotion {
 	/** Topics the person protected for this run: no note of these topics leaves. "Deep Memory/Nordwind integration", section and title. */
 	keepTopics: string[];
 	overageTokens: number;
+	/** Open items the pass left in place while the limit was still not met: they are protected outright, and this is what the protection cost. 0 when the limit was met. */
+	protectedOpenItems: number;
 	/** The counts the card shows; computed by the server, never in the browser. */
 	counts: { leaving: number; kept: number; instead: number; staying?: number };
 }
@@ -646,6 +650,10 @@ export interface ReviewAssessmentFields {
 	saysTheSameTwice?: string[];
 	/** The same pairs by id and topic, for the tidy; never shown. */
 	duplicateNotes?: { ids: [string, string]; topics: [string, string] }[];
+	/** Notes that share their words but disagree on a date, a number or a negation, as sentences; the machine finds them. Absent on an older server. */
+	disagree?: string[];
+	/** The same pairs by id and topic, for the tidy; never shown. */
+	conflictNotes?: { ids: [string, string]; topics: [string, string] }[];
 	/** Two topic titles that look like one topic, as sentences. Absent on an older server. */
 	topicsThatLookTheSame?: string[];
 	/** The same pairs by title, for the tidy; never shown. */
@@ -703,6 +711,8 @@ export interface AbsorbRunChange {
 	after?: string;
 	/** An add that created its topic in this run: the first note under a title the memory did not have. */
 	newTopic?: true;
+	/** superseded: which value replaced which and why, when the old and the new text disagree on a date, a number or a negation. */
+	reason?: string;
 }
 
 export interface AbsorbRunSession {
@@ -784,6 +794,10 @@ export interface ReviewRunChange {
 	notesMoved?: number;
 	/** archived as duplicate: the note that already says it, and the topic it sits under. */
 	duplicateOf?: { id: string; topic: string };
+	/** merged, when the merge resolved two notes that disagreed: which value replaced which and why, shown under the row. */
+	reason?: string;
+	/** merged, for the same rows: the note that left, and the topic it sat under. */
+	conflictWith?: { id: string; topic: string };
 }
 
 /** A group of topics whose tidy never came back in a form the memory could accept. */
@@ -979,6 +993,36 @@ export interface PersistentAgentMementoRuntimeBoundary {
 	newRuntime: PersistentAgentPiSessionJsonlThreadRuntime;
 }
 
+/** Room settings → Instructions: the user's standing text for how the room works. */
+export interface PersistentRoomInstructions {
+	/** Normalized text; "" when the room has no instructions. */
+	text: string;
+	fingerprint: string | null;
+	updatedAt: string | null;
+	/** Set when something sits at the file's path but cannot be read as the file; new conversations start without it. */
+	unreadable?: string;
+}
+
+export interface PersistentRoomInstructionsResponse {
+	agentId: PersistentAgentId;
+	instructions: PersistentRoomInstructions;
+	/** The cap the server enforces; the pane counts against the same number. */
+	maxChars: number;
+	/** The global instructions and this room's switch for them. Absent on an older server. */
+	global?: {
+		instructions: PersistentRoomInstructions;
+		enabled: boolean;
+		/** When this room last flipped its switch; null when it never did (the default, on). */
+		updatedAt: string | null;
+	};
+}
+
+/** Settings → Instructions: the one text every room follows before its own, unless a room switched it off. */
+export interface GlobalInstructionsResponse {
+	instructions: PersistentRoomInstructions;
+	maxChars: number;
+}
+
 export interface PersistentAgentMementoBoundaryResponse {
 	agentId: PersistentAgentId;
 	conversationId: string;
@@ -1082,6 +1126,8 @@ export interface PersistentAgentPiSessionJsonlThreadRuntime {
 	bootPromptSnapshotRelPath: string;
 	bootPromptSha256: string;
 	l1bFingerprint: L1bSourceFingerprint;
+	/** sha256 of the instructions layer the thread booted with, null for none; absent on records from before the field. */
+	instructionsFingerprint?: string | null;
 	createdAt: number;
 	leafId?: string;
 }

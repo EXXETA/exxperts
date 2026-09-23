@@ -38,6 +38,7 @@
 //   canonical layout; that first render is the migration write, and every
 //   render after it is a fixed point.
 
+import type { MemoryUse } from "./memory-use.js";
 import { estimateTokens, estimateTokensFromChars } from "./token-estimate.js";
 
 // --- The model ---------------------------------------------------------------
@@ -487,9 +488,15 @@ export function nextVersionedEntryId(id: string, taken: Iterable<string>): strin
  * (the text rule); everything else is a fact. A person cannot change a kind by
  * hand yet, so a call these rules get wrong stands until a Memorize or Review
  * rewrites the note.
+ *
+ * Both rules read English and German. The word edges are Unicode lookarounds,
+ * not `\b`: `\b` only knows ASCII letters, so it would sit inside "Präferenzen"
+ * wherever an umlaut meets a letter and never at the edge of a word that starts
+ * or ends with one. A compound is not a match ("Spielregeln" is not "Regeln"),
+ * and neither is a look-alike opening ("Immerhin" is not "immer").
  */
-export const MIGRATION_PRACTICE_TITLE_RULE = /\b(working style|working-style|preferences?|practices?|conventions?|guidelines?|rules?|how (we|i|to) work|style guide|ways of working)\b/i;
-export const MIGRATION_PRACTICE_TEXT_RULE = /^(always|never|prefer|avoid|do not|don't|use|ask before|keep)\b|^(when|whenever|before|after) /i;
+export const MIGRATION_PRACTICE_TITLE_RULE = /(?<![\p{L}\p{N}])(working style|working-style|preferences?|practices?|conventions?|guidelines?|rules?|how (we|i|to) work|style guide|ways of working|arbeitsweise|vorgehen|regeln|präferenzen|konventionen|richtlinien|zusammenarbeit|gewohnheiten|so arbeiten wir)(?![\p{L}\p{N}])/iu;
+export const MIGRATION_PRACTICE_TEXT_RULE = /^(always|never|prefer|avoid|do not|don't|use|ask before|keep|immer|nie|niemals|bitte stets|bitte immer|wir halten es so|grundsätzlich|stets|vermeide|verwende|nutze|frage? vorher|keine)(?![\p{L}\p{N}])|^(when|whenever|before|after) /iu;
 
 /** The kind migration gives a Deep Memory entry: the two rules above, in that order. */
 function migratedDeepMemoryKind(topicTitle: string, text: string): EntryKind {
@@ -865,38 +872,160 @@ export function findEntryLocation(doc: MemoryDocument, id: string): { entry: Mem
 
 // --- Ranking and demotion ----------------------------------------------------
 
-function kindRank(kind: EntryKind): number {
-	// Practices are what works; they outrank facts and items when the budget bites.
-	return kind === "practice" ? 1 : 0;
+/**
+ * THE SCORE. Every constant of the demotion order in one place, so the bench
+ * prints them beside its numbers and a change to the order is a change here.
+ * A note's score is kind + use + recency − size; the lowest leaves first.
+ *   practiceWeight, factWeight, eventWeight, doneItemWeight — what the kind is
+ *     worth on its own: a practice is what works, a fact is what is known, an
+ *     event and a finished item are what happened.
+ *   useCap — the use term is log2(1 + refs + recalls), capped here: three
+ *     uses lift a fact level with a practice never recalled, seven lift it one
+ *     past, and the cap stops it there, so a note that is read is kept and a
+ *     note that is merely read often is not kept above everything.
+ *   recencyWeight, recencyHorizonDays — the recency term falls from the weight
+ *     at a touch today to nothing at the horizon; past it a note is simply old,
+ *     and one untouched for a year scores as one untouched for two.
+ *   sizeDivisor, sizeCap — the size term is estimated tokens over the divisor,
+ *     capped, so among notes worth the same the one that costs more leaves first.
+ */
+export const DEMOTION_SCORE = {
+	practiceWeight: 3,
+	factWeight: 1,
+	eventWeight: 0,
+	doneItemWeight: 0,
+	useCap: 3,
+	recencyWeight: 2,
+	recencyHorizonDays: 365,
+	sizeDivisor: 50,
+	sizeCap: 4,
+} as const;
+
+export interface RankedEntry extends MemoryEntry {
+	/** Higher keeps; the order leaves the lowest first. */
+	score: number;
+	/** The deciding terms in a person's words, e.g. "not touched since 2 Mar, never recalled, 280 tokens". Never empty. */
+	reason: string;
+}
+
+/** Today as the local YYYY-MM-DD: the day a person reading the card is in. */
+function localDay(date = new Date()): string {
+	return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+/** A YYYY-MM-DD as a day count, NaN when the field does not hold a date. */
+function dayNumber(day: string): number {
+	const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(day);
+	if (!match) return Number.NaN;
+	return Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])) / 86_400_000;
+}
+
+const MONTH_WORDS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/** "2 Mar", with the year only when it is not today's: "2 Mar 2025". */
+export function dayWords(day: string, today: string): string {
+	const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(day);
+	if (!match) return day;
+	const year = match[1] === today.slice(0, 4) ? "" : ` ${match[1]}`;
+	return `${Number(match[3])} ${MONTH_WORDS[Number(match[2]) - 1] ?? match[2]}${year}`;
+}
+
+/** "May", with the year only when it is not today's: "May 2025". */
+function monthWords(day: string, today: string): string {
+	const match = /^(\d{4})-(\d{2})/.exec(day);
+	if (!match) return day;
+	const year = match[1] === today.slice(0, 4) ? "" : ` ${match[1]}`;
+	return `${MONTH_WORDS[Number(match[2]) - 1] ?? match[2]}${year}`;
+}
+
+function useWords(count: number): string {
+	if (count <= 0) return "never recalled";
+	if (count === 1) return "recalled once";
+	if (count === 2) return "recalled twice";
+	return `recalled ${count} times`;
+}
+
+function kindWeight(entry: MemoryEntry): number {
+	switch (entry.kind) {
+		case "practice": return DEMOTION_SCORE.practiceWeight;
+		case "fact": return DEMOTION_SCORE.factWeight;
+		case "event": return DEMOTION_SCORE.eventWeight;
+		default: return DEMOTION_SCORE.doneItemWeight;
+	}
+}
+
+/**
+ * The reason in a person's words: the terms that decided the score, joined
+ * with commas. The date always comes first — as the kind's own phrase for an
+ * event or a done item, else as the last touch — then the use, then the size
+ * when it is worth naming. Two terms at the least, so a reason is never a bare
+ * "never recalled".
+ */
+function demotionReason(entry: MemoryEntry, input: { useCount: number; days: number; today: string; tokens: number; oldestOfKind: boolean }): string {
+	const parts: string[] = [];
+	const touched = entry.updated ?? entry.saved;
+	if (entry.kind === "item") parts.push(`done item from ${monthWords(entry.saved, input.today)}`);
+	else if (entry.kind === "event") parts.push(`event from ${dayWords(entry.saved, input.today)}`);
+	// The kind's phrase already names the day when the note was never touched
+	// after it was saved; the same date twice would read as two reasons.
+	const dateNamed = parts.length > 0 && touched === entry.saved;
+	if (!dateNamed) {
+		if (Number.isNaN(input.days)) parts.push("date unknown");
+		else if (input.days > 30) parts.push(`not touched since ${dayWords(touched, input.today)}`);
+		else if (input.days <= 0) parts.push("touched today");
+		else if (input.days === 1) parts.push("touched yesterday");
+		else parts.push(`touched ${input.days} days ago`);
+	}
+	parts.push(input.useCount > 0 && input.oldestOfKind ? `${useWords(input.useCount)} but the oldest of its kind` : useWords(input.useCount));
+	if (input.tokens >= 100) parts.push(`${input.tokens} tokens`);
+	return parts.join(", ");
 }
 
 /**
  * The demotion order, lowest value first — deterministic and total.
- * Pinned entries are not in it at all. Then, in order: practices rank above
- * facts and items; the more recently touched (`updated`, falling back to
- * `saved`) ranks higher; more `refs` ranks higher; ties go to the oldest
- * saved-on; the last tie-break is the id.
+ * Pinned entries are not in it at all, and neither is an open item: a thread
+ * still open is protected outright, whatever it costs. Every other entry gets
+ * the score `DEMOTION_SCORE` describes — its kind, its use (refs and the
+ * recalls `use` counts), how recently it was touched (`updated`, falling back
+ * to `saved`, measured to `today`) and, against it, its size — and the order
+ * is the score ascending. On a tie the larger entry leaves first, then the
+ * oldest saved-on; the last tie-break is the id. Each entry carries its score
+ * and the reason a person reads on the card.
  */
-export function rankEntriesForDemotion(doc: MemoryDocument): MemoryEntry[] {
-	const entries = doc.topics.flatMap((t) => t.entries).filter((e) => !e.pinned);
-	return entries.sort((a, b) => {
-		const kinds = kindRank(a.kind) - kindRank(b.kind);
-		if (kinds !== 0) return kinds;
-		const touched = (a.updated ?? a.saved).localeCompare(b.updated ?? b.saved);
-		if (touched !== 0) return touched;
-		const refs = (a.refs ?? 0) - (b.refs ?? 0);
-		if (refs !== 0) return refs;
-		const saved = a.saved.localeCompare(b.saved);
-		if (saved !== 0) return saved;
-		return a.id.localeCompare(b.id);
+export function rankEntriesForDemotion(doc: MemoryDocument, opts: { use?: MemoryUse; today?: string } = {}): RankedEntry[] {
+	const today = opts.today ?? localDay();
+	const todayNumber = dayNumber(today);
+	const entries = doc.topics.flatMap((t) => t.entries).filter((e) => !e.pinned && !(e.kind === "item" && e.status === "open"));
+	const scored = entries.map((entry) => {
+		const useCount = (entry.refs ?? 0) + (opts.use?.notes[entry.id]?.hits ?? 0);
+		const touched = dayNumber(entry.updated ?? entry.saved);
+		const days = Number.isNaN(touched) ? Number.NaN : Math.max(0, Math.round(todayNumber - touched));
+		const tokens = entryTokens(entry);
+		const use = Math.min(DEMOTION_SCORE.useCap, Math.log2(1 + useCount));
+		const recency = Number.isNaN(days) ? 0 : DEMOTION_SCORE.recencyWeight * Math.max(0, 1 - days / DEMOTION_SCORE.recencyHorizonDays);
+		const size = Math.min(DEMOTION_SCORE.sizeCap, tokens / DEMOTION_SCORE.sizeDivisor);
+		return { entry, useCount, days, tokens, score: kindWeight(entry) + use + recency - size };
+	});
+	scored.sort((a, b) => a.score - b.score || b.tokens - a.tokens || a.entry.saved.localeCompare(b.entry.saved) || a.entry.id.localeCompare(b.entry.id));
+	// "The oldest of its kind": the first of its kind to leave, and none of its
+	// kind was touched longer ago — the shape a person needs when a note they
+	// did use leaves only because it is the oldest practice, say.
+	const firstOfKind = new Set<EntryKind>();
+	return scored.map((row) => {
+		const first = !firstOfKind.has(row.entry.kind);
+		firstOfKind.add(row.entry.kind);
+		const oldestOfKind = first && row.days > 30 && scored.every((other) => other.entry.kind !== row.entry.kind || !(other.days > row.days));
+		return { ...row.entry, score: row.score, reason: demotionReason(row.entry, { useCount: row.useCount, days: row.days, today, tokens: row.tokens, oldestOfKind }) };
 	});
 }
 
 export interface DemotionResult {
 	doc: MemoryDocument;
-	demoted: MemoryEntry[];
+	demoted: RankedEntry[];
 	/** Estimated tokens still over budget when nothing demotable is left; 0 when the budget was reached. */
 	overageTokens: number;
+	/** Open items the pass left in place while the budget was still not met — what the protection cost; 0 when the budget was reached. */
+	protectedOpenItems: number;
 }
 
 /**
@@ -913,12 +1042,14 @@ function contextEntryChars(entry: MemoryEntry, eol: string): number {
  * Brings Deep Memory + Active Items under the room's budget by taking entries
  * off the bottom of the ranking. Pinned entries, `keepIds` and every entry of a
  * topic in `keepTopics` (addresses as `memoryTopicAddress` writes them) are
- * never taken. `today` is the run's date: what this run just saved goes last,
+ * never taken, and neither is an open item (the ranking leaves it out). `today`
+ * is the run's date: what this run just saved goes last, whatever its score,
  * so a fold's own material is never archived by the same run's budget pass
- * unless nothing else is left. Pure — it returns a new document and the
- * entries that left; writing them to the archive is the caller's step.
+ * unless nothing else is left. `use` is the room's recall counter, a ranking
+ * input. Pure — it returns a new document and the entries that left, each
+ * with its score and reason; writing them to the archive is the caller's step.
  */
-export function demoteToBudget(doc: MemoryDocument, budgetTokens: number, opts: { keepIds?: string[]; keepTopics?: string[]; today: string }): DemotionResult {
+export function demoteToBudget(doc: MemoryDocument, budgetTokens: number, opts: { keepIds?: string[]; keepTopics?: string[]; today: string; use?: MemoryUse }): DemotionResult {
 	const next = cloneDocument(doc);
 	const eol = memoryDocumentEol(next);
 	const keep = new Set(opts.keepIds ?? []);
@@ -928,20 +1059,26 @@ export function demoteToBudget(doc: MemoryDocument, budgetTokens: number, opts: 
 			if (keptTopics.has(memoryTopicAddressKey(memoryTopicAddress(topic.section, topic.title)))) for (const entry of topic.entries) keep.add(entry.id);
 		}
 	}
-	const ranked = rankEntriesForDemotion(next).filter((e) => !keep.has(e.id));
+	const ranked = rankEntriesForDemotion(next, { today: opts.today, use: opts.use }).filter((e) => !keep.has(e.id));
 	const order = [...ranked.filter((e) => e.saved !== opts.today), ...ranked.filter((e) => e.saved === opts.today)];
-	const demoted: MemoryEntry[] = [];
+	const demoted: RankedEntry[] = [];
 	let chars = renderSection(next, "Deep Memory", "context", eol).length + renderSection(next, "Active Items", "context", eol).length;
 	for (const entry of order) {
 		if (estimateTokensFromChars(chars) <= budgetTokens) break;
 		for (const topic of next.topics) {
-			const at = topic.entries.indexOf(entry);
+			const at = topic.entries.findIndex((e) => e.id === entry.id);
 			if (at >= 0) { topic.entries.splice(at, 1); break; }
 		}
 		chars -= contextEntryChars(entry, eol);
 		demoted.push(entry);
 	}
-	return { doc: next, demoted, overageTokens: Math.max(0, estimateTokensFromChars(chars) - budgetTokens) };
+	const overageTokens = Math.max(0, estimateTokensFromChars(chars) - budgetTokens);
+	// What the open-item protection cost: the open items still in place when
+	// the budget could not be met and neither a pin nor a keep held them.
+	const protectedOpenItems = overageTokens > 0
+		? next.topics.flatMap((t) => t.entries).filter((e) => e.kind === "item" && e.status === "open" && !e.pinned && !keep.has(e.id)).length
+		: 0;
+	return { doc: next, demoted, overageTokens, protectedOpenItems };
 }
 
 // --- The archive file (`L1b/archive/entries.md`) ------------------------------

@@ -277,10 +277,31 @@ export interface AbsorbRecentContextSession {
 	/** The block as it stands in Recent Context, heading line included. */
 	text: string;
 	tokens: number;
+	/** The conversation this entry was made from, read off the entry's rc_metadata comment; absent on an entry written by hand. */
+	conversationId?: string;
+	/** The Remember (checkpoint event) that wrote this entry, read off the same comment; absent on an entry written by hand. */
+	checkpointId?: string;
 }
 
 const ISO_DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
 const RC_HEADING_LINE = /^###\s+(RC-[^\s|]+).*$/gm;
+const RC_METADATA_COMMENT = /<!--\s*rc_metadata:([\s\S]*?)-->/;
+
+/**
+ * The names the checkpoint gate stamped into an entry: which Remember wrote it
+ * and which conversation it was made from. A Recent Context id is handed back
+ * to a later conversation once a Memorize empties the section, so these two
+ * are the only exact way to say which conversation a folded entry was, and
+ * the run copies them into its record while the entry is still in the file.
+ * An entry without the comment names nothing.
+ */
+function recentContextEntryNames(text: string): { conversationId?: string; checkpointId?: string } {
+	const meta = text.match(RC_METADATA_COMMENT);
+	if (!meta) return {};
+	const conversationId = meta[1].match(/conversation_id=([^;\s]+)/)?.[1];
+	const checkpointId = meta[1].match(/checkpoint_id=([^;\s]+)/)?.[1];
+	return { ...(conversationId ? { conversationId } : {}), ...(checkpointId ? { checkpointId } : {}) };
+}
 
 interface RecentContextBlock {
 	id: string;
@@ -326,7 +347,7 @@ export function recentContextSessions(recentContext: string): AbsorbRecentContex
 			const fields = headingFields(heading);
 			const date = fields.find((field) => ISO_DATE_ONLY.test(field)) ?? "";
 			const title = fields.slice(1).filter((field) => field !== date && !/^(OPEN|CLOSED)$/i.test(field)).join(" | ") || block.id;
-			return { id: block.id, title, date, text: block.text, tokens: estimateTokens(block.text) };
+			return { id: block.id, title, date, text: block.text, tokens: estimateTokens(block.text), ...recentContextEntryNames(block.text) };
 		});
 }
 
