@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { growthAxisTicks } from "../memory-growth-axis";
 import { fmtMemoryDay } from "../memory-surface-copy";
 
 // One save of a room's memory as the server records it (/api/memory rooms'
@@ -58,7 +59,7 @@ export function MemoryGrowthChart({ series, budgetTokens, height = 300, markerTs
 	const H = height;
 	const padL = 40; // fits a "120k" axis label
 	const padT = 14;
-	const padB = 38; // two label rows under the axis: save kinds, then date anchors
+	const padB = 38; // the date labels under the axis
 	const padR = 52; // room for the "budget" label at the line's right end
 	const iW = W - padL - padR;
 	const iH = H - padT - padB;
@@ -78,8 +79,9 @@ export function MemoryGrowthChart({ series, budgetTokens, height = 300, markerTs
 		return `M ${top.join(" L ")} L ${bot.join(" L ")} Z`;
 	};
 	const ticks = [0, max];
-	const firstTs = series.find((s) => s.ts > 0)?.ts;
-	const lastTs = [...series].reverse().find((s) => s.ts > 0)?.ts;
+	// Dates under the axis: the first and last day and each new month between,
+	// never one per save (x is by save count, so a busy room would smear).
+	const axisTicks = growthAxisTicks(series.map((s) => s.ts), X, padL, W - padR + 6);
 
 	const onEnter = (i: number, e: React.MouseEvent) => {
 		const rect = wrapRef.current?.getBoundingClientRect();
@@ -111,8 +113,9 @@ export function MemoryGrowthChart({ series, budgetTokens, height = 300, markerTs
 						<text x={padL - 6} y={Y(tv) + 3} textAnchor="end" fontSize={9} fill="var(--muted)" fontFamily="var(--exx-font-mono)">{fmtK(tv)}</text>
 					</g>
 				))}
-				{firstTs && <text x={padL} y={H - 6} textAnchor="start" fontSize={9} fill="var(--dim)" fontFamily="var(--exx-font-mono)">{fmtMemoryDay(firstTs)}</text>}
-				{lastTs && lastTs !== firstTs && <text x={W - padR + 6} y={H - 6} textAnchor="end" fontSize={9} fill="var(--dim)" fontFamily="var(--exx-font-mono)">{fmtMemoryDay(lastTs)}</text>}
+				{axisTicks.map((tick) => (
+					<text key={`axis-${tick.kind}-${tick.index}`} x={tick.x.toFixed(1)} y={H - 6} textAnchor={tick.anchor} fontSize={9} fill="var(--dim)" fontFamily="var(--exx-font-mono)">{tick.label}</text>
+				))}
 				{/* Foreground-based fills so the chart reads in both themes. */}
 				<path d={band(() => 0, (s) => s.consolidated)} fill="var(--fg)" opacity={0.18} />
 				<path d={band((s) => s.consolidated, tot)} fill="var(--exx-plan)" opacity={0.8} />
@@ -127,7 +130,7 @@ export function MemoryGrowthChart({ series, budgetTokens, height = 300, markerTs
 						<text x={W - padR + 10} y={Y(budget) + 3} textAnchor="start" fontSize={9} fill="var(--muted)" fontFamily="var(--exx-font-mono)">budget</text>
 					</g>
 				)}
-				{/* Remembers dot the total line; Memorize/Review get a labelled full-height
+				{/* Remembers dot the total line; Memorize/Review get a dashed full-height
 				    tick with their mark on the lasting-notes boundary — the layer those
 				    two saves actually change — and on the total when the two lines part. */}
 				{series.map((s, i) => {
@@ -143,13 +146,11 @@ export function MemoryGrowthChart({ series, budgetTokens, height = 300, markerTs
 							? <path d={d} fill="var(--fg)" stroke="var(--bg)" strokeWidth={1.25} />
 							: <path d={d} fill="var(--bg)" stroke="var(--fg)" strokeWidth={1.75} />;
 					};
-					const anchor = xNum > W - padR - 30 ? "end" : xNum < padL + 30 ? "start" : "middle";
 					return (
 						<g key={`ev-${i}`}>
 							<line x1={x} y1={Y(tot(s)).toFixed(1)} x2={x} y2={padT + iH} stroke="var(--fg-soft)" strokeWidth={1} strokeDasharray="3 3" opacity={0.55} />
 							{mark(Y(s.consolidated))}
 							{Y(tot(s)) - Y(s.consolidated) < -8 && mark(Y(tot(s)))}
-							<text x={x} y={H - 20} textAnchor={anchor} fontSize={9} fill="var(--muted)" fontFamily="var(--exx-font-mono)">{KIND_WORD[s.kind]}</text>
 						</g>
 					);
 				})}

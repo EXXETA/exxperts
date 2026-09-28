@@ -32,10 +32,6 @@ export type PersistentAgentModelLock = {
 	model: string;
 };
 
-export type PersistentAgentCheckpointModelPolicy =
-	| { kind: "inheritPersistentRoom" }
-	| { kind: "fixed"; model: PersistentAgentModelLock };
-
 export type PersistentAgentAiProfile = {
 	id: PersistentAgentAiProfileId;
 	label: string;
@@ -44,7 +40,6 @@ export type PersistentAgentAiProfile = {
 	description: string;
 	processes: {
 		persistentRoom: PersistentAgentModelLock[];
-		checkpoint: PersistentAgentCheckpointModelPolicy;
 		absorb: PersistentAgentModelLock;
 		structuralReview: PersistentAgentModelLock;
 	};
@@ -86,7 +81,6 @@ export const PERSISTENT_AGENT_AI_PROFILES = {
 				{ provider: "openai-codex", model: "gpt-5.6-terra" },
 				{ provider: "openai-codex", model: "gpt-5.6-luna" },
 			],
-			checkpoint: { kind: "inheritPersistentRoom" },
 			absorb: { provider: "openai-codex", model: "gpt-6-sol" },
 			structuralReview: { provider: "openai-codex", model: "gpt-6-sol" },
 		},
@@ -111,7 +105,6 @@ export const PERSISTENT_AGENT_AI_PROFILES = {
 				{ provider: "anthropic", model: "claude-opus-4-7" },
 				{ provider: "anthropic", model: "claude-opus-4-6" },
 			],
-			checkpoint: { kind: "inheritPersistentRoom" },
 			absorb: { provider: "anthropic", model: "claude-opus-5-5" },
 			structuralReview: { provider: "anthropic", model: "claude-opus-5-5" },
 		},
@@ -147,7 +140,6 @@ export function persistentAgentAiProfileFromGateway(gateway: OpenAiCompatibleGat
 		description: "Local OpenAI-compatible gateway profile for persistent-agent room and maintenance workflows.",
 		processes: {
 			persistentRoom: gateway.roomModels.map((model) => ({ provider: gateway.providerId, model: model.modelId })),
-			checkpoint: { kind: "inheritPersistentRoom" },
 			absorb: maintenanceLock,
 			structuralReview: maintenanceLock,
 		},
@@ -224,35 +216,6 @@ export function getPersistentRoomModelLocks(profileId: PersistentAgentAiProfileI
 	return getPersistentAgentAiProfile(profileId).processes.persistentRoom.map(cloneModelLock);
 }
 
-export function getCheckpointModelPolicy(profileId: PersistentAgentAiProfileId = DEFAULT_PERSISTENT_AGENT_AI_PROFILE_ID): PersistentAgentCheckpointModelPolicy {
-	const policy = getPersistentAgentAiProfile(profileId).processes.checkpoint;
-	return policy.kind === "fixed"
-		? { kind: "fixed", model: cloneModelLock(policy.model) }
-		: { kind: "inheritPersistentRoom" };
-}
-
-// The curated list gates a NEW lock. A saved conversation keeps the model it
-// started on even after that model left the list, and Remember on it inherits
-// that same lock: callers pass existingLock for a model a saved thread already
-// carries, and the curated check applies only to a lock nothing carries yet.
-export function resolveCheckpointModelLockForProfile(profileId: PersistentAgentAiProfileId, persistentRoomModel: PersistentAgentModelLock, options: { existingLock?: boolean } = {}): PersistentAgentModelLock {
-	const policy = getCheckpointModelPolicy(profileId);
-	if (policy.kind === "inheritPersistentRoom") {
-		if (!options.existingLock) assertPersistentRoomModelForActiveProfile(profileId, persistentRoomModel.provider, persistentRoomModel.model, "checkpoint compression inherited persistent-room model");
-		return cloneModelLock(persistentRoomModel);
-	}
-	return cloneModelLock(policy.model);
-}
-
-export function resolveScheduledRoomModelLockForProfile(profileId: PersistentAgentAiProfileId): PersistentAgentModelLock {
-	const model = getPersistentAgentAiProfile(profileId).processes.persistentRoom[0];
-	if (!model) {
-		throw new Error(`missing scheduledRoom model policy for active persistent-agent AI profile ${profileId}: no persistentRoom models configured`);
-	}
-	assertPersistentRoomModelForActiveProfile(profileId, model.provider, model.model, "scheduled-room background work");
-	return cloneModelLock(model);
-}
-
 export function getAbsorbModelLock(profileId: PersistentAgentAiProfileId = DEFAULT_PERSISTENT_AGENT_AI_PROFILE_ID): PersistentAgentModelLock {
 	return cloneModelLock(getPersistentAgentAiProfile(profileId).processes.absorb);
 }
@@ -269,21 +232,4 @@ export function getConsultModelLock(profileId: PersistentAgentAiProfileId = DEFA
 
 export function isPersistentRoomModelForProfile(profileId: PersistentAgentAiProfileId, provider: string, model: string): boolean {
 	return getPersistentAgentAiProfile(profileId).processes.persistentRoom.some((candidate) => candidate.provider === provider && candidate.model === model);
-}
-
-export function persistentRoomProfileIdsForModel(provider: string, model: string): PersistentAgentAiProfileId[] {
-	return getAvailablePersistentAgentAiProfiles()
-		.filter((profile) => isPersistentRoomModelForProfile(profile.id, provider, model))
-		.map((profile) => profile.id);
-}
-
-export function isPersistentRoomModelKnown(provider: string, model: string): boolean {
-	return persistentRoomProfileIdsForModel(provider, model).length > 0;
-}
-
-export function assertPersistentRoomModelForActiveProfile(profileId: PersistentAgentAiProfileId, provider: string, model: string, processLabel = "persistent-agent rooms"): void {
-	if (isPersistentRoomModelForProfile(profileId, provider, model)) return;
-	const knownProfiles = persistentRoomProfileIdsForModel(provider, model);
-	if (knownProfiles.length > 0) throw new Error(`model is not approved for active persistent-agent AI profile ${profileId} for ${processLabel}: ${provider}/${model}`);
-	throw new Error(`model is not approved for ${processLabel}: ${provider}/${model}`);
 }

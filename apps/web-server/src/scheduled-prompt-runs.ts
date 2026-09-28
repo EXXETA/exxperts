@@ -1,11 +1,11 @@
 import { createBackgroundRun } from "./background-runs.js";
 import type { BackgroundRunRecord, BackgroundRunStatus, BackgroundRunTarget, BackgroundRunTrigger } from "./background-runs.js";
 import {
-	resolveScheduledRoomModelLockForProfile,
 	SCHEDULED_ROOM_MODEL_POLICY_KEY,
 } from "./persistent-agent-ai-profiles.js";
 import type { PersistentAgentAiProfileId } from "./persistent-agent-ai-profiles.js";
 import { readPersistentAgentAiProfileState } from "./persistent-agent-ai-profile-state.js";
+import { resolveScheduledRoomModel, RoomModelUnavailableError } from "./room-models.js";
 import { classifyPersistentRoomBackgroundRunTarget } from "./persistent-agents.js";
 import type { PersistentRoomBackgroundRunClassification } from "./persistent-agents.js";
 import {
@@ -190,7 +190,7 @@ function createClassifiedResult(
 		...(activeProfileState.message ? [activeProfileState.message] : []),
 	];
 	try {
-		const model = resolveScheduledRoomModelLockForProfile(activeProfileId);
+		const model = resolveScheduledRoomModel(roomId);
 		return {
 			job,
 			classification,
@@ -209,7 +209,7 @@ function createClassifiedResult(
 			}),
 		};
 	} catch (error) {
-		const message = `Scheduled-room model policy is unavailable for active profile ${activeProfileId}: ${safeErrorMessage(error)}`;
+		const message = error instanceof RoomModelUnavailableError ? error.message : `Scheduled-room model policy is unavailable for active profile ${activeProfileId}: ${safeErrorMessage(error)}`;
 		return createBlockedResult(roomId, scheduleJobId, trigger, dueAt, now, job, "model_policy_unavailable", message, {
 			classification,
 			activeProfileId,

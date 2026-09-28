@@ -134,6 +134,14 @@ async function createRoom(displayName: string): Promise<string> {
 }
 
 async function putThread(agentId: string, threadId: string, modelId: string, items: unknown[]): Promise<void> {
+	// The server decides a new conversation's model: the room's conversation
+	// pick, set first the way Room settings sets it.
+	const pick = await requestJson(`/api/persistent-agents/${agentId}/models`, {
+		method: "PUT",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify({ conversation: { provider: "openai-compatible", model: modelId } }),
+	});
+	assert(pick.status === 200, `the room's conversation pick should be set, got ${pick.status}: ${JSON.stringify(pick.body)}`);
 	const response = await requestJson(`/api/persistent-agents/${agentId}/threads/${threadId}`, {
 		method: "PUT",
 		headers: { "content-type": "application/json" },

@@ -109,8 +109,8 @@ RUNS: the server walks the room's notes a group at a time
 (`review-run.ts`, `absorb-run.ts`), so no single call is asked to
 rewrite a whole memory. Workers run as
 isolated, tool-less sessions (`persistent-agent-worker-runtime.ts`)
-with models locked per AI profile
-(`persistent-agent-ai-profiles.ts`).
+on the room's Memory model (`room-models.ts`), drawn from the models
+each provider approves (`persistent-agent-ai-profiles.ts`).
 
 **CLI sessions** use the runtime's resource loader: context files such
 as a repo-root `AGENTS.md` are auto-loaded, and extensions in
@@ -136,7 +136,7 @@ Current product/app state lives under `~/.exxperts/app/`, including:
 - `personalized-agents/<id>/`: persistent rooms (L1b memory, archives, event records, threads)
 - `conversations/`
 - `persistent-room-schedules/` and `background-runs/`
-- `persistent-agent-ai-profile.json` (active AI profile) and `openai-compatible-ai-profile.json` (gateway policy, when configured)
+- `persistent-agent-ai-profile.json` (the Default models) and `openai-compatible-ai-profile.json` (gateway policy, when configured); each room's Conversation and Memory models live in `personalized-agents/<id>/runtime/models.json`
 - `usage.jsonl`
 - `memory.jsonl` (CLI fact store, created on first use)
 - `agents/`, `skills/`
@@ -165,6 +165,6 @@ See [`packaging-local.md`](packaging-local.md) for packaging validation commands
 - [`how-exxperts-works.md`](how-exxperts-works.md): product architecture: rooms, prompt layers, memory lifecycle.
 - [`memory.md`](memory.md): user-facing memory walkthrough (rooms + CLI).
 - [`l1a-constitution-upgrade.md`](l1a-constitution-upgrade.md): constitution versioning/migration.
-- [`provider-setup.md`](provider-setup.md): AI profiles and provider setup.
+- [`provider-setup.md`](provider-setup.md): provider setup, and which model a room uses.
 - [`mcp.md`](mcp.md)
 - Historical extension and collaboration notes live in the development repository's archive and are not part of public releases.

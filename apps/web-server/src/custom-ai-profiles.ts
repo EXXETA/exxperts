@@ -115,7 +115,6 @@ export function customAiProfileFromEntry(entry: CustomAiProfileEntry): Persisten
 		description: "User-configured provider profile for persistent-agent room and maintenance workflows.",
 		processes: {
 			persistentRoom: entry.roomModels.map((modelId) => ({ provider: entry.providerId, model: modelId })),
-			checkpoint: { kind: "inheritPersistentRoom" },
 			absorb: { provider: entry.providerId, model: entry.learnModel },
 			structuralReview: { provider: entry.providerId, model: entry.reviewMemoryModel },
 		},
@@ -169,8 +168,8 @@ export type CustomAiProfileInput = {
 	providerId: string;
 	label?: string;
 	roomModels: string[];
+	/** The provider's memory model: Memorize and Review both run on it, as a room's one Memory row does. */
 	learnModel: string;
-	reviewMemoryModel: string;
 };
 
 /**
@@ -196,15 +195,14 @@ export function writeCustomAiProfile(input: CustomAiProfileInput, filePath = CUS
 	if (roomModels.length === 0) throw new Error("at least one room model is required");
 	const learnModel = nonEmptyString(input.learnModel);
 	if (!learnModel) throw new Error("learnModel is required");
-	const reviewMemoryModel = nonEmptyString(input.reviewMemoryModel);
-	if (!reviewMemoryModel) throw new Error("reviewMemoryModel is required");
 	const entry: CustomAiProfileEntry = {
 		id: customAiProfileIdForProvider(providerId),
 		providerId,
 		label: nonEmptyString(input.label) ?? providerId,
 		roomModels,
 		learnModel,
-		reviewMemoryModel,
+		// Review follows the memory pick; a file written before keeps what it holds.
+		reviewMemoryModel: learnModel,
 	};
 	const existing = readCustomAiProfiles(filePath).entries.filter((candidate) => candidate.providerId !== providerId);
 	existing.push(entry);

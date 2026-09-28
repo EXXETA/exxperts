@@ -32,8 +32,8 @@
 //      view; a conversation never Remembered has no checkpoint event and is
 //      never indexed, whatever session files the room holds. The transcript
 //      itself is read through the session manager, never by parsing the
-//      session file by hand, so this module reads the same conversation the
-//      compressor read.
+//      session file by hand, and along the whole session path (the reader
+//      Remember uses), so the words before a compaction are findable too.
 //
 // Nothing here writes. Not the memory file, not the settings, not a cache file
 // — the one cache is in this process's memory and is dropped whenever a watched
@@ -47,6 +47,7 @@ import path from "node:path";
 import { MEMORY_ARCHIVE_ENTRIES_FILE, parseMemoryDocument, type ArchivedEntry, type MemoryEntry } from "./memory-entries.js";
 import { readArchive } from "./memory-entries-store.js";
 import { buildIndex, type SearchDocument, type SearchIndex, type SearchSource } from "./memory-search-index.js";
+import { readSessionPathMessages } from "./session-path-reader.js";
 // The reason words live with the tool that reads them back to the room: a
 // person reading a search result and a room reading a recall are reading one
 // archive, and one table is how they keep saying the same thing.
@@ -470,7 +471,7 @@ function conversationDocuments(
 		let turns: TranscriptTurn[];
 		try {
 			const session = openPersistentAgentPiSessionManager(agentId, { sessionFileRelPath: relPath, sessionId }, runtimeCwd);
-			turns = transcriptTurns(session.buildSessionContext().messages);
+			turns = transcriptTurns(readSessionPathMessages(session));
 		} catch (error) {
 			skipped.push({ recentContextId, checkpointId: checkpoint.checkpointId, why: error instanceof Error ? error.message : String(error) });
 			continue;

@@ -41,7 +41,9 @@
  * backlog lean, fractional carry between ticks, and a jank cap so one slow
  * frame cannot burst. When generation finishes ahead of the reveal, the tail
  * keeps draining and the authoritative-text reconciliation waits for the
- * buffer to empty ("draining" phase) — no end-of-message dump.
+ * buffer to empty ("draining" phase), so there is no end-of-message dump.
+ * The host keeps the turn's "working" chrome up until that drain is done, so
+ * the screen and the Stop button agree.
  */
 
 export interface RevealPacing {
@@ -61,6 +63,17 @@ export const DEFAULT_REVEAL_PACING: RevealPacing = {
 	minCharsPerSec: 74,
 	maxCharsPerSec: 131,
 	backlogLean: 0.05,
+	maxTickDtMs: 250,
+};
+
+// Arrival speed, reachable only through the hidden reveal-speed knob
+// ("arrival"): the lean drains any backlog in about 1/backlogLean seconds, so
+// the reveal trails the model by a fraction of a second while a burst still
+// lands over a few frames instead of in one.
+export const ARRIVAL_REVEAL_PACING: RevealPacing = {
+	minCharsPerSec: 400,
+	maxCharsPerSec: 4000,
+	backlogLean: 2,
 	maxTickDtMs: 250,
 };
 

@@ -3,6 +3,7 @@ import { apiFetch } from "../api";
 import type { PersistentAgentMementoBoundaryResponse, PersistentAgentStatus } from "../types";
 import { modelDisplayName, modelTooltipName } from "../model-names";
 import { RsInfo } from "./rs-info";
+import { PaneHeader } from "./pane-header";
 
 async function applyMemento(agentId: string, conversationId: string): Promise<PersistentAgentMementoBoundaryResponse> {
 	const response = await apiFetch(`/api/persistent-agents/${encodeURIComponent(agentId)}/memento`, {
@@ -68,20 +69,13 @@ export function RoomSessionSection({ status, onRefresh, onMementoApplied, onMeme
 		}
 	}
 
-	const head = (
-		<>
-			<header className="rs-pane-head">
-				<h3>Session</h3>
-			</header>
-			<p className="rs-pane-sub">The conversation this room currently has open.</p>
-		</>
-	);
+	const head = <PaneHeader title="Conversation" line="The conversation this room has open right now." />;
 
 	if (!activeThread) {
 		return (
 			<div className="room-session-section">
 				{head}
-				<p className="workspaces-empty-state">No open conversation yet. Forget becomes available once the room has one.</p>
+				<p className="settings-empty">No open conversation yet. Forget becomes available once the room has one.</p>
 				{message && <div className="workspaces-success">{message}</div>}
 			</div>
 		);
@@ -91,25 +85,27 @@ export function RoomSessionSection({ status, onRefresh, onMementoApplied, onMeme
 		<div className="room-session-section">
 			{head}
 			{!confirming && (
-				<div className="rs-row">
-					<div className="rs-row-main">
-						<span className="rs-row-label">
-							Open conversation{modelLabel ? <> on <strong title={modelLabel.title}>{modelLabel.name}</strong></> : null}{busy ? " (in use)" : ""}
-						</span>
-						<span className="rs-row-hint">
-							Forget ends this conversation and starts a fresh one. The room keeps everything already in its memory, and nothing new is saved from this conversation.
-							<RsInfo text="Useful when the conversation is stuck on a model or provider you no longer have access to." />
-						</span>
+				<div className="settings-rows">
+					<div className="settings-row">
+						<div className="settings-row-main">
+							<span className="settings-row-label">
+								Open conversation{modelLabel ? <> on <strong title={modelLabel.title}>{modelLabel.name}</strong></> : null}{busy ? " (in use)" : ""}
+							</span>
+							<span className="settings-row-sub">
+								Forget ends this conversation and starts a fresh one. The room keeps everything already in its memory, and nothing new is saved from this conversation.
+								<RsInfo text="Useful when the conversation is stuck on a model or provider you no longer have access to." />
+							</span>
+						</div>
+						<button className="rs-btn" disabled={submitting} onClick={() => { setConfirming(true); setError(null); setMessage(null); }}>Forget…</button>
 					</div>
-					<button className="rs-btn" disabled={submitting} onClick={() => { setConfirming(true); setError(null); setMessage(null); }}>Forget…</button>
 				</div>
 			)}
 			{confirming && (
 				<div className="room-session-confirm" ref={confirmRef}>
-					<p className="room-danger-note"><strong>Forget this conversation?</strong> It is discarded and the room starts fresh. The room keeps its memory, and nothing from this conversation is added to it.{busy ? " The room is in use right now: any response being written will be stopped and a live session will be closed." : ""}</p>
+					<p className="room-danger-note"><strong>Forget this conversation?</strong> It is discarded and the room starts fresh. The room keeps its memory, and nothing from this conversation is added to it.{busy ? " The room is in use right now: any response being written will be stopped and an open chat with it will be closed." : ""}</p>
 					<div className="room-danger-confirm-actions">
 						<button className="rs-btn" disabled={submitting} onClick={() => void submitMemento()}>{submitting ? "Forgetting…" : "Forget conversation"}</button>
-						<button className="rs-quiet" type="button" disabled={submitting} onClick={() => { setConfirming(false); setError(null); }}>Cancel</button>
+						<button className="rs-btn" type="button" disabled={submitting} onClick={() => { setConfirming(false); setError(null); }}>Cancel</button>
 					</div>
 				</div>
 			)}

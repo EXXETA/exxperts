@@ -115,6 +115,9 @@
 	--exx-radius-pill: 999px;
 	--exx-shadow-hover: 0 2px 8px rgba(0, 0, 0, 0.18);
 	--exx-shadow-popover: 0 8px 28px rgba(0, 0, 0, 0.34);
+	/* The edge of a dialog that dims the page (no shadow): the standard
+	   border in both themes, which the light block's --exx-border sets. */
+	--exx-edge-dialog: var(--exx-border);
 
 	/* Compatibility aliases for the existing stylesheet. */
 	--bg: var(--exx-canvas);
@@ -686,6 +689,7 @@ strong, b { font-weight: 700; }
 	display: flex;
 	flex-shrink: 0;
 }
+.bash-mode-chip-icon { display: none; }
 /* Dressed like the other topbar actions: flat, borderless, a wash on hover.
    The two states differ by their text alone — the room owner asked for no
    alarm color on auto. */
@@ -847,6 +851,22 @@ strong, b { font-weight: 700; }
 	align-items: center;
 	gap: 18px;
 }
+/* One turn: a user message and what answers it (groupIntoTurns). It lays its
+   rows out exactly as the transcript does. The turn just sent is at least as
+   tall as the box's content area, so the message sits at the top and the
+   answer grows into the space below while the viewport stands still; the
+   percentage follows the box on every resize. */
+.transcript-turn {
+	width: 100%;
+	flex-shrink: 0;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: inherit;
+}
+.transcript-turn.reserved {
+	min-height: 100%;
+}
 /* The consult/task dock column above the composer. The wrapper is observed
    (ResizeObserver in InRoomChatShellView) so the messages re-pin to the bottom
    when a dock appears or grows; the fade below marks the scroll boundary as
@@ -865,10 +885,23 @@ strong, b { font-weight: 700; }
 	pointer-events: none;
 	background: linear-gradient(to bottom, transparent, var(--bg));
 }
+/* Under the jump-to-latest pill: the transcript fades out at the box's bottom
+   edge so the pill reads as sitting above the composer, never on a line of
+   text. */
+.jump-to-latest-fade {
+	position: absolute;
+	left: 0;
+	right: 0;
+	bottom: 0;
+	height: 56px;
+	z-index: 4;
+	pointer-events: none;
+	background: linear-gradient(to bottom, transparent, var(--bg) 58%);
+}
 .jump-to-latest {
 	position: absolute;
 	left: 50%;
-	bottom: 14px;
+	bottom: 12px;
 	transform: translateX(-50%);
 	z-index: 5;
 	border: 1px solid var(--border);
@@ -1203,28 +1236,6 @@ strong, b { font-weight: 700; }
 	margin-top: 14px;
 	padding: 10px 12px;
 }
-.section-help-btn {
-	flex: 0 0 auto;
-	display: inline-flex;
-	align-items: center;
-	justify-content: center;
-	width: 26px;
-	height: 26px;
-	padding: 0;
-	border-radius: 999px;
-	border: 1px solid var(--border-soft);
-	background: none;
-	color: var(--muted);
-	font-size: 13px;
-	font-weight: 700;
-	line-height: 1;
-	cursor: pointer;
-}
-.section-help-btn:hover,
-.section-help-btn:focus-visible {
-	color: var(--accent);
-	border-color: color-mix(in srgb, var(--accent) 45%, var(--border-soft));
-}
 .landing .cli-note {
 	font-size: 12px;
 	line-height: 1.5;
@@ -1344,57 +1355,20 @@ strong, b { font-weight: 700; }
 	padding: 16px 18px;
 	margin: 0;
 }
+/* A provider row: its name and state on the left, its models and its menu
+   on the right. Nothing to select; the defaults above choose the models. */
 .ai-profile-row {
 	display: flex;
 	align-items: center;
 	gap: 14px;
 	padding: 16px 18px;
-	cursor: pointer;
 }
-.ai-profile-row.active { cursor: default; }
-/* Unready rows are inert; the Sign in button carries the action. */
-.ai-profile-row.notready { cursor: default; }
-.ai-profile-row:hover,
-.ai-profile-row:has(.ai-profile-main:focus-visible) {
-	background: var(--panel-2);
-	outline: none;
-}
-/* The keyboard cursor must stay visible on every row the arrow keys can
-   reach — notready rows keep a transparent background, so without this ring
-   focusing them changes nothing on screen. */
-.ai-profile-row:has(.ai-profile-main:focus-visible) {
-	outline: 2px solid var(--exx-focus);
-	outline-offset: -2px;
-}
-.ai-profile-row.notready:hover,
-.ai-profile-row.notready:has(.ai-profile-main:focus-visible) {
-	background: transparent;
-}
-/* The radio semantics live on the label area only (buttons must stay outside
-   the radio role); it carries the row's focus and inherits the row layout. */
 .ai-profile-main {
 	display: flex;
 	align-items: center;
 	gap: 14px;
 	flex: 1;
 	min-width: 0;
-	outline: none;
-}
-.ai-profile-radio {
-	width: 16px;
-	height: 16px;
-	border-radius: 50%;
-	border: 1.5px solid color-mix(in srgb, var(--fg) 38%, transparent);
-	flex-shrink: 0;
-	position: relative;
-}
-.ai-profile-row.notready .ai-profile-radio { opacity: 0.45; }
-.ai-profile-row.active .ai-profile-radio::after {
-	content: "";
-	position: absolute;
-	inset: 3px;
-	border-radius: 50%;
-	background: var(--fg);
 }
 .ai-profile-text {
 	display: flex;
@@ -1428,20 +1402,12 @@ strong, b { font-weight: 700; }
 	color: var(--muted);
 }
 .ai-profile-models-toggle:hover { color: var(--fg); }
-.ai-profile-signin {
-	background: var(--exx-action-primary-bg);
-	color: var(--exx-action-primary-fg);
-	border: none;
-	border-radius: var(--exx-radius-control);
-	padding: 7px 16px;
-	font-weight: 700;
-	font-size: 13px;
-}
-.ai-profile-signin:hover { background: var(--exx-action-primary-hover-bg); }
+/* Optical nudge: the chevron's box is centred, the lowercase text is not. */
+.ai-profile-models-toggle .disclosure-chevron { position: relative; top: 1.5px; }
 .ai-profile-models {
 	background: var(--bg-2);
 	border-top: 1px solid var(--exx-divider);
-	padding: 12px 18px 14px 48px;
+	padding: 12px 18px 14px;
 }
 .ai-profile-models-row {
 	display: flex;
@@ -1497,7 +1463,7 @@ strong, b { font-weight: 700; }
 	background: var(--panel);
 	border: 1px solid var(--border-soft);
 	border-radius: var(--exx-radius-control);
-	box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+	box-shadow: var(--exx-shadow-popover);
 }
 .ai-profile-menu-item {
 	background: none;
@@ -1521,67 +1487,26 @@ strong, b { font-weight: 700; }
 .add-provider-panel {
 	display: grid;
 	gap: 14px;
-	justify-items: start;
 }
-.add-provider-block {
-	width: 100%;
-	border: 1px solid var(--border-soft);
-	border-radius: var(--exx-radius-card);
-	background: var(--panel);
-	padding: 16px 18px;
-	gap: 14px;
+/* Add a provider: one group of rows under the profile list. A row and the
+   field it opened (a key form, a sign-in code) read as one: no hairline
+   between them. */
+.add-provider-filter {
+	width: 220px;
 }
-.add-provider-group {
-	display: grid;
-	gap: 6px;
-}
-.add-provider-group h3 {
-	font-family: "Bandeins Strange", "Sen", sans-serif;
-	font-size: 12px;
-	letter-spacing: 0.08em;
-	margin: 0;
-	text-transform: uppercase;
-	color: var(--muted);
-}
-.add-provider-rows {
-	display: grid;
-	gap: 0;
-}
-.add-provider-row-group + .add-provider-row-group,
-.add-provider-rows > .add-provider-row + .add-provider-row,
-.add-provider-rows > .add-provider-row + .add-provider-row-group,
-.add-provider-rows > .add-provider-row-group + .add-provider-row {
-	border-top: 1px solid var(--exx-divider);
-}
-.add-provider-row {
-	display: flex;
-	align-items: center;
-	gap: 14px;
-	min-height: 40px;
-	padding: 5px 0;
-	font-size: 13.5px;
-}
-.add-provider-name { color: var(--fg-soft); }
-.add-provider-side {
-	margin-left: auto;
-	display: flex;
-	align-items: center;
-	gap: 12px;
-}
-.add-provider-configured {
-	font-size: 12.5px;
-	color: var(--muted);
-}
-.ai-profile-foot-link.danger { color: var(--danger, #d33); }
 .add-provider-key-form {
 	display: flex;
 	align-items: center;
+	flex-wrap: wrap;
 	gap: 10px;
-	padding: 2px 0 12px;
+}
+.add-provider-key-form input { flex: 1; }
+.add-provider-row-key-form,
+.add-provider-instructions {
+	padding: 0 0 12px;
 }
 /* Device-code sign-in (GitHub Copilot): the code the person types on the provider's page. */
 .add-provider-instructions {
-	padding: 2px 0 12px;
 	font-size: 14px;
 	font-weight: 700;
 	letter-spacing: 0.04em;
@@ -1590,42 +1515,21 @@ strong, b { font-weight: 700; }
 }
 /* Same code, shown under a profile row while its sign-in is pending. */
 .ai-profile-signin-instructions {
-	padding: 0 18px 14px 48px;
+	padding: 0 18px 14px;
 }
-/* A row and the key form it opened read as one block, so the field is plainly
-   this row's and the single Cancel plainly closes this row. */
-.ai-profile-row-group.key-open,
-.add-provider-row-group.key-open {
+/* A profile row and the key form it opened read as one block, so the field is
+   plainly this row's and the single Cancel plainly closes this row. */
+.ai-profile-row-group.key-open {
 	background: color-mix(in srgb, var(--panel-2) 55%, transparent);
 	border-radius: var(--exx-radius-control);
-}
-.add-provider-row-group.key-open {
-	padding: 0 10px;
-	margin: 0 -10px;
-}
-.add-provider-key-form {
-	flex-wrap: wrap;
-}
-.add-provider-key-form .landing-action {
-	flex-shrink: 0;
 }
 /* A key form belongs to the row that opened it: indented to that row's name, and
    padded so Save key and Cancel are not pressed against the card's edge. */
 .ai-profile-key-form {
-	padding: 2px 18px 14px 48px;
+	padding: 2px 18px 14px;
 	flex-wrap: wrap;
 }
-.add-provider-row-key-form {
-	padding-left: 14px;
-	border-left: 2px solid var(--exx-divider);
-	flex-wrap: wrap;
-}
-.add-provider-key-form input { flex: 1; }
 .configure-profile-modal { max-width: 560px; }
-/* Two selects and a sentence: narrower than the approval editor it replaces on built-in rows. */
-.maintenance-models-modal { max-width: 440px; }
-/* Going back to the defaults destroys nothing: the plain link, in the remove link's place. */
-.maintenance-models-defaults { margin-left: auto; }
 .configure-profile-body {
 	display: grid;
 	gap: 18px;
@@ -1673,7 +1577,7 @@ strong, b { font-weight: 700; }
 	padding: 8px 10px;
 	border: 1px solid var(--border-soft);
 	border-radius: var(--exx-radius-control);
-	background: var(--panel);
+	background: var(--bg-2);
 	color: var(--fg);
 	font-size: 13.5px;
 }
@@ -1950,18 +1854,6 @@ strong, b { font-weight: 700; }
 	align-items: center;
 	gap: 16px;
 }
-.add-provider-toggle-row {
-	display: flex;
-	align-items: center;
-	gap: 14px;
-	/* The panel left-aligns its items; this row spans it so the trailing
-	   Refresh can ride the far right edge. */
-	justify-self: stretch;
-}
-/* The page's Refresh link rides the toggle row's right end. */
-.add-provider-toggle-trailing {
-	margin-left: auto;
-}
 .add-provider-added-note {
 	font-size: 12.5px;
 	color: var(--muted);
@@ -2021,14 +1913,8 @@ strong, b { font-weight: 700; }
 	font-size: 13px;
 	line-height: 1.35;
 }
-.workspaces-default-form strong {
-	font-size: 12px;
-}
 .workspaces-root-title span,
-.workspaces-empty-state,
-.workspaces-default-form p,
 .workspaces-redaction-note,
-.workspaces-session-note,
 .workspaces-warnings,
 .workspaces-success,
 .workspaces-error {
@@ -2041,86 +1927,22 @@ strong, b { font-weight: 700; }
 	letter-spacing: 0.04em;
 	text-transform: uppercase;
 }
-.workspaces-session-note {
-	max-width: none;
-}
-.workspaces-default-form {
-	border-top: 1px solid var(--border);
-	padding-top: 12px;
-}
-.workspaces-default-form label,
-.workspaces-default-form .workspaces-field {
-	display: grid;
-	gap: 6px;
-}
-.workspace-folder-row {
-	display: flex;
-	align-items: center;
-	gap: 10px;
-	flex-wrap: wrap;
-}
-.workspace-folder-choice-action {
-	flex: 0 0 auto;
-	white-space: nowrap;
-	display: inline-flex;
-	align-items: center;
-	gap: 6px;
-}
-.workspace-folder-icon {
-	flex: 0 0 auto;
+/* The folder row of the workspace editor: the typed path shrinks before the
+   buttons beside it do. */
+.workspace-folder-controls {
+	flex: 0 1 auto;
+	min-width: 0;
 }
 .workspace-folder-path-input {
 	flex: 1 1 220px;
-	min-width: 180px;
+	min-width: 140px;
 	font-family: var(--exx-font-mono, monospace);
 	font-size: 12.5px;
-}
-.workspace-form-actions {
-	position: sticky;
-	bottom: 0;
-	display: flex;
-	align-items: center;
-	justify-content: flex-end;
-	flex-wrap: wrap;
-	gap: 10px;
-	padding: 10px 0;
-	margin-bottom: -12px;
-	background: var(--bg);
-	border-top: 1px solid var(--border-soft);
-}
-.workspace-form-actions .workspace-unsaved-hint {
-	margin-right: auto;
 }
 .workspace-unsaved-hint {
 	color: var(--warning);
 	font-size: 12px;
 	font-weight: 600;
-}
-.workspaces-tool-options {
-	display: grid;
-	gap: 8px;
-}
-.workspaces-tool-list {
-	display: grid;
-}
-.workspaces-default-form .workspaces-tool-row {
-	display: flex;
-	align-items: center;
-	justify-content: space-between;
-	gap: 12px;
-	padding: 8px 2px;
-	border-bottom: 1px solid var(--border-soft);
-	cursor: pointer;
-}
-.workspaces-default-form .workspaces-tool-row:last-child {
-	border-bottom: none;
-}
-.workspaces-default-form .workspace-tool-groups .workspaces-tool-row:hover {
-	background: color-mix(in srgb, var(--fg) 4%, transparent);
-}
-.workspaces-tool-row span {
-	font-size: 13px;
-	line-height: 1.3;
 }
 .workspaces-tool-switch {
 	appearance: none;
@@ -2154,9 +1976,9 @@ strong, b { font-weight: 700; }
 	background: #111111;
 	transform: translateX(16px);
 }
-.workspaces-tool-switch:focus-visible {
-	outline: 2px solid var(--success);
-	outline-offset: 2px;
+/* In light a black knob reads as on: the knob is white in both states. */
+:root[data-theme="light"] .workspaces-tool-switch::before {
+	background: #ffffff;
 }
 .workspaces-tool-switch:disabled {
 	cursor: wait;
@@ -2180,32 +2002,6 @@ strong, b { font-weight: 700; }
 	border-color: var(--border-soft);
 	color: var(--fg);
 }
-/* Web search: the provider-side switch first, then the fallback backends,
-   sitting quietly under the profile list rather than competing with it. */
-.web-search-native {
-	display: grid;
-	gap: 10px;
-}
-.web-search-native-toggle {
-	display: flex;
-	align-items: flex-start;
-	gap: 10px;
-	border: 1px solid var(--border);
-	border-radius: 12px;
-	padding: 12px 14px;
-	cursor: pointer;
-}
-.web-search-native-toggle input {
-	margin-top: 3px;
-	accent-color: var(--fg);
-	cursor: pointer;
-}
-/* The fallback heading is a divider with a name, not a second section title:
-   the pane already has one heading and does not need to shout twice. */
-.web-search-fallback {
-	display: grid;
-	gap: 6px;
-}
 .web-search-fallback-heading {
 	font-family: "Bandeins Strange", "Sen", sans-serif;
 	font-size: 12px;
@@ -2215,54 +2011,46 @@ strong, b { font-weight: 700; }
 	margin: 0;
 	font-weight: 500;
 }
-.web-search-fallback-copy {
-	font-size: 12.5px;
-	margin: 0;
+/* A path or a folder named in a row, in the code face as a quiet chip. */
+.settings-chip {
+	display: inline-block;
+	max-width: 100%;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	vertical-align: bottom;
+	font-family: var(--exx-font-mono);
+	font-size: 12px;
+	font-weight: 400;
+	padding: 2px 7px;
+	border-radius: 6px;
+	background: var(--bg-2);
+	color: var(--fg-soft);
 }
-.web-search-options {
-	display: grid;
-	gap: 10px;
-}
-.web-search-option {
-	display: flex;
+/* A choice among rows (the web search engines): the radio first, then the
+   label and its subline. A row mid-save is dimmed rather than moved: the
+   value it shows is still the machine's until the machine says otherwise. */
+.settings-row.settings-row-choice {
+	justify-content: flex-start;
 	align-items: flex-start;
-	gap: 10px;
-	border: 1px solid var(--border);
-	border-radius: 12px;
-	padding: 12px 14px;
-	cursor: pointer;
+	gap: 12px;
 }
-/* Selected reads the way every other choice card in the app reads. One card in
-   the section carries that weight at a time, and it is the chosen fallback
-   below: the switch above states itself in its checkbox and stays neutral. */
-.web-search-option.selected {
-	border-color: var(--fg);
-	background: color-mix(in srgb, var(--fg) 10%, var(--panel));
-	box-shadow: inset 0 0 0 1px var(--fg);
-}
-/* A control mid-save is dimmed rather than moved: the value it shows is still
-   the machine's, until the machine says otherwise. */
-.web-search-option.pending,
-.web-search-native-toggle.pending {
+.settings-row.pending {
 	opacity: 0.6;
 }
 .web-search-pending-note {
 	color: var(--muted);
 	font-size: 12px;
 }
-.web-search-option:hover:not(.selected),
-.web-search-native-toggle:hover {
-	border-color: color-mix(in srgb, var(--fg) 30%, transparent);
-}
 /* Native radios render as dark filled discs in this theme, which reads as a
-   third state beside the chosen one. Drawn here the way the profile rows draw
-   theirs: empty is empty, chosen is a dot. */
-.web-search-option input[type="radio"] {
+   third state beside the chosen one: empty is empty, chosen is a dot. */
+.settings-row-choice input[type="radio"] {
 	appearance: none;
 	-webkit-appearance: none;
 	position: relative;
 	width: 16px;
 	height: 16px;
+	/* on the label's first line, whatever the subline below does */
 	margin: 3px 0 0;
 	border-radius: 50%;
 	border: 1.5px solid color-mix(in srgb, var(--fg) 38%, transparent);
@@ -2270,36 +2058,23 @@ strong, b { font-weight: 700; }
 	flex-shrink: 0;
 	cursor: pointer;
 }
-.web-search-option input[type="radio"]:checked {
+.settings-row-choice input[type="radio"]:checked {
 	border-color: var(--fg);
 }
-.web-search-option input[type="radio"]:checked::after {
+.settings-row-choice input[type="radio"]:checked::after {
 	content: "";
 	position: absolute;
 	inset: 3px;
 	border-radius: 50%;
 	background: var(--fg);
 }
-.web-search-option input[type="radio"]:focus-visible {
+.settings-row-choice input[type="radio"]:focus-visible {
 	outline: 2px solid var(--exx-focus);
 	outline-offset: 2px;
 }
-.web-search-option input[type="radio"]:disabled {
+.settings-row-choice input[type="radio"]:disabled {
 	cursor: default;
 	opacity: 0.6;
-}
-.web-search-option-body {
-	display: grid;
-	gap: 3px;
-	min-width: 0;
-}
-.web-search-option-label {
-	color: var(--fg);
-}
-.web-search-option-blurb {
-	font-size: 12.5px;
-	color: var(--muted);
-	line-height: 1.5;
 }
 .web-search-searxng {
 	display: flex;
@@ -2338,15 +2113,6 @@ strong, b { font-weight: 700; }
 .add-provider-block input[type="checkbox"] {
 	accent-color: var(--fg);
 	cursor: pointer;
-}
-.ai-setup-section-heading {
-	display: flex;
-	align-items: flex-start;
-	justify-content: space-between;
-	gap: 18px;
-}
-.ai-setup-section-heading h2 {
-	margin-bottom: 0;
 }
 .ai-setup-copy {
 	color: var(--muted);
@@ -2674,17 +2440,9 @@ strong, b { font-weight: 700; }
 	overflow-x: auto;
 	padding: 12px;
 }
-.ai-setup-actions {
-	display: flex;
-	align-items: flex-start;
-	flex-wrap: wrap;
-	gap: 12px;
-}
-.ai-setup-actions .cli-copy-action,
 .ai-setup-command-block .cli-copy-action {
 	min-width: min(360px, 100%);
 }
-.ai-setup-actions .landing-action,
 .ai-setup-section .inline-action {
 	font-size: 11px;
 	line-height: 1;
@@ -2972,87 +2730,6 @@ strong, b { font-weight: 700; }
 	max-width: 100%;
 	min-width: 0;
 }
-.persistent-agent-card .persistent-agent-model select,
-.persistent-agent-card .persistent-agent-model .model-pill {
-	appearance: none;
-	border: 1px solid color-mix(in srgb, var(--fg-soft) 18%, var(--border-soft));
-	border-radius: var(--exx-radius-control);
-	background: color-mix(in srgb, var(--bg-2) 82%, var(--panel) 18%);
-	box-shadow: inset 0 1px 0 color-mix(in srgb, var(--fg-soft) 5%, transparent);
-	color: color-mix(in srgb, var(--fg-soft) 88%, var(--muted));
-	display: inline-flex;
-	align-items: center;
-	font: inherit;
-	font-size: 11px;
-	line-height: 1.35;
-	max-width: 164px;
-	min-height: 30px;
-	min-width: 0;
-	overflow: hidden;
-	padding: 6px 25px 6px 10px;
-	text-overflow: ellipsis;
-	transition: background 120ms ease, border-color 120ms ease, box-shadow 120ms ease, color 120ms ease;
-	white-space: nowrap;
-}
-.persistent-agent-card .persistent-agent-model select {
-	cursor: pointer;
-	inline-size: auto;
-	max-inline-size: 164px;
-	min-inline-size: 96px;
-}
-/* text-overflow does not apply to flex containers, so the pill's name gets its
-   own block-level span — an overlong name reads "Kimi K2.5 Extended…", never a
-   hard cut, and never wraps the row. */
-.persistent-agent-card .persistent-agent-model .model-pill .model-pill-name {
-	display: block;
-	min-width: 0;
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-}
-.persistent-agent-card .persistent-agent-model::after {
-	content: "▾";
-	position: absolute;
-	right: 9px;
-	top: 50%;
-	transform: translateY(-54%);
-	font-size: 9px;
-	color: var(--muted);
-	pointer-events: none;
-}
-.persistent-agent-card .persistent-agent-model.unavailable::after,
-.persistent-agent-card .persistent-agent-model:has(.model-pill)::after { content: ""; }
-.persistent-agent-card .persistent-agent-model select:hover,
-.persistent-agent-card .persistent-agent-model select:focus {
-	background: color-mix(in srgb, var(--panel) 58%, var(--bg-2));
-	border-color: color-mix(in srgb, var(--fg-soft) 42%, var(--border));
-	box-shadow: inset 0 1px 0 color-mix(in srgb, var(--fg-soft) 8%, transparent), 0 0 0 1px color-mix(in srgb, var(--fg-soft) 8%, transparent);
-	color: var(--fg);
-	outline: none;
-}
-.persistent-agent-card .persistent-agent-model select:focus-visible {
-	outline: 2px solid var(--exx-focus);
-	outline-offset: 2px;
-}
-.persistent-agent-card .persistent-agent-model .model-pill.disabled {
-	background: color-mix(in srgb, var(--warning) 6%, var(--bg-2));
-	border-color: color-mix(in srgb, var(--warning) 28%, var(--border-soft));
-	box-shadow: none;
-	color: color-mix(in srgb, var(--warning) 82%, var(--fg-soft));
-	padding-right: 10px;
-}
-.persistent-agent-card .persistent-agent-model .model-pill.locked {
-	background: color-mix(in srgb, var(--bg-2) 88%, var(--panel) 12%);
-	border-color: color-mix(in srgb, var(--fg-soft) 16%, var(--border-soft));
-	box-shadow: none;
-	color: color-mix(in srgb, var(--fg-soft) 82%, var(--muted));
-	padding-right: 10px;
-}
-.persistent-agent-card .persistent-agent-model .model-pill.locked.incompatible {
-	background: color-mix(in srgb, var(--warning) 6%, var(--bg-2));
-	border-color: color-mix(in srgb, var(--warning) 30%, var(--border-soft));
-	color: color-mix(in srgb, var(--warning) 86%, var(--fg-soft));
-}
 .persistent-agent-details {
 	border-top: 1px solid var(--border-soft);
 	padding-top: 10px;
@@ -3128,11 +2805,6 @@ strong, b { font-weight: 700; }
 	column-gap: 10px;
 	row-gap: 2px;
 }
-/* The armed confirm adds a second button to the row; a zero flex-basis on the
-   text column keeps the buttons at natural width instead of overflowing. */
-.room-danger-zone .rs-row-main {
-	flex: 1 1 0;
-}
 .archived-room-name {
 	font-weight: 600;
 	font-size: 14px;
@@ -3171,39 +2843,6 @@ strong, b { font-weight: 700; }
 	color: var(--muted);
 }
 :root[data-theme="light"] .persistent-agent-card .persistent-agent-id.duplicate { color: var(--fg-soft); }
-:root[data-theme="light"] .persistent-agent-card .persistent-agent-model::after {
-	color: var(--muted);
-}
-:root[data-theme="light"] .persistent-agent-card .persistent-agent-model select {
-	background: color-mix(in srgb, var(--bg-2) 86%, var(--panel) 14%);
-	border-color: var(--border-soft);
-	color: var(--fg-soft);
-}
-:root[data-theme="light"] .persistent-agent-card .persistent-agent-model select:hover,
-:root[data-theme="light"] .persistent-agent-card .persistent-agent-model select:focus {
-	background: var(--panel);
-	border-color: var(--border);
-	box-shadow: 0 0 0 1px color-mix(in srgb, var(--fg) 8%, transparent);
-	color: var(--fg);
-}
-:root[data-theme="light"] .persistent-agent-card .persistent-agent-model select:focus-visible {
-	outline-color: var(--exx-focus);
-}
-:root[data-theme="light"] .persistent-agent-card .persistent-agent-model .model-pill.disabled {
-	background: color-mix(in srgb, var(--warning) 8%, var(--bg-2));
-	border-color: color-mix(in srgb, var(--warning) 34%, var(--border-soft));
-	color: var(--warning);
-}
-:root[data-theme="light"] .persistent-agent-card .persistent-agent-model .model-pill.locked {
-	background: color-mix(in srgb, var(--bg-2) 88%, var(--panel) 12%);
-	border-color: var(--border-soft);
-	color: var(--fg-soft);
-}
-:root[data-theme="light"] .persistent-agent-card .persistent-agent-model .model-pill.locked.incompatible {
-	background: color-mix(in srgb, var(--warning) 8%, var(--bg-2));
-	border-color: color-mix(in srgb, var(--warning) 34%, var(--border-soft));
-	color: var(--warning);
-}
 :root[data-theme="light"] .landing-card .launcher-path-input,
 :root[data-theme="light"] .landing-card .cli-command {
 	background: var(--bg-2);
@@ -3252,10 +2891,10 @@ strong, b { font-weight: 700; }
 	width: min(900px, 100%);
 	max-height: min(860px, calc(100vh - 48px));
 	overflow: auto;
-	border: 1px solid var(--border);
+	border: 1px solid var(--exx-edge-dialog);
 	border-radius: 22px;
-	background: var(--bg);
-	box-shadow: 0 24px 80px color-mix(in srgb, #000 26%, transparent);
+	background: var(--panel);
+	box-shadow: none;
 	padding: 30px;
 	display: grid;
 	gap: 22px;
@@ -3450,6 +3089,14 @@ strong, b { font-weight: 700; }
 .checkpoint-input-meta.subtle {
 	opacity: 0.78;
 }
+/* How Remember read (or will read) the conversation: one quiet line. */
+.checkpoint-read-note {
+	margin: 0;
+	font-size: 12.5px;
+	line-height: 1.5;
+	color: var(--muted);
+	text-align: center;
+}
 .checkpoint-full-entry-trigger {
 	justify-self: center;
 	margin-top: 2px;
@@ -3589,7 +3236,7 @@ strong, b { font-weight: 700; }
 	margin-bottom: 10px;
 	color: var(--fg);
 }
-.absorb-workspace-header .landing-action {
+.absorb-workspace-header .rs-btn {
 	flex: 0 0 auto;
 	margin-top: 4px;
 }
@@ -3607,7 +3254,7 @@ strong, b { font-weight: 700; }
 .absorb-workspace-header.compact .card-kicker {
 	margin-bottom: 4px;
 }
-.absorb-workspace-header.compact .landing-action {
+.absorb-workspace-header.compact .rs-btn {
 	margin-top: 0;
 }
 .absorb-workspace-main {
@@ -3633,9 +3280,20 @@ strong, b { font-weight: 700; }
 	align-items: flex-start;
 }
 .maintain-confirm-backdrop { z-index: 60; }
+/* The app's confirm question (confirm-dialog.tsx) answers for whatever layer
+   asked it, room settings and the settings overlay included, so it sits
+   above all of them. */
+.confirm-dialog-backdrop { z-index: 100; }
 .maintain-confirm-card {
 	max-width: 460px;
 	gap: 14px;
+}
+/* Three answers on a phone: one full-width column, the primary on top. */
+@media (max-width: 760px) {
+	.confirm-dialog-three .checkpoint-preview-actions {
+		flex-direction: column-reverse;
+		align-items: stretch;
+	}
 }
 .maintain-confirm-card h2 {
 	font-family: var(--exx-font-display);
@@ -3672,7 +3330,7 @@ strong, b { font-weight: 700; }
 	max-width: none;
 	font-size: 15px;
 }
-.maintain-workspace .absorb-workspace-header .landing-action {
+.maintain-workspace .absorb-workspace-header .rs-btn {
 	margin-top: 0;
 }
 .maintain-workspace .absorb-workflow-card {
@@ -3995,7 +3653,6 @@ strong, b { font-weight: 700; }
 	color: var(--muted);
 	font-size: 14px;
 	line-height: 1.5;
-	max-width: 58ch;
 }
 .maintain-action-tag {
 	font-family: var(--exx-font-display);
@@ -4008,17 +3665,19 @@ strong, b { font-weight: 700; }
 	border-radius: 999px;
 	padding: 3px 9px;
 }
+/* Drawn like the one button (.rs-btn): sentence case, 32 px. */
 .maintain-action-go {
 	flex: 0 0 auto;
-	font-family: var(--exx-font-display);
+	display: inline-flex;
+	align-items: center;
+	box-sizing: border-box;
+	height: 32px;
 	font-weight: 700;
-	font-size: 13px;
-	letter-spacing: 0.1em;
-	text-transform: uppercase;
-	color: var(--fg-soft);
+	font-size: 12.5px;
+	color: var(--fg);
 	border: 1px solid var(--border);
-	border-radius: var(--exx-radius-control);
-	padding: 11px 16px;
+	border-radius: 8px;
+	padding: 0 12px;
 	white-space: nowrap;
 }
 .maintain-action.recommended .maintain-action-go {
@@ -4750,8 +4409,8 @@ strong, b { font-weight: 700; }
 	.archive-limit-bar-track { height: 26px; }
 	.archive-limit-bar-fill { flex-basis: 50%; max-width: 50%; }
 	.archive-limit-bar-over { flex-basis: calc(50% * var(--archive-over, 0)); }
-	.absorb-over-limit-actions .landing-action { flex: 1 1 auto; }
-	.absorb-run-budget-actions .landing-action { flex: 1 1 auto; }
+	.absorb-over-limit-actions .rs-btn { flex: 1 1 auto; }
+	.absorb-run-budget-actions .rs-btn { flex: 1 1 auto; }
 }
 .absorb-approval-note,
 .absorb-help-note {
@@ -4950,10 +4609,8 @@ strong, b { font-weight: 700; }
 	color: var(--muted);
 	font-size: 13px;
 }
-.absorb-discussion-remedy .landing-action {
+.absorb-discussion-remedy .rs-btn {
 	align-self: center;
-	font-size: 12px;
-	padding: 6px 12px;
 }
 /* Lives under the textarea (first grid column) and spans the full row on the
    stacked mobile layout. Tone shifts as the transcript nears its caps. */
@@ -6135,6 +5792,41 @@ strong, b { font-weight: 700; }
 	vertical-align: middle;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
+.ui-spinner { animation: spin 0.8s linear infinite; flex: 0 0 auto; }
+@media (prefers-reduced-motion: reduce) {
+	.ui-spinner { animation-duration: 2.4s; }
+}
+/* Connection lost: one line above the composer, sized to its content. */
+.connection-banner {
+	align-self: center;
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	margin: 0 auto 8px;
+	padding: 6px 12px;
+	border: 1px solid var(--border);
+	border-radius: 999px;
+	background: var(--panel);
+	color: var(--fg);
+	font-size: 12px;
+	font-weight: 600;
+}
+.connection-banner-action {
+	border: 1px solid var(--border);
+	background: transparent;
+	color: var(--fg);
+	border-radius: 999px;
+	padding: 2px 10px;
+	font: inherit;
+	cursor: pointer;
+}
+.connection-banner-action:hover,
+.connection-banner-action:focus-visible {
+	background: var(--fg);
+	border-color: var(--fg);
+	color: var(--bg);
+	outline: none;
+}
 
 /* Composer --------------------------------------------------------- */
 
@@ -6353,7 +6045,7 @@ strong, b { font-weight: 700; }
 	display: flex;
 	flex-direction: column;
 	gap: 7px;
-	box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+	box-shadow: var(--exx-shadow-popover);
 	z-index: 30;
 	color: var(--dim);
 	font-family: var(--exx-font-mono);
@@ -6553,7 +6245,7 @@ strong, b { font-weight: 700; }
 	display: flex;
 	flex-direction: column;
 	gap: 2px;
-	box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+	box-shadow: var(--exx-shadow-popover);
 	z-index: 30;
 }
 .checkpoint-split-menu button {
@@ -6771,9 +6463,6 @@ strong, b { font-weight: 700; }
 :root[data-theme="light"] .composer-context-pill:focus-visible {
 	color: var(--muted);
 	background: color-mix(in srgb, var(--context-health-color) 12%, transparent);
-}
-:root[data-theme="light"] .composer-context-popover {
-	box-shadow: 0 8px 24px rgba(0, 0, 0, 0.14);
 }
 :root[data-theme="light"] .composer .send-btn {
 	background: var(--fg);
@@ -7042,7 +6731,12 @@ strong, b { font-weight: 700; }
 .mem-g .k { color: var(--muted); font-size: 11px; }
 .mem-glance .mem-composition { margin-top: 14px; }
 /* Room experience cards. */
-.mem-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+/* Dense packing: the expanded room's detail row (full width, inserted right
+   after its card) opens under the card's row, and the cards after it fill the
+   rest of that row in their own order. */
+.mem-cards { display: grid; grid-template-columns: 1fr 1fr; grid-auto-flow: row dense; gap: 14px; }
+.mem-card-detail-row { grid-column: 1 / -1; min-width: 0; }
+.mem-card-detail-row > .mem-detail-section { margin-top: 10px; }
 .mem-card { appearance: none; text-align: left; font: inherit; color: inherit; cursor: pointer; width: 100%; border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px; background: var(--panel); display: flex; flex-direction: column; gap: 12px; transition: border-color 120ms ease, background 120ms ease; }
 .mem-card:hover { border-color: var(--fg-soft); background: var(--panel-2); }
 .mem-card:focus-visible { outline: 2px solid var(--exx-focus); outline-offset: 2px; }
@@ -7847,6 +7541,13 @@ strong, b { font-weight: 700; }
 	min-height: 80px;
 }
 .approval-input:focus { outline: none; border-color: var(--fg); }
+/* The composer's keyboard path to the one pending card, said quietly. */
+.approval-key-hint {
+	margin-left: auto;
+	align-self: center;
+	color: var(--muted);
+	font-size: 11px;
+}
 .approval-buttons { display: flex; gap: 8px; flex-wrap: wrap; }
 /* Keyboard approval: a pending card may focus its Approve button
    programmatically, and script-moved focus does not reliably match
@@ -8018,7 +7719,7 @@ strong, b { font-weight: 700; }
 		flex-direction: column;
 		gap: 14px;
 	}
-	.absorb-workspace-header .landing-action {
+	.absorb-workspace-header .rs-btn {
 		margin-top: 0;
 	}
 	.absorb-workspace-main {
@@ -8043,7 +7744,9 @@ strong, b { font-weight: 700; }
 	}
 	.product-sidebar-footer { padding: 8px 12px; }
 	.landing { padding: 24px 16px; gap: 16px; }
-	.landing-grid { grid-template-columns: 1fr; }
+	/* minmax(0, ...): the column is the phone's width, never a card's widest
+	   line (a long model label truncates instead). */
+	.landing-grid { grid-template-columns: minmax(0, 1fr); }
 	.landing-card,
 	.landing-card-primary,
 	.home-page .persistent-agent-card { min-height: 0; }
@@ -8476,8 +8179,8 @@ strong, b { font-weight: 700; }
 	padding: 24px;
 }
 .room-settings-modal {
-	background: var(--bg);
-	border: 1px solid var(--fg);
+	background: var(--panel);
+	border: 1px solid var(--exx-edge-dialog);
 	border-radius: 14px;
 	max-width: 840px;
 	width: 100%;
@@ -8485,72 +8188,6 @@ strong, b { font-weight: 700; }
 	display: flex;
 	flex-direction: column;
 	overflow: hidden;
-}
-/* The rail shell applies only to the room settings modal itself; the class is
-   shared with the create-room and configure-profile dialogs, which stay content-sized. */
-.room-settings-modal.rs-shell {
-	max-width: 960px;
-	height: min(800px, 90vh);
-	max-height: none;
-	border-color: var(--border);
-	border-radius: 22px;
-	box-shadow: 0 24px 80px color-mix(in srgb, #000 26%, transparent);
-}
-/* Only the room settings dialog borrows the main Settings backdrop (soft
-   translucent blur instead of the solid dim); the shared overlay class also
-   serves create-room and configure-profile, which keep the app's dim. */
-.room-settings-overlay:has(> .rs-shell) {
-	background: color-mix(in srgb, var(--bg) 72%, transparent);
-	backdrop-filter: blur(10px);
-}
-.room-settings-layout {
-	display: flex;
-	flex: 1;
-	min-height: 0;
-}
-.room-settings-nav {
-	width: 190px;
-	flex-shrink: 0;
-	border-right: 1px solid var(--exx-divider);
-	padding: 16px 12px;
-	display: flex;
-	flex-direction: column;
-	gap: 4px;
-}
-/* The rail items speak the main Settings nav's language: fg text at rest, a
-   wash on hover, the inverted fill for the current section. */
-.rs-nav-item {
-	display: block;
-	width: 100%;
-	text-align: left;
-	background: none;
-	border: none;
-	border-radius: 6px;
-	color: var(--fg);
-	font: inherit;
-	font-size: 14px;
-	padding: 8px 10px;
-	cursor: pointer;
-}
-.rs-nav-item:hover {
-	background: color-mix(in srgb, currentColor 10%, transparent);
-}
-.rs-nav-item.active {
-	background: var(--fg);
-	color: var(--bg);
-}
-.rs-nav-spacer {
-	flex: 1;
-}
-.rs-nav-danger {
-	color: color-mix(in srgb, var(--error) 70%, var(--muted));
-}
-.rs-nav-danger:hover {
-	color: var(--error);
-}
-.rs-nav-danger.active {
-	color: var(--error);
-	background: color-mix(in srgb, var(--error) 8%, transparent);
 }
 .room-settings-head {
 	display: flex;
@@ -8581,24 +8218,29 @@ strong, b { font-weight: 700; }
 	overflow-wrap: anywhere;
 	min-width: 0;
 }
-.room-settings-rename-form {
-	display: flex;
-	align-items: center;
-	gap: 10px;
-	min-width: 0;
-}
+/* Renaming turns the title into an input of its own width, in the title's
+   face, with Save and Cancel beside it. */
 .room-settings-rename-input {
-	flex: 1 1 auto;
-	min-width: 0;
-	font-size: 16px;
-	font-weight: 600;
+	flex: 0 1 auto;
+	field-sizing: content;
+	min-width: 200px;
+	max-width: 100%;
+	height: 38px;
+	padding: 0 10px;
+	font-family: "Bandeins Strange", "Sen", sans-serif;
+	font-size: 24px;
+	font-weight: 700;
+	letter-spacing: -0.01em;
+	color: var(--fg);
+	background: var(--bg-2);
+	border: 1px solid var(--border);
+	border-radius: 8px;
 }
 .room-settings-rename-message {
-	margin: 6px 0 0;
+	margin: 0;
 	font-size: 12px;
 }
 .room-settings-rename-preview {
-	margin-top: 12px;
 	display: flex;
 	flex-direction: column;
 	gap: 8px;
@@ -8631,31 +8273,6 @@ strong, b { font-weight: 700; }
 	display: flex;
 	flex-direction: column;
 	gap: 18px;
-}
-.rs-shell .room-settings-head {
-	border-bottom-color: var(--exx-divider);
-}
-.rs-shell .room-settings-body {
-	flex: 1;
-	min-width: 0;
-	display: block;
-	padding: 18px 28px 30px;
-}
-/* Quiet scrollbar, same recipe as the Settings overlay pane; the global
-   fg-colored thumb read as chrome inside the calm modal. */
-.rs-shell .room-settings-body::-webkit-scrollbar {
-	width: 8px;
-}
-.rs-shell .room-settings-body::-webkit-scrollbar-thumb {
-	background: var(--border);
-	border-radius: 4px;
-}
-.rs-shell .room-settings-body::-webkit-scrollbar-thumb:hover {
-	background: var(--fg-soft);
-}
-.rs-shell .room-settings-body::-webkit-scrollbar-track {
-	background: transparent;
-	margin-bottom: 18px;
 }
 .room-settings-status {
 	font-size: 10px;
@@ -8690,29 +8307,10 @@ strong, b { font-weight: 700; }
 	display: none;
 }
 /* Room settings shared control language: pane head, sub line, rows, buttons, info marks. */
-.rs-pane-head {
-	display: flex;
-	align-items: baseline;
-	justify-content: space-between;
-	gap: 16px;
-}
-.rs-pane-head h3 {
-	font-family: "Bandeins Strange", "Sen", sans-serif;
-	font-size: 16px;
-	font-weight: 700;
-	letter-spacing: -0.005em;
-	margin: 0;
-}
 .rs-pane-actions {
 	display: flex;
 	gap: 12px;
 	align-items: center;
-}
-.rs-pane-sub {
-	margin: -8px 0 4px;
-	color: var(--muted);
-	font-size: 13px;
-	line-height: 1.5;
 }
 .rs-info-anchor {
 	position: relative;
@@ -8768,55 +8366,164 @@ strong, b { font-weight: 700; }
 	white-space: normal;
 	z-index: 40;
 }
-.rs-row {
+/* Settings rows: every item in both settings dialogs is a row of one list,
+   the label (and an optional subline) on the left, the control or value on
+   the right, a hairline between rows only: never above the first or below
+   the last. Groups inside a pane are set apart by space and their kicker. */
+.settings-rows > * + * {
+	border-top: 1px solid var(--exx-divider);
+}
+.settings-row {
 	display: flex;
 	align-items: center;
 	justify-content: space-between;
-	gap: 16px;
+	gap: 20px;
 	padding: 12px 0;
 }
-label.rs-row {
+label.settings-row {
 	cursor: pointer;
 }
-/* General-sibling, not adjacent: an explanatory <details> or note between two
-   rows must not eat the divider rhythm of the later row. */
-.rs-row ~ .rs-row {
-	border-top: 1px solid var(--border-soft);
-}
-.rs-row-main {
+.settings-row-main {
 	min-width: 0;
+	flex: 1 1 auto;
 	display: flex;
 	flex-direction: column;
-	gap: 1px;
+	gap: 2px;
 }
-.rs-row-label {
-	font-weight: 600;
+.settings-row-label {
+	font-size: 14px;
+	font-weight: 500;
+}
+.settings-row-sub {
+	color: var(--muted);
+	font-size: 13px;
+	line-height: 1.45;
+}
+.settings-row-value {
+	flex-shrink: 0;
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	color: var(--muted);
+	font-size: 13px;
+	white-space: nowrap;
+}
+/* A long subline (a directory blurb) held to two lines; the full text is
+   in its title. */
+.settings-row-clamp {
+	display: -webkit-box;
+	-webkit-line-clamp: 2;
+	-webkit-box-orient: vertical;
+	overflow: hidden;
+}
+/* A mode or state named in tracked caps at the row's right end. */
+.settings-row-tag {
+	font-size: 11px;
+	letter-spacing: 0.1em;
+	text-transform: uppercase;
+	color: var(--muted);
+}
+.settings-group {
+	margin-top: 22px;
+}
+.pane-head + .settings-group {
+	margin-top: 0;
+}
+.settings-group-kicker {
+	margin: 0 0 6px;
+	font-size: 11px;
+	letter-spacing: 0.14em;
+	text-transform: uppercase;
+	color: var(--muted);
+}
+/* An empty state or a loading line: where the first row would be, in the
+   subline style. */
+.settings-dialog .settings-empty {
+	margin: 12px 0;
+	color: var(--muted);
+	font-size: 13px;
+	line-height: 1.45;
+}
+/* The one disclosure chevron: 12 px, pointing right while shut and down
+   while open, on a toggle's aria-expanded or a details element's open. */
+:root {
+	--disclosure-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6.4 4.2L10.2 8l-3.8 3.8'/%3E%3C/svg%3E");
+}
+.disclosure-chevron,
+.remote-fold > summary::before {
+	content: "";
+	display: inline-block;
+	flex-shrink: 0;
+	width: 12px;
+	height: 12px;
+	background-color: var(--muted);
+	-webkit-mask: var(--disclosure-chevron) center / contain no-repeat;
+	mask: var(--disclosure-chevron) center / contain no-repeat;
+	transition: transform 120ms ease;
+}
+[aria-expanded="true"] > .disclosure-chevron,
+.remote-fold[open] > summary::before {
+	transform: rotate(90deg);
+}
+/* A line under a list: what changing it means. */
+.settings-help {
+	margin: 6px 0 0;
+	color: var(--muted);
+	font-size: 13px;
+	line-height: 1.45;
+}
+/* One type scale in both dialogs: what the older pages bring in (a profile
+   name, a topic, a note, their sublines, hints and empty states) takes the
+   row label and the subline sizes. */
+.settings-dialog :is(.ai-profile-name, .memory-topic-title) {
+	font-size: 14px;
+	font-weight: 500;
+}
+.settings-dialog .memory-entry-text {
 	font-size: 14px;
 }
-.rs-row-hint {
-	color: var(--muted);
-	font-size: 12.5px;
+.settings-dialog :is(.ai-profile-sub, .ai-setup-copy, .cli-note, .remote-fold summary, .remote-master-footnote, .room-instructions-count, .memory-entry-meta, .memory-topic-count, .memory-history-row, .workspaces-warnings, .workspaces-success, .workspaces-error, .room-schedules-summary, .room-schedules-job-meta) {
+	font-size: 13px;
 	line-height: 1.45;
 }
-/* Shared note under a group of rs-rows (e.g. the two memory speed toggles). */
-.rs-row-footnote {
-	color: var(--muted);
-	font-size: 12.5px;
-	line-height: 1.45;
-	font-style: italic;
-	margin: 0;
+/* One control height in both dialogs: every field, select and button in a
+   row, a header or a form is 32 px tall; text areas keep their own. */
+.settings-dialog-pane :is(.rs-btn, input:not([type="checkbox"], [type="radio"], [type="range"]), select) {
+	box-sizing: border-box;
+	height: 32px;
 }
+.settings-dialog-pane :is(input:not([type="checkbox"], [type="radio"], [type="range"]), select) {
+	padding-block: 0;
+	font-size: 13px;
+}
+/* One focus for every field in both dialogs: a 1 px border in the focus
+   colour and a soft 3 px ring, instead of a heavy outline. */
+.settings-dialog-pane :is(input:not([type="checkbox"], [type="radio"], [type="range"]), select, textarea):focus {
+	outline: none;
+	border-color: var(--exx-focus);
+	box-shadow: 0 0 0 3px color-mix(in srgb, var(--exx-focus) 22%, transparent);
+}
+/* The one button of both settings dialogs and the Maintain screens:
+   sentence case, one small size, outlined; the primary one is filled and
+   the destructive one red. Text links are only for navigation. */
 .rs-btn {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	gap: 6px;
 	background: none;
 	border: 1px solid var(--border);
 	border-radius: 8px;
 	color: var(--fg);
 	font: inherit;
-	font-size: 12px;
-	font-weight: 600;
-	letter-spacing: 0.06em;
-	text-transform: uppercase;
+	font-size: 12.5px;
+	font-weight: 700;
+	line-height: 1.2;
+	box-sizing: border-box;
+	min-height: 32px;
 	padding: 6px 12px;
+	white-space: nowrap;
+	text-decoration: none;
 	cursor: pointer;
 	flex-shrink: 0;
 }
@@ -8828,6 +8535,17 @@ label.rs-row {
 	opacity: 0.45;
 	cursor: default;
 }
+/* The one action a form or a question is for, filled the way the app fills
+   a primary button. */
+.rs-btn.rs-btn-primary {
+	background: var(--fg);
+	border-color: var(--fg);
+	color: var(--bg);
+}
+.rs-btn.rs-btn-primary:hover:not(:disabled),
+.rs-btn.rs-btn-primary:focus-visible {
+	background: color-mix(in srgb, var(--fg) 88%, var(--bg));
+}
 .rs-btn-danger {
 	color: var(--error);
 	border-color: color-mix(in srgb, var(--error) 40%, transparent);
@@ -8835,6 +8553,15 @@ label.rs-row {
 .rs-btn-danger:hover:not(:disabled),
 .rs-btn-danger:focus-visible {
 	border-color: var(--error);
+}
+/* The destructive confirmation of a dialog: filled red. */
+.rs-btn.rs-btn-primary.rs-btn-danger:not(:disabled) {
+	background: var(--error);
+	border-color: var(--error);
+	color: #ffffff;
+}
+.confirm-dialog-backdrop .checkpoint-preview-actions {
+	justify-content: flex-end;
 }
 .rs-quiet {
 	background: none;
@@ -8856,6 +8583,14 @@ label.rs-row {
 .rs-quiet:disabled {
 	opacity: 0.45;
 	cursor: default;
+}
+/* A row's own actions in the dialogs are quiet words, not underlined: a
+   line under a word is kept for a link that leaves the page. */
+.settings-dialog-pane button.rs-quiet {
+	text-decoration: none;
+}
+.settings-dialog-pane :has(> button.rs-quiet) {
+	column-gap: 14px;
 }
 .rs-quiet-danger {
 	color: color-mix(in srgb, var(--error) 75%, var(--muted));
@@ -8885,61 +8620,15 @@ label.rs-row {
 	line-height: 1.4;
 }
 .room-schedules-form {
-	border: 1px solid var(--border-soft);
-	border-radius: 12px;
 	display: flex;
 	flex-direction: column;
 	gap: 10px;
-	padding: 12px;
 }
-.room-schedules-form-grid {
-	display: grid;
-	gap: 12px;
-	grid-template-columns: minmax(0, 1fr) minmax(160px, 220px);
-}
-.room-schedules-field {
-	display: grid;
-	gap: 6px;
-}
-.room-schedules-field span,
-.room-schedules-checkbox span {
-	font-size: 12px;
-	font-weight: 700;
-	line-height: 1.35;
-}
-.room-schedules-field textarea.launcher-path-input {
-	min-height: 84px;
-	resize: vertical;
-}
-.room-schedules-help {
-	color: var(--muted);
-	font-size: 11px;
-	line-height: 1.45;
-	margin: -4px 0 0;
-}
-.room-schedules-recurrence {
-	border: 1px solid var(--border-soft);
-	border-radius: 12px;
-	display: flex;
-	flex-direction: column;
-	gap: 10px;
-	margin: 0;
-	padding: 12px;
-}
-.room-schedules-recurrence legend {
-	font-size: 12px;
-	font-weight: 700;
-	padding: 0 4px;
-}
-.room-schedules-mode-buttons,
-.room-schedules-submode-row,
 .room-schedules-day-row {
 	display: flex;
 	flex-wrap: wrap;
 	gap: 8px;
 }
-.room-schedules-mode-button,
-.room-schedules-submode-button,
 .room-schedules-day-chip {
 	background: color-mix(in srgb, var(--panel-2) 78%, transparent);
 	border: 1px solid var(--border-soft);
@@ -8951,24 +8640,16 @@ label.rs-row {
 	font-weight: 700;
 	padding: 7px 12px;
 }
-.room-schedules-mode-button:hover:not(:disabled),
-.room-schedules-mode-button:focus-visible,
-.room-schedules-submode-button:hover:not(:disabled),
-.room-schedules-submode-button:focus-visible,
 .room-schedules-day-chip:hover:not(:disabled),
 .room-schedules-day-chip:focus-visible {
 	border-color: var(--fg);
 	outline: none;
 }
-.room-schedules-mode-button.active,
-.room-schedules-submode-button.active,
 .room-schedules-day-chip.active {
 	background: var(--fg);
 	border-color: var(--fg);
 	color: var(--bg);
 }
-.room-schedules-mode-button:disabled,
-.room-schedules-submode-button:disabled,
 .room-schedules-day-chip:disabled {
 	cursor: default;
 	opacity: 0.6;
@@ -8977,58 +8658,19 @@ label.rs-row {
 	min-width: 48px;
 	text-align: center;
 }
-.room-schedules-preset-panel {
-	background: color-mix(in srgb, var(--panel-2) 70%, transparent);
-	border: 1px solid var(--border-soft);
-	border-radius: 10px;
-	display: flex;
-	flex-direction: column;
-	gap: 10px;
-	padding: 10px;
+/* The schedule form's own inputs, sized to what they hold. */
+.room-schedules-time-input {
+	width: 120px;
 }
-.room-schedules-inline-controls {
-	display: flex;
-	flex-wrap: wrap;
-	gap: 10px;
-	align-items: end;
+.room-schedules-number-input {
+	width: 80px;
 }
-.room-schedules-time-field,
-.room-schedules-number-field,
-.room-schedules-unit-field {
-	min-width: 150px;
+.room-schedules-select {
+	width: auto;
 }
-.room-schedules-number-field {
-	max-width: 180px;
-}
-.room-schedules-save-summary {
-	border: 1px solid color-mix(in srgb, var(--warning) 20%, var(--border-soft));
-	border-radius: 10px;
-	background: color-mix(in srgb, var(--warning) 7%, transparent);
-	display: grid;
-	gap: 3px;
-	padding: 10px 12px;
-}
-.room-schedules-save-summary span {
-	font-size: 11px;
-	font-weight: 800;
-	letter-spacing: 0.08em;
-	text-transform: uppercase;
-}
-.room-schedules-save-summary p {
-	color: var(--fg);
-	font-size: 12px;
-	line-height: 1.45;
-	margin: 0;
-}
-.room-schedules-checkbox {
-	display: flex;
-	align-items: center;
-	gap: 12px;
-	color: var(--muted);
-	cursor: pointer;
-}
-.room-schedules-form-actions {
-	justify-content: flex-start;
+.room-schedules-expression-input {
+	width: 220px;
+	font-family: var(--exx-font-mono);
 }
 .room-schedules-list {
 	display: flex;
@@ -9242,52 +8884,10 @@ label.rs-row {
 	.room-settings-overlay {
 		padding: 12px;
 	}
-	.room-settings-modal.rs-shell {
-		height: min(92vh, 100%);
-	}
 	.room-settings-head,
 	.room-settings-body {
 		padding-left: 16px;
 		padding-right: 16px;
-	}
-	/* The rail folds into a horizontally scrollable strip on narrow screens. */
-	.room-settings-layout {
-		flex-direction: column;
-	}
-	.room-settings-nav {
-		flex-direction: row;
-		width: auto;
-		overflow-x: auto;
-		border-right: none;
-		border-bottom: 1px solid var(--border-soft);
-		padding: 8px 12px;
-	}
-	.rs-nav-item {
-		white-space: nowrap;
-		width: auto;
-	}
-	.rs-nav-spacer {
-		display: none;
-	}
-	.room-schedules-form-grid {
-		grid-template-columns: 1fr;
-	}
-	.room-schedules-inline-controls,
-	.room-schedules-mode-buttons,
-	.room-schedules-submode-row {
-		align-items: stretch;
-		flex-direction: column;
-	}
-	.room-schedules-time-field,
-	.room-schedules-number-field,
-	.room-schedules-unit-field {
-		max-width: none;
-		min-width: 0;
-		width: 100%;
-	}
-	.room-schedules-mode-button,
-	.room-schedules-submode-button {
-		text-align: left;
 	}
 	.room-schedules-job-head {
 		align-items: flex-start;
@@ -9298,16 +8898,151 @@ label.rs-row {
 /* Home hero "+ New room" --------------------------------------- */
 .landing-hero-head {
 	display: flex;
-	align-items: flex-start;
+	align-items: flex-end;
 	justify-content: space-between;
 	gap: 16px;
 }
+/* Home screen order -------------------------------------------- */
+/* The sort control sits at the right end of the hero head.
+   The control is one line of text, not a button-shaped thing: it must be
+   findable and never louder than the rooms. */
+.landing-hero-actions {
+	display: flex;
+	align-items: flex-start;
+	gap: 12px;
+	flex: 0 0 auto;
+}
+/* The arrange line is long: where it does not fit beside the title (a phone,
+   a narrow window) it takes its own row and its hint wraps, so Save and
+   Cancel stay on screen. */
+.landing-hero-head.is-arranging { flex-wrap: wrap; }
+.landing-hero-head.is-arranging .landing-hero-actions {
+	flex: 1 1 auto;
+	min-width: 0;
+	justify-content: flex-end;
+}
+.room-sort {
+	position: relative;
+	display: flex;
+	flex-direction: column;
+	align-items: flex-end;
+	min-width: 0;
+}
+.room-sort-row {
+	display: flex;
+	align-items: center;
+	gap: 2px;
+}
+.room-sort-btn,
+.room-sort-current {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	height: 26px;
+	padding: 0 8px;
+	border: none;
+	border-radius: var(--exx-radius-pill);
+	background: transparent;
+	color: var(--muted);
+	font: inherit;
+	font-size: 12.5px;
+	line-height: 1.2;
+	white-space: nowrap;
+}
+.room-sort-btn { cursor: pointer; }
+.room-sort-btn:hover,
+.room-sort-btn:focus-visible,
+.room-sort-btn[aria-expanded="true"] {
+	color: var(--fg);
+	background: color-mix(in srgb, var(--fg) 10%, transparent);
+	outline: none;
+}
+.room-sort-btn:focus-visible {
+	box-shadow: 0 0 0 1px color-mix(in srgb, var(--fg) 35%, transparent);
+}
+.room-sort-caret { font-size: 10px; }
+.room-sort-menu {
+	position: absolute;
+	top: 32px;
+	right: 0;
+	min-width: 176px;
+	max-width: min(280px, calc(100vw - 32px));
+	background: var(--bg);
+	border: 1px solid var(--border);
+	border-radius: 12px;
+	padding: 6px;
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	box-shadow: var(--exx-shadow-popover);
+	z-index: 30;
+}
+.room-sort-option {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 10px;
+	border: none;
+	border-radius: 8px;
+	padding: 7px 10px;
+	background: transparent;
+	color: var(--fg-soft);
+	font: inherit;
+	font-size: 12.5px;
+	line-height: 1.3;
+	text-align: left;
+	cursor: pointer;
+}
+.room-sort-option:hover:not(:disabled),
+.room-sort-option:focus-visible {
+	background: color-mix(in srgb, var(--fg) 10%, transparent);
+	color: var(--fg);
+	outline: none;
+}
+.room-sort-option:disabled {
+	color: var(--dim);
+	cursor: progress;
+}
+/* The current order is marked, not merely highlighted: hover must not be able
+   to impersonate "this is what you have". */
+.room-sort-option.is-current {
+	color: var(--fg);
+	font-weight: 700;
+}
+.room-sort-option.is-current::after {
+	content: "✓";
+	font-weight: 700;
+	color: var(--success);
+}
+/* .landing-scoped to beat `.landing p` (0,1,1), which would take their
+   colour, margin and width. */
+.landing .room-sort-menu-error {
+	margin: 2px 0 4px;
+	padding: 0 10px;
+	color: var(--error);
+	font-size: 11px;
+	line-height: 1.35;
+}
+.landing .room-sort-menu-error.is-note { color: var(--muted); }
+.landing .room-sort-problem {
+	margin: 4px 0 0;
+	/* Never wider than half a phone: the title beside it keeps its room. */
+	max-width: min(320px, 46vw);
+	color: var(--muted);
+	font-size: 11.5px;
+	line-height: 1.4;
+	text-align: right;
+}
+/* After .room-sort-problem on purpose: same weight, this colour wins. */
+.landing .room-sort-save-error { color: var(--error); }
 /* Room card settings gear -------------------------------------- */
 .persistent-agent-header-end {
 	display: flex;
 	align-items: center;
 	gap: 8px;
 	flex: 0 0 auto;
+	/* The height of a status pill, pill or not, so every card's rows line up. */
+	min-height: 22px;
 }
 .card-gear-btn {
 	background: transparent;
@@ -9339,82 +9074,16 @@ label.rs-row {
 	padding: 24px;
 }
 .help-modal {
-	background: var(--bg);
-	border: 1px solid var(--fg);
+	background: var(--panel);
+	color: var(--fg); /* drawn inside the gear menu, whose muted colour it would inherit */
+	border: 1px solid var(--exx-edge-dialog);
 	border-radius: 14px;
-	max-width: 820px;
+	max-width: 600px;
 	width: 100%;
 	max-height: 90vh;
 	display: flex;
 	flex-direction: column;
 	overflow: hidden;
-}
-.rooms-guide-overlay {
-	position: fixed;
-	inset: 0;
-	background: var(--overlay-bg);
-	display: flex;
-	align-items: center;
-	justify-content: center;
-	z-index: 50;
-	padding: 24px;
-}
-.rooms-guide-modal {
-	background: var(--bg);
-	border: 1px solid var(--border);
-	border-radius: 14px;
-	max-width: 520px;
-	width: 100%;
-	max-height: 90vh;
-	overflow-y: auto;
-	padding: 22px 26px 26px;
-}
-.rooms-guide-topbar {
-	display: flex;
-	justify-content: flex-end;
-	margin: -4px -6px 2px 0;
-}
-.rooms-guide-hook {
-	margin: 0 0 10px;
-	color: var(--fg);
-	font-size: 19px;
-	font-weight: 700;
-	line-height: 1.3;
-	letter-spacing: -0.01em;
-}
-.rooms-guide-lede {
-	margin: 0 0 26px;
-	color: var(--fg-soft);
-	font-size: 14px;
-	line-height: 1.55;
-}
-.rooms-guide-basics {
-	display: flex;
-	flex-direction: column;
-	gap: 20px;
-}
-.rooms-guide-basic {
-	display: flex;
-	flex-direction: column;
-	gap: 4px;
-}
-.rooms-guide-term {
-	font-weight: 700;
-	font-size: 14px;
-	color: var(--fg);
-}
-.rooms-guide-body {
-	color: var(--fg-soft);
-	font-size: 13px;
-	line-height: 1.5;
-}
-.rooms-guide-foot {
-	margin: 22px 0 0;
-	padding-top: 16px;
-	border-top: 1px solid var(--border-soft);
-	color: var(--muted);
-	font-size: 12px;
-	line-height: 1.5;
 }
 .help-head {
 	display: flex;
@@ -9430,108 +9099,42 @@ label.rs-row {
 	font-weight: 700;
 	letter-spacing: -0.01em;
 }
+/* One type scale: the hook, then everything at one size, the leads and the
+   heading set apart by weight alone. */
 .help-body {
 	overflow-y: auto;
-	padding: 22px;
-	display: flex;
-	flex-direction: column;
-	gap: 28px;
-}
-.help-body section {
-	border-left: 2px solid var(--fg);
-	padding-left: 16px;
-}
-.help-body section.help-hero {
-	border-left: none;
-	padding-left: 0;
-	padding-bottom: 4px;
-	border-bottom: 1px solid var(--border-soft);
+	padding: 24px 26px 28px;
+	font-size: 14px;
+	line-height: 1.55;
+	color: var(--fg-soft);
 }
 .help-lede {
 	font-family: "Bandeins Strange", "Bandeins Strange Variable", "Sen", sans-serif;
-	font-size: 18px;
-	line-height: 1.45;
+	font-size: 19px;
+	line-height: 1.35;
 	color: var(--fg);
 	letter-spacing: -0.005em;
-	margin: 0 0 6px;
+	margin: 0 0 22px;
 }
+.help-body strong,
+.help-body h3 { color: var(--fg); font-weight: 700; }
+.help-body h3 { font-size: inherit; margin: 28px 0 10px; }
+.help-steps,
+.help-notes {
+	margin: 0;
+	padding-left: 22px;
+	display: flex;
+	flex-direction: column;
+	gap: 14px;
+}
+.help-notes { gap: 8px; }
+.help-steps li::marker { color: var(--fg); font-weight: 700; }
+/* A quiet aside, used by the Maintain screens. */
 .help-note {
 	font-size: 12px;
 	color: var(--muted);
 	font-style: italic;
 }
-.help-body h3 {
-	font-family: "Bandeins Strange", "Sen", sans-serif;
-	margin: 0 0 8px;
-	font-size: 17px;
-	font-weight: 700;
-	letter-spacing: -0.005em;
-}
-.help-body p { margin: 0 0 8px; color: var(--fg-soft); }
-.help-body ul, .help-body ol { padding-left: 22px; color: var(--fg-soft); margin: 4px 0; }
-.help-body li { margin: 4px 0; }
-.help-body code {
-	font-family: var(--exx-font-mono);
-	font-size: 0.92em;
-	background: var(--panel-2);
-	padding: 1px 6px;
-	border-radius: 4px;
-}
-.help-code {
-	background: var(--panel);
-	border: 1px solid var(--border);
-	border-radius: 6px;
-	padding: 12px 14px;
-	font-family: var(--exx-font-mono);
-	font-size: 12px;
-	color: var(--fg-soft);
-	overflow-x: auto;
-	margin: 8px 0;
-}
-.help-table {
-	width: 100%;
-	border-collapse: collapse;
-	font-size: 13px;
-	margin: 4px 0 8px;
-}
-.help-table th {
-	text-align: left;
-	font-size: 10px;
-	font-weight: 700;
-	letter-spacing: 0.1em;
-	text-transform: uppercase;
-	color: var(--dim);
-	border-bottom: 1px solid var(--border);
-	padding: 8px 10px;
-}
-.help-table td {
-	padding: 10px;
-	border-bottom: 1px solid var(--border-soft);
-	color: var(--fg-soft);
-	vertical-align: top;
-}
-.help-table td.ok { color: var(--fg); font-weight: 700; }
-.help-cmds { columns: 2; column-gap: 24px; }
-.help-cmds li { break-inside: avoid; }
-.help-diagram {
-	background: var(--panel);
-	border: 1px solid var(--border);
-	border-radius: 8px;
-	padding: 14px;
-	margin-top: 8px;
-}
-.hd-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-.hd-box {
-	border: 1px solid var(--border);
-	border-radius: 6px;
-	padding: 6px 12px;
-	font-size: 12px;
-	font-weight: 700;
-	color: var(--fg-soft);
-}
-.hd-box.hd-active { background: var(--fg); color: var(--bg); border-color: var(--fg); }
-.hd-arrow { color: var(--dim); }
-.hd-caption { margin-top: 10px; color: var(--muted); font-size: 12px; }
 
 /* Fixture gallery --------------------------------------------------- */
 .fixture-gallery {
@@ -9613,72 +9216,57 @@ label.rs-row {
 .room-maintenance-section {
 	display: flex;
 	flex-direction: column;
-	gap: 8px;
-}
-.room-maintenance-section .workspaces-tool-row {
-	display: inline-flex;
-	align-items: center;
 	gap: 12px;
-	cursor: pointer;
-}
-.room-maintenance-section .workspaces-tool-row span {
-	font-size: 13px;
-	line-height: 1.3;
 }
 .room-maintenance-error {
 	color: var(--danger, #c0392b);
 	font-size: 12px;
 }
-.memory-budget-row .rs-row-main {
-	flex: 1;
+/* The budget row: the slider and its value on the right, as wide as the
+   row leaves; on a phone the control takes its own line. */
+.memory-budget-control {
+	flex: 0 1 360px;
+	min-width: 200px;
 }
 .memory-budget-value {
-	margin-left: 8px;
-	color: var(--muted);
+	color: var(--fg);
 	font-size: 13px;
-	font-weight: 400;
+	font-weight: 500;
 	font-variant-numeric: tabular-nums;
 }
 .memory-budget-slider {
-	width: 100%;
+	flex: 1 1 auto;
+	min-width: 0;
 	accent-color: var(--exx-plan);
 	cursor: pointer;
-	margin: 8px 0 2px;
 }
 .memory-budget-slider:disabled {
 	opacity: 0.45;
 	cursor: not-allowed;
 }
-.memory-budget-usage {
-	margin: 0;
-	color: var(--muted);
-	font-size: 12px;
-	font-variant-numeric: tabular-nums;
+.memory-budget-over {
+	color: var(--error);
 }
 
 /* Room settings → Memory: the entries and the archive, under the budget meter. */
 .room-memory-entries {
 	display: flex;
 	flex-direction: column;
-	gap: 8px;
-	margin-top: 18px;
-	border-top: 1px solid var(--border-soft);
-	padding-top: 16px;
+	gap: 12px;
+	margin-top: 22px;
 }
 .room-memory-entries .memory-archive-head {
-	margin-top: 18px;
-	border-top: 1px solid var(--border-soft);
-	padding-top: 16px;
+	margin-top: 22px;
 }
-.memory-topic {
-	display: grid;
-	gap: 4px;
+/* The topics (and the open items) as rows of one list. */
+.memory-topic + .memory-topic {
+	border-top: 1px solid var(--exx-divider);
 }
 .memory-topic-head {
 	display: flex;
 	align-items: baseline;
 	gap: 8px;
-	padding-top: 10px;
+	padding: 9px 0;
 	width: 100%;
 	background: none;
 	border: none;
@@ -9686,34 +9274,27 @@ label.rs-row {
 	cursor: pointer;
 	color: inherit;
 	font: inherit;
-}
-.memory-topic-caret {
-	color: var(--muted);
-	font-size: 11px;
-}
-.memory-topic-title {
-	font-family: "Bandeins Strange", "Sen", sans-serif;
 	font-size: 14px;
-	font-weight: 700;
+}
+.memory-topic-head .memory-topic-count {
+	margin-left: auto;
 }
 .memory-notes-search {
-	margin: 10px 0 4px;
+	margin: 4px 0;
 	width: 100%;
+	font: inherit;
+	font-size: 13px;
+	color: var(--fg);
+	background: var(--bg-2);
+	border: 1px solid var(--border-soft);
+	border-radius: 8px;
+	padding: 8px 12px;
 }
-.memory-note-group-head {
-	margin: 16px 0 0;
-	font-size: 11px;
-	letter-spacing: 0.12em;
-	text-transform: uppercase;
+.memory-notes-search::placeholder {
 	color: var(--muted);
 }
 .room-memory-history {
-	margin-top: 18px;
-	border-top: 1px solid var(--border-soft);
-	padding-top: 16px;
-}
-.room-memory-history .rs-pane-head {
-	margin-bottom: 14px;
+	margin-top: 22px;
 }
 .memory-history-status {
 	margin: 10px 0 0;
@@ -9732,8 +9313,10 @@ label.rs-row {
 	align-items: baseline;
 	gap: 10px;
 	padding: 7px 0;
-	border-top: 1px solid color-mix(in srgb, var(--border-soft) 38%, transparent);
 	font-size: 12.5px;
+}
+.memory-history-row + .memory-history-row {
+	border-top: 1px solid color-mix(in srgb, var(--border-soft) 38%, transparent);
 }
 .memory-history-when {
 	flex: 0 0 104px;
@@ -9747,11 +9330,11 @@ label.rs-row {
 	text-transform: uppercase;
 	color: var(--muted);
 }
-.memory-history-row .rs-quiet { margin-left: auto; }
+.memory-history-row :is(.rs-btn, .rs-quiet) { margin-left: auto; }
 /* "What changed" sits at the row's end beside Undo, and its fold wraps to a
    full-width line under the row on both surfaces. */
 .memory-history-row, .mem-hist-row { flex-wrap: wrap; }
-.memory-history-row .rs-quiet ~ .rs-quiet { margin-left: 0; }
+.memory-history-row :is(.rs-btn, .rs-quiet) ~ :is(.rs-btn, .rs-quiet) { margin-left: 0; }
 .mem-hist-row .memory-history-toggle { margin-left: auto; flex: 0 0 auto; }
 .memory-history-change { flex: 1 0 100%; min-width: 0; }
 .memory-history-change .mem-diff-note { color: var(--muted); font-size: 12.5px; }
@@ -9767,11 +9350,55 @@ label.rs-row {
 	display: grid;
 	gap: 2px;
 }
+.memory-topic .memory-entries {
+	padding-left: 18px;
+}
+/* A note: kind and date on the left, its small actions on the right, the
+   text below; a hairline above each note. */
 .memory-entry {
-	border-top: 1px solid color-mix(in srgb, var(--border-soft) 38%, transparent);
-	padding: 10px 0;
+	border-top: 1px solid var(--exx-divider);
+	padding: 12px 0;
 	display: grid;
 	gap: 5px;
+}
+.memory-entry-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+}
+.memory-entry-head .memory-entry-meta {
+	color: var(--muted);
+}
+.memory-entry-tools {
+	display: flex;
+	gap: 14px;
+	flex-shrink: 0;
+}
+/* The add-note form: labelled fields, Topic and Kind side by side, the
+   buttons at the foot on the right. */
+.settings-form-two {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+	column-gap: 16px;
+}
+.settings-field {
+	display: grid;
+	gap: 4px;
+}
+.settings-field > span {
+	font-size: 13px;
+	color: var(--muted);
+}
+/* A form that opens inside a list ends with Cancel, then its primary
+   action, on one line at the right. */
+.settings-form-foot {
+	display: flex;
+	justify-content: flex-end;
+	gap: 8px;
+}
+.memory-entry-move .settings-form-foot {
+	margin-left: auto;
 }
 .memory-entry-meta {
 	display: flex;
@@ -9809,218 +9436,97 @@ label.rs-row {
 .memory-entry-edit,
 .memory-entry-add {
 	display: grid;
-	gap: 8px;
+	gap: 10px;
 }
+/* One field style for the note forms: the text, the selects and the new
+   topic name all read as the same input, in both themes. */
 .memory-entry-edit textarea,
 .memory-entry-add textarea,
 .memory-entry-add select,
-.memory-entry-move select {
+.memory-entry-add input[type="text"],
+.memory-entry-move select,
+.memory-entry-move input[type="text"] {
 	font: inherit;
 	font-size: 13px;
 	color: var(--fg);
-	background: var(--panel);
-	border: 1px solid var(--border);
+	background: var(--bg-2);
+	border: 1px solid var(--border-soft);
 	border-radius: 8px;
 	padding: 8px 10px;
 	width: 100%;
+}
+.memory-entry-add input[type="text"]::placeholder,
+.memory-entry-move input[type="text"]::placeholder,
+.memory-entry-add textarea::placeholder {
+	color: var(--muted);
 }
 .memory-entry-move select {
 	width: auto;
 	min-width: 160px;
 }
 
-/* Room settings: workspace empty state — names what stays locked without a folder. */
-.workspaces-no-workspace {
-	border: 1px dashed var(--border-soft);
-	border-radius: 10px;
-	padding: 14px;
-	display: grid;
-	gap: 8px;
-	justify-items: start;
-}
-.workspaces-no-workspace-lead {
-	margin: 0;
-	font-size: 14px;
-	font-weight: 600;
-}
-.workspaces-no-workspace-copy {
-	margin: 0;
-	color: var(--muted);
-	font-size: 12.5px;
-	line-height: 1.5;
-}
-/* Room settings: edit mode shows the currently saved folder as a real value,
-   so an empty input reads as "keep this", not as an empty field. */
-.workspace-saved-folder {
-	display: flex;
-	align-items: center;
-	gap: 8px;
-	font-size: 13px;
-}
-.workspace-saved-folder-name {
-	font-weight: 600;
-}
-.workspace-saved-folder-tag {
-	color: var(--muted);
-	font-size: 11px;
-	text-transform: uppercase;
-	letter-spacing: 0.08em;
-}
-
-/* Room settings: workspace summary card ------------------------------ */
-.workspace-summary-card {
-	display: grid;
-	gap: 8px;
-	border: 1px solid var(--border-soft);
-	border-radius: 10px;
-	padding: 14px 16px;
-}
-.workspace-summary-folder {
-	display: flex;
-	align-items: center;
-	flex-wrap: wrap;
-	gap: 8px;
-}
-.workspace-summary-folder strong {
-	font-size: 14px;
-	line-height: 1.3;
-	overflow-wrap: anywhere;
-}
-.workspace-summary-folder .workspace-folder-icon {
-	color: var(--muted);
-}
-.workspace-summary-mode {
-	border: 1px solid var(--border);
-	border-radius: 999px;
-	color: var(--muted);
-	font-size: 10px;
-	font-weight: 700;
-	letter-spacing: 0.06em;
-	padding: 2px 8px;
-	text-transform: uppercase;
-}
-.workspace-summary-facts {
-	display: grid;
-	gap: 4px;
-	margin: 0;
-}
-.workspace-summary-facts div {
-	display: flex;
-	gap: 8px;
-	align-items: baseline;
-}
-.workspace-summary-facts dt {
-	flex: 0 0 52px;
-	color: var(--muted);
-	font-size: 10px;
-	font-weight: 700;
-	letter-spacing: 0.08em;
-	text-transform: uppercase;
-}
-.workspace-summary-facts dd {
-	color: var(--fg);
-	font-size: 12px;
-	line-height: 1.4;
-	margin: 0;
-	overflow-wrap: anywhere;
-}
-.workspace-summary-note {
-	color: var(--muted);
-	font-size: 11px;
-	line-height: 1.4;
-	margin: 0;
-}
-
-/* Room settings: workspace access mode segments ---------------------- */
-.workspace-mode-segments {
+/* A segmented choice (the workspace access mode, the schedule's mode): the
+   chosen option takes the quiet filled row colour. It never shrinks; the
+   label beside it does. */
+.settings-segments {
 	display: inline-flex;
-	border: 1px solid var(--border);
-	border-radius: 999px;
+	flex-shrink: 0;
+	box-sizing: border-box;
+	height: 32px;
+	border: 1px solid var(--border-soft);
+	border-radius: 8px;
 	overflow: hidden;
-	width: fit-content;
-	max-width: 100%;
 }
-.workspace-mode-segment {
+.settings-segment {
 	background: transparent;
 	border: none;
 	color: var(--muted);
 	cursor: pointer;
 	font: inherit;
-	font-size: 12px;
-	font-weight: 700;
-	padding: 8px 16px;
+	font-size: 13px;
+	padding: 0 12px;
 	white-space: nowrap;
 }
-.workspace-mode-segment + .workspace-mode-segment {
-	border-left: 1px solid var(--border);
+.settings-segment + .settings-segment {
+	border-left: 1px solid var(--border-soft);
 }
-.workspace-mode-segment:hover:not(:disabled):not(.active) {
+.settings-segment:hover:not(:disabled):not(.active) {
 	color: var(--fg);
-	background: color-mix(in srgb, var(--fg) 6%, transparent);
 }
-.workspace-mode-segment:focus-visible {
+.settings-segment:focus-visible {
 	color: var(--fg);
-	outline: 2px solid var(--fg);
+	outline: 2px solid var(--exx-focus);
 	outline-offset: -2px;
 }
-.workspace-mode-segment.active {
-	background: var(--fg);
-	color: var(--bg);
+.settings-segment.active {
+	background: var(--exx-active-muted-bg);
+	color: var(--fg);
 	cursor: default;
 }
-.workspace-mode-segment:disabled {
+.settings-segment:disabled {
 	cursor: default;
 	opacity: 0.6;
 }
 
-/* Room settings: grouped workspace tools ------------------------------ */
-.workspace-tool-groups {
+/* Room settings: the workspace tools in two columns of rows. */
+.workspace-tool-columns {
 	display: grid;
-	gap: 12px;
-	grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+	grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+	column-gap: 32px;
 	align-items: start;
-}
-.workspace-tool-group {
-	display: grid;
-	gap: 6px;
-}
-.workspace-tool-group-label {
-	color: var(--muted);
-	font-size: 10px;
-	font-weight: 700;
-	letter-spacing: 0.08em;
-	text-transform: uppercase;
-}
-
-/* Room settings: power user block ------------------------------------- */
-.workspace-power-user {
-	border: 1px solid color-mix(in srgb, var(--warning) 26%, var(--border-soft));
-	border-radius: 12px;
-	display: grid;
-	gap: 4px;
-	padding: 10px 12px;
-	background: color-mix(in srgb, var(--warning) 5%, transparent);
-}
-.workspace-power-user .workspaces-tool-row {
-	padding: 0;
-	background: transparent;
-	border: none;
-}
-.workspace-power-user .workspaces-session-note {
-	margin: 0;
 }
 
 /* Room settings: session / memento ------------------------------------ */
 .room-session-section {
 	display: flex;
 	flex-direction: column;
-	gap: 8px;
+	gap: 12px;
 }
 /* Room settings → Instructions: one textarea, its counter, Save and Remove. */
 .room-instructions-section {
 	display: flex;
 	flex-direction: column;
-	gap: 10px;
+	gap: 12px;
 }
 .room-instructions-textarea {
 	min-height: 220px;
@@ -10043,29 +9549,8 @@ label.rs-row {
 .room-instructions-count.over {
 	color: var(--error);
 }
-/* The one per-room control for the instructions for every room: the same
-   switch row as the workspace tools, with its state said under the title;
-   under it, the every-room text folded to one line and shown read-only. */
-.room-instructions-global-row {
-	display: flex;
-	align-items: center;
-	justify-content: space-between;
-	gap: 16px;
-	padding: 10px 12px;
-	border: 1px solid var(--border);
-	border-radius: 8px;
-	cursor: pointer;
-}
-.room-instructions-global-main {
-	display: flex;
-	flex-direction: column;
-	gap: 3px;
-	min-width: 0;
-}
-.room-instructions-global-title {
-	font-size: 13px;
-	line-height: 1.3;
-}
+/* Under the "use the global instructions" row, the every-room text folded
+   to one line and shown read-only. */
 .room-instructions-global {
 	display: flex;
 	flex-direction: column;
@@ -10115,11 +9600,7 @@ label.rs-row {
 	flex-wrap: wrap;
 	gap: 10px;
 }
-.landing-action.room-danger-submit:not(:disabled) {
-	background: var(--error);
-	border-color: var(--error);
-	color: #ffffff;
-}
+
 
 /* Room settings: schedules summary line -------------------------------- */
 .room-schedules-summary-fact {
@@ -10145,11 +9626,14 @@ label.rs-row {
 	gap: 6px;
 }
 .connector-oauth-toggle {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
 	background: none;
 	border: none;
 	padding: 0;
 	text-align: left;
-	font-size: 12px;
+	font-size: 13px;
 	color: var(--muted);
 	cursor: pointer;
 }
@@ -10158,13 +9642,10 @@ label.rs-row {
 }
 .connector-oauth-fields {
 	display: grid;
-	gap: 10px;
-	padding: 10px 12px;
-	border: 1px solid var(--border-soft);
-	border-radius: var(--exx-radius-control);
+	gap: 12px;
 }
 .connector-form-field span {
-	font-size: 12px;
+	font-size: 13px;
 	color: var(--muted);
 }
 .connector-form-field input {
@@ -10210,180 +9691,27 @@ label.rs-row {
 .connector-form-kind input[type="radio"] {
 	accent-color: var(--fg);
 }
-.ai-setup-model-row .ai-setup-actions {
-	margin-top: 8px;
-	display: flex;
-	align-items: center;
-	flex-wrap: wrap;
-	gap: 8px;
-}
-.ai-setup-model-row .ai-setup-actions .inline-action {
-	width: auto;
-	justify-self: start;
-}
 .connector-outcome-error {
 	color: var(--exx-danger, #e85858) !important;
 }
 
-/* Connector directory ------------------------------------------------ */
-.connector-dir-search {
-	width: 100%;
-	border: 1px solid var(--border-soft);
-	border-radius: var(--exx-radius-control);
-	background: var(--bg-2);
-	color: var(--fg);
-	padding: 10px 12px;
-	font: inherit;
-	margin-bottom: 16px;
-}
-.connector-dir-search:focus {
-	outline: 2px solid var(--exx-focus);
-	outline-offset: 2px;
-	border-color: var(--exx-focus);
-}
-.connector-dir-grid {
-	display: grid;
-	grid-template-columns: repeat(2, minmax(0, 1fr));
-	gap: 10px;
-}
-@media (max-width: 760px) {
-	.connector-dir-grid {
-		grid-template-columns: minmax(0, 1fr);
-	}
-}
-.connector-dir-card {
-	border: 1px solid var(--border-soft);
-	border-radius: 12px;
-	background: color-mix(in srgb, var(--panel) 82%, transparent);
-	padding: 12px 14px;
-	display: flex;
-	flex-direction: column;
-	gap: 8px;
-}
-/* Reference card geometry: icon left; name, kind, and a two-line blurb in
-   the middle; one small square add control right, vertically centered. */
-.connector-dir-card-row {
-	display: flex;
-	align-items: center;
-	gap: 12px;
-	min-width: 0;
-}
-.connector-dir-body {
-	flex: 1 1 auto;
-	min-width: 0;
-	display: grid;
-	gap: 2px;
-}
-.connector-dir-title {
-	display: flex;
-	align-items: baseline;
-	gap: 8px;
-	min-width: 0;
-}
-.connector-dir-title strong {
-	font-size: 14px;
-	font-weight: 500;
-	white-space: nowrap;
-	overflow: hidden;
-	text-overflow: ellipsis;
-	min-width: 0;
-}
-.connector-avatar {
-	border-radius: 9px;
-	display: flex;
-	align-items: center;
-	justify-content: center;
-	font-weight: 700;
-	font-size: 15px;
-	color: var(--fg);
-	background: color-mix(in srgb, var(--fg) 8%, transparent);
-	border: 1px solid var(--border-soft);
-	flex: 0 0 auto;
-}
+/* Connectors, Added: each connector is a row of one table, a grid whose
+   columns the table head sets (icon, name, type, status, actions), with a
+   hairline between rows only. The name area is a plain button that opens
+   the row's detail under it, at the name's edge. */
 .connector-rows {
 	display: grid;
 }
 .connector-row {
 	display: grid;
-	grid-template-columns: auto minmax(0, 1fr) auto auto;
-	gap: 6px 14px;
+	grid-template-columns: 24px minmax(0, 1fr) auto;
+	gap: 6px 12px;
 	align-items: center;
 	padding: 12px 0;
-	border-bottom: 1px solid color-mix(in srgb, var(--fg) 18%, transparent);
 }
-.connector-row:last-child {
-	border-bottom: none;
+.connector-rows > .connector-row + .connector-row {
+	border-top: 1px solid var(--exx-divider);
 }
-.connector-row-main {
-	display: grid;
-	gap: 2px;
-	min-width: 0;
-}
-.connector-row-title {
-	display: flex;
-	align-items: baseline;
-	gap: 10px;
-	min-width: 0;
-}
-.connector-row-title strong {
-	flex: 0 0 auto;
-}
-.connector-row-target {
-	color: var(--muted);
-	font-size: 12px;
-	white-space: nowrap;
-	overflow: hidden;
-	text-overflow: ellipsis;
-	min-width: 0;
-}
-.connector-row-meta {
-	color: var(--muted);
-	font-size: 12px;
-	line-height: 1.5;
-}
-/* Transient action outcomes: a full-width line under the row that wraps
-   instead of truncating inside the name cell. */
-.connector-row-outcome {
-	grid-column: 1 / -1;
-	color: var(--muted);
-	font-size: 12px;
-	line-height: 1.5;
-	min-width: 0;
-}
-.connector-row em.ready,
-.connector-row em.missing {
-	font-style: normal;
-	font-family: "Bandeins Strange", "Sen", sans-serif;
-	font-size: 11px;
-	letter-spacing: 0.06em;
-	text-transform: uppercase;
-	white-space: nowrap;
-}
-.connector-row em.ready {
-	color: var(--exx-success, #6bc77a);
-}
-.connector-row em.missing {
-	color: var(--exx-warning, #e8a838);
-}
-.connector-row-actions {
-	display: flex;
-	align-items: center;
-	flex-wrap: wrap;
-	justify-content: flex-end;
-	gap: 6px;
-}
-@media (max-width: 860px) {
-	.connector-row {
-		grid-template-columns: auto minmax(0, 1fr) auto;
-	}
-	.connector-row-actions {
-		grid-column: 2 / -1;
-		justify-content: flex-start;
-	}
-}
-/* Inline row expansion (Available table): the name area toggles a
-   full-width detail strip under the row — catalog blurb, tool chips,
-   quiet metadata. Pure presentation of already-fetched status data. */
 .connector-row-toggle {
 	background: none;
 	border: none;
@@ -10394,17 +9722,55 @@ label.rs-row {
 	text-align: left;
 	cursor: pointer;
 }
+.connector-row-main {
+	display: grid;
+	gap: 2px;
+	min-width: 0;
+}
+.connector-row-title {
+	display: flex;
+	align-items: baseline;
+	gap: 8px;
+	min-width: 0;
+}
+.connector-row-title strong {
+	font-size: 14px;
+	font-weight: 500;
+}
+.connector-row-meta {
+	color: var(--muted);
+	font-size: 13px;
+	line-height: 1.4;
+}
+.connector-row-actions {
+	display: flex;
+	align-items: center;
+	justify-content: flex-end;
+	flex-wrap: wrap;
+	gap: 14px;
+	min-height: 32px;
+}
+/* An action's outcome: a full-width line under the row that wraps instead
+   of truncating inside the name cell. */
+.connector-row-outcome {
+	grid-column: 2 / -1;
+	color: var(--muted);
+	font-size: 13px;
+	line-height: 1.4;
+	min-width: 0;
+}
 .connector-row-expansion {
-	grid-column: 1 / -1;
+	grid-column: 2 / -1;
 	display: grid;
 	gap: 8px;
-	padding: 2px 0 8px 36px;
+	padding: 2px 0 4px;
+	min-width: 0;
 }
 .connector-expansion-desc {
 	margin: 0;
-	font-size: 12.5px;
-	line-height: 1.5;
 	color: var(--muted);
+	font-size: 13px;
+	line-height: 1.5;
 	max-width: 44rem;
 }
 .connector-tool-chips {
@@ -10413,58 +9779,84 @@ label.rs-row {
 	gap: 6px;
 }
 .connector-tool-chip {
-	border: 1px solid var(--border-soft);
+	border: none;
 	border-radius: 6px;
-	background: color-mix(in srgb, var(--fg) 4%, transparent);
+	background: color-mix(in srgb, var(--fg) 6%, transparent);
 	color: var(--muted);
 	font-family: var(--exx-font-mono);
-	font-size: 11px;
+	font-size: 12px;
 	line-height: 1;
 	padding: 5px 8px;
 	white-space: nowrap;
 }
-/* The quiet toggle after the 8th chip: chip-shaped, dashed, obviously an
-   action rather than a tool name. */
+/* The toggle after the eighth tool reads as an action, not a tool name. */
 .connector-tool-chip-more {
 	background: none;
-	border-style: dashed;
+	font-family: inherit;
+	font-size: 13px;
 	cursor: pointer;
 }
 .connector-tool-chip-more:hover,
 .connector-tool-chip-more:focus-visible {
 	color: var(--fg);
-	border-color: var(--border);
+	text-decoration: underline;
+	text-underline-offset: 3px;
 }
 .connector-expansion-meta {
 	margin: 0;
-	font-size: 11.5px;
-	color: color-mix(in srgb, var(--muted) 80%, transparent);
+	color: var(--muted);
+	font-size: 12px;
 	white-space: nowrap;
 	overflow: hidden;
 	text-overflow: ellipsis;
 	min-width: 0;
+}
+/* A connector's icon: its brand glyph or monogram on a quiet tile, sized by
+   the caller (24 px in the table, 28 px in Room settings, 32 px in the
+   directory). */
+.connector-avatar {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	flex: 0 0 auto;
+	border-radius: 7px;
+	background: color-mix(in srgb, var(--fg) 8%, transparent);
+	color: var(--fg);
+	font-size: 13px;
+	font-weight: 600;
+	line-height: 1;
+}
+
+/* Connector directory ------------------------------------------------ */
+.connector-dir-search {
+	width: 220px;
+}
+/* A directory row: the icon, the name with its login kind as a small tag,
+   the description, one Add. A token entry opens its field as the next row,
+   with no hairline between the connector and its field. */
+.connector-dir-row {
+	justify-content: flex-start;
+	gap: 14px;
+}
+/* The custom form opens under its row, at the row's label edge. */
+.connector-dir-row-group > .ai-setup-block {
+	padding: 0 0 16px 46px;
+}
+.connector-dir-token-row {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 8px;
+	padding: 0 0 12px 46px;
 }
 .connector-dir-kind {
-	flex: 0 1 auto;
-	min-width: 0;
+	margin-left: 8px;
 	white-space: nowrap;
-	overflow: hidden;
-	text-overflow: ellipsis;
 	font-size: 11px;
+	font-weight: 400;
+	letter-spacing: 0.1em;
+	text-transform: uppercase;
 	color: var(--muted);
-}
-.connector-dir-desc {
-	margin: 0;
-	font-size: 12.5px;
-	line-height: 1.45;
-	color: var(--muted);
-	display: -webkit-box;
-	-webkit-line-clamp: 2;
-	-webkit-box-orient: vertical;
-	overflow: hidden;
-	/* Two reserved lines: every card keeps the same height whether the
-	   blurb fills them or not. */
-	min-height: calc(2 * 1.45em);
 }
 .connector-dir-note {
 	margin: 0;
@@ -10472,79 +9864,10 @@ label.rs-row {
 	line-height: 1.5;
 	color: var(--muted);
 }
-.connector-dir-actions {
-	display: flex;
-	align-items: center;
-	flex-wrap: wrap;
-	gap: 8px;
-}
-.connector-dir-actions .inline-action {
-	text-decoration: none;
-}
-.connector-dir-added {
-	display: inline-flex;
-	align-items: center;
-	min-height: 29px;
-	font-size: 12px;
-	color: var(--exx-success, #6bc77a);
-	font-weight: 600;
-}
 .connector-dir-token-input {
-	flex: 1 1 140px;
+	flex: 1 1 240px;
 	min-width: 0;
-	border: 1px solid var(--border-soft);
-	border-radius: var(--exx-radius-control);
-	background: var(--bg-2);
-	color: var(--fg);
-	padding: 7px 9px;
-	font-size: 12px;
-}
-.connector-dir-token-guide {
-	flex-basis: 100%;
-	font-size: 12px;
-	color: var(--muted);
-	text-decoration: none;
-}
-.connector-dir-token-guide:hover {
-	color: var(--fg);
-	text-decoration: underline;
-}
-/* The card's one control: a small square +, existing secondary tokens. */
-.connector-dir-add {
-	flex: 0 0 auto;
-	width: 28px;
-	height: 28px;
-	display: inline-flex;
-	align-items: center;
-	justify-content: center;
-	padding: 0;
-	border: 1px solid var(--exx-action-secondary-border);
-	border-radius: var(--exx-radius-control);
-	background: var(--exx-action-secondary-bg);
-	color: var(--exx-action-secondary-fg);
-	font-size: 16px;
-	line-height: 1;
-	cursor: pointer;
-	text-decoration: none;
-	transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
-}
-.connector-dir-add:hover:not(:disabled),
-.connector-dir-add:focus-visible {
-	background: color-mix(in srgb, var(--fg) 8%, transparent);
-	border-color: var(--border);
-	color: var(--fg);
-}
-.connector-dir-add:disabled {
-	opacity: 0.45;
-	cursor: not-allowed;
-}
-/* Installed marker in the same square footprint, quiet and inert. */
-.connector-dir-add.connector-dir-added {
-	min-height: 0;
-	border-color: transparent;
-	background: transparent;
-	font-size: 14px;
-	cursor: default;
+	max-width: 320px;
 }
 
 /* Connectors polish ---------------------------------------------------- */
@@ -10556,28 +9879,6 @@ label.rs-row {
 }
 .connectors-hero-title h1 {
 	margin: 0;
-}
-.connector-action-primary {
-	background: var(--exx-action-primary-bg) !important;
-	color: var(--exx-action-primary-fg) !important;
-	border-color: var(--exx-action-primary-bg) !important;
-}
-.connector-action-primary:hover {
-	background: var(--exx-action-primary-hover-bg) !important;
-}
-.connector-action-quiet {
-	border-color: transparent !important;
-	color: var(--muted) !important;
-}
-.connector-action-quiet:hover {
-	color: var(--fg) !important;
-}
-.connector-action-danger {
-	border-color: var(--exx-danger, #e85858) !important;
-	color: var(--exx-danger, #e85858) !important;
-}
-.connector-dir-actions {
-	margin-top: auto;
 }
 
 /* Connectors page: match home/dashboard framing — full width, no section
@@ -10592,33 +9893,11 @@ label.rs-row {
 .connectors-page > * {
 	width: min(1120px, 100%);
 }
-.connectors-page .landing-hero {
-	border-bottom: none;
-}
 .connectors-page .ai-setup-section {
 	border-bottom: none;
 	padding: 0 0 8px;
 }
-.connector-row {
-	border-bottom-color: var(--exx-divider);
-}
-
 /* Connectors: hero/list rhythm + active-connections head + off state */
-.connectors-page .landing-hero h1 {
-	margin: 0 0 12px;
-}
-.connectors-page .landing-hero {
-	padding-bottom: 14px;
-}
-.connector-section-head {
-	display: flex;
-	align-items: center;
-	gap: 14px;
-	flex-wrap: wrap;
-}
-.connector-section-head h2 {
-	margin: 0;
-}
 .connector-row em.off {
 	font-style: normal;
 	font-family: "Bandeins Strange", "Sen", sans-serif;
@@ -10627,9 +9906,6 @@ label.rs-row {
 	text-transform: uppercase;
 	white-space: nowrap;
 	color: color-mix(in srgb, var(--exx-danger, #e85858) 72%, var(--muted));
-}
-.connector-dir-custom {
-	border-style: dashed;
 }
 .connector-row em.idle {
 	font-style: normal;
@@ -10642,12 +9918,11 @@ label.rs-row {
 }
 
 /* Config/provenance plumbing lives as a quiet footnote, not a section:
-   a hairline above, muted prose, no headings or status pills. */
+   muted prose under the list, no headings or status pills. */
 .connectors-page .connector-config-note {
 	display: flex;
 	flex-direction: column;
 	gap: 8px;
-	border-top: 1px solid var(--exx-divider);
 	padding: 16px 0 8px;
 }
 .connectors-page .connector-config-note .cli-note {
@@ -11981,6 +11256,10 @@ button.composer-staged-tile-frame:focus-visible { outline: 2px solid var(--exx-p
 	width: min(560px, calc(100vw - 32px));
 	z-index: 30;
 }
+/* A toast raised from inside the settings dialog sits above it. */
+.launcher-toasts.settings-toast {
+	z-index: 80;
+}
 .launcher-toasts .composer-toasts {
 	position: static;
 	padding-bottom: 0;
@@ -12134,7 +11413,8 @@ button.composer-staged-tile-frame:focus-visible { outline: 2px solid var(--exx-p
 	outline: none;
 }
 
-/* Library list: clean rows. The row body is a button (opens the detail view). */
+/* Library list: a table whose every row is one button that opens the
+   skill's page. */
 .skill-rows {
 	display: grid;
 	margin-top: 6px;
@@ -12144,55 +11424,36 @@ button.composer-staged-tile-frame:focus-visible { outline: 2px solid var(--exx-p
 	grid-template-columns: minmax(0, 1fr) auto;
 	gap: 6px 14px;
 	align-items: center;
+	width: 100%;
 	padding: 12px 0;
+	background: transparent;
+	border: none;
 	border-bottom: 1px solid color-mix(in srgb, var(--fg) 18%, transparent);
+	border-radius: 0;
+	color: inherit;
+	font: inherit;
+	text-align: left;
+	cursor: pointer;
 }
 .skill-row:last-child {
 	border-bottom: none;
 }
-.skill-row-main {
-	display: grid;
-	gap: 3px;
-	min-width: 0;
-	text-align: left;
-	background: transparent;
-	border: none;
-	padding: 0;
-	cursor: pointer;
-	color: inherit;
+.skill-row:focus-visible {
+	outline: 2px solid var(--exx-focus);
+	outline-offset: 2px;
+	border-radius: 6px;
 }
-.skill-row-title {
-	display: flex;
-	align-items: baseline;
-	gap: 10px;
-	min-width: 0;
+.skill-row:disabled {
+	cursor: progress;
 }
-.skill-row-title strong {
-	flex: 0 0 auto;
-}
-.skill-row-source {
+.skill-table-chevron {
 	color: var(--muted);
-	font-size: 12px;
-	white-space: nowrap;
-	overflow: hidden;
-	text-overflow: ellipsis;
-	min-width: 0;
+	font-size: 16px;
+	line-height: 1;
+	text-align: right;
 }
-.skill-row-desc {
-	color: var(--muted);
-	font-size: 12px;
-	line-height: 1.5;
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-}
-.skill-row-main:hover .skill-row-title strong {
-	text-decoration: underline;
-}
-.skill-row-actions {
-	display: flex;
-	align-items: center;
-	gap: 8px;
+.skill-table-narrow {
+	display: none;
 }
 
 /* Write form specifics (reuses .connector-form + .ai-setup-block). */
@@ -12273,34 +11534,6 @@ button.composer-staged-tile-frame:focus-visible { outline: 2px solid var(--exx-p
 .skill-review-desc-counter.over {
 	color: var(--danger, #d84a4a);
 }
-.skill-review-meta {
-	display: grid;
-	gap: 6px;
-	margin: 0;
-	padding: 14px 16px;
-	background: var(--panel-2);
-	border: 1px solid var(--border-soft);
-	border-radius: var(--exx-radius-card);
-}
-.skill-review-meta-row {
-	display: grid;
-	grid-template-columns: 90px minmax(0, 1fr);
-	gap: 10px;
-	align-items: baseline;
-}
-.skill-review-meta-row dt {
-	color: var(--muted);
-	font-size: 11px;
-	letter-spacing: 0.06em;
-	text-transform: uppercase;
-}
-.skill-review-meta-row dd {
-	margin: 0;
-	word-break: break-word;
-}
-.skill-review-warn-text {
-	color: var(--exx-warning, #e8a838);
-}
 
 /* Warning/danger banners: unknown license, hidden characters, bundled scripts. */
 .skill-review-banner {
@@ -12335,17 +11568,6 @@ button.composer-staged-tile-frame:focus-visible { outline: 2px solid var(--exx-p
 	letter-spacing: 0.06em;
 	text-transform: uppercase;
 }
-.skill-review-body {
-	padding: 16px 18px;
-	background: var(--panel);
-	border: 1px solid var(--border);
-	border-radius: var(--exx-radius-card);
-	max-height: 60vh;
-	overflow-y: auto;
-	overflow-x: auto;
-	line-height: 1.6;
-	word-break: break-word;
-}
 .skill-review-error {
 	margin: 0;
 }
@@ -12354,33 +11576,170 @@ button.composer-staged-tile-frame:focus-visible { outline: 2px solid var(--exx-p
 	gap: 10px;
 	flex-wrap: wrap;
 }
-.skill-delete-action {
-	margin-left: auto;
-	border-color: color-mix(in srgb, var(--exx-danger, #d9534f) 55%, transparent);
-	color: var(--exx-danger, #d9534f);
-}
 
-/* Library header actions: Browse featured beside the Add menu (MR-4 integration). */
-.skill-library-actions {
+
+/* A library skill's page (skill-detail.tsx): a back link, the pane header
+   with the description held to three lines, the facts as settings rows, the
+   instructions, and Delete as the last row. The pane is the one scroll. */
+.skills-page .skill-detail {
 	display: flex;
-	align-items: center;
-	gap: 10px;
+	flex-direction: column;
+	min-width: 0;
+}
+.skill-detail-back {
+	align-self: flex-start;
+	margin: 0 0 10px;
+	padding: 0;
+	background: none;
+	border: none;
+	color: var(--muted);
+	font: inherit;
+	font-size: 13px;
+	cursor: pointer;
+}
+.skill-detail-back:hover {
+	color: var(--fg);
+}
+.skill-detail-back:focus-visible {
+	outline: 2px solid var(--exx-focus);
+	outline-offset: 2px;
+}
+.skill-detail-desc {
+	display: block;
+}
+.skill-detail-desc.clamped {
+	display: -webkit-box;
+	-webkit-line-clamp: 3;
+	-webkit-box-orient: vertical;
+	overflow: hidden;
+}
+.skill-detail .skill-detail-more {
+	display: block;
+	margin-top: 4px;
+	color: var(--muted);
+	font-size: 13px;
+}
+.skill-detail .skill-review-banner {
+	margin: 10px 0 0;
+}
+.skill-detail .settings-row-value .rs-text-btn {
+	margin-left: 10px;
+}
+.skill-fact-value {
+	max-width: 65%;
+	text-align: right;
+	white-space: normal;
+	overflow-wrap: anywhere;
+}
+.skill-fact-link {
+	color: var(--fg);
+	text-decoration: underline;
+	text-underline-offset: 2px;
+}
+.skill-fact-warn {
+	color: var(--exx-warning, #c47f00);
+}
+.skill-detail-files {
+	padding-bottom: 12px;
+}
+.skill-review-files {
+	margin-top: 10px;
 }
 
-/* Origin chip on library rows (MR-P2): a small muted pill (built in / written / imported). */
-.skill-row-origin {
-	flex: 0 0 auto;
-	border: 1px solid color-mix(in srgb, var(--muted) 20%, transparent);
-	border-radius: var(--exx-radius-pill);
-	background: color-mix(in srgb, var(--muted) 8%, transparent);
-	color: var(--muted);
-	font-size: 10px;
-	font-weight: 700;
-	letter-spacing: 0.06em;
-	text-transform: uppercase;
-	line-height: 1;
-	padding: 3px 7px;
+/* A skill's instructions at the pane's scale (skill-instructions.tsx):
+   headings in the UI font, code that wraps, tables that fit the width, and
+   an optional fold with a fade. */
+.skills-page .skill-doc {
+	min-width: 0;
+	color: var(--fg);
+	font-size: 13.5px;
+	line-height: 1.6;
+	overflow-wrap: break-word;
+}
+.skills-page .skill-doc > :first-child {
+	margin-top: 0;
+}
+.skills-page .skill-doc :is(h1, h2, h3, h4, h5, h6) {
+	font-family: inherit;
+	font-weight: 600;
+	letter-spacing: 0;
+	line-height: 1.35;
+	text-transform: none;
+}
+.skills-page .skill-doc h1 {
+	font-size: 17px;
+	margin: 4px 0 8px;
+}
+.skills-page .skill-doc h2 {
+	font-size: 15px;
+	margin: 20px 0 6px;
+}
+.skills-page .skill-doc :is(h3, h4, h5, h6) {
+	font-size: 13.5px;
+	margin: 16px 0 4px;
+}
+.skills-page .skill-doc :is(p, li, td, th) {
+	font-size: 13.5px;
+}
+.skills-page .skill-doc pre {
+	margin: 8px 0;
+	padding: 9px 11px;
+	border: 1px solid var(--border-soft);
+	border-radius: 6px;
+	background: var(--code-bg);
+	color: var(--code-fg);
+}
+.skills-page .skill-doc .code-block-tools {
+	background: var(--code-bg);
+}
+.skills-page .skill-doc .code-block > pre {
+	margin: 0;
+	border-top: none;
+	border-top-left-radius: 0;
+	border-top-right-radius: 0;
+}
+.skills-page .skill-doc pre,
+.skills-page .skill-doc pre code {
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+	font-size: 12px;
+}
+.skills-page .skill-doc .code-block {
+	margin: 8px 0;
+}
+.skills-page .skill-doc table {
+	display: block;
+	max-width: 100%;
+	overflow-x: auto;
+	border-collapse: collapse;
+	margin: 8px 0;
+}
+.skills-page .skill-doc :is(td, th) {
+	padding: 4px 14px 4px 0;
+	vertical-align: top;
+	text-align: left;
+	word-break: normal;
+	overflow-wrap: normal;
+}
+/* Code in a cell wraps at its spaces, never inside a token (the tokens are
+   spans, see MarkdownRenderer codeTokens); a table still too wide scrolls. */
+.skills-page .skill-doc :is(td, th) code {
+	white-space: normal;
+	word-break: normal;
+	overflow-wrap: normal;
+}
+.skills-page .skill-doc :is(td, th) .md-code-token {
 	white-space: nowrap;
+}
+.skills-page .skill-doc.folded {
+	max-height: 340px;
+	overflow: hidden;
+	-webkit-mask-image: linear-gradient(#000 60%, transparent);
+	mask-image: linear-gradient(#000 60%, transparent);
+}
+.skill-doc-toggle {
+	align-self: flex-start;
+	margin-top: 10px;
 }
 
 /* --- Browse featured directory (MR-P2) ------------------------------------ */
@@ -12402,108 +11761,9 @@ button.composer-staged-tile-frame:focus-visible { outline: 2px solid var(--exx-p
 	gap: 8px;
 	justify-items: start;
 }
-.skill-browse-source {
-	display: grid;
-	gap: 10px;
-}
-.skill-browse-source-head {
-	display: flex;
-	align-items: baseline;
-	justify-content: space-between;
-	gap: 12px;
-}
-.skill-browse-source-head strong {
-	font-weight: 600;
-}
-.skill-browse-source-repo {
-	color: var(--muted);
-	font-size: 12px;
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-	min-width: 0;
-}
 .skill-browse-source-warn {
 	color: var(--exx-warning, #c47f00);
 	font-size: 13px;
-}
-.skill-browse-grid {
-	display: grid;
-	grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-	gap: 12px;
-}
-.skill-card {
-	display: grid;
-	grid-template-rows: auto 1fr auto;
-	gap: 8px;
-	padding: 14px 15px;
-	background: var(--panel);
-	border: 1px solid var(--border);
-	border-radius: var(--exx-radius-card);
-	transition: border-color 120ms ease, background 120ms ease;
-}
-.skill-card:hover {
-	border-color: color-mix(in srgb, var(--fg) 22%, transparent);
-	background: var(--panel-2);
-}
-.skill-card-head {
-	display: flex;
-	align-items: flex-start;
-	justify-content: space-between;
-	gap: 10px;
-}
-.skill-card-name {
-	font-weight: 500;
-	line-height: 1.3;
-	min-width: 0;
-	word-break: break-word;
-}
-.skill-card-import {
-	flex: 0 0 auto;
-	display: inline-flex;
-	align-items: center;
-	justify-content: center;
-	width: 28px;
-	height: 28px;
-	border: 1px solid var(--border);
-	border-radius: 7px;
-	background: var(--bg-2);
-	color: var(--fg);
-	font-size: 16px;
-	line-height: 1;
-	cursor: pointer;
-	transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
-}
-.skill-card-import:hover:not(:disabled),
-.skill-card-import:focus-visible:not(:disabled) {
-	background: color-mix(in srgb, var(--fg) 10%, transparent);
-	border-color: var(--fg);
-	outline: none;
-}
-.skill-card-import:disabled {
-	cursor: default;
-	color: var(--muted);
-	opacity: 0.8;
-}
-.skill-card-desc {
-	color: var(--muted);
-	font-size: 13px;
-	line-height: 1.5;
-	display: -webkit-box;
-	-webkit-line-clamp: 3;
-	line-clamp: 3;
-	-webkit-box-orient: vertical;
-	overflow: hidden;
-}
-.skill-card-desc.empty {
-	font-style: italic;
-}
-.skill-card-meta {
-	color: var(--muted);
-	font-size: 12px;
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
 }
 
 /* --- Upload modal (MR-P2): reuses the app overlay/dialog language ---------- */
@@ -12519,8 +11779,8 @@ button.composer-staged-tile-frame:focus-visible { outline: 2px solid var(--exx-p
 	padding: 24px;
 }
 .skill-upload-modal {
-	background: var(--bg);
-	border: 1px solid var(--border);
+	background: var(--panel);
+	border: 1px solid var(--exx-edge-dialog);
 	border-radius: 14px;
 	max-width: 460px;
 	width: 100%;
@@ -12657,9 +11917,6 @@ button.composer-staged-tile-frame:focus-visible { outline: 2px solid var(--exx-p
 	font-size: 13px;
 	line-height: 1.5;
 }
-.skill-import-option-desc.empty {
-	font-style: italic;
-}
 .skill-import-option-meta {
 	color: var(--muted);
 	font-size: 12px;
@@ -12709,28 +11966,6 @@ button.composer-staged-tile-frame:focus-visible { outline: 2px solid var(--exx-p
 	font-size: 12px;
 	color: var(--exx-warning, #c47f00);
 }
-.room-skills-exec {
-	display: grid;
-	gap: 2px;
-	margin-top: 4px;
-	min-width: 0;
-}
-.room-skills-exec-title {
-	font-size: 12px;
-	font-weight: 600;
-}
-.room-skills-files {
-	list-style: none;
-	margin: 0;
-	padding: 0;
-	font-size: 12px;
-	opacity: 0.75;
-	max-height: 96px;
-	overflow-y: auto;
-}
-.room-skills-files li {
-	overflow-wrap: anywhere;
-}
 .room-skills-row-actions {
 	display: flex;
 	align-items: center;
@@ -12745,12 +11980,72 @@ button.composer-staged-tile-frame:focus-visible { outline: 2px solid var(--exx-p
 .room-connectors-section .connector-avatar {
 	font-size: 13px;
 }
-.room-skills-toggle {
-	display: inline-flex;
+
+/* Room settings, Skills: an enabled skill is a settings row; a skill that can
+   run files adds a second row for that, with no hairline above it, and its
+   file list opens under it in the pane's own scroll. */
+.room-skill-row {
+	align-items: flex-start;
+}
+.room-skill-actions {
+	flex-shrink: 0;
+	display: flex;
 	align-items: center;
-	gap: 6px;
+	gap: 8px;
+}
+.room-skill-problem {
+	color: var(--exx-warning, #c47f00);
+}
+.room-skill-files-row {
+	padding-top: 0;
+}
+.room-skill-files-label {
 	font-size: 13px;
+}
+.room-skill-files {
+	padding-bottom: 12px;
+}
+/* A text action inside a sentence: normal ink, underlined. */
+.rs-text-btn {
+	background: none;
+	border: none;
+	border-radius: 0;
+	padding: 0;
+	font: inherit;
+	color: var(--fg);
+	text-decoration: underline;
+	text-underline-offset: 2px;
 	cursor: pointer;
+}
+.rs-text-btn:focus-visible {
+	outline: 2px solid var(--exx-focus);
+	outline-offset: 2px;
+}
+/* Files grouped by folder (file-groups.tsx): the folder in normal ink, its
+   names muted; a name never breaks inside itself. */
+.file-groups {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	min-width: 0;
+	font-family: var(--exx-font-mono, monospace);
+	font-size: 12px;
+	line-height: 1.6;
+	color: var(--muted);
+}
+.file-groups-folder {
+	color: var(--fg);
+}
+.file-groups-token {
+	display: inline-block;
+	max-width: 100%;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	vertical-align: top;
 }
 
 /* Room settings — drifted-skill re-review gate (MR-5 hardening). */
@@ -12778,11 +12073,6 @@ button.composer-staged-tile-frame:focus-visible { outline: 2px solid var(--exx-p
 }
 .room-skills-empty {
 	color: var(--muted);
-}
-.room-skills-library-empty {
-	display: grid;
-	gap: 10px;
-	justify-items: start;
 }
 .room-skills-live {
 	font-size: 10px;
@@ -13246,7 +12536,7 @@ html.desktop-app-mac .desktop-drag-strip {
 	-webkit-app-region: drag;
 	z-index: 20;
 }
-html.desktop-app-mac .landing { padding-top: 60px; }
+html.desktop-app-mac .landing:not(.settings-dialog .landing) { padding-top: 60px; }
 /* Chat column: the topbar sits flush like the pane header beside it — same
    lift over the strip, same bar-drags/controls-click split. Only the bar is
    lifted (not the whole column): .main must not become a stacking context,
@@ -13328,10 +12618,9 @@ html.desktop-app-mac .creator-overlay,
 html.desktop-app-mac .agent-details-overlay,
 html.desktop-app-mac .room-settings-overlay,
 html.desktop-app-mac .help-overlay,
-html.desktop-app-mac .rooms-guide-overlay,
 html.desktop-app-mac .skill-upload-overlay,
 html.desktop-app-mac .ai-profile-menu-backdrop,
-html.desktop-app-mac .settings-overlay-backdrop,
+html.desktop-app-mac .settings-dialog-backdrop,
 html.desktop-app-mac .mem-fullscreen {
 	-webkit-app-region: no-drag;
 }
@@ -13499,7 +12788,7 @@ html.sidebar-collapsed .product-sidebar {
 html.sidebar-collapsed:not(.desktop-app-mac) .topbar {
 	padding-left: 52px;
 }
-html.sidebar-collapsed:not(.desktop-app-mac) .landing {
+html.sidebar-collapsed:not(.desktop-app-mac) .landing:not(.settings-dialog .landing) {
 	padding-left: 56px;
 }
 
@@ -13549,257 +12838,7 @@ html.sidebar-collapsed:not(.desktop-app-mac) .landing {
 	border-color: transparent;
 }
 
-/* ---------------------------------------------------------------------------
-   Grouped room-model picker (community #9): the room card's model control is
-   a popover grouped by AI profile. The trigger wears the old select's clothes
-   so the card reads unchanged; the menu borrows the sidebar config menu's
-   surface. Everything below is scoped under .model-picker* so the feature
-   lifts out cleanly. */
-.persistent-agent-card .persistent-agent-model .model-picker {
-	display: inline-flex;
-	min-width: 0;
-	position: relative;
-}
-.persistent-agent-card .persistent-agent-model .model-picker-trigger {
-	appearance: none;
-	border: 1px solid color-mix(in srgb, var(--fg-soft) 18%, var(--border-soft));
-	border-radius: var(--exx-radius-control);
-	background: color-mix(in srgb, var(--bg-2) 82%, var(--panel) 18%);
-	box-shadow: inset 0 1px 0 color-mix(in srgb, var(--fg-soft) 5%, transparent);
-	color: color-mix(in srgb, var(--fg-soft) 88%, var(--muted));
-	cursor: pointer;
-	display: inline-flex;
-	align-items: center;
-	font: inherit;
-	font-size: 11px;
-	line-height: 1.35;
-	max-width: 164px;
-	min-height: 30px;
-	min-width: 96px;
-	overflow: hidden;
-	padding: 6px 25px 6px 10px;
-	text-align: left;
-	transition: background 120ms ease, border-color 120ms ease, box-shadow 120ms ease, color 120ms ease;
-	white-space: nowrap;
-}
-.persistent-agent-card .persistent-agent-model .model-picker-trigger-name {
-	display: block;
-	min-width: 0;
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-}
-.persistent-agent-card .persistent-agent-model .model-picker-trigger:hover,
-.persistent-agent-card .persistent-agent-model .model-picker-trigger:focus,
-.persistent-agent-card .persistent-agent-model .model-picker-trigger[aria-expanded="true"] {
-	background: color-mix(in srgb, var(--panel) 58%, var(--bg-2));
-	border-color: color-mix(in srgb, var(--fg-soft) 42%, var(--border));
-	box-shadow: inset 0 1px 0 color-mix(in srgb, var(--fg-soft) 8%, transparent), 0 0 0 1px color-mix(in srgb, var(--fg-soft) 8%, transparent);
-	color: var(--fg);
-	outline: none;
-}
-.persistent-agent-card .persistent-agent-model .model-picker-trigger:focus-visible {
-	outline: 2px solid var(--exx-focus);
-	outline-offset: 2px;
-}
-.model-picker-menu {
-	position: absolute;
-	right: 0;
-	top: calc(100% + 6px);
-	width: 296px;
-	max-height: 348px;
-	overflow-y: auto;
-	display: flex;
-	flex-direction: column;
-	gap: 2px;
-	padding: 6px;
-	background: var(--panel);
-	border: 1px solid var(--border);
-	border-radius: var(--exx-radius-card);
-	box-shadow: var(--exx-shadow-popover);
-	z-index: 50;
-	font-size: var(--exx-font-size-xs);
-}
-.model-picker-filter {
-	width: 100%;
-	background: var(--bg-2);
-	border: 1px solid var(--border-soft);
-	border-radius: 6px;
-	color: var(--fg);
-	font: inherit;
-	font-size: var(--exx-font-size-xs);
-	padding: 6px 8px;
-	margin-bottom: 4px;
-}
-.model-picker-filter:focus {
-	border-color: var(--border);
-	outline: none;
-}
-.model-picker-filter:focus-visible {
-	outline: 2px solid var(--exx-focus);
-	outline-offset: 1px;
-}
-.model-picker-group {
-	display: flex;
-	flex-direction: column;
-	gap: 2px;
-}
-.model-picker-group + .model-picker-group {
-	border-top: 1px solid var(--border-soft);
-	margin-top: 4px;
-	padding-top: 6px;
-}
-.model-picker-group-head {
-	display: flex;
-	align-items: center;
-	justify-content: space-between;
-	gap: 8px;
-	padding: 4px 8px 2px;
-	color: var(--muted);
-	font-size: 10px;
-	letter-spacing: 0.02em;
-}
-.model-picker-group-text {
-	display: flex;
-	flex-direction: column;
-	gap: 1px;
-	min-width: 0;
-}
-.model-picker-group-name {
-	color: var(--fg-soft);
-	font-weight: 600;
-	white-space: nowrap;
-	overflow: hidden;
-	text-overflow: ellipsis;
-}
-.model-picker-group-meta {
-	white-space: nowrap;
-	overflow: hidden;
-	text-overflow: ellipsis;
-}
-button.model-picker-group-head {
-	background: transparent;
-	border: 1px solid transparent;
-	border-radius: 6px;
-	cursor: pointer;
-	font: inherit;
-	font-size: 10px;
-	text-align: left;
-	width: 100%;
-}
-button.model-picker-group-head:hover,
-button.model-picker-group-head:focus {
-	background: var(--panel-2);
-	outline: none;
-}
-button.model-picker-group-head:focus-visible {
-	outline: 2px solid var(--exx-focus);
-	outline-offset: -2px;
-}
-.model-picker-group-chevron {
-	color: var(--muted);
-	flex-shrink: 0;
-}
-.model-picker-option {
-	display: flex;
-	align-items: center;
-	justify-content: space-between;
-	gap: 8px;
-	width: 100%;
-	background: transparent;
-	border: 1px solid transparent;
-	border-radius: 6px;
-	color: var(--fg);
-	cursor: pointer;
-	font: inherit;
-	font-size: var(--exx-font-size-xs);
-	padding: 6px 8px;
-	text-align: left;
-}
-.model-picker-option:hover,
-.model-picker-option:focus {
-	background: var(--panel-2);
-	outline: none;
-}
-.model-picker-option:focus-visible {
-	outline: 2px solid var(--exx-focus);
-	outline-offset: -2px;
-}
-.model-picker-option.selected {
-	background: var(--panel-2);
-	border-color: var(--border);
-}
-.model-picker-option-name {
-	min-width: 0;
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-}
-.model-picker-option-check {
-	color: var(--fg);
-	flex-shrink: 0;
-}
-.model-picker-group.inert {
-	opacity: 0.6;
-}
-.model-picker-confirm-error {
-	color: var(--error);
-	font-size: var(--exx-font-size-xs);
-}
-:root[data-theme="light"] .persistent-agent-card .persistent-agent-model .model-picker-trigger {
-	background: color-mix(in srgb, var(--bg-2) 86%, var(--panel) 14%);
-	border-color: var(--border-soft);
-	color: var(--fg-soft);
-}
-:root[data-theme="light"] .persistent-agent-card .persistent-agent-model .model-picker-trigger:hover,
-:root[data-theme="light"] .persistent-agent-card .persistent-agent-model .model-picker-trigger:focus,
-:root[data-theme="light"] .persistent-agent-card .persistent-agent-model .model-picker-trigger[aria-expanded="true"] {
-	background: var(--panel);
-	border-color: var(--border);
-	box-shadow: 0 0 0 1px color-mix(in srgb, var(--fg) 8%, transparent);
-	color: var(--fg);
-}
-:root[data-theme="light"] .persistent-agent-card .persistent-agent-model .model-picker-trigger:focus-visible {
-	outline-color: var(--exx-focus);
-}
-/* The switch confirm must cover the open picker menu (menu is z-50). */
-.model-picker .checkpoint-preview-backdrop {
-	z-index: 60;
-}
-/* Measured placement: a bottom-row card opens its picker upward. */
-.model-picker-menu.drop-up {
-	top: auto;
-	bottom: calc(100% + 6px);
-}
-/* Combobox highlight while focus stays in the filter input. */
-.model-picker-option.kb-active,
-button.model-picker-group-head.kb-active {
-	background: var(--panel-2);
-	outline: 2px solid var(--exx-focus);
-	outline-offset: -2px;
-}
-
 /* Remote access (Settings page + sidebar indicator) */
-.remote-master {
-	display: flex;
-	flex-direction: column;
-	align-items: stretch;
-	gap: 0;
-}
-.remote-master > .web-search-fallback-heading {
-	margin-bottom: 8px;
-}
-.remote-master-state {
-	margin: 0;
-	font-size: 14px;
-	line-height: 1.5;
-	display: flex;
-	align-items: baseline;
-	gap: 8px;
-}
-.remote-master-state code {
-	font-size: 13px;
-}
 .remote-hint-degraded {
 	color: var(--warning);
 }
@@ -13815,10 +12854,17 @@ button.model-picker-group-head.kb-active {
 	max-width: 40rem;
 }
 .remote-fold summary {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	list-style: none;
 	color: var(--muted);
 	font-size: 12.5px;
 	cursor: pointer;
 	width: fit-content;
+}
+.remote-fold summary::-webkit-details-marker {
+	display: none;
 }
 .remote-fold summary:hover,
 .remote-fold summary:focus-visible {
@@ -13827,11 +12873,6 @@ button.model-picker-group-head.kb-active {
 .remote-fold[open] summary {
 	color: var(--fg-soft);
 	margin-bottom: 6px;
-}
-/* Folds and the pairing panel sit between rows; small margins keep the
-   row rhythm around them. */
-.remote-master > .remote-fold {
-	margin: 2px 0 10px;
 }
 .remote-fold .remote-fold {
 	margin-top: 6px;
@@ -13894,14 +12935,6 @@ button.model-picker-group-head.kb-active {
 .menu-item-state {
 	color: var(--muted);
 	font-size: var(--exx-font-size-xs);
-}
-/* Inside the settings tab the section grid already spaces the blocks; the
-   headings only need a little air above and a steady gap to their rows. */
-.remote-devices {
-	margin-top: 6px;
-}
-.remote-devices .web-search-fallback-heading {
-	margin-bottom: 12px;
 }
 .remote-pairing-copy {
 	margin-bottom: 12px;
@@ -13997,12 +13030,7 @@ button.model-picker-group-head.kb-active {
 	cursor: default;
 	opacity: 0.6;
 }
-/* Soft divider between the pairing area and the paired-device rows. */
-.remote-section-divider {
-	border-top: 1px solid color-mix(in srgb, var(--border-soft) 55%, transparent);
-	margin: 14px 0 2px;
-}
-/* Device and room rows borrow the room-settings rs-row shape: label and hint
+/* Device and room rows borrow the room-settings settings-row shape: label and hint
    stacked on the left, controls as one quiet aligned group on the right. */
 .remote-device-armed {
 	color: var(--error);
@@ -14013,46 +13041,7 @@ button.model-picker-group-head.kb-active {
 	align-items: center;
 	flex-shrink: 0;
 }
-/* Room rows are a long list; they sit tighter than the device rows. */
-.remote-room-row {
-	padding: 8px 0;
-}
 
-/* Remote access onboarding (no tunnel yet) */
-.remote-onboarding {
-	margin: 10px 0;
-	display: flex;
-	flex-direction: column;
-	align-items: flex-start;
-	gap: 10px;
-	border: 1px solid var(--border);
-	border-radius: 10px;
-	padding: 16px 18px;
-	max-width: 40rem;
-}
-.remote-onboarding-copy {
-	margin: 0;
-}
-.remote-onboarding-steps {
-	margin: 0;
-	padding-left: 20px;
-	color: var(--fg-soft);
-	font-size: 14px;
-	line-height: 1.6;
-}
-.remote-onboarding-actions {
-	display: flex;
-	align-items: center;
-	gap: 14px;
-	flex-wrap: wrap;
-}
-.remote-onboarding-link {
-	text-decoration: none;
-}
-.remote-onboarding-waiting {
-	color: var(--muted);
-	font-size: 12.5px;
-}
 
 /* ================= Mobile pass (function-first) =================
    One breakpoint for phone-sized screens. Scope: make every screen usable
@@ -14114,7 +13103,7 @@ button.model-picker-group-head.kb-active {
 	}
 	.product-sidebar, .landing { min-width: 0; }
 	html.sidebar-collapsed:has(.product-sidebar) .sidebar-toggle-floating { display: none; }
-	html.sidebar-collapsed:not(.desktop-app-mac) .landing { padding-left: 16px; }
+	html.sidebar-collapsed:not(.desktop-app-mac) .landing:not(.settings-dialog .landing) { padding-left: 16px; }
 	/* The collapse control is meaningless while the bar is forced visible. */
 	.product-sidebar-footer .sidebar-toggle { display: none; }
 	/* The gear menu anchors to a footer that now sits in a TOP bar, so it
@@ -14159,7 +13148,12 @@ button.model-picker-group-head.kb-active {
 	/* Name and status keep the full line; the controls drop to their own row
 	   instead of crushing the text column into one word per line. */
 	.ai-profile-main { flex-basis: 100%; }
-	.ai-profile-side { margin-left: 30px; }
+	.ai-profile-side { margin-left: 0; }
+	/* In the dialog a profile stays one row: the controls keep the right
+	   edge and the name and status wrap beside them. */
+	.settings-overlay .ai-profile-row { flex-wrap: nowrap; }
+	.settings-overlay .ai-profile-main { flex-basis: auto; }
+	.settings-overlay .ai-profile-side { margin-left: auto; gap: 8px; }
 	.archived-room-row { flex-wrap: wrap; }
 	.remote-device-row {
 		flex-direction: column;
@@ -14174,13 +13168,14 @@ button.model-picker-group-head.kb-active {
 	max-width: 40rem;
 }
 
-/* Settings overlay ------------------------------------------------
-   A centered modal over the dimmed current view (same backdrop treatment as
-   the checkpoint preview, same card tokens as the checkpoint input card).
-   The hosted pages keep their own .landing layout and scrolling; the modal
-   only supplies the two-column grid, the section nav, and the phone
-   collapse into a full-screen sheet. */
-.settings-overlay-backdrop {
+/* Settings dialog ------------------------------------------------
+   One shell for Room settings (.rs-shell) and Settings (.settings-overlay):
+   kicker, title and one close control in the header, a 200 px navigation
+   column beside the pane. One size on every pane, centred: 960 px wide and
+   at most 800 px tall, 36 px clear of the viewport's edges; the pane scrolls
+   inside, so switching panes moves nothing. On a phone it is a full sheet
+   showing either the list of panes or one pane. */
+.settings-dialog-backdrop {
 	position: fixed;
 	inset: 0;
 	z-index: 70;
@@ -14191,130 +13186,360 @@ button.model-picker-group-head.kb-active {
 	justify-content: center;
 	padding: 24px;
 }
-.settings-overlay {
-	position: relative;
-	width: min(940px, 100%);
-	height: min(720px, 85vh);
-	border: 1px solid var(--border);
-	border-radius: 22px;
-	background: var(--bg);
-	box-shadow: 0 24px 80px color-mix(in srgb, #000 26%, transparent);
+.settings-dialog {
+	width: 960px;
+	max-width: calc(100vw - 48px);
+	height: min(800px, calc(100vh - 72px));
+	display: flex;
+	flex-direction: column;
+	background: var(--panel);
+	border: 1px solid var(--exx-edge-dialog);
+	border-radius: 16px;
+	box-shadow: none;
 	color: var(--fg);
 	overflow: hidden;
-	display: grid;
-	grid-template-columns: 200px minmax(0, 1fr);
 }
-.settings-overlay-nav {
+.settings-dialog-head {
 	display: flex;
-	flex-direction: column;
-	gap: 18px;
-	padding: 22px 14px 16px 20px;
-	border-right: 1px solid var(--exx-divider);
-	overflow-y: auto;
-	min-height: 0;
-}
-.settings-overlay-nav-head {
-	display: flex;
-	align-items: center;
+	align-items: flex-start;
 	justify-content: space-between;
-	gap: 10px;
+	gap: 16px;
+	padding: 20px 24px 14px;
 }
-/* Same typographic pattern as the page titles, sized to the modal-header
-   scale the room-settings dialog uses. */
-.settings-overlay-nav h1 {
-	font-family: "Bandeins Strange Variable", "Bandeins Strange", "Sen", sans-serif;
-	font-variation-settings: "wght" 820;
-	font-size: 22px;
-	line-height: 1;
-	letter-spacing: -0.025em;
-	margin: 0;
-}
-.settings-overlay-sections {
-	display: flex;
-	flex-direction: column;
-	gap: 4px;
-}
-.settings-overlay-sections .list-btn {
-	width: 100%;
-	font-size: 14px;
-}
-/* Flex column, not a grid: the phone back bar is display:none on desktop,
-   and a hidden first child left the grid's auto row to swallow the page,
-   which then sized to its content instead of the pane. Short content left
-   dead space below a stunted scrollbar; tall content overflowed the
-   overflow:hidden frame, which the browser then scrolled on focus, shoving
-   the whole dialog upward. In a flex column the page always fills exactly
-   what the strip leaves, so the one scroll container per pane is the page
-   itself and its scrollbar starts below the strip at the right edge. */
-.settings-overlay-content {
+.settings-dialog-heading {
 	min-width: 0;
-	min-height: 0;
-	display: flex;
-	flex-direction: column;
 }
-/* A slim non-scrolling strip across the pane's top: the close X's home.
-   Chromeless on desktop (no border, no title; the nav names the tab), it
-   starts the scroll region below the X so content clips under the X band
-   instead of sliding behind the control, and the scrollbar track begins
-   below the modal's top rounding. Not a pointer target itself: only the X
-   (pinned over it) is interactive, and there is nothing under the strip
-   for it to shadow. On phones the same element is the sheet's back bar
-   (media block below). */
-.settings-overlay-content-bar {
-	height: 44px;
-	flex: 0 0 auto;
-}
-/* The close X floats pinned to the modal's top-right corner; content
-   scrolls beneath it. Chromeless at rest; the circular backdrop appears on
-   hover and focus only. */
-.settings-overlay-close {
-	position: absolute;
-	top: 12px;
-	right: 12px;
-	z-index: 5;
-	width: 30px;
-	height: 30px;
-	display: inline-flex;
-	align-items: center;
-	justify-content: center;
-	padding: 0;
-	border: none;
-	border-radius: 50%;
-	background: transparent;
+.settings-dialog-kicker {
+	margin: 0 0 4px;
+	font-size: 11px;
+	letter-spacing: 0.14em;
+	text-transform: uppercase;
 	color: var(--muted);
-	font-size: 13px;
+}
+/* The title row and the rename form share one height, so renaming moves
+   nothing below the header. */
+.settings-dialog-title-row,
+.room-settings-rename-form {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	min-width: 0;
+	min-height: 38px;
+}
+.settings-dialog-head {
+	position: relative;
+}
+.settings-dialog-head-note {
+	position: absolute;
+	top: calc(100% - 8px);
+	left: 24px;
+	z-index: 6;
+	width: min(560px, calc(100% - 48px));
+	display: grid;
+	gap: 8px;
+	justify-items: start;
+	padding: 12px 14px;
+	background: var(--panel-2);
+	border: 1px solid var(--border-soft);
+	border-radius: 10px;
+	box-shadow: var(--exx-shadow-popover);
+}
+.settings-dialog-title {
+	margin: 0;
+	font-family: "Bandeins Strange", "Sen", sans-serif;
+	font-size: 24px;
+	font-weight: 700;
+	line-height: 1.2;
+	letter-spacing: -0.01em;
+	overflow-wrap: anywhere;
+	min-width: 0;
+}
+.settings-dialog-title-action {
+	flex-shrink: 0;
+	background: none;
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	padding: 2px 8px;
+	font: inherit;
+	font-size: 12px;
+	color: var(--muted);
+	cursor: pointer;
+}
+.settings-dialog-title-action:hover,
+.settings-dialog-title-action:focus-visible {
+	color: var(--fg);
+	border-color: var(--border);
+}
+.settings-dialog-close {
+	flex-shrink: 0;
+	width: 32px;
+	height: 32px;
+	display: grid;
+	place-items: center;
+	padding: 0;
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	background: transparent;
+	color: var(--fg-soft);
+	font: inherit;
+	font-size: 20px;
 	line-height: 1;
 	cursor: pointer;
 }
-.settings-overlay-close:hover,
-.settings-overlay-close:focus-visible {
-	background: color-mix(in srgb, var(--fg) 14%, transparent);
+.settings-dialog-close:hover,
+.settings-dialog-close:focus-visible {
 	color: var(--fg);
-	outline: none;
+	border-color: var(--border);
 }
-.settings-overlay-content > .landing {
+.settings-dialog-body {
 	flex: 1 1 auto;
 	min-height: 0;
+	display: grid;
+	grid-template-columns: 200px minmax(0, 1fr);
 }
-/* The pages were built for full-page width; inside the modal pane, wide
-   content (tables, model lists) scrolls horizontally within the pane
-   instead of clipping against the rounded frame. */
-.settings-overlay .landing {
-	overflow-x: auto;
-	padding: 6px 28px 30px;
+.settings-dialog-nav {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	padding: 6px 12px 16px 16px;
+	min-height: 0;
+	overflow-y: auto;
+}
+.settings-dialog-nav-item {
+	text-align: left;
+	background: none;
+	border: 0;
+	border-radius: 8px;
+	padding: 8px 10px;
+	font: inherit;
+	font-size: 14px;
+	color: var(--fg-soft);
+	cursor: pointer;
+}
+.settings-dialog-nav-item:hover {
+	background: color-mix(in srgb, var(--fg) 6%, transparent);
+	color: var(--fg);
+}
+.settings-dialog-nav-item.active {
+	background: var(--exx-active-muted-bg);
+	color: var(--fg);
+}
+.settings-dialog-nav-item.danger {
+	margin-top: auto;
+	color: var(--error);
+}
+.settings-dialog-pane {
+	min-width: 0;
+	min-height: 0;
+	overflow: auto;
+	padding: 6px 24px 24px;
+}
+.settings-dialog-pane::-webkit-scrollbar {
+	width: 8px;
+}
+.settings-dialog-pane::-webkit-scrollbar-thumb {
+	background: var(--border);
+	border-radius: 4px;
+}
+.settings-dialog-pane::-webkit-scrollbar-track {
+	background: transparent;
+	margin-bottom: 16px;
+}
+.settings-dialog-back {
+	display: none;
+}
+/* A group inside a pane (GroupHeader): its kicker, a line, its actions. */
+.group-head {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
 	gap: 16px;
+	margin-bottom: 6px;
+}
+.group-head-line {
+	margin: 0;
+	color: var(--fg-soft);
+	font-size: 14px;
+}
+/* Every pane opens with the same header (PaneHeader): the title in the
+   display face, one muted line, the pane's actions on the right. */
+.pane-head {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 16px;
+	margin: 4px 0 6px;
+}
+.pane-head-text {
+	min-width: 0;
+}
+.pane-head h2 {
+	margin: 0 0 2px;
+	font-family: "Bandeins Strange", "Sen", sans-serif;
+	font-size: 20px;
+	font-weight: 700;
+	line-height: 1.25;
+	letter-spacing: -0.01em;
+}
+.pane-head p {
+	margin: 0;
+	color: var(--muted);
+	font-size: 14px;
+	line-height: 1.45;
+}
+.pane-head-actions {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex-shrink: 0;
+}
+/* The Settings pages were built as full pages: inside the pane they neither
+   scroll nor pad themselves, the pane does both. */
+.settings-dialog .landing {
+	overflow: visible;
+	min-height: auto;
+	padding: 0;
+	background: none;
+	gap: 12px;
+}
+@media (max-width: 760px) {
+	.settings-dialog-backdrop {
+		padding: 0;
+	}
+	.settings-dialog {
+		width: 100%;
+		max-width: none;
+		height: 100%;
+		border: 0;
+		border-radius: 0;
+		box-shadow: none;
+	}
+	.settings-dialog-head {
+		padding: 16px 16px 10px;
+	}
+	.settings-dialog-body {
+		display: block;
+		overflow: hidden;
+	}
+	.settings-dialog-nav,
+	.settings-dialog-pane {
+		height: 100%;
+	}
+	.settings-dialog.show-list .settings-dialog-pane,
+	.settings-dialog:not(.show-list) .settings-dialog-nav {
+		display: none;
+	}
+	/* A header whose action is a field (a search, a filter): the field takes
+	   its own full-width line under the kicker and its line. */
+	:is(.pane-head, .group-head):has(> .pane-head-actions input) {
+		flex-direction: column;
+		align-items: stretch;
+	}
+	:is(.pane-head, .group-head):has(> .pane-head-actions input) > .pane-head-text {
+		flex: none;
+	}
+	:is(.pane-head, .group-head) > .pane-head-actions:has(input) input {
+		width: 100%;
+		max-width: none;
+	}
+	/* The list of panes: one row each with a chevron, Delete room last. */
+	.settings-dialog-nav {
+		gap: 0;
+		padding: 4px 8px 16px;
+	}
+	.settings-dialog-nav-item {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		padding: 14px 8px;
+		border-radius: 0;
+		border-bottom: 1px solid var(--exx-divider);
+		font-size: 15px;
+		color: var(--fg);
+	}
+	.settings-dialog-nav-item::after {
+		content: "";
+		width: 12px;
+		height: 12px;
+		background-color: var(--muted);
+		-webkit-mask: var(--disclosure-chevron) center / contain no-repeat;
+		mask: var(--disclosure-chevron) center / contain no-repeat;
+	}
+	.settings-dialog-nav-item.active {
+		background: none;
+	}
+	.settings-dialog-nav-item.danger {
+		margin-top: 8px;
+		border-bottom: none;
+		color: var(--error);
+	}
+	.settings-dialog-nav-item.danger::after {
+		content: none;
+	}
+	.settings-dialog-pane {
+		padding: 4px 16px 24px;
+	}
+	.pane-head {
+		flex-wrap: wrap;
+	}
+	.pane-head-text {
+		flex: 1 1 220px;
+	}
+	/* Rows keep one line where they can: the label column shrinks before a
+	   value or a control does. The budget slider and the folder field take
+	   their own line. */
+	.settings-row-main {
+		flex-basis: 0;
+	}
+	.settings-row-tag {
+		white-space: nowrap;
+	}
+	.memory-budget-row,
+	.settings-row:has(> .workspace-folder-controls) {
+		flex-wrap: wrap;
+	}
+	/* A wide control (a long button, a segmented choice) goes under the text,
+	   left aligned, instead of squeezing it into a narrow column; toggles,
+	   radios, values and small buttons keep the right edge. */
+	.settings-row:has(> :is(.rs-btn-danger, .settings-segments)) {
+		flex-direction: column;
+		align-items: flex-start;
+		gap: 10px;
+	}
+	.memory-budget-control,
+	.workspace-folder-controls {
+		flex: 1 0 100%;
+	}
+	.settings-dialog-back {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		margin-bottom: 8px;
+		padding: 0;
+		background: none;
+		border: 0;
+		font: inherit;
+		font-size: 14px;
+		color: var(--fg-soft);
+		cursor: pointer;
+	}
+	/* A skill's page has its own way back (and the review its Cancel), so
+	   the shell's link to the list steps aside while one is open. */
+	.settings-dialog-pane:has(.skill-detail, .skill-review) > .settings-dialog-back {
+		display: none;
+	}
 }
 /* Profiles: rows wrap and the create input shrinks inside the pane. Without
    this, the input's width:100% inside the flex actions (and a long armed
    hint's max-content in the section grid) push the pane into the horizontal
    scroll above, which no settings row should ever cause. */
-.state-profiles .rs-row {
+.state-profiles .settings-row {
 	flex-wrap: wrap;
 }
-.state-profiles .rs-row-main {
+.state-profiles .settings-row-main {
 	flex: 1 1 240px;
 }
-.state-profiles .rs-pane-actions {
+.state-profiles .settings-row-value {
 	flex-wrap: wrap;
 	justify-content: flex-end;
 	min-width: 0;
@@ -14324,175 +13549,36 @@ button.model-picker-group-head.kb-active {
 	flex: 1 1 160px;
 	min-width: 0;
 }
-/* The profiles read as a short list, not as a ruled table: the shared row
-   rhythm draws a line under every row, and a pane that is almost all rows
-   ends up striped. The headings and the section gap separate the groups,
-   the way the other settings panes separate theirs. */
-.state-profiles .rs-row ~ .rs-row {
-	border-top: none;
-}
-/* The folder a profile lives in, under its name: a fact to recognise, not a
-   sentence to read, so it is set in the code face and kept quiet. */
-.state-profiles .state-profile-folder {
-	font-family: var(--exx-font-mono);
-	font-size: 12px;
-	opacity: 0.85;
-}
-/* An armed delete is the one decision here that removes something: the
-   whole row lights up with the danger-notice tint, so confirm-or-cancel is unmissable
-   instead of one red line of text. The extra class in the selector outranks
-   the settings-overlay row-rhythm rule further down, whose zero side padding
-   would press the text against the tinted border. */
-.state-profiles .rs-row.rs-row-armed {
-	border: 1px solid color-mix(in srgb, var(--error) 55%, var(--border));
+/* An armed delete is the one decision here that removes something: the row
+   takes the danger tint, so confirm-or-cancel is unmissable instead of one
+   red line of text. Moving the data folder or switching profiles only asks,
+   in the ordinary voice: the question under the label, no tint. */
+.state-profiles .settings-row.settings-row-armed {
 	background: color-mix(in srgb, var(--error) 8%, transparent);
-	border-radius: 8px;
-	padding: 14px 16px;
-	margin: 6px 0;
-}
-/* Moving the data folder copies first and deletes nothing, and a switch
-   only restarts against another tree, so their second step asks in the
-   ordinary voice: the same framed row, in the ordinary border colour and
-   with no tint, and its question in the ordinary text colour. Red stays
-   for the one step that really does remove something. */
-.state-profiles .rs-row.rs-row-asking {
-	border: 1px solid var(--border);
-	border-radius: 8px;
-	padding: 14px 16px;
-	margin: 6px 0;
+	padding-left: 12px;
+	padding-right: 12px;
 }
 .state-profiles .state-profile-asking {
 	color: var(--fg);
 	margin-top: 4px;
-}
-/* The one action the framed question is asking for, filled the way the app
-   fills a primary button; Keep it stays the quiet way out beside it. */
-.state-profiles .rs-btn.rs-btn-primary {
-	background: var(--fg);
-	border-color: var(--fg);
-	color: var(--bg);
-}
-.state-profiles .rs-btn.rs-btn-primary:hover:not(:disabled),
-.state-profiles .rs-btn.rs-btn-primary:focus-visible {
-	background: color-mix(in srgb, var(--fg) 88%, var(--bg));
-}
-/* The mac desktop app pads full-page landings 60px down to clear the
-   traffic lights; the modal pane floats well below them, so it keeps the
-   modal's own inset (the desktop rule is more specific than the pair
-   above and would win without this). */
-html.desktop-app-mac .settings-overlay .landing {
-	padding-top: 6px;
-}
-/* Quiet custom scrollbar; the standard scrollbar-width/scrollbar-color
-   pair is deliberately absent above because setting either one makes
-   engines ignore these pseudo-element rules, and only the pseudo-element
-   track takes a margin. The top inset comes structurally from the strip
-   (the scroll container starts below it); the bottom margin keeps the
-   track and thumb clear of the modal's rounded corner. */
-.settings-overlay .landing::-webkit-scrollbar {
-	width: 8px;
-}
-.settings-overlay .landing::-webkit-scrollbar-thumb {
-	background: var(--border);
-	border-radius: 4px;
-}
-.settings-overlay .landing::-webkit-scrollbar-thumb:hover {
-	background: var(--fg-soft);
-}
-.settings-overlay .landing::-webkit-scrollbar-track {
-	background: transparent;
-	margin-bottom: 18px;
-}
-/* Engines without ::-webkit-scrollbar keep the thin standard treatment
-   (no inset available there). */
-@supports not selector(::-webkit-scrollbar) {
-	.settings-overlay .landing {
-		scrollbar-width: thin;
-		scrollbar-color: var(--border) transparent;
-	}
-}
-/* The nav names the section and the header bar repeats it; the pages'
-   full-page hero titles would say it a third time at poster size, so the
-   hero keeps only its intro copy in here. */
-.settings-overlay .landing-hero h1 {
-	display: none;
-}
-.settings-overlay .landing-hero {
-	padding-bottom: 12px;
-}
-/* The hero already names the section; the component's own heading would
-   say it twice. */
-.settings-overlay .settings-web-search .ai-setup-section-heading {
-	display: none;
 }
 
 /* Compact scale inside the modal only: the hosted pages were built for
    full-page air, and at modal density their sizes read loose. Everything
    here is scoped under .settings-overlay so the full-page views (remote
    devices see some of these components full-page) are untouched. */
-.settings-overlay .landing p,
-.settings-overlay .ai-setup-copy,
-.settings-overlay .remote-onboarding-steps {
-	font-size: 14px;
-	line-height: 1.55;
-}
-.settings-overlay .landing-hero p {
-	max-width: 36rem;
-}
+/* Inside the dialog a page's sections are groups: no rule between them, and
+   a long path in a row shortens instead of widening the pane. */
 .settings-overlay .ai-setup-section {
-	gap: 14px;
-	padding-bottom: 20px;
-}
-.settings-overlay .connectors-page .ai-setup-section,
-.settings-overlay .skills-page .ai-setup-section {
-	padding-top: 6px;
-}
-.settings-overlay .connectors-page.ai-setup-page {
-	gap: 10px;
-}
-.settings-overlay .remote-master-state {
-	font-size: 14px;
-}
-.settings-overlay .remote-master-state code {
-	font-size: 13px;
-}
-.settings-overlay .remote-master-footnote,
-.settings-overlay .remote-fold summary,
-.settings-overlay .remote-onboarding-waiting {
-	font-size: 12.5px;
+	grid-template-columns: minmax(0, 1fr);
+	gap: 12px;
+	padding: 0;
+	border-bottom: none;
 }
 .settings-overlay .web-search-fallback-heading {
 	font-size: 11px;
 	letter-spacing: 0.12em;
 	color: color-mix(in srgb, var(--muted) 78%, transparent);
-}
-.settings-overlay .remote-devices {
-	margin-top: 2px;
-}
-.settings-overlay .remote-devices .web-search-fallback-heading {
-	margin-bottom: 8px;
-}
-/* Row rhythm: ~44-48px rows, hint tight beneath the name, dividers a shade
-   quieter than the full-page token. */
-.settings-overlay .rs-row {
-	padding: 6px 0;
-	min-height: 46px;
-	gap: 12px;
-}
-.settings-overlay .rs-row ~ .rs-row {
-	border-top-color: color-mix(in srgb, var(--border-soft) 55%, transparent);
-}
-.settings-overlay .rs-row-label {
-	font-size: 14px;
-	font-weight: 500;
-}
-.settings-overlay .rs-row-hint {
-	font-size: 12px;
-	line-height: 1.4;
-}
-.settings-overlay .remote-room-row {
-	padding: 4px 0;
-	min-height: 40px;
 }
 /* Small quiet pills instead of chunky bordered segments; the selected side
    keeps the app's existing filled-selection treatment. */
@@ -14504,14 +13590,7 @@ html.desktop-app-mac .settings-overlay .landing {
 	line-height: 1.3;
 	padding: 4px 9px;
 }
-/* Revoke rests muted; red is saved for hover and the armed confirm state,
-   so one row shows at most one emphasis at a time. */
-.settings-overlay .rs-quiet-danger {
-	color: var(--muted);
-	text-decoration: none;
-}
-.settings-overlay .rs-quiet-danger:hover:not(:disabled),
-.settings-overlay .rs-quiet-danger:focus-visible {
+.settings-overlay .rs-quiet-danger:hover:not(:disabled) {
 	color: var(--error);
 	text-decoration: underline;
 	text-underline-offset: 3px;
@@ -14520,31 +13599,6 @@ html.desktop-app-mac .settings-overlay .landing {
    stays the section's one primary action. */
 .settings-overlay .skill-row {
 	padding: 8px 0;
-}
-.settings-overlay .skill-row-title strong {
-	font-size: 14px;
-}
-.settings-overlay .skill-row-desc {
-	font-size: 12px;
-}
-.settings-overlay .skill-row-actions .inline-action {
-	background: none;
-	border-color: transparent;
-	font-family: inherit;
-	font-size: 12.5px;
-	font-weight: 400;
-	letter-spacing: normal;
-	text-transform: none;
-	padding: 2px 4px;
-	color: var(--muted);
-	text-decoration: underline;
-	text-underline-offset: 3px;
-}
-.settings-overlay .skill-row-actions .inline-action:hover:not(:disabled),
-.settings-overlay .skill-row-actions .inline-action:focus-visible {
-	color: var(--fg);
-	background: none;
-	border-color: transparent;
 }
 /* Connectors at modal density: quiet row actions (the one primary Log in
    keeps its fill), compact rows, and a plain count beside the header. */
@@ -14583,21 +13637,7 @@ html.desktop-app-mac .settings-overlay .landing {
 	text-overflow: ellipsis;
 	min-width: 0;
 }
-.settings-overlay .connector-row-actions .inline-action:not(.connector-action-primary) {
-	background: none;
-	border-color: transparent;
-	font-family: inherit;
-	font-size: 12.5px;
-	font-weight: 400;
-	letter-spacing: normal;
-	text-transform: none;
-	padding: 2px 4px;
-	color: var(--muted);
-	text-decoration: underline;
-	text-underline-offset: 3px;
-}
-.settings-overlay .connector-row-actions .inline-action:not(.connector-action-primary):hover:not(:disabled),
-.settings-overlay .connector-row-actions .inline-action:not(.connector-action-primary):focus-visible {
+.settings-overlay .connector-row-actions .inline-action:not(.connector-action-primary):hover:not(:disabled) {
 	color: var(--fg);
 	background: none;
 	border-color: transparent;
@@ -14616,29 +13656,30 @@ html.desktop-app-mac .settings-overlay .landing {
 	text-transform: uppercase;
 	color: color-mix(in srgb, var(--muted) 78%, transparent);
 }
-/* The one control row that reaches into the floating X's band keeps
-   clear of it; every other control keeps the shared right edge. */
-.settings-overlay .skill-library-controls {
-	justify-content: flex-end;
-	padding-right: 48px;
-}
 .settings-overlay .skill-table-head,
 .settings-overlay .skill-table .skill-row {
-	grid-template-columns: minmax(0, 1fr) 88px 104px 108px;
+	grid-template-columns: minmax(0, 1fr) 88px 64px 108px 16px;
 	gap: 6px 14px;
 }
 .settings-overlay .skill-table .skill-row {
 	border-bottom-color: var(--exx-divider);
 }
-.settings-overlay .skill-table .skill-row:has(.skill-row-main:hover) {
-	background: color-mix(in srgb, var(--fg) 3%, transparent);
+@media (hover: hover) {
+	.settings-overlay .skill-table .skill-row:hover:not(:disabled) {
+		background: color-mix(in srgb, var(--fg) 3%, transparent);
+	}
+	.settings-overlay .skill-table .skill-row:hover .skill-table-name {
+		text-decoration: underline;
+		text-underline-offset: 3px;
+	}
 }
 .settings-overlay .skill-table-name {
 	font-size: 14px;
 	font-weight: 500;
-}
-.settings-overlay .skill-table .skill-row-main:hover .skill-table-name {
-	text-decoration: underline;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 }
 .settings-overlay .skill-table-cell {
 	font-size: 12px;
@@ -14647,11 +13688,6 @@ html.desktop-app-mac .settings-overlay .landing {
 	overflow: hidden;
 	text-overflow: ellipsis;
 	min-width: 0;
-}
-.settings-overlay .skill-table .skill-row-actions {
-	justify-content: flex-end;
-	flex-wrap: wrap;
-	gap: 6px;
 }
 /* Connectors table: header first cell spans icon+name; fixed type/status/
    action columns keep the rows aligned even though each row is its own grid. */
@@ -14688,51 +13724,9 @@ html.desktop-app-mac .settings-overlay .landing {
 	gap: 6px;
 	padding-right: 12px;
 }
-/* Add catalog: the base card styles already carry the modal-density
-   reference geometry; only the token row's buttons compact here. */
-.settings-overlay .connector-dir-actions .inline-action {
-	font-size: 10px;
-	padding: 5px 8px;
-}
-/* Sentence case on every action pill inside the modal: the source strings
-   are already typed that way, only the uppercase transform lifts. Pills
-   outside the modal keep the display face. */
-.settings-overlay .inline-action,
-.settings-overlay .landing-action {
-	text-transform: none;
-}
-/* Web search at modal density: the provider-search card becomes a switch
-   row like the remote tab's, and the engine cards compact. */
-.settings-overlay .web-search-native {
-	gap: 4px;
-}
-.settings-overlay .web-search-native .rs-row.pending {
-	opacity: 0.6;
-}
-.settings-overlay .web-search-options {
-	gap: 8px;
-}
-.settings-overlay .web-search-option {
-	padding: 9px 12px;
-	border-radius: 8px;
-}
-.settings-overlay .web-search-option-label {
-	font-size: 14px;
-	font-weight: 500;
-}
-.settings-overlay .web-search-option-blurb {
-	font-size: 12px;
-}
-/* AI setup at modal density: the profile card flattens to bare rows with
-   the remote tab's divider rhythm; the active profile keeps the one filled
-   emphasis per section. */
-.settings-overlay .ai-profile-switcher-section {
-	gap: 10px;
-}
-.settings-overlay .ai-profile-section-head {
-	display: grid;
-	gap: 8px;
-}
+/* AI setup in the dialog: the profiles are rows of one list like every
+   other setting; the radio alone says which one is active, and the models
+   panel under a row starts at the row's label edge. */
 .settings-overlay .ai-profile-card {
 	border: none;
 	border-radius: 0;
@@ -14740,84 +13734,18 @@ html.desktop-app-mac .settings-overlay .landing {
 	overflow: visible;
 }
 .settings-overlay .ai-profile-row {
-	padding: 8px 12px;
-	min-height: 46px;
-	border-radius: 8px;
-}
-.settings-overlay .ai-profile-row.active {
-	background: color-mix(in srgb, var(--panel-2) 70%, transparent);
-}
-.settings-overlay .ai-profile-row-group + .ai-profile-row-group {
-	border-top-color: color-mix(in srgb, var(--border-soft) 55%, transparent);
-}
-.settings-overlay .ai-profile-name {
-	font-size: 14px;
-	font-weight: 600;
-}
-.settings-overlay .ai-profile-sub {
-	font-size: 12px;
+	padding: 12px 0;
 }
 .settings-overlay .ai-profile-card-empty {
-	padding: 8px 12px;
+	padding: 12px 0;
 }
 .settings-overlay .ai-profile-models {
-	padding: 10px 12px 12px 42px;
-}
-.settings-overlay .add-provider-block {
-	border: none;
-	border-radius: 0;
-	background: transparent;
-	padding: 2px 0 0;
-}
-/* Desktop shows both panes; the back control is a phone affordance. */
-.settings-overlay-back {
-	display: none;
+	margin: 0 0 12px;
+	border-top: none;
+	border-radius: 8px;
+	padding: 10px 12px;
 }
 @media (max-width: 760px) {
-	/* The modal becomes a full-screen sheet on phones. */
-	.settings-overlay-backdrop {
-		padding: 0;
-	}
-	.settings-overlay {
-		width: 100%;
-		height: 100%;
-		border: none;
-		border-radius: 0;
-		box-shadow: none;
-		grid-template-columns: minmax(0, 1fr);
-	}
-	.settings-overlay-nav {
-		border-right: none;
-		padding: 24px 16px 16px;
-	}
-	.settings-overlay.show-nav .settings-overlay-content { display: none; }
-	.settings-overlay:not(.show-nav) .settings-overlay-nav { display: none; }
-	/* The sheet keeps its back bar; the floating X is pinned to the sheet
-	   itself, so it closes from both the nav view and a section view. The
-	   bar leaves room for it on the right. */
-	.settings-overlay-back {
-		display: inline-block;
-	}
-	.settings-overlay-content-bar {
-		display: flex;
-		height: auto;
-		align-items: center;
-		padding: 10px 52px 10px 12px;
-		border-bottom: 1px solid var(--exx-divider);
-	}
-	.settings-overlay .landing {
-		padding: 16px 16px 24px;
-	}
-	.settings-overlay .landing::-webkit-scrollbar-track {
-		margin-bottom: 0;
-	}
-	.settings-overlay-close {
-		top: 8px;
-		right: 8px;
-		width: 44px;
-		height: 44px;
-		font-size: 15px;
-	}
 	/* Phone tables: the fixed desktop columns collapse into stacked rows —
 	   name on top, the fact cells folded into one muted dot-separated hint
 	   line beneath, actions at the right. Self-labeling, so no header row. */
@@ -14860,9 +13788,15 @@ html.desktop-app-mac .settings-overlay .landing {
 	.settings-overlay .skill-table .skill-row {
 		grid-template-columns: minmax(0, 1fr) auto;
 	}
-	.settings-overlay .skill-table .skill-row-main {
+	.settings-overlay .skill-table-name {
 		grid-column: 1;
 		grid-row: 1;
+	}
+	.settings-overlay .skill-table-wide {
+		display: none;
+	}
+	.settings-overlay .skill-table-narrow {
+		display: inline;
 	}
 	.settings-overlay .skill-table-facts {
 		display: flex;
@@ -14878,7 +13812,7 @@ html.desktop-app-mac .settings-overlay .landing {
 	.settings-overlay .skill-table-facts .skill-table-cell + .skill-table-cell::before {
 		content: "· ";
 	}
-	.settings-overlay .skill-table .skill-row-actions {
+	.settings-overlay .skill-table-chevron {
 		grid-column: 2;
 		grid-row: 1 / span 2;
 		align-self: center;
@@ -14901,16 +13835,41 @@ html.desktop-app-mac .settings-overlay .landing {
 	justify-content: center;
 	padding: 24px;
 }
+.whats-new-close {
+	position: absolute;
+	top: 12px;
+	right: 12px;
+	z-index: 5;
+	width: 30px;
+	height: 30px;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	padding: 0;
+	border: none;
+	border-radius: 50%;
+	background: transparent;
+	color: var(--muted);
+	font-size: 13px;
+	line-height: 1;
+	cursor: pointer;
+}
+.whats-new-close:hover,
+.whats-new-close:focus-visible {
+	background: color-mix(in srgb, var(--fg) 14%, transparent);
+	color: var(--fg);
+	outline: none;
+}
 .whats-new-dialog {
 	position: relative;
 	width: min(560px, 100%);
 	max-height: min(640px, 70vh);
 	display: flex;
 	flex-direction: column;
-	border: 1px solid var(--border);
+	border: 1px solid var(--exx-edge-dialog);
 	border-radius: 22px;
-	background: var(--bg);
-	box-shadow: 0 24px 80px color-mix(in srgb, #000 26%, transparent);
+	background: var(--panel);
+	box-shadow: none;
 	color: var(--fg);
 	overflow: hidden;
 }
@@ -15029,12 +13988,11 @@ html.desktop-app-mac .settings-overlay .landing {
 	.creator-body,
 	.agent-details-body,
 	.room-settings-body,
-	.rooms-guide-modal,
 	.help-body,
-	.skill-review-body,
-	.settings-overlay-nav,
+	.settings-dialog-nav,
+	.settings-dialog-pane,
 	.whats-new-entries,
-	.model-picker-menu,
+	.room-model-menu,
 	.configure-profile-model-list,
 	.composer textarea {
 		overscroll-behavior: contain;
@@ -15075,14 +14033,8 @@ html.desktop-app-mac .settings-overlay .landing {
 	.sidebar-toggle-floating {
 		top: calc(8px + env(safe-area-inset-top, 0px));
 	}
-	.settings-overlay-nav {
-		padding-top: calc(24px + env(safe-area-inset-top, 0px));
-	}
-	.settings-overlay-content-bar {
-		padding-top: calc(10px + env(safe-area-inset-top, 0px));
-	}
-	.settings-overlay-close {
-		top: calc(8px + env(safe-area-inset-top, 0px));
+	.settings-dialog-head {
+		padding-top: calc(16px + env(safe-area-inset-top, 0px));
 	}
 }
 
@@ -15174,33 +14126,9 @@ html.desktop-app-mac .settings-overlay .landing {
 		min-width: 0;
 		width: auto !important;
 	}
-	/* Room settings: the same full-screen sheet the settings overlay
-	   gets on phones - the floating card read as sparse desktop furniture
-	   at this width, and its margins bought nothing. */
+	/* The create-room and configure-profile dialogs fill the phone edge to edge. */
 	.room-settings-overlay {
 		padding: 0;
-	}
-	.room-settings-modal.rs-shell {
-		width: 100%;
-		max-width: none;
-		height: 100%;
-		max-height: none;
-		border: none;
-		border-radius: 0;
-	}
-	.rs-shell .room-settings-head {
-		padding-top: calc(14px + env(safe-area-inset-top, 0px));
-	}
-	/* Room settings: the section strip scrolls sideways; the end fade
-	   marks the cut as scrollable rather than clipped, and the raw
-	   scrollbar stays hidden like the landing nav's. */
-	.room-settings-nav {
-		scrollbar-width: none;
-		mask-image: linear-gradient(to right, #000 calc(100% - 64px), transparent);
-		-webkit-mask-image: linear-gradient(to right, #000 calc(100% - 64px), transparent);
-	}
-	.room-settings-nav::-webkit-scrollbar {
-		display: none;
 	}
 }
 
@@ -15256,27 +14184,6 @@ html.desktop-app-mac .settings-overlay .landing {
    language (remote devices, web search, archived rooms) keep their scale.
    Appended after the base rules on purpose: same-specificity overrides here
    must win on order. */
-.rs-shell .rs-row {
-	padding: 6px 0;
-	min-height: 46px;
-}
-.rs-shell .rs-row ~ .rs-row {
-	border-top-color: color-mix(in srgb, var(--border-soft) 55%, transparent);
-}
-.rs-shell .rs-row-label {
-	font-weight: 500;
-}
-.rs-shell .rs-row-hint {
-	font-size: 12px;
-	line-height: 1.4;
-}
-/* Sentence case on the action pills, like the Settings modal lifts the
-   uppercase transform from its inline actions; the pill shape stays. */
-.rs-shell .rs-btn {
-	font-size: 12.5px;
-	letter-spacing: normal;
-	text-transform: none;
-}
 /* Errors as plain colored sentences, no card: the boxed treatment read
    heavier than the pane itself and the color already carries the meaning. */
 .rs-shell .checkpoint-proposal-error {
@@ -15285,64 +14192,7 @@ html.desktop-app-mac .settings-overlay .landing {
 	background: transparent;
 	padding: 0;
 }
-/* One hint scale across the panes (the settings modal's 12px), instead of
-   the full-page views' 11px small print. */
-.rs-shell .workspaces-empty-state,
-.rs-shell .workspaces-session-note,
-.rs-shell .workspaces-warnings,
-.rs-shell .workspaces-success,
-.rs-shell .workspaces-error,
-.rs-shell .workspace-summary-note,
-.rs-shell .room-schedules-help,
-.rs-shell .room-schedules-summary,
-.rs-shell .room-schedules-job-meta {
-	font-size: 12px;
-}
-/* One tracked-caps recipe for every group label in the panes, matching the
-   Settings tables' header treatment. */
-.rs-shell .workspace-summary-facts dt,
-.rs-shell .workspace-tool-group-label,
-.rs-shell .workspaces-field > strong,
-.rs-shell .workspaces-tool-options > strong,
-.rs-shell .room-schedules-recurrence legend,
-.rs-shell .room-schedules-save-summary span {
-	font-size: 10.5px;
-	font-weight: 600;
-	letter-spacing: 0.12em;
-	text-transform: uppercase;
-	color: color-mix(in srgb, var(--muted) 78%, transparent);
-}
-/* Workspace pane: the saved-state summary reads as a plain block, not a
-   card — the folder line and the facts carry the structure themselves. */
-.rs-shell .workspace-summary-card {
-	border: none;
-	border-radius: 0;
-	padding: 0;
-}
-/* The mode segments and tool rows sit on the soft divider palette. */
-.rs-shell .workspace-mode-segments {
-	border-color: var(--border-soft);
-}
-.rs-shell .workspace-mode-segment {
-	font-size: 12.5px;
-	font-weight: 500;
-	padding: 7px 14px;
-}
-.rs-shell .workspace-mode-segment + .workspace-mode-segment {
-	border-left-color: var(--border-soft);
-}
-.rs-shell .workspaces-default-form .workspaces-tool-row {
-	border-bottom-color: color-mix(in srgb, var(--border-soft) 55%, transparent);
-}
-.rs-shell .workspaces-default-form .workspace-tool-groups .workspaces-tool-row:hover {
-	background: color-mix(in srgb, var(--fg) 3%, transparent);
-}
-/* The Bash block keeps a subtle raised distinction, but neutral: a power
-   tool's home, not a warning. */
-.rs-shell .workspace-power-user {
-	border-color: var(--border-soft);
-	background: color-mix(in srgb, var(--panel-2) 55%, transparent);
-}
+
 /* Skills + connectors: bordered row-cards flatten to the shared divider
    rhythm; the picker keeps its outline as a boundary but loses the fill. */
 .rs-shell .room-skills-rows {
@@ -15369,41 +14219,12 @@ html.desktop-app-mac .settings-overlay .landing {
 .rs-shell .room-skills-review {
 	border-color: color-mix(in srgb, var(--exx-warning, #c47f00) 45%, transparent);
 }
-/* Scheduled tasks: the form, recurrence fieldset and preset panel run
-   without boxes; the field structure carries them. */
-.rs-shell .room-schedules-form,
-.rs-shell .room-schedules-recurrence,
-.rs-shell .room-schedules-preset-panel {
-	border: none;
-	border-radius: 0;
-	background: transparent;
-	padding: 0;
-}
-.rs-shell .room-schedules-recurrence legend {
-	padding: 0;
-}
-.rs-shell .room-schedules-field span,
-.rs-shell .room-schedules-checkbox span {
-	font-weight: 600;
-}
-/* The what-will-be-saved summary is a quiet labeled sentence, not an
-   amber alert box. */
-.rs-shell .room-schedules-save-summary {
-	border: none;
-	border-radius: 0;
-	background: transparent;
-	padding: 0;
-}
 /* Choice chips rest transparent at chip weight; the selected one keeps the
    app's filled-selection treatment from the base rules. */
-.rs-shell .room-schedules-mode-button,
-.rs-shell .room-schedules-submode-button,
 .rs-shell .room-schedules-day-chip {
 	background: transparent;
 	font-weight: 500;
 }
-.rs-shell .room-schedules-mode-button.active,
-.rs-shell .room-schedules-submode-button.active,
 .rs-shell .room-schedules-day-chip.active {
 	background: var(--fg);
 }
@@ -15427,19 +14248,6 @@ html.desktop-app-mac .settings-overlay .landing {
 	border-radius: 0;
 	padding: 0;
 }
-/* The edit form's separator drops to the shared hairline strength. */
-.rs-shell .workspaces-default-form {
-	border-top-color: color-mix(in srgb, var(--border-soft) 55%, transparent);
-}
-/* The access-mode fact beside the folder name reads as quiet caps text,
-   not an outlined pill. */
-.rs-shell .workspace-summary-mode {
-	border: none;
-	border-radius: 0;
-	padding: 0;
-	font-weight: 600;
-	letter-spacing: 0.08em;
-}
 
 /* Review: the depth picker borrows the chooser's rows; the picked row shows a check. */
 .review-depth-section .maintain-actions { margin-top: 12px; }
@@ -15458,3 +14266,308 @@ html.desktop-app-mac .settings-overlay .landing {
 /* Memorize and Review while they work: the card's headline carries the progress and a small spinner. */
 .absorb-run-card-working { display: flex; align-items: center; gap: 10px; }
 .absorb-run-card-working .spinner { width: 18px; height: 18px; flex: none; }
+
+/* Arrange mode (home screen, room sorting slice 3) ----------------- */
+/* The arrange line replaces the sort control: what to do, then Cancel and
+   Save as at the end of a form, on the hint's baseline. */
+.room-arrange-line { align-items: flex-end; }
+.room-arrange-line-row {
+	display: flex;
+	align-items: baseline;
+	justify-content: flex-end;
+	flex-wrap: wrap;
+	gap: 8px;
+}
+.room-arrange-hint {
+	font-size: 12.5px;
+	color: var(--muted);
+}
+/* The pair wraps as one, never Cancel on one row and Save on the next. */
+.room-arrange-buttons {
+	display: inline-flex;
+	align-items: baseline;
+	gap: 8px;
+}
+/* A card fills its grid cell as on Home, so the grid's columns and gaps are
+   the same as when not arranging: nothing reflows on entry. The slot is
+   what is pressed, focused and moved: a transform written by the motion
+   hook slides it aside or carries it, and the grid (positioned, so it is the
+   slots' offset parent) keeps every rest box readable through those
+   transforms. No text is selectable while arranging: a press-and-move on a
+   card is a drag, never a selection (and never the browser's drag of
+   selected text or a long press's menu). */
+.landing-grid.is-arranging { position: relative; }
+.room-arrange-slot {
+	display: flex;
+	min-width: 0;
+	min-height: 0;
+	position: relative;
+	cursor: grab;
+	border-radius: var(--exx-radius-card);
+	user-select: none;
+	-webkit-user-select: none;
+	-webkit-touch-callout: none;
+}
+.room-arrange-slot:focus-visible {
+	outline: 2px solid var(--exx-focus);
+	outline-offset: 3px;
+}
+/* Opaque while arranging (the same colour, mixed over the page's): cards
+   pass over one another as they slide and while one is carried. */
+.room-arrange-slot > .landing-card {
+	flex: 1 1 auto;
+	min-width: 0; /* shrinks as on Home, so a long model label is cut short, never wider than the screen */
+	background: color-mix(in srgb, var(--panel) 72%, var(--bg));
+	transition: box-shadow 200ms ease-out;
+}
+/* Lifted: above the others with one clear shadow, until it has settled. */
+.room-arrange-slot.is-dragging,
+.room-arrange-slot[data-settling] { z-index: 3; }
+.room-arrange-slot.is-dragging { cursor: grabbing; }
+.room-arrange-slot.is-dragging > .landing-card { box-shadow: var(--exx-shadow-popover); }
+/* The card's own controls stay drawn, so the card keeps its Home look, but
+   dimmed and out of reach (they are inert too). */
+.persistent-agent-card.arranging { cursor: inherit; }
+.persistent-agent-card.arranging .persistent-agent-actions,
+.persistent-agent-card.arranging .card-gear-btn {
+	opacity: 0.45;
+	pointer-events: none;
+}
+.add-room-card:disabled {
+	cursor: default;
+	opacity: 0.5;
+}
+/* The live region: read by assistive technology, never seen. */
+.room-arrange-live {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	overflow: hidden;
+	clip: rect(0 0 0 0);
+	white-space: nowrap;
+}
+
+/* Phone room header on one row (ui polish): home and drawer controls float at
+   the left, then "TALKING TO <name>" truncating with an ellipsis, then the
+   actions right-aligned. The Bash chip becomes an icon; its title and label
+   keep the words. Scoped to the room shell so the other topbars keep theirs. */
+@media (max-width: 760px) {
+	.app .topbar { flex-wrap: nowrap; }
+	.app .topbar .left { flex: 1 1 auto; min-width: 0; flex-wrap: nowrap; gap: 8px; }
+	.app .topbar .agent-label { flex: 0 0 auto; white-space: nowrap; }
+	.app .topbar .title-stack { min-width: 0; }
+	.app .topbar .title { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+	.app .topbar-actions { margin-left: auto; gap: 2px; }
+	.app .bash-mode-chip { width: 30px; padding: 0; justify-content: center; }
+	.app .bash-mode-chip-icon { display: inline-flex; }
+	.app .bash-mode-chip-label { display: none; }
+}
+
+/* The model per room: the picker, the Model pane, the card label. */
+/* The model picker: a quiet control naming the model, the provider as a
+   muted suffix after a middle dot, a chevron. Muted when the row inherits. */
+.room-model-picker {
+	position: relative;
+}
+.room-model-pick {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	height: 32px;
+	max-width: 320px;
+	padding: 0 10px;
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	background: none;
+	color: var(--fg);
+	font: inherit;
+	font-size: 13px;
+	white-space: nowrap;
+	cursor: pointer;
+}
+.room-model-pick:hover:not(:disabled),
+.room-model-pick:focus-visible {
+	border-color: color-mix(in srgb, var(--fg) 35%, var(--border));
+}
+.room-model-pick:disabled {
+	cursor: default;
+}
+.room-model-pick.inherited {
+	color: var(--muted);
+}
+.room-model-pick-name {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.room-model-pick-provider {
+	color: var(--muted);
+}
+.room-model-pick-provider::before {
+	content: "· ";
+}
+.room-model-menu {
+	position: fixed;
+	z-index: 95;
+	width: 320px;
+	max-height: min(420px, 60vh);
+	overflow-y: auto;
+	padding: 6px 0;
+	background: var(--exx-surface-raised, var(--panel));
+	border: 1px solid var(--border-soft);
+	border-radius: 10px;
+	box-shadow: var(--exx-shadow-popover);
+	white-space: normal;
+}
+.room-model-menu-group + .room-model-menu-group {
+	margin-top: 4px;
+}
+.room-model-menu-kicker {
+	margin: 0;
+	padding: 8px 14px 4px;
+	color: var(--muted);
+	font-size: 11px;
+	letter-spacing: 0.14em;
+	text-transform: uppercase;
+}
+.room-model-menu-empty {
+	margin: 0;
+	padding: 10px 14px;
+	color: var(--muted);
+	font-size: 13px;
+}
+.room-model-option {
+	display: flex;
+	width: 100%;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	padding: 8px 14px;
+	border: none;
+	background: none;
+	color: var(--fg);
+	font: inherit;
+	font-size: 13px;
+	text-align: left;
+	cursor: pointer;
+}
+.room-model-option:hover,
+.room-model-option:focus-visible {
+	background: color-mix(in srgb, var(--fg) 7%, transparent);
+	outline: none;
+}
+.room-model-option.selected .room-model-option-name {
+	font-weight: 600;
+}
+.room-model-option-tag {
+	color: var(--muted);
+	font-size: 12px;
+}
+.room-model-sheet-backdrop {
+	display: none;
+}
+.settings-row-sub.room-model-unavailable {
+	color: var(--fg);
+}
+.room-model-switch {
+	margin-top: 14px;
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 8px;
+}
+.room-model-switch-line,
+.room-model-switch-note {
+	margin: 0;
+	color: var(--muted);
+	font-size: 13px;
+	line-height: 1.45;
+}
+.room-model-error {
+	margin: 10px 0 0;
+	color: var(--error);
+	font-size: 13px;
+	line-height: 1.45;
+}
+/* The card's model: a quiet label that opens Room settings, Model. One line,
+   right-aligned. The name is never cut; the provider suffix wraps to a second
+   line that the fixed height clips when the whole label does not fit, and the
+   tooltip keeps it. */
+.card-model-label {
+	display: inline-flex;
+	flex-wrap: wrap;
+	justify-content: flex-end;
+	align-items: baseline;
+	column-gap: 4px;
+	height: 1.5em;
+	line-height: 1.5em;
+	overflow: hidden;
+	min-width: 0;
+	max-width: 100%;
+	padding: 0;
+	border: none;
+	background: none;
+	color: var(--muted);
+	font: inherit;
+	font-size: 12.5px;
+	white-space: nowrap;
+	cursor: pointer;
+}
+.card-model-label:hover,
+.card-model-label:focus-visible {
+	color: var(--fg);
+}
+.card-model-label-name,
+.card-model-label-provider {
+	flex: 0 0 auto;
+}
+/* Only a name longer than the whole space is cut, as the last resort. */
+.card-model-label-name {
+	max-width: 100%;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.card-model-label-provider::before {
+	content: "· ";
+}
+@media (max-width: 720px) {
+	.room-model-row {
+		flex-wrap: wrap;
+		row-gap: 8px;
+	}
+	.room-model-row .settings-row-main {
+		flex-basis: 100%;
+	}
+	.room-model-pick {
+		max-width: 100%;
+	}
+	.room-model-row .settings-row-value {
+		flex-wrap: wrap;
+		white-space: normal;
+	}
+	/* A full-width sheet from the bottom on a phone. */
+	.room-model-sheet-backdrop {
+		display: block;
+		position: fixed;
+		inset: 0;
+		z-index: 94;
+		background: rgba(0, 0, 0, 0.35);
+	}
+	.room-model-menu {
+		left: 0 !important;
+		right: 0 !important;
+		top: auto !important;
+		bottom: 0 !important;
+		width: auto;
+		max-height: 70vh;
+		border-radius: 14px 14px 0 0;
+		padding: 8px 0 max(12px, env(safe-area-inset-bottom));
+	}
+	.room-model-option {
+		padding: 12px 18px;
+		font-size: 15px;
+	}
+	.room-model-menu-kicker {
+		padding: 10px 18px 4px;
+	}
+}

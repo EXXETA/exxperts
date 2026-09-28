@@ -103,6 +103,12 @@ export const notConfiguredAiProfileStatus: PersistentAgentAiProfileSelectionStat
 	state: { path: "~/.exxperts/app/persistent-agent-ai-profile.json", source: "default", message: "No AI profile selected yet." },
 };
 
+const fixtureModelLock = { provider: "fixture-ai", model: "strategy-large", label: "Strategy Large", name: "Strategy Large", providerLabel: "Fixture AI", contextWindow: 272000 };
+const fixtureRoomModels: NonNullable<PersistentAgentStatus["models"]> = {
+	conversation: { stored: null, chosen: fixtureModelLock, effective: fixtureModelLock, source: "default" },
+	memory: { stored: null, chosen: fixtureModelLock, effective: fixtureModelLock, source: "default" },
+};
+
 function roomStatus(overrides: Partial<PersistentAgentStatus> & Pick<PersistentAgentStatus, "id" | "displayName" | "status">): PersistentAgentStatus {
 	const runtimeModel = overrides.runtime?.model ?? { provider: "fixture-ai", model: "strategy-large", label: "Fixture AI — Strategy Large" };
 	return {
@@ -119,10 +125,13 @@ function roomStatus(overrides: Partial<PersistentAgentStatus> & Pick<PersistentA
 			updatedAt: Date.parse(now),
 		},
 		activeThread: overrides.activeThread ?? null,
+		lastUsedAt: overrides.lastUsedAt ?? null,
+		lastUsedIsEstimate: overrides.lastUsedIsEstimate ?? false,
 		displayName: overrides.displayName,
 		description: overrides.description ?? "Synthetic persistent-room fixture.",
 		role: overrides.role ?? "Synthetic fixture room",
 		model: overrides.model ?? { provider: "fixture-ai", model: "strategy-large" },
+		models: overrides.models ?? fixtureRoomModels,
 		l1a: overrides.l1a ?? { path: `fixture://rooms/${overrides.id}/l1a`, exists: true, bytes: 2048 },
 		l1b: overrides.l1b ?? { path: `fixture://rooms/${overrides.id}/l1b`, exists: true, bytes: 4096, sections: ["profile", "working-context"], missingSections: [] },
 		sectionRegistry: overrides.sectionRegistry ?? { path: `fixture://rooms/${overrides.id}/sections`, exists: true, missingSections: [] },

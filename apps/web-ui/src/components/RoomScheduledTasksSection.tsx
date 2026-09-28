@@ -36,6 +36,7 @@ import type {
 	PersistentRoomScheduleUpdateRequest,
 	PersistentRoomSchedulesResponse,
 } from "../types";
+import { PaneHeader } from "./pane-header";
 
 const PROMPT_PREVIEW_LIMIT = 220;
 // Monday-first display order over cron day numbers (0 = Sunday).
@@ -127,7 +128,7 @@ function formatFriendlyRunReason(run: PersistentRoomBackgroundRunView): string |
 		case "prepared_runtime_boundary": return "Remember or Forget needs a manual decision.";
 		case "model_not_found": return "Scheduled model is not available.";
 		case "provider_not_connected": return "AI provider is not connected.";
-		case "model_policy_unavailable": return "Scheduled-room model policy is unavailable.";
+		case "model_policy_unavailable": return "This room's model cannot run. See Room settings, Model.";
 		case "schedule_missing": return "Schedule was deleted before it ran.";
 		case "schedule_disabled": return "Schedule was disabled before it ran.";
 		case "completed": return "Completed.";
@@ -281,6 +282,7 @@ function ScheduleSummary({ latestRun, nextDueAt, summary }: { latestRun: Persist
 }
 
 function ScheduleForm({
+	formId,
 	allowAutoType,
 	initialDraft,
 	saving,
@@ -288,6 +290,8 @@ function ScheduleForm({
 	onCancel,
 	onSave,
 }: {
+	/** Set when the pane header carries Save and Cancel; the form then has none of its own. */
+	formId?: string;
 	allowAutoType: boolean;
 	initialDraft: ScheduleFormDraft;
 	saving: boolean;
@@ -316,9 +320,9 @@ function ScheduleForm({
 	}
 
 	return (
-		<form className="room-schedules-form" onSubmit={handleSubmit}>
-			<label className="room-schedules-field">
-				<span>Task name</span>
+		<form id={formId} className="room-schedules-form" onSubmit={handleSubmit}>
+			<label className="settings-field">
+				<span>Name</span>
 				<input
 					className="launcher-path-input"
 					value={draft.name}
@@ -328,8 +332,8 @@ function ScheduleForm({
 					disabled={saving}
 				/>
 			</label>
-			<label className="room-schedules-field">
-				<span>Prompt / what should this room do?</span>
+			<label className="settings-field">
+				<span>What should this room do?</span>
 				<textarea
 					className="launcher-path-input"
 					value={draft.prompt}
@@ -341,32 +345,37 @@ function ScheduleForm({
 					disabled={saving}
 				/>
 			</label>
-			<ScheduleRecurrenceEditor
-				allowAutoType={allowAutoType}
-				disabled={saving}
-				recurrence={draft.recurrence}
-				onChange={(recurrence) => updateDraft((current) => ({ ...current, recurrence }))}
-			/>
-			<label className="room-schedules-checkbox">
-				<span>Enabled</span>
-				<input
-					className="workspaces-tool-switch"
-					type="checkbox"
-					checked={draft.enabled}
-					onChange={(event) => updateDraft((current) => ({ ...current, enabled: event.target.checked }))}
+			<div className="settings-rows">
+				<ScheduleRecurrenceEditor
+					allowAutoType={allowAutoType}
 					disabled={saving}
-					aria-label="Enabled"
+					recurrence={draft.recurrence}
+					onChange={(recurrence) => updateDraft((current) => ({ ...current, recurrence }))}
 				/>
-			</label>
-			<div className="room-schedules-save-summary" aria-live="polite">
-				<span>Summary</span>
-				<p>{summary ?? "Choose when this saved task should run."}</p>
+				<label className="settings-row">
+					<span className="settings-row-label">Enabled</span>
+					<input
+						className="workspaces-tool-switch"
+						type="checkbox"
+						checked={draft.enabled}
+						onChange={(event) => updateDraft((current) => ({ ...current, enabled: event.target.checked }))}
+						disabled={saving}
+						aria-label="Enabled"
+					/>
+				</label>
 			</div>
+			{/* Daily, weekly and one-time say their summary in their own row;
+			    only an advanced expression needs it said here. */}
+			{draft.recurrence.mode === "advanced" && (
+				<p className="settings-help" aria-live="polite">{summary ?? "Choose when this saved task should run."}</p>
+			)}
 			{displayedError && <p className="workspaces-error">{displayedError}</p>}
-			<div className="checkpoint-preview-actions room-schedules-form-actions">
-				<button className="rs-btn" type="submit" disabled={saving}>{saving ? "Saving…" : "Save"}</button>
-				<button className="rs-quiet" type="button" onClick={onCancel} disabled={saving}>Cancel</button>
-			</div>
+			{!formId && (
+				<div className="settings-form-foot">
+					<button className="rs-btn" type="button" onClick={onCancel} disabled={saving}>Cancel</button>
+					<button className="rs-btn rs-btn-primary" type="submit" disabled={saving}>{saving ? "Saving…" : "Save"}</button>
+				</div>
+			)}
 		</form>
 	);
 }
@@ -446,192 +455,126 @@ function ScheduleRecurrenceEditor({
 	const oneTimeAtSummary = formatNativeTimeSummary(recurrence.oneTime.at.time);
 
 	return (
-		<fieldset className="room-schedules-recurrence">
-			<legend>When / recurrence</legend>
-			<div className="room-schedules-mode-buttons" role="radiogroup" aria-label="Schedule recurrence mode">
-				<ScheduleModeButton active={recurrence.mode === "daily"} disabled={disabled} onClick={() => setMode("daily")}>Daily</ScheduleModeButton>
-				<ScheduleModeButton active={recurrence.mode === "weekly"} disabled={disabled} onClick={() => setMode("weekly")}>Weekly</ScheduleModeButton>
-				<ScheduleModeButton active={recurrence.mode === "oneTime"} disabled={disabled} onClick={() => setMode("oneTime")}>One time</ScheduleModeButton>
-				<ScheduleModeButton active={recurrence.mode === "advanced"} disabled={disabled} onClick={() => setMode("advanced")}>Advanced</ScheduleModeButton>
+		<>
+			<div className="settings-row">
+				<span className="settings-row-label">Runs</span>
+				<div className="settings-segments" role="radiogroup" aria-label="Schedule recurrence mode">
+					<SegmentButton active={recurrence.mode === "daily"} disabled={disabled} onClick={() => setMode("daily")}>Daily</SegmentButton>
+					<SegmentButton active={recurrence.mode === "weekly"} disabled={disabled} onClick={() => setMode("weekly")}>Weekly</SegmentButton>
+					<SegmentButton active={recurrence.mode === "oneTime"} disabled={disabled} onClick={() => setMode("oneTime")}>One time</SegmentButton>
+					<SegmentButton active={recurrence.mode === "advanced"} disabled={disabled} onClick={() => setMode("advanced")}>Advanced</SegmentButton>
+				</div>
 			</div>
 			{recurrence.mode === "daily" && (
-				<div className="room-schedules-preset-panel">
-					<label className="room-schedules-field room-schedules-time-field">
-						<span>Every day at</span>
-						<input
-							className="launcher-path-input"
-							type="time"
-							value={recurrence.daily.time}
-							onChange={(event) => setDailyTime(event.target.value)}
-							required
-							disabled={disabled}
-						/>
-					</label>
-					<p className="room-schedules-help">Runs every day at {dailyTimeSummary ?? "the selected time"}. Times use this app's local runtime.</p>
-				</div>
+				<label className="settings-row">
+					<span className="settings-row-main">
+						<span className="settings-row-label">At</span>
+						<span className="settings-row-sub">Every day at {dailyTimeSummary ?? "the selected time"}, in this computer's time.</span>
+					</span>
+					<input className="launcher-path-input room-schedules-time-input" type="time" value={recurrence.daily.time} onChange={(event) => setDailyTime(event.target.value)} required disabled={disabled} />
+				</label>
 			)}
 			{recurrence.mode === "weekly" && (
-				<div className="room-schedules-preset-panel">
-					<div className="room-schedules-day-row" role="group" aria-label="Weekly schedule days">
-						{WEEKLY_DAY_CHIPS.map(({ day, short, full }) => (
-							<button
-								key={day}
-								className={recurrence.weekly.days.includes(day) ? "room-schedules-day-chip active" : "room-schedules-day-chip"}
-								type="button"
-								aria-pressed={recurrence.weekly.days.includes(day)}
-								aria-label={full}
-								disabled={disabled}
-								onClick={() => toggleWeeklyDay(day)}
-							>
-								{short}
-							</button>
-						))}
+				<>
+					<div className="settings-row">
+						<span className="settings-row-label">Days</span>
+						<div className="room-schedules-day-row" role="group" aria-label="Weekly schedule days">
+							{WEEKLY_DAY_CHIPS.map(({ day, short, full }) => (
+								<button
+									key={day}
+									className={recurrence.weekly.days.includes(day) ? "room-schedules-day-chip active" : "room-schedules-day-chip"}
+									type="button"
+									aria-pressed={recurrence.weekly.days.includes(day)}
+									aria-label={full}
+									disabled={disabled}
+									onClick={() => toggleWeeklyDay(day)}
+								>
+									{short}
+								</button>
+							))}
+						</div>
 					</div>
-					<label className="room-schedules-field room-schedules-time-field">
-						<span>At</span>
-						<input
-							className="launcher-path-input"
-							type="time"
-							value={recurrence.weekly.time}
-							onChange={(event) => setWeeklyTime(event.target.value)}
-							required
-							disabled={disabled}
-						/>
+					<label className="settings-row">
+						<span className="settings-row-main">
+							<span className="settings-row-label">At</span>
+							<span className="settings-row-sub">{weeklySummary ? `${weeklySummary}, in this computer's time.` : "Choose the days this task should run."}</span>
+						</span>
+						<input className="launcher-path-input room-schedules-time-input" type="time" value={recurrence.weekly.time} onChange={(event) => setWeeklyTime(event.target.value)} required disabled={disabled} />
 					</label>
-					<p className="room-schedules-help">{weeklySummary ?? "Choose the days this task should run."} Times use this app's local runtime.</p>
-				</div>
+				</>
 			)}
 			{recurrence.mode === "oneTime" && (
-				<div className="room-schedules-preset-panel">
-					<div className="room-schedules-submode-row" role="radiogroup" aria-label="One-time schedule type">
-						<ScheduleSubmodeButton active={recurrence.oneTime.mode === "in"} disabled={disabled} onClick={() => setOneTimeMode("in")}>In</ScheduleSubmodeButton>
-						<ScheduleSubmodeButton active={recurrence.oneTime.mode === "at"} disabled={disabled} onClick={() => setOneTimeMode("at")}>At</ScheduleSubmodeButton>
-					</div>
-					{recurrence.oneTime.mode === "in" ? (
-						<div className="room-schedules-inline-controls">
-							<label className="room-schedules-field room-schedules-number-field">
-								<span>Run once in</span>
-								<input
-									className="launcher-path-input"
-									type="number"
-									min="1"
-									step="1"
-									value={recurrence.oneTime.in.count}
-									onChange={(event) => setOneTimeInCount(event.target.value)}
-									required
-									disabled={disabled}
-								/>
-							</label>
-							<label className="room-schedules-field room-schedules-unit-field">
-								<span>Unit</span>
-								<select
-									className="launcher-path-input"
-									value={recurrence.oneTime.in.unit}
-									onChange={(event) => setOneTimeInUnit(event.target.value as ScheduleOneTimeDelayUnit)}
-									disabled={disabled}
-								>
+				<div className="settings-row">
+					<span className="settings-row-main">
+						<span className="settings-row-label">When</span>
+						<span className="settings-row-sub">
+							{recurrence.oneTime.mode === "at"
+								? `Runs once ${recurrence.oneTime.at.day} at ${oneTimeAtSummary ?? "the selected time"}, in this computer's time.`
+								: "Runs once after the delay you set."}
+						</span>
+					</span>
+					<div className="settings-row-value">
+						<div className="settings-segments" role="radiogroup" aria-label="One-time schedule type">
+							<SegmentButton active={recurrence.oneTime.mode === "in"} disabled={disabled} onClick={() => setOneTimeMode("in")}>In</SegmentButton>
+							<SegmentButton active={recurrence.oneTime.mode === "at"} disabled={disabled} onClick={() => setOneTimeMode("at")}>At</SegmentButton>
+						</div>
+						{recurrence.oneTime.mode === "in" ? (
+							<>
+								<input className="launcher-path-input room-schedules-number-input" type="number" min="1" step="1" value={recurrence.oneTime.in.count} onChange={(event) => setOneTimeInCount(event.target.value)} required disabled={disabled} aria-label="Run once in" />
+								<select className="launcher-path-input room-schedules-select" value={recurrence.oneTime.in.unit} onChange={(event) => setOneTimeInUnit(event.target.value as ScheduleOneTimeDelayUnit)} disabled={disabled} aria-label="Unit">
 									<option value="minutes">minutes</option>
 									<option value="hours">hours</option>
 									<option value="days">days</option>
 								</select>
-							</label>
-						</div>
-					) : (
-						<div className="room-schedules-inline-controls">
-							<label className="room-schedules-field room-schedules-unit-field">
-								<span>Day</span>
-								<select
-									className="launcher-path-input"
-									value={recurrence.oneTime.at.day}
-									onChange={(event) => setOneTimeAtDay(event.target.value as ScheduleOneTimeAtDay)}
-									disabled={disabled}
-								>
+							</>
+						) : (
+							<>
+								<select className="launcher-path-input room-schedules-select" value={recurrence.oneTime.at.day} onChange={(event) => setOneTimeAtDay(event.target.value as ScheduleOneTimeAtDay)} disabled={disabled} aria-label="Day">
 									<option value="today">Today</option>
 									<option value="tomorrow">Tomorrow</option>
 								</select>
-							</label>
-							<label className="room-schedules-field room-schedules-time-field">
-								<span>Time</span>
-								<input
-									className="launcher-path-input"
-									type="time"
-									value={recurrence.oneTime.at.time}
-									onChange={(event) => setOneTimeAtTime(event.target.value)}
-									required
-									disabled={disabled}
-								/>
-							</label>
-						</div>
-					)}
-					<p className="room-schedules-help">{recurrence.oneTime.mode === "at" ? `Runs once ${recurrence.oneTime.at.day} at ${oneTimeAtSummary ?? "the selected time"}.` : "Runs once after the selected delay."}</p>
+								<input className="launcher-path-input room-schedules-time-input" type="time" value={recurrence.oneTime.at.time} onChange={(event) => setOneTimeAtTime(event.target.value)} required disabled={disabled} aria-label="Time" />
+							</>
+						)}
+					</div>
 				</div>
 			)}
 			{recurrence.mode === "advanced" && (
-				<div className="room-schedules-preset-panel">
-					<p className="room-schedules-help">Advanced is for custom schedules. Most users should use Daily or One time.</p>
-					<div className="room-schedules-form-grid">
-						<label className="room-schedules-field">
-							<span>Type</span>
-							<select
-								className="launcher-path-input"
-								value={recurrence.advanced.type}
-								onChange={(event) => setAdvancedType(event.target.value as ScheduleAdvancedType)}
-								disabled={disabled}
-							>
-								{allowAutoType && <option value={SCHEDULE_CREATE_TYPE_AUTO}>Auto</option>}
-								<option value="once">Once</option>
-								<option value="interval">Interval</option>
-								<option value="cron">Cron</option>
-							</select>
-						</label>
-						<label className="room-schedules-field">
-							<span>Schedule expression</span>
-							<input
-								className="launcher-path-input"
-								value={recurrence.advanced.schedule}
-								onChange={(event) => setAdvancedSchedule(event.target.value)}
-								placeholder="+30m"
-								required
-								disabled={disabled}
-							/>
-						</label>
-					</div>
-					<p className="room-schedules-help">Examples: +30m, tomorrow at 7am, 2h, 0 0 7 * * *. Raw expressions are interpreted by the local app/server runtime. Timezone controls are not available yet.</p>
-				</div>
+				<>
+					<label className="settings-row">
+						<span className="settings-row-main">
+							<span className="settings-row-label">Type</span>
+							<span className="settings-row-sub">Advanced is for custom schedules. Most people use Daily or One time.</span>
+						</span>
+						<select className="launcher-path-input room-schedules-select" value={recurrence.advanced.type} onChange={(event) => setAdvancedType(event.target.value as ScheduleAdvancedType)} disabled={disabled}>
+							{allowAutoType && <option value={SCHEDULE_CREATE_TYPE_AUTO}>Auto</option>}
+							<option value="once">Once</option>
+							<option value="interval">Interval</option>
+							<option value="cron">Cron</option>
+						</select>
+					</label>
+					<label className="settings-row">
+						<span className="settings-row-main">
+							<span className="settings-row-label">Expression</span>
+							<span className="settings-row-sub">For example +30m, tomorrow at 7am, 2h or 0 0 7 * * *, read by this computer. Time zones cannot be set yet.</span>
+						</span>
+						<input className="launcher-path-input room-schedules-expression-input" value={recurrence.advanced.schedule} onChange={(event) => setAdvancedSchedule(event.target.value)} placeholder="+30m" required disabled={disabled} />
+					</label>
+				</>
 			)}
-		</fieldset>
+		</>
 	);
 }
 
-function ScheduleModeButton({ active, children, disabled, onClick }: { active: boolean; children: string; disabled: boolean; onClick: () => void }) {
+/** One option of a segmented choice (the schedule's mode, the one-time kind). */
+function SegmentButton({ active, children, disabled, onClick }: { active: boolean; children: string; disabled: boolean; onClick: () => void }) {
 	return (
-		<button
-			className={active ? "room-schedules-mode-button active" : "room-schedules-mode-button"}
-			type="button"
-			role="radio"
-			aria-checked={active}
-			disabled={disabled}
-			onClick={onClick}
-		>
+		<button className={active ? "settings-segment active" : "settings-segment"} type="button" role="radio" aria-checked={active} disabled={disabled} onClick={onClick}>
 			{children}
 		</button>
 	);
 }
 
-function ScheduleSubmodeButton({ active, children, disabled, onClick }: { active: boolean; children: string; disabled: boolean; onClick: () => void }) {
-	return (
-		<button
-			className={active ? "room-schedules-submode-button active" : "room-schedules-submode-button"}
-			type="button"
-			role="radio"
-			aria-checked={active}
-			disabled={disabled}
-			onClick={onClick}
-		>
-			{children}
-		</button>
-	);
-}
 
 function RecentScheduledRunsSection({
 	error,
@@ -660,9 +603,9 @@ function RecentScheduledRunsSection({
 					<span>Showing latest {scheduledRuns.length}</span>
 				)}
 			</div>
-			{loading && <p className="workspaces-empty-state">Loading recent runs…</p>}
+			{loading && <p className="settings-empty">Loading recent runs…</p>}
 			{error && <p className="workspaces-error">Could not load recent runs: {error}</p>}
-			{!loading && !error && scheduledRuns.length === 0 && <p className="workspaces-empty-state">Nothing has run yet. Runs appear here once a schedule fires.</p>}
+			{!loading && !error && scheduledRuns.length === 0 && <p className="settings-empty">Nothing has run yet. Runs appear here once a schedule fires.</p>}
 			{!loading && !error && scheduledRuns.length > 0 && (
 				<div className="room-schedules-run-list">
 					{scheduledRuns.map((run) => {
@@ -757,15 +700,15 @@ function ScheduleJobCard({
 					{error && <p className="workspaces-error">{error}</p>}
 					<div className="room-schedules-job-actions">
 						<button className="rs-quiet" type="button" onClick={onEdit} disabled={actionDisabled}>Edit</button>
-						<button className="rs-quiet" type="button" onClick={onToggleEnabled} disabled={actionDisabled} title={job.enabled ? "Pause this schedule — the record stays" : "Turn this schedule back on"}>{toggling ? "Saving…" : job.enabled ? "Disable" : "Enable"}</button>
+						<button className="rs-quiet" type="button" onClick={onToggleEnabled} disabled={actionDisabled} title={job.enabled ? "Pause this schedule; the record stays" : "Turn this schedule back on"}>{toggling ? "Saving…" : job.enabled ? "Disable" : "Enable"}</button>
 						<button className="rs-quiet rs-quiet-danger" type="button" onClick={onRequestDelete} disabled={actionDisabled}>Delete</button>
 					</div>
 					{confirmingDelete && (
 						<div className="room-schedules-delete-confirm">
 							<p>Delete this schedule record? This only removes the saved record.</p>
 							<div className="room-schedules-job-actions">
-								<button className="rs-btn rs-btn-danger" type="button" onClick={onConfirmDelete} disabled={deleting}>{deleting ? "Deleting…" : "Delete"}</button>
 								<button className="rs-quiet" type="button" onClick={onCancelDelete} disabled={deleting}>Cancel</button>
+								<button className="rs-quiet rs-quiet-danger" type="button" onClick={onConfirmDelete} disabled={deleting}>{deleting ? "Deleting…" : "Delete"}</button>
 							</div>
 						</div>
 					)}
@@ -923,35 +866,39 @@ export function RoomScheduledTasksSection({ status }: { status: PersistentAgentS
 
 	return (
 		<div className="room-schedules-section">
-			<header className="rs-pane-head">
-				<h3>Scheduled tasks</h3>
-				{!createOpen && canLoadSchedules && !loading && !error && (
-					<div className="rs-pane-actions">
-						<button
-							className="rs-btn"
-							type="button"
-							onClick={() => {
-								setCreateOpen(true);
-								setCreateError(null);
-								setJobError(null);
-								setMessage(null);
-								setEditingJobId(null);
-								setConfirmDeleteJobId(null);
-							}}
-							disabled={Boolean(mutation)}
-						>
-							Add schedule
-						</button>
-					</div>
+			<PaneHeader
+				title="Scheduled tasks"
+				line="Prompts this room runs on its own."
+				actions={createOpen ? (
+					<>
+						<button className="rs-btn" type="button" disabled={creating} onClick={() => { setCreateOpen(false); setCreateError(null); }}>Cancel</button>
+						<button className="rs-btn rs-btn-primary" type="submit" form="schedule-create-form" disabled={creating}>{creating ? "Saving…" : "Save task"}</button>
+					</>
+				) : canLoadSchedules && !loading && !error && (
+					<button
+						className="rs-btn"
+						type="button"
+						onClick={() => {
+							setCreateOpen(true);
+							setCreateError(null);
+							setJobError(null);
+							setMessage(null);
+							setEditingJobId(null);
+							setConfirmDeleteJobId(null);
+						}}
+						disabled={Boolean(mutation)}
+					>
+						Add schedule
+					</button>
 				)}
-			</header>
-			<p className="rs-pane-sub">Prompts this room runs on its own.</p>
+			/>
 			<ScheduleSummary latestRun={latestScheduledRun} nextDueAt={derivedNextDueAt} summary={summary} />
 			{message && <p className="workspaces-success">{message}</p>}
-			{loading && <p className="workspaces-empty-state">Loading scheduled tasks…</p>}
+			{loading && <p className="settings-empty">Loading scheduled tasks…</p>}
 			{error && <div className="workspaces-error">Could not load scheduled tasks: {error}</div>}
 			{createOpen && (
 				<ScheduleForm
+					formId="schedule-create-form"
 					allowAutoType
 					initialDraft={emptyCreateDraft()}
 					saving={creating}
@@ -960,9 +907,9 @@ export function RoomScheduledTasksSection({ status }: { status: PersistentAgentS
 					onSave={handleCreate}
 				/>
 			)}
-			{!loading && !error && response && response.jobs.length === 0 && <p className="workspaces-empty-state">No scheduled tasks yet.</p>}
+			{!loading && !error && !createOpen && response && response.jobs.length === 0 && <p className="settings-empty">No scheduled tasks yet.</p>}
 			{!loading && !error && response && response.jobs.length > 0 && activeScheduleRows.length === 0 && completedOneTimeRows.length > 0 && (
-				<p className="workspaces-empty-state">No active schedules. Completed one-time schedules are collapsed below.</p>
+				<p className="settings-empty">No active schedules. Completed one-time schedules are collapsed below.</p>
 			)}
 			{!loading && !error && response && activeScheduleRows.length > 0 && (
 				<div className="room-schedules-list">
@@ -1006,7 +953,7 @@ export function RoomScheduledTasksSection({ status }: { status: PersistentAgentS
 						aria-expanded={completedOneTimeOpen}
 						onClick={() => setCompletedOneTimeOpen((open) => !open)}
 					>
-						<span>{completedOneTimeOpen ? "▾" : "▸"}</span>
+						<span className="disclosure-chevron" aria-hidden="true" />
 						Completed one-time schedules ({completedOneTimeRows.length})
 					</button>
 					{completedOneTimeOpen && (

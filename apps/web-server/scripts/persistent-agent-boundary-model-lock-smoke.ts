@@ -208,7 +208,7 @@ try {
 	];
 	expectThrows(
 		() => writePiThread("c_new_on_delisted_model", "active", "launcher", modelA, []),
-		/model is not approved/i,
+		/is not offered to rooms by any provider/i,
 		"a NEW thread on the delisted model should be refused",
 	);
 	assert(getPersistentAgentThread(agentId, "c_new_on_delisted_model") === null, "the refused thread must not exist");

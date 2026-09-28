@@ -1,9 +1,11 @@
-import { memo, useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ClipboardEvent, CSSProperties, KeyboardEvent, MutableRefObject, ReactNode, Ref } from "react";
-import { Approval } from "./Approval";
+import { Approval, confirmApprovalLabels } from "./Approval";
 import { ConsultThreadItem, Message, TaskThreadItem, ToolBundle, isBundleableToolItem, type MessageAttachmentAccess } from "./Message";
 import { MentionConsultPopover, MentionConsultPopoverBusy, type MentionSupport } from "./mention-consult-popover";
+import { rememberChipValue, type RememberReadEstimate } from "../remember-read";
 import { useEscapeKey } from "./use-escape-key";
+import { SpinnerIcon } from "./icons";
 import { SidebarDrawerBackdrop } from "../sidebar-collapse";
 import type { ApprovalPreviewData } from "../approval-preview";
 import type { ChatItem, ContextHealthStatus } from "../types";
@@ -33,6 +35,8 @@ export interface InRoomChatShellViewProps {
 	busy: boolean;
 	usage: InRoomChatUsage;
 	contextHealth?: ContextHealthStatus | null;
+	/** How a Remember would read the open conversation; asked when the chip's popover opens, never on a turn. */
+	loadRememberEstimate?: () => Promise<RememberReadEstimate>;
 	currentModelLabel?: string | null;
 	/** Provider behind that label. Tooltip only; the face stays the bare name. */
 	currentModelProvider?: string | null;
@@ -49,6 +53,8 @@ export interface InRoomChatShellViewProps {
 	reconnectState?: "idle" | "reconnecting" | "failed";
 	/** Starts a fresh reconnect cycle immediately (the "Reconnect" affordance when failed). */
 	onReconnect?: () => void;
+	/** The room stopped because its model cannot run (a signed-out provider, a model no longer offered), not a lost connection: one notice with the ways on, and no Reconnect. */
+	connectionStopped?: ConnectionStopped;
 	items: ChatItem[];
 	empty: boolean;
 	messagesRef?: Ref<HTMLDivElement>;
@@ -99,32 +105,69 @@ function fmtTok(n: number): string {
 	return (n / 1_000_000).toFixed(1) + "M";
 }
 
-const AUTO_FOLLOW_BOTTOM_THRESHOLD_PX = 96;
-const JUMP_TO_LATEST_SHOW_MIN_PX = 300;
-const JUMP_TO_LATEST_SHOW_VIEWPORT_RATIO = 0.35;
-const JUMP_TO_LATEST_HIDE_MIN_PX = 120;
-const JUMP_TO_LATEST_HIDE_VIEWPORT_RATIO = 0.15;
+/**
+ * Following the answer is decided by the reader's gestures, not by position
+ * math (the tail of a trackpad gesture used to count as a move down, and a
+ * near-bottom threshold then pulled the reader back). A gesture up (wheel,
+ * touch, PageUp/ArrowUp/Home, a scrollbar drag) stops following at once,
+ * wherever the view is. Following resumes only when the reader reaches the
+ * true bottom themselves (within this distance), clicks the pill, or sends.
+ */
+const FOLLOW_RESUME_BOTTOM_PX = 2;
+/** A scroll this soon after a wheel or touch event belongs to that gesture. */
+const GESTURE_SCROLL_WINDOW_MS = 100;
+/** A scroll this soon after the app wrote scrollTop is the app's own. */
+const PROGRAMMATIC_SCROLL_WINDOW_MS = 50;
+/** How long a smooth programmatic scroll may run before the bottom pin resumes. */
+const SMOOTH_SCROLL_MS = 600;
+/** A dropped socket this short is a blink, not news: the banner waits this long. */
+const CONNECTION_BANNER_DELAY_MS = 800;
+
+/** Why the room stopped when the connection is fine but its model cannot run, and the ways on. */
+export interface ConnectionStopped {
+	line: string;
+	/** Settings, AI setup, at the provider's row; absent when signing in cannot help. */
+	onSignIn?: () => void;
+	/** This room's Room settings, Model. */
+	onChooseModel: () => void;
+}
 
 function bottomDistance(el: HTMLElement): number {
 	return el.scrollHeight - el.scrollTop - el.clientHeight;
 }
 
-function isNearBottom(el: HTMLElement, threshold = AUTO_FOLLOW_BOTTOM_THRESHOLD_PX): boolean {
-	return bottomDistance(el) <= threshold;
+/**
+ * The newest thing the reader could read: the last row of the last turn
+ * (the thinking row aside), measured at its message body when it has one so
+ * the time row under a message never counts. For a fresh send with no answer
+ * yet that is the user's own bubble; while an answer streams it is the
+ * growing reply. Empty reserved space below it is never content.
+ */
+function newestContent(el: HTMLElement): Element | null {
+	const turns = el.querySelectorAll(":scope > .transcript-turn");
+	const scope = turns.length > 0 ? turns[turns.length - 1] : el;
+	let row = scope.lastElementChild;
+	while (row && row.classList.contains("thinking-row")) row = row.previousElementSibling;
+	if (!row) return null;
+	const bodies = row.querySelectorAll(".bubble");
+	return bodies.length > 0 ? bodies[bodies.length - 1] : row;
 }
 
-function jumpToLatestShowThreshold(el: HTMLElement): number {
-	return Math.max(JUMP_TO_LATEST_SHOW_MIN_PX, el.clientHeight * JUMP_TO_LATEST_SHOW_VIEWPORT_RATIO);
+/**
+ * The pill shows while not following once the newest content has gone past
+ * the box's visible bottom edge; one rect pair per call. The pill's fade only
+ * exists while the pill does, so a line still above the edge is fully
+ * readable; the half pixel only absorbs subpixel rounding.
+ */
+function shouldShowJumpToLatest(el: HTMLElement, empty: boolean): boolean {
+	if (empty) return false;
+	const newest = newestContent(el);
+	if (!newest) return false;
+	return newest.getBoundingClientRect().bottom - el.getBoundingClientRect().bottom > 0.5;
 }
 
-function jumpToLatestHideThreshold(el: HTMLElement): number {
-	return Math.max(JUMP_TO_LATEST_HIDE_MIN_PX, el.clientHeight * JUMP_TO_LATEST_HIDE_VIEWPORT_RATIO);
-}
-
-function shouldShowJumpToLatest(el: HTMLElement, wasShowing: boolean, empty: boolean): boolean {
-	if (empty || el.scrollHeight <= el.clientHeight) return false;
-	const distance = bottomDistance(el);
-	return distance > (wasShowing ? jumpToLatestHideThreshold(el) : jumpToLatestShowThreshold(el));
+function prefersReducedMotion(): boolean {
+	return typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 }
 
 function assignRef<T>(ref: Ref<T> | undefined, value: T | null): void {
@@ -162,25 +205,31 @@ function fmtExact(n: number): string {
 function ContextPill({
 	status,
 	usage,
+	loadRememberEstimate,
 	currentModelLabel,
 	currentModelProvider,
 	connected,
 	reconnectState = "idle",
+	stopped = false,
 }: {
 	status: ContextHealthStatus;
 	usage: InRoomChatUsage;
+	loadRememberEstimate?: () => Promise<RememberReadEstimate>;
 	currentModelLabel?: string | null;
 	currentModelProvider?: string | null;
 	connected: boolean;
 	reconnectState?: "idle" | "reconnecting" | "failed";
+	/** Stopped on its model, not offline: the notice above the composer says so. */
+	stopped?: boolean;
 }) {
 	const [open, setOpen] = useState(false);
 	const anchorRef = useRef<HTMLDivElement | null>(null);
 	const popoverId = useId();
 	const known = status.tokens != null && status.checkpointPercent != null;
-	const zone = connected ? (status.zone ?? "unknown") : "offline";
-	const reconnecting = !connected && reconnectState === "reconnecting";
-	const label = !connected
+	const offline = !connected && !stopped;
+	const zone = offline ? "offline" : (status.zone ?? "unknown");
+	const reconnecting = offline && reconnectState === "reconnecting";
+	const label = offline
 		? (reconnecting ? "Reconnecting…" : "Offline")
 		: known
 			? `${Math.round(status.checkpointPercent!)}% of recommended context`
@@ -189,13 +238,29 @@ function ContextPill({
 	// While a retry is running, say so; once it has given up, the Reconnect
 	// button beside this pill is the next move, and restarting the app is the
 	// one after that.
-	const title = connected
+	const title = !offline
 		? "Context and model details"
 		: reconnecting
 			? "This room lost its connection. Trying to pick it up again…"
 			: "This room lost its connection. Use Reconnect to try again, or restart the app if it keeps happening.";
 
 	useEscapeKey(() => setOpen(false), open);
+
+	// Whether a Remember now would need parts: asked each time the popover
+	// opens, so the line follows the conversation without touching a turn.
+	// The loader is read through a ref so a parent re-render (every streamed
+	// token) never asks again while the popover stays open.
+	const [rememberEstimate, setRememberEstimate] = useState<RememberReadEstimate | null>(null);
+	const loadRememberEstimateRef = useRef(loadRememberEstimate);
+	loadRememberEstimateRef.current = loadRememberEstimate;
+	useEffect(() => {
+		const load = loadRememberEstimateRef.current;
+		if (!open || !load) return;
+		let cancelled = false;
+		load().then((estimate) => { if (!cancelled) setRememberEstimate(estimate); }, () => { if (!cancelled) setRememberEstimate(null); });
+		return () => { cancelled = true; };
+	}, [open]);
+	const rememberParts = rememberChipValue(rememberEstimate);
 
 	useEffect(() => {
 		if (!open) return;
@@ -267,9 +332,15 @@ function ContextPill({
 						<span>cost</span>
 						<strong>{fmtCost(usage.cost)}</strong>
 					</div>
+					{rememberParts && (
+						<div className="composer-context-popover-row" title="A memory model with a larger window reads it in one pass (Room settings, Model)">
+							<span>remember</span>
+							<strong>{rememberParts}</strong>
+						</div>
+					)}
 					<div className="composer-context-popover-row">
 						<span>connection</span>
-						<strong>{connected ? "online" : reconnecting ? "reconnecting…" : "offline"}</strong>
+						<strong>{connected ? "online" : stopped ? "paused" : reconnecting ? "reconnecting…" : "offline"}</strong>
 					</div>
 					<p className="composer-context-popover-note">
 						{zone === "red"
@@ -279,6 +350,57 @@ function ContextPill({
 								: "Models lose sharpness as context grows. Use Remember before you reach the recommendation to keep answers sharp."}
 					</p>
 				</div>
+			)}
+		</div>
+	);
+}
+
+/**
+ * Losing the server is said above the composer, not only in its footer: a
+ * banner while the room reconnects, and a Reconnect button once the automatic
+ * attempts have given up, so a dead room always leaves the user a way back.
+ * Typed text stays in the composer; Send waits for the connection.
+ */
+function ConnectionBanner({ connected, reconnectState, onReconnect, stopped }: { connected: boolean; reconnectState: "idle" | "reconnecting" | "failed"; onReconnect?: () => void; stopped?: ConnectionStopped }) {
+	const lost = !connected && reconnectState !== "idle";
+	const [shown, setShown] = useState(false);
+	useEffect(() => {
+		if (!lost) {
+			setShown(false);
+			return;
+		}
+		const timer = window.setTimeout(() => setShown(true), CONNECTION_BANNER_DELAY_MS);
+		return () => window.clearTimeout(timer);
+	}, [lost]);
+	// Stopped on its model (the socket refused, or a turn failed on the sign-in
+	// with the socket up): Reconnect cannot help, so the notice offers the two
+	// ways on, and the room carries on once one of them is taken.
+	// It takes the workspace nudge's panel, in the same place, so the two
+	// read as one family and stack cleanly.
+	if (stopped && (connected || reconnectState === "failed")) {
+		return (
+			<div className="room-workspace-nudge room-model-notice" role="status">
+				<span className="room-workspace-nudge-text">{stopped.line}</span>
+				<div className="room-workspace-nudge-actions">
+					<button type="button" className="rs-btn" onClick={stopped.onChooseModel}>Choose another model</button>
+					{stopped.onSignIn && <button type="button" className="rs-btn rs-btn-primary" onClick={stopped.onSignIn}>Sign in</button>}
+				</div>
+			</div>
+		);
+	}
+	if (!lost || !shown) return null;
+	return (
+		<div className="connection-banner" role="status">
+			{reconnectState === "failed" ? (
+				<>
+					<span>Connection lost.</span>
+					{onReconnect && <button type="button" className="connection-banner-action" onClick={onReconnect}>Reconnect</button>}
+				</>
+			) : (
+				<>
+					<SpinnerIcon size={14} />
+					<span>Connection lost. Reconnecting…</span>
+				</>
 			)}
 		</div>
 	);
@@ -300,6 +422,8 @@ interface TranscriptItemsProps {
 	showThinkingIndicator: boolean;
 	/** Turn in flight: the last reply's copy button waits for it to end. */
 	busy: boolean;
+	/** The user message whose turn holds the answer space (see groupIntoTurns). */
+	reservedTurnId: string | null;
 }
 
 /**
@@ -318,9 +442,10 @@ function renderTranscript(
 	pendingConsultIds: TranscriptItemsProps["pendingConsultIds"],
 	onOpenTaskArtifact: TranscriptItemsProps["onOpenTaskArtifact"],
 	attachmentAccess: TranscriptItemsProps["attachmentAccess"],
-): ReactNode[] {
+): IndexedNode[] {
 	const copyTargets = replyCopyTargets(items, busy);
-	const rendered: ReactNode[] = [];
+	const keyboardApprovalId = soleKeyboardApproval(items)?.requestId ?? null;
+	const rendered: IndexedNode[] = [];
 	for (let index = 0; index < items.length; index++) {
 		const it = items[index];
 		if (isBundleableToolItem(it)) {
@@ -331,14 +456,14 @@ function renderTranscript(
 				else break;
 			}
 			if (end > index) {
-				rendered.push(<ToolBundle key={it.id} items={items.slice(index, end + 1).filter(isBundleableToolItem)} />);
+				rendered.push({ index, node: <ToolBundle key={it.id} items={items.slice(index, end + 1).filter(isBundleableToolItem)} /> });
 				index = end;
 				continue;
 			}
 		}
-		rendered.push(
+		rendered.push({ index, node:
 			it.kind === "approval" ? (
-				<Approval key={it.id} item={it} onResolve={onResolveApproval} onPreview={onApprovalPreview} />
+				<Approval key={it.id} item={it} onResolve={onResolveApproval} onPreview={onApprovalPreview} keyboardHint={it.requestId === keyboardApprovalId} />
 			) : it.kind === "consult" ? (
 				<ConsultThreadItem key={it.id} item={it} pending={pendingConsultIds?.has(it.id) ?? false} />
 			) : it.kind === "task" ? (
@@ -346,9 +471,73 @@ function renderTranscript(
 			) : (
 				<Message key={it.id} item={it} attachmentAccess={attachmentAccess} copyText={copyTargets.get(it.id)?.text} copyTs={copyTargets.get(it.id)?.ts} />
 			),
-		);
+		});
 	}
 	return rendered;
+}
+
+/**
+ * The one pending yes/no card the composer may answer by keyboard: Enter
+ * approves and Escape declines while the composer is empty. With two cards
+ * pending, or a card that asks for a choice or an answer, the keys keep
+ * their usual meaning. Only the current turn is looked at (back to the last
+ * user message), so the scan stays a few items long on every render.
+ */
+function soleKeyboardApproval(items: ChatItem[]): Extract<ChatItem, { kind: "approval" }> | null {
+	let found: Extract<ChatItem, { kind: "approval" }> | null = null;
+	for (let index = items.length - 1; index >= 0; index--) {
+		const item = items[index];
+		if (item.kind === "user") break;
+		if (item.kind !== "approval" || item.done) continue;
+		if (found || item.uiKind !== "confirm") return null;
+		found = item;
+	}
+	return found;
+}
+
+interface IndexedNode {
+	/** Index of the first transcript item the node renders. */
+	index: number;
+	node: ReactNode;
+}
+
+/**
+ * Wraps each turn (a user message and everything after it, up to the next
+ * user message) in its own element, keyed by the user message, so a turn
+ * never remounts when a newer one starts. The turn the user just sent is the
+ * reserved one: it is at least as tall as the messages box, which leaves
+ * empty space under the message for the answer to grow into while the
+ * viewport stands still. Anything before the first user message stays
+ * unwrapped. The trailing node (the thinking row) joins the last turn so the
+ * reservation covers it too.
+ */
+function groupIntoTurns(items: ChatItem[], nodes: IndexedNode[], trailing: ReactNode, reservedTurnId: string | null): ReactNode[] {
+	const out: ReactNode[] = [];
+	let turn: { id: string; nodes: ReactNode[] } | null = null;
+	const closeTurn = () => {
+		if (!turn) return;
+		out.push(
+			<div key={`turn-${turn.id}`} className={`transcript-turn${turn.id === reservedTurnId ? " reserved" : ""}`}>
+				{turn.nodes}
+			</div>,
+		);
+		turn = null;
+	};
+	for (const { index, node } of nodes) {
+		const item = items[index];
+		if (item?.kind === "user") {
+			closeTurn();
+			turn = { id: item.id, nodes: [] };
+		}
+		if (turn) turn.nodes.push(node);
+		else out.push(node);
+	}
+	if (trailing) {
+		if (turn) (turn as { id: string; nodes: ReactNode[] }).nodes.push(trailing);
+		else out.push(trailing);
+	}
+	closeTurn();
+	return out;
 }
 
 const TranscriptItems = memo(function TranscriptItems({
@@ -363,23 +552,18 @@ const TranscriptItems = memo(function TranscriptItems({
 	attachmentAccess,
 	showThinkingIndicator,
 	busy,
+	reservedTurnId,
 }: TranscriptItemsProps) {
-	return (
-		<>
-			{empty ? (
-				emptySlot ?? null
-			) : renderItem ? (
-				items.map((it, idx) => renderItem(it, idx, items))
-			) : (
-				renderTranscript(items, busy, onResolveApproval, onApprovalPreview, pendingConsultIds, onOpenTaskArtifact, attachmentAccess)
-			)}
-			{showThinkingIndicator && (
-				<div className="thinking-row" role="status" aria-label="thinking">
-					<span className="thinking-dot" aria-hidden="true" />
-				</div>
-			)}
-		</>
-	);
+	const thinking = showThinkingIndicator ? (
+		<div key="thinking-row" className="thinking-row" role="status" aria-label="thinking">
+			<span className="thinking-dot" aria-hidden="true" />
+		</div>
+	) : null;
+	if (empty) return <>{emptySlot ?? null}{thinking}</>;
+	const nodes: IndexedNode[] = renderItem
+		? items.map((it, index) => ({ index, node: renderItem(it, index, items) }))
+		: renderTranscript(items, busy, onResolveApproval, onApprovalPreview, pendingConsultIds, onOpenTaskArtifact, attachmentAccess);
+	return <>{groupIntoTurns(items, nodes, thinking, reservedTurnId)}</>;
 });
 
 interface ComposerInputProps {
@@ -391,6 +575,8 @@ interface ComposerInputProps {
 	textareaRef?: Ref<HTMLTextAreaElement>;
 	placeholder: string;
 	sendUnavailable?: boolean;
+	/** Tooltip of the Send button (says why it is waiting when it is). */
+	sendTitle?: string;
 	initialDraftValue?: string;
 	draftResetKey?: string | number;
 	mention?: MentionSupport;
@@ -402,6 +588,8 @@ interface ComposerInputProps {
 	allowEmptySend?: boolean;
 	/** #52: files pasted into the textarea (images, documents alike) are handed here to be staged. */
 	onPasteFiles?: (files: File[]) => void;
+	/** The sole pending yes/no card, answered by Enter and Escape while the composer is empty. */
+	keyboardApproval?: { approve: () => void; decline: () => void } | null;
 }
 
 function ComposerInput({
@@ -413,6 +601,7 @@ function ComposerInput({
 	textareaRef,
 	placeholder,
 	sendUnavailable = false,
+	sendTitle = "Send",
 	initialDraftValue,
 	draftResetKey,
 	mention,
@@ -421,6 +610,7 @@ function ComposerInput({
 	stagingSlot,
 	allowEmptySend = false,
 	onPasteFiles,
+	keyboardApproval = null,
 }: ComposerInputProps) {
 	const [draft, setDraft] = useState(() => initialDraftValue ?? "");
 	const [caret, setCaret] = useState(0);
@@ -562,6 +752,15 @@ function ComposerInput({
 			if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); selectMention(mentionMatches[activeMentionIndex]); return; }
 			if (e.key === "Escape") { e.preventDefault(); setMentionDismissed(true); return; }
 		}
+		// An empty composer answers the one pending yes/no card; with text in
+		// it, Enter sends as always and the card stays.
+		if (keyboardApproval && draft === "" && !e.shiftKey && (e.key === "Enter" || e.key === "Escape")) {
+			e.preventDefault();
+			e.stopPropagation();
+			if (e.key === "Enter") keyboardApproval.approve();
+			else keyboardApproval.decline();
+			return;
+		}
 		if (e.key === "Enter" && !e.shiftKey) {
 			e.preventDefault();
 			submitDraft();
@@ -623,7 +822,7 @@ function ComposerInput({
 					{stopVisible ? (
 						<button className="send-btn stop-btn" onClick={onStop} disabled={stopDisabled} aria-label={stopLabel} title={stopLabel}><span aria-hidden="true">■</span></button>
 					) : (
-						<button className="send-btn" onClick={submitDraft} disabled={sendDisabled} aria-label="Send" title="Send">↑</button>
+						<button className="send-btn" onClick={submitDraft} disabled={sendDisabled} aria-label="Send" title={sendTitle}>↑</button>
 					)}
 				</div>
 			</div>
@@ -640,6 +839,7 @@ export function InRoomChatShellView({
 	busy,
 	usage,
 	contextHealth,
+	loadRememberEstimate,
 	currentModelLabel,
 	currentModelProvider,
 	topbarActions,
@@ -650,6 +850,7 @@ export function InRoomChatShellView({
 	connected,
 	reconnectState = "idle",
 	onReconnect,
+	connectionStopped,
 	items,
 	empty,
 	messagesRef,
@@ -686,6 +887,20 @@ export function InRoomChatShellView({
 	const autoFollowRef = useRef(true);
 	const lastItemIdRef = useRef<string | null>(null);
 	const lastScrollTopRef = useRef(0);
+	const prevItemsRef = useRef<ChatItem[]>(items);
+	// The turn the user just sent (see groupIntoTurns). Kept until the next
+	// send so a short answer never snaps the view back when the turn ends.
+	const [reservedTurnId, setReservedTurnId] = useState<string | null>(null);
+	// A smooth programmatic scroll (the send, a pill click) is running until
+	// this time: the per-tick bottom pin must not cut it short.
+	const smoothScrollUntilRef = useRef(0);
+	// A glide the reader cut short: until it would have landed, reaching the
+	// bottom is the glide's leftover, not the reader coming back.
+	const glideInterruptedUntilRef = useRef(0);
+	// Gesture bookkeeping for the follow decision (see FOLLOW_RESUME_BOTTOM_PX).
+	const lastGestureAtRef = useRef(0);
+	const lastProgrammaticScrollAtRef = useRef(0);
+	const lastScrollHeightRef = useRef(0);
 	const [showJumpToLatest, setShowJumpToLatest] = useState(false);
 	const [dockPresent, setDockPresent] = useState(false);
 	const lastItem = items[items.length - 1];
@@ -695,6 +910,15 @@ export function InRoomChatShellView({
 	// only while assistant text is actually growing on screen.
 	const visiblyStreaming = lastItem?.kind === "assistant" && lastItem.streaming === true && !!lastItem.text;
 	const showThinkingIndicator = busy && items.length > 0 && !visiblyStreaming;
+	const soleApproval = soleKeyboardApproval(items);
+	const keyboardApproval = useMemo(() => {
+		if (!soleApproval) return null;
+		const labels = confirmApprovalLabels(soleApproval);
+		return {
+			approve: () => onResolveApproval(soleApproval.requestId, true, labels.approve),
+			decline: () => onResolveApproval(soleApproval.requestId, false, labels.decline),
+		};
+	}, [soleApproval, onResolveApproval]);
 	const composerLayoutClass = [
 		"composer-layout",
 		composerRightActions ? "with-actions" : "",
@@ -705,39 +929,106 @@ export function InRoomChatShellView({
 		assignRef(messagesRef, node);
 	}, [messagesRef]);
 
+	// The app's own bottom pin: remembered, so the scroll event it causes is
+	// never mistaken for the reader.
+	const pinToBottom = useCallback((el: HTMLElement) => {
+		lastProgrammaticScrollAtRef.current = performance.now();
+		el.scrollTop = el.scrollHeight;
+		lastScrollTopRef.current = el.scrollTop;
+		lastScrollHeightRef.current = el.scrollHeight;
+	}, []);
+
+	// Gestures up stop following at once. Passive listeners, a boolean and a
+	// timestamp each; a gesture up also stops a send or pill glide in progress
+	// where the reader is, so it holds from the first moment after Send.
+	useEffect(() => {
+		const el = messagesElRef.current;
+		if (!el) return;
+		const stopFollowing = () => {
+			autoFollowRef.current = false;
+			const now = performance.now();
+			if (now < smoothScrollUntilRef.current) {
+				glideInterruptedUntilRef.current = smoothScrollUntilRef.current;
+				lastProgrammaticScrollAtRef.current = now;
+				// An instant write to the current position cancels the smooth one.
+				if (typeof el.scrollTo === "function") el.scrollTo({ top: el.scrollTop, behavior: "auto" });
+				else el.scrollTop = el.scrollTop;
+			}
+			smoothScrollUntilRef.current = 0;
+		};
+		const onWheel = (event: WheelEvent) => {
+			lastGestureAtRef.current = performance.now();
+			if (event.deltaY < 0) stopFollowing();
+		};
+		let touchY: number | null = null;
+		const onTouchStart = (event: TouchEvent) => {
+			lastGestureAtRef.current = performance.now();
+			touchY = event.touches[0]?.clientY ?? null;
+		};
+		const onTouchMove = (event: TouchEvent) => {
+			lastGestureAtRef.current = performance.now();
+			const y = event.touches[0]?.clientY;
+			// A finger moving down drags the content down: reading back up.
+			if (y !== undefined && touchY !== null && y > touchY) stopFollowing();
+			if (y !== undefined) touchY = y;
+		};
+		const onKeyDown = (event: globalThis.KeyboardEvent) => {
+			if (event.key !== "PageUp" && event.key !== "ArrowUp" && event.key !== "Home") return;
+			const target = event.target as HTMLElement | null;
+			if (target && (target.tagName === "TEXTAREA" || target.tagName === "INPUT" || target.tagName === "SELECT" || target.isContentEditable)) return;
+			stopFollowing();
+		};
+		el.addEventListener("wheel", onWheel, { passive: true });
+		el.addEventListener("touchstart", onTouchStart, { passive: true });
+		el.addEventListener("touchmove", onTouchMove, { passive: true });
+		document.addEventListener("keydown", onKeyDown);
+		return () => {
+			el.removeEventListener("wheel", onWheel);
+			el.removeEventListener("touchstart", onTouchStart);
+			el.removeEventListener("touchmove", onTouchMove);
+			document.removeEventListener("keydown", onKeyDown);
+		};
+	}, [empty]);
+
 	const handleMessagesScroll = useCallback(() => {
 		const el = messagesElRef.current;
 		if (!el) return;
+		const now = performance.now();
 		const previousScrollTop = lastScrollTopRef.current;
-		const currentScrollTop = el.scrollTop;
-		const scrolledUp = currentScrollTop < previousScrollTop - 3;
-		lastScrollTopRef.current = currentScrollTop;
-
-		if (scrolledUp) {
-			autoFollowRef.current = false;
-			setShowJumpToLatest((wasShowing) => shouldShowJumpToLatest(el, wasShowing, empty));
-			return;
+		const previousScrollHeight = lastScrollHeightRef.current;
+		lastScrollTopRef.current = el.scrollTop;
+		lastScrollHeightRef.current = el.scrollHeight;
+		// The app's own writes and glides decide nothing.
+		if (now < smoothScrollUntilRef.current || now - lastProgrammaticScrollAtRef.current < PROGRAMMATIC_SCROLL_WINDOW_MS) return;
+		// Content that shrank clamps scrollTop; that is not the reader either.
+		const shrank = el.scrollHeight < previousScrollHeight;
+		if (!shrank) {
+			// Moving up with no wheel or touch behind it: the scrollbar, or keys.
+			if (el.scrollTop < previousScrollTop - 1 && now - lastGestureAtRef.current > GESTURE_SCROLL_WINDOW_MS) {
+				autoFollowRef.current = false;
+			}
+			// The reader reached the true bottom themselves: follow again.
+			if (!autoFollowRef.current && bottomDistance(el) <= FOLLOW_RESUME_BOTTOM_PX && now >= glideInterruptedUntilRef.current) {
+				autoFollowRef.current = true;
+			}
 		}
-
-		if (isNearBottom(el)) {
-			autoFollowRef.current = true;
-			setShowJumpToLatest(false);
-			return;
-		}
-
-		if (!autoFollowRef.current) {
-			setShowJumpToLatest((wasShowing) => shouldShowJumpToLatest(el, wasShowing, empty));
-		}
+		setShowJumpToLatest(!autoFollowRef.current && shouldShowJumpToLatest(el, empty));
 	}, [empty]);
 
+	// The one animated scroll besides the send: the stream's own ticks never
+	// animate, and they hold off until this glide has landed.
 	const jumpToLatest = useCallback(() => {
 		const el = messagesElRef.current;
 		if (!el) return;
 		autoFollowRef.current = true;
-		el.scrollTop = el.scrollHeight;
-		lastScrollTopRef.current = el.scrollTop;
 		setShowJumpToLatest(false);
-	}, []);
+		if (!prefersReducedMotion() && typeof el.scrollTo === "function") {
+			smoothScrollUntilRef.current = performance.now() + SMOOTH_SCROLL_MS;
+			el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+			return;
+		}
+		pinToBottom(el);
+	}, [pinToBottom]);
 
 	// The above-composer dock (consult / task card) shares the column with the
 	// messages: when it mounts or grows it shrinks the scroll area from below,
@@ -750,13 +1041,12 @@ export function InRoomChatShellView({
 		const el = messagesElRef.current;
 		if (!el || typeof ResizeObserver === "undefined") return;
 		const dock = dockElRef.current;
+		// Re-pins only while following; a resize never moves a reader who
+		// stopped following, it only refreshes the pill.
 		const pinOrRefresh = () => {
-			if (autoFollowRef.current) {
-				el.scrollTop = el.scrollHeight;
-				lastScrollTopRef.current = el.scrollTop;
-			} else {
-				setShowJumpToLatest((wasShowing) => shouldShowJumpToLatest(el, wasShowing, empty));
-			}
+			if (performance.now() < smoothScrollUntilRef.current) return;
+			if (autoFollowRef.current) pinToBottom(el);
+			else setShowJumpToLatest(shouldShowJumpToLatest(el, empty));
 		};
 		const observer = new ResizeObserver(() => {
 			if (dock) setDockPresent(dock.offsetHeight > 0);
@@ -766,28 +1056,61 @@ export function InRoomChatShellView({
 		observer.observe(el);
 		if (dock) observer.observe(dock);
 		return () => observer.disconnect();
-	}, [empty, aboveComposerSlot != null]);
+	}, [empty, aboveComposerSlot != null, pinToBottom]);
 
 	useLayoutEffect(() => {
 		const el = messagesElRef.current;
 		if (!el) return;
+
+		// A live send appends exactly one user message to the list as it was;
+		// anything else that changes the first item (a room switch, a fresh
+		// thread, a refetch after reattach) is a new list and drops the
+		// reservation, so those still open at the bottom as before.
+		const prevItems = prevItemsRef.current;
+		prevItemsRef.current = items;
+		const appendedSend = items.length === prevItems.length + 1
+			&& lastItem?.kind === "user"
+			&& (prevItems.length === 0 || items[items.length - 2] === prevItems[prevItems.length - 1]);
+		if (appendedSend) {
+			if (lastItem.id !== reservedTurnId) {
+				// Render the reserved space first; this effect runs again for it.
+				autoFollowRef.current = true;
+				setReservedTurnId(lastItem.id);
+				return;
+			}
+		} else if (reservedTurnId && items !== prevItems && items[0] !== prevItems[0]) {
+			setReservedTurnId(null);
+		}
 
 		const lastItemId = lastItem?.id ?? null;
 		const lastItemChanged = lastItemIdRef.current !== lastItemId;
 		lastItemIdRef.current = lastItemId;
 		if (lastItemChanged && lastItem?.kind === "user") {
 			autoFollowRef.current = true;
+			if (lastItem.id === reservedTurnId) {
+				// The reserved turn is at least the box's height, so the bottom
+				// of the list is exactly the sent message at the top of the box.
+				if (!prefersReducedMotion() && typeof el.scrollTo === "function") {
+					smoothScrollUntilRef.current = performance.now() + SMOOTH_SCROLL_MS;
+					el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+					setShowJumpToLatest(false);
+					return;
+				}
+			}
 		}
 
+		if (performance.now() < smoothScrollUntilRef.current) return;
+
 		if (autoFollowRef.current) {
-			el.scrollTop = el.scrollHeight;
-			lastScrollTopRef.current = el.scrollTop;
+			pinToBottom(el);
 			setShowJumpToLatest(false);
 			return;
 		}
 
-		setShowJumpToLatest((wasShowing) => shouldShowJumpToLatest(el, wasShowing, empty));
-	}, [empty, items, lastItem, showThinkingIndicator]);
+		// Each reveal tick commits one items change, so while not following
+		// this measures the growing reply once per tick and never per token.
+		setShowJumpToLatest(shouldShowJumpToLatest(el, empty));
+	}, [empty, items, lastItem, showThinkingIndicator, reservedTurnId, pinToBottom]);
 
 	return (
 		<div className="app">
@@ -831,12 +1154,16 @@ export function InRoomChatShellView({
 								attachmentAccess={attachmentAccess}
 								showThinkingIndicator={showThinkingIndicator}
 								busy={busy}
+								reservedTurnId={reservedTurnId}
 							/>
 						</div>
 						{showJumpToLatest && (
-							<button type="button" className="jump-to-latest" onClick={jumpToLatest} aria-label="Jump to latest message" title="Jump to the newest message">
-								↓ Latest
-							</button>
+							<>
+								<div className="jump-to-latest-fade" aria-hidden="true" />
+								<button type="button" className="jump-to-latest" onClick={jumpToLatest} aria-label="Jump to latest message" title="Jump to the newest message">
+									{busy ? "↓ New text" : "↓ Latest"}
+								</button>
+							</>
 						)}
 					</div>
 					{aboveComposerSlot && (
@@ -844,6 +1171,7 @@ export function InRoomChatShellView({
 							{aboveComposerSlot}
 						</div>
 					)}
+					<ConnectionBanner connected={connected} reconnectState={reconnectState} onReconnect={onReconnect} stopped={connectionStopped} />
 
 					<div className="composer">
 						{composerOverlaySlot}
@@ -857,6 +1185,7 @@ export function InRoomChatShellView({
 								textareaRef={textareaRef}
 								placeholder={composerPlaceholder}
 								sendUnavailable={sendUnavailable}
+								sendTitle={connected ? "Send" : "Waiting for the connection"}
 								initialDraftValue={initialDraftValue}
 								draftResetKey={draftResetKey}
 								mention={mention}
@@ -865,10 +1194,12 @@ export function InRoomChatShellView({
 										<ContextPill
 											status={contextHealth}
 											usage={usage}
+											loadRememberEstimate={loadRememberEstimate}
 											currentModelLabel={currentModelLabel}
 											currentModelProvider={currentModelProvider}
 											connected={connected}
 											reconnectState={reconnectState}
+											stopped={!!connectionStopped}
 										/>
 									) : (
 										<div className="composer-status" aria-label="Chat status">
@@ -879,10 +1210,10 @@ export function InRoomChatShellView({
 											{usage.cacheRead > 0 && <span>cache <strong>{fmtTok(usage.cacheRead)}</strong></span>}
 											<span><strong>{fmtCost(usage.cost)}</strong></span>
 											{(usage.contextTokens ?? usage.totalTokens) > 0 && <span title="last assistant context">ctx <strong>{fmtTok(usage.contextTokens ?? usage.totalTokens)}</strong></span>}
-											<span className={`composer-connection ${connected ? "live" : ""}`}>{connected ? "online" : reconnectState === "reconnecting" ? "reconnecting…" : "offline"}</span>
+											{!connectionStopped && <span className={`composer-connection ${connected ? "live" : ""}`}>{connected ? "online" : reconnectState === "reconnecting" ? "reconnecting…" : "offline"}</span>}
 										</div>
 									)}
-									{!connected && reconnectState === "failed" && onReconnect && (
+									{!connected && reconnectState === "failed" && onReconnect && !connectionStopped && (
 										<button type="button" className="icon-btn composer-reconnect-btn" title="The automatic reconnect gave up. Try again now. If the server isn't running, start it with: exxperts web" onClick={onReconnect}>Reconnect</button>
 									)}
 								</>}
@@ -890,6 +1221,7 @@ export function InRoomChatShellView({
 								stagingSlot={composerStagingSlot}
 								allowEmptySend={composerAllowEmptySend}
 								onPasteFiles={composerOnPasteFiles}
+								keyboardApproval={keyboardApproval}
 							/>
 						</div>
 					</div>

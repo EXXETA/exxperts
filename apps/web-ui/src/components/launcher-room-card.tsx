@@ -1,9 +1,7 @@
-import { useEffect, useRef, useState } from "react";
-import { modelDisplayName, modelTooltipName } from "../model-names";
-import type { PersistentAgentAiProfileSelectionStatus, PersistentAgentId, PersistentAgentStatus, WebChatModelOption, WebChatModelStatus } from "../types";
-import { strandedBySwitchCount } from "./product-shell";
-import { ProfileSwitchConfirm, RoomModelPicker } from "./room-model-picker";
-import { useEscapeKey } from "./use-escape-key";
+import { useState, type HTMLAttributes } from "react";
+import { NOTHING_TO_MAINTAIN_SENTENCE, nothingToMaintain } from "../memory-surface-copy";
+import { canonicalModelName } from "../model-names";
+import type { PersistentAgentId, PersistentAgentStatus, WebChatModelOption } from "../types";
 
 export type LauncherRoomThread = {
 	state: "live" | "standby";
@@ -15,28 +13,6 @@ export type LauncherRoomThread = {
 };
 
 export type LauncherRoomMaintainTarget = { agentId: PersistentAgentId; displayName: string };
-
-// Canonical display name for a model lock/option however its label was
-// persisted ("moonshotai.kimi-k2.5" and "GitHub Copilot — Claude Opus 4.8"
-// both come out clean). The tooltip form adds the provider, which the card
-// face deliberately leaves out.
-function cardModelName(model: { provider?: string; model?: string; label?: string } | null | undefined): string {
-	if (!model) return "";
-	return modelDisplayName({ model: model.model, modelLabel: model.label, provider: model.provider });
-}
-
-function cardModelTooltip(model: { provider?: string; model?: string; label?: string } | null | undefined): string {
-	if (!model) return "";
-	return modelTooltipName({ model: model.model, modelLabel: model.label, provider: model.provider });
-}
-
-function persistentRoomModels(status: WebChatModelStatus | null): WebChatModelOption[] {
-	return status?.roomModels?.length ? status.roomModels : status?.models ?? [];
-}
-
-function persistentRoomRecommended(status: WebChatModelStatus | null): WebChatModelOption | undefined {
-	return status?.roomRecommended ?? persistentRoomModels(status)[0];
-}
 
 function compactDateTime(value: string | null | undefined): string {
 	if (!value) return "none yet";
@@ -58,37 +34,50 @@ function checkpointAgo(value: string | null | undefined): { label: string; title
 
 export type PersistentAgentCardProps = {
 	status: PersistentAgentStatus | null;
-	modelStatus: WebChatModelStatus | null;
-	aiProfileStatus: PersistentAgentAiProfileSelectionStatus | null;
 	thread: LauncherRoomThread | null;
 	live: boolean;
 	/** The room refused to open because its memory does not fit the thread's model: the standby thread is not resumable, so it must not block Maintain. */
 	unresumable?: boolean;
 	duplicateDisplayName?: boolean;
-	onEnter: (status: PersistentAgentStatus, model: WebChatModelOption) => Promise<void> | void;
+	/** Enters a new conversation; the server decides its model (the room's conversation row). */
+	onEnter: (status: PersistentAgentStatus) => Promise<void> | void;
 	onResume: (status: PersistentAgentStatus) => Promise<void> | void;
 	onMaintain: (target: LauncherRoomMaintainTarget) => void;
 	onOpenSettings?: () => void;
+	/** Opens Room settings on the Model pane (the card's model label). */
+	onOpenModelSettings?: () => void;
+	/** Each provider's name as AI setup shows it, by provider id. */
+	providerLabels?: Readonly<Record<string, string>>;
 	/** A response finished in this room after the user left it (community #14). */
 	backgroundReady?: boolean;
 	/** A purge for this room is in flight (community #10): every door into the room closes until it resolves. */
 	purging?: boolean;
-	/** Locked models of standby rooms — feeds the picker's switch-warning counts. */
-	standbyLockedModels?: Array<{ provider: string; model: string }>;
-	/** Runs a profile switch when the picker confirms a cross-profile model pick. */
-	onSelectAiProfile?: (profileId: string) => Promise<void>;
-	/** Records a model pick as this room's preferred model — the memory a profile switch cannot revert. */
-	onRecordPreferredModel?: (agentId: PersistentAgentId, model: { provider: string; model: string }) => void;
+	/**
+	 * The home screen is in arrange mode: the card keeps its Home look (the
+	 * same height and content, the model label included) and nothing inside
+	 * it can be pressed or reached: the gear and the actions row are inert,
+	 * hidden from assistive technology and dimmed, so a click while arranging
+	 * can never enter a room. The card is moved as a whole by the grid.
+	 */
+	arranging?: boolean;
 };
 
-export function PersistentAgentCard({ status, modelStatus, aiProfileStatus, thread, live, unresumable = false, duplicateDisplayName = false, onEnter, onResume, onMaintain, onOpenSettings, backgroundReady = false, purging = false, standbyLockedModels, onSelectAiProfile, onRecordPreferredModel }: PersistentAgentCardProps) {
+export function PersistentAgentCard({ status, thread, live, unresumable = false, duplicateDisplayName = false, onEnter, onResume, onMaintain, onOpenSettings, onOpenModelSettings, providerLabels, backgroundReady = false, purging = false, arranging = false }: PersistentAgentCardProps) {
 	const [entering, setEntering] = useState(false);
+	// React 18 knows no `inert` prop: the attribute is passed as a string.
+	const inertWhileArranging = arranging ? ({ inert: "", "aria-hidden": true } as HTMLAttributes<HTMLElement>) : {};
 	const [expanded, setExpanded] = useState(false);
-	const [draftModel, setDraftModel] = useState("");
 	const preparedBoundary = status?.activeThread?.preparedByBoundary ?? (status?.activeThread?.preparedByCheckpoint ? "checkpoint" : null);
 	const preparedBoundaryThread = !live && !!preparedBoundary && !!status?.runtime.activeThreadId;
 	const hasStandbyThread = thread?.state === "standby" || (!live && !preparedBoundaryThread && (status?.runtime.state === "standby" || status?.runtime.state === "active") && !!status.runtime.activeThreadId);
 	const hasActiveThread = live || hasStandbyThread || preparedBoundaryThread;
+	// Maintain waits only for a conversation someone has spoken in; the empty
+	// one Remember or Forget prepares boots on the memory as it is when next
+	// entered, so it holds nothing Maintain could leave behind.
+	const openConversationHasTurns = thread?.state === "standby"
+		? thread.items.some((item: any) => (item?.kind === "user" || item?.kind === "assistant") && typeof item.text === "string" && item.text.trim().length > 0)
+		: (status?.activeThread?.hasUserVisibleTurns ?? true);
+	const maintainWaitsForConversation = live || (hasActiveThread && openConversationHasTurns);
 	const state = hasStandbyThread ? "standby" : live ? "live" : status?.status ?? "missing";
 	const stateLabel = state === "needs_absorb" ? "ready to memorize" : state;
 	// A room due for Memorize stays open until it holds as many remembered
@@ -102,7 +91,6 @@ export function PersistentAgentCard({ status, modelStatus, aiProfileStatus, thre
 	const memoryHardCap = memory?.recentContextHardCap;
 	const memoryMeterReady = !!memory && typeof memoryHardCap === "number" && Number.isFinite(memoryHardCap) && memoryHardCap > 0;
 	const memoryFill = memoryMeterReady ? Math.min(Math.max((memory!.recentContextCount ?? 0) / sessionBlockCap, 0), 1) : 0;
-	const overMemoryBudget = status?.memoryBudget?.overBudget === true;
 	const maintenanceSeverity: "none" | "soft" | "hard" =
 		memoryLevel === "hard_cap"
 			? (entryBlocked ? "hard" : "soft")
@@ -117,88 +105,28 @@ export function PersistentAgentCard({ status, modelStatus, aiProfileStatus, thre
 	const badgeClass = showMaintenanceBadge ? `mem-${maintenanceSeverity}` : state;
 	const showBadge = showMaintenanceBadge || state !== "ready";
 	const memoryCheckpoint = checkpointAgo(memory?.lastCheckpointAt);
-	const roomModels = persistentRoomModels(modelStatus);
-	const selectedModel = roomModels.find((m) => `${m.provider}/${m.model}` === draftModel) ?? persistentRoomRecommended(modelStatus);
-	const standbyLockedModel = thread?.model ?? (status?.runtime.model ? { provider: status.runtime.model.provider, model: status.runtime.model.model, label: status.runtime.model.label || `${status.runtime.model.provider}/${status.runtime.model.model}` } : null);
-	// While the model status still describes a different profile than the
-	// profile status (the refetch window after a switch), its list cannot
-	// judge anything — validating a pick against it would silently revert a
-	// choice made from the new profile's group, and judging a standby lock
-	// against it would briefly offer Switch & resume back to the profile just
-	// left. In that window the active profile's own curated list judges.
-	const modelStatusAgreesWithProfile = !modelStatus?.activeProfileId || !aiProfileStatus || modelStatus.activeProfileId === aiProfileStatus.activeProfileId;
-	const activeModelJudgeList: Array<{ provider: string; model: string }> = modelStatusAgreesWithProfile ? roomModels : aiProfileStatus?.activeProfile.processes?.persistentRoom.models ?? [];
-	const standbyModelAllowed = !standbyLockedModel || activeModelJudgeList.some((model) => model.provider === standbyLockedModel.provider && model.model === standbyLockedModel.model);
-	const preparedModelKey = preparedBoundaryThread && standbyLockedModel && standbyModelAllowed ? `${standbyLockedModel.provider}/${standbyLockedModel.model}` : "";
-	// The room's server-recorded preferred model: the empty-room counterpart of
-	// the standby lock. Only an EMPTY room consults it — a live, standby, or
-	// prepared-boundary thread already carries its own model.
-	const preferredModel = !live && !hasStandbyThread && !preparedBoundaryThread ? status?.preferredModel ?? null : null;
-	const preferredModelKey = preferredModel ? `${preferredModel.provider}/${preferredModel.model}` : "";
-	const preferredInActiveList = !!preferredModel && activeModelJudgeList.some((model) => model.provider === preferredModel.provider && model.model === preferredModel.model);
-	// Which ready non-active profile provides the preference when the active one
-	// does not — the same shape switchTargetProfile gives a stranded standby room.
-	const preferredSwitchProfile = preferredModel && !preferredInActiveList
-		? aiProfileStatus?.profiles.find((profile) => !profile.active && profile.ready && profile.processes?.persistentRoom.models.some((model) => model.provider === preferredModel.provider && model.model === preferredModel.model)) ?? null
-		: null;
-	const preferredModelLabel = cardModelName(preferredModel);
-	useEffect(() => {
-		if (preparedModelKey) {
-			setDraftModel(preparedModelKey);
-			return;
-		}
-		if (!modelStatusAgreesWithProfile) return;
-		// A refresh keeps the user's pick when the new list still carries it —
-		// this is what lets a cross-profile pick survive the model-status
-		// refetch that follows the profile switch. Keying on draftModel too is
-		// the belt for the reverse case: a pick that the refreshed list does
-		// NOT carry falls back to the recommendation instead of leaving a
-		// selection Enter silently cannot resolve.
-		setDraftModel((current) => {
-			const recommended = persistentRoomRecommended(modelStatus);
-			const recommendedKey = recommended ? `${recommended.provider}/${recommended.model}` : "";
-			// The room's recorded preference outranks the recommendation: it
-			// seeds the empty picker, and when it lives on another READY profile
-			// it survives the refresh instead of being reverted — Enter then
-			// offers the same profile switch the stranded standby card does.
-			// A preference no configured profile serves anymore is unusable and
-			// falls through to the recommendation, exactly as before.
-			const preferredUsable = !!preferredModelKey && (preferredInActiveList || !!preferredSwitchProfile);
-			const currentInList = !!current && persistentRoomModels(modelStatus).some((m) => `${m.provider}/${m.model}` === current);
-			// A draft still sitting on the bare recommendation is a seed, not a
-			// choice, so a recorded preference may replace it. An explicit pick
-			// records a new preference the moment it is made, so the two agree
-			// from then on and picks keep winning here.
-			if (currentInList && (!preferredUsable || current !== recommendedKey || preferredModelKey === current)) return current;
-			if (preferredUsable) return preferredModelKey;
-			return recommendedKey;
-		});
-	}, [modelStatus, preparedModelKey, draftModel, modelStatusAgreesWithProfile, preferredModelKey, preferredInActiveList, preferredSwitchProfile]);
-	// A prepared boundary session is empty, so it only continues on its prepared
-	// model when the user keeps that selection; picking another model retires it
-	// and enters fresh.
-	const preparedSelectionMatchesLock = !!preparedModelKey && draftModel === preparedModelKey;
-	const lockedModelLabel = cardModelName(standbyLockedModel) || cardModelName(status?.runtime.model) || "Locked model";
-	const lockedModelTooltip = cardModelTooltip(standbyLockedModel) || cardModelTooltip(status?.runtime.model);
-	// Which ready profile provides the locked model — names the way out in the tooltip when resume is dimmed.
-	const switchTargetProfile = !standbyModelAllowed && standbyLockedModel
-		? aiProfileStatus?.profiles.find((profile) => !profile.active && profile.ready && profile.processes?.persistentRoom.models.some((model) => model.provider === standbyLockedModel.provider && model.model === standbyLockedModel.model)) ?? null
-		: null;
-	const modelLabel = hasStandbyThread || preparedBoundaryThread
-		? lockedModelLabel
-		: selectedModel ? cardModelName(selectedModel) : "No model";
-	const selectedModelTooltip = hasStandbyThread || preparedBoundaryThread ? lockedModelTooltip : cardModelTooltip(selectedModel);
-	const standbyActionTitle = standbyModelAllowed
-		? "Resume this standby thread"
-		: switchTargetProfile
-			? `This thread is locked to ${lockedModelLabel}. Switch the AI profile to ${switchTargetProfile.label} in AI setup to resume it.`
-			: `This thread is locked to ${lockedModelLabel}, which no ready AI profile provides right now. Open AI setup to connect one.`;
-	// One title on the locked pill: the model's identity, then what the lock
-	// means. The incompatible sentences already name the model, so the prefix
-	// would only say it twice.
-	const lockedPillTitle = standbyModelAllowed
-		? `${lockedModelTooltip}${lockedModelTooltip ? " · " : ""}This thread continues on the model it started with.`
-		: standbyActionTitle;
+	// The card's model, read-only: a standby conversation continues on its own
+	// lock; anything else (an empty room, the empty conversation Remember or
+	// Forget prepares, which boots on the room's pick, a standby conversation
+	// nobody has written in yet, whose first message follows the pick) runs on
+	// the room's conversation row as the server resolved it.
+	const conversationModel = status?.models?.conversation.effective ?? null;
+	// A room whose model cannot run waits for it: the card still names that
+	// model, and Enter's title carries the refusal.
+	const waitingModel = !conversationModel && status?.models?.conversation.reason ? status.models.conversation.chosen : null;
+	const waitingSentence = waitingModel ? status?.models?.conversation.refusal ?? null : null;
+	const standbyFollowsPick = hasStandbyThread && !openConversationHasTurns && status?.activeThread?.threadId === status?.runtime.activeThreadId && status?.activeThread?.followsConversationPick === true;
+	const standbyLockedModel = hasStandbyThread && !standbyFollowsPick ? thread?.model ?? status?.runtime.model ?? null : null;
+	const cardModel = standbyLockedModel ?? (live ? thread?.model ?? null : null) ?? conversationModel ?? waitingModel;
+	const cardModelCanonical = cardModel ? canonicalModelName({ model: cardModel.model, modelLabel: cardModel.label, provider: cardModel.provider }) : null;
+	// The provider in AI setup's words, whichever model the card shows.
+	const cardModelProvider = cardModel
+		? providerLabels?.[cardModel.provider] ?? (conversationModel?.provider === cardModel.provider ? conversationModel.providerLabel : undefined) ?? cardModelCanonical?.provider
+		: undefined;
+	const cardModelNames = cardModelCanonical ? { name: cardModelCanonical.name, provider: cardModelProvider } : null;
+	const cardModelTitle = `${cardModelNames ? `${cardModelNames.name}${cardModelNames.provider ? ` · ${cardModelNames.provider}` : ""}. ` : ""}${hasStandbyThread && !standbyFollowsPick
+		? "This conversation continues on its current model. Room settings, Model can switch it."
+		: "The model this room talks with. Change it in Room settings, Model."}`;
 	const lockedElsewhere = !!status?.activeLock;
 	const lockSurface = status?.activeLock?.surface;
 	const lockedByScheduler = lockSurface === "scheduler";
@@ -224,75 +152,10 @@ export function PersistentAgentCard({ status, modelStatus, aiProfileStatus, thre
 	// endpoint retries; entering it then would either doom the delete or get
 	// the room removed underneath the new session.
 	const purgeNote = "This room is being deleted.";
-	// A stranded standby room whose locked model another READY profile serves
-	// gets its way out on the card itself: Resume keeps its everyday label but
-	// opens the same profile-switch confirm the model picker uses (community
-	// #9) — the dialog does the explaining, the button stays calm. The thread
-	// never changes model — it resumes on the one it is locked to.
-	// A room being deleted never offers it: the purge closes every door.
-	const [switchResumeOpen, setSwitchResumeOpen] = useState(false);
-	const [switchResumeBusy, setSwitchResumeBusy] = useState(false);
-	const [switchResumeError, setSwitchResumeError] = useState<string | null>(null);
-	// Cancel/Escape hands focus back to the button that opened the confirm —
-	// the picker's confirmReturnFocusRef pattern.
-	const switchResumeReturnFocusRef = useRef<HTMLElement | null>(null);
-	const canSwitchResume = hasStandbyThread && !standbyModelAllowed && !!switchTargetProfile && !!onSelectAiProfile && !!status && !lockedElsewhere && !purging;
-	// The one confirm dialog serves both stranded shapes: a standby thread
-	// locked to another profile's model (switch and resume) and an empty room
-	// preferring one (switch and enter). They are mutually exclusive — a room
-	// has a thread or it does not.
-	const confirmSwitchProfile = switchTargetProfile ?? preferredSwitchProfile;
-	const switchResumeStranded = confirmSwitchProfile && aiProfileStatus ? strandedBySwitchCount(standbyLockedModels, aiProfileStatus.activeProfile, confirmSwitchProfile) : 0;
-	function closeSwitchResume() {
-		setSwitchResumeOpen(false);
-		setSwitchResumeError(null);
-		requestAnimationFrame(() => switchResumeReturnFocusRef.current?.focus());
-	}
-	useEscapeKey(closeSwitchResume, switchResumeOpen && !switchResumeBusy);
-	async function switchAndResume() {
-		if (!status || !switchTargetProfile || !onSelectAiProfile || switchResumeBusy) return;
-		setSwitchResumeBusy(true);
-		setSwitchResumeError(null);
-		try {
-			await onSelectAiProfile(switchTargetProfile.id);
-			// The switch landed; the resume rides the app's normal path (its
-			// failures surface where every resume failure does).
-			setSwitchResumeOpen(false);
-			await onResume(status);
-		} catch (e) {
-			setSwitchResumeError((e as Error).message);
-		} finally {
-			setSwitchResumeBusy(false);
-		}
-	}
-	// The empty-room twin of switchAndResume: the room's preferred model lives
-	// on another ready profile, so Enter runs the same confirm-then-switch and
-	// then enters fresh on the preferred model instead of resuming a thread.
-	// A draft moved off the preference (the user picked something else) hands
-	// the button back to the normal enter path.
-	const canSwitchEnter = !hasActiveThread && state === "ready" && !!preferredSwitchProfile && !!onSelectAiProfile && !!status && !lockedElsewhere && !purging && (!draftModel || draftModel === preferredModelKey);
-	async function switchAndEnter() {
-		if (!status || !preferredModel || !preferredSwitchProfile || !onSelectAiProfile || switchResumeBusy) return;
-		setSwitchResumeBusy(true);
-		setSwitchResumeError(null);
-		try {
-			await onSelectAiProfile(preferredSwitchProfile.id);
-			setSwitchResumeOpen(false);
-			const option = preferredSwitchProfile.processes?.persistentRoom.models.find((model) => model.provider === preferredModel.provider && model.model === preferredModel.model);
-			await onEnter(status, { provider: preferredModel.provider, model: preferredModel.model, label: option?.label ?? `${preferredModel.provider}/${preferredModel.model}` });
-		} catch (e) {
-			setSwitchResumeError((e as Error).message);
-		} finally {
-			setSwitchResumeBusy(false);
-		}
-	}
-	const canEnter = !!status && (state === "ready" || (state === "needs_absorb" && !entryBlocked)) && !preparedBoundaryThread && roomModels.length > 0 && !!draftModel && !lockedElsewhere && !purging;
-	// The picker stays reachable when the ACTIVE profile offers nothing (its
-	// provider signed out) as long as any ready profile has room models — that
-	// is exactly when reaching another provider matters most (community #9).
-	const switchableModelsAvailable = !!onSelectAiProfile && !!aiProfileStatus?.profiles.some((profile) => profile.ready && (profile.processes?.persistentRoom.models.length ?? 0) > 0);
-	const showModelPicker = roomModels.length > 0 || switchableModelsAvailable;
-	const canMaintain = !!status && status.exists && (!hasActiveThread || unresumable) && !lockedElsewhere && !purging && (status.status === "ready" || status.status === "needs_absorb");
+	const canEnter = !!status && (state === "ready" || (state === "needs_absorb" && !entryBlocked)) && !preparedBoundaryThread && !!conversationModel && !lockedElsewhere && !purging;
+	const maintainReadyState = !!status && (status.status === "ready" || status.status === "needs_absorb");
+	const nothingToMaintainYet = nothingToMaintain(status?.memoryStatus);
+	const canMaintain = !!status && status.exists && (!maintainWaitsForConversation || unresumable) && !lockedElsewhere && !purging && maintainReadyState && !nothingToMaintainYet;
 	// Disabled tooltips name the actual blocker and the way out; "resting" is
 	// not a state shown anywhere else on the card.
 	const enterDisabledReason = purging
@@ -300,32 +163,32 @@ export function PersistentAgentCard({ status, modelStatus, aiProfileStatus, thre
 		: entryBlocked
 		? `This room is holding ${rememberedSessions} remembered conversations, as many as it can hold. Memorize them first: use Maintain, then enter.`
 		: state === "ready" || state === "needs_absorb"
-			? roomModels.length === 0 && switchableModelsAvailable
-				? "Pick a model from another profile to enter."
-				: "Enter persistent chat"
+			? conversationModel
+				? "Enter persistent chat"
+				: waitingSentence ?? "Sign in to an AI provider in Settings, AI setup."
 			: "This room is not ready to enter yet.";
 	const maintainDisabledReason = purging
 		? purgeNote
 		: lockedElsewhere
 			? lockNote
-		: hasActiveThread
-			? "This room has a session in progress. Resume it and use Remember, then Maintain becomes available."
+		: maintainWaitsForConversation
+			? "Remember or Forget the open conversation first, then Maintain becomes available."
 			: !status || !status.exists
 				? "Maintain becomes available once the room is set up."
-				: "This room needs attention before it can be maintained.";
+				: !maintainReadyState
+					? "This room needs attention before it can be maintained."
+					: NOTHING_TO_MAINTAIN_SENTENCE;
 	async function enter() {
-		const model = roomModels.find((m) => `${m.provider}/${m.model}` === draftModel);
-		if (!model || entering) return;
+		if (!status || entering) return;
 		setEntering(true);
 		try {
-			if (!status) return;
-			await onEnter(status, model);
+			await onEnter(status);
 		} finally {
 			setEntering(false);
 		}
 	}
 	return (
-		<article className={`landing-card persistent-agent-card ${state}${maintenanceSeverity !== "none" ? ` mem-${maintenanceSeverity}` : ""}`}>
+		<article className={`landing-card persistent-agent-card ${state}${maintenanceSeverity !== "none" ? ` mem-${maintenanceSeverity}` : ""}${arranging ? " arranging" : ""}`}>
 			<div className="persistent-agent-card-main">
 				<div className="persistent-agent-header">
 					<div className="persistent-agent-title-block">
@@ -341,7 +204,7 @@ export function PersistentAgentCard({ status, modelStatus, aiProfileStatus, thre
 								: backgroundReady
 									? <span className="persistent-agent-badge ready" title="A response finished after you left this room. Resume to read it.">response ready</span>
 									: showBadge && <span className={`persistent-agent-badge ${badgeClass}`} title={badgeLabel === "memorize soon" ? `${rememberedSessions} conversations are waiting to be memorized. Use Maintain → Memorize when convenient; the room keeps working meanwhile.` : badgeLabel === "memorize due" ? `${rememberedSessions} conversations are waiting to be memorized. Use Maintain → Memorize; chatting and Remember keep working until the room holds ${sessionBlockCap}.` : badgeLabel === "memorize now" ? `This room holds ${rememberedSessions} remembered conversations, as many as it can. Memorize them (Maintain → Memorize) to enter it again.` : undefined}>{badgeLabel}</span>}
-						{status?.exists && onOpenSettings && <button className="card-gear-btn" aria-label="Room settings" title={purging ? purgeNote : "Room settings"} disabled={purging} onClick={onOpenSettings}>⚙</button>}
+						{status?.exists && onOpenSettings && <button {...inertWhileArranging} className="card-gear-btn" aria-label="Room settings" title={purging ? purgeNote : "Room settings"} disabled={purging} onClick={onOpenSettings}>⚙</button>}
 					</div>
 				</div>
 				{status && status.errors.length > 0 && <div className="persistent-agent-error-summary">This room needs attention before it can be used.</div>}
@@ -374,46 +237,18 @@ export function PersistentAgentCard({ status, modelStatus, aiProfileStatus, thre
 				)}
 				</div>
 			</div>
-			<div className="persistent-agent-actions">
+			<div className="persistent-agent-actions" {...inertWhileArranging}>
 				<div className="persistent-agent-primary-actions">
 					{state === "missing" ? (
 						<button className="landing-action" disabled title="This room's files are missing on this machine">Unavailable</button>
 					) : hasStandbyThread ? (
-						canSwitchResume && switchTargetProfile ? (
-							<button
-								className="landing-action"
-								title={`This thread is locked to ${lockedModelLabel}, which ${switchTargetProfile.label} provides. Resuming asks to switch the AI profile first.`}
-								onClick={(e) => {
-									switchResumeReturnFocusRef.current = e.currentTarget;
-									setSwitchResumeError(null);
-									setSwitchResumeOpen(true);
-								}}
-							>Resume →</button>
-						) : (
-							<button className="landing-action" title={purging ? purgeNote : lockedElsewhere ? lockNote : standbyActionTitle} disabled={!status || (lockedElsewhere && !canStepBackIn) || !standbyModelAllowed || purging} onClick={() => status && onResume(status)}>Resume →</button>
-						)
+						<button className="landing-action" title={purging ? purgeNote : lockedElsewhere ? lockNote : "Resume this standby thread"} disabled={!status || (lockedElsewhere && !canStepBackIn) || purging} onClick={() => status && onResume(status)}>Resume →</button>
 					) : preparedBoundaryThread ? (
 						<button
 							className="landing-action"
-							title={purging ? purgeNote : lockedElsewhere ? lockNote : preparedSelectionMatchesLock || !roomModels.length ? "Enter the prepared room runtime" : "Enter with the selected model"}
-							disabled={!status || lockedElsewhere || entering || purging || (roomModels.length > 0 && !draftModel)}
-							onClick={() => {
-								if (!status) return;
-								// With no room models to offer, entering the prepared runtime on
-								// its inherited model is still better than a dead button.
-								if (preparedSelectionMatchesLock || !roomModels.length) void onResume(status);
-								else void enter();
-							}}
-						>{entering ? "Entering…" : "Enter →"}</button>
-					) : canSwitchEnter && preferredSwitchProfile ? (
-						<button
-							className="landing-action"
-							title={`This room prefers ${preferredModelLabel}, which ${preferredSwitchProfile.label} provides. Entering asks to switch the AI profile first.`}
-							onClick={(e) => {
-								switchResumeReturnFocusRef.current = e.currentTarget;
-								setSwitchResumeError(null);
-								setSwitchResumeOpen(true);
-							}}
+							title={purging ? purgeNote : lockedElsewhere ? lockNote : "Enter the prepared room runtime"}
+							disabled={!status || lockedElsewhere || purging}
+							onClick={() => status && void onResume(status)}
 						>Enter →</button>
 					) : (
 						<button className="landing-action" disabled={!canEnter || entering} title={lockedElsewhere ? lockNote : enterDisabledReason} onClick={enter}>{entering ? "Entering…" : "Enter →"}</button>
@@ -423,22 +258,12 @@ export function PersistentAgentCard({ status, modelStatus, aiProfileStatus, thre
 					<button className="inline-action" disabled={!canMaintain} title={canMaintain ? `Memorize the remembered conversations, or tidy what ${label} knows.` : maintainDisabledReason} onClick={() => status && onMaintain({ agentId: status.id, displayName: label })}>Maintain</button>
 					{status && (status.errors.length > 0 || status.warnings.length > 0) && <button className="inline-action" title={expanded ? "Hide the details" : "Show what needs attention"} onClick={() => setExpanded((v) => !v)}>{expanded ? "Hide" : "Details"}</button>}
 				</div>
-				{state !== "missing" && (
-					<div className={`persistent-agent-model${hasStandbyThread ? " locked" : showModelPicker ? "" : " unavailable"}`}>
-						{hasStandbyThread ? (
-							<span className={`model-pill locked${standbyModelAllowed ? "" : " incompatible"}`} aria-label="Locked room thread model" title={lockedPillTitle}>🔒 <span className="model-pill-name">{modelLabel}</span></span>
-						) : showModelPicker ? (
-							<RoomModelPicker roomModels={roomModels} modelStatusProfileId={modelStatus?.activeProfileId} value={draftModel} onChange={(key) => {
-								setDraftModel(key);
-								// A pick is the room's memory: record it so it survives the
-								// next profile switch away. Provider ids never contain "/",
-								// so the first slash splits the key unambiguously.
-								const slash = key.indexOf("/");
-								if (status && slash > 0 && onRecordPreferredModel) onRecordPreferredModel(status.id, { provider: key.slice(0, slash), model: key.slice(slash + 1) });
-							}} aiProfileStatus={aiProfileStatus} standbyLockedModels={standbyLockedModels} onSelectAiProfile={onSelectAiProfile} />
-						) : (
-							<span className="model-pill disabled" title={selectedModelTooltip || undefined}><span className="model-pill-name">{modelLabel}</span></span>
-						)}
+				{state !== "missing" && cardModelNames && (
+					<div className="persistent-agent-model">
+						<button type="button" className="card-model-label" title={purging ? purgeNote : cardModelTitle} disabled={purging || !onOpenModelSettings} onClick={onOpenModelSettings}>
+							<span className="card-model-label-name">{cardModelNames.name}</span>
+							{cardModelNames.provider && <span className="card-model-label-provider">{cardModelNames.provider}</span>}
+						</button>
 					</div>
 				)}
 			</div>
@@ -447,17 +272,6 @@ export function PersistentAgentCard({ status, modelStatus, aiProfileStatus, thre
 					{status.errors.length > 0 && <div className="error">This room needs attention before it can be used.</div>}
 					{status.warnings.length > 0 && <div>Some room diagnostics are available in server logs.</div>}
 				</div>
-			)}
-			{switchResumeOpen && confirmSwitchProfile && (
-				<ProfileSwitchConfirm
-					profile={confirmSwitchProfile}
-					strandedCount={switchResumeStranded}
-					continuation={switchTargetProfile ? `This conversation continues on ${lockedModelLabel}.` : `This room enters on ${preferredModelLabel}.`}
-					switching={switchResumeBusy}
-					error={switchResumeError}
-					onCancel={closeSwitchResume}
-					onConfirm={() => void (switchTargetProfile ? switchAndResume() : switchAndEnter())}
-				/>
 			)}
 		</article>
 	);

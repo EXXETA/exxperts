@@ -18,6 +18,8 @@ interface Props {
 	item: ApprovalItem;
 	onResolve: (requestId: string, value: any, label: string) => void;
 	onPreview?: (preview: ApprovalPreviewData) => void;
+	/** The composer answers this card by keyboard (the only pending yes/no card): say so. */
+	keyboardHint?: boolean;
 }
 
 function kbWriteType(title: string): string {
@@ -70,7 +72,18 @@ function splitFencedBrief(text?: string): { facts: string; label: string; brief:
 	};
 }
 
-function ApprovalImpl({ item, onResolve, onPreview }: Props) {
+/**
+ * The words a yes/no card resolves with: a fenced card (a command, a
+ * delegate brief) says Approve/Decline, a plain one Yes/No. The composer's
+ * Enter and Escape resolve through the same words, so the folded line reads
+ * the same whichever way the answer came.
+ */
+export function confirmApprovalLabels(item: ApprovalItem): { approve: string; decline: string } {
+	const fenced = !item.done && !approvalPreviewFromItem(item) ? (splitFencedBrief(item.message) ?? splitFencedBrief(item.detail)) : null;
+	return fenced ? { approve: "Approve", decline: "Decline" } : { approve: "Yes", decline: "No" };
+}
+
+function ApprovalImpl({ item, onResolve, onPreview, keyboardHint = false }: Props) {
 	const [text, setText] = useState("");
 	const [detailsOpen, setDetailsOpen] = useState(false);
 	const preview = useMemo(() => approvalPreviewFromItem(item), [item.requestId, item.done, item.detail, item.message, item.title]);
@@ -244,6 +257,7 @@ function ApprovalImpl({ item, onResolve, onPreview }: Props) {
 								{detailsOpen ? "Hide details" : "Details"}
 							</button>
 						)}
+						{keyboardHint && <span className="approval-key-hint">Enter to approve, Esc to decline</span>}
 					</div>
 				)}
 

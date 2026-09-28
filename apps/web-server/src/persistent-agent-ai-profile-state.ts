@@ -70,6 +70,9 @@ export function readPersistentAgentAiProfileState(): PersistentAgentAiProfileSta
 		}
 		const raw = JSON.parse(fs.readFileSync(PERSISTENT_AGENT_AI_PROFILE_FILE, "utf-8"));
 		const profileId = String(raw?.profileId ?? raw?.id ?? "").trim();
+		// The file may hold only the defaults for new rooms: no choice was made,
+		// so the profile follows the signed-in provider, as with no file at all.
+		if (!profileId) return autoResolvedPersistentAgentAiProfileState() ?? defaultPersistentAgentAiProfileState("default");
 		if (!isPersistentAgentAiProfileId(profileId)) {
 			return (
 				autoResolvedPersistentAgentAiProfileState("Saved persistent-agent AI profile is unknown; using the signed-in profile.")
@@ -126,12 +129,38 @@ export function readSavedPersistentAgentAiProfileId(): string | null {
 
 // Drops the explicit choice: the state becomes "auto" and follows the signed-in
 // provider. Called when the profile the pointer names no longer exists, so the
-// pointer never stays stale from the app's own actions. Returns true when a
-// file was removed.
+// pointer never stays stale from the app's own actions. The defaults for new
+// rooms kept in the same file stay. Returns true when a choice was dropped.
 export function clearSavedPersistentAgentAiProfileState(): boolean {
 	if (!fs.existsSync(PERSISTENT_AGENT_AI_PROFILE_FILE)) return false;
-	fs.rmSync(PERSISTENT_AGENT_AI_PROFILE_FILE, { force: true });
+	const rest = readProfileStateFileWithout(["profileId", "id"]);
+	if (!rest || Object.keys(rest).length === 0) {
+		fs.rmSync(PERSISTENT_AGENT_AI_PROFILE_FILE, { force: true });
+		return true;
+	}
+	writeProfileStateFile(rest);
 	return true;
+}
+
+// The state file's other keys (the defaults for new rooms), or null when it
+// does not parse, in which case there is nothing to keep.
+function readProfileStateFileWithout(keys: string[]): Record<string, unknown> | null {
+	try {
+		const raw = JSON.parse(fs.readFileSync(PERSISTENT_AGENT_AI_PROFILE_FILE, "utf-8"));
+		if (!raw || typeof raw !== "object") return null;
+		const rest: Record<string, unknown> = { ...raw };
+		for (const key of keys) delete rest[key];
+		return rest;
+	} catch {
+		return null;
+	}
+}
+
+function writeProfileStateFile(payload: Record<string, unknown>): void {
+	fs.mkdirSync(path.dirname(PERSISTENT_AGENT_AI_PROFILE_FILE), { recursive: true, mode: 0o700 });
+	const tmpPath = `${PERSISTENT_AGENT_AI_PROFILE_FILE}.${process.pid}.tmp`;
+	fs.writeFileSync(tmpPath, JSON.stringify(payload, null, 2), { mode: 0o600 });
+	fs.renameSync(tmpPath, PERSISTENT_AGENT_AI_PROFILE_FILE);
 }
 
 export function getActivePersistentAgentAiProfileId(): PersistentAgentAiProfileId {
@@ -145,11 +174,9 @@ export function getActivePersistentAgentAiProfile(): PersistentAgentAiProfile {
 export function writePersistentAgentAiProfileState(profileId: PersistentAgentAiProfileId): PersistentAgentAiProfileState {
 	// Resolve before writing: an unknown id must throw without persisting.
 	const profile = getPersistentAgentAiProfile(profileId);
-	fs.mkdirSync(path.dirname(PERSISTENT_AGENT_AI_PROFILE_FILE), { recursive: true, mode: 0o700 });
-	const payload = JSON.stringify({ profileId }, null, 2);
-	const tmpPath = `${PERSISTENT_AGENT_AI_PROFILE_FILE}.${process.pid}.tmp`;
-	fs.writeFileSync(tmpPath, payload, { mode: 0o600 });
-	fs.renameSync(tmpPath, PERSISTENT_AGENT_AI_PROFILE_FILE);
+	// The defaults for new rooms share the file and are kept.
+	const rest = fs.existsSync(PERSISTENT_AGENT_AI_PROFILE_FILE) ? readProfileStateFileWithout(["profileId", "id"]) ?? {} : {};
+	writeProfileStateFile({ profileId, ...rest });
 	return {
 		profileId,
 		profile,

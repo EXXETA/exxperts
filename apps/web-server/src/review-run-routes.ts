@@ -33,7 +33,8 @@ export interface ReviewRunRouteDeps {
 	/** The room routes' error envelope: `{ error, code? }` at the error's own status. */
 	errorReply(reply: any, error: unknown): unknown;
 	/** The maintenance model this room's profile locks Review to. */
-	modelLock(): PersistentAgentModelLock;
+	/** The room's memory model: Review runs on the memory row. */
+	modelLock(agentId: string): PersistentAgentModelLock;
 	/** The locked model's window, so an oversized prompt refuses with guidance instead of running truncated. */
 	resolveModelWindow(model: PersistentAgentModelLock): CheckpointModelWindow | undefined;
 	/** The isolated worker call: one prompt, one reply, cancellable by the run. */
@@ -66,7 +67,7 @@ export function registerReviewRunRoutes(app: FastifyInstance, deps: ReviewRunRou
 				topics: request.topics,
 				guidance: reviewGuidanceFromWire(body.guidance),
 				...(request.sourceFingerprint ? { sourceFingerprint: request.sourceFingerprint } : {}),
-				model: deps.modelLock(),
+				model: deps.modelLock(id),
 				resolveModelWindow: deps.resolveModelWindow,
 				generate: (prompt, modelLock, options) => deps.generate(id, prompt, modelLock, options),
 			});

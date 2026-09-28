@@ -14,6 +14,7 @@ import {
 import { CONNECTOR_CATALOG, type ConnectorCatalogEntry } from "../connector-catalog";
 import { CONNECTOR_ICONS } from "../connector-icons";
 import { useRemoteClientContext } from "../remote-client-context";
+import { GroupHeader } from "./pane-header";
 
 const APPLY_NOTE = "Config change saved. Rooms pick it up the next time you enter or resume them.";
 
@@ -175,7 +176,7 @@ function ConnectorRow({ server, expanded, onToggle, onChanged, onNotice, readOnl
 			{!readOnly && (
 				<div className="connector-row-actions">
 						<button
-							className="inline-action"
+							className="rs-quiet"
 							disabled={busy !== null}
 							title="Check the server is reachable and list its tools"
 							onClick={() => void run("test", async () => {
@@ -201,7 +202,7 @@ function ConnectorRow({ server, expanded, onToggle, onChanged, onNotice, readOnl
 						</button>
 						{showLogin && busy !== "login" && (
 							<button
-								className="inline-action connector-action-primary"
+								className="rs-quiet"
 								disabled={busy !== null}
 								onClick={() => void run("login", async () => {
 									await startMcpServerLogin(server.name);
@@ -213,7 +214,7 @@ function ConnectorRow({ server, expanded, onToggle, onChanged, onNotice, readOnl
 						)}
 						{busy === "login" && (
 							<button
-								className="inline-action"
+								className="rs-quiet"
 								onClick={() => void (async () => {
 									if (loginPollRef.current !== null) window.clearTimeout(loginPollRef.current);
 									try {
@@ -230,7 +231,7 @@ function ConnectorRow({ server, expanded, onToggle, onChanged, onNotice, readOnl
 						)}
 						{canLogin && server.auth.hasStoredTokens && (
 							<button
-								className="inline-action"
+								className="rs-quiet"
 								disabled={busy !== null}
 								onClick={() => void run("logout", async () => {
 									await logoutMcpServer(server.name);
@@ -244,8 +245,9 @@ function ConnectorRow({ server, expanded, onToggle, onChanged, onNotice, readOnl
 						)}
 						{confirmRemove ? (
 							<>
+								<button className="rs-quiet" disabled={busy !== null} title="Cancel and keep this connector" onClick={() => setConfirmRemove(false)}>Keep</button>
 								<button
-									className="inline-action connector-action-danger"
+									className="rs-quiet rs-quiet-danger"
 									disabled={busy !== null}
 									onClick={() => void run("remove", async () => {
 										await removeMcpServer(server.name);
@@ -256,10 +258,9 @@ function ConnectorRow({ server, expanded, onToggle, onChanged, onNotice, readOnl
 								>
 									{busy === "remove" ? "Removing…" : "Remove"}
 								</button>
-								<button className="inline-action connector-action-quiet" disabled={busy !== null} title="Cancel — keep this connector" onClick={() => setConfirmRemove(false)}>Keep</button>
 							</>
 						) : (
-							<button className="inline-action connector-action-quiet" disabled={busy !== null} onClick={() => setConfirmRemove(true)}>Remove</button>
+							<button className="rs-quiet rs-quiet-danger" disabled={busy !== null} onClick={() => setConfirmRemove(true)}>Remove</button>
 						)}
 				</div>
 			)}
@@ -305,10 +306,10 @@ function AddConnectorForm({ onAdded, onCancel, prefill }: { onAdded: () => Promi
 	const [error, setError] = useState<string | null>(null);
 	const blockRef = useRef<HTMLDivElement | null>(null);
 
-	// The "Add custom" card that opens this form sits at the end of the grid,
-	// below where the form appears — bring the form to the user.
+	// The form opens right under the row that opened it; scroll only as far
+	// as it takes to show it whole.
 	useEffect(() => {
-		blockRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+		blockRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
 	}, []);
 
 	async function save() {
@@ -337,7 +338,7 @@ function AddConnectorForm({ onAdded, onCancel, prefill }: { onAdded: () => Promi
 
 	return (
 		<div className="ai-setup-block" aria-label="Custom connector" ref={blockRef}>
-			<h3>Custom connector</h3>
+			<p className="settings-group-kicker">Custom connector</p>
 			{prefill?.note && <p className="cli-note">{prefill.note}</p>}
 			<div className="connector-form">
 				<label className="connector-form-field">
@@ -359,7 +360,8 @@ function AddConnectorForm({ onAdded, onCancel, prefill }: { onAdded: () => Promi
 							<input type="password" value={bearerToken} placeholder="leave empty for OAuth or public servers" onChange={(e) => setBearerToken(e.target.value)} />
 						</label>
 						<button type="button" className="connector-oauth-toggle" onClick={() => setShowOAuthClient((current) => !current)} aria-expanded={showOAuthClient}>
-							{showOAuthClient ? "▾" : "▸"} Custom OAuth client (for providers without automatic registration, like HubSpot)
+							<span className="disclosure-chevron" aria-hidden="true" />
+							Custom OAuth client (for providers without automatic registration, like HubSpot)
 						</button>
 						{showOAuthClient && (
 							<div className="connector-oauth-fields">
@@ -386,11 +388,11 @@ function AddConnectorForm({ onAdded, onCancel, prefill }: { onAdded: () => Promi
 					</label>
 				)}
 				{error && <div className="checkpoint-proposal-error">{error}</div>}
-				<div className="ai-setup-actions">
-					<button className="landing-action" disabled={saving || !name.trim() || (kind === "url" ? !url.trim() : !command.trim())} onClick={() => void save()}>
+				<div className="settings-form-foot">
+					<button className="rs-btn" disabled={saving} onClick={onCancel}>Cancel</button>
+					<button className="rs-btn rs-btn-primary" disabled={saving || !name.trim() || (kind === "url" ? !url.trim() : !command.trim())} onClick={() => void save()}>
 						{saving ? "Saving…" : "Save connector"}
 					</button>
-					<button className="landing-action secondary" disabled={saving} onClick={onCancel}>Cancel</button>
 				</div>
 				<p className="cli-note">Saved to ~/.exxperts/agent/mcp.json. Test the connection afterwards. It will tell you if the server needs a login.</p>
 			</div>
@@ -428,8 +430,7 @@ export interface AddConnectorPrefill {
 	openOAuthClient?: boolean;
 }
 
-function DirectoryCard({ entry, installed, onAdd, onOpenCustom }: { entry: ConnectorCatalogEntry; installed: boolean; onAdd: (entry: ConnectorCatalogEntry, token?: string) => Promise<void>; onOpenCustom: (prefill?: AddConnectorPrefill) => void }) {
-	const [tokenOpen, setTokenOpen] = useState(false);
+function DirectoryCard({ entry, installed, onAdd, onOpenCustom, tokenOpen, onTokenOpen, customForm }: { entry: ConnectorCatalogEntry; installed: boolean; onAdd: (entry: ConnectorCatalogEntry, token?: string) => Promise<void>; onOpenCustom: (prefill?: AddConnectorPrefill) => void; tokenOpen: boolean; onTokenOpen: (open: boolean) => void; customForm: React.ReactNode }) {
 	const [token, setToken] = useState("");
 	const [adding, setAdding] = useState(false);
 	const [error, setError] = useState<string | null>(null);
@@ -439,7 +440,7 @@ function DirectoryCard({ entry, installed, onAdd, onOpenCustom }: { entry: Conne
 		setError(null);
 		try {
 			await onAdd(entry, withToken);
-			setTokenOpen(false);
+			onTokenOpen(false);
 			setToken("");
 		} catch (e) {
 			setError((e as Error).message);
@@ -448,75 +449,80 @@ function DirectoryCard({ entry, installed, onAdd, onOpenCustom }: { entry: Conne
 		}
 	}
 
-	// One small square + carries what the old per-kind buttons did: open and
-	// oauth entries add directly, token entries open the inline token row,
-	// oauth-client entries open the prefilled custom form. Guided entries
-	// link out to their setup guide. The kind label beside the name says
-	// which flow the + opens.
+	// One Add carries every kind: open and oauth entries add directly, token
+	// entries open the token row under this one, oauth-client entries open
+	// the prefilled custom form. Guided entries link out to their setup
+	// guide. The kind label beside the name says which flow Add opens.
 	const addLabel =
 		entry.kind === "token" ? `Add ${entry.name} with an API token` : entry.kind === "oauth-client" ? `Add ${entry.name} with an OAuth app` : `Add ${entry.name}`;
 
 	return (
-		<article className="connector-dir-card">
-			<div className="connector-dir-card-row">
-				<ConnectorAvatar id={entry.id} name={entry.name} size={40} />
-				<div className="connector-dir-body">
-					<div className="connector-dir-title">
-						<strong>{entry.name}</strong>
-						<span className="connector-dir-kind">{KIND_LABELS[entry.kind]}</span>
-					</div>
-					<p className="connector-dir-desc" title={entry.description}>{entry.description}</p>
+		<div className="connector-dir-row-group">
+			<div className="settings-row connector-dir-row">
+				<ConnectorAvatar id={entry.id} name={entry.name} size={32} />
+				<div className="settings-row-main">
+					<span className="settings-row-label">{entry.name}<span className="connector-dir-kind">{KIND_LABELS[entry.kind]}</span></span>
+					<span className="settings-row-sub settings-row-clamp" title={entry.description}>{entry.description}</span>
 				</div>
 				{installed ? (
-					<span className="connector-dir-add connector-dir-added" title="Added" aria-label={`${entry.name} is added`}>✓</span>
+					<span className="settings-row-value" aria-label={`${entry.name} is added`}>Added</span>
 				) : entry.kind === "guided" ? (
 					entry.docsUrl && (
-						<a className="connector-dir-add" href={entry.docsUrl} target="_blank" rel="noreferrer" title="Setup guide" aria-label={`${entry.name} setup guide`}>↗</a>
+						<a className="rs-btn" href={entry.docsUrl} target="_blank" rel="noreferrer" aria-label={`${entry.name} setup guide`}>Setup guide ↗</a>
 					)
+				) : entry.kind === "token" && tokenOpen ? (
+					<button className="rs-btn" disabled={adding} onClick={() => { onTokenOpen(false); setToken(""); }}>Cancel</button>
 				) : (
 					<button
-						className="connector-dir-add"
-						disabled={adding || (entry.kind === "token" && tokenOpen)}
+						className="rs-btn"
+						disabled={adding}
 						title={addLabel}
 						aria-label={addLabel}
 						aria-expanded={entry.kind === "token" ? tokenOpen : undefined}
 						onClick={() => {
 							if (entry.kind === "oauth-client") onOpenCustom({ name: entry.id, url: entry.url, note: entry.guideNote, openOAuthClient: true });
-							else if (entry.kind === "token") setTokenOpen(true);
+							else if (entry.kind === "token") onTokenOpen(true);
 							else void add();
 						}}
 					>
-						{adding ? "…" : "+"}
+						{adding ? "Adding…" : "Add"}
 					</button>
 				)}
 			</div>
 			{tokenOpen && !installed && (
-				<div className="connector-dir-actions">
+				<div className="connector-dir-token-row">
 					<input
 						type="password"
-						className="connector-dir-token-input"
+						className="launcher-path-input connector-dir-token-input"
 						placeholder={entry.tokenHint ?? "API token"}
 						value={token}
+						autoFocus
 						onChange={(e) => setToken(e.target.value)}
+						onKeyDown={(e) => { if (e.key === "Enter" && token.trim()) void add(token.trim()); }}
 					/>
-					<button className="inline-action" disabled={adding || !token.trim()} onClick={() => void add(token.trim())}>
+					<button className="rs-btn rs-btn-primary" disabled={adding || !token.trim()} onClick={() => void add(token.trim())}>
 						{adding ? "Adding…" : "Add"}
 					</button>
-					<button className="inline-action" disabled={adding} onClick={() => setTokenOpen(false)}>Cancel</button>
 					{entry.docsUrl && (
-						<a className="connector-dir-token-guide" href={entry.docsUrl} target="_blank" rel="noreferrer">
-							Where do I get one? ↗
-						</a>
+						<a className="rs-quiet" href={entry.docsUrl} target="_blank" rel="noreferrer">Where do I get one? ↗</a>
 					)}
 				</div>
 			)}
+			{customForm}
 			{error && <p className="connector-dir-note connector-outcome-error">{error}</p>}
-		</article>
+		</div>
 	);
 }
 
-function ConnectorDirectory({ status, onChanged, onNotice, customOpen, onOpenCustom, customForm }: { status: McpConnectorsStatusResponse | null; onChanged: () => Promise<void>; onNotice: (text: string) => void; customOpen: boolean; onOpenCustom: (prefill?: AddConnectorPrefill) => void; customForm: React.ReactNode }) {
+// One form open at a time in the directory: a token row or the custom form,
+// under the row that opened it ("" is the custom connector row itself).
+function ConnectorDirectory({ status, onChanged, onNotice, customFor, onOpenCustom, onCloseCustom, customForm }: { status: McpConnectorsStatusResponse | null; onChanged: () => Promise<void>; onNotice: (text: string) => void; customFor: string | null; onOpenCustom: (prefill?: AddConnectorPrefill) => void; onCloseCustom: () => void; customForm: React.ReactNode }) {
 	const [query, setQuery] = useState("");
+	const [tokenOpenId, setTokenOpenId] = useState<string | null>(null);
+	const openCustom = (prefill?: AddConnectorPrefill) => {
+		setTokenOpenId(null);
+		onOpenCustom(prefill);
+	};
 
 	const configured = status?.servers ?? [];
 	const isInstalled = (entry: ConnectorCatalogEntry) =>
@@ -538,37 +544,50 @@ function ConnectorDirectory({ status, onChanged, onNotice, customOpen, onOpenCus
 	}
 
 	return (
-		<section className="ai-setup-section" aria-label="Connector directory">
-			<h3 className="web-search-fallback-heading">Add</h3>
-			<p className="ai-setup-copy web-search-fallback-copy">Verified servers, one click to add. Same list on the web and in the CLI.</p>
-			<input
-				type="search"
-				className="connector-dir-search"
-				placeholder="Search connectors…"
-				value={query}
-				onChange={(e) => setQuery(e.target.value)}
-				aria-label="Search connectors"
+		<section className="ai-setup-section settings-group" aria-label="Connector directory">
+			<GroupHeader
+				kicker="Directory"
+				line="Verified servers, one click to add. Same list on the web and in the CLI."
+				actions={(
+					<input
+						type="search"
+						className="launcher-path-input connector-dir-search"
+						placeholder="Search connectors…"
+						value={query}
+						onChange={(e) => setQuery(e.target.value)}
+						aria-label="Search connectors"
+					/>
+				)}
 			/>
-			{customForm}
-			<div className="connector-dir-grid">
+			<div className="settings-rows">
 				{entries.map((entry) => (
-					<DirectoryCard key={entry.id} entry={entry} installed={isInstalled(entry)} onAdd={add} onOpenCustom={onOpenCustom} />
+					<DirectoryCard
+						key={entry.id}
+						entry={entry}
+						installed={isInstalled(entry)}
+						onAdd={add}
+						onOpenCustom={openCustom}
+						tokenOpen={tokenOpenId === entry.id}
+						onTokenOpen={(open) => {
+							setTokenOpenId(open ? entry.id : null);
+							if (open) onCloseCustom();
+						}}
+						customForm={customFor === entry.id ? customForm : null}
+					/>
 				))}
-				{entries.length === 0 && <p className="cli-note">No matches. Use the custom connector card to add one.</p>}
-				<article className="connector-dir-card connector-dir-custom">
-					<div className="connector-dir-card-row">
-						<span className="connector-avatar" style={{ width: 40, height: 40 }}>+</span>
-						<div className="connector-dir-body">
-							<div className="connector-dir-title">
-								<strong>Custom connector</strong>
-								<span className="connector-dir-kind">custom</span>
-							</div>
-							<p className="connector-dir-desc">Add any MCP server that isn't in the list.</p>
+				<div className="connector-dir-row-group">
+					<div className="settings-row connector-dir-row">
+						<span className="connector-avatar" style={{ width: 32, height: 32 }}>+</span>
+						<div className="settings-row-main">
+							<span className="settings-row-label">Custom connector<span className="connector-dir-kind">custom</span></span>
+							<span className="settings-row-sub">Add any MCP server that isn't in the list.</span>
 						</div>
-						<button className="connector-dir-add" onClick={() => onOpenCustom()} disabled={customOpen} title={customOpen ? "Fill in the form above" : "Add a custom connector"} aria-label="Add a custom connector">+</button>
+						<button className="rs-btn" onClick={() => openCustom()} disabled={customFor === ""} title={customFor === "" ? "Fill in the form below" : "Add a custom connector"} aria-label="Add a custom connector">Add</button>
 					</div>
-				</article>
+					{customFor === "" && customForm}
+				</div>
 			</div>
+			{entries.length === 0 && <p className="cli-note">No matches. Use the custom connector row to add one.</p>}
 		</section>
 	);
 }
@@ -609,7 +628,7 @@ export function ConnectorsPage() {
 	return (
 		<>
 			<section className="ai-setup-section" aria-label="MCP connectors">
-				<h3 className="web-search-fallback-heading">Available</h3>
+				<p className="settings-group-kicker">Added</p>
 				{notice && <p className="cli-note" role="status">{notice}</p>}
 				{error && <div className="checkpoint-proposal-error">{error}</div>}
 				{!error && loading && !status && <p className="ai-setup-copy">Loading connectors…</p>}
@@ -645,7 +664,7 @@ export function ConnectorsPage() {
 					remoteClient.remote ? (
 						<p className="cli-note">Connectors are set up and signed in on the computer itself.</p>
 					) : (
-						<p className="ai-setup-copy">No connectors yet. Add one from the directory below.</p>
+						<p className="settings-empty">No connectors yet. Add one from the directory below.</p>
 					)
 				)}
 			</section>
@@ -654,10 +673,14 @@ export function ConnectorsPage() {
 					status={status}
 					onChanged={refresh}
 					onNotice={setNotice}
-					customOpen={addOpen}
+					customFor={addOpen ? (addPrefill?.name ?? "") : null}
 					onOpenCustom={(prefill) => {
 						setAddPrefill(prefill);
 						setAddOpen(true);
+					}}
+					onCloseCustom={() => {
+						setAddOpen(false);
+						setAddPrefill(undefined);
 					}}
 					customForm={
 						addOpen ? (

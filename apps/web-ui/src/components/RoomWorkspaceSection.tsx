@@ -2,6 +2,8 @@ import { type FormEvent, useEffect, useRef, useState } from "react";
 import type { PersistentAgentStatus, PersistentRoomCapabilityPolicyView, PersistentRoomWorkspaceAccessMode } from "../types";
 import { chooseSystemFolder, clearPersistentRoomWorkspaceDefault, fetchPersistentRoomWorkspaceDefault, savePersistentRoomWorkspaceDefault } from "../persistent-room-workspace-api";
 import { useRemoteClientContext } from "../remote-client-context";
+import { PaneHeader } from "./pane-header";
+import { useRegisteredSave, type RegisterSave } from "./use-registered-save";
 
 const BOUNDED_WORKSPACE_TOOL_OPTIONS = [
 	{ name: "read", label: "Read" },
@@ -85,10 +87,14 @@ function WorkspaceDefaultPolicySummary({ policy, warnings, setupDisabled, onSetW
 	const currentRoot = policy?.roots[0] ?? null;
 	if (!policy || !currentRoot) {
 		return (
-			<div className="workspaces-no-workspace">
-				<p className="workspaces-no-workspace-lead">No workspace yet.</p>
-				<p className="workspaces-no-workspace-copy">Without a folder, this room can't read or write files, export documents, or use Bash. Set a project folder to unlock file work.</p>
-				<button className="rs-btn" type="button" disabled={setupDisabled} onClick={onSetWorkspace}>Set workspace</button>
+			<div className="settings-rows">
+				<div className="settings-row">
+					<div className="settings-row-main">
+						<span className="settings-row-label">No workspace yet</span>
+						<span className="settings-row-sub">Without a folder, this room can't read or write files, export documents, or use Bash. Set a project folder to unlock file work.</span>
+					</div>
+					<button className="rs-btn" type="button" disabled={setupDisabled} onClick={onSetWorkspace}>Set workspace</button>
+				</div>
 			</div>
 		);
 	}
@@ -101,30 +107,30 @@ function WorkspaceDefaultPolicySummary({ policy, warnings, setupDisabled, onSetW
 	const honestyNote = workspaceHonestyNote({ toolNames: policy.allowedToolNames, localFiles: isLocalFiles, bashEnabled: policy.bashEnabled === true });
 	return (
 		<div className="workspaces-policy-summary">
-			<div className="workspace-summary-card">
-				<div className="workspace-summary-folder">
-					<svg className="workspace-folder-icon" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M1.5 2.5A1.5 1.5 0 0 1 3 1h3.2c.4 0 .78.16 1.06.44L8.6 2.78c.1.1.22.15.35.15H13a1.5 1.5 0 0 1 1.5 1.5v8.07A1.5 1.5 0 0 1 13 14H3a1.5 1.5 0 0 1-1.5-1.5v-10Z" /></svg>
-					<strong>{savedLabel}</strong>
-					<span className="workspace-summary-mode" title={accessModeHint(policy.workspaceAccessMode)}>{accessModeLabel(policy.workspaceAccessMode)}</span>
-				</div>
-				<dl className="workspace-summary-facts">
-					<div>
-						<dt>Tools</dt>
-						<dd>{toolNames}</dd>
+			<div className="settings-rows">
+				<div className="settings-row">
+					<div className="settings-row-main">
+						<span className="settings-row-label">Folder</span>
+						<span className="settings-row-sub">The full path stays on this machine and is not shown here.{showFolderClue ? ` Folder: ${folderName}.` : ""}</span>
 					</div>
-					{isLocalFiles && (
-						<div>
-							<dt>Bash</dt>
-							<dd>{policy.bashEnabled ? "On" : "Off"}</dd>
-						</div>
-					)}
-				</dl>
-				{honestyNote && <p className="workspace-summary-note">{honestyNote}</p>}
-				<p className="workspace-summary-note">
-					The full local path stays on this machine and is not shown here.{showFolderClue ? ` Folder: ${folderName}.` : ""}
-				</p>
-				<p className="workspace-summary-note">Workspace changes apply from your next message, also in a conversation that is already running.</p>
+					<span className="settings-row-value">
+						{savedLabel}
+						<span className="settings-row-tag" title={accessModeHint(policy.workspaceAccessMode)}>{accessModeLabel(policy.workspaceAccessMode)}</span>
+					</span>
+				</div>
+				<div className="settings-row">
+					<span className="settings-row-label">Tools</span>
+					<span className="settings-row-value">{toolNames}</span>
+				</div>
+				{isLocalFiles && (
+					<div className="settings-row">
+						<span className="settings-row-label">Bash</span>
+						<span className="settings-row-value">{policy.bashEnabled ? "On" : "Off"}</span>
+					</div>
+				)}
 			</div>
+			{honestyNote && <p className="settings-help">{honestyNote}</p>}
+			<p className="settings-help">Changes apply from your next message, also in a conversation that is already running.</p>
 			{warnings.length > 0 && (
 				<ul className="workspaces-warnings">
 					{warnings.map((warning, index) => <li key={`${warning}-${index}`}>{warning}</li>)}
@@ -134,7 +140,7 @@ function WorkspaceDefaultPolicySummary({ policy, warnings, setupDisabled, onSetW
 	);
 }
 
-export function RoomWorkspaceSection({ status, onDirtyChange }: { status: PersistentAgentStatus; onDirtyChange?: (dirty: boolean) => void }) {
+export function RoomWorkspaceSection({ status, onDirtyChange, registerSave }: { status: PersistentAgentStatus; onDirtyChange?: (dirty: boolean) => void; registerSave?: RegisterSave }) {
 	const [policy, setPolicy] = useState<PersistentRoomCapabilityPolicyView | null>(null);
 	const [warnings, setWarnings] = useState<string[]>([]);
 	const [loading, setLoading] = useState(false);
@@ -211,12 +217,20 @@ export function RoomWorkspaceSection({ status, onDirtyChange }: { status: Persis
 		return () => { cancelled = true; };
 	}, [canManageWorkspace, status.exists, status.id]);
 
+	// Save and close in the unsaved question: the editor's own save.
+	useRegisteredSave(registerSave, saveWorkspaceDefault);
+
 	async function submitWorkspaceDefault(event: FormEvent<HTMLFormElement>): Promise<void> {
 		event.preventDefault();
+		await saveWorkspaceDefault();
+	}
+
+	async function saveWorkspaceDefault(): Promise<boolean> {
+		if (saving) return false;
 		const root = draftRoot.trim();
 		if (!root && !policy) {
 			setError("Choose a folder for this room workspace.");
-			return;
+			return false;
 		}
 		const activeToolNames = workspaceToolNamesForMode(draftAccessMode);
 		const selectedToolNames = activeToolNames.filter((toolName) => draftToolNames.includes(toolName));
@@ -242,8 +256,10 @@ export function RoomWorkspaceSection({ status, onDirtyChange }: { status: Persis
 			setDraftBashEnabled(response.policy?.workspaceAccessMode === "localFiles" && response.policy?.bashEnabled === true);
 			setEditing(false);
 			setMessage("Saved. Applies from your next message.");
+			return true;
 		} catch (e) {
 			setError((e as Error).message || "Failed to save workspace default.");
+			return false;
 		} finally {
 			setSaving(false);
 		}
@@ -329,97 +345,90 @@ export function RoomWorkspaceSection({ status, onDirtyChange }: { status: Persis
 
 	return (
 		<div className="room-workspace-section">
-			<header className="rs-pane-head">
-				<h3>Workspace</h3>
-				{!editing && policy && (
-					<div className="rs-pane-actions">
+			<PaneHeader
+				title="Workspace"
+				line="The folder this room works in, and what it may do there."
+				actions={editing ? (
+					<>
+						{dirty && <span className="workspace-unsaved-hint">Unsaved changes</span>}
+						<button className="rs-btn" type="button" disabled={saving} onClick={startOrCancelEditing}>Cancel</button>
+						<button className="rs-btn rs-btn-primary" type="submit" form="workspace-editor-form" disabled={saving}>{saving ? "Saving…" : policy ? "Save changes" : "Save workspace"}</button>
+					</>
+				) : policy && (
+					<>
+						<button className="rs-btn" disabled={!canManageWorkspace || loading || saving} title="Remove the saved workspace folder" onClick={() => void clearWorkspaceDefault()}>{saving ? "Updating…" : "Clear"}</button>
 						<button className="rs-btn" disabled={!canManageWorkspace || loading || saving} onClick={startOrCancelEditing}>Edit workspace</button>
-						<button className="rs-quiet" disabled={!canManageWorkspace || loading || saving} title="Remove the saved workspace folder" onClick={() => void clearWorkspaceDefault()}>{saving ? "Updating…" : "Clear"}</button>
-					</div>
+					</>
 				)}
-			</header>
-			<p className="rs-pane-sub">The folder this room works in, and what it may do there.</p>
+			/>
 			<div className="workspaces-room-body">
-				{loading ? <p className="workspaces-empty-state">Loading workspace default…</p> : !editing && <WorkspaceDefaultPolicySummary policy={policy} warnings={warnings} setupDisabled={!canManageWorkspace || saving} onSetWorkspace={startOrCancelEditing} />}
+				{loading ? <p className="settings-empty">Loading workspace default…</p> : !editing && <WorkspaceDefaultPolicySummary policy={policy} warnings={warnings} setupDisabled={!canManageWorkspace || saving} onSetWorkspace={startOrCancelEditing} />}
 				{editing && (
-					<form className="workspaces-default-form" onSubmit={(event) => void submitWorkspaceDefault(event)}>
-						<div className="workspaces-field">
-							<strong>Workspace folder</strong>
-							{savedFolderLabel && (
-								<div className="workspace-saved-folder">
-									<svg className="workspace-folder-icon" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M1.5 2.5A1.5 1.5 0 0 1 3 1h3.2c.4 0 .78.16 1.06.44L8.6 2.78c.1.1.22.15.35.15H13a1.5 1.5 0 0 1 1.5 1.5v8.07A1.5 1.5 0 0 1 13 14H3a1.5 1.5 0 0 1-1.5-1.5v-10Z" /></svg>
-									<span className="workspace-saved-folder-name">{savedFolderLabel}</span>
-									<span className="workspace-saved-folder-tag">saved</span>
+					<form id="workspace-editor-form" className="workspaces-default-form" onSubmit={(event) => void submitWorkspaceDefault(event)}>
+						<div className="settings-rows">
+							<div className="settings-row">
+								<div className="settings-row-main">
+									<span className="settings-row-label">Folder</span>
+									<span className="settings-row-sub">{savedFolderLabel ? `${savedFolderLabel}, saved. Pick another to change it.` : "Pick the folder this room works in."}</span>
 								</div>
-							)}
-							<div className="workspace-folder-row">
-								{!remoteClient.remote && (
-									<button className="inline-action workspace-folder-choice-action" type="button" disabled={saving || choosingFolder} onClick={() => void chooseWorkspaceRootFolder()}>
-										<svg className="workspace-folder-icon" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M1.5 2.5A1.5 1.5 0 0 1 3 1h3.2c.4 0 .78.16 1.06.44L8.6 2.78c.1.1.22.15.35.15H13a1.5 1.5 0 0 1 1.5 1.5v8.07A1.5 1.5 0 0 1 13 14H3a1.5 1.5 0 0 1-1.5-1.5v-10Z" /></svg>
-										{choosingFolder ? "Choosing…" : "Choose folder…"}
-									</button>
-								)}
-								<input
-									className="launcher-path-input workspace-folder-path-input"
-									type="text"
-									value={draftRoot}
-									placeholder={savedFolderLabel ? "Change to a different folder (empty keeps the saved one)" : "Type a folder path, or choose one"}
-									aria-label="Workspace folder path"
-									disabled={saving || choosingFolder}
-									onChange={(event) => { setDraftRoot(event.target.value); setError(null); setMessage(null); }}
-								/>
-								{trimmedDraftRoot.length > 0 && policy && (
-									<button className="rs-quiet" type="button" disabled={saving} onClick={() => { setDraftRoot(""); setError(null); setMessage(null); }}>Keep saved folder</button>
-								)}
+								<div className="settings-row-value workspace-folder-controls">
+									<input
+										className="launcher-path-input workspace-folder-path-input"
+										type="text"
+										value={draftRoot}
+										placeholder={savedFolderLabel ? "Or type a path" : "Type a folder path"}
+										aria-label="Workspace folder path"
+										disabled={saving || choosingFolder}
+										onChange={(event) => { setDraftRoot(event.target.value); setError(null); setMessage(null); }}
+									/>
+									{trimmedDraftRoot.length > 0 && policy && (
+										<button className="rs-btn" type="button" disabled={saving} onClick={() => { setDraftRoot(""); setError(null); setMessage(null); }}>Keep saved folder</button>
+									)}
+									{!remoteClient.remote && (
+										<button className="rs-btn" type="button" disabled={saving || choosingFolder} onClick={() => void chooseWorkspaceRootFolder()}>
+											{choosingFolder ? "Choosing…" : "Choose folder…"}
+										</button>
+									)}
+								</div>
+							</div>
+							<div className="settings-row">
+								<div className="settings-row-main">
+									<span className="settings-row-label">Access</span>
+									<span className="settings-row-sub">{accessModeHint(draftAccessMode)}</span>
+								</div>
+								<div className="settings-segments" role="radiogroup" aria-label="Workspace access mode">
+									<button type="button" role="radio" aria-checked={draftAccessMode === "localFiles"} className={`settings-segment${draftAccessMode === "localFiles" ? " active" : ""}`} disabled={saving} title={accessModeHint("localFiles")} onClick={() => changeAccessMode("localFiles")}>Full access</button>
+									<button type="button" role="radio" aria-checked={draftAccessMode === "bounded"} className={`settings-segment${draftAccessMode === "bounded" ? " active" : ""}`} disabled={saving} title={accessModeHint("bounded")} onClick={() => changeAccessMode("bounded")}>Bounded</button>
+								</div>
 							</div>
 						</div>
-						<div className="workspaces-tool-options">
-							<strong>Access mode</strong>
-							<div className="workspace-mode-segments" role="radiogroup" aria-label="Workspace access mode">
-								<button type="button" role="radio" aria-checked={draftAccessMode === "localFiles"} className={`workspace-mode-segment${draftAccessMode === "localFiles" ? " active" : ""}`} disabled={saving} title={accessModeHint("localFiles")} onClick={() => changeAccessMode("localFiles")}>Full access</button>
-								<button type="button" role="radio" aria-checked={draftAccessMode === "bounded"} className={`workspace-mode-segment${draftAccessMode === "bounded" ? " active" : ""}`} disabled={saving} title={accessModeHint("bounded")} onClick={() => changeAccessMode("bounded")}>Bounded workspace</button>
-							</div>
-							<p className="workspaces-session-note">{accessModeHint(draftAccessMode)}</p>
-						</div>
-						<div className="workspaces-tool-options">
-							<strong>Tools</strong>
-							<div className="workspace-tool-groups">
-								{activeToolGroups.map((group) => (
-									<div className="workspace-tool-group" key={group.label}>
-										<span className="workspace-tool-group-label">{group.label}</span>
-										<div className="workspaces-tool-list">
-											{group.tools.map((tool) => {
-												const checked = draftToolNames.includes(tool.name);
-												return (
-													<label className="workspaces-tool-row" key={tool.name}>
-														<span>{tool.label}</span>
-														<input className="workspaces-tool-switch" type="checkbox" checked={checked} disabled={saving} onChange={() => toggleTool(tool.name)} aria-label={`${tool.label} workspace tool`} />
-													</label>
-												);
-											})}
-										</div>
+						<div className="settings-group">
+							<p className="settings-group-kicker">Tools</p>
+							{/* Reading tools in one column, writing ones in the other; Bash is
+							    one more row of the second, in Full access only. */}
+							<div className="workspace-tool-columns">
+								{activeToolGroups.map((group, index) => (
+									<div className="settings-rows" key={group.label} aria-label={group.label}>
+										{group.tools.map((tool) => (
+											<label className="settings-row" key={tool.name}>
+												<span className="settings-row-label">{tool.label}</span>
+												<input className="workspaces-tool-switch" type="checkbox" checked={draftToolNames.includes(tool.name)} disabled={saving} onChange={() => toggleTool(tool.name)} aria-label={`${tool.label} workspace tool`} />
+											</label>
+										))}
+										{index === activeToolGroups.length - 1 && draftAccessMode === "localFiles" && (
+											<label className="settings-row">
+												<span className="settings-row-main">
+													<span className="settings-row-label">Bash</span>
+													<span className="settings-row-sub">Shell commands, off by default. Whether they ask first is set in the chat header.</span>
+												</span>
+												<input className="workspaces-tool-switch" type="checkbox" checked={draftBashEnabled} disabled={saving} onChange={() => { setDraftBashEnabled((current) => !current); setError(null); setMessage(null); }} aria-label="Bash shell access" />
+											</label>
+										)}
 									</div>
 								))}
 							</div>
-							{draftHonestyNote && <p className="workspaces-session-note">{draftHonestyNote}</p>}
-							{draftAccessMode === "bounded" && <p className="workspaces-session-note">Bash is available in Full access mode.</p>}
-						</div>
-						{draftAccessMode === "localFiles" && (
-							<div className="workspace-power-user">
-								<label className="workspaces-tool-row">
-									<span><strong>Bash</strong></span>
-									<input className="workspaces-tool-switch" type="checkbox" checked={draftBashEnabled} disabled={saving} onChange={() => { setDraftBashEnabled((current) => !current); setError(null); setMessage(null); }} aria-label="Bash shell access" />
-								</label>
-								<p className="workspaces-session-note">Power-user tool, off by default. Gives the room shell command access when enabled.</p>
-								{draftBashEnabled && (
-									<p className="workspaces-session-note">Whether commands ask for approval is switched from the chat header ("Bash: asks" / "Bash: auto").</p>
-								)}
-							</div>
-						)}
-						<div className="workspace-form-actions">
-							{dirty && <span className="workspace-unsaved-hint">Unsaved changes</span>}
-							<button className="rs-btn" disabled={saving}>{saving ? "Saving…" : policy ? "Save changes" : "Save workspace"}</button>
-							<button className="rs-quiet" type="button" disabled={saving} onClick={startOrCancelEditing}>Cancel</button>
+							{draftHonestyNote && <p className="settings-help">{draftHonestyNote}</p>}
+							{draftAccessMode === "bounded" && <p className="settings-help">Bash is available in Full access mode.</p>}
 						</div>
 					</form>
 				)}

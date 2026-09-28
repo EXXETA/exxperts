@@ -3245,7 +3245,10 @@ export async function createRealIngest(input: { roomModel: { provider: string; m
 	const profiles = await import("../../src/persistent-agent-ai-profiles.js");
 	const profileState = await import("../../src/persistent-agent-ai-profile-state.js");
 	const profileId = profileState.readPersistentAgentAiProfileState().profileId;
-	const checkpointModel = profiles.resolveCheckpointModelLockForProfile(profileId, input.roomModel);
+	// Remember ran on the room model when the 0.13 bench was measured; the
+	// product now runs it on the room's memory row (backlog 49 decides the
+	// rerun). Kept on the room model so this harness measures what it did.
+	const checkpointModel = { provider: input.roomModel.provider, model: input.roomModel.model };
 	const foldModel = profiles.getAbsorbModelLock(profileId);
 	const worker = await createMaintenanceWorker();
 

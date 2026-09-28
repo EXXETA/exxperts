@@ -90,3 +90,25 @@ export function ChevronDownIcon({ size = 14 }: { size?: number } = {}) {
 		</Icon>
 	);
 }
+
+/** The one spinner: a quarter arc turning on a faint track, drawn as SVG. */
+export function SpinnerIcon({ size = 14 }: { size?: number } = {}) {
+	return (
+		<svg className="ui-icon ui-spinner" width={size} height={size} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" aria-hidden="true" focusable="false">
+			<circle cx="8" cy="8" r="6" opacity="0.25" />
+			<path d="M8 2a6 6 0 0 1 6 6" />
+		</svg>
+	);
+}
+
+
+/** A command prompt: the Bash chip's face when there is no room for its words. */
+export function TerminalIcon({ size = 16 }: { size?: number } = {}) {
+	return (
+		<Icon size={size}>
+			<rect x="1.8" y="2.8" width="12.4" height="10.4" rx="1.6" />
+			<path d="M4.6 6.2l2 1.8-2 1.8" />
+			<path d="M8.4 10.2h3" />
+		</Icon>
+	);
+}

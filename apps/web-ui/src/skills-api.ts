@@ -29,6 +29,18 @@ export interface SkillListItem {
 	source: string;
 	protected: boolean;
 	provenance: SkillProvenanceView | null;
+	/** Its import record's license, or else the one its SKILL.md declares. */
+	license: string | null;
+	/** The rooms that enable this skill. */
+	rooms: SkillRoomRef[];
+	/** How many files it carries that a room can be allowed to run. */
+	fileCount: number;
+}
+
+/** A room that enables a skill. */
+export interface SkillRoomRef {
+	id: string;
+	name: string;
 }
 
 /** The detail response = a list item plus the review-screen extras. */
@@ -122,22 +134,4 @@ export async function fileToBase64(file: File): Promise<string> {
 		binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
 	}
 	return btoa(binary);
-}
-
-/** Map a library skill to the review-screen candidate shape (the detail view reuses the
- *  review component in read mode). Imported skills keep no bundled scripts. */
-export function skillDetailToCandidate(skill: SkillDetail): SkillCandidate {
-	return {
-		id: skill.name,
-		name: skill.displayName || skill.name,
-		description: skill.description,
-		body: skill.body,
-		// A shared skill's origin is its cross-tool location: it lives in
-		// ~/.agents/skills and other tools manage it, which the review screen
-		// should say instead of the bare tier name.
-		source: skill.provenance?.source ?? (skill.source === "shared" ? "~/.agents/skills (shared with other agent tools, managed outside exxperts)" : skill.source),
-		license: skill.provenance?.license ?? null,
-		scanFindings: skill.scanFindings,
-		bundledScripts: skill.bundledScripts,
-	};
 }

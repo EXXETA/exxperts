@@ -73,11 +73,11 @@ second switch.
 ### The approval card
 
 The card shows the command as fenced text, so a long command is readable
-before you decide. You can answer it with the keyboard, but only while the
-card visibly holds the focus ring: **Enter** approves and **Escape**
-declines. The card never takes focus while you are typing, so a "send"
-Enter in the composer cannot become a silent approval; the Approve button
-is focused only when no text field has focus and the composer is empty.
+before you decide. When it is the only yes or no card waiting, you can
+answer it from the keyboard while the composer is empty: **Enter**
+approves and **Escape** declines. With text in the composer, two cards
+waiting, or a card that asks for a choice or an answer, the keys keep
+their usual meaning, so a "send" Enter cannot become a silent approval.
 Either way, focus returns to the composer when the card folds.
 
 ## Remote devices

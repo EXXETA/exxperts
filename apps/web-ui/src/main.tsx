@@ -1,6 +1,7 @@
 import React from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
+import { ConfirmDialogHost } from "./components/confirm-dialog";
 import { SidebarCollapsedAffordance } from "./sidebar-collapse";
 import { installPhoneViewportTracking } from "./phone-viewport";
 
@@ -24,5 +25,6 @@ createRoot(document.getElementById("root")!).render(
 		<div className="desktop-drag-strip" aria-hidden="true" />
 		<SidebarCollapsedAffordance />
 		<App />
+		<ConfirmDialogHost />
 	</React.StrictMode>,
 );

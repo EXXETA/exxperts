@@ -240,7 +240,7 @@ export function ArchiveLimitBar({ budget, demotion, busy, onRaiseBudget }: { bud
 			{raise && (
 				<div className="absorb-run-budget-actions">
 					{raise.ceilingSentence && <span className="archive-limit-bar-ceiling">{raise.ceilingSentence}</span>}
-					<button className="landing-action secondary" disabled={busy || raise.target <= budget.budgetTokens} onClick={() => onRaiseBudget(raise.target)}>
+					<button className="rs-btn" disabled={busy || raise.target <= budget.budgetTokens} onClick={() => onRaiseBudget(raise.target)}>
 						{raise.label}
 					</button>
 				</div>
@@ -453,9 +453,9 @@ export function AbsorbRunCard({ run, roomName, working = false, headline, fastPa
 				)}
 			</div>
 			<div className="checkpoint-preview-actions">
-				<button className="landing-action secondary" disabled={busy} onClick={onCancel} title="Stop this update. Nothing is saved.">Cancel</button>
-				{!working && <button className="landing-action secondary" disabled={busy} onClick={onBackToAssessment} title="Return to the first read. This update is dropped and nothing is saved.">Back</button>}
-				<button className="landing-action" disabled={busy || working} onClick={onApprove} title={working ? "Save turns on once every conversation has been read" : overBudget ? "Save this update and leave memory above its budget" : "Save this update to memory"}>
+				<button className="rs-btn" disabled={busy} onClick={onCancel} title="Stop this update. Nothing is saved.">Cancel</button>
+				{!working && <button className="rs-btn" disabled={busy} onClick={onBackToAssessment} title="Return to the first read. This update is dropped and nothing is saved.">Back</button>}
+				<button className="rs-btn rs-btn-primary" disabled={busy || working} onClick={onApprove} title={working ? "Save turns on once every conversation has been read" : overBudget ? "Save this update and leave memory above its budget" : "Save this update to memory"}>
 					{overBudget && !working ? "Save over the budget" : "Save to memory"}
 				</button>
 			</div>
@@ -474,8 +474,8 @@ export function AbsorbRunFailedScreen({ error, onBackToAssessment, onRetry }: { 
 			</div>
 			<div className="checkpoint-proposal-error" role="alert">{error}</div>
 			<div className="checkpoint-preview-actions">
-				<button className="landing-action secondary" onClick={onBackToAssessment}>Back</button>
-				<button className="landing-action" onClick={onRetry}>Try again</button>
+				<button className="rs-btn" onClick={onBackToAssessment}>Back</button>
+				<button className="rs-btn rs-btn-primary" onClick={onRetry}>Try again</button>
 			</div>
 		</div>
 	);

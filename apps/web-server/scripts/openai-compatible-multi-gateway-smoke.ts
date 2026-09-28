@@ -301,12 +301,13 @@ try {
 		body: JSON.stringify({ profileId: "openai-compatible" }),
 	});
 	assertStatusOk(selectLegacy, "select legacy gateway profile");
-	// A room thread locked to {provider: "openai-compatible", model: "legacy-primary"}
-	// still validates against the active profile, which is the whole invariant.
-	const legacyLock = await requestJson("/api/persistent-agent-room/model-selection", {
-		method: "POST",
+	// A room model on {provider: "openai-compatible", model: "legacy-primary"} is
+	// still one rooms may run on (the default for new rooms takes it), which is
+	// the whole invariant.
+	const legacyLock = await requestJson("/api/ai/defaults", {
+		method: "PUT",
 		headers: { "content-type": "application/json" },
-		body: JSON.stringify({ provider: "openai-compatible", model: "legacy-primary" }),
+		body: JSON.stringify({ conversation: { provider: "openai-compatible", model: "legacy-primary" } }),
 	});
 	assertStatusOk(legacyLock, "legacy room model lock");
 
@@ -567,10 +568,10 @@ try {
 	assert(!authAfterDelete[projectProviderId], "the removed gateway's key should be gone");
 	const listedAfterDelete = await requestJson("/api/persistent-agent-ai-profiles/gateways");
 	assert(listedAfterDelete.body.gateways.length === 1 && listedAfterDelete.body.gateways[0].id === "openai-compatible", `only the first gateway should remain, got ${JSON.stringify(listedAfterDelete.body.gateways)}`);
-	const lockAfterDelete = await requestJson("/api/persistent-agent-room/model-selection", {
-		method: "POST",
+	const lockAfterDelete = await requestJson("/api/ai/defaults", {
+		method: "PUT",
 		headers: { "content-type": "application/json" },
-		body: JSON.stringify({ provider: "openai-compatible", model: "legacy-primary" }),
+		body: JSON.stringify({ conversation: { provider: "openai-compatible", model: "legacy-primary" } }),
 	});
 	assertStatusOk(lockAfterDelete, "legacy room model lock after deleting the other gateway");
 

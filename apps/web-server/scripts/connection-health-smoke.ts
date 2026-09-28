@@ -25,6 +25,7 @@
 // Run: npm run smokes -- connection-health   (or tsx this file)
 
 import {
+	appendErrorLineOnce,
 	CONNECT_DEADLINE_MS,
 	createConnectionHealthState,
 	FIRST_CONNECT_GRACE_MS,
@@ -421,6 +422,20 @@ for (const scenario of scenarios) {
 	// A settle that arrives after the socket is gone must not wipe a live run.
 	const closed = reduceConnectionHealth(state, { type: "settled", now: 4_000 });
 	if (closed.unhealthySince !== 1_000) fail("a stale settle wiped an unhealthy run on a closed socket");
+}
+
+// A bind that fails the same way on every reconnect attempt says so once.
+{
+	type Line = { kind: string; id: string; text?: string; level?: string };
+	const failed = (id: string, text: string) => ({ kind: "system" as const, id, text, level: "error" as const });
+	let items: Line[] = [{ kind: "user", id: "u1", text: "Hello" }];
+	for (let attempt = 0; attempt < 25; attempt += 1) items = appendErrorLineOnce(items, failed(`e${attempt}`, "failed to create session: model not found: fake/gone"));
+	const repeated = items.filter((item) => item.kind === "system").length;
+	if (repeated !== 1) { failures += 1; console.error(`FAIL repeated error: 25 identical failures should leave one line, got ${repeated}`); } else console.log("ok   a failure repeated on every reconnect attempt is said once");
+	items = appendErrorLineOnce(items, failed("e-other", "failed to create session: the provider refused the key"));
+	items = appendErrorLineOnce([...items, { kind: "user", id: "u2", text: "Again" }], failed("e-again", "failed to create session: the provider refused the key"));
+	const lines = items.filter((item) => item.kind === "system").map((item) => item.text);
+	if (lines.length !== 3) { failures += 1; console.error(`FAIL repeated error: a different error, and the same one after a message, are added, got ${JSON.stringify(lines)}`); } else console.log("ok   a different error, or the same one after something else, is added");
 }
 
 if (failures > 0) {

@@ -85,7 +85,7 @@ function roomFileNameFromSrc(src: string): string | null {
 // renderMermaid is true — the caller passes false while the message streams,
 // so expensive rendering never runs on incomplete content; the fence shows as
 // a normal code block until the message is complete.
-function markdownComponents(renderMermaid: boolean, onOpenRoomFile?: (name: string) => void): Components {
+function markdownComponents(renderMermaid: boolean, onOpenRoomFile?: (name: string) => void, codeTokens = false): Components {
 	return {
 		a({ href, children, ...props }) {
 			return (
@@ -121,6 +121,12 @@ function markdownComponents(renderMermaid: boolean, onOpenRoomFile?: (name: stri
 				if (!renderMermaid) return <code className={className} {...props}>{children}</code>;
 				return <MermaidDiagram chart={String(children).replace(/\n$/, "")} />;
 			}
+			// codeTokens: inline code keeps each space-separated token in its own
+			// span, so a stylesheet can let it wrap only between tokens (a table
+			// cell on a skill's page). The text itself is unchanged.
+			if (codeTokens && !className && typeof children === "string" && !children.includes("\n")) {
+				return <code {...props}>{children.split(/(\s+)/).map((part, i) => (/^\s*$/.test(part) ? part : <span key={i} className="md-code-token">{part}</span>))}</code>;
+			}
 			return <code className={className} {...props}>{children}</code>;
 		},
 		pre({ children, node, ...props }) {
@@ -150,8 +156,8 @@ function markdownComponents(renderMermaid: boolean, onOpenRoomFile?: (name: stri
  * the file name. Pass a stable identity — it is a dependency of the memoised
  * component map, so a fresh function each render re-parses the markdown.
  */
-function MarkdownRendererImpl({ children, renderMermaid = true, onOpenRoomFile }: { children: string; renderMermaid?: boolean; onOpenRoomFile?: (name: string) => void }) {
-	const components = useMemo(() => markdownComponents(renderMermaid, onOpenRoomFile), [renderMermaid, onOpenRoomFile]);
+function MarkdownRendererImpl({ children, renderMermaid = true, onOpenRoomFile, codeTokens = false }: { children: string; renderMermaid?: boolean; onOpenRoomFile?: (name: string) => void; codeTokens?: boolean }) {
+	const components = useMemo(() => markdownComponents(renderMermaid, onOpenRoomFile, codeTokens), [renderMermaid, onOpenRoomFile, codeTokens]);
 	return <ReactMarkdown remarkPlugins={MARKDOWN_PLUGINS} components={components}>{children}</ReactMarkdown>;
 }
 

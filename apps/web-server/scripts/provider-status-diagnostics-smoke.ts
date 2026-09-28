@@ -205,10 +205,6 @@ try {
 		aiProfileStatus.body?.state?.path === "~/.exxperts/app/persistent-agent-ai-profile.json",
 		`AI profile state path should be redacted, got ${aiProfileStatus.body?.state?.path}`,
 	);
-	assert(
-		roomModelStatus.body?.selectionState?.path === "~/.exxperts/app/web-chat-model.json",
-		`room model selection path should be redacted, got ${roomModelStatus.body?.selectionState?.path}`,
-	);
 	assert(roomModelStatus.body?.activeProfileId === "anthropic", `room model status active profile should be anthropic, got ${roomModelStatus.body?.activeProfileId}`);
 	assert(roomModelStatus.body?.activeProfileLabel === "Claude", `room model status active profile label should be Claude, got ${roomModelStatus.body?.activeProfileLabel}`);
 	assert(

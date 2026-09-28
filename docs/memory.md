@@ -203,9 +203,9 @@ stored.
 
 ### Saving without a second look
 
-Two per-room toggles, off by default, under "Saving without a second
-look": **Remember: save without the preview** and **Memorize: save a
-clean update without the card**. A clean update is one with nothing for
+Two per-room switches, off by default, under Saving in **Room settings,
+Memory**: **Remember without the preview** and **Memorize without the
+card**. A clean update is one with nothing for
 you to weigh. An update that archives notes, crosses the memory budget
 or leaves a conversation unfinished always waits for you, and you can
 always see what changed afterwards in History.
@@ -246,11 +246,11 @@ One refusal can meet you at the door: a room whose memory and setup no
 longer fit the usable window of its model refuses to start a
 conversation rather than failing on the first reply. Memory is
 unchanged and nothing is sent to the model. The way out is spelled out
-in the message: open Room settings, Session, and choose **Forget** (it
-closes the session without using a model and unlocks the room); then
-from Home open Maintain and run **Memorize** if the room has waiting
-conversations, or **Review** to tidy its notes; or open the room again
-with a larger-context model.
+in the message: open Room settings, Conversation, and choose **Forget**
+(it closes the conversation without using a model and unlocks the room);
+then from Home open Maintain and run **Memorize** if the room has waiting
+conversations, or **Review** to tidy its notes; or pick a model with a
+larger window in Room settings, Model, and open the room again.
 
 **Upgrading from 0.11.2:** a room keeps everything it has. Its notes
 migrate on the first save, the old "(saved …)" stamps become dates,
@@ -324,8 +324,8 @@ The limits of this result:
 - The same model answers and judges.
 - The benchmark is personal chat with a scripted user who Remembers
   everything, not project work.
-- It was measured with Memorize on Claude Sonnet 5. The Claude
-  profile's default runs Memorize on Opus 5.5, which was not measured.
+- It was measured with Memorize on Claude Sonnet 5. Claude's
+  recommended memory model is Opus 5.5, which was not measured.
 - Personal preferences are weak with and without memory, because a
   Memorize is tuned for how work is done, not for personal taste.
 
@@ -362,16 +362,17 @@ JSONL, mode 0600), wired in by the `memory` extension:
 When a CLI session approaches the model's context window, the runtime
 compacts older messages into a structured summary and keeps recent
 messages verbatim. Compaction is lossy for the model but the full
-transcript stays on disk. (Persistent rooms don't rely on compaction;
-Remember is their deliberate, human-approved
-equivalent.)
+transcript stays on disk. A room's conversation compacts the same way
+when it nears its model's window; Remember is the deliberate,
+human-approved way to keep what matters in the room's memory.
 
 ## Privacy
 
 - All memory is local, per-user, under `~/.exxperts/` with restrictive
   file modes. Nothing is synced anywhere.
 - Memory content is sent to your configured model provider as part of
-  prompts; choose your AI profile accordingly for sensitive material.
+  prompts; choose your providers and each room's models accordingly for
+  sensitive material.
 - The room workers apply restraint to sensitive personal categories
   (health, conflicts, finances, identity, third-party details): they
   propose such material for durable memory only when it's clearly

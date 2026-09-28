@@ -76,7 +76,7 @@ export function switchHint(view: RoomInstructionsOutcomeView | null): string {
 		const fresh = view.instructions.unreadable || !view.instructions.text ? "without instructions" : "with this room's own instructions";
 		return `They cannot be read right now (${global.instructions.unreadable}). New conversations start ${fresh}; a conversation that is already open keeps what it started with, edits to this room's text included, until that is fixed.`;
 	}
-	if (!global.instructions.text) return "None are written yet. Write them in Settings → Instructions; every room with this switch on follows them.";
+	if (!global.instructions.text) return "None are written yet. Write them in Settings, Instructions (the gear at the bottom of the sidebar); every room with this switch on follows them.";
 	if (view.instructions.unreadable || !view.instructions.text) return "This room follows them.";
 	return "Where the two disagree, this room's own instructions win.";
 }

@@ -1,67 +1,46 @@
+import { useEscapeKey } from "./use-escape-key";
+
 interface Props {
 	onClose: () => void;
 }
 
+/** The first steps, in the order a new user takes them: a bold lead and a few sentences each. */
+const STEPS: { lead: string; body: string }[] = [
+	{ lead: "Connect your AI.", body: "Open the gear, then Settings, AI setup. Sign in with a subscription, add an API key, or connect your company gateway. Set the default models for your rooms there." },
+	{ lead: "Create a room.", body: "One room per project or topic. Press New room on Home, give it a name and start talking: ask questions, share files, work things through." },
+	{ lead: "Remember what matters.", body: "When a conversation is worth keeping, press Remember. You see what your exxpert will keep before anything is saved. Forget closes a conversation without keeping it." },
+	{ lead: "Keep the memory tidy.", body: "When conversations pile up, press Maintain on the room's card. Memorize turns them into notes, and Review tidies the notes. Nothing changes without your approval." },
+	{ lead: "Come back any time.", body: "A room rests fully saved. Press Resume to continue where you left off." },
+];
+
+const GOOD_TO_KNOW = [
+	"Each room can have its own model: Room settings, Model.",
+	"Sort your rooms on Home by last used, by name, or drag them into your own order.",
+	"A room is open in one place at a time. If it's open in another window, close it there first.",
+	"The Memory page shows what your rooms remember. The Wallet shows what you spend.",
+];
+
+/** The one user guide, behind Help in the gear menu (on a phone too): guidance for a new user, not a manual. */
 export function Help({ onClose }: Props) {
+	useEscapeKey(onClose);
 	return (
-		<div className="help-overlay" onClick={onClose}>
+		<div className="help-overlay" onClick={onClose} role="dialog" aria-modal="true" aria-label="How exxperts works">
 			<div className="help-modal" onClick={(e) => e.stopPropagation()}>
 				<div className="help-head">
 					<h2>How exxperts works</h2>
 					<button className="icon-btn" onClick={onClose} aria-label="Close">✕</button>
 				</div>
 				<div className="help-body">
-					<section className="help-hero">
-						<p className="help-lede">
-							exxperts runs on your machine: persistent AI rooms with durable memory that
-							you govern. No memory changes without your approval.
-						</p>
-					</section>
-
-					<section>
-						<h3>Rooms</h3>
-						<p>
-							Each room is a persistent workspace with its own exxpert, memory, threads, and
-							workspace files. Use Remember to save what matters from a conversation into
-							the room's memory. Beside it in the composer, the effort pill sets how hard the
-							room thinks: open it and slide between Faster and Smarter. The choice sticks
-							for the room and takes effect from your next message, and the pill only appears
-							when the room's model can actually reason. Forget, the bin icon at the top of
-							the room, closes the current conversation without remembering it and is also
-							available in Room Settings. Maintain, on the room card, opens Memorize and
-							Review: Memorize turns the conversations a room has remembered into notes, and
-							Review tidies the notes it has. You sign off both before anything is saved.
-							Room Settings holds the rest: workspace access, the room's notes and archive,
-							its memory budget and history, schedules, and delete.
-						</p>
-					</section>
-
-					<section>
-						<h3>Your AI</h3>
-						<p>
-							Connect the AI you already have in AI setup: sign in with a subscription, paste
-							an API key, or point at a company gateway. You approve which models rooms may
-							use, and you switch between AI profiles right here in the settings menu.
-						</p>
-					</section>
-
-					<section>
-						<h3>Memory and Wallet</h3>
-						<p>
-							The Memory page shows what your rooms remember and how full their memory is,
-							and HiveMind answers questions across all of it. The Wallet tracks spend,
-							including background work like memory upkeep and scheduled runs, split into
-							billed API spend and plan-covered usage, with a CSV export.
-						</p>
-					</section>
-
-					<section>
-						<h3>Commands</h3>
-						<pre className="help-code">
-{`exxperts web  # this app, in the browser
-exxperts cli  # coding agent in the terminal, from any repo`}
-						</pre>
-					</section>
+					<p className="help-lede">Most AI forgets the moment you close it. Your rooms don't.</p>
+					<ol className="help-steps">
+						{STEPS.map((step) => (
+							<li key={step.lead}><strong>{step.lead}</strong> {step.body}</li>
+						))}
+					</ol>
+					<h3>Good to know</h3>
+					<ul className="help-notes">
+						{GOOD_TO_KNOW.map((note) => <li key={note}>{note}</li>)}
+					</ul>
 				</div>
 			</div>
 		</div>

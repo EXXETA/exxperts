@@ -304,7 +304,7 @@ function run(overrides: Partial<AbsorbRun> = {}): AbsorbRun {
 
 // 12. One name for applying updates automatically, wherever it is named.
 {
-	assert(AUTOMATIC_APPLY_SETTING_LABEL === "Memorize: save a clean update without the card", "the room setting has one label");
+	assert(AUTOMATIC_APPLY_SETTING_LABEL === "Memorize without the card", "the room setting has one label");
 	assert(AUTOMATIC_APPLY_ON_SENTENCE === "This room applies memory updates automatically", "and the sentences build on that same name");
 	const sentence = automaticApplyNeedsReviewSentence(["2 entries would move to the archive to stay under budget", "1 session did not finish."]);
 	assert(

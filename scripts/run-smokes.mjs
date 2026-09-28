@@ -75,6 +75,14 @@ function isInterferenceFailure(result) {
 	return result.output.includes("process.cwd failed with error operation not permitted");
 }
 
+// A smoke that could not exercise part of itself (no browser installed, say)
+// still passes, but the run must say so next to its "ok" instead of hiding it.
+// Only the smoke's own notice counts ("... smoke skipped ...", "smoke passed
+// (... SKIPPED ...)"); an assertion that merely mentions skipping does not.
+function skipLines(output) {
+	return output.split("\n").map((line) => line.trim()).filter((line) => /\bsmoke\b.*\bskipped\b/i.test(line));
+}
+
 const results = [];
 console.log(`Running ${smokes.length} smoke${smokes.length === 1 ? "" : "s"}…\n`);
 for (const name of smokes) {
@@ -85,12 +93,15 @@ for (const name of smokes) {
 		result = await runSmoke(name);
 	}
 	results.push(result);
-	console.log(result.code === 0 ? `ok (${result.seconds.toFixed(1)}s)` : `FAIL (${result.seconds.toFixed(1)}s)`);
+	const skips = result.code === 0 ? skipLines(result.output) : [];
+	console.log(result.code === 0 ? `ok (${result.seconds.toFixed(1)}s)${skips.map((line) => `\n      SKIP: ${line}`).join("")}` : `FAIL (${result.seconds.toFixed(1)}s)`);
 }
 
 const failed = results.filter((result) => result.code !== 0);
 const total = results.reduce((sum, result) => sum + result.seconds, 0);
+const skipped = results.filter((result) => result.code === 0 && skipLines(result.output).length > 0);
 console.log(`\n${results.length - failed.length}/${results.length} passed in ${Math.round(total)}s`);
+if (skipped.length > 0) console.log(`${skipped.length} passed with parts SKIPPED: ${skipped.map((result) => result.name).join(", ")}`);
 for (const result of failed) {
 	console.log(`\n--- ${result.name} (exit ${result.code}) ---`);
 	// Last lines carry the assertion message; full logs would drown the summary.

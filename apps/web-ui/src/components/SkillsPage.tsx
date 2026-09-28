@@ -1,18 +1,20 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { PaneHeader } from "./pane-header";
 import {
 	acceptSkillCandidate,
 	createSkill,
-	deleteSkill,
 	fetchSkill,
 	fetchSkills,
 	fileToBase64,
-	skillDetailToCandidate,
 	uploadSkillFile,
 	type SkillCandidate,
+	type SkillDetail,
 	type SkillListItem,
 } from "../skills-api";
 import { SkillReview } from "./SkillReview";
+import { SkillDetailPage, formatSkillDate } from "./skill-detail";
+import { skillTierLabel } from "../skill-source-copy";
 import { useRemoteClientContext } from "../remote-client-context";
 import { SkillImportFromRepo } from "./SkillImportFromRepo";
 import { SkillBrowseDirectory } from "./SkillBrowseDirectory";
@@ -28,25 +30,6 @@ function slugifySkillId(value: string): string {
 		.replace(/\s+/g, "-")
 		.replace(/-+/g, "-")
 		.slice(0, 48);
-}
-
-/** Short origin label for the library row chip (MR-P2): "written" / "imported" for skills
- *  with provenance, else the store tier ("built in" / "shared" / "project"). "shared" is
- *  the cross-tool ~/.agents/skills directory: listed here, managed by other tools. */
-function skillOrigin(skill: SkillListItem): string {
-	if (skill.provenance) {
-		return skill.provenance.source === "local" ? "written" : "imported";
-	}
-	return skill.source === "builtin" ? "built in" : skill.source === "project" ? "project" : skill.source === "shared" ? "shared" : skill.source;
-}
-
-/** Updated cell for the library table: the provenance importedAt (recorded on
- *  write/upload/import, preserved across edits). Builtin/project rows have no
- *  provenance and render an empty cell. */
-function formatSkillDate(iso: string): string {
-	const parsed = new Date(iso);
-	if (Number.isNaN(parsed.getTime())) return "";
-	return parsed.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
 }
 
 /** Upload-skill modal (MR-P2): a drag-and-drop / click zone that routes the picked file
@@ -123,7 +106,7 @@ function AddSkillMenu({ onWrite, onUpload, onImportRepo }: { onWrite: () => void
 		<div className="skill-add-menu-wrap" ref={wrapRef}>
 			{/* Same small filled pill as the connector rows' Log in button: the
 			    tab's one primary action, not a page-scale slab. */}
-			<button className="inline-action connector-action-primary" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
+			<button className="rs-btn" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
 				Add skill
 			</button>
 			{open && (
@@ -181,9 +164,9 @@ function WriteSkillForm({ onCreated, onCancel }: { onCreated: (notice: string) =
 					<textarea className="skill-write-instructions" value={instructions} rows={12} placeholder={"When answering, cite the source of every factual claim.\nPrefer primary sources."} onChange={(e) => setInstructions(e.target.value)} />
 				</label>
 				{error && <div className="checkpoint-proposal-error">{error}</div>}
-				<div className="ai-setup-actions">
-					<button className="landing-action" disabled={!canSave} onClick={() => void save()}>{saving ? "Saving…" : "Save skill"}</button>
-					<button className="landing-action secondary" disabled={saving} onClick={onCancel}>Cancel</button>
+				<div className="settings-form-foot">
+					<button className="rs-btn" disabled={saving} onClick={onCancel}>Cancel</button>
+					<button className="rs-btn rs-btn-primary" disabled={!canSave} onClick={() => void save()}>{saving ? "Saving…" : "Save skill"}</button>
 				</div>
 			</div>
 		</div>
@@ -196,50 +179,41 @@ type Mode =
 	| { kind: "import-repo" }
 	| { kind: "browse" }
 	| { kind: "review"; candidate: SkillCandidate }
-	| { kind: "detail"; candidate: SkillCandidate; protected: boolean };
+	| { kind: "detail"; skill: SkillDetail };
 
-function SkillRow({ skill, onOpen, opening = false, readOnly = false, onDeleted, onError }: { skill: SkillListItem; onOpen: () => void; opening?: boolean; readOnly?: boolean; onDeleted: (notice: string) => void; onError: (message: string) => void }) {
-	const [confirming, setConfirming] = useState(false);
-	const [busy, setBusy] = useState(false);
-
-	async function remove() {
-		setBusy(true);
-		try {
-			await deleteSkill(skill.name);
-			onDeleted(`Removed “${skill.displayName || skill.name}”.`);
-		} catch (e) {
-			onError((e as Error).message);
-			setBusy(false);
-			setConfirming(false);
-		}
-	}
-
+/** One library row: the whole row opens the skill's page. The description is
+ *  the name's tooltip; on a phone the facts fold into one line under the name. */
+function SkillRow({ skill, onOpen, opening = false }: { skill: SkillListItem; onOpen: () => void; opening?: boolean }) {
+	const name = skill.displayName || skill.name;
+	const rooms = skill.rooms.length;
+	const usedIn = rooms === 0 ? "No rooms" : rooms === 1 ? "1 room" : `${rooms} rooms`;
+	// A skill exxperts does not own has no import date; its cell names its source.
+	const updated = skill.provenance ? formatSkillDate(skill.provenance.importedAt) : "";
+	const tier = updated ? null : skillTierLabel(skill.source);
+	const files = skill.fileCount === 0 ? "No files" : skill.fileCount === 1 ? "1 file" : `${skill.fileCount} files`;
 	return (
-		<div className="skill-row skill-table-row">
-			<button className="skill-row-main" onClick={onOpen}>
-				<strong className="skill-table-name">{skill.displayName || skill.name}</strong>
-			</button>
-			{/* One wrapper around the two fact cells: on desktop it dissolves
-			    into the table grid (display: contents); the phone layout folds
-			    it into a single dot-separated hint line under the name. */}
+		<button
+			type="button"
+			className="skill-row skill-table-row"
+			disabled={opening}
+			aria-busy={opening}
+			aria-label={[name, `used in ${usedIn.toLowerCase()}`, files.toLowerCase(), updated ? `updated ${updated}` : tier?.toLowerCase()].filter(Boolean).join(", ")}
+			onClick={onOpen}
+		>
+			<span className="skill-table-name" title={skill.description || undefined}>{name}</span>
+			{/* One wrapper around the fact cells: on desktop it dissolves into the
+			    table grid (display: contents); the phone layout folds it into a
+			    single dot-separated line under the name. */}
 			<span className="skill-table-facts">
-				<span className="skill-table-cell">{skillOrigin(skill)}</span>
-				<span className="skill-table-cell">{skill.provenance ? formatSkillDate(skill.provenance.importedAt) : ""}</span>
+				<span className="skill-table-cell">{usedIn}</span>
+				<span className="skill-table-cell">
+					<span className="skill-table-wide">{skill.fileCount === 0 ? "None" : skill.fileCount}</span>
+					<span className="skill-table-narrow">{files}</span>
+				</span>
+				<span className="skill-table-cell">{updated || tier}</span>
 			</span>
-			<div className="skill-row-actions">
-				<button className="inline-action" disabled={opening} onClick={onOpen}>{opening ? "Opening…" : "View"}</button>
-				{!skill.protected && !readOnly && (
-					confirming ? (
-						<>
-							<button className="inline-action connector-action-danger" disabled={busy} onClick={() => void remove()}>{busy ? "Removing…" : "Delete"}</button>
-							<button className="inline-action connector-action-quiet" disabled={busy} onClick={() => setConfirming(false)}>Keep</button>
-						</>
-					) : (
-						<button className="inline-action connector-action-quiet" onClick={() => setConfirming(true)}>Delete</button>
-					)
-				)}
-			</div>
-		</div>
+			<span className="skill-table-chevron" aria-hidden="true">›</span>
+		</button>
 	);
 }
 
@@ -299,8 +273,7 @@ export function SkillsPage() {
 		setNotice(null);
 		setOpeningName(name);
 		try {
-			const detail = await fetchSkill(name);
-			setMode({ kind: "detail", candidate: skillDetailToCandidate(detail), protected: detail.protected });
+			setMode({ kind: "detail", skill: await fetchSkill(name) });
 		} catch (e) {
 			setError((e as Error).message);
 		} finally {
@@ -322,23 +295,13 @@ export function SkillsPage() {
 		}
 	}
 
-	async function deleteFromDetail(candidate: SkillCandidate) {
-		setReviewBusy(true);
-		try {
-			await deleteSkill(candidate.id);
-			await refresh();
-			backToList(`Removed “${candidate.name || candidate.id}”.`);
-		} catch (e) {
-			setReviewError((e as Error).message);
-		} finally {
-			setReviewBusy(false);
-		}
-	}
-
+	const header = (actions?: ReactNode) => <PaneHeader title="Skills" line="Reusable know-how your rooms can pick up. Every skill is reviewed before it enters the library." actions={actions} />;
+	const backToLibrary = <button className="rs-btn" onClick={() => backToList()}>Back to library</button>;
 	// Review / detail take over the page (the shared trust-moment screen).
 	if (mode.kind === "review") {
 		return (
 			<div className="landing skills-page">
+				{header()}
 				<SkillReview
 					candidate={mode.candidate}
 					descriptionEditable
@@ -353,12 +316,11 @@ export function SkillsPage() {
 	if (mode.kind === "detail") {
 		return (
 			<div className="landing skills-page">
-				<SkillReview
-					candidate={mode.candidate}
-					onCancel={() => backToList()}
-					onDelete={mode.protected || remoteClient.remote ? undefined : () => void deleteFromDetail(mode.candidate)}
-					busy={reviewBusy}
-					error={reviewError}
+				<SkillDetailPage
+					skill={mode.skill}
+					onBack={() => backToList()}
+					onDeleted={(message) => { setError(null); void refresh(); backToList(message); }}
+					readOnly={remoteClient.remote}
 				/>
 			</div>
 		);
@@ -366,6 +328,14 @@ export function SkillsPage() {
 
 	return (
 		<div className="landing skills-page">
+			{header(mode.kind === "import-repo" || mode.kind === "browse"
+				? backToLibrary
+				: mode.kind === "write" || remoteClient.remote
+					? undefined
+					: <>
+						<button className="rs-btn" onClick={() => setMode({ kind: "browse" })}>Browse featured</button>
+						<AddSkillMenu onWrite={() => setMode({ kind: "write" })} onUpload={() => setUploadOpen(true)} onImportRepo={() => setMode({ kind: "import-repo" })} />
+					</>)}
 			{uploadOpen && (
 				<SkillUploadModal
 					onClose={() => setUploadOpen(false)}
@@ -380,42 +350,28 @@ export function SkillsPage() {
 				/>
 			) : mode.kind === "import-repo" ? (
 				<section className="ai-setup-section" aria-label="Import skills from a repository">
-					<div className="connector-section-head">
-						<h3 className="web-search-fallback-heading">Import from repo</h3>
-						<button className="rs-quiet" onClick={() => backToList()}>Back to library</button>
-					</div>
+					<h3 className="web-search-fallback-heading">Import from repo</h3>
 					<SkillImportFromRepo onImported={(name) => { setNotice(`Added “${name}” to your library.`); void refresh(); }} />
 				</section>
 			) : mode.kind === "browse" ? (
 				<section className="ai-setup-section" aria-label="Browse featured skill sources">
-					<div className="connector-section-head">
-						<h3 className="web-search-fallback-heading">Browse featured</h3>
-						<button className="rs-quiet" onClick={() => backToList()}>Back to library</button>
-					</div>
-					<p className="cli-note">Every skill is reviewed before it enters the library.</p>
 					<SkillBrowseDirectory onImported={(name) => { setNotice(`Added “${name}” to your library.`); void refresh(); }} />
 				</section>
 			) : (
 				<section className="ai-setup-section" aria-label="Skills library">
-					{remoteClient.remote ? (
-						<p className="cli-note">Skills are uploaded and edited on the computer itself.</p>
-					) : (
-						<div className="skill-library-actions skill-library-controls">
-							<button className="rs-quiet" onClick={() => setMode({ kind: "browse" })}>Browse featured</button>
-							<AddSkillMenu onWrite={() => setMode({ kind: "write" })} onUpload={() => setUploadOpen(true)} onImportRepo={() => setMode({ kind: "import-repo" })} />
-						</div>
-					)}
+					{remoteClient.remote && <p className="cli-note">Skills are uploaded and edited on the computer itself.</p>}
 					{notice && <p className="cli-note" role="status">{notice}</p>}
 					{error && <div className="checkpoint-proposal-error">{error}</div>}
 					{loading && skills.length === 0 && <p className="ai-setup-copy">Loading your skills…</p>}
 					{!loading && skills.length === 0 && !error && (
-						<p className="ai-setup-copy">{remoteClient.remote ? "No skills yet." : "No skills yet. Use Add skill to write, upload, or import one."}</p>
+						<p className="settings-empty">{remoteClient.remote ? "No skills yet." : "No skills yet. Use Add skill to write, upload, or import one."}</p>
 					)}
 					{skills.length > 0 && (
 						<div className="skill-rows skill-table">
 							<div className="settings-table-head skill-table-head" aria-hidden="true">
 								<span>Skill</span>
-								<span>Origin</span>
+								<span>Used in</span>
+								<span>Files</span>
 								<span>Updated</span>
 								<span />
 							</div>
@@ -425,14 +381,11 @@ export function SkillsPage() {
 									skill={skill}
 									onOpen={() => void openDetail(skill.name)}
 									opening={openingName === skill.name}
-									readOnly={remoteClient.remote}
-									onDeleted={(message) => { setError(null); setNotice(message); void refresh(); }}
-									onError={(message) => { setNotice(null); setError(message); }}
 								/>
 							))}
 						</div>
 					)}
-					{skills.length > 0 && <p className="cli-note">Bundled scripts only run after you allow them in a room's settings, at the exact version you approved.</p>}
+					{skills.length > 0 && <p className="cli-note">A skill's files run only in rooms where you allow them, and only as they were when you did.</p>}
 				</section>
 			)}
 		</div>

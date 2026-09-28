@@ -19,6 +19,7 @@ import {
 } from "../memory-surface-copy";
 import { RsInfo } from "./rs-info";
 import { RoomMemoryEntriesSection, RoomMemoryHistorySection } from "./room-memory-entries";
+import { PaneHeader } from "./pane-header";
 
 const MEMORY_BUDGET_MIN_TOKENS = 10_000;
 // The ceiling the server enforces on every memory write. It rose with the
@@ -148,73 +149,74 @@ export function RoomMaintenanceSection({ status }: { status: PersistentAgentStat
 
 	return (
 		<div className="room-maintenance-section">
-			<header className="rs-pane-head">
-				<h3>Memory</h3>
-			</header>
-			<p className="rs-pane-sub">{ROOM_MEMORY_SUB}</p>
-			<h4 className="memory-note-group-head">{ROOM_MEMORY_TOGGLES_TITLE}</h4>
-			<p className="rs-row-footnote">{ROOM_MEMORY_TOGGLES_FOOTNOTE}</p>
-			<label className="rs-row">
-				<div className="rs-row-main">
-					<span className="rs-row-label">
-						{AUTOMATIC_APPLY_SETTING_LABEL}
-						<RsInfo text={AUTOMATIC_APPLY_INFO} />
-					</span>
-				</div>
-				<input
-					className="workspaces-tool-switch"
-					type="checkbox"
-					checked={fastPath === true}
-					disabled={fastPath === null || saving}
-					onChange={(e) => void toggleFastPath(e.target.checked)}
-					aria-label={AUTOMATIC_APPLY_SETTING_LABEL}
-				/>
-			</label>
-			<label className="rs-row">
-				<div className="rs-row-main">
-					<span className="rs-row-label">
-						{REMEMBER_WITHOUT_PREVIEW_LABEL}
-						<RsInfo text={REMEMBER_WITHOUT_PREVIEW_INFO} />
-					</span>
-				</div>
-				<input
-					className="workspaces-tool-switch"
-					type="checkbox"
-					checked={quickApply === true}
-					disabled={quickApply === null || saving}
-					onChange={(e) => void toggleQuickApply(e.target.checked)}
-					aria-label={REMEMBER_WITHOUT_PREVIEW_LABEL}
-				/>
-			</label>
-			<div className="rs-row memory-budget-row">
-				<div className="rs-row-main">
-					<span className="rs-row-label">
-						{MEMORY_LIMIT_LABEL}
-						<span className="memory-budget-value">{budget !== null ? `${fmtTokensK(budget)} tokens` : "…"}</span>
-					</span>
-					<span className="rs-row-hint">{MEMORY_LIMIT_HINT}</span>
-					<input
-						className="memory-budget-slider"
-						type="range"
-						min={MEMORY_BUDGET_MIN_TOKENS}
-						max={MEMORY_BUDGET_MAX_TOKENS}
-						step={1000}
-						value={budget ?? MEMORY_BUDGET_MIN_TOKENS}
-						disabled={budget === null}
-						onChange={(e) => setBudget(Number(e.target.value))}
-						aria-label={`${MEMORY_LIMIT_LABEL} in tokens`}
-					/>
-					{usagePercent !== null && (
-						// The percent is the sentence; the two token numbers behind it are
-						// one hover away, which is the only place this pane says "tokens"
-						// other than beside the slider itself.
-						<p className="memory-budget-usage" title={memoryUsageTitle(currentMemoryTokens!, budget!)}>
-							{memoryFullShort(usagePercent)}{overBudget ? ` · ${MEMORY_OVER_LIMIT_SENTENCE}` : ""}
-						</p>
-					)}
-					{budgetSettledTo !== null && savedBudget === budgetSettledTo && (
-						<span className="rs-row-hint">{budgetSettledHint(savedBudget)}</span>
-					)}
+			<PaneHeader title="Memory" line={ROOM_MEMORY_SUB} />
+			<div className="settings-group">
+				<p className="settings-group-kicker">{ROOM_MEMORY_TOGGLES_TITLE}</p>
+				<div className="settings-rows">
+					<label className="settings-row">
+						<div className="settings-row-main">
+							<span className="settings-row-label">
+								{AUTOMATIC_APPLY_SETTING_LABEL}
+								<RsInfo text={AUTOMATIC_APPLY_INFO} />
+							</span>
+							<span className="settings-row-sub">{ROOM_MEMORY_TOGGLES_FOOTNOTE}</span>
+						</div>
+						<input
+							className="workspaces-tool-switch"
+							type="checkbox"
+							checked={fastPath === true}
+							disabled={fastPath === null || saving}
+							onChange={(e) => void toggleFastPath(e.target.checked)}
+							aria-label={AUTOMATIC_APPLY_SETTING_LABEL}
+						/>
+					</label>
+					<label className="settings-row">
+						<div className="settings-row-main">
+							<span className="settings-row-label">
+								{REMEMBER_WITHOUT_PREVIEW_LABEL}
+								<RsInfo text={REMEMBER_WITHOUT_PREVIEW_INFO} />
+							</span>
+						</div>
+						<input
+							className="workspaces-tool-switch"
+							type="checkbox"
+							checked={quickApply === true}
+							disabled={quickApply === null || saving}
+							onChange={(e) => void toggleQuickApply(e.target.checked)}
+							aria-label={REMEMBER_WITHOUT_PREVIEW_LABEL}
+						/>
+					</label>
+					<div className="settings-row memory-budget-row">
+						<div className="settings-row-main">
+							<span className="settings-row-label">{MEMORY_LIMIT_LABEL}</span>
+							<span className="settings-row-sub">{MEMORY_LIMIT_HINT}</span>
+							{usagePercent !== null && (
+								// The percent is the sentence; the two token numbers behind it are
+								// one hover away, which is the only place this pane says "tokens"
+								// other than beside the slider itself.
+								<span className={`settings-row-sub${overBudget ? " memory-budget-over" : ""}`} title={memoryUsageTitle(currentMemoryTokens!, budget!)}>
+									{memoryFullShort(usagePercent)}{overBudget ? ` · ${MEMORY_OVER_LIMIT_SENTENCE}` : ""}
+								</span>
+							)}
+							{budgetSettledTo !== null && savedBudget === budgetSettledTo && (
+								<span className="settings-row-sub">{budgetSettledHint(savedBudget)}</span>
+							)}
+						</div>
+						<div className="settings-row-value memory-budget-control">
+							<input
+								className="memory-budget-slider"
+								type="range"
+								min={MEMORY_BUDGET_MIN_TOKENS}
+								max={MEMORY_BUDGET_MAX_TOKENS}
+								step={1000}
+								value={budget ?? MEMORY_BUDGET_MIN_TOKENS}
+								disabled={budget === null}
+								onChange={(e) => setBudget(Number(e.target.value))}
+								aria-label={`${MEMORY_LIMIT_LABEL} in tokens`}
+							/>
+							<strong className="memory-budget-value">{budget !== null ? `${fmtTokensK(budget)} tokens` : "…"}</strong>
+						</div>
+					</div>
 				</div>
 			</div>
 			{error && <div className="room-maintenance-error">{error}</div>}

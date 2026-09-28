@@ -326,7 +326,7 @@ export function RemoteAccessPage() {
 			setNote(
 				next === "full"
 					? `"${device.name}" has full access again from its next sign-in.`
-					: `"${device.name}" is limited to viewing. Its open sessions are closed; it signs back in with the new access.`,
+					: `"${device.name}" is limited to viewing. It is signed out and signs back in with the new access.`,
 			);
 		} catch (e) {
 			setError((e as Error).message);
@@ -372,7 +372,7 @@ export function RemoteAccessPage() {
 		setNote(null);
 		try {
 			setDevices(await revokeRemoteDevice(device.id));
-			setNote(`"${device.name}" is revoked. Its sessions are closed and its key no longer works.`);
+			setNote(`"${device.name}" is revoked. It is signed out and its key no longer works.`);
 		} catch (e) {
 			setError((e as Error).message);
 		} finally {
@@ -388,7 +388,6 @@ export function RemoteAccessPage() {
 	if (remoteClient.remote) {
 		return (
 			<section className="ai-setup-section" aria-label="Remote access">
-				<h3 className="web-search-fallback-heading">Remote access</h3>
 				<p className="cli-note">Remote access is managed on the computer itself.</p>
 			</section>
 		);
@@ -409,7 +408,7 @@ export function RemoteAccessPage() {
 		return (
 			<section className="ai-setup-section" aria-label="Remote access">
 				<div className="workspaces-error archived-rooms-note" role="alert">{loadError ?? "Could not read the remote access state."}</div>
-				<p><button className="inline-action" type="button" onClick={() => void load()}>Try again</button></p>
+				<p><button className="rs-btn" type="button" onClick={() => void load()}>Try again</button></p>
 			</section>
 		);
 	}
@@ -422,19 +421,17 @@ export function RemoteAccessPage() {
 
 	return (
 		<section className="ai-setup-section" aria-label="Remote access">
-			<div className="remote-master">
-				<h3 className="web-search-fallback-heading">General</h3>
-				<label className="rs-row">
-					<div className="rs-row-main">
-						<span className="rs-row-label">Remote access{switching ? " (switching…)" : ""}</span>
-						<span className="rs-row-hint">Your phone talks to this computer directly over your private Tailscale tunnel; nothing goes through a cloud. Turning it off blocks every device until you turn it back on. If this is a company-managed computer, check your company's policy before enabling remote access.</span>
+			<div className="settings-rows">
+				<label className="settings-row">
+					<div className="settings-row-main">
+						<span className="settings-row-label">Remote access{switching ? " (switching…)" : ""}</span>
+						<span className="settings-row-sub">Turning it off blocks every device until you turn it back on. If this is a company-managed computer, check your company's policy before enabling remote access.</span>
 						{degraded && (
-							<span className="rs-row-hint remote-hint-degraded" role="status">
+							<span className="settings-row-sub remote-hint-degraded" role="status">
 								On, but not serving right now: {status.degradedReason || "waiting for the tunnel address"}. Local
 								use is unaffected; remote is available again when your VPN is back on.
 							</span>
 						)}
-						{!on && !degraded && tunnelReady && <span className="rs-row-hint">Your tunnel is running.</span>}
 					</div>
 					<input
 						className="workspaces-tool-switch"
@@ -445,33 +442,22 @@ export function RemoteAccessPage() {
 						aria-label="Remote access"
 					/>
 				</label>
-				{/* Status lines live with the switch they most often describe
-				    (the off-state note especially), not below the rooms list. */}
-				{note && <p className="archived-rooms-note" role="status">{note}</p>}
-				{error && <div className="workspaces-error archived-rooms-note" role="alert">{error}</div>}
-				{!on && !degraded && !tunnelReady && (
-					<div className="remote-onboarding">
-						<p className="remote-master-state">Off. Remote access needs a private tunnel first.</p>
-						<p className="ai-setup-copy remote-onboarding-copy">
-							The tunnel is Tailscale, a free app. Nothing is opened to the internet; only devices signed in to
-							your account can reach this computer.
-						</p>
-						<ol className="remote-onboarding-steps">
-							<li>Install Tailscale on this computer and sign in. The free plan is enough.</li>
-							<li>Install the Tailscale app on your phone and sign in to the same account.</li>
-						</ol>
-						<div className="remote-onboarding-actions">
-							<a className="rs-btn remote-onboarding-link" href="https://tailscale.com/download" target="_blank" rel="noopener noreferrer">Get Tailscale</a>
-							<span className="remote-onboarding-waiting" role="status">Waiting for your tunnel. This screen notices it by itself.</span>
-						</div>
-						<p className="remote-master-footnote">Another compatible tunnel is detected the same way.</p>
+				<div className="settings-row">
+					<div className="settings-row-main">
+						<span className="settings-row-label">Tunnel</span>
+						<span className="settings-row-sub">
+							{tunnelReady
+								? "Running. Only devices signed in to your Tailscale account can reach this computer."
+								: "Not found yet. Install Tailscale here and on your phone, signed in to the same account; this screen notices it by itself, and any other compatible tunnel too."}
+						</span>
 					</div>
-				)}
+					{!tunnelReady && <a className="rs-btn" href="https://tailscale.com/download" target="_blank" rel="noopener noreferrer">Get Tailscale</a>}
+				</div>
 				{on && (
-					<label className="rs-row">
-						<div className="rs-row-main">
-							<span className="rs-row-label">Keep this computer awake{keepAwakeBusy ? " (saving…)" : ""}</span>
-							<span className="rs-row-hint">Works best plugged in with the lid open.</span>
+					<label className="settings-row">
+						<div className="settings-row-main">
+							<span className="settings-row-label">Keep this computer awake{keepAwakeBusy ? " (saving…)" : ""}</span>
+							<span className="settings-row-sub">Works best plugged in with the lid open.</span>
 						</div>
 						<input
 							className="workspaces-tool-switch"
@@ -484,9 +470,13 @@ export function RemoteAccessPage() {
 					</label>
 				)}
 			</div>
+			{/* Status lines live right under the switch they most often describe
+			    (the off-state note especially), not below the rooms list. */}
+			{note && <p className="archived-rooms-note" role="status">{note}</p>}
+			{error && <div className="workspaces-error archived-rooms-note" role="alert">{error}</div>}
 
-			<div className="remote-devices">
-				<h3 className="web-search-fallback-heading">Devices</h3>
+			<div className="remote-devices settings-group">
+				<p className="settings-group-kicker">Devices</p>
 				{on && (
 					<div className="remote-pairing-panel">
 						{code?.matrix ? (
@@ -527,7 +517,7 @@ export function RemoteAccessPage() {
 								)}
 							</details>
 							{mintFailed && (
-								<p className="rs-row-hint remote-hint-degraded" role="status">
+								<p className="settings-row-sub remote-hint-degraded" role="status">
 									Could not create a pairing code. It retries by itself.
 								</p>
 							)}
@@ -543,22 +533,21 @@ export function RemoteAccessPage() {
 										<button className="rs-btn" type="button" disabled={approving !== null} onClick={() => void approve(request)}>
 											{approving === request.requestId ? "Approving…" : "Approve"}
 										</button>
-										<button className="rs-quiet" type="button" disabled={approving !== null} onClick={() => void decline(request)}>Decline</button>
+										<button className="rs-btn" type="button" disabled={approving !== null} onClick={() => void decline(request)}>Decline</button>
 									</div>
 								</div>
 							))}
 						</div>
 					</div>
 				)}
-				{on && <div className="remote-section-divider" />}
-				{(devices ?? []).length === 0 && <p className="ai-setup-copy">No devices are paired yet.</p>}
-				{(devices ?? []).map((device) => (
-					<div key={device.id} className="rs-row remote-device-row">
-						<div className="rs-row-main">
-							<span className="rs-row-label">{device.name}</span>
-							<span className="rs-row-hint">{deviceHint(device)}</span>
+				{(devices ?? []).length === 0 && <p className="settings-empty">No devices are paired yet.</p>}
+				{(devices ?? []).length > 0 && <div className="settings-rows">{(devices ?? []).map((device) => (
+					<div key={device.id} className="settings-row remote-device-row">
+						<div className="settings-row-main">
+							<span className="settings-row-label">{device.name}</span>
+							<span className="settings-row-sub">{deviceHint(device)}</span>
 							{revokeArmed === device.id && (
-								<span className="rs-row-hint remote-device-armed" role="alert">
+								<span className="settings-row-sub remote-device-armed" role="alert">
 									Sign this device out everywhere and remove it? Pairing it again needs a fresh code.
 								</span>
 							)}
@@ -568,7 +557,7 @@ export function RemoteAccessPage() {
 							{revokeArmed === device.id ? (
 								<>
 									<button className="rs-quiet" type="button" disabled={deviceBusy === device.id} onClick={() => setRevokeArmed(null)}>Keep it</button>
-									<button className="rs-btn rs-btn-danger" type="button" disabled={deviceBusy === device.id} onClick={() => void revoke(device)}>
+									<button className="rs-quiet rs-quiet-danger" type="button" disabled={deviceBusy === device.id} onClick={() => void revoke(device)}>
 										{deviceBusy === device.id ? "Revoking…" : "Revoke"}
 									</button>
 								</>
@@ -577,18 +566,18 @@ export function RemoteAccessPage() {
 							)}
 						</div>
 					</div>
-				))}
+				))}</div>}
 			</div>
 
 			{(rooms ?? []).length > 0 && (
-				<div className="remote-devices remote-rooms">
-					<h3 className="web-search-fallback-heading">Rooms</h3>
-					{(rooms ?? []).map((room) => (
-						<div key={room.id} className="rs-row remote-room-row">
-							<div className="rs-row-main">
-								<span className="rs-row-label">{room.displayName}</span>
-								{room.bashEnabled && <span className="rs-row-hint">can run commands on this computer</span>}
-								{!room.bashEnabled && room.writeEnabled && <span className="rs-row-hint">can change files in its workspace</span>}
+				<div className="remote-devices remote-rooms settings-group">
+					<p className="settings-group-kicker">Rooms</p>
+					<div className="settings-rows">{(rooms ?? []).map((room) => (
+						<div key={room.id} className="settings-row remote-room-row">
+							<div className="settings-row-main">
+								<span className="settings-row-label">{room.displayName}</span>
+								{room.bashEnabled && <span className="settings-row-sub">Can run commands on this computer</span>}
+								{!room.bashEnabled && room.writeEnabled && <span className="settings-row-sub">Can change files in its workspace</span>}
 							</div>
 							<div className="remote-device-actions">
 								<div className="remote-capability-seg" role="group" aria-label="Remote reachability">
@@ -597,10 +586,9 @@ export function RemoteAccessPage() {
 								</div>
 							</div>
 						</div>
-					))}
+					))}</div>
 				</div>
 			)}
-
 		</section>
 	);
 }

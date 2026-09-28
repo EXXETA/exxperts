@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { GroupHeader } from "./pane-header";
 import type { LoginProviderCatalogEntry, PersistentAgentAiProfileStatus, ProviderModelCatalog } from "../types";
 import { useEscapeKey } from "./use-escape-key";
 import { apiFetch, fetchJson } from "../api";
@@ -75,12 +76,12 @@ export function ApiKeyForm({ placeholder, onSave, className, onCancel }: {
 					}
 				}}
 			/>
-			<button className="landing-action" disabled={!key.trim() || saving} onClick={() => void save()}>
+			{onCancel && (
+				<button className="rs-btn" type="button" disabled={saving} onClick={onCancel}>Cancel</button>
+			)}
+			<button className="rs-btn rs-btn-primary" disabled={!key.trim() || saving} onClick={() => void save()}>
 				{saving ? "Saving…" : "Save key"}
 			</button>
-			{onCancel && (
-				<button className="ai-profile-foot-link" type="button" disabled={saving} onClick={onCancel}>Cancel</button>
-			)}
 		</div>
 	);
 }
@@ -147,7 +148,8 @@ export function useProviderLogin(onDone: (providerId: string, ok: boolean) => vo
 }
 
 // Suggest-then-approve model configuration for one provider: which models its
-// rooms may use, and which model runs Memorize and Review. Saving creates
+// rooms may use, and its recommended memory model (the one the memory picker
+// marks Recommended; each room's Memory row decides what runs). Saving creates
 // or updates the provider's custom AI profile.
 export function ConfigureProfileModal({ providerId, providerName, existingProfile, allowRemove = true, onClose, onSaved }: {
 	providerId: string;
@@ -163,7 +165,6 @@ export function ConfigureProfileModal({ providerId, providerName, existingProfil
 	const [loadError, setLoadError] = useState<string | null>(null);
 	const [roomModels, setRoomModels] = useState<Set<string>>(new Set());
 	const [learnModel, setLearnModel] = useState("");
-	const [reviewMemoryModel, setReviewMemoryModel] = useState("");
 	const [saving, setSaving] = useState(false);
 	const [removing, setRemoving] = useState(false);
 	const [saveError, setSaveError] = useState<string | null>(null);
@@ -185,7 +186,6 @@ export function ConfigureProfileModal({ providerId, providerName, existingProfil
 				const initialRooms = existingRoomModels.length > 0 ? existingRoomModels : [result.suggested];
 				setRoomModels(new Set(initialRooms.filter((id) => result.models.some((model) => model.id === id))));
 				setLearnModel(existingForPurpose("absorb") || result.suggested);
-				setReviewMemoryModel(existingForPurpose("structural-review") || result.suggested);
 			})
 			.catch((e) => {
 				if (!stopped) setLoadError((e as Error).message);
@@ -216,7 +216,6 @@ export function ConfigureProfileModal({ providerId, providerName, existingProfil
 					label: providerName,
 					roomModels: [...roomModels],
 					learnModel,
-					reviewMemoryModel,
 				}),
 			});
 			onSaved();
@@ -243,7 +242,7 @@ export function ConfigureProfileModal({ providerId, providerName, existingProfil
 		}
 	}
 
-	const canSave = roomModels.size > 0 && Boolean(learnModel) && Boolean(reviewMemoryModel) && !saving && !removing;
+	const canSave = roomModels.size > 0 && Boolean(learnModel) && !saving && !removing;
 
 	return (
 		<div className="room-settings-overlay configure-profile-overlay" role="dialog" aria-modal="true" aria-label={`Configure ${providerName} models`} onClick={onClose}>
@@ -258,7 +257,7 @@ export function ConfigureProfileModal({ providerId, providerName, existingProfil
 				</div>
 				<div className="room-settings-body configure-profile-body">
 					<p className="ai-setup-copy">
-						Choose the models your rooms may run on, and which model handles Memorize and Review. You can change this later.
+						Choose the models your rooms may run on, and the memory model for this provider. You can change this later.
 					</p>
 					{loadError && <div className="checkpoint-proposal-error">{loadError}</div>}
 					{!catalog && !loadError && <p className="cli-note">Loading models…</p>}
@@ -275,25 +274,18 @@ export function ConfigureProfileModal({ providerId, providerName, existingProfil
 								/>
 							</div>
 							<div className="configure-profile-field">
-								<h3>Memorize</h3>
-								<select className="configure-profile-select" value={learnModel} onChange={(e) => setLearnModel(e.target.value)} aria-label="Memorize model" title="The model that turns remembered sessions into lasting memory">
+								<h3>Recommended memory model</h3>
+								<select className="configure-profile-select" value={learnModel} onChange={(e) => setLearnModel(e.target.value)} aria-label="Recommended memory model" title="Marked Recommended in the memory picker for this provider">
 									{catalog.models.map((model) => (
 										<option key={model.id} value={model.id}>{catalogModelName(model)}{model.suggestedDefault ? " (suggested)" : ""}</option>
 									))}
 								</select>
-							</div>
-							<div className="configure-profile-field">
-								<h3>Review</h3>
-								<select className="configure-profile-select" value={reviewMemoryModel} onChange={(e) => setReviewMemoryModel(e.target.value)} aria-label="Review model" title="The model that reviews and tidies long-term memory">
-									{catalog.models.map((model) => (
-										<option key={model.id} value={model.id}>{catalogModelName(model)}{model.suggestedDefault ? " (suggested)" : ""}</option>
-									))}
-								</select>
+								<p className="cli-note">Rooms choose theirs in Room settings, Model.</p>
 							</div>
 							{saveError && <div className="checkpoint-proposal-error">{saveError}</div>}
 							<div className="create-room-actions">
-								<button className="landing-action" disabled={!canSave} onClick={() => void save()}>{saving ? "Saving…" : "Save profile"}</button>
-								<button className="inline-action" disabled={saving || removing} onClick={onClose}>Cancel</button>
+								<button className="rs-btn rs-btn-primary" disabled={!canSave} onClick={() => void save()}>{saving ? "Saving…" : "Save profile"}</button>
+								<button className="rs-btn" disabled={saving || removing} onClick={onClose}>Cancel</button>
 								{existingProfile && allowRemove && (
 									<button className="ai-profile-foot-link configure-profile-remove" disabled={saving || removing} onClick={() => void removeProfile()}>
 										{removing ? "Removing…" : "Remove profile"}
@@ -302,104 +294,6 @@ export function ConfigureProfileModal({ providerId, providerName, existingProfil
 							</div>
 						</>
 					)}
-				</div>
-			</div>
-		</div>
-	);
-}
-
-/**
- * The one choice a built-in profile keeps: which curated model runs Memorize
- * and which runs Review. Rooms use the curated list as it is, so there is no
- * checkbox list and no catalogue fetch: the options are the row's curated
- * room models, already in the status.
- */
-export function MaintenanceModelsModal({ profile, onClose, onSaved }: { profile: PersistentAgentAiProfileStatus; onClose: () => void; onSaved: () => void }) {
-	const options = profile.processes?.persistentRoom.models ?? [];
-	// The first curated entry is the default for rooms, Memorize and Review alike.
-	const defaultModel = options[0]?.model ?? "";
-	const currentForPurpose = (token: string) =>
-		profile.requiredModels.find((model) => (model.purpose ?? "").split("/").includes(token))?.model ?? defaultModel;
-	const [learnModel, setLearnModel] = useState(currentForPurpose("absorb"));
-	const [reviewMemoryModel, setReviewMemoryModel] = useState(currentForPurpose("structural-review"));
-	const [saving, setSaving] = useState(false);
-	const [resetting, setResetting] = useState(false);
-	const [saveError, setSaveError] = useState<string | null>(null);
-	useEscapeKey(onClose, true);
-	const url = `/api/persistent-agent-ai-profiles/builtin/${encodeURIComponent(profile.id)}/maintenance-models`;
-
-	async function save() {
-		setSaving(true);
-		setSaveError(null);
-		try {
-			await fetchJson(url, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ learnModel, reviewMemoryModel }) });
-			onSaved();
-			onClose();
-		} catch (e) {
-			setSaveError((e as Error).message);
-		} finally {
-			setSaving(false);
-		}
-	}
-
-	async function backToDefaults() {
-		setResetting(true);
-		setSaveError(null);
-		try {
-			await fetchJson(url, { method: "DELETE" });
-			onSaved();
-			onClose();
-		} catch (e) {
-			setSaveError((e as Error).message);
-		} finally {
-			setResetting(false);
-		}
-	}
-
-	const optionName = (model: { provider: string; model: string; label?: string }) =>
-		modelDisplayName({ model: model.model, modelLabel: model.label, provider: model.provider }) || model.model;
-	const busy = saving || resetting;
-	const canSave = Boolean(learnModel) && Boolean(reviewMemoryModel) && !busy;
-
-	return (
-		<div className="room-settings-overlay configure-profile-overlay" role="dialog" aria-modal="true" aria-label={`${profile.label}: Memorize and Review`} onClick={onClose}>
-			<div className="room-settings-modal configure-profile-modal maintenance-models-modal" onClick={(e) => e.stopPropagation()}>
-				<div className="room-settings-head">
-					<div className="room-settings-title-block">
-						<div className="room-settings-title-row">
-							<h2>{`${profile.label}: Memorize and Review`}</h2>
-						</div>
-					</div>
-					<button className="icon-btn" onClick={onClose} aria-label="Close">Close</button>
-				</div>
-				<div className="room-settings-body configure-profile-body">
-					<p className="ai-setup-copy">Rooms use the curated models. Choose which of them run Memorize and Review.</p>
-					<div className="configure-profile-field">
-						<h3>Memorize</h3>
-						<select className="configure-profile-select" value={learnModel} onChange={(e) => setLearnModel(e.target.value)} aria-label="Memorize model" title="The model that turns remembered sessions into lasting memory">
-							{options.map((model) => (
-								<option key={model.model} value={model.model}>{optionName(model)}{model.model === defaultModel ? " (default)" : ""}</option>
-							))}
-						</select>
-					</div>
-					<div className="configure-profile-field">
-						<h3>Review</h3>
-						<select className="configure-profile-select" value={reviewMemoryModel} onChange={(e) => setReviewMemoryModel(e.target.value)} aria-label="Review model" title="The model that reviews and tidies long-term memory">
-							{options.map((model) => (
-								<option key={model.model} value={model.model}>{optionName(model)}{model.model === defaultModel ? " (default)" : ""}</option>
-							))}
-						</select>
-					</div>
-					{saveError && <div className="checkpoint-proposal-error">{saveError}</div>}
-					<div className="create-room-actions">
-						<button className="landing-action" disabled={!canSave} onClick={() => void save()}>{saving ? "Saving…" : "Save"}</button>
-						<button className="inline-action" disabled={busy} onClick={onClose}>Cancel</button>
-						{profile.maintenanceModels?.custom && (
-							<button className="ai-profile-foot-link maintenance-models-defaults" disabled={busy} onClick={() => void backToDefaults()} title="Drop the saved choice; the curated defaults run Memorize and Review">
-								{resetting ? "Resetting…" : "Back to the defaults"}
-							</button>
-						)}
-					</div>
 				</div>
 			</div>
 		</div>
@@ -1023,7 +917,7 @@ export function GatewayConfigModal({ gatewayId, knownLabel, onClose, onSaved }: 
 				</div>
 				<div className="room-settings-body configure-profile-body">
 					<p className="ai-setup-copy">
-						Connect an OpenAI-compatible endpoint such as a company LiteLLM or vLLM gateway. Give it a name, enter the address and your API key, load the models it routes, and approve the ones your rooms may use. You can save as many gateways as you like and switch between them in the profile list.
+						Connect an OpenAI-compatible endpoint such as a company LiteLLM or vLLM gateway. Give it a name, enter the address and your API key, load the models it routes, and approve the ones your rooms may use. You can save as many gateways as you like; each room picks its models in Room settings, Model.
 					</p>
 					<div className="configure-profile-field">
 						<h3>Name</h3>
@@ -1047,7 +941,7 @@ export function GatewayConfigModal({ gatewayId, knownLabel, onClose, onSaved }: 
 						<h3>Room models</h3>
 						{!manualMode && !discoveredOnce && drafts.length === 0 && (
 							<div className="gateway-discover-row">
-								<button className="landing-action" disabled={!canDiscover} onClick={() => void discover()}>{discovering ? "Loading…" : "Load models from gateway"}</button>
+								<button className="rs-btn" disabled={!canDiscover} onClick={() => void discover()}>{discovering ? "Loading…" : "Load models from gateway"}</button>
 								<button className="ai-profile-foot-link" disabled={saving} onClick={() => setManualMode(true)}>enter ids manually</button>
 							</div>
 						)}
@@ -1088,17 +982,18 @@ export function GatewayConfigModal({ gatewayId, knownLabel, onClose, onSaved }: 
 						)}
 					</div>
 					<div className="configure-profile-field">
-						<h3>Memorize &amp; Review</h3>
-						<select className="configure-profile-select" value={effectiveMaintenanceModel} onChange={(e) => setMaintenanceModel(e.target.value)} aria-label="Maintenance model" title="The model that runs Memorize and Review" disabled={approvedIds.length === 0}>
+						<h3>Recommended memory model</h3>
+						<select className="configure-profile-select" value={effectiveMaintenanceModel} onChange={(e) => setMaintenanceModel(e.target.value)} aria-label="Recommended memory model" title="Marked Recommended in the memory picker for this gateway" disabled={approvedIds.length === 0}>
 							{maintenanceEligibleIds.map((id) => (
 								<option key={id} value={id}>{catalogModelName({ id })}</option>
 							))}
 						</select>
+						<p className="cli-note">Rooms choose theirs in Room settings, Model.</p>
 					</div>
 					{error && <div className="checkpoint-proposal-error">{error}</div>}
 					<div className="create-room-actions">
-						<button className="landing-action" disabled={!canSave} onClick={() => void save()}>{saving ? "Saving…" : "Save gateway"}</button>
-						<button className="inline-action" disabled={saving} onClick={onClose}>Cancel</button>
+						<button className="rs-btn rs-btn-primary" disabled={!canSave} onClick={() => void save()}>{saving ? "Saving…" : "Save gateway"}</button>
+						<button className="rs-btn" disabled={saving} onClick={onClose}>Cancel</button>
 					</div>
 				</div>
 			</div>
@@ -1298,23 +1193,24 @@ export function GatewayApproveModelsModal({ gatewayId, onClose, onSaved }: { gat
 								)}
 							</div>
 							<div className="configure-profile-field">
-								<h3>Memorize and Review</h3>
-								<select className="configure-profile-select" value={effectiveMaintenanceModel} onChange={(e) => setMaintenanceModel(e.target.value)} aria-label="Maintenance model" title="The model that runs Memorize and Review" disabled={approvedIds.length === 0}>
+								<h3>Recommended memory model</h3>
+								<select className="configure-profile-select" value={effectiveMaintenanceModel} onChange={(e) => setMaintenanceModel(e.target.value)} aria-label="Recommended memory model" title="Marked Recommended in the memory picker for this gateway" disabled={approvedIds.length === 0}>
 									{maintenanceEligibleIds.map((id) => (
 										<option key={id} value={id}>{catalogModelName({ id })}</option>
 									))}
 								</select>
+								<p className="cli-note">Rooms choose theirs in Room settings, Model.</p>
 							</div>
 							{saveError && <div className="checkpoint-proposal-error">{saveError}</div>}
 							<div className="create-room-actions">
-								<button className="landing-action" disabled={!canSave} onClick={() => void save()}>{saving ? "Saving…" : "Save models"}</button>
-								<button className="inline-action" disabled={saving} onClick={onClose}>Cancel</button>
+								<button className="rs-btn rs-btn-primary" disabled={!canSave} onClick={() => void save()}>{saving ? "Saving…" : "Save models"}</button>
+								<button className="rs-btn" disabled={saving} onClick={onClose}>Cancel</button>
 							</div>
 						</>
 					)}
 					{loadError && (
 						<div className="create-room-actions">
-							<button className="inline-action" onClick={onClose}>Close</button>
+							<button className="rs-btn" onClick={onClose}>Close</button>
 						</div>
 					)}
 				</div>
@@ -1329,7 +1225,10 @@ const POPULAR_PROVIDER_ORDER = ["google", "mistral", "openrouter", "deepseek", "
 // "Add provider" flow on the AI setup page: the full raw-Pi sign-in surface —
 // subscription (OAuth) providers plus API-key providers — followed by the
 // approve-models step that creates the provider's profile.
-export function AddProviderPanel({ onProfilesChanged, onKeyFormOpen, keyFormBlocked, profilesSignature, trailing }: {
+export function AddProviderPanel({ open, onOpenChange, onProfilesChanged, onKeyFormOpen, keyFormBlocked, profilesSignature }: {
+	/** Opened and closed by the pane header's Add provider button. */
+	open: boolean;
+	onOpenChange: (open: boolean) => void;
 	onProfilesChanged: () => void;
 	/** Told when this panel opens a key form, so the page can close any other one. */
 	onKeyFormOpen?: () => void;
@@ -1340,11 +1239,7 @@ export function AddProviderPanel({ onProfilesChanged, onKeyFormOpen, keyFormBloc
 	 *  provider becomes addable again, so both of this panel's lists are re-read when
 	 *  it moves. Passing nothing simply keeps the open-time refresh. */
 	profilesSignature?: string;
-	/** Rendered at the right end of the toggle row (the page's Refresh link),
-	 *  so the two controls share one line under the profile list. */
-	trailing?: ReactNode;
 }) {
-	const [open, setOpen] = useState(false);
 	const [providers, setProviders] = useState<LoginProviderCatalogEntry[] | null>(null);
 	const [loadError, setLoadError] = useState<string | null>(null);
 	const [apiKeyProvider, setApiKeyProvider] = useState<LoginProviderCatalogEntry | null>(null);
@@ -1372,12 +1267,19 @@ export function AddProviderPanel({ onProfilesChanged, onKeyFormOpen, keyFormBloc
 	useEffect(() => {
 		if (keyFormBlocked) setApiKeyProvider(null);
 	}, [keyFormBlocked]);
+	// Opening clears the last "added" note. Collapsing takes the key form with
+	// it: leaving it open would bring an autofocused secret field back on the
+	// next open, one nothing outside this panel knows about.
+	useEffect(() => {
+		if (open) setAddedNote(null);
+		else setApiKeyProvider(null);
+	}, [open]);
 
 	// Called when a provider gains its profile: collapse the panel and narrate
 	// the hand-off so the row appearing above does not read as a disappearance.
 	function announceAdded(name: string) {
 		setAddedNote(`${name} added · it now appears above as a profile.`);
-		setOpen(false);
+		onOpenChange(false);
 		setFilter("");
 	}
 
@@ -1471,117 +1373,97 @@ export function AddProviderPanel({ onProfilesChanged, onKeyFormOpen, keyFormBloc
 
 	return (
 		<div className="add-provider-panel">
-			<span className="add-provider-toggle-row">
-				{/* Collapsing takes the key form with it. Leaving it open would bring an
-				    autofocused secret field back on the next open, one nothing outside
-				    this panel knows about. */}
-				<button className="ai-profile-foot-link add-provider-toggle" aria-expanded={open} onClick={() => { setAddedNote(null); setApiKeyProvider(null); setOpen((value) => !value); }}>
-					{open ? "Add another provider ▴" : "Add another provider ▾"}
-				</button>
-				{addedNote && !open && <span className="add-provider-added-note">{addedNote}</span>}
-				{trailing && <span className="add-provider-toggle-trailing">{trailing}</span>}
-			</span>
+			{addedNote && !open && <p className="add-provider-added-note">{addedNote}</p>}
 			{open && (
-				<div className="ai-setup-block add-provider-block">
-					<p className="cli-note">Sign in, then approve the models it may use.</p>
+				<div className="settings-group add-provider-block">
+					<GroupHeader
+						kicker="Add a provider"
+						line="Sign in or add a key, then pick the models it may use."
+						actions={providers && addable.length > 6 && (
+							<input
+								className="launcher-path-input add-provider-filter"
+								type="text"
+								placeholder="Filter providers…"
+								aria-label="Filter providers"
+								value={filter}
+								onChange={(e) => setFilter(e.target.value)}
+							/>
+						)}
+					/>
 					{loadError && <div className="checkpoint-proposal-error">{loadError}</div>}
 					{!providers && !loadError && <p className="cli-note">Loading providers…</p>}
 					{login.error && <div className="checkpoint-proposal-error">{login.error}</div>}
-					{providers && addable.length > 6 && (
-						<input
-							className="launcher-path-input create-room-input add-provider-filter"
-							type="text"
-							placeholder="Filter providers…"
-							value={filter}
-							onChange={(e) => setFilter(e.target.value)}
-						/>
-					)}
+					{gatewayNotice && <div className="checkpoint-proposal-error">{gatewayNotice}</div>}
 					{providers && filterText && oauthProviders.length === 0 && apiKeyProviders.length === 0 && (
 						<p className="cli-note">No provider matches "{filter.trim()}".</p>
 					)}
-					{oauthProviders.length > 0 && (
-						<div className="add-provider-group">
-							<h3>Subscription</h3>
-							<div className="add-provider-rows">
-								{oauthProviders.map((provider) => (
-									<div key={provider.id} className="add-provider-row-group">
-										<div className="add-provider-row">
-											<span className="add-provider-name">{provider.name}</span>
-											<span className="add-provider-side">
-												{provider.configured && <span className="add-provider-configured">signed in</span>}
-												{login.signingInProvider === provider.id ? (
-													<>
-														<span className="add-provider-configured">finish signing in in your browser…</span>
-														<button className="ai-profile-foot-link" onClick={() => void login.cancel()}>Cancel</button>
-													</>
-												) : provider.configured ? (
-													<button className="ai-profile-foot-link" onClick={() => setConfigureProvider({ id: provider.id, name: provider.name })}>Approve models</button>
-												) : (
-													<button className="ai-profile-signin" disabled={login.signingInProvider !== null} onClick={() => void login.signIn(provider.id)}>Sign in →</button>
-												)}
-											</span>
-										</div>
-										{login.signingInProvider === provider.id && login.instructions && (
-											<div className="add-provider-instructions">{login.instructions}</div>
-										)}
+					<div className="settings-rows">
+						{oauthProviders.map((provider) => (
+							<div key={provider.id} className={`add-provider-row-group${login.signingInProvider === provider.id && login.instructions ? " key-open" : ""}`}>
+								<div className="settings-row">
+									<div className="settings-row-main">
+										<span className="settings-row-label">{provider.name}</span>
+										<span className="settings-row-sub">
+											{login.signingInProvider === provider.id ? "Subscription · finish signing in in your browser…" : provider.configured ? "Subscription · signed in" : "Subscription"}
+										</span>
 									</div>
-								))}
+									<span className="settings-row-value">
+										{login.signingInProvider === provider.id ? (
+											<button className="rs-btn" onClick={() => void login.cancel()}>Cancel</button>
+										) : provider.configured ? (
+											<button className="rs-btn" onClick={() => setConfigureProvider({ id: provider.id, name: provider.name })}>Approve models</button>
+										) : (
+											<button className="rs-btn" disabled={login.signingInProvider !== null} onClick={() => void login.signIn(provider.id)}>Sign in</button>
+										)}
+									</span>
+								</div>
+								{login.signingInProvider === provider.id && login.instructions && (
+									<div className="add-provider-instructions">{login.instructions}</div>
+								)}
 							</div>
-						</div>
-					)}
-					<div className="add-provider-group">
-						<h3>Gateways</h3>
-						{gatewayNotice && <div className="checkpoint-proposal-error">{gatewayNotice}</div>}
-						{/* This group only adds. A gateway that exists is a profile in the
+						))}
+						{/* This row only adds. A gateway that exists is a profile in the
 						    list above, and that row's menu already carries every way of
-						    changing or ending it; a second copy of those actions down here
-						    was a second place to look and a second place to be wrong. */}
-						<div className="add-provider-rows">
-							<div className="add-provider-row">
-								<span className="add-provider-name">OpenAI-compatible gateway · LiteLLM, vLLM, company proxies</span>
-								<span className="add-provider-side">
-									<button className="ai-profile-foot-link" onClick={() => setGatewayEdit({ id: null })}>Add gateway</button>
-								</span>
+						    changing or ending it. */}
+						<div className="settings-row">
+							<div className="settings-row-main">
+								<span className="settings-row-label">OpenAI-compatible gateway</span>
+								<span className="settings-row-sub">LiteLLM, vLLM, company proxies</span>
 							</div>
+							<button className="rs-btn" onClick={() => setGatewayEdit({ id: null })}>Add gateway</button>
 						</div>
-					</div>
-					{apiKeyProviders.length > 0 && (
-						<div className="add-provider-group">
-							<h3>API key</h3>
-							<div className="add-provider-rows">
-								{apiKeyProviders.map((provider) => (
-									<div key={provider.id} className={`add-provider-row-group${keyFormOpen === provider.id ? " key-open" : ""}`}>
-										<div className="add-provider-row">
-											<span className="add-provider-name">{provider.name}</span>
-											<span className="add-provider-side">
-												{provider.configured && <span className="add-provider-configured">key saved</span>}
-												{/* The open form owns the way out. A row that also kept its own
-												    Cancel put two of them on screen at once, one under the other,
-												    both closing the same thing. */}
-												{provider.configured ? (
-													<>
-														<button className="ai-profile-foot-link" onClick={() => setConfigureProvider({ id: provider.id, name: provider.name })}>Approve models</button>
-														{keyFormOpen !== provider.id && (
-															<button className="ai-profile-foot-link" onClick={() => openApiKeyProvider(provider)}>Replace key</button>
-														)}
-														<button className="ai-profile-foot-link" onClick={() => void removeKey(provider)}>Remove key</button>
-													</>
-												) : (
-													keyFormOpen !== provider.id && (
-														<button className="ai-profile-foot-link" onClick={() => openApiKeyProvider(provider)}>Add API key</button>
-													)
-												)}
-											</span>
-										</div>
-										{keyFormOpen === provider.id && (
-											<ApiKeyForm className="add-provider-row-key-form" placeholder={`${provider.name} API key`} onSave={saveApiKey} onCancel={() => setApiKeyProvider(null)} />
-										)}
+						{apiKeyProviders.map((provider) => (
+							<div key={provider.id} className={`add-provider-row-group${keyFormOpen === provider.id ? " key-open" : ""}`}>
+								<div className="settings-row">
+									<div className="settings-row-main">
+										<span className="settings-row-label">{provider.name}</span>
+										<span className="settings-row-sub">{provider.configured ? "API key · saved" : "API key"}</span>
 									</div>
-								))}
+									<span className="settings-row-value">
+										{/* The open form owns the way out: a row that also kept its own
+										    Cancel put two of them on screen, both closing the same thing. */}
+										{provider.configured ? (
+											<>
+												<button className="rs-btn" onClick={() => setConfigureProvider({ id: provider.id, name: provider.name })}>Approve models</button>
+												{keyFormOpen !== provider.id && (
+													<button className="rs-quiet" onClick={() => openApiKeyProvider(provider)}>Replace key</button>
+												)}
+												<button className="rs-quiet" onClick={() => void removeKey(provider)}>Remove key</button>
+											</>
+										) : (
+											keyFormOpen !== provider.id && (
+												<button className="rs-btn" onClick={() => openApiKeyProvider(provider)}>Add key</button>
+											)
+										)}
+									</span>
+								</div>
+								{keyFormOpen === provider.id && (
+									<ApiKeyForm className="add-provider-row-key-form" placeholder={`${provider.name} API key`} onSave={saveApiKey} onCancel={() => setApiKeyProvider(null)} />
+								)}
 							</div>
-							<p className="cli-note">Keys stay on this device.</p>
-						</div>
-					)}
+						))}
+					</div>
+					{apiKeyProviders.length > 0 && <p className="settings-help">Keys stay on this device.</p>}
 				</div>
 			)}
 			{gatewayEdit && (

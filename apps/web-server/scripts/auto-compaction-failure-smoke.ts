@@ -322,7 +322,7 @@ try {
 	// --- 3. The room is told, after the turn, without the turn failing -------
 	const noticeIndex = await ws.waitFor((row) => row.type === "ui_request" && row.kind === "notify" && row.level === "error", "the compaction notice", 0, 10_000);
 	const notice = ws.frames[noticeIndex];
-	const expected = `The room could not condense its conversation history: Summarization failed: ${RUNTIME_REASON}. Your memory is unchanged. Try a model with a larger output limit, or start a new conversation.`;
+	const expected = `The room could not condense its conversation history: Summarization failed: ${RUNTIME_REASON}. Your memory is unchanged. Remember, then continue: the next conversation starts from what was remembered. Or continue on a model with a larger output limit in Room settings, Model.`;
 	assert(notice.message === expected, `the notice should use the house wording, got ${JSON.stringify(notice.message)}`);
 	assert(noticeIndex > agentEndIndex, "the notice should follow the turn's end, not interrupt it");
 	assert(!ws.frames.some((frame) => frame.type === "error"), `a failed compaction must not fail the turn, saw ${JSON.stringify(ws.frames.filter((frame) => frame.type === "error"))}`);

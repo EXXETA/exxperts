@@ -2,6 +2,29 @@
 
 User-visible changes per release. Historical private/internal development notes are not part of this public-facing changelog.
 
+## 0.14.0 (2026-09-28)
+
+- Models: Each room now has its own model. Choose it in Room settings, Model: one for conversations
+  and one for memory work. The Home card shows it, and your choice stays after Remember and Forget.
+- Models: Switch the model of an open conversation. Pick another model between answers and the
+  conversation continues on it, as long as it fits the new model.
+- Models: AI setup sets the default models for new rooms, and for any room until you choose its own.
+  Your existing rooms keep the models they use.
+- Models: When your AI sign-in expires, exxperts takes you straight to signing in again. What you
+  typed is kept, and you can also choose another model instead.
+- Home: Sort your rooms. By when you last used them, by name, or in your own order by dragging them.
+  The order is the same on every device.
+- Chat: Scrolling up while an answer streams now keeps the page where you left it. A "New text" pill
+  takes you back down.
+- Chat: If the connection drops, you see it and what you typed is kept. The chat reconnects by
+  itself, or offers a Reconnect button.
+- Chat: Enter and Escape answer yes or no questions and confirmations. A dialog that deletes or
+  forgets starts on Cancel, so Enter alone never removes anything.
+- Remember: Remember now handles conversations of any length. Long conversations are read in parts,
+  and you can cancel while it reads.
+- Settings: Settings, Room settings and Skills have a simpler design. Every setting is one row, and
+  closing with unsaved changes offers Save and close.
+
 ## 0.13.2 (2026-09-23)
 
 - Models: the Claude picker adds Haiku 4.5 and follows Anthropic's order, the ChatGPT picker

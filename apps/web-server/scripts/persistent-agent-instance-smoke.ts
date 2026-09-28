@@ -166,6 +166,7 @@ try {
 	}
 	assert(overflow && overflow.code === "memory_overflow" && overflow.statusCode === 413, "an oversized boot prompt should refuse with the memory_overflow code and 413");
 	assert(/do not fit the usable window of GPT 5.5/.test(overflow.message) && /choose Forget/.test(overflow.message) && /open Maintain and run (Memorize|Review)/.test(overflow.message) && /Memory is unchanged/.test(overflow.message), `overflow refusal should name the model, the reachable exit (Forget → Maintain), the layer-matched run, and that memory is untouched (got ${overflow.message})`);
+	assert(/open Room settings, Conversation and choose Forget/.test(overflow.message) && /Room settings, Model/.test(overflow.message) && !/Session/.test(overflow.message), `overflow refusal should name the panes as they are called now (got ${overflow.message})`);
 	assert(overflow.bootEstimatedTokens > overflow.promptTokenBudget && overflow.promptTokenBudget === 1000, "overflow refusal should carry the real numbers (min budget floor applies)");
 
 	const initialRuntime = getPersistentAgentRuntimeState(alphaAgentId);

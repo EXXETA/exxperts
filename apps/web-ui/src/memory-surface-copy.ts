@@ -145,13 +145,24 @@ export function memoryUsageTitle(tokens: number, limitTokens: number): string {
 
 export const MEMORY_OVER_LIMIT_SENTENCE = "Above its budget. Memorize or Review brings it back.";
 
+export const NOTHING_TO_MAINTAIN_SENTENCE = "Nothing to maintain yet. Talk to this room and use Remember first.";
+
+/**
+ * Nothing is waiting and the memory is still exactly what the room was
+ * created with, so neither Memorize nor Review has anything to work on. A
+ * status without the write stamp (undefined) never blocks.
+ */
+export function nothingToMaintain(memoryStatus: { recentContextCount: number; lastMemoryWriteAt?: string | null } | null | undefined): boolean {
+	return !!memoryStatus && memoryStatus.recentContextCount === 0 && memoryStatus.lastMemoryWriteAt === null;
+}
+
 // --- Room settings → Memory --------------------------------------------------
 
 export const ROOM_MEMORY_SUB = "What this room remembers, and how it saves new things.";
-export const ROOM_MEMORY_TOGGLES_FOOTNOTE = "The two toggles below are off by default. Seeing what gets saved is how you decide what your room remembers.";
+export const ROOM_MEMORY_TOGGLES_FOOTNOTE = "Off by default: seeing what gets saved is how you decide what the room remembers.";
 export const AUTOMATIC_APPLY_INFO = "A memory update with nothing to weigh is saved as soon as it is ready, instead of being shown to you one last time. An update that archives notes, crosses the memory budget or leaves a conversation unfinished always waits for you, and you can always see what changed afterwards in History.";
-export const ROOM_MEMORY_TOGGLES_TITLE = "Saving without a second look";
-export const REMEMBER_WITHOUT_PREVIEW_LABEL = "Remember: save without the preview";
+export const ROOM_MEMORY_TOGGLES_TITLE = "Saving";
+export const REMEMBER_WITHOUT_PREVIEW_LABEL = "Remember without the preview";
 export const REMEMBER_WITHOUT_PREVIEW_INFO = "Remember normally shows you what it is about to save from the conversation. With this on, the save happens without that preview. If a save looks incomplete, the preview comes back and you decide.";
 
 export const MEMORY_LIMIT_LABEL = "Memory budget";
