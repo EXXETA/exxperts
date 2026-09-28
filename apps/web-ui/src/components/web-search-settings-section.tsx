@@ -25,7 +25,7 @@ import { GroupHeader } from "./pane-header";
  * value from the server's answer.
  */
 
-type WebSearchProvider = "duckduckgo" | "searxng" | "disabled";
+type WebSearchProvider = "duckduckgo" | "searxng" | "youcom" | "disabled";
 
 type WebSearchSettingsPayload = {
 	provider: WebSearchProvider;
@@ -42,6 +42,11 @@ const OPTIONS: Array<{ id: WebSearchProvider; label: string; blurb: (providerSea
 		id: "duckduckgo",
 		label: "DuckDuckGo",
 		blurb: () => "Nothing to install. Some networks refuse automated searches; the room says so when that happens.",
+	},
+	{
+		id: "youcom",
+		label: "You.com Search",
+		blurb: () => "Keyless remote search API. No API key needed for basic search; set YDC_API_KEY for authenticated access. Works on any network.",
 	},
 	{
 		id: "searxng",

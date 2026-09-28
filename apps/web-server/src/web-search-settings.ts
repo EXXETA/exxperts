@@ -83,7 +83,7 @@ export function writeWebSearchSettings(patch: { provider?: unknown; baseUrl?: un
 	let chosen = saved.provider;
 	if (patch.provider !== undefined) {
 		const requested = String(patch.provider ?? "").trim().toLowerCase();
-		if (requested !== "duckduckgo" && requested !== "searxng" && requested !== "disabled") {
+		if (requested !== "duckduckgo" && requested !== "searxng" && requested !== "youcom" && requested !== "disabled") {
 			throw new WebSearchSettingsError(`Unknown search setting: ${requested || "(empty)"}.`);
 		}
 		chosen = requested;

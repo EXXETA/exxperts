@@ -6,9 +6,11 @@ import { productAppStatePath } from "../../product-state-paths.js";
 // Search backends: DuckDuckGo's HTML endpoint is the zero-setup default
 // (works out of the box, no Docker); a local SearXNG instance is the
 // preferred/power path whenever one is configured, with DuckDuckGo as the
-// fallback when SearXNG is configured but not answering. An explicit
+// fallback when SearXNG is configured but not answering. You.com Search
+// is a remote API provider that works keylessly out of the box (basic
+// you-search) or with YDC_API_KEY for authenticated access. An explicit
 // EXXETA_SEARCH_PROVIDER=disabled turns web search off entirely.
-type SearchProvider = "duckduckgo" | "searxng" | "disabled";
+type SearchProvider = "duckduckgo" | "searxng" | "youcom" | "disabled";
 
 // Setup command shown in user-facing messages, shell-appropriate per platform
 // (the bash entry point does not run from PowerShell/cmd).
@@ -78,6 +80,7 @@ export function readSharedSearchConfig(): SharedConfigRead {
 function normalizeProvider(raw: string): SearchProvider {
 	const value = raw.trim().toLowerCase();
 	if (value === "searxng") return "searxng";
+	if (value === "youcom") return "youcom";
 	if (value === "disabled") return "disabled";
 	return "duckduckgo";
 }
@@ -238,6 +241,50 @@ async function searchSearxng(query: string, limit: number): Promise<SearchResult
 	}));
 }
 
+// --- You.com Search API ----------------------------------------------------
+
+const YOUCOM_KEYLESS_ENDPOINT = "https://api.you.com/v1/agents/search";
+const YOUCOM_KEYED_ENDPOINT = "https://api.you.com/v1/search";
+
+interface YoucomResult {
+	title?: string;
+	url?: string;
+	snippet?: string;
+}
+
+interface YoucomResponse {
+	results?: YoucomResult[];
+	answer?: string;
+}
+
+async function searchYoucom(query: string, limit: number): Promise<SearchResult[]> {
+	const apiKey = process.env.YDC_API_KEY?.trim();
+	const url = new URL(apiKey ? YOUCOM_KEYED_ENDPOINT : YOUCOM_KEYLESS_ENDPOINT);
+	url.searchParams.set("query", query);
+	url.searchParams.set("num_web_results", String(Math.min(limit, 10)));
+
+	const headers: Record<string, string> = { accept: "application/json" };
+	if (apiKey) headers["X-API-Key"] = apiKey;
+
+	let res: Response;
+	try {
+		res = await fetch(url, { headers, signal: AbortSignal.timeout(15_000) });
+	} catch (e) {
+		throw new Error(`You.com is not reachable. ${(e as Error).message}`);
+	}
+	if (!res.ok) {
+		const body = await res.text().catch(() => "");
+		throw new Error(`You.com search failed (${res.status} ${res.statusText}).${body ? ` ${body}` : ""}`);
+	}
+
+	const data = await res.json() as YoucomResponse;
+	return (data.results ?? []).slice(0, limit).map((r) => ({
+		title: (r.title || "Untitled").slice(0, 300),
+		url: (r.url || "").slice(0, 2000),
+		snippet: (r.snippet || "").slice(0, 500),
+	}));
+}
+
 // --- DuckDuckGo HTML endpoint ------------------------------------------------
 
 function decodeEntities(s: string): string {
@@ -345,7 +392,7 @@ export default function (pi: ExtensionAPI) {
 		name: "web_search",
 		label: "Web search",
 		description:
-			"Search the public web. Works out of the box (DuckDuckGo); a local SearXNG instance is used instead when one is configured (optional, for heavier use).",
+			"Search the public web. Works out of the box (DuckDuckGo); a local SearXNG instance is used instead when one is configured (optional, for heavier use). You.com Search is also available as a keyless remote provider (set EXXETA_SEARCH_PROVIDER=youcom).",
 		promptSnippet:
 			"Use `web_search` when the user asks for latest/current web information, market/client research, trends, or sourced briefings. Cite URLs in the final answer.",
 		parameters: Type.Object({
@@ -373,6 +420,22 @@ export default function (pi: ExtensionAPI) {
 					details: { configured: false, provider },
 					isError: true,
 				};
+			}
+
+			if (provider === "youcom") {
+				try {
+					const results = await searchYoucom(query, maxResults);
+					return {
+						content: [{ type: "text", text: formatResults(query, results) }],
+						details: { configured: true, provider, query, count: results.length, results },
+					};
+				} catch (e) {
+					return {
+						content: [{ type: "text", text: `Web search failed: ${(e as Error).message}` }],
+						details: { configured: true, provider, error: (e as Error).message },
+						isError: true,
+					};
+				}
 			}
 
 			// SearXNG when configured, DuckDuckGo as the fallback when it is not

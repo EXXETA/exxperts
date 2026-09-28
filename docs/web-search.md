@@ -60,25 +60,28 @@ DuckDuckGo directly (its plain HTML endpoint; no API key, no account).
 DuckDuckGo rate-limits automated queries, and on some networks it blocks
 them outright; when that happens the room shows an honest error naming the
 block. Which backend runs is a setting in the app, under **AI setup → Web
-search**. For heavy use, or on a network where DuckDuckGo blocks searches, a
-**local SearXNG container** is the reliable path: it aggregates several
+search**. **You.com Search** is a keyless remote API alternative: set
+`EXXETA_SEARCH_PROVIDER=youcom` and no API key is needed for basic search
+(optionally set `YDC_API_KEY` for authenticated access). For heavy use,
+or on a network where DuckDuckGo blocks searches, a **local SearXNG
+container** is the reliable path: it aggregates several
 engines and is not subject to DuckDuckGo's limits. When SearXNG is configured it is always preferred;
 if it stops answering, searches fall back to the built-in DuckDuckGo backend
 until it is back. Setting `EXXETA_SEARCH_PROVIDER=disabled` turns web search
 off entirely.
 
-**Privacy note:** either backend sends your search **queries** to a public
-search engine (DuckDuckGo directly, or the engines SearXNG aggregates), so
-search terms do leave the machine; results and the rest of your data do not.
-Avoid searching confidential client/internal content.
+**Privacy note:** the chosen backend sends your search **queries** to a public
+search engine (DuckDuckGo directly, the engines SearXNG aggregates, or the
+You.com API), so search terms do leave the machine; results and the rest of
+your data do not.
 
 ### Choosing a backend in the app
 
 Under the provider-search switch, **AI setup → Web search** shows the built-in
 choice and lets you change it: DuckDuckGo (the default, nothing to install),
-your own SearXNG (with a field for its address), or off. A change applies to
-the **next search**; nothing needs restarting, and rooms already in the middle
-of a conversation pick it up too.
+You.com Search (keyless remote API), your own SearXNG (with a field for its
+address), or off. A change applies to the **next search**; nothing needs
+restarting, and rooms already in the middle of a conversation pick it up too.
 
 This choice covers gateway and custom models, and every room whose model does
 not search for itself. With provider search switched off it covers the Claude
@@ -164,3 +167,16 @@ exists yet, plus generated SearXNG settings to
 `~/.exxperts/app/searxng/settings.yml` (JSON output enabled, because
 `web_search` calls `/search?format=json`). Environment variables override the
 shared config; see [`operations.md`](operations.md) for `EXXETA_SEARCH_*`.
+
+### You.com Search
+
+When `EXXETA_SEARCH_PROVIDER=youcom` is set, the `web_search` tool calls the
+[You.com Search API](https://you.com/docs) directly. No API key is needed for
+basic search (the keyless free tier at
+`https://api.you.com/v1/agents/search`). Set `YDC_API_KEY` for authenticated
+access to the full You.com search API (`https://api.you.com/v1/search`). Get
+an API key at [you.com/platform/api-keys](https://you.com/platform/api-keys).
+
+You.com Search works on any network, has no rate limits comparable to
+DuckDuckGo's HTML endpoint, and returns structured JSON results that the
+agent parses directly.
