@@ -52,6 +52,9 @@ jobs:
           npm ci
           npx tsc --noEmit -p tsconfig.json
 
+      - name: Script tests
+        run: npm run test:scripts
+
       - name: Smoke suite
         run: npm run smokes
 

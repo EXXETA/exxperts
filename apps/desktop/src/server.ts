@@ -1,15 +1,14 @@
 // Manages the exxperts web server as a child process of the desktop app.
 //
 // The shell stays additive: it launches the exact same server the `exxperts
-// web` launcher runs (tsx over apps/web-server/src/index.ts with EXXETA_HOME,
+// web` launcher runs (the bundled apps/web-server/dist/server.mjs, or tsx over
+// apps/web-server/src/index.ts in a tree without the bundle, with EXXETA_HOME,
 // NODE_ENV=production and PORT), waits for /healthz, and reads the minted auth
 // token from the app state dir. Nothing server-side changes for the app.
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { createRequire } from "node:module";
-import { pathToFileURL } from "node:url";
 import { app } from "electron";
 
 export const PORT = Number(process.env.EXXPERTS_DESKTOP_PORT ?? 8787);
@@ -88,6 +87,12 @@ type StateProfilesModule = {
 export function stateProfilesModule(): StateProfilesModule {
   return require(path.join(serverRoot(), "bin", "lib", "state-profiles.cjs")) as StateProfilesModule;
 }
+
+// Which entry starts the server, shared with the CLI launcher (plain CJS in
+// the server payload, which always ships with this shell).
+type ServerEntryModule = {
+  serverLaunchArgs: (root: string, options?: { tsxLoader?: boolean }) => string[];
+};
 
 export function serverEnv(): NodeJS.ProcessEnv {
   const root = serverRoot();
@@ -261,20 +266,15 @@ export class ServerHandle {
 
   start(): void {
     const root = serverRoot();
-    const requireFromRoot = createRequire(path.join(root, "package.json"));
-    // Deliberately NOT tsx/cli: that is a wrapper which spawns the real
-    // server as a grandchild, so signals to our child hit the wrapper and a
-    // SIGKILL orphans the actual server (found live: the orphan kept
-    // answering /healthz and faked out the watchdog). Spawning node with
-    // tsx's loader flags directly makes the child BE the server - one
-    // process, exact signals, exact watchdog.
-    const tsxDir = path.dirname(requireFromRoot.resolve("tsx/package.json"));
-    const serverEntry = path.join(root, "apps", "web-server", "src", "index.ts");
-    const child = spawn(nodeBinary(), [
-      "--require", path.join(tsxDir, "dist", "preflight.cjs"),
-      "--import", pathToFileURL(path.join(tsxDir, "dist", "loader.mjs")).href,
-      serverEntry,
-    ], {
+    // The child must BE the server - one process, exact signals, exact
+    // watchdog: the bundled server with plain node, or the source with tsx's
+    // loader flags, deliberately NOT tsx/cli: that is a wrapper which spawns
+    // the real server as a grandchild, so signals to our child hit the
+    // wrapper and a SIGKILL orphans the actual server (found live: the orphan
+    // kept answering /healthz and faked out the watchdog).
+    const serverEntry = require(path.join(root, "bin", "lib", "server-entry.cjs")) as ServerEntryModule;
+    const serverArgs = serverEntry.serverLaunchArgs(root, { tsxLoader: true });
+    const child = spawn(nodeBinary(), serverArgs, {
       cwd: root,
       env: serverEnv(),
       stdio: ["ignore", "pipe", "pipe"],

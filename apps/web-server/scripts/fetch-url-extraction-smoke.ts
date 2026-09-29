@@ -8,9 +8,13 @@
 // Chromium fails to launch (which happens under full-suite load), because the
 // tool's contract is to fall back to the static result in exactly that case.
 import http from "node:http";
+import { createRequire } from "node:module";
 import type { AddressInfo } from "node:net";
 
 const mod = await import("../../../pi-package/extensions/fetch_url/index.js");
+// jsdom opens about 1,100 files when it loads, so the extension loads it on
+// the first page it parses, not when the server imports the extension.
+const jsdomLoaded = () => Object.keys(createRequire(import.meta.url).cache).some((file) => /[\\/]node_modules[\\/]jsdom[\\/]/.test(file));
 const factory = mod.default;
 const { extractReadable, THIN_TEXT_THRESHOLD } = mod;
 
@@ -72,7 +76,9 @@ const SPA_HTML = `<!doctype html><html><head><title>SPA Shell</title></head>
 
 // ---- Unit: extraction ------------------------------------------------------
 
+assert(!jsdomLoaded(), "importing fetch_url must not load jsdom");
 const article = extractReadable(ARTICLE_HTML, "https://fixture.test/article");
+assert(jsdomLoaded(), "parsing a page should load jsdom");
 assert(article.title === "Widget Guide" || article.title === "How Widgets Work", `article title unexpected: ${article.title}`);
 assert(/How Widgets Work/.test(article.markdown), "article markdown should keep the heading");
 assert(/self-contained component/.test(article.markdown), "article markdown should keep the body text");

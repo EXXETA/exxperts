@@ -244,7 +244,7 @@ export function openUpdatePanel(options: { version: string; parent?: BrowserWind
       // On Windows the NSIS installer's own small window follows the panel
       // (the install runs after the app has quit); on macOS the swap and the
       // relaunch take a few seconds.
-      const wait = process.platform === "win32" ? "one to two minutes" : "a few seconds";
+      const wait = process.platform === "win32" ? "a few minutes" : "a few seconds";
       current = {
         ...current,
         state: "installing",

@@ -7,8 +7,19 @@ import { fileURLToPath } from "node:url";
 let logoBase64: string | null = null;
 try {
 	const __dirname = dirname(fileURLToPath(import.meta.url));
+	// The install root first: the launchers and the desktop app name it in
+	// EXXETA_HOME, and inside the bundled web server this file's folder is
+	// apps/web-server/dist, where the walk up below overshoots it.
+	const home = process.env.EXXETA_HOME;
+	const homePaths = home
+		? [
+				resolve(home, "apps/web-ui/public/brand/exxperts-logo-negative.png"),
+				resolve(home, "apps/web-ui/dist/brand/exxperts-logo-negative.png"),
+			]
+		: [];
 	// Walk up from runtime/packages/ai/dist/utils/oauth/ to repo root, then into web-ui
 	const logoPaths = [
+		...homePaths,
 		resolve(__dirname, "../../../../../..", "apps/web-ui/public/brand/exxperts-logo-negative.png"),
 		resolve(__dirname, "../../../../../../..", "apps/web-ui/public/brand/exxperts-logo-negative.png"),
 		resolve(__dirname, "../../../../../..", "apps/web-ui/dist/brand/exxperts-logo-negative.png"),

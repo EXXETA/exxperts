@@ -8,7 +8,8 @@
 //   node scripts/bundle-release.mjs --print-node-version
 //
 // Output: <out>/exxperts-<version>-<target>.tar.gz (POSIX targets) or .zip
-// (win-x64), plus <archivename>.sha256 next to it (sha256sum format).
+// (win-x64), plus <archivename>.sha256 next to it (sha256sum format), and the
+// bundled server's source map in <out>/maps/, which the archive never carries.
 //
 // The target MUST match the host platform/arch: esbuild,
 // @mariozechner/clipboard and @napi-rs/canvas (the vision renderer) install
@@ -39,6 +40,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { findPrunedTypeScriptImports, pruneNodeModules } from "./bundle-release-prune.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 // npm is npm.cmd on Windows; a shell is required to spawn it there.
@@ -72,6 +75,15 @@ const NODE_PIN = JSON.parse(
 	fs.readFileSync(path.join(root, "scripts", "release-node-version.json"), "utf8"),
 );
 const NODE_VERSION = NODE_PIN.version;
+
+// The most files a release archive may carry, one ceiling for every target.
+// Each file costs install and update time on Windows, where the virus scanner
+// checks every new file, so growth has to be a reviewed decision. Measured on
+// 2026-09-29 for 0.14.1: the darwin-arm64 archive held 32,389 files before the
+// payload trim and 13,611 after it (win-x64 and linux-x64 estimated at 13,662
+// and 13,605 from the 0.14.0 archives); the ceiling sits about 10 percent
+// above the trimmed count.
+const MAX_ARCHIVE_FILES = 15_000;
 
 // ---------------------------------------------------------------------------
 // CLI parsing. The contract here is consumed by the release workflow; keep
@@ -146,6 +158,8 @@ if (fs.existsSync(outDir)) {
 		}
 	}
 }
+const mapsDir = path.join(outDir, "maps");
+fs.rmSync(mapsDir, { recursive: true, force: true });
 
 // Scratch space lives under os.tmpdir(): a fresh dir per run, removed at the
 // end. Kept out of the repo so a failed run never leaves half-staged trees
@@ -249,6 +263,21 @@ for (const script of ["scripts/patch-mcp-adapter.mjs", "scripts/install-chromium
 	}
 }
 
+// Bundle the web server inside the installed tree, so it inlines the
+// dependency versions this install resolved and the patched MCP adapter, not
+// the checkout's (scripts/bundle-server.mjs). Its source map goes to the out
+// dir, never into the archive.
+log("bundling the web server in the temp install...");
+const bundled = spawnSync(
+	process.execPath,
+	[path.join(installedRoot, "scripts", "bundle-server.mjs"), "--map", path.join(mapsDir, `exxperts-${pkg.version}-${target}-server.mjs.map`)],
+	{ cwd: installedRoot, stdio: "inherit" },
+);
+if (bundled.status !== 0 || !fs.existsSync(path.join(installedRoot, "apps", "web-server", "dist", "server.mjs"))) {
+	console.error("[bundle-release] scripts/bundle-server.mjs did not produce apps/web-server/dist/server.mjs in the temp install");
+	process.exit(bundled.status || 1);
+}
+
 // The pack tarball has served its purpose; keep the repo tidy.
 try { fs.rmSync(tarball); } catch {}
 
@@ -275,6 +304,25 @@ const leftoverLinks = findSymlinks(appDir);
 if (leftoverLinks.length > 0) {
 	console.error(`[bundle-release] ${leftoverLinks.length} symlink(s) survived staging; the archive would be broken:`);
 	for (const link of leftoverLinks.slice(0, 10)) console.error(`[bundle-release]   ${link}`);
+	process.exit(1);
+}
+
+// Trim app/node_modules of what the app never reads at run time (source
+// maps, declarations, third-party TypeScript sources, markdown); the rules,
+// the protected packages and the reasons live in bundle-release-prune.mjs.
+// The static gate then fails the build if any remaining JavaScript file
+// imports a TypeScript file the prune removed.
+const nodeModulesDir = path.join(appDir, "node_modules");
+const prune = pruneNodeModules(nodeModulesDir);
+const pruned = Object.entries(prune.counts).map(([kind, count]) => `${count} ${kind}`).join(", ");
+log(`prune (${target}): app/node_modules ${prune.filesBefore} -> ${prune.filesAfter} files (removed ${pruned})`);
+const brokenImports = findPrunedTypeScriptImports(nodeModulesDir, prune.removed);
+if (brokenImports.length > 0) {
+	console.error(`[bundle-release] ${brokenImports.length} file(s) import a TypeScript source the prune removed:`);
+	for (const { file, specifier } of brokenImports.slice(0, 10)) {
+		console.error(`[bundle-release]   ${path.relative(appDir, file)} imports ${specifier}`);
+	}
+	console.error("[bundle-release] Add the package to PROTECTED_PACKAGES in scripts/bundle-release-prune.mjs, with the reason.");
 	process.exit(1);
 }
 
@@ -310,6 +358,16 @@ if (isWin) {
 		'#!/bin/sh\n# exxperts launcher: runs the app with the vendored Node runtime.\ndir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)\nexec "$dir/vendor/node/bin/node" "$dir/app/bin/exxperts.cjs" "$@"\n',
 		{ mode: 0o755 },
 	);
+}
+
+// The staged tree is complete: count it against the ceiling (see
+// MAX_ARCHIVE_FILES) before anything is archived.
+const archiveFiles = countFiles(staging);
+log(`file count (${target}): ${archiveFiles} (ceiling ${MAX_ARCHIVE_FILES})`);
+if (archiveFiles > MAX_ARCHIVE_FILES) {
+	console.error(`[bundle-release] the archive would carry ${archiveFiles} files, over the ceiling of ${MAX_ARCHIVE_FILES}.`);
+	console.error("[bundle-release] Prune what the app never reads (scripts/bundle-release-prune.mjs), or raise MAX_ARCHIVE_FILES in a reviewed commit that states the measured count.");
+	process.exit(1);
 }
 
 // ---------------------------------------------------------------------------
@@ -508,6 +566,15 @@ function copyDereferenced(src, dest, ancestors = new Set()) {
 		fs.copyFileSync(src, dest);
 		fs.chmodSync(dest, stat.mode);
 	}
+}
+
+function countFiles(dir) {
+	let count = 0;
+	for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+		if (entry.isDirectory()) count += countFiles(path.join(dir, entry.name));
+		else count++;
+	}
+	return count;
 }
 
 function findSymlinks(dir) {
