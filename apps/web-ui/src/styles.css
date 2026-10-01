@@ -7757,6 +7757,7 @@ strong, b { font-weight: 700; }
 .markdown-editor-tiptap .ProseMirror ul[data-type="taskList"] li > label { margin-top: 5px; }
 .markdown-editor-tiptap .ProseMirror ul[data-type="taskList"] li > div { flex: 1; }
 .markdown-editor-preview { min-height: 0; flex: 1 1 auto; overflow: auto; padding: 16px; }
+.markdown-editor-raw { min-width: 0; min-height: 0; flex: 1 1 auto; margin: 0; overflow: auto; padding: 16px; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--fg); background: transparent; font: 13px/1.55 var(--exx-font-mono, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace); }
 .markdown-editor-placeholder { margin: auto; color: var(--fg-soft); font-size: 13px; }
 .markdown-editor-conflict { flex: 0 0 auto; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 10px 14px; border-top: 1px solid var(--border); color: var(--fg-soft); font-size: 12px; }
 .markdown-editor-conflict strong { color: var(--fg); }
