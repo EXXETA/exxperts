@@ -9,6 +9,7 @@ interface Props {
 }
 
 const ROOT_PATH = "";
+const FILE_TREE_REFRESH_MS = 2000;
 
 export function WorkspaceFileBrowser({ agentId, conversationId, selectedPath = null, onFileSelect }: Props) {
 	const [root, setRoot] = useState<{ displayLabel: string; basename: string } | null>(null);
@@ -19,6 +20,9 @@ export function WorkspaceFileBrowser({ agentId, conversationId, selectedPath = n
 	const [loadingPaths, setLoadingPaths] = useState<Set<string>>(() => new Set());
 	const [loading, setLoading] = useState(true);
 	const [error, setError] = useState<string | null>(null);
+	const entriesByPathRef = useRef(entriesByPath);
+	entriesByPathRef.current = entriesByPath;
+	const refreshInFlightRef = useRef(false);
 	const generationRef = useRef(0);
 
 	useEffect(() => {
@@ -36,6 +40,33 @@ export function WorkspaceFileBrowser({ agentId, conversationId, selectedPath = n
 	}, [agentId, conversationId]);
 
 	useEffect(() => {
+		let active = true;
+		const generation = generationRef.current;
+		const refreshLoadedDirectories = async (): Promise<void> => {
+			if (!active || document.visibilityState === "hidden" || refreshInFlightRef.current) return;
+			const paths = Object.keys(entriesByPathRef.current);
+			if (paths.length === 0) return;
+			refreshInFlightRef.current = true;
+			try {
+				await Promise.all(paths.map((relativePath) => loadDirectory(relativePath, generation, relativePath === ROOT_PATH, true)));
+			} finally {
+				refreshInFlightRef.current = false;
+			}
+		};
+		const onFocus = () => { void refreshLoadedDirectories(); };
+		const onVisibilityChange = () => { if (document.visibilityState === "visible") void refreshLoadedDirectories(); };
+		const timer = window.setInterval(() => { void refreshLoadedDirectories(); }, FILE_TREE_REFRESH_MS);
+		window.addEventListener("focus", onFocus);
+		document.addEventListener("visibilitychange", onVisibilityChange);
+		return () => {
+			active = false;
+			window.clearInterval(timer);
+			window.removeEventListener("focus", onFocus);
+			document.removeEventListener("visibilitychange", onVisibilityChange);
+		};
+	}, [agentId, conversationId]);
+
+	useEffect(() => {
 		const previousPath = previousSelectedPathRef.current;
 		previousSelectedPathRef.current = selectedPath;
 		if (!previousPath || selectedPath) return;
@@ -43,17 +74,17 @@ export function WorkspaceFileBrowser({ agentId, conversationId, selectedPath = n
 		return () => window.cancelAnimationFrame(frame);
 	}, [selectedPath]);
 
-	async function loadDirectory(relativePath: string, generation = generationRef.current, isRoot = false): Promise<void> {
+	async function loadDirectory(relativePath: string, generation = generationRef.current, isRoot = false, background = false): Promise<void> {
 		setLoadingPaths((current) => new Set(current).add(relativePath));
-		if (isRoot) setLoading(true);
+		if (isRoot && !background) setLoading(true);
 		try {
 			const listing = await listWorkspaceFiles(agentId, conversationId, relativePath);
 			if (generation !== generationRef.current) return;
 			setRoot(listing.root);
 			setEntriesByPath((current) => ({ ...current, [listing.path]: listing.entries }));
-			setError(null);
+			if (!background || isRoot) setError(null);
 		} catch (cause) {
-			if (generation === generationRef.current) setError((cause as Error).message || "Failed to load workspace files.");
+			if (generation === generationRef.current && (!background || isRoot)) setError((cause as Error).message || "Failed to load workspace files.");
 		} finally {
 			if (generation !== generationRef.current) return;
 			setLoadingPaths((current) => {
@@ -61,7 +92,7 @@ export function WorkspaceFileBrowser({ agentId, conversationId, selectedPath = n
 				next.delete(relativePath);
 				return next;
 			});
-			if (isRoot) setLoading(false);
+			if (isRoot && !background) setLoading(false);
 		}
 	}
 
