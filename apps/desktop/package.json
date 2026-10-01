@@ -1,6 +1,6 @@
 {
   "name": "@exxeta/exxperts-desktop",
-  "version": "0.14.0",
+  "version": "0.14.1",
   "private": true,
   "description": "Desktop app shell for exxperts: spawns the local web server and wraps the web UI in a window with a tray.",
   "main": "dist/main.js",
@@ -17,7 +17,7 @@
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
-    "electron": "^43.2.0",
+    "electron": "^43.5.0",
     "electron-builder": "^26.15.3",
     "electron-updater": "^6.8.9",
     "esbuild": "^0.28.1",

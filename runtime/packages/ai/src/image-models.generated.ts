@@ -215,6 +215,21 @@ export const IMAGE_MODELS = {
 	  "cacheWrite": 0
 	}
 		} satisfies ImagesModel<"openrouter-images">,
+		"inclusionai/ming-image-0.1-design-layer": {
+			id: "inclusionai/ming-image-0.1-design-layer",
+			name: "inclusionAI: Ming Image 0.1 Design Layer",
+			api: "openrouter-images",
+			provider: "openrouter",
+			baseUrl: "https://openrouter.ai/api/v1",
+			input: ["text","image"],
+			output: ["image"],
+			cost: 	{
+	  "input": 0,
+	  "output": 0,
+	  "cacheRead": 0,
+	  "cacheWrite": 0
+	}
+		} satisfies ImagesModel<"openrouter-images">,
 		"krea/krea-2-large": {
 			id: "krea/krea-2-large",
 			name: "Krea: Krea 2 Large",
@@ -657,6 +672,21 @@ export const IMAGE_MODELS = {
 			provider: "openrouter",
 			baseUrl: "https://openrouter.ai/api/v1",
 			input: ["text","image"],
+			output: ["image"],
+			cost: 	{
+	  "input": 0,
+	  "output": 0,
+	  "cacheRead": 0,
+	  "cacheWrite": 0
+	}
+		} satisfies ImagesModel<"openrouter-images">,
+		"recraft/recraft-v4.1-flash": {
+			id: "recraft/recraft-v4.1-flash",
+			name: "Recraft: Recraft V4.1 Flash",
+			api: "openrouter-images",
+			provider: "openrouter",
+			baseUrl: "https://openrouter.ai/api/v1",
+			input: ["text"],
 			output: ["image"],
 			cost: 	{
 	  "input": 0,

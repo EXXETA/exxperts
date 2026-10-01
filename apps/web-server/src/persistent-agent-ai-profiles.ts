@@ -75,6 +75,7 @@ export const PERSISTENT_AGENT_AI_PROFILES = {
 			// The order OpenAI's Codex app uses; the first entry is the default.
 			persistentRoom: [
 				{ provider: "openai-codex", model: "gpt-6-sol" },
+				{ provider: "openai-codex", model: "gpt-6.1-sol" },
 				{ provider: "openai-codex", model: "gpt-6-astra" },
 				{ provider: "openai-codex", model: "gpt-6-luna" },
 				{ provider: "openai-codex", model: "gpt-5.6-sol" },
@@ -96,6 +97,7 @@ export const PERSISTENT_AGENT_AI_PROFILES = {
 			persistentRoom: [
 				{ provider: "anthropic", model: "claude-opus-5-5" },
 				{ provider: "anthropic", model: "claude-fable-5-1" },
+				{ provider: "anthropic", model: "claude-sonnet-5-5" },
 				{ provider: "anthropic", model: "claude-sonnet-5" },
 				{ provider: "anthropic", model: "claude-haiku-4-5" },
 				{ provider: "anthropic", model: "claude-opus-5" },

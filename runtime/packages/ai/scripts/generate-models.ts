@@ -148,7 +148,9 @@ const OPENAI_RESPONSES_NONE_REASONING_MODELS = new Set([
 	"gpt-5.4-nano",
 	"gpt-5.5",
 	// GPT-6 Sol and Luna take reasoning.effort "none" (developers.openai.com,
-	// 2026-09-22); gpt-6-astra does not.
+	// 2026-09-22); gpt-6-astra does not. Neither does gpt-6.1-sol: its model
+	// page lists low to max and names none and minimal as unsupported
+	// (developers.openai.com/api/docs/models/gpt-6.1-sol, 2026-10-01).
 	"gpt-6-sol",
 	"gpt-6-luna",
 ]);
@@ -358,19 +360,23 @@ function applyThinkingLevelMetadata(model: Model<any>): void {
 	// control thinking behavior.' Opus 5.5 (released 2026-09-22) is the third
 	// family member whose thinking cannot be disabled, with the same 400 and
 	// the same remedy; see its what's-new page,
-	// platform.claude.com/docs/en/models/opus-5-5/whats-new. Opus 5, Sonnet 5
-	// and the rest accept disabled and keep "off".
+	// platform.claude.com/docs/en/models/opus-5-5/whats-new. Sonnet 5.5
+	// (released 2026-09-28) returns the same 400 for disabled; its lowest
+	// setting is thinking.type "between_tools", which this app does not send,
+	// so it gets no "off" either and its cheapest rung is adaptive at effort
+	// "low" (platform.claude.com/docs/en/models/sonnet-5-5/whats-new-sonnet-5-5).
+	// Opus 5, Sonnet 5 and the rest accept disabled and keep "off".
 	// models.dev publishes the same effort ladder for Opus 5 and Fable 5,
 	// so the ladder cannot be the rule; the family is, on every provider that
 	// carries it (Bedrock and Vertex prefixes and the gateways' dotted spellings
 	// included), the way the GPT-5.6 rows pin off to null above. The Opus 5.5
-	// pattern requires the minor version to end there, so claude-opus-5 stays
-	// untouched.
+	// and Sonnet 5.5 patterns require the minor version to end there, so
+	// claude-opus-5 and claude-sonnet-5 stay untouched.
 	// A room that already stores "off" for one of these models is settled by
 	// clampThinkingLevel (src/models.ts) to "minimal", the cheapest thinking
 	// rung it lists (the Anthropic rows leave minimal unmapped), and the
 	// provider sends that as effort "low", the same rung the dial shows as low.
-	if (/claude-(fable|mythos)-|claude-opus-5[-.]5(?:$|[^0-9])/.test(model.id.toLowerCase())) {
+	if (/claude-(fable|mythos)-|claude-(opus|sonnet)-5[-.]5(?:$|[^0-9])/.test(model.id.toLowerCase())) {
 		mergeThinkingLevelMap(model, { off: null });
 	}
 	if (model.api === "openai-completions" && model.id.includes("deepseek-v4")) {
@@ -1831,6 +1837,24 @@ async function generateModels() {
 			reasoning: true,
 			input: ["text", "image"],
 			cost: { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 0 },
+			contextWindow: 272000,
+			maxTokens: CODEX_MAX_TOKENS,
+		},
+		// GPT-6.1 Sol (released 2026-09-29) on the ChatGPT subscription
+		// endpoint, shaped like the GPT-6 Sol row: the 272000 window the backend
+		// serves, the 5.6 output, the cost of the openai API row. Like Astra it
+		// has no "none" effort (its model page lists low to max), so off is
+		// pinned to null; the family rule adds minimal, xhigh and max.
+		{
+			id: "gpt-6.1-sol",
+			name: "GPT-6.1 Sol",
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			baseUrl: CODEX_BASE_URL,
+			reasoning: true,
+			thinkingLevelMap: { off: null },
+			input: ["text", "image"],
+			cost: { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 0 },
 			contextWindow: 272000,
 			maxTokens: CODEX_MAX_TOKENS,
 		},

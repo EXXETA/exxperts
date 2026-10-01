@@ -50,6 +50,12 @@ describe("clampThinkingLevel", () => {
 		expect(clampThinkingLevel(model!, "off")).toBe("minimal");
 	});
 
+	it("settles a stored off on the Sonnet 5.5 row the same way, since disabled is a 400 there too", () => {
+		const model = getModel("anthropic", "claude-sonnet-5-5");
+		expect(getSupportedThinkingLevels(model!)).toEqual(["minimal", "low", "medium", "high", "xhigh", "max"]);
+		expect(clampThinkingLevel(model!, "off")).toBe("minimal");
+	});
+
 	it("keeps a reachable level exactly as asked", () => {
 		const model = getModel("anthropic", "claude-opus-5");
 		for (const level of ["off", "low", "medium", "high", "xhigh", "max"] as const) {

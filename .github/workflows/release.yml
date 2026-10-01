@@ -116,6 +116,18 @@ jobs:
             dist-release/exxperts-*
           if-no-files-found: error
 
+      # The bundled server's source map, kept as a workflow artifact so a
+      # stack trace from a user can be read back; never a release asset.
+      # Ninety days is the most a public repository keeps an artifact, so the
+      # map of a release can be read for three months after it; storing it
+      # longer is a separate decision.
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: server-map-${{ matrix.target }}
+          path: dist-release/maps/
+          if-no-files-found: error
+          retention-days: 90
+
   # The desktop apps ride the same pipeline: payloads are the CI-built
   # release archives (never a locally-built tree — the win-x64 payload rule),
   # each app built natively on its own OS runner, exactly like the local

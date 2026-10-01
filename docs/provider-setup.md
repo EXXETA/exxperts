@@ -323,7 +323,7 @@ Current `chatgpt-codex` mapping:
 
 | Process | Approved provider/model |
 | --- | --- |
-| Persistent-room conversation | `openai-codex/gpt-6-sol`, `openai-codex/gpt-6-astra`, `openai-codex/gpt-6-luna`, `openai-codex/gpt-5.6-sol`, `openai-codex/gpt-5.6-terra`, `openai-codex/gpt-5.6-luna` |
+| Persistent-room conversation | `openai-codex/gpt-6-sol`, `openai-codex/gpt-6.1-sol`, `openai-codex/gpt-6-astra`, `openai-codex/gpt-6-luna`, `openai-codex/gpt-5.6-sol`, `openai-codex/gpt-5.6-terra`, `openai-codex/gpt-5.6-luna` |
 | Memory row (Remember, Memorize, Review, and the other memory work) | Any approved model; recommended: `openai-codex/gpt-6-sol` |
 
 `gpt-6-sol` is the default/recommended model. The list follows the order of OpenAI's Codex app.
@@ -338,7 +338,7 @@ Current `anthropic` mapping:
 
 | Process | Approved provider/model |
 | --- | --- |
-| Persistent-room conversation | `anthropic/claude-opus-5-5`, `anthropic/claude-fable-5-1`, `anthropic/claude-sonnet-5`, `anthropic/claude-haiku-4-5`, `anthropic/claude-opus-5`, `anthropic/claude-opus-4-8`, `anthropic/claude-fable-5`, `anthropic/claude-sonnet-4-6`, `anthropic/claude-opus-4-7`, `anthropic/claude-opus-4-6` |
+| Persistent-room conversation | `anthropic/claude-opus-5-5`, `anthropic/claude-fable-5-1`, `anthropic/claude-sonnet-5-5`, `anthropic/claude-sonnet-5`, `anthropic/claude-haiku-4-5`, `anthropic/claude-opus-5`, `anthropic/claude-opus-4-8`, `anthropic/claude-fable-5`, `anthropic/claude-sonnet-4-6`, `anthropic/claude-opus-4-7`, `anthropic/claude-opus-4-6` |
 | Memory row (Remember, Memorize, Review, and the other memory work) | Any approved model; recommended: `anthropic/claude-opus-5-5` |
 
 `claude-opus-5-5` is the default/recommended model. The list follows Anthropic's tier order, newest first inside a tier.

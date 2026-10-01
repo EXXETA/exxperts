@@ -12,12 +12,12 @@ describe("getThinkingLevelLadder", () => {
 		expect(ladder.map((rung) => rung.label)).toEqual(["off", "low", "medium", "high", "xhigh", "max"]);
 	});
 
-	it.each(["claude-fable-5-1", "claude-fable-5", "claude-opus-5-5"] as const)("gives %s no off rung, because its thinking cannot be disabled", (modelId) => {
+	it.each(["claude-fable-5-1", "claude-fable-5", "claude-opus-5-5", "claude-sonnet-5-5"] as const)("gives %s no off rung, because its thinking cannot be disabled", (modelId) => {
 		const model = getModel("anthropic", modelId);
 		expect(model).toBeDefined();
 		const ladder = getThinkingLevelLadder(model!);
-		// The Fable family and Opus 5.5 take adaptive thinking only, always on:
-		// a request to disable it is a 400, so the dial never offers "off".
+		// The Fable family, Opus 5.5 and Sonnet 5.5 reject thinking disabled
+		// with a 400, so the dial never offers "off".
 		expect(ladder.map((rung) => rung.level)).toEqual(["low", "medium", "high", "xhigh", "max"]);
 		expect(ladder.map((rung) => rung.label)).toEqual(["low", "medium", "high", "xhigh", "max"]);
 	});
@@ -26,8 +26,8 @@ describe("getThinkingLevelLadder", () => {
 		const model = getModel("anthropic", modelId);
 		expect(model).toBeDefined();
 		const ladder = getThinkingLevelLadder(model!);
-		// Only the Fable and Mythos families and Opus 5.5 reject thinking
-		// disabled; every other Claude row keeps "off" as its first rung.
+		// Only the Fable and Mythos families, Opus 5.5 and Sonnet 5.5 reject
+		// thinking disabled; every other Claude row keeps "off" as its first rung.
 		expect(ladder[0]).toEqual({ level: "off", label: "off" });
 	});
 
@@ -55,6 +55,27 @@ describe("getThinkingLevelLadder", () => {
 		const ladder = getThinkingLevelLadder(model!);
 		expect(ladder.map((rung) => rung.level)).toEqual(["low", "medium", "high", "xhigh", "max"]);
 		expect(ladder.map((rung) => rung.label)).toEqual(["low", "medium", "high", "xhigh", "max"]);
+	});
+
+	it.each([
+		["openai", "gpt-6.1-sol"],
+		["azure-openai-responses", "gpt-6.1-sol"],
+		["github-copilot", "gpt-6.1-sol"],
+	] as const)("gives %s %s low to max with no off, because 6.1 Sol takes no effort none", (provider, modelId) => {
+		// The "6.1" generation must reach the GPT-6 family rules, not fall to the
+		// 5.x ones, and unlike GPT-6 Sol it is not on the "none" list.
+		const model = getModel(provider, modelId);
+		expect(model).toBeDefined();
+		const ladder = getThinkingLevelLadder(model!);
+		expect(ladder.map((rung) => rung.level)).toEqual(["low", "medium", "high", "xhigh", "max"]);
+	});
+
+	it("gives GPT-6.1 Sol on the subscription route the same low to max ladder, minimal folded onto low and no off", () => {
+		const model = getModel("openai-codex", "gpt-6.1-sol");
+		expect(model).toBeDefined();
+		const ladder = getThinkingLevelLadder(model!);
+		expect(ladder.map((rung) => rung.level)).toEqual(["low", "medium", "high", "xhigh", "max"]);
+		expect(ladder.some((rung) => rung.level === "minimal")).toBe(false);
 	});
 
 	it("gives GPT-6 Astra on the subscription route the maker's ladder, minimal folded onto low and no off", () => {

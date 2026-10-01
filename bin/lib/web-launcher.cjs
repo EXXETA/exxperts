@@ -5,6 +5,7 @@ const os = require("node:os");
 const path = require("node:path");
 const { ensureProductAppUserDirs, productAppStatePath } = require("./product-state-paths.cjs");
 const stateProfiles = require("./state-profiles.cjs");
+const { serverLaunchArgs } = require("./server-entry.cjs");
 
 function usage(command) {
   return `Usage: ${command} [--port <port>] [--no-open] [--help]\n\nStarts the local exxperts business/user web app, serves the built UI,\nand opens the browser unless --no-open is set.\n\nOptions:\n  --port <port>   Port for the local server (default: 8787 or PORT)\n  --no-open       Do not open a browser\n  --help          Show this help\n`;
@@ -185,8 +186,7 @@ function main(argv = process.argv.slice(2), command = path.basename(process.argv
       console.error(portHeldMessage(command, opts.port, portState));
       process.exit(1);
     }
-    const tsxCli = require.resolve("tsx/cli");
-    const serverEntry = path.join(root, "apps", "web-server", "src", "index.ts");
+    const serverArgs = serverLaunchArgs(root);
     // Spread per leg on top of a fresh copy of baseEnv: the exxperts home can
     // move between legs, and each leg adopts the home into its own copy.
     const extraEnv = {
@@ -234,7 +234,7 @@ function main(argv = process.argv.slice(2), command = path.basename(process.argv
       // env copy, so no leg can inherit the one before it.
       const { home } = stateProfiles.adoptStateHome(loginHome, legEnv);
       const activeProfile = stateProfiles.readActiveProfile(home);
-      server = spawn(process.execPath, [tsxCli, serverEntry], {
+      server = spawn(process.execPath, serverArgs, {
         cwd: root,
         stdio: "inherit",
         env: { ...legEnv, EXXPERTS_REAL_HOME: home, ...stateProfiles.serverEnvForProfile(home, activeProfile) },

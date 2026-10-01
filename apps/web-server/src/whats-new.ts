@@ -29,12 +29,12 @@ import { productAppStatePath } from "../../../pi-package/product-state-paths.js"
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// Same three-steps-up resolution index.ts uses for REPO_ROOT: from this
-// source file's directory, apps/web-server/src, three levels up is the repo
-// checkout in development and the package root when installed, and both keep
-// package.json and CHANGELOG.md side by side at that level (the npm "files"
-// list ships apps/web-server/src as source, so the layout never diverges).
-const PACKAGE_ROOT = path.resolve(__dirname, "..", "..", "..");
+// Same resolution index.ts uses for REPO_ROOT: EXXETA_HOME when the launcher
+// names the install root, else three levels up from this file's directory
+// (apps/web-server/src, or apps/web-server/dist for the bundled server), which
+// is the repo checkout in development and the package root when installed;
+// both keep package.json and CHANGELOG.md side by side at that level.
+const PACKAGE_ROOT = process.env.EXXETA_HOME ? path.resolve(process.env.EXXETA_HOME) : path.resolve(__dirname, "..", "..", "..");
 
 const FILE_NAME = "whats-new.json";
 

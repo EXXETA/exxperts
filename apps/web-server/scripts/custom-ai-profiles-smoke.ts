@@ -79,10 +79,10 @@ try {
 	assert(rejected, "built-in provider anthropic should be rejected on write");
 	const curated = profiles.getPersistentAgentAiProfile("anthropic");
 	const curatedRoomModels = curated.processes.persistentRoom.length;
-	assert(curatedRoomModels === 10 && curated.processes.persistentRoom[0].model === "claude-opus-5-5", "the curated Claude list has ten rows with Opus 5.5 first");
+	assert(curatedRoomModels === 11 && curated.processes.persistentRoom[0].model === "claude-opus-5-5", "the curated Claude list has eleven rows with Opus 5.5 first");
 	assert(curated.processes.persistentRoom.some((lock) => lock.model === "claude-haiku-4-5"), "the curated Claude list carries Haiku 4.5");
 	const curatedCodex = profiles.getPersistentAgentAiProfile("chatgpt-codex");
-	assert(curatedCodex.processes.persistentRoom.length === 6 && curatedCodex.processes.persistentRoom[0].model === "gpt-6-sol", "the curated ChatGPT list has six rows with GPT-6 Sol first");
+	assert(curatedCodex.processes.persistentRoom.length === 7 && curatedCodex.processes.persistentRoom[0].model === "gpt-6-sol", "the curated ChatGPT list has seven rows with GPT-6 Sol first");
 	assert(!curatedCodex.processes.persistentRoom.some((lock) => lock.model === "gpt-5.5"), "gpt-5.5 has left the ChatGPT picker");
 
 	// First start after the update: a custom list saved earlier for a built-in

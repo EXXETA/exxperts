@@ -1,4 +1,4 @@
-import type { Model } from "@exxeta/exxperts-ai";
+import { type Api, getModels, getProviders, type Model } from "@exxeta/exxperts-ai";
 import { describe, expect, test } from "vitest";
 import {
 	defaultModelPerProvider,
@@ -369,6 +369,31 @@ describe("resolveCliModel", () => {
 		expect(result.error).toBeUndefined();
 		expect(result.model?.provider).toBe("openrouter");
 		expect(result.model?.id).toBe("qwen/qwen3-coder:exacto");
+	});
+
+	test("a bare claude-sonnet-5 stays on Sonnet 5 with Sonnet 5.5 in the built-in catalogue", () => {
+		// The fuzzy fallback prefers the alias that sorts highest, which would be
+		// claude-sonnet-5-5; the exact id must win before that fallback runs.
+		const builtIn = getProviders().flatMap((provider) => getModels(provider) as Model<Api>[]);
+		expect(builtIn.some((model) => model.provider === "anthropic" && model.id === "claude-sonnet-5-5")).toBe(true);
+		const registry = {
+			getAll: () => builtIn,
+		} as unknown as Parameters<typeof resolveCliModel>[0]["modelRegistry"];
+
+		for (const [cliProvider, cliModel] of [
+			[undefined, "claude-sonnet-5"],
+			["anthropic", "claude-sonnet-5"],
+			[undefined, "anthropic/claude-sonnet-5"],
+		] as const) {
+			const result = resolveCliModel({ cliProvider, cliModel, modelRegistry: registry });
+			expect(result.error).toBeUndefined();
+			expect(result.model?.provider).toBe("anthropic");
+			expect(result.model?.id).toBe("claude-sonnet-5");
+		}
+
+		const newer = resolveCliModel({ cliModel: "claude-sonnet-5-5", modelRegistry: registry });
+		expect(newer.model?.provider).toBe("anthropic");
+		expect(newer.model?.id).toBe("claude-sonnet-5-5");
 	});
 });
 

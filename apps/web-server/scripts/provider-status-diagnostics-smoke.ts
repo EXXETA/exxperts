@@ -211,6 +211,7 @@ try {
 		JSON.stringify(roomModelKeys(roomModelStatus.body)) === JSON.stringify([
 			"anthropic/claude-opus-5-5",
 			"anthropic/claude-fable-5-1",
+			"anthropic/claude-sonnet-5-5",
 			"anthropic/claude-sonnet-5",
 			"anthropic/claude-haiku-4-5",
 			"anthropic/claude-opus-5",
@@ -226,6 +227,7 @@ try {
 		JSON.stringify(compactRoomModelLabels(roomModelStatus.body)) === JSON.stringify([
 			"Opus 5.5",
 			"Fable 5.1",
+			"Sonnet 5.5",
 			"Sonnet 5",
 			"Haiku 4.5",
 			"Opus 5",

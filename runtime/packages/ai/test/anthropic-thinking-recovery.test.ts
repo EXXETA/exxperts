@@ -219,8 +219,8 @@ describe("anthropic thinking validation recovery", () => {
 		expect(result.diagnostics?.filter((d) => d.type === "anthropic-history-validation-recovery").length).toBe(1);
 	});
 
-	it("recovers an Opus 5.5 turn the same way: thinking stays adaptive and the binding field stays on the retry", async () => {
-		const model = getModel("anthropic", "claude-opus-5-5")!;
+	it.each(["claude-opus-5-5", "claude-sonnet-5-5"] as const)("recovers a %s turn the same way: thinking stays adaptive and the binding field stays on the retry", async (modelId) => {
+		const model = getModel("anthropic", modelId)!;
 		const done = sse([
 			messageStart("msg_recovered"),
 			{ type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
@@ -235,7 +235,7 @@ describe("anthropic thinking validation recovery", () => {
 				{
 					role: "assistant",
 					content: [{ type: "thinking", thinking: "t", thinkingSignature: "sig" }, { type: "text", text: "First." }],
-					api: "anthropic-messages", provider: "anthropic", model: "claude-opus-5-5",
+					api: "anthropic-messages", provider: "anthropic", model: modelId,
 					usage: {} as any, stopReason: "stop", timestamp: Date.now(),
 				} as any,
 				{ role: "user", content: "again", timestamp: Date.now() },

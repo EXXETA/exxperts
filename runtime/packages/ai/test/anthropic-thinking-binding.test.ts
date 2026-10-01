@@ -126,9 +126,23 @@ describe("thinking-block binding on the models that enforce it", () => {
 		expect(beta).toContain("oauth-2025-04-20");
 	});
 
+	it("claude-sonnet-5-5 asks the API to drop a block bound to a different prefix (API key path)", async () => {
+		const { params, beta } = await requestWithReasoning("claude-sonnet-5-5", API_KEY);
+		expect(params.thinking.type).toBe("adaptive");
+		expect(params.thinking.block_binding).toEqual({ prefix_mismatch_behavior: "drop_block" });
+		expect(beta).toContain(BINDING_BETA);
+	});
+
+	it("claude-sonnet-5-5 carries the same field and beta on the subscription (OAuth) path", async () => {
+		const { params, beta } = await requestWithReasoning("claude-sonnet-5-5", OAUTH_KEY);
+		expect(params.thinking.block_binding).toEqual({ prefix_mismatch_behavior: "drop_block" });
+		expect(beta).toContain(BINDING_BETA);
+		expect(beta).toContain("oauth-2025-04-20");
+	});
+
 	// The negative case: the earlier Claude 5 rows are not bound and must stay
 	// free of both the field and the beta.
-	it.each(["claude-opus-5", "claude-fable-5"])("%s is not a binding model and carries neither the field nor the beta", async (modelId) => {
+	it.each(["claude-opus-5", "claude-fable-5", "claude-sonnet-5"])("%s is not a binding model and carries neither the field nor the beta", async (modelId) => {
 		const { params, beta } = await requestWithReasoning(modelId, API_KEY);
 		expect(params.thinking.type).toBe("adaptive");
 		expect(params.thinking.block_binding).toBeUndefined();

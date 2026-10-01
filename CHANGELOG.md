@@ -2,6 +2,16 @@
 
 User-visible changes per release. Historical private/internal development notes are not part of this public-facing changelog.
 
+## 0.14.1 (2026-10-02)
+
+- Desktop: Installs and updates much faster. The app carries about 2,200 files instead of 32,500 and
+  starts its server without compiling it first.
+- Desktop: Security update of the app framework and three libraries.
+- Models: Claude Sonnet 5.5 is in the Claude picker. Like Opus 5.5, it thinks from low to max.
+- Models: GPT-6.1 Sol is in the ChatGPT picker.
+- Models: The model catalogue is refreshed, with Copilot gaining Opus 5.5, Sonnet 5.5 and the GPT-6
+  line.
+
 ## 0.14.0 (2026-09-28)
 
 - Models: Each room now has its own model. Choose it in Room settings, Model: one for conversations

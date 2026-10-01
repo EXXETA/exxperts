@@ -13,7 +13,7 @@ import type { Api, Context, Model, ThinkingLevel } from "../src/types.js";
 // payload and fail if a top tier ever silently becomes a budget again.
 
 interface AnthropicThinkingPayload {
-	thinking?: { type: string; budget_tokens?: number; display?: string };
+	thinking?: { type: string; budget_tokens?: number; display?: string; block_binding?: unknown };
 	output_config?: { effort?: string };
 }
 
@@ -31,7 +31,7 @@ function makeContext(): Context {
 async function capture<TApi extends Api>(
 	stream: (model: Model<TApi>, context: Context, options?: any) => AsyncIterable<{ type: string }>,
 	model: Model<TApi>,
-	reasoning: ThinkingLevel,
+	reasoning: ThinkingLevel | undefined,
 ): Promise<any> {
 	let captured: unknown;
 	// The request is aborted before it leaves: the payload is built either way,
@@ -53,7 +53,7 @@ async function capture<TApi extends Api>(
 }
 
 describe("adaptive thinking reaches the provider as an effort", () => {
-	it.each(["claude-opus-5", "claude-fable-5", "claude-fable-5-1", "claude-opus-5-5", "claude-opus-4-8", "claude-sonnet-5"] as const)(
+	it.each(["claude-opus-5", "claude-fable-5", "claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5", "claude-opus-4-8", "claude-sonnet-5"] as const)(
 		"%s sends output_config effort, never a thinking budget",
 		async (modelId) => {
 			const model = getModel("anthropic", modelId);
@@ -108,4 +108,41 @@ describe("adaptive thinking reaches the provider as an effort", () => {
 		expect(payload.thinking?.type).toBe("enabled");
 		expect(payload.output_config).toBeUndefined();
 	});
+});
+
+describe("a request with no thinking level on a model that cannot stop thinking", () => {
+	// A caller that passes no reasoning level means "off". On these rows off
+	// does not exist (thinking.type "disabled" is a 400), so the request goes
+	// out at the cheapest rung the dial offers instead of a disabled that the
+	// API refuses and the self-heal has to repair.
+	it.each(["claude-fable-5", "claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5"] as const)(
+		"%s sends adaptive thinking at effort low, never disabled",
+		async (modelId) => {
+			const model = getModel("anthropic", modelId);
+			expect(model).toBeDefined();
+			const payload = (await capture(streamSimpleAnthropic, model!, undefined)) as AnthropicThinkingPayload;
+			expect(payload.thinking?.type).toBe("adaptive");
+			expect(payload.output_config).toEqual({ effort: "low" });
+			expect(payload.thinking?.budget_tokens).toBeUndefined();
+		},
+	);
+
+	it.each(["claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5"] as const)(
+		"%s keeps the binding field on that request, like any other turn on it",
+		async (modelId) => {
+			const model = getModel("anthropic", modelId);
+			const payload = (await capture(streamSimpleAnthropic, model!, undefined)) as AnthropicThinkingPayload;
+			expect(payload.thinking?.block_binding).toEqual({ prefix_mismatch_behavior: "drop_block" });
+		},
+	);
+
+	it.each(["claude-opus-5", "claude-sonnet-5", "claude-sonnet-4-5"] as const)(
+		"%s still turns thinking off, because off is real there",
+		async (modelId) => {
+			const model = getModel("anthropic", modelId);
+			const payload = (await capture(streamSimpleAnthropic, model!, undefined)) as AnthropicThinkingPayload;
+			expect(payload.thinking).toEqual({ type: "disabled" });
+			expect(payload.output_config).toBeUndefined();
+		},
+	);
 });
