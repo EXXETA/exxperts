@@ -42,6 +42,7 @@ interface Props {
 }
 
 type EditorPhase = "loading" | "ready" | "saving" | "conflict" | "error";
+type EditorMode = "edit" | "preview" | "raw";
 
 // Markdown permits a list item's first block to be a heading, quote, table, or
 // nested list. Relaxing the stock paragraph-first schema keeps those files
@@ -272,7 +273,7 @@ export const MarkdownEditorPane = forwardRef(function MarkdownEditorPane({ agent
 	const [draft, setDraft] = useState("");
 	const draftRef = useRef("");
 	const [phase, setPhase] = useState<EditorPhase>("loading");
-	const [mode, setMode] = useState<"edit" | "preview">("edit");
+	const [mode, setMode] = useState<EditorMode>("edit");
 	const [error, setError] = useState<string | null>(null);
 	const [conflictRevision, setConflictRevision] = useState<string | null>(null);
 	const [canEdit, setCanEdit] = useState(false);
@@ -383,6 +384,18 @@ export const MarkdownEditorPane = forwardRef(function MarkdownEditorPane({ agent
 	const save = useCallback(() => surfaceRef.current?.save() ?? Promise.resolve(false), []);
 	const discard = useCallback(() => surfaceRef.current?.discard(), []);
 	const focus = useCallback(() => surfaceRef.current?.focus(), []);
+	const setEditorMode = useCallback((nextMode: EditorMode) => {
+		// TipTap is the source of truth after a formatting command. Mirror it
+		// before switching views so Preview/RAW never show a stale React draft.
+		if (isDirty) {
+			const current = surfaceRef.current?.getContent();
+			if (current !== undefined && current !== draftRef.current) {
+				draftRef.current = current;
+				setDraft(current);
+			}
+		}
+		setMode(nextMode);
+	}, [isDirty]);
 	useImperativeHandle(ref, () => ({ save, discard, focus }), [discard, focus, save]);
 
 	const reloadLatest = useCallback(async () => {
@@ -426,8 +439,9 @@ export const MarkdownEditorPane = forwardRef(function MarkdownEditorPane({ agent
 				<div className="markdown-editor-title"><h2>{filename}</h2><span title={path}>{path}</span></div>
 				<div className="markdown-editor-actions">
 					<div className="markdown-editor-mode" role="group" aria-label="Editor mode">
-						<button type="button" aria-pressed={mode === "edit"} onClick={() => setMode("edit")}>Edit</button>
-						<button type="button" aria-pressed={mode === "preview"} onClick={() => setMode("preview")}>Preview</button>
+						<button type="button" aria-pressed={mode === "edit"} onClick={() => setEditorMode("edit")}>Edit</button>
+						<button type="button" aria-pressed={mode === "preview"} onClick={() => setEditorMode("preview")}>Preview</button>
+						<button type="button" aria-pressed={mode === "raw"} onClick={() => setEditorMode("raw")}>RAW</button>
 					</div>
 					<span className={`markdown-editor-status markdown-editor-status-${phase}`} aria-live="polite">{status}</span>
 					<button type="button" className="markdown-editor-save" onClick={() => void save()} disabled={!canEdit || !isDirty || phase === "loading" || phase === "saving" || conflict}>{phase === "saving" ? "Saving…" : "Save"}</button>
@@ -439,6 +453,7 @@ export const MarkdownEditorPane = forwardRef(function MarkdownEditorPane({ agent
 				{phase === "loading" && <p className="markdown-editor-placeholder">Loading file…</p>}
 				{phase !== "loading" && file && <div className={mode === "edit" ? "markdown-editor-surface" : "markdown-editor-surface markdown-editor-surface-hidden"}><MarkdownEditorSurfaceWithRef key={`${conversationId}:${path}:${editorKey}`} ref={surfaceRef} content={draft} revision={file.revision} canEdit={canEdit} isDirty={isDirty} hasExternalUpdate={hasExternalUpdate || phase === "conflict"} isSaving={phase === "saving"} saveError={phase === "error"} setDirty={setDirty} onDraftChange={handleDraftChange} onSave={persist} discardAndApplyExternal={discardAndApplyExternal} contentSetterRef={contentSetterRef} /></div>}
 				{phase !== "loading" && mode === "preview" && <div className="markdown-editor-preview"><MarkdownRenderer renderMermaid={false}>{draft}</MarkdownRenderer></div>}
+				{phase !== "loading" && mode === "raw" && <pre className="markdown-editor-raw" aria-label="Raw Markdown source">{draft}</pre>}
 			</div>
 			{conflict && <div className="markdown-editor-conflict" role="alert"><strong>This file changed outside the editor.</strong>{conflictRevision ? <span> Reload the latest version or save your draft over it.</span> : <span> Reload the latest version or keep your local draft.</span>}<div className="markdown-editor-conflict-actions"><button type="button" onClick={() => void reloadLatest()}>Reload</button><button type="button" onClick={() => void keepMine()} disabled={!canEdit}>Keep mine</button></div></div>}
 		</aside>

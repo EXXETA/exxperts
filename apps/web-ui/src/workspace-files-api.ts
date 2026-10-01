@@ -15,8 +15,8 @@ export interface WorkspaceFileListing {
 	entries: WorkspaceFileEntry[];
 }
 
-export async function listWorkspaceFiles(agentId: string, conversationId: string, relativePath = ""): Promise<WorkspaceFileListing> {
+export async function listWorkspaceFiles(agentId: string, conversationId: string, relativePath = "", init?: RequestInit): Promise<WorkspaceFileListing> {
 	const params = new URLSearchParams({ conversationId });
 	if (relativePath) params.set("path", relativePath);
-	return fetchJson<WorkspaceFileListing>(`/api/persistent-agents/${encodeURIComponent(agentId)}/workspace-files?${params.toString()}`);
+	return fetchJson<WorkspaceFileListing>(`/api/persistent-agents/${encodeURIComponent(agentId)}/workspace-files?${params.toString()}`, { ...init, cache: "no-store" });
 }
