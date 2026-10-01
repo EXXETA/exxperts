@@ -57,6 +57,7 @@
 		"gaxios": {
 			"rimraf": "6.1.2"
 		},
-		"shell-quote": "^1.10.0"
+		"shell-quote": "^1.10.0",
+		"basic-ftp": "6.2.1"
 	}
 }
