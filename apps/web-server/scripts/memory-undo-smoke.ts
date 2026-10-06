@@ -20,7 +20,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import type { AbsorbRunGenerate } from "../src/absorb-run.js";
+import type { AbsorbRunGenerate, AbsorbRunProbe } from "../src/absorb-run.js";
 
 const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "memory-undo-smoke-home-"));
 const root = path.join(tempHome, ".exxperts", "app", "personalized-agents");
@@ -146,9 +146,10 @@ const FOLDED_SESSION = session("RC-0001", "2026-09-11", "Addendum signed", [
 ]);
 
 /**
- * A session the scripted worker never answers readably: it fails its two
- * attempts and stays in Recent Context, which is what gives the room a session
- * left for the run that has to be caught mid-fold further down.
+ * A session the scripted model never answers: its call fails and the probe
+ * finds the model down, so the run stops for the outage and the session stays
+ * in Recent Context, unrecorded. That is what gives the room a session left for
+ * the run that has to be caught mid-fold further down.
  */
 const UNFOLDABLE_SESSION = session("RC-0002", "2026-09-11", "Invoicing questions", [
 	"Invoicing days were discussed without landing anywhere in particular.",
@@ -178,10 +179,13 @@ const FOLD_OPS = [
 	{ op: "close", id: "m-0201" },
 ];
 
-/** The one session this worker can fold; anything else comes back unreadable. */
+/** The one session this worker can fold; for anything else the model is down. */
 const scriptedGenerate: AbsorbRunGenerate = async (prompt) => {
 	if (/^### RC-0001 \|/m.test(prompt)) return foldReply(FOLD_OPS);
-	return { text: "I have folded that discussion into memory for you.", usage: { input: 2400, output: 40, totalTokens: 2440 } };
+	throw new Error("fetch failed");
+};
+const downProbe: AbsorbRunProbe = async () => {
+	throw new Error("fetch failed");
 };
 
 const WORKING_STATES = new Set(["prepass", "folding", "budget"]);
@@ -210,7 +214,7 @@ const RAISED_LIMIT = 30_000;
 
 /** Runs Memorize the way the client does and approves it: one save, one saveId. `raiseTo` is the card's "Raise the limit" before Save; `limitRaisedFrom` is what the client sends after the first read's raise. */
 async function memorize(agentId: string, now = SAVED_AT, raiseTo?: number, limitRaisedFrom?: number): Promise<{ saveId: string; archived: string[]; raisedFrom: number | undefined }> {
-	const started = startAbsorbRun({ agentId, assessmentMarkdown: ASSESSMENT, model: MODEL, generate: scriptedGenerate, now: RUN_CLOCK, ...(limitRaisedFrom === undefined ? {} : { limitRaisedFrom }) });
+	const started = startAbsorbRun({ agentId, assessmentMarkdown: ASSESSMENT, model: MODEL, generate: scriptedGenerate, probe: downProbe, now: RUN_CLOCK, ...(limitRaisedFrom === undefined ? {} : { limitRaisedFrom }) });
 	const run = await settle(agentId, started.runId, "the Memorize run");
 	assert(run.state === "ready", `a scripted Memorize run ends ready for approval, got "${run.state}"${run.error ? ` with "${run.error}"` : ""}`);
 	if (raiseTo !== undefined) setAbsorbRunBudget(agentId, started.runId, raiseTo);

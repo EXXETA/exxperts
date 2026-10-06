@@ -265,6 +265,18 @@ try {
 	assert(afterRestore.body.archive.count === 1, "a restored entry leaves the archive and the other stays");
 	const ghostRestore = await requestJson(`${room}/memory/archive/m-9999/restore`, { method: "POST" });
 	assert(ghostRestore.status === 400 && /archive/.test(String(ghostRestore.body?.error ?? "")), "restoring what is not archived must be refused with a sentence");
+	// An older value kept as history is never made current again.
+	const archiveFile = path.join(agentsRoot, roomId, "L1b", "archive", "entries.md");
+	const archiveBefore = fs.readFileSync(archiveFile, "utf-8");
+	fs.writeFileSync(archiveFile, `${archiveBefore.replace(/\s+$/, "")}\n\n<!-- e: id=m-0900 kind=fact saved=2026-09-30 from=RC-0003 learned=2026-01-10 archived=2026-09-30 why=history until=2026-06-02 topic="Commercial terms" section="Deep Memory" -->\n- The deposit was 3000 euros.\n`);
+	const historyRestore = await requestJson(`${room}/memory/archive/m-0900/restore`, { method: "POST" });
+	assert(historyRestore.status === 409 && /older value/.test(String(historyRestore.body?.error ?? "")), `restoring an older value kept as history must be refused with a sentence, got ${historyRestore.status}: ${JSON.stringify(historyRestore.body)}`);
+	assert(!allEntries((await requestJson(`${room}/memory/entries`)).body).some((e: any) => e.id === "m-0900"), "and it stays out of memory");
+	const withHistory = (await requestJson(`${room}/memory/entries`)).body.archive;
+	assert(withHistory.history === 1 && withHistory.count === 2, `the entries payload counts the older value apart, got ${JSON.stringify(withHistory)}`);
+	const historyRow = ((await requestJson(`${room}/memory/archive?limit=50`)).body.entries as any[]).find((e) => e.id === "m-0900");
+	assert(historyRow?.why === "history" && historyRow.learned === "2026-01-10" && historyRow.until === "2026-06-02", `the archive list carries an older value's two days, got ${JSON.stringify(historyRow)}`);
+	fs.writeFileSync(archiveFile, archiveBefore);
 
 	// --- 4b. Delete for good: the one way out of the archive ------------------
 	// The archive is where a deleted note waits to be restored; a person may
@@ -367,13 +379,22 @@ try {
 	assert(fs.readFileSync(l1bPath, "utf-8") === l1bBeforeConflict, "a refused restore writes nothing to the notes file");
 	const conflictArchive = await requestJson(`${room}/memory/archive?limit=50`);
 	assert(conflictArchive.body.entries.length === 2 && conflictArchive.body.entries.every((e: any) => e.id === nordwind.id || e.id === `${nordwind.id}-v1`), `both rows stay in the archive, got ${JSON.stringify(conflictArchive.body.entries.map((e: any) => e.id))}`);
+	assert(conflictArchive.body.entries.every((e: any) => e.standing === true), `a row whose note still stands in memory says so, so the pane offers no Restore, got ${JSON.stringify(conflictArchive.body.entries)}`);
 	const stillOne = await requestJson(`${room}/memory/entries`);
 	assert(allEntries(stillOne.body).filter((e: any) => e.id === nordwind.id || e.id === `${nordwind.id}-v1`).length === 1, "the core holds the note once");
+	assert(stillOne.body.archive.count === 2 && stillOne.body.archive.history === 2, `rows whose note still stands are counted with the older values, not as notes to bring back, got ${JSON.stringify(stillOne.body.archive)}`);
 	for (const id of [nordwind.id, `${nordwind.id}-v1`]) {
 		const cleared = await requestJson(`${room}/memory/archive/${id}`, { method: "DELETE" });
 		assert(cleared.status === 200 && cleared.body.deleted?.id === id, `the stray row can still be deleted for good, got ${cleared.status}: ${JSON.stringify(cleared.body)}`);
 	}
 	assert((await requestJson(`${room}/memory/archive?limit=50`)).body.entries.length === 0, "and the archive is empty again");
+	// A replaced row whose note is gone from memory can come back: no mark, not counted with the older values.
+	fs.writeFileSync(entriesPath, fs.readFileSync(entriesPath, "utf-8") + stray("m-0950", "- A replaced note whose newer text has left memory."), { mode: 0o600 });
+	const freeRow = ((await requestJson(`${room}/memory/archive?limit=50`)).body.entries as any[]).find((e) => e.id === "m-0950");
+	const freeCounts = (await requestJson(`${room}/memory/entries`)).body.archive;
+	assert(freeRow?.why === "superseded" && freeRow.standing === undefined && freeCounts.count === 1 && freeCounts.history === 0, `a replaced row whose note is gone keeps its Restore, got ${JSON.stringify(freeRow)} and ${JSON.stringify(freeCounts)}`);
+	const freeCleared = await requestJson(`${room}/memory/archive/m-0950`, { method: "DELETE" });
+	assert(freeCleared.status === 200 && freeCleared.body.archive.count === 0 && freeCleared.body.archive.history === 0, `and it can be deleted for good, got ${JSON.stringify(freeCleared.body)}`);
 
 	// --- 8. The pane while the room is in a conversation ----------------------
 	// The field failure: with a turn in flight, the read-only Memory pane asked

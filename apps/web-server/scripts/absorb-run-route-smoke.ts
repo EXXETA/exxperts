@@ -95,9 +95,15 @@ ${sessions}`;
 interface GatewayCall {
 	kind: "assessment" | "fold" | "other";
 	session: string;
+	model: string;
 }
 
 const gatewayCalls: GatewayCall[] = [];
+/**
+ * The room model's outage for section 9: it answers this many more folds, then
+ * nothing at all, the probe included, the way a provider that went away does.
+ */
+let roomModelFoldsBeforeDown = Number.POSITIVE_INFINITY;
 
 /** The prompt as the worker sent it, whatever shape the request wraps it in. */
 function promptTextOf(rawBody: string): string {
@@ -211,7 +217,16 @@ const gateway = http.createServer((req, res) => {
 		const isAssessment = prompt.includes("## Task: Compact Initial Assessment");
 		const kind: GatewayCall["kind"] = isFold ? "fold" : isAssessment ? "assessment" : "other";
 		const session = /Session being folded: (RC-\d+)/.exec(prompt)?.[1] ?? "";
-		gatewayCalls.push({ kind, session });
+		let model = "";
+		try {
+			model = String(JSON.parse(body)?.model ?? "");
+		} catch {}
+		gatewayCalls.push({ kind, session, model });
+		if (model === "room-model" && isFold && roomModelFoldsBeforeDown > 0) roomModelFoldsBeforeDown -= 1;
+		else if (model === "room-model" && roomModelFoldsBeforeDown <= 0) {
+			res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: { message: "the synthetic gateway is not answering", type: "invalid_request_error" } }));
+			return;
+		}
 		const text = isFold ? foldReply(prompt) : isAssessment ? ASSESSMENT_REPLY : "Nothing to do here.";
 		const base = { id: `cmpl_${gatewayCalls.length}`, object: "chat.completion.chunk", created: Math.floor(Date.now() / 1000), model: "room-model" };
 		// A fold call takes a beat, the way a real one does: the run must still be
@@ -283,9 +298,15 @@ try {
 	fs.mkdirSync(agentDir, { recursive: true, mode: 0o700 });
 	fs.mkdirSync(productAppRoot, { recursive: true, mode: 0o700 });
 	fs.writeFileSync(path.join(agentDir, "models.json"), JSON.stringify({
-		providers: { "openai-compatible": { name: "Synthetic Gateway", baseUrl: `http://127.0.0.1:${gatewayPort}/v1`, api: "openai-completions", models: [{ id: "room-model", name: "Room Model", contextWindow: 128000, maxTokens: 16384 }] } },
+		providers: {
+			"openai-compatible": { name: "Synthetic Gateway", baseUrl: `http://127.0.0.1:${gatewayPort}/v1`, api: "openai-completions", models: [{ id: "room-model", name: "Room Model", contextWindow: 128000, maxTokens: 16384 }] },
+			// Section 9's other Memory models: one on a second, signed-in provider,
+			// and one whose provider is signed out.
+			"gateway-backup": { name: "Backup Gateway", baseUrl: `http://127.0.0.1:${gatewayPort}/v1`, api: "openai-completions", models: [{ id: "narrow-model", name: "Narrow Model", contextWindow: 128000, maxTokens: 16384 }] },
+			"gateway-offline": { name: "Offline Gateway", baseUrl: `http://127.0.0.1:${gatewayPort}/v1`, api: "openai-completions", models: [{ id: "offline-model", name: "Offline Model", contextWindow: 128000, maxTokens: 16384 }] },
+		},
 	}, null, 2), { mode: 0o600 });
-	fs.writeFileSync(path.join(agentDir, "auth.json"), JSON.stringify({ "openai-compatible": { type: "api_key", key: "synthetic-absorb-run-key" } }, null, 2), { mode: 0o600 });
+	fs.writeFileSync(path.join(agentDir, "auth.json"), JSON.stringify({ "openai-compatible": { type: "api_key", key: "synthetic-absorb-run-key" }, "gateway-backup": { type: "api_key", key: "synthetic-backup-key" } }, null, 2), { mode: 0o600 });
 	fs.writeFileSync(path.join(productAppRoot, "openai-compatible-ai-profile.json"), JSON.stringify({
 		profileId: "openai-compatible",
 		providerId: "openai-compatible",
@@ -294,6 +315,13 @@ try {
 		maintenanceModel: "room-model",
 	}, null, 2), { mode: 0o600 });
 	fs.writeFileSync(path.join(productAppRoot, "persistent-agent-ai-profile.json"), JSON.stringify({ profileId: "openai-compatible" }, null, 2), { mode: 0o600 });
+	fs.writeFileSync(path.join(productAppRoot, "openai-compatible-gateways.json"), JSON.stringify({
+		version: 1,
+		gateways: [
+			{ id: "gateway-backup", providerId: "gateway-backup", label: "Backup Gateway", baseUrl: `http://127.0.0.1:${gatewayPort}/v1`, roomModels: [{ modelId: "narrow-model", label: "Narrow Model" }], maintenanceModel: "narrow-model" },
+			{ id: "gateway-offline", providerId: "gateway-offline", label: "Offline Gateway", baseUrl: `http://127.0.0.1:${gatewayPort}/v1`, roomModels: [{ modelId: "offline-model", label: "Offline Model" }], maintenanceModel: "offline-model" },
+		],
+	}, null, 2), { mode: 0o600 });
 
 	server = spawn("npx", ["tsx", "src/index.ts"], {
 		shell: process.platform === "win32",
@@ -466,9 +494,76 @@ try {
 		return found.class ?? null;
 	};
 	assert(classOf("GET", "/api/persistent-agents/:id/absorb/runs/:runId") === "read", `watching a run is a room read, got ${JSON.stringify(classOf("GET", "/api/persistent-agents/:id/absorb/runs/:runId"))}`);
-	for (const url of ["/api/persistent-agents/:id/absorb/runs/:runId/keep", "/api/persistent-agents/:id/absorb/runs/:runId/budget", "/api/persistent-agents/:id/absorb/runs/:runId/cancel"]) {
+	for (const url of ["/api/persistent-agents/:id/absorb/runs/:runId/keep", "/api/persistent-agents/:id/absorb/runs/:runId/budget", "/api/persistent-agents/:id/absorb/runs/:runId/cancel", "/api/persistent-agents/:id/absorb/runs/:runId/resume"]) {
 		assert(classOf("POST", url) === "write", `changing a run is room interaction, so POST ${url} should be classified write, got ${JSON.stringify(classOf("POST", url))}`);
 	}
+
+	// --- 9. Try again reads the rest with the room's Memory model as it is now --
+	// The room model folds two conversations and then stops answering, so the run
+	// stops for the outage. The person chooses another Memory model from the
+	// notice: a model whose provider is signed out is refused before anything is
+	// read, the same way Memorize itself refuses it; a model on another provider
+	// that is signed in reads the rest, and the save and the records say so.
+	const resumeCreated = await requestJson("/api/persistent-agents", jsonBody("POST", { displayName: "Memorize Resume Smoke Room", userName: "Synthetic User", preferredUserAddress: "Synthetic User" }));
+	assert(resumeCreated.status === 201, `the second room should be created, got ${resumeCreated.status}: ${JSON.stringify(resumeCreated.body)}`);
+	const resumeRoomId = String(resumeCreated.body?.agent?.id ?? "");
+	const resumeRoom = `/api/persistent-agents/${resumeRoomId}`;
+	const resumeRoomDir = path.join(agentsRoot, resumeRoomId);
+	fs.writeFileSync(path.join(resumeRoomDir, "L1b", "current.md"), fixtureL1b(resumeRoomId), { mode: 0o600 });
+	const settle = async (url: string): Promise<any> => {
+		const deadline = Date.now() + 120_000;
+		for (;;) {
+			const polled = await requestJson(url);
+			assert(polled.status === 200, `the run should stay readable, got ${polled.status}: ${JSON.stringify(polled.body)}`);
+			if (!["prepass", "folding", "budget"].includes(String(polled.body.state))) return polled.body;
+			assert(Date.now() < deadline, `the run was still ${JSON.stringify(polled.body.state)} after two minutes`);
+			await new Promise((resolve) => setTimeout(resolve, 300));
+		}
+	};
+	roomModelFoldsBeforeDown = 2;
+	const resumeProposed = await requestJson(`${resumeRoom}/absorb/propose`, jsonBody("POST", {}));
+	assert(resumeProposed.status === 202, `Memorize should start in the second room, got ${resumeProposed.status}: ${JSON.stringify(resumeProposed.body)}`);
+	const resumeRunUrl = `${resumeRoom}/absorb/runs/${resumeProposed.body.runId}`;
+	const stopped = await settle(resumeRunUrl);
+	const outcomes = (r: any) => r.sessions.map((session: any) => session.outcome);
+	assert(stopped.state === "ready" && stopped.stop?.kind === "outage" && stopped.stop.model?.model === "room-model", `the room model's outage stops the run, got ${JSON.stringify({ state: stopped.state, stop: stopped.stop })}`);
+	assert(JSON.stringify(outcomes(stopped)) === JSON.stringify(["folded", "folded", "pending", "pending", "pending"]), `two conversations were read before the stop and three wait, got ${JSON.stringify(outcomes(stopped))}`);
+
+	// A Memory model whose provider signed out after it was chosen.
+	const roomModelsFile = path.join(resumeRoomDir, "runtime", "models.json");
+	fs.writeFileSync(roomModelsFile, JSON.stringify({ schemaVersion: 1, updatedAt: new Date().toISOString(), memory: { provider: "gateway-offline", model: "offline-model" } }, null, 2), { mode: 0o600 });
+	const callsBeforeRefusal = gatewayCalls.length;
+	const refusedResume = await requestJson(`${resumeRunUrl}/resume`, jsonBody("POST", {}));
+	const refusedPropose = await requestJson(`${resumeRoom}/absorb/propose`, jsonBody("POST", {}));
+	assert(refusedResume.status >= 400 && refusedResume.status === refusedPropose.status && refusedResume.body?.error === refusedPropose.body?.error && refusedResume.body?.code === refusedPropose.body?.code, `Try again with a signed-out Memory model is refused as Memorize refuses it, got ${JSON.stringify(refusedResume)} and ${JSON.stringify(refusedPropose)}`);
+	assert(/Offline Gateway|gateway-offline|signed/i.test(String(refusedResume.body?.error ?? "")) && !/not answering/i.test(String(refusedResume.body?.error ?? "")), `the refusal names the sign-in, never the outage, got ${JSON.stringify(refusedResume.body)}`);
+	assert(gatewayCalls.length === callsBeforeRefusal, `a refused Try again reads nothing, got ${JSON.stringify(gatewayCalls.slice(callsBeforeRefusal))}`);
+	const stillStopped = await requestJson(resumeRunUrl);
+	assert(stillStopped.body.state === "ready" && stillStopped.body.stop?.kind === "outage", `a refused Try again leaves the run as it stopped, got ${JSON.stringify({ state: stillStopped.body.state, stop: stillStopped.body.stop })}`);
+
+	// The person chooses a signed-in model on another provider.
+	const chosen = await requestJson(`${resumeRoom}/models`, jsonBody("PUT", { memory: { provider: "gateway-backup", model: "narrow-model" } }));
+	assert(chosen.status === 200, `choosing the backup model should be stored, got ${chosen.status}: ${JSON.stringify(chosen.body)}`);
+	const callsBeforeResume = gatewayCalls.length;
+	const resumed = await requestJson(`${resumeRunUrl}/resume`, jsonBody("POST", {}));
+	assert(resumed.status === 200 && resumed.body.state === "folding" && !resumed.body.stop, `Try again resumes the run, got ${resumed.status}: ${JSON.stringify({ state: resumed.body?.state, stop: resumed.body?.stop, error: resumed.body?.error })}`);
+	const resumedRun = await settle(resumeRunUrl);
+	const resumedCalls = gatewayCalls.slice(callsBeforeResume);
+	assert(resumedRun.state === "ready" && !resumedRun.stop && outcomes(resumedRun).every((outcome: string) => outcome === "folded"), `the rest is read, got ${JSON.stringify({ state: resumedRun.state, stop: resumedRun.stop, outcomes: outcomes(resumedRun) })}`);
+	assert(resumedCalls.filter((call) => call.kind === "fold").length === 3 && resumedCalls.every((call) => call.model === "narrow-model"), `the rest is read with the model the person chose, got ${JSON.stringify(resumedCalls)}`);
+
+	// Each conversation's record names the model that read it.
+	const diagnosticsDir = path.join(resumeRoomDir, "events", "maintenance-diagnostics");
+	const pageRecords = fs.readdirSync(diagnosticsDir).map((name) => JSON.parse(fs.readFileSync(path.join(diagnosticsDir, name), "utf-8"))).filter((record) => record.process === "memorize-page");
+	const pageModels = (outcome: string) => pageRecords.filter((record) => record.page?.outcome === outcome).map((record) => `${record.provider}/${record.model}`).sort();
+	assert(JSON.stringify(pageModels("folded")) === JSON.stringify(["gateway-backup/narrow-model", "gateway-backup/narrow-model", "gateway-backup/narrow-model", "openai-compatible/room-model", "openai-compatible/room-model"]), `the two read before the stop keep the room model and the three after name the chosen one, got ${JSON.stringify(pageModels("folded"))}`);
+	assert(JSON.stringify(pageModels("outage-stop")) === JSON.stringify(["openai-compatible/room-model"]), `the stop is the room model's, got ${JSON.stringify(pageModels("outage-stop"))}`);
+	const resumeSaved = await requestJson(`${resumeRoom}/absorb/approve`, jsonBody("POST", { runId: resumeProposed.body.runId }));
+	assert(resumeSaved.status === 200, `the resumed run saves, got ${resumeSaved.status}: ${JSON.stringify(resumeSaved.body)}`);
+	const eventRecord = JSON.parse(fs.readFileSync(path.join(resumeRoomDir, resumeSaved.body.eventRelPath), "utf-8"));
+	assert(eventRecord.process?.model?.provider === "gateway-backup" && eventRecord.process.model.model === "narrow-model", `the save records the model the rest was read with, got ${JSON.stringify(eventRecord.process)}`);
+	const savedRun = await requestJson(resumeRunUrl);
+	assert(savedRun.body.state === "saved" && !savedRun.body.stop, `a saved run offers no Try again, got ${JSON.stringify({ state: savedRun.body.state, stop: savedRun.body.stop })}`);
 
 	console.log(`absorb-run-route-smoke: OK (${Math.round((Date.now() - startedAt) / 1000)}s, ${gatewayCalls.length} model calls)`);
 } catch (error) {

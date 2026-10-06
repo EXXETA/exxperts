@@ -3,10 +3,19 @@
 Reproduces the Memorize (absorb consolidation) pipeline on a synthetic room memory of the field's size class, with scripted model replies. Numbers only; no provider needed. Not part of `npm run smokes`.
 
 - `gen-memory.mjs <tokens> <rcEntries>`: deterministic L1b/current.md in the real layout (Chronos, Deep Memory subsections, Active Items, Recent Context entries with rc_metadata). `node gen-memory.mjs 66000 10 > synthetic-66k.md`.
-- `measure.mts`: prompt sizes, required reply size against output caps and generation speeds, the prompt-window guard, the validator's verdict per reply shape (complete, cut, decorated headings, fenced, edited Chronos, budget-fit), and whether approval enforces the budget. Also dumps the proposal fixtures the gateway serves. Run from `apps/web-server`: `npx tsx scripts/memory-bench/measure.mts`.
-- `memorize-gateway.mjs` + `start.sh` + `e2e.sh`: the real web server against a synthetic OpenAI-compatible gateway whose reply leg is chosen per run (`cut-at-max`, `decorated`, `faithful-fast`, `budgetfit-fast`, `budgetfit-80tps`, `drop-midstream`, `assess-drop`). `MAINT=maint-16k|maint-32k|maint-128k ./start.sh`, then `./e2e.sh <leg>`. Requests are logged to `gateway-requests.jsonl`.
+- The whole-document Memorize this bench first measured was retired from the product: Memorize is now a run of per-conversation folds (`absorb-run.ts`). Its numbers are recorded below; the bench that produced them, its gateway and its scripts are gone.
 
-Generated files (`synthetic-*.md`, `*-proposal.md`, `assessment.md`, `home/`, logs) are ignored.
+Generated files (`synthetic-*.md`, logs) are ignored.
+
+### The retired whole-document Memorize, measured at 4299dea6
+
+The synthetic room of `gen-memory.mjs 66000 10` (66,388 tokens: 56,383 Deep Memory, 9,263 Recent Context in 10 entries, 110 Deep Memory subsections), a 20,000-token budget, no model call.
+
+- Prompts: the first read 67,811 tokens; the whole-document proposal 68,141 tokens (272,563 characters).
+- The reply it needed: 57,753 tokens for a faithful rewrite, 20,721 for one fitted to the budget. Against a 16,384-token output cap the faithful reply was 41,369 over, and 25,753 over a 32,000 cap; at 40, 80 and 150 tokens a second it took 24.1, 12.0 and 6.4 minutes (the budget-fit one 8.6, 4.3 and 2.3).
+- The prompt-window guard refused the proposal on a 64k window and let it through on 100k, 128k and 200k.
+- The validator: a complete draft, a draft fenced in ```markdown, collapsed Chronos blank lines and a cleared Recent Context without its placeholder were valid; a draft cut at 16,384 tokens without the provider's flag was refused with 4 structural errors, and with the flag refused as too large to rewrite; bolded, numbered or level-2 proposal headings were refused with 13 errors; one edited Chronos line was refused.
+- An over-budget faithful draft was written as it was (57,497 tokens against the 20,000 budget): approval did not enforce the budget.
 
 ## Fold quality bench
 
@@ -92,7 +101,7 @@ Memory has one test for "do these two notes say one thing", and since 0.13 it ha
 
 | shape | what the pair is | what the run expects |
 | --- | --- | --- |
-| duplicate | the same sentence, word for word, in two conversations | one note carries it, the second add is refused as a repeat and left out, nothing is superseded |
+| duplicate | the same sentence, word for word, in two conversations | one note carries it, the second add is left out as a repeat, nothing is superseded |
 | conflict-long | nine normalised words, eight shared: the shape the twin test calls alike (Jaccard 0.80 exactly) | the newer wording is a note, the older is an archive row that reads `superseded`, never `duplicate`, and the row carries a reason naming both values |
 | conflict-short | under the twin test's six-word floor, three or more plain words around one date group | the same |
 | moved-event | a dated event whose date moved ("Sprint 12 review is on 20 May", then 10 June) | the same |
@@ -102,19 +111,19 @@ The members of a pair carry their reference code in square brackets (`[REC-E62]`
 
 Each pair asks one question: a knowledge-update question on the newer member of a conflict (the older value is the trap), an extraction question on the duplicate's first member and on the decoy's second. They carry a `shape`, and they are counted APART from the ability tables: the forgetting table, the retrieval tables, the interleave table and the ask line leave them out, because what they measure is not whether the room can find a note but what the memory made of the pair, and a table that mixed the two would say something untrue about both. In the results file their rows carry `shape`, and the summary carries a `conflicts` block.
 
-The scripted fold answers a refusal the way the refusal asks. A Retry Notice that refuses `op N (add)` as a repeat (the sentence says the note `already says` it) has that add left out of the second reply and the rest answered as before; a reply whose every operation was a repeat drops the session. Any other refusal is answered as before, so a fixture the memory genuinely disagrees with still fails twice and is reported as mechanical. The adds left out are counted (`twinsRefused`, on every Memorize outcome and every ingest step).
+The scripted fold answers with the planted operations, and the Memorize decides each one alone: an add whose every word a note already says is left out, with no second call. The texts left out are counted from the run's own fold records (`twinsLeftOut`, on every Memorize outcome and every ingest step).
 
 After the `supersedes:` line the run prints the conflicts block:
 
 ```
-conflicts: 3 found, 3 superseded with a reason, 0 left as both, 1 repeats refused as twins
-  duplicate       ok    one note carries the sentence, the second add was refused as a repeat and left out (REC-E63 reads archive, found by wording)
+conflicts: 3 found, 3 superseded with a reason, 0 left as both, 1 repeats left out
+  duplicate       ok    one note carries the sentence, the second add was left out as a repeat (REC-E63 reads archive, found by wording)
   conflict-long   ok    REC-E65 in the core, REC-E62 superseded as m-0944-v1: "1 July (saved 21 Apr) replaces 1 June (saved 23 Apr); the newer date decides"
   ...
   3 of 5 right
 ```
 
-`found` is the rows the room's own Memorize records (`events/absorb/*.json`, `run.archived`) say were superseded with a reason, plus the pairs the product's own predicate still finds disagreeing in the final core; `superseded with a reason` is the first of those and `left as both` the second; `repeats refused as twins` is the ingest's count. The pair search leaves the back history's filler notes out: each carries its own reference number, which is a value, and every twenty-fourth of them repeats the words of another, so the product rightly lists those as disagreeing, and left in they would fill the predicate's ceiling of thirty pairs before any planted note was reached. Then one line per pair, `ok` or `FAIL` with the detail read off the room's files (the archive by the planted line's code first and its words second, the core by the locator, the records for the reason), `n/a` for a pair the size holds only half of, and, when the room was asked, how many of the pairs' own questions it got right. A newer wording the budget moved out AFTER the supersede reads "in the archive by budget" and is still ok: that is the ordinary forgetting of a long run, not the conflict's doing. A `FAIL` is printed in full on every run and is an exit code only under `--gate-conflicts` or `--gate-before`.
+`found` is the rows the room's own Memorize records (`events/absorb/*.json`, `run.archived`) say were superseded with a reason, plus the pairs the product's own predicate still finds disagreeing in the final core; `superseded with a reason` is the first of those and `left as both` the second; `repeats left out` is the ingest's count. The pair search leaves the back history's filler notes out: each carries its own reference number, which is a value, and every twenty-fourth of them repeats the words of another, so the product rightly lists those as disagreeing, and left in they would fill the predicate's ceiling of thirty pairs before any planted note was reached. Then one line per pair, `ok` or `FAIL` with the detail read off the room's files (the archive by the planted line's code first and its words second, the core by the locator, the records for the reason), `n/a` for a pair the size holds only half of, and, when the room was asked, how many of the pairs' own questions it got right. A newer wording the budget moved out AFTER the supersede reads "in the archive by budget" and is still ok: that is the ordinary forgetting of a long run, not the conflict's doing. A `FAIL` is printed in full on every run and is an exit code only under `--gate-conflicts` or `--gate-before`.
 
 ```
 npx tsx scripts/memory-bench/recall-bench.mts --language both --sessions 13 --per-ability 2 --fold-every 3 --gate-conflicts
@@ -204,8 +213,6 @@ A second opinion on the answers, with `--judge provider/model`. The scorer is co
 RECALL_BENCH_MODEL=anthropic/claude-sonnet-5 npx tsx scripts/memory-bench/recall-bench.mts --ask --judge anthropic/claude-sonnet-5
 ```
 
-`RECALL_BENCH_DUMP=1` prints what the memory refused, in its own words.
-
 ### Reading the tables
 
 The ingest table comes first, one row per Memorize in fold order: how many conversations that run folded, how many it refused, the operations applied, and the room's own size afterwards: notes in core, rows in the archive, how many of those left BY BUDGET, and the core's token count against the budget. It is the only place the forgetting is watched as it happens.
@@ -243,6 +250,8 @@ Three details of the waiting. A turn the provider ended still ends the way every
 A call that HANGS is the other shape a provider's bad hour takes: the request is never answered, and the worker's own limit is what ends it (a fold's limit is the product's, eight minutes; the checkpoint, which the product runs without one, gets the same limit in the bench, because a call that never comes back would otherwise hold a run of hours forever). A stopped call reads as "aborted" and is waited out like a refusal. The wall time every failed attempt took, hung or refused, counts toward the Memorize's own settle limit along with the waits, and a Memorize that reaches that limit while the provider was being waited out is the provider's failure (the instance is marked, the run goes on), not the pipeline's. Two more smoke hooks: `RECALL_BENCH_WORKER_TIMEOUT_MS` shrinks the worker limit, `RECALL_BENCH_SETTLE_TIMEOUT_MS` the Memorize limit, and `RECALL_BENCH_SCRIPTED_FAIL="<marker>:<times|all>:hang"` makes the gateway hold the matching requests open instead of answering 500.
 
 Under each instance's ingest summary the adapter prints the claim audit described above, `claims: N memorized, N unindexed, N misassigned`; the instance's row in the `.meta.json` carries it as `claims`, the meta carries the sum, and the final summary prints the sum once. A non-zero count does not fail the instance, whose answer is still measured, but the summary then says `CLAIM AUDIT FAILED`, names the instances, and the run exits 1.
+
+`--first-read fixed|none|real` chooses the first read each Memorize run folds with: `fixed` (the default) is the bench's fixed text, which every number below was measured with; `none` is the "None." the fast Start hands a run; `real` is the room's own first read on the fold model, one call per Memorize run, counted apart in the totals (`first reads (...)`), with the reads the run could not carry (missing or too long) counted as runs that folded with "None.". The mode is in the meta, on every row and, for `none` and `real`, in the file name, and a `--resume` refuses a file run with another mode. A real first read runs at the model's own reasoning default, with no thinking level passed, as the product's route does; every other bench call runs at "low", as every earlier number was measured. The bench waits a first read's provider failure out on the same schedule as every other call, up to six attempts, where the product asks once: the same choice as for folds.
 
 `--resume` carries on into an existing hypothesis file: the instances its lines name are skipped, the rest are appended, and the meta says `resumedFrom`. `--resume <file>` names the file and stands in for `--out`. Without it an existing `--out` is refused with a sentence naming `--resume`, because a file silently overwritten and a sample silently resumed are both files nobody can trust. The dry run prints the sample's question ids in order (`sample: ...`), and with `--resume` how many of them are already answered. The judge of a resumed run reads the whole hypothesis file, the earlier run's lines included, so one `--judge` at the end of the last resume scores the full sample. Two hooks exist for the smoke and nothing else: `RECALL_BENCH_RETRY_SCHEDULE_MS="10,10,10,10,10"` replaces the schedule with milliseconds, and `RECALL_BENCH_SCRIPTED_FAIL="<marker>:<times|all>"` makes the scripted gateway answer every completion whose request carries the marker with an HTTP 500, that many times or always, which the runtime turns into exactly the worker error the real failure had.
 

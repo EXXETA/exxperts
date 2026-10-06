@@ -4,19 +4,10 @@
 // the screen re-renders from the server's numbers and never recomputes one.
 
 import { apiFetch, fetchJson } from "./api";
-import type { AbsorbApprovalResponse, AbsorbDiscussionSignoffResponse, AbsorbProposalResponse, AbsorbProposalSourceMetadata, AbsorbRun, AbsorbRunStart, FoldGuidance, PersistentAgentId } from "./types";
+import type { AbsorbApprovalResponse, AbsorbDiscussionSignoffResponse, AbsorbProposalSourceMetadata, AbsorbRun, AbsorbRunStart, FoldGuidance, PersistentAgentId } from "./types";
 
 function absorbBase(agentId: PersistentAgentId): string {
 	return `/api/persistent-agents/${encodeURIComponent(agentId)}/absorb`;
-}
-
-/**
- * A v2 server answers propose with `{ runId }`; a server that still builds the
- * whole draft in one request answers with the proposal itself. The shape of
- * the answer is the version test, so the same button works against both.
- */
-export function isAbsorbRunStart(response: AbsorbProposalResponse | AbsorbRunStart): response is AbsorbRunStart {
-	return typeof (response as AbsorbRunStart).runId === "string" && (response as AbsorbRunStart).runId.length > 0;
 }
 
 /**
@@ -34,10 +25,7 @@ export class AbsorbRunActiveError extends Error {
 	}
 }
 
-// retryFeedback rides for a server that still drafts in one request (its
-// "Draft again" corrects the named failures); a run server has no redraft to
-// feed and ignores it.
-export async function startAbsorbRun(agentId: PersistentAgentId, assessmentMarkdown: string, options?: { assessmentHandoff?: AbsorbDiscussionSignoffResponse["assessmentHandoff"]; source?: AbsorbProposalSourceMetadata; guidance?: FoldGuidance; retryFeedback?: string[]; limitRaisedFrom?: number }): Promise<AbsorbProposalResponse | AbsorbRunStart> {
+export async function startAbsorbRun(agentId: PersistentAgentId, assessmentMarkdown: string, options?: { assessmentHandoff?: AbsorbDiscussionSignoffResponse["assessmentHandoff"]; source?: AbsorbProposalSourceMetadata; guidance?: FoldGuidance; limitRaisedFrom?: number }): Promise<AbsorbRunStart> {
 	const res = await apiFetch(`${absorbBase(agentId)}/propose`, {
 		method: "POST",
 		headers: { "content-type": "application/json" },
@@ -46,12 +34,11 @@ export async function startAbsorbRun(agentId: PersistentAgentId, assessmentMarkd
 			...(options?.assessmentHandoff ? { assessmentHandoff: options.assessmentHandoff } : {}),
 			...(options?.source ? { source: options.source } : {}),
 			...(options?.guidance ? { guidance: options.guidance } : {}),
-			...(options?.retryFeedback?.length ? { retryFeedback: options.retryFeedback } : {}),
 			// The limit the first read raised from, so the save records it and an undo takes it back.
 			...(options?.limitRaisedFrom === undefined ? {} : { limitRaisedFrom: options.limitRaisedFrom }),
 		}),
 	});
-	if (res.ok) return await res.json() as AbsorbProposalResponse | AbsorbRunStart;
+	if (res.ok) return await res.json() as AbsorbRunStart;
 	let message = `Request failed (${res.status})`;
 	type ErrorBody = { error?: unknown; message?: unknown; code?: unknown; runId?: unknown; details?: { runId?: unknown } };
 	let body: ErrorBody | null = null;
@@ -97,6 +84,15 @@ export function editAbsorbRunEntry(agentId: PersistentAgentId, runId: string, en
 	});
 }
 
+/** Keep both, or put a new note shown beside another in that note's place at the save; the server answers with the run. */
+export function chooseAbsorbRunBeside(agentId: PersistentAgentId, runId: string, entryId: string, choice: "replace" | "keep-both"): Promise<AbsorbRun> {
+	return fetchJson<AbsorbRun>(`${absorbBase(agentId)}/runs/${encodeURIComponent(runId)}/beside-choice`, {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify({ entryId, choice }),
+	});
+}
+
 /** Compute this run against a higher limit. The room's setting is written on Save, with the memory, and not before. */
 export function setAbsorbRunBudget(agentId: PersistentAgentId, runId: string, budgetTokens: number): Promise<AbsorbRun> {
 	return fetchJson<AbsorbRun>(`${absorbBase(agentId)}/runs/${encodeURIComponent(runId)}/budget`, {
@@ -109,6 +105,11 @@ export function setAbsorbRunBudget(agentId: PersistentAgentId, runId: string, bu
 /** Stops a run, aborting the session it is reading. Nothing is written. */
 export function cancelAbsorbRun(agentId: PersistentAgentId, runId: string): Promise<AbsorbRun> {
 	return fetchJson<AbsorbRun>(`${absorbBase(agentId)}/runs/${encodeURIComponent(runId)}/cancel`, { method: "POST" });
+}
+
+/** Try again, after the run stopped because its model was not answering: the same run reads the conversations still waiting. */
+export function resumeAbsorbRun(agentId: PersistentAgentId, runId: string): Promise<AbsorbRun> {
+	return fetchJson<AbsorbRun>(`${absorbBase(agentId)}/runs/${encodeURIComponent(runId)}/resume`, { method: "POST" });
 }
 
 export function approveAbsorbRun(agentId: PersistentAgentId, runId: string): Promise<AbsorbApprovalResponse> {

@@ -425,7 +425,7 @@ async function runLanguage(fixture: RecallFixture, args: BenchArgs, home: string
 
 	// A conversation the scripted fold answered and the memory still refused is
 	// a fixture the product cannot accept — mechanical, because the operations
-	// were the fixture's own. `RECALL_BENCH_DUMP=1` prints what was refused.
+	// were the fixture's own.
 	for (const failure of ingest.failures) mechanical.push(`${failure.session} (${failure.rcId}) was refused although the scripted fold answered with the planted operations: ${failure.reason}`);
 
 	// The claim audit: every conversation the room memorized is in its search
@@ -629,7 +629,7 @@ async function runLanguage(fixture: RecallFixture, args: BenchArgs, home: string
 	// The planted pairs, judged off the room's files, whether or not the room
 	// was asked; a pair this size holds only half of is said so and not judged.
 	const wholeShapes = CONFLICT_SHAPES.filter((shape) => plants.filter((plant) => plant.shape === shape).length === 2);
-	const conflicts = wholeShapes.length > 0 ? await conflictsSummary({ roomId: room.roomId, plants, twinsRefused: ingest.twinsRefused }) : null;
+	const conflicts = wholeShapes.length > 0 ? await conflictsSummary({ roomId: room.roomId, plants, twinsLeftOut: ingest.twinsLeftOut }) : null;
 	const conflictFailures: string[] = [];
 	if (conflicts) {
 		printConflicts(conflicts, shapeRows, CONFLICT_SHAPES.filter((shape) => !wholeShapes.includes(shape)));
@@ -770,12 +770,12 @@ function printSupersedes(rows: readonly RecallResultRow[]): void {
  * first line counts: the conflicts found (rows a Memorize superseded with a
  * reason, plus the pairs still disagreeing in the final core), how many were
  * resolved with a reason, how many stand as both, and the repeats the fold
- * refused as twins. Then one line per planted pair, `ok` or `FAIL` with the
+ * left out as repeats. Then one line per planted pair, `ok` or `FAIL` with the
  * detail read off the room's files; a pair this size holds only half of reads
  * `n/a`. When the room was asked, the last line is the pairs' own score.
  */
 function printConflicts(conflicts: ConflictsSummary, shapeRows: readonly RecallResultRow[], absent: readonly ConflictShape[]): void {
-	console.log(`conflicts: ${conflicts.found} found, ${conflicts.supersededWithReason} superseded with a reason, ${conflicts.leftAsBoth} left as both, ${conflicts.twinsRefused} repeats refused as twins`);
+	console.log(`conflicts: ${conflicts.found} found, ${conflicts.supersededWithReason} superseded with a reason, ${conflicts.leftAsBoth} left as both, ${conflicts.twinsLeftOut} repeats left out`);
 	for (const verdict of conflicts.shapes) console.log(`  ${pad(verdict.shape, 16)}${pad(verdict.ok ? "ok" : "FAIL", 6)}${verdict.detail}`);
 	for (const shape of absent) console.log(`  ${pad(shape, 16)}${pad("n/a", 6)}the pair is not in this run; a run of more sessions holds it`);
 	const answered = shapeRows.filter((row) => row.answered !== null);

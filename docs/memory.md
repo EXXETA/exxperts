@@ -205,10 +205,10 @@ stored.
 
 Two per-room switches, off by default, under Saving in **Room settings,
 Memory**: **Remember without the preview** and **Memorize without the
-card**. A clean update is one with nothing for
-you to weigh. An update that archives notes, crosses the memory budget
-or leaves a conversation unfinished always waits for you, and you can
-always see what changed afterwards in History.
+first read or the card**. A clean update is one with nothing for you to
+weigh. Anything you need to weigh always waits for you, for example a
+note leaving memory or a new note that may disagree with another. You
+can always see what changed afterwards in History.
 
 ## The memory budget
 

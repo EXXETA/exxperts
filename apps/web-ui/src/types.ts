@@ -351,64 +351,17 @@ export interface AbsorbAssessmentResponse {
 		model: { provider: string; model: string; label?: string };
 	};
 	availability: AbsorbAvailability;
-	source: AbsorbProposalSourceMetadata;
+	/** Absent only on a first read the client could not ask for: without it there is no discussion. */
+	source?: AbsorbProposalSourceMetadata;
 	assessmentMarkdown: string;
 	fields: AbsorbAssessmentFields;
-	absorbTelemetry: AbsorbPromptTelemetry;
+	absorbTelemetry?: AbsorbPromptTelemetry;
 	absorbUsage?: AbsorbUsage;
 	warnings: string[];
-}
-
-export interface AbsorbProposalFields {
-	mode: string;
-	primacyMap: string;
-	sectionLevelChangeLog: string;
-	entryLevelDetail: string;
-	compressionMetrics: string;
-	warnings: string;
-	candidateL1b: string;
-}
-
-export interface AbsorbCandidateValidationResult {
-	valid: boolean;
-	warnings: string[];
-	errors: string[];
-	sourceTopLevelSections: string[];
-	candidateTopLevelSections: string[];
-	recentContextEntryCount: number;
-}
-
-export type AbsorbReviewAction = "preserve" | "promote" | "update" | "merge" | "clear" | "drop" | "none" | "needs_judgment";
-
-export interface AbsorbReviewSectionChange {
-	section: string;
-	action: AbsorbReviewAction;
-	description: string;
-}
-
-export interface AbsorbReviewEntryChange {
-	sourceEntry: string;
-	action: AbsorbReviewAction;
-	targetSection?: string;
-	rationale: string;
-}
-
-export interface AbsorbReviewMetrics {
-	recentContextEntriesBefore: number;
-	recentContextEntriesAfter: number;
-	sourceBytes: number;
-	candidateBytes: number;
-	stableMemoryDeltaBytes: number;
-	sourceEstimatedTokens: number;
-	candidateEstimatedTokens: number;
-	stableMemoryDeltaTokens: number;
-}
-
-export interface AbsorbProposalReview {
-	summary: string;
-	sectionChanges: AbsorbReviewSectionChange[];
-	entryChanges: AbsorbReviewEntryChange[];
-	keyMetrics: AbsorbReviewMetrics;
+	/** Set when there is no first read, with the reason; the assessment is then "None.". "unreachable" is the client's own: the request itself failed. */
+	firstReadMissing?: "failed" | "cut-off" | "too-long" | "too-large" | "unreachable" | "skipped";
+	/** With a missing first read the server answered: the conversations waiting, by title and date. The client's own stand-in has none. */
+	waitingConversations?: Array<{ title: string; date?: string }>;
 }
 
 export interface L1bSourceFingerprint {
@@ -486,36 +439,6 @@ export interface AbsorbDiscussionSignoffResponse {
 	warnings: string[];
 }
 
-// Mirrors the server's MemoryBudgetImpact: before/after review-target tokens
-// plus the server-computed verdicts. Cards render these fields verbatim and
-// never re-derive the comparison. Optional on the responses so the UI stays
-// honest against an older server that doesn't send it.
-export interface MemoryBudgetImpact {
-	budgetTokens: number;
-	reviewTargetEstimatedTokensBefore: number;
-	reviewTargetEstimatedTokensAfter: number;
-	overBudgetBefore: boolean;
-	overBudgetAfter: boolean;
-}
-
-export interface AbsorbProposalResponse {
-	agentId: PersistentAgentId;
-	writesMemory: false;
-	process: {
-		type: "absorb-consolidation-worker";
-		model: { provider: string; model: string; label?: string };
-	};
-	availability: AbsorbAvailability;
-	source: AbsorbProposalSourceMetadata;
-	fields: AbsorbProposalFields;
-	review?: AbsorbProposalReview;
-	candidateValidation: AbsorbCandidateValidationResult;
-	memoryBudgetImpact?: MemoryBudgetImpact;
-	absorbTelemetry: AbsorbPromptTelemetry;
-	absorbUsage?: AbsorbUsage;
-	warnings: string[];
-}
-
 export interface AbsorbApprovalResponse {
 	agentId: PersistentAgentId;
 	writesMemory: true;
@@ -535,6 +458,12 @@ export interface AbsorbApprovalResponse {
 	archivedEntries?: number;
 	/** How many of those left for the budget alone (pre-pass plus post-fold demotions), so the saved screen can say so even when nothing folded. */
 	archivedForBudget?: number;
+	/** How many of those are a note's old text that a newer one replaced, said apart on the saved screen. */
+	replacedEntries?: number;
+	/** Older values kept as history in the archive, counted apart: no note left memory for them. */
+	historyKept?: number;
+	/** Summary notes a re-read sorted into topics: archived whole, counted apart. */
+	sortedNotes?: number;
 	/** The card raised the limit and this save wrote the room setting; the new value. */
 	budgetRaisedTo?: number;
 	/** Conversations remembered while the run was open: the save was rebased onto the file with them, and they stay waiting. */
@@ -574,7 +503,7 @@ export interface EntryCard {
 export type ArchiveRow = EntryCard & {
 	/** The current computation moves it to the archive. */
 	leaving: boolean;
-	/** The person kept it, by id or by topic; pinned on Save. */
+	/** The person kept it, by id or by topic, for this save only; a keep never pins a note. */
 	kept: boolean;
 	/** It entered the list because of a keep, an edit or a limit change after the first computation: a replacement. Cleared when it stops leaving. */
 	instead: boolean;
@@ -615,8 +544,14 @@ export interface RunBudget {
 export interface ArchivedEntryCard extends EntryCard {
 	/** YYYY-MM-DD */
 	archived: string;
-	/** "stale" and "duplicate" are Review's own reasons; the other four are older than it. */
-	why: "budget" | "superseded" | "done" | "user" | "stale" | "duplicate";
+	/** "stale" and "duplicate" are Review's own reasons; "history" is an older value a newer conversation replaced, which is never restored as current. */
+	why: "budget" | "superseded" | "done" | "user" | "stale" | "duplicate" | "history" | "sorted";
+	/** YYYY-MM-DD of the conversation that wrote the text, when one dated it. */
+	learned?: string;
+	/** YYYY-MM-DD the text stopped holding: the day the newer text was learned. */
+	until?: string;
+	/** The note is still in memory under this id or another version of it, so it cannot be restored. */
+	standing?: true;
 }
 
 export interface BudgetState {
@@ -690,6 +625,8 @@ export interface ReviewAssessmentFields {
 	topicsThatLookTheSame?: string[];
 	/** The same pairs by title, for the tidy; never shown. */
 	lookAlikeTopics?: { a: string; b: string }[];
+	/** One sentence naming the summary notes that still wait in Unsorted, or none. Absent on an older server. */
+	waitInUnsorted?: string[];
 }
 
 export interface ReviewAssessmentResponse {
@@ -731,9 +668,10 @@ export interface ReviewDiscussionSignoffResponse {
 
 export type AbsorbRunState = "prepass" | "folding" | "budget" | "ready" | "approving" | "saved" | "cancelled" | "failed";
 
-export type AbsorbRunSessionOutcome = "pending" | "folding" | "folded" | "dropped" | "failed" | "skipped";
+export type AbsorbRunSessionOutcome = "pending" | "folding" | "folded" | "dropped" | "summarized" | "failed" | "skipped";
 
-export type AbsorbRunChangeKind = "added" | "updated" | "superseded" | "closed" | "pinned";
+/** `history`: an older conversation's text that disagreed with a newer note, kept in the archive; memory is unchanged, and `after` is the older text. */
+export type AbsorbRunChangeKind = "added" | "updated" | "superseded" | "closed" | "pinned" | "history";
 
 export interface AbsorbRunChange {
 	kind: AbsorbRunChangeKind;
@@ -743,6 +681,20 @@ export interface AbsorbRunChange {
 	after?: string;
 	/** An add that created its topic in this run: the first note under a title the memory did not have. */
 	newTopic?: true;
+	/** An add next to a note the person pinned ("pinned"), or one that may disagree with a note already in memory ("may-disagree"): tagged, and the automatic save waits. */
+	beside?: "pinned" | "may-disagree";
+	/** A tagged add: the other note's first line as memory holds it now, for the line under the row. */
+	besideLine?: string;
+	/** A tagged add: the day the other note's text was learned, and this note's own, when known. */
+	besideLearned?: string;
+	learned?: string;
+	/** history: the note the older value yielded to, and its first line as memory holds it now. */
+	of?: string;
+	ofLine?: string;
+	/** A tagged add whose other note, or itself, is going to the archive ("leaving"), whose other note this update closes ("closed") or is no longer in memory ("gone"), or that this update closes later itself ("self-closed"): no Replace is offered. */
+	besideState?: "leaving" | "gone" | "closed" | "self-closed";
+	/** A tagged add the person chose to put in place of the other note at the save. Absent means Keep both. */
+	choice?: "replace";
 	/** superseded: which value replaced which and why, when the old and the new text disagree on a date, a number or a negation. */
 	reason?: string;
 }
@@ -767,6 +719,8 @@ export interface AbsorbRun {
 	updatedAt: string;
 	progress: { folded: number; total: number; current?: { id: string; title: string } };
 	sessions: AbsorbRunSession[];
+	/** The summary notes the run re-reads after its conversations, each row keyed by the NOTE's id. Absent from a server that has none. */
+	rereads?: AbsorbRunSession[];
 	/** Entries archived before any model call, because the room was already over its budget. Diagnostics and the older smokes; the card reads `demotion` alone. */
 	prepass: { demoted: EntryCard[] };
 	budget: RunBudget;
@@ -785,6 +739,12 @@ export interface AbsorbRun {
 	usage?: { input?: number; output?: number; totalTokens?: number; cost?: number };
 	/** failed: one product sentence. */
 	error?: string;
+	/**
+	 * The run stopped before every conversation was read because the Memory
+	 * model was not answering, or was busy or at its usage limit. What finished
+	 * is on the card; the rest wait. Absent otherwise.
+	 */
+	stop?: { kind: "outage"; model: { provider: string; model: string }; cause: "not-answering" | "busy" };
 }
 
 /** The 202 answer to a v2 propose: the run to poll, not a finished draft. */
@@ -929,7 +889,8 @@ export interface MemoryEntriesResponse {
 	readOnly?: boolean;
 	reason?: string;
 	topics: MemoryEntriesTopicGroup[];
-	archive: { count: number; byTopic: { section: string; topic: string; count: number; earliest: string; latest: string }[] };
+	/** `history`: of `count`, the older values kept as history, which never left memory. */
+	archive: { count: number; history?: number; byTopic: { section: string; topic: string; count: number; earliest: string; latest: string }[] };
 }
 
 export interface MemoryArchiveResponse {
@@ -1401,6 +1362,8 @@ export interface PersistentAgentStatus {
 		lastCheckpointAt: string | null;
 		/** The latest memory write of any kind; null while the memory is still the creation scaffold. */
 		lastMemoryWriteAt?: string | null;
+		/** Summary notes still in Unsorted after a saved Memorize read them again. Absent on an older server. */
+		unsortedAfterReread?: number;
 	};
 	scheduleSummary: PersistentRoomScheduleSummary;
 	promptBudget?: {
@@ -1413,6 +1376,8 @@ export interface PersistentAgentStatus {
 		thresholds: { warning: number; pressure: number; hard: number };
 	};
 	memoryBudgetTokens?: number;
+	// The room saves a clean Memorize without the card, and its Start skips the first read.
+	fastPathSecondApproval?: boolean;
 	// Server-computed budget condition. The budget binds on the review target
 	// (Deep Memory + Active Items); render this block, never re-derive the
 	// comparison client-side.

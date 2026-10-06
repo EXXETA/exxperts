@@ -3,7 +3,7 @@ import { createRequire } from "node:module";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { authedFetch, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, type AuthedFetchInit } from "./smoke-server-process.js";
 
 // Pins EXXPERTS_DATA_DIR (issue #60): one configured directory carries the
@@ -136,8 +136,11 @@ async function api(route: string, init: AuthedFetchInit = {}): Promise<{ status:
 
 let server: ChildProcessWithoutNullStreams | null = null;
 try {
-	server = spawn("npx", ["tsx", "src/index.ts"], {
-		shell: process.platform === "win32",
+	// Node with the tsx loader, as the smoke runner starts smokes: npx would run
+	// npm under the decoy HOME, and npm writes its own logs and update check
+	// there, which is not exxperts state but breaks the byte-untouched check.
+	const tsxLoader = pathToFileURL(createRequire(import.meta.url).resolve("tsx/esm")).href;
+	server = spawn(process.execPath, ["--import", tsxLoader, "src/index.ts"], {
 		...SMOKE_SERVER_SPAWN_TREE_OPTIONS,
 		cwd: webServerDir,
 		env: serverEnv,

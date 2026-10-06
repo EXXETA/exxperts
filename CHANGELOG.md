@@ -2,6 +2,28 @@
 
 User-visible changes per release. Historical private/internal development notes are not part of this public-facing changelog.
 
+## 0.14.2 (2026-10-07)
+
+- Memorize: Never gets stuck on a conversation. If it can't sort one, it keeps the conversation's
+  summary in Unsorted and moves on, and a later Memorize or Review can sort it into topics.
+- Memorize: When the model stops answering, Memorize pauses and says so. Try again continues where it
+  stopped, without losing what was read.
+- Memorize: When a new note lands beside a pinned note, or may disagree with an older one, you choose
+  Keep both or Replace.
+- Memory: Notes know when they were learned, so an older conversation never overwrites a newer note.
+  The older value stays in the Archive as history.
+- Memory: Keep protects a note for this update only, in Memorize and in Review. To keep a note for
+  good, pin it.
+- Settings: "Memorize without the card" is now "Memorize without the first read or the card", and
+  also skips the first read. Start runs at once, and Discuss first opens the first read.
+- Rooms: Very long conversations open and save, showing their newest 2,000 messages.
+- Rooms: When a room holds as many remembered conversations as it can, its Home card says so and
+  Maintain opens, so you can Memorize.
+- Skills: Import from a private repository, using the sign-in git already has on this computer.
+- Connectors: Opening a room on a folder from someone else, such as a downloaded project, can no
+  longer start programs on your computer. A room uses only the connectors in your settings that you
+  switched on for it.
+
 ## 0.14.1 (2026-10-02)
 
 - Desktop: Installs and updates much faster. The app carries about 2,200 files instead of 32,500 and

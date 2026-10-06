@@ -71,7 +71,6 @@
     "smoke:persistent-mutation-api-redaction": "tsx scripts/persistent-mutation-api-redaction-smoke.ts",
     "smoke:absorb-consolidation": "tsx scripts/absorb-consolidation-smoke.ts",
     "smoke:absorb-discussion": "tsx scripts/absorb-discussion-smoke.ts",
-    "smoke:absorb-write": "tsx scripts/absorb-write-smoke.ts",
     "smoke:structural-review": "tsx scripts/structural-review-smoke.ts",
     "smoke:structural-review-write": "tsx scripts/structural-review-write-smoke.ts",
     "smoke:structural-review-discussion": "tsx scripts/structural-review-discussion-smoke.ts",

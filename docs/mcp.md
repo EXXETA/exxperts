@@ -21,6 +21,11 @@ Servers are read from these files, merged in precedence order:
 3. `.mcp.json`: project-local
 4. `.pi/mcp.json`: project override
 
+A room, in the web app, in a scheduled run or in the terminal, reads only
+the first two: its connectors are the ones in your own settings. Only a
+plain terminal session without a room also reads `.mcp.json` and
+`.pi/mcp.json` in the folder it runs in.
+
 ```json
 {
   "mcpServers": {

@@ -62,7 +62,7 @@ export function restoreMemoryEntry(agentId: PersistentAgentId, entryId: string):
 export interface MemoryArchiveDeleteResponse {
 	agentId: string;
 	deleted: ArchivedEntryCard;
-	archive: { count: number };
+	archive: { count: number; history?: number };
 }
 
 /** The one way out of the archive. The server refuses a busy room and a row already gone with its own sentences. */

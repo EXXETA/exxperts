@@ -27,13 +27,15 @@
 //      not what stays findable, and a detail the fold left out of the notes is
 //      answered from the transcript a month later or not at all. A dropped
 //      conversation says so on its origin line, so a row from it shows that
-//      the transcript is all memory kept of it. A conversation remembered but
-//      not yet memorized is still in Recent Context and therefore still in
-//      view; a conversation never Remembered has no checkpoint event and is
-//      never indexed, whatever session files the room holds. The transcript
-//      itself is read through the session manager, never by parsing the
-//      session file by hand, and along the whole session path (the reader
-//      Remember uses), so the words before a compaction are findable too.
+//      the transcript is all memory kept of it; one kept whole as its approved
+//      summary, because the fold could not sort it, says that instead. A
+//      conversation remembered but not yet memorized is still in Recent
+//      Context and therefore still in view; a conversation never Remembered
+//      has no checkpoint event and is never indexed, whatever session files
+//      the room holds. The transcript itself is read through the session
+//      manager, never by parsing the session file by hand, and along the
+//      whole session path (the reader Remember uses), so the words before a
+//      compaction are findable too.
 //
 // Nothing here writes. Not the memory file, not the settings, not a cache file
 // — the one cache is in this process's memory and is dropped whenever a watched
@@ -182,9 +184,9 @@ function archiveDocuments(agentId: string): SearchDocument[] {
 		source: "archive" as const,
 		topic: row.topic,
 		date: row.archived,
-		origin: `archived ${row.archived}, ${MEMORY_RECALL_REASON_WORDS[row.why] ?? ARCHIVE_REASON_FALLBACK}`,
+		origin: `archived ${row.archived}, ${MEMORY_RECALL_REASON_WORDS[row.why] ?? ARCHIVE_REASON_FALLBACK}${row.learned ? `, as of ${row.learned}` : ""}${row.until ? `, held until ${row.until}` : ""}`,
 		text: row.text,
-		meta: { why: row.why, saved: row.saved, section: row.section },
+		meta: { why: row.why, saved: row.saved, section: row.section, ...(row.until ? { until: row.until } : {}) },
 	}));
 }
 
@@ -217,11 +219,11 @@ function readEventRecords<T extends { approvedAt: string }>(dir: string, watchLi
 	return records.filter((record) => Number.isFinite(Date.parse(record.approvedAt))).sort((a, b) => Date.parse(a.approvedAt) - Date.parse(b.approvedAt));
 }
 
-/** One memorized conversation: which Recent Context entry it was, which Remember closed it, and whether the fold took notes from it. */
+/** One memorized conversation: which Recent Context entry it was, which Remember closed it, and whether the fold took notes from it or kept it as one note. */
 interface MemorizedConversation {
 	recentContextId: string;
 	checkpoint: CheckpointEventRecord;
-	outcome: "folded" | "dropped";
+	outcome: "folded" | "dropped" | "summarized";
 }
 
 /**
@@ -260,7 +262,8 @@ interface MemorizedConversation {
  * Context and left with the same save, so letting them go unclaimed would push
  * their transcript onto the next reuse of the id.
  *
- * A folded entry that claims nothing is a memorized conversation this room
+ * A folded entry that claims nothing (or one kept as its summary, which has
+ * notes behind it too) is a memorized conversation this room
  * cannot search, so it is reported rather than dropped in silence. It happens
  * when the Remember's record is gone, and on a record without names it happens
  * when a clock stepped back and stamped the Remember after the Memorize that
@@ -308,12 +311,12 @@ function memorizedConversations(absorbEvents: readonly AbsorbEventRecord[], chec
 				if (taken) leftOut.add(taken.checkpointId);
 				continue;
 			}
-			if (session.outcome !== "folded" && session.outcome !== "dropped") continue;
+			if (session.outcome !== "folded" && session.outcome !== "dropped" && session.outcome !== "summarized") continue;
 			if (session.checkpointId) {
 				const checkpoint = byCheckpointId.get(session.checkpointId);
 				if (!checkpoint) {
-					if (session.outcome === "folded") {
-						skipped.push({ recentContextId: session.id, checkpointId: session.checkpointId, why: "the Remember's record for this folded conversation is gone, so its transcript cannot be found" });
+					if (session.outcome !== "dropped") {
+						skipped.push({ recentContextId: session.id, checkpointId: session.checkpointId, why: "the Remember's record for this memorized conversation is gone, so its transcript cannot be found" });
 					}
 					continue;
 				}
@@ -323,8 +326,8 @@ function memorizedConversations(absorbEvents: readonly AbsorbEventRecord[], chec
 			// The group is oldest first, so the first one standing is the oldest that qualifies.
 			const match = (byRecentContextId.get(session.id) ?? []).find((checkpoint) => !named.has(checkpoint.checkpointId) && !memorized.has(checkpoint.checkpointId) && !leftOut.has(checkpoint.checkpointId) && Date.parse(checkpoint.approvedAt) <= at);
 			if (!match) {
-				if (session.outcome === "folded") {
-					skipped.push({ recentContextId: session.id, why: "no Remember of this conversation was recorded before the Memorize that folded it, so which conversation it was cannot be told from another use of the same id" });
+				if (session.outcome !== "dropped") {
+					skipped.push({ recentContextId: session.id, why: "no Remember of this conversation was recorded before the Memorize that memorized it, so which conversation it was cannot be told from another use of the same id" });
 				}
 				continue;
 			}
@@ -442,6 +445,8 @@ function chunkTurns(turns: readonly TranscriptTurn[], limit = CONVERSATION_CHUNK
 
 /** What a dropped conversation's origin line says after the day: the transcript is all memory kept of it. */
 const NO_NOTES_TAKEN = " (no notes taken)";
+/** What a conversation kept whole as its approved summary says after the day: its notes are that summary, not topics. */
+const KEPT_AS_ONE_NOTE = " (kept as one note)";
 
 function conversationDocuments(
 	agentId: string,
@@ -516,7 +521,7 @@ function conversationDocuments(
 		const time = sharedDay ? ` at ${checkpoint.approvedAt.slice(11, sharedMinute ? 19 : 16)} UTC` : "";
 		// A dropped conversation says so where the row is read: the person and
 		// the room both see why no note carries the point.
-		const origin = `from a conversation on ${date}${time}${outcome === "dropped" ? NO_NOTES_TAKEN : ""}`;
+		const origin = `from a conversation on ${date}${time}${outcome === "dropped" ? NO_NOTES_TAKEN : outcome === "summarized" ? KEPT_AS_ONE_NOTE : ""}`;
 		chunks.forEach((chunk, index) => {
 			docs.push({
 				id: `${recentContextId}#${index + 1}@${conversation}`,

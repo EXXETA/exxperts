@@ -272,7 +272,7 @@ export function RoomSettingsModal({ status, onClose, onArchive, onPurge, onRefre
 				<RoomModelSection status={status} onRefresh={onRefresh} onSwitched={(conversationId, model, notice) => { requestClose(); onConversationSwitched?.(conversationId, model, notice); }} />
 			</section>
 			<section className="room-settings-section" hidden={pane !== "memory"}>
-				<RoomMaintenanceSection status={status} />
+				<RoomMaintenanceSection status={status} onRefresh={onRefresh} />
 			</section>
 			<section className="room-settings-section" hidden={pane !== "instructions"}>
 				<RoomInstructionsSection status={status} onDirtyChange={handleInstructionsDirtyChange} registerSave={registerInstructionsSave} />

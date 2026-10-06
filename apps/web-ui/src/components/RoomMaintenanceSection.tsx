@@ -34,7 +34,7 @@ export function fmtTokensK(value: number): string {
 	return `${Math.round(value / 1000)}k`;
 }
 
-export function RoomMaintenanceSection({ status }: { status: PersistentAgentStatus }) {
+export function RoomMaintenanceSection({ status, onRefresh }: { status: PersistentAgentStatus; /** Re-reads the room for the screen beneath (Home), after a change to memory here. */ onRefresh?: () => void }) {
 	const [fastPath, setFastPath] = useState<boolean | null>(null);
 	const [quickApply, setQuickApply] = useState<boolean | null>(null);
 	const [budget, setBudget] = useState<number | null>(null);
@@ -220,9 +220,9 @@ export function RoomMaintenanceSection({ status }: { status: PersistentAgentStat
 				</div>
 			</div>
 			{error && <div className="room-maintenance-error">{error}</div>}
-			<RoomMemoryEntriesSection key={reloadKey} status={status} onMemoryTokens={setLiveTokens} onArchiveDeleted={() => setHistoryKey((key) => key + 1)} />
+			<RoomMemoryEntriesSection key={reloadKey} status={status} onMemoryTokens={setLiveTokens} onArchiveDeleted={() => setHistoryKey((key) => key + 1)} onChanged={onRefresh} />
 			{/* The history re-reads itself after an Undo and keeps what that undo said, so it is not remounted; a note deleted for good re-reads it too. */}
-			<RoomMemoryHistorySection status={status} reloadKey={historyKey} onUndone={() => { setReloadKey((key) => key + 1); setSettingsReloadKey((key) => key + 1); }} />
+			<RoomMemoryHistorySection status={status} reloadKey={historyKey} onUndone={() => { setReloadKey((key) => key + 1); setSettingsReloadKey((key) => key + 1); onRefresh?.(); }} />
 		</div>
 	);
 }

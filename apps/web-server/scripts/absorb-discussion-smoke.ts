@@ -19,11 +19,11 @@ const {
 	createPersistentAgentFromScaffoldInput,
 	buildAbsorbDiscussionSignoff,
 	buildAbsorbDiscussionTurn,
-	buildAbsorbProposal,
 	fingerprintL1bSource,
 	getAbsorbAvailability,
 } = await import("../src/persistent-agents.js");
 const { getAbsorbModelLock } = await import("../src/persistent-agent-ai-profiles.js");
+const { parseAbsorbRunProposeRequest, startAbsorbRun } = await import("../src/absorb-run.js");
 const { ABSORB_HANDOFF_SHED_ORDER, describeHandoffTrim, DISCUSSION_HANDOFF_MAX_CHARS, DISCUSSION_HANDOFF_TRIM_MARKER, DISCUSSION_TRANSCRIPT_TRIM_MARKER, fitDiscussionHandoff } = await import("../src/discussion-handoff.js");
 const ABSORB_MODEL = getAbsorbModelLock("openai-compatible");
 
@@ -32,7 +32,6 @@ const {
 	ABSORB_EMPTY_RECENT_CONTEXT_PLACEHOLDER,
 	buildAbsorbDiscussionPrompt,
 	buildSectionPurposeMap,
-	extractTopLevelSectionBody,
 } = await import("../src/absorb-consolidation.js");
 
 const agentRoot = path.join(root, agentId);
@@ -74,18 +73,6 @@ const signoffMarkdown = `## Memorize discussion signoff\n\n### Pin\n- m-0007\n\n
 // prose-shaped handoff on purpose: it is the shape the shed order is written
 // for, and the step accepts whatever a worker returns.
 const legacySignoffMarkdown = `## Absorb discussion signoff\n\n### User guidance\n- Preserve the backend-only discussion operator boundary.\n\n### Learn / memorize\n- Discussion signoff should hand off to a separate proposal operator.\n\n### Clear / forget\n- Repeated smoke-test details can be cleared.\n\n### Update existing memory\n- Sharpen absorb workflow state around deliberative discussion.\n\n### Needs judgment\n- None\n\n### Transcript summary\nThe discussion confirmed that signoff should produce a bounded handoff, not a Candidate L1b.\n`;
-
-function candidateL1b(): string {
-	// Chronos is system-managed: a faithful candidate carries the source's
-	// Chronos through unchanged, so the fixture splices it from the live L1b.
-	const chronos = extractTopLevelSectionBody(readL1b(), "Chronos");
-	if (chronos == null) throw new Error("source L1b should have a Chronos section");
-	return `<!-- exxeta:l1b schema_version=1 -->\n\n## Chronos\n\n${chronos.trim()}\n\n## Deep Memory\n\n- Synthetic user is validating persistence-native personalized agents inside exxperts.\n- Absorb discussion smoke durable understanding has been consolidated into stable memory.\n\n## Active Items\n\n### High Priority\n\n- Continue absorb discussion backend implementation.\n\n### Medium Priority\n\n- Keep discussion and proposal operators separate.\n\n### Low Priority\n\n- Add frontend discussion UX in a later MR.\n\n## Recent Context\n\n${ABSORB_EMPTY_RECENT_CONTEXT_PLACEHOLDER}\n`;
-}
-
-function proposalFixture(candidate = candidateL1b()): string {
-	return `## Memory Absorption Proposal\n\n### Mode\nRC_CONSOLIDATION\n\n### Primacy Map\nThe RC chain captures absorb discussion backend implementation and operator-boundary decisions.\n\n### Section-Level Change Log\n| Section | Prior Words | Candidate Words | Action | Rationale |\n|---|---:|---:|---|---|\n| Deep Memory | 20 | 28 | sharpen | Preserve durable discussion architecture direction. |\n| Active Items | 20 | 26 | update | Preserve live implementation thread. |\n| Recent Context | 200 | 4 | clear | Strict absorb clears RC entries. |\n\n### Entry-Level Detail\n| Entry / Block | Operation | Target Section | Rationale |\n|---|---|---|---|\n| RC-0001..RC-0005 | consolidate | Deep Memory / Active Items | Durable signal survives outside RC. |\n\n### Compression Metrics\n- RC input words: 200\n- RC removed words: 200\n- RC removed percent: 100%\n- Stable memory words before: 80\n- Stable memory words after: 90\n- Stable memory delta: +10\n- Compression ratio: 2.2\n\n### Warnings\nNone\n\n### Candidate L1b\n${candidate}`;
-}
 
 async function expectThrowsAsync(fn: () => Promise<unknown>, expected: RegExp, label: string): Promise<void> {
 	try {
@@ -174,20 +161,11 @@ try {
 	assert(signoffResponse.guidance.corrections.length === 1 && signoffResponse.guidance.instructions.length === 1, `signoff should return corrections and instructions, got ${JSON.stringify(signoffResponse.guidance)}`);
 	assert(readL1b() === sourceL1b, "discussion signoff must not mutate L1b");
 
-	const proposalResponse = await buildAbsorbProposal({
-		agentId,
-		assessmentMarkdown,
-		assessmentHandoff: signoffResponse.assessmentHandoff,
-		source: { l1bFingerprint: sourceFingerprint },
-	}, ABSORB_MODEL, async (prompt, model) => {
-		assert(prompt.includes("Source: discussion_signoff"), "proposal prompt should include discussion signoff handoff source");
-		assert(prompt.includes("Preserve the backend-only discussion operator boundary"), "proposal prompt should include handoff text");
-		assert(model.provider === ABSORB_MODEL.provider && model.model === ABSORB_MODEL.model, "proposal should use system-selected absorb model");
-		return { text: proposalFixture(), usage: { input: 30, output: 40, totalTokens: 70, cost: 0 } };
-	});
-	assert(proposalResponse.writesMemory === false, "proposal from discussion signoff should be non-mutating");
-	assert(proposalResponse.candidateValidation.valid, "proposal from discussion signoff should validate candidate");
-	assert(readL1b() === sourceL1b, "proposal generation must not mutate L1b");
+	// The run reads the sign-off the client hands it as the fields every fold honours.
+	const proposeRequest = parseAbsorbRunProposeRequest({ assessmentMarkdown, assessmentHandoff: signoffResponse.assessmentHandoff, source: { l1bFingerprint: sourceFingerprint } });
+	assert(proposeRequest.guidance.pin.join(",") === "m-0007" && proposeRequest.guidance.corrections.some((line) => /backend-only discussion operator boundary/.test(line)), `the run reads the handoff as the sign-off's fields, got ${JSON.stringify(proposeRequest.guidance)}`);
+	assert(proposeRequest.sourceFingerprint?.value === sourceFingerprint.value && proposeRequest.assessmentMarkdown === assessmentMarkdown.trim(), "the run keeps the first read and the source it was built on");
+
 
 	// --- Trap family: the server never rejects its own signoff output ---------
 
@@ -209,17 +187,7 @@ try {
 	assert(trimmedSignoff.assessmentHandoff.text.includes("NEEDS_JUDGMENT_SENTINEL"), "Needs judgment must survive the trim");
 	assert(trimmedSignoff.assessmentHandoff.text.includes("Preserve the backend-only discussion operator boundary"), "User guidance should survive when shedding the summary is enough");
 	assert(trimmedSignoff.warnings.some((warning) => /discussion summary handed to the draft ran past its 8000-character limit/.test(warning) && /"Transcript summary"/.test(warning)), "trimmed handoff should be disclosed in warnings");
-	let trimmedProposalPrompt = "";
-	await buildAbsorbProposal({
-		agentId,
-		assessmentMarkdown,
-		assessmentHandoff: trimmedSignoff.assessmentHandoff,
-		source: { l1bFingerprint: sourceFingerprint },
-	}, ABSORB_MODEL, async (prompt) => {
-		trimmedProposalPrompt = prompt;
-		return { text: proposalFixture(), usage: { input: 30, output: 40, totalTokens: 70, cost: 0 } };
-	});
-	assert(trimmedProposalPrompt.includes(DISCUSSION_HANDOFF_TRIM_MARKER), "proposal step should accept the trimmed handoff and see the marker");
+	assert(parseAbsorbRunProposeRequest({ assessmentMarkdown, assessmentHandoff: trimmedSignoff.assessmentHandoff }).assessmentMarkdown === assessmentMarkdown.trim(), "the run accepts the trimmed handoff with its first read");
 
 	// 2. The real shed order: past the summary it continues through the list,
 	// never touching User guidance or Needs judgment; the tail cut is the last
@@ -443,21 +411,21 @@ try {
 	assert(!staleGeneratorCalled, "stale discussion source should not call generator");
 
 	const freshFingerprint = fingerprintL1bSource(readL1b());
-	let staleProposalGeneratorCalled = false;
+	let staleRunGeneratorCalled = false;
 	await expectThrowsAsync(
-		() => buildAbsorbProposal({
+		async () => startAbsorbRun({
 			agentId,
-			assessmentMarkdown,
-			assessmentHandoff: signoffResponse.assessmentHandoff,
-			source: { l1bFingerprint: staleFingerprint },
-		}, ABSORB_MODEL, async () => {
-			staleProposalGeneratorCalled = true;
-			return { text: proposalFixture() };
+			...parseAbsorbRunProposeRequest({ assessmentMarkdown, assessmentHandoff: signoffResponse.assessmentHandoff, source: { l1bFingerprint: staleFingerprint } }),
+			model: ABSORB_MODEL,
+			generate: async () => {
+				staleRunGeneratorCalled = true;
+				return { text: "should not run" };
+			},
 		}),
-		/source L1b fingerprint changed/,
-		"stale discussion signoff proposal source should be rejected before generator",
+		/assessment source is stale: source L1b fingerprint changed/,
+		"a run on a stale discussion source should be refused before any fold",
 	);
-	assert(!staleProposalGeneratorCalled, "stale discussion signoff proposal source should not call generator");
+	assert(!staleRunGeneratorCalled, "a run refused on a stale source should not call the model");
 
 	const hugeBody = `- ${"budget pressure ".repeat(34000)}`;
 	setRecentContextEntries(5, hugeBody);

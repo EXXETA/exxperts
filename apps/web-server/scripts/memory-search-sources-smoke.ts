@@ -477,7 +477,7 @@ try {
 	const supersededRow = withText(archive, SUPERSEDE_TARGET);
 	assert(supersededRow.id === "m-0001-v1", `the superseded row keeps its own version id, got ${supersededRow.id}`);
 	assert(supersededRow.topic === "Commercial terms" && supersededRow.date === RUN_DAY, `the superseded row is filed under the topic it left, on the day it left, got ${JSON.stringify({ topic: supersededRow.topic, date: supersededRow.date })}`);
-	assert(supersededRow.origin === `archived ${RUN_DAY}, replaced by a newer note`, `the row says why it left in the person's words, got "${supersededRow.origin}"`);
+	assert(supersededRow.origin === `archived ${RUN_DAY}, replaced by a newer note, held until 2026-09-14`, `the row says why it left in the person's words, and until when it held, got "${supersededRow.origin}"`);
 	assert(supersededRow.meta?.why === "superseded" && supersededRow.meta?.saved === "2026-09-01" && supersededRow.meta?.section === "Deep Memory", `the row carries its reason, its saved day and its section, got ${JSON.stringify(supersededRow.meta)}`);
 
 	const demotedRow = withText(archive, DEMOTED_NOTE);
@@ -578,6 +578,17 @@ try {
 	const afterArchive = loadRoomCorpus(agentId, { runtimeCwd: threadCwd });
 	assert(afterArchive !== built, "a new archive row rebuilds the corpus");
 	assert(afterArchive.counts.archive === 3 && readArchive(agentId).length === 3, `the rebuilt corpus holds the new row, got ${JSON.stringify(afterArchive.counts)}`);
+	// An older value kept as history says so, and the day it stopped holding.
+	appendArchive(agentId, [{
+		entry: { id: "m-0501", kind: "fact", saved: RUN_DAY, pinned: false, learned: "2026-06-10", text: "- The volume price was 40k in June." },
+		why: "history",
+		topic: "Commercial terms",
+		section: "Deep Memory",
+		archived: RUN_DAY,
+		until: "2026-08-02",
+	}], APPROVED_AT);
+	const historyRow = loadRoomCorpus(agentId, { runtimeCwd: threadCwd }).docs.find((doc) => doc.id === "m-0501");
+	assert(historyRow?.origin === `archived ${RUN_DAY}, an older value kept as history, as of 2026-06-10, held until 2026-08-02`, `an older value is no note moved to make room, and says as of which day and until when it held, got "${historyRow?.origin}"`);
 
 	const touched = new Date(Date.now() + 5_000);
 	fs.utimesSync(l1bPath, touched, touched);
@@ -632,7 +643,7 @@ try {
 	assert(ofSource(steppedDocs.docs, "conversation").length === 0, `a fold that claims no Remember has no transcript to index, got ${ofSource(steppedDocs.docs, "conversation").length} conversation documents`);
 	const steppedSkip = steppedDocs.skipped.find((entry) => entry.recentContextId === steppedConversation.rcId);
 	assert(steppedSkip, `the folded conversation the corpus could not place must be reported, and skipped holds ${JSON.stringify(steppedDocs.skipped)}`);
-	assert(/Remember/.test(steppedSkip!.why) && /folded/.test(steppedSkip!.why), `the reason says plainly what is missing, got "${steppedSkip!.why}"`);
+	assert(/Remember/.test(steppedSkip!.why) && /memorized it/.test(steppedSkip!.why), `the reason says plainly what is missing, got "${steppedSkip!.why}"`);
 	pass("a Memorize that named what it folded is matched by the names whatever the clock says, and an older record whose Remember cannot be claimed in time is reported as skipped with its reason, never dropped in silence");
 
 	// =====================================================================
@@ -855,7 +866,8 @@ try {
 	const originRoom = createPersistentAgentFromScaffoldInput({ displayName: "Memory Search Origin Line Room", userName: "Synthetic User", preferredUserAddress: "Synthetic User" });
 	const originId = originRoom.agent.agentId;
 	fs.writeFileSync(path.join(root, originId, "L1b", "current.md"), smallMemoryFixture(originId), { mode: 0o600 });
-	const originCases: Array<{ conversationId: string; plant: string; at: string; outcome: "folded" | "dropped"; note?: string; origin: string }> = [
+	const originCases: Array<{ conversationId: string; plant: string; at: string; outcome: "folded" | "dropped" | "summarized"; note?: string; origin: string }> = [
+		{ conversationId: "c_origin_kept", plant: "MAPLEGUSSET", at: "2026-09-09T11:20:00.000Z", outcome: "summarized", origin: "from a conversation on 2026-09-09 (kept as one note)" },
 		{ conversationId: "c_origin_alone", plant: "HAZELTRIVET", at: "2026-09-10T16:45:12.000Z", outcome: "folded", note: "The harbour office closes at noon on Fridays.", origin: "from a conversation on 2026-09-10" },
 		{ conversationId: "c_origin_morning", plant: "IVORYSEXTANT", at: "2026-09-11T08:05:00.000Z", outcome: "folded", note: "Customs forms are countersigned by the shipping clerk.", origin: "from a conversation on 2026-09-11 at 08:05 UTC" },
 		{ conversationId: "c_origin_evening", plant: "JUNIPERANVIL", at: "2026-09-11T19:40:30.000Z", outcome: "dropped", origin: "from a conversation on 2026-09-11 at 19:40 UTC (no notes taken)" },
@@ -868,9 +880,12 @@ try {
 			{ speaker: "user", text: `For the record, the reference for this one is ${entry.plant}, and nobody else uses it.` },
 			{ speaker: "assistant", text: `Noted: ${entry.plant} it is.` },
 		], new Date(entry.at));
+		// A reply with no operations, twice, keeps the conversation as its approved summary.
 		originScripts[remembered.rcId] = entry.outcome === "folded"
 			? () => reply("One point is worth keeping.", [{ op: "add", topic: "Commercial terms", kind: "fact", text: `- ${entry.note}` }])
-			: () => reply("Nothing here that memory does not hold.", [{ op: "drop", reason: "Memory already holds what this conversation went over." }]);
+			: entry.outcome === "summarized"
+				? () => ({ text: "There is a point here, but no operations follow.", usage: { input: 1200, output: 20, totalTokens: 1220, cost: 0.0010 } })
+				: () => reply("Nothing here that memory does not hold.", [{ op: "drop", reason: "Memory already holds what this conversation went over." }]);
 	}
 	const originRun = startAbsorbRun({ agentId: originId, assessmentMarkdown: "## What these sessions leave behind\n\n- One point each, or nothing.", model: MODEL, generate: scriptedGenerate(originScripts), now: () => new Date("2026-09-13T09:00:00.000Z") });
 	const originRested = await settle(originId, originRun.runId);
@@ -884,6 +899,8 @@ try {
 		assert(own.length === 1, `${conversationId} should have exactly one document, got ${own.length}`);
 		return String(own[0]!.origin);
 	};
+	const keptDocs = ofSource(originCorpus.docs, "conversation").filter((doc) => doc.meta?.conversationId === "c_origin_kept");
+	assert(keptDocs.length === 1 && keptDocs[0]!.text.includes("MAPLEGUSSET") && keptDocs[0]!.meta?.outcome === "summarized", `a conversation kept as its summary is indexed like a folded one, its words searchable and its outcome in the meta, got ${JSON.stringify(keptDocs.map((doc) => doc.meta))}`);
 	for (const entry of originCases) {
 		assert(originOf(entry.conversationId) === entry.origin, `${entry.conversationId}, remembered at ${entry.at}, should read "${entry.origin}", got "${originOf(entry.conversationId)}"`);
 	}
@@ -891,7 +908,16 @@ try {
 	assert(originOf("c_origin_minute_a").replace(" (no notes taken)", "") !== originOf("c_origin_minute_b"), "two conversations in one minute carry different origins");
 	assert(!/ at /.test(originOf("c_origin_alone")), `a conversation alone on its day carries no time, got "${originOf("c_origin_alone")}"`);
 	for (const doc of originCorpus.docs) assert(!/\b(?:RC|m)-\d/.test(String(doc.origin)), `no origin in the room shows an internal id, got "${doc.origin}" on ${doc.id}`);
-	pass("a conversation's origin names the day and never its id: alone on its day it says no time, on a shared day it says the hour and minute, in a shared minute the second too, and a dropped one still says no notes were taken");
+	// A conversation kept as its summary has notes behind it, like a folded
+	// one, so a Remember record that is gone is reported, never passed over.
+	const originCheckpointDir = path.join(root, originId, "events", "checkpoint");
+	const keptCheckpoint = fs.readdirSync(originCheckpointDir).find((name) => fs.readFileSync(path.join(originCheckpointDir, name), "utf-8").includes("c_origin_kept"));
+	assert(keptCheckpoint, "the kept conversation's Remember record is on disk");
+	fs.rmSync(path.join(originCheckpointDir, keptCheckpoint!));
+	invalidateRoomCorpus(originId);
+	const keptGone = collectRoomDocuments(originId, { runtimeCwd: threadCwd });
+	assert(keptGone.skipped.length === 1 && `${keptGone.skipped[0]!.checkpointId}.json` === keptCheckpoint && /gone/.test(keptGone.skipped[0]!.why), `a conversation kept as its summary whose Remember record is gone is reported as skipped, got ${JSON.stringify(keptGone.skipped)}`);
+	pass("a conversation's origin names the day and never its id: alone on its day it says no time, on a shared day it says the hour and minute, in a shared minute the second too, a dropped one still says no notes were taken, and one kept as its summary says it was kept as one note and is reported when its Remember record is gone");
 
 	console.log("memory-search-sources-smoke: OK");
 } catch (error) {

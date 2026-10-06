@@ -160,7 +160,7 @@ export function nothingToMaintain(memoryStatus: { recentContextCount: number; la
 
 export const ROOM_MEMORY_SUB = "What this room remembers, and how it saves new things.";
 export const ROOM_MEMORY_TOGGLES_FOOTNOTE = "Off by default: seeing what gets saved is how you decide what the room remembers.";
-export const AUTOMATIC_APPLY_INFO = "A memory update with nothing to weigh is saved as soon as it is ready, instead of being shown to you one last time. An update that archives notes, crosses the memory budget or leaves a conversation unfinished always waits for you, and you can always see what changed afterwards in History.";
+export const AUTOMATIC_APPLY_INFO = "Start on Memorize goes straight to the update, with no first read; Discuss first still reads the conversations with you. A memory update with nothing to weigh is saved as soon as it is ready, instead of being shown to you one last time. Anything you need to weigh always waits for you, for example a note leaving memory or a new note that may disagree with another. You can always see what changed afterwards in History.";
 export const ROOM_MEMORY_TOGGLES_TITLE = "Saving";
 export const REMEMBER_WITHOUT_PREVIEW_LABEL = "Remember without the preview";
 export const REMEMBER_WITHOUT_PREVIEW_INFO = "Remember normally shows you what it is about to save from the conversation. With this on, the save happens without that preview. If a save looks incomplete, the preview comes back and you decide.";
@@ -195,8 +195,15 @@ export function memoryTopicName(topic: string): string {
 	return topic.trim().toLowerCase() === "active items" ? "Open items" : topic;
 }
 
-export function archiveSummaryLine(count: number): string {
-	return `${notesPhrase(count)} that left memory. They are not read in conversations; bring back any of them.`;
+/** The Archive's line: the total first, then the notes that can come back and, apart from them, the older values kept as history, which cannot. */
+export function archiveSummaryLine(count: number, history = 0): string {
+	const older = Math.min(Math.max(0, history), count);
+	const left = Math.max(0, count - older);
+	const olderValues = `${older.toLocaleString()} older ${older === 1 ? "value" : "values"}`;
+	if (left === 0 && older === 0) return "The archive is empty.";
+	if (left === 0) return `${olderValues} in the archive, kept as history.`;
+	if (older === 0) return `${notesPhrase(left)} in the archive, not read in conversations. You can bring ${left === 1 ? "it" : "them"} back.`;
+	return `${count.toLocaleString()} in the archive, not read in conversations: ${notesPhrase(left)} you can bring back, and ${olderValues} kept as history.`;
 }
 
 /** Why a note left memory, in the archive's own words. */
@@ -207,15 +214,19 @@ const ARCHIVE_REASONS: Record<string, string> = {
 	stale: "no longer holds",
 	duplicate: "already said elsewhere",
 	user: "removed by you",
+	history: "older value",
+	sorted: "sorted into topics",
 };
 
 export function memoryArchiveReason(why: string): string {
 	return ARCHIVE_REASONS[why] ?? why;
 }
 
-/** One archived row's meta: "archived 13 Sep · to make room". */
-export function archiveRowMeta(archived: string, why: string): string {
-	return `archived ${fmtMemoryDay(archived)} · ${memoryArchiveReason(why)}`;
+/** One archived row's meta: "archived 13 Sep · to make room"; an older value says what and when first: "older value from 10 Jun until 2 Aug · archived 6 Oct". */
+export function archiveRowMeta(archived: string, why: string, dates: { learned?: string; until?: string } = {}): string {
+	if (why !== "history") return `archived ${fmtMemoryDay(archived)} · ${memoryArchiveReason(why)}`;
+	const held = [dates.learned ? `from ${fmtMemoryDay(dates.learned)}` : "", dates.until ? `until ${fmtMemoryDay(dates.until)}` : ""].filter(Boolean);
+	return `${[memoryArchiveReason(why), ...held].join(" ")} · archived ${fmtMemoryDay(archived)}`;
 }
 
 /** One note's meta: "fact · saved 12 Sep · pinned". */

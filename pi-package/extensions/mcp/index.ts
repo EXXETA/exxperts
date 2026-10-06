@@ -14,13 +14,13 @@
  * Server configuration is read from, in precedence order:
  *   ~/.config/mcp/mcp.json     shared user-global (Cursor/Claude compatible)
  *   ~/.exxperts/agent/mcp.json exxperts user-global
- *   .mcp.json                  project-local
- *   .pi/mcp.json               project override
+ *   .mcp.json                  project-local (not in a room)
+ *   .pi/mcp.json               project override (not in a room)
  */
 
 import * as path from "node:path";
 import { stateHome } from "../../product-state-paths.js";
-import { ensureRoomScopedMcpGrantsMigration, prepareRoomScopedMcpSessionCache, roomScopedMcpToolRegistration, type RegisteredToolLike, type RoomScopeRegistrationOptions } from "./room-scope.js";
+import { ensureRoomScopedMcpGrantsMigration, prepareRoomScopedMcpSessionCache, roomConnectorConfigCwd, roomScopedMcpToolRegistration, type RegisteredToolLike, type RoomScopeRegistrationOptions } from "./room-scope.js";
 
 // Kept non-literal so tsc never resolves the specifiers into raw .ts sources,
 // and so no tsconfig `paths` remap is needed — a remap would also be applied
@@ -28,6 +28,22 @@ import { ensureRoomScopedMcpGrantsMigration, prepareRoomScopedMcpSessionCache, r
 const PI_MCP_ADAPTER_SPECIFIER = "pi-mcp-adapter" as string;
 const ADAPTER_CONFIG_SPECIFIER = "pi-mcp-adapter/config.ts" as string;
 const CONNECTORS_PANEL_SPECIFIER = "./connectors-panel.ts" as string;
+
+type EventHandlerLike = (event: unknown, ctx: unknown) => unknown;
+
+/**
+ * The session context a room's adapter sees: everything as the runtime made it,
+ * except `cwd`, which is the room connector folder. The adapter reads `cwd`
+ * only to find config files, so a room's connectors come from the person's
+ * settings while each connector still starts where it always did. The guarded
+ * getters are carried over as getters, never read eagerly.
+ */
+function withRoomConnectorConfigCwd(ctx: unknown): unknown {
+	if (!ctx || typeof ctx !== "object") return ctx;
+	const descriptors = Object.getOwnPropertyDescriptors(ctx);
+	descriptors.cwd = { get: () => roomConnectorConfigCwd(), enumerable: true, configurable: true };
+	return Object.create(Object.getPrototypeOf(ctx), descriptors);
+}
 
 interface RegisteredCommandLike {
 	description?: string;
@@ -87,6 +103,7 @@ async function registerMcpExtension(pi: unknown, roomScopeId: string | null, sco
 	const api = pi as {
 		registerCommand?: (name: string, options: RegisteredCommandLike) => void;
 		registerTool?: (tool: RegisteredToolLike) => void;
+		on?: (event: string, handler: EventHandlerLike) => void;
 	};
 	const originalRegisterCommand = api.registerCommand?.bind(pi);
 	if (originalRegisterCommand) {
@@ -111,12 +128,26 @@ async function registerMcpExtension(pi: unknown, roomScopeId: string | null, sco
 			deferredRoomScopedTools.push(tool);
 		};
 	}
+	// In a room the adapter's session handlers (its session start loads the
+	// config) see the room connector folder as their cwd.
+	const originalOn = api.on?.bind(pi);
+	if (roomScopeId && originalOn) {
+		api.on = (event: string, handler: EventHandlerLike) => {
+			originalOn(event, (eventValue: unknown, ctx: unknown) => handler(eventValue, withRoomConnectorConfigCwd(ctx)));
+		};
+	}
+	// ...and its startup config read (direct tools, settings) uses the same
+	// folder (scripts/patch-mcp-adapter.mjs, patch 6).
+	const configCwdCarrier = pi as { exxpertsConnectorConfigCwd?: string };
+	if (roomScopeId) configCwdCarrier.exxpertsConnectorConfigCwd = roomConnectorConfigCwd();
 	let result: unknown;
 	try {
 		result = await (register as (pi: unknown) => unknown)(pi);
 	} finally {
 		if (originalRegisterCommand) api.registerCommand = originalRegisterCommand;
 		if (roomScopeId && originalRegisterTool) api.registerTool = originalRegisterTool;
+		if (roomScopeId && originalOn) api.on = originalOn;
+		if (roomScopeId) delete configCwdCarrier.exxpertsConnectorConfigCwd;
 	}
 	if (roomScopeId && originalRegisterTool) {
 		const getAllTools = (pi as { getAllTools?: () => Array<{ name: string }> }).getAllTools?.bind(pi);
@@ -135,7 +166,7 @@ async function registerMcpExtension(pi: unknown, roomScopeId: string | null, sco
 	let sessionConfigKey: string | null = null;
 	try {
 		const [configMod, panelMod] = await Promise.all([import(ADAPTER_CONFIG_SPECIFIER), import(CONNECTORS_PANEL_SPECIFIER)]);
-		sessionConfigKey = panelMod.connectorConfigKey(configMod.loadMcpConfig());
+		sessionConfigKey = panelMod.connectorConfigKey(roomScopeId ? configMod.loadMcpConfig(undefined, roomConnectorConfigCwd()) : configMod.loadMcpConfig());
 	} catch {
 		// drift detection is best-effort
 	}
@@ -152,7 +183,7 @@ async function registerMcpExtension(pi: unknown, roomScopeId: string | null, sco
 					return;
 				}
 				const panelMod = await import(CONNECTORS_PANEL_SPECIFIER);
-				const result = await panelMod.openConnectorsPanel(ctx as Parameters<typeof panelMod.openConnectorsPanel>[0], sessionConfigKey);
+				const result = await panelMod.openConnectorsPanel(ctx as Parameters<typeof panelMod.openConnectorsPanel>[0], sessionConfigKey, roomScopeId ? roomConnectorConfigCwd() : undefined);
 				if (result === "setup") await adapterHandler("setup", ctx);
 			},
 		});

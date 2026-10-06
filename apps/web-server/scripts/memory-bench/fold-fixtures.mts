@@ -84,7 +84,7 @@ export type PlantKind =
 	| "noise";
 
 /** The operation kinds a plant expects; "none" is a line that must produce nothing. */
-export type PlantedOp = "add" | "update" | "supersede" | "close" | "pin" | "unpin" | "drop" | "none";
+export type PlantedOp = "add" | "update" | "supersede" | "close" | "pin" | "drop" | "none";
 
 export interface Plant {
 	/** Short id inside the fixture, e.g. "F01". */

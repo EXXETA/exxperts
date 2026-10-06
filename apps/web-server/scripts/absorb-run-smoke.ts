@@ -49,7 +49,6 @@ process.env.EXXETA_PERSISTENT_AGENTS_ROOT = root;
 const {
 	ABSORB_FOLD_CONNECTION_LOST,
 	ABSORB_FOLD_CONNECTION_LOST_TWICE,
-	ABSORB_FOLD_REFUSED_TWICE,
 	ABSORB_FOLD_RETRY_PAUSE_MS,
 	ABSORB_FOLD_TIMED_OUT,
 	ABSORB_FOLD_WORKER_FAILED_TWICE,
@@ -62,13 +61,17 @@ const {
 	parseAbsorbRunProposeRequest,
 	resetAbsorbRunsForTests,
 	rewindAbsorbRunClockForTests,
+	setAbsorbFoldRateLimitPauseForTests,
 	setAbsorbFoldRetryPauseForTests,
 	setAbsorbRunBudget,
 	startAbsorbRun,
 } = await import("../src/absorb-run.js");
+const { flushMemoryUse, readMemoryUse } = await import("../src/memory-use.js");
 // A call that never came back is asked again after a pause. The pause is the
-// one thing here that is real time rather than behaviour, so it is zeroed.
+// one thing here that is real time rather than behaviour, so it is zeroed,
+// and so is the long one a dropped connection waits.
 setAbsorbFoldRetryPauseForTests(0);
+setAbsorbFoldRateLimitPauseForTests(0);
 const { beginPersistentAgentTurn, buildPersistentAgentCheckpointTranscriptSource, createPersistentAgentFromScaffoldInput, createPersistentAgentPiSessionJsonlThreadRuntime, finishPersistentAgentTurn, parseCheckpointApprovalRequest, reviewTargetEstimatedTokensFromL1b, writeApprovedCheckpoint, writePersistentAgentThread } = await import("../src/persistent-agents.js");
 const { IsolatedPersistentAgentWorkerTurnError } = await import("../src/persistent-agent-worker-runtime.js");
 const { appendArchive, readArchive } = await import("../src/memory-entries-store.js");
@@ -346,9 +349,11 @@ interface PromptArea {
 	id: string;
 	topic: string;
 	pinned: boolean;
-	/** The dates the address carries: the day the entry was saved, and the day a fold last rewrote it. */
+	/** The dates the address carries: the day the text was learned; with none, the day a fold saved it or the day it was in memory by, and the day a fold rewrote it. */
+	learned?: string;
 	saved?: string;
-	updated?: string;
+	since?: string;
+	rewritten?: string;
 	firstLine: string;
 }
 
@@ -385,9 +390,10 @@ function sessionIdFromPrompt(prompt: string): string {
 /**
  * The entries this prompt says may be addressed, read back the way a model
  * reads them: off the memory itself, where every entry opens with its own id
- * and its dates — `- [m-0031 · saved 2026-08-02] …`, `- [m-0032 · pinned ·
- * saved …] …` for a pinned one, and `· updated 2026-09-01` after the saved
- * date once a fold rewrote it.
+ * and its date: `- [m-0031 · learned 2026-08-02] …`, `- [m-0032 · pinned ·
+ * learned …] …` for a pinned one; with no learned day, `· saved 2026-09-01`
+ * for a note a fold wrote or `· in memory since 2026-09-01` for one nothing
+ * wrote, and `· rewritten 2026-09-11` once a fold rewrote it.
  */
 const ENTRY_ADDRESS = /^(?:\s*(?:[-*+]|\d+[.)])\s+)?\[([^\]\s·]+)((?:\s+·\s+[^\]·]+)*)\]\s*([\s\S]*)$/;
 
@@ -401,10 +407,11 @@ function areasFromPrompt(prompt: string): PromptArea[] {
 		if (heading) { topic = heading[1]; continue; }
 		const row = ENTRY_ADDRESS.exec(line.trim());
 		if (!row) continue;
-		// A note no conversation wrote reads "in memory since" its date instead of "saved".
-		const saved = /·\s+(?:saved|in memory since)\s+(\d{4}-\d{2}-\d{2})/.exec(row[2])?.[1];
-		const updated = /·\s+updated\s+(\d{4}-\d{2}-\d{2})/.exec(row[2])?.[1];
-		rows.push({ id: row[1], topic, pinned: /·\s+pinned\b/.test(row[2]), ...(saved ? { saved } : {}), ...(updated ? { updated } : {}), firstLine: row[3] });
+		const learned = /·\s+learned\s+(\d{4}-\d{2}-\d{2})/.exec(row[2])?.[1];
+		const saved = /·\s+saved\s+(\d{4}-\d{2}-\d{2})/.exec(row[2])?.[1];
+		const since = /·\s+in memory since\s+(\d{4}-\d{2}-\d{2})/.exec(row[2])?.[1];
+		const rewritten = /·\s+rewritten\s+(\d{4}-\d{2}-\d{2})/.exec(row[2])?.[1];
+		rows.push({ id: row[1], topic, pinned: /·\s+pinned\b/.test(row[2]), ...(learned ? { learned } : {}), ...(saved ? { saved } : {}), ...(since ? { since } : {}), ...(rewritten ? { rewritten } : {}), firstLine: row[3] });
 	}
 	return rows;
 }
@@ -580,11 +587,14 @@ try {
 	assert(updatedChange!.after?.includes(UPDATED_TEXT), `an updated change shows what the entry says now, and RC-0001's does not carry ${UPDATED_TEXT}: ${JSON.stringify(updatedChange!.after?.slice(0, 60))}`);
 	assert(updatedChange!.topic === "Working style", `an updated change names the topic the entry lives under, got "${updatedChange!.topic}"`);
 
-	// --- 2. A reply cut at the model's output limit costs one session ------------
+	// --- 2. A reply cut at the output limit is asked again, then kept as its summary ---
 	const rc3 = sessionView(runA, "RC-0003");
-	assert(rc3.outcome === "failed", `a fold cut off at the model's output limit fails that session, got "${rc3.outcome}"`);
-	assert(/output limit/.test(rc3.reason ?? ""), `a cut-off fold's reason names the model's output limit, got "${rc3.reason}"`);
-	assert((rc3.reason ?? "").includes("8192"), `a cut-off fold's reason carries the numbers the model reported, got "${rc3.reason}"`);
+	assert(rc3.outcome === "summarized", `a fold cut off at the output limit with nothing to salvage, twice, is kept as its summary, got "${rc3.outcome}"`);
+	assert(!rc3.reason, `a summarized conversation carries no failure reason, got "${rc3.reason}"`);
+	const rc3Calls = callsFor(callsA, "RC-0003");
+	assert(rc3Calls.length === 2 && rc3.attempts === 2, `a cut-off reply is asked once more, got ${rc3Calls.length} call(s)`);
+	assert(rc3Calls[1].prompt.trimEnd().endsWith("Your last answer ran to the output limit and had no readable operations. Answer with a short narrative and one json fence.") && !rc3Calls[1].prompt.includes("## Retry Notice"), `the second ask says the reply ran to the output limit, got: ${rc3Calls[1].prompt.slice(-200)}`);
+	assert((rc3.changes ?? []).some((change) => change.kind === "added" && change.topic === "Unsorted" && (change.after ?? "").includes("The delivery window was reconsidered at length.")), `the summary note carries the page, got ${JSON.stringify(rc3.changes)}`);
 	assert(callsFor(callsA, "RC-0004").length > 0, "a session cut off at the output limit costs one session, and the run must have carried on to the next one");
 
 	// --- 3. A decorated reply still parses ----------------------------------------
@@ -596,17 +606,14 @@ try {
 	const closedChange = (rc4.changes ?? []).find((change) => change.kind === "closed");
 	assert(closedChange?.before?.includes(CLOSE_TARGET), `a closed change carries the item that was finished, got ${JSON.stringify(closedChange?.before?.slice(0, 50))}`);
 
-	// --- 4. Unreadable twice: the one retry runs, and it is disclosed as a retry ---
+	// --- 4. Unreadable twice: the one retry runs, then the page is kept as its summary ---
 	const rc5 = sessionView(runA, "RC-0005");
-	assert(rc5.outcome === "failed", `a reply with no operations block, twice, fails that session, got "${rc5.outcome}"`);
-	assert(rc5.reason === ABSORB_FOLD_REFUSED_TWICE, `a twice-refused fold carries the product's own sentence, got "${rc5.reason}"`);
-	assert(rc5.attempts === 2, `a twice-refused fold records both attempts, got ${rc5.attempts}`);
+	assert(rc5.outcome === "summarized", `a reply with no operations block, twice, is kept as its summary, got "${rc5.outcome}"`);
+	assert(rc5.attempts === 2, `an unreadable fold records both attempts, got ${rc5.attempts}`);
 	const rc5Calls = callsFor(callsA, "RC-0005");
-	assert(rc5Calls.length === 2, `a refused fold is asked exactly once more, so the worker should have been called twice for RC-0005, got ${rc5Calls.length}`);
-	assert(!rc5Calls[0].prompt.includes("## Retry Notice"), "the first fold call carries no Retry Notice");
-	assert(rc5Calls[1].prompt.includes("## Retry Notice"), "the retry call carries the Retry Notice naming what was refused, and this one does not");
-	assert(rc5Calls[1].prompt.includes("no ```json fence"), `the Retry Notice repeats the reason the first reply was refused, got: ${rc5Calls[1].prompt.slice(-400)}`);
-	assert((rc5Calls[1].prompt.match(/## Retry Notice/g) ?? []).length === 1, "a retry prompt never stacks two Retry Notices");
+	assert(rc5Calls.length === 2, `an unreadable fold is asked exactly once more, so the worker should have been called twice for RC-0005, got ${rc5Calls.length}`);
+	assert(!rc5Calls[0].prompt.includes("## Retry Notice") && !rc5Calls[1].prompt.includes("## Retry Notice"), "an unreadable reply's second ask carries no Retry Notice: there are no reasons to name");
+	assert(rc5Calls[1].prompt === `${rc5Calls[0].prompt.trimEnd()}\n\nYour last answer had no readable operations. Answer with the narrative and one json fence.\n`, `the second ask is the same prompt plus one line, got: ${rc5Calls[1].prompt.slice(-200)}`);
 
 	// --- 5. A worker that fails outright is asked again, then costs one session ----
 	const rc6 = sessionView(runA, "RC-0006");
@@ -629,7 +636,7 @@ try {
 	assert(rc2.outcome === "skipped", `a session the user asked to drop is skipped, got "${rc2.outcome}"`);
 	assert(rc2.reason === "This one was a repeat of the pricing review.", `a skipped session carries the user's own reason, got "${rc2.reason}"`);
 	assert(callsFor(callsA, "RC-0002").length === 0, `a session the user dropped costs no model call, and the worker was asked about RC-0002 ${callsFor(callsA, "RC-0002").length} time(s)`);
-	assert(runA.progress.total === 5 && runA.progress.folded === 2, `five sessions were to be folded and two of them landed, got ${runA.progress.folded} of ${runA.progress.total}`);
+	assert(runA.progress.total === 5 && runA.progress.folded === 4, `five sessions were to be folded: two folded and two kept as summaries, got ${runA.progress.folded} of ${runA.progress.total}`);
 
 	// --- 7. The prepass brings an over-budget room under its budget first ----------
 	assert(runA.budget.budgetTokens === TIGHT_BUDGET, `the run reads the room's own budget, got ${runA.budget.budgetTokens}`);
@@ -702,13 +709,17 @@ try {
 	const writtenA = fs.readFileSync(roomA.l1bPath, "utf-8");
 	assert(approval.budgetRaisedTo === undefined, `a save against the saved limit raises nothing, got ${JSON.stringify(approval.budgetRaisedTo)}`);
 	const keptMeta = writtenA.slice(writtenA.indexOf(`id=${firstBefore.id} `), writtenA.indexOf(`id=${firstBefore.id} `) + 160);
-	assert(writtenA.includes(`id=${firstBefore.id} `) && /pinned=true/.test(keptMeta), `a prepass row the person kept is back in the written memory, pinned as the person's own, got ${JSON.stringify(keptMeta)}`);
+	assert(writtenA.includes(`id=${firstBefore.id} `) && !/pinned=true/.test(keptMeta.slice(0, keptMeta.indexOf("-->"))), `a prepass row the person kept is back in the written memory for this save, and a keep is not a pin, got ${JSON.stringify(keptMeta)}`);
+	flushMemoryUse(roomA.agentId);
+	assert((readMemoryUse(roomA.agentId).notes[firstBefore.id]?.hits ?? 0) === 1, `the save records one use for the kept note, so the next run ranks it higher, got ${JSON.stringify(readMemoryUse(roomA.agentId).notes[firstBefore.id])}`);
 
 	assert(!/^###\s+RC-0001\s*\|/m.test(writtenA), "a folded session leaves Recent Context, and RC-0001 is still there");
 	assert(!/^###\s+RC-0004\s*\|/m.test(writtenA), "a folded session leaves Recent Context, and RC-0004 is still there");
 	assert(!/^###\s+RC-0002\s*\|/m.test(writtenA), "a session the user dropped leaves Recent Context, and RC-0002 is still there");
-	assert(/^###\s+RC-0003\s*\|/m.test(writtenA), "a session whose fold failed stays in Recent Context for next time, and RC-0003 is gone");
-	assert(/^###\s+RC-0005\s*\|/m.test(writtenA), "a session whose fold failed stays in Recent Context for next time, and RC-0005 is gone");
+	assert(!/^###\s+RC-0003\s*\|/m.test(writtenA), "a session kept as its summary leaves Recent Context, and RC-0003 is still there");
+	assert(!/^###\s+RC-0005\s*\|/m.test(writtenA), "a session kept as its summary leaves Recent Context, and RC-0005 is still there");
+	assert(/^### Unsorted$/m.test(writtenA) && writtenA.includes("The delivery window was reconsidered at length.") && writtenA.includes("A long back and forth about invoicing days."), "the summaries are in the written memory, under Unsorted");
+	assert((writtenA.match(/ summary=true/g) ?? []).length === 2, "each summary note is marked in the written memory");
 	assert(/^###\s+RC-0006\s*\|/m.test(writtenA), "a session whose fold failed stays in Recent Context for next time, and RC-0006 is gone");
 	assert(writtenA.includes(ADDED_FACT) && writtenA.includes(ADDED_ITEM), "what the folds added is in the written memory");
 	assert(writtenA.includes(UPDATED_TEXT) && !writtenA.includes(UPDATE_TARGET), "an updated entry reads as its new text and no longer as its old one");
@@ -747,19 +758,21 @@ try {
 	assert(record.run?.runId === startedA.runId, `the event record names the run it came from, got ${JSON.stringify(record.run?.runId)}`);
 	assert(Array.isArray(record.run?.sessions) && record.run.sessions.length === 6, `the event record accounts for every session the run saw, got ${record.run?.sessions?.length}`);
 	const recordedOutcomes = Object.fromEntries((record.run.sessions as Array<{ id: string; outcome: string }>).map((session) => [session.id, session.outcome]));
-	assert(JSON.stringify(recordedOutcomes) === JSON.stringify({ "RC-0001": "folded", "RC-0002": "skipped", "RC-0003": "failed", "RC-0004": "folded", "RC-0005": "failed", "RC-0006": "failed" }), `the event record carries each session's outcome as the run ended it, got ${JSON.stringify(recordedOutcomes)}`);
+	assert(JSON.stringify(recordedOutcomes) === JSON.stringify({ "RC-0001": "folded", "RC-0002": "skipped", "RC-0003": "summarized", "RC-0004": "folded", "RC-0005": "summarized", "RC-0006": "failed" }), `the event record carries each session's outcome as the run ended it, got ${JSON.stringify(recordedOutcomes)}`);
 	assert(record.run.sessions.find((session: any) => session.id === "RC-0005")?.attempts === 2, "the event record keeps the attempt count of a session that was asked twice");
 	assert(Array.isArray(record.run?.archived) && record.run.archived.length === archiveA.length, `the event record lists every entry this write archived, got ${record.run?.archived?.length} against ${archiveA.length} archive rows`);
 	assert(record.run.archived.every((row: any) => ["budget", "superseded", "done"].includes(row.why)), `every archived entry is recorded with the reason it left, got ${JSON.stringify([...new Set(record.run.archived.map((row: any) => row.why))])}`);
 	assert(record.run.budget?.budgetTokens === TIGHT_BUDGET && record.run.budget?.overBudgetAfter === false, `the event record discloses the budget this write was held to, got ${JSON.stringify(record.run.budget)}`);
 
-	assert(JSON.stringify(approval.foldedSessions) === JSON.stringify(["RC-0001", "RC-0004"]), `the approval reports what was folded, got ${JSON.stringify(approval.foldedSessions)}`);
-	assert(JSON.stringify(approval.remainingSessions) === JSON.stringify(["RC-0003", "RC-0005", "RC-0006"]), `the approval reports what stays for next time, got ${JSON.stringify(approval.remainingSessions)}`);
+	assert(JSON.stringify(approval.foldedSessions) === JSON.stringify(["RC-0001", "RC-0003", "RC-0004", "RC-0005"]), `the approval reports what was memorized, summaries included, got ${JSON.stringify(approval.foldedSessions)}`);
+	assert(JSON.stringify(approval.remainingSessions) === JSON.stringify(["RC-0006"]), `the approval reports what stays for next time, got ${JSON.stringify(approval.remainingSessions)}`);
+	const summaryRow = record.run.sessions.find((session: any) => session.id === "RC-0003");
+	assert(summaryRow?.outcome === "summarized" && "attempts" in summaryRow, `the event record keeps a summarized session with its outcome, got ${JSON.stringify(summaryRow)}`);
 	assert(approval.archivedEntries === archiveA.length, `the approval reports how much was archived, got ${approval.archivedEntries} against ${archiveA.length} archive rows`);
 	const budgetRows = archiveA.filter((entry) => entry.why === "budget").length;
 	assert(budgetRows > 0 && approval.archivedForBudget === budgetRows, `the saved screen can say how many entries the BUDGET took, apart from superseded texts and finished items, got ${approval.archivedForBudget} against ${budgetRows} budget rows of ${archiveA.length}`);
 	assert(approval.archivedForBudget < approval.archivedEntries, `the budget count is its own number, not a copy of the total, and both read ${approval.archivedForBudget}`);
-	assert(approval.recentContextEntryCount === 3, `the approval reports how many sessions the room still holds, got ${approval.recentContextEntryCount}`);
+	assert(approval.recentContextEntryCount === 1, `the approval reports how many sessions the room still holds, got ${approval.recentContextEntryCount}`);
 	assert(JSON.stringify(approval.rebasedOnto) === "[]", `nothing was remembered while this update was open, and the approval says so with an empty list, got ${JSON.stringify(approval.rebasedOnto)}`);
 	assert(approval.memoryBudget.overBudget === false, "an approved write that the budget pass held to the room's budget is not over it");
 	assert(getAbsorbRun(roomA.agentId, startedA.runId).state === "saved", "an approved run reads as saved");
@@ -954,7 +967,12 @@ try {
 
 	// --- 14. The raw message survives where it is meant to: the diagnostics ---------
 	const diagnosticsDir = path.join(root, roomD.agentId, "events", "maintenance-diagnostics");
-	const records = fs.readdirSync(diagnosticsDir).filter((name) => name.endsWith(".json")).map((name) => JSON.parse(fs.readFileSync(path.join(diagnosticsDir, name), "utf-8")));
+	const allRecords = fs.readdirSync(diagnosticsDir).filter((name) => name.endsWith(".json")).map((name) => JSON.parse(fs.readFileSync(path.join(diagnosticsDir, name), "utf-8")));
+	const records = allRecords.filter((record) => record.process === "memorize-fold");
+	// One record per conversation says how it ended, in codes: never the RC id, never room text.
+	const pageRecords = allRecords.filter((record) => record.process === "memorize-page");
+	assert(pageRecords.length === 3 && pageRecords.every((record) => record.page?.outcome === "waiting" && record.page.reason === "first-failure" && record.page.probe === "answered" && !/^RC-/.test(record.page.key)), `each conversation writes one page record, keyed away from its RC id, got ${JSON.stringify(pageRecords.map((record) => record.page))}`);
+	assert(pageRecords.some((record) => record.page.failureCode === "timed-out") && pageRecords.some((record) => record.page.failureCode === "provider-error"), `a page record names the failure's code, got ${JSON.stringify(pageRecords.map((record) => record.page.failureCode))}`);
 	assert(records.length === 5, `each failed fold call writes its own diagnostics record: one for the timeout and two each for the two sessions asked twice, got ${records.length}`);
 	assert(records.filter((record) => record.outcome === "retried").length === 2, `the call that was asked again is marked as retried, and the timeout is not, got ${JSON.stringify(records.map((record) => record.outcome))}`);
 	assert(records.filter((record) => record.outcome === "error").length === 3, `the call that ended it keeps the failure outcome, got ${JSON.stringify(records.map((record) => record.outcome))}`);
@@ -1172,29 +1190,30 @@ try {
 	const rh7 = sessionView(runH, "RC-0007");
 	assert(rh7.reason === ABSORB_FOLD_TIMED_OUT && callsFor(callsH, "RC-0007").length === 1, `a turn stopped at its ceiling is not asked again whatever would have followed, got "${rh7.reason}" after ${callsFor(callsH, "RC-0007").length} call(s)`);
 
-	// --- 25. A reply that came back cut is not asked again ------------------------
-	// The model answered; it answered too much. Asking the same question again
-	// would cut it in the same place, so it costs one call and one conversation.
+	// --- 25. A reply that came back cut is asked once more, told why --------------
+	// The model answered; it answered too much. The second ask says so, and a
+	// reply cut again is kept as its summary rather than waiting forever.
 	const rh4 = sessionView(runH, "RC-0004");
-	assert(rh4.outcome === "failed" && /output limit/.test(rh4.reason ?? ""), `a cut reply still reads as the output limit, got "${rh4.outcome}" / "${rh4.reason}"`);
-	assert(rh4.attempts === 1 && callsFor(callsH, "RC-0004").length === 1, `a cut reply is not asked again, got ${callsFor(callsH, "RC-0004").length} call(s)`);
+	assert(rh4.outcome === "summarized", `a reply cut twice with nothing to salvage is kept as its summary, got "${rh4.outcome}" / "${rh4.reason}"`);
+	assert(rh4.attempts === 2 && callsFor(callsH, "RC-0004").length === 2, `a cut reply is asked once more, got ${callsFor(callsH, "RC-0004").length} call(s)`);
+	assert(/ran to the output limit/.test(callsFor(callsH, "RC-0004")[1].prompt), "and the second ask says it ran to the output limit");
 
 	// --- 26. Three calls is the ceiling, whichever order the failures come in -----
 	const rh5 = sessionView(runH, "RC-0005");
 	assert(rh5.outcome === "folded" && rh5.attempts === 3, `refused, then dropped, then answered: the third call is allowed and it lands, got "${rh5.outcome}" after ${rh5.attempts} attempt(s)`);
 	const rh5Calls = callsFor(callsH, "RC-0005");
 	assert(rh5Calls.length === 3, `and it costs exactly three calls, got ${rh5Calls.length}`);
-	assert(!rh5Calls[0].prompt.includes("## Retry Notice") && rh5Calls[1].prompt.includes("## Retry Notice"), "the call after a refusal carries the Retry Notice");
-	assert(rh5Calls[2].prompt === rh5Calls[1].prompt, "the call after a dropped one repeats that same prompt, Retry Notice and all");
-	assert((rh5Calls[2].prompt.match(/## Retry Notice/g) ?? []).length === 1, "and never stacks two Retry Notices");
+	assert(!rh5Calls[0].prompt.includes("no readable operations") && rh5Calls[1].prompt.includes("Your last answer had no readable operations."), "the call after an unreadable reply carries the one line");
+	assert(rh5Calls[2].prompt === rh5Calls[1].prompt, "the call after a dropped one repeats that same prompt, the line and all");
+	assert((rh5Calls[2].prompt.match(/no readable operations/g) ?? []).length === 1, "and never stacks the line twice");
 	const rh6 = sessionView(runH, "RC-0006");
-	assert(rh6.outcome === "failed" && rh6.reason === ABSORB_FOLD_REFUSED_TWICE, `dropped once and refused twice ends on what the memory could not accept, got "${rh6.outcome}" / "${rh6.reason}"`);
+	assert(rh6.outcome === "summarized" && !rh6.reason, `dropped once and unreadable twice is kept as its summary, got "${rh6.outcome}" / "${rh6.reason}"`);
 	assert(rh6.attempts === 3 && callsFor(callsH, "RC-0006").length === 3, `and stops at three calls, got ${callsFor(callsH, "RC-0006").length}`);
 	assert(callsH.every((call) => callsFor(callsH, call.sessionId).length <= 3), `no conversation is ever asked more than three times, got ${JSON.stringify(runH.sessions.map((session) => [session.id, callsFor(callsH, session.id).length]))}`);
 
 	// --- 27. The record of the call that was retried says so ----------------------
 	const diagnosticsH = path.join(root, roomH.agentId, "events", "maintenance-diagnostics");
-	const recordsH = fs.readdirSync(diagnosticsH).filter((name) => name.endsWith(".json")).map((name) => JSON.parse(fs.readFileSync(path.join(diagnosticsH, name), "utf-8")));
+	const recordsH = fs.readdirSync(diagnosticsH).filter((name) => name.endsWith(".json")).map((name) => JSON.parse(fs.readFileSync(path.join(diagnosticsH, name), "utf-8"))).filter((record) => record.process === "memorize-fold");
 	assert(recordsH.length === callsH.length, `one record per call made, got ${recordsH.length} records for ${callsH.length} calls`);
 	const outcomesH = recordsH.map((record) => record.outcome).sort();
 	assert(outcomesH.filter((outcome) => outcome === "retried").length === 4, `each of the four calls that never came back and was asked again is annotated as retried, and the two timeouts are not, got ${JSON.stringify(outcomesH)}`);
@@ -1212,6 +1231,7 @@ try {
 	// the conversation goes back to waiting, exactly as it does when a fold in
 	// flight is cancelled.
 	setAbsorbFoldRetryPauseForTests(ABSORB_FOLD_RETRY_PAUSE_MS);
+	setAbsorbFoldRateLimitPauseForTests(null);
 	const roomI = createRoom("Absorb Run Retry Cancel Smoke Room", (agentId) => memoryFixture({ agentId, fillerCount: 6, markedEntries: false, sessions: sessionsE }));
 	const l1bBeforeI = fs.readFileSync(roomI.l1bPath, "utf-8");
 	const callsI: WorkerCall[] = [];
@@ -1238,6 +1258,7 @@ try {
 	assert(!sessionView(unwoundI, "RC-0001").reason, `and carries no failure reason, got "${sessionView(unwoundI, "RC-0001").reason}"`);
 	assert(fs.readFileSync(roomI.l1bPath, "utf-8") === l1bBeforeI, "a run cancelled between two calls leaves the room's memory byte for byte as it was");
 	setAbsorbFoldRetryPauseForTests(0);
+	setAbsorbFoldRateLimitPauseForTests(0);
 
 	// =====================================================================
 	// Room ten: a conversation folded late is weighed by its date.
@@ -1267,11 +1288,11 @@ try {
 
 	// --- 29. Every fold prompt carries the conversation's date and the entries' dates ---
 	const firstJ = callsFor(callsJ1, "RC-0007")[0].prompt;
-	assert(firstJ.includes("This conversation is from 2026-09-03: it is newer than every entry saved or updated before that day, and older than every entry saved or updated after it."), "the task names the day the conversation is from, read off its own heading");
+	assert(firstJ.includes("This conversation is from 2026-09-03: it is newer than every entry learned, saved or rewritten before that day, and older than every entry learned, saved or rewritten after it."), "the task names the day the conversation is from, read off its own heading");
 	assert(callsFor(callsJ1, "RC-0009")[0].prompt.includes("This conversation is from 2026-09-08:"), "each conversation's prompt names that conversation's day");
 	const priceIdJ = addressOf(areasFromPrompt(firstJ), SUPERSEDE_TARGET);
-	assert(firstJ.includes(`[${priceIdJ} · saved 2026-09-01 · updated 2026-09-11] ${SUPERSEDE_TARGET}`), `an entry's address carries the saved and updated dates the file holds, and the prompt reads ${JSON.stringify(/\[m-0102[^\]]*\]/.exec(firstJ)?.[0])}`);
-	assert(areasFromPrompt(firstJ).every((row) => row.saved), "every entry of the memory carries a saved date in its address");
+	assert(firstJ.includes(`[${priceIdJ} · saved 2026-09-01 · rewritten 2026-09-11] ${SUPERSEDE_TARGET}`), `a note a fold wrote before days were learned carries the saved and rewritten days the file holds, so a page of 3 Sep reads it as newer, and the prompt reads ${JSON.stringify(/\[m-0102[^\]]*\]/.exec(firstJ)?.[0])}`);
+	assert(areasFromPrompt(firstJ).every((row) => row.learned || row.saved || row.since), "every entry of the memory carries a date in its address");
 	assert(!firstJ.includes("this session is newer than everything already in memory"), "the rule that the session is newer than everything is gone from the constitution");
 	approveAbsorbRun(roomJ.agentId, startedJ1.runId, APPROVED_AT);
 	const writtenJ1 = fs.readFileSync(roomJ.l1bPath, "utf-8");
@@ -1289,10 +1310,13 @@ try {
 	const lateJ = callsFor(callsJ2, "RC-0007")[0].prompt;
 	assert(lateJ.includes("This conversation is from 2026-09-03:"), "the late fold's prompt names the day the conversation is from");
 	const priceRowJ = areasFromPrompt(lateJ).find((row) => row.firstLine.includes(PRICE_45K));
-	assert(priceRowJ?.id === priceIdJ && priceRowJ.saved === "2026-09-01" && priceRowJ.updated === RUN_DAY, `the 45k note keeps its id and its saved date and carries the day the newer conversation's fold rewrote it, got ${JSON.stringify(priceRowJ)}`);
-	assert(lateJ.includes(`[${priceIdJ} · saved 2026-09-01 · updated ${RUN_DAY}] ${PRICE_45K}`), `the address reads as one line, got ${JSON.stringify(/\[m-0102[^\]]*\]/.exec(lateJ)?.[0])}`);
+	// The stale-value bug: the rewrite happened on the run's day, but the text is
+	// only as new as the conversation of 8 Sep that said it, and the late fold of
+	// 3 Sep weighs itself against that day, not against the day of the run.
+	assert(priceRowJ?.id === priceIdJ && priceRowJ.learned === "2026-09-08" && !priceRowJ.since, `the 45k note keeps its id and carries the day of the conversation that wrote it, not the run's day, got ${JSON.stringify(priceRowJ)}`);
+	assert(lateJ.includes(`[${priceIdJ} · learned 2026-09-08] ${PRICE_45K}`) && !lateJ.includes(RUN_DAY + "]"), `the address reads as one line, got ${JSON.stringify(/\[m-0102[^\]]*\]/.exec(lateJ)?.[0])}`);
 	assert(!lateJ.includes(SUPERSEDE_TARGET), "the older text is gone from the memory the late fold reads");
-	assert(lateJ.includes("An entry saved or updated AFTER this session's date already knows more than this session does: never supersede or update it with this session's older information."), "the constitution tells the late fold not to roll a newer entry back");
+	assert(lateJ.includes("An entry learned AFTER this session's date already knows more than this session does: never supersede or update it with this session's older information."), "the constitution tells the late fold not to roll a newer entry back");
 	resetAbsorbRunsForTests();
 
 	// =====================================================================
@@ -1421,7 +1445,8 @@ try {
 	assert(fs.readFileSync(roomM.l1bPath, "utf-8").includes(`${SUPERSEDE_TARGET} The delivery window is 6 weeks`), "the thirteenth room's fixture writes the window as a number");
 	const WINDOW_8 = `- ${SUPERSEDE_TARGET} The delivery window is 8 weeks from the day the order is signed.`;
 	const REWORDED = `- ${UPDATE_TARGET} Commercial summaries always go out as one page, numbers first.`;
-	const WINDOW_REASON = "8 (saved 12 Sep) replaces 6 (saved 11 Sep); the newer date decides";
+	// The entry came before dates were kept (no learned day): no date decides, and none is named.
+	const WINDOW_REASON = "8 replaces 6";
 	const scriptsM: Record<string, Script> = {
 		"RC-0001": ({ areas }) => reply("The window moved, and the summaries rule is said again.", [
 			{ op: "supersede", id: addressOf(areas, SUPERSEDE_TARGET), text: WINDOW_8 },
@@ -1436,7 +1461,7 @@ try {
 	const changesM = sessionView(readyM, "RC-0001").changes ?? [];
 	const windowChange = changesM.find((change) => change.kind === "superseded" && change.id === entryId(102));
 	const rewordedChange = changesM.find((change) => change.kind === "superseded" && change.id === entryId(101));
-	assert(windowChange?.reason === WINDOW_REASON, `the superseded row whose texts disagree on a value carries the reason, with the conversation's own day as the newer one and the entry's updated day as the older, got ${JSON.stringify(windowChange)}`);
+	assert(windowChange?.reason === WINDOW_REASON, `the superseded row whose texts disagree on a value carries the reason, naming no day when the older text has none, got ${JSON.stringify(windowChange)}`);
 	assert(rewordedChange && !("reason" in rewordedChange), `a supersede that only rewords carries no reason, got ${JSON.stringify(rewordedChange)}`);
 	const approvalM = approveAbsorbRun(roomM.agentId, startedM.runId, APPROVED_AT);
 	const recordM = JSON.parse(fs.readFileSync(path.join(root, roomM.agentId, "events", "absorb", `${approvalM.absorbId}.json`), "utf-8"));

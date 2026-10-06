@@ -206,7 +206,7 @@ Smokes: `npm run smoke:state-home-move` and `npm run smoke:data-dir`
 | `~/.exxperts/app/content-policy.json` | Content policy config | yes |
 | `~/.exxperts/app/web-search.json` | Web-search provider config | yes |
 | `~/.exxperts/app/searxng/settings.yml` | Generated local SearXNG settings | yes |
-| `~/.exxperts/agent/mcp.json` | MCP server config (also `~/.config/mcp/mcp.json`, project `.mcp.json`) | yes |
+| `~/.exxperts/agent/mcp.json` | MCP server config (also `~/.config/mcp/mcp.json`; a plain terminal session without a room also reads `.mcp.json` and `.pi/mcp.json` in its folder) | yes |
 | `~/.exxperts/agent/` | Embedded runtime provider/auth/model/session state | yes |
 | `~/.exxperts/app/run/active-profile.json` | Pointer to the loaded data profile (Settings → Profiles; absent = the standard `~/.exxperts`) | no (transient) |
 | `~/.exxperts-<name>/` | Additional data profiles, each a self-contained `.exxperts` tree; the standard `~/.exxperts` never moves | yes |

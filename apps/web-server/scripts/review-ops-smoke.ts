@@ -139,6 +139,22 @@ const cut = parseReviewOps("Here is what I did.\n\n```json\n{\"ops\": [{\"op\":\
 assert(cut.ops.length === 0 && /cut off/.test(cut.problems[0] ?? ""), `a reply cut off inside its fence should say so, got ${JSON.stringify(cut.problems)}`);
 assert(isReviewOpsJsonProblem(extractReviewOpsJson("no fence at all")), "a reply with no fence should come back as a problem, not a throw");
 assert(/"ops"/.test(String((extractReviewOpsJson("nothing here") as any).problem)), "the no-fence problem should say what the fence must hold");
+// Review reads with the fold's tolerant reader: a stray fence line or a trailing comma costs nothing, and an empty list is still an answer.
+const stray = parseReviewOps('Tidied one note.\n\n```json\n{"ops":[{"op":"update","id":"m-0031","text":"- shorter",}]}\n```\n```');
+assert(stray.problems.length === 0 && stray.ops.length === 1 && stray.narrative === "Tidied one note.", `a stray fence line and a trailing comma no longer read as cut off, got ${JSON.stringify(stray)}`);
+const none = parseReviewOps('These notes are already as short as they can be.\n\n```json\n{"ops": []}\n```');
+assert(none.problems.length === 0 && none.ops.length === 0 && none.narrative === "These notes are already as short as they can be.", `an empty list is a valid answer with its narrative, got ${JSON.stringify(none)}`);
+const DRAFT = '```json\n{"ops":[{"op":"merge","ids":["m-0041","m-0032"],"text":"- Summaries go out as one page."}]}\n```';
+const retracted = parseReviewOps(`${DRAFT}\n\nOn reflection these two notes say different things, so nothing should change.\n\n\`\`\`json\n{"ops": []}\n\`\`\``);
+assert(retracted.problems.length === 0 && retracted.ops.length === 0, `a final empty list outranks a draft the model took back, got ${JSON.stringify(retracted.ops)}`);
+assert(parseReviewOps(`Merged two notes.\n\n${DRAFT}`).ops.length === 1, "a draft alone is the answer");
+assert(parseReviewOps(`${DRAFT}\n\nOn reflection nothing should change.\n\n\`\`\`json\n{"ops": []}\n\`\`\`\n\`\`\``).ops.length === 0, "a stray fence line after the final empty list is ignored, as everywhere else: the taken-back draft stays taken back");
+// An empty list quoted early as an example is no answer: it wins only as the reply's last block.
+const EXAMPLE = 'If nothing needs tidying I answer:\n\n```json\n{"ops": []}\n```\n\nHere, two notes say the same thing:';
+const LIST = '{"ops":[{"op":"merge","ids":["m-0041","m-0032"],"text":"- Summaries go out as one page."}]}';
+for (const [shape, reply] of [["an unlabelled fence", `${EXAMPLE}\n\n\`\`\`\n${LIST}\n\`\`\``], ["a json fence cut before its end", `${EXAMPLE}\n\n\`\`\`json\n${LIST}\n`], ["prose", `${EXAMPLE}\n\n${LIST}`]]) {
+	assert(parseReviewOps(reply).ops.length === 1, `an empty example list, then the real list in ${shape}: the real list is the answer, got ${JSON.stringify(parseReviewOps(reply))}`);
+}
 
 const foreign = parseReviewOps('```json\n{"ops":[{"op":"update","id":"m-0031","text":"- shorter","area":"Commercial terms"}]}\n```');
 assert(foreign.ops.length === 1, "an op with a foreign key still parses, so the validator can refuse it by name");
@@ -261,6 +277,24 @@ const duplicated = applyReviewOps(fixture(), [{ op: "archive", id: "m-0032", why
 assert(duplicated.archive[0].why === "duplicate", '"duplicate" reaches the archive as its own reason');
 const finished = applyReviewOps(fixture(), [{ op: "archive", id: "m-0031", why: "finished" }], { savedDate: "2026-09-14" });
 assert(finished.archive[0].why === "done", '"finished" maps to the archive\'s existing "done"');
+
+// The day a note was learned: a shorten keeps it; a merge takes the newest of its members, or none when one has none.
+const dated = () => { const doc = fixture(); const all = doc.topics.flatMap((topic) => topic.entries); all.find((e) => e.id === "m-0031")!.learned = "2026-06-01"; all.find((e) => e.id === "m-0032")!.learned = "2026-08-01"; return doc; };
+const learnedOf = (doc: MemoryDocument, id: string) => doc.topics.flatMap((topic) => topic.entries).find((e) => e.id === id)?.learned;
+assert(learnedOf(applyReviewOps(dated(), [{ op: "update", id: "m-0031", text: "- Shorter." }], { savedDate: "2026-09-14" }).doc, "m-0031") === "2026-06-01", "a shorten keeps the day the note was learned");
+assert(learnedOf(applyReviewOps(dated(), [{ op: "merge", ids: ["m-0031", "m-0032"], text: "- Both, merged." }], { savedDate: "2026-09-14" }).doc, "m-0031") === "2026-08-01", "a merge takes the newest day of its members");
+const oneUndated = dated();
+delete oneUndated.topics.flatMap((topic) => topic.entries).find((e) => e.id === "m-0032")!.learned;
+assert(learnedOf(applyReviewOps(oneUndated, [{ op: "merge", ids: ["m-0031", "m-0032"], text: "- Both, merged." }], { savedDate: "2026-09-14" }).doc, "m-0031") === undefined, "a merge with a member of no known day has none, and none is guessed");
+// A merge's members that leave, and the survivor's own old text, held until the day the merged note is learned; with no day, no until.
+const mergedArchive = applyReviewOps(dated(), [{ op: "merge", ids: ["m-0031", "m-0032"], text: "- Both, merged." }], { savedDate: "2026-09-14" }).archive;
+assert(mergedArchive.length === 2 && mergedArchive.every((row) => row.until === "2026-08-01"), `a merge's archived texts say until when they held, got ${JSON.stringify(mergedArchive.map((row) => [row.entry.id, row.until]))}`);
+assert(applyReviewOps(oneUndated, [{ op: "merge", ids: ["m-0031", "m-0032"], text: "- Both, merged." }], { savedDate: "2026-09-14" }).archive.every((row) => row.until === undefined), "a merge with no known day writes no until");
+// A kept pair's mark leaves with the text it was written for: a shorten or a merge clears it.
+const paired = () => { const doc = dated(); const all = doc.topics.flatMap((topic) => topic.entries); all.find((e) => e.id === "m-0031")!.disagrees = "m-0032"; all.find((e) => e.id === "m-0032")!.disagrees = "m-0031"; return doc; };
+const pairOf = (doc: MemoryDocument, id: string) => doc.topics.flatMap((topic) => topic.entries).find((e) => e.id === id)?.disagrees;
+assert(pairOf(applyReviewOps(paired(), [{ op: "update", id: "m-0031", text: "- Shorter." }], { savedDate: "2026-09-14" }).doc, "m-0031") === undefined, "a shorten clears the mark on the note it rewrites");
+assert(pairOf(applyReviewOps(paired(), [{ op: "merge", ids: ["m-0031", "m-0032"], text: "- Both, merged." }], { savedDate: "2026-09-14" }).doc, "m-0031") === undefined, "a merge clears it on the note that stays");
 
 // A second version of one note in one run is -v2, not a second -v1: two rows
 // claiming one address would make a restore a coin toss.
@@ -500,7 +534,7 @@ assert(judge([{ op: "archive", id: "m-0081", why: "stale" }]).length === 0, "arc
 assert(judge([{ op: "archive", id: "m-0032", why: "duplicate" }]).length === 0, "a note outside the pair is archived as a duplicate as before");
 
 // The merge: the newer value stands when the dates decide.
-const MERGE_REFUSAL = `op 1 (merge): the merged text keeps 1 June, but m-0082 (saved 14 Sep) is newer; keep 1 July or say why in the narrative`;
+const MERGE_REFUSAL = `op 1 (merge): the merged text keeps 1 June, but m-0082 (as of 14 Sep) is newer; keep 1 July or say why in the narrative`;
 assert(judge([{ op: "merge", ids: ["m-0082", "m-0081"], text: OLDER_TEXT }]).join("|") === MERGE_REFUSAL, `a merge whose text keeps the older value is refused in the words the spec fixed, got ${JSON.stringify(judge([{ op: "merge", ids: ["m-0082", "m-0081"], text: OLDER_TEXT }]))}`);
 assert(judge([{ op: "merge", ids: ["m-0081", "m-0082"], text: "- Nordwind maintenance renews automatically on 1 June." }]).join("|") === MERGE_REFUSAL, "the refusal holds whichever member survives and however the words are shortened: the value is what is judged");
 assert(judge([{ op: "merge", ids: ["m-0082", "m-0081"], text: NEWER_TEXT }]).length === 0, "a merge keeping the newer value passes");
@@ -511,7 +545,7 @@ assert(judge([{ op: "merge", ids: ["m-0082", "m-0032"], text: "- Invoices go out
 assert(validateReviewOps([{ op: "archive", id: "m-0081", why: "duplicate" }], CONFLICT_NOTES, "tidy").length === 0, "a caller that hands the validator no pairs gets the validator it had");
 
 // The prompt: one line per pair with both days and both first lines, at either depth, and the rule that every pair is dealt with.
-const CONFLICT_LINE = `m-0081 (saved 2 Jun) says "The Nordwind maintenance contract renews automatically on 1 June."; m-0082 (saved 14 Sep) says "The Nordwind maintenance contract renews automatically on 1 July.": the newer date decides; merge them keeping the newer text, or say in the narrative why both stay`;
+const CONFLICT_LINE = `m-0081 (as of 2 Jun) says "The Nordwind maintenance contract renews automatically on 1 June."; m-0082 (as of 14 Sep) says "The Nordwind maintenance contract renews automatically on 1 July.": the newer date decides; merge them keeping the newer text, or say in the narrative why both stay`;
 const CONFLICT_RULE = `Every pair listed under "Notes That Disagree" is dealt with: merge them keeping the newer text, or say in the narrative why both stay.`;
 const conflictPrompt = { conflictNotes: [{ ids: ["m-0081", "m-0082"] as [string, string], line: CONFLICT_LINE }] };
 const disagreeing = buildReviewGroupPrompt({ ...base, notes: CONFLICT_NOTES, ...findings, ...conflictPrompt, depth: "tidy" });
@@ -524,7 +558,7 @@ assert(!disagreeingWording.prompt.includes("Notes That Say The Same Twice"), "th
 assert(!withFindings.prompt.includes("Notes That Disagree"), "a group with no disagreeing pair carries neither the section nor the rule");
 
 // Applying: the merged row and the archive row of the member that left say why.
-const REASON = `1 July (saved 14 Sep) replaces 1 June (saved 2 Jun); the newer date decides`;
+const REASON = `1 July (as of 14 Sep) replaces 1 June (as of 2 Jun); the newer date decides`;
 const resolved = applyReviewOps(conflictFixture(), [{ op: "merge", ids: ["m-0082", "m-0081"], text: NEWER_TEXT }], { savedDate: "2026-09-14", conflictNotes: [DECIDED] });
 const resolvedRow = resolved.changes.find((change) => change.kind === "merged")!;
 assert(resolvedRow.id === "m-0082" && resolvedRow.reason === REASON && JSON.stringify(resolvedRow.conflictWith) === JSON.stringify({ id: "m-0081", topic: "Maintenance renewals" }), `a merge that resolves a disagreeing pair carries the reason and names the member that left with its topic, got ${JSON.stringify(resolvedRow)}`);
@@ -535,9 +569,9 @@ const olderSurvives = applyReviewOps(conflictFixture(), [{ op: "merge", ids: ["m
 assert(olderSurvives.changes[0].id === "m-0081" && olderSurvives.changes[0].reason === REASON && olderSurvives.changes[0].conflictWith?.id === "m-0082" && olderSurvives.archive.find((row) => row.entry.id === "m-0082")?.reason === REASON, `when the older note survives with the newer text the reason is the same and the newer member is the one that left, got ${JSON.stringify(olderSurvives.changes[0])}`);
 // With equal dates the merged text itself says which value stands.
 const undecidedNewer = applyReviewOps(conflictFixture(), [{ op: "merge", ids: ["m-0082", "m-0081"], text: NEWER_TEXT }], { savedDate: "2026-09-14", conflictNotes: [UNDECIDED] });
-assert(undecidedNewer.changes[0].reason === `1 July replaces 1 June (both saved 14 Sep)`, `an undecided pair resolved to the second value says so with both days as one, got ${JSON.stringify(undecidedNewer.changes[0].reason)}`);
+assert(undecidedNewer.changes[0].reason === `1 July replaces 1 June (both as of 14 Sep)`, `an undecided pair resolved to the second value says so with both days as one, got ${JSON.stringify(undecidedNewer.changes[0].reason)}`);
 const undecidedOlder = applyReviewOps(conflictFixture(), [{ op: "merge", ids: ["m-0081", "m-0082"], text: OLDER_TEXT }], { savedDate: "2026-09-14", conflictNotes: [UNDECIDED] });
-assert(undecidedOlder.changes[0].reason === `1 June replaces 1 July (both saved 14 Sep)`, `an undecided pair resolved to the first value says that, not the other way round, got ${JSON.stringify(undecidedOlder.changes[0].reason)}`);
+assert(undecidedOlder.changes[0].reason === `1 June replaces 1 July (both as of 14 Sep)`, `an undecided pair resolved to the first value says that, not the other way round, got ${JSON.stringify(undecidedOlder.changes[0].reason)}`);
 // A merge of notes that are no pair says nothing more, and neither does a caller that hands over no pairs.
 const plainMerge = applyReviewOps(conflictFixture(), [{ op: "merge", ids: ["m-0041", "m-0032"], text: "- Summaries go out as one page, numbers first; invoices on the first working day." }], { savedDate: "2026-09-14", conflictNotes: [DECIDED] });
 assert(plainMerge.changes[0].reason === undefined && plainMerge.changes[0].conflictWith === undefined && plainMerge.archive.every((row) => row.reason === undefined), "a merge outside the pair carries no reason and no partner");

@@ -29,6 +29,9 @@
 //   RECALL_BENCH_MODEL=anthropic/claude-sonnet-5 npx tsx scripts/memory-bench/longmemeval-adapter.mts --sample 50 --seed 1
 // What it would cost first, always:
 //   RECALL_BENCH_MODEL=anthropic/claude-sonnet-5 npx tsx scripts/memory-bench/longmemeval-adapter.mts --sample 50 --seed 1 --dry-run
+// The first read each Memorize run folds with: --first-read fixed (the default,
+// the text every earlier number was measured with), none (what the fast Start
+// hands the run) or real (the room's own first read, one call per run).
 
 import fs from "node:fs";
 import path from "node:path";
@@ -42,6 +45,8 @@ import {
 	createMaintenanceWorker,
 	createRealIngest,
 	DEFAULT_MEMORY_BUDGET_TOKENS,
+	FIRST_READ_MODES,
+	firstReadTallyLine,
 	ingestSessions,
 	pad,
 	prepareBenchHome,
@@ -56,6 +61,7 @@ import {
 	withProviderRetry,
 	writeScriptedProviderRecords,
 	type BenchServer,
+	type FirstReadMode,
 	type ClaimAudit,
 	type MaintenanceWorker,
 	type RealIngest,
@@ -126,10 +132,11 @@ interface AdapterArgs {
 	keepHome: boolean;
 	/** Carry on into an existing hypothesis file: its instances are skipped, the rest appended. */
 	resume: boolean;
+	firstRead: FirstReadMode;
 }
 
 function parseArgs(argv: string[]): AdapterArgs {
-	const args: AdapterArgs = { oracle: false, seed: 1, dryRun: false, scripted: false, keepHome: false, resume: false };
+	const args: AdapterArgs = { oracle: false, seed: 1, dryRun: false, scripted: false, keepHome: false, resume: false, firstRead: "fixed" };
 	for (let i = 0; i < argv.length; i++) {
 		const flag = argv[i];
 		const next = () => {
@@ -147,6 +154,10 @@ function parseArgs(argv: string[]): AdapterArgs {
 			const value = next();
 			if (value !== "none" && value !== "transcript") throw new Error("--baseline must be none or transcript");
 			args.baseline = value;
+		} else if (flag === "--first-read") {
+			const value = next();
+			if (!(FIRST_READ_MODES as readonly string[]).includes(value)) throw new Error(`--first-read must be ${FIRST_READ_MODES.join(", ")}`);
+			args.firstRead = value as FirstReadMode;
 		} else if (flag === "--judge") args.judge = next();
 		else if (flag === "--dry-run") args.dryRun = true;
 		else if (flag === "--scripted") args.scripted = true;
@@ -198,6 +209,8 @@ const RECENT_CONTEXT_DRAFT_TOKENS = 400;
 /** The ask: one recall leg and one answer leg, each carrying the room's memory and its system prompt. */
 const ASK_PROMPT_OVERHEAD = 2_000;
 const ASK_CALLS_PER_QUESTION = 2;
+/** A real first read: the room's memory, the waiting conversations and about this much of instructions, once per Memorize run. */
+const FIRST_READ_PROMPT_OVERHEAD = 1_000;
 
 interface Estimate {
 	instances: number;
@@ -206,23 +219,26 @@ interface Estimate {
 	checkpointTokens: number;
 	foldTokens: number;
 	askTokens: number;
+	/** Zero unless --first-read real. */
+	firstReadTokens: number;
 	transcriptTokens: number;
 	promptTokens: number;
 }
 
-function estimate(mapped: readonly MappedInstance[], foldEvery: number, baseline: AdapterArgs["baseline"]): Estimate {
+function estimate(mapped: readonly MappedInstance[], foldEvery: number, baseline: AdapterArgs["baseline"], firstRead: FirstReadMode): Estimate {
 	const sessions = mapped.reduce((total, instance) => total + instance.sessions.length, 0);
 	const memorizeRuns = mapped.reduce((total, instance) => total + Math.max(1, Math.ceil(instance.sessions.length / foldEvery)), 0);
 	const transcriptTokens = mapped.reduce((total, instance) => total + instance.sessions.reduce((sum, session) => sum + answerTokens(session.turns.map((turn) => turn.text).join("\n")), 0), 0);
 	const checkpointTokens = sessions * (DEFAULT_MEMORY_BUDGET_TOKENS + CHECKPOINT_PROMPT_OVERHEAD) + transcriptTokens;
 	const foldTokens = sessions * (DEFAULT_MEMORY_BUDGET_TOKENS + FOLD_PROMPT_OVERHEAD + RECENT_CONTEXT_DRAFT_TOKENS);
 	const askTokens = mapped.length * ASK_CALLS_PER_QUESTION * (DEFAULT_MEMORY_BUDGET_TOKENS + ASK_PROMPT_OVERHEAD);
+	const firstReadTokens = firstRead === "real" && baseline === undefined ? memorizeRuns * (DEFAULT_MEMORY_BUDGET_TOKENS + FIRST_READ_PROMPT_OVERHEAD) + sessions * RECENT_CONTEXT_DRAFT_TOKENS : 0;
 	const promptTokens = baseline === "transcript"
 		? transcriptTokens + mapped.length * ASK_PROMPT_OVERHEAD
 		: baseline === "none"
 			? askTokens
-			: checkpointTokens + foldTokens + askTokens;
-	return { instances: mapped.length, sessions, memorizeRuns, checkpointTokens, foldTokens, askTokens, transcriptTokens, promptTokens };
+			: checkpointTokens + foldTokens + firstReadTokens + askTokens;
+	return { instances: mapped.length, sessions, memorizeRuns, checkpointTokens, foldTokens, askTokens, firstReadTokens, transcriptTokens, promptTokens };
 }
 
 function printEstimate(numbers: Estimate, args: AdapterArgs, foldEvery: number): void {
@@ -235,6 +251,7 @@ function printEstimate(numbers: Estimate, args: AdapterArgs, foldEvery: number):
 	} else {
 		console.log(`estimate: ingest ≈ ${numbers.sessions} checkpoint call(s) ≈ ${k(numbers.checkpointTokens)} (the room's ${DEFAULT_MEMORY_BUDGET_TOKENS}-token memory, ~${CHECKPOINT_PROMPT_OVERHEAD} of instructions, and ${k(numbers.transcriptTokens)} of transcript)`);
 		console.log(`estimate: ingest ≈ ${numbers.sessions} fold call(s) ≈ ${k(numbers.foldTokens)} prompt tokens`);
+		if (numbers.firstReadTokens > 0) console.log(`estimate: first read ≈ ${numbers.memorizeRuns} call(s), one per Memorize run ≈ ${k(numbers.firstReadTokens)} prompt tokens (the room's memory, the waiting conversations and ~${FIRST_READ_PROMPT_OVERHEAD} of instructions)`);
 		console.log(`estimate: asking ≈ ${numbers.instances} question(s) × ${ASK_CALLS_PER_QUESTION} call(s) ≈ ${k(numbers.askTokens)} prompt tokens`);
 	}
 	console.log(`estimate: ${k(numbers.promptTokens)} prompt tokens in total, ≈ ${k(numbers.promptTokens / Math.max(1, numbers.instances))} per instance`);
@@ -245,6 +262,8 @@ function printEstimate(numbers: Estimate, args: AdapterArgs, foldEvery: number):
 
 interface InstanceResult {
 	question_id: string;
+	/** The first read this instance's Memorize runs folded with; absent on a row an older adapter wrote. */
+	firstRead?: FirstReadMode;
 	question_type: string;
 	abstention: boolean;
 	/** null when the instance failed: the provider gave up on its ingest or its ask, and `failure` says which. */
@@ -456,7 +475,7 @@ const modelLabel = args.scripted ? "scripted" : realSpec!.replace(/[^A-Za-z0-9._
 // because the run began after the UTC midnight is a file nobody can find.
 const now = new Date();
 const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
-const outFile = args.out ?? path.join(resultsDir(), `longmemeval-${modelLabel}${args.baseline ? `-baseline-${args.baseline}` : ""}-${today}.jsonl`);
+const outFile = args.out ?? path.join(resultsDir(), `longmemeval-${modelLabel}${args.baseline ? `-baseline-${args.baseline}` : ""}${args.firstRead !== "fixed" ? `-first-read-${args.firstRead}` : ""}-${today}.jsonl`);
 const metaFile = `${outFile}.meta.json`;
 const scriptedFail = parseScriptedFail(process.env.RECALL_BENCH_SCRIPTED_FAIL, args.scripted);
 
@@ -479,9 +498,9 @@ function answeredIn(file: string): string[] {
 }
 
 /** The earlier run's meta, on a resume: its usage and its answered rows are carried into the new one. */
-function readPreviousMeta(): { usage?: unknown; rows?: InstanceResult[] } | null {
+function readPreviousMeta(): { usage?: unknown; rows?: InstanceResult[]; firstRead?: FirstReadMode } | null {
 	if (!args.resume || !fs.existsSync(metaFile)) return null;
-	try { return JSON.parse(fs.readFileSync(metaFile, "utf-8")) as { usage?: unknown; rows?: InstanceResult[] }; } catch { return null; }
+	try { return JSON.parse(fs.readFileSync(metaFile, "utf-8")) as { usage?: unknown; rows?: InstanceResult[]; firstRead?: FirstReadMode }; } catch { return null; }
 }
 
 const outExists = fs.existsSync(outFile);
@@ -496,12 +515,17 @@ if (args.resume && !outExists) {
 const answeredBefore = args.resume ? answeredIn(outFile) : [];
 const answeredSet = new Set(answeredBefore);
 const previousMeta = readPreviousMeta();
+// One file, one first read: a file an older adapter wrote was measured with the fixed one.
+if (previousMeta && (previousMeta.firstRead ?? "fixed") !== args.firstRead) {
+	console.log(`--resume: ${outFile} was run with --first-read ${previousMeta.firstRead ?? "fixed"}, and this run asks for ${args.firstRead}; one file holds one first read, so pass the same, or --out to name another file.`);
+	process.exit(1);
+}
 /** The earlier run's rows this file still answers; a failed row is not one, its instance is tried again. */
 const carried: InstanceResult[] = (previousMeta?.rows ?? []).filter((row) => typeof row.hypothesis === "string" && answeredSet.has(row.question_id));
 /** The instances this run has to do: the selection, less what the file already answers. */
 const todo = mapped.filter((instance) => !answeredSet.has(instance.questionId));
 
-console.log(`LongMemEval adapter · ${path.basename(dataFile)} · ${mapped.length} of ${all.length} instance(s) · ${args.scripted ? "scripted gateway, no provider" : realSpec} · ${args.baseline ? `baseline ${args.baseline}` : "the room's memory"}`);
+console.log(`LongMemEval adapter · ${path.basename(dataFile)} · ${mapped.length} of ${all.length} instance(s) · ${args.scripted ? "scripted gateway, no provider" : realSpec} · ${args.baseline ? `baseline ${args.baseline}` : `the room's memory · first read ${args.firstRead}`}`);
 const byType = new Map<string, number>();
 for (const instance of mapped) byType.set(instance.questionType, (byType.get(instance.questionType) ?? 0) + 1);
 console.log(`selection: ${[...byType].sort().map(([type, count]) => `${type} ${count}`).join(" · ")} · ${mapped.filter((instance) => instance.abstention).length} abstention(s)`);
@@ -513,7 +537,7 @@ if (args.resume) {
 	console.log(`resume: ${answeredBefore.length - strangers.length} of ${mapped.length} already answered in ${outFile}, ${todo.length} to go${strangers.length > 0 ? `; ${strangers.length} line(s) of the file answer instances outside this selection and are left as they are` : ""}`);
 }
 
-const numbers = estimate(todo, foldEvery, args.baseline);
+const numbers = estimate(todo, foldEvery, args.baseline, args.firstRead);
 printEstimate(numbers, args, foldEvery);
 if (args.dryRun) {
 	console.log("dry run: nothing was built, nothing was called, no home was made; drop --dry-run to run it");
@@ -547,7 +571,7 @@ const totalClaims = (): ClaimAudit => [...carried, ...results].reduce<ClaimAudit
 const failed = () => results.filter((row) => row.hypothesis === null);
 
 const record: RecordRow = (row) => {
-	results.push(row);
+	results.push({ ...row, firstRead: args.firstRead });
 	// The hypothesis file keeps upstream's line shape and nothing else, so a
 	// failed instance has no line in it: the judge file holds answers only.
 	if (row.hypothesis !== null) fs.appendFileSync(outFile, `${hypothesisLine({ questionId: row.question_id, hypothesis: row.hypothesis })}\n`);
@@ -570,6 +594,8 @@ const writeMeta = (partial: boolean): void => {
 		sample: args.sample ?? null,
 		type: args.type ?? null,
 		foldEvery,
+		/** The first read each Memorize run folded with. */
+		firstRead: args.firstRead,
 		memoryBudgetTokens: DEFAULT_MEMORY_BUDGET_TOKENS,
 		estimate: numbers,
 		/** True when not every instance was reached: the pipeline broke or the run was interrupted. */
@@ -581,7 +607,7 @@ const writeMeta = (partial: boolean): void => {
 		/** The file this run carried on into, and what the earlier run spent; null on a fresh run. */
 		resumedFrom: args.resume ? { file: outFile, answeredBefore: answeredBefore.length, usage: previousMeta?.usage ?? null } : null,
 		/** This run's spend alone; an earlier run's is under resumedFrom. */
-		usage: { ingest: spentIngest, ask: askUsage },
+		usage: { ingest: spentIngest, ask: askUsage, ...(ingestPair ? { firstReads: ingestPair.firstReads() } : {}) },
 		rows: [...carried, ...results],
 	};
 	fs.mkdirSync(path.dirname(metaFile), { recursive: true });
@@ -633,7 +659,7 @@ try {
 		console.log(`\nbaseline transcript: the whole haystack in one prompt, through the isolated worker, on ${lock.provider}/${lock.model}`);
 		await runTranscriptBaseline(todo, worker, lock, record);
 	} else {
-		if (args.baseline !== "none") ingestPair = await createRealIngest({ roomModel: lock });
+		if (args.baseline !== "none") ingestPair = await createRealIngest({ roomModel: lock, firstRead: args.firstRead });
 		else console.log("\nbaseline none: every room is scaffolded and nothing is ever remembered into it, so whatever is scored is what the questions give away by themselves");
 		server = await startBenchServer({ home, model: lock });
 		console.log(`server: ${server.baseUrl} · model ${server.model.provider}/${server.model.model} · memory budget ${DEFAULT_MEMORY_BUDGET_TOKENS} tokens · fold every ${foldEvery}`);
@@ -680,6 +706,7 @@ try {
 	const spentIngest = ingestPair?.usage() ?? { input: 0, output: 0, totalTokens: 0, cost: 0, calls: 0 };
 	const askUsage = results.reduce((total, row) => ({ input: total.input + (row.usage?.input ?? 0), output: total.output + (row.usage?.output ?? 0), total: total.total + (row.usage?.total ?? 0), cost: total.cost + (row.usage?.cost ?? 0) }), { input: 0, output: 0, total: 0, cost: 0 });
 	if (spentIngest.calls > 0) console.log(`ingest cost: ${spentIngest.calls} worker call(s) · in ${spentIngest.input} tok · out ${spentIngest.output} tok${spentIngest.cost > 0 ? ` · $${spentIngest.cost.toFixed(4)}` : ""}`);
+	if (ingestPair) console.log(firstReadTallyLine(ingestPair.firstReads()));
 	console.log(`ask cost: in ${askUsage.input} tok · out ${askUsage.output} tok · ${askUsage.total} total${askUsage.cost > 0 ? ` · $${askUsage.cost.toFixed(4)}` : ""}`);
 
 	// --- the judge -----------------------------------------------------------

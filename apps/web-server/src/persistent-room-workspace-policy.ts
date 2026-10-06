@@ -180,8 +180,10 @@ export const PERSISTENT_ROOM_WORKSPACE_DEFAULT_STORAGE_SOURCE = "persistent-agen
 export const PERSISTENT_ROOM_WORKSPACE_DEFAULT_CONVERSATION_ID = "room_default";
 export const PERSISTENT_ROOM_DEFAULT_WORKSPACE_ACCESS_MODE: PersistentRoomWorkspaceAccessMode = "localFiles";
 export const PERSISTENT_ROOM_LEGACY_WORKSPACE_ACCESS_MODE: PersistentRoomWorkspaceAccessMode = "bounded";
-export const PERSISTENT_ROOM_DEFAULT_DENY_SEGMENTS = [".git", ".exxeta", ".exxperts", "node_modules"] as const;
-export const PERSISTENT_ROOM_DEFAULT_DENY_FILENAME_GLOBS = [".env", ".env.*", "*.pem", "*.key", "id_rsa", "id_ed25519"] as const;
+// `.pi` and `.mcp.json` hold tool and connector settings, not documents: a
+// bounded room neither reads nor writes them.
+export const PERSISTENT_ROOM_DEFAULT_DENY_SEGMENTS = [".git", ".exxeta", ".exxperts", ".pi", "node_modules"] as const;
+export const PERSISTENT_ROOM_DEFAULT_DENY_FILENAME_GLOBS = [".env", ".env.*", "*.pem", "*.key", "id_rsa", "id_ed25519", ".mcp.json"] as const;
 
 export function defaultExxetaStateRoot(): string {
 	return productAppStateRoot();

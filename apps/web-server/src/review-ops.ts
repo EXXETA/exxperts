@@ -42,7 +42,7 @@ import {
 	type MemorySection,
 	type MemoryTopic,
 } from "./memory-entries.js";
-import { nearDuplicateTopicTitle } from "./absorb-ops.js";
+import { lastJsonFenceIsEmptyList, nearDuplicateTopicTitle, readFoldReply, type FoldUnreadableClass } from "./absorb-ops.js";
 import { conflictReason, conflictValuePairs, noteValueTokens } from "./memory-duplicates.js";
 import { reviewGuidanceIsEmpty, type ReviewGuidance } from "./review-guidance.js";
 import { estimateTokens } from "./token-estimate.js";
@@ -327,6 +327,8 @@ export interface ReviewGroupPromptInput {
 	conflictNotes?: readonly { ids: readonly [string, string]; line: string }[];
 	/** Pairs of topics in THIS group that look like one topic, as the machine found them. */
 	lookAlikeTopics?: readonly { a: string; b: string }[];
+	/** The summary notes in THIS group's Unsorted, by id: conversations a Memorize kept whole. */
+	unsortedSummaries?: readonly string[];
 	/** Reasons a previous reply was refused, repeated as a Retry Notice. */
 	retryFeedback?: string[];
 	now?: Date;
@@ -438,6 +440,9 @@ function groupFindingsSections(input: ReviewGroupPromptInput): string[] {
 	if (input.lookAlikeTopics?.length && DEPTH_OPS[input.depth].includes("merge_topics")) {
 		sections.push(`## Material: Topics That Look The Same\n\n${input.lookAlikeTopics.map((pair) => `- "${pair.a}" and "${pair.b}" look like one topic: fold the one with fewer notes into the other with merge_topics, unless they are two subjects after all.`).join("\n")}`);
 	}
+	if (input.unsortedSummaries?.length) {
+		sections.push(`## Material: Conversations Kept Whole In Unsorted\n\n- ${input.unsortedSummaries.join(", ")}: each is a conversation kept whole. File each under its topic with move, or merge it into the note that says the same.`);
+	}
 	return sections;
 }
 
@@ -530,53 +535,38 @@ export function isReviewOpsJsonProblem(value: unknown): value is ReviewOpsJsonPr
 	return value instanceof ReviewOpsJsonProblem;
 }
 
-interface Fence {
-	label: string;
-	body: string;
-	start: number;
-}
+/** Review's own words, for its retry, when the reader finds no op list; an empty list is a valid answer here. */
+const REVIEW_UNREADABLE: Readonly<Record<Exclude<FoldUnreadableClass, "empty-list">, string>> = {
+	"no-fence": 'the reply has no ```json fence; end the answer with exactly one fence holding {"ops": [ ... ]}',
+	"invalid-json": "the reply's ```json fence is not valid JSON",
+	"not-a-list": 'the JSON must be an object with an "ops" array',
+	"cut-off": "the reply was cut off inside its ```json fence and holds no complete operations block",
+};
 
-function completeFences(raw: string): Fence[] {
-	const fences: Fence[] = [];
-	const fenceRe = /^[ \t]*```([^\s`]*)[^\n]*\r?\n([\s\S]*?)\r?\n[ \t]*```/gm;
-	for (let m = fenceRe.exec(raw); m; m = fenceRe.exec(raw)) {
-		fences.push({ label: m[1].toLowerCase(), body: m[2], start: m.index });
-	}
-	return fences;
-}
-
-/** Fence markers are counted at line starts only: a ``` inside a JSON string is mid-line and never a fence. */
-function fenceMarkerCount(raw: string): number {
-	return (toLf(raw).match(/^[ \t]*```/gm) ?? []).length;
-}
-
-function chooseFence(fences: Fence[]): Fence | undefined {
-	const labelled = fences.filter((fence) => fence.label === "json" || fence.label === "");
-	const pool = labelled.length > 0 ? labelled : fences;
-	return pool[pool.length - 1];
+/**
+ * The op list of a tidy reply as the tolerant reader finds it (a fold's
+ * reader): where it starts, or the problem. A last fence holding an empty list
+ * is the answer, whatever draft came before it: for Review a taken-back draft
+ * would merge or archive notes the model decided to leave alone.
+ */
+function readReviewReply(reply: string): { list: unknown[]; start?: number } | { problem: string } {
+	const empty = lastJsonFenceIsEmptyList(reply);
+	if (empty !== undefined) return { list: [], start: empty };
+	const read = readFoldReply(reply);
+	if (read.list) return { list: read.list, ...(read.start !== undefined ? { start: read.start } : {}) };
+	if (read.unreadable === "empty-list") return { list: [], ...(read.start !== undefined ? { start: read.start } : {}) };
+	return { problem: REVIEW_UNREADABLE[read.unreadable ?? "no-fence"] };
 }
 
 /**
- * The operations JSON of a tidy reply: the LAST fence, labelled json or not,
- * whatever prose surrounds it. Returns the parsed value, or a problem naming
- * why the reply carries no readable fence. Never throws.
+ * The operations JSON of a tidy reply, read by the same tolerant reader as a
+ * fold's: a stray fence line, trailing commas or prose around the block cost
+ * nothing. Returns `{ ops }`, or a problem naming why the reply carries no op
+ * list. Never throws.
  */
 export function extractReviewOpsJson(reply: string): unknown {
-	const raw = toLf(reply);
-	const fences = completeFences(raw);
-	if (fenceMarkerCount(raw) % 2 === 1) {
-		return new ReviewOpsJsonProblem(fences.length > 0
-			? "the reply was cut off inside a ```json fence; the operations after the last complete fence are unreadable"
-			: "the reply was cut off inside its ```json fence and holds no complete operations block");
-	}
-	const fence = chooseFence(fences);
-	if (!fence) return new ReviewOpsJsonProblem('the reply has no ```json fence; end the answer with exactly one fence holding {"ops": [ ... ]}');
-	if (!fence.body.trim()) return new ReviewOpsJsonProblem('the reply\'s ```json fence is empty; it must hold {"ops": [ ... ]}');
-	try {
-		return JSON.parse(fence.body);
-	} catch (error) {
-		return new ReviewOpsJsonProblem(`the reply's \`\`\`json fence is not valid JSON (${(error as Error).message})`);
-	}
+	const read = readReviewReply(reply);
+	return "problem" in read ? new ReviewOpsJsonProblem(read.problem) : { ops: read.list };
 }
 
 export interface ParsedReviewOps {
@@ -605,12 +595,10 @@ function foreignKeysOf(item: Record<string, unknown>, kind: ReviewOpKind): strin
 /** The parsed ops of a tidy reply plus the narrative that preceded them. Never throws. */
 export function parseReviewOps(reply: string): ParsedReviewOps {
 	const raw = toLf(reply);
-	const fence = chooseFence(completeFences(raw));
-	const narrative = narrativeBefore(raw, fence?.start);
-	const parsed = extractReviewOpsJson(reply);
-	if (isReviewOpsJsonProblem(parsed)) return { ops: [], problems: [parsed.problem], narrative };
-	const list = Array.isArray(parsed) ? parsed : (parsed as { ops?: unknown })?.ops;
-	if (!Array.isArray(list)) return { ops: [], problems: ['the JSON must be an object with an "ops" array'], narrative };
+	const read = readReviewReply(reply);
+	const narrative = narrativeBefore(raw, "start" in read ? read.start : undefined);
+	if ("problem" in read) return { ops: [], problems: [read.problem], narrative };
+	const list = read.list;
 	const ops: ReviewOp[] = [];
 	const problems: string[] = [];
 	list.forEach((value: unknown, index: number) => {
@@ -771,13 +759,14 @@ export interface ReviewConflictPair {
 	ids: readonly [string, string];
 	newer: "a" | "b" | null;
 	texts: readonly [string, string];
-	dates: readonly [string, string];
+	/** The day each note was learned, when known; `newer` is null unless both are. */
+	dates: readonly [string | undefined, string | undefined];
 }
 
 interface ConflictMember {
 	id: string;
 	text: string;
-	date: string;
+	date?: string;
 }
 
 /** The pair's members with the older first, the newer second; document order when nothing decides. */
@@ -921,7 +910,7 @@ export function validateReviewOps(ops: readonly ReviewOp[], notes: readonly Revi
 				const [older, newer] = conflictMembers(conflict);
 				const kept = keptOlderValues(older.text, newer.text, op.text);
 				if (kept.length > 0) {
-					refusals.push(`${label}: the merged text keeps ${valuesNamed(kept, "older")}, but ${newer.id} (saved ${dayWords(newer.date, today)}) is newer; keep ${valuesNamed(kept, "newer")} or say why in the narrative`);
+					refusals.push(`${label}: the merged text keeps ${valuesNamed(kept, "older")}, but ${newer.id}${newer.date ? ` (as of ${dayWords(newer.date, today)})` : ""} is newer; keep ${valuesNamed(kept, "newer")} or say why in the narrative`);
 				}
 			}
 			return;
@@ -1010,6 +999,8 @@ export interface ReviewArchiveRow {
 	section: MemorySection;
 	/** Why the note left, when a merge resolved a pair that disagreed: the member that left carries the merged row's own reason. */
 	reason?: string;
+	/** A merged text held until the day the merged note is learned, when known. */
+	until?: string;
 }
 
 export interface AppliedReview {
@@ -1069,19 +1060,23 @@ export function applyReviewOps(doc: MemoryDocument, ops: readonly ReviewOp[], ct
 	 * carries something the room learned; the archived `-vN` row, dated the day
 	 * it left, is the record of the tidy.
 	 */
-	const supersede = (entry: MemoryEntry, topic: MemoryTopic, text: string) => {
+	// `until`: the day the text that replaced it was learned, when known.
+	const supersede = (entry: MemoryEntry, topic: MemoryTopic, text: string, until?: string) => {
 		const id = nextVersionedEntryId(entry.id, taken);
 		taken.push(id);
 		archive.push({
-			entry: { id, kind: entry.kind, saved: entry.saved, pinned: false, text, ...(entry.from ? { from: entry.from } : {}) },
+			// The previous version is the entry as it stood, marks and unknown keys
+			// included, under its versioned id; it was never pinned in the archive.
+			entry: { ...entry, id, pinned: false, text },
 			why: "superseded",
+			...(until ? { until } : {}),
 			topic: topic.title,
 			section: topic.section,
 		});
 	};
-	const takeOut = (entry: MemoryEntry, topic: MemoryTopic, why: ArchiveReason, reason?: string) => {
+	const takeOut = (entry: MemoryEntry, topic: MemoryTopic, why: ArchiveReason, reason?: string, until?: string) => {
 		topic.entries.splice(topic.entries.indexOf(entry), 1);
-		archive.push({ entry: { ...entry }, why, topic: topic.title, section: topic.section, ...(reason ? { reason } : {}) });
+		archive.push({ entry: { ...entry }, why, ...(until ? { until } : {}), topic: topic.title, section: topic.section, ...(reason ? { reason } : {}) });
 	};
 
 	for (const op of ops) {
@@ -1091,6 +1086,7 @@ export function applyReviewOps(doc: MemoryDocument, ops: readonly ReviewOp[], ct
 				const before = entry.text;
 				supersede(entry, topic, before);
 				entry.text = op.text;
+				delete entry.disagrees;
 				changes.push({ id: entry.id, section: topic.section, topic: topic.title, kind: "shortened", before, after: op.text });
 				break;
 			}
@@ -1102,19 +1098,27 @@ export function applyReviewOps(doc: MemoryDocument, ops: readonly ReviewOp[], ct
 				const survivor = locate(survivorId);
 				const before = survivor.entry.text;
 				const pinned = survivor.entry.pinned || others.some((id) => locate(id).entry.pinned);
+				// The merged note is as new as its newest member, and has no day
+				// when a member has none: a day is never guessed.
+				const days = op.ids.map((id) => locate(id).entry.learned);
+				const learned = days.every((day) => day) ? (days as string[]).sort().at(-1) : undefined;
 				// A merge that joins both members of a pair the machine found
 				// disagreeing says why, on its own row and on the archive row of
 				// the member that left; read before anything leaves, so the topic
 				// of the leaving member is still where it was.
 				const conflict = (ctx.conflictNotes ?? []).find((pair) => pair.ids.every((id) => op.ids.includes(id)));
 				const resolved = conflict ? resolvedConflict(conflict, op.text, survivorId, (id) => locate(id).topic.title, ctx.savedDate) : undefined;
-				supersede(survivor.entry, survivor.topic, before);
+				// Each member's text held until the day the merged note is learned, when known.
+				supersede(survivor.entry, survivor.topic, before, learned);
 				for (const id of others) {
 					const member = locate(id);
-					takeOut(member.entry, member.topic, "superseded", resolved && conflict!.ids.includes(id) ? resolved.reason : undefined);
+					takeOut(member.entry, member.topic, "superseded", resolved && conflict!.ids.includes(id) ? resolved.reason : undefined, learned);
 				}
 				survivor.entry.text = op.text;
+				delete survivor.entry.disagrees;
 				survivor.entry.pinned = pinned;
+				if (learned) survivor.entry.learned = learned;
+				else delete survivor.entry.learned;
 				changes.push({ id: survivorId, section: survivor.topic.section, topic: survivor.topic.title, kind: "merged", before, after: op.text, mergedFrom: [...op.ids], ...(resolved ? { reason: resolved.reason, conflictWith: resolved.conflictWith } : {}) });
 				break;
 			}

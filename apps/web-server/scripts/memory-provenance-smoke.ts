@@ -26,15 +26,16 @@ process.env.EXXETA_PERSISTENT_AGENTS_ROOT = root;
 const {
 	buildPersistentAgentCheckpointTranscriptSource,
 	createPersistentAgentFromScaffoldInput,
-	fingerprintL1bSource,
+	createPersistentAgentInstance,
 	getPersistentAgentStatus,
-	parseAbsorbApprovalRequest,
+	l1bStateMetrics,
 	parseCheckpointApprovalRequest,
-	writeApprovedAbsorb,
+	reviewTargetEstimatedTokensFromL1b,
+	updateChronosForAbsorb,
 	writeApprovedCheckpoint,
 	writePersistentAgentThread,
 } = await import("../src/persistent-agents.js");
-const { ABSORB_CONSOLIDATION_WORKER_TYPE, ABSORB_EMPTY_RECENT_CONTEXT_PLACEHOLDER, extractTopLevelSectionBody } = await import("../src/absorb-consolidation.js");
+const { ABSORB_EMPTY_RECENT_CONTEXT_PLACEHOLDER } = await import("../src/absorb-consolidation.js");
 const { buildRoomMemory, readConversationTranscript, readMemoryEventDiff, readMemorySnapshotAt } = await import("../src/memory-api.js");
 
 const agentId = "memory-provenance-smoke-room";
@@ -74,24 +75,47 @@ function checkpointRequest(title: string) {
 function candidateL1b(): string {
 	// Chronos is system-managed: a faithful candidate carries the source's
 	// Chronos through unchanged, so the fixture splices it from the live L1b.
-	const chronos = extractTopLevelSectionBody(readL1b(), "Chronos");
+	const chronos = /^## Chronos[ \t]*\n([\s\S]*?)(?=^## )/m.exec(readL1b())?.[1];
 	if (chronos == null) throw new Error("source L1b should have a Chronos section");
 	return `<!-- exxeta:l1b schema_version=1 -->\n\n## Chronos\n\n${chronos.trim()}\n\n## Deep Memory\n\n- Synthetic user validates memory provenance receipts.\n- The provenance smoke durable understanding is consolidated.\n\n## Active Items\n\n### High Priority\n\n- Keep provenance read-only.\n\n## Recent Context\n\n${ABSORB_EMPTY_RECENT_CONTEXT_PLACEHOLDER}\n`;
 }
 
-function absorbRequest(recentContextEntryCount: number) {
-	const sourceL1b = readL1b();
-	return parseAbsorbApprovalRequest({
-		proposal: {
-			agentId,
-			writesMemory: false,
-			process: { type: ABSORB_CONSOLIDATION_WORKER_TYPE, model: { provider: "openai-compatible", model: "gpt-5.5", label: "GPT-5.5" } },
-			availability: { recentContextEntryCount },
-			source: { l1bFingerprint: fingerprintL1bSource(sourceL1b), generatedAt: T2 },
-			fields: { candidateL1b: candidateL1b() },
-			review: { keyMetrics: { recentContextEntriesBefore: recentContextEntryCount, recentContextEntriesAfter: 0, stableMemoryDeltaBytes: 50, stableMemoryDeltaTokens: 12 } },
+/**
+ * A Learn as the whole-document Memorize saved it before memory v2: the
+ * snapshot before it, the rewritten document, and its v1 event record. Nothing
+ * in the product writes one any more; rooms still hold them, and their history
+ * must still read.
+ */
+function writeLegacyLearn(at: Date): void {
+	const instance = createPersistentAgentInstance(agentId);
+	const before = readL1b();
+	const absorbId = "absorb_20260518T120000Z_legacy";
+	const archived = path.join(instance.l1bArchiveDir(instance.readAgentJson()), `20260518T120000Z-before-${absorbId}.md`);
+	const written = updateChronosForAbsorb(candidateL1b(), absorbId, at);
+	fs.writeFileSync(archived, before, { mode: 0o600, flag: "wx" });
+	fs.writeFileSync(l1bPath, written, "utf-8");
+	const source = l1bStateMetrics(before);
+	const result = l1bStateMetrics(written);
+	const record = {
+		schemaVersion: 1,
+		operation: "absorb",
+		mode: "rc_consolidation",
+		paths: { archivedL1bRelPath: instance.rootRelativePath(archived), updatedL1bRelPath: instance.rootRelativePath(l1bPath), eventRelPath: instance.rootRelativePath(instance.absorbEventRecordPath(absorbId)) },
+		agentId,
+		absorbId,
+		approvedAt: at.toISOString(),
+		source,
+		result,
+		absorb: {
+			recentContextEntryCountBefore: source.recentContextEntryCount,
+			recentContextEntryCountAfter: result.recentContextEntryCount,
+			stableMemoryEstimatedTokensBefore: reviewTargetEstimatedTokensFromL1b(before),
+			stableMemoryEstimatedTokensAfter: reviewTargetEstimatedTokensFromL1b(written),
 		},
-	}, agentId);
+		warnings: [],
+	};
+	fs.mkdirSync(instance.absorbEventDir(), { recursive: true });
+	fs.writeFileSync(instance.absorbEventRecordPath(absorbId), JSON.stringify(record, null, 2) + "\n", "utf-8");
 }
 
 function detail() {
@@ -158,8 +182,7 @@ try {
 	// and the checkpoint keeps its title even though the RC entry is gone.
 	// (Absorb requires at least 5 RC entries, so pad with more record-less ones.)
 	for (let i = 3; i <= 5; i++) appendSyntheticEntry(i);
-	const absorb = absorbRequest(5);
-	writeApprovedAbsorb(absorb.request, absorb.warnings, new Date(T2));
+	writeLegacyLearn(new Date(T2));
 
 	// 3a. What the Learn changed, while it is the latest event: before = its
 	// own archived snapshot, after = today's document, verified by the

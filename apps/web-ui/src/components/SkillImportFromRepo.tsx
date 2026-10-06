@@ -98,7 +98,7 @@ export function SkillImportFromRepo({ onImported }: { onImported?: (name: string
 	return (
 		<section className="skill-import-from-repo">
 			<p className="ai-setup-copy skill-import-help">
-				Paste a public GitHub repository URL. Every skill found gets an individual review before it enters your library.
+				Paste the address of a repository on GitHub, GitLab or another git host. A private one uses the sign-in git already has on this computer. Every skill found gets an individual review before it enters your library.
 			</p>
 			<div className="skill-import-row">
 				<input

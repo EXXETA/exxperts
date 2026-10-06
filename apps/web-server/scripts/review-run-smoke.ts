@@ -55,6 +55,7 @@ const {
 	setReviewTidyRetryPauseForTests,
 	startReviewRun,
 } = await import("../src/review-run.js");
+const { flushMemoryUse, readMemoryUse } = await import("../src/memory-use.js");
 // A call that never came back is asked again after a pause. The pause is the one
 // thing here that is real time rather than behaviour, so it is zeroed.
 setReviewTidyRetryPauseForTests(0);
@@ -108,6 +109,7 @@ interface FixtureEntry {
 	pinned?: boolean;
 	status?: "open" | "done";
 	updated?: string;
+	learned?: string;
 	refs?: number;
 	text: string;
 }
@@ -117,6 +119,7 @@ function renderFixtureEntry(entry: FixtureEntry): string {
 	if (entry.pinned) fields.push("pinned=true");
 	if (entry.status) fields.push(`status=${entry.status}`);
 	if (entry.updated) fields.push(`updated=${entry.updated}`);
+	if (entry.learned) fields.push(`learned=${entry.learned}`);
 	if (entry.refs !== undefined) fields.push(`refs=${entry.refs}`);
 	return `<!-- e: ${fields.join(" ")} -->\n${entry.text}\n`;
 }
@@ -300,9 +303,9 @@ function memoryFixtureE(agentId: string): string {
 	const note = (id: string, text: string, extra: Partial<FixtureEntry> = {}): FixtureEntry => ({ id, kind: "fact", saved: "2026-06-01", refs: 0, text, ...extra });
 	const wall = Array.from({ length: NOTES_PER_TOPIC }, (_, i) => fixtureNote(WALL_TOPIC, 201 + i));
 	const blocks = [
-		`### Commercial terms\n\n${[note("m-0101", CONFLICT_OLD, { saved: CONFLICT_OLD_DAY }), note("m-0102", "- Invoices go out on the first working day of the month.")].map(renderFixtureEntry).join("\n")}`,
+		`### Commercial terms\n\n${[note("m-0101", CONFLICT_OLD, { saved: CONFLICT_OLD_DAY, learned: CONFLICT_OLD_DAY }), note("m-0102", "- Invoices go out on the first working day of the month.")].map(renderFixtureEntry).join("\n")}`,
 		`### ${WALL_TOPIC}\n\n${wall.map(renderFixtureEntry).join("\n")}`,
-		`### Delivery practice\n\n${[note("m-0301", CONFLICT_NEW, { saved: CONFLICT_NEW_DAY }), note("m-0302", "- Deliveries are confirmed in writing the same day they land.")].map(renderFixtureEntry).join("\n")}`,
+		`### Delivery practice\n\n${[note("m-0301", CONFLICT_NEW, { saved: CONFLICT_NEW_DAY, learned: CONFLICT_NEW_DAY }), note("m-0302", "- Deliveries are confirmed in writing the same day they land.")].map(renderFixtureEntry).join("\n")}`,
 		`### ${TWINS_TOPIC}\n\n${[note("m-0401", TWIN_A), note("m-0402", TWIN_B)].map(renderFixtureEntry).join("\n")}`,
 	];
 	const items: FixtureEntry[] = [{ id: entryId(901), kind: "item", status: "open", saved: "2026-08-20", refs: 1, text: `- ${KEEP_ITEM_MARKER} Confirm the invoicing day with finance before the quarter closes.` }];
@@ -645,6 +648,10 @@ try {
 
 	const written = fs.readFileSync(roomA.l1bPath, "utf-8");
 	assert(written !== beforeApproval, "approve is the write");
+	const keptTidyMeta = written.slice(written.indexOf(`id=${archivedByTidy.id} `), written.indexOf("-->", written.indexOf(`id=${archivedByTidy.id} `)));
+	assert(written.includes(`id=${archivedByTidy.id} `) && !/pinned=true/.test(keptTidyMeta), `the note the person kept is back for this save, and a keep is not a pin, got ${JSON.stringify(keptTidyMeta)}`);
+	flushMemoryUse(roomA.agentId);
+	assert((readMemoryUse(roomA.agentId).notes[archivedByTidy.id]?.hits ?? 0) === 1, `the save records one use for the kept note, got ${JSON.stringify(readMemoryUse(roomA.agentId).notes[archivedByTidy.id])}`);
 	assert(/^- Last review: review_/m.test(written) && written.includes(`- Last review at: ${APPROVED_AT.toISOString()}`), `the write should stamp Chronos with this review, got ${JSON.stringify(written.slice(written.indexOf("## Chronos"), written.indexOf("## Deep Memory")))}`);
 	assert(/- Last checkpoint: cp_20260912_0001/.test(written), "a review must not move the fields the other two workflows own");
 	assert(written.includes(PINNED_MARKER) && /pinned=true/.test(written), "the user's own pinned note survives a review that tried to take it away");
@@ -837,11 +844,11 @@ try {
 	// true pair of twins elsewhere in the room is still archived as one.
 	// =====================================================================
 	const DISAGREE_HEADING = "## Material: Notes That Disagree";
-	const CONFLICT_LINE = `m-0101 (saved 2 Jun) says "The Nordwind maintenance contract renews automatically on 1 June."; m-0301 (saved 14 Sep) says "The Nordwind maintenance contract renews automatically on 1 July.": the newer date decides; merge them keeping the newer text, or say in the narrative why both stay`;
+	const CONFLICT_LINE = `m-0101 (as of 2 Jun) says "The Nordwind maintenance contract renews automatically on 1 June."; m-0301 (as of 14 Sep) says "The Nordwind maintenance contract renews automatically on 1 July.": the newer date decides; merge them keeping the newer text, or say in the narrative why both stay`;
 	const CONFLICT_RULE = `Every pair listed under "Notes That Disagree" is dealt with: merge them keeping the newer text, or say in the narrative why both stay.`;
 	const ARCHIVE_AS_DUPLICATE_REFUSAL = `op 1 (archive): m-0101 and m-0301 disagree, they are not twins; merge them keeping the newer text, or leave both`;
-	const KEEPS_OLDER_REFUSAL = `op 1 (merge): the merged text keeps 1 June, but m-0301 (saved 14 Sep) is newer; keep 1 July or say why in the narrative`;
-	const CONFLICT_REASON = "1 July (saved 14 Sep) replaces 1 June (saved 2 Jun); the newer date decides";
+	const KEEPS_OLDER_REFUSAL = `op 1 (merge): the merged text keeps 1 June, but m-0301 (as of 14 Sep) is newer; keep 1 July or say why in the narrative`;
+	const CONFLICT_REASON = "1 July (as of 14 Sep) replaces 1 June (as of 2 Jun); the newer date decides";
 	/** A worker for this fixture: the disagreeing pair's call is answered by `first` once and by the resolving merge on the retry; twins are archived as before. */
 	function disagreeWorker(calls: WorkerCall[], first: unknown): ReviewRunGenerate {
 		return async (prompt) => {
@@ -916,6 +923,24 @@ try {
 	assert(disagreeCallsF.length === 2 && /## Retry Notice/.test(disagreeCallsF[1].prompt) && disagreeCallsF[1].prompt.includes(KEEPS_OLDER_REFUSAL), `the retry names the refusal of the merge that kept the older value in the words the memory refuses by, got ${JSON.stringify(disagreeCallsF[1]?.prompt.split("## Retry Notice")[1]?.slice(0, 400))}`);
 	assert(runF.changes.find((change) => change.kind === "merged" && change.id === "m-0301")?.reason === CONFLICT_REASON, "the accepted merge on the retry carries the reason like any other");
 	assert(fs.readFileSync(roomF.l1bPath, "utf-8").includes(CONFLICT_OLD), "nothing is written before an approval, whatever was refused");
+	resetReviewRunsForTests();
+
+	// Room U: the tidy is told which notes in Unsorted are conversations kept
+	// whole, tried or not, and never a note that is not a summary.
+	const roomU = createRoom("Review Unsorted Room", (agentId) => [
+		"<!-- exxeta:l1b schema_version=1 -->", "", "## Chronos", "", `- Persistent agent id: ${agentId}`, "- Last checkpoint: none", "",
+		"## Deep Memory", "", "<!-- entries: next=900 -->", "",
+		"### Unsorted", "",
+		"<!-- e: id=m-0501 kind=fact saved=2026-06-01 summary=true -->", "- A call about pricing", "  - The rate holds for the year.", "",
+		"<!-- e: id=m-0502 kind=fact saved=2026-06-01 pinned=true -->", "- **must-keep** The legal contact is Dana.", "",
+		"## Active Items", "", "## Recent Context", "",
+	].join("\n"));
+	const promptsU: string[] = [];
+	const startedU = startReviewRun(roomU.agentId, { depth: "wording", model: MODEL, topics: ["Unsorted"], generate: async (prompt) => { promptsU.push(prompt); return reply("Nothing to tidy.", []); }, resolveModelWindow: () => MODEL_WINDOW, now: RUN_CLOCK });
+	await settle(roomU.agentId, startedU.runId, "room unsorted");
+	const unsortedLine = promptsU[0]?.split("## Material: Conversations Kept Whole In Unsorted\n\n")[1]?.split("\n")[0];
+	assert(unsortedLine === "- m-0501: each is a conversation kept whole. File each under its topic with move, or merge it into the note that says the same.", `the tidy lists the summary note alone, got ${JSON.stringify(unsortedLine)}`);
+	cancelReviewRun(roomU.agentId, startedU.runId, new Date(`${RUN_DAY}T09:01:00.000Z`));
 	resetReviewRunsForTests();
 
 	// =====================================================================

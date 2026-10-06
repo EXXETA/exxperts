@@ -1,6 +1,6 @@
 {
   "name": "@exxeta/exxperts-app",
-  "version": "0.14.1",
+  "version": "0.14.2",
   "license": "Apache-2.0",
   "private": true,
   "type": "module",
@@ -25,7 +25,8 @@
   ],
   "overrides": {
     "@hono/node-server": "^2.0.5",
-    "shell-quote": "^1.9.0",
+    "shell-quote": "^1.11.0",
+    "@modelcontextprotocol/sdk": "1.31.0",
     "basic-ftp": "6.2.1"
   },
   "bin": {

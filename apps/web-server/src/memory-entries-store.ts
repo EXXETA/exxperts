@@ -5,7 +5,7 @@
 // here, and every write obeys the same three rules the maintenance writes obey:
 //
 //   1. The previous file is archived first, byte for byte, as
-//      `L1b/archive/<stamp>-before-<id>.md` — the convention writeApprovedAbsorb
+//      `L1b/archive/<stamp>-before-<id>.md`: the convention the older saves
 //      and writeApprovedCheckpoint already follow, so one room has one snapshot
 //      shape whatever wrote it.
 //   2. An immutable event record lands in `events/memory-edit/<id>.json`, so a
@@ -95,6 +95,8 @@ export interface MemoryArchiveAppend {
 	section: MemorySection;
 	/** YYYY-MM-DD; defaults to the write's own day. */
 	archived?: string;
+	/** YYYY-MM-DD the text stopped holding: the day the text that replaced it was learned. */
+	until?: string;
 }
 
 export interface MemoryWriteOptions {
@@ -229,6 +231,8 @@ export const MEMORY_ENTRY_UNKNOWN_SENTENCE = "That entry is not in this room's m
 export const MEMORY_ARCHIVED_ENTRY_UNKNOWN_SENTENCE = "That entry is not in this room's archive any more.";
 /** A restore of a note the core already holds, in this or an older version: nothing is put in beside it. */
 export const MEMORY_ENTRY_ALREADY_IN_CORE_SENTENCE = "This note is already in memory.";
+/** A restore of an older value a newer conversation replaced: it stays in the archive as history. */
+export const MEMORY_ENTRY_HISTORY_SENTENCE = "This is an older value kept as history, so it cannot be restored as current.";
 
 function productError(message: string, code: string, statusCode = 400): Error {
 	const error = new Error(message);
@@ -243,6 +247,11 @@ export function memoryRoomBusyError(): Error {
 
 export function memoryEntryUnknownError(archived = false): Error {
 	return productError(archived ? MEMORY_ARCHIVED_ENTRY_UNKNOWN_SENTENCE : MEMORY_ENTRY_UNKNOWN_SENTENCE, "memory_entry_unknown");
+}
+
+/** A conflict, not a bad request: the row is real, and a newer value holds its place. */
+export function memoryEntryHistoryError(): Error {
+	return productError(MEMORY_ENTRY_HISTORY_SENTENCE, "memory_entry_history", 409);
 }
 
 /** A conflict, not a bad request: the archive row is real, the core just holds the note already. */
@@ -433,7 +442,7 @@ function archiveTextWith(current: string, appends: MemoryArchiveAppend[], remove
 	}
 	const day = isoDay(now);
 	const entries = appends.map((append) => append.entry);
-	const meta = appends.map((append) => ({ archived: append.archived ?? day, why: append.why, topic: append.topic, section: append.section }));
+	const meta = appends.map((append) => ({ archived: append.archived ?? day, why: append.why, ...(append.until ? { until: append.until } : {}), topic: append.topic, section: append.section }));
 	if (entries.length > 0) text = appendToArchive(text, entries, meta);
 	const archived: ArchivedEntry[] = entries.map((entry, i) => ({ ...entry, ...meta[i] }));
 	return { text, archived, restored };
@@ -531,7 +540,7 @@ export function deleteArchivedEntry(agentIdRaw: string, entryId: string, now = n
  */
 export function contextRender(agentIdRaw: string): string {
 	const files = roomFiles(agentIdRaw);
-	return renderMemoryContext(readL1bOrThrow(files), readArchiveText(files));
+	return renderMemoryContext(readL1bOrThrow(files), readArchiveText(files), { pairDays: true });
 }
 
 // --- load --------------------------------------------------------------------

@@ -3,12 +3,10 @@ import os from "node:os";
 import path from "node:path";
 
 // A lifecycle worker response cut at the provider's output-token ceiling must
-// be refused with an honest size error BEFORE parsing/validation. Otherwise
-// the candidate validator blames the document structure ("missing Recent
-// Context") for what is a model output limit, and every "Draft again" retry
-// re-rolls the same dice. This smoke pins the refusal for Memorize, Review,
-// checkpoint, and consult, and pins that complete outputs and the
-// validator backstop are untouched.
+// be refused with an honest size error BEFORE parsing, so a parser never
+// blames the reply's structure for what is a model output limit. This smoke
+// pins the refusal for Memorize's first read, Review, checkpoint and consult,
+// and pins that complete outputs are untouched.
 
 const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "exxeta-worker-truncation-home-"));
 process.env.HOME = tempHome;
@@ -26,7 +24,6 @@ process.env.EXXETA_PERSISTENT_AGENTS_ROOT = root;
 const {
 	createPersistentAgentFromScaffoldInput,
 	buildAbsorbAssessment,
-	buildAbsorbProposal,
 	buildCheckpointProposal,
 	buildConsultAnswer,
 	writePersistentAgentThread,
@@ -70,11 +67,6 @@ function setRecentContextEntries(count: number): void {
 	const entries = Array.from({ length: count }, (_, i) => rcEntry(i + 1)).join("\n");
 	fs.writeFileSync(l1bPath, `${base.slice(0, start)}\n\n${entries || ABSORB_EMPTY_RECENT_CONTEXT_PLACEHOLDER}\n`, "utf-8");
 }
-
-const assessmentFixture = `## Absorb assessment\n\nI found 5 Recent Context entries. Here is the proposed direction.\n\n### What to remember\n- Durable truncation-guard decisions.\n\n### What to forget\n- Smoke chatter.\n\n### What changes in stable memory\n- Deep Memory: sharpen the guard rationale.\n- Active Items: track the guard slice.\n- Recent Context: all entries are expected to be cleared after approval.\n\n### Needs your judgment\n- None\n`;
-
-// A draft that was cut mid-document: proposal head present, Candidate L1b gone.
-const cutAbsorbDraft = `## Memory Absorption Proposal\n\n### Mode\nRC_CONSOLIDATION\n\n### Primacy Map\nThe RC chain captures truncation-guard work.\n\n### Section-Level Change Log\n| Section | Prior Words | Candidate Words | Action | Rationale |\n|---|---:|---:|---|---|\n| Deep Memory | 20 | 28 | sharpen | Preserve durable direction. |\n\n### Entry-Level`;
 
 /** A room whose memory is notes with ids and dates — what a Review run reads. */
 function reviewMemoryFixture(agentId: string): string {
@@ -137,35 +129,15 @@ try {
 	assert(fs.existsSync(l1bPath), "scaffold should create L1b/current.md");
 	setRecentContextEntries(5);
 
-	// 1. Memorize proposal: truncated draft refuses with the size truth, before the validator.
-	const learnError = await expectRejects(
-		() => buildAbsorbProposal({ agentId, assessmentMarkdown: assessmentFixture }, ABSORB_MODEL, async () => truncatedResult(cutAbsorbDraft)),
-		/too large to rewrite in one response/,
-		"truncated Memorize proposal",
-	);
-	assert(/the Memorize draft was cut off/.test(learnError.message), "Memorize refusal should name the process");
-	assert(/42666/.test(learnError.message), "Memorize refusal should carry the real token numbers");
-	assert(/No memory has been written/.test(learnError.message), "Memorize refusal should state that memory is untouched");
-	assert(!/topology|missing Recent Context/.test(learnError.message), "Memorize refusal must not surface validator structure errors");
-
-	// 2. Same cut draft WITHOUT the truncated flag: the validator backstop still
-	// catches it exactly as before (the guard fires only on the provider signal).
-	const untaggedCut = await buildAbsorbProposal({ agentId, assessmentMarkdown: assessmentFixture }, ABSORB_MODEL, async () => ({ text: cutAbsorbDraft }));
-	assert(untaggedCut.candidateValidation.valid === false, "validator backstop should still reject an untagged cut draft");
-	assert(untaggedCut.candidateValidation.errors.some((error: string) => /Candidate L1b is empty/.test(error)), "validator backstop errors should be unchanged");
-
-	// 3. Memorize assessment: generic refusal (small outputs, still honest), and
-	// the truncation check runs BEFORE the assessment regenerate — a cut draft
-	// is missing sections for size reasons, so no retry is attempted.
+	// 3. Memorize assessment: a cut reply is no first read, and Memorize goes on
+	// without one; the truncation check runs BEFORE the assessment regenerate,
+	// since a cut draft is missing sections for size reasons, so no retry is attempted.
 	let assessmentCalls = 0;
-	await expectRejects(
-		() => buildAbsorbAssessment(agentId, ABSORB_MODEL, async () => {
-			assessmentCalls += 1;
-			return truncatedResult("## Absorb assessment\n\nI found");
-		}),
-		/Memorize assessment response was cut off at the model's output limit/,
-		"truncated Memorize assessment",
-	);
+	const cut = await buildAbsorbAssessment(agentId, ABSORB_MODEL, async () => {
+		assessmentCalls += 1;
+		return truncatedResult("## Absorb assessment\n\nI found");
+	});
+	assert(cut.assessmentMarkdown === "None." && cut.firstReadMissing === "cut-off", `a truncated Memorize assessment is no first read, got ${JSON.stringify({ text: cut.assessmentMarkdown, missing: cut.firstReadMissing })}`);
 	assert(assessmentCalls === 1, `truncated assessment must not trigger the regenerate (got ${assessmentCalls} calls)`);
 	// 3b. A usable-but-incomplete first draft retries; when the retry is cut
 	// off, the FIRST draft survives with a disclosure — a failed retry never
@@ -180,17 +152,14 @@ try {
 	assert(survived.assessmentMarkdown.startsWith("## Absorb assessment\n\n### What to remember\n- Keep."), "the first draft should be returned when the retry is truncated");
 	assert(survived.warnings.some((warning) => /could not be regenerated/.test(warning) && /cut off at the model's output limit/.test(warning)), `the failed retry should be disclosed (got ${JSON.stringify(survived.warnings)})`);
 	assert(survived.warnings.some((warning) => /^assessment missing What to forget/.test(warning)), "the first draft keeps its own parse warnings");
-	// 3c. An OVERSIZED first draft is not usable, so a truncated retry still refuses.
+	// 3c. An OVERSIZED first draft is not usable, so a truncated retry is still no first read.
 	assessmentCalls = 0;
-	await expectRejects(
-		() => buildAbsorbAssessment(agentId, ABSORB_MODEL, async () => {
-			assessmentCalls += 1;
-			if (assessmentCalls === 1) return { text: `## Absorb assessment\n\n### What to remember\n- ${"long ".repeat(3000)}\n` };
-			return truncatedResult("## Absorb assessment\n\n### What to remember\n- Ke");
-		}),
-		/Memorize assessment response was cut off at the model's output limit/,
-		"truncated retry after an oversized first draft",
-	);
+	const cutRetry = await buildAbsorbAssessment(agentId, ABSORB_MODEL, async () => {
+		assessmentCalls += 1;
+		if (assessmentCalls === 1) return { text: `## Absorb assessment\n\n### What to remember\n- ${"long ".repeat(3000)}\n` };
+		return truncatedResult("## Absorb assessment\n\n### What to remember\n- Ke");
+	});
+	assert(cutRetry.assessmentMarkdown === "None." && cutRetry.firstReadMissing === "cut-off", `a truncated retry after an oversized first draft is no first read, got ${JSON.stringify(cutRetry.firstReadMissing)}`);
 	assert(assessmentCalls === 2, `oversized first draft should regenerate once before the truncated retry refuses (got ${assessmentCalls} calls)`);
 
 	// 4. Review tidy: a cut reply costs the group it was tidying and nothing
@@ -254,9 +223,9 @@ try {
 
 	// 8. A truncated result without usage numbers still refuses, without inventing numbers.
 	const bareError = await expectRejects(
-		() => buildAbsorbProposal({ agentId, assessmentMarkdown: assessmentFixture }, ABSORB_MODEL, async () => ({ text: cutAbsorbDraft, truncated: true })),
-		/too large to rewrite in one response/,
-		"truncated Memorize proposal without usage",
+		() => buildConsultAnswer({ targetAgentId: agentId, question: "What do you know?" }, { provider: ABSORB_MODEL.provider, model: ABSORB_MODEL.model }, async () => ({ text: "From my memory: the answer begins", truncated: true })),
+		/consult response was cut off at the model's output limit\. /,
+		"truncated consult without usage",
 	);
 	assert(!/undefined|NaN/.test(bareError.message), "refusal without usage must not render placeholder numbers");
 

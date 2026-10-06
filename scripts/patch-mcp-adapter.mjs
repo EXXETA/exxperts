@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 // Patch pi-mcp-adapter after install (postinstall).
 //
-// Two patches, both against the exactly-pinned 2.10.0 sources; each warns
+// Patches against the exactly-pinned 2.10.0 sources. The cosmetic ones warn
 // instead of failing if a future version changes the surrounding code, so
-// installs never break:
+// installs never break; patch 6 (a room's startup config read) fails the
+// install instead, because a room depends on it:
 //
 // 1. Rebrand the OAuth callback pages. The adapter serves hard-coded
 //    Pi-branded pages from its OAuth loopback server with no customization
@@ -319,4 +320,36 @@ try {
 	}
 } catch (e) {
 	console.warn(`patch-mcp-adapter: proxy description skipped (${e.message})`);
+}
+
+// --- Patch 6: a room's startup config read uses the room connector folder ---
+// The adapter's factory reads its config once at startup (direct-tool
+// registration and settings such as toolPrefix and disableProxyTool) against
+// the process's working folder. The room wrapper (pi-package/extensions/mcp)
+// hands it the room connector folder on the extension API, so a room's tools
+// come from the person's own settings only. This one must apply: when it
+// cannot, the install fails instead of shipping without it.
+
+try {
+	const indexPath = path.join(adapterDir, "index.ts");
+	const index = fs.readFileSync(indexPath, "utf-8");
+	const anchor = "  const earlyConfig = loadMcpConfig(earlyConfigPath);";
+	if (index.includes("exxpertsConnectorConfigCwd")) {
+		console.log("patch-mcp-adapter: startup config read already patched");
+	} else if (!index.includes(anchor)) {
+		console.error("patch-mcp-adapter: ERROR startup config read not found (adapter changed?); a room's startup read cannot be pointed at the room connector folder");
+		process.exitCode = 1;
+	} else {
+		fs.writeFileSync(
+			indexPath,
+			index.replace(
+				anchor,
+				"  const earlyConfig = loadMcpConfig(earlyConfigPath, (pi as { exxpertsConnectorConfigCwd?: string }).exxpertsConnectorConfigCwd);",
+			),
+		);
+		console.log("patch-mcp-adapter: a room's startup config read uses the room connector folder");
+	}
+} catch (e) {
+	console.error(`patch-mcp-adapter: ERROR startup config read patch failed (${e.message})`);
+	process.exitCode = 1;
 }

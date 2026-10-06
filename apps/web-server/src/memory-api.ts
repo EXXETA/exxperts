@@ -427,6 +427,9 @@ function topSectionBody(src: string, name: string): string | null {
  * (reviewTargetEstimatedTokensFromL1b) measures exactly this render too, and a
  * file's storage bookkeeping — the id counter and the per-note metadata lines —
  * never reaches a prompt, so it must never be charged to a room here either.
+ * The room's own read adds one thing this render leaves out: the day each note
+ * of a kept pair was learned, "(learned D)", a few tokens per marked note that
+ * no size here counts.
  */
 function memoryContextRender(l1b: string): string {
 	try {

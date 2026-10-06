@@ -41,6 +41,7 @@ import {
 	deleteArchivedEntry,
 	loadMemoryDocument,
 	memoryEntryAlreadyInCoreError,
+	memoryEntryHistoryError,
 	memoryEntryUnknownError,
 	memoryRoomBusy,
 	MEMORY_ROOM_BUSY_SENTENCE,
@@ -69,6 +70,9 @@ export interface EntryCard {
 export interface ArchivedEntryCard extends EntryCard {
 	archived: string;
 	why: ArchivedEntry["why"];
+	/** The day the text was learned and the day it stopped holding, when known: the Archive dates an older value by them. */
+	learned?: string;
+	until?: string;
 }
 
 export interface MemoryEntryRouteDeps {
@@ -102,7 +106,8 @@ function entryCard(entry: MemoryEntry, topic: MemoryTopic): EntryCard {
 	};
 }
 
-function archivedCard(entry: ArchivedEntry): ArchivedEntryCard {
+// `standing`: the note is still in memory under this id or another version of it, so the restore route refuses it.
+function archivedCard(entry: ArchivedEntry, doc: MemoryDocument): ArchivedEntryCard {
 	return {
 		id: entry.id,
 		section: entry.section,
@@ -118,6 +123,9 @@ function archivedCard(entry: ArchivedEntry): ArchivedEntryCard {
 		text: entry.text,
 		archived: entry.archived,
 		why: entry.why,
+		...(entry.learned ? { learned: entry.learned } : {}),
+		...(entry.until ? { until: entry.until } : {}),
+		...(entry.why !== "history" && findEntryVersion(doc, entry.id) ? { standing: true } : {}),
 	};
 }
 
@@ -137,8 +145,9 @@ function topicsPayload(doc: MemoryDocument): Array<{ section: MemorySection; tit
 
 // The same per-topic counts the context render's pointer lines are built from,
 // so the pane and the room are looking at one archive, not two summaries of it.
-function archivePayload(archive: ArchivedEntry[]): { count: number; byTopic: ArchiveTopicIndexRow[] } {
-	return { count: archive.length, byTopic: Object.values(archiveIndex(archive)) };
+function archivePayload(archive: ArchivedEntry[], doc: MemoryDocument): { count: number; history: number; byTopic: ArchiveTopicIndexRow[] } {
+	// `history`: of the rows, the older values kept as history and the replaced texts whose note still stands, none of which can come back.
+	return { count: archive.length, history: archive.filter((entry) => entry.why === "history" || findEntryVersion(doc, entry.id)).length, byTopic: Object.values(archiveIndex(archive)) };
 }
 
 function badRequest(message: string, code = "memory_bad_request"): Error {
@@ -210,7 +219,7 @@ export function registerMemoryEntryRoutes(app: FastifyInstance, deps: MemoryEntr
 				agentId: id,
 				budget: load.budget,
 				topics: topicsPayload(load.doc),
-				archive: archivePayload(load.archive),
+				archive: archivePayload(load.archive, load.doc),
 				...(load.migrated ? { migrated: true } : {}),
 				...readOnlyFields(readOnly),
 			};
@@ -228,11 +237,12 @@ export function registerMemoryEntryRoutes(app: FastifyInstance, deps: MemoryEntr
 			const limitRaw = Number.parseInt(String(query.limit ?? ""), 10);
 			const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(ARCHIVE_PAGE_MAX, limitRaw) : ARCHIVE_PAGE_DEFAULT;
 			const before = String(query.before ?? "").trim();
+			const doc = loadForRead(id).load.doc;
 			const sorted = readArchive(id).sort((a, b) => (b.archived.localeCompare(a.archived) || b.id.localeCompare(a.id)));
 			const from = before ? sorted.filter((entry) => `${entry.archived} ${entry.id}` < before) : sorted;
 			const page = from.slice(0, limit);
 			const next = from.length > page.length && page.length > 0 ? `${page[page.length - 1].archived} ${page[page.length - 1].id}` : undefined;
-			return { agentId: id, entries: page.map(archivedCard), ...(next ? { next } : {}), ...readOnlyFields(memoryRoomBusy(id)) };
+			return { agentId: id, entries: page.map((entry) => archivedCard(entry, doc)), ...(next ? { next } : {}), ...readOnlyFields(memoryRoomBusy(id)) };
 		} catch (e) {
 			return deps.errorReply(reply, e);
 		}
@@ -313,7 +323,7 @@ export function registerMemoryEntryRoutes(app: FastifyInstance, deps: MemoryEntr
 				entryId,
 				archiveAppend: [{ entry: applied.archived, why: "user", topic: topicTitle, section }],
 			});
-			return { agentId: id, archived: archivedCard(write.archived[0]), budget: write.budget };
+			return { agentId: id, archived: archivedCard(write.archived[0], applied.doc), budget: write.budget };
 		} catch (e) {
 			return deps.errorReply(reply, e);
 		}
@@ -331,6 +341,7 @@ export function registerMemoryEntryRoutes(app: FastifyInstance, deps: MemoryEntr
 			const load = loadMemoryDocument(id);
 			const archived = load.archive.find((entry) => entry.id === entryId);
 			if (!archived) throw memoryEntryUnknownError(true);
+			if (archived.why === "history") throw memoryEntryHistoryError();
 			if (findEntryVersion(load.doc, entryId)) throw memoryEntryAlreadyInCoreError();
 			const next = restoreEntry(load.doc, archived);
 			const write = writeMemoryDocument(id, next, {
@@ -355,7 +366,8 @@ export function registerMemoryEntryRoutes(app: FastifyInstance, deps: MemoryEntr
 			const id = roomId(req);
 			const entryId = entryIdOf(req);
 			const result = deleteArchivedEntry(id, entryId);
-			return { agentId: id, deleted: archivedCard(result.deleted), archive: archivePayload(result.archive) };
+			const doc = loadForRead(id).load.doc;
+			return { agentId: id, deleted: archivedCard(result.deleted, doc), archive: archivePayload(result.archive, doc) };
 		} catch (e) {
 			return deps.errorReply(reply, e);
 		}

@@ -12,7 +12,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { ArchivedEntryCard, BudgetState, EntryCard, EntryKind, MemoryEntriesTopicGroup, MemoryUndoResponse, PersistentAgentStatus } from "../types";
 import { createMemoryEntry, deleteArchivedMemoryEntry, deleteMemoryEntry, fetchMemoryArchive, fetchMemoryEntries, fetchMemoryHistory, restoreMemoryEntry, undoMemorySave, updateMemoryEntry } from "../memory-entries-api";
-import { entryKindLabel, LIMIT_LOWERED_ON_UNDO_SENTENCE, MEMORY_EDIT_BLOCKED_SENTENCE } from "../memory-v2-copy";
+import { archivedEntryRestorable, entryKindLabel, LIMIT_LOWERED_ON_UNDO_SENTENCE, MEMORY_EDIT_BLOCKED_SENTENCE } from "../memory-v2-copy";
 import { MemoryChangeFold } from "./memory-change-fold";
 import { GroupHeader } from "./pane-header";
 import {
@@ -91,11 +91,12 @@ function matchesQuery(entry: EntryCard, query: string): boolean {
 	return entry.text.toLowerCase().includes(needle) || memoryTopicName(entry.topic).toLowerCase().includes(needle);
 }
 
-export function RoomMemoryEntriesSection({ status, onMemoryTokens, onArchiveDeleted }: { status: PersistentAgentStatus; onMemoryTokens?: (tokens: number | null) => void; onArchiveDeleted?: () => void }) {
+export function RoomMemoryEntriesSection({ status, onMemoryTokens, onArchiveDeleted, onChanged }: { status: PersistentAgentStatus; onMemoryTokens?: (tokens: number | null) => void; onArchiveDeleted?: () => void; /** Told after each change this section makes to memory. */ onChanged?: () => void }) {
 	const [entries, setEntries] = useState<EntryCard[] | null>(null);
 	const [topicOrder, setTopicOrder] = useState<{ section: MemoryEntriesTopicGroup["section"]; title: string }[]>([]);
 	const [budget, setBudget] = useState<BudgetState | null>(null);
 	const [archiveCount, setArchiveCount] = useState(0);
+	const [archiveHistory, setArchiveHistory] = useState(0);
 	const [archive, setArchive] = useState<ArchivedEntryCard[] | null>(null);
 	const [archiveNext, setArchiveNext] = useState<string | undefined>(undefined);
 	const [archiveBusy, setArchiveBusy] = useState(false);
@@ -154,6 +155,7 @@ export function RoomMemoryEntriesSection({ status, onMemoryTokens, onArchiveDele
 				setTopicOrder(response.topics.map((topic) => ({ section: topic.section, title: topic.title })));
 				setBudget(response.budget);
 				setArchiveCount(response.archive.count);
+				setArchiveHistory(response.archive.history ?? 0);
 			})
 			.catch((e) => {
 				if (cancelled) return;
@@ -206,6 +208,7 @@ export function RoomMemoryEntriesSection({ status, onMemoryTokens, onArchiveDele
 		setActionError(null);
 		try {
 			await action();
+			onChanged?.();
 		} catch (e) {
 			setActionError((e as Error).message);
 		} finally {
@@ -312,6 +315,7 @@ export function RoomMemoryEntriesSection({ status, onMemoryTokens, onArchiveDele
 			const response = await deleteArchivedMemoryEntry(status.id, entry.id);
 			setArchive((current) => (current ?? []).filter((existing) => existing.id !== entry.id));
 			setArchiveCount(response.archive.count);
+			setArchiveHistory(response.archive.history ?? 0);
 			setConfirmArchiveDeleteId(null);
 			onArchiveDeleted?.();
 		});
@@ -457,7 +461,7 @@ export function RoomMemoryEntriesSection({ status, onMemoryTokens, onArchiveDele
 			<div className="memory-archive-head">
 				<GroupHeader
 					kicker="Archive"
-					line={archiveSummaryLine(archiveCount)}
+					line={archiveSummaryLine(archiveCount, archiveHistory)}
 					actions={archive === null
 						? <button className="rs-btn" type="button" disabled={archiveBusy} onClick={() => void loadArchive()}>{archiveBusy ? "Reading…" : "Show"}</button>
 						: <button className="rs-btn" type="button" disabled={archiveBusy} onClick={() => setArchive(null)}>Hide</button>}
@@ -472,7 +476,7 @@ export function RoomMemoryEntriesSection({ status, onMemoryTokens, onArchiveDele
 							<li className="memory-entry" key={entry.id}>
 								<div className="memory-entry-meta">
 									<span className="memory-entry-topic">{memoryTopicName(entry.topic)}</span>
-									<span className="memory-entry-saved">{archiveRowMeta(entry.archived, entry.why)}</span>
+									<span className="memory-entry-saved">{archiveRowMeta(entry.archived, entry.why, entry)}</span>
 								</div>
 								<p className="memory-entry-text">{entry.text}</p>
 								{!readOnly && confirmArchiveDeleteId === entry.id ? (
@@ -483,7 +487,7 @@ export function RoomMemoryEntriesSection({ status, onMemoryTokens, onArchiveDele
 									</div>
 								) : !readOnly && (
 									<div className="memory-entry-actions">
-										<button className="rs-quiet" type="button" disabled={busyId === entry.id} onClick={() => void restore(entry)}>{busyId === entry.id ? "Restoring…" : "Restore"}</button>
+										{archivedEntryRestorable(entry) && <button className="rs-quiet" type="button" disabled={busyId === entry.id} onClick={() => void restore(entry)}>{busyId === entry.id ? "Restoring…" : "Restore"}</button>}
 										<button className="rs-quiet rs-quiet-danger" type="button" disabled={busyId === entry.id} onClick={() => setConfirmArchiveDeleteId(entry.id)}>{DELETE_FOR_GOOD_LABEL}</button>
 									</div>
 								)}

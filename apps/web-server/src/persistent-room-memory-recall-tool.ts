@@ -100,6 +100,8 @@ export const MEMORY_RECALL_REASON_WORDS: Record<string, string> = {
 	user: "removed by hand",
 	stale: "no longer holds",
 	duplicate: "already said elsewhere",
+	history: "an older value kept as history",
+	sorted: "sorted into topics",
 };
 
 // A marker-like token inside a row loses its brackets, so the words survive but
