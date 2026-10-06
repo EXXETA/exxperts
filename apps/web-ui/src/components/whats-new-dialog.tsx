@@ -40,7 +40,7 @@ export function WhatsNewDialog({ version, entries, onClose }: { version: string;
 	return (
 		<div className="whats-new-backdrop" onClick={onClose}>
 			<div className="whats-new-dialog" role="dialog" aria-modal="true" aria-label={`What's new in ${version}`} onClick={(e) => e.stopPropagation()}>
-				<button type="button" className="settings-overlay-close" onClick={onClose} aria-label="Close">✕</button>
+				<button type="button" className="whats-new-close" onClick={onClose} aria-label="Close">✕</button>
 				<h1 className="whats-new-title">What's new in {version}</h1>
 				<div className="whats-new-entries">
 					{entries.map((entry, index) => {

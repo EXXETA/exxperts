@@ -177,7 +177,7 @@ function NoteRow({ row }: { row: NoteChange }) {
  * it sits in. Rendered inside the row's flex line: the button takes the end of
  * the line and the fold wraps to a full-width line beneath.
  */
-export function MemoryChangeFold({ roomId, row, open, onToggle, quiet }: { roomId: string; row: MemoryHistoryRow; open: boolean; onToggle: () => void; quiet: "rs-quiet" | "mem-close" }) {
+export function MemoryChangeFold({ roomId, row, open, onToggle, quiet }: { roomId: string; row: MemoryHistoryRow; open: boolean; onToggle: () => void; quiet: "rs-quiet" | "rs-btn" | "mem-close" }) {
 	const [change, setChange] = useState<ChangeState | null>(null);
 	const [full, setFull] = useState(false);
 	// The effect below decides whether to read by what is already held, without

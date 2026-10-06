@@ -41,6 +41,7 @@ export const MAINTENANCE_DIAGNOSTICS_PROCESSES = [
 	"review-proposal",
 	"review-tidy",
 	"remember-compression",
+	"remember-part",
 	"consult",
 ] as const;
 export type MaintenanceDiagnosticsProcess = (typeof MAINTENANCE_DIAGNOSTICS_PROCESSES)[number];
@@ -56,6 +57,7 @@ export const REVIEW_OPS_PROPOSAL_MARKERS = ["Summary", "Staleness Flags", "Warni
 export const MEMORIZE_ASSESSMENT_MARKERS = ["What to remember", "What to forget", "What changes in stable memory", "Needs your judgment"] as const;
 export const REVIEW_ASSESSMENT_MARKERS = ["Memory map", "Looks healthy", "Stale or drift-prone", "Could be denser", "Structure opportunities", "Proposed direction"] as const;
 export const REMEMBER_MARKERS = ["TITLE", "SESSION_ARC", "BODY", "PARKED"] as const;
+export const REMEMBER_PART_MARKERS = ["MUST-KEEP", "DECISIONS AND CORRECTIONS", "PRODUCED", "OPEN THREADS", "ARC", "OPEN AT THE END OF THIS PART"] as const;
 
 const DEFAULT_MARKERS: Readonly<Record<MaintenanceDiagnosticsProcess, readonly string[]>> = {
 	"memorize-assessment": MEMORIZE_ASSESSMENT_MARKERS,
@@ -75,6 +77,7 @@ const DEFAULT_MARKERS: Readonly<Record<MaintenanceDiagnosticsProcess, readonly s
 	// every reply whatever the marker list says.
 	"review-tidy": [],
 	"remember-compression": REMEMBER_MARKERS,
+	"remember-part": REMEMBER_PART_MARKERS,
 	consult: [],
 };
 

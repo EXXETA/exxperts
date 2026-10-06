@@ -97,7 +97,10 @@ try {
 					name: "Synthetic Gateway",
 					baseUrl: `http://127.0.0.1:${gatewayPort}/v1`,
 					api: "openai-completions",
-					models: [{ id: "maintenance-model", name: "Maintenance Model", contextWindow: MODEL_CONTEXT_WINDOW, maxTokens: 4096 }],
+					models: [
+						{ id: "maintenance-model", name: "Maintenance Model", contextWindow: MODEL_CONTEXT_WINDOW, maxTokens: 4096 },
+						{ id: "large-output-model", name: "Large Output Model", contextWindow: 200000, maxTokens: 64000 },
+					],
 				},
 			},
 		}, null, 2),
@@ -118,19 +121,29 @@ try {
 	if (!model) throw new Error("the synthetic maintenance model should be in the registry");
 	const workerModel: NonNullable<typeof model> = model;
 
-	async function runWorker(systemPrompt: string, timeoutMs?: number) {
+	async function runWorker(systemPrompt: string, timeoutMs?: number, options: { lock?: typeof modelLock; maxTokens?: number } = {}) {
+		const lock = options.lock ?? modelLock;
+		const lockModel = lock === modelLock ? workerModel : registry.find(lock.provider, lock.model);
+		if (!lockModel) throw new Error(`the synthetic model ${lock.model} should be in the registry`);
 		return runIsolatedPersistentAgentWorker({
 			workerSystemPrompt: systemPrompt,
 			triggerPrompt: "Produce the draft now.",
-			modelLock,
-			resolveExpectedModel: () => workerModel,
+			modelLock: lock,
+			resolveExpectedModel: () => lockModel,
 			workerLabel: "maintenance worker",
 			emptyTextError: "maintenance worker produced no text",
 			cwd: repoRoot,
 			agentDir,
 			modelRegistry: registry,
 			...(timeoutMs ? { timeoutMs } : {}),
+			...(options.maxTokens ? { maxTokens: options.maxTokens } : {}),
 		});
+	}
+
+	/** The output cap a request asked the provider for, read off the request body. */
+	function requestedOutputCap(body: string): number | undefined {
+		const parsed = JSON.parse(body) as { max_tokens?: number; max_completion_tokens?: number };
+		return parsed.max_completion_tokens ?? parsed.max_tokens;
 	}
 
 	// --- 1. A reported context past the compaction threshold makes ONE call ---
@@ -181,6 +194,24 @@ try {
 	const uncapped = await runWorker("Synthetic maintenance worker prompt, second run.");
 	assert(uncapped.text.includes("Draft line one."), "a worker call without a ceiling still returns its reply");
 	assert(requests.length === 1, `an ordinary worker call makes exactly one request, got ${requests.length}`);
+
+	// --- 5. A per-call cap asks for less than the model's ceiling ----------
+	// Remember asks for 16k, not the model's full 64k, so a prompt near its
+	// budget leaves room under the window; the result reports the cap it asked
+	// for, so a truncation names the limit that applied. A cap above the
+	// model's own ceiling is clamped to the ceiling. Without a cap the worker
+	// asks for the full ceiling, as Memorize and Review need.
+	const largeLock = { provider: "openai-compatible", model: "large-output-model" };
+	requests.length = 0;
+	const capped = await runWorker("Synthetic Remember prompt, capped.", undefined, { lock: largeLock, maxTokens: 16000 });
+	assert(requests.length === 1 && requestedOutputCap(requests[0]!.body) === 16000, `a capped call asks the provider for 16000 output tokens, got ${requests.map((request) => requestedOutputCap(request.body)).join(", ")}`);
+	assert(capped.modelMaxOutputTokens === 16000, `a capped call reports the cap it asked for, got ${capped.modelMaxOutputTokens}`);
+	requests.length = 0;
+	const clamped = await runWorker("Synthetic Remember prompt, cap above the ceiling.", undefined, { maxTokens: 16000 });
+	assert(requestedOutputCap(requests[0]!.body) === 4096 && clamped.modelMaxOutputTokens === 4096, `a cap above the model's ceiling is clamped to it, got ${requestedOutputCap(requests[0]!.body)} / ${clamped.modelMaxOutputTokens}`);
+	requests.length = 0;
+	const full = await runWorker("Synthetic Memorize prompt, full ceiling.", undefined, { lock: largeLock });
+	assert(requestedOutputCap(requests[0]!.body) === 64000 && full.modelMaxOutputTokens === 64000, `an uncapped call asks for the model's full ceiling, got ${requestedOutputCap(requests[0]!.body)} / ${full.modelMaxOutputTokens}`);
 
 	console.log("lifecycle-worker-session-smoke: PASS");
 } catch (error) {

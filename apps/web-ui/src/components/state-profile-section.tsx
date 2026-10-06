@@ -267,7 +267,7 @@ export function StateProfileSection() {
 				</p>
 				{restarting.signInPath && (
 					<p className="ai-setup-copy">
-						If nothing happens within a minute, <a href={restarting.signInPath}>open the new session manually</a>.
+						If nothing happens within a minute, <a href={restarting.signInPath}>sign in again manually</a>.
 					</p>
 				)}
 			</section>
@@ -286,175 +286,171 @@ export function StateProfileSection() {
 		return (
 			<section className="ai-setup-section state-profiles" aria-label="Profiles">
 				<div className="workspaces-error archived-rooms-note" role="alert">{loadError ?? "Could not read the profiles."}</div>
-				<p><button className="inline-action" type="button" onClick={() => void load()}>Try again</button></p>
+				<p><button className="rs-btn" type="button" onClick={() => void load()}>Try again</button></p>
 			</section>
 		);
 	}
 
 	return (
 		<>
-			{payload.home && (
-				<section className="ai-setup-section state-profiles" aria-label="Data folder">
-					<h3 className="web-search-fallback-heading">Data folder</h3>
-					<div className={movePlan ? "rs-row rs-row-asking" : "rs-row"}>
-						<div className="rs-row-main">
-							<span className="rs-row-label">{payload.home.source === "default" ? "Your home folder" : payload.home.dir}</span>
-							<span className="rs-row-hint">
-								{payload.home.source === "default"
-									? `All profiles live here (${payload.home.dir}). They can move anywhere, for example a folder synced by OneDrive or Dropbox, to use the same setup on more than one computer.`
-									: payload.home.source === "env"
-										? "All profiles live here, set by the EXXPERTS_DATA_DIR environment variable."
-										: "All profiles live here. Moving takes every profile along and reloads exxperts."}
+			<section className="ai-setup-section state-profiles" aria-label="Profiles on this computer">
+				<div className="settings-rows">
+					<div className="settings-row">
+						<div className="settings-row-main">
+							{/* The standard profile is a role, not a folder name: it says what it is
+							    and answers on the spot why no Delete button stands next to it. A named
+							    profile keeps its own name. Its folder is in the Data folder row. */}
+							<span className="settings-row-label">{payload.active ?? "Standard profile"}</span>
+							<span className="settings-row-sub">
+								{payload.active === null
+									? "Always on this computer; it cannot be deleted."
+									: "Everything you see in the app right now lives here."}
 							</span>
-							{movePlan && (
-								<span className="rs-row-hint state-profile-asking" role="status">
-									{movePlan.mode === "migrate"
-										? `Move everything to “${movePlan.dir}” and reload now? ${movePlan.moving.length > 0 ? `${movePlan.moving.join(", ")} move there.` : "It becomes the new data folder."} Nothing is deleted, nothing changes inside your profiles.`
-										: `“${movePlan.dir}” already holds exxperts data. Use that data as it is and reload now? What is loaded right now stays behind, unchanged, at “${payload.home.dir}”: nothing is moved or merged.`}
-								</span>
-							)}
 						</div>
-						<div className="rs-pane-actions">
-							{movePlan ? (
-								<>
-									<button className="rs-quiet" type="button" disabled={moveBusy} onClick={() => { setMovePlan(null); setMoveError(null); }}>Keep it</button>
-									<button className="rs-btn rs-btn-primary" type="button" disabled={moveBusy} onClick={() => void applyMove()}>
-										{moveBusy ? "Moving…" : movePlan.mode === "migrate" ? "Move and reload" : "Use it and reload"}
-									</button>
-								</>
-							) : payload.home.canMove ? (
-								<button className="rs-btn" type="button" disabled={moveBusy} onClick={() => void pickMoveTarget()}>
-									{moveBusy ? "Choosing…" : "Move…"}
-								</button>
-							) : (
-								<span className="rs-row-hint">{payload.home.reason}</span>
-							)}
-						</div>
+						<span className="settings-row-value">Loaded</span>
 					</div>
-					{manualVisible && !movePlan && (
-						<div className="rs-row">
-							<div className="rs-row-main">
-								<span className="rs-row-hint">No folder picker is available here. Enter the full path of the new folder.</span>
+					{payload.active !== null && (
+						<div className="settings-row">
+							<div className="settings-row-main">
+								<span className="settings-row-label">Standard profile</span>
+								<span className="settings-row-sub">Always on this computer; it cannot be deleted.</span>
+								{armed?.kind === "switch" && armed.name === null && (
+									<span className="settings-row-sub state-profile-asking" role="status">Switch back to “.exxperts” and reload now?</span>
+								)}
 							</div>
-							<div className="rs-pane-actions">
-								<input
-									className="launcher-path-input"
-									type="text"
-									value={manualDir}
-									placeholder="/path/to/folder"
-									disabled={moveBusy}
-									onChange={(e) => setManualDir(e.target.value)}
-									onKeyDown={(e) => { if (e.key === "Enter" && manualDir.trim()) void requestMovePlan(manualDir.trim()); }}
-									aria-label="New data folder path"
-								/>
-								<button className="rs-btn" type="button" disabled={moveBusy || !manualDir.trim()} onClick={() => void requestMovePlan(manualDir.trim())}>
-									Check
+							<div className="settings-row-value">
+								{armed?.kind === "switch" && armed.name === null && (
+									<button className="rs-btn" type="button" disabled={busy} onClick={() => setArmed(null)}>Keep it</button>
+								)}
+								<button className={armed?.kind === "switch" && armed.name === null ? "rs-btn rs-btn-primary" : "rs-btn"} type="button" disabled={busy} onClick={() => void switchTo(null)}>
+									{busy && armed?.kind === "switch" && armed.name === null ? "Switching…" : armed?.kind === "switch" && armed.name === null ? "Switch and reload" : "Switch"}
 								</button>
 							</div>
 						</div>
 					)}
-					{moveError && <div className="workspaces-error archived-rooms-note" role="alert">{moveError}</div>}
-				</section>
-			)}
-			<section className="ai-setup-section state-profiles" aria-label="Profiles on this computer">
-				<h3 className="web-search-fallback-heading">Profiles</h3>
-				<p className="ai-setup-copy">
-					A profile is everything exxperts holds (rooms, agents, history, wallet, memory) living side by side in the
-					data folder. Only one is loaded at a time; switching reloads exxperts and signs this page back in. Running
-					work stops, nothing is lost.
-				</p>
-				<div className="rs-row">
-					<div className="rs-row-main">
-						{/* The standard profile is a role, not a folder name: it says what it is,
-						    shows its folder underneath, and answers on the spot why no Delete
-						    button stands next to it. A named profile keeps its own name. */}
-						<span className="rs-row-label">{payload.active ?? "Standard profile"}</span>
-						{payload.active === null && <span className="rs-row-hint state-profile-folder">.exxperts</span>}
-						<span className="rs-row-hint">
-							{payload.active === null
-								? "Always on this computer; it cannot be deleted."
-								: "Everything you see in the app right now lives here."}
-						</span>
-					</div>
-					<span className="rs-row-hint">Loaded</span>
-				</div>
-				{payload.active !== null && (
-					<div className={armed?.kind === "switch" && armed.name === null ? "rs-row rs-row-asking" : "rs-row"}>
-						<div className="rs-row-main">
-							<span className="rs-row-label">Standard profile</span>
-							<span className="rs-row-hint state-profile-folder">.exxperts</span>
-							<span className="rs-row-hint">Always on this computer; it cannot be deleted.</span>
-							{armed?.kind === "switch" && armed.name === null && (
-								<span className="rs-row-hint state-profile-asking" role="status">Switch back to “.exxperts” and reload now?</span>
-							)}
+					{payload.profiles.map((profile) => {
+						const switchArmed = armed?.kind === "switch" && armed.name === profile.name;
+						const deleteArmed = armed?.kind === "delete" && armed.name === profile.name;
+						return (
+							<div className={deleteArmed ? "settings-row settings-row-armed" : "settings-row"} key={profile.name}>
+								<div className="settings-row-main">
+									<span className="settings-row-label">{profile.name}</span>
+									{switchArmed && (
+										<span className="settings-row-sub state-profile-asking" role="status">Switch to “{profile.name}” and reload now?</span>
+									)}
+									{deleteArmed && (
+										<span className="settings-row-sub room-danger-armed" role="alert">
+											Delete “{profile.name}” forever? Everything in it is removed from this machine.
+										</span>
+									)}
+								</div>
+								<div className="settings-row-value">
+									{(switchArmed || deleteArmed) && (
+										<button className="rs-btn" type="button" disabled={busy} onClick={() => setArmed(null)}>Keep it</button>
+									)}
+									{!deleteArmed && (
+										<button className={switchArmed ? "rs-btn rs-btn-primary" : "rs-btn"} type="button" disabled={busy} onClick={() => void switchTo(profile.name)}>
+											{busy && switchArmed ? "Switching…" : switchArmed ? "Switch and reload" : "Switch"}
+										</button>
+									)}
+									{!switchArmed && (
+										<button className="rs-btn rs-btn-danger" type="button" disabled={busy} onClick={() => void deleteProfile(profile.name)}>
+											{busy && deleteArmed ? "Deleting…" : "Delete"}
+										</button>
+									)}
+								</div>
+							</div>
+						);
+					})}
+					<div className="settings-row">
+						<div className="settings-row-main">
+							<span className="settings-row-label">New profile</span>
+							<span className="settings-row-sub">Starts empty, like a fresh install.</span>
 						</div>
-						<div className="rs-pane-actions">
-							{armed?.kind === "switch" && armed.name === null && (
-								<button className="rs-quiet" type="button" disabled={busy} onClick={() => setArmed(null)}>Keep it</button>
-							)}
-							<button className={armed?.kind === "switch" && armed.name === null ? "rs-btn rs-btn-primary" : "rs-btn"} type="button" disabled={busy} onClick={() => void switchTo(null)}>
-								{busy && armed?.kind === "switch" && armed.name === null ? "Switching…" : armed?.kind === "switch" && armed.name === null ? "Switch and reload" : "Switch"}
+						<div className="settings-row-value">
+							<input
+								className="launcher-path-input"
+								type="text"
+								value={draft}
+								placeholder="demo"
+								disabled={creating}
+								onChange={(e) => setDraft(e.target.value)}
+								onKeyDown={(e) => { if (e.key === "Enter" && draft.trim()) void create(); }}
+								aria-label="New profile name"
+							/>
+							<button className="rs-btn" type="button" disabled={creating || !draft.trim()} onClick={() => void create()}>
+								{creating ? "Creating…" : "Create"}
 							</button>
 						</div>
-					</div>
-				)}
-				{payload.profiles.map((profile) => {
-					const switchArmed = armed?.kind === "switch" && armed.name === profile.name;
-					const deleteArmed = armed?.kind === "delete" && armed.name === profile.name;
-					return (
-						<div className={switchArmed ? "rs-row rs-row-asking" : deleteArmed ? "rs-row rs-row-armed" : "rs-row"} key={profile.name}>
-							<div className="rs-row-main">
-								<span className="rs-row-label">{profile.name}</span>
-								{switchArmed && (
-									<span className="rs-row-hint state-profile-asking" role="status">Switch to “{profile.name}” and reload now?</span>
-								)}
-								{deleteArmed && (
-									<span className="rs-row-hint room-danger-armed" role="alert">
-										Delete “{profile.name}” forever? Everything in it is removed from this machine.
-									</span>
-								)}
-							</div>
-							<div className="rs-pane-actions">
-								{(switchArmed || deleteArmed) && (
-									<button className="rs-quiet" type="button" disabled={busy} onClick={() => setArmed(null)}>Keep it</button>
-								)}
-								{!deleteArmed && (
-									<button className={switchArmed ? "rs-btn rs-btn-primary" : "rs-btn"} type="button" disabled={busy} onClick={() => void switchTo(profile.name)}>
-										{busy && switchArmed ? "Switching…" : switchArmed ? "Switch and reload" : "Switch"}
-									</button>
-								)}
-								{!switchArmed && (
-									<button className="rs-btn rs-btn-danger" type="button" disabled={busy} onClick={() => void deleteProfile(profile.name)}>
-										{busy && deleteArmed ? "Deleting…" : "Delete"}
-									</button>
-								)}
-							</div>
-						</div>
-					);
-				})}
-				<div className="rs-row">
-					<div className="rs-row-main">
-						<span className="rs-row-hint">A new profile starts empty, like a fresh install.</span>
-					</div>
-					<div className="rs-pane-actions">
-						<input
-							className="launcher-path-input"
-							type="text"
-							value={draft}
-							placeholder="demo"
-							disabled={creating}
-							onChange={(e) => setDraft(e.target.value)}
-							onKeyDown={(e) => { if (e.key === "Enter" && draft.trim()) void create(); }}
-							aria-label="New profile name"
-						/>
-						<button className="rs-btn" type="button" disabled={creating || !draft.trim()} onClick={() => void create()}>
-							{creating ? "Creating…" : "Create"}
-						</button>
 					</div>
 				</div>
 				{createError && <div className="workspaces-error archived-rooms-note" role="alert">{createError}</div>}
 				{listError && <div className="workspaces-error archived-rooms-note" role="alert">{listError}</div>}
 			</section>
+			{payload.home && (
+				<section className="ai-setup-section state-profiles settings-group" aria-label="Data folder">
+					<p className="settings-group-kicker">Data folder</p>
+					<div className="settings-rows">
+						<div className="settings-row">
+							<div className="settings-row-main">
+								<span className="settings-row-label"><code className="settings-chip" title={payload.home.dir}>{payload.home.dir}</code></span>
+								<span className="settings-row-sub">
+									{payload.home.source === "default"
+										? "All profiles live here. They can move anywhere, for example a folder synced by OneDrive or Dropbox, to use the same setup on more than one computer."
+										: payload.home.source === "env"
+											? "All profiles live here, set by the EXXPERTS_DATA_DIR environment variable."
+											: "All profiles live here. Moving takes every profile along and reloads exxperts."}
+								</span>
+								{!payload.home.canMove && !movePlan && <span className="settings-row-sub">{payload.home.reason}</span>}
+								{movePlan && (
+									<span className="settings-row-sub state-profile-asking" role="status">
+										{movePlan.mode === "migrate"
+											? `Move everything to “${movePlan.dir}” and reload now? ${movePlan.moving.length > 0 ? `${movePlan.moving.join(", ")} move there.` : "It becomes the new data folder."} Nothing is deleted, nothing changes inside your profiles.`
+											: `“${movePlan.dir}” already holds exxperts data. Use that data as it is and reload now? What is loaded right now stays behind, unchanged, at “${payload.home.dir}”: nothing is moved or merged.`}
+									</span>
+								)}
+							</div>
+							<div className="settings-row-value">
+								{movePlan ? (
+									<>
+										<button className="rs-btn" type="button" disabled={moveBusy} onClick={() => { setMovePlan(null); setMoveError(null); }}>Keep it</button>
+										<button className="rs-btn rs-btn-primary" type="button" disabled={moveBusy} onClick={() => void applyMove()}>
+											{moveBusy ? "Moving…" : movePlan.mode === "migrate" ? "Move and reload" : "Use it and reload"}
+										</button>
+									</>
+								) : payload.home.canMove ? (
+									<button className="rs-btn" type="button" disabled={moveBusy} onClick={() => void pickMoveTarget()}>
+										{moveBusy ? "Choosing…" : "Move…"}
+									</button>
+								) : null}
+							</div>
+						</div>
+						{manualVisible && !movePlan && (
+							<div className="settings-row">
+								<div className="settings-row-main">
+									<span className="settings-row-sub">No folder picker is available here. Enter the full path of the new folder.</span>
+								</div>
+								<div className="settings-row-value">
+									<input
+										className="launcher-path-input"
+										type="text"
+										value={manualDir}
+										placeholder="/path/to/folder"
+										disabled={moveBusy}
+										onChange={(e) => setManualDir(e.target.value)}
+										onKeyDown={(e) => { if (e.key === "Enter" && manualDir.trim()) void requestMovePlan(manualDir.trim()); }}
+										aria-label="New data folder path"
+									/>
+									<button className="rs-btn" type="button" disabled={moveBusy || !manualDir.trim()} onClick={() => void requestMovePlan(manualDir.trim())}>
+										Check
+									</button>
+								</div>
+							</div>
+						)}
+					</div>
+					{moveError && <div className="workspaces-error archived-rooms-note" role="alert">{moveError}</div>}
+				</section>
+			)}
 		</>
 	);
 }

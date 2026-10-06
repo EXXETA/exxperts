@@ -3,7 +3,6 @@ import { settingsChordHint } from "../platform";
 import { useRemoteAccessStatus } from "../remote-access-api";
 import { useRemoteClientContext } from "../remote-client-context";
 import { SidebarToggleButton } from "../sidebar-collapse";
-import type { PersistentAgentAiProfileStatus } from "../types";
 import { requestUpdate, useUpdateNotice } from "../update-notice";
 import { Help } from "./Help";
 
@@ -14,22 +13,6 @@ export type AppearancePreference = ThemeMode | "system";
 // Injected at build time from the root package.json "version" field (vite define).
 const APP_VERSION = __APP_VERSION__;
 const GITHUB_URL = "https://github.com/EXXETA/exxperts";
-
-export function profileIncludesModel(profile: PersistentAgentAiProfileStatus, model: { provider: string; model: string }): boolean {
-	return profile.processes?.persistentRoom.models.some((candidate) => candidate.provider === model.provider && candidate.model === model.model) ?? true;
-}
-
-/**
- * How many standby rooms the switch to `candidate` would actually block:
- * rooms resumable under the ACTIVE profile whose locked model the candidate
- * does not provide. Rooms already stranded today (locked to a model the
- * active profile no longer provides, e.g. a removed gateway) are not counted —
- * the switch changes nothing for them, and counting them inflates every row.
- */
-export function strandedBySwitchCount(standbyLockedModels: Array<{ provider: string; model: string }> | undefined, activeProfile: PersistentAgentAiProfileStatus, candidate: PersistentAgentAiProfileStatus): number {
-	if (!standbyLockedModels || candidate.active) return 0;
-	return standbyLockedModels.filter((model) => profileIncludesModel(activeProfile, model) && !profileIncludesModel(candidate, model)).length;
-}
 
 export function firstWordOfLabel(label: string): string {
 	return label.split(" ")[0] || label;

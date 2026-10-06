@@ -45,9 +45,10 @@ import {
 	createPersistentRoomWorkspaceTools,
 	isPersistentRoomWorkspaceToolPolicyEnabled,
 } from "../../../apps/web-server/src/persistent-room-workspace-tools.js";
-import { getPersistentRoomModelLocks } from "../../../apps/web-server/src/persistent-agent-ai-profiles.js";
-import { readPersistentAgentAiProfileState } from "../../../apps/web-server/src/persistent-agent-ai-profile-state.js";
-import { cliLauncherStatePath, productAppStatePath } from "../../product-state-paths.js";
+import { catalogModelNames, createRoomModelCatalog, resolveAiDefault, resolveRoomModel, roomModelUnavailableError, writeAiDefaults } from "../../../apps/web-server/src/room-models.js";
+import { toolOutputTrimSentence } from "../../../apps/web-server/src/remember-two-stage.js";
+import { recordPersistentRoomLastUsed } from "../../../apps/web-server/src/persistent-room-last-used.js";
+import { cliLauncherStatePath } from "../../product-state-paths.js";
 
 // Half-block "exxperts" logotype, shown atop the room header for brand
 // consistency with the launcher picker. (Mirrors WORDMARK in exxcode-launcher.cjs.)
@@ -442,10 +443,13 @@ function formatCheckpointProposalDetail(proposal: any, draft: string): string {
 	const warnings = Array.isArray(proposal?.warnings) && proposal.warnings.length > 0
 		? `\n\nWarnings:\n${proposal.warnings.map((warning: string) => `- ${warning}`).join("\n")}`
 		: "";
+	// What the read shortened is a count on the proposal, said once here.
+	const trimmed = toolOutputTrimSentence(Number(proposal?.rememberRead?.trimmedToolOutputs ?? 0), Number(proposal?.rememberRead?.toolOutputCapChars) || undefined);
 	return truncateDetail([
 		String(proposal?.preview?.summary ?? "").trim(),
 		points,
 		`\n\nDraft Recent Context entry:\n\n${draft}`,
+		trimmed ? `\n\n${trimmed}` : "",
 		warnings,
 	].join(""));
 }
@@ -534,16 +538,29 @@ async function runCheckpointCommand(args: string, ctx: ExtensionCommandContext):
 		return;
 	}
 
+	// Remember runs on the room's Memory row, resolved as the web resolves it,
+	// not on the model this conversation talks with, and never on another.
+	const catalog = createRoomModelCatalog();
+	const memoryRow = resolveRoomModel(env.agentId, "memory", catalog);
+	const refusal = roomModelUnavailableError(memoryRow, "memory", catalogModelNames(catalog));
+	if (refusal) {
+		ctx.ui.notify(refusal.message, "warning");
+		return;
+	}
+	const memoryModel = memoryRow.effective;
+	if (!memoryModel) {
+		ctx.ui.notify("No AI provider is signed in, so this room's memory work has no model. Sign in in Settings, AI setup.", "warning");
+		return;
+	}
 	ctx.ui.notify("Generating checkpoint memory proposal...", "info");
 	const proposal = await buildCheckpointProposal({
 		agentId: env.agentId,
 		conversationId: env.threadId,
-		model: env.model,
 		density,
 		rememberText,
 		items: transcriptItems,
 		runtimeCwd: process.cwd(),
-	}, (prompt, modelLock) => runCheckpointCompressionWorker(prompt, modelLock, ctx));
+	}, (prompt, modelLock) => runCheckpointCompressionWorker(prompt, modelLock, ctx), { model: memoryModel });
 	if (proposal.agentId !== env.agentId || proposal.conversationId !== env.threadId) {
 		throw new Error("checkpoint proposal target does not match the active room");
 	}
@@ -578,7 +595,7 @@ async function runCheckpointCommand(args: string, ctx: ExtensionCommandContext):
 			density: proposal.density,
 			proposal,
 			approvedRecentContext: draft,
-		}, env.agentId);
+		}, env.agentId, { expectedMemoryModel: resolveRoomModel(env.agentId, "memory").effective });
 		const result = writeApprovedCheckpoint(parsedApproval.request, parsedApproval.warnings, new Date(), { runtimeCwd: process.cwd() });
 		suppressRoomStandbyOnShutdown = true;
 		if (!writeRoomMarker({ action: "enter", agentId: env.agentId, model: env.model, ts: Date.now() })) {
@@ -841,7 +858,7 @@ export default function (pi: ExtensionAPI) {
 		const useHere = `Use this directory as the workspace (${cwdName})`;
 		const clearWs = wsLabel ? "Clear saved workspace" : null;
 		const toggleBash = defaultPolicy?.workspaceAccessMode === "localFiles" ? `${defaultPolicy.bashEnabled ? "Turn Bash off" : "Turn Bash on"} (applies the next time you open this room)` : null;
-		const changeModel = "Change model (applies to a fresh thread)";
+		const changeModel = "Change the default model (rooms without their own pick)";
 		const del = "Delete this room…";
 		const options = [useHere, ...(clearWs ? [clearWs] : []), ...(toggleBash ? [toggleBash] : []), changeModel, del, "Cancel"];
 
@@ -907,25 +924,28 @@ export default function (pi: ExtensionAPI) {
 			return;
 		}
 		if (pick === changeModel) {
-			// The active thread's model is locked (same as the UI). Writing the room
-			// model selection makes the NEXT fresh thread (checkpoint / memento / new
-			// room) use it — mirroring the UI, where model choice is a fresh-thread action.
+			// The active thread's model is locked (same as the UI). This sets the
+			// default for new conversations, which every room without its own pick
+			// follows: the CLI offers the default's provider only. Choosing a model
+			// per room is a web feature (Room settings, Model) until the parity
+			// track brings it here.
 			try {
-				const profileId = readPersistentAgentAiProfileState().profileId;
-				const models = getPersistentRoomModelLocks(profileId);
+				const catalog = createRoomModelCatalog();
+				const resolved = resolveAiDefault("conversation", catalog);
+				const current = resolved.effective ?? resolved.chosen;
+				const provider = catalog.providers.find((candidate) => candidate.providerId === current?.provider && candidate.ready) ?? catalog.providers.find((candidate) => candidate.ready);
+				const models = provider ? provider.conversation.filter((lock) => catalog.availability(lock, "conversation").ok) : [];
 				if (models.length === 0) {
-					ctx.ui.notify("No models available for the active AI profile.", "warning");
+					ctx.ui.notify("No models available: sign in to an AI provider first.", "warning");
 					return;
 				}
 				const labelOf = (m: { provider: string; model: string }) => `${m.provider}/${m.model}`;
-				const choice = await ctx.ui.select("Model for the next fresh thread", [...models.map(labelOf), "Cancel"]);
+				const choice = await ctx.ui.select("Default model for new conversations", [...models.map(labelOf), "Cancel"]);
 				if (!choice || choice === "Cancel") return;
 				const picked = models.find((m) => labelOf(m) === choice);
 				if (!picked) return;
-				const file = productAppStatePath("web-chat-model.json");
-				fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-				fs.writeFileSync(file, JSON.stringify({ provider: picked.provider, model: picked.model }, null, 2), { mode: 0o600 });
-				ctx.ui.notify(`Model set to ${choice}. It applies to a fresh thread — run /checkpoint or /memento to start one with it.`, "info");
+				writeAiDefaults({ conversation: picked });
+				ctx.ui.notify(`Default model set to ${choice}. Rooms without their own pick start their next conversation on it; run /checkpoint or /memento to start one now.`, "info");
 			} catch (error) {
 				ctx.ui.notify(`Could not change model: ${(error as Error).message}`, "error");
 			}
@@ -1033,6 +1053,10 @@ export default function (pi: ExtensionAPI) {
 		const rawText = textFromContent((event.message as any).content);
 		const text = role === "user" ? stripRestoredThreadBlock(rawText) : rawText;
 		if (!text) return;
+		// A message the user sent is a turn starting through this door: the room
+		// counts as used (the server stamps its own doors in
+		// beginPersistentAgentTurn). Best-effort: the function cannot throw.
+		if (role === "user") recordPersistentRoomLastUsed(env.agentId, "cli");
 		appendThreadItem({
 			kind: role,
 			id: threadItemId(role),

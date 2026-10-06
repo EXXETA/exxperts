@@ -4,6 +4,7 @@ import { fetchPersistentRoomMcpConnectors, updatePersistentRoomMcpConnector, typ
 import { fetchMcpConnectorsStatus, type McpConnectorStatus } from "../mcp-api";
 import { CONNECTOR_ICONS } from "../connector-icons";
 import { RsInfo } from "./rs-info";
+import { PaneHeader } from "./pane-header";
 
 /**
  * Room settings wheel, Connectors panel (per-room MCP v1). Mirrors the Skills
@@ -12,9 +13,9 @@ import { RsInfo } from "./rs-info";
  * borrow the global Connectors page's avatar + name + target look so the two
  * surfaces read as one feature. Changes apply to a running conversation from
  * the room's next reply on. New rooms start with nothing enabled; connectors
- * are added and managed globally under Connectors in the sidebar.
+ * are added and managed globally in Settings, Connectors.
  */
-export function RoomConnectorsSection({ status }: { status: PersistentAgentStatus }) {
+export function RoomConnectorsSection({ status, onOpenConnectors }: { status: PersistentAgentStatus; onOpenConnectors?: () => void }) {
 	const [granted, setGranted] = useState<PersistentRoomGrantedConnectorStatus[] | null>(null);
 	const [configured, setConfigured] = useState<string[] | null>(null);
 	const [globalServers, setGlobalServers] = useState<Map<string, McpConnectorStatus>>(new Map());
@@ -76,22 +77,22 @@ export function RoomConnectorsSection({ status }: { status: PersistentAgentStatu
 
 	return (
 		<div className="room-skills-section room-connectors-section">
-			<header className="rs-pane-head">
-				<h3>Connectors</h3>
-				{loaded && enableable.length > 0 && !pickerOpen && (
-					<div className="rs-pane-actions">
-						<button className="rs-btn" onClick={() => { setPickerOpen(true); setQuery(""); }}>Enable connectors…</button>
-					</div>
-				)}
-			</header>
-			<p className="rs-pane-sub">
-				{enabledCount > 0 ? `${enabledCount} enabled. Controls which connectors this room can use.` : "Controls which connectors this room can use."}
-				<RsInfo text="This room can only see and call the connectors enabled here. Enabling or disabling takes effect right away, from the room's next reply on, and scheduled runs of this room use the same list. Deleting a connector on the Connectors page disables it in every room. Connectors are added and managed globally under Connectors in the sidebar." />
-			</p>
+			<PaneHeader
+				title="Connectors"
+				line={<>
+					{enabledCount > 0 ? `${enabledCount} enabled. Controls which connectors this room can use.` : "Controls which connectors this room can use."}
+					<RsInfo text="This room can only see and call the connectors enabled here. Enabling or disabling takes effect right away, from the room's next reply on, and scheduled runs of this room use the same list. Deleting a connector on the Connectors page disables it in every room. Connectors are added and managed globally in Settings, Connectors (the gear at the bottom of the sidebar)." />
+				</>}
+				actions={loaded && enableable.length > 0 && !pickerOpen
+					? <button className="rs-btn" onClick={() => { setPickerOpen(true); setQuery(""); }}>Enable connectors…</button>
+					: loaded && configured.length === 0 && granted.length === 0 && onOpenConnectors
+						? <button className="rs-btn" type="button" onClick={onOpenConnectors}>Open connectors</button>
+						: null}
+			/>
 			{error && granted === null && <div className="checkpoint-proposal-error">{error}</div>}
 			{!loaded && error === null && <p className="ai-setup-copy">Loading connectors…</p>}
 			{loaded && configured.length === 0 && granted.length === 0 && (
-				<p className="ai-setup-copy">No connectors configured yet. Add them under Connectors in the sidebar, then enable them here for this room.</p>
+				<p className="settings-empty">No connectors configured yet. Add them in Settings, Connectors (the gear at the bottom of the sidebar), then enable them here for this room.</p>
 			)}
 			{loaded && (configured.length > 0 || granted.length > 0) && (
 				<>
@@ -121,7 +122,7 @@ export function RoomConnectorsSection({ status }: { status: PersistentAgentStatu
 										)}
 									</div>
 									<div className="room-skills-row-actions">
-										<button className="rs-quiet" disabled={busyName === entry.name} title="Disconnect from this room — the connector stays configured" onClick={() => void toggle(entry.name, "revoke")}>
+										<button className="rs-btn" disabled={busyName === entry.name} title="Disconnect from this room; the connector stays configured" onClick={() => void toggle(entry.name, "revoke")}>
 											{busyName === entry.name ? "Removing…" : "Remove"}
 										</button>
 									</div>

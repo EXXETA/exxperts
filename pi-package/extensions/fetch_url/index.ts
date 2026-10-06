@@ -1,8 +1,8 @@
 import * as dns from "node:dns/promises";
+import { createRequire } from "node:module";
 import * as net from "node:net";
 import { Agent } from "undici";
 import { Type } from "typebox";
-import { JSDOM } from "jsdom";
 import { Readability } from "@mozilla/readability";
 import { NodeHtmlMarkdown } from "node-html-markdown";
 import type { ExtensionAPI } from "@exxeta/exxperts-runtime";
@@ -391,10 +391,21 @@ function stripBoilerplate(doc: Document): void {
 	}
 }
 
+// jsdom opens about 1,100 files when it loads, so it is loaded on the first
+// page parsed, not at every server start.
+let jsdomModule: typeof import("jsdom") | null = null;
+function loadJsdom(): typeof import("jsdom") {
+	jsdomModule ??= createRequire(import.meta.url)("jsdom") as typeof import("jsdom");
+	return jsdomModule;
+}
+
 // Turn an HTML document into readable Markdown: isolate the main article with
 // Readability, then convert that HTML to Markdown. Falls back to converting the
 // whole <body> when Readability cannot find an article. Exported for testing.
 export function extractReadable(html: string, url: string): ExtractedContent {
+	// Outside the try: a missing jsdom must fail loudly, not degrade every page
+	// to the bare conversion below.
+	const { JSDOM } = loadJsdom();
 	let doc: Document;
 	try {
 		doc = new JSDOM(html, { url }).window.document;

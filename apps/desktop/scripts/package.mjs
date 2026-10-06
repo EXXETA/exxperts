@@ -14,7 +14,8 @@
 //
 // Steps: (1) resolve the payload archive, hard-matched to the root
 // package.json version (no lexicographic latest: 0.6.10 sorts under 0.6.8);
-// (2) stage its app/ + vendor/node/ tree into build/server; (3) regenerate
+// (2) stage its app/ + vendor/node/ tree into build/server and trim app/ to
+// what the desktop app runs (scripts/prune-payload.mjs); (3) regenerate
 // the icons every run so icon changes always ship; (4) sync the shell version
 // to the root version so artifacts carry the product version; (5) run
 // electron-builder for the target.
@@ -31,6 +32,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { countFiles, pruneDesktopPayload } from "./prune-payload.mjs";
 
 const desktopRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const repoRoot = path.resolve(desktopRoot, "..", "..");
@@ -160,6 +163,17 @@ if (!fs.existsSync(vendoredNode)) {
   process.exit(1);
 }
 
+// Step 2a: the archive also carries the CLI, which the desktop app never
+// runs; trim app/ to the bundled server, the shell's helpers and the Health
+// Check. The prune fails the build when the result misses anything they need.
+try {
+  pruneDesktopPayload(path.join(serverDir, "app"));
+} catch (err) {
+  console.error(`[package] ${err.message}`);
+  process.exit(1);
+}
+console.log(`[package] staged desktop payload: ${countFiles(serverDir)} files (app/ and vendor/)`);
+
 // Step 2b: the bundled ripgrep for the target, fetched through the runtime's
 // tools-manager so the pinned version + SHA-256 there stay the single source
 // of truth (the script rebuilds build/tools from scratch; electron-builder
@@ -245,14 +259,14 @@ if (!fs.existsSync(channelFile)) {
 // Cross-built output cannot be launched here; assert the layout instead.
 if (target === "win-x64") {
   const unpacked = path.join(desktopRoot, "dist-app", "win-unpacked");
-  for (const rel of ["exxperts.exe", path.join("resources", "server", "vendor", "node", "node.exe"), path.join("resources", "server", "app", "bin", "exxperts.cjs"), path.join("resources", "tools", "rg.exe"), path.join("resources", "app.asar")]) {
+  for (const rel of ["exxperts.exe", path.join("resources", "server", "vendor", "node", "node.exe"), path.join("resources", "server", "app", "apps", "web-server", "dist", "server.mjs"), path.join("resources", "server", "app", "bin", "lib", "state-profiles.cjs"), path.join("resources", "tools", "rg.exe"), path.join("resources", "app.asar")]) {
     const p = path.join(unpacked, rel);
     if (!fs.existsSync(p)) {
       console.error(`[package] win-unpacked is missing ${rel}`);
       process.exit(1);
     }
   }
-  console.log("[package] win-unpacked layout verified (exe, asar, payload, vendored node.exe, bundled rg.exe)");
+  console.log("[package] win-unpacked layout verified (exe, asar, bundled server, vendored node.exe, bundled rg.exe)");
 
   // Fail closed: a --sign-windows build must never ship unsigned binaries.
   // Verify the Authenticode signature on the app exe (also the exe inside the

@@ -6,7 +6,7 @@
 
 - Node.js 20.6+ (we test on 22).
 - A model provider configured; see [`provider-setup.md`](provider-setup.md)
-  for AI profiles (Claude, ChatGPT Plus/Pro, OpenAI-compatible gateway).
+  for the providers (Claude, ChatGPT Plus/Pro, OpenAI-compatible gateway).
   API keys via `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` in `.env` or shell
   also work.
 
@@ -80,11 +80,16 @@ Where API calls happen:
 | Memory lifecycle workers | Remember, Memorize, and Review proposals each run an isolated, tool-less worker session (`apps/web-server/src/persistent-agent-worker-runtime.ts`). |
 | Scheduled room runs | Background schedule execution runs room turns headlessly. |
 
-Model selection is owned by the active **AI profile**: rooms pick from
-the profile's room-model list, Remember workers inherit the room's
-model, and Memorize/Review use the profile's maintenance model
-(`apps/web-server/src/persistent-agent-ai-profiles.ts`). See
-[`provider-setup.md`](provider-setup.md).
+Each room has two model rows in **Room settings, Model**: Conversation
+(the room's chat and its scheduled runs) and Memory (Remember, Memorize,
+Review, and the room's other memory work). A row without its own model
+follows the **Default models** in AI setup
+(`apps/web-server/src/room-models.ts`). A row whose model cannot run (its
+provider signed out, or the model no longer approved) is never replaced by
+another model: the room refuses with the reason until the provider is signed
+in again or another model is picked. The approved models per provider
+come from `apps/web-server/src/persistent-agent-ai-profiles.ts`. See
+[`provider-setup.md`](provider-setup.md#which-model-a-room-uses).
 
 Temperature is **not configured in exxperts today**. Generation behaviour
 comes from the runtime/provider defaults for the selected model.
@@ -186,11 +191,11 @@ Smokes: `npm run smoke:state-home-move` and `npm run smoke:data-dir`
 
 | Path | What | Persists across reinstalls? |
 |---|---|---|
-| `~/.exxperts/app/personalized-agents/<id>/` | Persistent rooms: L1b memory, archives, event records, threads, per-room settings | yes |
+| `~/.exxperts/app/personalized-agents/<id>/` | Persistent rooms: L1b memory, archives, event records, threads, per-room settings (the Conversation and Memory models in `runtime/models.json`) | yes |
 | `~/.exxperts/app/conversations/` | Web conversation metadata + transcripts | yes |
 | `~/.exxperts/app/persistent-room-schedules/` | Room schedule definitions | yes |
 | `~/.exxperts/app/background-runs/` | Scheduled-run history | yes |
-| `~/.exxperts/app/persistent-agent-ai-profile.json` | Active AI profile selection | yes |
+| `~/.exxperts/app/persistent-agent-ai-profile.json` | The Default models (Conversation and Memory) | yes |
 | `~/.exxperts/app/openai-compatible-gateways.json` | Saved OpenAI-compatible gateways (name, base URL, approved models with image support and context window, plus the per-model prices and caching capability detection read), when configured | yes |
 | `~/.exxperts/app/openai-compatible-ai-profile.json` | First gateway's profile policy, kept as a mirror for the terminal setup wizard | yes |
 | `~/.exxperts/app/usage.jsonl` | The Wallet ledger: one line per turn with tokens and cost; gateway turns are booked at the gateway's published price, a turn from before a price was on file is estimated at today's rate and marked with an approximation sign, and a turn nobody can price shows "no price on file" | yes |
@@ -227,9 +232,12 @@ bad import path. Run `cd apps/web-ui && npm run build` to surface it.
 
 ### A room refuses to run or remember
 
-Room and worker models are locked to the active AI profile. If the
-profile changed since the room was created, the UI names the expected
-model; see [`provider-setup.md`](provider-setup.md).
+A conversation runs on the model it started on, a new conversation on the
+room's Conversation row, and memory work on the room's Memory row. If that
+model's provider is signed out or the model is no longer approved, the room
+says which, and no other model runs in its place; sign in again, or pick
+another model in Room settings, Model (and switch the open conversation
+too). See [`provider-setup.md`](provider-setup.md#which-model-a-room-uses).
 
 ## Health checks
 

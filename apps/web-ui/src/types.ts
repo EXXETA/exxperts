@@ -1,3 +1,5 @@
+import type { RememberRead } from "./remember-read";
+
 /**
  * Display label for an agent id in usage/history views. Rooms are labelled by
  * their id; the fixed entries cover ids from retired agents that can still
@@ -12,16 +14,6 @@ export function agentLabel(id: string): string {
 		researcher: "Researcher",
 	};
 	return RETIRED[id] ?? id;
-}
-
-export interface SkillInfo {
-	name: string;
-	displayName?: string;
-	description: string;
-	body: string;
-	source: string;
-	protected: boolean;
-	usedByAgents: string[];
 }
 
 export interface ConversationMeta {
@@ -46,6 +38,8 @@ export interface AuthProviderStatus {
 	source?: "stored" | "runtime" | "environment" | "fallback" | "models_json_key" | "models_json_command";
 	label?: string;
 	oauth: boolean;
+	/** The stored credential is a subscription sign-in (not an API key). */
+	signedInWithOAuth?: boolean;
 }
 
 export interface AuthStatusResponse {
@@ -73,11 +67,6 @@ export interface ContextHealthStatus {
 	source: "runtime-context-usage" | "unknown";
 }
 
-export interface PersistentRoomModelSelectionState {
-	path: string;
-	compatibility: "legacy-web-chat-model-selection";
-}
-
 export interface WebChatModelStatus {
 	ready: boolean;
 	selected: WebChatModelOption | null;
@@ -87,8 +76,52 @@ export interface WebChatModelStatus {
 	activeProfileLabel?: string;
 	roomRecommended?: WebChatModelOption | null;
 	roomModels?: WebChatModelOption[];
-	selectionState?: PersistentRoomModelSelectionState;
+	/** Every provider AI setup knows, in its order, with the lists the Model pickers show. */
+	providers?: RoomModelProviderView[];
 	message: string | null;
+}
+
+/** A room's two model rows: the model it talks with, and the model its memory work runs on. */
+export type RoomModelTask = "conversation" | "memory";
+
+export interface RoomModelLock {
+	provider: string;
+	model: string;
+}
+
+/** A lock with the names a person reads. */
+export interface RoomModelLockView extends RoomModelLock {
+	/** The wire label (provider and name in one string); render it through modelDisplayName, never as is. */
+	label: string;
+	name: string;
+	providerLabel: string;
+	contextWindow?: number;
+}
+
+/** One row: what is stored, what the row is set to, what runs, and why nothing does. */
+export interface RoomModelRowView {
+	stored: RoomModelLockView | null;
+	/** The room's pick, else the default; null only when nothing was ever chosen. */
+	chosen: RoomModelLockView | null;
+	/** Null while the chosen model cannot run: the room waits, nothing runs in its place. */
+	effective: RoomModelLockView | null;
+	source: "room" | "default" | "fallback" | "none";
+	reason?: "signed-out" | "not-offered";
+	/** The server's refusal while the chosen model cannot run: the model, its provider, why, and the way out. */
+	refusal?: string;
+}
+
+export type RoomModelsView = Record<RoomModelTask, RoomModelRowView>;
+/** The defaults for new rooms: the same two rows. */
+export type AiDefaultsView = RoomModelsView;
+
+export interface RoomModelProviderView {
+	id: string;
+	label: string;
+	/** Signed in or holding a key. */
+	ready: boolean;
+	conversation: WebChatModelOption[];
+	memory: WebChatModelOption[];
 }
 
 export type PersistentRoomModelOption = WebChatModelOption;
@@ -174,8 +207,6 @@ export interface PersistentAgentAiProfileStatus {
 	id: string;
 	label: string;
 	kind: "builtin" | "gateway" | "custom";
-	// Built-in rows only: whether a saved Memorize and Review choice is in force.
-	maintenanceModels?: { custom: boolean };
 	active: boolean;
 	ready: boolean;
 	message: string | null;
@@ -1089,6 +1120,8 @@ export interface CheckpointProposalResponse {
 		totalTokens?: number;
 		cost?: number;
 	};
+	/** How Remember read the conversation (one pass or parts), and by which model. */
+	rememberRead?: RememberRead;
 	source: CheckpointTranscriptSourceMetadata;
 	warnings: string[];
 }
@@ -1180,6 +1213,8 @@ export interface PersistentAgentActiveThreadSummary {
 	hasUserVisibleTurns: boolean;
 	preparedByBoundary: PersistentAgentRuntimeBoundaryReason | null;
 	preparedByCheckpoint: boolean;
+	/** Still empty, so its first message runs on the room's conversation pick. */
+	followsConversationPick?: boolean;
 	activeTurn?: PersistentAgentActiveTurnState;
 	inFlight?: boolean;
 	working?: boolean;
@@ -1343,12 +1378,16 @@ export interface PersistentAgentStatus {
 	activeLock?: { surface: "cli" | "web" | "scheduler" | string; acquiredAt: number } | null;
 	/** Issue #33: the web lock is held by a detached turn still cooking with NO client attached, so stepping back in is offered; a room genuinely open in another window stays locked out. */
 	answeringDetached?: boolean;
+	/** When a turn last started in this room, through any door, or the estimate below; null when the room has neither (never used, or archived before it was given an estimate). Read by the "Recently used" order only. */
+	lastUsedAt: string | null;
+	/** True while `lastUsedAt` is an estimate rather than a turn's stamp: the newest change of any conversation somebody spoke in, given once to a room that was in use before stamps existed. The room's first turn replaces it. */
+	lastUsedIsEstimate: boolean;
 	displayName?: string;
 	description?: string;
 	role?: string;
 	model?: { provider: string; model: string } | string;
-	/** The model this room's picker last settled on: an empty room's memory across profile switches. Display/seeding only; execution always rides the active profile. */
-	preferredModel?: { provider: string; model: string };
+	/** The room's two model rows, resolved on the server. */
+	models?: RoomModelsView;
 	l1a: { path: string; exists: boolean; bytes?: number };
 	l1b: { path: string; exists: boolean; bytes?: number; sections: string[]; missingSections: string[] };
 	sectionRegistry: { path: string; exists: boolean; missingSections: string[] };
@@ -1360,6 +1399,8 @@ export interface PersistentAgentStatus {
 		recentContextLevel: "empty" | "ok" | "approaching_soft_cap" | "at_soft_cap" | "hard_cap";
 		lastCheckpointId: string | null;
 		lastCheckpointAt: string | null;
+		/** The latest memory write of any kind; null while the memory is still the creation scaffold. */
+		lastMemoryWriteAt?: string | null;
 	};
 	scheduleSummary: PersistentRoomScheduleSummary;
 	promptBudget?: {

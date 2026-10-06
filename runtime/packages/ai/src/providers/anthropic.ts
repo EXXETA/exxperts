@@ -950,9 +950,10 @@ function supportsAdaptiveThinking(model: Model<"anthropic-messages">): boolean {
  * messages. True for direct Anthropic requests to Claude Fable 5.1 and
  * Mythos 5.1 (ids "claude-fable-5-1" and "claude-mythos-5-1", the dotted
  * spelling "5.1" too, with or without a date suffix) and to Claude Opus 5.5
- * (id "claude-opus-5-5", released 2026-09-22), which is bound the same way
- * and takes the same beta and field. The Opus pattern stops at the minor
- * version, so "claude-opus-5" is not matched.
+ * (id "claude-opus-5-5", released 2026-09-22) and Claude Sonnet 5.5 (id
+ * "claude-sonnet-5-5", released 2026-09-28), which are bound the same way and
+ * take the same beta and field. The Opus and Sonnet patterns stop at the
+ * minor version, so "claude-opus-5" and "claude-sonnet-5" are not matched.
  *
  * This app rebuilds the system prompt with live room state on every turn and
  * replays every signed thinking block, so on these models a prefix change
@@ -976,7 +977,7 @@ function supportsAdaptiveThinking(model: Model<"anthropic-messages">): boolean {
  */
 export function usesThinkingBlockBinding(model: Model<"anthropic-messages">): boolean {
 	if (model.provider !== "anthropic") return false;
-	return /claude-(fable|mythos)-5[-.]1(?:$|[^0-9])|claude-opus-5[-.]5(?:$|[^0-9])/.test(model.id);
+	return /claude-(fable|mythos)-5[-.]1(?:$|[^0-9])|claude-(opus|sonnet)-5[-.]5(?:$|[^0-9])/.test(model.id);
 }
 
 /**
@@ -1025,6 +1026,20 @@ export const streamSimpleAnthropic: StreamFunction<"anthropic-messages", SimpleS
 
 	const base = buildBaseOptions(model, options, apiKey);
 	if (!options?.reasoning) {
+		// No level means off. A row that withholds off (thinkingLevelMap.off is
+		// null: the Fable and Mythos families, Opus 5.5 and Sonnet 5.5) cannot
+		// stop thinking, and "disabled" is a 400 there, so the request goes out
+		// at the cheapest rung the dial offers, the one a stored off settles on.
+		// The self-heal for a disabled refusal stays for rows the catalogue does
+		// not know about.
+		if (model.thinkingLevelMap?.off === null && supportsAdaptiveThinking(model)) {
+			const lowest = clampThinkingLevel(model, "off") as ThinkingLevel;
+			return streamAnthropic(model, context, {
+				...base,
+				thinkingEnabled: true,
+				effort: mapThinkingLevelToEffort(model, lowest),
+			} satisfies AnthropicOptions);
+		}
 		return streamAnthropic(model, context, { ...base, thinkingEnabled: false } satisfies AnthropicOptions);
 	}
 

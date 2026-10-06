@@ -1,13 +1,14 @@
 // A conversation keeps the model it started on after that model leaves the
-// active profile's curated list; the list gates a NEW conversation only.
+// curated list; which model a NEW conversation gets is the server's call.
 //
 // Seeds a room whose active thread is locked to anthropic/claude-opus-4-5, a
 // catalogue model that is not on the curated Claude list, under a synthetic
 // Claude sign-in, then checks through the server: the room status names the
-// model, the thread resumes (PUT and WebSocket bind), a new conversation on
-// that model is refused on every creating path with today's message, one on
-// a curated model is accepted, and the fresh thread after a Forget and after
-// a Remember starts on the profile's first curated model.
+// model, the thread resumes (PUT and WebSocket bind) on its own lock whatever
+// model the client names, a new conversation starts on the room's model even
+// when the client names the delisted one, the old model-selection route is
+// gone, and the fresh thread after a Forget and after a Remember starts on the
+// room's model (the first curated one, by default).
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -119,24 +120,11 @@ try {
 		allowInactiveProfileModel: true,
 	});
 
-	// The gates that stay, in process: a new lock on the delisted model is refused
-	// on the scheduled-room path and the checkpoint path, with today's message.
-	let refused = "";
-	try {
-		profiles.assertPersistentRoomModelForActiveProfile("anthropic", delisted.provider, delisted.model, "scheduled-room background work");
-	} catch (error) {
-		refused = (error as Error).message;
-	}
-	assert(/model is not approved for scheduled-room background work: anthropic\/claude-opus-4-5/.test(refused), `the scheduled-room lock refuses the delisted model, got ${refused}`);
-	assert(profiles.resolveScheduledRoomModelLockForProfile("anthropic").model === curatedFirst.model, "the scheduled-room lock is the first curated model");
-	refused = "";
-	try {
-		profiles.resolveCheckpointModelLockForProfile("anthropic", delisted);
-	} catch (error) {
-		refused = (error as Error).message;
-	}
-	assert(/model is not approved .*checkpoint compression inherited persistent-room model/.test(refused), `a new checkpoint lock on the delisted model is refused, got ${refused}`);
-	assert(profiles.resolveCheckpointModelLockForProfile("anthropic", delisted, { existingLock: true }).model === delisted.model, "the saved conversation's own lock is inherited for Remember");
+	// In process: the delisted model is offered to no room, and a scheduled
+	// run's fresh conversation starts on the room's model.
+	const roomModels = await import("../src/room-models.js");
+	assert(!roomModels.isRoomModelOffered(delisted, "conversation"), "the delisted model is offered to no room");
+	assert(roomModels.resolveScheduledRoomModel(agentId).model === curatedFirst.model, "a scheduled run's fresh conversation starts on the room's model, the first curated one");
 
 	server = spawn("npx", ["tsx", "src/index.ts"], { shell: process.platform === "win32", ...SMOKE_SERVER_SPAWN_TREE_OPTIONS, cwd: webServerDir, env: smokeEnv() });
 	server.stdout.on("data", (chunk) => serverOutput.push(String(chunk)));
@@ -159,19 +147,9 @@ try {
 	const bound = await firstSessionFrame(agentId, conversationId, delisted);
 	assert(bound.type === "ready" && bound.model?.model === delisted.model, `the session should bind to the saved conversation on its own model, got ${JSON.stringify(bound)}`);
 	const otherModel = await firstSessionFrame(agentId, conversationId, curatedFirst);
-	assert(otherModel.type === "error" && /locked to anthropic\/claude-opus-4-5/.test(String(otherModel.message)), `a resume on another model keeps today's lock message, got ${JSON.stringify(otherModel)}`);
+	assert(otherModel.type === "ready" && otherModel.model?.model === delisted.model, `a client naming another model still binds on the conversation's own lock, got ${JSON.stringify(otherModel)}`);
 
-	// A NEW conversation on the delisted model is refused on every creating path.
-	const newBind = await firstSessionFrame(agentId, "c_new_on_delisted", delisted);
-	assert(newBind.type === "error" && /model is not approved for persistent-agent rooms: anthropic\/claude-opus-4-5/.test(String(newBind.message)), `a new conversation on the delisted model is refused at the bind, got ${JSON.stringify(newBind)}`);
-	const newPut = await requestJson(`/api/persistent-agents/${agentId}/threads/c_new_on_delisted`, { method: "PUT", body: JSON.stringify({ state: "active", origin: "launcher", model: delisted, items: [] }) });
-	assert(newPut.status === 400 && /model is not approved .*persistent-agent thread writes: anthropic\/claude-opus-4-5/.test(String(newPut.body?.error)), `a PUT that creates a thread on the delisted model is refused, got ${newPut.status}: ${JSON.stringify(newPut.body)}`);
-	const selection = await requestJson("/api/persistent-agent-room/model-selection", { method: "POST", body: JSON.stringify(delisted) });
-	assert(selection.status === 400 && /model is not approved for persistent-agent rooms: anthropic\/claude-opus-4-5/.test(String(selection.body?.error)), `the model-selection POST refuses the delisted model, got ${selection.status}: ${JSON.stringify(selection.body)}`);
-	const curatedSelection = await requestJson("/api/persistent-agent-room/model-selection", { method: "POST", body: JSON.stringify(curatedFirst) });
-	assert(curatedSelection.status === 200, `the model-selection POST accepts a curated model, got ${curatedSelection.status}: ${JSON.stringify(curatedSelection.body)}`);
-
-	// Forget: the old conversation closes and the fresh thread starts on the first curated model.
+	// Forget: the old conversation closes and the fresh thread starts on the room's model.
 	const memento = await requestJson(`/api/persistent-agents/${agentId}/memento`, { method: "POST", body: JSON.stringify({ conversationId }) });
 	assert(memento.status === 200, `Forget should succeed on the delisted conversation, got ${memento.status}: ${JSON.stringify(memento.body)}`);
 	const afterMemento = (await requestJson("/api/persistent-agents")).body.find((row: any) => row.id === agentId);
@@ -179,9 +157,15 @@ try {
 	const oldThread = await requestJson(`/api/persistent-agents/${agentId}/threads/${conversationId}`);
 	assert(oldThread.body?.thread?.state === "closed" && oldThread.body.thread.model.model === delisted.model, "the old conversation is closed and keeps its lock");
 
-	// A new conversation on a curated model is accepted.
-	const curatedPut = await requestJson(`/api/persistent-agents/${agentId}/threads/c_new_on_curated`, { method: "PUT", body: JSON.stringify({ state: "active", origin: "launcher", model: { ...curatedFirst, label: "Opus 5.5" }, items: [] }) });
-	assert(curatedPut.status === 200, `a new conversation on a curated model is accepted, got ${curatedPut.status}: ${JSON.stringify(curatedPut.body)}`);
+
+	// A NEW conversation starts on the room's model, whatever the client names.
+	const newPut = await requestJson(`/api/persistent-agents/${agentId}/threads/c_new_on_delisted`, { method: "PUT", body: JSON.stringify({ state: "active", origin: "launcher", model: delisted, items: [] }) });
+	assert(newPut.status === 200 && newPut.body?.thread?.model?.model === curatedFirst.model, `a PUT that creates a thread naming the delisted model starts it on the room's model, got ${newPut.status}: ${JSON.stringify(newPut.body?.thread?.model)}`);
+	const newBind = await firstSessionFrame(agentId, "c_new_on_delisted", delisted);
+	assert(newBind.type === "ready" && newBind.model?.model === curatedFirst.model, `and the session binds on it, got ${JSON.stringify(newBind)}`);
+	const selection = await requestJson("/api/persistent-agent-room/model-selection", { method: "POST", body: JSON.stringify(curatedFirst) });
+	assert(selection.status === 404, `the old model-selection route is gone, got ${selection.status}`);
+
 
 	await stopSmokeServer(server);
 	server = null;

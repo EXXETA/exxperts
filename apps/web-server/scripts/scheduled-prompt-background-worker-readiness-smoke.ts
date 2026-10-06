@@ -338,6 +338,23 @@ try {
 	const revivedSummary = processScheduledPromptBackgroundRunReadinessOnce({ workerId, now: reviveNow, limit: 10, leaseMs: 60_000 });
 	assert(revivedSummary.processed.some((item) => item.runId === noAuthRun.runId && item.finalStatus === "queued" && item.reason === "ready_for_execution"), "revived run should queue once the provider is connected again");
 
+	// A room's own pick that cannot run is never run and nothing runs in its
+	// place. On no list any more: refused at preflight with the sentence. On
+	// the gateway's list but unknown to the registry: named at preflight and
+	// blocked by readiness as model_not_found.
+	const { writeRoomModels } = await import("../src/room-models.js");
+	fs.writeFileSync(path.join(smokeAppDir, "openai-compatible-ai-profile.json"), JSON.stringify({ profileId: "openai-compatible", providerId: "openai-compatible", label: "Synthetic Gateway", roomModels: [{ modelId: "gpt-5.5" }, { modelId: "claude-opus-4.6" }, { modelId: "listed-only" }], maintenanceModel: "claude-opus-4.6" }, null, 2));
+	const delistedRoom = createRoom("Worker Delisted Pick Room");
+	writeRoomModels(delistedRoom, { conversation: { provider: "openai-compatible", model: "retired-model" } });
+	const delistedRun = preflight(delistedRoom, addSchedule(delistedRoom, "delisted pick job").id, "2026-01-01T00:20:00.000Z", reviveNow);
+	assert(delistedRun.status === "blocked" && delistedRun.reason === "model_policy_unavailable" && /^This room's model, retired-model on .+, is no longer offered\./.test(String(delistedRun.message)), `a pick on no list is refused at preflight with the sentence, got ${JSON.stringify({ status: delistedRun.status, reason: delistedRun.reason, message: delistedRun.message })}`);
+	const unknownRoom = createRoom("Worker Unknown Listed Pick Room");
+	writeRoomModels(unknownRoom, { conversation: { provider: "openai-compatible", model: "listed-only" } });
+	const unknownRun = preflight(unknownRoom, addSchedule(unknownRoom, "unknown listed pick job").id, "2026-01-01T00:25:00.000Z", reviveNow);
+	assert(unknownRun.status === "queued" && (unknownRun.target as any)?.model?.model === "listed-only", `a listed pick the registry does not know is named at preflight, got ${JSON.stringify({ status: unknownRun.status, target: unknownRun.target })}`);
+	const unknownSummary = processScheduledPromptBackgroundRunReadinessOnce({ workerId, now: reviveNow, limit: 10, leaseMs: 60_000 });
+	assert(unknownSummary.processed.some((item) => item.runId === unknownRun.runId && item.finalStatus === "blocked" && item.reason === "model_not_found"), `and readiness blocks it as model_not_found, never running it, got ${JSON.stringify(unknownSummary.processed)}`);
+
 	assertNoUnexpectedRuntimeSideEffects("final");
 
 	console.log("scheduled-prompt background worker/readiness smoke passed");

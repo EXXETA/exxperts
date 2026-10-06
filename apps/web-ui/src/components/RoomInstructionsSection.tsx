@@ -4,6 +4,8 @@ import type { PersistentAgentStatus, PersistentRoomInstructionsResponse } from "
 import { ROOM_INSTRUCTIONS_MAX_CHARS } from "../../../web-server/src/persistent-room-instructions-text";
 import { EMPTY_INSTRUCTIONS_BOX, instructionsClearLink, measureInstructionsDraft, readInstructionsReply, reduceInstructionsBox, ROOM_INSTRUCTIONS_PLACEHOLDER, savedAtLabel, type InstructionsBoxState } from "./instructions-pane-shared";
 import { outcomeAfter, switchHint } from "../room-instructions-outcome";
+import { PaneHeader } from "./pane-header";
+import { useRegisteredSave, type RegisterSave } from "./use-registered-save";
 
 async function fetchInstructions(agentId: string): Promise<PersistentRoomInstructionsResponse> {
 	const response = await apiFetch(`/api/persistent-agents/${encodeURIComponent(agentId)}/instructions`);
@@ -42,7 +44,7 @@ async function saveGlobalSwitch(agentId: string, enabled: boolean): Promise<Pers
  * for the global instructions: the switch, on by default, and under
  * it the global text folded to one line, read-only, edited in Settings.
  */
-export function RoomInstructionsSection({ status, onDirtyChange }: { status: PersistentAgentStatus; onDirtyChange?: (dirty: boolean) => void }) {
+export function RoomInstructionsSection({ status, onDirtyChange, registerSave }: { status: PersistentAgentStatus; onDirtyChange?: (dirty: boolean) => void; registerSave?: RegisterSave }) {
 	const [loaded, setLoaded] = useState<PersistentRoomInstructionsResponse | null>(null);
 	const [loadError, setLoadError] = useState<string | null>(null);
 	const [reloadToken, setReloadToken] = useState(0);
@@ -98,7 +100,10 @@ export function RoomInstructionsSection({ status, onDirtyChange }: { status: Per
 	}, [dirty, onDirtyChange]);
 	useEffect(() => () => onDirtyChange?.(false), [onDirtyChange]);
 
-	async function submit(text: string): Promise<void> {
+	// Save and close in the unsaved question: the Save button's save.
+	useRegisteredSave(registerSave, async () => canSave && submit(measured));
+
+	async function submit(text: string): Promise<boolean> {
 		setSaving(true);
 		setBox((state) => reduceInstructionsBox(state, { type: "save" }));
 		setError(null);
@@ -108,10 +113,12 @@ export function RoomInstructionsSection({ status, onDirtyChange }: { status: Per
 			setLoaded(response);
 			setBox((state) => reduceInstructionsBox(state, { type: "reload", value: response.instructions.text }));
 			setMessage(outcomeAfter(response, response.instructions.text ? "save" : "saveEmpty"));
+			return true;
 		} catch (e) {
 			// The server's sentence carries the remedy (wait for the scheduled
 			// task, close the CLI session, shorten the text); the draft stays.
 			setError((e as Error).message || "Could not save the instructions.");
+			return false;
 		} finally {
 			setSaving(false);
 		}
@@ -137,33 +144,32 @@ export function RoomInstructionsSection({ status, onDirtyChange }: { status: Per
 
 	return (
 		<div className="room-instructions-section">
-			<header className="rs-pane-head">
-				<h3>Instructions</h3>
-			</header>
-			<p className="rs-pane-sub">
-				Standing guidance this room follows in every conversation: how to answer, what to prefer, what to avoid.
-				Changes apply from the next message.
-			</p>
+			<PaneHeader
+				title="Instructions"
+				line="Standing guidance this room follows in every conversation: how to answer, what to prefer, what to avoid. Changes apply from the next message."
+			/>
 			{loadError && (
 				<div className="workspaces-error">
 					{loadError}{" "}
-					<button className="rs-quiet" type="button" onClick={() => setReloadToken((token) => token + 1)}>Try again</button>
+					<button className="rs-btn" type="button" onClick={() => setReloadToken((token) => token + 1)}>Try again</button>
 				</div>
 			)}
-			<label className="workspaces-tool-row room-instructions-global-row">
-				<span className="room-instructions-global-main">
-					<span className="room-instructions-global-title">Use the global instructions in this room</span>
-					{globalHint && <span className="rs-row-hint">{globalHint}</span>}
-				</span>
-				<input
-					className="workspaces-tool-switch"
-					type="checkbox"
-					checked={globalEnabled}
-					disabled={loaded === null || !global || switching || saving}
-					onChange={() => void flipGlobal(!globalEnabled)}
-					aria-label="Use the global instructions in this room"
-				/>
-			</label>
+			<div className="settings-rows">
+				<label className="settings-row">
+					<span className="settings-row-main">
+						<span className="settings-row-label">Use the global instructions in this room</span>
+						{globalHint && <span className="settings-row-sub">{globalHint}</span>}
+					</span>
+					<input
+						className="workspaces-tool-switch"
+						type="checkbox"
+						checked={globalEnabled}
+						disabled={loaded === null || !global || switching || saving}
+						onChange={() => void flipGlobal(!globalEnabled)}
+						aria-label="Use the global instructions in this room"
+					/>
+				</label>
+			</div>
 			{global && globalEnabled && globalText && !globalUnreadable && (
 				<div className="room-instructions-global">
 					<button type="button" className="approval-details-toggle room-instructions-global-toggle" aria-expanded={globalOpen} aria-controls="room-instructions-global-text" onClick={() => setGlobalOpen((open) => !open)}>
@@ -172,7 +178,7 @@ export function RoomInstructionsSection({ status, onDirtyChange }: { status: Per
 					{globalOpen && (
 						<>
 							<pre id="room-instructions-global-text" className="room-instructions-global-text">{globalText}</pre>
-							<p className="rs-row-footnote">Read-only here. Edit in Settings → Instructions.</p>
+							<p className="settings-help">Read-only here. Edit it in Settings, Instructions (the gear at the bottom of the sidebar).</p>
 						</>
 					)}
 				</div>
@@ -194,13 +200,13 @@ export function RoomInstructionsSection({ status, onDirtyChange }: { status: Per
 				<span id="room-instructions-count" className={over > 0 || controls > 0 ? "room-instructions-count over" : "room-instructions-count"} aria-live="polite">{count}</span>
 				<div className="rs-pane-actions">
 					{clearLink && (
-						<button className="rs-quiet" type="button" disabled={clearLink.disabled} onClick={() => { setBox((state) => reduceInstructionsBox(state, { type: "link" })); setMessage(null); setError(null); }}>{clearLink.label}</button>
+						<button className="rs-btn" type="button" disabled={clearLink.disabled} onClick={() => { setBox((state) => reduceInstructionsBox(state, { type: "link" })); setMessage(null); setError(null); }}>{clearLink.label}</button>
 					)}
 					<button className="rs-btn" type="button" disabled={!canSave} onClick={() => void submit(measured)}>{saving ? "Saving…" : "Save"}</button>
 				</div>
 			</div>
-			{savedAt && !dirty && <p className="rs-row-footnote">Last saved {savedAt}.</p>}
-			{dirty && !saving && <p className="rs-row-footnote">Unsaved changes.</p>}
+			{savedAt && !dirty && <p className="settings-help">Last saved {savedAt}.</p>}
+			{dirty && !saving && <p className="settings-help">Unsaved changes.</p>}
 			{message && <div className="workspaces-success">{message}</div>}
 			{error && <div className="workspaces-error">{error}</div>}
 		</div>

@@ -1,6 +1,27 @@
-import { type FormEvent, useEffect, useState } from "react";
+import { type FormEvent, type KeyboardEvent, useEffect, useRef, useState } from "react";
 import { apiFetch } from "../api";
-import type { PersistentAgentCreateRequest, PersistentAgentModeOption } from "../types";
+import type { PersistentAgentCreateRequest, PersistentAgentCreateResponse, PersistentAgentModeOption } from "../types";
+
+/**
+ * "Your name" is the same person room after room on one machine, so the last
+ * one used is offered again. A per-viewer convenience: no room status carries
+ * it, and a browser without storage simply starts empty.
+ */
+const LAST_USER_NAME_KEY = "exxperts.lastUserName";
+
+function readLastUserName(): string {
+	try {
+		return localStorage.getItem(LAST_USER_NAME_KEY) ?? "";
+	} catch {
+		return "";
+	}
+}
+
+function rememberLastUserName(name: string): void {
+	try {
+		localStorage.setItem(LAST_USER_NAME_KEY, name);
+	} catch {}
+}
 
 export interface CreateRoomFormValues {
 	personalAgentName: string;
@@ -24,16 +45,24 @@ export interface CreateRoomPanelViewProps {
 }
 
 export function CreateRoomPanelView({ variant = "card", open, values, modes = [], defaultModeId, submitting = false, error = null, successName = null, onOpen, onClose, onSubmit, onChange }: CreateRoomPanelViewProps) {
+	const userNameRef = useRef<HTMLInputElement | null>(null);
+	// Enter in Room name submits once the form is complete; with Your name
+	// still empty it moves there instead of raising the required-field error.
+	function onRoomNameKeyDown(e: KeyboardEvent<HTMLInputElement>) {
+		if (e.key !== "Enter" || !values.personalAgentName.trim() || values.userName.trim()) return;
+		e.preventDefault();
+		userNameRef.current?.focus();
+	}
 	const form = (
 		<form className="create-room-form" onSubmit={onSubmit}>
 			<div className="create-room-fields">
 				<label className="create-room-field">
 					<strong>Room name</strong>
-					<input className="launcher-path-input create-room-input" type="text" value={values.personalAgentName} onChange={(e) => onChange("personalAgentName", e.target.value)} />
+					<input className="launcher-path-input create-room-input" type="text" autoFocus value={values.personalAgentName} onChange={(e) => onChange("personalAgentName", e.target.value)} onKeyDown={onRoomNameKeyDown} />
 				</label>
 				<label className="create-room-field">
 					<strong>Your name</strong>
-					<input className="launcher-path-input create-room-input" type="text" value={values.userName} onChange={(e) => onChange("userName", e.target.value)} />
+					<input ref={userNameRef} className="launcher-path-input create-room-input" type="text" value={values.userName} onChange={(e) => onChange("userName", e.target.value)} />
 				</label>
 				{modes.length > 1 && (
 					<div className="create-room-field create-room-mode-field" role="radiogroup" aria-label="Working style">
@@ -86,14 +115,14 @@ export function CreateRoomPanelView({ variant = "card", open, values, modes = []
 	);
 }
 
-export function CreateRoomPanel({ onCreate, initialOpen = false, variant = "card", onCreated, onCancel }: { onCreate: (request: PersistentAgentCreateRequest) => Promise<void>; initialOpen?: boolean; variant?: "card" | "section"; onCreated?: () => void; onCancel?: () => void }) {
+export function CreateRoomPanel({ onCreate, initialOpen = false, variant = "card", onCreated, onCancel }: { onCreate: (request: PersistentAgentCreateRequest) => Promise<PersistentAgentCreateResponse | void>; initialOpen?: boolean; variant?: "card" | "section"; onCreated?: (created: PersistentAgentCreateResponse | null) => void; onCancel?: () => void }) {
 	const [open, setOpen] = useState(initialOpen);
 	const [modes, setModes] = useState<PersistentAgentModeOption[]>([]);
 	const [defaultModeId, setDefaultModeId] = useState<string | undefined>(undefined);
-	const [values, setValues] = useState<CreateRoomFormValues>({
+	const [values, setValues] = useState<CreateRoomFormValues>(() => ({
 		personalAgentName: "",
-		userName: "",
-	});
+		userName: readLastUserName(),
+	}));
 	const [submitting, setSubmitting] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [successName, setSuccessName] = useState<string | null>(null);
@@ -134,19 +163,20 @@ export function CreateRoomPanel({ onCreate, initialOpen = false, variant = "card
 		setSubmitting(true);
 		setError(null);
 		try {
-			await onCreate({
+			const created = await onCreate({
 				displayName,
 				userName: trimmedUserName,
 				...(values.mode ? { mode: values.mode } : {}),
 			});
+			rememberLastUserName(trimmedUserName);
 			setSuccessName(displayName);
 			setValues((current) => ({
 				personalAgentName: "",
-				userName: "",
+				userName: trimmedUserName,
 				...(current.mode ? { mode: defaultModeId ?? current.mode } : {}),
 			}));
 			setOpen(false);
-			onCreated?.();
+			onCreated?.(created ?? null);
 		} catch (err) {
 			setError((err as Error).message || "Failed to create room.");
 		} finally {

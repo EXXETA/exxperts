@@ -344,7 +344,7 @@ async function offerManualUpdate(version: string): Promise<void> {
   const { response } = await dialog.showMessageBox({
     type: "info",
     title: "exxperts",
-    message: `exxperts v${version} is available.`,
+    message: `exxperts ${version} is available`,
     detail: "The download opens in your browser; quit exxperts before installing over it.",
     buttons: ["Download", "Later"],
     defaultId: 0,
@@ -369,8 +369,10 @@ async function offerOneClickUpdate(version: string): Promise<void> {
   const response = SMOKE ? 0 : (await dialog.showMessageBox({
     type: "info",
     title: "exxperts",
-    message: `exxperts v${version} is available.`,
-    detail: "The update downloads, then exxperts closes and reopens by itself. Your rooms, conversations and settings stay as they are.",
+    message: `exxperts ${version} is available`,
+    detail: "The update downloads, then exxperts closes and reopens by itself. "
+      + (process.platform === "win32" ? "This can take a few minutes. " : "")
+      + "Your rooms, conversations and settings stay as they are.",
     buttons: ["Install and restart", "Later"],
     defaultId: 0,
     cancelId: 1,
@@ -775,6 +777,7 @@ const BOOT_WAIT_MAX_MS = 10 * 60_000;
 
 async function waitReadyPatiently(): Promise<void> {
   const started = Date.now();
+  let slowShown = false;
   for (;;) {
     try {
       await server.waitReady(BOOT_WAIT_ROUND_MS);
@@ -788,7 +791,12 @@ async function waitReadyPatiently(): Promise<void> {
       }
       const waited = Math.round((Date.now() - started) / 1000);
       console.error(`[boot] server not ready after ${waited}s; still waiting`);
-      setBootStatus(`Still starting after ${waited} seconds. The local server is taking longer than usual; exxperts will open as soon as it answers.`);
+      // One plain line, set on the first timeout and left as it is: the
+      // seconds go to the log, not the screen.
+      if (!slowShown) {
+        setBootStatus("Taking a little longer than usual. exxperts opens as soon as it is ready.");
+        slowShown = true;
+      }
     }
   }
 }

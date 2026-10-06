@@ -49,7 +49,7 @@
  */
 
 import "dotenv/config";
-import { estimateTokensFromChars } from "./token-estimate.js";
+import { estimateTokens, estimateTokensFromChars } from "./token-estimate.js";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -58,15 +58,14 @@ import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import Fastify from "fastify";
 import websocket from "@fastify/websocket";
-import { createAgentSession, clampThinkingLevel, getThinkingLevelLadder, resolveThinkingLevelRung, DefaultResourceLoader, getAgentDir, SessionManager, CoordinationManager, AuthStorage, ModelRegistry, defaultModelPerProvider, isApiKeyLoginProvider, listGitHubCopilotModels } from "@exxeta/exxperts-runtime";
+import { createAgentSession, clampThinkingLevel, getThinkingLevelLadder, resolveThinkingLevelRung, DefaultResourceLoader, getAgentDir, SessionManager, SettingsManager, CoordinationManager, AuthStorage, ModelRegistry, defaultModelPerProvider, isApiKeyLoginProvider, listGitHubCopilotModels } from "@exxeta/exxperts-runtime";
 import { createWebUiContext } from "./web-ui-context.js";
 import { cancelProviderLogin, logoutProvider, ProviderAuthError, providerLoginState, saveProviderApiKey, startProviderLogin } from "./provider-auth.js";
-import { clearBuiltInAiProfilePreference, readBuiltInAiProfilePreferences, writeBuiltInAiProfilePreference } from "./built-in-ai-profile-preferences.js";
 import { migrateBuiltInAiProfiles } from "./built-in-ai-profile-migration.js";
 import { deleteCustomAiProfile, isCustomAiProfileId, isReservedCustomProfileProvider, readCustomAiProfiles, writeCustomAiProfile } from "./custom-ai-profiles.js";
 import { ConsultPromptOverflowError } from "./consult.js";
 import { exportMaintenanceDiagnostics, listMaintenanceDiagnostics, MAINTENANCE_DIAGNOSTICS_DEFAULT_LIMIT, MAINTENANCE_DIAGNOSTICS_KEEP } from "./maintenance-diagnostics.js";
-import { appendPersistentAgentThreadPendingHandoff, archivePersistentAgent, assertPersistentAgentAcceptsCheckpoint, assertPersistentAgentAcceptsSession, createPersistentAgentInstance, parsePersistentAgentL1aMarker, planPersistentAgentConstitutionUpgrade, upgradePersistentAgentConstitution, PERSISTENT_AGENT_L1A_TEMPLATE_VERSION, getPersistentAgentLifecycleCounts, listArchivedPersistentAgents, purgePersistentAgent, restorePersistentAgent, sweepPersistentAgentPurgeTombstones, beginPersistentAgentTurn, buildAbsorbAssessment, buildAbsorbDiscussionSignoff, buildAbsorbDiscussionTurn, buildCheckpointProposal, buildConsultAnswer, buildPersistentAgentBootContext, buildPersistentAgentCurrentIdentitySection, buildPersistentRoomCurrentWorkspaceSection, createPersistentAgentFromScaffoldInput, createPersistentAgentPiSessionJsonlThreadRuntime, createPersistentRoomAutoDeclinedQuestionLog, clearPersistentAgentThreadPendingHandoffs, clearPersistentAgentUnseenLandedAnswerForBind, deletePersistentAgentThread, PERSISTENT_AGENT_L1A_DEFAULT_MODE_ID, PERSISTENT_AGENT_L1A_MODES, discardEmptyPreparedBoundaryThread, finishPersistentAgentTurn, getAbsorbAvailability, getPersistentAgentActiveTurnState, getPersistentAgentRuntimeState, getPersistentAgentStatus, getPersistentAgentThread, getPersistentRoomInstructionsView, savePersistentRoomGlobalInstructionsEnabled, isPersistentAgentArchived, listPersistentAgents, markPersistentAgentTurnCancelling, openPersistentAgentPiSessionManager, parseCheckpointApprovalRequest, readPersistentAgentBootPromptSnapshot, readPersistentAgentReviewTargetEstimatedTokens, recordPersistentAgentUnseenLandedAnswer, renamePersistentAgent, validatePersistentAgentId, writeApprovedCheckpoint, writePersistentAgentMementoBoundary, writePersistentAgentRuntimeState, writePersistentAgentThread, parseAssessmentRetryFeedback, assertPersistentAgentBootPromptFitsWindow, PersistentAgentMemoryOverflowError } from "./persistent-agents.js";
+import { appendPersistentAgentThreadPendingHandoff, archivePersistentAgent, assertPersistentAgentAcceptsCheckpoint, assertPersistentAgentAcceptsSession, createPersistentAgentInstance, parsePersistentAgentL1aMarker, planPersistentAgentConstitutionUpgrade, upgradePersistentAgentConstitution, PERSISTENT_AGENT_L1A_TEMPLATE_VERSION, getPersistentAgentLifecycleCounts, listArchivedPersistentAgents, purgePersistentAgent, restorePersistentAgent, sweepPersistentAgentPurgeTombstones, beginPersistentAgentTurn, buildAbsorbAssessment, buildAbsorbDiscussionSignoff, buildAbsorbDiscussionTurn, beginRememberGeneration, buildCheckpointProposal, estimateCheckpointRead, getRememberGeneration, REMEMBER_WORKER_MAX_OUTPUT_TOKENS, buildConsultAnswer, buildPersistentAgentBootContext, buildPersistentAgentCurrentIdentitySection, buildPersistentRoomCurrentWorkspaceSection, createPersistentAgentFromScaffoldInput, createPersistentAgentPiSessionJsonlThreadRuntime, createPersistentRoomAutoDeclinedQuestionLog, clearPersistentAgentThreadPendingHandoffs, clearPersistentAgentUnseenLandedAnswerForBind, deletePersistentAgentThread, PERSISTENT_AGENT_L1A_DEFAULT_MODE_ID, PERSISTENT_AGENT_L1A_MODES, discardEmptyPreparedBoundaryThread, finishPersistentAgentTurn, getAbsorbAvailability, getPersistentAgentActiveTurnState, getPersistentAgentRuntimeState, getPersistentAgentStatus, getPersistentAgentThread, getPersistentRoomInstructionsView, savePersistentRoomGlobalInstructionsEnabled, isPersistentAgentArchived, listPersistentAgents, markPersistentAgentTurnCancelling, openPersistentAgentPiSessionManager, parseCheckpointApprovalRequest, readPersistentAgentBootPromptSnapshot, refreshEmptyPersistentAgentThreadBootSnapshot, refreshEmptyPersistentAgentThreadModel, emptyPersistentAgentThreadModelTarget, persistentAgentThreadFollowsConversationPick, switchPersistentAgentThreadModel, estimatePersistentAgentThreadContext, SWITCH_WHILE_REMEMBERING_MESSAGE, readPersistentAgentReviewTargetEstimatedTokens, recordPersistentAgentUnseenLandedAnswer, renamePersistentAgent, validatePersistentAgentId, writeApprovedCheckpoint, writePersistentAgentMementoBoundary, writePersistentAgentRuntimeState, writePersistentAgentThread, parseAssessmentRetryFeedback, assertPersistentAgentBootPromptFitsWindow, PersistentAgentMemoryOverflowError } from "./persistent-agents.js";
 import { buildPersistentRoomRestoredLiveThreadContext } from "./persistent-room-resume-context.js";
 import {
 	getPersistentRoomToolPolicy,
@@ -78,7 +77,9 @@ import { MEMORY_BUDGET_DEFAULT_TOKENS, overMemoryBudget, readPersistentRoomMaint
 import { settleMemoryBudget } from "./memory-entries-store.js";
 import { createPersistentRoomBashApprovalExtension, createPersistentRoomBashApprovalGuard } from "./persistent-room-bash-approval.js";
 import { migratePersistentRoomBashAutoApproveDefaults, readPersistentRoomBashSettings, writePersistentRoomBashSettings } from "./persistent-room-bash-settings.js";
-import { readPersistentRoomPreferredModel, writePersistentRoomPreferredModel } from "./persistent-room-preferred-model.js";
+import { rememberSentenceModelName } from "./checkpoint-compression.js";
+import { createRoomModelCatalog, parseModelLock, resolveAiDefault, resolveRoomModel, ROOM_MODEL_TASKS, RoomModelUnavailableError, roomModelUnavailableError, writeAiDefaults, writeRoomModels, type RoomModelCatalog, type RoomModelNames, type RoomModelResolution, type RoomModelTask } from "./room-models.js";
+import { migrateRoomModels } from "./room-models-migration.js";
 import { isRoomEffortLevel, readPersistentRoomEffortChoice, writePersistentRoomEffortChoice, type RoomEffortLevel } from "./persistent-room-effort-settings.js";
 import { buildPersistentRoomCurrentInstructionsSection, readGlobalInstructions, writeGlobalInstructions, ROOM_INSTRUCTIONS_MAX_CHARS } from "./persistent-room-instructions.js";
 import { assertPersistentRoomNotHeldByAnotherProcess, fingerprintPersistentAgentBootContextInstructions, savePersistentRoomInstructions } from "./persistent-agents.js";
@@ -99,11 +100,12 @@ import { assessTaskStoreGc, collectProtectedTaskIds, executeTaskStoreGc } from "
 import { getSpecialistTemplate, SPECIALIST_TASK_CAPS } from "./specialist-templates.js";
 import { generateTaskArtifactThumbnails } from "./task-artifact-thumbnails.js";
 import { createPersistentRoomWorkspaceTools } from "./persistent-room-workspace-tools.js";
-import { assertPersistentRoomModelForActiveProfile, DEFAULT_PERSISTENT_AGENT_AI_PROFILE_ID, getAbsorbModelLock, isBuiltInPersistentAgentAiProfileId, PERSISTENT_AGENT_AI_PROFILES, getAvailablePersistentAgentAiProfiles, getConsultModelLock, getPersistentAgentAiProfile, getPersistentRoomModelLocks, getStructuralReviewModelLock, isPersistentAgentAiProfileId, isPersistentRoomModelForProfile, OPENAI_COMPATIBLE_AI_PROFILE_ID, OPENAI_COMPATIBLE_PROVIDER_ID } from "./persistent-agent-ai-profiles.js";
+import { DEFAULT_PERSISTENT_AGENT_AI_PROFILE_ID, persistentAgentModelLocksEqual, getAbsorbModelLock, getAvailablePersistentAgentAiProfiles, getConsultModelLock, getPersistentAgentAiProfile, getPersistentRoomModelLocks, getStructuralReviewModelLock, isPersistentAgentAiProfileId, isPersistentRoomModelForProfile, OPENAI_COMPATIBLE_AI_PROFILE_ID, OPENAI_COMPATIBLE_PROVIDER_ID } from "./persistent-agent-ai-profiles.js";
 import { deleteOpenAiCompatibleGateway, findOpenAiCompatibleGateway, GATEWAY_DEFAULT_CONTEXT_WINDOW, GATEWAY_MAX_CONTEXT_WINDOW, GATEWAY_MIN_CONTEXT_WINDOW, GATEWAY_PROVIDER_ID_PREFIX, GatewayStoreUnreadableError, mintGatewayProviderId, effectiveGatewayModel, parseGatewayContextWindow, parseGatewayDetectedSnapshot, readOpenAiCompatibleGateways, writeOpenAiCompatibleGateway, type GatewayModelDetected, type GatewayRoomModel, type OpenAiCompatibleGateway } from "./openai-compatible-gateways.js";
 import { ModelCatalogUnreadableError, readCatalogProviderIds, readGatewayProviderBaseUrl, removeGatewayProviderEntry, writeGatewayProviderEntry } from "./openai-compatible-gateway-catalog.js";
 import { discoverGatewayModels, GatewayDiscoveryError, isNonChatGatewayMode, normalizeGatewayBaseUrl } from "./openai-compatible-gateway-detect.js";
 import { resolveGatewayDeclarationsRefreshOptionsFromEnv, startGatewayDeclarationsRefreshLoop, type GatewayDeclarationsRefreshLoopHandle } from "./openai-compatible-gateway-refresh.js";
+import { readRoomOrder, ROOM_ORDER_SAVE_FAILED_SENTENCE, roomOrderPayload, saveRoomOrder, type HiddenRooms } from "./room-order-store.js";
 import { readWebSearchSettings, WebSearchSettingsError, WebSearchSettingsUnreadableError, writeWebSearchSettings } from "./web-search-settings.js";
 import { registerVoiceApi, withSpokenConversationHint } from "./voice.js";
 import { acknowledgeWhatsNew, resolveWhatsNew } from "./whats-new.js";
@@ -113,7 +115,7 @@ import { registerUsageApi } from "./usage-api.js";
 import { componentFromText, createPromptAssemblyManifest, estimateTextTokens } from "./prompt-diagnostics.js";
 import { listPromptAssemblyManifests, recordPromptAssemblyManifest } from "./prompt-diagnostics-store.js";
 import type { PromptComponentType, PromptDiagnosticsModel, PromptDiagnosticsSurface, RedactedPromptComponent } from "./prompt-diagnostics.js";
-import type { PersistentAgentAiProfileId, PersistentAgentAiProfile } from "./persistent-agent-ai-profiles.js";
+import type { PersistentAgentAiProfileId, PersistentAgentAiProfile, PersistentAgentModelLock } from "./persistent-agent-ai-profiles.js";
 import { clearSavedPersistentAgentAiProfileState, readPersistentAgentAiProfileState, readSavedPersistentAgentAiProfileId, writePersistentAgentAiProfileState } from "./persistent-agent-ai-profile-state.js";
 import type { PersistentAgentAiProfileStateSource } from "./persistent-agent-ai-profile-state.js";
 import { registerKnowledgeApi } from "./knowledge-api.js";
@@ -266,6 +268,17 @@ type PersistentRoomLiveSession = {
 	notify: (message: string) => void;
 	/** Close the socket; its close handler releases the room lock. */
 	closeSocket: () => void;
+	/**
+	 * Moves this connection's conversation to another model between turns:
+	 * the session is disposed, the conversation switched on disk, and a new
+	 * session bound on the new model through the single rebind gate.
+	 */
+	/** Resolves with the id of the "Continued on" line the switch wrote. */
+	switchModel: (lock: PersistentAgentModelLock, notice: string) => Promise<{ noticeId: string }>;
+	/** The context the provider last reported for this conversation, or null when it has not answered since the last compaction. */
+	measuredContextTokens: () => number | null;
+	/** The bound session's tool definitions by the one estimator, or null with no session. */
+	toolDefinitionTokens: () => number | null;
 };
 const persistentRoomLiveSessions = new Map<string, PersistentRoomLiveSession>();
 // Rooms whose web client disconnected while a turn was in flight and whose
@@ -1419,7 +1432,9 @@ function recordPersistentRoomPromptDiagnostics(input: {
 app.get("/api/persistent-agents", async (req) => {
 	// Remote devices never see hidden rooms, in listings or anywhere else.
 	const rows = (req as any).exxRemoteDevice ? listPersistentAgents().filter((agent) => !remoteRoomExposure.isHidden(agent.id)) : listPersistentAgents();
-	return rows.map((agent) => ({ ...agent, activeLock: activeRoomLock(agent.id), answeringDetached: detachedCookingRooms.has(agent.id) }));
+	// One read of the profiles and sign-ins for every room's model rows.
+	const catalog = createRoomModelCatalog();
+	return rows.map((agent) => ({ ...agent, models: roomModelsPayload(agent.id, catalog), activeLock: activeRoomLock(agent.id), answeringDetached: detachedCookingRooms.has(agent.id) }));
 });
 
 // Test-only (EXXPERTS_TEST_INTROSPECTION=1): the replay-buffer probe, so the
@@ -1438,7 +1453,9 @@ app.get("/api/persistent-agent-modes", async () => ({
 app.post("/api/persistent-agents", async (req, reply) => {
 	try {
 		const result = createPersistentAgentFromScaffoldInput((req.body ?? {}) as any);
-		return reply.code(201).send(result);
+		// The status carries the model rows the way GET .../status does, so
+		// Home can enter the new room on its conversation model at once.
+		return reply.code(201).send({ ...result, status: { ...result.status, models: roomModelsPayload(result.agent.id) } });
 	} catch (e) {
 		const message = (e as Error).message;
 		const explicitStatus = (e as any)?.statusCode;
@@ -1758,7 +1775,7 @@ app.get("/api/persistent-agents/:id/status", async (req, reply) => {
 	const status = getPersistentAgentStatus(id);
 	if (!status.exists) return reply.code(404).send({ error: `persistent agent not found: ${id}` });
 	if (isPersistentAgentArchived(status)) return reply.code(410).send({ error: `persistent agent is archived: ${id}`, status: "archived", agentId: id, archivedAt: status.archivedAt });
-	return status;
+	return { ...status, models: roomModelsPayload(id) };
 });
 app.get("/api/persistent-agents/:id/background-runs", async (req, reply) => {
 	try {
@@ -1994,7 +2011,11 @@ app.patch("/api/persistent-agents/:id/runtime", async (req, reply) => {
 	try {
 		const status = getUsablePersistentAgentStatusForNormalUse(idRaw);
 		const body = (req.body ?? {}) as any;
-		return { runtime: writePersistentAgentRuntimeState(status.id, { state: body.state, activeThreadId: body.activeThreadId, model: body.model }) };
+		// The runtime model is the active conversation's own lock, whatever the
+		// client names: the server decides which model a conversation runs on.
+		const activeThreadId = body.state === "idle" ? undefined : String(body.activeThreadId ?? getPersistentAgentRuntimeState(status.id).activeThreadId ?? "").trim() || undefined;
+		const lock = activeThreadId ? getPersistentAgentThread(status.id, activeThreadId)?.model : undefined;
+		return { runtime: writePersistentAgentRuntimeState(status.id, { state: body.state, activeThreadId: body.activeThreadId, model: lock ?? body.model }) };
 	} catch (e) {
 		return persistentAgentNormalUseErrorReply(reply, e);
 	}
@@ -2197,7 +2218,12 @@ app.put("/api/persistent-agents/:id/threads/:threadId", async (req, reply) => {
 		// A save that raced a server-side landing merges the landed answer in
 		// instead of overwriting it away (see mergeLandedAnswerTailIntoClientItems).
 		const items = mergeLandedAnswerTailIntoClientItems(status.id, threadId, body.items);
-		return writePersistentAgentThread(status.id, threadId, { state: body.state, origin: body.origin, model: body.model, items, pendingHandoffs: body.pendingHandoffs }, {
+		// The server decides the lock: a saved conversation keeps its own, a new
+		// one starts on the room's conversation model. A model the client names
+		// is not a choice (choices are made in Room settings, Model).
+		const existing = getPersistentAgentThread(status.id, threadId);
+		const model = existing?.model ?? roomConversationModelForNewThread(status.id);
+		return writePersistentAgentThread(status.id, threadId, { state: body.state, origin: body.origin, model, items, pendingHandoffs: body.pendingHandoffs }, {
 			createRuntime: ({ model }) => createPersistentAgentPiSessionJsonlThreadRuntime({
 				agentId: status.id,
 				threadId,
@@ -2214,6 +2240,108 @@ app.put("/api/persistent-agents/:id/threads/:threadId", async (req, reply) => {
 		return persistentAgentNormalUseErrorReply(reply, e);
 	}
 });
+// The switch: an open conversation continues on another model between turns.
+// Refused while the room answers or a Remember reads the conversation, and
+// when the conversation would not fit the new model: the fit is the larger of
+// what the provider last measured and the one estimator over every message,
+// the system prompt and the tool definitions, with a 15 percent margin, under
+// the new window minus the compaction reserve. A null measurement never
+// refuses (it only means no answer since the last compaction; the estimate
+// always exists). The switch also becomes the room's conversation pick.
+app.post("/api/persistent-agents/:id/threads/:threadId/switch-model", async (req, reply) => {
+	const idRaw = String((req.params as any).id ?? "").trim();
+	const threadId = String((req.params as any).threadId ?? "").trim();
+	try {
+		const status = getUsablePersistentAgentStatusForNormalUse(idRaw);
+		const catalog = createRoomModelCatalog();
+		const lock = parseRoomModelPatch({ conversation: req.body ?? {} }, catalog, { allowClear: false }).conversation!;
+		const thread = getPersistentAgentThread(status.id, threadId);
+		if (!thread || thread.state === "closed") return reply.code(404).send({ error: "That conversation is not open." });
+		// A scheduled run or a CLI session is working this room: its session
+		// file has one writer, so the switch waits, as memory undo does. The
+		// room's own web session is not in the way: the switch rebinds it.
+		const roomLockState = activeRoomLock(status.id);
+		if (roomLockState?.surface === "scheduler" || roomLockState?.surface === "cli") {
+			return reply.code(409).send({ error: `This room is ${roomLockBusyStatus(roomLockState)}. ${roomLockState.surface === "cli" ? "Close it there" : "Wait for it to finish"}, then switch the model.`, code: "switch_room_busy" });
+		}
+		if (getPersistentAgentActiveTurnState(status.id, threadId).state !== "idle") return reply.code(409).send({ error: SWITCH_WHILE_ANSWERING_MESSAGE });
+		if (getRememberGeneration(status.id, threadId)) return reply.code(409).send({ error: SWITCH_WHILE_REMEMBERING_MESSAGE });
+		const registry = catalog.registry;
+		const target = registry.find(lock.provider, lock.model);
+		if (!target) return reply.code(400).send({ error: `${lock.model} is not offered for rooms by ${webChatProviderLabel(lock.provider)}.` });
+		const runtimeCwd = persistentRoomRuntimeCwdForEffectiveWorkspacePolicy(resolvePersistentRoomEffectiveWorkspacePolicy(status.id, threadId), REPO_ROOT);
+		const live = persistentRoomLiveSessions.get(status.id);
+		const liveHere = live && live.conversationId === threadId ? live : null;
+		const fit = conversationSwitchFit(status.id, threadId, target, runtimeCwd, liveHere);
+		// The name the app shows, as in every other sentence (a gateway's raw id tidied).
+		const name = rememberSentenceModelName(roomModelLockPayload(lock, registry, catalog)!);
+		if (!fit.fits) {
+			return reply.code(409).send({
+				error: `This conversation is too long to continue on ${name}: it needs about ${fit.needed.toLocaleString("en-US")} tokens and ${name} holds ${fit.available.toLocaleString("en-US")} before it would compact. Remember it and continue on ${name}, or Forget it.`,
+				fit,
+			});
+		}
+		const notice = `Continued on ${name}`;
+		// The line the switch wrote, with its id, so a client that did not hear
+		// the socket's frame adds this line and not a second one of its own.
+		let written: { id: string; text: string } | null = null;
+		if (!persistentAgentModelLocksEqual(thread.model, lock)) {
+			if (liveHere) {
+				const { noticeId } = await liveHere.switchModel(lock, notice);
+				written = { id: noticeId, text: notice };
+			} else {
+				const switched = switchPersistentAgentThreadModel(status.id, threadId, lock, { notice, runtimeCwd });
+				const last = switched.thread.items[switched.thread.items.length - 1] as { id?: string } | undefined;
+				written = { id: String(last?.id ?? ""), text: notice };
+			}
+		}
+		writeRoomModels(status.id, { conversation: lock });
+		return { agentId: status.id, conversationId: threadId, model: roomModelLockPayload(lock, registry, catalog), notice: written, fit, models: roomModelsPayload(status.id, createRoomModelCatalog()) };
+	} catch (e) {
+		return persistentAgentNormalUseErrorReply(reply, e);
+	}
+});
+
+/** What one tool definition counts for in the switch's fit when no session is bound to measure the real ones. */
+const SWITCH_FIT_TOOL_TOKENS = 350;
+/** The switch's margin on the estimate, the same the probe measured against (real/estimate 1.084). */
+const SWITCH_FIT_MARGIN = 1.15;
+
+/** The numbers the switch's fit is decided on, returned with the answer so a refusal can say them. */
+function conversationSwitchFit(agentId: string, threadId: string, target: RegistryModel, runtimeCwd: string, live: PersistentRoomLiveSession | null) {
+	const estimate = estimatePersistentAgentThreadContext(agentId, threadId, runtimeCwd);
+	let toolTokens = live?.toolDefinitionTokens() ?? null;
+	let toolsFrom: "session" | "room tool list" = "session";
+	if (toolTokens == null) {
+		const policy = resolvePersistentRoomEffectiveWorkspacePolicy(agentId, threadId);
+		const toolPolicy = getPersistentRoomToolPolicy(agentId, {
+			workspaceToolsEnabled: policy?.workspaceToolsEnabled === true,
+			workspaceToolNames: policy?.allowedToolNames ?? [],
+			workspaceAccessMode: policy?.workspaceAccessMode,
+			bashEnabled: policy?.bashEnabled === true,
+			bashRuntimeAllowed: true,
+		});
+		toolTokens = (toolPolicy?.allowedToolNames.length ?? 0) * SWITCH_FIT_TOOL_TOKENS;
+		toolsFrom = "room tool list";
+	}
+	const measured = live?.measuredContextTokens() ?? null;
+	const estimated = estimate.messagesTokens + estimate.systemPromptTokens + toolTokens;
+	const needed = Math.ceil(Math.max(measured ?? 0, estimated) * SWITCH_FIT_MARGIN);
+	const reserve = SettingsManager.create(runtimeCwd, getAgentDir()).getCompactionSettings().reserveTokens;
+	const window = typeof target.contextWindow === "number" ? target.contextWindow : 0;
+	const available = window - reserve;
+	return {
+		fits: window > 0 && needed <= available,
+		needed,
+		available,
+		window,
+		reserve,
+		margin: SWITCH_FIT_MARGIN,
+		measured,
+		estimated: { messages: estimate.messagesTokens, systemPrompt: estimate.systemPromptTokens, tools: toolTokens, toolsFrom },
+	};
+}
+
 app.delete("/api/persistent-agents/:id/threads/:threadId", async (req, reply) => {
 	const idRaw = String((req.params as any).id ?? "").trim();
 	const threadId = String((req.params as any).threadId ?? "").trim();
@@ -2448,28 +2576,27 @@ app.put("/api/persistent-agents/:id/bash-settings", async (req, reply) => {
 		return persistentAgentNormalUseErrorReply(reply, e);
 	}
 });
-// Per-room preferred model: what an empty room's picker remembers across
-// restarts and profile switches. Deliberately not gated on the active
-// profile's catalog: a pick recorded just before a switch away is exactly the
-// value that must survive it. Execution still runs through the active profile;
-// the thread-write and model-selection approval gates are untouched.
-app.get("/api/persistent-agents/:id/preferred-model", async (req, reply) => {
+// The model per room: what the room talks with and what does its memory work.
+// GET answers both rows (stored, effective, and why they differ); PUT sets a
+// row (a lock), clears it back to the default (null), or leaves it (absent).
+// A lock that cannot run now is refused: the picker only offers what can.
+app.get("/api/persistent-agents/:id/models", async (req, reply) => {
 	const idRaw = String((req.params as any).id ?? "").trim();
 	try {
 		const status = getUsablePersistentAgentStatusForNormalUse(idRaw);
-		const preferred = readPersistentRoomPreferredModel(status.id);
-		return { agentId: status.id, preferredModel: preferred ? { provider: preferred.provider, model: preferred.model } : null };
+		return { agentId: status.id, models: roomModelsPayload(status.id) };
 	} catch (e) {
 		return persistentAgentNormalUseErrorReply(reply, e);
 	}
 });
-app.put("/api/persistent-agents/:id/preferred-model", async (req, reply) => {
+app.put("/api/persistent-agents/:id/models", async (req, reply) => {
 	const idRaw = String((req.params as any).id ?? "").trim();
 	try {
 		const status = getUsablePersistentAgentStatusForNormalUse(idRaw);
-		const body = (req.body ?? {}) as any;
-		const preferred = writePersistentRoomPreferredModel(status.id, { provider: body.provider, model: body.model ?? body.modelId });
-		return { agentId: status.id, preferredModel: { provider: preferred.provider, model: preferred.model } };
+		const catalog = createRoomModelCatalog();
+		const patch = parseRoomModelPatch(req.body ?? {}, catalog, { allowClear: true });
+		writeRoomModels(status.id, patch);
+		return { agentId: status.id, models: roomModelsPayload(status.id, catalog) };
 	} catch (e) {
 		return persistentAgentNormalUseErrorReply(reply, e);
 	}
@@ -2739,7 +2866,7 @@ app.get("/api/persistent-agents/:id/absorb/status", async (req, reply) => {
 	try {
 		const status = getPersistentAgentStatusForMaintenance(idRaw);
 		const id = status.id;
-		const selection = activeAbsorbModelSelection();
+		const selection = roomMemoryModelSelection(id);
 		const availability = getAbsorbAvailability(id);
 		// The v2 block: what this room would fold, what its memory costs now, and
 		// whether anything has to leave before a single model call is made.
@@ -2760,7 +2887,7 @@ app.post("/api/persistent-agents/:id/absorb/assess", async (req, reply) => {
 	try {
 		const status = getPersistentAgentStatusForMaintenance(idRaw);
 		const id = status.id;
-		const selection = activeAbsorbModelSelection();
+		const selection = roomMemoryModelSelection(id);
 		return await buildAbsorbAssessment(id, selection.modelLock, async (prompt, modelLock) => runIsolatedLifecycleWorker(prompt, modelLock, resolveAbsorbModel, "absorb worker", "Produce the compact absorb assessment now.", "absorb assessment worker produced no text", { agent: id, kind: "upkeep" }), { resolveModelWindow: consultModelWindow, retryFeedback: parseAssessmentRetryFeedback((req.body as any)?.retryFeedback) });
 	} catch (e) {
 		return persistentAgentNormalUseErrorReply(reply, e);
@@ -2771,7 +2898,7 @@ app.post("/api/persistent-agents/:id/absorb/discuss", async (req, reply) => {
 	try {
 		const status = getPersistentAgentStatusForMaintenance(idRaw);
 		const id = status.id;
-		const selection = activeAbsorbModelSelection();
+		const selection = roomMemoryModelSelection(id);
 		return await buildAbsorbDiscussionTurn({ ...(req.body ?? {} as any), agentId: id }, selection.modelLock, async (prompt, modelLock) => runIsolatedLifecycleWorker(prompt, modelLock, resolveAbsorbModel, "absorb worker", "Produce the absorb discussion response now.", "absorb discussion worker produced no text", { agent: id, kind: "upkeep" }), { resolveModelWindow: consultModelWindow });
 	} catch (e) {
 		return persistentAgentNormalUseErrorReply(reply, e);
@@ -2782,7 +2909,7 @@ app.post("/api/persistent-agents/:id/absorb/discuss/signoff", async (req, reply)
 	try {
 		const status = getPersistentAgentStatusForMaintenance(idRaw);
 		const id = status.id;
-		const selection = activeAbsorbModelSelection();
+		const selection = roomMemoryModelSelection(id);
 		return await buildAbsorbDiscussionSignoff({ ...(req.body ?? {} as any), agentId: id }, selection.modelLock, async (prompt, modelLock) => runIsolatedLifecycleWorker(prompt, modelLock, resolveAbsorbModel, "absorb worker", "Produce the absorb discussion signoff handoff now.", "absorb discussion signoff worker produced no text", { agent: id, kind: "upkeep" }), { resolveModelWindow: consultModelWindow });
 	} catch (e) {
 		return persistentAgentNormalUseErrorReply(reply, e);
@@ -2795,7 +2922,7 @@ registerReviewAssessRoutes(app, {
 	room: (idRaw) => getPersistentAgentStatusForMaintenance(idRaw),
 	reviewRunActive: (agentId) => hasActiveReviewRun(agentId),
 	errorReply: (reply, error) => persistentAgentNormalUseErrorReply(reply, error),
-	modelLock: () => activeAbsorbModelSelection().modelLock,
+	modelLock: (agentId) => roomMemoryModelSelection(agentId).modelLock,
 	generate: (agentId, prompt, modelLock, options) => runIsolatedLifecycleWorker(prompt, modelLock, resolveAbsorbModel, "review worker", "Produce the Review first read now.", "the Review worker produced no text", { agent: agentId, kind: "upkeep" }, options),
 	resolveModelWindow: (modelLock) => consultModelWindow(modelLock),
 });
@@ -2808,7 +2935,7 @@ app.post("/api/persistent-agents/:id/absorb/propose", async (req, reply) => {
 	try {
 		const status = getPersistentAgentStatusForMaintenance(idRaw);
 		const id = status.id;
-		const selection = activeAbsorbModelSelection();
+		const selection = roomMemoryModelSelection(id);
 		const availability = getAbsorbAvailability(id);
 		if (!availability.available) throw new Error(availability.message);
 		const request = parseAbsorbRunProposeRequest(req.body ?? {});
@@ -2899,11 +3026,31 @@ app.post("/api/persistent-agents/:id/absorb/approve", async (req, reply) => {
 registerReviewRunRoutes(app, {
 	maintenanceRoom: (idRaw) => getPersistentAgentStatusForMaintenance(idRaw),
 	errorReply: (reply, error) => persistentAgentNormalUseErrorReply(reply, error),
-	modelLock: () => activeStructuralReviewModelSelection().modelLock,
+	modelLock: (agentId) => roomMemoryModelSelection(agentId).modelLock,
 	resolveModelWindow: consultModelWindow,
 	generate: (agentId, prompt, modelLock, options) => runIsolatedLifecycleWorker(prompt, modelLock, resolveStructuralReviewModel, "review tidy worker", REVIEW_TRIGGER_PROMPT, "the review tidy worker produced no text", { agent: agentId, kind: "upkeep" }, options),
 });
-app.post("/api/persistent-agents/:id/checkpoint/propose", async (req, reply) => {
+/** The room's memory model for Remember, with the name a person reads. */
+function rememberMemoryModel(agentId: string): PersistentAgentModelLock & { label?: string } {
+	const { modelLock } = roomMemoryModelSelection(agentId);
+	const model = getWebChatModelRegistry().find(modelLock.provider, modelLock.model);
+	return model ? { ...modelLock, label: webChatModelLabel(modelLock.provider, model) } : modelLock;
+}
+
+/** The sentence a switch gets while the room answers. */
+const SWITCH_WHILE_ANSWERING_MESSAGE = "The room is answering. Switch the model when the answer has finished.";
+
+/** The window Remember plans against: the model's context window and its declared output ceiling. */
+function rememberModelWindow(modelLock: { provider: string; model: string }) {
+	const registry = getWebChatModelRegistry();
+	const model = registry.find(modelLock.provider, modelLock.model);
+	if (!model) throw new Error(`model not found: ${modelLock.provider}/${modelLock.model}`);
+	return { contextWindow: model.contextWindow, maxOutputTokens: model.maxTokens };
+}
+// A session-backed conversation is read from its session file, so the client
+// sends no transcript; an older recap conversation still sends its display
+// transcript, which a long conversation can take past the default 1 MiB.
+app.post("/api/persistent-agents/:id/checkpoint/propose", { bodyLimit: 16 * 1024 * 1024 }, async (req, reply) => {
 	const idRaw = String((req.params as any).id ?? "").trim();
 	try {
 		const status = getPersistentAgentStatusForCheckpoint(idRaw);
@@ -2912,36 +3059,88 @@ app.post("/api/persistent-agents/:id/checkpoint/propose", async (req, reply) => 
 		const conversationId = String(body.conversationId ?? "").trim();
 		const effectiveWorkspacePolicy = conversationId ? resolvePersistentRoomEffectiveWorkspacePolicy(id, conversationId) : null;
 		const runtimeCwd = persistentRoomRuntimeCwdForEffectiveWorkspacePolicy(effectiveWorkspacePolicy, REPO_ROOT);
-		return await buildCheckpointProposal({ ...body, agentId: id, runtimeCwd }, async (prompt, modelLock) => {
-			const registry = getWebChatModelRegistry();
-			const workerResult = await runIsolatedPersistentAgentWorker({
-				workerSystemPrompt: prompt,
-				triggerPrompt: "Produce the checkpoint compression fields now.",
-				modelLock,
-				// Checkpoint compression inherits the ROOM model, so this is the one
-				// restricted worker most likely to be handed a model marked for
-				// provider search. Same resolver as the other workers, same removal.
-				resolveExpectedModel: (workerRegistry, expectedModelLock) =>
-					resolveConfiguredWorkerModel(workerRegistry, expectedModelLock, "checkpoint compression model"),
-				workerLabel: "checkpoint compression worker",
-				emptyTextError: "checkpoint compression worker produced no text",
-				cwd: runtimeCwd,
-				agentDir: getAgentDir(),
-				modelRegistry: registry,
-				// A single-shot transform: reasoning tokens would count against the
-				// output cap and starve the compression fields themselves.
-				thinkingLevel: "low",
-			});
-			recordWorkerUsage(id, "upkeep", modelLock, workerResult.usage);
-			return workerResult;
-		}, {
-			resolveModelWindow: (modelLock) => {
+		// While the proposal generates, the conversation holds still: a prompt
+		// frame for it is refused (beginPersistentAgentTurn), from any device.
+		// Cancel is the client closing this request: the close aborts the
+		// worker calls in flight and no further part starts.
+		const generation = conversationId ? beginRememberGeneration(id, conversationId) : null;
+		const cancel = new AbortController();
+		const onClose = () => { if (!reply.raw.writableFinished) cancel.abort(); };
+		reply.raw.on("close", onClose);
+		try {
+			// Remember runs on the room's memory model; a model the client names is ignored.
+			const { model: _clientModel, ...request } = body;
+			const memoryModel = rememberMemoryModel(id);
+			return await buildCheckpointProposal({ ...request, agentId: id, runtimeCwd }, async (prompt, modelLock, call) => {
 				const registry = getWebChatModelRegistry();
-				const model = registry.find(modelLock.provider, modelLock.model);
-				if (!model) throw new Error(`model not found: ${modelLock.provider}/${modelLock.model}`);
-				return { contextWindow: model.contextWindow, maxOutputTokens: model.maxTokens };
-			},
-		});
+				const workerResult = await runIsolatedPersistentAgentWorker({
+					workerSystemPrompt: prompt,
+					// A part of a long conversation is read for notes; the single pass
+					// and the final call produce the fields.
+					triggerPrompt: call?.trigger ?? "Produce the checkpoint compression fields now.",
+					modelLock,
+					// Checkpoint compression inherits the ROOM model, so this is the one
+					// restricted worker most likely to be handed a model marked for
+					// provider search. Same resolver as the other workers, same removal.
+					resolveExpectedModel: (workerRegistry, expectedModelLock) =>
+						resolveConfiguredWorkerModel(workerRegistry, expectedModelLock, "checkpoint compression model"),
+					workerLabel: call?.workerLabel ?? "checkpoint compression worker",
+					emptyTextError: "checkpoint compression worker produced no text",
+					cwd: runtimeCwd,
+					agentDir: getAgentDir(),
+					modelRegistry: registry,
+					// A single-shot transform: reasoning tokens would count against the
+					// output cap and starve the compression fields themselves.
+					thinkingLevel: "low",
+					// Remember's own cap, not the model's full ceiling: see
+					// REMEMBER_WORKER_MAX_OUTPUT_TOKENS.
+					maxTokens: REMEMBER_WORKER_MAX_OUTPUT_TOKENS,
+					// A part's own signal also stops it when a sibling part failed;
+					// it follows the request's cancel too.
+					signal: call?.signal ?? cancel.signal,
+				});
+				recordWorkerUsage(id, "upkeep", modelLock, workerResult.usage);
+				return workerResult;
+			}, {
+				model: memoryModel,
+				resolveModelWindow: rememberModelWindow,
+				signal: cancel.signal,
+				...(generation ? { onProgress: generation.update } : {}),
+			});
+		} finally {
+			reply.raw.off("close", onClose);
+			generation?.end();
+		}
+	} catch (e) {
+		return persistentAgentNormalUseErrorReply(reply, e);
+	}
+});
+// How far a running Remember has read: polled by the dialog for "part 2 of
+// 4". A 404 means none is running for this conversation (it finished, was
+// cancelled, or the server restarted and took it along).
+app.get("/api/persistent-agents/:id/checkpoint/progress", async (req, reply) => {
+	const idRaw = String((req.params as any).id ?? "").trim();
+	try {
+		const status = getPersistentAgentStatusForCheckpoint(idRaw);
+		const conversationId = String((req.query as any)?.conversationId ?? "").trim();
+		if (!conversationId) return reply.code(400).send({ error: "conversationId is required" });
+		const progress = getRememberGeneration(status.id, conversationId);
+		if (!progress) return reply.code(404).send({ error: "no Remember is reading this conversation" });
+		return progress;
+	} catch (e) {
+		return persistentAgentNormalUseErrorReply(reply, e);
+	}
+});
+// One pass or N parts, before anything is generated: the Remember dialog and
+// the context chip's popover ask when they open. Read-only, no model call.
+app.get("/api/persistent-agents/:id/checkpoint/estimate", async (req, reply) => {
+	const idRaw = String((req.params as any).id ?? "").trim();
+	try {
+		const status = getPersistentAgentStatusForCheckpoint(idRaw);
+		const conversationId = String((req.query as any)?.conversationId ?? "").trim();
+		const effectiveWorkspacePolicy = conversationId ? resolvePersistentRoomEffectiveWorkspacePolicy(status.id, conversationId) : null;
+		const runtimeCwd = persistentRoomRuntimeCwdForEffectiveWorkspacePolicy(effectiveWorkspacePolicy, REPO_ROOT);
+		return estimateCheckpointRead({ agentId: status.id, conversationId, runtimeCwd }, { model: rememberMemoryModel(status.id), resolveModelWindow: rememberModelWindow });
 	} catch (e) {
 		return persistentAgentNormalUseErrorReply(reply, e);
 	}
@@ -2950,7 +3149,8 @@ app.post("/api/persistent-agents/:id/checkpoint/approve", async (req, reply) => 
 	const idRaw = String((req.params as any).id ?? "").trim();
 	try {
 		const status = getPersistentAgentStatusForCheckpoint(idRaw);
-		const parsed = parseCheckpointApprovalRequest(req.body ?? {}, status.id);
+		// A proposal written on another memory model than the room's row now is refused: generate again.
+		const parsed = parseCheckpointApprovalRequest(req.body ?? {}, status.id, { expectedMemoryModel: resolveRoomModel(status.id, "memory").effective });
 		const effectiveWorkspacePolicy = resolvePersistentRoomEffectiveWorkspacePolicy(status.id, parsed.request.conversationId);
 		const runtimeCwd = persistentRoomRuntimeCwdForEffectiveWorkspacePolicy(effectiveWorkspacePolicy, REPO_ROOT);
 		// The fresh post-checkpoint thread starts on a curated model when the old
@@ -2971,7 +3171,8 @@ app.post("/api/persistent-agents/:targetId/consult", async (req, reply) => {
 		const status = getPersistentAgentStatusForMaintenance(idRaw);
 		const id = status.id;
 		const body = (req.body ?? {}) as any;
-		const selection = activeConsultModelSelection();
+		// A consult reads the consulted room's memory, so it runs on that room's memory model.
+		const selection = roomMemoryModelSelection(id, status.displayName || id);
 		// Consult usage bills to the asking room (room A) when one is named;
 		// a direct consult with no asking room bills to the consulted room.
 		const usageAgent = String(body.fromRoomId ?? "").trim() || id;
@@ -3053,6 +3254,9 @@ function getAuthOverview() {
 			source: status.source,
 			label: status.label,
 			oauth: oauthProviders.has(provider.id),
+			// Whether the stored credential is a subscription sign-in, so its row
+			// offers "Sign in again" rather than "Replace API key".
+			signedInWithOAuth: authStorage.get(provider.id)?.type === "oauth",
 		};
 	});
 	return {
@@ -3110,10 +3314,6 @@ app.post("/api/auth/api-key", async (req, reply) => {
 registerKnowledgeApi(app);
 registerVoiceApi(app);
 
-// Global compatibility state path: persistent-agent room default selection is
-// product/app state. This is not per-agent object state and must not be copied
-// into personalized-agents/<agentId>/ scaffolds.
-const PERSISTENT_ROOM_MODEL_SELECTION_FILE = productAppStatePath("web-chat-model.json");
 function modelLocksToCuratedModels(modelLocks: Array<{ provider: string; model: string }>): Record<string, string[]> {
 	const curatedModels: Record<string, string[]> = {};
 	for (const modelLock of modelLocks) {
@@ -3140,11 +3340,13 @@ const WEB_CHAT_MODEL_LABELS: Record<string, Record<string, string>> = {
 	"openai-codex": {
 		"gpt-6-astra": "GPT-6 Astra",
 		"gpt-6-sol": "GPT-6 Sol",
+		"gpt-6.1-sol": "GPT-6.1 Sol",
 		"gpt-6-luna": "GPT-6 Luna",
 	},
 	anthropic: {
 		"claude-opus-5-5": "Opus 5.5",
 		"claude-fable-5-1": "Fable 5.1",
+		"claude-sonnet-5-5": "Sonnet 5.5",
 		"claude-sonnet-5": "Sonnet 5",
 		"claude-haiku-4-5": "Haiku 4.5",
 		"claude-opus-5": "Opus 5",
@@ -3199,10 +3401,6 @@ type PersistentAgentAiProfileDiagnostic = {
 	id: PersistentAgentAiProfileId;
 	label: string;
 	kind: "builtin" | "gateway" | "custom";
-	// Built-in rows only: whether a saved Memorize and Review choice is in
-	// force, so the UI can offer the way back to the curated defaults. The
-	// effective models are the absorb and structural-review requiredModels.
-	maintenanceModels?: { custom: boolean };
 	provider: {
 		id: string;
 		configured: boolean;
@@ -3216,7 +3414,6 @@ type PersistentAgentAiProfileDiagnostic = {
 	requiredModels: ProfileModelDiagnostic[];
 	processes: {
 		persistentRoom: { ready: boolean; models: ProfileModelDiagnostic[] };
-		checkpoint: { ready: boolean; inheritedFrom?: "persistentRoom"; model?: ProfileModelDiagnostic; models?: ProfileModelDiagnostic[] };
 		absorb: { ready: boolean; model: ProfileModelDiagnostic };
 		structuralReview: { ready: boolean; model: ProfileModelDiagnostic };
 	};
@@ -3236,23 +3433,6 @@ type PersistentAgentAiProfileSelectionStatus = {
 		errors: string[];
 	};
 };
-
-function readPersistentRoomModelSelection(): WebChatModelSelection | null {
-	try {
-		if (!fs.existsSync(PERSISTENT_ROOM_MODEL_SELECTION_FILE)) return null;
-		const raw = JSON.parse(fs.readFileSync(PERSISTENT_ROOM_MODEL_SELECTION_FILE, "utf-8"));
-		const provider = String(raw.provider ?? "").trim();
-		const model = String(raw.model ?? raw.modelId ?? "").trim();
-		return provider && model ? { provider, model } : null;
-	} catch {
-		return null;
-	}
-}
-
-function writePersistentRoomModelSelection(selection: WebChatModelSelection): void {
-	fs.mkdirSync(path.dirname(PERSISTENT_ROOM_MODEL_SELECTION_FILE), { recursive: true, mode: 0o700 });
-	fs.writeFileSync(PERSISTENT_ROOM_MODEL_SELECTION_FILE, JSON.stringify(selection, null, 2), { mode: 0o600 });
-}
 
 function isGatewayProviderId(provider: string): boolean {
 	return provider === OPENAI_COMPATIBLE_PROVIDER_ID || provider.startsWith(GATEWAY_PROVIDER_ID_PREFIX);
@@ -3289,6 +3469,95 @@ function modelStatusPayload(model: any) {
 	if (!model) return null;
 	const contextWindow = modelContextWindow(model);
 	return { provider: model.provider, model: model.id, label: webChatModelLabel(model.provider, model), ...(contextWindow ? { contextWindow } : {}) };
+}
+
+// --- Model per room: payloads ------------------------------------------------------
+// The same shapes for a room's rows, the defaults' rows and the status payload:
+// what is stored, what the row is set to, what runs, and why nothing does, with
+// the names a person reads and the refusal every surface shows.
+
+type RoomModelLockPayload = { provider: string; model: string; label: string; name: string; providerLabel: string; contextWindow?: number };
+type RoomModelRowPayload = { stored: RoomModelLockPayload | null; chosen: RoomModelLockPayload | null; effective: RoomModelLockPayload | null; source: RoomModelResolution["source"]; reason?: RoomModelResolution["reason"]; refusal?: string };
+
+/** A provider's name as AI setup shows it; the curated table when the catalog does not know it. */
+function roomModelProviderLabel(providerId: string, catalog?: RoomModelCatalog): string {
+	return catalog?.providers.find((provider) => provider.providerId === providerId)?.label ?? webChatProviderLabel(providerId);
+}
+
+function roomModelLockPayload(lock: PersistentAgentModelLock | null, registry: ModelRegistry, catalog?: RoomModelCatalog): RoomModelLockPayload | null {
+	if (!lock) return null;
+	const model = registry.find(lock.provider, lock.model);
+	const contextWindow = modelContextWindow(model);
+	return {
+		provider: lock.provider,
+		model: lock.model,
+		// A model the registry no longer knows keeps its bare id as the label;
+		// the provider rides beside it, so nothing has to be split back apart.
+		label: model ? webChatModelLabel(lock.provider, model) : lock.model,
+		name: WEB_CHAT_MODEL_LABELS[lock.provider]?.[lock.model] ?? (String(model?.name ?? "").trim() || lock.model),
+		providerLabel: roomModelProviderLabel(lock.provider, catalog),
+		...(contextWindow ? { contextWindow } : {}),
+	};
+}
+
+/** The names a room model refusal reads, as the Model pickers show them. */
+function roomModelNames(catalog: RoomModelCatalog, registry: ModelRegistry = catalog.registry): RoomModelNames {
+	return { model: (lock) => roomModelLockPayload(lock, registry, catalog)!.name, provider: (providerId) => roomModelProviderLabel(providerId, catalog) };
+}
+
+/** The refusal when a room's row cannot run its chosen model (another room's, by name); nothing else runs in its place. */
+function roomModelRefusal(resolution: RoomModelResolution, task: RoomModelTask, catalog: RoomModelCatalog, roomName?: string): RoomModelUnavailableError | null {
+	return roomModelUnavailableError(resolution, task, roomModelNames(catalog), roomName ? { room: roomName } : "room");
+}
+
+function roomModelRowPayload(resolution: RoomModelResolution, task: RoomModelTask, registry: ModelRegistry, catalog: RoomModelCatalog, of: "room" | "defaults"): RoomModelRowPayload {
+	const refusal = roomModelUnavailableError(resolution, task, roomModelNames(catalog, registry), of);
+	return {
+		stored: roomModelLockPayload(resolution.stored, registry, catalog),
+		chosen: roomModelLockPayload(resolution.chosen, registry, catalog),
+		effective: roomModelLockPayload(resolution.effective, registry, catalog),
+		source: resolution.source,
+		...(resolution.reason ? { reason: resolution.reason } : {}),
+		...(refusal ? { refusal: refusal.message } : {}),
+	};
+}
+
+function roomModelsPayload(agentId: string, catalog = createRoomModelCatalog(), registry = catalog.registry): Record<RoomModelTask, RoomModelRowPayload> {
+	return {
+		conversation: roomModelRowPayload(resolveRoomModel(agentId, "conversation", catalog), "conversation", registry, catalog, "room"),
+		memory: roomModelRowPayload(resolveRoomModel(agentId, "memory", catalog), "memory", registry, catalog, "room"),
+	};
+}
+
+function aiDefaultsPayload(catalog = createRoomModelCatalog(), registry = catalog.registry): Record<RoomModelTask, RoomModelRowPayload> {
+	return {
+		conversation: roomModelRowPayload(resolveAiDefault("conversation", catalog), "conversation", registry, catalog, "defaults"),
+		memory: roomModelRowPayload(resolveAiDefault("memory", catalog), "memory", registry, catalog, "defaults"),
+	};
+}
+
+/** A PUT body's rows: a lock sets the row, null clears it, a missing key leaves it. Every lock set must be able to run now. */
+function parseRoomModelPatch(body: any, catalog: RoomModelCatalog, options: { allowClear: boolean }): Partial<Record<RoomModelTask, PersistentAgentModelLock | null>> {
+	const patch: Partial<Record<RoomModelTask, PersistentAgentModelLock | null>> = {};
+	for (const task of ROOM_MODEL_TASKS) {
+		if (!(task in (body ?? {}))) continue;
+		const raw = body[task];
+		if (raw === null) {
+			if (!options.allowClear) throw Object.assign(new Error(`the ${task} default cannot be empty`), { statusCode: 400 });
+			patch[task] = null;
+			continue;
+		}
+		const lock = parseModelLock(raw);
+		const available = catalog.availability(lock, task);
+		if (!available.ok) {
+			const message = available.reason === "signed-out"
+				? `${webChatProviderLabel(lock.provider)} is signed out; sign in again in Settings, AI setup, then choose this model.`
+				: `${lock.model} is not offered for ${task === "memory" ? "memory work" : "rooms"} by ${webChatProviderLabel(lock.provider)}.`;
+			throw Object.assign(new Error(message), { statusCode: 400 });
+		}
+		patch[task] = lock;
+	}
+	return patch;
 }
 
 /**
@@ -3444,7 +3713,6 @@ function modelLockKey(lock: { provider: string; model: string }): string {
 }
 
 function buildProfileRequiredModelLocks(profile: PersistentAgentAiProfile): Array<{ provider: string; model: string; purpose: string }> {
-	const checkpointPolicy = profile.processes.checkpoint;
 	const purposeByModel = new Map<string, { provider: string; model: string; purposes: Set<string> }>();
 	const addPurpose = (lock: { provider: string; model: string }, purpose: string) => {
 		const key = modelLockKey(lock);
@@ -3457,11 +3725,6 @@ function buildProfileRequiredModelLocks(profile: PersistentAgentAiProfile): Arra
 	};
 
 	for (const model of profile.processes.persistentRoom) addPurpose(model, "persistent-room");
-	if (checkpointPolicy.kind === "inheritPersistentRoom") {
-		for (const model of profile.processes.persistentRoom) addPurpose(model, "checkpoint");
-	} else {
-		addPurpose(checkpointPolicy.model, "checkpoint");
-	}
 	addPurpose(profile.processes.absorb, "absorb");
 	addPurpose(profile.processes.structuralReview, "structural-review");
 
@@ -3508,26 +3771,18 @@ function savedGatewayIds(): Set<string> {
 	return new Set(readOpenAiCompatibleGateways().gateways.map((gateway) => gateway.id));
 }
 
-// Built-in profiles with a saved Memorize and Review choice.
-function savedMaintenanceProfileIds(): Set<string> {
-	return new Set(Object.keys(readBuiltInAiProfilePreferences().profiles));
-}
-
-function buildPersistentAgentAiProfileDiagnostic(registry: ModelRegistry, profileId: PersistentAgentAiProfileId, activeProfileId: PersistentAgentAiProfileId = DEFAULT_PERSISTENT_AGENT_AI_PROFILE_ID, resolvedProfile?: PersistentAgentAiProfile, gatewayIds?: ReadonlySet<string>, customMaintenanceProfileIds?: ReadonlySet<string>): PersistentAgentAiProfileDiagnostic {
+function buildPersistentAgentAiProfileDiagnostic(registry: ModelRegistry, profileId: PersistentAgentAiProfileId, activeProfileId: PersistentAgentAiProfileId = DEFAULT_PERSISTENT_AGENT_AI_PROFILE_ID, resolvedProfile?: PersistentAgentAiProfile, gatewayIds?: ReadonlySet<string>): PersistentAgentAiProfileDiagnostic {
 	// Resolve once and thread through: profile resolution hits the profile
 	// files on disk, and this builder runs for every profile per status call.
 	const profile: PersistentAgentAiProfile = resolvedProfile ?? getPersistentAgentAiProfile(profileId);
-	const checkpointPolicy = profile.processes.checkpoint;
 	const providerAuth = registry.getProviderAuthStatus(profile.providerId);
 	const requiredModels = buildProfileRequiredModelLocks(profile).map((lock) => profileModelDiagnostic(registry, lock));
 	const persistentRoomModels = profile.processes.persistentRoom.map((modelLock) =>
-		profileModelDiagnostic(registry, { ...modelLock, purpose: checkpointPolicy.kind === "inheritPersistentRoom" ? "persistent-room/checkpoint" : "persistent-room" }),
+		profileModelDiagnostic(registry, { ...modelLock, purpose: "persistent-room" }),
 	);
 	const absorbModel = profileDiagnosticForModel(requiredModels, profile.processes.absorb);
 	const structuralReviewModel = profileDiagnosticForModel(requiredModels, profile.processes.structuralReview);
-	const checkpointModel = checkpointPolicy.kind === "fixed" ? profileDiagnosticForModel(requiredModels, checkpointPolicy.model) : undefined;
 	const persistentRoomReady = persistentRoomModels.length > 0 && persistentRoomModels.every(profileModelReady);
-	const checkpointReady = checkpointPolicy.kind === "inheritPersistentRoom" ? persistentRoomReady : Boolean(checkpointModel && profileModelReady(checkpointModel));
 	const absorbReady = profileModelReady(absorbModel);
 	const structuralReviewReady = profileModelReady(structuralReviewModel);
 	const issues: string[] = [];
@@ -3538,11 +3793,10 @@ function buildPersistentAgentAiProfileDiagnostic(registry: ModelRegistry, profil
 		else if (!model.authConfigured) issues.push(`Mapped model provider is not connected: ${model.provider}/${model.model}.`);
 	}
 	if (!persistentRoomReady) issues.push(`${profile.label} persistent-room models are not ready.`);
-	if (!checkpointReady) issues.push(`${profile.label} checkpoint compression model is not ready.`);
 	if (!absorbReady) issues.push(`${profile.label} absorb model is not ready.`);
 	if (!structuralReviewReady) issues.push(`${profile.label} structural-review model is not ready.`);
 
-	const ready = providerAuth.configured && requiredModels.every(profileModelReady) && persistentRoomReady && checkpointReady && absorbReady && structuralReviewReady;
+	const ready = providerAuth.configured && requiredModels.every(profileModelReady) && persistentRoomReady && absorbReady && structuralReviewReady;
 	// Gateway-ness is a fact of the store now, not of one reserved id: any
 	// saved gateway is a gateway, and the row menu offers the gateway actions
 	// for whichever one it belongs to.
@@ -3551,7 +3805,6 @@ function buildPersistentAgentAiProfileDiagnostic(registry: ModelRegistry, profil
 		id: profile.id,
 		label: profile.label,
 		kind,
-		...(kind === "builtin" ? { maintenanceModels: { custom: (customMaintenanceProfileIds ?? savedMaintenanceProfileIds()).has(profile.id) } } : {}),
 		provider: {
 			id: profile.providerId,
 			configured: providerAuth.configured,
@@ -3565,9 +3818,6 @@ function buildPersistentAgentAiProfileDiagnostic(registry: ModelRegistry, profil
 		requiredModels,
 		processes: {
 			persistentRoom: { ready: persistentRoomReady, models: persistentRoomModels },
-			checkpoint: checkpointPolicy.kind === "inheritPersistentRoom"
-				? { ready: checkpointReady, inheritedFrom: "persistentRoom", models: persistentRoomModels }
-				: { ready: checkpointReady, model: checkpointModel },
 			absorb: { ready: absorbReady, model: absorbModel },
 			structuralReview: { ready: structuralReviewReady, model: structuralReviewModel },
 		},
@@ -3577,14 +3827,12 @@ function buildPersistentAgentAiProfileDiagnostic(registry: ModelRegistry, profil
 function buildPersistentAgentAiProfileSelectionStatus(registry = getWebChatModelRegistry()): PersistentAgentAiProfileSelectionStatus {
 	const state = readPersistentAgentAiProfileState();
 	const customProfileRead = readCustomAiProfiles();
-	// One gateway-store read and one preference-file read for the whole
-	// status, not one per profile row.
+	// One gateway-store read for the whole status, not one per profile row.
 	const gatewayIds = savedGatewayIds();
-	const customMaintenanceProfileIds = savedMaintenanceProfileIds();
 	const profiles = getAvailablePersistentAgentAiProfiles().map((profile) =>
-		buildPersistentAgentAiProfileDiagnostic(registry, profile.id, state.profileId, profile, gatewayIds, customMaintenanceProfileIds),
+		buildPersistentAgentAiProfileDiagnostic(registry, profile.id, state.profileId, profile, gatewayIds),
 	);
-	const activeProfile = profiles.find((profile) => profile.id === state.profileId) ?? buildPersistentAgentAiProfileDiagnostic(registry, DEFAULT_PERSISTENT_AGENT_AI_PROFILE_ID, state.profileId, undefined, gatewayIds, customMaintenanceProfileIds);
+	const activeProfile = profiles.find((profile) => profile.id === state.profileId) ?? buildPersistentAgentAiProfileDiagnostic(registry, DEFAULT_PERSISTENT_AGENT_AI_PROFILE_ID, state.profileId, undefined, gatewayIds);
 	return {
 		activeProfileId: state.profileId,
 		activeProfile,
@@ -3601,88 +3849,61 @@ function buildPersistentAgentAiProfileSelectionStatus(registry = getWebChatModel
 	};
 }
 
-function isCuratedPersistentAgentRoomModelForProfile(profileId: PersistentAgentAiProfileId, provider: string, modelId: string): boolean {
-	return isPersistentRoomModelForProfile(profileId, provider, modelId);
-}
-
-function assertPersistentAgentRoomModelApproved(provider: string, modelId: string, options: { conversationId?: string; processLabel?: string } = {}): void {
-	const activeProfileId = readPersistentAgentAiProfileState().profileId;
-	assertPersistentRoomModelForActiveProfile(activeProfileId, provider, modelId, options.processLabel ?? "persistent-agent rooms");
-}
-
 function getWebChatModelRegistry(): ModelRegistry {
 	return ModelRegistry.create(AuthStorage.create());
 }
 
-function resolveSelectedWebChatModel(registry: ModelRegistry, activeProfileId = readPersistentAgentAiProfileState().profileId) {
-	const saved = readPersistentRoomModelSelection();
-	if (!saved) return undefined;
-	if (!isCuratedPersistentAgentRoomModelForProfile(activeProfileId, saved.provider, saved.model)) return undefined;
-	const model = registry.find(saved.provider, saved.model);
-	return model && registry.hasConfiguredAuth(model) ? model : undefined;
-}
-
 /**
- * Model lock for the fresh thread after a Forget or a Remember, or null to
- * inherit the old thread's lock. Continuity wins when the old lock is still
- * on the active profile's curated list. Otherwise pick a currently-available
- * room model: the saved room selection first, then the profile's room models,
- * preferring ones with configured auth, so a new conversation always starts
- * on a curated model. Best-effort by design: neither boundary may fail on
- * this.
+ * Model lock for the fresh thread after a Forget or a Remember: the room's
+ * conversation model as it resolves now, so a pick made while the old
+ * conversation ran is the one the next conversation starts on. Null inherits
+ * the old thread's lock, when the room's model cannot run. Best-effort by
+ * design: neither boundary may fail on this. The prepared conversation
+ * re-resolves at its first boot (see refreshEmptyPersistentAgentThreadModel),
+ * and refuses there while the room's model cannot run.
  */
-function resolveBoundaryFreshThreadModel(agentId: string, conversationId: string): ReturnType<typeof getPersistentRoomModelLocks>[number] | null {
+function resolveBoundaryFreshThreadModel(agentId: string, _conversationId: string): PersistentAgentModelLock | null {
 	try {
-		const oldThread = getPersistentAgentThread(agentId, conversationId);
-		if (!oldThread) return null;
-		const activeProfileId = readPersistentAgentAiProfileState().profileId;
-		if (isPersistentRoomModelForProfile(activeProfileId, oldThread.model.provider, oldThread.model.model)) return null;
-		const locks = getPersistentRoomModelLocks(activeProfileId);
-		if (locks.length === 0) return null;
-		const saved = readPersistentRoomModelSelection();
-		const savedLock = saved ? locks.find((lock) => lock.provider === saved.provider && lock.model === saved.model) : undefined;
-		const candidates = savedLock ? [savedLock, ...locks.filter((lock) => lock !== savedLock)] : locks;
-		const registry = getWebChatModelRegistry();
-		const authed = candidates.find((lock) => {
-			const model = registry.find(lock.provider, lock.model);
-			return Boolean(model && registry.hasConfiguredAuth(model));
-		});
-		return authed ?? candidates[0] ?? null;
+		return resolveRoomModel(agentId, "conversation").effective;
 	} catch {
 		return null;
 	}
 }
 
-function resolveSelectedPersistentRoomModel(registry: ModelRegistry, activeProfileId: PersistentAgentAiProfileId) {
-	const saved = readPersistentRoomModelSelection();
-	if (!saved) return undefined;
-	if (!isCuratedPersistentAgentRoomModelForProfile(activeProfileId, saved.provider, saved.model)) return undefined;
-	const model = registry.find(saved.provider, saved.model);
-	return model && registry.hasConfiguredAuth(model) ? model : undefined;
+/** The room's conversation model for a new conversation, or a plain refusal: its model cannot run, or no provider is ready. */
+function roomConversationModelForNewThread(agentId: string, catalog = createRoomModelCatalog()): PersistentAgentModelLock {
+	const resolved = resolveRoomModel(agentId, "conversation", catalog);
+	const refusal = roomModelRefusal(resolved, "conversation", catalog);
+	if (refusal) throw refusal;
+	if (!resolved.effective) throw Object.assign(new Error("No AI provider is signed in. Sign in in Settings, AI setup, then open the room again."), { statusCode: 409 });
+	return resolved.effective;
 }
 
-// A saved conversation resumes on the model it is locked to, whether or not
-// that model is still on the active profile's curated list: the list gates a
-// NEW conversation. Returns true when the request continues a saved thread.
-function assertPersistentAgentSavedThreadCanResume(agentId: string, conversationId: string | undefined, provider: string, modelId: string): boolean {
-	if (!conversationId) return false;
-	const thread = getPersistentAgentThread(agentId, conversationId);
-	if (!thread) return false;
-	if (thread.model.provider !== provider || thread.model.model !== modelId) {
-		throw new Error(`saved persistent-agent thread is locked to ${thread.model.provider}/${thread.model.model}; start fresh to use ${provider}/${modelId}`);
+/**
+ * The model a room's session binds on, decided by the server: a saved
+ * conversation binds on its own lock; a conversation not saved yet binds on
+ * the room's conversation model. A model the client names in the socket query
+ * is only a hint and never decides; a differing one is logged. The bound
+ * model must be in the registry with its provider signed in.
+ */
+function resolvePersistentAgentBindModel(registry: ModelRegistry, params: URLSearchParams, options: { agentId: string; conversationId?: string }) {
+	const thread = options.conversationId ? getPersistentAgentThread(options.agentId, options.conversationId) : null;
+	const lock = thread?.model ?? roomConversationModelForNewThread(options.agentId);
+	const hintProvider = String(params.get("modelProvider") ?? params.get("provider") ?? "").trim();
+	const hintModel = String(params.get("model") ?? params.get("modelId") ?? "").trim();
+	if (hintProvider && hintModel && (hintProvider !== lock.provider || hintModel !== lock.model)) {
+		app.log.info({ roomId: options.agentId, conversationId: options.conversationId, hint: `${hintProvider}/${hintModel}`, bound: `${lock.provider}/${lock.model}` }, "room session binds on the server's model, not the one the client named");
 	}
-	return true;
-}
-
-function resolvePersistentAgentQueryModel(registry: ModelRegistry, params: URLSearchParams, options: { agentId: string; conversationId?: string }) {
-	const provider = String(params.get("modelProvider") ?? params.get("provider") ?? "").trim();
-	const modelId = String(params.get("model") ?? params.get("modelId") ?? "").trim();
-	if (!provider || !modelId) throw new Error("persistent-agent sessions require selected modelProvider/provider and model/modelId query params");
-	const resumesSavedThread = assertPersistentAgentSavedThreadCanResume(options.agentId, options.conversationId, provider, modelId);
-	if (!resumesSavedThread) assertPersistentAgentRoomModelApproved(provider, modelId, { conversationId: options.conversationId, processLabel: "persistent-agent rooms" });
-	const model = registry.find(provider, modelId);
-	if (!model) throw new Error(`model not found: ${provider}/${modelId}`);
-	if (!registry.hasConfiguredAuth(model)) throw new Error(`provider not connected: ${provider}`);
+	const model = registry.find(lock.provider, lock.model);
+	if (!model) throw new Error(`model not found: ${lock.provider}/${lock.model}`);
+	if (!registry.hasConfiguredAuth(model)) {
+		// Named so the client stops redialing and points to the two ways on.
+		const name = WEB_CHAT_MODEL_LABELS[lock.provider]?.[lock.model] ?? (String(model.name ?? "").trim() || lock.model);
+		// The refusal class, so every route that binds (the first bind, the
+		// rebind before a message, an adopted turn's rebuild) stands down with
+		// the one notice instead of a line.
+		throw new RoomModelUnavailableError(`${webChatProviderLabel(lock.provider)} is signed out, so this conversation cannot continue on ${name}. Sign in again in Settings, AI setup, or continue it on another model in Room settings, Model.`, "signed-out", lock.provider);
+	}
 	return model;
 }
 
@@ -3712,28 +3933,20 @@ function profileStatusPayload(profile: PersistentAgentAiProfile) {
 	};
 }
 
-function activeAbsorbModelSelection() {
-	const state = readPersistentAgentAiProfileState();
-	return {
-		profile: state.profile,
-		modelLock: getAbsorbModelLock(state.profileId),
-	};
-}
-
-function activeStructuralReviewModelSelection() {
-	const state = readPersistentAgentAiProfileState();
-	return {
-		profile: state.profile,
-		modelLock: getStructuralReviewModelLock(state.profileId),
-	};
-}
-
-function activeConsultModelSelection() {
-	const state = readPersistentAgentAiProfileState();
-	return {
-		profile: state.profile,
-		modelLock: getConsultModelLock(state.profileId),
-	};
+/**
+ * The model a room's memory work runs on (Memorize, Review, and the consults
+ * and specialists that read its memory): the room's memory row, resolved. The
+ * profile is the one that offers that model, for the status line.
+ */
+function roomMemoryModelSelection(agentId: string, consultedRoomName?: string): { profile: PersistentAgentAiProfile; modelLock: PersistentAgentModelLock } {
+	const catalog = createRoomModelCatalog();
+	const resolved = resolveRoomModel(agentId, "memory", catalog);
+	const refusal = roomModelRefusal(resolved, "memory", catalog, consultedRoomName);
+	if (refusal) throw refusal;
+	if (!resolved.effective) throw Object.assign(new Error("No AI provider is signed in, so this room's memory work has no model. Sign in in Settings, AI setup."), { statusCode: 409 });
+	const lock = resolved.effective;
+	const profile = getAvailablePersistentAgentAiProfiles().find((candidate) => candidate.providerId === lock.provider) ?? readPersistentAgentAiProfileState().profile;
+	return { profile, modelLock: lock };
 }
 
 function resolveAbsorbModel(registry: ModelRegistry, modelLock: { provider: string; model: string }) {
@@ -3827,67 +4040,68 @@ function getWebChatModelStatus() {
 	const activeProfile = activeProfileState.profile;
 	const available = registry.getAvailable();
 	const roomOptions = curatedModelOptions(available, persistentAgentRoomCuratedModels(activeProfileState.profileId));
-	// Legacy fields (models/recommended/selected) now mirror the active profile
-	// catalog instead of a separate hardcoded list.
+	// Legacy fields (models/recommended/selected/roomRecommended) now mirror the
+	// conversation default for new rooms; the per-provider lists the pickers
+	// read are in `providers`.
 	const options = roomOptions;
-
-	const saved = readPersistentRoomModelSelection();
-	const selectedModel = resolveSelectedWebChatModel(registry, activeProfileState.profileId);
-	const selectedRoomModel = resolveSelectedPersistentRoomModel(registry, activeProfileState.profileId);
-	const selected = modelStatusPayload(selectedModel);
-	const selectedRoom = modelStatusPayload(selectedRoomModel);
+	const catalog = createRoomModelCatalog();
+	const conversationDefault = resolveAiDefault("conversation", catalog).effective;
+	const defaultModel = conversationDefault ? registry.find(conversationDefault.provider, conversationDefault.model) : undefined;
+	const selected = modelStatusPayload(defaultModel && registry.hasConfiguredAuth(defaultModel) ? defaultModel : undefined);
 	const recommended = options.find((option) => option.recommended) ?? options[0] ?? null;
-	const defaultRoomRecommended = roomOptions.find((option) => option.recommended) ?? roomOptions[0] ?? null;
-	const roomRecommended = selectedRoom ?? defaultRoomRecommended;
-	const hasInvalidSelection = Boolean(saved && !selected);
 	return {
 		ready: Boolean(selected),
 		selected,
 		recommended,
 		models: options,
+		providers: roomModelProvidersPayload(registry, catalog),
 		activeProfileId: activeProfile.id,
 		activeProfileLabel: activeProfile.label,
-		roomRecommended,
+		roomRecommended: selected ?? recommended,
 		roomModels: roomOptions,
-		selectionState: {
-			path: browserSafeLocalPath(PERSISTENT_ROOM_MODEL_SELECTION_FILE),
-			compatibility: "legacy-web-chat-model-selection",
-		},
-		message: selected
-			? null
-			: hasInvalidSelection
-				? `Selected model is unavailable, not connected, or not part of the active ${activeProfile.label} profile.`
-				: options.length > 0
-					? "Choose a model before opening chat."
-					: "Connect a provider first.",
+		message: selected ? null : "Connect a provider first.",
 	};
+}
+
+/**
+ * Every provider AI setup knows, in its order, with the models its rooms may
+ * talk with and the models their memory work may use: the lists the Model
+ * pickers show. A model the registry does not know is left out.
+ */
+function roomModelProvidersPayload(registry: ModelRegistry, catalog = createRoomModelCatalog()) {
+	const options = (locks: PersistentAgentModelLock[], recommended: PersistentAgentModelLock | undefined): WebChatModelOption[] => locks.flatMap((lock) => {
+		const model = registry.find(lock.provider, lock.model);
+		if (!model) return [];
+		const contextWindow = modelContextWindow(model);
+		return [{ provider: lock.provider, model: lock.model, label: webChatModelLabel(lock.provider, model), recommended: Boolean(recommended && recommended.provider === lock.provider && recommended.model === lock.model), ...(contextWindow ? { contextWindow } : {}) }];
+	});
+	return catalog.providers.map((provider) => ({
+		id: provider.providerId,
+		label: provider.label,
+		ready: provider.ready,
+		// "Recommended" only where the release curates the list.
+		conversation: options(provider.conversation, provider.curated ? provider.recommended.conversation : undefined),
+		memory: options(provider.memory, provider.curated ? provider.recommended.memory : undefined),
+	}));
 }
 
 const getPersistentAgentRoomModelStatusHandler = async () => getWebChatModelStatus();
 
-const postPersistentAgentRoomModelSelectionHandler = async (req: any, reply: any) => {
-	const body = (req.body ?? {}) as any;
-	const provider = String(body.provider ?? "").trim();
-	const modelId = String(body.model ?? body.modelId ?? "").trim();
-	if (!provider || !modelId) return reply.code(400).send({ error: "provider and model are required" });
-	const activeProfileState = readPersistentAgentAiProfileState();
-	if (!isCuratedPersistentAgentRoomModelForProfile(activeProfileState.profileId, provider, modelId)) return reply.code(400).send({ error: `model is not approved for persistent-agent rooms: ${provider}/${modelId}` });
-	try {
-		assertPersistentRoomModelForActiveProfile(activeProfileState.profileId, provider, modelId);
-	} catch (e) {
-		return reply.code(400).send({ error: (e as Error).message });
-	}
-	const registry = getWebChatModelRegistry();
-	const model = registry.find(provider, modelId);
-	if (!model) return reply.code(404).send({ error: `model not found: ${provider}/${modelId}` });
-	if (!registry.hasConfiguredAuth(model)) return reply.code(400).send({ error: `provider not connected: ${provider}` });
-	writePersistentRoomModelSelection({ provider, model: modelId });
-	return reply.send(getWebChatModelStatus());
-};
-
 app.get("/api/persistent-agent-room/model-status", getPersistentAgentRoomModelStatusHandler);
-app.post("/api/persistent-agent-room/model-selection", postPersistentAgentRoomModelSelectionHandler);
 app.get("/api/web-chat/model-status", getPersistentAgentRoomModelStatusHandler);
+// The defaults for new rooms: the rows a room inherits until it sets its own.
+app.get("/api/ai/defaults", async () => ({ defaults: aiDefaultsPayload() }));
+app.put("/api/ai/defaults", async (req, reply) => {
+	try {
+		const catalog = createRoomModelCatalog();
+		const patch = parseRoomModelPatch(req.body ?? {}, catalog, { allowClear: false });
+		writeAiDefaults(patch as Partial<Record<RoomModelTask, PersistentAgentModelLock>>);
+		return { defaults: aiDefaultsPayload(catalog) };
+	} catch (e) {
+		const statusCode = (e as any)?.statusCode ?? 500;
+		return reply.code(statusCode).send({ error: (e as Error).message });
+	}
+});
 app.get("/api/persistent-agent-ai-profile", async () => buildPersistentAgentAiProfileSelectionStatus());
 app.put("/api/persistent-agent-ai-profile", async (req, reply) => {
 	const body = (req.body ?? {}) as any;
@@ -3952,46 +4166,19 @@ app.put("/api/persistent-agent-ai-profiles/custom", async (req, reply) => {
 	if (!getLoginProviderCatalog().some((entry) => entry.id === providerId)) return reply.code(400).send({ error: `unknown login provider: ${providerId}` });
 	const registry = getWebChatModelRegistry();
 	const roomModels: string[] = Array.isArray(body.roomModels) ? body.roomModels.map((value: unknown) => String(value ?? "").trim()).filter(Boolean) : [];
+	// One memory model per provider: Memorize and Review both run on it.
 	const learnModel = String(body.learnModel ?? "").trim();
-	const reviewMemoryModel = String(body.reviewMemoryModel ?? "").trim();
 	if (roomModels.length === 0) return reply.code(400).send({ error: "at least one room model is required" });
-	if (!learnModel || !reviewMemoryModel) return reply.code(400).send({ error: "learnModel and reviewMemoryModel are required" });
-	for (const modelId of new Set([...roomModels, learnModel, reviewMemoryModel])) {
+	if (!learnModel) return reply.code(400).send({ error: "learnModel is required" });
+	for (const modelId of new Set([...roomModels, learnModel])) {
 		if (!registry.find(providerId, modelId)) return reply.code(400).send({ error: `model not found: ${providerId}/${modelId}` });
 	}
 	try {
-		writeCustomAiProfile({ providerId, label: typeof body.label === "string" ? body.label : undefined, roomModels, learnModel, reviewMemoryModel });
+		writeCustomAiProfile({ providerId, label: typeof body.label === "string" ? body.label : undefined, roomModels, learnModel });
 	} catch (e) {
 		return reply.code(400).send({ error: (e as Error).message });
 	}
 	return buildPersistentAgentAiProfileSelectionStatus(registry);
-});
-// The one preference a built-in profile keeps: which curated model runs
-// Memorize and which runs Review. The room list is the curated list of the
-// release and cannot be edited; both choices must come from it.
-app.put("/api/persistent-agent-ai-profiles/builtin/:profileId/maintenance-models", async (req, reply) => {
-	const profileId = String((req.params as any).profileId ?? "").trim();
-	if (!isBuiltInPersistentAgentAiProfileId(profileId)) return reply.code(404).send({ error: `not a built-in profile: ${profileId}` });
-	const body = (req.body ?? {}) as any;
-	const learnModel = String(body.learnModel ?? "").trim();
-	const reviewMemoryModel = String(body.reviewMemoryModel ?? "").trim();
-	if (!learnModel || !reviewMemoryModel) return reply.code(400).send({ error: "learnModel and reviewMemoryModel are required" });
-	const curated = PERSISTENT_AGENT_AI_PROFILES[profileId].processes.persistentRoom;
-	for (const modelId of [learnModel, reviewMemoryModel]) {
-		if (!curated.some((lock) => lock.model === modelId)) return reply.code(400).send({ error: `model is not on the curated ${PERSISTENT_AGENT_AI_PROFILES[profileId].label} list: ${modelId}` });
-	}
-	// Choosing exactly the curated defaults is no preference: nothing is stored,
-	// so the way back to the defaults is offered only when something differs.
-	const defaults = PERSISTENT_AGENT_AI_PROFILES[profileId].processes;
-	if (learnModel === defaults.absorb.model && reviewMemoryModel === defaults.structuralReview.model) clearBuiltInAiProfilePreference(profileId);
-	else writeBuiltInAiProfilePreference(profileId, { learnModel, reviewMemoryModel });
-	return buildPersistentAgentAiProfileSelectionStatus();
-});
-app.delete("/api/persistent-agent-ai-profiles/builtin/:profileId/maintenance-models", async (req, reply) => {
-	const profileId = String((req.params as any).profileId ?? "").trim();
-	if (!isBuiltInPersistentAgentAiProfileId(profileId)) return reply.code(404).send({ error: `not a built-in profile: ${profileId}` });
-	clearBuiltInAiProfilePreference(profileId);
-	return buildPersistentAgentAiProfileSelectionStatus();
 });
 // Saved OpenAI-compatible gateways (LiteLLM, vLLM, OpenRouter, company
 // proxies), plural: each one is its own AI profile with its own base URL, key
@@ -4379,6 +4566,24 @@ app.put("/api/settings/instructions", async (req, reply) => {
 		return reply.code(500).send({ error: `${removing ? "Removing" : "Saving"} the global instructions failed because of a server error. The previous text is unchanged. Check the server logs for details.` });
 	}
 });
+// The order of the rooms on the home screen: one saved preference for every
+// door, mode and arrangement. A remote device is told the arrangement without
+// its hidden rooms and may only arrange the rooms it sees; the merge in the
+// store keeps the hidden ones in place, its ceiling apart (room-order-store.ts).
+const roomOrderHiddenRooms = (req: unknown): HiddenRooms => ((req as { exxRemoteDevice?: unknown }).exxRemoteDevice ? (roomId: string) => remoteRoomExposure.isHidden(roomId) : null);
+app.get("/api/settings/room-order", async (req) => roomOrderPayload(readRoomOrder(), roomOrderHiddenRooms(req)));
+app.put("/api/settings/room-order", async (req, reply) => {
+	try {
+		const hidden = roomOrderHiddenRooms(req);
+		return roomOrderPayload(saveRoomOrder(req.body, {}, new Date(), hidden), hidden);
+	} catch (e) {
+		const statusCode = (e as any).statusCode;
+		if (statusCode === 400) return reply.code(400).send({ error: (e as Error).message });
+		app.log.error({ err: e }, "room order save failed");
+		return reply.code(500).send({ error: ROOM_ORDER_SAVE_FAILED_SENTENCE });
+	}
+});
+
 app.get("/api/settings/web-search", async () => webSearchSettingsPayload());
 // The one-time What's new window after an update. The GET can record: a
 // machine with no acknowledgement yet (fresh install, or the first run of the
@@ -4612,7 +4817,6 @@ app.delete("/api/persistent-agent-ai-profiles/custom/:profileId", async (req, re
 // Remove the OpenAI-compatible gateway: reverses the setup writes (app policy
 // file + models.json provider entry) and drops the stored key.
 app.delete("/api/persistent-agent-ai-profiles/openai-compatible", async (_req, reply) => gatewayDeleteHandler(OPENAI_COMPATIBLE_AI_PROFILE_ID, reply));
-app.post("/api/web-chat/model-selection", postPersistentAgentRoomModelSelectionHandler);
 
 // --- discovery endpoints used by the UI sidebar -------------------------
 
@@ -4623,11 +4827,13 @@ interface SkillInfo {
 	body: string;
 	source: string;
 	protected: boolean;
-	usedByAgents: string[];
 	/** Import origin + license + date from the provenance sidecar (spec §1). Null for
 	 *  builtin/project skills, which carry no sidecar. Surfaced by the library list and
 	 *  the review/detail screen (the trust moment — where it came from, what license). */
 	provenance: { source: string; license: string | null; importedAt: string } | null;
+	/** The license the skill carries: its import record's, or else the one its
+	 *  SKILL.md declares (a built-in, shared or project skill has no record). */
+	license: string | null;
 	/** The skill's author marked it `disable-model-invocation`: the model must not
 	 *  invoke it on its own. In a room that means it is kept out of the per-turn
 	 *  enabled-skills index and refused by read_skill, so it never auto-runs.
@@ -4723,13 +4929,44 @@ function listSkills(): SkillInfo[] {
 				body: body.trim(),
 				source,
 				protected: source !== "user",
-				usedByAgents: [],
 				provenance: sidecar ? { source: sidecar.source, license: sidecar.license, importedAt: sidecar.importedAt } : null,
+				license: sidecar?.license?.trim() || fm.license?.trim() || null,
 				disableModelInvocation: frontmatterFlagTrue(fm["disable-model-invocation"]),
 			});
 		}
 	}
 	return Array.from(byName.values()).sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/** A room that enables a library skill, as the Skills pages name it. */
+interface SkillRoomRef {
+	id: string;
+	name: string;
+}
+
+/** Which rooms enable each library skill, by skill name, read from every room's
+ *  skill settings. A remote device never sees a hidden room here either. */
+function skillRoomsByName(req: unknown): Map<string, SkillRoomRef[]> {
+	const remote = Boolean((req as any)?.exxRemoteDevice);
+	const byName = new Map<string, SkillRoomRef[]>();
+	for (const room of listPersistentAgents()) {
+		if (remote && remoteRoomExposure.isHidden(room.id)) continue;
+		const ref = { id: room.id, name: room.displayName?.trim() || room.id };
+		for (const skill of readPersistentRoomSkillSettings(room.id).enabledSkills) {
+			const rooms = byName.get(skill.name) ?? [];
+			rooms.push(ref);
+			byName.set(skill.name, rooms);
+		}
+	}
+	for (const rooms of byName.values()) rooms.sort((a, b) => a.name.localeCompare(b.name));
+	return byName;
+}
+
+/** A library skill as the Skills pages read it: its rooms and how many files it
+ *  carries, the files a room can be allowed to run (the room's Skills pane lists
+ *  the same ones). */
+function librarySkillView(skill: SkillInfo, roomsByName: Map<string, SkillRoomRef[]>, files: string[] = resolveExecutableSkillFiles(skill.name)?.files ?? []) {
+	return { ...skill, rooms: roomsByName.get(skill.name) ?? [], fileCount: files.length };
 }
 
 function slugifySkillId(value: string): string {
@@ -4971,7 +5208,8 @@ async function buildSkillCandidateFromUpload(filename: string, buffer: Buffer): 
 			new Set(
 				relPaths
 					.filter((p) => p !== manifestPath && (prefix === "" || p.startsWith(prefix)) && isScriptFile(p))
-					.map((p) => path.posix.basename(p)),
+					// Relative to the skill's folder, so the review can group them by folder.
+					.map((p) => p.slice(prefix.length)),
 			),
 		).sort();
 		dirHint = skillRoot === "." ? "" : path.posix.basename(skillRoot);
@@ -5032,14 +5270,19 @@ async function buildSkillCandidateFromUpload(filename: string, buffer: Buffer): 
 	};
 }
 
-app.get("/api/skills", async () => listSkills());
+app.get("/api/skills", async (req) => {
+	const roomsByName = skillRoomsByName(req);
+	return listSkills().map((skill) => librarySkillView(skill, roomsByName));
+});
 app.get("/api/skills/:id", async (req, reply) => {
 	const id = slugifySkillId(String((req.params as any).id ?? ""));
 	const skill = listSkills().find((s) => s.name === id);
 	if (!skill) return reply.code(404).send({ error: `skill not found: ${id}` });
 	// The detail view IS the review screen: attach the same trust-moment data an upload
-	// candidate carries. An imported skill keeps no bundled scripts (instructions only).
-	return reply.send({ ...skill, scanFindings: scanInvisibleUnicode(`${skill.body}\n${skill.description ?? ""}`).findings, bundledScripts: [] as string[] });
+	// candidate carries. Its files are the ones a room can be allowed to run, so a
+	// skill that can never run files (see resolveExecutableSkillFiles) lists none.
+	const files = resolveExecutableSkillFiles(skill.name)?.files ?? [];
+	return reply.send({ ...librarySkillView(skill, skillRoomsByName(req), files), scanFindings: scanInvisibleUnicode(`${skill.body}\n${skill.description ?? ""}`).findings, bundledScripts: files });
 });
 app.post("/api/skills/upload", { bodyLimit: 12 * 1024 * 1024 }, async (req, reply) => {
 	const raw = (req.body ?? {}) as { filename?: unknown; contentBase64?: unknown };
@@ -5108,7 +5351,7 @@ app.post("/api/skills/accept", async (req, reply) => {
 	// AFTER the bundled files so the stamped files digest covers them.
 	writeSkillProvenance(skillDir, { source, importedAt: new Date().toISOString(), license, sha256: sha256(acceptedManifest) });
 	const created = listSkills().find((skill) => skill.name === value.id);
-	const payload = created ?? { name: value.id, displayName: value.displayName, description: value.description, body: value.instructions, source: "user", protected: false, usedByAgents: [], provenance: { source, license, importedAt: new Date().toISOString() } };
+	const payload = created ? librarySkillView(created, skillRoomsByName(req)) : { name: value.id, displayName: value.displayName, description: value.description, body: value.instructions, source: "user", protected: false, rooms: [], fileCount: 0, provenance: { source, license, importedAt: new Date().toISOString() }, license };
 	return reply.code(201).send({ ...payload, bundledCopied });
 });
 app.post("/api/skills", async (req, reply) => {
@@ -5126,7 +5369,7 @@ app.post("/api/skills", async (req, reply) => {
 	// whole SKILL.md, so a later description/body edit forces re-review.
 	writeSkillProvenance(skillDir, localSkillProvenance(markdown));
 	const created = listSkills().find((skill) => skill.name === value.id);
-	return reply.code(201).send(created ?? { name: value.id, displayName: value.displayName, description: value.description, body: value.instructions, source: "user", protected: false, usedByAgents: [], provenance: { source: "local", license: null, importedAt: new Date().toISOString() } });
+	return reply.code(201).send(created ? librarySkillView(created, skillRoomsByName(req)) : { name: value.id, displayName: value.displayName, description: value.description, body: value.instructions, source: "user", protected: false, rooms: [], fileCount: 0, provenance: { source: "local", license: null, importedAt: new Date().toISOString() }, license: null });
 });
 app.put("/api/skills/:id", async (req, reply) => {
 	const id = slugifySkillId(String((req.params as any).id ?? ""));
@@ -5147,7 +5390,7 @@ app.put("/api/skills/:id", async (req, reply) => {
 	const existingProvenance = readSkillProvenance(path.dirname(file));
 	writeSkillProvenance(path.dirname(file), existingProvenance ? { ...existingProvenance, sha256: sha256(editedManifest) } : localSkillProvenance(editedManifest));
 	const updated = listSkills().find((skill) => skill.name === id);
-	return reply.send(updated ?? { name: id, displayName: value.displayName, description: value.description, body: value.instructions, source: "user", protected: false, usedByAgents: [], provenance: null });
+	return reply.send(updated ? librarySkillView(updated, skillRoomsByName(req)) : { name: id, displayName: value.displayName, description: value.description, body: value.instructions, source: "user", protected: false, rooms: [], fileCount: 0, provenance: null, license: null });
 });
 app.delete("/api/skills/:id", async (req, reply) => {
 	const id = slugifySkillId(String((req.params as any).id ?? ""));
@@ -5244,7 +5487,7 @@ app.post("/api/skills/repo/import", async (req, reply) => {
 	const provenance: SkillProvenance = { source: checkout.source, importedAt: new Date().toISOString(), license: vendored.license, sha256: sha256(vendoredManifest) };
 	writeSkillProvenance(skillDir, provenance);
 	const created = listSkills().find((s) => s.name === candidate.name) ?? listSkills().find((s) => s.name === id) ?? null;
-	return reply.code(201).send({ skill: created, provenance, bundledCopied: vendored.bundledCopied });
+	return reply.code(201).send({ skill: created ? librarySkillView(created, skillRoomsByName(req)) : null, provenance, bundledCopied: vendored.bundledCopied });
 });
 
 app.get("/api/skills/featured", async () => {
@@ -5573,7 +5816,14 @@ app.post("/api/memory/ask", async (req, reply) => {
 			.map((m) => ({ role: m.role === "assistant" ? "Assistant" : "You", content: String(m.content).slice(0, 1500) }))
 		: [];
 
-	const { modelLock } = activeAbsorbModelSelection();
+	// One room asked: that room's memory model. Several (or all): the memory
+	// default for new rooms, since no single room's row speaks for them.
+	const memoryCatalog = createRoomModelCatalog();
+	const oneRoom = rooms && rooms.length === 1;
+	const memoryResolution = oneRoom ? resolveRoomModel(rooms![0]!, "memory", memoryCatalog) : resolveAiDefault("memory", memoryCatalog);
+	const memoryRefusal = roomModelUnavailableError(memoryResolution, "memory", roomModelNames(memoryCatalog), oneRoom ? "room" : "defaults");
+	if (memoryRefusal) return { ok: false, reason: "no-model", message: memoryRefusal.message };
+	const modelLock = memoryResolution.effective ?? { provider: "", model: "" };
 	const registry = getWebChatModelRegistry();
 	const model = registry.find(modelLock.provider, modelLock.model);
 	if (!model || !registry.hasConfiguredAuth(model)) {
@@ -6483,6 +6733,42 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 		},
 		notify: (message: string) => { try { socket.send(JSON.stringify({ type: "ui_request", kind: "notify", id: `memento_${Date.now().toString(36)}`, message, level: "info" })); } catch {} },
 		closeSocket: () => { try { socket.close(); } catch {} },
+		switchModel: async (lock, notice) => {
+			if (workspaceRebindInFlight) { try { await workspaceRebindInFlight; } catch {} }
+			if (activePersistentWebTurn || autoSummaryRunning || (claimedCookingTurn && !claimedCookingTurn.settled)) {
+				throw Object.assign(new Error(SWITCH_WHILE_ANSWERING_MESSAGE), { statusCode: 409 });
+			}
+			const runtimeCwd = persistentRoomRuntimeCwdForEffectiveWorkspacePolicy(resolvePersistentRoomEffectiveWorkspacePolicy(persistentAgentIdForSession, persistentConversationId), REPO_ROOT);
+			let noticeId = "";
+			const rebind = (async () => {
+				if (!sessionDisposed) {
+					sessionDisposed = true;
+					try { (session as any)?.dispose?.(); } catch {}
+				}
+				session = null;
+				const switched = switchPersistentAgentThreadModel(persistentAgentIdForSession, persistentConversationId, lock, { notice, runtimeCwd });
+				persistentAgentThreadForSession = switched.thread;
+				const last = switched.thread.items[switched.thread.items.length - 1] as { id?: string } | undefined;
+				noticeId = String(last?.id ?? "");
+				await bindSession();
+			})();
+			workspaceRebindInFlight = rebind;
+			rebind.catch(reportRebindRefusal).finally(() => {
+				if (workspaceRebindInFlight === rebind) workspaceRebindInFlight = null;
+			});
+			await rebind;
+			send({ type: "model_switched", model: modelStatusPayload((session as any)?.model), contextHealth: initialContextHealthForSession(session), effort: roomEffortStatusPayload(persistentAgentIdForSession, session), notice: { id: noticeId, text: notice } });
+			return { noticeId };
+		},
+		measuredContextTokens: () => {
+			const usage = typeof (session as any)?.getContextUsage === "function" ? (session as any).getContextUsage() : undefined;
+			return typeof usage?.tokens === "number" ? usage.tokens : null;
+		},
+		toolDefinitionTokens: () => {
+			if (!session) return null;
+			const tools = typeof (session as any).getAllTools === "function" ? (session as any).getAllTools() : [];
+			return estimateTokens(JSON.stringify(tools.map((tool: any) => ({ name: tool.name, description: tool.description, parameters: tool.parameters }))));
+		},
 	};
 	persistentRoomLiveSessions.set(persistentAgentIdForSession, liveSessionHandle);
 	socket.on("close", () => {
@@ -6719,8 +7005,30 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 		// extension reads it to scope tool gating.
 		process.env.EXXETA_ACTIVE_AGENT = persistentAgentIdForSession;
 		const persistentAgentId = persistentAgentIdForSession;
+		// An empty conversation (the one Remember or Forget prepared) boots on
+		// the room's conversation model as it is now, and while that cannot run
+		// it waits with the room's refusal instead of booting on the lock it was
+		// prepared with. Best effort: on a failure to read the pick it boots on
+		// its stored lock exactly as before.
+		if (persistentAgentThreadForSession?.runtime.kind === "pi-session-jsonl") {
+			let waits: RoomModelUnavailableError | null = null;
+			try {
+				const catalog = createRoomModelCatalog();
+				const resolved = resolveRoomModel(persistentAgentId, "conversation", catalog);
+				const pick = resolved.effective;
+				const refreshed = pick ? refreshEmptyPersistentAgentThreadModel(persistentAgentId, persistentConversationId, pick) : null;
+				if (refreshed?.moved) {
+					persistentAgentThreadForSession = refreshed.thread;
+					app.log.info({ roomId: persistentAgentId, threadId: persistentConversationId, before: `${refreshed.moved.before.provider}/${refreshed.moved.before.model}`, after: `${refreshed.moved.after.provider}/${refreshed.moved.after.model}` }, "an empty conversation boots on the room's current conversation model");
+				}
+				if (!pick && persistentAgentThreadFollowsConversationPick(persistentAgentId, persistentConversationId)) waits = roomModelRefusal(resolved, "conversation", catalog);
+			} catch (error) {
+				app.log.warn({ err: (error as Error).message, roomId: persistentAgentId, threadId: persistentConversationId }, "empty conversation model refresh failed");
+			}
+			if (waits) throw waits;
+		}
 		const webChatModelRegistry = getWebChatModelRegistry();
-		const webChatModel = resolvePersistentAgentQueryModel(webChatModelRegistry, params, { agentId: persistentAgentId, conversationId: persistentConversationId });
+		const webChatModel = resolvePersistentAgentBindModel(webChatModelRegistry, params, { agentId: persistentAgentId, conversationId: persistentConversationId });
 		if (!webChatModel) throw new Error("persistent-agent model could not be resolved");
 		const persistentRoomModel = { provider: webChatModel.provider, model: webChatModel.id, label: webChatModelLabel(webChatModel.provider, webChatModel) };
 		promptDiagnosticsCurrentModel = persistentRoomModel;
@@ -6755,6 +7063,21 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 		}
 		const persistentRoomWorkspaceCapability = persistentRoomEffectiveWorkspacePolicy?.capability;
 		if (persistentAgentThreadLoadError) throw new Error(`failed to load persistent-agent thread runtime: ${persistentAgentThreadLoadError.message}`);
+		// A prepared conversation nobody has spoken in yet boots on the room's
+		// memory as it is now, not as it was when Remember or Forget prepared it
+		// (Maintain may have run in between). Best effort: on failure the thread
+		// boots on its snapshot exactly as before.
+		if (persistentAgentThreadForSession?.runtime.kind === "pi-session-jsonl") {
+			try {
+				const refresh = refreshEmptyPersistentAgentThreadBootSnapshot(persistentAgentId, persistentConversationId);
+				if (refresh?.rebuilt) {
+					persistentAgentThreadForSession = refresh.thread;
+					app.log.info({ roomId: persistentAgentId, threadId: persistentConversationId, l1bFingerprintBefore: refresh.rebuilt.before.value, l1bFingerprintAfter: refresh.rebuilt.after.value }, "rebuilt the boot snapshot of an empty prepared conversation on the current memory");
+				}
+			} catch (error) {
+				app.log.warn({ err: (error as Error).message, roomId: persistentAgentId, threadId: persistentConversationId }, "empty conversation boot snapshot refresh failed");
+			}
+		}
 		const persistentRoomThreadRuntime = persistentAgentThreadForSession?.runtime;
 		// Skills MR-5 (spec §5): the room's EFFECTIVE enabled set — hash-pinned and
 		// verified by effectiveEnabledSkills, so drifted/deleted skills never reach
@@ -6797,9 +7120,9 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 			// with the delegate tool is "must not throw", and a selection failure
 			// (profile/registry drift) after the registry claim would strand the
 			// room's cap slot.
-			let selection: ReturnType<typeof activeConsultModelSelection>;
+			let selection: ReturnType<typeof roomMemoryModelSelection>;
 			try {
-				selection = activeConsultModelSelection();
+				selection = roomMemoryModelSelection(persistentAgentIdForSession);
 			} catch (e) {
 				return { ok: false, reason: `no usable specialist model: ${(e as Error).message}` };
 			}
@@ -7407,7 +7730,7 @@ ${lines.join("\n")}`;
 					type: "ui_request",
 					kind: "notify",
 					id: `compaction_${Date.now().toString(36)}`,
-					message: `The room could not condense its conversation history: ${compactionCause}. Your memory is unchanged. Try a model with a larger output limit, or start a new conversation.`,
+					message: `The room could not condense its conversation history: ${compactionCause}. Your memory is unchanged. Remember, then continue: the next conversation starts from what was remembered. Or continue on a model with a larger output limit in Room settings, Model.`,
 					level: "error",
 				});
 			}
@@ -7558,10 +7881,14 @@ ${lines.join("\n")}`;
 		await bindSession();
 		send({ type: "ready", persona, agent: persistentAgentIdForSession, persistentAgentId: persistentAgentIdForSession, conversationId: persistentConversationId, model: modelStatusPayload((session as any)?.model), contextHealth: initialContextHealthForSession(session), effort: roomEffortStatusPayload(persistentAgentIdForSession, session) });
 	} catch (e) {
-		if (e instanceof PersistentAgentMemoryOverflowError) {
+		if (e instanceof PersistentAgentMemoryOverflowError || e instanceof RoomModelUnavailableError || (e as { code?: unknown })?.code === "provider_signed_out") {
 			// Named so the client can stand its reconnect loop down: redialing
-			// reaches the same memory and the same window.
-			send({ type: "error", code: e.code, message: e.message });
+			// reaches the same memory and the same window, the same signed-out
+			// provider, or the same model no longer offered.
+			// A signed-out provider is named, so the room can dial again by
+			// itself once that provider is signed in.
+			const provider = (e as { provider?: unknown }).provider;
+			send({ type: "error", code: (e as { code: string }).code, message: (e as Error).message, ...(typeof provider === "string" ? { provider } : {}) });
 		} else {
 			send({ type: "error", message: `failed to create session: ${(e as Error).message}` });
 		}
@@ -7578,14 +7905,14 @@ ${lines.join("\n")}`;
 	// code: swallowing it leaves a silently dead room, and the generic
 	// "failed to apply" wrapper hides the only sentence that names the exit.
 	const reportRebindRefusal = (error: unknown): void => {
-		if (!(error instanceof PersistentAgentMemoryOverflowError)) {
-			// Non-overflow rebind failures are retried on the next prompt rather
-			// than surfaced to the client; leave a trace so they at least reach
-			// the operator log instead of vanishing.
+		if (!(error instanceof PersistentAgentMemoryOverflowError) && !(error instanceof RoomModelUnavailableError)) {
+			// Other rebind failures are retried on the next prompt rather than
+			// surfaced to the client; leave a trace so they at least reach the
+			// operator log instead of vanishing.
 			app.log.warn({ err: error }, "persistent room rebind failed");
 			return;
 		}
-		send({ type: "error", code: error.code, message: error.message });
+		send({ type: "error", code: error.code, message: error.message, ...(error instanceof RoomModelUnavailableError ? { provider: error.provider } : {}) });
 		try { socket.close(); } catch {}
 	};
 
@@ -7807,9 +8134,27 @@ ${lines.join("\n")}`;
 					// session bound with until something readable says otherwise.
 					const liveNativeSearchDecision = resolveNativeProviderSearchDecision(boundSessionProviderId ?? undefined);
 					const liveNativeProviderSearch = liveNativeSearchDecision.indeterminate ? boundNativeProviderSearch : liveNativeSearchDecision.active;
+					// An empty conversation follows the room's conversation pick until
+					// its first message: a pick made after it was bound (Room settings,
+					// Model) rebinds it before that message, and bindSession moves it.
+					// Best effort: on a failure to read the pick it stays as bound.
+					let emptyConversationMoves = false;
+					if (persistentAgentThreadForSession?.runtime.kind === "pi-session-jsonl") {
+						try {
+							// A room model that cannot run any more is named too: the
+							// rebind then refuses with the room's sentence.
+							emptyConversationMoves = emptyPersistentAgentThreadModelTarget(persistentAgentIdForSession, persistentConversationId, () => {
+								const resolved = resolveRoomModel(persistentAgentIdForSession, "conversation");
+								return resolved.effective ?? resolved.chosen;
+							}) !== null;
+						} catch {
+							emptyConversationMoves = false;
+						}
+					}
+					const modelBeforeRebind = promptDiagnosticsCurrentModel;
 					// `!session` here means an earlier rebind failed after disposing
 					// the old session; retry rather than bricking the connection.
-					if (!session || liveWorkspacePolicy.fingerprint.value !== boundWorkspaceFingerprint || liveMcpGrantsFingerprint !== boundMcpGrantsFingerprint || liveNativeProviderSearch !== boundNativeProviderSearch) {
+					if (!session || emptyConversationMoves || liveWorkspacePolicy.fingerprint.value !== boundWorkspaceFingerprint || liveMcpGrantsFingerprint !== boundMcpGrantsFingerprint || liveNativeProviderSearch !== boundNativeProviderSearch) {
 						if (!workspaceRebindInFlight) {
 							const rebind = (async () => {
 								if (!sessionDisposed) {
@@ -7825,9 +8170,16 @@ ${lines.join("\n")}`;
 							});
 						}
 						await workspaceRebindInFlight;
+						// The room shows the model the conversation now runs on: the
+						// same frame a switch sends, without a line (nothing was said
+						// on the old model, so nothing continues).
+						const modelAfterRebind = promptDiagnosticsCurrentModel;
+						if (session && modelAfterRebind && (modelAfterRebind.provider !== modelBeforeRebind?.provider || modelAfterRebind.model !== modelBeforeRebind?.model)) {
+							send({ type: "model_switched", model: modelStatusPayload((session as any)?.model), contextHealth: initialContextHealthForSession(session), effort: roomEffortStatusPayload(persistentAgentIdForSession, session) });
+						}
 					}
 				} catch (e) {
-					if (e instanceof PersistentAgentMemoryOverflowError) {
+					if (e instanceof PersistentAgentMemoryOverflowError || e instanceof RoomModelUnavailableError) {
 						reportRebindRefusal(e);
 						return;
 					}
@@ -7895,6 +8247,10 @@ ${lines.join("\n")}`;
 				// never let it break the turn.
 				try { clearPersistentAgentThreadPendingHandoffs(persistentAgentIdForSession, persistentConversationId); } catch (error) { app.log.warn({ err: error }, "failed to clear consult pending-transfer queue on prompt"); }
 				preparePromptDiagnosticsTurn("user");
+				// The session read the sign-ins when it bound; one made since (after
+				// a turn failed on a key that no longer worked) is read now, so this
+				// message runs on it. One file read per message.
+				try { session!.modelRegistry.authStorage.reload(); } catch (error) { app.log.warn({ err: error }, "reading the sign-ins before the turn failed"); }
 				// A spoken turn (conversation mode) asks for spoken prose; wire only.
 				await session!.prompt(withPersistentRoomRestoredLiveThreadContext(withSpokenConversationHint(userText, msg.voice === true)));
 				// Consent dies with the answer: everything after this line (event
@@ -8050,7 +8406,7 @@ ${lines.join("\n")}`;
 			activeWebConsult = consult;
 			try {
 				const targetStatus = getPersistentAgentStatusForMaintenance(String(msg.targetRoomId ?? "").trim());
-				const selection = activeConsultModelSelection();
+				const selection = roomMemoryModelSelection(targetStatus.id, targetStatus.displayName || targetStatus.id);
 				send({ type: "consult_started", consultId, targetRoomId: targetStatus.id, targetDisplayName: targetStatus.displayName ?? targetStatus.id, model: selection.modelLock });
 				const response = await buildConsultAnswer(
 					// §8.1: the client holds the conversation; `priorExchanges` re-feeds
@@ -9235,6 +9591,16 @@ try {
 	migrateBuiltInAiProfiles({ log: (message) => app.log.info(message) });
 } catch (e) {
 	app.log.warn({ err: (e as Error).message }, "built-in AI profile migration failed; the saved files stay as they are");
+}
+
+// Model per room (0.14): each room's preferred model becomes its conversation
+// pick, and the defaults for new rooms are written from the saved profile.
+// Idempotent, never removes a file before its replacement reads back, and a
+// failure logs and never blocks the start.
+try {
+	migrateRoomModels({ log: (message) => app.log.info(message) });
+} catch (e) {
+	app.log.warn({ err: (e as Error).message }, "room models migration failed; the saved files stay as they are");
 }
 
 // Per-room MCP update-day migration: before the server accepts traffic, every

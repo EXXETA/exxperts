@@ -40,6 +40,13 @@ export interface IsolatedPersistentAgentWorkerInput<TModelLock extends { provide
 	 * output cap and starve the reply the caller is waiting for.
 	 */
 	thinkingLevel?: CreateAgentSessionOptions["thinkingLevel"];
+	/**
+	 * Output cap for this call, below the model's own ceiling. Omitted, the
+	 * worker asks for the model's full ceiling (the Memorize and Review
+	 * rewrites need it). The cap asked for is what the result reports as
+	 * modelMaxOutputTokens, so a truncation names the limit that applied.
+	 */
+	maxTokens?: number;
 }
 
 export interface IsolatedPersistentAgentWorkerResult {
@@ -159,7 +166,9 @@ export async function runIsolatedPersistentAgentWorker<TModelLock extends { prov
 	// (Anthropic requests a third of maxTokens; gateways apply their own
 	// server default), which is what silently truncated large Memorize/Review
 	// rewrites in the field.
-	const workerMaxTokens = typeof model.maxTokens === "number" && model.maxTokens > 0 ? model.maxTokens : undefined;
+	const modelCeiling = typeof model.maxTokens === "number" && model.maxTokens > 0 ? model.maxTokens : undefined;
+	const callCap = typeof input.maxTokens === "number" && input.maxTokens > 0 ? Math.floor(input.maxTokens) : undefined;
+	const workerMaxTokens = callCap ? Math.min(callCap, modelCeiling ?? callCap) : modelCeiling;
 	// A worker session is single-shot: one prompt, one reply, then thrown away.
 	// The interactive defaults it would otherwise inherit are all wrong here.
 	//
@@ -283,6 +292,5 @@ export async function runIsolatedPersistentAgentWorker<TModelLock extends { prov
 
 	const failure = isolatedPersistentAgentWorkerFailure({ workerLabel, text, stopReason, errorMessage, emptyTextError: input.emptyTextError });
 	if (failure) throw failure;
-	const modelMaxOutputTokens = typeof model.maxTokens === "number" && model.maxTokens > 0 ? model.maxTokens : undefined;
-	return { text, usage, stopReason, truncated, ...(modelMaxOutputTokens ? { modelMaxOutputTokens } : {}) };
+	return { text, usage, stopReason, truncated, ...(workerMaxTokens ? { modelMaxOutputTokens: workerMaxTokens } : {}) };
 }

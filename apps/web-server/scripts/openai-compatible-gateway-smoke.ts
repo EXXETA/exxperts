@@ -220,17 +220,17 @@ try {
 	);
 	assert(!roomModelKeys(roomModelStatus.body).includes("openai-compatible/maintenance-model"), "maintenance model should not be a room picker option unless approved as a room model");
 
-	const selectRoomModel = await requestJson("/api/persistent-agent-room/model-selection", {
-		method: "POST",
+	const selectRoomModel = await requestJson("/api/ai/defaults", {
+		method: "PUT",
 		headers: { "content-type": "application/json" },
-		body: JSON.stringify({ provider: "openai-compatible", model: "secondary-model" }),
+		body: JSON.stringify({ conversation: { provider: "openai-compatible", model: "secondary-model" } }),
 	});
 	assertStatusOk(selectRoomModel, "select openai-compatible room model");
 
-	const rejectMaintenanceModel = await requestJson("/api/persistent-agent-room/model-selection", {
-		method: "POST",
+	const rejectMaintenanceModel = await requestJson("/api/ai/defaults", {
+		method: "PUT",
 		headers: { "content-type": "application/json" },
-		body: JSON.stringify({ provider: "openai-compatible", model: "maintenance-model" }),
+		body: JSON.stringify({ conversation: { provider: "openai-compatible", model: "maintenance-model" } }),
 	});
 	assert(rejectMaintenanceModel.status === 400, `maintenance-only model should not be selectable for rooms, got ${rejectMaintenanceModel.status}: ${JSON.stringify(rejectMaintenanceModel.body)}`);
 

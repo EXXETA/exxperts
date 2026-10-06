@@ -72,10 +72,10 @@ const POLICY: Record<string, RemoteRouteClass> = {
 	// ends from a full-access device.
 	"GET /api/persistent-agent-ai-profile": "read",
 	"PUT /api/persistent-agent-ai-profile": "write",
+	"GET /api/ai/defaults": "read",
+	"PUT /api/ai/defaults": "write",
 	"PUT /api/persistent-agent-ai-profiles/custom": "local",
 	"DELETE /api/persistent-agent-ai-profiles/custom/:profileId": "local",
-	"PUT /api/persistent-agent-ai-profiles/builtin/:profileId/maintenance-models": "local",
-	"DELETE /api/persistent-agent-ai-profiles/builtin/:profileId/maintenance-models": "local",
 	"GET /api/persistent-agent-ai-profiles/gateways": "read",
 	"POST /api/persistent-agent-ai-profiles/gateways": "local",
 	"GET /api/persistent-agent-ai-profiles/gateways/:gatewayId": "read",
@@ -92,9 +92,7 @@ const POLICY: Record<string, RemoteRouteClass> = {
 	// Model choice: room interaction, not credentials.
 	"GET /api/persistent-agent-modes": "read",
 	"GET /api/persistent-agent-room/model-status": "read",
-	"POST /api/persistent-agent-room/model-selection": "write",
 	"GET /api/web-chat/model-status": "read",
-	"POST /api/web-chat/model-selection": "write",
 
 	// MCP connectors: credentials and host-side admin.
 	"GET /api/mcp/status": "read",
@@ -152,9 +150,17 @@ const POLICY: Record<string, RemoteRouteClass> = {
 	"GET /api/persistent-agents/:id/memory/archive": "read",
 	"GET /api/persistent-agents/:id/memory/history": "read",
 	"GET /api/persistent-agents/:id/bash-settings": "read",
-	"GET /api/persistent-agents/:id/preferred-model": "read",
+	"GET /api/persistent-agents/:id/models": "read",
+	// How a Remember would read the open conversation (one pass or N parts):
+	// counts and a model name, no transcript text.
+	"GET /api/persistent-agents/:id/checkpoint/estimate": "read",
+	// How far a running Remember has read: two counts.
+	"GET /api/persistent-agents/:id/checkpoint/progress": "read",
 	"GET /api/persistent-agents/:id/instructions": "read",
 	"GET /api/settings/instructions": "read",
+	// The order of the home screen: every device that sees the rooms sees
+	// them in the saved order.
+	"GET /api/settings/room-order": "read",
 	"GET /api/persistent-agents/:id/mcp-connectors": "read",
 	"GET /api/persistent-agents/:id/skill-settings": "read",
 	"GET /api/persistent-agents/:id/workspace-default": "read",
@@ -216,7 +222,8 @@ const POLICY: Record<string, RemoteRouteClass> = {
 	"DELETE /api/persistent-agents/:id/tasks/:taskId/removed": "write",
 	"POST /api/persistent-agents/:id/tasks/:taskId/viewed": "write",
 	"PUT /api/persistent-agents/:id/threads/:threadId": "write",
-	"PUT /api/persistent-agents/:id/preferred-model": "write",
+	"PUT /api/persistent-agents/:id/models": "write",
+	"POST /api/persistent-agents/:id/threads/:threadId/switch-model": "write",
 	// The room's standing instructions are prompt text the user owns, like a
 	// memory note edited by hand: they change what the room is told, never
 	// what it may do, so a full-capability device may save them.
@@ -225,6 +232,9 @@ const POLICY: Record<string, RemoteRouteClass> = {
 	// never what they may do: the same class as the room's own text.
 	"PUT /api/settings/instructions": "write",
 	"PUT /api/persistent-agents/:id/instructions/global": "write",
+	// The saved order changes how the home screen looks, never what a room is
+	// told or may do, so a full-capability device may choose it.
+	"PUT /api/settings/room-order": "write",
 	"DELETE /api/persistent-agents/:id/threads/:threadId": "write",
 
 	// Rooms: capability-widening settings. Loopback only: a phone must never

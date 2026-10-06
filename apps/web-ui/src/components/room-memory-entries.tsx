@@ -14,6 +14,7 @@ import type { ArchivedEntryCard, BudgetState, EntryCard, EntryKind, MemoryEntrie
 import { createMemoryEntry, deleteArchivedMemoryEntry, deleteMemoryEntry, fetchMemoryArchive, fetchMemoryEntries, fetchMemoryHistory, restoreMemoryEntry, undoMemorySave, updateMemoryEntry } from "../memory-entries-api";
 import { entryKindLabel, LIMIT_LOWERED_ON_UNDO_SENTENCE, MEMORY_EDIT_BLOCKED_SENTENCE } from "../memory-v2-copy";
 import { MemoryChangeFold } from "./memory-change-fold";
+import { GroupHeader } from "./pane-header";
 import {
 	ADD_NOTE_LABEL,
 	archiveRowMeta,
@@ -32,8 +33,8 @@ import {
 	NOTES_LOADING_SENTENCE,
 	NOTES_NO_MATCH_SENTENCE,
 	NOTES_SEARCH_PLACEHOLDER,
+	notesPhrase,
 	notesSummaryLine,
-	topicRowLine,
 	undoableHistoryRow,
 	type MemoryHistoryRow,
 	type MemorySaveEvent,
@@ -41,11 +42,8 @@ import {
 
 const KIND_OPTIONS: EntryKind[] = ["fact", "practice", "item"];
 const NEW_TOPIC = "__new-topic__";
-/** The two groups, in the order memory itself is written. */
-const SECTIONS: { section: MemoryEntriesTopicGroup["section"]; title: string }[] = [
-	{ section: "Deep Memory", title: "Notes" },
-	{ section: "Active Items", title: "Open items" },
-];
+/** The topics first, then the open items, in one list: the order memory itself is written. */
+const SECTION_ORDER: MemoryEntriesTopicGroup["section"][] = ["Deep Memory", "Active Items"];
 
 /**
  * A room that is mid-conversation cannot be edited: the server refuses the
@@ -323,15 +321,25 @@ export function RoomMemoryEntriesSection({ status, onMemoryTokens, onArchiveDele
 		const busy = busyId === entry.id;
 		return (
 			<li className="memory-entry" key={entry.id}>
-				<div className="memory-entry-meta" title={noteOriginTitle(entry)}>
-					{noteRowMeta({ kind: entryKindLabel(entry.kind), saved: entry.saved, pinned: entry.pinned, status: entry.status })}
+				<div className="memory-entry-head">
+					<span className="memory-entry-meta" title={noteOriginTitle(entry)}>
+						{noteRowMeta({ kind: entryKindLabel(entry.kind), saved: entry.saved, pinned: entry.pinned, status: entry.status })}
+					</span>
+					{!readOnly && editingId !== entry.id && movingId !== entry.id && confirmDeleteId !== entry.id && (
+						<span className="memory-entry-tools">
+							<button className="rs-quiet" type="button" disabled={busy} onClick={() => startEdit(entry)}>Edit</button>
+							<button className="rs-quiet" type="button" disabled={busy} onClick={() => void togglePin(entry)}>{entry.pinned ? "Unpin" : "Pin"}</button>
+							<button className="rs-quiet" type="button" disabled={busy} onClick={() => startMove(entry)}>Move</button>
+							<button className="rs-quiet rs-quiet-danger" type="button" disabled={busy} onClick={() => setConfirmDeleteId(entry.id)}>Delete</button>
+						</span>
+					)}
 				</div>
 				{editingId === entry.id ? (
 					<div className="memory-entry-edit">
 						<textarea value={editText} rows={4} onChange={(event) => setEditText(event.target.value)} aria-label="Note text" />
-						<div className="memory-entry-actions">
-							<button className="rs-btn" type="button" disabled={busy} onClick={() => void saveEdit(entry)}>{busy ? "Saving…" : "Save"}</button>
-							<button className="rs-quiet" type="button" disabled={busy} onClick={() => setEditingId(null)}>Cancel</button>
+						<div className="settings-form-foot">
+							<button className="rs-btn" type="button" disabled={busy} onClick={() => setEditingId(null)}>Cancel</button>
+							<button className="rs-btn rs-btn-primary" type="button" disabled={busy} onClick={() => void saveEdit(entry)}>{busy ? "Saving…" : "Save"}</button>
 						</div>
 					</div>
 				) : (
@@ -344,27 +352,20 @@ export function RoomMemoryEntriesSection({ status, onMemoryTokens, onArchiveDele
 							<option value={NEW_TOPIC}>new topic…</option>
 						</select>
 						{moveTopic === NEW_TOPIC && (
-							<input className="create-room-input" type="text" value={moveNewTopic} placeholder="Topic name" aria-label="New topic name" onChange={(event) => setMoveNewTopic(event.target.value)} />
+							<input type="text" value={moveNewTopic} placeholder="Topic name" aria-label="New topic name" onChange={(event) => setMoveNewTopic(event.target.value)} />
 						)}
-						<button className="rs-btn" type="button" disabled={busy} onClick={() => void saveMove(entry)}>{busy ? "Moving…" : "Move"}</button>
-						<button className="rs-quiet" type="button" disabled={busy} onClick={() => setMovingId(null)}>Cancel</button>
+						<span className="settings-form-foot">
+							<button className="rs-btn" type="button" disabled={busy} onClick={() => setMovingId(null)}>Cancel</button>
+							<button className="rs-btn rs-btn-primary" type="button" disabled={busy} onClick={() => void saveMove(entry)}>{busy ? "Moving…" : "Move"}</button>
+						</span>
 					</div>
 				)}
-				{confirmDeleteId === entry.id ? (
+				{confirmDeleteId === entry.id && (
 					<div className="memory-entry-confirm">
 						<span>{DELETE_NOTE_QUESTION}</span>
-						<button className="rs-btn" type="button" disabled={busy} onClick={() => void confirmDelete(entry)}>{busy ? "Deleting…" : "Delete"}</button>
 						<button className="rs-quiet" type="button" disabled={busy} onClick={() => setConfirmDeleteId(null)}>Keep it</button>
+						<button className="rs-quiet rs-quiet-danger" type="button" disabled={busy} onClick={() => void confirmDelete(entry)}>{busy ? "Deleting…" : "Delete"}</button>
 					</div>
-				) : (
-					!readOnly && editingId !== entry.id && movingId !== entry.id && (
-						<div className="memory-entry-actions">
-							<button className="rs-quiet" type="button" disabled={busy} onClick={() => startEdit(entry)}>Edit</button>
-							<button className="rs-quiet" type="button" disabled={busy} onClick={() => void togglePin(entry)}>{entry.pinned ? "Unpin" : "Pin"}</button>
-							<button className="rs-quiet" type="button" disabled={busy} onClick={() => startMove(entry)}>Move</button>
-							<button className="rs-quiet" type="button" disabled={busy} onClick={() => setConfirmDeleteId(entry.id)}>Delete</button>
-						</div>
-					)
 				)}
 			</li>
 		);
@@ -377,8 +378,9 @@ export function RoomMemoryEntriesSection({ status, onMemoryTokens, onArchiveDele
 		return (
 			<section className="memory-topic" key={`${group.section}-${group.title}`}>
 				<button className="memory-topic-head" type="button" aria-expanded={open} onClick={() => toggleTopic(group.title)}>
-					<span className="memory-topic-caret">{open ? "▾" : "▸"}</span>
-					<span className="memory-topic-title">{topicRowLine(memoryTopicName(group.title), group.entries.length)}</span>
+					<span className="disclosure-chevron" aria-hidden="true" />
+					<span className="memory-topic-title">{memoryTopicName(group.title)}</span>
+					<span className="memory-topic-count">{notesPhrase(group.entries.length)}</span>
 				</button>
 				{open && <ul className="memory-entries">{group.entries.map(renderEntry)}</ul>}
 			</section>
@@ -390,18 +392,55 @@ export function RoomMemoryEntriesSection({ status, onMemoryTokens, onArchiveDele
 
 	return (
 		<div className="room-memory-entries">
-			<header className="rs-pane-head">
-				<h3>Notes</h3>
-			</header>
-			<p className="rs-pane-sub">{notesSummaryLine(noteCount, topicCount)}</p>
-			{readOnly && <p className="rs-row-footnote">{readOnlySentence}</p>}
+			<GroupHeader
+				kicker="Notes"
+				line={notesSummaryLine(noteCount, topicCount)}
+				actions={!readOnly && entries !== null && !adding && (
+					<button className="rs-btn" type="button" onClick={() => setAdding(true)}>{ADD_NOTE_LABEL}</button>
+				)}
+			/>
+			{readOnly && <p className="settings-row-sub">{readOnlySentence}</p>}
+			{!readOnly && entries !== null && adding && (
+				<div className="memory-entry-add">
+					<div className="settings-form-two">
+						<label className="settings-field">
+							<span>Topic</span>
+							<select id="memory-add-topic" value={addTopic} onChange={(event) => setAddTopic(event.target.value)}>
+								<option value="">Choose a topic</option>
+								{topicNames.map((name) => <option key={name} value={name}>{memoryTopicName(name)}</option>)}
+								<option value={NEW_TOPIC}>new topic…</option>
+							</select>
+						</label>
+						<label className="settings-field">
+							<span>Kind</span>
+							<select id="memory-add-kind" value={addKind} onChange={(event) => setAddKind(event.target.value as EntryKind)}>
+								{KIND_OPTIONS.map((kind) => <option key={kind} value={kind}>{entryKindLabel(kind)}</option>)}
+							</select>
+						</label>
+					</div>
+					{(addTopic === NEW_TOPIC || addTopic === "") && (
+						<label className="settings-field">
+							<span>Topic name</span>
+							<input type="text" value={addNewTopic} placeholder="Topic name" aria-label="New topic name" onChange={(event) => setAddNewTopic(event.target.value)} />
+						</label>
+					)}
+					<label className="settings-field">
+						<span>Note</span>
+						<textarea value={addText} rows={3} placeholder="What should this room remember?" aria-label="Note text" onChange={(event) => setAddText(event.target.value)} />
+					</label>
+					<div className="settings-form-foot">
+						<button className="rs-btn" type="button" disabled={busyId === "new-entry"} onClick={() => setAdding(false)}>Cancel</button>
+						<button className="rs-btn rs-btn-primary" type="button" disabled={busyId === "new-entry"} onClick={() => void addEntry()}>{busyId === "new-entry" ? "Saving…" : "Save note"}</button>
+					</div>
+				</div>
+			)}
 			{loadError && <div className="room-maintenance-error">{loadError}</div>}
 			{actionError && <div className="room-maintenance-error">{actionError}</div>}
-			{entries === null && !loadError && <p className="rs-row-hint">{NOTES_LOADING_SENTENCE}</p>}
-			{entries !== null && groups.length === 0 && <p className="rs-row-hint">{NOTES_EMPTY_SENTENCE}</p>}
+			{entries === null && !loadError && <p className="settings-row-sub">{NOTES_LOADING_SENTENCE}</p>}
+			{entries !== null && groups.length === 0 && !adding && <p className="settings-empty">{NOTES_EMPTY_SENTENCE}</p>}
 			{entries !== null && groups.length > 0 && (
 				<input
-					className="create-room-input memory-notes-search"
+					className="memory-notes-search"
 					type="search"
 					value={query}
 					placeholder={NOTES_SEARCH_PLACEHOLDER}
@@ -409,56 +448,23 @@ export function RoomMemoryEntriesSection({ status, onMemoryTokens, onArchiveDele
 					onChange={(event) => setQuery(event.target.value)}
 				/>
 			)}
-			{entries !== null && groups.length > 0 && filtered.length === 0 && <p className="rs-row-hint">{NOTES_NO_MATCH_SENTENCE}</p>}
-			{SECTIONS.map((section) => {
-				const sectionGroups = filtered.filter((group) => group.section === section.section);
-				if (sectionGroups.length === 0) return null;
-				return (
-					<div className="memory-note-group" key={section.section}>
-						<h4 className="memory-note-group-head">{section.title}</h4>
-						{sectionGroups.map(renderTopic)}
-					</div>
-				);
-			})}
-			{!readOnly && entries !== null && (
-				adding ? (
-					<div className="memory-entry-add">
-						<label className="rs-row-hint" htmlFor="memory-add-topic">Topic</label>
-						<select id="memory-add-topic" value={addTopic} onChange={(event) => setAddTopic(event.target.value)}>
-							<option value="">Choose a topic</option>
-							{topicNames.map((name) => <option key={name} value={name}>{memoryTopicName(name)}</option>)}
-							<option value={NEW_TOPIC}>new topic…</option>
-						</select>
-						{(addTopic === NEW_TOPIC || addTopic === "") && (
-							<input className="create-room-input" type="text" value={addNewTopic} placeholder="Topic name" aria-label="New topic name" onChange={(event) => setAddNewTopic(event.target.value)} />
-						)}
-						<label className="rs-row-hint" htmlFor="memory-add-kind">Kind</label>
-						<select id="memory-add-kind" value={addKind} onChange={(event) => setAddKind(event.target.value as EntryKind)}>
-							{KIND_OPTIONS.map((kind) => <option key={kind} value={kind}>{entryKindLabel(kind)}</option>)}
-						</select>
-						<textarea value={addText} rows={3} placeholder="What should this room remember?" aria-label="Note text" onChange={(event) => setAddText(event.target.value)} />
-						<div className="memory-entry-actions">
-							<button className="rs-btn" type="button" disabled={busyId === "new-entry"} onClick={() => void addEntry()}>{busyId === "new-entry" ? "Saving…" : "Save note"}</button>
-							<button className="rs-quiet" type="button" disabled={busyId === "new-entry"} onClick={() => setAdding(false)}>Cancel</button>
-						</div>
-					</div>
-				) : (
-					<button className="rs-btn" type="button" onClick={() => setAdding(true)}>{ADD_NOTE_LABEL}</button>
-				)
+			{entries !== null && groups.length > 0 && filtered.length === 0 && <p className="settings-row-sub">{NOTES_NO_MATCH_SENTENCE}</p>}
+			{filtered.length > 0 && (
+				<div className="memory-topics">
+					{SECTION_ORDER.flatMap((section) => filtered.filter((group) => group.section === section)).map(renderTopic)}
+				</div>
 			)}
-			<header className="rs-pane-head memory-archive-head">
-				<h3>Archive</h3>
-			</header>
-			<p className="rs-pane-sub">{archiveSummaryLine(archiveCount)}</p>
-			{archive === null ? (
-				<button className="rs-btn" type="button" disabled={archiveBusy} onClick={() => void loadArchive()}>
-					{archiveBusy ? "Reading…" : "Show the archive"}
-				</button>
-			) : archive.length === 0 ? (
-				<>
-					<p className="rs-row-hint">The archive is empty.</p>
-					<button className="rs-quiet" type="button" onClick={() => setArchive(null)}>Close</button>
-				</>
+			<div className="memory-archive-head">
+				<GroupHeader
+					kicker="Archive"
+					line={archiveSummaryLine(archiveCount)}
+					actions={archive === null
+						? <button className="rs-btn" type="button" disabled={archiveBusy} onClick={() => void loadArchive()}>{archiveBusy ? "Reading…" : "Show"}</button>
+						: <button className="rs-btn" type="button" disabled={archiveBusy} onClick={() => setArchive(null)}>Hide</button>}
+				/>
+			</div>
+			{archive === null ? null : archive.length === 0 ? (
+				<p className="settings-empty">The archive is empty.</p>
 			) : (
 				<>
 					<ul className="memory-entries memory-archive-entries">
@@ -472,8 +478,8 @@ export function RoomMemoryEntriesSection({ status, onMemoryTokens, onArchiveDele
 								{!readOnly && confirmArchiveDeleteId === entry.id ? (
 									<div className="memory-entry-confirm">
 										<span>{DELETE_ARCHIVED_NOTE_TITLE} {DELETE_ARCHIVED_NOTE_BODY}</span>
-										<button className="rs-btn" type="button" disabled={busyId === entry.id} onClick={() => void deleteForGood(entry)}>{busyId === entry.id ? "Deleting…" : DELETE_FOR_GOOD_LABEL}</button>
 										<button className="rs-quiet" type="button" disabled={busyId === entry.id} onClick={() => setConfirmArchiveDeleteId(null)}>{KEEP_IT_LABEL}</button>
+										<button className="rs-quiet rs-quiet-danger" type="button" disabled={busyId === entry.id} onClick={() => void deleteForGood(entry)}>{busyId === entry.id ? "Deleting…" : DELETE_FOR_GOOD_LABEL}</button>
 									</div>
 								) : !readOnly && (
 									<div className="memory-entry-actions">
@@ -484,12 +490,11 @@ export function RoomMemoryEntriesSection({ status, onMemoryTokens, onArchiveDele
 							</li>
 						))}
 					</ul>
-					<div className="memory-entry-actions">
-						{archiveNext && (
+					{archiveNext && (
+						<div className="memory-entry-actions">
 							<button className="rs-btn" type="button" disabled={archiveBusy} onClick={() => void loadArchive(archiveNext)}>{archiveBusy ? "Reading…" : "Load more"}</button>
-						)}
-						<button className="rs-quiet" type="button" disabled={archiveBusy} onClick={() => setArchive(null)}>Close</button>
-					</div>
+						</div>
+					)}
 				</>
 			)}
 		</div>
@@ -558,14 +563,11 @@ export function RoomMemoryHistorySection({ status, onUndone, reloadKey }: { stat
 
 	return (
 		<div className="room-memory-history">
-			<header className="rs-pane-head">
-				<h3>History</h3>
-			</header>
-			<p className="rs-pane-sub">{HISTORY_SUB}</p>
+			<GroupHeader kicker="History" line={HISTORY_SUB} />
 			{loadError && <div className="room-maintenance-error">{loadError}</div>}
 			{undoError && <div className="room-maintenance-error">{undoError}</div>}
-			{events === null && !loadError && <p className="rs-row-hint">Reading this room's history…</p>}
-			{events !== null && rows.length === 0 && <p className="rs-row-hint">{HISTORY_EMPTY_SENTENCE}</p>}
+			{events === null && !loadError && <p className="settings-row-sub">Reading this room's history…</p>}
+			{events !== null && rows.length === 0 && <p className="settings-empty">{HISTORY_EMPTY_SENTENCE}</p>}
 			<ul className="memory-history-rows">
 				{rows.map((row) => (
 					<li className="memory-history-row" key={row.key}>

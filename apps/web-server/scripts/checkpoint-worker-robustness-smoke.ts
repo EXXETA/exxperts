@@ -80,7 +80,6 @@ try {
 	assert(capped.telemetry.elidedChars === longToolBody.length - 4_000, "elided char count should match the 4k cap");
 	assert(capped.prompt.includes("characters elided from this item"), "capped tool result should carry a declared elision marker");
 	assert(!capped.prompt.includes(longToolBody), "full tool body must not reach the prompt");
-	assert(capped.warnings.some((warning) => /trimmed to fit the compression budget/.test(warning)), "assembly should surface an elision warning");
 
 	// 2. Budget pressure tightens tool results first.
 	const manyToolItems = Array.from({ length: 10 }, (_, index) => ({
@@ -95,14 +94,19 @@ try {
 	assert(tightened.telemetry.promptEstimatedTokens <= 8_000, "tightened prompt should fit the budget");
 	assert(tightened.telemetry.promptTokenBudget === 8_000, "telemetry should expose the prompt token budget");
 
-	// 3. Heavier pressure also caps assistant messages.
+	// 3. Heavier pressure never cuts what the room said: past the tool-result
+	// stages the single pass refuses, and Remember reads the conversation in
+	// parts instead (remember-two-stage-smoke).
 	const chattyItems = [
 		...manyToolItems,
 		...Array.from({ length: 8 }, (_, index) => ({ kind: "assistant" as const, id: `a${index + 1}`, text: "assistant-detail ".repeat(700).trim() })),
 	];
-	const assistantCapped = buildCheckpointCompressionPrompt({ ...promptBase, items: chattyItems, promptTokenBudget: 15_000 });
-	assert(assistantCapped.telemetry.reductionStage === "tight-tool-results-and-assistant", "assistant messages should be capped at the final reduction stage");
-	assert(assistantCapped.telemetry.promptEstimatedTokens <= 15_000, "assistant-capped prompt should fit the budget");
+	try {
+		buildCheckpointCompressionPrompt({ ...promptBase, items: chattyItems, promptTokenBudget: 15_000 });
+		throw new Error("a prompt that fits only with assistant text cut should refuse the single pass");
+	} catch (error) {
+		assert(error instanceof CheckpointPromptOverflowError, `assistant text is never cut to fit; the single pass refuses instead, got ${(error as Error).message}`);
+	}
 
 	// 4. Impossible budget refuses with guidance instead of truncating silently.
 	try {
@@ -111,8 +115,9 @@ try {
 	} catch (error) {
 		assert(error instanceof CheckpointPromptOverflowError, `impossible budget should throw the overflow error, got ${(error as Error).message}`);
 		assert(error.statusCode === 413, "overflow error should carry statusCode 413");
-		assert(/too large for the locked checkpoint model/.test(error.message), "overflow error should name the locked model");
+		assert(/^This conversation is too long for \S+ to remember in one read/.test(error.message), "overflow error should name the memory model in the plain Remember sentence");
 		assert(/No memory has been written/.test(error.message), "overflow error should reassure that no memory was written");
+		assert(/Room settings, Model/.test(error.message) && !/checkpoint earlier|switch the room/i.test(error.message), "overflow error should point to the Model pane, not to a checkpoint or a room switch");
 	}
 
 	// 5. Short-session gates behave as before (thresholds now expressed in est tokens).
@@ -148,22 +153,19 @@ try {
 	);
 	assert(stubbornCalls === 2, "guided failure should stop after the single retry");
 
-	// 8. Overflow guard fires before the worker is ever invoked.
-	let overflowCalls = 0;
-	const overflowError = await expectRejects(
-		() => buildCheckpointProposal(
-			proposalInput("c_overflow_0001", legacyUserItems(12, 11_000)),
-			async () => {
-				overflowCalls += 1;
-				return { text: completeFields() };
-			},
-			{ resolveModelWindow: () => ({ contextWindow: 32_000, maxOutputTokens: 8_000 }) },
-		),
-		/too large for the locked checkpoint model openai-compatible\/gpt-5\.5/,
-		"small context window should refuse oversized transcripts",
+	// 8. A transcript too large for one pass on a small window is read in
+	// parts instead of refused (remember-two-stage-smoke pins the parts).
+	let partsCalls = 0;
+	const partsProposal = await buildCheckpointProposal(
+		proposalInput("c_overflow_0001", legacyUserItems(12, 11_000)),
+		async () => {
+			partsCalls += 1;
+			return { text: completeFields() };
+		},
+		{ resolveModelWindow: () => ({ contextWindow: 32_000, maxOutputTokens: 8_000 }) },
 	);
-	assert((overflowError as any).statusCode === 413, "proposal overflow should carry statusCode 413");
-	assert(overflowCalls === 0, "overflow guard must fire before the worker call");
+	assert(partsProposal.rememberRead.mode === "parts" && partsProposal.rememberRead.reads > 1, `a transcript over the small window's budget is read in parts, got ${JSON.stringify(partsProposal.rememberRead)}`);
+	assert(partsCalls >= 3, `the parts and the final call each reach the worker, got ${partsCalls} calls`);
 
 	// 9. Large windows pass the guard and record the budget.
 	const okProposal = await buildCheckpointProposal(

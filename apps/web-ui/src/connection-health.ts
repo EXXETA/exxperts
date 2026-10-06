@@ -164,3 +164,15 @@ export function msUntilWarn(state: ConnectionHealthState, now: number): number |
 	if (state.failedAttempts < MIN_FAILED_ATTEMPTS) return null;
 	return Math.max(0, state.unhealthySince + graceForState(state) - now);
 }
+
+/**
+ * A room error line, added unless the transcript already ends with the same
+ * one: a failure that repeats on every reconnect attempt (a bind that cannot
+ * succeed) is said once, not once per attempt. A different error, or the
+ * same one after anything else happened, is added as usual.
+ */
+export function appendErrorLineOnce<T extends { kind: string; text?: string; level?: string }>(items: T[], line: T & { kind: "system"; text: string; level: "error" }): T[] {
+	const last = items[items.length - 1];
+	if (last?.kind === "system" && last.level === "error" && last.text === line.text) return items;
+	return [...items, line];
+}

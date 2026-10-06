@@ -132,7 +132,7 @@ export function ReviewRunProgressScreen({ run, onCancel }: { run: ReviewRun; onC
 				</ul>
 			)}
 			<div className="checkpoint-preview-actions">
-				<button className="landing-action secondary" onClick={onCancel} title="Stop this tidy and return to the first read. Nothing is saved.">Cancel</button>
+				<button className="rs-btn" onClick={onCancel} title="Stop this tidy and return to the first read. Nothing is saved.">Cancel</button>
 			</div>
 		</div>
 	);
@@ -342,9 +342,9 @@ export function ReviewCard({ run, roomName, keepIds, busy, error, fastPathBlocke
 				)}
 			</div>
 			<div className="checkpoint-preview-actions">
-				<button className="landing-action secondary" disabled={busy} onClick={onCancel} title="Stop this tidy. Nothing is saved.">Cancel</button>
-				<button className="landing-action secondary" disabled={busy} onClick={onBack} title="Return to the first read. This tidy is dropped and nothing is saved.">{backLabel}</button>
-				<button className="landing-action" disabled={busy} onClick={onSave} title={overBudget || run.budget.overBudgetAfter ? "Save these changes and leave memory above its budget" : "Save these changes to memory"}>
+				<button className="rs-btn" disabled={busy} onClick={onCancel} title="Stop this tidy. Nothing is saved.">Cancel</button>
+				<button className="rs-btn" disabled={busy} onClick={onBack} title="Return to the first read. This tidy is dropped and nothing is saved.">{backLabel}</button>
+				<button className="rs-btn rs-btn-primary" disabled={busy} onClick={onSave} title={overBudget || run.budget.overBudgetAfter ? "Save these changes and leave memory above its budget" : "Save these changes to memory"}>
 					{overBudget || run.budget.overBudgetAfter ? "Save over the budget" : "Save to memory"}
 				</button>
 			</div>
@@ -363,8 +363,8 @@ export function ReviewRunFailedScreen({ error, onBack, onRetry }: { error: strin
 			</div>
 			<div className="checkpoint-proposal-error" role="alert">{error}</div>
 			<div className="checkpoint-preview-actions">
-				<button className="landing-action secondary" onClick={onBack}>Back</button>
-				<button className="landing-action" onClick={onRetry}>Try again</button>
+				<button className="rs-btn" onClick={onBack}>Back</button>
+				<button className="rs-btn rs-btn-primary" onClick={onRetry}>Try again</button>
 			</div>
 		</div>
 	);
@@ -420,8 +420,8 @@ export function ReviewSavedScreen({ roomName, counts, percent, over, archivedEnt
 			{undo.error && <div className="checkpoint-proposal-error" role="alert">{undo.error}</div>}
 			{warnings.length > 0 && <div className="checkpoint-proposal-warnings">{warnings.map((warning) => <div key={warning}>{warning}</div>)}</div>}
 			<div className="checkpoint-preview-actions">
-				{!undo.done && (counts.notes > 0 || archivedEntries > 0) && <button className="landing-action secondary" disabled={undo.busy} title={`Put ${roomName}'s memory back as it was before this tidy`} onClick={onUndo}>{undo.busy ? "Undoing…" : "Undo"}</button>}
-				<button className="landing-action" onClick={onReturn}>{returnLabel}</button>
+				{!undo.done && (counts.notes > 0 || archivedEntries > 0) && <button className="rs-btn" disabled={undo.busy} title={`Put ${roomName}'s memory back as it was before this tidy`} onClick={onUndo}>{undo.busy ? "Undoing…" : "Undo"}</button>}
+				<button className="rs-btn rs-btn-primary" onClick={onReturn}>{returnLabel}</button>
 			</div>
 			{!undo.done && <p className="checkpoint-footnote">The previous memory is kept, so this can also be undone later from Room settings → Memory.</p>}
 		</div>

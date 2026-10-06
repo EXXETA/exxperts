@@ -12,6 +12,11 @@ import { shouldUseWindowsShell } from "./utils/child-process.js";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
+// Defined only when scripts/bundle-server.mjs inlines this module into the
+// bundled web server: the package root as a path relative to the bundle file.
+// Everywhere else it stays undeclared and getPackageDir() walks up as usual.
+declare const __EXXPERTS_BUNDLED_PACKAGE_DIR__: string | undefined;
+
 /**
  * Detect if we're running as a Bun compiled binary.
  * Bun binaries have import.meta.url containing "$bunfs", "~BUN", or "%7EBUN" (Bun's virtual filesystem path)
@@ -307,6 +312,12 @@ export function getPackageDir(): string {
 		if (envDir === "~") return homedir();
 		if (envDir.startsWith("~/")) return homedir() + envDir.slice(1);
 		return envDir;
+	}
+
+	// Bundled: __dirname is the bundle's folder, where the nearest package.json
+	// belongs to the app, not to this package.
+	if (typeof __EXXPERTS_BUNDLED_PACKAGE_DIR__ === "string") {
+		return join(__dirname, __EXXPERTS_BUNDLED_PACKAGE_DIR__);
 	}
 
 	if (isBunBinary) {

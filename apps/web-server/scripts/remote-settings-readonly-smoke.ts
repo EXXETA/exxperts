@@ -12,7 +12,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
-import { SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer } from "./smoke-server-process.js";
+import { authedFetch, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer } from "./smoke-server-process.js";
 
 const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "exxperts-remote-readonly-"));
 process.env.HOME = tempHome;
@@ -50,22 +50,23 @@ const SECTIONS: Array<{ tab: string; honest: string; absent: string[] }> = [
 	{
 		tab: "AI setup",
 		honest: "Providers and gateways are set up on the computer itself.",
-		absent: [".ai-profile-signin", ".ai-profile-menu-btn", ".add-provider-toggle"],
+		// No radio: providers are rows, and the defaults for new rooms choose the models.
+		absent: [".ai-profile-signin", ".ai-profile-menu-btn", ".add-provider-toggle", '[role="radio"]', ".ai-profile-radio", ".room-model-pick:not(:disabled)"],
 	},
 	{
 		tab: "Web search",
 		honest: "Web search is set up on the computer itself.",
-		absent: [".web-search-native input", ".web-search-native button", ".web-search-fallback select"],
+		absent: ['input[type="checkbox"]', 'input[type="radio"]', "select"],
 	},
 	{
 		tab: "Connectors",
 		honest: "Connectors are set up and signed in on the computer itself.",
-		absent: [".connector-row-actions button", ".connector-directory input"],
+		absent: [".connector-row-actions button", ".connector-dir-search", ".connector-dir-row button"],
 	},
 	{
 		tab: "Skills",
 		honest: "Skills are uploaded and edited on the computer itself.",
-		absent: [".skill-library-controls button"],
+		absent: [".pane-head-actions button"],
 	},
 ];
 
@@ -89,6 +90,9 @@ try {
 		stdio: ["ignore", "pipe", "pipe"],
 	}) as unknown as ChildProcessWithoutNullStreams;
 	await waitForServer();
+	// One room, so Home shows a card whose model label opens Room settings, Model.
+	const created = await authedFetch(`${baseUrl}/api/persistent-agents`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ displayName: "Readonly Room", userName: "Synthetic User", preferredUserAddress: "Synthetic User" }) });
+	assert(created.ok, `room create failed: ${created.status}`);
 
 	const browser = await chromium.launch();
 	try {
@@ -107,11 +111,11 @@ try {
 
 		// The Remote access section is not offered to remote devices at all
 		// (the shell drops it); its in-page gate is unreachable depth.
-		const remoteTab = await page.locator(".settings-overlay-nav button").filter({ hasText: "Remote access" }).count();
+		const remoteTab = await page.locator(".settings-dialog-nav button").filter({ hasText: "Remote access" }).count();
 		assert(remoteTab === 0, "Remote access tab must be absent on a remote device");
 
 		for (const section of SECTIONS) {
-			await page.locator(".settings-overlay-nav button").filter({ hasText: section.tab }).first().click();
+			await page.locator(".settings-dialog-nav button").filter({ hasText: section.tab }).first().click();
 			await page.waitForTimeout(700);
 			const honestCount = await page.locator(".settings-overlay").getByText(section.honest, { exact: true }).count();
 			assert(honestCount === 1, `${section.tab}: expected exactly one honest line, saw ${honestCount}`);
@@ -119,10 +123,34 @@ try {
 				const count = await page.locator(`.settings-overlay ${selector}`).count();
 				assert(count === 0, `${section.tab}: local-only control still renders remotely (${selector}, ${count} found)`);
 			}
-			const back = page.locator(".settings-overlay-back");
+			const back = page.locator(".settings-dialog-back");
 			if (await back.count()) await back.click();
 			await page.waitForTimeout(200);
 		}
+		// AI setup renders the defaults for new rooms, read-only.
+		await page.locator(".settings-dialog-nav button").filter({ hasText: "AI setup" }).first().click();
+		await page.waitForTimeout(700);
+		const defaultPickers = await page.locator(".settings-overlay .ai-defaults-group .room-model-pick").count();
+		assert(defaultPickers === 2, `AI setup: expected the two default rows, saw ${defaultPickers}`);
+		await page.keyboard.press("Escape");
+		await page.waitForTimeout(300);
+		if (await page.locator(".settings-overlay").count()) {
+			await page.locator(".settings-dialog-close").first().click();
+			await page.waitForTimeout(300);
+		}
+
+		// The card's model is a label that opens Room settings on the Model
+		// pane; on a read-only device its pickers are disabled.
+		const label = page.locator(".card-model-label").first();
+		await label.waitFor({ timeout: 10000 });
+		await label.click();
+		await page.waitForSelector(".settings-dialog .room-model-section", { timeout: 10000 });
+		const modelPane = page.locator(".settings-dialog .room-model-section");
+		assert(await modelPane.isVisible(), "the card label must open Room settings on the Model pane");
+		assert((await modelPane.locator(".pane-head h2").innerText()).trim() === "Model", "the pane opened is Model");
+		const pickers = await modelPane.locator(".room-model-pick").count();
+		assert(pickers === 2, `Model pane: expected two rows, saw ${pickers}`);
+		assert((await modelPane.locator(".room-model-pick:not(:disabled)").count()) === 0, "Model pane: a picker is enabled on a read-only device");
 		await remoteCtx.close();
 
 		// Loopback: the same tabs stay operable (the gate must fail open).
@@ -135,7 +163,7 @@ try {
 		await localPage.locator(".product-sidebar-footer button").first().click();
 		await localPage.locator(".sidebar-config-menu button, .sidebar-config-menu a").filter({ hasText: /Settings/ }).first().click();
 		await localPage.waitForSelector(".settings-overlay", { timeout: 10000 });
-		await localPage.locator(".settings-overlay-nav button").filter({ hasText: "AI setup" }).first().click();
+		await localPage.locator(".settings-dialog-nav button").filter({ hasText: "AI setup" }).first().click();
 		await localPage.waitForTimeout(700);
 		assert((await localPage.locator(".add-provider-toggle").count()) === 1, "loopback: Add another provider must render");
 		assert((await localPage.locator(".settings-overlay").getByText(SECTIONS[0].honest, { exact: true }).count()) === 0, "loopback: the remote honest line must not render");

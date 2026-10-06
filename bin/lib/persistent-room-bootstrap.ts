@@ -15,12 +15,7 @@ import {
 	writePersistentAgentThread,
 } from "../../apps/web-server/src/persistent-agents.js";
 import { buildPersistentRoomRestoredLiveThreadContext } from "../../apps/web-server/src/persistent-room-resume-context.js";
-import {
-	assertPersistentRoomModelForActiveProfile,
-	getPersistentRoomModelLocks,
-	persistentAgentModelLocksEqual,
-} from "../../apps/web-server/src/persistent-agent-ai-profiles.js";
-import { readPersistentAgentAiProfileState } from "../../apps/web-server/src/persistent-agent-ai-profile-state.js";
+import { catalogModelNames, createRoomModelCatalog, isRoomModelOffered, resolveRoomModel, roomModelUnavailableError } from "../../apps/web-server/src/room-models.js";
 import {
 	getPersistentRoomToolPolicy,
 } from "../../apps/web-server/src/persistent-room-tool-policy.js";
@@ -28,27 +23,13 @@ import {
 	resolvePersistentRoomEffectiveWorkspacePolicy,
 	persistentRoomRuntimeCwdForEffectiveWorkspacePolicy,
 } from "../../apps/web-server/src/persistent-room-workspace-policy.js";
-import { productAppStatePath } from "../../pi-package/product-state-paths.js";
 
 type ModelLock = { provider: string; model: string; label?: string };
 
-const MODEL_SELECTION_FILE = productAppStatePath("web-chat-model.json");
 
 function readStdinJson(): any {
 	const raw = fs.readFileSync(0, "utf-8").trim();
 	return raw ? JSON.parse(raw) : {};
-}
-
-function readPersistentRoomModelSelection(): ModelLock | null {
-	try {
-		if (!fs.existsSync(MODEL_SELECTION_FILE)) return null;
-		const raw = JSON.parse(fs.readFileSync(MODEL_SELECTION_FILE, "utf-8"));
-		const provider = String(raw?.provider ?? "").trim();
-		const model = String(raw?.model ?? raw?.modelId ?? "").trim();
-		return provider && model ? { provider, model } : null;
-	} catch {
-		return null;
-	}
 }
 
 function inputModelLock(raw: any): ModelLock | null {
@@ -58,27 +39,25 @@ function inputModelLock(raw: any): ModelLock | null {
 	return provider && model ? { provider, model, ...(label ? { label } : {}) } : null;
 }
 
-function selectedRoomModel(threadModel: ModelLock | null, requestedModel: ModelLock | null): { model: ModelLock; source: "thread" | "requested" | "selection" | "profile-default" } {
-	const activeProfileId = readPersistentAgentAiProfileState().profileId;
-	const locks = getPersistentRoomModelLocks(activeProfileId);
-	if (locks.length === 0) throw new Error(`active persistent-agent AI profile ${activeProfileId} has no persistent-room models`);
-
-	if (threadModel) {
-		assertPersistentRoomModelForActiveProfile(activeProfileId, threadModel.provider, threadModel.model, "persistent-agent saved thread");
-		return { model: threadModel, source: "thread" };
-	}
-
+// The same resolver the web uses, so a room opened from the CLI runs on the
+// same model as from the web: a saved conversation keeps its own lock; a new
+// one starts on the model the CLI asked for when it can run, else on the
+// room's conversation model, and is refused with the web's sentence while
+// that cannot run.
+function selectedRoomModel(agentId: string, threadModel: ModelLock | null, requestedModel: ModelLock | null): { model: ModelLock; source: "thread" | "requested" | "room" | "default" | "fallback" } {
+	if (threadModel) return { model: threadModel, source: "thread" };
+	// The same floor as every stored lock: a model some provider offers rooms.
+	// The session the CLI then binds checks the sign-in, as the web bind does.
 	if (requestedModel) {
-		assertPersistentRoomModelForActiveProfile(activeProfileId, requestedModel.provider, requestedModel.model, "persistent-agent requested room model");
+		if (!isRoomModelOffered(requestedModel, "conversation")) throw new Error(`model is not offered to rooms by any provider: ${requestedModel.provider}/${requestedModel.model}`);
 		return { model: requestedModel, source: "requested" };
 	}
-
-	const saved = readPersistentRoomModelSelection();
-	if (saved && locks.some((candidate) => persistentAgentModelLocksEqual(candidate, saved))) {
-		return { model: saved, source: "selection" };
-	}
-
-	return { model: locks[0], source: "profile-default" };
+	const catalog = createRoomModelCatalog();
+	const resolved = resolveRoomModel(agentId, "conversation", catalog);
+	const refusal = roomModelUnavailableError(resolved, "conversation", catalogModelNames(catalog));
+	if (refusal) throw refusal;
+	if (!resolved.effective || resolved.source === "none") throw new Error("no AI provider is signed in; sign in first (exxperts login), then open the room again");
+	return { model: resolved.effective, source: resolved.source };
 }
 
 function makeThreadId(): string {
@@ -103,7 +82,7 @@ function main() {
 	const runtime = getPersistentAgentRuntimeState(status.id);
 	const threadId = String(input?.threadId || runtime.activeThreadId || makeThreadId()).trim();
 	const existingThread = getPersistentAgentThread(status.id, threadId);
-	const { model, source: modelSource } = selectedRoomModel(existingThread?.model ?? null, inputModelLock(input?.model));
+	const { model, source: modelSource } = selectedRoomModel(status.id, existingThread?.model ?? null, inputModelLock(input?.model));
 	const fallbackRuntimeCwd = String(input?.cwd || process.cwd()).trim() || process.cwd();
 
 	const effectiveWorkspacePolicy = resolvePersistentRoomEffectiveWorkspacePolicy(status.id, threadId);

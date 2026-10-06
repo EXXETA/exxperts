@@ -6,7 +6,7 @@ Thanks for your interest in improving exxperts. Issues and pull requests are wel
 
 Open a [GitHub issue](https://github.com/EXXETA/exxperts/issues). The most useful reports include your platform (macOS/Windows/Linux), Node and npm versions, the exact command or click path, and what you expected versus what happened. Screenshots help a lot. If `npm run doctor` (from the repo folder) prints anything red, include that too.
 
-Small fix already in hand? Feel free to skip the issue and open the pull request directly.
+Small fix already in hand? Feel free to skip the issue and open the pull request directly. New features, integrations, and providers are different: open an issue first and wait for a maintainer to agree before writing code. Pull requests that add a third-party service (a search engine, an API, a hosted tool) without an agreed issue are closed without review.
 
 ## Setting up for development
 

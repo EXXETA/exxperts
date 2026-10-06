@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { fetchPersistentRoomBashSettings, updatePersistentRoomBashSettings } from "../persistent-room-management-api";
 import { useRemoteClientContext } from "../remote-client-context";
 import type { PersistentAgentId } from "../types";
+import { TerminalIcon } from "./icons";
 
 /**
  * The chat header's bash-mode chip: visible only in rooms whose workspace
@@ -132,11 +133,14 @@ export function BashModeChip({ agentId, bashEnabled, settingsOpen = false }: {
 				type="button"
 				className={`bash-mode-chip${autoApprove ? " auto" : ""}`}
 				title={autoApprove ? "This room runs commands without asking. Click to change" : "This room asks before each command. Click to change"}
+				aria-label={autoApprove ? "Bash: auto" : "Bash: asks"}
 				aria-haspopup="menu"
 				aria-expanded={open}
 				onClick={toggleMenu}
 			>
-				{autoApprove ? "Bash: auto" : "Bash: asks"}
+				{/* Phone width shows the icon alone; the words ride the title and the label. */}
+				<span className="bash-mode-chip-icon"><TerminalIcon size={16} /></span>
+				<span className="bash-mode-chip-label">{autoApprove ? "Bash: auto" : "Bash: asks"}</span>
 			</button>
 			{open && (
 				<div className="bash-mode-menu" role="menu" aria-label="Bash approval mode">

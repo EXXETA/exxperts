@@ -14,6 +14,7 @@ process.env.EXXPERTS_CODING_AGENT_DIR = path.join(tempHome, ".exxperts", "agent"
 try {
 	const custom = await import("../src/custom-ai-profiles.js");
 	const profiles = await import("../src/persistent-agent-ai-profiles.js");
+	const roomModels = await import("../src/room-models.js");
 	const profileState = await import("../src/persistent-agent-ai-profile-state.js");
 
 	const filePath = path.join(tempHome, ".exxperts", "app", "custom-ai-profiles.json");
@@ -26,10 +27,10 @@ try {
 
 	// Write/read roundtrip via the upsert API.
 	custom.writeCustomAiProfile(
-		{ providerId: "groq", label: "Groq", roomModels: ["model-a", "model-b", "model-a"], learnModel: "model-a", reviewMemoryModel: "model-b" },
+		{ providerId: "groq", label: "Groq", roomModels: ["model-a", "model-b", "model-a"], learnModel: "model-a" },
 		filePath,
 	);
-	custom.writeCustomAiProfile({ providerId: "mistral", roomModels: ["m-1"], learnModel: "m-1", reviewMemoryModel: "m-1" }, filePath);
+	custom.writeCustomAiProfile({ providerId: "mistral", roomModels: ["m-1"], learnModel: "m-1" }, filePath);
 	const loaded = custom.readCustomAiProfiles(filePath);
 	assert(loaded.errors.length === 0, `roundtrip should load cleanly, got: ${loaded.errors.join(" | ")}`);
 	assert(loaded.profiles.length === 2, "both custom profiles should load");
@@ -37,8 +38,7 @@ try {
 	assert(groq, "custom-groq should exist");
 	assert(groq.processes.persistentRoom.length === 2, "duplicate room models should be deduped");
 	assert(groq.processes.absorb.model === "model-a" && groq.processes.absorb.provider === "groq", "absorb lock should come from learnModel");
-	assert(groq.processes.structuralReview.model === "model-b", "structural review lock should come from reviewMemoryModel");
-	assert(groq.processes.checkpoint.kind === "inheritPersistentRoom", "checkpoint should inherit the room model");
+	assert(groq.processes.structuralReview.model === "model-a", "Review follows the provider's one memory model");
 	const mistral = loaded.profiles.find((profile) => profile.id === "custom-mistral");
 	assert(mistral && mistral.label === "mistral", "label should default to the provider id");
 
@@ -49,19 +49,10 @@ try {
 		"available profiles should include both custom profiles",
 	);
 	assert(profiles.isPersistentRoomModelForProfile("custom-groq", "groq", "model-b"), "approved room model should pass the profile check");
-	let threw = false;
-	try {
-		profiles.assertPersistentRoomModelForActiveProfile("custom-groq", "groq", "model-c");
-	} catch {
-		threw = true;
-	}
-	assert(threw, "unapproved model should be rejected by the assert gate");
+	assert(!profiles.isPersistentRoomModelForProfile("custom-groq", "groq", "model-c"), "a model the custom profile does not list is not one of its room models");
+	assert(roomModels.isRoomModelOffered({ provider: "groq", model: "model-b" }, "conversation") && !roomModels.isRoomModelOffered({ provider: "groq", model: "model-c" }, "conversation"), "the custom profile's list is what rooms are offered");
 	assert(profiles.getAbsorbModelLock("custom-groq").model === "model-a", "absorb lock resolution should work for custom profiles");
-	assert(profiles.getStructuralReviewModelLock("custom-groq").model === "model-b", "structural review lock resolution should work for custom profiles");
-	assert(
-		profiles.resolveCheckpointModelLockForProfile("custom-groq", { provider: "groq", model: "model-b" }).model === "model-b",
-		"checkpoint should inherit an approved room model",
-	);
+	assert(profiles.getStructuralReviewModelLock("custom-groq").model === "model-a", "structural review lock resolution should work for custom profiles (it follows the memory pick)");
 
 	// Active-profile state accepts a custom profile.
 	profileState.writePersistentAgentAiProfileState("custom-groq");
@@ -71,7 +62,7 @@ try {
 	// The gateway provider stays reserved (its policy file owns it)...
 	let rejected = false;
 	try {
-		custom.writeCustomAiProfile({ providerId: "openai-compatible", roomModels: ["x"], learnModel: "x", reviewMemoryModel: "x" }, filePath);
+		custom.writeCustomAiProfile({ providerId: "openai-compatible", roomModels: ["x"], learnModel: "x" }, filePath);
 	} catch {
 		rejected = true;
 	}
@@ -81,17 +72,17 @@ try {
 	// no custom model list, their room list is the curated one of the release.
 	rejected = false;
 	try {
-		custom.writeCustomAiProfile({ providerId: "anthropic", roomModels: ["claude-haiku-4-5"], learnModel: "claude-haiku-4-5", reviewMemoryModel: "claude-haiku-4-5" }, filePath);
+		custom.writeCustomAiProfile({ providerId: "anthropic", roomModels: ["claude-haiku-4-5"], learnModel: "claude-haiku-4-5" }, filePath);
 	} catch {
 		rejected = true;
 	}
 	assert(rejected, "built-in provider anthropic should be rejected on write");
 	const curated = profiles.getPersistentAgentAiProfile("anthropic");
 	const curatedRoomModels = curated.processes.persistentRoom.length;
-	assert(curatedRoomModels === 10 && curated.processes.persistentRoom[0].model === "claude-opus-5-5", "the curated Claude list has ten rows with Opus 5.5 first");
+	assert(curatedRoomModels === 11 && curated.processes.persistentRoom[0].model === "claude-opus-5-5", "the curated Claude list has eleven rows with Opus 5.5 first");
 	assert(curated.processes.persistentRoom.some((lock) => lock.model === "claude-haiku-4-5"), "the curated Claude list carries Haiku 4.5");
 	const curatedCodex = profiles.getPersistentAgentAiProfile("chatgpt-codex");
-	assert(curatedCodex.processes.persistentRoom.length === 6 && curatedCodex.processes.persistentRoom[0].model === "gpt-6-sol", "the curated ChatGPT list has six rows with GPT-6 Sol first");
+	assert(curatedCodex.processes.persistentRoom.length === 7 && curatedCodex.processes.persistentRoom[0].model === "gpt-6-sol", "the curated ChatGPT list has seven rows with GPT-6 Sol first");
 	assert(!curatedCodex.processes.persistentRoom.some((lock) => lock.model === "gpt-5.5"), "gpt-5.5 has left the ChatGPT picker");
 
 	// First start after the update: a custom list saved earlier for a built-in
@@ -172,7 +163,7 @@ try {
 	assert(pointerCase("custom-x").pointerCleared === "custom-x" && !fs.existsSync(pointerPath), "a custom id with no entry is cleared");
 	assert(pointerCase("anthropic").pointerCleared === null && fs.existsSync(pointerPath), "a built-in id is kept");
 	assert(pointerCase("custom-github-copilot").pointerCleared === "custom-github-copilot" && !fs.existsSync(pointerPath), "the stale copilot pointer is cleared");
-	custom.writeCustomAiProfile({ providerId: "groq", roomModels: ["model-a"], learnModel: "model-a", reviewMemoryModel: "model-a" }, filePath);
+	custom.writeCustomAiProfile({ providerId: "groq", roomModels: ["model-a"], learnModel: "model-a" }, filePath);
 	assert(pointerCase("custom-groq").pointerCleared === null && fs.existsSync(pointerPath), "a custom id with an entry is kept");
 	fs.writeFileSync(filePath, "{not json");
 	assert(pointerCase("custom-groq").pointerCleared === null && fs.existsSync(pointerPath), "an unreadable custom-profiles file keeps the pointer");
@@ -216,8 +207,8 @@ try {
 	assert(fallback.profileId !== "custom-groq", "active state must fall back when the custom profile disappears");
 
 	// Delete removes only the targeted profile.
-	custom.writeCustomAiProfile({ providerId: "groq", roomModels: ["model-a"], learnModel: "model-a", reviewMemoryModel: "model-a" }, filePath);
-	custom.writeCustomAiProfile({ providerId: "xai", roomModels: ["grok"], learnModel: "grok", reviewMemoryModel: "grok" }, filePath);
+	custom.writeCustomAiProfile({ providerId: "groq", roomModels: ["model-a"], learnModel: "model-a" }, filePath);
+	custom.writeCustomAiProfile({ providerId: "xai", roomModels: ["grok"], learnModel: "grok" }, filePath);
 	assert(custom.deleteCustomAiProfile("custom-groq", filePath), "delete should report success for an existing profile");
 	assert(!custom.deleteCustomAiProfile("custom-groq", filePath), "delete should report false for a missing profile");
 	const afterDelete = custom.readCustomAiProfiles(filePath);

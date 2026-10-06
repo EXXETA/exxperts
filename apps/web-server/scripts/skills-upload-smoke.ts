@@ -90,6 +90,7 @@ try {
 	const validZip = await zipBase64({
 		"doc-helper/SKILL.md": skillMd("doc-helper", "Helps with documents", validBody, ["license: MIT"]),
 		"doc-helper/run.py": "import sys\nprint('this must never execute')\n",
+		"doc-helper/scripts/lib/util.py": "print('nested helper')\n",
 		"doc-helper/README.md": "# Doc helper\nSupporting docs, not a skill.",
 	});
 	const validUpload = await upload("doc-helper.zip", validZip);
@@ -103,6 +104,7 @@ try {
 	assert(Array.isArray(candidate.scanFindings) && candidate.scanFindings.length === 0, "clean body should have no scan findings");
 	assert(Array.isArray(candidate.bundledScripts) && candidate.bundledScripts.includes("run.py"), "bundled script should be listed by name");
 	assert(!candidate.bundledScripts.includes("README.md"), "a README is not a bundled script");
+	assert(candidate.bundledScripts.includes("scripts/lib/util.py"), `a nested script is listed by its path inside the skill, got ${JSON.stringify(candidate.bundledScripts)}`);
 	// The README/docs never leak into the adopted body.
 	assert(!String(candidate.body).includes("Supporting docs"), "README content must not leak into the candidate body");
 

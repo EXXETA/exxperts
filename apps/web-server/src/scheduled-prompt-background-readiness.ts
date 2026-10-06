@@ -11,10 +11,10 @@ import type {
 	BackgroundRunTarget,
 } from "./background-runs.js";
 import {
-	resolveScheduledRoomModelLockForProfile,
 	SCHEDULED_ROOM_MODEL_POLICY_KEY,
 } from "./persistent-agent-ai-profiles.js";
 import { readPersistentAgentAiProfileState } from "./persistent-agent-ai-profile-state.js";
+import { resolveScheduledRoomModel, RoomModelUnavailableError } from "./room-models.js";
 import { classifyPersistentRoomBackgroundRunTarget } from "./persistent-agents.js";
 import {
 	readPersistentRoomScheduleStore,
@@ -252,11 +252,12 @@ export function checkScheduledPromptBackgroundRunExecutionReadiness(
 	} else {
 		const activeProfileState = readPersistentAgentAiProfileState();
 		try {
-			modelLock = resolveScheduledRoomModelLockForProfile(activeProfileState.profileId);
+			modelLock = resolveScheduledRoomModel(roomId);
 			modelPolicyCheck = "ready";
 			target = { kind: "fresh-thread", roomId, modelPolicyKey: SCHEDULED_ROOM_MODEL_POLICY_KEY, model: modelLock };
 		} catch (error) {
-			const message = `Scheduled-room model policy is unavailable for active profile ${activeProfileState.profileId}: ${safeErrorMessage(error)}`;
+			// The room's own refusal (its model no longer offered) reads as it is.
+			const message = error instanceof RoomModelUnavailableError ? error.message : `Scheduled-room model is unavailable for this room: ${safeErrorMessage(error)}`;
 			return decision({
 				status: "blocked",
 				result: "blocked",

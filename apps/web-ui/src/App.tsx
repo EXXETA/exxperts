@@ -15,10 +15,22 @@ import { BashModeChip } from "./components/BashModeChip";
 import { isMacPlatform, roomSettingsChordHint } from "./platform";
 import { CreateRoomPanel } from "./components/create-room-panel";
 import { useEscapeKey } from "./components/use-escape-key";
+import { confirmChoice, confirmDialog } from "./components/confirm-dialog";
 import { PersistentAgentCard } from "./components/launcher-room-card";
+import { RoomSortControl, ROOM_ARRANGE_HINT_ID, ROOM_SORT_MIN_ROOMS } from "./components/RoomSortControl";
+import { useHomeRoomOrder } from "./use-home-room-order";
+import type { HomeRoomOrderView } from "./home-room-order";
+import { orderRooms, type RoomOrderChoice, type RoomOrderMode } from "../../web-server/src/room-order";
+import { confirmLeavingArrangement, createRoomArrangement, moveByKey, type RoomArrangement } from "./home-room-arrange";
+import { createCardDrag, ROOM_LONG_PRESS_MS, type CardDrag, type CardDragView, type Rect, type SlotLayout } from "./home-room-drag";
+import { arrangeSlots, slotRestBox, useArrangeEdgeScroll, useRoomArrangeMotion } from "./use-room-arrange-motion";
+import { NOTHING_TO_MAINTAIN_SENTENCE, nothingToMaintain } from "./memory-surface-copy";
 import { fmtTokensK } from "./components/RoomMaintenanceSection";
 import { ProductSidebar, type AppearancePreference, type ThemeMode } from "./components/product-shell";
 import { SettingsOverlay, type SettingsSection } from "./components/settings-overlay";
+import { isSignInFailure } from "./sign-in-failure";
+import { GroupHeader, PaneHeader } from "./components/pane-header";
+import { roomFilesSentence } from "./components/RoomDangerZone";
 import { WhatsNewDialog } from "./components/whats-new-dialog";
 import { useRemoteClientContext } from "./remote-client-context";
 import { RemoteAccessPage } from "./components/remote-access-page";
@@ -30,24 +42,26 @@ import { VoiceSettingsSection } from "./components/voice-settings-section";
 import { SkillsPage } from "./components/SkillsPage";
 import { Preview } from "./components/Preview";
 import { ConnectionLostBanner } from "./components/connection-lost-banner";
-import { CONNECT_DEADLINE_MS, createConnectionHealthState, msUntilWarn, OPEN_DWELL_MS, reduceConnectionHealth, type ConnectionHealthAction, type ConnectionHealthState } from "./connection-health";
+import { appendErrorLineOnce, CONNECT_DEADLINE_MS, createConnectionHealthState, msUntilWarn, OPEN_DWELL_MS, reduceConnectionHealth, type ConnectionHealthAction, type ConnectionHealthState } from "./connection-health";
 import { MarkdownRenderer } from "./components/Markdown";
-import { RoomsGuide } from "./components/RoomsGuide";
-import { RoomSettingsModal } from "./components/RoomSettingsModal";
-import { AddProviderPanel, ApiKeyForm, ConfigureProfileModal, GatewayApproveModelsModal, GatewayConfigModal, MaintenanceModelsModal, useProviderLogin } from "./components/add-provider-panel";
+import { RoomSettingsModal, type SettingsPane } from "./components/RoomSettingsModal";
+import { AddProviderPanel, ApiKeyForm, ConfigureProfileModal, GatewayApproveModelsModal, GatewayConfigModal, useProviderLogin } from "./components/add-provider-panel";
+import { AiDefaultsGroup } from "./components/ai-defaults-group";
 import { apiFetch, fetchJson } from "./api";
 import { canonicalModelName, modelDisplayName, modelTooltipName } from "./model-names";
 import type { ApprovalPreviewData } from "./approval-preview";
 import { describeMaintenanceWarning, describeValidationError, meaningfulMaintenanceWarnings, sectionLabel } from "./maintenance-warnings";
+import { fetchRememberReadEstimate, isPlainRememberSentence, quickRememberBlockers, rememberEstimateSentence, rememberSendsTranscript, rememberProgressSentence, rememberReadSentences, rememberToolOutputSentence, type RememberReadEstimate } from "./remember-read";
 import { AbsorbRunActiveError, approveAbsorbRun, cancelAbsorbRun, fetchAbsorbRun, isAbsorbRunStart, keepAbsorbRunEntries, setAbsorbRunBudget, startAbsorbRun, editAbsorbRunEntry } from "./absorb-run-api";
 import { ABSORB_RUN_ACTIVE_ACTION, ABSORB_RUN_ACTIVE_SENTENCE, absorbRunFastPathBlockers, AUTOMATIC_APPLY_ON_SENTENCE, automaticApplyNeedsReviewSentence, absorbRunIsWorking, absorbRunNewTopics, absorbRunSavedSentence, KEEP_DEBOUNCE_MS, keepBatchAction, LIMIT_RAISED_ON_SAVE_SENTENCE, nextKeepIds, nextKeepTopics, overLimitFirstRead, RUN_POLL_INTERVAL_MS, RUN_POLL_LOST_SENTENCE, RUN_POLL_MAX_RETRIES, absorbRunSavedHeadline, absorbRunFullPercent, absorbRunNotesChanged, reviewChangeCounts, reviewRunFastPathBlockers, reviewRunFullPercent, reviewRunIsWorking, REVIEW_RUN_ACTIVE_ACTION, REVIEW_RUN_ACTIVE_SENTENCE } from "./memory-v2-copy";
 import { AbsorbRunCard, AbsorbRunFailedScreen, placeholderAbsorbRun } from "./components/absorb-run-screen";
 import { ReviewCard, ReviewDepthPicker, ReviewFirstReadSections, ReviewRunFailedScreen, ReviewRunProgressScreen, ReviewSavedScreen, reviewPercent, type ReviewUndoState } from "./components/review-screen";
 import { approveReviewRun, cancelReviewRun, editReviewRunEntry, fetchReviewRun, fetchReviewStatus, keepReviewRunEntries, requestReviewAssessment, requestReviewDiscussionSignoff, requestReviewDiscussionTurn, ReviewRunActiveError, setReviewRunBudget, startReviewRun, type ReviewDiscussionMessage } from "./review-api";
 import { undoMemorySave } from "./memory-entries-api";
-import type { AbsorbApprovalResponse, AbsorbAssessmentResponse, AbsorbAvailability, AbsorbDiscussionMessage, AbsorbDiscussionSignoffResponse, AbsorbDiscussionTokenBudget, AbsorbDiscussionTurnResponse, AbsorbProposalResponse, AbsorbProposalSourceMetadata, AbsorbReviewAction, AbsorbReviewEntryChange, AbsorbReviewSectionChange, AbsorbRun, AuthStatusResponse, ChatItem, CheckpointApprovalResponse, CheckpointProposalResponse, ContextHealthStatus, LoginProviderCatalogEntry, PersistentAgentAiProfileSelectionStatus, PersistentAgentAiProfileStatus, ArchivedPersistentAgentSummary, MemoryBudgetImpact, PersistentAgentArchiveResponse, PersistentAgentCreateRequest, PersistentAgentCreateResponse, PersistentAgentId, PersistentAgentMementoBoundaryResponse, PersistentAgentPurgeResponse, PersistentAgentStatus, PersistentAgentThreadOrigin, PersistentAgentThreadRecord, ReviewAssessmentResponse, ReviewAvailability, ReviewDepth, ReviewDiscussionTokenBudget, ReviewGuidance, ReviewRun, ReviewRunApprovalResponse, WebChatModelOption, WebChatModelStatus } from "./types";
+import type { AbsorbApprovalResponse, AbsorbAssessmentResponse, AbsorbAvailability, AbsorbDiscussionMessage, AbsorbDiscussionSignoffResponse, AbsorbDiscussionTokenBudget, AbsorbDiscussionTurnResponse, AbsorbProposalResponse, AbsorbProposalSourceMetadata, AbsorbReviewAction, AbsorbReviewEntryChange, AbsorbReviewSectionChange, AbsorbRun, AuthStatusResponse, ChatItem, CheckpointApprovalResponse, CheckpointProposalResponse, ContextHealthStatus, LoginProviderCatalogEntry, PersistentAgentAiProfileSelectionStatus, PersistentAgentAiProfileStatus, ArchivedPersistentAgentSummary, MemoryBudgetImpact, PersistentAgentArchiveResponse, PersistentAgentCreateRequest, PersistentAgentCreateResponse, PersistentAgentId, PersistentAgentMementoBoundaryResponse, PersistentAgentPurgeResponse, PersistentAgentStatus, PersistentAgentThreadOrigin, PersistentAgentThreadRecord, ReviewAssessmentResponse, ReviewAvailability, ReviewDepth, ReviewDiscussionTokenBudget, ReviewGuidance, ReviewRun, ReviewRunApprovalResponse, RoomModelLockView, WebChatModelOption, WebChatModelStatus } from "./types";
+import type { ConversationSwitchNotice } from "./room-models-api";
 import { archivePersistentRoom, fetchArchivedPersistentRooms, fetchPersistentRoomMaintenanceSettings, purgePersistentRoom, restorePersistentRoom, updatePersistentRoomMaintenanceSettings, type PersistentRoomPurgeError } from "./persistent-room-management-api";
-import { createAssistantStreamState, DEFAULT_REVEAL_PACING, isAssistantStreamActive, outputLimitNoticeForTurn, reduceAssistantStream, type AssistantStreamAction, type AssistantStreamEffect, type AssistantStreamState, type RevealPacing } from "./assistant-stream";
+import { ARRIVAL_REVEAL_PACING, createAssistantStreamState, DEFAULT_REVEAL_PACING, isAssistantStreamActive, outputLimitNoticeForTurn, reduceAssistantStream, type AssistantStreamAction, type AssistantStreamEffect, type AssistantStreamState, type RevealPacing } from "./assistant-stream";
 import { consultStack, createConsultState, reduceConsult, type ConsultAction, type ConsultExchange, type ConsultState } from "./consult-stream";
 import { createTaskState, reduceTask, type TaskAction, type TaskState } from "./task-stream";
 import { ConsultDock } from "./components/delegation-card";
@@ -264,29 +278,6 @@ function maintenanceFastPathBlockers(proposal: { candidateValidation: { valid: b
 	return blockers;
 }
 
-// The transcript-elision notice (checkpoint-compression.ts) is a quality
-// hedge, not a defect: it fires on long tool-heavy sessions — exactly where
-// the one-click path matters most — elision never touches the user's own
-// messages, and the entry lands in Recent Context where Memorize re-reviews it.
-// So it is disclosed on the saved line instead of forcing the full preview.
-function isTranscriptElisionWarning(warning: string): boolean {
-	return /trimmed to fit the compression budget/i.test(warning);
-}
-
-// Quick-checkpoint gate (same shape as the maintenance fast path): only
-// deterministic problems block — parse warnings from the worker, or an
-// incomplete proposal. The server stamps every propose response with the
-// informational "no memory has been written" line; that is status, not a
-// problem, so it is filtered out like the maintenance gate does. The
-// transcript-elision notice does not block either — the user chose the
-// no-preview path — it is appended to the saved system line instead.
-// Anything blocked falls back to the full preview with the reasons named.
-function quickCheckpointBlockers(proposal: CheckpointProposalResponse): string[] {
-	const blockers: string[] = meaningfulMaintenanceWarnings(proposal.warnings).filter((warning) => !isTranscriptElisionWarning(warning));
-	if (!proposal.fields.sessionArc.trim()) blockers.push("the proposal is missing its session arc");
-	if (!proposal.fields.body.trim()) blockers.push("the proposal is missing its body");
-	return blockers;
-}
 
 const CHECKPOINT_REMEMBER_MAX_CHARS = 500;
 const ABSORB_WAITING_MESSAGES = [
@@ -344,7 +335,9 @@ type PersistentAgentThread = {
 	model: WebChatModelOption;
 	items: ChatItem[];
 };
-type PersistentAgentTarget = { id: PersistentAgentId; displayName?: string };
+// A just-created room is not in the room list yet; its create answer brings
+// the model rows along.
+type PersistentAgentTarget = { id: PersistentAgentId; displayName?: string; models?: PersistentAgentStatus["models"] };
 type MaintainTarget = { agentId: PersistentAgentId; displayName: string };
 type PersistentChatConfig = Pick<PersistentAgentThread, "agentId" | "displayName" | "conversationId" | "model"> | null;
 
@@ -369,8 +362,16 @@ function threadRecordToLocalThread(record: PersistentAgentThreadRecord, fallback
 		displayName: fallbackDisplayName,
 		conversationId: record.threadId,
 		model,
-		items: settleLoadedItems(Array.isArray(record.items) ? record.items as ChatItem[] : []),
+		items: settleLoadedItems(Array.isArray(record.items) ? record.items as ChatItem[] : []).filter((item) => !isSavedModelWaitLine(item)),
 	};
+}
+
+// Older builds wrote the "signed out" or "no longer offered" refusal into the
+// conversation as a red line. The room says it once, in the notice above the
+// composer, so a saved copy is not shown again.
+const SAVED_MODEL_WAIT_LINE = /is signed out, so this conversation cannot continue on |^This room's (?:memory )?model, .+, is (?:signed out|no longer offered)\./;
+function isSavedModelWaitLine(item: ChatItem): boolean {
+	return item.kind === "system" && item.level === "error" && SAVED_MODEL_WAIT_LINE.test(String(item.text ?? ""));
 }
 
 /**
@@ -425,19 +426,22 @@ let __nextId = 1;
 const nid = () => `i_${Date.now().toString(36)}_${__nextId++}_${Math.random().toString(36).slice(2, 7)}`;
 
 // The reveal band is a taste knob, not physics: `localStorage.setItem(
-// "exxperts.revealSpeed", "brisk" | "instant")` overrides the default
-// reading-speed band without a rebuild (reload to apply). Cached — useRef
-// initializer expressions run on every render and this reads localStorage.
+// "exxperts.revealSpeed", "brisk" | "arrival" | "instant")` overrides the
+// default reading-speed band without a rebuild (reload to apply). Cached —
+// useRef initializer expressions run on every render and this reads
+// localStorage.
 let cachedRevealPacing: RevealPacing | null = null;
 function readRevealPacing(): RevealPacing {
 	if (cachedRevealPacing) return cachedRevealPacing;
-	cachedRevealPacing = DEFAULT_REVEAL_PACING;
+	let pacing = DEFAULT_REVEAL_PACING;
 	try {
 		const value = localStorage.getItem("exxperts.revealSpeed");
-		if (value === "brisk") cachedRevealPacing = { ...DEFAULT_REVEAL_PACING, minCharsPerSec: 90, maxCharsPerSec: 150 };
-		if (value === "instant") cachedRevealPacing = { ...DEFAULT_REVEAL_PACING, minCharsPerSec: 1e6, maxCharsPerSec: 1e6 };
+		if (value === "brisk") pacing = { ...DEFAULT_REVEAL_PACING, minCharsPerSec: 90, maxCharsPerSec: 150 };
+		if (value === "arrival") pacing = ARRIVAL_REVEAL_PACING;
+		if (value === "instant") pacing = { ...DEFAULT_REVEAL_PACING, minCharsPerSec: 1e6, maxCharsPerSec: 1e6 };
 	} catch {}
-	return cachedRevealPacing;
+	cachedRevealPacing = pacing;
+	return pacing;
 }
 const newConversationId = () => `c_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
 const DIRECT_RESUME_INCOMPATIBLE_MODEL_MESSAGE = "This standby thread is locked to a model that is not available in the active AI profile. Select a compatible AI profile to resume it.";
@@ -465,6 +469,8 @@ function stopRunningToolItems(items: ChatItem[]): ChatItem[] {
 function hasUserInput(items: ChatItem[]): boolean {
 	return items.some((item) => item.kind === "user" && item.text.trim().length > 0);
 }
+
+const MAINTAIN_BLOCKED_BY_OPEN_CONVERSATION = "Remember or Forget the open conversation first, then Maintain becomes available.";
 
 function hasUserVisibleTurn(items: ChatItem[]): boolean {
 	return items.some((item) => (item.kind === "user" || item.kind === "assistant") && item.text.trim().length > 0);
@@ -530,26 +536,16 @@ function authSourceLabel(source?: AuthStatusResponse["providers"][number]["sourc
 	return "not connected";
 }
 
-function persistentRoomModels(status: WebChatModelStatus | null): WebChatModelOption[] {
-	return status?.roomModels?.length ? status.roomModels : status?.models ?? [];
-}
 
-function persistentRoomRecommended(status: WebChatModelStatus | null): WebChatModelOption | undefined {
-	return status?.roomRecommended ?? persistentRoomModels(status)[0];
-}
-
+// Home asks for AI setup only when no room could run: nothing set up yet, or
+// no provider signed in. A room whose own pick is signed out runs on the
+// default meanwhile and says so in its Model pane.
 function homeAiProfileStatus(modelStatus: WebChatModelStatus | null, aiProfileStatus: PersistentAgentAiProfileSelectionStatus | null): { message: string; ready: boolean | undefined } | null {
 	if (!modelStatus && !aiProfileStatus) return null;
 	const configured = aiProfileStatus ? aiProfileStatus.state.source !== "default" : true;
 	if (!configured) return { message: "AI setup needed", ready: false };
-	const activeProfile = aiProfileStatus?.activeProfile;
-	const ready = activeProfile ? activeProfile.ready : modelStatus?.ready;
-	// Name the broken profile only when it is specifically the problem; with
-	// nothing signed in at all the honest message is provider-neutral.
-	const anySignedIn = aiProfileStatus?.profiles?.some((profile) => profile.provider.configured) ?? true;
-	if (!anySignedIn) return { message: "AI setup needed", ready };
-	const label = modelStatus?.activeProfileLabel || activeProfile?.label || "AI profile";
-	return { message: `${label} setup needed`, ready };
+	const anyReady = modelStatus?.providers ? modelStatus.providers.some((provider) => provider.ready) : aiProfileStatus?.profiles.some((profile) => profile.ready);
+	return { message: "AI setup needed", ready: anyReady };
 }
 
 function compactDateTime(value: string | null | undefined): string {
@@ -673,18 +669,14 @@ function ModelNameList({ models }: { models: RegistryModel[] }) {
 	);
 }
 
-// The per-profile model catalog, in product vocabulary: the room-model choices,
-// plus the fixed models behind Memorize (absorb) and Review (structural review).
+// A provider's models in product vocabulary: the ones its rooms may pick, and
+// the connection. Which model runs memory work is the rooms' choice (the
+// defaults above, or Room settings, Model), not the provider's.
 function AiProfileModelsDetail({ profile }: { profile: PersistentAgentAiProfileStatus }) {
 	const roomModels = profile.processes?.persistentRoom.models ?? [];
-	const forPurpose = (token: string) => profile.requiredModels.filter((model) => (model.purpose ?? "").split("/").includes(token));
-	const learnModels = forPurpose("absorb");
-	const reviewModels = forPurpose("structural-review");
 	return (
 		<div className="ai-profile-models" role="presentation">
 			<div className="ai-profile-models-row"><span>Rooms</span><span>{roomModels.length > 0 ? <ModelNameList models={roomModels} /> : "no room models listed"}</span></div>
-			{learnModels.length > 0 && <div className="ai-profile-models-row"><span>Memorize</span><span><ModelNameList models={learnModels} /></span></div>}
-			{reviewModels.length > 0 && <div className="ai-profile-models-row"><span>Review</span><span><ModelNameList models={reviewModels} /></span></div>}
 			<div className="ai-profile-models-row"><span>Connection</span><span>{profile.provider.configured ? `signed in · ${authSourceLabel(profile.provider.source, profile.provider.label)}` : "not signed in"}</span></div>
 		</div>
 	);
@@ -747,19 +739,26 @@ function AiProfileRowMenu({ anchorRef, onDismiss, children }: { anchorRef: React
 	);
 }
 
-function AiProfileSwitcherSection({ status, onSelect, onRefresh, onRefreshAuth }: { status: PersistentAgentAiProfileSelectionStatus | null; onSelect: (profileId: string) => Promise<void>; onRefresh: () => void; onRefreshAuth: () => void }) {
+function AiProfileSwitcherSection({ status, authStatus, onRefresh, onRefreshAuth, onSignedIn, focus }: { status: PersistentAgentAiProfileSelectionStatus | null; authStatus: AuthStatusResponse | null; onRefresh: () => void; onRefreshAuth: () => void; /** A sign-in or a key was just saved here. */ onSignedIn?: () => void; focus?: { providerId: string } | null }) {
 	// On a remote device the provider/gateway setup routes are local-only
 	// (remote-route-policy is the truth), so those controls render as facts
-	// with one honest line instead of failing per tap. Switching the active
-	// profile is a write route, so full-capability devices keep it.
+	// with one honest line instead of failing per tap.
 	const remoteClient = useRemoteClientContext();
 	const remoteSetupLocked = remoteClient.remote;
-	const remoteSwitchLocked = remoteClient.remote && remoteClient.capability !== "full";
-	const [switchingId, setSwitchingId] = useState<string | null>(null);
+	const [addProviderOpen, setAddProviderOpen] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [modelsOpenId, setModelsOpenId] = useState<string | null>(null);
 	const [editProfile, setEditProfile] = useState<PersistentAgentAiProfileStatus | null>(null);
-	const [maintenanceProfile, setMaintenanceProfile] = useState<PersistentAgentAiProfileStatus | null>(null);
+	// Opened to sign a provider in again (a room stopped on it): its row is
+	// brought into view once the rows are there, once per request.
+	const focusedRef = useRef<typeof focus>(null);
+	useEffect(() => {
+		if (!focus || focusedRef.current === focus || !status) return;
+		const row = document.querySelector(`[data-provider-id="${CSS.escape(focus.providerId)}"]`);
+		if (!row) return;
+		focusedRef.current = focus;
+		row.scrollIntoView({ block: "center" });
+	}, [focus, status]);
 	// Which gateway the modal is for: gateways are plural now, so "open" is not
 	// enough to know whose base URL or model set is being edited.
 	const [gatewayEdit, setGatewayEdit] = useState<{ id: string; label: string } | null>(null);
@@ -772,7 +771,6 @@ function AiProfileSwitcherSection({ status, onSelect, onRefresh, onRefreshAuth }
 	const [removing, setRemoving] = useState(false);
 	const [keyProfileId, setKeyProfileId] = useState<string | null>(null);
 	const [loginCatalog, setLoginCatalog] = useState<LoginProviderCatalogEntry[] | null>(null);
-	const notConfigured = status ? status.state.source === "default" : false;
 
 	// Refetched when the profile SET changes (not on every status refresh):
 	// setting up a gateway or custom provider adds catalog entries the
@@ -803,6 +801,7 @@ function AiProfileSwitcherSection({ status, onSelect, onRefresh, onRefreshAuth }
 	const login = useProviderLogin(() => {
 		onRefresh();
 		onRefreshAuth();
+		onSignedIn?.();
 	});
 
 	async function signIn(profile: PersistentAgentAiProfileStatus) {
@@ -836,6 +835,7 @@ function AiProfileSwitcherSection({ status, onSelect, onRefresh, onRefreshAuth }
 			setKeyProfileId(null);
 			onRefresh();
 			onRefreshAuth();
+			onSignedIn?.();
 		} catch (e) {
 			setError((e as Error).message);
 		}
@@ -856,17 +856,6 @@ function AiProfileSwitcherSection({ status, onSelect, onRefresh, onRefreshAuth }
 		}
 	}
 
-	async function selectProfile(profileId: string) {
-		setSwitchingId(profileId);
-		setError(null);
-		try {
-			await onSelect(profileId);
-		} catch (e) {
-			setError((e as Error).message);
-		} finally {
-			setSwitchingId(null);
-		}
-	}
 	function closeMenu() {
 		setMenuOpenId(null);
 		setConfirmRemoveId(null);
@@ -901,102 +890,58 @@ function AiProfileSwitcherSection({ status, onSelect, onRefresh, onRefreshAuth }
 		</div>
 	);
 	return (
-		<section className="ai-setup-section ai-profile-switcher-section" aria-label="AI profile selection">
-			<div className="ai-profile-section-head">
-				<h3 className="web-search-fallback-heading">Profiles</h3>
-				<p className="ai-setup-copy web-search-fallback-copy">The profile your exxperts run on: a provider plus the models you approved for it.</p>
-			</div>
+		<section className="ai-setup-section ai-profile-switcher-section" aria-label="AI setup">
+			<PaneHeader
+				title="AI setup"
+				line="Your providers, and the models rooms use until they set their own."
+				actions={!remoteSetupLocked && (
+					<button className="rs-btn add-provider-toggle" type="button" aria-expanded={addProviderOpen} onClick={() => setAddProviderOpen((value) => !value)}>Add provider</button>
+				)}
+			/>
+			<AiDefaultsGroup refreshKey={(status?.profiles ?? []).map((profile) => `${profile.id}:${profile.ready ? 1 : 0}:${profile.processes?.persistentRoom.models.length ?? 0}`).join(",")} />
+			<div className="settings-group">
+			<GroupHeader kicker="Providers" />
 			{status ? (
 				status.profiles.length > 0 ? (
 					<div className="ai-profile-card">
-						{/* The radiogroup wraps only the rows: the card's Refresh link is not a
-						    choice in it, and assistive tech would otherwise read it as one. */}
-						<div className="ai-profile-rows" role="radiogroup" aria-label="AI profile">
+						<div className="ai-profile-rows">
 							{status.profiles.map((profile) => {
 								const roomModelCount = profile.processes?.persistentRoom.models.length ?? 0;
 								const roomModelsLabel = `${roomModelCount} room model${roomModelCount === 1 ? "" : "s"}`;
 								const signingIn = login.signingInProvider === profile.provider.id;
-								// One quiet subline per row, describing the row's own state — the same
-								// state reads the same on every row, active or not. "Setup needed" is
-								// reserved for signed-in-but-still-broken.
-								const subline = switchingId === profile.id
-									? "selecting…"
-									: signingIn
-										? "finish signing in in your browser…"
-										: profile.ready
-											? profile.active && notConfigured ? "default" : "signed in"
-											: profile.provider.configured
-												? "setup needed"
-												// The models toggle beside the row already carries the count;
-												// repeating it here read as a glitch, loudest on phones where
-												// the toggle wraps directly under this line.
-												: "not signed in";
-								// A selection that cannot run is not presented as one: the dot only
-								// shows when the active profile is actually signed in.
-								const presentedActive = profile.active && profile.provider.configured;
-								const sublineWarn = !signingIn && presentedActive && !notConfigured && !profile.ready;
+								// One quiet subline per row, describing the row's own state.
+								// "Setup needed" is reserved for signed-in-but-still-broken.
+								const signedInWithOAuth = authStatus?.providers.find((provider) => provider.id === profile.provider.id)?.signedInWithOAuth;
+								const subline = signingIn
+									? "finish signing in in your browser…"
+									: profile.ready
+										? signedInWithOAuth === false ? "key saved" : "signed in"
+										: profile.provider.configured
+											? "setup needed"
+											// The models toggle beside the row already carries the count;
+											// repeating it here read as a glitch, loudest on phones where
+											// the toggle wraps directly under this line.
+											: "signed out";
+								const sublineWarn = !signingIn && profile.provider.configured && !profile.ready;
 								const modelsOpen = modelsOpenId === profile.id;
-								const title = !profile.ready
-									? "Sign in to this profile before using it"
-									: profile.active
-										? "The active profile — your exxperts run on it"
-										: "Select this AI profile. New room threads start on it; standby threads keep their model";
 								return (
-									<div key={profile.id} className={`ai-profile-row-group${modelsOpen ? " open" : ""}${keyProfileId === profile.id ? " key-open" : ""}`}>
-										<div
-											className={`ai-profile-row${presentedActive ? " active" : ""}${profile.ready ? "" : " notready"}`}
-											onClick={() => {
-												// Unready rows are inert; only the Sign in button starts a sign-in.
-												if (remoteSwitchLocked) return;
-												if (!profile.ready || switchingId !== null || login.signingInProvider !== null) return;
-												if (!profile.active) void selectProfile(profile.id);
-											}}
-										>
-											{/* The radio role covers only the label area: a radio's children are
-											    presentational, so Sign in and the manage menu must live outside it
-											    or assistive tech treats them as decoration — and the unready row's
-											    aria-disabled would wrongly disable them too. */}
-											<span
-												className="ai-profile-main"
-												role="radio"
-												aria-checked={presentedActive}
-												aria-disabled={!profile.ready || undefined}
-												tabIndex={profile.ready ? 0 : -1}
-												title={title}
-												onKeyDown={(e) => {
-													// Arrows move focus only (unready rows included, so their state is
-													// hearable); selection stays on Enter/Space because switching the
-													// active profile is a heavyweight action that must not ride along
-													// with browsing, as radiogroup selection-follows-focus would.
-													if (e.key === "ArrowDown" || e.key === "ArrowRight" || e.key === "ArrowUp" || e.key === "ArrowLeft") {
-														e.preventDefault();
-														const radios = Array.from(e.currentTarget.closest(".ai-profile-rows")?.querySelectorAll<HTMLElement>(".ai-profile-main") ?? []);
-														const index = radios.indexOf(e.currentTarget as HTMLElement);
-														if (index < 0 || radios.length < 2) return;
-														const delta = e.key === "ArrowDown" || e.key === "ArrowRight" ? 1 : -1;
-														radios[(index + delta + radios.length) % radios.length].focus();
-														return;
-													}
-													if (e.key !== "Enter" && e.key !== " ") return;
-													e.preventDefault();
-													(e.currentTarget as HTMLElement).click();
-												}}
-											>
-												<span className="ai-profile-radio" aria-hidden="true" />
+									<div key={profile.id} data-provider-id={profile.provider.id} className={`ai-profile-row-group${modelsOpen ? " open" : ""}${keyProfileId === profile.id ? " key-open" : ""}`}>
+										<div className={`ai-profile-row${profile.ready ? "" : " notready"}`}>
+											<span className="ai-profile-main">
 												<span className="ai-profile-text">
 													<span className="ai-profile-name">{profile.label}</span>
 													<span className={`ai-profile-sub sub-default${sublineWarn ? " warn" : ""}`}>{subline}</span>
 												</span>
 											</span>
-											<span className="ai-profile-side" onClick={(e) => e.stopPropagation()}>
+											<span className="ai-profile-side">
 												{roomModelCount > 0 && (
 													<button
 														className="ai-profile-models-toggle"
 														aria-expanded={modelsOpen}
-														title="Show or hide this profile's approved models"
+														title="Show or hide this profile's models"
 														onClick={() => setModelsOpenId(modelsOpen ? null : profile.id)}
 													>
-														{roomModelsLabel} {modelsOpen ? "▴" : "▾"}
+														{roomModelsLabel} <span className="disclosure-chevron" aria-hidden="true" />
 													</button>
 												)}
 												{signingIn ? (
@@ -1007,8 +952,8 @@ function AiProfileSwitcherSection({ status, onSelect, onRefresh, onRefreshAuth }
 														    than only the not-ready ones, so this offers the way IN and the
 														    form offers the way out. */}
 														{!profile.ready && keyProfileId !== profile.id && !remoteSetupLocked && (
-															<button className="ai-profile-signin" disabled={login.signingInProvider !== null} onClick={() => void signIn(profile)}>
-																{providerUsesOAuth(profile.provider.id) ? "Sign in →" : "Add API key →"}
+															<button className="rs-btn ai-profile-signin" disabled={login.signingInProvider !== null} onClick={() => void signIn(profile)}>
+																{providerUsesOAuth(profile.provider.id) ? "Sign in" : "Add API key"}
 															</button>
 														)}
 														{/* Management stays reachable in every state — broken (expired
@@ -1028,7 +973,7 @@ function AiProfileSwitcherSection({ status, onSelect, onRefresh, onRefreshAuth }
 															<AiProfileRowMenu anchorRef={menuAnchorRef} onDismiss={closeMenu}>
 																{confirmRemoveId === profile.id ? (
 																	<>
-																		<span className="ai-profile-menu-confirm">Remove {profile.label}? This {profile.provider.configured ? "signs out and deletes" : "deletes"} its approved models.</span>
+																		<span className="ai-profile-menu-confirm">Remove {profile.label}? This {profile.provider.configured ? "signs out and deletes" : "deletes"} its models.</span>
 																		<button className="ai-profile-menu-item danger" role="menuitem" disabled={removing} onClick={() => void removeProfile(profile)}>{removing ? "Removing…" : "Remove"}</button>
 																		<button className="ai-profile-menu-item" role="menuitem" disabled={removing} onClick={() => setConfirmRemoveId(null)} title="Cancel — keep this profile">Keep it</button>
 																	</>
@@ -1041,11 +986,6 @@ function AiProfileSwitcherSection({ status, onSelect, onRefresh, onRefreshAuth }
 																		{profile.kind === "custom" && (
 																			<button className="ai-profile-menu-item" role="menuitem" onClick={() => { setEditProfile(profile); closeMenu(); }} title="Choose which models rooms may use">Approve models</button>
 																		)}
-																		{/* A built-in row's room list is the curated one of the release; the
-																		    only choice is which curated model runs Memorize and Review. */}
-																		{profile.kind === "builtin" && (
-																			<button className="ai-profile-menu-item" role="menuitem" onClick={() => { setMaintenanceProfile(profile); closeMenu(); }} title="Choose which curated models run Memorize and Review">Memorize and Review models</button>
-																		)}
 																		{profile.kind === "gateway" && (
 																			<>
 																				{/* Approve models edits the model set only; Edit gateway
@@ -1054,7 +994,12 @@ function AiProfileSwitcherSection({ status, onSelect, onRefresh, onRefreshAuth }
 																				<button className="ai-profile-menu-item" role="menuitem" onClick={() => { setGatewayEdit({ id: profile.id, label: profile.label }); closeMenu(); }} title="Change the gateway URL or API key">Edit gateway</button>
 																			</>
 																		)}
-																		{providerAcceptsApiKey(profile.provider.id) && profile.provider.configured && (
+																		{/* A subscription sign-in is renewed by signing in again; only a
+																		    key is replaced. Switching a subscription row to a key is Sign
+																		    out, then Add key. */}
+																		{profile.provider.configured && authStatus?.providers.find((provider) => provider.id === profile.provider.id)?.signedInWithOAuth ? (
+																			<button className="ai-profile-menu-item" role="menuitem" onClick={() => { closeMenu(); void signIn(profile); }}>Sign in again</button>
+																		) : providerAcceptsApiKey(profile.provider.id) && profile.provider.configured && (
 																			<button className="ai-profile-menu-item" role="menuitem" onClick={() => { setKeyProfileId(profile.id); closeMenu(); }}>Replace API key</button>
 																		)}
 																		{/* No credential stored → nothing to sign out of. */}
@@ -1093,19 +1038,21 @@ function AiProfileSwitcherSection({ status, onSelect, onRefresh, onRefreshAuth }
 			) : (
 				emptyCard
 			)}
-			{/* One controls row directly under the list: Add another provider on
-			    the left (its fold still opens beneath), Refresh quiet on the
-			    right. One key form at a time across the whole page: the panel
-			    closes the row form when it opens its own, and closes its own when
-			    a row opens one. The signature is how the panel learns this list
-			    moved: removing a gateway profile here deletes the gateway the
-			    panel lists below, and a renamed one would keep its old name
-			    there. A string rather than the status object, so a refetch that
-			    changed nothing costs no fetch. */}
+			</div>
+			{/* The providers to add open under the list (the header's Add
+			    provider button). One key form at a time across the whole page:
+			    the panel closes the row form when it opens its own, and closes
+			    its own when a row opens one. The signature is how the panel
+			    learns this list moved: removing a gateway profile here deletes
+			    the gateway the panel lists below, and a renamed one would keep
+			    its old name there. A string rather than the status object, so a
+			    refetch that changed nothing costs no fetch. */}
 			{remoteSetupLocked ? (
 				<p className="cli-note">Providers and gateways are set up on the computer itself.</p>
 			) : (
 				<AddProviderPanel
+					open={addProviderOpen}
+					onOpenChange={setAddProviderOpen}
 					onProfilesChanged={() => { onRefresh(); onRefreshAuth(); }}
 					onKeyFormOpen={() => setKeyProfileId(null)}
 					keyFormBlocked={keyProfileId !== null}
@@ -1122,13 +1069,6 @@ function AiProfileSwitcherSection({ status, onSelect, onRefresh, onRefreshAuth }
 					existingProfile={editProfile}
 					allowRemove={editProfile.kind === "custom"}
 					onClose={() => setEditProfile(null)}
-					onSaved={() => { onRefresh(); onRefreshAuth(); }}
-				/>
-			)}
-			{maintenanceProfile && (
-				<MaintenanceModelsModal
-					profile={maintenanceProfile}
-					onClose={() => setMaintenanceProfile(null)}
 					onSaved={() => { onRefresh(); onRefreshAuth(); }}
 				/>
 			)}
@@ -1151,26 +1091,223 @@ function AiProfileSwitcherSection({ status, onSelect, onRefresh, onRefreshAuth }
 	);
 }
 
-function Landing({ onOpenSettings, onOpenDashboard, onOpenMemory, onOpenPersistentAgent, onResumePersistentAgent, onMaintainPersistentAgent, onCreatePersistentAgent, onArchiveRoom, onPurgeRoom, onMementoForget, onRecordPreferredModel, modelStatus, persistentAgentStatuses, persistentThread, persistentLive, persistentResumeError, onRefreshPersistentAgent, theme, appearance, onSetAppearance, aiProfileStatus: aiProfileSelection, onSelectAiProfile, standbyLockedModels, backgroundReadyRooms, purgingRooms, unresumableRooms }: { onOpenSettings: (section?: SettingsSection) => void; onOpenDashboard: () => void; onOpenMemory: () => void; onOpenPersistentAgent: (status: PersistentAgentStatus, model: WebChatModelOption) => Promise<void> | void; onResumePersistentAgent: (status: PersistentAgentStatus) => Promise<void> | void; onMaintainPersistentAgent: (target: MaintainTarget) => void; onCreatePersistentAgent: (request: PersistentAgentCreateRequest) => Promise<void>; onArchiveRoom: (agentId: PersistentAgentId, confirmation: string) => Promise<PersistentAgentArchiveResponse>; onPurgeRoom: (agentId: PersistentAgentId, confirmation: string) => Promise<PersistentAgentPurgeResponse>; onMementoForget: (agentId: PersistentAgentId) => void; onRecordPreferredModel?: (agentId: PersistentAgentId, model: { provider: string; model: string }) => void; modelStatus: WebChatModelStatus | null; persistentAgentStatuses: PersistentAgentStatus[]; persistentThread: PersistentAgentThread | null; persistentLive: boolean; persistentResumeError: string | null; onRefreshPersistentAgent: () => void; theme: ThemeMode; appearance: AppearancePreference; onSetAppearance: (pref: AppearancePreference) => void; aiProfileStatus: PersistentAgentAiProfileSelectionStatus | null; onSelectAiProfile: (profileId: string) => Promise<void>; standbyLockedModels?: Array<{ provider: string; model: string }>; backgroundReadyRooms?: ReadonlySet<PersistentAgentId>; purgingRooms?: ReadonlySet<PersistentAgentId>; unresumableRooms?: ReadonlySet<PersistentAgentId> }) {
+// Exported for the jsdom probe of arrange mode (a probe outside the app renders the real screen); the app itself never imports it.
+export function Landing({ roomOrder, onChooseRoomOrder, onArrangingChange, onOpenSettings, onOpenDashboard, onOpenMemory, onOpenPersistentAgent, onResumePersistentAgent, onMaintainPersistentAgent, onCreatePersistentAgent, onArchiveRoom, onPurgeRoom, onMementoForget, modelStatus, persistentAgentStatuses, persistentThread, persistentLive, persistentResumeError, onRefreshPersistentAgent, theme, appearance, onSetAppearance, aiProfileStatus: aiProfileSelection, backgroundReadyRooms, purgingRooms, unresumableRooms }: { roomOrder: HomeRoomOrderView; onChooseRoomOrder: (choice: RoomOrderChoice) => Promise<boolean>; /** Told whenever arrange mode has unsaved moves or stops having them, and false when the screen goes; the app asks the leave question at its own exits. */ onArrangingChange: (dirty: boolean) => void; onOpenSettings: (section?: SettingsSection) => void; onOpenDashboard: () => void; onOpenMemory: () => void; onOpenPersistentAgent: (status: PersistentAgentStatus) => Promise<void> | void; onResumePersistentAgent: (status: PersistentAgentStatus) => Promise<void> | void; onMaintainPersistentAgent: (target: MaintainTarget) => void; onCreatePersistentAgent: (request: PersistentAgentCreateRequest) => Promise<PersistentAgentCreateResponse>; onArchiveRoom: (agentId: PersistentAgentId, confirmation: string) => Promise<PersistentAgentArchiveResponse>; onPurgeRoom: (agentId: PersistentAgentId, confirmation: string) => Promise<PersistentAgentPurgeResponse>; onMementoForget: (agentId: PersistentAgentId) => void; modelStatus: WebChatModelStatus | null; persistentAgentStatuses: PersistentAgentStatus[]; persistentThread: PersistentAgentThread | null; persistentLive: boolean; persistentResumeError: string | null; onRefreshPersistentAgent: () => void; theme: ThemeMode; appearance: AppearancePreference; onSetAppearance: (pref: AppearancePreference) => void; aiProfileStatus: PersistentAgentAiProfileSelectionStatus | null; backgroundReadyRooms?: ReadonlySet<PersistentAgentId>; purgingRooms?: ReadonlySet<PersistentAgentId>; unresumableRooms?: ReadonlySet<PersistentAgentId> }) {
 	const [createOpen, setCreateOpen] = useState(false);
 	useEscapeKey(() => setCreateOpen(false), createOpen);
 	const [settingsRoomId, setSettingsRoomId] = useState<PersistentAgentId | null>(null);
-	const [helpOpen, setHelpOpen] = useState(false);
-	// The modal must track the LIVE status for its room: statuses are not
-	// refetched when leaving a room (a snapshot could carry stale mid-stream
-	// inFlight/working flags and e.g. keep Memento disabled forever), and
+	const [settingsRoomPane, setSettingsRoomPane] = useState<SettingsPane | undefined>(undefined);
+	// The modal must track the LIVE status for its room: a snapshot taken when
+	// it opened could carry stale mid-stream inFlight/working flags and e.g.
+	// keep Memento disabled forever (the home screen's arrival refreshes the
+	// statuses once, home-room-order.ts, not while the modal is open), and
 	// onRefresh must be able to update what the open modal shows.
 	const settingsRoom = settingsRoomId ? persistentAgentStatuses.find((status) => status.id === settingsRoomId) ?? null : null;
-	const openRoomSettings = (status: PersistentAgentStatus): void => {
+	const openRoomSettings = (status: PersistentAgentStatus, pane?: SettingsPane): void => {
 		setSettingsRoomId(status.id);
+		setSettingsRoomPane(pane);
 		onRefreshPersistentAgent();
 	};
 
-	const roomStatuses = persistentAgentStatuses
-		.slice()
-		.sort((a, b) => (a.displayName || a.id).localeCompare(b.displayName || b.id));
-	const firstRoomStatus = roomStatuses[0] ?? null;
-	const additionalRoomStatuses = firstRoomStatus ? roomStatuses.filter((status) => status.id !== firstRoomStatus.id) : [];
+	// The ONE ordering (room-order.ts). While the saved order is withheld
+	// (home-room-order.ts: on every arrival, until that arrival's read has
+	// settled) nothing is drawn in the grid, the "New room" card included, so
+	// no card appears in one place and moves to another. With no rooms there
+	// is nothing to order and the empty state shows at once, as it always did.
+	const roomStatuses = persistentAgentStatuses;
+	const orderedRoomStatuses = roomOrder.order ? orderRooms(persistentAgentStatuses, roomOrder.order, roomOrder.lastUsed) : [];
+	const gridDrawn = roomOrder.order !== null || roomStatuses.length === 0;
+
+	// Arrange mode. The arrangement itself is home-room-arrange.ts (plain,
+	// immutable); this screen holds it as ONE piece of state that dies with
+	// the screen. While arranging the grid is drawn from the arrangement, not
+	// from the saved order: the cards are the set at entry, minus rooms gone
+	// meanwhile (retain, below). Save is one choice handed to the controller
+	// (mode custom + the ids); Cancel and Escape drop the arrangement, and
+	// nothing is written. Moves, Cancel and Escape are not taken while a save
+	// is in flight: what was sent is what closes, and a write already sent
+	// cannot be cancelled.
+	const [arrangement, setArrangement] = useState<RoomArrangement | null>(null);
+	const [announcement, setAnnouncement] = useState("");
+	const arranging = arrangement !== null;
+	const arrangeDirty = arrangement?.dirty() ?? false;
+	const onArrangingChangeRef = useRef(onArrangingChange);
+	onArrangingChangeRef.current = onArrangingChange;
+	useEffect(() => { onArrangingChangeRef.current(arrangeDirty); }, [arrangeDirty]);
+	useEffect(() => () => onArrangingChangeRef.current(false), []);
+	useEffect(() => {
+		if (!arrangement) return;
+		const kept = arrangement.retain(new Set(persistentAgentStatuses.map((status) => status.id)));
+		if (kept !== arrangement) setArrangement(kept);
+	}, [arrangement, persistentAgentStatuses]);
+	// The live region is emptied whenever arrange mode closes (Cancel, Escape,
+	// a Save that landed): a sentence identical to the last one announced is
+	// not a change to the DOM and would be read by nobody, and the same
+	// position can come round again in a later arrange session.
+	const startArranging = (): void => setArrangement(createRoomArrangement(orderedRoomStatuses.map((status) => status.id)));
+	const cancelArranging = (): void => { if (!roomOrder.saving) { setAnnouncement(""); setArrangement(null); } };
+	// Registered once for the whole arrange session, never re-registered: the
+	// Escape stack is in enabling order, so an entry pushed again after a
+	// failed save would sit above an overlay opened during the save (the
+	// guide, Settings) and take the Escape meant for it. While saving the
+	// handler itself does nothing.
+	useEscapeKey(cancelArranging, arranging);
+	async function saveArrangement(): Promise<void> {
+		if (!arrangement || roomOrder.saving) return;
+		if (await onChooseRoomOrder({ mode: "custom", customOrder: arrangement.ids() })) { setAnnouncement(""); setArrangement(null); }
+	}
+	// Custom with nothing arranged yet opens arrange mode on the order on
+	// screen and writes nothing: Save is the first write, and a Cancel leaves
+	// the saved mode as it was. With an arrangement saved, Custom is a choice
+	// like any other.
+	const chooseMode = (mode: RoomOrderMode): Promise<boolean> => {
+		if (mode === "custom" && roomOrder.order && roomOrder.order.mode !== "custom" && roomOrder.order.customOrder.length === 0) {
+			startArranging();
+			return Promise.resolve(true);
+		}
+		return onChooseRoomOrder({ mode });
+	};
+	// The keyboard: each card is focusable while arranging, and a key moves
+	// the focused card (moveByKey: the arrows one place, Home and End to the
+	// ends), animated like a drag. The focus stays with the moved card: it is
+	// found again after the render, because the card's DOM node moves with it
+	// and a moved node loses focus. No key is taken while a card is held or a
+	// save is in flight.
+	const pendingFocusRef = useRef<string | null>(null);
+	// The ONE name a room has in arrange mode: its display name, and its id
+	// as well when another room shows the same name, so two rooms' cards
+	// never share a label and two consecutive moves never produce the same
+	// announcement (a repeated sentence is no change to the live region).
+	const arrangeName = (status: PersistentAgentStatus): string => `${status.displayName || status.id}${hasDuplicateDisplayName(status) ? ` (room ${status.id})` : ""}`;
+	// The ONE announcement of a move, whichever way it was made (a key, a drop).
+	const announceMoved = (status: PersistentAgentStatus, next: RoomArrangement): void => setAnnouncement(`${arrangeName(status)}, position ${next.positionOf(status.id)} of ${next.count()}`);
+	const moveByKeyboard = (status: PersistentAgentStatus, event: React.KeyboardEvent<HTMLDivElement>): void => {
+		if (!arrangement || event.target !== event.currentTarget || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+		const next = moveByKey(arrangement, status.id, event.key);
+		if (next === null) return;
+		event.preventDefault(); // the arrows, Home and End are the card's while it has the focus, not the page's scroll
+		if (next === arrangement || roomOrder.saving || cardDrag.activeId() !== null) return;
+		pendingFocusRef.current = status.id;
+		setArrangement(next);
+		announceMoved(status, next);
+	};
+	useLayoutEffect(() => {
+		const pending = pendingFocusRef.current;
+		if (!pending) return;
+		pendingFocusRef.current = null;
+		const slot = arrangeSlots(gridRef.current).find((element) => element.dataset.arrangeSlot === pending);
+		slot?.focus({ preventScroll: true });
+		slot?.scrollIntoView({ block: "nearest" }); // a card moved off screen (End) is brought into view
+	}, [arrangement]);
+	const statusById = new Map(persistentAgentStatuses.map((status) => [status.id, status]));
+	const leaveGuarded = (leave: () => void) => (): void => { if (confirmLeavingArrangement(arrangeDirty)) leave(); };
+	// Dragging a card (slice 4). The gesture is home-room-drag.ts;
+	// this screen feeds it the pointer events of the card's slot (the wrapper
+	// around the card, whose own controls are inert while arranging) and the
+	// slots' boxes at rest, and draws what it says: while a card is held the grid is
+	// the arrangement as it would be after the drop (a moveTo preview, nothing
+	// written), so the others step aside and the gap is where it lands; the
+	// motion is use-room-arrange-motion.ts. The preview is drawn with the
+	// slots' CSS order, never by moving them in the DOM: a moved node loses
+	// the pointer capture (and the drag with it), and the focus. A drop ends
+	// in ONE moveTo and the same announcement as a button move; focus stays
+	// where it was. A finger or a pen picks a card up with a long press (the
+	// timer is this screen's, the rule the module's); moving sooner scrolls
+	// the page, and once a card is held the page does not scroll under the
+	// finger (touchmove is refused while held, and the long press's menu is
+	// refused while arranging). Near the top or bottom edge a held card
+	// scrolls the page slowly (use-room-arrange-motion.ts). Escape while a card is
+	// held puts it back and nothing else: its entry is enabled only while held,
+	// so it sits above arrange mode's and leaves the stack with the drag. A
+	// gesture the browser takes away (pointercancel, a lost capture) puts the
+	// card back too, as does the card's room vanishing or arrange mode closing
+	// under it (Escape, Enter on the focused Cancel, a save landing), for a
+	// press not yet held as well, whose handle unmounts with its release still
+	// to come; left in the module, the next session's first move would lift
+	// the card pressed before. Another pointer changes nothing while one
+	// holds a card: its release and its cancel are its own. A press while a save is in flight starts nothing, and a drop that
+	// lands during one is refused, as a key is.
+	const cardDragRef = useRef<CardDrag | null>(null);
+	if (!cardDragRef.current) cardDragRef.current = createCardDrag();
+	const cardDrag = cardDragRef.current;
+	const [dragView, setDragView] = useState<CardDragView | null>(null);
+	const dragging = dragView !== null;
+	const gridRef = useRef<HTMLElement | null>(null);
+	// The held card's box on screen at the press: it is drawn where the pointer carries it from there.
+	const grabRef = useRef<{ id: string; box: Rect } | null>(null);
+	const slotLayout = (heldId: string): SlotLayout => {
+		const grid = gridRef.current;
+		// In the order drawn: the preview's CSS order, the DOM's where none is set (a stable sort).
+		const slotElements = arrangeSlots(grid).sort((a, b) => Number(a.style.order || 0) - Number(b.style.order || 0));
+		const gridBox = grid?.getBoundingClientRect();
+		return {
+			slots: grid ? slotElements.map((element) => slotRestBox(grid, element, gridBox)) : [],
+			held: slotElements.findIndex((element) => element.dataset.arrangeSlot === heldId),
+		};
+	};
+	const pointOf = (event: React.PointerEvent): { x: number; y: number } => ({ x: event.clientX, y: event.clientY });
+	const longPressRef = useRef<number | null>(null);
+	const stopLongPress = (): void => { if (longPressRef.current !== null) window.clearTimeout(longPressRef.current); longPressRef.current = null; };
+	useEffect(() => stopLongPress, []);
+	// The pressing pointer and where it is, for the edge scroll.
+	const pointerRef = useRef<{ id: number; x: number; y: number } | null>(null);
+	const cancelDrag = (pointerId?: number): void => { cardDrag.cancel(pointerId); if (cardDrag.activeId() === null) stopLongPress(); setDragView(cardDrag.view()); };
+	const cancelByPointer = (event: React.PointerEvent<HTMLDivElement>): void => cancelDrag(event.pointerId);
+	const pressCard = (status: PersistentAgentStatus, event: React.PointerEvent<HTMLDivElement>): void => {
+		if (!arrangement || roomOrder.saving) return;
+		if (!cardDrag.press(status.id, pointOf(event), event.pointerType, event.button, event.pointerId)) return;
+		event.currentTarget.setPointerCapture(event.pointerId);
+		pointerRef.current = { id: event.pointerId, ...pointOf(event) };
+		const box = event.currentTarget.getBoundingClientRect();
+		grabRef.current = { id: status.id, box: { left: box.left, top: box.top, width: box.width, height: box.height } };
+		if (event.pointerType === "mouse") return;
+		const pointerId = event.pointerId;
+		stopLongPress();
+		longPressRef.current = window.setTimeout(() => { longPressRef.current = null; const held = cardDrag.hold(pointerId, slotLayout); if (held) setDragView(held); }, ROOM_LONG_PRESS_MS);
+	};
+	const carryCard = (event: React.PointerEvent<HTMLDivElement>): void => {
+		if (event.pointerId === pointerRef.current?.id) pointerRef.current = { id: event.pointerId, ...pointOf(event) };
+		setDragView(cardDrag.move(pointOf(event), event.pointerId, slotLayout));
+		if (cardDrag.activeId() === null) stopLongPress(); // a finger that moved before the long press: the page scrolls
+	};
+	const dropCard = (event: React.PointerEvent<HTMLDivElement>): void => {
+		// The drop is read first: releasing the capture may end the gesture (lostpointercapture) before a release read after it could land.
+		const landed = cardDrag.release(pointOf(event), event.pointerId, slotLayout);
+		if (cardDrag.activeId() === null) stopLongPress();
+		setDragView(cardDrag.view()); // null once the gesture ended; still the held card when another pointer went up
+		try { event.currentTarget.releasePointerCapture(event.pointerId); } catch {}
+		if (!landed || !arrangement || roomOrder.saving) return;
+		const status = statusById.get(landed.id);
+		const next = arrangement.moveTo(landed.id, landed.position);
+		if (!status || next === arrangement) return;
+		setArrangement(next);
+		announceMoved(status, next);
+	};
+	useEscapeKey(cancelDrag, dragging);
+	useEffect(() => {
+		const active = cardDrag.activeId(); // pressed or held: a press under the threshold is a gesture too
+		if (active !== null && (!arrangement || arrangement.positionOf(active) === null)) cancelDrag();
+	}, [arrangement, dragView]);
+	useEffect(() => {
+		if (!dragging) return;
+		const onScroll = (): void => { setDragView(cardDrag.scrolled(slotLayout)); };
+		// Registered by hand: React's touchmove is passive and could not refuse the page's scroll.
+		const onTouchMove = (event: TouchEvent): void => { if (event.cancelable) event.preventDefault(); };
+		document.addEventListener("scroll", onScroll, { capture: true, passive: true });
+		document.addEventListener("touchmove", onTouchMove, { passive: false });
+		return () => {
+			document.removeEventListener("scroll", onScroll, { capture: true });
+			document.removeEventListener("touchmove", onTouchMove);
+		};
+	}, [dragging]);
+	useArrangeEdgeScroll(gridRef, dragging, pointerRef);
+	const arrangedStatuses = arrangement ? arrangement.ids().map((id) => statusById.get(id)).filter((status): status is PersistentAgentStatus => status !== undefined) : null;
+	// While a card is held, the arrangement after its drop, drawn by each slot's CSS order. The orders are
+	// negative so the "New room" card (order 0) stays last.
+	const preview = arrangement && dragView ? arrangement.moveTo(dragView.id, dragView.position) : null;
+	const previewOrder = (id: string): number | undefined => (preview ? (preview.positionOf(id) ?? 0) - 1 - preview.count() : undefined);
+	const grab = grabRef.current;
+	useRoomArrangeMotion(gridRef, arranging, dragView && grab?.id === dragView.id ? { id: dragView.id, grab: grab.box, dx: dragView.dx, dy: dragView.dy } : null);
 	const displayNameCounts = roomStatuses.reduce((counts, status) => {
 		const key = (status.displayName || "").trim().toLocaleLowerCase();
 		if (!key) return counts;
@@ -1182,18 +1319,32 @@ function Landing({ onOpenSettings, onOpenDashboard, onOpenMemory, onOpenPersiste
 		return key ? (displayNameCounts.get(key) ?? 0) > 1 : false;
 	};
 	const aiProfileStatus = homeAiProfileStatus(modelStatus, aiProfileSelection);
+	const providerLabels = Object.fromEntries((modelStatus?.providers ?? []).map((provider) => [provider.id, provider.label]));
+	// A room is created to be talked to: after Create, enter it the way its
+	// card's Enter would, on the room's conversation model. Without a model
+	// that can run (no provider signed in) the new card simply waits on Home.
+	const openCreatedRoom = (created: PersistentAgentCreateResponse | null): void => {
+		setCreateOpen(false);
+		onRefreshPersistentAgent();
+		if (created?.status?.models?.conversation.effective) void onOpenPersistentAgent(created.status);
+	};
 
 	return (
 		<div className="landing-shell with-product-sidebar">
-			<ProductSidebar onHome={() => {}} onSettings={onOpenSettings} onDashboard={onOpenDashboard} onMemory={onOpenMemory} theme={theme} appearance={appearance} onSetAppearance={onSetAppearance} active="home" />
+			<ProductSidebar onHome={() => {}} onSettings={onOpenSettings} onDashboard={leaveGuarded(onOpenDashboard)} onMemory={leaveGuarded(onOpenMemory)} theme={theme} appearance={appearance} onSetAppearance={onSetAppearance} active="home" />
 			<div className="landing home-page">
 			<section className="landing-hero">
-				<div className="landing-hero-head">
+				<div className={`landing-hero-head${arranging ? " is-arranging" : ""}`}>
 					<div>
 						<h1>Your rooms.</h1>
 						<p>{roomStatuses.length === 0 ? "Create your first room to get started." : "Pick up where you left off, or start a new room."}</p>
 					</div>
-					<button type="button" className="section-help-btn" aria-label="How rooms work" title="How rooms work" onClick={() => setHelpOpen(true)}>?</button>
+					<div className="landing-hero-actions">
+						{roomOrder.order && (arranging || roomStatuses.length >= ROOM_SORT_MIN_ROOMS) && (
+							<RoomSortControl order={roomOrder.order} saving={roomOrder.saving} saveError={roomOrder.saveError} onChoose={chooseMode} onArrange={startArranging} arranging={arrangement ? { onSave: () => void saveArrangement(), onCancel: cancelArranging } : null} />
+						)}
+						<div className="room-arrange-live" role="status" aria-live="polite">{announcement}</div>
+					</div>
 				</div>
 				{aiProfileStatus && aiProfileStatus.ready === false && (
 					<button type="button" className="home-ai-profile-status setup-needed" onClick={() => onOpenSettings("ai-setup")} title="Open Settings to finish AI setup">
@@ -1204,19 +1355,42 @@ function Landing({ onOpenSettings, onOpenDashboard, onOpenMemory, onOpenPersiste
 					<div className="home-resume-error" role="alert">{persistentResumeError}</div>
 				)}
 			</section>
-			<section className={`landing-grid${roomStatuses.length === 0 ? " landing-grid--empty" : ""}`} aria-label="exxperts entry points">
-				{firstRoomStatus && (
-					<PersistentAgentCard key={firstRoomStatus.id} status={firstRoomStatus} unresumable={unresumableRooms?.has(firstRoomStatus.id) ?? false} modelStatus={modelStatus} aiProfileStatus={aiProfileSelection} thread={persistentThread?.agentId === firstRoomStatus.id ? persistentThread : null} live={persistentLive && persistentThread?.agentId === firstRoomStatus.id} duplicateDisplayName={hasDuplicateDisplayName(firstRoomStatus)} backgroundReady={backgroundReadyRooms?.has(firstRoomStatus.id) ?? false} purging={purgingRooms?.has(firstRoomStatus.id) ?? false} onEnter={onOpenPersistentAgent} onResume={onResumePersistentAgent} onMaintain={onMaintainPersistentAgent} onOpenSettings={() => openRoomSettings(firstRoomStatus)} standbyLockedModels={standbyLockedModels} onSelectAiProfile={onSelectAiProfile} onRecordPreferredModel={onRecordPreferredModel} />
+			<section ref={gridRef} className={`landing-grid${roomStatuses.length === 0 ? " landing-grid--empty" : ""}${arranging ? " is-arranging" : ""}`} aria-label="exxperts entry points">
+				{(arrangedStatuses ?? orderedRoomStatuses).map((status, index, list) => {
+					const card = <PersistentAgentCard key={status.id} status={status} arranging={arranging} unresumable={unresumableRooms?.has(status.id) ?? false} thread={persistentThread?.agentId === status.id ? persistentThread : null} live={persistentLive && persistentThread?.agentId === status.id} duplicateDisplayName={hasDuplicateDisplayName(status)} backgroundReady={backgroundReadyRooms?.has(status.id) ?? false} purging={purgingRooms?.has(status.id) ?? false} onEnter={onOpenPersistentAgent} onResume={onResumePersistentAgent} onMaintain={onMaintainPersistentAgent} onOpenSettings={() => openRoomSettings(status)} onOpenModelSettings={() => openRoomSettings(status, "model")} providerLabels={providerLabels} />;
+					if (!arrangedStatuses) return card;
+					const held = dragView?.id === status.id;
+					return (
+						<div
+							className={`room-arrange-slot${held ? " is-dragging" : ""}`}
+							key={status.id}
+							data-arrange-slot={status.id}
+							style={{ order: previewOrder(status.id) }}
+							tabIndex={0}
+							role="button"
+							aria-roledescription="movable room"
+							aria-label={`${arrangeName(status)}, position ${index + 1} of ${list.length}`}
+							aria-describedby={ROOM_ARRANGE_HINT_ID}
+							onKeyDown={(event) => moveByKeyboard(status, event)}
+							onPointerDown={(event) => pressCard(status, event)}
+							onPointerMove={carryCard}
+							onPointerUp={dropCard}
+							onPointerCancel={cancelByPointer}
+							onLostPointerCapture={cancelByPointer}
+							onContextMenu={(event) => event.preventDefault()}
+						>
+							{card}
+						</div>
+					);
+				})}
+				{gridDrawn && (
+					<button type="button" className="landing-card add-room-card" disabled={arranging} onClick={() => setCreateOpen(true)} aria-label="Create a new room">
+						<span className="add-room-plus" aria-hidden="true">+</span>
+						<span className="add-room-label">New room</span>
+					</button>
 				)}
-				{additionalRoomStatuses.map((status) => (
-					<PersistentAgentCard key={status.id} status={status} unresumable={unresumableRooms?.has(status.id) ?? false} modelStatus={modelStatus} aiProfileStatus={aiProfileSelection} thread={persistentThread?.agentId === status.id ? persistentThread : null} live={persistentLive && persistentThread?.agentId === status.id} duplicateDisplayName={hasDuplicateDisplayName(status)} backgroundReady={backgroundReadyRooms?.has(status.id) ?? false} purging={purgingRooms?.has(status.id) ?? false} onEnter={onOpenPersistentAgent} onResume={onResumePersistentAgent} onMaintain={onMaintainPersistentAgent} onOpenSettings={() => openRoomSettings(status)} standbyLockedModels={standbyLockedModels} onSelectAiProfile={onSelectAiProfile} onRecordPreferredModel={onRecordPreferredModel} />
-				))}
-				<button type="button" className="landing-card add-room-card" onClick={() => setCreateOpen(true)} aria-label="Create a new room">
-					<span className="add-room-plus" aria-hidden="true">+</span>
-					<span className="add-room-label">New room</span>
-				</button>
 			</section>
-			<ArchivedRoomsSection activeRoomCount={roomStatuses.length} onRestored={onRefreshPersistentAgent} />
+			{!arranging && <ArchivedRoomsSection activeRoomCount={roomStatuses.length} onRestored={onRefreshPersistentAgent} />}
 			</div>
 			{createOpen && (
 				<div className="room-settings-overlay create-room-overlay" role="dialog" aria-modal="true" aria-label="Create room" onClick={() => setCreateOpen(false)}>
@@ -1230,15 +1404,14 @@ function Landing({ onOpenSettings, onOpenDashboard, onOpenMemory, onOpenPersiste
 							<button className="icon-btn" onClick={() => setCreateOpen(false)} aria-label="Close">Close</button>
 						</div>
 						<div className="room-settings-body">
-							<CreateRoomPanel onCreate={onCreatePersistentAgent} initialOpen variant="section" onCreated={() => { setCreateOpen(false); onRefreshPersistentAgent(); }} onCancel={() => setCreateOpen(false)} />
+							<CreateRoomPanel onCreate={onCreatePersistentAgent} initialOpen variant="section" onCreated={openCreatedRoom} onCancel={() => setCreateOpen(false)} />
 						</div>
 					</div>
 				</div>
 			)}
 			{settingsRoom && (
-				<RoomSettingsModal status={settingsRoom} onClose={() => setSettingsRoomId(null)} onArchive={onArchiveRoom} onPurge={onPurgeRoom} onRefresh={onRefreshPersistentAgent} onMementoForget={() => onMementoForget(settingsRoom.id)} onOpenSkillsLibrary={() => onOpenSettings("skills")} />
+				<RoomSettingsModal status={settingsRoom} initialPane={settingsRoomPane} onClose={() => setSettingsRoomId(null)} onArchive={onArchiveRoom} onPurge={onPurgeRoom} onRefresh={onRefreshPersistentAgent} onMementoForget={() => onMementoForget(settingsRoom.id)} onOpenSkillsLibrary={() => onOpenSettings("skills")} onOpenConnectors={() => onOpenSettings("connectors")} />
 			)}
-			{helpOpen && <RoomsGuide onClose={() => setHelpOpen(false)} />}
 		</div>
 	);
 }
@@ -1368,7 +1541,7 @@ function ArchivedRoomsSection({ activeRoomCount, onRestored }: { activeRoomCount
 								</span>
 								{armedId === room.id && (
 									<span className="archived-room-meta archived-room-armed" role="alert">
-										Delete {room.displayName || room.id} forever? Its {room.counts.files} file{room.counts.files === 1 ? "" : "s"} include {room.counts.documents} document{room.counts.documents === 1 ? "" : "s"} the room created. Everything is removed from this machine.
+										Delete {room.displayName || room.id} forever? {roomFilesSentence(room.counts)}Everything is removed from this machine.
 									</span>
 								)}
 							</div>
@@ -1406,7 +1579,7 @@ function MemoryShell({ onHome, onSettings, onDashboard, onMaintain, maintainBloc
 	);
 }
 
-// In-flow replacement for window.confirm at the Maintain flow's sensitive
+// In-flow replacement for the browser confirm at the Maintain flow's sensitive
 // moments: same visual language as the rest of the product, Escape cancels.
 type MaintainConfirm = { title: string; body: string; confirmLabel: string; cancelLabel: string; onConfirm: () => void };
 
@@ -1418,8 +1591,8 @@ function MaintainConfirmDialog({ confirm, onClose }: { confirm: MaintainConfirm;
 				<h2>{confirm.title}</h2>
 				<p>{confirm.body}</p>
 				<div className="checkpoint-preview-actions">
-					<button className="landing-action secondary" onClick={onClose}>{confirm.cancelLabel}</button>
-					<button className="landing-action" autoFocus onClick={() => { onClose(); confirm.onConfirm(); }}>{confirm.confirmLabel}</button>
+					<button className="rs-btn" onClick={onClose}>{confirm.cancelLabel}</button>
+					<button className="rs-btn rs-btn-primary" autoFocus onClick={() => { onClose(); confirm.onConfirm(); }}>{confirm.confirmLabel}</button>
 				</div>
 			</section>
 		</div>
@@ -1470,8 +1643,8 @@ function ExportCollisionDialog({ collision, onClose }: { collision: ExportCollis
 				<h2>File already exists</h2>
 				<p>A file called “{collision.fileName}” is already in {collision.place ?? "the chosen folder"}.</p>
 				<div className="checkpoint-preview-actions">
-					<button className="landing-action secondary" autoFocus onClick={onClose}>Cancel</button>
-					<button className="landing-action secondary" onClick={() => { onClose(); collision.onKeepBoth(); }} title="Save with a new name; the existing file stays">Keep both</button>
+					<button className="rs-btn" autoFocus onClick={onClose}>Cancel</button>
+					<button className="rs-btn" onClick={() => { onClose(); collision.onKeepBoth(); }} title="Save with a new name; the existing file stays">Keep both</button>
 					<button className="rs-btn rs-btn-danger" onClick={() => { onClose(); collision.onReplace(); }} title="Overwrite the existing file">Replace</button>
 				</div>
 			</section>
@@ -1489,7 +1662,7 @@ function AssetDeleteDialog({ title, onDelete, onCancel }: { title: string; onDel
 				<h2>Delete “{title}”?</h2>
 				<p>This removes its files for good. Snapshots you downloaded or saved to a folder stay.</p>
 				<div className="checkpoint-preview-actions">
-					<button className="landing-action secondary" autoFocus onClick={onCancel}>Cancel</button>
+					<button className="rs-btn" autoFocus onClick={onCancel}>Cancel</button>
 					<button className="rs-btn rs-btn-danger" onClick={onDelete}>Delete</button>
 				</div>
 			</section>
@@ -1508,7 +1681,7 @@ function FileDeleteDialog({ fileName, reason, onDelete, onCancel }: { fileName: 
 				<h2>Delete “{fileName}”?</h2>
 				<p>{reason} Snapshots you downloaded or saved to a folder stay.</p>
 				<div className="checkpoint-preview-actions">
-					<button className="landing-action secondary" autoFocus onClick={onCancel}>Cancel</button>
+					<button className="rs-btn" autoFocus onClick={onCancel}>Cancel</button>
 					<button className="rs-btn rs-btn-danger" onClick={onDelete}>Delete</button>
 				</div>
 			</section>
@@ -1544,8 +1717,8 @@ function SaveAsDialog({ shelfName, onSave, onCancel }: { shelfName: string; onSa
 					onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); commit(); } }}
 				/>
 				<div className="checkpoint-preview-actions">
-					<button className="landing-action secondary" onClick={onCancel}>Cancel</button>
-					<button className="landing-action" disabled={!draft.trim()} onClick={commit}>Choose folder…</button>
+					<button className="rs-btn" onClick={onCancel}>Cancel</button>
+					<button className="rs-btn rs-btn-primary" disabled={!draft.trim()} onClick={commit}>Choose folder…</button>
 				</div>
 			</section>
 		</div>
@@ -1570,7 +1743,7 @@ function TaskStoreGcBanner({ assessment, onReview, onDismiss }: { assessment: Ta
 	return (
 		<div className="task-store-gc-banner" role="status">
 			<span>Old specialist files are taking up {fmtMb(assessment.totalBytes)} — {fmtMb(assessment.proposal.reclaimBytes)} can be freed safely.</span>
-			<button className="landing-action secondary" onClick={onReview} title="See which old task folders would be deleted">Review</button>
+			<button className="rs-btn" onClick={onReview} title="See which old task folders would be deleted">Review</button>
 			<button className="icon-btn" aria-label="Dismiss" title="Dismiss — nothing is deleted" onClick={onDismiss}>✕</button>
 		</div>
 	);
@@ -1594,7 +1767,7 @@ function TaskStoreGcDialog({ assessment, busy, onConfirm, onClose }: { assessmen
 					))}
 				</div>
 				<div className="checkpoint-preview-actions">
-					<button className="landing-action secondary" autoFocus disabled={busy} onClick={onClose}>Cancel</button>
+					<button className="rs-btn" autoFocus disabled={busy} onClick={onClose}>Cancel</button>
 					<button className="rs-btn rs-btn-danger" disabled={busy} onClick={onConfirm}>{busy ? "Deleting…" : `Delete ${proposal.candidates.length} task folders`}</button>
 				</div>
 			</section>
@@ -1613,6 +1786,9 @@ function MaintainChooserShell({ target, roomStatus, onAbsorb, onPrune, onReturn,
 	const waiting = memoryStatus?.recentContextCount ?? null;
 	const sessionBlockCap = roomStatus?.recentContext?.blockCap ?? 20;
 	const nothingWaiting = waiting === 0;
+	// The belt for a deep link: the card and maintainBlockedReason already
+	// keep Maintain closed on a room whose memory is still its scaffold.
+	const nothingToReview = nothingToMaintain(memoryStatus);
 	const fullPercent = memoryBudget && memoryBudget.budgetTokens > 0 ? Math.round((memoryBudget.reviewTargetEstimatedTokens / memoryBudget.budgetTokens) * 100) : null;
 	const overLimit = fullPercent !== null && fullPercent > 100;
 	// One recommendation at a time: waiting conversations come first, because
@@ -1631,7 +1807,7 @@ function MaintainChooserShell({ target, roomStatus, onAbsorb, onPrune, onReturn,
 						? <p className="maintain-status" title={statusTitle}>{waitingWords}{waitingWords && fullWords ? " · " : ""}{fullWords}</p>
 						: <p>What {target.displayName} remembers, and how to keep it in shape.</p>}
 				</div>
-				<button className="landing-action secondary" onClick={onReturn}>{returnLabel}</button>
+				<button className="rs-btn" onClick={onReturn}>{returnLabel}</button>
 			</header>
 			<main className="absorb-workspace-main maintain-workspace-main">
 				<div className="maintain-chooser-column">
@@ -1646,17 +1822,19 @@ function MaintainChooserShell({ target, roomStatus, onAbsorb, onPrune, onReturn,
 									? `Nothing to memorize yet. Have a conversation with ${target.displayName} first.`
 									: `Turn the ${waiting === 1 ? "remembered conversation" : `${waiting} remembered conversations`} into lasting notes. You read what will be kept before it is saved; whatever does not fit in the budget goes to the archive.`}</span>
 							</span>
-							<span className="maintain-action-go" aria-hidden="true">Start →</span>
+							<span className="maintain-action-go" aria-hidden="true">Start</span>
 						</button>
-						<button type="button" className={`maintain-action${recommended === "review" ? " recommended" : ""}`} title="Tidy this room's notes" onClick={onPrune}>
+						<button type="button" className={`maintain-action${recommended === "review" ? " recommended" : ""}`} disabled={nothingToReview} title={nothingToReview ? NOTHING_TO_MAINTAIN_SENTENCE : "Tidy this room's notes"} onClick={onPrune}>
 							<span className="maintain-action-body">
 								<span className="maintain-action-head">
 									<span className="maintain-action-title">Review</span>
 									{recommended === "review" && <span className="maintain-action-tag">Recommended</span>}
 								</span>
-								<span className="maintain-action-text">Make the notes shorter and clearer, and move what is finished or stale to the archive. You see every change before it is saved and can undo it after.</span>
+								<span className="maintain-action-text">{nothingToReview
+									? NOTHING_TO_MAINTAIN_SENTENCE
+									: "Make the notes shorter and clearer, and move what is finished or stale to the archive. You see every change before it is saved and can undo it after."}</span>
 							</span>
-							<span className="maintain-action-go" aria-hidden="true">Start →</span>
+							<span className="maintain-action-go" aria-hidden="true">Start</span>
 						</button>
 					</section>
 					<p className="maintain-footnote">Nothing is saved until you approve it. The memory budget is set in Room settings.</p>
@@ -1724,11 +1902,11 @@ function ReviewWorkflowShell({ state, loadingMessage, waitingMessage, keepIds, o
 					<p>{stepLine}</p>
 				</div>
 				{state.step === "approving" ? (
-					<button className="landing-action secondary" disabled title="The changes are being saved and cannot be cancelled.">Saving…</button>
+					<button className="rs-btn" disabled title="The changes are being saved and cannot be cancelled.">Saving…</button>
 				) : state.step === "assessment" || state.step === "run_card" || state.step === "running" ? null : (
 					// The first read, the working screen and the card keep a single
 					// Cancel in their own action row instead of a duplicate header exit.
-					<button className="landing-action secondary" onClick={onAbort}>{state.step === "saved" || state.step === "unavailable" || state.step === "error" ? returnLabel : "Cancel"}</button>
+					<button className="rs-btn" onClick={onAbort}>{state.step === "saved" || state.step === "unavailable" || state.step === "error" ? returnLabel : "Cancel"}</button>
 				)}
 			</header>
 			<main className="absorb-workspace-main">
@@ -1746,8 +1924,8 @@ function ReviewWorkflowShell({ state, loadingMessage, waitingMessage, keepIds, o
 								<p>{state.unavailableReason || "This room's notes cannot be tidied right now. Nothing was changed. Try again in a moment."}</p>
 							</div>
 							<div className="checkpoint-preview-actions">
-								<button className="landing-action secondary" onClick={onAbort}>{returnLabel}</button>
-								<button className="landing-action" onClick={onRestart}>Back to Maintain</button>
+								<button className="rs-btn" onClick={onAbort}>{returnLabel}</button>
+								<button className="rs-btn rs-btn-primary" onClick={onRestart}>Back to Maintain</button>
 							</div>
 						</div>
 					) : state.step === "signing_off" || state.step === "approving" ? (
@@ -1770,7 +1948,7 @@ function ReviewWorkflowShell({ state, loadingMessage, waitingMessage, keepIds, o
 								<p>The notes are tidied topic by topic. Every note keeps its date and anything you pinned. Nothing is saved until you approve.</p>
 								{state.runPollError && <div className="checkpoint-proposal-error" role="alert">{state.runPollError}</div>}
 								<div className="checkpoint-preview-actions">
-									<button className="landing-action secondary" onClick={onCancelRun} title="Stop this tidy and return to the first read. Nothing is saved.">Cancel</button>
+									<button className="rs-btn" onClick={onCancelRun} title="Stop this tidy and return to the first read. Nothing is saved.">Cancel</button>
 								</div>
 							</div>
 						)
@@ -1821,8 +1999,8 @@ function ReviewWorkflowShell({ state, loadingMessage, waitingMessage, keepIds, o
 							</div>
 							{state.error && <div className="checkpoint-proposal-error" role="alert">{state.error}</div>}
 							<div className="checkpoint-preview-actions">
-								<button className="landing-action secondary" onClick={onAbort}>{returnLabel}</button>
-								<button className="landing-action" onClick={onRestart}>Start Maintain again</button>
+								<button className="rs-btn" onClick={onAbort}>{returnLabel}</button>
+								<button className="rs-btn rs-btn-primary" onClick={onRestart}>Start Maintain again</button>
 							</div>
 						</div>
 					) : state.step === "discussing" && assessment ? (
@@ -1855,7 +2033,7 @@ function ReviewWorkflowShell({ state, loadingMessage, waitingMessage, keepIds, o
 							{state.activeRunConflictId && (
 								<div className="absorb-help-note absorb-run-conflict-note">
 									<span>{REVIEW_RUN_ACTIVE_SENTENCE}</span>
-									<button className="landing-action secondary" onClick={onStopAbandonedRun} title="Stop the tidy this room is still holding, then start this one.">{REVIEW_RUN_ACTIVE_ACTION}</button>
+									<button className="rs-btn" onClick={onStopAbandonedRun} title="Stop the tidy this room is still holding, then start this one.">{REVIEW_RUN_ACTIVE_ACTION}</button>
 								</div>
 							)}
 							<div className="absorb-assessment-grid absorb-assessment-flow">
@@ -1867,10 +2045,10 @@ function ReviewWorkflowShell({ state, loadingMessage, waitingMessage, keepIds, o
 							{assessment.fields.needsYourCall.length > 0 && <p className="absorb-help-note">Answer these in Discuss first, and the tidy follows your answers. Continue lets the room decide on its own.</p>}
 							{meaningfulMaintenanceWarnings(assessment.warnings).length > 0 && <div className="checkpoint-proposal-warnings">{meaningfulMaintenanceWarnings(assessment.warnings).map((warning) => <div key={warning}>{warning}</div>)}</div>}
 							<div className="checkpoint-preview-actions">
-								<button className="landing-action secondary" onClick={onAbort}>Cancel</button>
-								<button className="landing-action secondary" onClick={onReassess} title="Read the notes again, asking the room to fix what this read got wrong. Nothing is saved.">Read again</button>
-								<button className={`landing-action${assessment.fields.needsYourCall.length > 0 ? "" : " secondary"}`} onClick={onDiscuss} title="Talk the first read through before anything is tidied. The discussion itself is not saved.">Discuss first</button>
-								<button className={`landing-action${assessment.fields.needsYourCall.length > 0 ? " secondary" : ""}`} onClick={onContinue} title="Tidy the notes and show every change before saving">Continue →</button>
+								<button className="rs-btn" onClick={onAbort}>Cancel</button>
+								<button className="rs-btn" onClick={onReassess} title="Read the notes again, asking the room to fix what this read got wrong. Nothing is saved.">Read again</button>
+								<button className={`rs-btn${assessment.fields.needsYourCall.length > 0 ? " rs-btn-primary" : ""}`} onClick={onDiscuss} title="Talk the first read through before anything is tidied. The discussion itself is not saved.">Discuss first</button>
+								<button className={`rs-btn${assessment.fields.needsYourCall.length > 0 ? "" : " rs-btn-primary"}`} onClick={onContinue} title="Tidy the notes and show every change before saving">Continue →</button>
 							</div>
 							{state.fastPathEnabled && <p className="checkpoint-footnote">{AUTOMATIC_APPLY_ON_SENTENCE} · a clean tidy is saved without a second look</p>}
 						</div>
@@ -1919,11 +2097,11 @@ function AbsorbWorkflowShell({ state, loadingMessage, waitingMessage, keepIds, o
 					<p>{stepLine}</p>
 				</div>
 				{state.step === "approving" ? (
-					<button className="landing-action secondary" disabled title="The memory update is being written and cannot be cancelled.">Updating memory…</button>
+					<button className="rs-btn" disabled title="The memory update is being written and cannot be cancelled.">Updating memory…</button>
 				) : state.step === "assessment" || state.step === "proposal" || state.step === "running" || state.step === "run_card" ? null : (
 					// Assessment, the run screens and the proposal keep a single Cancel
 					// in their action row instead of a duplicate header exit.
-					<button className="landing-action secondary" onClick={onAbort}>{state.step === "saved" || state.step === "unavailable" || state.step === "error" ? returnLabel : "Cancel"}</button>
+					<button className="rs-btn" onClick={onAbort}>{state.step === "saved" || state.step === "unavailable" || state.step === "error" ? returnLabel : "Cancel"}</button>
 				)}
 			</header>
 			<main className="absorb-workspace-main">
@@ -1950,8 +2128,8 @@ function AbsorbWorkflowShell({ state, loadingMessage, waitingMessage, keepIds, o
 									</details>
 								)}
 								<div className="checkpoint-preview-actions">
-									<button className="landing-action secondary" onClick={onAbort}>{returnLabel}</button>
-									<button className="landing-action" onClick={onRestart}>Back to Maintain</button>
+									<button className="rs-btn" onClick={onAbort}>{returnLabel}</button>
+									<button className="rs-btn rs-btn-primary" onClick={onRestart}>Back to Maintain</button>
 								</div>
 							</div>
 						);
@@ -1983,7 +2161,7 @@ function AbsorbWorkflowShell({ state, loadingMessage, waitingMessage, keepIds, o
 							<p>Each conversation is read on its own and turned into notes.</p>
 							{state.runPollError && <div className="checkpoint-proposal-error" role="alert">{state.runPollError}</div>}
 							<div className="checkpoint-preview-actions">
-								<button className="landing-action secondary" onClick={onCancelRun} title="Stop this memory update and return to the assessment. Nothing is saved.">Cancel</button>
+								<button className="rs-btn" onClick={onCancelRun} title="Stop this memory update and return to the assessment. Nothing is saved.">Cancel</button>
 							</div>
 						</div>
 					)
@@ -2022,7 +2200,7 @@ function AbsorbWorkflowShell({ state, loadingMessage, waitingMessage, keepIds, o
 						{state.approvalResult.warnings.length > 0 && <div className="checkpoint-proposal-warnings">{state.approvalResult.warnings.map((warning) => <div key={warning}>{warning}</div>)}</div>}
 						<p className="checkpoint-footnote">The previous memory is kept, so this update can be undone from Room settings → Memory.</p>
 						<div className="checkpoint-preview-actions">
-							<button className="landing-action" onClick={onAbort}>{returnLabel}</button>
+							<button className="rs-btn rs-btn-primary" onClick={onAbort}>{returnLabel}</button>
 						</div>
 					</div>
 				) : state.step === "saved" && state.approvalResult ? (
@@ -2073,8 +2251,8 @@ function AbsorbWorkflowShell({ state, loadingMessage, waitingMessage, keepIds, o
 						)}
 						{state.approvalResult.warnings.length > 0 && <div className="checkpoint-proposal-warnings">{state.approvalResult.warnings.map((warning) => <div key={warning}>{warning}</div>)}</div>}
 						<div className="checkpoint-preview-actions">
-							{state.approvalResult.memoryBudget?.overBudget && <button className="landing-action secondary" onClick={onRestart} title="Return to Maintain, where Review can tighten deep memory and active items">Open Maintain</button>}
-							<button className="landing-action" onClick={onAbort}>{returnLabel}</button>
+							{state.approvalResult.memoryBudget?.overBudget && <button className="rs-btn" onClick={onRestart} title="Return to Maintain, where Review can tighten deep memory and active items">Open Maintain</button>}
+							<button className="rs-btn rs-btn-primary" onClick={onAbort}>{returnLabel}</button>
 						</div>
 					</div>
 				) : state.step === "error" ? (
@@ -2085,8 +2263,8 @@ function AbsorbWorkflowShell({ state, loadingMessage, waitingMessage, keepIds, o
 						</div>
 						{state.error && <div className="checkpoint-proposal-error" role="alert">{state.error}</div>}
 						<div className="checkpoint-preview-actions">
-							<button className="landing-action secondary" onClick={onAbort}>{returnLabel}</button>
-							<button className="landing-action" onClick={onRestart}>Start Maintain again</button>
+							<button className="rs-btn" onClick={onAbort}>{returnLabel}</button>
+							<button className="rs-btn rs-btn-primary" onClick={onRestart}>Start Maintain again</button>
 						</div>
 					</div>
 				) : state.step === "discussing" && assessment ? (
@@ -2147,10 +2325,10 @@ function AbsorbWorkflowShell({ state, loadingMessage, waitingMessage, keepIds, o
 
 						<div className="checkpoint-preview-actions">
 							<ProposalApproveBlockedReason validation={validation} stale={state.proposalStale} />
-							<button className="landing-action secondary" onClick={onAbort}>Cancel</button>
-							{(state.discussionMessages?.length ?? 0) > 0 && <button className="landing-action secondary" title="Return to the discussion; the transcript is kept and only this draft is dropped" onClick={onBackToDiscussion}>Back to discussion</button>}
-							<button className="landing-action secondary" title="Generate a fresh memory update from the same assessment" onClick={onGenerate}>Draft again</button>
-							<button className="landing-action" disabled={!validation?.valid || state.proposalStale} title={state.proposalStale ? "This draft can no longer be applied. Draft the update again to continue." : validation?.valid ? "Approve and update long-term memory" : "Candidate memory must pass validation before approval"} onClick={onApprove}>Approve and update memory</button>
+							<button className="rs-btn" onClick={onAbort}>Cancel</button>
+							{(state.discussionMessages?.length ?? 0) > 0 && <button className="rs-btn" title="Return to the discussion; the transcript is kept and only this draft is dropped" onClick={onBackToDiscussion}>Back to discussion</button>}
+							<button className="rs-btn" title="Generate a fresh memory update from the same assessment" onClick={onGenerate}>Draft again</button>
+							<button className="rs-btn rs-btn-primary" disabled={!validation?.valid || state.proposalStale} title={state.proposalStale ? "This draft can no longer be applied. Draft the update again to continue." : validation?.valid ? "Approve and update long-term memory" : "Candidate memory must pass validation before approval"} onClick={onApprove}>Approve and update memory</button>
 						</div>
 						<p className="checkpoint-footnote">Approve writes the candidate update · the current memory is archived first · this Memorize is stamped on the room's timeline</p>
 					</div>
@@ -2164,7 +2342,7 @@ function AbsorbWorkflowShell({ state, loadingMessage, waitingMessage, keepIds, o
 						{state.activeRunConflictId && (
 							<div className="absorb-help-note absorb-run-conflict-note">
 								<span>{ABSORB_RUN_ACTIVE_SENTENCE}</span>
-								<button className="landing-action secondary" onClick={onStopAbandonedRun} title="Stop the update this room is still holding, then draft this one.">{ABSORB_RUN_ACTIVE_ACTION}</button>
+								<button className="rs-btn" onClick={onStopAbandonedRun} title="Stop the update this room is still holding, then draft this one.">{ABSORB_RUN_ACTIVE_ACTION}</button>
 							</div>
 						)}
 						{availability?.prepass?.demotionRequired && availability.budget && (() => {
@@ -2178,8 +2356,8 @@ function AbsorbWorkflowShell({ state, loadingMessage, waitingMessage, keepIds, o
 									<h3>{over.headline}</h3>
 									<p>{over.sentence}</p>
 									<div className="absorb-over-limit-actions">
-										<button className="landing-action secondary" disabled={raising} onClick={() => onRaiseLimitBeforeRun(over.raise.target)} title="Write this budget to Room settings now, then read the room again.">{raising ? "Raising…" : over.raise.label}</button>
-										<button className="landing-action secondary" disabled={raising} onClick={onReviewFirst} title="Leave this first read and open Review on the same room. Nothing is saved.">{over.reviewLabel}</button>
+										<button className="rs-btn" disabled={raising} onClick={() => onRaiseLimitBeforeRun(over.raise.target)} title="Write this budget to Room settings now, then read the room again.">{raising ? "Raising…" : over.raise.label}</button>
+										<button className="rs-btn" disabled={raising} onClick={onReviewFirst} title="Leave this first read and open Review on the same room. Nothing is saved.">{over.reviewLabel}</button>
 									</div>
 								</div>
 							);
@@ -2190,10 +2368,10 @@ function AbsorbWorkflowShell({ state, loadingMessage, waitingMessage, keepIds, o
 						{assessment.fields.needsJudgment.length > 0 && <p className="absorb-help-note">Answer these in Discuss first, and the update follows your answers. Continue lets the room decide on its own.</p>}
 						{meaningfulMaintenanceWarnings(assessment.warnings).length > 0 && <div className="checkpoint-proposal-warnings">{meaningfulMaintenanceWarnings(assessment.warnings).map((warning) => <div key={warning}>{warning}</div>)}</div>}
 						<div className="checkpoint-preview-actions">
-							<button className="landing-action secondary" onClick={onAbort}>Cancel</button>
-							<button className="landing-action secondary" onClick={onReassess} title="Read the conversations again, asking the model to fix what this read got wrong. Nothing is saved.">Read again</button>
-							<button className={`landing-action${assessment.fields.needsJudgment.length > 0 ? "" : " secondary"}`} onClick={onDiscuss} title="Answer the questions and give instructions first; the discussion itself is not saved">Discuss first</button>
-							<button className={`landing-action${assessment.fields.needsJudgment.length > 0 ? " secondary" : ""}`} onClick={onGenerate} title="Memorize the conversations and show what the room will keep">Continue →</button>
+							<button className="rs-btn" onClick={onAbort}>Cancel</button>
+							<button className="rs-btn" onClick={onReassess} title="Read the conversations again, asking the model to fix what this read got wrong. Nothing is saved.">Read again</button>
+							<button className={`rs-btn${assessment.fields.needsJudgment.length > 0 ? " rs-btn-primary" : ""}`} onClick={onDiscuss} title="Answer the questions and give instructions first; the discussion itself is not saved">Discuss first</button>
+							<button className={`rs-btn${assessment.fields.needsJudgment.length > 0 ? "" : " rs-btn-primary"}`} onClick={onGenerate} title="Memorize the conversations and show what the room will keep">Continue →</button>
 						</div>
 						{state.fastPathEnabled && <p className="checkpoint-footnote">{AUTOMATIC_APPLY_ON_SENTENCE} · a clean update is saved without a second look</p>}
 					</div>
@@ -2255,7 +2433,7 @@ function MaintenanceDiscussion({ assessmentMarkdown, aside, generateLabel = "Dra
 				// "Back to discussion" on the proposal screen.
 				<div className="absorb-discussion-remedy">
 					<span>{aside ? "You can still continue without this discussion; what you wrote here stays available from the update." : "You can still draft from the assessment alone; this discussion is kept and stays available from the draft."}</span>
-					<button className="landing-action secondary" onClick={onDraftWithoutDiscussion} title={aside ? "Continue from the first read alone, leaving this discussion out. Nothing is saved until you approve." : "Draft the memory update from the initial assessment, leaving this discussion out. Nothing is saved until you approve."}>{aside ? "Continue without the discussion" : "Draft without the discussion"}</button>
+					<button className="rs-btn" onClick={onDraftWithoutDiscussion} title={aside ? "Continue from the first read alone, leaving this discussion out. Nothing is saved until you approve." : "Draft the memory update from the initial assessment, leaving this discussion out. Nothing is saved until you approve."}>{aside ? "Continue without the discussion" : "Draft without the discussion"}</button>
 				</div>
 			)}
 			<section className="absorb-discussion-transcript" aria-label="Discussion transcript" ref={transcriptRef}>
@@ -2295,8 +2473,8 @@ function MaintenanceDiscussion({ assessmentMarkdown, aside, generateLabel = "Dra
 					</div>
 				</div>
 				<div className="absorb-discussion-actions">
-					<button className="landing-action secondary" title="Return to the first read. This discussion is not saved anywhere; memory is unchanged." onClick={onBack}>{backLabel}</button>
-					<button className="landing-action absorb-discussion-generate" disabled={sending || messages.length === 0} title={messages.length === 0 ? "Send at least one message first" : "Go on with what you said here"} onClick={onGenerate}>{generateLabel}</button>
+					<button className="rs-btn" title="Return to the first read. This discussion is not saved anywhere; memory is unchanged." onClick={onBack}>{backLabel}</button>
+					<button className="rs-btn rs-btn-primary absorb-discussion-generate" disabled={sending || messages.length === 0} title={messages.length === 0 ? "Send at least one message first" : "Go on with what you said here"} onClick={onGenerate}>{generateLabel}</button>
 				</div>
 			</div>
 		</div>
@@ -2665,8 +2843,8 @@ function formatMaintenanceRequestError(message: string): string | null {
 		// Memorize's guidance offers Review as the shrink path; Review's own
 		// guidance cannot (Review is what overflowed), so it only offers a model.
 		const remedy = /run Review to shrink/i.test(message)
-			? "Run Review to shrink stable memory, or switch the maintenance profile to a larger-context model, then try again."
-			: "Switch the maintenance profile to a larger-context model, then run it again.";
+			? "Run Review to shrink stable memory, or choose a memory model with a larger window in Room settings, Model, then try again."
+			: "Choose a memory model with a larger window in Room settings, Model, then run it again.";
 		const discussion = /discussion/i.test(message) ? " — the discussion itself was already shortened as far as it goes" : "";
 		return `This room's memory is too large for the maintenance model to read in one request${discussion}. No memory was updated. ${remedy}`;
 	}
@@ -2742,6 +2920,8 @@ const RECENT_SESSIONS_BLOCK_CAP = 20;
 // Remember runs inside the room, where Maintain is not reachable — so its
 // failures must say what to do, not echo the engine's 409.
 function formatRememberError(message: string): string {
+	// Remember's own refusals are already written for the person: pass them through.
+	if (isPlainRememberSentence(message)) return message;
 	if (/not ready: needs_absorb/i.test(message)) return `This room is holding ${RECENT_SESSIONS_BLOCK_CAP} remembered sessions, which is as many as it can hold. Nothing was saved. Memorize them first: leave the room, then use Maintain → Memorize from Home, and come back to Remember.`;
 	if (isStaleMaintenanceMessage(message)) return "Memory changed while this proposal was open. Nothing was saved. Generate the proposal again to work from the latest memory state.";
 	return formatMaintenanceRequestError(message) ?? message;
@@ -2809,14 +2989,25 @@ function formatReviewApprovalError(message: string): string {
 	return `These changes could not be saved. The memory is unchanged and this tidy is still here. Details: ${message}`;
 }
 
-function CheckpointPreviewShell({ chat, itemCount, rememberText, density, proposal, loading, error, approvalLoading, approvalError, approvalResult, quickRequested, quickBlockedReasons, consultRunning, taskRunning, pendingConsultHandoffCount, pendingTaskHandoffCount, onRememberTextChange, onDensityChange, onGenerate, onApprove, onDiscard, onContinueAfterCheckpoint, onRestAfterCheckpoint, onClose }: { chat: NonNullable<PersistentChatConfig>; itemCount: number; rememberText: string; density: CheckpointDensity; proposal: CheckpointProposalResponse | null; loading: boolean; error: string | null; approvalLoading: boolean; approvalError: string | null; approvalResult: CheckpointApprovalResponse | null; quickRequested: boolean; quickBlockedReasons: string[] | null; consultRunning: boolean; taskRunning: boolean; pendingConsultHandoffCount: number; pendingTaskHandoffCount: number; onRememberTextChange: (text: string) => void; onDensityChange: (density: CheckpointDensity) => void; onGenerate: () => void; onApprove: (approvedRecentContext: string) => void; onDiscard: () => void; onContinueAfterCheckpoint: () => void; onRestAfterCheckpoint: () => void; onClose: () => void }) {
+function CheckpointPreviewShell({ chat, itemCount, rememberText, density, proposal, loading, progress, onCancelGenerate, error, approvalLoading, approvalError, approvalResult, quickRequested, quickBlockedReasons, consultRunning, taskRunning, pendingConsultHandoffCount, pendingTaskHandoffCount, onRememberTextChange, onDensityChange, onGenerate, onApprove, onDiscard, onContinueAfterCheckpoint, onRestAfterCheckpoint, onClose }: { chat: NonNullable<PersistentChatConfig>; itemCount: number; rememberText: string; density: CheckpointDensity; proposal: CheckpointProposalResponse | null; loading: boolean; progress: { read: number; of: number } | null; onCancelGenerate: () => void; error: string | null; approvalLoading: boolean; approvalError: string | null; approvalResult: CheckpointApprovalResponse | null; quickRequested: boolean; quickBlockedReasons: string[] | null; consultRunning: boolean; taskRunning: boolean; pendingConsultHandoffCount: number; pendingTaskHandoffCount: number; onRememberTextChange: (text: string) => void; onDensityChange: (density: CheckpointDensity) => void; onGenerate: () => void; onApprove: (approvedRecentContext: string) => void; onDiscard: () => void; onContinueAfterCheckpoint: () => void; onRestAfterCheckpoint: () => void; onClose: () => void }) {
 	const [showFullEntry, setShowFullEntry] = useState(false);
 	const [editing, setEditing] = useState(false);
 	const [approvedFields, setApprovedFields] = useState<CheckpointApprovalEditFields>({ sessionArc: "", body: "", parked: "None" });
+	// One pass or N parts, said before anything is generated. Asked once when
+	// the dialog opens; a failed estimate just leaves the line out.
+	const [readEstimate, setReadEstimate] = useState<RememberReadEstimate | null>(null);
+	useEffect(() => {
+		let cancelled = false;
+		setReadEstimate(null);
+		fetchRememberReadEstimate(chat.agentId, chat.conversationId).then((estimate) => { if (!cancelled) setReadEstimate(estimate); }, () => {});
+		return () => { cancelled = true; };
+	}, [chat.agentId, chat.conversationId]);
+	// While the proposal generates, Escape does not close the dialog: Cancel
+	// does, and says what it does. Closing would leave a paid request running.
 	useEscapeKey(() => {
 		if (editing) setEditing(false);
 		else onClose();
-	}, !approvalLoading);
+	}, !approvalLoading && !loading);
 	useEffect(() => {
 		setShowFullEntry(false);
 		setEditing(false);
@@ -2839,8 +3030,13 @@ function CheckpointPreviewShell({ chat, itemCount, rememberText, density, propos
 	function updateApprovedField(field: keyof CheckpointApprovalEditFields, value: string) {
 		setApprovedFields((current) => ({ ...current, [field]: value }));
 	}
-	function confirmDiscard() {
-		const ok = window.confirm("Discard this memory proposal?\n\nIt has not been saved. If you discard it, you return to the active thread and the proposal is lost.");
+	async function confirmDiscard() {
+		const ok = await confirmDialog({
+			title: "Discard this memory proposal?",
+			body: "It has not been saved. If you discard it, you return to the active thread and the proposal is lost.",
+			confirmLabel: "Discard",
+			danger: true,
+		});
 		if (ok) onDiscard();
 	}
 	// Consult MR-5 checkpoint-time honesty (§2.3): one-line notices, NOT gates —
@@ -2867,7 +3063,10 @@ function CheckpointPreviewShell({ chat, itemCount, rememberText, density, propos
 						<span className="spinner" />
 						<p className="card-kicker">Remember</p>
 						<h2>Drafting memory proposal…</h2>
-						<p>This conversation is being compressed into a proposed memory entry. Nothing is saved yet.</p>
+						<p>{rememberProgressSentence(progress)} Nothing is saved yet.</p>
+						<div className="checkpoint-preview-actions">
+							<button className="rs-btn" onClick={onCancelGenerate}>Cancel</button>
+						</div>
 					</div>
 				) : quickRequested && !quickBlockedReasons?.length && approvalLoading && !approvalResult ? (
 					<div className="checkpoint-generating-state">
@@ -2886,8 +3085,8 @@ function CheckpointPreviewShell({ chat, itemCount, rememberText, density, propos
 						{recentSessionsHeadsUp(approvalResult.recentContextEntryCount) && <div className="checkpoint-proposal-warnings checkpoint-sessions-headsup" role="status">{recentSessionsHeadsUp(approvalResult.recentContextEntryCount)}</div>}
 						{approvalResult.warnings.length > 0 && <div className="checkpoint-proposal-warnings">{approvalResult.warnings.map((warning) => <div key={warning}>{warning}</div>)}</div>}
 						<div className="checkpoint-preview-actions">
-							<button className="landing-action" onClick={onContinueAfterCheckpoint} title="Stay in this room on a fresh thread">Continue working</button>
-							<button className="landing-action secondary" onClick={onRestAfterCheckpoint}>Return Home</button>
+							<button className="rs-btn rs-btn-primary" onClick={onContinueAfterCheckpoint} title="Stay in this room on a fresh thread">Continue working</button>
+							<button className="rs-btn" onClick={onRestAfterCheckpoint}>Return Home</button>
 						</div>
 					</div>
 				) : proposal ? (
@@ -2922,14 +3121,15 @@ function CheckpointPreviewShell({ chat, itemCount, rememberText, density, propos
 									</div>
 									{showFullEntry ? (
 										<div className="checkpoint-review-actions">
-											<button className="inline-action" onClick={() => setShowFullEntry(false)}>Hide full entry</button>
-											<button className="inline-action" onClick={() => setEditing(true)} title="Edit the entry before saving">Edit</button>
+											<button className="rs-btn" onClick={() => setShowFullEntry(false)}>Hide full entry</button>
+											<button className="rs-btn" onClick={() => setEditing(true)} title="Edit the entry before saving">Edit</button>
 										</div>
 									) : (
-										<button className="inline-action checkpoint-full-entry-trigger" onClick={() => setShowFullEntry(true)}>Show full entry</button>
+										<button className="rs-btn checkpoint-full-entry-trigger" onClick={() => setShowFullEntry(true)}>Show full entry</button>
 									)}
 								</div>
 							)}
+							{!editing && proposal.rememberRead && <p className="checkpoint-read-note">{rememberReadSentences(proposal.rememberRead).join(" ")}</p>}
 							{editing ? (
 								<div className="checkpoint-edit-field checkpoint-structured-editor">
 									<span className="checkpoint-field-label">Edit the entry before saving</span>
@@ -2950,7 +3150,7 @@ function CheckpointPreviewShell({ chat, itemCount, rememberText, density, propos
 										<span>Parked / Open items</span>
 										<textarea value={approvedFields.parked} onChange={(e) => updateApprovedField("parked", e.target.value)} rows={5} />
 									</label>
-									<button className="inline-action" onClick={() => setEditing(false)}>Done editing</button>
+									<button className="rs-btn" onClick={() => setEditing(false)}>Done editing</button>
 								</div>
 							) : showFullEntry ? (
 								<div className="checkpoint-full-review">
@@ -2964,10 +3164,9 @@ function CheckpointPreviewShell({ chat, itemCount, rememberText, density, propos
 						</div>
 						{honestyNoticesNode}
 						<div className="checkpoint-preview-actions">
-							<button className="landing-action" disabled={approvalLoading || !approvalReady} onClick={() => onApprove(approvedDraft)}>{approvalLoading ? "Saving…" : "Save to memory"}</button>
-							<button className="landing-action secondary" disabled={approvalLoading} onClick={confirmDiscard} title="Throw away this draft — nothing is saved">Discard</button>
+							<button className="rs-btn rs-btn-primary" disabled={approvalLoading || !approvalReady} onClick={() => onApprove(approvedDraft)}>{approvalLoading ? "Saving…" : "Save to memory"}</button>
+							<button className="rs-btn" disabled={approvalLoading} onClick={() => void confirmDiscard()} title="Throw away this draft. Nothing is saved">Discard</button>
 						</div>
-						<p className="checkpoint-footnote">Saved only when you approve · automatic apply can be turned on in room settings</p>
 					</div>
 				) : (
 					<>
@@ -3000,11 +3199,12 @@ function CheckpointPreviewShell({ chat, itemCount, rememberText, density, propos
 								rows={4}
 							/>
 						</label>
+						{readEstimate && <p className="checkpoint-read-note">{rememberEstimateSentence(readEstimate)}</p>}
 						{error && <div className="checkpoint-proposal-error" role="alert">{error}</div>}
 						{honestyNoticesNode}
 						<div className="checkpoint-preview-actions">
-							<button className="landing-action secondary" onClick={onClose}>Close</button>
-							<button className="landing-action" disabled={itemCount === 0} onClick={onGenerate}>Generate memory proposal</button>
+							<button className="rs-btn" onClick={onClose}>Close</button>
+							<button className="rs-btn rs-btn-primary" disabled={itemCount === 0} onClick={onGenerate}>Generate memory proposal</button>
 						</div>
 					</>
 				)}
@@ -3035,7 +3235,7 @@ function readEffortPayload(raw: any): { level: string; ladder: Array<{ level: st
 	return { level: raw.level, ladder };
 }
 
-function CheckpointSplitButton({ hasUserInput, inFlight, onQuickCheckpoint, onOpenFullCheckpoint }: { hasUserInput: boolean; inFlight: boolean; onQuickCheckpoint: () => void; onOpenFullCheckpoint: () => void }) {
+function CheckpointSplitButton({ hasUserInput, inFlight, skipsPreview, onQuickCheckpoint, onOpenFullCheckpoint }: { hasUserInput: boolean; inFlight: boolean; skipsPreview: boolean; onQuickCheckpoint: () => void; onOpenFullCheckpoint: () => void }) {
 	const [menuOpen, setMenuOpen] = useState(false);
 	const rootRef = useRef<HTMLDivElement | null>(null);
 	useEffect(() => {
@@ -3053,7 +3253,7 @@ function CheckpointSplitButton({ hasUserInput, inFlight, onQuickCheckpoint, onOp
 			document.removeEventListener("keydown", onKeyDown);
 		};
 	}, [menuOpen]);
-	const checkpointTitle = inFlight ? "Stop or wait for the current response before remembering" : hasUserInput ? "Save this conversation to memory. Applies automatically when the proposal is warning-free" : "Send a message before remembering";
+	const checkpointTitle = inFlight ? "Stop or wait for the current response before remembering" : hasUserInput ? (skipsPreview ? "Saves without the preview unless something needs your review" : "Proposes what to remember from this conversation, for you to review") : "Send a message before remembering";
 	return (
 		<div className="checkpoint-split" ref={rootRef}>
 			<button className="icon-btn checkpoint-split-main" title={checkpointTitle} disabled={!hasUserInput || inFlight} onClick={() => { setMenuOpen(false); onQuickCheckpoint(); }}>Remember</button>
@@ -3075,21 +3275,43 @@ export function App() {
 	// Settings item) starts on the section list, a targeted open goes straight
 	// to its section.
 	const [settingsOverlay, setSettingsOverlay] = useState<{ section: SettingsSection; mobileNav: boolean } | null>(null);
+	// The provider row AI setup scrolls to when it opens for a sign-in; a new
+	// object each time, so the same provider asked twice scrolls twice.
+	const [aiSetupFocus, setAiSetupFocus] = useState<{ providerId: string } | null>(null);
+	useEffect(() => { if (!settingsOverlay) setAiSetupFocus(null); }, [settingsOverlay]);
 	// Settings → Instructions holds a free-text draft and the overlay renders
 	// only the active section, so every way out of that section (close,
 	// another section, a fresh open over it) asks once before the draft goes,
 	// the way the room modal asks for the room's own text.
 	const globalInstructionsDirtyRef = useRef(false);
 	const handleGlobalInstructionsDirtyChange = useCallback((dirty: boolean) => { globalInstructionsDirtyRef.current = dirty; }, []);
-	const confirmLeavingGlobalInstructions = (verb: "Close" | "Leave"): boolean => !globalInstructionsDirtyRef.current || window.confirm(`The global instructions have unsaved changes. ${verb} without saving them?`);
+	const globalInstructionsSaveRef = useRef<(() => Promise<boolean>) | null>(null);
+	const registerGlobalInstructionsSave = useCallback((save: () => Promise<boolean>) => { globalInstructionsSaveRef.current = save; }, []);
+	// Save and close (or leave) runs the pane's own save; a failed save stays
+	// on the pane, which shows its error.
+	const confirmLeavingGlobalInstructions = async (verb: "Close" | "Leave"): Promise<boolean> => {
+		if (!globalInstructionsDirtyRef.current) return true;
+		const choice = await confirmChoice({
+			title: "Unsaved changes",
+			body: "The global instructions have unsaved changes.",
+			confirmLabel: `Save and ${verb.toLowerCase()}`,
+			alternateLabel: `${verb} without saving`,
+			cancelLabel: "Keep editing",
+		});
+		if (choice === "cancel") return false;
+		if (choice === "alternate") return true;
+		return (await globalInstructionsSaveRef.current?.()) ?? false;
+	};
 	const openSettings = (section?: SettingsSection): void => {
-		if (!(settingsOverlay && section === settingsOverlay.section) && !confirmLeavingGlobalInstructions("Leave")) return;
-		setSettingsOverlay(section ? { section, mobileNav: false } : { section: "ai-setup", mobileNav: true });
-		// Opening settings re-asks for sign-in and profile state, so the pane
-		// never needs a refresh control of its own: it is simply current when
-		// it appears, and the focus listener keeps it current after that.
-		void refreshAuthStatus();
-		void refreshAiProfileStatus();
+		void (async () => {
+			if (!(settingsOverlay && section === settingsOverlay.section) && !(await confirmLeavingGlobalInstructions("Leave"))) return;
+			setSettingsOverlay(section ? { section, mobileNav: false } : { section: "ai-setup", mobileNav: true });
+			// Opening settings re-asks for sign-in and profile state, so the pane
+			// never needs a refresh control of its own: it is simply current when
+			// it appears, and the focus listener keeps it current after that.
+			void refreshAuthStatus();
+			void refreshAiProfileStatus();
+		})();
 	};
 	// The one-time What's new window after an update. Asked once per app load;
 	// the server decides whether there is anything to show. The seen POST is
@@ -3182,6 +3404,19 @@ export function App() {
 	// affordance or a tab re-focus starts a new cycle). The pill copy follows
 	// this so it never claims "Reconnecting" while nothing is trying.
 	const [roomReconnectState, setRoomReconnectState] = useState<"idle" | "reconnecting" | "failed">("idle");
+	// The provider the open conversation is locked to, once the server said it
+	// is signed out ("" when the server did not name it); null otherwise.
+	const [signedOutProvider, setSignedOutProvider] = useState<string | null>(null);
+	// The room's model is no longer offered: stopped like a signed-out
+	// provider, but no sign-in brings it back, so the notice offers only
+	// another model.
+	const [roomModelNotOffered, setRoomModelNotOffered] = useState(false);
+	// A turn failed on the sign-in (a key that is gone or refused, a failed
+	// refresh) while the socket stayed up: the same one notice, until a
+	// sign-in in AI setup, the next message, or the conversation moves. The
+	// server reads the sign-ins again before every message, so the next send
+	// after a sign-in runs on it.
+	const [turnSignedOutProvider, setTurnSignedOutProvider] = useState<string | null>(null);
 	const [busy, setBusy] = useState(false);
 	// Voice. Desktop app only for now: the shell appends the user-agent token
 	// main.tsx keys its CSS off, and a browser tab gets neither the talk key
@@ -3359,6 +3594,11 @@ export function App() {
 	// card's wheel opens. Declared here because the Escape handler below has to
 	// yield to it.
 	const [roomSettingsOpen, setRoomSettingsOpen] = useState(false);
+	const [roomSettingsPane, setRoomSettingsPane] = useState<SettingsPane | undefined>(undefined);
+	// The room's "Remember without the preview" switch, for the Remember
+	// button's tooltip: read on entering the room and whenever Room settings
+	// (where it is changed) closes.
+	const [rememberSkipsPreview, setRememberSkipsPreview] = useState(false);
 	// First-open workspace nudge: a room with no workspace configured gets one
 	// dismissible in-room notice pointing at workspace settings. The dismissal
 	// is remembered per room in localStorage, so it never comes back.
@@ -3388,6 +3628,15 @@ export function App() {
 	const [modelStatus, setModelStatus] = useState<WebChatModelStatus | null>(null);
 	const [aiProfileStatus, setAiProfileStatus] = useState<PersistentAgentAiProfileSelectionStatus | null>(null);
 	const [persistentAgentStatuses, setPersistentAgentStatuses] = useState<PersistentAgentStatus[]>([]);
+	// The saved order of the home screen. Every rule about it (withheld on each
+	// arrival until that arrival's read settles, reads and saves never
+	// overlapping, a save from an earlier visit remembered and not drawn, a
+	// failed save remembered too) lives in home-room-order.ts.
+	const homeRoomOrder = useHomeRoomOrder(view === "home", { statuses: persistentAgentStatuses, refresh: refreshPersistentAgentStatus });
+	// Whether the home screen's arrange mode has unsaved moves (Landing tells
+	// it); the exits that leave home from outside Landing ask the leave
+	// question with it (home-room-arrange.ts, the ONE sentence).
+	const roomArrangeDirtyRef = useRef(false);
 	const [persistentAgentStatus, setPersistentAgentStatus] = useState<PersistentAgentStatus | null>(null);
 	// Community #14 slice 2: rooms observed finishing a response WITHOUT us
 	// inside (left mid-generation, or found in flight from outside). When a
@@ -3472,6 +3721,11 @@ export function App() {
 	const [checkpointDensity, setCheckpointDensity] = useState<CheckpointDensity>("standard");
 	const [checkpointProposal, setCheckpointProposal] = useState<CheckpointProposalResponse | null>(null);
 	const [checkpointProposalLoading, setCheckpointProposalLoading] = useState(false);
+	// The running proposal request: Cancel aborts it, and the server stops the
+	// worker when the request closes.
+	const checkpointProposalAbortRef = useRef<AbortController | null>(null);
+	// How far the server has read, polled while the proposal generates.
+	const [checkpointProgress, setCheckpointProgress] = useState<{ read: number; of: number } | null>(null);
 	const [checkpointProposalError, setCheckpointProposalError] = useState<string | null>(null);
 	const [checkpointApprovalLoading, setCheckpointApprovalLoading] = useState(false);
 	const [checkpointApprovalError, setCheckpointApprovalError] = useState<string | null>(null);
@@ -3541,7 +3795,11 @@ export function App() {
 	// lock-bounce error frame is judged at event time, not render time).
 	const roomReconnectStateRef = useRef<"idle" | "reconnecting" | "failed">("idle");
 	const reconnectAttemptRef = useRef(0);
+	// When the current outage began (first scheduled retry), null while connected.
+	const reconnectStartedAtRef = useRef<number | null>(null);
 	const reconnectTimerRef = useRef<number | null>(null);
+	// "Connected again" after an outage; the toast clears itself.
+	const [reconnectedNotice, setReconnectedNotice] = useState<number | null>(null);
 	// Deliberate socket closes (navigation resets, leaving the room) must not
 	// trigger the auto-reconnect; these paths arm the flag and the WS effect
 	// clears it when it builds the next socket.
@@ -3585,6 +3843,12 @@ export function App() {
 	// retry flow swaps in and out.
 	const streamStateRef = useRef<AssistantStreamState>(createAssistantStreamState());
 	const revealPacingRef = useRef<RevealPacing>(readRevealPacing());
+	// The answer is fully received but its tail is still appearing (the
+	// reducer's draining phase). The turn's chrome (Stop, the header spinner,
+	// the composer placeholder, Remember) keeps saying "working" until it is
+	// done; nothing server-side reads this. Set only when it flips.
+	const [revealing, setRevealing] = useState(false);
+	const revealingRef = useRef(false);
 	// The consult (DelegationCard) client state machine — see consult-stream.ts.
 	// The ref is the source of truth the WS closures read; the state drives the
 	// docked card / folded pill render.
@@ -3629,6 +3893,12 @@ export function App() {
 	const outputLimitNoticeShownRef = useRef(false);
 	const retryNoticeIdRef = useRef<string | null>(null);
 	const persistentChatRef = useRef<PersistentChatConfig>(persistentChat);
+	// The room's socket belongs to a conversation, not to its model: a model
+	// that changes under an open conversation (the ready frame, a switch, an
+	// empty conversation moving to the room's pick) updates the room without
+	// dialing again, which would cut off a turn or a consult. A reconnect that
+	// needs the new model bumps sessionVersion.
+	const persistentSocketKey = persistentChat ? `${persistentChat.agentId}\u0000${persistentChat.conversationId}` : null;
 	// The projected asset rows, mirrored for callbacks created before the memo
 	// (openArtifactViewer attaches the row to whatever entry path opened it).
 	const assetRowsRef = useRef<AssetRowView[]>([]);
@@ -3899,29 +4169,6 @@ export function App() {
 		} catch {}
 	}
 
-	async function selectAiProfile(profileId: string) {
-		const res = await apiFetch("/api/persistent-agent-ai-profile", {
-			method: "PUT",
-			headers: { "content-type": "application/json" },
-			body: JSON.stringify({ profileId }),
-		});
-		if (!res.ok) {
-			let message = `Failed to select AI profile (${res.status})`;
-			try {
-				const body = await res.json();
-				if (body?.error) message = String(body.error);
-			} catch {}
-			throw new Error(message);
-		}
-		setAiProfileStatus(await res.json() as PersistentAgentAiProfileSelectionStatus);
-		try {
-			await refreshModelStatus({ rethrow: true });
-		} catch {
-			// The switch itself landed — say so, and say what did not.
-			throw new Error("The AI profile was switched, but the model list could not be refreshed. Reload the page if models look stale.");
-		}
-	}
-
 	async function persistentAgentResponseError(res: Response, fallback: string): Promise<Error> {
 		let message = fallback;
 		try {
@@ -4031,11 +4278,17 @@ export function App() {
 		return null;
 	}
 
-	async function refreshPersistentAgentStatus() {
+	// `onFetched` is for a caller that needs the list itself as soon as it is
+	// here, not the bookkeeping after it (the home screen's order,
+	// home-room-order.ts, which takes a refresh that ends without having told
+	// anything as failed). Most callers pass nothing, and some are event
+	// handlers, hence the typeof.
+	async function refreshPersistentAgentStatus(onFetched?: (statuses: PersistentAgentStatus[]) => void) {
 		try {
 			const statuses = await fetchPersistentAgentStatuses();
 			const activeStatuses = Array.isArray(statuses) ? statuses : [];
 			setPersistentAgentStatuses(activeStatuses);
+			if (typeof onFetched === "function") onFetched(activeStatuses);
 			// Background-generation bookkeeping (community #14): note rooms
 			// cooking without us inside; when one settles with a completed turn,
 			// promote it to the "response ready" badge.
@@ -4108,9 +4361,10 @@ export function App() {
 		} catch {}
 	}
 
-	async function createPersistentAgentRoom(request: PersistentAgentCreateRequest): Promise<void> {
-		await createPersistentAgent(request);
+	async function createPersistentAgentRoom(request: PersistentAgentCreateRequest): Promise<PersistentAgentCreateResponse> {
+		const created = await createPersistentAgent(request);
 		await refreshPersistentAgentStatus();
+		return created;
 	}
 
 	// Archive shares purge's busy guards server-side, so from INSIDE the room it
@@ -4482,9 +4736,18 @@ export function App() {
 		return next;
 	}
 
+	function commitStreamState(state: AssistantStreamState) {
+		streamStateRef.current = state;
+		const draining = state.phase === "draining";
+		if (draining !== revealingRef.current) {
+			revealingRef.current = draining;
+			setRevealing(draining);
+		}
+	}
+
 	function dispatchStream(action: AssistantStreamAction): AssistantStreamEffect[] {
 		const { state, effects } = reduceAssistantStream(streamStateRef.current, action, revealPacingRef.current);
-		streamStateRef.current = state;
+		commitStreamState(state);
 		const upserts = new Map<string, { text: string; streaming: boolean }>();
 		for (const effect of effects) {
 			if (effect.kind === "upsert") upserts.set(effect.id, { text: effect.text, streaming: effect.streaming });
@@ -4543,7 +4806,7 @@ export function App() {
 	function flushAssistantStream() {
 		cancelStreamTick();
 		const { state, effects } = reduceAssistantStream(streamStateRef.current, { type: "flush", now: performance.now() }, revealPacingRef.current);
-		streamStateRef.current = state;
+		commitStreamState(state);
 		const upserts = new Map<string, { text: string; streaming: boolean }>();
 		for (const effect of effects) {
 			if (effect.kind === "upsert") upserts.set(effect.id, { text: effect.text, streaming: effect.streaming });
@@ -4669,7 +4932,17 @@ export function App() {
 	// busy stuck, the truncated bubble looking complete, and live items
 	// diverging from the thread file.
 
-	const RECONNECT_MAX_ATTEMPTS = 8; // 1s..30s doubling backoff ≈ 2 minutes
+	// Doubling backoff from 1 s, capped at 5 s, so the room is back within 5 s
+	// of the server's return. The cap does not depend on visibility: macOS
+	// reports a window covered by another app as hidden, and a longer delay
+	// scheduled then outlived the uncovering (measured: 24 s late after a
+	// 36 s outage). A background tab's timers are throttled by the browser
+	// anyway, and the loop gives up after two minutes of outage; the banner
+	// then offers Reconnect. The attempt cap is a backstop only, and the value
+	// a stand-down (room_cooking) jumps to.
+	const RECONNECT_MAX_ATTEMPTS = 60;
+	const RECONNECT_GIVE_UP_MS = 120_000;
+	const RECONNECT_MAX_DELAY_MS = 5_000;
 
 	/** How long room chrome keeps quiet about a socket being replaced. */
 	const SWAP_QUIET_MS = 800;
@@ -4816,12 +5089,13 @@ export function App() {
 			setRoomReconnect("idle");
 			return;
 		}
-		if (reconnectAttemptRef.current >= RECONNECT_MAX_ATTEMPTS) {
+		if (reconnectStartedAtRef.current === null) reconnectStartedAtRef.current = Date.now();
+		if (reconnectAttemptRef.current >= RECONNECT_MAX_ATTEMPTS || Date.now() - reconnectStartedAtRef.current >= RECONNECT_GIVE_UP_MS) {
 			setRoomReconnect("failed");
 			return;
 		}
 		setRoomReconnect("reconnecting");
-		const delay = delayMs ?? Math.min(30_000, 1000 * 2 ** reconnectAttemptRef.current);
+		const delay = delayMs ?? Math.min(RECONNECT_MAX_DELAY_MS, 1000 * 2 ** reconnectAttemptRef.current);
 		reconnectTimerRef.current = window.setTimeout(() => {
 			reconnectTimerRef.current = null;
 			reconnectAttemptRef.current += 1;
@@ -4833,6 +5107,7 @@ export function App() {
 	// cycle right away instead of waiting out a long backoff.
 	function retryRoomReconnectNow() {
 		reconnectAttemptRef.current = 0;
+		reconnectStartedAtRef.current = null;
 		scheduleRoomReconnect(0);
 	}
 
@@ -4918,6 +5193,7 @@ export function App() {
 			// Not in a room (or just left one): no reconnect business.
 			cancelScheduledReconnect();
 			reconnectAttemptRef.current = 0;
+			reconnectStartedAtRef.current = null;
 			if (roomReconnectStateRef.current !== "idle") setRoomReconnect("idle");
 		} else {
 			// Inside a room the room ladder owns the socket; a pending non-room
@@ -5051,9 +5327,18 @@ export function App() {
 				if (readyRoom) setMemoryOverflowRooms((rooms) => rooms.has(readyRoom) ? new Set([...rooms].filter((id) => id !== readyRoom)) : rooms);
 				if (wsRef.current !== ws) return;
 				cancelScheduledReconnect();
+				setSignedOutProvider(null);
+				setRoomModelNotOffered(false);
 				reconnectAttemptRef.current = 0;
-				if (roomReconnectStateRef.current !== "idle") setRoomReconnect("idle");
+				reconnectStartedAtRef.current = null;
+				if (roomReconnectStateRef.current !== "idle") {
+					setRoomReconnect("idle");
+					setReconnectedNotice(Date.now());
+				}
 				if (msg.model?.label) setCurrentModelFromName({ model: msg.model.model, modelLabel: String(msg.model.label), provider: msg.model.provider });
+				// The server binds on its own model (the saved lock, or the room's
+				// pick for an empty conversation); the room's model follows it.
+				if (msg.model?.provider && msg.model?.model) setPersistentChat((chat) => chat && (chat.model.provider !== msg.model.provider || chat.model.model !== msg.model.model) ? { ...chat, model: { provider: msg.model.provider, model: msg.model.model, label: String(msg.model.label ?? msg.model.model) } } : chat);
 				setContextHealth(msg.contextHealth ?? null);
 				setRoomEffort(readEffortPayload(msg.effort));
 				// A level picked while the socket was down waits here, not in the
@@ -5061,6 +5346,22 @@ export function App() {
 				// Sent after the server's own level has been applied, so this
 				// overrides it rather than being overwritten by it.
 				flushPendingEffort(ws);
+				return;
+			}
+			if (msg.type === "model_switched") {
+				setTurnSignedOutProvider(null);
+				// The conversation continues on another model: the server rebound the
+				// session. The room's model, the chip, the effort dial and the socket's
+				// model follow, and one quiet line marks the place in the transcript
+				// (a display line only, never part of what the model reads).
+				if (wsRef.current !== ws) return;
+				if (msg.model?.label) setCurrentModelFromName({ model: msg.model.model, modelLabel: String(msg.model.label), provider: msg.model.provider });
+				if (msg.model?.provider && msg.model?.model) setPersistentChat((chat) => chat && (chat.model.provider !== msg.model.provider || chat.model.model !== msg.model.model) ? { ...chat, model: { provider: msg.model.provider, model: msg.model.model, label: String(msg.model.label ?? msg.model.model) } } : chat);
+				setContextHealth(msg.contextHealth ?? null);
+				setRoomEffort(readEffortPayload(msg.effort));
+				const noticeText = typeof msg.notice?.text === "string" ? msg.notice.text : "";
+				const noticeId = typeof msg.notice?.id === "string" && msg.notice.id ? msg.notice.id : nid();
+				if (noticeText) setItems((s) => s.some((it) => it.id === noticeId) ? s : [...s, { kind: "system", id: noticeId, text: noticeText, level: "info" }]);
 				return;
 			}
 			if (msg.type === "effort") {
@@ -5156,7 +5457,7 @@ export function App() {
 			}
 			if (msg.type === "turn_reattach_replay_done") {
 				// End of the catch-up window: land whatever the replay buffered
-				// in one go, then let live frames reveal at reading pace again.
+				// in one go, then let live frames reveal at the paced rate again.
 				reattachReplayDrainRef.current = false;
 				cancelStreamTick();
 				if (isAssistantStreamActive(streamStateRef.current)) {
@@ -5185,6 +5486,25 @@ export function App() {
 				// refused to start the session and said why. Redialing reaches the
 				// same memory, so stand the reconnect loop down and leave the
 				// server's sentence (it names the remedy) as the room's only line.
+				// The conversation's provider is signed out (or the room's model is
+				// no longer offered): redialing reaches the same refusal, so the
+				// ladder stands down and one notice above the composer offers the
+				// ways on (Sign in, Choose another model) instead of a Reconnect.
+				if (msg.code === "provider_signed_out" || msg.code === "room_model_unavailable") {
+					if (wsRef.current !== ws) return;
+					suppressReconnectRef.current = true;
+					cancelScheduledReconnect();
+					// Stopped, not idle: the notice stays, and the room dials again
+					// by itself once the provider is signed in or another model is
+					// picked.
+					setRoomReconnect("failed");
+					if (msg.code === "provider_signed_out") setSignedOutProvider(typeof msg.provider === "string" ? msg.provider : "");
+					else setRoomModelNotOffered(true);
+					flushAssistantStream();
+					setBusy(false);
+					busyRef.current = false;
+					return;
+				}
 				if (msg.code === "memory_overflow") {
 					// The refusal belongs to the room this socket was opened for —
 					// key the mark on the closure's room, not on whatever room is
@@ -5217,7 +5537,15 @@ export function App() {
 				// settle any tool call the failure cut off (its result is never
 				// coming) so the transcript does not keep a chip running forever.
 				flushAssistantStream();
-				setItems((s) => [...stopRunningToolItems(s), { kind: "system", id: nid(), text: msg.message, level: "error" }]);
+				// A turn refused on the sign-in: the one notice, not the raw line.
+				if (isSignInFailure(String(msg.message ?? ""))) {
+					noteTurnSignInFailure(String(msg.message));
+					setItems((s) => stopRunningToolItems(s));
+				} else {
+					// A failure that repeats on every reconnect attempt (a bind that
+					// cannot succeed) says so once, not once per attempt.
+					setItems((s) => appendErrorLineOnce(stopRunningToolItems(s), { kind: "system", id: nid(), text: msg.message, level: "error" }));
+				}
 				setBusy(false);
 				busyRef.current = false;
 				if (turnCancellingRef.current) {
@@ -5518,7 +5846,36 @@ export function App() {
 			dispatchTask({ type: "reset" });
 			try { ws.close(); } catch {}
 		};
-	}, [sessionVersion, conversationId, persistentChat]);
+	}, [sessionVersion, conversationId, persistentSocketKey]);
+
+	// A room that stopped on a signed-out provider dials again by itself once
+	// that provider is signed in: a sign-in in this window refreshes the model
+	// status, and one made elsewhere (another tab, the CLI) is noticed when this
+	// window comes back to the front. Another room or conversation starts clean.
+	useEffect(() => { setSignedOutProvider(null); setRoomModelNotOffered(false); setTurnSignedOutProvider(null); }, [persistentSocketKey]);
+	useEffect(() => {
+		if (signedOutProvider === null) return;
+		const ready = modelStatus?.providers?.some((provider) => provider.ready && (signedOutProvider === "" || provider.id === signedOutProvider));
+		if (ready) retryRoomReconnectNow();
+	}, [modelStatus, signedOutProvider]);
+	// An empty conversation that stopped with its room (the room's model could
+	// not run) dials again once the room can run: another model picked in Room
+	// settings, Model, or the default changed.
+	const stoppedRoomStatus = signedOutProvider !== null || roomModelNotOffered ? persistentAgentStatuses.find((status) => status.id === persistentChat?.agentId) : undefined;
+	const stoppedRoomCanRun = !!stoppedRoomStatus?.models?.conversation.effective && stoppedRoomStatus.activeThread?.followsConversationPick === true;
+	useEffect(() => {
+		if (stoppedRoomCanRun) retryRoomReconnectNow();
+	}, [stoppedRoomCanRun]);
+	useEffect(() => {
+		if (signedOutProvider === null) return;
+		const recheck = () => { if (document.visibilityState === "visible") void refreshModelStatus(); };
+		window.addEventListener("focus", recheck);
+		document.addEventListener("visibilitychange", recheck);
+		return () => {
+			window.removeEventListener("focus", recheck);
+			document.removeEventListener("visibilitychange", recheck);
+		};
+	}, [signedOutProvider]);
 
 
 	function isRoutineRetrievalTool(name: string): boolean {
@@ -5600,12 +5957,17 @@ export function App() {
 				// The runtime compacts the conversation on its own; what it cannot
 				// shrink is the room's memory, so name that remedy.
 				const contextOverflow = /context(?:[ _-]?window| length)|too many tokens|maximum context|prompt is too long|exceeds? (?:the )?(?:model'?s? )?(?:context|token|input)/i.test(detail);
-				setItems((s) => [...s, {
+				// A sign-in that cannot be used (the catalog may still call the
+				// provider signed in): the one notice with Sign in, not the raw line.
+				if (!contextOverflow && isSignInFailure(detail)) {
+					streamErrorLineIdRef.current = null;
+					noteTurnSignInFailure(detail, typeof ev.message.provider === "string" ? ev.message.provider : undefined);
+				} else setItems((s) => [...s, {
 					kind: "system",
 					id: errorLineId,
 					level: "error",
 					text: contextOverflow
-						? `The model could not respond: the conversation plus this room's memory exceed its context window${detail ? ` · ${detail}` : ""}. Run Review from Maintain to shrink memory, or switch this room to a larger-context model.`
+						? `The model could not respond: the conversation plus this room's memory exceed its context window${detail ? ` · ${detail}` : ""}. Run Review from Maintain to shrink memory, or continue on a model with a larger window in Room settings, Model.`
 						: `The model could not respond${detail ? ` · ${detail}` : ""} · check the model and its sign-in in AI setup.`,
 				}]);
 			}
@@ -5755,7 +6117,7 @@ export function App() {
 		// persist the thread right after calling this.
 		cancelStreamTick();
 		const { state, effects } = reduceAssistantStream(streamStateRef.current, { type: "interrupt", now: performance.now() }, revealPacingRef.current);
-		streamStateRef.current = state;
+		commitStreamState(state);
 		const upserts = new Map<string, { text: string; streaming: boolean }>();
 		let interruptedId: string | null = null;
 		for (const effect of effects) {
@@ -5884,6 +6246,7 @@ export function App() {
 		// Spoken turns carry a flag so the server can ask for spoken prose; the
 		// hint rides the wire only, never this bubble or the saved thread.
 		ws.send(JSON.stringify({ type: "prompt", text: wireText, ...(voiceSendRef.current ? { voice: true } : {}) }));
+		setTurnSignedOutProvider(null);
 		dispatchStream({ type: "new_turn", now: performance.now() });
 		outputLimitNoticeShownRef.current = false;
 		retrievalActivityIdRef.current = null;
@@ -6287,25 +6650,27 @@ export function App() {
 		return true;
 	}
 
-	async function requestCheckpointProposal(targetChat: NonNullable<PersistentChatConfig>, density: CheckpointDensity, rememberText: string): Promise<CheckpointProposalResponse> {
+	async function requestCheckpointProposal(targetChat: NonNullable<PersistentChatConfig>, density: CheckpointDensity, rememberText: string, signal?: AbortSignal): Promise<CheckpointProposalResponse> {
 		// A paced tail may still be draining after busy cleared — the proposal
 		// must see the complete answer.
 		flushAssistantStream();
-		const transcriptItems = itemsRef.current
+		const targetStatus = persistentAgentStatuses.find((status) => status.id === targetChat.agentId);
+		const runtimeKind = targetStatus?.activeThread?.threadId === targetChat.conversationId ? targetStatus.activeThread.runtime?.kind : undefined;
+		const transcriptItems = rememberSendsTranscript(runtimeKind) ? itemsRef.current
 			.filter((item) => item.kind === "user" || item.kind === "assistant" || item.kind === "system" || item.kind === "tool")
 			.map((item) => {
 				if (item.kind === "user" || item.kind === "assistant" || item.kind === "system") return { kind: item.kind, id: item.id, text: item.text };
 				return { kind: "tool", id: item.id, name: item.name, status: item.status };
-			});
+			}) : undefined;
 		const res = await apiFetch(`/api/persistent-agents/${encodeURIComponent(targetChat.agentId)}/checkpoint/propose`, {
 			method: "POST",
 			headers: { "content-type": "application/json" },
+			...(signal ? { signal } : {}),
 			body: JSON.stringify({
 				conversationId: targetChat.conversationId,
-				model: targetChat.model,
 				density,
 				rememberText,
-				items: transcriptItems,
+				...(transcriptItems ? { items: transcriptItems } : {}),
 			}),
 		});
 		if (!res.ok) {
@@ -6336,15 +6701,59 @@ export function App() {
 		setCheckpointApprovalError(null);
 		setCheckpointApprovalResult(null);
 		setCheckpointProposal(null);
+		const cancel = new AbortController();
+		checkpointProposalAbortRef.current = cancel;
 		try {
-			const proposal = await requestCheckpointProposal(targetChat, checkpointDensity, checkpointRememberText);
+			const proposal = await requestCheckpointProposal(targetChat, checkpointDensity, checkpointRememberText, cancel.signal);
 			setCheckpointProposal(proposal);
 		} catch (e) {
-			setCheckpointProposalError(formatRememberError((e as Error).message));
+			// A cancel returns to the dialog as it was; any other failure says why.
+			if (!cancel.signal.aborted) setCheckpointProposalError(formatRememberError((e as Error).message));
+			else if (cancel.signal.reason instanceof Error && cancel.signal.reason.name !== "AbortError") setCheckpointProposalError(cancel.signal.reason.message);
 		} finally {
+			if (checkpointProposalAbortRef.current === cancel) checkpointProposalAbortRef.current = null;
 			setCheckpointProposalLoading(false);
 		}
 	}
+
+	function cancelCheckpointProposal(reason?: Error) {
+		checkpointProposalAbortRef.current?.abort(reason);
+	}
+
+	// "Part 2 of 4" while a proposal generates. A 404 means the server has no
+	// Remember running for this conversation: normal for a moment at the start
+	// and the end of a request, but twice in a row past the first seconds it
+	// means the server restarted and took the Remember with it, and the dialog
+	// says so instead of spinning forever.
+	useEffect(() => {
+		const targetChat = persistentChat;
+		if (!checkpointProposalLoading || !targetChat) {
+			setCheckpointProgress(null);
+			return;
+		}
+		let stopped = false;
+		let missing = 0;
+		const startedAt = Date.now();
+		const url = `/api/persistent-agents/${encodeURIComponent(targetChat.agentId)}/checkpoint/progress?conversationId=${encodeURIComponent(targetChat.conversationId)}`;
+		const timer = window.setInterval(async () => {
+			try {
+				const res = await apiFetch(url);
+				if (stopped) return;
+				if (res.ok) {
+					missing = 0;
+					setCheckpointProgress(await res.json() as { read: number; of: number });
+					return;
+				}
+				if (res.status !== 404 || Date.now() - startedAt < 3_000) return;
+				missing += 1;
+				if (missing >= 2) cancelCheckpointProposal(new Error("Remember stopped before it finished, because the app restarted while it was reading. Nothing was saved. Generate the proposal again."));
+			} catch {}
+		}, 1_000);
+		return () => {
+			stopped = true;
+			window.clearInterval(timer);
+		};
+	}, [checkpointProposalLoading, persistentChat?.agentId, persistentChat?.conversationId]);
 
 	async function bindToApprovedCheckpointRuntime(approval: CheckpointApprovalResponse, targetChat: NonNullable<PersistentChatConfig>): Promise<void> {
 		const freshThreadId = approval.postCheckpoint.activeThreadId || approval.runtimeBoundary.newThreadId;
@@ -6513,16 +6922,21 @@ export function App() {
 		setCheckpointPreviewOpen(true);
 		setCheckpointProposalLoading(true);
 		let proposal: CheckpointProposalResponse;
+		const cancel = new AbortController();
+		checkpointProposalAbortRef.current = cancel;
 		try {
-			proposal = await requestCheckpointProposal(targetChat, "standard", "");
+			proposal = await requestCheckpointProposal(targetChat, "standard", "", cancel.signal);
 			setCheckpointProposal(proposal);
 		} catch (e) {
-			setCheckpointProposalError(formatRememberError((e as Error).message));
+			if (!cancel.signal.aborted) setCheckpointProposalError(formatRememberError((e as Error).message));
+			else if (cancel.signal.reason instanceof Error && cancel.signal.reason.name !== "AbortError") setCheckpointProposalError(cancel.signal.reason.message);
 			setCheckpointProposalLoading(false);
 			return;
+		} finally {
+			if (checkpointProposalAbortRef.current === cancel) checkpointProposalAbortRef.current = null;
 		}
 		setCheckpointProposalLoading(false);
-		const blockers = quickCheckpointBlockers(proposal);
+		const blockers = quickRememberBlockers(proposal);
 		if (blockers.length > 0) {
 			setCheckpointQuickBlockedReasons(blockers);
 			return;
@@ -6530,8 +6944,10 @@ export function App() {
 		// The room decides whether a blocker-free proposal may skip the preview.
 		// Off (or unreadable) means review-first: the safe direction is showing
 		// the proposal, never silently applying it.
-		if (!(await fetchQuickCheckpointPreference(targetChat.agentId))) {
-			setCheckpointQuickBlockedReasons(["Remember now asks for review first. You can turn on automatic apply in this room's settings."]);
+		const skipsPreview = await fetchQuickCheckpointPreference(targetChat.agentId);
+		setRememberSkipsPreview(skipsPreview);
+		if (!skipsPreview) {
+			setCheckpointQuickBlockedReasons(["To save without this preview, turn on Remember without the preview in Room settings, Memory."]);
 			return;
 		}
 		setCheckpointApprovalLoading(true);
@@ -6545,12 +6961,13 @@ export function App() {
 			await bindToApprovedCheckpointRuntime(approval, targetChat);
 			void refreshPersistentAgentStatus();
 			resetCheckpointInput();
-			// Disclose what the gate no longer blocks on: elision notices from the
-			// propose step ride the saved line together with approval warnings.
+			// Disclose what the gate does not block on: shortened tool output
+			// rides the saved line together with approval warnings.
 			// "automatically" is deliberate: the saved line must disclose that no
 			// human reviewed this entry before it was written.
 			let savedNote = "Saved to memory automatically.";
-			const disclosedNotes = [...proposal.warnings.filter(isTranscriptElisionWarning), ...approval.warnings];
+			const trimmedNote = rememberToolOutputSentence(proposal.rememberRead);
+			const disclosedNotes = [...(trimmedNote ? [trimmedNote] : []), ...approval.warnings];
 			if (disclosedNotes.length > 0) savedNote += ` ${disclosedNotes.join(" ")}`;
 			// The manual path shows the sessions-cap heads-up in the preview; the
 			// auto path has no preview, so it rides the saved line instead.
@@ -6642,10 +7059,18 @@ export function App() {
 				? "This room is working on a scheduled background task. Wait for it to finish, then start Maintain."
 				: "This room is active in another place. Close it there, then start Maintain.";
 		}
-		const hasThread = (persistentThread?.state === "standby" && persistentThread.agentId === agentId)
+		const localStandby = persistentThread?.state === "standby" && persistentThread.agentId === agentId ? persistentThread : null;
+		const hasThread = Boolean(localStandby)
 			|| (!!status && (status.runtime.state === "standby" || status.runtime.state === "active") && !!status.runtime.activeThreadId);
-		if (hasThread && !memoryOverflowRooms.has(agentId)) return "This room has a session in progress. Resume it and use Remember, then Maintain becomes available.";
+		// Only a conversation someone has spoken in holds anything Maintain
+		// could leave behind. The fresh one Remember or Forget prepares is empty,
+		// and its next bind boots on the memory as it is then.
+		const threadHasTurns = localStandby
+			? hasUserVisibleTurn(localStandby.items)
+			: (status?.activeThread?.hasUserVisibleTurns ?? true);
+		if (hasThread && threadHasTurns && !memoryOverflowRooms.has(agentId)) return MAINTAIN_BLOCKED_BY_OPEN_CONVERSATION;
 		if (status && status.exists && status.status !== "ready" && status.status !== "needs_absorb") return "This room needs attention before it can be maintained.";
+		if (status && nothingToMaintain(status.memoryStatus)) return NOTHING_TO_MAINTAIN_SENTENCE;
 		return null;
 	}
 
@@ -7667,6 +8092,14 @@ export function App() {
 		}
 	}
 
+	const rememberSwitchAgentId = persistentChat?.agentId ?? null;
+	useEffect(() => {
+		if (!rememberSwitchAgentId || roomSettingsOpen) return;
+		let cancelled = false;
+		void fetchQuickCheckpointPreference(rememberSwitchAgentId).then((on) => { if (!cancelled) setRememberSkipsPreview(on); });
+		return () => { cancelled = true; };
+	}, [rememberSwitchAgentId, roomSettingsOpen]);
+
 	// Whether this room lets the quick Checkpoint bridge propose and approve on
 	// its own. A failed lookup reads as "no": review-first is the safe answer.
 	async function fetchQuickCheckpointPreference(agentId: PersistentAgentId): Promise<boolean> {
@@ -7749,29 +8182,23 @@ export function App() {
 		}
 	}
 
-	// Best-effort per-room model memory: the room remembers the model it was
-	// last pointed at, so a profile switch stops reverting an empty room's
-	// picker to the new profile's recommendation. Failures stay silent — the
-	// pick already applied locally, the memory just does not outlive it.
-	function recordRoomPreferredModel(agentId: PersistentAgentId, model: { provider: string; model: string }): void {
-		void apiFetch(`/api/persistent-agents/${encodeURIComponent(agentId)}/preferred-model`, {
-			method: "PUT",
-			headers: { "content-type": "application/json" },
-			body: JSON.stringify({ provider: model.provider, model: model.model }),
-		}).then((res) => {
-			if (!res.ok) return;
-			// Fold the write into the statuses the cards already render, so the
-			// memory is live before the next status poll.
-			setPersistentAgentStatuses((statuses) => statuses.map((status) => status.id === agentId ? { ...status, preferredModel: { provider: model.provider, model: model.model } } : status));
-		}).catch(() => {});
-	}
-
-	async function openPersistentAgent(target: PersistentAgentTarget, model: WebChatModelOption) {
+	async function openPersistentAgent(target: PersistentAgentTarget) {
 		const label = target.displayName?.trim() || "Exxpert";
-		// An empty prepared boundary thread (post-checkpoint/Memento) only pins
-		// the model while it exists. Entering with a fresh session retires it
-		// first so the room starts on the model the user picked.
+		// The server decides a new conversation's model (the room's conversation
+		// row); the resolved row only fills the room's header until the saved
+		// thread answers with its lock.
 		const targetStatus = persistentAgentStatuses.find((candidate) => candidate.id === target.id) ?? null;
+		const conversationRow = targetStatus?.models?.conversation ?? target.models?.conversation ?? null;
+		const shownModel = conversationRow?.effective ?? null;
+		if (!shownModel) {
+			// The room's model cannot run (the server's sentence names it and the
+			// way out), or nothing is signed in at all.
+			setPersistentResumeError(conversationRow?.refusal ?? "No AI provider is signed in. Sign in in Settings, AI setup, then open the room again.");
+			return;
+		}
+		const model: WebChatModelOption = { provider: shownModel.provider, model: shownModel.model, label: shownModel.label };
+		// An empty prepared boundary thread (post-checkpoint/Memento) is retired
+		// before a fresh entry.
 		const preparedThreadId = targetStatus && (targetStatus.runtime.state === "standby" || targetStatus.runtime.state === "active") ? targetStatus.runtime.activeThreadId : null;
 		const targetPreparedBoundary = targetStatus?.activeThread?.preparedByBoundary ?? (targetStatus?.activeThread?.preparedByCheckpoint ? "checkpoint" : null);
 		if (preparedThreadId && targetPreparedBoundary && !targetStatus?.activeThread?.hasUserVisibleTurns) {
@@ -7795,9 +8222,6 @@ export function App() {
 			}
 		}
 		const nextConversationId = newConversationId();
-		// Entering IS a model choice: record it so the room remembers it once
-		// this conversation is gone again.
-		recordRoomPreferredModel(target.id, { provider: model.provider, model: model.model });
 		setPersistentResumeError(null);
 		clearBackgroundActivityBadge(target.id);
 		resetLiveUiState();
@@ -7814,11 +8238,17 @@ export function App() {
 		setPersistentChat({ agentId: nextThread.agentId, displayName: nextThread.displayName, conversationId: nextThread.conversationId, model: nextThread.model });
 		// A fresh conversation starts with an empty pending-transfer queue.
 		applyPendingHandoffs([], new Set());
+		let savedModel: WebChatModelOption = model;
 		try {
-			await savePersistentAgentThread(nextThread, "active", "launcher", [], []);
+			const record = await savePersistentAgentThread(nextThread, "active", "launcher", [], []);
+			if (record.model && (record.model.provider !== model.provider || record.model.model !== model.model)) {
+				savedModel = { provider: record.model.provider, model: record.model.model, label: record.model.label || record.model.model };
+				setPersistentThread((thread) => thread && thread.conversationId === nextConversationId ? { ...thread, model: savedModel } : thread);
+				setPersistentChat((chat) => chat && chat.conversationId === nextConversationId ? { ...chat, model: savedModel } : chat);
+			}
 		} catch (e) {
-			// The server rejected the new conversation (model gate after a
-			// concurrent profile change, or the room's state moved). Entering
+			// The server rejected the new conversation (no provider can run it,
+			// or the room's state moved). Entering
 			// anyway would drop the user's first message into a thread the server
 			// never accepted — surface the rejection on the launcher instead.
 			setPersistentChat(null);
@@ -7828,9 +8258,25 @@ export function App() {
 			await refreshPersistentAgentStatus();
 			return;
 		}
-		setCurrentModel(model);
+		setCurrentModel(savedModel);
 		setView("chat");
 		setSessionVersion((v) => v + 1);
+	}
+
+	// A switch made in Room settings, Model. With a live socket the
+	// model_switched frame usually lands first and carries all of this; the
+	// answer to the request settles it either way: the room takes the new model,
+	// the conversation gets the server's own "Continued on" line unless the
+	// frame already brought it (the same id), and a socket that is down (its
+	// provider signed out) dials again on the new model.
+	function adoptSwitchedConversationModel(conversationId: string, model: RoomModelLockView, notice: ConversationSwitchNotice): void {
+		const next: WebChatModelOption = { provider: model.provider, model: model.model, label: model.label };
+		const differs = (current: WebChatModelOption) => current.provider !== next.provider || current.model !== next.model;
+		setPersistentThread((thread) => thread && thread.conversationId === conversationId && differs(thread.model) ? { ...thread, model: next } : thread);
+		setPersistentChat((chat) => chat && chat.conversationId === conversationId && differs(chat.model) ? { ...chat, model: next } : chat);
+		if (notice?.id) setItems((s) => s.some((item) => item.id === notice.id) ? s : [...s, { kind: "system", id: notice.id, text: notice.text, level: "info" }]);
+		const ws = wsRef.current;
+		if (!ws || ws.readyState === WebSocket.CLOSING || ws.readyState === WebSocket.CLOSED) setSessionVersion((v) => v + 1);
 	}
 
 	// Opening a room consumes its background-generation badge (community #14):
@@ -7960,9 +8406,18 @@ export function App() {
 		if (!targetChat) return;
 		// Memento always works, even mid-stream: the server stops the current
 		// response, closes the thread and opens a fresh one.
-		const inFlightWarning = persistentRoomInFlight ? "The response currently being written will be stopped.\n\n" : "";
-		const ok = window.confirm(`Forget this conversation and start fresh?\n\n${inFlightWarning}This will discard the current room transcript. Nothing will be saved to memory.`);
+		const inFlightWarning = persistentRoomInFlight ? "The response currently being written will be stopped. " : "";
+		const ok = await confirmDialog({
+			title: "Forget this conversation and start fresh?",
+			body: `${inFlightWarning}This will discard the current room transcript. Nothing will be saved to memory.`,
+			confirmLabel: "Forget",
+			danger: true,
+		});
 		if (!ok) return;
+		// The server closes this room's socket as part of Forget, before its
+		// answer arrives: that close is deliberate, not a drop to reconnect
+		// from (or to save an interrupted answer into the forgotten conversation).
+		suppressReconnectRef.current = true;
 		try {
 			setBusy(true);
 			const result = await applyPersistentAgentMemento(targetChat.agentId, targetChat.conversationId);
@@ -7972,7 +8427,12 @@ export function App() {
 			await bindToMementoRuntime(result, targetChat);
 			void refreshPersistentAgentStatus();
 		} catch (e) {
+			// A refusal leaves the socket open, and a later drop is a real one; a
+			// failure after the server closed it reconnects the usual way.
+			suppressReconnectRef.current = false;
 			setBusy(false);
+			busyRef.current = false;
+			if (wsRef.current && wsRef.current.readyState !== WebSocket.OPEN && wsRef.current.readyState !== WebSocket.CONNECTING) scheduleRoomReconnect();
 			setItems((s) => [...s, { kind: "system", id: nid(), text: (e as Error).message, level: "error" }]);
 		}
 	}
@@ -8244,10 +8704,16 @@ export function App() {
 		tone: "success",
 		text: `${backgroundDoneToast.displayName} finished a response.`,
 		sub: "The answer is saved in the room's conversation.",
-		action: { label: "Open", onClick: () => void openRoomFromBackgroundToastRef.current(backgroundDoneToast.agentId) },
+		action: { label: "Open", onClick: () => { if (confirmLeavingArrangement(roomArrangeDirtyRef.current)) void openRoomFromBackgroundToastRef.current(backgroundDoneToast.agentId); } },
 	} : null, [backgroundDoneToast]);
+	useEffect(() => {
+		if (reconnectedNotice === null) return;
+		const timer = window.setTimeout(() => setReconnectedNotice(null), 3000);
+		return () => window.clearTimeout(timer);
+	}, [reconnectedNotice]);
 	const roomToasts = useMemo<ToastView[]>(() => {
 		const list: ToastView[] = [];
+		if (reconnectedNotice !== null) list.push({ id: `reconnected:${reconnectedNotice}`, tone: "success", text: "Connected again." });
 		if (backgroundDoneToastView) list.push(backgroundDoneToastView);
 		if (exportNotice) list.push({ id: "export", tone: exportNotice.kind, text: exportNotice.text });
 		if (voiceNotice) list.push({ id: "voice", tone: "error", text: voiceNotice.text, ...(voiceNotice.sub ? { sub: voiceNotice.sub } : {}) });
@@ -8292,7 +8758,7 @@ export function App() {
 			});
 		}
 		return list;
-	}, [voiceNotice, backgroundDoneToastView, exportNotice, removeNotice, fileDeleteNotice, taskDoneToast]);
+	}, [reconnectedNotice, voiceNotice, backgroundDoneToastView, exportNotice, removeNotice, fileDeleteNotice, taskDoneToast]);
 	// The chip in a message opens the file exactly as its Files row does (taste
 	// pass), so the two entry points can never drift: find the row that stands
 	// for that shelf file and take the row's own path. A ref keeps the handler
@@ -8335,19 +8801,39 @@ export function App() {
 	const persistentRoomRunning = Boolean(persistentChat && (busy || (serverInFlightRelevant && currentActiveThreadStatus?.working)));
 	const persistentRoomCancelling = Boolean(persistentChat && (turnCancelling || (serverInFlightRelevant && currentActiveThreadStatus?.cancelling)));
 	const persistentRoomInFlight = Boolean(persistentChat && (persistentRoomRunning || persistentRoomCancelling || serverInFlightRelevant));
+	// What the turn's chrome shows: the server's turn plus the reveal of its
+	// tail. Only Stop, the header spinner, the composer placeholder and
+	// Remember read these; leaving, detaching and every server call keep
+	// reading the server-side flags above.
+	const roomWorkingForChrome = persistentRoomRunning || (Boolean(persistentChat) && revealing);
+	const roomInFlightForChrome = persistentRoomInFlight || (Boolean(persistentChat) && revealing);
+	// Stop while the answer is only still appearing: the turn is over and the
+	// answer is saved, so there is nothing to abort. Show the rest at once.
+	function stopTurn() {
+		if (!persistentRoomInFlight && revealingRef.current) {
+			flushAssistantStream();
+			return;
+		}
+		void abortCurrentTurn();
+	}
 	// Resolves true when the leave actually happened (or nothing needed
 	// leaving) — a declined leave-and-let-it-finish confirm resolves false, so
 	// a caller chaining a navigation (the background-answer toast's Open) can
 	// stand down without reading state that only settles on the next render.
 	async function goHome(): Promise<boolean> {
-		// A fully-received answer may still be revealing at reading speed
-		// (busy already false) — leaving must not persist a truncated tail.
+		// A fully-received answer may still be revealing its tail (busy
+		// already false); leaving must not persist a truncated tail.
 		flushAssistantStream();
 		if (persistentChat && persistentRoomInFlight && !turnCancelling) {
 			// Community #14 slice 2: leaving no longer kills the response — the
 			// server keeps writing it and lands it in the conversation; the room
 			// card announces when it is ready.
-			const ok = window.confirm("The assistant is still responding. Leave and let it finish in the background? The answer will be waiting in this room.");
+			const ok = await confirmDialog({
+				title: "Leave and let it finish in the background?",
+				body: "The assistant is still responding. The answer will be waiting in this room.",
+				confirmLabel: "Leave",
+				cancelLabel: "Stay",
+			});
 			if (!ok) return false;
 			// Make sure the prompt that started this turn is on disk before the
 			// socket closes: the server lands the answer by appending to the
@@ -8356,9 +8842,10 @@ export function App() {
 			try { await savePersistentAgentThread(persistentChat, "active", "home", itemsRef.current, pendingHandoffsRef.current); } catch {}
 			backgroundCookingRoomsRef.current.add(persistentChat.agentId);
 			await finishLeaveRoom({ detachInFlight: true });
-			// Prime the launcher: statuses are normally not refetched on leave,
-			// but the cards need the still-held lock and in-flight turn to show
-			// the answering badge (and to start the settle polling) right away.
+			// Prime the launcher: the leave path itself does not refetch statuses
+			// (the home screen's arrival does, home-room-order.ts), and the cards
+			// need the still-held lock and in-flight turn to show the answering
+			// badge (and to start the settle polling) right away.
 			void refreshPersistentAgentStatus();
 			return true;
 		}
@@ -8425,15 +8912,34 @@ export function App() {
 
 	// The room's own record wins over the name the thread was opened with, so a
 	// rename from the in-room settings wheel lands on the header and the
-	// composer placeholder right away. (persistentChat itself is left alone —
-	// changing it re-binds the room websocket.)
+	// composer placeholder right away. (persistentChat itself is left alone:
+	// it is the open conversation's own record.)
 	const activeDisplay = currentPersistentStatus?.displayName || persistentChat?.displayName || "";
 	// The modal tracks the LIVE status for this room the same way the launcher's
 	// does — it renders off persistentAgentStatuses, and opening refetches so it
 	// starts from what the server says right now.
-	function openRoomSettings(): void {
+	function openRoomSettings(pane?: SettingsPane): void {
+		setRoomSettingsPane(pane);
 		setRoomSettingsOpen(true);
 		void refreshPersistentAgentStatus();
+	}
+	// A turn refused on the sign-in: the raw text goes to the log, the room
+	// shows the one notice, and the message the person sent goes back into an
+	// empty composer, to send again once signed in.
+	function noteTurnSignInFailure(detail: string, provider?: string): void {
+		console.warn("[exxperts] the turn failed on the provider's sign-in:", detail);
+		setTurnSignedOutProvider(provider || persistentChatRef.current?.model.provider || "");
+		const lastUser = [...itemsRef.current].reverse().find((item) => item.kind === "user");
+		if (lastUser?.kind === "user" && lastUser.text && !(textareaRef.current?.value ?? "").trim()) {
+			setComposerPrefill(lastUser.text);
+			setComposerResetNonce((n) => n + 1);
+		}
+	}
+	const stoppedProvider = signedOutProvider ?? turnSignedOutProvider;
+	// Settings, AI setup, at the signed-out provider's row, to sign in again.
+	function openSignIn(providerId: string): void {
+		setAiSetupFocus(providerId ? { providerId } : null);
+		openSettings("ai-setup");
 	}
 	// Memento applied from inside the open room: the server has already closed
 	// the conversation, so staying bound to the thread would leave the user
@@ -8498,15 +9004,15 @@ export function App() {
 			key={settingsOverlay.mobileNav ? "nav" : "section"}
 			active={settingsOverlay.section}
 			initialMobileNav={settingsOverlay.mobileNav}
-			onSelect={(section) => { if (section === settingsOverlay.section || confirmLeavingGlobalInstructions("Leave")) setSettingsOverlay({ section, mobileNav: false }); }}
-			onClose={() => { if (confirmLeavingGlobalInstructions("Close")) setSettingsOverlay(null); }}
+			onSelect={(section) => { void (async () => { if (section === settingsOverlay.section || await confirmLeavingGlobalInstructions("Leave")) setSettingsOverlay({ section, mobileNav: false }); })(); }}
+			onClose={() => { void (async () => { if (await confirmLeavingGlobalInstructions("Close")) setSettingsOverlay(null); })(); }}
 			sections={[
 				{
 					id: "ai-setup",
 					label: "AI setup",
 					content: (
 						<div className="landing ai-setup-page">
-							<AiProfileSwitcherSection status={aiProfileStatus} onSelect={selectAiProfile} onRefresh={refreshAiProfileStatus} onRefreshAuth={refreshAuthStatus} />
+							<AiProfileSwitcherSection status={aiProfileStatus} authStatus={authStatus} onRefresh={refreshAiProfileStatus} onRefreshAuth={refreshAuthStatus} onSignedIn={() => setTurnSignedOutProvider(null)} focus={aiSetupFocus} />
 						</div>
 					),
 				},
@@ -8515,6 +9021,7 @@ export function App() {
 					label: "Web search",
 					content: (
 						<div className="landing ai-setup-page settings-web-search">
+							<PaneHeader title="Web search" line="How rooms look things up on the web." />
 							<WebSearchSettingsSection />
 						</div>
 					),
@@ -8535,7 +9042,7 @@ export function App() {
 					title: "Guidance every room follows before its own instructions",
 					content: (
 						<div className="landing ai-setup-page">
-							<GlobalInstructionsSection onDirtyChange={handleGlobalInstructionsDirtyChange} />
+							<GlobalInstructionsSection onDirtyChange={handleGlobalInstructionsDirtyChange} registerSave={registerGlobalInstructionsSave} />
 						</div>
 					),
 				},
@@ -8545,6 +9052,7 @@ export function App() {
 					title: "External tools your rooms can reach",
 					content: (
 						<div className="landing ai-setup-page connectors-page">
+							<PaneHeader title="Connectors" line="External tools your rooms can reach. Add one here, then enable it in each room that should use it." />
 							<ConnectorsPage />
 						</div>
 					),
@@ -8555,6 +9063,7 @@ export function App() {
 					label: "Remote access",
 					content: (
 						<div className="landing ai-setup-page remote-access-shell">
+							<PaneHeader title="Remote access" line="Your phone talks to this computer over your private Tailscale tunnel; nothing goes through a cloud." />
 							<RemoteAccessPage />
 						</div>
 					),
@@ -8568,6 +9077,7 @@ export function App() {
 					title: "Which exxperts data profile this computer runs",
 					content: (
 						<div className="landing ai-setup-page">
+							<PaneHeader title="Profiles" line="A profile is everything exxperts holds: rooms, history, wallet, memory. One is loaded at a time; switching reloads the app." />
 							<StateProfileSection />
 						</div>
 					),
@@ -8582,17 +9092,6 @@ export function App() {
 			{settingsOverlayNode}
 		</>
 	);
-	const standbyLockedModels = persistentAgentStatuses
-		.filter((status) => {
-			if (status.runtime.state === "idle" || !status.runtime.activeThreadId || !status.runtime.model) return false;
-			// An empty prepared boundary thread (post-checkpoint/Memento) does not
-			// pin the room's model: entering can retire it and pick any model, so a
-			// profile switch strands nothing. Only real standby conversations count.
-			const preparedBoundary = status.activeThread?.preparedByBoundary ?? (status.activeThread?.preparedByCheckpoint ? "checkpoint" : null);
-			return !preparedBoundary;
-		})
-		.map((status) => ({ provider: status.runtime.model!.provider, model: status.runtime.model!.model }));
-
 	// Consult MR-3 candidate rooms for the composer @-mention popover. The list is
 	// already archived-free (the server filters archived rooms); the current room
 	// is excluded inside the popover logic.
@@ -8629,7 +9128,7 @@ export function App() {
 				{gcReviewOpen && gcAssessment && <TaskStoreGcDialog assessment={gcAssessment} busy={gcBusy} onConfirm={() => void confirmTaskStoreGc()} onClose={() => setGcReviewOpen(false)} />}
 				{backgroundDoneToastView && <div className="launcher-toasts"><ToastStack toasts={[backgroundDoneToastView]} /></div>}
 				{whatsNew && <WhatsNewDialog version={whatsNew.version} entries={whatsNew.entries} onClose={dismissWhatsNew} />}
-				<Landing onOpenSettings={openSettings} onOpenDashboard={() => setView("dashboard")} onOpenMemory={() => setView("memory")} onOpenPersistentAgent={openPersistentAgent} onResumePersistentAgent={openPersistentAgentResume} onMaintainPersistentAgent={(target) => { if (!openMaintainChooser(target)) setPersistentResumeError(maintainBlockedReason(target.agentId) ?? "Maintain is not available for this room right now."); }} onCreatePersistentAgent={createPersistentAgentRoom} onArchiveRoom={archivePersistentAgentRoom} onPurgeRoom={purgePersistentAgentRoom} onMementoForget={(agentId) => { roomDraftsRef.current.delete(agentId); }} onRecordPreferredModel={recordRoomPreferredModel} modelStatus={modelStatus} persistentAgentStatuses={persistentAgentStatuses} persistentThread={persistentThread} persistentLive={!!persistentChat} persistentResumeError={persistentResumeError} onRefreshPersistentAgent={refreshPersistentAgentStatus} theme={theme} appearance={appearance} onSetAppearance={setAppearance} aiProfileStatus={aiProfileStatus} onSelectAiProfile={selectAiProfile} standbyLockedModels={standbyLockedModels} backgroundReadyRooms={backgroundReadyRooms} purgingRooms={purgingRooms} unresumableRooms={memoryOverflowRooms} />
+				<Landing roomOrder={homeRoomOrder.view} onChooseRoomOrder={homeRoomOrder.choose} onArrangingChange={(dirty) => { roomArrangeDirtyRef.current = dirty; }} onOpenSettings={openSettings} onOpenDashboard={() => setView("dashboard")} onOpenMemory={() => setView("memory")} onOpenPersistentAgent={openPersistentAgent} onResumePersistentAgent={openPersistentAgentResume} onMaintainPersistentAgent={(target) => { if (!openMaintainChooser(target)) setPersistentResumeError(maintainBlockedReason(target.agentId) ?? "Maintain is not available for this room right now."); }} onCreatePersistentAgent={createPersistentAgentRoom} onArchiveRoom={archivePersistentAgentRoom} onPurgeRoom={purgePersistentAgentRoom} onMementoForget={(agentId) => { roomDraftsRef.current.delete(agentId); }} modelStatus={modelStatus} persistentAgentStatuses={persistentAgentStatuses} persistentThread={persistentThread} persistentLive={!!persistentChat} persistentResumeError={persistentResumeError} onRefreshPersistentAgent={refreshPersistentAgentStatus} theme={theme} appearance={appearance} onSetAppearance={setAppearance} aiProfileStatus={aiProfileStatus} backgroundReadyRooms={backgroundReadyRooms} purgingRooms={purgingRooms} unresumableRooms={memoryOverflowRooms} />
 			</>
 		);
 	}
@@ -8642,7 +9141,7 @@ export function App() {
 			<>
 				<MemoryShell onHome={goHome} onSettings={openSettings} onDashboard={() => setView("dashboard")} onMaintain={(target) => { if (openMaintainChooser(target, "memory")) setView("home"); }} maintainBlocked={maintainBlockedReason} onOpenMemorySettings={(target) => setMemorySettingsRoomId(target.agentId)} theme={theme} appearance={appearance} onSetAppearance={setAppearance} />
 				{memorySettingsRoom && (
-					<RoomSettingsModal status={memorySettingsRoom} initialPane="memory" onClose={() => setMemorySettingsRoomId(null)} onArchive={archivePersistentAgentRoom} onPurge={purgePersistentAgentRoom} onRefresh={refreshPersistentAgentStatus} onOpenSkillsLibrary={() => openSettings("skills")} />
+					<RoomSettingsModal status={memorySettingsRoom} initialPane="memory" onClose={() => setMemorySettingsRoomId(null)} onArchive={archivePersistentAgentRoom} onPurge={purgePersistentAgentRoom} onRefresh={refreshPersistentAgentStatus} onOpenSkillsLibrary={() => openSettings("skills")} onOpenConnectors={() => openSettings("connectors")} />
 				)}
 			</>
 		);
@@ -8767,9 +9266,10 @@ export function App() {
 			workbenchStyle={workbenchStyle}
 			activeDisplay={activeDisplay || ""}
 			ownerSecondary=""
-			busy={busy}
+			busy={busy || revealing}
 			usage={usage}
 			contextHealth={persistentChat ? contextHealth : null}
+			loadRememberEstimate={persistentChat ? () => fetchRememberReadEstimate(persistentChat.agentId, persistentChat.conversationId) : undefined}
 			currentModelLabel={currentModel.name}
 			currentModelProvider={currentModel.provider}
 			topbarActions={
@@ -8782,7 +9282,7 @@ export function App() {
 							    Forget exists to rescue, and the button vanishing then
 							    would be the worst possible moment to lose it. */}
 							<button className="icon-btn icon-btn-square icon-btn-danger" aria-label="Forget" title="Forget this conversation and start fresh. Nothing is saved to memory" onClick={() => void mementoPersistentThread()}><TrashIcon /></button>
-							{currentPersistentStatus?.exists && <button className="icon-btn icon-btn-square" aria-label="Room settings" title={`Room settings — ${roomSettingsChordHint()}`} onClick={openRoomSettings}><GearIcon /></button>}
+							{currentPersistentStatus?.exists && <button className="icon-btn icon-btn-square" aria-label="Room settings" title={`Room settings — ${roomSettingsChordHint()}`} onClick={() => openRoomSettings()}><GearIcon /></button>}
 						</>
 					)
 					: undefined
@@ -8817,7 +9317,8 @@ export function App() {
 						)}
 						<CheckpointSplitButton
 							hasUserInput={currentThreadHasUserInput}
-							inFlight={persistentRoomInFlight}
+							inFlight={roomInFlightForChrome}
+							skipsPreview={rememberSkipsPreview}
 							onQuickCheckpoint={() => void runQuickCheckpoint()}
 							onOpenFullCheckpoint={() => { setCheckpointQuickRequested(false); setCheckpointQuickBlockedReasons(null); setCheckpointPreviewOpen(true); }}
 						/>
@@ -8827,6 +9328,11 @@ export function App() {
 			connected={connectedForChrome}
 			reconnectState={roomReconnectState}
 			onReconnect={retryRoomReconnectNow}
+			connectionStopped={stoppedProvider !== null
+				? { line: `${modelStatus?.providers?.find((provider) => provider.id === stoppedProvider)?.label ?? "This conversation's provider"} is signed out. Sign in again to continue this conversation.`, onSignIn: () => openSignIn(stoppedProvider), onChooseModel: () => openRoomSettings("model") }
+				: roomModelNotOffered
+					? { line: `${currentPersistentStatus?.models?.conversation.chosen?.name ?? "This room's model"} is no longer offered. Choose another model to continue.`, onChooseModel: () => openRoomSettings("model") }
+					: undefined}
 			items={items}
 			pendingConsultIds={pendingConsultItemIds}
 			attachmentAccess={attachmentAccess}
@@ -8838,13 +9344,13 @@ export function App() {
 			}}
 			empty={empty}
 			onSend={send}
-			onStop={() => void abortCurrentTurn()}
-			stopVisible={persistentRoomInFlight}
-			stopDisabled={persistentRoomCancelling || !connected}
+			onStop={stopTurn}
+			stopVisible={roomInFlightForChrome}
+			stopDisabled={persistentRoomCancelling || (persistentRoomInFlight && !connected)}
 			stopLabel="Stop"
 			textareaRef={textareaRef}
-			composerPlaceholder={persistentRoomCancelling ? "Stopping current response…" : persistentRoomRunning ? "Working… Stop before sending another message" : `Ask ${activeDisplay}…`}
-			sendUnavailable={!connected || persistentRoomInFlight}
+			composerPlaceholder={persistentRoomCancelling ? "Stopping current response…" : roomWorkingForChrome ? "Working… Stop before sending another message" : `Ask ${activeDisplay}…`}
+			sendUnavailable={!connected || roomInFlightForChrome}
 			initialDraftValue={composerPrefill || undefined}
 			draftResetKey={composerResetNonce}
 			composerAllowEmptySend={stagedAttachments.some((entry) => entry.status === "ready")}
@@ -8943,11 +9449,11 @@ export function App() {
 				</>
 			) : undefined}
 			previewSlot={rightPaneSlot}
-			checkpointPreviewSlot={checkpointPreviewOpen && persistentChat && <CheckpointPreviewShell chat={persistentChat} itemCount={items.length} rememberText={checkpointRememberText} density={checkpointDensity} proposal={checkpointProposal} loading={checkpointProposalLoading} error={checkpointProposalError} approvalLoading={checkpointApprovalLoading} approvalError={checkpointApprovalError} approvalResult={checkpointApprovalResult} quickRequested={checkpointQuickRequested} quickBlockedReasons={checkpointQuickBlockedReasons} consultRunning={consultState.phase === "streaming"} taskRunning={taskState.phase === "running"} pendingConsultHandoffCount={pendingHandoffs.filter((block) => !isSpecialistHandoffBlock(block)).length} pendingTaskHandoffCount={pendingHandoffs.filter(isSpecialistHandoffBlock).length} onRememberTextChange={(text) => { setCheckpointRememberText(text); setCheckpointProposal(null); setCheckpointProposalError(null); setCheckpointApprovalError(null); setCheckpointApprovalResult(null); }} onDensityChange={(next) => { setCheckpointDensity(next); setCheckpointProposal(null); setCheckpointProposalError(null); setCheckpointApprovalError(null); setCheckpointApprovalResult(null); }} onGenerate={generateCheckpointProposal} onApprove={approveCheckpointProposal} onDiscard={() => { setCheckpointProposal(null); setCheckpointProposalError(null); setCheckpointApprovalError(null); setCheckpointApprovalResult(null); setCheckpointQuickRequested(false); setCheckpointQuickBlockedReasons(null); setCheckpointPreviewOpen(false); }} onContinueAfterCheckpoint={continueAfterCheckpoint} onRestAfterCheckpoint={restAfterCheckpoint} onClose={() => setCheckpointPreviewOpen(false)} />}
+			checkpointPreviewSlot={checkpointPreviewOpen && persistentChat && <CheckpointPreviewShell chat={persistentChat} itemCount={items.length} rememberText={checkpointRememberText} density={checkpointDensity} proposal={checkpointProposal} loading={checkpointProposalLoading} progress={checkpointProgress} onCancelGenerate={() => cancelCheckpointProposal()} error={checkpointProposalError} approvalLoading={checkpointApprovalLoading} approvalError={checkpointApprovalError} approvalResult={checkpointApprovalResult} quickRequested={checkpointQuickRequested} quickBlockedReasons={checkpointQuickBlockedReasons} consultRunning={consultState.phase === "streaming"} taskRunning={taskState.phase === "running"} pendingConsultHandoffCount={pendingHandoffs.filter((block) => !isSpecialistHandoffBlock(block)).length} pendingTaskHandoffCount={pendingHandoffs.filter(isSpecialistHandoffBlock).length} onRememberTextChange={(text) => { setCheckpointRememberText(text); setCheckpointProposal(null); setCheckpointProposalError(null); setCheckpointApprovalError(null); setCheckpointApprovalResult(null); }} onDensityChange={(next) => { setCheckpointDensity(next); setCheckpointProposal(null); setCheckpointProposalError(null); setCheckpointApprovalError(null); setCheckpointApprovalResult(null); }} onGenerate={generateCheckpointProposal} onApprove={approveCheckpointProposal} onDiscard={() => { setCheckpointProposal(null); setCheckpointProposalError(null); setCheckpointApprovalError(null); setCheckpointApprovalResult(null); setCheckpointQuickRequested(false); setCheckpointQuickBlockedReasons(null); setCheckpointPreviewOpen(false); }} onContinueAfterCheckpoint={continueAfterCheckpoint} onRestAfterCheckpoint={restAfterCheckpoint} onClose={() => setCheckpointPreviewOpen(false)} />}
 			globalOverlaySlot={
 				<>
 					{roomSettingsOpen && currentPersistentStatus && (
-						<RoomSettingsModal status={currentPersistentStatus} onClose={() => setRoomSettingsOpen(false)} onArchive={archivePersistentAgentRoom} onPurge={purgePersistentAgentRoom} onRefresh={refreshPersistentAgentStatus} onMementoApplied={leaveRoomAfterMemento} onOpenSkillsLibrary={() => openSettings("skills")} />
+						<RoomSettingsModal status={currentPersistentStatus} initialPane={roomSettingsPane} onClose={() => setRoomSettingsOpen(false)} onArchive={archivePersistentAgentRoom} onPurge={purgePersistentAgentRoom} onRefresh={refreshPersistentAgentStatus} onMementoApplied={leaveRoomAfterMemento} onConversationSwitched={adoptSwitchedConversationModel} onOpenSkillsLibrary={() => openSettings("skills")} onOpenConnectors={() => openSettings("connectors")} />
 					)}
 					{assetDeleteConfirm && <AssetDeleteDialog title={assetDeleteConfirm.title} onDelete={() => { const row = assetDeleteConfirm; setAssetDeleteConfirm(null); if (row) void deleteAssetRow(row); }} onCancel={() => setAssetDeleteConfirm(null)} />}
 					{fileDeleteConfirm && <FileDeleteDialog fileName={fileDeleteConfirm.fileName} reason={fileDeleteConfirm.reason} onDelete={() => { const confirm = fileDeleteConfirm; setFileDeleteConfirm(null); if (confirm) void performFileDelete(confirm.fileName); }} onCancel={() => setFileDeleteConfirm(null)} />}

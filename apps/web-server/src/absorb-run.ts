@@ -768,7 +768,7 @@ async function performRun(slot: RunSlot, input: AbsorbRunStartInput, nowFn: () =
 				model: input.model,
 				promptEstimatedTokens: assembly.telemetry.promptEstimatedTokens,
 				window: input.resolveModelWindow?.(input.model),
-				guidance: "Run Review to shrink stable memory, or switch the maintenance profile to a larger-context model, then Memorize again.",
+				guidance: "Run Review to shrink stable memory, or choose a memory model with a larger window in Room settings, Model, then Memorize again.",
 			});
 		} catch (error) {
 			view.outcome = "failed";

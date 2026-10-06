@@ -493,7 +493,7 @@ const SECTION_ORDER: EntryCard["section"][] = ["Deep Memory", "Active Items"];
 export function groupEntriesByTopic<T extends EntryCard>(entries: T[]): EntryTopicGroup<T>[] {
 	const groups = new Map<string, EntryTopicGroup<T>>();
 	for (const entry of entries) {
-		const key = `${entry.section} ${entry.topic}`;
+		const key = `${entry.section}\u0000${entry.topic}`;
 		let group = groups.get(key);
 		if (!group) {
 			group = { section: entry.section, topic: entry.topic, entries: [], tokens: 0 };
@@ -628,7 +628,7 @@ export function absorbRunGuidanceSummary(run: AbsorbRun): AbsorbRunGuidanceSumma
 // than the name and stays as it is.
 
 /** The room setting's label, wherever it is named. */
-export const AUTOMATIC_APPLY_SETTING_LABEL = "Memorize: save a clean update without the card";
+export const AUTOMATIC_APPLY_SETTING_LABEL = "Memorize without the card";
 
 /** The same fact as a clause, for the sentences that build on it. */
 export const AUTOMATIC_APPLY_ON_SENTENCE = "This room applies memory updates automatically";

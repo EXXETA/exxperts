@@ -1,9 +1,10 @@
-// MR-4 — Browse featured sources (spec §3 Browse, locked). A directory-style grid
-// of skills from the curated server-side source list (config-only to extend).
-// Cards show name/description/author(source); a "+" enters the same review seam
-// as the paste-a-URL flow, using the featured card's checkout token.
+// Browse featured sources: the skills of the curated server-side source list
+// (config-only to extend), one group per source, one row per skill with its
+// description, licence and one Add, which enters the same review seam as the
+// paste-a-URL flow, using the source's checkout token.
 import { useCallback, useEffect, useState } from "react";
 import { fetchFeaturedSources, fetchRepoCandidate, importRepoSkill, licenseLabel, repoCandidateToSkillCandidate, skillCardDescription, type FeaturedSourceResult, type RepoFoundSkill, type RepoSkillCandidate } from "../skills-repo-api";
+import { GroupHeader } from "./pane-header";
 import { SkillReview } from "./SkillReview";
 
 interface ReviewTarget {
@@ -68,7 +69,7 @@ export function SkillBrowseDirectory({ onImported }: { onImported?: (name: strin
 		return (
 			<div className="skill-browse-retry">
 				<div className="skill-browse-error">{loadError}</div>
-				<button type="button" className="inline-action" onClick={() => void load()}>Retry</button>
+				<button type="button" className="rs-btn" onClick={() => void load()}>Retry</button>
 			</div>
 		);
 	}
@@ -82,7 +83,7 @@ export function SkillBrowseDirectory({ onImported }: { onImported?: (name: strin
 			<div className="skill-browse-retry">
 				<div className="skill-browse-loading">Loading {target.skill.name}…</div>
 				{reviewError && <div className="skill-browse-error">{reviewError}</div>}
-				<button type="button" className="inline-action" onClick={() => setTarget(null)}>Back</button>
+				<button type="button" className="rs-btn" onClick={() => setTarget(null)}>Back</button>
 			</div>
 		);
 	}
@@ -90,41 +91,38 @@ export function SkillBrowseDirectory({ onImported }: { onImported?: (name: strin
 	return (
 		<section className="skill-browse-directory">
 			{sources.map((source) => (
-				<div className="skill-browse-source" key={source.source}>
-					<div className="skill-browse-source-head">
-						<strong>{source.author}</strong>
-						<span className="skill-browse-source-repo">{source.source}</span>
-					</div>
+				<div className="settings-group" key={source.source}>
+					<GroupHeader kicker={source.author} line={source.source} />
 					{source.error && <div className="skill-browse-source-warn">Could not load: {source.error}</div>}
-					<div className="skill-browse-grid">
+					<div className="settings-rows">
 						{source.skills.map((skill) => {
 							const description = skillCardDescription(skill.description);
 							const license = licenseLabel(skill.license);
 							const done = imported.includes(skill.name);
 							return (
-								<div className="skill-card" key={skill.path || skill.name}>
-									<div className="skill-card-head">
-										<span className="skill-card-name">{skill.name}</span>
+								<div className="settings-row" key={skill.path || skill.name}>
+									<div className="settings-row-main">
+										<span className="settings-row-label">{skill.name}</span>
+										<span className="settings-row-sub settings-row-clamp" title={description || undefined}>{description || "No description provided."}</span>
+										<span className="settings-row-sub">
+											<span title={license.title}>{license.text}</span>
+											{skill.hasBundledScripts ? " · scripts" : ""}
+										</span>
+									</div>
+									{done ? (
+										<span className="settings-row-value" aria-label={`${skill.name} imported`}>Added</span>
+									) : (
 										<button
 											type="button"
-											className="skill-card-import"
-											title={done ? "Imported" : "Review & import"}
-											aria-label={done ? `${skill.name} imported` : `Review and import ${skill.name}`}
+											className="rs-btn"
+											title="Review and add"
+											aria-label={`Review and add ${skill.name}`}
 											onClick={() => source.token && void openReview(source.token, skill)}
-											disabled={!source.token || done}
+											disabled={!source.token}
 										>
-											{done ? "✓" : "+"}
+											Add
 										</button>
-									</div>
-									{description ? (
-										<span className="skill-card-desc">{description}</span>
-									) : (
-										<span className="skill-card-desc empty">No description provided.</span>
 									)}
-									<span className="skill-card-meta">
-										<span title={license.title}>{license.text}</span>
-										{skill.hasBundledScripts ? " · scripts" : ""}
-									</span>
 								</div>
 							);
 						})}

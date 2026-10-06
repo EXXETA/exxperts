@@ -155,7 +155,11 @@ console.log("scenarios:");
 	const seconds = (host.now - start) / 1000;
 	const cps = text.length / seconds;
 	check("pacing: average rate within band (±20%)", cps >= DEFAULT_REVEAL_PACING.minCharsPerSec * 0.8 && cps <= DEFAULT_REVEAL_PACING.maxCharsPerSec * 1.2, { cps });
-	check("pacing: max per-frame step ≤ 10 chars", maxStep <= 10, { maxStep });
+	// A frame may reveal at most the ceiling's share of it (the first frame
+	// counts as 17 ms, plus the fractional carry): smoothing, not a
+	// whole-burst dump.
+	const maxFrameStep = Math.ceil((DEFAULT_REVEAL_PACING.maxCharsPerSec * 17) / 1000) + 1;
+	check(`pacing: max per-frame step ≤ ${maxFrameStep} chars`, maxStep <= maxFrameStep && maxStep < text.length / 10, { maxStep });
 }
 
 {

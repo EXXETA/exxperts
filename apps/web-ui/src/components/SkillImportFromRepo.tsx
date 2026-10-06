@@ -110,7 +110,7 @@ export function SkillImportFromRepo({ onImported }: { onImported?: (name: string
 					onKeyDown={(e) => { if (e.key === "Enter" && url.trim()) void runScan(); }}
 					disabled={phase === "scanning"}
 				/>
-				<button type="button" className="landing-action" onClick={() => void runScan()} disabled={!url.trim() || phase === "scanning"}>
+				<button type="button" className="rs-btn rs-btn-primary" onClick={() => void runScan()} disabled={!url.trim() || phase === "scanning"}>
 					{phase === "scanning" ? "Scanning…" : "Scan"}
 				</button>
 			</div>
@@ -148,7 +148,7 @@ export function SkillImportFromRepo({ onImported }: { onImported?: (name: string
 						);
 					})}
 					<div>
-						<button type="button" className="landing-action" onClick={() => void startReview()} disabled={selected.size === 0}>
+						<button type="button" className="rs-btn rs-btn-primary" onClick={() => void startReview()} disabled={selected.size === 0}>
 							Review {selected.size > 0 ? `${selected.size} ` : ""}selected
 						</button>
 					</div>

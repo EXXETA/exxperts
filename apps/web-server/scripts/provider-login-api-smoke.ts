@@ -98,6 +98,16 @@ try {
 	assert(afterSave.body.providers.find((provider: any) => provider.id === "groq")?.configured === true, "groq should be configured after api-key save");
 	const overview = await requestJson("/api/auth/status");
 	assert(overview.body.providers.some((provider: any) => provider.id === "groq" && provider.configured), "auth overview should surface the newly configured provider");
+	assert(overview.body.providers.find((provider: any) => provider.id === "groq")?.signedInWithOAuth === false, "a provider signed in with a key is not signed in with OAuth");
+	// A subscription credential in the store reads as signed in with OAuth
+	// (its row offers "Sign in again"); the store is put back right after.
+	{
+		const stored = fs.readFileSync(authFile, "utf8");
+		fs.writeFileSync(authFile, JSON.stringify({ ...JSON.parse(stored), anthropic: { type: "oauth", access: "smoke-access", refresh: "smoke-refresh", expires: Date.now() + 3_600_000 } }), { mode: 0o600 });
+		const withOAuth = await requestJson("/api/auth/status");
+		fs.writeFileSync(authFile, stored, { mode: 0o600 });
+		assert(withOAuth.body.providers.find((provider: any) => provider.id === "anthropic")?.signedInWithOAuth === true, "a stored subscription sign-in reads as signed in with OAuth");
+	}
 
 	// --- model catalog for the configure step -------------------------------
 	const noProvider = await requestJson("/api/persistent-agent-ai-profiles/model-catalog");
@@ -114,71 +124,41 @@ try {
 	// --- custom profile CRUD -------------------------------------------------
 	const reservedGateway = await requestJson("/api/persistent-agent-ai-profiles/custom", {
 		method: "PUT",
-		body: JSON.stringify({ providerId: "openai-compatible", roomModels: ["x"], learnModel: "x", reviewMemoryModel: "x" }),
+		body: JSON.stringify({ providerId: "openai-compatible", roomModels: ["x"], learnModel: "x" }),
 	});
 	assert(reservedGateway.status === 400, "gateway provider must be rejected for custom profiles");
 	// The Claude and ChatGPT profiles carry no custom model list: their room list
-	// is the curated one, and the only choice is which curated model runs
-	// Memorize and which runs Review.
+	// is the curated one.
 	const reservedBuiltIn = await requestJson("/api/persistent-agent-ai-profiles/custom", {
 		method: "PUT",
-		body: JSON.stringify({ providerId: "anthropic", roomModels: ["claude-opus-4-8"], learnModel: "claude-opus-4-8", reviewMemoryModel: "claude-opus-4-8" }),
+		body: JSON.stringify({ providerId: "anthropic", roomModels: ["claude-opus-4-8"], learnModel: "claude-opus-4-8" }),
 	});
 	assert(reservedBuiltIn.status === 400, `a built-in provider must be rejected for custom profiles, got ${reservedBuiltIn.status}`);
 	const curated = await requestJson("/api/persistent-agent-ai-profile");
 	const curatedAnthropic = curated.body?.profiles?.find((profile: any) => profile.id === "anthropic");
 	const curatedRoomModels: number = curatedAnthropic?.processes?.persistentRoom?.models?.length;
 	assert(curated.status === 200 && typeof curatedRoomModels === "number" && curatedRoomModels > 1, `the curated Claude catalog should be readable, got ${curated.status}: ${JSON.stringify(curatedRoomModels)}`);
-	assert(curatedAnthropic.kind === "builtin" && curatedAnthropic.maintenanceModels?.custom === false && !("overridden" in curatedAnthropic), "a built-in row reports maintenanceModels.custom false and no overridden field");
-	const purposeModel = (profile: any, token: string) => profile?.requiredModels?.find((model: any) => String(model.purpose ?? "").split("/").includes(token))?.model;
-	const chosen = await requestJson("/api/persistent-agent-ai-profiles/builtin/anthropic/maintenance-models", {
+	assert(curatedAnthropic.kind === "builtin" && !("maintenanceModels" in curatedAnthropic) && !("overridden" in curatedAnthropic), "a built-in row carries no Memorize and Review choice of its own (the defaults for new rooms hold it)");
+	const retired = await requestJson("/api/persistent-agent-ai-profiles/builtin/anthropic/maintenance-models", {
 		method: "PUT",
 		body: JSON.stringify({ learnModel: "claude-sonnet-5", reviewMemoryModel: "claude-opus-5" }),
 	});
-	assert(chosen.status === 200, `a curated Memorize and Review choice should be accepted, got ${chosen.status}: ${JSON.stringify(chosen.body)}`);
-	const chosenAnthropic = chosen.body.profiles.find((profile: any) => profile.id === "anthropic");
-	assert(purposeModel(chosenAnthropic, "absorb") === "claude-sonnet-5" && purposeModel(chosenAnthropic, "structural-review") === "claude-opus-5", `requiredModels should carry the chosen models, got ${JSON.stringify(chosenAnthropic?.requiredModels)}`);
-	assert(chosenAnthropic.maintenanceModels?.custom === true, "a saved choice reports maintenanceModels.custom true");
-	assert(chosenAnthropic.processes.persistentRoom.models.length === curatedRoomModels, "the choice leaves the curated room list alone");
-	const notCurated = await requestJson("/api/persistent-agent-ai-profiles/builtin/anthropic/maintenance-models", {
-		method: "PUT",
-		body: JSON.stringify({ learnModel: "claude-opus-4-5", reviewMemoryModel: "claude-opus-5" }),
-	});
-	assert(notCurated.status === 400 && /claude-opus-4-5/.test(String(notCurated.body?.error)), `a model outside the curated list must be refused by name, got ${notCurated.status}: ${JSON.stringify(notCurated.body)}`);
-	const notBuiltIn = await requestJson("/api/persistent-agent-ai-profiles/builtin/custom-groq/maintenance-models", {
-		method: "PUT",
-		body: JSON.stringify({ learnModel: "x", reviewMemoryModel: "x" }),
-	});
-	assert(notBuiltIn.status === 404, `a non-built-in id must 404, got ${notBuiltIn.status}`);
-	const explicitDefaults = await requestJson("/api/persistent-agent-ai-profiles/builtin/anthropic/maintenance-models", {
-		method: "PUT",
-		body: JSON.stringify({ learnModel: "claude-opus-5-5", reviewMemoryModel: "claude-opus-5-5" }),
-	});
-	assert(explicitDefaults.status === 200 && explicitDefaults.body.profiles.find((profile: any) => profile.id === "anthropic")?.maintenanceModels?.custom === false, `choosing exactly the defaults saves no preference, got ${explicitDefaults.status}`);
-	const chosenAgain = await requestJson("/api/persistent-agent-ai-profiles/builtin/anthropic/maintenance-models", {
-		method: "PUT",
-		body: JSON.stringify({ learnModel: "claude-sonnet-5", reviewMemoryModel: "claude-opus-5-5" }),
-	});
-	assert(chosenAgain.status === 200 && chosenAgain.body.profiles.find((profile: any) => profile.id === "anthropic")?.maintenanceModels?.custom === true, "a choice that differs from the defaults in one model is a preference");
-	const defaults = await requestJson("/api/persistent-agent-ai-profiles/builtin/anthropic/maintenance-models", { method: "DELETE" });
-	assert(defaults.status === 200, `back to the defaults should succeed, got ${defaults.status}`);
-	const defaultAnthropic = defaults.body.profiles.find((profile: any) => profile.id === "anthropic");
-	assert(defaultAnthropic.maintenanceModels?.custom === false && purposeModel(defaultAnthropic, "absorb") === "claude-opus-5-5" && purposeModel(defaultAnthropic, "structural-review") === "claude-opus-5-5", `the defaults should be back, got ${JSON.stringify(defaultAnthropic?.requiredModels)}`);
-	assert(defaultAnthropic.processes.persistentRoom.models.length === curatedRoomModels, "the room list count equals the curated count throughout");
+	assert(retired.status === 404, `the built-in Memorize and Review route is gone, got ${retired.status}`);
 	const badModel = await requestJson("/api/persistent-agent-ai-profiles/custom", {
 		method: "PUT",
-		body: JSON.stringify({ providerId: "groq", roomModels: ["definitely-not-a-model"], learnModel: suggested, reviewMemoryModel: suggested }),
+		body: JSON.stringify({ providerId: "groq", roomModels: ["definitely-not-a-model"], learnModel: suggested }),
 	});
 	assert(badModel.status === 400, "unknown model ids must be rejected");
 	const secondModel = groqModelIds.find((id) => id !== suggested) ?? suggested;
 	const upserted = await requestJson("/api/persistent-agent-ai-profiles/custom", {
 		method: "PUT",
-		body: JSON.stringify({ providerId: "groq", label: "Groq", roomModels: [suggested, secondModel], learnModel: suggested, reviewMemoryModel: suggested }),
+		body: JSON.stringify({ providerId: "groq", label: "Groq", roomModels: [suggested, secondModel], learnModel: suggested }),
 	});
 	assert(upserted.status === 200, `custom profile upsert should succeed, got ${upserted.status}: ${JSON.stringify(upserted.body)}`);
 	const customDiag = upserted.body.profiles.find((profile: any) => profile.id === "custom-groq");
 	assert(customDiag, "custom-groq should appear in profile diagnostics");
 	assert(customDiag.kind === "custom", "custom profile should be flagged custom");
+	assert(customDiag.processes?.structuralReview?.model?.model === suggested && customDiag.processes?.absorb?.model?.model === suggested, `a custom provider's one memory model runs Memorize and Review, got ${JSON.stringify(customDiag.processes)}`);
 	assert(customDiag.ready === true, `custom-groq should be ready with a stored key, issues: ${JSON.stringify(customDiag.issues)}`);
 	const builtIn = upserted.body.profiles.find((profile: any) => profile.id === "anthropic");
 	assert(builtIn && builtIn.kind === "builtin", "built-in profiles must not be flagged custom");
@@ -191,11 +171,11 @@ try {
 	const roomModels: any[] = modelStatus.body?.roomModels ?? [];
 	assert(roomModels.length === new Set([suggested, secondModel]).size, `room model options should mirror the approved catalog, got ${JSON.stringify(roomModels)}`);
 	assert(roomModels.every((option) => option.provider === "groq"), "room model options should all come from the custom provider");
-	const approve = await requestJson("/api/persistent-agent-room/model-selection", { method: "POST", body: JSON.stringify({ provider: "groq", model: suggested }) });
+	const approve = await requestJson("/api/ai/defaults", { method: "PUT", body: JSON.stringify({ conversation: { provider: "groq", model: suggested } }) });
 	assert(approve.status === 200, `approved model selection should succeed, got ${approve.status}: ${JSON.stringify(approve.body)}`);
 	const unapprovedId = groqModelIds.find((id) => id !== suggested && id !== secondModel);
 	if (unapprovedId) {
-		const rejected = await requestJson("/api/persistent-agent-room/model-selection", { method: "POST", body: JSON.stringify({ provider: "groq", model: unapprovedId }) });
+		const rejected = await requestJson("/api/ai/defaults", { method: "PUT", body: JSON.stringify({ conversation: { provider: "groq", model: unapprovedId } }) });
 		assert(rejected.status === 400, `unapproved model must be rejected by the gate, got ${rejected.status}`);
 	}
 

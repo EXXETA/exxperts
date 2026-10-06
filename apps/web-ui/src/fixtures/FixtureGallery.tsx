@@ -5,7 +5,7 @@ import { PersistentAgentCard } from "../components/launcher-room-card";
 import { ProductSidebar, type ProductSidebarActive, type ThemeMode } from "../components/product-shell";
 import { Sidebar } from "../components/Sidebar";
 import { ConnectionLostBanner } from "../components/connection-lost-banner";
-import type { PersistentAgentAiProfileSelectionStatus, PersistentAgentStatus, WebChatModelOption, WebChatModelStatus } from "../types";
+import type { PersistentAgentAiProfileSelectionStatus, PersistentAgentStatus, WebChatModelStatus } from "../types";
 import { FIXTURE_DEFAULT_AGENT_ID, fixtureStates, type CreateRoomFixtureState, type FixtureState, type HomeFixtureState, type InRoomChatActionItem, type InRoomChatFixtureState, type SidebarFixtureState, type TaskCardsFixtureState } from "./fixture-data";
 import { TaskRunView } from "../components/task-run-view";
 import { TaskThreadItem } from "../components/Message";
@@ -76,7 +76,7 @@ function HomeFixtureScreen({ fixture, theme }: { fixture: HomeFixtureState; them
 		return key ? (displayNameCounts.get(key) ?? 0) > 1 : false;
 	};
 	const aiProfileStatus = homeAiProfileStatus(fixture.modelStatus, fixture.aiProfileStatus);
-	const onEnter = (_status: PersistentAgentStatus, _model: WebChatModelOption) => {};
+	const onEnter = (_status: PersistentAgentStatus) => {};
 	const onResume = (_status: PersistentAgentStatus) => {};
 	const onMaintain = (_target: { agentId: string; displayName: string }) => {};
 
@@ -85,8 +85,6 @@ function HomeFixtureScreen({ fixture, theme }: { fixture: HomeFixtureState; them
 			<PersistentAgentCard
 				key={status.id}
 				status={status}
-				modelStatus={fixture.modelStatus}
-				aiProfileStatus={fixture.aiProfileStatus}
 				thread={fixture.thread?.agentId === status.id ? fixture.thread : null}
 				live={fixture.live && fixture.thread?.agentId === status.id}
 				duplicateDisplayName={hasDuplicateDisplayName(status)}

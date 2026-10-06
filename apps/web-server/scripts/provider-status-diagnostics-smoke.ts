@@ -205,16 +205,13 @@ try {
 		aiProfileStatus.body?.state?.path === "~/.exxperts/app/persistent-agent-ai-profile.json",
 		`AI profile state path should be redacted, got ${aiProfileStatus.body?.state?.path}`,
 	);
-	assert(
-		roomModelStatus.body?.selectionState?.path === "~/.exxperts/app/web-chat-model.json",
-		`room model selection path should be redacted, got ${roomModelStatus.body?.selectionState?.path}`,
-	);
 	assert(roomModelStatus.body?.activeProfileId === "anthropic", `room model status active profile should be anthropic, got ${roomModelStatus.body?.activeProfileId}`);
 	assert(roomModelStatus.body?.activeProfileLabel === "Claude", `room model status active profile label should be Claude, got ${roomModelStatus.body?.activeProfileLabel}`);
 	assert(
 		JSON.stringify(roomModelKeys(roomModelStatus.body)) === JSON.stringify([
 			"anthropic/claude-opus-5-5",
 			"anthropic/claude-fable-5-1",
+			"anthropic/claude-sonnet-5-5",
 			"anthropic/claude-sonnet-5",
 			"anthropic/claude-haiku-4-5",
 			"anthropic/claude-opus-5",
@@ -230,6 +227,7 @@ try {
 		JSON.stringify(compactRoomModelLabels(roomModelStatus.body)) === JSON.stringify([
 			"Opus 5.5",
 			"Fable 5.1",
+			"Sonnet 5.5",
 			"Sonnet 5",
 			"Haiku 4.5",
 			"Opus 5",

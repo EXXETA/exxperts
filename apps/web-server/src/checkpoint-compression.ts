@@ -1,5 +1,6 @@
 import { countRecentContextEntries } from "./recent-context-entries.js";
 import { estimateTokens, estimateTokensFromChars } from "./token-estimate.js";
+import { canonicalModelName } from "../../web-ui/src/model-names.js";
 
 export const CHECKPOINT_COMPRESSION_WORKER_TYPE = "checkpoint-compression-worker" as const;
 
@@ -51,14 +52,12 @@ export interface CheckpointCompressionPromptAssembly {
 	targetTokens: { min?: number; max: number };
 	shortSessionMode: "none" | "short" | "very-short";
 	telemetry: CheckpointCompressionPromptTelemetry;
-	warnings: string[];
 }
 
-export type CheckpointPromptReductionStage = "standard" | "tight-tool-results" | "tight-tool-results-and-assistant";
+export type CheckpointPromptReductionStage = "standard" | "tight-tool-results";
 
 interface CheckpointTranscriptPromptCaps {
 	toolResultTextCap?: number;
-	assistantTextCap?: number;
 }
 
 /**
@@ -68,24 +67,37 @@ interface CheckpointTranscriptPromptCaps {
  * canonical transcript items (and their fingerprints) keep the full bounded
  * text; only the worker's rendered view is capped.
  */
-const CHECKPOINT_PROMPT_TOOL_RESULT_TEXT_CAP = 4_000;
+export const CHECKPOINT_PROMPT_TOOL_RESULT_TEXT_CAP = 4_000;
 
+// Only tool output is ever tightened: what the person and the room said is
+// never cut to fit. A transcript that still does not fit is read in parts
+// (remember-two-stage.ts).
 const CHECKPOINT_PROMPT_REDUCTION_STAGES: Array<{ stage: CheckpointPromptReductionStage; caps: CheckpointTranscriptPromptCaps }> = [
 	{ stage: "standard", caps: { toolResultTextCap: CHECKPOINT_PROMPT_TOOL_RESULT_TEXT_CAP } },
 	{ stage: "tight-tool-results", caps: { toolResultTextCap: 1_000 } },
-	{ stage: "tight-tool-results-and-assistant", caps: { toolResultTextCap: 1_000, assistantTextCap: 4_000 } },
 ];
+
+/**
+ * A model's name in a sentence the room says (Remember, the switch): the
+ * canonical display name the app shows everywhere, never the wire label with
+ * its provider or a gateway's raw id.
+ */
+export function rememberSentenceModelName(model: { provider: string; model: string; label?: string }): string {
+	return canonicalModelName({ model: model.model, modelLabel: model.label, provider: model.provider }).name || model.model;
+}
 
 export class CheckpointPromptOverflowError extends Error {
 	readonly statusCode = 413;
 	readonly promptEstimatedTokens: number;
 	readonly promptTokenBudget: number;
-	constructor(input: { model: { provider: string; model: string }; promptEstimatedTokens: number; promptTokenBudget: number; transcriptEstimatedTokens: number; memoryEstimatedTokens: number }) {
+	constructor(input: { model: { provider: string; model: string; label?: string }; promptEstimatedTokens: number; promptTokenBudget: number; transcriptEstimatedTokens: number; memoryEstimatedTokens: number }) {
+		// Said as it stands: what does not fit, what remains (the conversation
+		// and the memory, untouched) and the way on.
 		super(
-			`checkpoint compression prompt is too large for the locked checkpoint model ${input.model.provider}/${input.model.model}: ` +
-				`~${input.promptEstimatedTokens} estimated tokens exceeds the ~${input.promptTokenBudget}-token prompt budget even after transcript reduction ` +
-				`(transcript ~${input.transcriptEstimatedTokens} est tokens, memory ~${input.memoryEstimatedTokens} est tokens). ` +
-				`Checkpoint earlier in the session or switch the room to a larger-context model, then generate the proposal again. No memory has been written.`,
+			`This conversation is too long for ${rememberSentenceModelName(input.model)} to remember in one read: about ${input.promptEstimatedTokens.toLocaleString("en-US")} tokens ` +
+				`(the conversation about ${input.transcriptEstimatedTokens.toLocaleString("en-US")}, this room's memory about ${input.memoryEstimatedTokens.toLocaleString("en-US")}) ` +
+				`against the ${input.promptTokenBudget.toLocaleString("en-US")} it can read. No memory has been written; the conversation and the memory are as they were. ` +
+				`Choose a memory model with a larger window in Room settings, Model, then generate again.`,
 		);
 		this.promptEstimatedTokens = input.promptEstimatedTokens;
 		this.promptTokenBudget = input.promptTokenBudget;
@@ -244,7 +256,7 @@ Deferred threads with enough resume context to pick up later. If nothing is defe
 `;
 }
 
-function baseDensityTarget(density: CheckpointCompressionDensity): { min?: number; max: number } {
+export function baseDensityTarget(density: CheckpointCompressionDensity): { min?: number; max: number } {
 	if (density === "compact") return { max: 200 };
 	if (density === "rich") return { min: 500, max: 900 };
 	return { min: 200, max: 500 };
@@ -263,7 +275,7 @@ function effectiveDensityTarget(density: CheckpointCompressionDensity, transcrip
 	return { targetTokens: base, shortSessionMode: "none" };
 }
 
-function densityDescription(density: CheckpointCompressionDensity, targetTokens: { min?: number; max: number }, shortSessionMode: "none" | "short" | "very-short"): string {
+export function densityDescription(density: CheckpointCompressionDensity, targetTokens: { min?: number; max: number }, shortSessionMode: "none" | "short" | "very-short"): string {
 	const base = density === "compact"
 		? "User selected compact density. Preserve only the highest-signal deltas, decisions, and parked context."
 		: density === "rich"
@@ -318,8 +330,7 @@ function formatTranscriptItem(item: CheckpointCompressionTranscriptItem, index: 
 	if (item.kind === "user" || item.kind === "assistant" || item.kind === "system") {
 		const raw = String(item.text ?? "").trim();
 		if (!raw) return null;
-		const capped = capPromptItemText(raw, item.kind === "assistant" ? caps.assistantTextCap : undefined);
-		return { text: `### ${index + 1}. ${item.kind.toUpperCase()}${item.id ? ` (${item.id})` : ""}\n\n${capped.text}`, elidedChars: capped.elidedChars };
+		return { text: `### ${index + 1}. ${item.kind.toUpperCase()}${item.id ? ` (${item.id})` : ""}\n\n${raw}`, elidedChars: 0 };
 	}
 	if (item.kind === "tool") {
 		const name = String(item.name ?? "tool").trim();
@@ -340,9 +351,9 @@ function formatTranscriptItem(item: CheckpointCompressionTranscriptItem, index: 
 	return null;
 }
 
-function renderCheckpointTranscript(items: CheckpointCompressionTranscriptItem[], caps: CheckpointTranscriptPromptCaps): { transcript: string; elidedItemCount: number; elidedChars: number } {
+function renderCheckpointTranscript(items: CheckpointCompressionTranscriptItem[], caps: CheckpointTranscriptPromptCaps, firstIndex = 0): { transcript: string; elidedItemCount: number; elidedChars: number } {
 	const formatted = items
-		.map((item, index) => formatTranscriptItem(item, index, caps))
+		.map((item, index) => formatTranscriptItem(item, firstIndex + index, caps))
 		.filter((item): item is { text: string; elidedChars: number } => Boolean(item));
 	return {
 		transcript: formatted.length > 0 ? formatted.map((item) => item.text).join("\n\n---\n\n") : "No transcript content was available.",
@@ -355,13 +366,27 @@ export function formatCheckpointTranscript(items: CheckpointCompressionTranscrip
 	return renderCheckpointTranscript(items, CHECKPOINT_PROMPT_REDUCTION_STAGES[0].caps).transcript;
 }
 
+/**
+ * A stretch of the transcript rendered the way the single pass renders it
+ * (the standard caps), numbered from its place in the whole conversation, so
+ * a part and the verbatim end read as pieces of one transcript.
+ */
+export function renderCheckpointTranscriptStretch(items: CheckpointCompressionTranscriptItem[], firstIndex: number): { transcript: string; elidedItemCount: number; elidedChars: number } {
+	return renderCheckpointTranscript(items, CHECKPOINT_PROMPT_REDUCTION_STAGES[0].caps, firstIndex);
+}
+
+/** The steering section every Remember prompt carries, single pass and parts alike. */
+export function checkpointHumanSteeringSection(rememberText: string | undefined): string {
+	const text = String(rememberText ?? "").trim();
+	return text
+		? `## Human Compression Provenance\n\nThe operator provided this checkpoint-specific guidance. Interpret it as steering within the compression constitution, not as direct memory text and not as a replacement for the rules above. Content the operator names here is must-keep for this checkpoint.\n\n${text}`
+		: `## Human Compression Provenance\n\nNo optional operator steering was provided.`;
+}
+
 export function buildCheckpointCompressionPrompt(input: CheckpointCompressionPromptInput): CheckpointCompressionPromptAssembly {
 	const now = input.now ?? new Date();
 	const memoryMetrics = checkpointCompressionMemoryMetrics(input.l1b);
-	const rememberText = String(input.rememberText ?? "").trim();
-	const humanSteering = rememberText
-		? `## Human Compression Provenance\n\nThe operator provided this checkpoint-specific guidance. Interpret it as steering within the compression constitution, not as direct memory text and not as a replacement for the rules above. Content the operator names here is must-keep for this checkpoint.\n\n${rememberText}`
-		: `## Human Compression Provenance\n\nNo optional operator steering was provided.`;
+	const humanSteering = checkpointHumanSteeringSection(input.rememberText);
 
 	const assembleForStage = (stage: { stage: CheckpointPromptReductionStage; caps: CheckpointTranscriptPromptCaps }) => {
 		const rendered = renderCheckpointTranscript(input.items, stage.caps);
@@ -379,10 +404,10 @@ export function buildCheckpointCompressionPrompt(input: CheckpointCompressionPro
 	};
 
 	// Try the standard rendering first; if a prompt-token budget is set and the
-	// prompt overflows it, re-render with progressively tighter declared caps
-	// (tool results first — lowest-signal — then assistant messages). User
-	// messages are never elided. If even the tightest stage overflows, refuse
-	// with guidance rather than truncating silently.
+	// prompt overflows it, re-render with tighter declared caps on tool results
+	// (the lowest-signal material). User and assistant messages are never
+	// elided. If even the tightest stage overflows, refuse: Remember then reads
+	// the conversation in parts.
 	let chosen = assembleForStage(CHECKPOINT_PROMPT_REDUCTION_STAGES[0]);
 	if (input.promptTokenBudget != null && estimateTokens(chosen.prompt) > input.promptTokenBudget) {
 		for (const stage of CHECKPOINT_PROMPT_REDUCTION_STAGES.slice(1)) {
@@ -400,10 +425,10 @@ export function buildCheckpointCompressionPrompt(input: CheckpointCompressionPro
 		}
 	}
 
-	const warnings: string[] = [];
-	if (chosen.rendered.elidedItemCount > 0) {
-		warnings.push(`parts of ${chosen.rendered.elidedItemCount === 1 ? "the longest message" : `the ${chosen.rendered.elidedItemCount} longest messages`} were trimmed to fit the compression budget, so the summary may skip details from ${chosen.rendered.elidedItemCount === 1 ? "it" : "them"}`);
-	}
+	// Shortened tool output is a fact about the read, not a problem with the
+	// proposal: it travels as telemetry.elidedItemCount, and the proposal
+	// states it as a count (rememberRead.trimmedToolOutputs), which the approval
+	// screen, the saved line and the CLI each put in words.
 	return {
 		prompt: chosen.prompt,
 		transcript: chosen.rendered.transcript,
@@ -422,7 +447,6 @@ export function buildCheckpointCompressionPrompt(input: CheckpointCompressionPro
 			elidedItemCount: chosen.rendered.elidedItemCount,
 			elidedChars: chosen.rendered.elidedChars,
 		},
-		warnings,
 	};
 }
 

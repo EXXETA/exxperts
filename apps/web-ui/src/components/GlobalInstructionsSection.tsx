@@ -4,6 +4,8 @@ import type { GlobalInstructionsResponse } from "../types";
 import { ROOM_INSTRUCTIONS_MAX_CHARS } from "../../../web-server/src/persistent-room-instructions-text";
 import { EMPTY_INSTRUCTIONS_BOX, GLOBAL_INSTRUCTIONS_PLACEHOLDER, instructionsClearLink, measureInstructionsDraft, readInstructionsReply, reduceInstructionsBox, savedAtLabel, type InstructionsBoxState } from "./instructions-pane-shared";
 import { globalOutcomeAfter } from "../room-instructions-outcome";
+import { PaneHeader } from "./pane-header";
+import { useRegisteredSave, type RegisterSave } from "./use-registered-save";
 
 async function fetchGlobalInstructions(): Promise<GlobalInstructionsResponse> {
 	const response = await apiFetch("/api/settings/instructions");
@@ -29,7 +31,7 @@ async function saveGlobalInstructions(text: string): Promise<GlobalInstructionsR
  * unsaved draft is reported through onDirtyChange, the way the room's pane
  * does, so leaving Settings → Instructions asks first.
  */
-export function GlobalInstructionsSection({ onDirtyChange }: { onDirtyChange?: (dirty: boolean) => void }) {
+export function GlobalInstructionsSection({ onDirtyChange, registerSave }: { onDirtyChange?: (dirty: boolean) => void; registerSave?: RegisterSave }) {
 	const [loaded, setLoaded] = useState<GlobalInstructionsResponse | null>(null);
 	const [loadError, setLoadError] = useState<string | null>(null);
 	const [reloadToken, setReloadToken] = useState(0);
@@ -76,7 +78,10 @@ export function GlobalInstructionsSection({ onDirtyChange }: { onDirtyChange?: (
 	}, [dirty, onDirtyChange]);
 	useEffect(() => () => onDirtyChange?.(false), [onDirtyChange]);
 
-	async function submit(text: string): Promise<void> {
+	// Save and close in the unsaved question: the Save button's save.
+	useRegisteredSave(registerSave, async () => canSave && submit(measured));
+
+	async function submit(text: string): Promise<boolean> {
 		setSaving(true);
 		setBox((state) => reduceInstructionsBox(state, { type: "save" }));
 		setError(null);
@@ -86,8 +91,10 @@ export function GlobalInstructionsSection({ onDirtyChange }: { onDirtyChange?: (
 			setLoaded(response);
 			setBox((state) => reduceInstructionsBox(state, { type: "reload", value: response.instructions.text }));
 			setMessage(globalOutcomeAfter(response.instructions.text));
+			return true;
 		} catch (e) {
 			setError((e as Error).message || "Could not save the instructions.");
+			return false;
 		} finally {
 			setSaving(false);
 		}
@@ -95,17 +102,14 @@ export function GlobalInstructionsSection({ onDirtyChange }: { onDirtyChange?: (
 
 	return (
 		<section className="ai-setup-section room-instructions-section" aria-label="Global instructions">
-			<header className="rs-pane-head">
-				<h3>Global instructions</h3>
-			</header>
-			<p className="rs-pane-sub">
-				Standing guidance for every room that has not switched them off: how to answer, what to prefer, what to avoid.
-				Changes apply from the next message.
-			</p>
+			<PaneHeader
+				title="Instructions"
+				line="Standing guidance for every room that has not switched them off: how to answer, what to prefer, what to avoid. Changes apply from the next message."
+			/>
 			{loadError && (
 				<div className="workspaces-error">
 					{loadError}{" "}
-					<button className="rs-quiet" type="button" onClick={() => setReloadToken((token) => token + 1)}>Try again</button>
+					<button className="rs-btn" type="button" onClick={() => setReloadToken((token) => token + 1)}>Try again</button>
 				</div>
 			)}
 			{unreadable && (
@@ -125,13 +129,13 @@ export function GlobalInstructionsSection({ onDirtyChange }: { onDirtyChange?: (
 				<span id="global-instructions-count" className={over > 0 || controls > 0 ? "room-instructions-count over" : "room-instructions-count"} aria-live="polite">{count}</span>
 				<div className="rs-pane-actions">
 					{clearLink && (
-						<button className="rs-quiet" type="button" disabled={clearLink.disabled} onClick={() => { setBox((state) => reduceInstructionsBox(state, { type: "link" })); setMessage(null); setError(null); }}>{clearLink.label}</button>
+						<button className="rs-btn" type="button" disabled={clearLink.disabled} onClick={() => { setBox((state) => reduceInstructionsBox(state, { type: "link" })); setMessage(null); setError(null); }}>{clearLink.label}</button>
 					)}
 					<button className="rs-btn" type="button" disabled={!canSave} onClick={() => void submit(measured)}>{saving ? "Saving…" : "Save"}</button>
 				</div>
 			</div>
-			{savedAt && !dirty && <p className="rs-row-footnote">Last saved {savedAt}.</p>}
-			{dirty && !saving && <p className="rs-row-footnote">Unsaved changes.</p>}
+			{savedAt && !dirty && <p className="settings-help">Last saved {savedAt}.</p>}
+			{dirty && !saving && <p className="settings-help">Unsaved changes.</p>}
 			{message && <div className="workspaces-success">{message}</div>}
 			{error && <div className="workspaces-error">{error}</div>}
 		</section>

@@ -115,15 +115,17 @@ system **writes**, never the worker.
 Freezes the active thread and asks a compression worker to distill it
 into a proposed summary of the conversation. The default Remember button
 runs a fast path at standard density and shows you the proposal before
-it is saved; a room can be set to apply warning-free proposals without
-that preview. "Remember with options…" opens the full flow, where you
+it is saved; a room can be set to save without that preview unless
+something needs your review (Room settings, Memory, **Remember without
+the preview**). "Remember with options…" opens the full flow, where you
 choose a density (compact/standard/rich) and can add an optional
 steering note. Things
 you explicitly asked the agent to remember are carried through and
-become pinned notes when the conversation is memorized. The worker prompt is measured against
-the model's context window before the call; oversized transcripts are
-reduced with declared elisions (never silently truncated) or refused
-with guidance. On approval, the summary joins the waiting conversations, the thread closes at
+become pinned notes when the conversation is memorized. Remember runs on
+the room's Memory model and reads the whole conversation: in one pass
+when it fits that model's window, in parts when it does not. Very long
+tool outputs are shortened and counted on the proposal; nothing else is
+cut. On approval, the summary joins the waiting conversations, the thread closes at
 a clean boundary, and the previous memory file is archived. Remember
 warns when one more save would fill the room's waiting list; the
 budget behavior behind that is in [`memory.md`](memory.md).
@@ -175,14 +177,18 @@ room answers from its memory, against having the whole history in the
 prompt, is measured there under
 [How well it works, measured](memory.md#how-well-it-works-measured).
 
-## Models and AI profiles
+## Models and providers
 
-A global **AI profile** (Claude, ChatGPT Plus/Pro, or a local
-OpenAI-compatible gateway) maps each LLM process to an allowed model:
-rooms pick from the profile's room-model list, Remember workers
-inherit the room's model, and Memorize/Review use the profile's
-maintenance model. The mapping is asserted at call time, so a room
-cannot silently run on an off-profile model. Setup is described in
+Each signed-in provider (Claude, ChatGPT Plus/Pro, an OpenAI-compatible
+gateway, or another provider added in AI setup) brings its approved
+models. Every room has two rows in **Room settings, Model**:
+**Conversation**, the model it talks with and runs its scheduled tasks
+on, and **Memory**, the model for Remember, Memorize, Review and its
+other memory work. A row without its own model follows the **Defaults
+for new rooms** in AI setup. A conversation keeps the model it started
+on until you switch it in the Model pane, which refuses a model too
+small to hold it. The model is checked at call time, so a room cannot
+silently run on a model that is not approved. Setup is described in
 [`provider-setup.md`](provider-setup.md).
 
 ## Tools and the workspace

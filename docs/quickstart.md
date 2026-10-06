@@ -96,10 +96,10 @@ Developing from a clone without a global install? Use the shell-independent form
 
 Open **AI setup** in the web app.
 
-- **Claude or ChatGPT Plus/Pro:** click **Sign in →** on the provider's card. The provider's login opens in a new browser tab; complete it there and the page updates by itself. Credentials stay on your machine, in the local credential store.
-- **OpenAI-compatible gateway (or any other provider):** on the same page, open **Add another provider**. For a gateway, choose **Set up gateway**, enter the base URL and model ids, then paste your token on the gateway's profile row; the terminal wizard (`exxperts setup openai-compatible`) still works too. Details: [Provider setup and AI profiles](provider-setup.md).
+- **Claude or ChatGPT Plus/Pro:** click **Sign in** on the provider's row. The provider's login opens in a new browser tab; complete it there and the page updates by itself. Credentials stay on your machine, in the local credential store.
+- **OpenAI-compatible gateway (or any other provider):** on the same page, choose **Add provider**. For a gateway, choose **Add gateway**, give it a name, enter its base URL and API key, load its models and approve the ones your rooms may use; the terminal wizard (`exxperts setup openai-compatible`) still works too. Details: [Provider setup](provider-setup.md).
 
-Signing in is enough: the matching profile activates by itself. You can switch between connected profiles anytime on the same page.
+Signing in is enough: the provider's models join the model pickers, and the **Default models** on the same page start on the first provider you sign in to. Each room can pick its own Conversation and Memory models later in **Room settings, Model**. A room never switches models on its own: if its model's provider is signed out later, the room waits until you sign in again or choose another model.
 
 ## 3. Create your first room
 
@@ -115,6 +115,10 @@ Try this:
 Nothing enters memory silently. Remember shows you the proposal before it saves, and a room can be set to save clean proposals without that preview; anything questionable always comes back to you. Later, as remembered conversations accumulate, the room offers **Memorize** (turning them into lasting notes, grouped by topic) and **Review** (tidying the notes it has), both approval-gated the same way, and both undoable. Each room also has a memory budget for its notes: Room settings and the Memory page show how full the memory is, and notes that would not fit move to an archive the room can still read, only when you save. Remember warns when one more save would fill the room's waiting list; Memorize then clears it. The full story: [Memory](memory.md).
 
 The app's Settings open with Cmd+, (Ctrl+, on Windows), and a room's settings with Cmd+Shift+, or the gear in the room.
+
+### Order your rooms
+
+With two or more rooms, Home shows a **Sort** control at the top right. Choose **Last used** (the room where a message was last sent comes first, through whichever door, scheduled runs included; until a room is used after this update, its most recent conversation stands in; rooms never used follow, by name), **Name A→Z**, **Name Z→A**, or **Custom**. Custom opens arrange mode the first time, on the order you see; once an arrangement is saved, the **Arrange** link beside the control reopens it. In arrange mode, drag each room into place (on a touch screen, a long press picks it up; with the keyboard, the arrow keys move the focused room, Home and End to the ends), then **Save**. **Cancel** or Escape leaves the order as it was. The order is saved with your rooms, not in the browser, so the desktop app, the web app and your phone all show the same one; a phone paired read-only sees it and cannot change it. "New room" is always last, and the archived section is not sorted.
 
 ## 4. Give the room a workspace (optional)
 
@@ -143,7 +147,7 @@ Because a room is just a folder, backing it up or moving it to another machine i
 
 1. Finish the session in the room (use Remember if you want the latest conversation kept) and close it.
 2. Copy the room's folder, `~/.exxperts/app/personalized-agents/<room-id>/`, to the same path on the other machine (or archive it: `tar -czf my-room.tgz -C ~/.exxperts/app/personalized-agents <room-id>`).
-3. On the other machine, install Exxperts and sign in to the **same provider profile**; saved threads are model-locked, so the room needs a profile that offers its model.
+3. On the other machine, install Exxperts and sign in to the **same provider**: the room's models and its open conversation's model come from it. Without it, pick other models in **Room settings, Model** and switch the open conversation too.
 4. If the room had a workspace, set it again in room settings; workspace grants reference absolute paths on the original machine and don't carry over. The workspace section warns when the saved folder isn't found on this machine.
 
 The room appears on Home automatically; no import step. Copying all of `~/.exxperts/` backs up everything, credentials included, so treat that copy as sensitive.
@@ -156,7 +160,7 @@ Desktop app: quit it from the tray, then delete the app (macOS: drag it out of A
 
 - [How Exxperts works](how-exxperts-works.md): the architecture of rooms, prompt layers, and the approval-gated memory lifecycle.
 - [Memory](memory.md): the full memory model and who approves what.
-- [Provider setup and AI profiles](provider-setup.md): all provider paths in detail.
+- [Provider setup](provider-setup.md): all provider paths in detail, and which model a room uses.
 - [MCP client support](mcp.md): connect MCP tool servers.
 - [Web search](web-search.md): built in via DuckDuckGo, no setup; SearXNG is the reliable path for heavy use or networks where DuckDuckGo blocks automated queries.
 - CLI/TUI: `exxperts cli` (or `./scripts/exxperts-cli`) opens the terminal experience, sharing the same rooms and credentials.

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { apiFetch } from "../api";
 import {
 	allRoomsFactsLine,
@@ -338,10 +338,10 @@ export function Memory({ onMaintain, maintainBlocked, onOpenMemorySettings }: { 
 		| null
 	>(null);
 
-	// Expanding a card loads its detail below the grid — bring it into view so
-	// the click visibly "goes somewhere".
+	// Expanding a card opens its detail under the card's row; bring as much of
+	// it into view as fits, without moving a detail that is already on screen.
 	useEffect(() => {
-		if (detail) detailRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+		if (detail) detailRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
 		panelReq.current++;
 		setPanel(null);
 		setPanelFull(false);
@@ -684,7 +684,7 @@ export function Memory({ onMaintain, maintainBlocked, onOpenMemorySettings }: { 
 									{digest.rooms.length > 0 && (
 										<div className="mem-digest-rooms">
 											{digest.rooms.slice(0, 3).map((r) => (
-												<button key={r.id} type="button" className="mem-digest-room" onClick={() => setSelected(r.id)}>
+												<button key={r.id} type="button" className="mem-digest-room" aria-label={`Open ${r.displayName}`} onClick={() => setSelected(r.id)}>
 													<span className="mem-digest-room-name">{r.displayName}</span>
 													<span className="mem-digest-room-meta">
 														{r.newCheckpoints} conversation{r.newCheckpoints === 1 ? "" : "s"}
@@ -740,388 +740,394 @@ export function Memory({ onMaintain, maintainBlocked, onOpenMemorySettings }: { 
 							{data.rooms.map((r) => {
 								const isSel = selected === r.id;
 								return (
-									<button key={r.id} type="button" className={`mem-card${isSel ? " sel" : ""}`} aria-expanded={isSel} onClick={() => setSelected(isSel ? null : r.id)}>
-										<div className="mem-card-head"><div className="mem-card-name">{r.displayName}</div>{r.needsAbsorb && <span className="mem-pill">to memorize</span>}</div>
-										<MemoryFullBar room={r} />
-										<div className="mem-card-facts">{roomMemoryFactsLine({ notes: r.notes, waiting: r.sessions, lastMemorizedAt: r.lastCheckpointAt })}</div>
-										<div className="mem-card-foot">
-											<span className="mem-card-hint">{isSel ? "Expanded ▾" : "Expand ▸"}</span>
+									<Fragment key={r.id}>
+										<button type="button" className={`mem-card${isSel ? " sel" : ""}`} aria-expanded={isSel} aria-label={`${isSel ? "Collapse" : "Expand"} ${r.displayName}`} onClick={() => setSelected(isSel ? null : r.id)}>
+											<div className="mem-card-head"><div className="mem-card-name">{r.displayName}</div>{r.needsAbsorb && <span className="mem-pill">to memorize</span>}</div>
+											<MemoryFullBar room={r} />
+											<div className="mem-card-facts">{roomMemoryFactsLine({ notes: r.notes, waiting: r.sessions, lastMemorizedAt: r.lastCheckpointAt })}</div>
+											<div className="mem-card-foot">
+												<span className="mem-card-hint">{isSel ? "Expanded ▾" : "Expand ▸"}</span>
+											</div>
+										</button>
+										{/* The expanded room opens right under its card's row, spanning
+										    the grid (dense packing keeps every card in its place). */}
+										{isSel && detail && detail.id === r.id && (
+											<div className="mem-card-detail-row">
+									<section className="dash-section mem-detail-section" ref={detailRef}>
+										<div className="dash-section-head mem-detail-head">
+											<div className="mem-detail-hero">
+												<div className="mem-detail-name">
+													<h1>{detail.displayName}</h1>
+													{/* Exactly the Rooms page's chips: standby while a parked
+													    conversation waits, ready to memorize when Memorize is due,
+													    and no chip at all for a settled room. */}
+													{detail.standbyThread
+														? <span className="mem-pill" title="This room has a conversation parked to resume.">standby</span>
+														: detail.needsAbsorb
+															? <span className="mem-pill" title="Remembered conversations are waiting to become notes.">ready to memorize</span>
+															: null}
+												</div>
+												{detail.description && <div className="sub">{detail.description}</div>}
+												{(() => {
+													// Today's facts, led by the day the room's memory began: its
+													// first recorded save, when there is one.
+													const facts = roomMemoryFactsLine({ notes: detail.notes, waiting: detail.sessions, lastMemorizedAt: detail.lastCheckpointAt });
+													const since = detail.series[0]?.ts;
+													return <div className="sub mem-detail-strip">{since ? inMemorySinceLine(since, facts) : facts}</div>;
+												})()}
+											</div>
+											{/* The state pill carries the why (tooltip), so no note here. */}
+											<div className="mem-detail-actions">
+												{/* This page is the cross-room view; editing a note belongs to
+												    the room, so the link hands the person over to its pane. */}
+												{onOpenMemorySettings && (
+													<button type="button" className="mem-review-btn" title="Open this room's memory settings, where you can read, edit, restore and undo" onClick={() => onOpenMemorySettings({ agentId: detail.id, displayName: detail.displayName })}>
+														{OPEN_IN_ROOM_SETTINGS_LABEL} →
+													</button>
+												)}
+												{onMaintain && (() => {
+													const blocked = maintainBlocked?.(detail.id) ?? null;
+													return (
+														<button type="button" className="mem-review-btn" disabled={!!blocked} title={blocked ?? "Open Maintain to turn this room's waiting conversations into notes, or to tidy the notes it has. You approve changes before they are saved."} onClick={() => onMaintain({ agentId: detail.id, displayName: detail.displayName })}>
+															Maintain →
+														</button>
+													);
+												})()}
+												<button type="button" className="mem-close" onClick={() => setSelected(null)}>Close ×</button>
+											</div>
 										</div>
-									</button>
+										<div className="mem-detail-full"><MemoryFullBar room={detail} /></div>
+
+										{asOf !== null && (
+											<div className="mem-tt-banner mem-tt-banner-global">
+												<span>{snap?.state === "error" ? ASOF_ERROR : !past ? ASOF_READING : asOfSentence(asOf, past.boundaryTs)}</span>
+												<button type="button" className="mem-close" onClick={leaveAsOf}>{BACK_TO_TODAY_LABEL}</button>
+											</div>
+										)}
+
+										<div className="chart-block mem-detail-graph">
+											<div className="chart-head"><h2>Memory growth</h2></div>
+											{detail.series.length >= 2 && <div className="sub" style={{ marginBottom: 8 }}>{GROWTH_SUB}</div>}
+											{detail.series.length >= 2 ? (
+												<>
+													<MemoryGrowthChart series={detail.series} budgetTokens={detail.memoryLimit?.budgetTokens ?? null} height={300} markerTs={asOf} onPick={setAsOf} />
+													<div className="mem-comp-legend" style={{ marginTop: 8 }}>
+														<span><span className="sw" style={{ background: "var(--fg)", opacity: 0.35 }} />Lasting notes</span>
+														<span><span className="sw" style={{ background: "var(--exx-plan)" }} />Remembered conversations</span>
+														<span><span className="mem-dot cp" />Remember</span>
+														<span><span className="mem-dot learn" />Memorize</span>
+														<span><span className="mem-dot review" />Review</span>
+														{detail.memoryLimit && detail.memoryLimit.budgetTokens > 0 && <span><span className="sw budget" />Budget</span>}
+													</div>
+												</>
+											) : <div className="sub">No saves yet.</div>}
+											{(() => {
+												const lastLearn = [...detail.series].reverse().find((s) => s.kind === "absorb");
+												if (!lastLearn && !detail.lastReviewAt) return null;
+												return (
+													<div className="sub" style={{ marginTop: 8 }}>
+														{lastLearn && <>Last memorized {fmtAgo(lastLearn.ts)}.</>}
+														{detail.lastReviewAt && <>{lastLearn ? " " : ""}Last memory review {fmtAgo(detail.lastReviewAt)}.</>}
+													</div>
+												);
+											})()}
+										</div>
+
+										<div className="chart-grid">
+											<div className="chart-block">
+												<div className="dash-section-head" style={{ marginBottom: 0 }}>
+													<div className="chart-head mem-head-row"><h2>{TOPICS_PANEL_TITLE}</h2>{asOf !== null && <span className="mem-asof">{asOfChip(asOf)}</span>}</div>
+													<div className="mem-panel-actions">
+														<button type="button" className="mem-close" title="Read everything this room carries into a conversation" onClick={openFullMemory}>Full memory →</button>
+													</div>
+												</div>
+												<div className="sub" style={{ marginBottom: 6 }}>{TOPICS_PANEL_SUB}</div>
+												{(() => {
+													// Today's topics, or the ones the viewed moment's copy holds;
+													// while that copy is still being read, the list waits empty
+													// rather than showing today's under a past date.
+													const topicRows: TopicRow[] = asOf === null ? detail.memoryTopics : (past?.topics ?? []);
+													const settled = asOf === null || past !== null;
+													return (
+														<>
+															{settled && topicRows.length === 0 && <div className="sub">{TOPICS_PANEL_EMPTY}</div>}
+															{topicRows.map((row) => {
+																const name = memoryTopicName(row.topic);
+																const isOpen = panel?.kind === "area" && !panel.full && panel.area === name;
+																// The open topic's row closes it again: the panel returns to its
+																// resting state, today's waiting list or the viewed moment's full memory.
+																const toggleTopic = () => { if (isOpen) { panelReq.current++; setPanel(null); } else openTopic(row); };
+																return (
+																	<div
+																		key={`${row.section}-${row.topic}`}
+																		role="button"
+																		tabIndex={0}
+																		aria-pressed={isOpen}
+																		className={`bar-row bar-row-static mem-map-row${isOpen ? " mem-map-sel" : ""}`}
+																		onClick={toggleTopic}
+																		onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleTopic(); } }}
+																	>
+																		<div className="name">{topicRowLine(name, row.notes)}</div>
+																	</div>
+																);
+															})}
+														</>
+													);
+												})()}
+											</div>
+											<div className="chart-block mem-reading-block">
+												{(() => {
+													// The reading panel: the waiting conversations by default, one
+													// topic's text, or the stored conversation behind a receipt. One
+													// body, rendered inline here and again inside the
+													// full-screen overlay when expanded.
+													// While a past moment is viewed, every panel carries its chip, and
+													// Back returns to that moment's full memory (the panel's resting
+													// state then), which itself has nowhere to go back to.
+													const panelHead = (title: string, caption: string, back = true) => (
+														<>
+															<div className="dash-section-head" style={{ marginBottom: 0 }}>
+																<div className="chart-head mem-head-row"><h2>{title}</h2>{asOf !== null && <span className="mem-asof">{asOfChip(asOf)}</span>}</div>
+																<div className="mem-panel-actions">
+																	<button type="button" className="mem-close" onClick={() => setPanelFull(!panelFull)}>{panelFull ? "Exit full screen" : "Full screen ⤢"}</button>
+																	{back && <button type="button" className="mem-close" onClick={() => { panelReq.current++; setPanel(null); }}>Back ×</button>}
+																</div>
+															</div>
+															<div className="sub" style={{ marginBottom: 6 }}>{caption}</div>
+														</>
+													);
+													const body = panel?.kind === "transcript" ? (
+														<>
+															{panelHead("Conversation", `The conversation "${panel.title}" was saved from, as stored on your machine. Read-only.`)}
+															{panel.state === "loading" && <div className="sub">Opening the conversation…</div>}
+															{panel.state === "error" && <div className="sub">Couldn't read this conversation right now.</div>}
+															{panel.state === "ready" && !panel.data.stored && <div className="sub">This conversation is no longer stored.</div>}
+															{panel.state === "ready" && panel.data.stored && (() => {
+																const data = panel.data;
+																const shown = trAll ? data.items : data.items.slice(0, 40);
+																return (
+																	<div className="mem-tr">
+																		{shown.map((it, i) => {
+																			if (it.kind === "tool") {
+																				const open = openTools.has(i);
+																				return (
+																					<div key={i} className="mem-tr-tool">
+																						<button
+																							type="button"
+																							className="mem-tr-tool-line"
+																							aria-expanded={open}
+																							onClick={() => setOpenTools((prev) => { const next = new Set(prev); if (open) next.delete(i); else next.add(i); return next; })}
+																						>
+																							<span className="mem-tr-caret">{open ? "▾" : "▸"}</span>
+																							<span className="mem-tr-tool-name">{it.name}</span>
+																							{it.status && <span className="mem-tr-tool-status">{it.status}</span>}
+																						</button>
+																						{open && (
+																							<div className="mem-tr-tool-detail">
+																								{it.args && <pre className="mem-tr-pre">{it.args}</pre>}
+																								{it.result && <pre className="mem-tr-pre">{it.result}</pre>}
+																								{it.truncated && <div className="mem-tr-note">Long values are shortened in this view.</div>}
+																							</div>
+																						)}
+																					</div>
+																				);
+																			}
+																			if (it.kind === "user") {
+																				return (
+																					<div key={i} className="mem-tr-user">
+																						<span className="mem-tr-who">You</span>
+																						<div className="mem-tr-text">{it.text}</div>
+																					</div>
+																				);
+																			}
+																			return (
+																				<div key={i} className={it.kind === "system" ? "mem-tr-system" : "mem-tr-assistant"}>
+																					<div className="md assistant-markdown"><MarkdownRenderer>{it.text ?? ""}</MarkdownRenderer></div>
+																				</div>
+																			);
+																		})}
+																		{!trAll && data.items.length > shown.length && (
+																			<button type="button" className="mem-hist-more" onClick={() => setTrAll(true)}>Show all {data.items.length} items</button>
+																		)}
+																		{data.itemsTotal > data.items.length && (
+																			<div className="mem-tr-note">Showing the first {data.items.length} of {data.itemsTotal} stored items.</div>
+																		)}
+																	</div>
+																);
+															})()}
+														</>
+													) : panel?.kind === "area" ? (
+														<>
+															{panelHead(panel.area, panel.full ? FULL_MEMORY_PANEL_SUB : topicPanelSub(panel.area))}
+															<div className="mem-area-content md assistant-markdown">
+																<MarkdownRenderer>{panel.content || (panel.full ? "*This room has no notes yet.*" : "*This topic is empty right now.*")}</MarkdownRenderer>
+															</div>
+														</>
+													) : asOf !== null ? (
+														<>
+															{/* The resting panel of a past moment is its full memory; the
+															    waiting list is today's and stays out of this mode. */}
+															{panelHead("Full memory", FULL_MEMORY_PANEL_SUB, false)}
+															{snap?.state === "error" ? (
+																<div className="sub">{ASOF_ERROR}</div>
+															) : !past ? (
+																<div className="sub">{ASOF_READING}</div>
+															) : (
+																<div className="mem-area-content md assistant-markdown">
+																	<MarkdownRenderer>{past.content || "*This room has no notes yet.*"}</MarkdownRenderer>
+																</div>
+															)}
+														</>
+													) : (
+														<>
+															<div className="dash-section-head" style={{ marginBottom: 0 }}>
+																<div className="chart-head mem-head-row"><h2>{WAITING_PANEL_TITLE}</h2></div>
+																<div className="mem-panel-actions">
+																	<button type="button" className="mem-close" onClick={() => setPanelFull(!panelFull)}>{panelFull ? "Exit full screen" : "Full screen ⤢"}</button>
+																</div>
+															</div>
+															<div className="sub" style={{ marginBottom: 6 }}>{WAITING_PANEL_SUB}</div>
+															{detail.recentSessions.length === 0 && (
+																<div className="sub">{detail.checkpoints > 0 ? WAITING_PANEL_EMPTY : WAITING_PANEL_NONE_YET}</div>
+															)}
+															<div className="mem-learned">
+																{detail.recentSessions.map((s, i) => (
+																	<div key={i} className="mem-li">
+																		<div className="mem-li-txt">{s.title}</div>
+																		<div className="mem-li-src">
+																			{s.ts ? (s.tsPrecise ? fmtAgo(s.ts) : fmtAgoDay(s.ts)) : "saved"}
+																			{(s.content || s.approvedAt) && (
+																				<button
+																					type="button"
+																					className="mem-prov-toggle"
+																					aria-expanded={receiptIdx === i}
+																					onClick={() => setReceiptIdx(receiptIdx === i ? null : i)}
+																				>
+																					{receiptIdx === i ? "Hide details" : "Details"}
+																				</button>
+																			)}
+																		</div>
+																		{receiptIdx === i && (
+																			// Details = what the room saved, word for word, plus the
+																			// receipt. The receipt states only what the checkpoint event
+																			// record proves: the exact time it passed the gate,
+																			// and it opens the stored conversation only while the
+																			// closed-thread file actually exists.
+																			<div className="mem-prov-open">
+																				{s.content && (
+																					<div className="mem-prov-body md assistant-markdown">
+																						<MarkdownRenderer>{s.content}</MarkdownRenderer>
+																					</div>
+																				)}
+																				{s.approvedAt && (
+																					<div className="mem-prov">
+																						saved to memory {fmtWhen(s.approvedAt)} through Remember
+																						{s.conversation && s.checkpointId && (
+																							<>
+																								{" · "}
+																								<button type="button" className="mem-prov-link" onClick={() => openConversation(s)}>{OPEN_CONVERSATION_LABEL}</button>
+																							</>
+																						)}
+																					</div>
+																				)}
+																			</div>
+																		)}
+																	</div>
+																))}
+															</div>
+															{(() => {
+																// The conversations already turned into notes, under the
+																// waiting ones. Each opens as it was stored while its file
+																// still exists; the fold stays away when there are none.
+																const memorized = (conversations ?? []).filter((c) => !c.waiting);
+																if (memorized.length === 0) return null;
+																return (
+																	<details className="mem-memorized">
+																		<summary>{memorizedConversationsTitle(memorized.length)}</summary>
+																		<div className="sub" style={{ marginBottom: 6 }}>{MEMORIZED_SUB}</div>
+																		<div className="mem-learned">
+																			{memorized.map((c) => (
+																				<div key={c.checkpointId} className="mem-li">
+																					<div className="mem-li-txt">{c.title}</div>
+																					<div className="mem-li-src">
+																						{fmtKeptDay(c.approvedAt)}
+																						{" · "}
+																						{c.conversation
+																							? <button type="button" className="mem-prov-link" onClick={() => openConversation(c)}>{OPEN_CONVERSATION_LABEL}</button>
+																							: <span className="mem-memorized-gone">{CONVERSATION_GONE}</span>}
+																					</div>
+																				</div>
+																			))}
+																		</div>
+																	</details>
+																);
+															})()}
+														</>
+													);
+													if (panelFull) {
+														return (
+															<>
+																<div className="sub">Reading in full screen.</div>
+																<div className="mem-fullscreen" role="dialog" aria-modal="true" aria-label="Memory reading panel, full screen">
+																	<div className="mem-fullscreen-inner chart-block">{body}</div>
+																</div>
+															</>
+														);
+													}
+													return body;
+												})()}
+											</div>
+										</div>
+										{(() => {
+											// The same rows Room settings lists, in the same words, with
+											// nothing to press: this page is the cross-room reading of a
+											// room's memory, and taking a save back belongs beside the
+											// notes it would put back.
+											const rows = memoryHistoryRows(detail.history ?? []);
+											if (rows.length === 0) return null;
+											return (
+												<div className="chart-block mem-history">
+													<div className="dash-section-head" style={{ marginBottom: 0 }}>
+														<div className="chart-head"><h2>History</h2></div>
+														{onOpenMemorySettings && (
+															<div className="mem-panel-actions">
+																<button type="button" className="mem-close" onClick={() => onOpenMemorySettings({ agentId: detail.id, displayName: detail.displayName })}>{OPEN_IN_ROOM_SETTINGS_LABEL} →</button>
+															</div>
+														)}
+													</div>
+													<div className="sub" style={{ marginBottom: 6 }}>{MEMORY_TAB_HISTORY_SUB}{asOf !== null ? HISTORY_ASOF_TAIL : ""}</div>
+													{(histAll ? rows : rows.slice(0, 10)).map((row, i, shown) => (
+														<div key={row.key} className={`mem-hist-item${asOf !== null && row.ts > asOf ? " mem-hist-future" : ""}`}>
+															{asOf !== null && row.ts <= asOf && (i === 0 || shown[i - 1].ts > asOf) && (
+																<div className="mem-youare">{YOU_ARE_VIEWING_HERE}</div>
+															)}
+															<div className="mem-hist-row">
+																<span className="mem-hist-date">{fmtMemoryMoment(row.ts)}</span>
+																<span className="mem-hist-what">{row.words}</span>
+																{row.undone && <span className="mem-hist-undone">undone</span>}
+																{row.diffable && (
+																	<MemoryChangeFold roomId={detail.id} row={row} quiet="mem-close" open={changeOpen === `${detail.id}:${row.key}`} onToggle={() => setChangeOpen((open) => (open === `${detail.id}:${row.key}` ? null : `${detail.id}:${row.key}`))} />
+																)}
+															</div>
+														</div>
+													))}
+													{rows.length > 10 && (
+														<button type="button" className="mem-hist-more" onClick={() => setHistAll((v) => !v)}>
+															{histAll ? "Show fewer" : `Show all ${rows.length}`}
+														</button>
+													)}
+												</div>
+											);
+										})()}
+									</section>
+											</div>
+										)}
+									</Fragment>
 								);
 							})}
 						</div>
 					</section>
 
-					{detail && (
-						<section className="dash-section mem-detail-section" ref={detailRef}>
-							<div className="dash-section-head mem-detail-head">
-								<div className="mem-detail-hero">
-									<div className="mem-detail-name">
-										<h1>{detail.displayName}</h1>
-										{/* Exactly the Rooms page's chips: standby while a parked
-										    conversation waits, ready to memorize when Memorize is due,
-										    and no chip at all for a settled room. */}
-										{detail.standbyThread
-											? <span className="mem-pill" title="This room has a conversation parked to resume.">standby</span>
-											: detail.needsAbsorb
-												? <span className="mem-pill" title="Remembered conversations are waiting to become notes.">ready to memorize</span>
-												: null}
-									</div>
-									{detail.description && <div className="sub">{detail.description}</div>}
-									{(() => {
-										// Today's facts, led by the day the room's memory began: its
-										// first recorded save, when there is one.
-										const facts = roomMemoryFactsLine({ notes: detail.notes, waiting: detail.sessions, lastMemorizedAt: detail.lastCheckpointAt });
-										const since = detail.series[0]?.ts;
-										return <div className="sub mem-detail-strip">{since ? inMemorySinceLine(since, facts) : facts}</div>;
-									})()}
-								</div>
-								{/* The state pill carries the why (tooltip), so no note here. */}
-								<div className="mem-detail-actions">
-									{/* This page is the cross-room view; editing a note belongs to
-									    the room, so the link hands the person over to its pane. */}
-									{onOpenMemorySettings && (
-										<button type="button" className="mem-review-btn" title="Open this room's memory settings, where you can read, edit, restore and undo" onClick={() => onOpenMemorySettings({ agentId: detail.id, displayName: detail.displayName })}>
-											{OPEN_IN_ROOM_SETTINGS_LABEL} →
-										</button>
-									)}
-									{onMaintain && (() => {
-										const blocked = maintainBlocked?.(detail.id) ?? null;
-										return (
-											<button type="button" className="mem-review-btn" disabled={!!blocked} title={blocked ?? "Open Maintain to turn this room's waiting conversations into notes, or to tidy the notes it has. You approve changes before they are saved."} onClick={() => onMaintain({ agentId: detail.id, displayName: detail.displayName })}>
-												Maintain →
-											</button>
-										);
-									})()}
-									<button type="button" className="mem-close" onClick={() => setSelected(null)}>Close ×</button>
-								</div>
-							</div>
-							<div className="mem-detail-full"><MemoryFullBar room={detail} /></div>
-
-							{asOf !== null && (
-								<div className="mem-tt-banner mem-tt-banner-global">
-									<span>{snap?.state === "error" ? ASOF_ERROR : !past ? ASOF_READING : asOfSentence(asOf, past.boundaryTs)}</span>
-									<button type="button" className="mem-close" onClick={leaveAsOf}>{BACK_TO_TODAY_LABEL}</button>
-								</div>
-							)}
-
-							<div className="chart-block mem-detail-graph">
-								<div className="chart-head"><h2>Memory growth</h2></div>
-								{detail.series.length >= 2 && <div className="sub" style={{ marginBottom: 8 }}>{GROWTH_SUB}</div>}
-								{detail.series.length >= 2 ? (
-									<>
-										<MemoryGrowthChart series={detail.series} budgetTokens={detail.memoryLimit?.budgetTokens ?? null} height={300} markerTs={asOf} onPick={setAsOf} />
-										<div className="mem-comp-legend" style={{ marginTop: 8 }}>
-											<span><span className="sw" style={{ background: "var(--fg)", opacity: 0.35 }} />Lasting notes</span>
-											<span><span className="sw" style={{ background: "var(--exx-plan)" }} />Remembered conversations</span>
-											<span><span className="mem-dot cp" />Remember</span>
-											<span><span className="mem-dot learn" />Memorize</span>
-											<span><span className="mem-dot review" />Review</span>
-											{detail.memoryLimit && detail.memoryLimit.budgetTokens > 0 && <span><span className="sw budget" />Budget</span>}
-										</div>
-									</>
-								) : <div className="sub">No saves yet.</div>}
-								{(() => {
-									const lastLearn = [...detail.series].reverse().find((s) => s.kind === "absorb");
-									if (!lastLearn && !detail.lastReviewAt) return null;
-									return (
-										<div className="sub" style={{ marginTop: 8 }}>
-											{lastLearn && <>Last memorized {fmtAgo(lastLearn.ts)}.</>}
-											{detail.lastReviewAt && <>{lastLearn ? " " : ""}Last memory review {fmtAgo(detail.lastReviewAt)}.</>}
-										</div>
-									);
-								})()}
-							</div>
-
-							<div className="chart-grid">
-								<div className="chart-block">
-									<div className="dash-section-head" style={{ marginBottom: 0 }}>
-										<div className="chart-head mem-head-row"><h2>{TOPICS_PANEL_TITLE}</h2>{asOf !== null && <span className="mem-asof">{asOfChip(asOf)}</span>}</div>
-										<div className="mem-panel-actions">
-											<button type="button" className="mem-close" title="Read everything this room carries into a conversation" onClick={openFullMemory}>Full memory →</button>
-										</div>
-									</div>
-									<div className="sub" style={{ marginBottom: 6 }}>{TOPICS_PANEL_SUB}</div>
-									{(() => {
-										// Today's topics, or the ones the viewed moment's copy holds;
-										// while that copy is still being read, the list waits empty
-										// rather than showing today's under a past date.
-										const topicRows: TopicRow[] = asOf === null ? detail.memoryTopics : (past?.topics ?? []);
-										const settled = asOf === null || past !== null;
-										return (
-											<>
-												{settled && topicRows.length === 0 && <div className="sub">{TOPICS_PANEL_EMPTY}</div>}
-												{topicRows.map((row) => {
-													const name = memoryTopicName(row.topic);
-													const isOpen = panel?.kind === "area" && !panel.full && panel.area === name;
-													// The open topic's row closes it again: the panel returns to its
-													// resting state, today's waiting list or the viewed moment's full memory.
-													const toggleTopic = () => { if (isOpen) { panelReq.current++; setPanel(null); } else openTopic(row); };
-													return (
-														<div
-															key={`${row.section}-${row.topic}`}
-															role="button"
-															tabIndex={0}
-															aria-pressed={isOpen}
-															className={`bar-row bar-row-static mem-map-row${isOpen ? " mem-map-sel" : ""}`}
-															onClick={toggleTopic}
-															onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleTopic(); } }}
-														>
-															<div className="name">{topicRowLine(name, row.notes)}</div>
-														</div>
-													);
-												})}
-											</>
-										);
-									})()}
-								</div>
-								<div className="chart-block mem-reading-block">
-									{(() => {
-										// The reading panel: the waiting conversations by default, one
-										// topic's text, or the stored conversation behind a receipt. One
-										// body, rendered inline here and again inside the
-										// full-screen overlay when expanded.
-										// While a past moment is viewed, every panel carries its chip, and
-										// Back returns to that moment's full memory (the panel's resting
-										// state then), which itself has nowhere to go back to.
-										const panelHead = (title: string, caption: string, back = true) => (
-											<>
-												<div className="dash-section-head" style={{ marginBottom: 0 }}>
-													<div className="chart-head mem-head-row"><h2>{title}</h2>{asOf !== null && <span className="mem-asof">{asOfChip(asOf)}</span>}</div>
-													<div className="mem-panel-actions">
-														<button type="button" className="mem-close" onClick={() => setPanelFull(!panelFull)}>{panelFull ? "Exit full screen" : "Full screen ⤢"}</button>
-														{back && <button type="button" className="mem-close" onClick={() => { panelReq.current++; setPanel(null); }}>Back ×</button>}
-													</div>
-												</div>
-												<div className="sub" style={{ marginBottom: 6 }}>{caption}</div>
-											</>
-										);
-										const body = panel?.kind === "transcript" ? (
-											<>
-												{panelHead("Conversation", `The conversation "${panel.title}" was saved from, as stored on your machine. Read-only.`)}
-												{panel.state === "loading" && <div className="sub">Opening the conversation…</div>}
-												{panel.state === "error" && <div className="sub">Couldn't read this conversation right now.</div>}
-												{panel.state === "ready" && !panel.data.stored && <div className="sub">This conversation is no longer stored.</div>}
-												{panel.state === "ready" && panel.data.stored && (() => {
-													const data = panel.data;
-													const shown = trAll ? data.items : data.items.slice(0, 40);
-													return (
-														<div className="mem-tr">
-															{shown.map((it, i) => {
-																if (it.kind === "tool") {
-																	const open = openTools.has(i);
-																	return (
-																		<div key={i} className="mem-tr-tool">
-																			<button
-																				type="button"
-																				className="mem-tr-tool-line"
-																				aria-expanded={open}
-																				onClick={() => setOpenTools((prev) => { const next = new Set(prev); if (open) next.delete(i); else next.add(i); return next; })}
-																			>
-																				<span className="mem-tr-caret">{open ? "▾" : "▸"}</span>
-																				<span className="mem-tr-tool-name">{it.name}</span>
-																				{it.status && <span className="mem-tr-tool-status">{it.status}</span>}
-																			</button>
-																			{open && (
-																				<div className="mem-tr-tool-detail">
-																					{it.args && <pre className="mem-tr-pre">{it.args}</pre>}
-																					{it.result && <pre className="mem-tr-pre">{it.result}</pre>}
-																					{it.truncated && <div className="mem-tr-note">Long values are shortened in this view.</div>}
-																				</div>
-																			)}
-																		</div>
-																	);
-																}
-																if (it.kind === "user") {
-																	return (
-																		<div key={i} className="mem-tr-user">
-																			<span className="mem-tr-who">You</span>
-																			<div className="mem-tr-text">{it.text}</div>
-																		</div>
-																	);
-																}
-																return (
-																	<div key={i} className={it.kind === "system" ? "mem-tr-system" : "mem-tr-assistant"}>
-																		<div className="md assistant-markdown"><MarkdownRenderer>{it.text ?? ""}</MarkdownRenderer></div>
-																	</div>
-																);
-															})}
-															{!trAll && data.items.length > shown.length && (
-																<button type="button" className="mem-hist-more" onClick={() => setTrAll(true)}>Show all {data.items.length} items</button>
-															)}
-															{data.itemsTotal > data.items.length && (
-																<div className="mem-tr-note">Showing the first {data.items.length} of {data.itemsTotal} stored items.</div>
-															)}
-														</div>
-													);
-												})()}
-											</>
-										) : panel?.kind === "area" ? (
-											<>
-												{panelHead(panel.area, panel.full ? FULL_MEMORY_PANEL_SUB : topicPanelSub(panel.area))}
-												<div className="mem-area-content md assistant-markdown">
-													<MarkdownRenderer>{panel.content || (panel.full ? "*This room has no notes yet.*" : "*This topic is empty right now.*")}</MarkdownRenderer>
-												</div>
-											</>
-										) : asOf !== null ? (
-											<>
-												{/* The resting panel of a past moment is its full memory; the
-												    waiting list is today's and stays out of this mode. */}
-												{panelHead("Full memory", FULL_MEMORY_PANEL_SUB, false)}
-												{snap?.state === "error" ? (
-													<div className="sub">{ASOF_ERROR}</div>
-												) : !past ? (
-													<div className="sub">{ASOF_READING}</div>
-												) : (
-													<div className="mem-area-content md assistant-markdown">
-														<MarkdownRenderer>{past.content || "*This room has no notes yet.*"}</MarkdownRenderer>
-													</div>
-												)}
-											</>
-										) : (
-											<>
-												<div className="dash-section-head" style={{ marginBottom: 0 }}>
-													<div className="chart-head mem-head-row"><h2>{WAITING_PANEL_TITLE}</h2></div>
-													<div className="mem-panel-actions">
-														<button type="button" className="mem-close" onClick={() => setPanelFull(!panelFull)}>{panelFull ? "Exit full screen" : "Full screen ⤢"}</button>
-													</div>
-												</div>
-												<div className="sub" style={{ marginBottom: 6 }}>{WAITING_PANEL_SUB}</div>
-												{detail.recentSessions.length === 0 && (
-													<div className="sub">{detail.checkpoints > 0 ? WAITING_PANEL_EMPTY : WAITING_PANEL_NONE_YET}</div>
-												)}
-												<div className="mem-learned">
-													{detail.recentSessions.map((s, i) => (
-														<div key={i} className="mem-li">
-															<div className="mem-li-txt">{s.title}</div>
-															<div className="mem-li-src">
-																{s.ts ? (s.tsPrecise ? fmtAgo(s.ts) : fmtAgoDay(s.ts)) : "saved"}
-																{(s.content || s.approvedAt) && (
-																	<button
-																		type="button"
-																		className="mem-prov-toggle"
-																		aria-expanded={receiptIdx === i}
-																		onClick={() => setReceiptIdx(receiptIdx === i ? null : i)}
-																	>
-																		{receiptIdx === i ? "Hide details" : "Details"}
-																	</button>
-																)}
-															</div>
-															{receiptIdx === i && (
-																// Details = what the room saved, word for word, plus the
-																// receipt. The receipt states only what the checkpoint event
-																// record proves: the exact time it passed the gate —
-																// and it opens the stored conversation only while the
-																// closed-thread file actually exists.
-																<div className="mem-prov-open">
-																	{s.content && (
-																		<div className="mem-prov-body md assistant-markdown">
-																			<MarkdownRenderer>{s.content}</MarkdownRenderer>
-																		</div>
-																	)}
-																	{s.approvedAt && (
-																		<div className="mem-prov">
-																			saved to memory {fmtWhen(s.approvedAt)} through Remember
-																			{s.conversation && s.checkpointId && (
-																				<>
-																					{" · "}
-																					<button type="button" className="mem-prov-link" onClick={() => openConversation(s)}>{OPEN_CONVERSATION_LABEL}</button>
-																				</>
-																			)}
-																		</div>
-																	)}
-																</div>
-															)}
-														</div>
-													))}
-												</div>
-												{(() => {
-													// The conversations already turned into notes, under the
-													// waiting ones. Each opens as it was stored while its file
-													// still exists; the fold stays away when there are none.
-													const memorized = (conversations ?? []).filter((c) => !c.waiting);
-													if (memorized.length === 0) return null;
-													return (
-														<details className="mem-memorized">
-															<summary>{memorizedConversationsTitle(memorized.length)}</summary>
-															<div className="sub" style={{ marginBottom: 6 }}>{MEMORIZED_SUB}</div>
-															<div className="mem-learned">
-																{memorized.map((c) => (
-																	<div key={c.checkpointId} className="mem-li">
-																		<div className="mem-li-txt">{c.title}</div>
-																		<div className="mem-li-src">
-																			{fmtKeptDay(c.approvedAt)}
-																			{" · "}
-																			{c.conversation
-																				? <button type="button" className="mem-prov-link" onClick={() => openConversation(c)}>{OPEN_CONVERSATION_LABEL}</button>
-																				: <span className="mem-memorized-gone">{CONVERSATION_GONE}</span>}
-																		</div>
-																	</div>
-																))}
-															</div>
-														</details>
-													);
-												})()}
-											</>
-										);
-										if (panelFull) {
-											return (
-												<>
-													<div className="sub">Reading in full screen.</div>
-													<div className="mem-fullscreen" role="dialog" aria-modal="true" aria-label="Memory reading panel, full screen">
-														<div className="mem-fullscreen-inner chart-block">{body}</div>
-													</div>
-												</>
-											);
-										}
-										return body;
-									})()}
-								</div>
-							</div>
-							{(() => {
-								// The same rows Room settings lists, in the same words, with
-								// nothing to press: this page is the cross-room reading of a
-								// room's memory, and taking a save back belongs beside the
-								// notes it would put back.
-								const rows = memoryHistoryRows(detail.history ?? []);
-								if (rows.length === 0) return null;
-								return (
-									<div className="chart-block mem-history">
-										<div className="dash-section-head" style={{ marginBottom: 0 }}>
-											<div className="chart-head"><h2>History</h2></div>
-											{onOpenMemorySettings && (
-												<div className="mem-panel-actions">
-													<button type="button" className="mem-close" onClick={() => onOpenMemorySettings({ agentId: detail.id, displayName: detail.displayName })}>{OPEN_IN_ROOM_SETTINGS_LABEL} →</button>
-												</div>
-											)}
-										</div>
-										<div className="sub" style={{ marginBottom: 6 }}>{MEMORY_TAB_HISTORY_SUB}{asOf !== null ? HISTORY_ASOF_TAIL : ""}</div>
-										{(histAll ? rows : rows.slice(0, 10)).map((row, i, shown) => (
-											<div key={row.key} className={`mem-hist-item${asOf !== null && row.ts > asOf ? " mem-hist-future" : ""}`}>
-												{asOf !== null && row.ts <= asOf && (i === 0 || shown[i - 1].ts > asOf) && (
-													<div className="mem-youare">{YOU_ARE_VIEWING_HERE}</div>
-												)}
-												<div className="mem-hist-row">
-													<span className="mem-hist-date">{fmtMemoryMoment(row.ts)}</span>
-													<span className="mem-hist-what">{row.words}</span>
-													{row.undone && <span className="mem-hist-undone">undone</span>}
-													{row.diffable && (
-														<MemoryChangeFold roomId={detail.id} row={row} quiet="mem-close" open={changeOpen === `${detail.id}:${row.key}`} onToggle={() => setChangeOpen((open) => (open === `${detail.id}:${row.key}` ? null : `${detail.id}:${row.key}`))} />
-													)}
-												</div>
-											</div>
-										))}
-										{rows.length > 10 && (
-											<button type="button" className="mem-hist-more" onClick={() => setHistAll((v) => !v)}>
-												{histAll ? "Show fewer" : `Show all ${rows.length}`}
-											</button>
-										)}
-									</div>
-								);
-							})()}
-						</section>
-					)}
 				</>
 			)}
 

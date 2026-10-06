@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { fetchJson } from "../api";
 import { useRemoteClientContext } from "../remote-client-context";
+import { GroupHeader } from "./pane-header";
 
 /**
  * Web search, made visible: both kinds of it.
@@ -297,7 +298,7 @@ export function WebSearchSettingsSection() {
 		return (
 			<section className="ai-setup-section" aria-label="Web search">
 					<div className="workspaces-error archived-rooms-note" role="alert">{loadError ?? "Could not read the web search settings."}</div>
-				<p><button className="inline-action" type="button" onClick={() => void load()}>Try again</button></p>
+				<p><button className="rs-btn" type="button" onClick={() => void load()}>Try again</button></p>
 			</section>
 		);
 	}
@@ -314,23 +315,29 @@ export function WebSearchSettingsSection() {
 						falling back to DuckDuckGo.
 					</div>
 				)}
-				<div className="web-search-native">
-					<h3 className="web-search-fallback-heading">Provider search</h3>
-					<p className="ai-setup-copy">
-						{settings.providerSearch
-							? "On. Claude and ChatGPT rooms search on the provider's side."
-							: "Off. Claude and ChatGPT rooms use the search below."}
-					</p>
-				</div>
-				<div className="web-search-fallback">
-					<h3 className="web-search-fallback-heading">Everything else</h3>
-					<p className="ai-setup-copy">
-						{settings.provider === "searxng"
-							? `Your own SearXNG${settings.baseUrl ? ` at ${settings.baseUrl}` : ""}.`
-							: settings.provider === "disabled"
-								? "Off. Rooms can still open links you give them."
-								: "DuckDuckGo."}
-					</p>
+				<div className="settings-rows">
+					<div className="settings-row">
+						<div className="settings-row-main">
+							<span className="settings-row-label">Provider search</span>
+							<span className="settings-row-sub">
+								{settings.providerSearch
+									? "On. Claude and ChatGPT rooms search on the provider's side."
+									: "Off. Claude and ChatGPT rooms use the search below."}
+							</span>
+						</div>
+					</div>
+					<div className="settings-row">
+						<div className="settings-row-main">
+							<span className="settings-row-label">Everything else</span>
+							<span className="settings-row-sub">
+								{settings.provider === "searxng"
+									? `Your own SearXNG${settings.baseUrl ? ` at ${settings.baseUrl}` : ""}.`
+									: settings.provider === "disabled"
+										? "Off. Rooms can still open links you give them."
+										: "DuckDuckGo."}
+							</span>
+						</div>
+					</div>
 				</div>
 				<p className="cli-note">Web search is set up on the computer itself.</p>
 			</section>
@@ -353,13 +360,11 @@ export function WebSearchSettingsSection() {
 				</div>
 			)}
 
-			<div className="web-search-native">
-				<h3 className="web-search-fallback-heading">Provider search</h3>
-				<label className={`rs-row${togglePending ? " pending" : ""}`}>
-					<div className="rs-row-main">
-						<span className="rs-row-label">Use provider search where available{togglePending ? " (saving…)" : ""}</span>
-						<span className="rs-row-hint">Claude and ChatGPT rooms search on the provider's side; nothing runs on your machine.</span>
-						<span className="rs-row-hint">Gateway models follow their own per-model web search tick, not this switch.</span>
+			<div className="settings-rows">
+				<label className={`settings-row${togglePending ? " pending" : ""}`}>
+					<div className="settings-row-main">
+						<span className="settings-row-label">Provider search where available{togglePending ? " (saving…)" : ""}</span>
+						<span className="settings-row-sub">Claude and ChatGPT rooms search on the provider's side; nothing runs on your machine. Gateway models follow their own per-model web search tick, not this switch.</span>
 					</div>
 					<input
 						className="workspaces-tool-switch"
@@ -367,90 +372,90 @@ export function WebSearchSettingsSection() {
 						checked={providerSearchOn}
 						disabled={pending !== null || !!settings.unreadable}
 						onChange={(e) => void saveProviderSearch(e.target.checked)}
-						aria-label="Use provider search where available"
+						aria-label="Provider search where available"
 					/>
 				</label>
 			</div>
 
-			<div className="web-search-fallback">
-				<h3 className="web-search-fallback-heading">Everything else</h3>
-				<p className="ai-setup-copy web-search-fallback-copy">
-					{providerSearchOn
+			<div className="settings-group">
+				<GroupHeader
+					kicker="Everything else"
+					line={providerSearchOn
 						? "The search every room uses except Claude and ChatGPT. Gateway models use it alongside their own."
 						: "The search every room uses, including Claude and ChatGPT while the switch above is off."}
-				</p>
+				/>
 				{envHeld && (
-					<p className="ai-setup-copy web-search-env-note" role="status">
+					<p className="settings-help web-search-env-note" role="status">
 						This computer forces {settings.provider === "disabled" ? "no search backend" : settings.provider} over this screen.
 						Your choice is saved and takes over when the forced one is removed; provider search above is unaffected.
 					</p>
 				)}
-			</div>
-			<div className="web-search-options" role="radiogroup" aria-label="Web search provider">
-				{OPTIONS.map((option) => {
-					const optionPending = pending?.kind === "provider" && pending.value === option.id;
-					const unsaved = pendingChoice === option.id && savedProvider !== option.id;
-					return (
-						<label key={option.id} className={`web-search-option${shownChoice === option.id ? " selected" : ""}${optionPending ? " pending" : ""}`}>
-							<input
-								type="radio"
-								name="web-search-provider"
-								checked={shownChoice === option.id}
-								disabled={pending !== null || !!settings.unreadable}
-								onChange={() => {
-									setNote(null);
-									setError(null);
-									// SearXNG needs an address before it means anything, so it
-									// waits for Save and says so; the other two are the whole
-									// decision, and the radio only moves when the server agrees.
-									if (option.id === "searxng") setPendingChoice("searxng");
-									else void saveProvider(option.id);
-								}}
-							/>
-							<span className="web-search-option-body">
-								<span className="web-search-option-label">
-									{option.label}
-									{optionPending && <span className="web-search-pending-note"> saving…</span>}
-									{unsaved && !optionPending && <span className="web-search-pending-note"> not saved yet</span>}
+				<div className="settings-rows" role="radiogroup" aria-label="Web search provider">
+					{OPTIONS.map((option) => {
+						const optionPending = pending?.kind === "provider" && pending.value === option.id;
+						const unsaved = pendingChoice === option.id && savedProvider !== option.id;
+						return (
+							<label key={option.id} className={`settings-row settings-row-choice${optionPending ? " pending" : ""}`}>
+								<input
+									type="radio"
+									name="web-search-provider"
+									checked={shownChoice === option.id}
+									disabled={pending !== null || !!settings.unreadable}
+									onChange={() => {
+										setNote(null);
+										setError(null);
+										// SearXNG needs an address before it means anything, so it
+										// waits for Save and says so; the other two are the whole
+										// decision, and the radio only moves when the server agrees.
+										if (option.id === "searxng") setPendingChoice("searxng");
+										else void saveProvider(option.id);
+									}}
+								/>
+								<span className="settings-row-main">
+									<span className="settings-row-label">
+										{option.label}
+										{optionPending && <span className="web-search-pending-note"> saving…</span>}
+										{unsaved && !optionPending && <span className="web-search-pending-note"> not saved yet</span>}
+									</span>
+									<span className="settings-row-sub">{option.blurb(providerSearchOn)}</span>
 								</span>
-								<span className="web-search-option-blurb">{option.blurb(providerSearchOn)}</span>
-							</span>
-						</label>
-					);
-				})}
-			</div>
-			{shownChoice === "searxng" && (
-				<div className="web-search-searxng">
-					<label className="web-search-searxng-label" htmlFor="web-search-base-url">Address</label>
-					<input
-						id="web-search-base-url"
-						className="launcher-path-input"
-						type="text"
-						value={shownBaseUrl}
-						placeholder="http://localhost:8080"
-						disabled={baseUrlPending}
-						onChange={(e) => { baseUrlDirty.current = true; setBaseUrlDraft(e.target.value); setNote(null); }}
-					/>
-					<button className="inline-action" type="button" disabled={pending !== null} onClick={() => void saveProvider("searxng")}>
-						{baseUrlPending ? "Saving…" : "Save"}
-					</button>
-					{/* The other half of the choice: an address somebody already has, or
-					    one this app makes for them. Nothing here asks for a terminal. */}
-					<div className="web-search-searxng-setup">
-						<button
-							className="inline-action"
-							type="button"
-							disabled={setupStarting || setupRunning || !!settings.unreadable}
-							onClick={() => void startSetup()}
-						>
-							{setupRunning || setupStarting ? "Starting…" : "Start one on this computer"}
-						</button>
-						{setupMessage && (
-							<span className={`web-search-searxng-status${setupFailed ? " failed" : ""}`} role="status">{setupMessage}</span>
-						)}
-					</div>
+							</label>
+						);
+					})}
 				</div>
-			)}
+				{shownChoice === "searxng" && (
+					<div className="web-search-searxng">
+						<label className="web-search-searxng-label" htmlFor="web-search-base-url">Address</label>
+						<input
+							id="web-search-base-url"
+							className="launcher-path-input"
+							type="text"
+							value={shownBaseUrl}
+							placeholder="http://localhost:8080"
+							disabled={baseUrlPending}
+							onChange={(e) => { baseUrlDirty.current = true; setBaseUrlDraft(e.target.value); setNote(null); }}
+						/>
+						<button className="rs-btn" type="button" disabled={pending !== null} onClick={() => void saveProvider("searxng")}>
+							{baseUrlPending ? "Saving…" : "Save"}
+						</button>
+						{/* The other half of the choice: an address somebody already has, or
+						    one this app makes for them. Nothing here asks for a terminal. */}
+						<div className="web-search-searxng-setup">
+							<button
+								className="rs-btn"
+								type="button"
+								disabled={setupStarting || setupRunning || !!settings.unreadable}
+								onClick={() => void startSetup()}
+							>
+								{setupRunning || setupStarting ? "Starting…" : "Start one on this computer"}
+							</button>
+							{setupMessage && (
+								<span className={`web-search-searxng-status${setupFailed ? " failed" : ""}`} role="status">{setupMessage}</span>
+							)}
+						</div>
+					</div>
+				)}
+			</div>
 			{note && <p className="archived-rooms-note" role="status">{note}</p>}
 			{error && <div className="workspaces-error archived-rooms-note" role="alert">{error}</div>}
 		</section>

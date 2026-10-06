@@ -630,7 +630,7 @@ async function performRun(slot: RunSlot, input: ReviewRunStartInput, nowFn: () =
 				model: input.model,
 				promptEstimatedTokens: assembly.telemetry.promptEstimatedTokens,
 				window: input.resolveModelWindow?.(input.model),
-				guidance: "Switch the maintenance profile to a larger-context model, then review again.",
+				guidance: "Choose a memory model with a larger window in Room settings, Model, then review again.",
 			});
 		} catch (error) {
 			run.leftAsIs.push({ topics: group.titles, reason: endsAsSentence((error as Error).message) });

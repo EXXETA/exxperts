@@ -67,7 +67,8 @@ export interface ReviewAssessRouteDeps {
 	/** The room routes' error envelope: `{ error, code? }` at the error's own status. */
 	errorReply(reply: any, error: unknown): unknown;
 	/** The maintenance model, the same one Memorize reads its notes with. */
-	modelLock(): ReviewModelLock;
+	/** The room's memory model: the first read and the discussion run on the memory row. */
+	modelLock(agentId: string): ReviewModelLock;
 	/** The one isolated worker seam every maintenance call goes through. */
 	generate(agentId: string, prompt: string, model: ReviewModelLock, options?: ReviewWorkerOptions): Promise<ReviewGenerateResult>;
 	/** The locked model's window, so an oversized read refuses with a remedy instead of a provider error. */
@@ -176,7 +177,7 @@ export function registerReviewAssessRoutes(app: FastifyInstance, deps: ReviewAss
 	app.post("/api/persistent-agents/:id/review/assess", async (req, reply) => {
 		try {
 			const { id } = deps.room(String((req.params as any).id ?? "").trim());
-			const model = deps.modelLock();
+			const model = deps.modelLock(id);
 			const notes = readNotes(id, model, deps);
 			assertAvailable(notes.availability);
 			const retryFeedback = parseReviewRetryFeedback((req.body as any)?.retryFeedback);
@@ -228,7 +229,7 @@ export function registerReviewAssessRoutes(app: FastifyInstance, deps: ReviewAss
 	app.post("/api/persistent-agents/:id/review/discuss", async (req, reply) => {
 		try {
 			const { id } = deps.room(String((req.params as any).id ?? "").trim());
-			const model = deps.modelLock();
+			const model = deps.modelLock(id);
 			const notes = readNotes(id, model, deps);
 			assertAvailable(notes.availability);
 			const request = parseDiscussionRequest(req.body ?? {});
@@ -260,7 +261,7 @@ export function registerReviewAssessRoutes(app: FastifyInstance, deps: ReviewAss
 	app.post("/api/persistent-agents/:id/review/discuss/signoff", async (req, reply) => {
 		try {
 			const { id } = deps.room(String((req.params as any).id ?? "").trim());
-			const model = deps.modelLock();
+			const model = deps.modelLock(id);
 			const notes = readNotes(id, model, deps);
 			assertAvailable(notes.availability);
 			const request = parseDiscussionRequest(req.body ?? {});
