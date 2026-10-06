@@ -487,6 +487,14 @@ try {
 } finally {
 	disposeAllCheckouts();
 	if (process.exitCode == null || process.exitCode === 0) {
-		for (const dir of cleanup) fs.rmSync(dir, { recursive: true, force: true });
+		// The waiting helper of the timeout check may still run on Windows and
+		// hold its script; a folder left in the temp directory is harmless there.
+		for (const dir of cleanup) {
+			try {
+				fs.rmSync(dir, { recursive: true, force: true });
+			} catch (error) {
+				console.warn(`could not remove ${dir} yet: ${error instanceof Error ? error.message : String(error)}`);
+			}
+		}
 	}
 }

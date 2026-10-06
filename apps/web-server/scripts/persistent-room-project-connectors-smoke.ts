@@ -55,8 +55,13 @@ const baseUrl = `http://127.0.0.1:${port}`;
 
 const marker = (name: string): string => path.join(markers, `${name}.txt`);
 const markerText = (name: string): string | null => (fs.existsSync(marker(name)) ? fs.readFileSync(marker(name), "utf-8").trim() : null);
-const shellQuote = (value: string): string => `'${value.replace(/'/g, `'\\''`)}'`;
-const markerCommand = (name: string, what = "date") => ({ command: "/bin/sh", args: ["-c", `${what} >> ${shellQuote(marker(name))}`] });
+// A stand-in connector is a Node one-liner, so it starts the same way on every
+// system: it appends one line to its marker (the time, or the folder it was
+// started in) and exits.
+const markerCommand = (name: string, what: "time" | "folder" = "time") => ({
+	command: process.execPath,
+	args: ["-e", `require("node:fs").appendFileSync(${JSON.stringify(marker(name))}, ${what === "folder" ? "process.cwd()" : "new Date().toISOString()"} + "\\n")`],
+});
 
 function writeFolderConnectorFile(workspace: string, file: ".mcp.json" | ".pi/mcp.json", markerName: string, serverName = "folder-server", lifecycle = "eager"): void {
 	const target = path.join(workspace, file);
@@ -76,7 +81,7 @@ await new Promise<void>((resolve) => githubRecorder.listen(0, "127.0.0.1", resol
 fs.writeFileSync(path.join(agentDir, "mcp.json"), JSON.stringify({
 	mcpServers: {
 		github: { url: `http://127.0.0.1:${(githubRecorder.address() as AddressInfo).port}/mcp` },
-		"cwd-probe": markerCommand("cwd-probe", "pwd"),
+		"cwd-probe": markerCommand("cwd-probe", "folder"),
 	},
 }, null, 2));
 

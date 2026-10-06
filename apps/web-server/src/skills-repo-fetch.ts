@@ -270,6 +270,11 @@ function runGit(args: string[], what: string, timeoutMs: number, env: NodeJS.Pro
 		const timer = setTimeout(() => {
 			timedOut = true;
 			killProcessTree(child);
+			// On Windows a helper that Git for Windows started through its own shell
+			// can fall outside the tree taskkill sees and keep the output pipes open.
+			// Let go of them, so the call ends once git itself has gone.
+			child.stdout?.destroy();
+			child.stderr?.destroy();
 		}, timeoutMs);
 		child.stdout?.on("data", (chunk) => {
 			if (stdout.length < 262_144) stdout += String(chunk);
@@ -476,7 +481,11 @@ export async function cloneRepoShallow(source: ResolvedRepoSource, timeoutMs = C
 		if (result.code !== 0) throw new Error(describeCloneFailure(result.stderr, source) || `git clone exited with code ${result.code}`);
 		return dir;
 	} catch (err) {
-		fs.rmSync(dir, { recursive: true, force: true });
+		// Best effort: such a leftover helper can still hold the folder on Windows,
+		// and the person should see why the import failed, not the cleanup.
+		try {
+			fs.rmSync(dir, { recursive: true, force: true });
+		} catch {}
 		throw err instanceof Error ? err : new Error(String(err));
 	}
 }
