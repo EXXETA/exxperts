@@ -54,9 +54,9 @@ export function sessionFromPrompt(prompt: string): string {
 }
 
 /**
- * The entry's address as the fold prompt writes it: `- [m-0031 · saved
- * 2026-08-02] …`, `- [m-0032 · pinned · saved …] …` for a pinned one, and
- * `· updated 2026-09-01` after the saved date once a fold rewrote it.
+ * The entry's address as the fold prompt writes it: `- [m-0031 · learned
+ * 2026-08-02] …`, `- [m-0032 · pinned · learned …] …` for a pinned one, and
+ * `· in memory since 2026-09-01` for a note no dated conversation wrote.
  */
 const ENTRY_ADDRESS = /^(?:\s*(?:[-*+]|\d+[.)])\s+)?\[([^\]\s·]+)((?:\s+·\s+[^\]·]+)*)\]\s*([\s\S]*)$/;
 
@@ -110,7 +110,6 @@ function opsFromDirectives(directives: PlantDirective[], areas: PromptArea[]): S
 				if (id) ops.push({ op: "close", id });
 				break;
 			case "pin":
-			case "unpin":
 				if (id) ops.push({ op: directive.op, id, because: directive.quote ?? "" });
 				break;
 			case "drop":
@@ -176,15 +175,8 @@ export const SCRIPTED_FOLD_MODELS: Record<ScriptedFoldVariant, ScriptedFoldModel
 };
 
 /**
- * A reply that names an entry the memory does not hold: the refusal rehearsal,
- * so the bench exercises the validator's refusal path and the Retry Notice on
- * every offline run instead of only when a real model happens to slip.
+ * A reply that names an entry the memory does not hold: the redirect
+ * rehearsal, so the bench exercises the decision's redirect on every offline
+ * run instead of only when a real model happens to slip.
  */
-export const refusingThenExactFoldModel = (): ScriptedFoldModel => {
-	let asked = 0;
-	return (prompt) => {
-		asked += 1;
-		if (asked === 1) return `A first attempt.\n\n${fence([{ op: "update", id: "m-9999", text: "- An entry this memory does not hold." }])}`;
-		return exactFoldModel(prompt);
-	};
-};
+export const unknownIdFoldModel = (): ScriptedFoldModel => () => `A reply naming a note memory does not hold.\n\n${fence([{ op: "update", id: "m-9999", text: "- An entry this memory does not hold." }])}`;

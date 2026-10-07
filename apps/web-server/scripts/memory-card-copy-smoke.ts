@@ -7,7 +7,8 @@
 //
 // Run: npx tsx scripts/memory-card-copy-smoke.ts
 
-import { archivedLabel, archiveRowMeta, protectedOpenItemsSentence } from "../../web-ui/src/memory-surface-copy.js";
+import { archivedLabel, archiveRowMeta, archiveSummaryLine, protectedOpenItemsSentence } from "../../web-ui/src/memory-surface-copy.js";
+import { archivedEntryRestorable, archiveReasonLabel } from "../../web-ui/src/memory-v2-copy.js";
 
 let checks = 0;
 let failed = 0;
@@ -33,6 +34,17 @@ check(archivedLabel(undefined, "done item from May, never recalled") === "archiv
 
 check(archiveRowMeta("2026-09-13", "budget") === "archived 13 Sep · to make room", `the archive list's meta line is unchanged (got: ${JSON.stringify(archiveRowMeta("2026-09-13", "budget"))})`);
 check(archiveRowMeta("2026-09-13", "superseded") === "archived 13 Sep · replaced", `the archive list's meta line names the archive reason only (got: ${JSON.stringify(archiveRowMeta("2026-09-13", "superseded"))})`);
+check(archiveRowMeta("2026-10-06", "history", { learned: "2026-06-10", until: "2026-08-02" }) === "older value from 10 Jun until 2 Aug · archived 6 Oct" && archiveRowMeta("2026-09-13", "superseded", { learned: "2026-08-02", until: "2026-09-11" }) === "archived 13 Sep · replaced", `an older value says what and when first, then the day it was archived; other rows are unchanged (got: ${JSON.stringify(archiveRowMeta("2026-10-06", "history", { learned: "2026-06-10", until: "2026-08-02" }))})`);
+check(archiveRowMeta("2026-10-06", "history", { learned: "2026-06-10" }) === "older value from 10 Jun · archived 6 Oct" && archiveRowMeta("2026-10-06", "history", { until: "2026-08-02" }) === "older value until 2 Aug · archived 6 Oct", `an older value with one known day names only that day (got: ${JSON.stringify(archiveRowMeta("2026-10-06", "history", { learned: "2026-06-10" }))}, ${JSON.stringify(archiveRowMeta("2026-10-06", "history", { until: "2026-08-02" }))})`);
+check(archiveSummaryLine(3, 1) === "3 in the archive, not read in conversations: 2 notes you can bring back, and 1 older value kept as history.", `the Archive's line for 3 archived, 1 of them older values: the total first, singular right (got: ${JSON.stringify(archiveSummaryLine(3, 1))})`);
+check(archiveSummaryLine(2, 1) === "2 in the archive, not read in conversations: 1 note you can bring back, and 1 older value kept as history.", `the Archive's line for 2 archived, 1 of them older values: the total first, singular right (got: ${JSON.stringify(archiveSummaryLine(2, 1))})`);
+check(archiveSummaryLine(5, 2) === "5 in the archive, not read in conversations: 3 notes you can bring back, and 2 older values kept as history.", `the Archive's line for 5 archived, 2 of them older values: the total first, singular right (got: ${JSON.stringify(archiveSummaryLine(5, 2))})`);
+check(archiveSummaryLine(1, 0) === "1 note in the archive, not read in conversations. You can bring it back.", `the Archive's line for 1 archived, 0 of them older values: the total first, singular right (got: ${JSON.stringify(archiveSummaryLine(1, 0))})`);
+check(archiveSummaryLine(2, 0) === "2 notes in the archive, not read in conversations. You can bring them back.", `the Archive's line for 2 archived, 0 of them older values: the total first, singular right (got: ${JSON.stringify(archiveSummaryLine(2, 0))})`);
+check(archiveSummaryLine(1, 1) === "1 older value in the archive, kept as history.", `the Archive's line for 1 archived, 1 of them older values: the total first, singular right (got: ${JSON.stringify(archiveSummaryLine(1, 1))})`);
+check(archiveSummaryLine(2, 2) === "2 older values in the archive, kept as history.", `the Archive's line for 2 archived, 2 of them older values: the total first, singular right (got: ${JSON.stringify(archiveSummaryLine(2, 2))})`);
+check(archiveSummaryLine(0, 0) === "The archive is empty.", `the Archive's line for 0 archived, 0 of them older values: the total first, singular right (got: ${JSON.stringify(archiveSummaryLine(0, 0))})`);
+check(archiveRowMeta("2026-10-06", "history") === "older value · archived 6 Oct" && archiveReasonLabel("history") === "older value" && !archivedEntryRestorable({ why: "history" }) && archivedEntryRestorable({ why: "superseded" }), `an older value kept as history says so, and offers no Restore (got: ${JSON.stringify(archiveRowMeta("2026-10-06", "history"))})`);
 
 console.log(`memory-card-copy-smoke: ${checks - failed}/${checks} checks passed`);
 if (failed > 0) process.exit(1);

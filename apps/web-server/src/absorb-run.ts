@@ -17,25 +17,32 @@
 //     archive, core, event record) through the entry store.
 //
 // What lives here: the state machine, the loop, the budget pass and the
-// approval write. What does not: the prompt, the grammar, the validator and
+// approval write. What does not: the prompt, the grammar, the decision and
 // the applier (absorb-ops.ts), the entry model (memory-entries.ts), the files
 // (memory-entries-store.ts), and the worker itself (the route injects it).
 
 import {
 	applyFoldOps,
 	buildFoldPrompt,
+	buildFoldUnreadableRetryPrompt,
+	decideFoldOps,
 	EMPTY_FOLD_GUIDANCE,
+	FIRST_READ_NONE,
 	foldGuidanceFromWire,
 	foldGuidanceToWire,
 	parseFoldGuidance,
 	parseFoldOps,
 	summarizeFold,
-	validateFoldOps,
+	type FoldBesideTag,
 	type FoldGuidance,
 	type FoldGuidanceWire,
 	type FoldOp,
 	type FoldRecord,
 } from "./absorb-ops.js";
+import { pageFailureKey, readPageFailures, writePageFailures } from "./absorb-page-failures.js";
+import { connectionDropped, foldPages, prunePageFailureState, type PageDeps, type PageEnding, type PageFailureCode, type PageRead, type PageRetryAsk, type PageTrace, type PagesOutcome } from "./absorb-run-pages.js";
+import { rereadModelKey, rereadPage, rereadTriedOn, selectRereads, withTried, type RereadPage } from "./absorb-reread.js";
+import { fileSessionAsSummary } from "./absorb-summary.js";
 import { ABSORB_EMPTY_RECENT_CONTEXT_PLACEHOLDER, extractRecentContextForAbsorb, parseRecentContextBlocks, recentContextSessions, recentContextWithout, type AbsorbModelLock, type AbsorbRecentContextSession } from "./absorb-consolidation.js";
 import {
 	cloneDocument,
@@ -45,9 +52,11 @@ import {
 	MEMORY_SECTIONS,
 	memoryTopicAddress,
 	memoryTopicAddressKey,
+	hasMustKeepMarker,
 	nextVersionedEntryId,
 	parseMemoryDocument,
 	renderMemoryDocument,
+	withoutMustKeepMarkers,
 	restoreEntries,
 	reviewTargetTokens,
 	type MemoryDocument,
@@ -61,8 +70,9 @@ import {
 	writeMemoryDocument,
 	type MemoryArchiveAppend,
 } from "./memory-entries-store.js";
-import { emptyMemoryUse, readMemoryUse, type MemoryUse } from "./memory-use.js";
-import { recordMaintenanceWorkerCalls } from "./maintenance-diagnostics.js";
+import { textDisagreesWith } from "./memory-duplicates.js";
+import { emptyMemoryUse, readMemoryUse, recordMemoryUse, type MemoryUse } from "./memory-use.js";
+import { recordMaintenanceWorkerCalls, writeMemorizePageRecord } from "./maintenance-diagnostics.js";
 import { IsolatedPersistentAgentWorkerTurnError } from "./persistent-agent-worker-runtime.js";
 import {
 	assertAbsorbSourceFingerprintCurrent,
@@ -82,8 +92,15 @@ import { estimateTokens } from "./token-estimate.js";
 // --- The wire shapes (the API contract, field for field) ----------------------
 
 export type AbsorbRunState = "prepass" | "folding" | "budget" | "ready" | "approving" | "saved" | "cancelled" | "failed";
-export type AbsorbRunSessionOutcome = "pending" | "folding" | "folded" | "dropped" | "failed" | "skipped";
-export type AbsorbRunChangeKind = "added" | "updated" | "superseded" | "closed" | "pinned";
+/**
+ * How a conversation of the run ended. `summarized`: the fold gave nothing
+ * usable, so the approved page itself was filed as notes (absorb-summary.ts);
+ * it leaves Recent Context on approve like `folded`. `failed`: it waits for
+ * next time, which after this slice only a probe-confirmed first failure does.
+ */
+export type AbsorbRunSessionOutcome = "pending" | "folding" | "folded" | "dropped" | "summarized" | "failed" | "skipped";
+/** `history`: an older page's text that disagreed with a newer note, kept in the archive; memory is unchanged, and `after` is the older text. */
+export type AbsorbRunChangeKind = "added" | "updated" | "superseded" | "closed" | "pinned" | "history";
 
 export interface AbsorbRunEntryCard {
 	id: string;
@@ -108,8 +125,26 @@ export interface AbsorbRunChange {
 	after?: string;
 	/** The add that opened a topic the memory did not have: the card tags it "new topic". Absent otherwise. */
 	newTopic?: true;
+	/** An add next to a note the person pinned, or one that may disagree with a note: the card tags it and the automatic save waits. Absent otherwise. */
+	beside?: FoldBesideTag;
+	/** A tagged add: the id of the note it is beside or may disagree with. Never shown. */
+	besideOf?: string;
+	/** A tagged add: that note's first line as the memory holds it now (a later page may have rewritten it), for the line under the row. */
+	besideLine?: string;
+	/** A tagged add: the day that note's text was learned, and this note's own, when known, so the person sees which is newer. */
+	besideLearned?: string;
+	learned?: string;
+	/** A tagged add whose other note, or itself, is going to the archive ("leaving"), whose other note this update closes ("closed") or is no longer in memory ("gone"), or that this update closes later itself ("self-closed"): no Replace is offered. */
+	besideState?: "leaving" | "gone" | "closed" | "self-closed";
+	/** A tagged add the person chose to put in place of the other note: the save gives that note this text. Absent means Keep both. */
+	choice?: "replace";
+	/** With `choice`: the other note's text when the person chose, which it must still read at the save. */
+	choiceText?: string;
 	/** superseded: which value replaced which and why, when the old and the new text disagree on a date, a number or a negation. */
 	reason?: string;
+	/** history: the note the older value yielded to, and its first line as the memory holds it now (absent once it is gone). */
+	of?: string;
+	ofLine?: string;
 }
 
 /** Which pass sent a note to the archive: before any conversation was read (the room was already over), or to make room for what was read. Diagnostics and the smokes read it; the card does not. */
@@ -124,7 +159,7 @@ export type AbsorbRunArchivePhase = "before" | "after";
 export interface AbsorbRunArchiveRow extends AbsorbRunEntryCard {
 	/** The current computation moves it to the archive. */
 	leaving: boolean;
-	/** The person kept it, by id or by topic; a keep by id is pinned on save. */
+	/** The person kept it, by id or by topic, for this save only: a keep never pins a note. */
 	kept: boolean;
 	/** It entered the list after the run was ready — because of a keep, an edit or a limit change — and is leaving in the place of something kept. Cleared when it stops leaving. */
 	instead: boolean;
@@ -180,6 +215,12 @@ export interface AbsorbRun {
 	updatedAt: string;
 	progress: { folded: number; total: number; current?: { id: string; title: string } };
 	sessions: AbsorbRunSessionView[];
+	/**
+	 * The summary notes this run re-reads after its conversations, each row
+	 * keyed by the NOTE's id. They are not conversations: nothing that reads the
+	 * sessions (the count, Recent Context, the record's sessions) reads these.
+	 */
+	rereads: AbsorbRunSessionView[];
 	/** What the prepass took, as it took it. Diagnostics and older smokes read it; the card reads `demotion.entries`, which carries these rows too. */
 	prepass: { demoted: AbsorbRunEntryCard[] };
 	budget: AbsorbRunBudget;
@@ -204,6 +245,13 @@ export interface AbsorbRun {
 	warnings: string[];
 	usage?: { input?: number; output?: number; totalTokens?: number; cost?: number };
 	error?: string;
+	/**
+	 * The run stopped before every conversation was read because the Memory
+	 * model was not answering (the probe failed, or the provider named a rate
+	 * limit). What finished is on the card; the rest wait, and the card offers
+	 * to try again (resume) or to choose another model. Absent otherwise.
+	 */
+	stop?: { kind: "outage"; model: { provider: string; model: string }; cause: AbsorbRunStopCause };
 }
 
 export interface AbsorbRunApprovalResponse extends AbsorbApprovalResponse {
@@ -225,6 +273,12 @@ export interface AbsorbRunApprovalResponse extends AbsorbApprovalResponse {
 	 * superseded texts and finished items.
 	 */
 	archivedForBudget: number;
+	/** How many of those are a note's old text that a newer one took the place of (a fold's rewrite or a Replace), so the saved screen says them apart. */
+	replacedEntries: number;
+	/** Older values kept as history: in the archive, but never a note that left memory, so not among `archivedEntries`. */
+	historyKept: number;
+	/** Summary notes a re-read sorted into topics: archived whole, counted apart, since their words are in memory. */
+	sortedNotes: number;
 	/** The limit the card raised, written to the room's settings by this save. Absent when the save was made against the saved limit. */
 	budgetRaisedTo?: number;
 	/**
@@ -237,13 +291,16 @@ export interface AbsorbRunApprovalResponse extends AbsorbApprovalResponse {
 	rebasedOnto: string[];
 }
 
+/** Why an outage stopped the run: the probe went unanswered, or the provider named a rate limit, a quota or an overload. */
+export type AbsorbRunStopCause = "not-answering" | "busy";
+
 // --- Bounds and sentences ------------------------------------------------------
 
 /** One fold call's hard ceiling — the same eight minutes every maintenance worker gets. */
 export const ABSORB_FOLD_TIMEOUT_MS = 8 * 60 * 1000;
 /** A finished run stays readable this long, so a client that polls late still sees how it ended. */
 export const ABSORB_RUN_RETENTION_MS = 60 * 60 * 1000;
-/** The assessment's own cap, the same one the assessment screen accepts. */
+/** The assessment's own cap, the same one the assessment screen accepts: a longer one runs without a first read. */
 export const ABSORB_RUN_ASSESSMENT_MAX_CHARS = 20_000;
 /**
  * The wait before a call that never came back is asked again.
@@ -254,17 +311,27 @@ export const ABSORB_RUN_ASSESSMENT_MAX_CHARS = 20_000;
 export const ABSORB_FOLD_RETRY_PAUSE_MS = 2_000;
 
 /**
- * The failure reasons a session carries. Each is ONE cause sentence, ending in
- * a full stop; the consequence ("It stays for next time.") belongs to the
- * screen, which appends it to every failure reason alike, so the two halves are
- * never written twice or in two voices.
+ * One fold call's output cap. A fold is a handful of operations; the cap stops
+ * a runaway reply, and the reader salvages its last complete fence. It is
+ * inert on the ChatGPT subscription, whose request carries no output field.
  */
-export const ABSORB_FOLD_REFUSED_TWICE = "This session's update did not come back in a form the memory could accept.";
+export const ABSORB_FOLD_MAX_OUTPUT_TOKENS = 16_000;
+/** The probe's own ceiling: a two-word answer, so far short of the fold's eight minutes. */
+export const ABSORB_PROBE_TIMEOUT_MS = 45_000;
+/** The probe's one fixed prompt, so its diagnostics records compare across runs. */
+export const ABSORB_PROBE_PROMPT = "Reply with OK";
+
+/**
+ * The failure reasons a session that WAITS carries. Each is ONE cause
+ * sentence, ending in a full stop; the consequence ("It stays for next time.")
+ * belongs to the screen, which appends it to every failure reason alike, so
+ * the two halves are never written twice or in two voices.
+ */
 /** The turn was stopped: its own eight-minute ceiling, or a stall the ceiling caught. */
 export const ABSORB_FOLD_TIMED_OUT = "The model did not answer within the time limit, so this session waits for the next update.";
-/** The provider failed mid-turn: a dropped connection ("terminated"), an expired sign-in, an HTTP error. */
+/** The connection dropped mid-turn ("terminated", a reset socket, a failed fetch). */
 export const ABSORB_FOLD_CONNECTION_LOST = "The connection to the model dropped while this session was being added, so it waits for the next update.";
-/** Anything else the call threw. A person is told what it means for their memory, not what the stack said. */
+/** Anything else the call threw: a provider error such as a content filter or a refused request. A person is told what it means for their memory, not what the stack said. */
 export const ABSORB_FOLD_WORKER_FAILED = "The model could not add this session this time, so it waits for the next update.";
 
 /**
@@ -297,14 +364,18 @@ const FOLD_FAILURE_TWICE = new Map<string, string>([
  * their memory. What a person needs to know is what happened to this session
  * and what becomes of it, so the cause is mapped to one of three sentences and
  * the provider's own words go to the diagnostics record, which is redacted and
- * meant to be read by whoever is fixing it.
+ * meant to be read by whoever is fixing it. The worker tells only "error" from
+ * "aborted", so a dropped connection is told apart by its words; any other
+ * provider error (a content filter, a refused request) is not a connection.
  */
 function foldFailureSentence(error: unknown): string {
 	if (error instanceof IsolatedPersistentAgentWorkerTurnError) {
-		return error.stopReason === "aborted" ? ABSORB_FOLD_TIMED_OUT : ABSORB_FOLD_CONNECTION_LOST;
+		if (error.stopReason === "aborted") return ABSORB_FOLD_TIMED_OUT;
+		return connectionDropped(error.providerMessage ?? "") ? ABSORB_FOLD_CONNECTION_LOST : ABSORB_FOLD_WORKER_FAILED;
 	}
 	return ABSORB_FOLD_WORKER_FAILED;
 }
+
 
 /**
  * Whether a failed call is worth asking again. A dropped connection, an
@@ -342,25 +413,41 @@ export function setAbsorbFoldRetryPauseForTests(ms: number): void {
 	foldRetryPauseMs = Math.max(0, ms);
 }
 
-/** Waits out the retry pause, and gives it up the moment the run is cancelled. */
-function foldRetryPause(signal: AbortSignal): Promise<void> {
-	if (foldRetryPauseMs <= 0 || signal.aborted) return Promise.resolve();
+/** The long pause (a rate limit's or a blip's) as a smoke sets it: null waits the real one (20 to 60 seconds). */
+let rateLimitPauseOverrideMs: number | null = null;
+
+/** Test seam: the wait before a rate-limited fold call, or one that hit a blip, is asked again, in milliseconds, or null for the real one. */
+export function setAbsorbFoldRateLimitPauseForTests(ms: number | null): void {
+	rateLimitPauseOverrideMs = ms === null ? null : Math.max(0, ms);
+}
+
+/** Waits out a retry pause (the short one, or `longMs` for a rate limit or a blip), and gives it up the moment the run is cancelled. */
+function foldRetryPause(signal: AbortSignal, longMs?: number): Promise<void> {
+	const pauseMs = longMs === undefined ? foldRetryPauseMs : rateLimitPauseOverrideMs ?? longMs;
+	if (pauseMs <= 0 || signal.aborted) return Promise.resolve();
 	return new Promise<void>((resolve) => {
 		const done = () => {
 			clearTimeout(timer);
 			signal.removeEventListener("abort", done);
 			resolve();
 		};
-		const timer = setTimeout(done, foldRetryPauseMs);
+		const timer = setTimeout(done, pauseMs);
 		signal.addEventListener("abort", done);
 	});
 }
 
-function truncatedFoldSentence(generated: { usage?: { output?: number }; modelMaxOutputTokens?: number }): string {
-	const produced = generated.usage?.output;
-	const ceiling = generated.modelMaxOutputTokens;
-	const numbers = produced ? ` (the model returned ${produced}${ceiling ? ` of a maximum ${ceiling}` : ""} output tokens)` : "";
-	return `This session's update was cut off at the model's output limit${numbers}.`;
+/** What a failed call's error says about the page's record: its own ceiling, the provider, or anything else. */
+function foldFailureCode(error: unknown): PageFailureCode {
+	if (error instanceof IsolatedPersistentAgentWorkerTurnError) return error.stopReason === "aborted" ? "timed-out" : "provider-error";
+	return "worker-failed";
+}
+
+export { connectionDropped };
+
+/** The provider's own words for a failure, which the outage rule reads. Never shown to a person. */
+function foldFailureMessage(error: unknown): string {
+	if (error instanceof IsolatedPersistentAgentWorkerTurnError) return error.providerMessage ?? error.message;
+	return (error as Error)?.message ?? String(error);
 }
 
 function oneLine(value: string, max = 240): string {
@@ -448,49 +535,17 @@ function coreContextOf(doc: MemoryDocument): string {
 	return renderMemoryDocument(doc, "context", { entryIds: true, sections: MEMORY_SECTIONS }).trim();
 }
 
-/**
- * The area map with each entry's `updated` date beside its `saved` one. The
- * entry model's map carries the saved date only; the fold prompt writes both
- * into the addresses, because a session folded late (its call failed last run)
- * has to be weighed against entries that a newer session has since rewritten,
- * and the day of that rewrite is the date that decides.
- */
-function areasWithDates(doc: MemoryDocument) {
-	const updatedById = new Map<string, string>();
-	const fromById = new Map<string, string>();
-	for (const topic of doc.topics) for (const entry of topic.entries) {
-		if (!entry.id) continue;
-		if (entry.updated) updatedById.set(entry.id, entry.updated);
-		if (entry.from) fromById.set(entry.id, entry.from);
-	}
-	return listAreas(doc).map((row) => {
-		const updated = updatedById.get(row.id);
-		// No conversation wrote it: the saved date is the day the upgrade or a
-		// hand edit gave it an id, which is a floor on its age, not its age.
-		const since = fromById.has(row.id) ? {} : { since: true as const };
-		return updated ? { ...row, updated, ...since } : { ...row, ...since };
-	});
-}
-
-/**
- * The Retry Notice, the same shape every maintenance worker's retry takes: the
- * original prompt, the reasons as they were named, then the ask again. One
- * refused reply per session earns one of these, and never two notices stacked
- * on one prompt — a call that never came back repeats the prompt it was given,
- * this one included, rather than adding a second notice to it.
- */
-export function buildFoldRetryPrompt(prompt: string, reasons: string[]): string {
-	return `${prompt.trimEnd()}\n\n---\n\n## Retry Notice\n\nYour previous operations were refused:\n\n${reasons.map((reason) => `- ${reason}`).join("\n")}\n\nAnswer again with the narrative and exactly one \`\`\`json fence holding \`{"ops": [ ... ]}\`, resolving every reason above. Copy entry ids exactly as they are listed, and name only what this session changes.\n`;
-}
-
 // --- The run's private state ----------------------------------------------------
 
 export type AbsorbRunGenerate = (
 	prompt: string,
 	model: AbsorbModelLock,
-	/** The fold is a single-shot transform: reasoning tokens would count against the output cap and starve the reply, so it asks for reasoning off. */
-	options: { signal: AbortSignal; timeoutMs: number; thinkingLevel: "low" },
+	/** The fold is a single-shot transform: it asks for low reasoning, so reasoning tokens do not starve the reply under its output cap. */
+	options: { signal: AbortSignal; timeoutMs: number; thinkingLevel: "low"; maxTokens: number },
 ) => Promise<AbsorbGenerateResult>;
+
+/** The probe's call: the fixed question on the same model, with its own short ceiling, at low reasoning so a reasoning model does not think its way to that ceiling. */
+export type AbsorbRunProbe = (prompt: string, model: AbsorbModelLock, options: { signal: AbortSignal; timeoutMs: number; thinkingLevel: "low" }) => Promise<AbsorbGenerateResult>;
 
 export interface AbsorbRunStartInput {
 	agentId: string;
@@ -498,6 +553,12 @@ export interface AbsorbRunStartInput {
 	guidance?: FoldGuidance;
 	model: AbsorbModelLock;
 	generate: AbsorbRunGenerate;
+	/**
+	 * Asks the Memory model the tiny fixed question when a fold call failed, to
+	 * tell a page's failure from an outage. Absent (a smoke that scripts no
+	 * probe), the model reads as answering.
+	 */
+	probe?: AbsorbRunProbe;
 	/**
 	 * The memory the assessment and the discussion were built on. When the client
 	 * sends it, a run refuses to start on a memory that has changed underneath —
@@ -530,12 +591,20 @@ interface RunSlot {
 	sessionsById: Map<string, AbsorbRecentContextSession>;
 	/** The document as it stands after the folds and after closed items left — what keep/budget recompute from. */
 	postFoldDoc: MemoryDocument | null;
-	/** The document as it will be written: post-fold, post-demotion, keeps pinned. */
+	/** The document as it will be written: post-fold, post-demotion, the kept notes back in. */
 	candidateDoc: MemoryDocument | null;
 	/** What the prepass took, so the folds read a memory under its limit. Every recompute puts these back and ranks them again; what still leaves is in `demotionArchive`. */
 	prepassArchive: RankedArchiveAppend[];
 	/** The texts the folds replaced; a row whose old and new text disagree on a value carries the reason the new one won. */
 	supersededArchive: RankedArchiveAppend[];
+	/** The older values the folds kept as history: an older page's text that disagreed with a newer note. */
+	historyArchive: MemoryArchiveAppend[];
+	/** The summary notes a re-read sorted, each archived whole: its row is the only full copy of the page. */
+	sortedArchive: MemoryArchiveAppend[];
+	/** The Memory models, by note id, whose re-read of a summary note ended with an answer: the save writes them into `tried`. */
+	rereadTried: Map<string, Set<string>>;
+	/** How many re-read pages this run has started: the prompt's "N of M" for them. */
+	rereadsStarted: number;
 	closedArchive: MemoryArchiveAppend[];
 	demotionArchive: RankedArchiveAppend[];
 	/** The archive list, by note id, for the life of the run: rows are added and re-flagged, never removed. */
@@ -549,6 +618,17 @@ interface RunSlot {
 	 */
 	idleSince: number | null;
 	work: Promise<void> | null;
+	/** What the run was started with: a resume folds the waiting pages with the same model, first read and guidance. */
+	input: AbsorbRunStartInput;
+	guidance: FoldGuidance;
+	/** The working document while pages fold, and its id counter. */
+	workingDoc: MemoryDocument | null;
+	nextEntryNumber: number;
+	/** The kept notes a resume pinned for its folds only: a change to one is added beside it, untagged, since the person kept it and did not pin it. */
+	keptForFolds?: Set<string>;
+	/** How many pages this run has started, across a resume: the prompt's "session N of M". */
+	pagesStarted: number;
+	usage: { input: number; output: number; totalTokens: number; cost: number };
 }
 
 const RUNS = new Map<string, RunSlot>();
@@ -585,8 +665,10 @@ function touch(slot: RunSlot, now: Date): void {
 	slot.run.updatedAt = now.toISOString();
 }
 
+/** Ends the run. A run that ended has nothing left to try again, so an outage stop goes with it. */
 function finish(slot: RunSlot, state: AbsorbRunState, now: Date, error?: string): void {
 	slot.run.state = state;
+	delete slot.run.stop;
 	if (error) slot.run.error = error;
 	slot.idleSince = Date.now();
 	touch(slot, now);
@@ -629,6 +711,7 @@ export function startAbsorbRun(input: AbsorbRunStartInput): AbsorbRun {
 		updatedAt: now.toISOString(),
 		progress: { folded: 0, total: 0 },
 		sessions: [],
+		rereads: [],
 		prepass: { demoted: [] },
 		budget: { before: 0, after: 0, budgetTokens: savedBudgetTokens, savedBudgetTokens, overBudgetAfter: false, ceilingTokens: MEMORY_BUDGET_MAX_TOKENS },
 		demotion: { entries: [], keepIds: [], keepTopics: [], overageTokens: 0, protectedOpenItems: 0, counts: { leaving: 0, kept: 0, instead: 0, staying: 0 } },
@@ -651,11 +734,21 @@ export function startAbsorbRun(input: AbsorbRunStartInput): AbsorbRun {
 		candidateDoc: null,
 		prepassArchive: [],
 		supersededArchive: [],
+		historyArchive: [],
+		sortedArchive: [],
+		rereadTried: new Map(),
+		rereadsStarted: 0,
 		closedArchive: [],
 		demotionArchive: [],
 		archiveRows: new Map(),
 		idleSince: null,
 		work: null,
+		input,
+		guidance: input.guidance ?? { ...EMPTY_FOLD_GUIDANCE, pin: [], drop: [], corrections: [], topics: [], instructions: [] },
+		workingDoc: null,
+		nextEntryNumber: 0,
+		pagesStarted: 0,
+		usage: { input: 0, output: 0, totalTokens: 0, cost: 0 },
 	};
 	RUNS.set(agentId, slot);
 	slot.work = performRun(slot, input, nowFn).catch((error) => {
@@ -669,7 +762,7 @@ export function startAbsorbRun(input: AbsorbRunStartInput): AbsorbRun {
 async function performRun(slot: RunSlot, input: AbsorbRunStartInput, nowFn: () => Date): Promise<void> {
 	const run = slot.run;
 	const agentId = run.agentId;
-	const guidance: FoldGuidance = input.guidance ?? { ...EMPTY_FOLD_GUIDANCE, pin: [], drop: [], corrections: [], topics: [], instructions: [] };
+	const guidance = slot.guidance;
 
 	// --- prepass ---------------------------------------------------------------
 	// A file that has never carried entry ids is migrated IN MEMORY and nothing
@@ -706,9 +799,9 @@ async function performRun(slot: RunSlot, input: AbsorbRunStartInput, nowFn: () =
 	});
 	run.progress.total = run.sessions.filter((session) => session.outcome === "pending").length;
 
-	// The user's pins are applied to the working document first, so the prepass
-	// demotion below can never take one: keeping is pinning, and a pin is the
-	// user's own.
+	// The pins the person asked for in the discussion are applied to the
+	// working document first, so the prepass demotion below can never take one:
+	// a pin is the person's own.
 	const pinIds = new Set(guidance.pin);
 	if (pinIds.size > 0) {
 		doc = cloneDocument(doc);
@@ -731,178 +824,49 @@ async function performRun(slot: RunSlot, input: AbsorbRunStartInput, nowFn: () =
 		publishArchiveList(slot, doc);
 		doc = demoted.doc;
 	}
+	// The summary notes this run re-reads are chosen now, from the memory the
+	// folds start from: a note the prepass sent to the archive is not read, as
+	// the budget pass would bring it back whole, and a conversation this run
+	// files as its summary waits for a later run. They ride only on a run that
+	// has a conversation to read.
+	if (run.progress.total > 0) {
+		run.rereads = selectRereads(doc, input.model).flatMap((note) => {
+			const page = rereadPage(doc, note.id);
+			return page ? [{ id: page.id, title: page.title, date: page.date, outcome: "pending" as const, attempts: 0 }] : [];
+		});
+	}
 	touch(slot, nowFn());
 
 	// --- folding ----------------------------------------------------------------
 	run.state = "folding";
 	touch(slot, nowFn());
-	const usage = { input: 0, output: 0, totalTokens: 0, cost: 0 };
-	let nextEntryNumber = doc.nextEntryNumber;
-	let index = 0;
-	for (const view of run.sessions) {
-		if (view.outcome !== "pending") continue;
-		if (slot.controller.signal.aborted) break;
-		const session = slot.sessionsById.get(view.id)!;
-		index += 1;
-		view.outcome = "folding";
-		run.progress.current = { id: view.id, title: view.title };
-		touch(slot, nowFn());
-
-		const areas = areasWithDates(doc);
-		const assembly = buildFoldPrompt({
-			agentId,
-			model: input.model,
-			coreContext: coreContextOf(doc),
-			areas,
-			assessmentMarkdown: input.assessmentMarkdown,
-			guidance,
-			session: { id: session.id, text: session.text, date: session.date },
-			sessionIndex: index,
-			sessionCount: run.progress.total,
-			now: nowFn(),
-		});
-		try {
-			refuseOversizedMaintenancePrompt({
-				agentId,
-				processLabel: "Memorize fold",
-				model: input.model,
-				promptEstimatedTokens: assembly.telemetry.promptEstimatedTokens,
-				window: input.resolveModelWindow?.(input.model),
-				guidance: "Run Review to shrink stable memory, or choose a memory model with a larger window in Room settings, Model, then Memorize again.",
-			});
-		} catch (error) {
-			view.outcome = "failed";
-			view.reason = endsAsSentence((error as Error).message);
-			touch(slot, nowFn());
-			continue;
-		}
-
-		const diagnostics = recordMaintenanceWorkerCalls<AbsorbModelLock, AbsorbGenerateResult>(
-			{ roomRootDir: createPersistentAgentInstance(agentId).rootDir, agentId, process: "memorize-fold", roomText: session.text },
-			(prompt, model) => input.generate(prompt, model, { signal: slot.controller.signal, timeoutMs: ABSORB_FOLD_TIMEOUT_MS, thinkingLevel: "low" }),
-		);
-
-		let prompt = assembly.prompt;
-		let ops: FoldOp[] = [];
-		let refusals: string[] = [];
-		let failed: string | null = null;
-		// THE RULE, for one session: two calls — the first, and one retry of a
-		// reply the memory refused. A call that never came back at all (a dropped
-		// connection, a sign-in that expired) buys ONE call on top of that, once
-		// per session, after a short pause, with the same prompt — because a call
-		// that never came back said nothing about this session, and asking again
-		// usually lands. A turn stopped at its eight-minute ceiling is the one
-		// failure that is NOT asked again: the second ask would be another eight
-		// minutes, and the session waits for next time after one. So a session
-		// costs at most three calls, and never more than one retry of either kind.
-		let maxAttempts = 2;
-		let retriedAfterThrow = false;
-		let firstThrowSentence = "";
-		for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-			view.attempts = attempt;
-			touch(slot, nowFn());
-			let generated: AbsorbGenerateResult;
-			try {
-				generated = await diagnostics.generate(prompt, input.model);
-			} catch (error) {
-				// A worker failure (timeout, provider error, an aborted turn) costs
-				// this one session: its reason is what that failure means for the
-				// memory, never the runtime's own sentence, and the loop carries on
-				// with the next session.
-				const sentence = foldFailureSentence(error);
-				// A cancelled run is not a failure to retry: the session goes back to
-				// waiting, untouched, and the loop stops below.
-				if (slot.controller.signal.aborted) { failed = sentence; break; }
-				if (!foldFailureRetryable(error)) { failed = sentence; break; }
-				if (!retriedAfterThrow) {
-					retriedAfterThrow = true;
-					maxAttempts = 3;
-					firstThrowSentence = sentence;
-					await foldRetryPause(slot.controller.signal);
-					if (slot.controller.signal.aborted) { failed = sentence; break; }
-					// The call that never came back is recorded as retried once the
-					// retry is actually going to happen; the provider's own words stay
-					// on that record either way.
-					diagnostics.annotate({ outcome: "retried" });
-					continue;
-				}
-				failed = foldFailureSentenceAfterRetry(firstThrowSentence, sentence);
-				break;
-			}
-			usage.input += generated.usage?.input ?? 0;
-			usage.output += generated.usage?.output ?? 0;
-			usage.totalTokens += generated.usage?.totalTokens ?? 0;
-			usage.cost += generated.usage?.cost ?? 0;
-			run.usage = { ...usage };
-			if (generated.truncated) {
-				failed = truncatedFoldSentence(generated);
-				diagnostics.annotate({ outcome: "refused" });
-				break;
-			}
-			const parsed = parseFoldOps(generated.text);
-			ops = parsed.ops;
-			refusals = parsed.problems.length > 0 ? parsed.problems : validateFoldOps(parsed.ops, areas, { id: session.id, text: session.text });
-			if (refusals.length === 0) {
-				diagnostics.annotate({ outcome: "accepted" });
-				break;
-			}
-			diagnostics.annotate({ outcome: "refused", validatorErrors: refusals });
-			if (attempt >= maxAttempts) break;
-			prompt = buildFoldRetryPrompt(assembly.prompt, refusals);
-		}
-
-		if (failed) {
-			view.outcome = slot.controller.signal.aborted ? "pending" : "failed";
-			if (view.outcome === "failed") view.reason = failed;
-			touch(slot, nowFn());
-			if (slot.controller.signal.aborted) break;
-			continue;
-		}
-		if (refusals.length > 0) {
-			view.outcome = "failed";
-			view.reason = ABSORB_FOLD_REFUSED_TWICE;
-			touch(slot, nowFn());
-			continue;
-		}
-
-		const applied = applyFoldOps(doc, ops, { sessionId: session.id, savedDate: slot.savedDate, nextEntryNumber, ...(session.date ? { sessionDate: session.date } : {}), sessionDateOf: (id) => slot.sessionsById.get(id)?.date || undefined });
-		doc = applied.doc;
-		nextEntryNumber = applied.nextEntryNumber;
-		const where = addressBook(doc);
-		// The card's counts, from what was APPLIED, never from the model's prose.
-		// Whether the session was dropped is the outcome below, not a count, so it
-		// does not ride in the summary the card reads.
-		const counted = summarizeFold(applied.record);
-		view.summary = { added: counted.added, updated: counted.updated, superseded: counted.superseded, closed: counted.closed };
-		view.changes = foldChanges(applied.record, where);
-		if (applied.record.dropped) {
-			view.outcome = "dropped";
-			view.reason = endsAsSentence(applied.record.dropped.reason);
-		} else {
-			view.outcome = "folded";
-		}
-
-		collectSupersededArchive(slot, applied.record, doc, where);
-		run.progress.folded += 1;
-		touch(slot, nowFn());
-	}
-	run.progress.current = undefined;
-
+	slot.workingDoc = doc;
+	slot.nextEntryNumber = doc.nextEntryNumber;
+	await foldWaitingPages(slot, nowFn);
 	if (slot.controller.signal.aborted) {
 		finish(slot, "cancelled", nowFn());
 		return;
 	}
+	settleRun(slot, nowFn);
+}
 
-	// --- budget -------------------------------------------------------------------
+/**
+ * The budget pass after the folds, and the run is ready: items the folds
+ * closed leave the core, the demotion is derived, and the card waits on a
+ * person.
+ */
+function settleRun(slot: RunSlot, nowFn: () => Date): void {
+	const run = slot.run;
 	run.state = "budget";
 	touch(slot, nowFn());
 	// Items the folds closed leave the core in the same run that closed them —
 	// "done items leave the core on the next Memorize", and this IS that
 	// Memorize. They go before the demotion so the budget numbers the card shows
 	// are the numbers the write produces.
-	doc = removeClosedItems(slot, doc);
-	doc.nextEntryNumber = nextEntryNumber;
+	const doc = removeClosedItems(slot, slot.workingDoc!);
+	doc.nextEntryNumber = slot.nextEntryNumber;
 	slot.postFoldDoc = doc;
+	slot.workingDoc = null;
 	recomputeDemotion(slot);
 	run.state = "ready";
 	// A ready run is waiting on a person, and a person can close the tab. Its
@@ -910,6 +874,309 @@ async function performRun(slot: RunSlot, input: AbsorbRunStartInput, nowFn: () =
 	// finished run instead of holding the room for the life of the process.
 	slot.idleSince = Date.now();
 	touch(slot, nowFn());
+}
+
+/** The applier the run calls; a smoke swaps it to prove an apply that throws costs one page, not the run. */
+let applyFold: typeof applyFoldOps = applyFoldOps;
+
+/** Test seam: the fold applier, or null for the real one. */
+export function setAbsorbFoldApplyForTests(apply: typeof applyFoldOps | null): void {
+	applyFold = apply ?? applyFoldOps;
+}
+
+/** The sentence a waiting page carries: its failure, said "twice" when the retried call failed the same way. */
+function waitingSentence(sentences: string[]): string {
+	if (sentences.length === 0) return ABSORB_FOLD_WORKER_FAILED;
+	if (sentences.length === 1) return sentences[0];
+	return foldFailureSentenceAfterRetry(sentences[0], sentences[sentences.length - 1]);
+}
+
+interface RunPage {
+	view: AbsorbRunSessionView;
+	/** A re-read's session is its note's: the note id, its text and its learned day, never a Recent Context entry. */
+	session: AbsorbRecentContextSession;
+	/** Set on a summary note's re-read: the note, and the memory without it that its fold reads and applies to. */
+	reread?: RereadPage;
+}
+
+/** The records a re-read page never carries: it is not a conversation, so it holds no failure record and no throttle note. */
+const NO_PAGE_RECORDS = { records: new Map(), throttled: new Map() };
+
+/** The key a page's record is written under; a re-read's can never be a conversation's. */
+function runPageKey(page: RunPage): string {
+	return page.reread ? `reread:${page.view.id}` : pageFailureKey(page.session);
+}
+
+/**
+ * Folds every page still waiting on the card through the page core
+ * (absorb-run-pages.ts), which decides how each one ends. This function owns
+ * what the core does not: the prompts, the working document, the card rows,
+ * the diagnostics and the records file. A resume calls it again on the pages
+ * an outage left waiting.
+ */
+async function foldWaitingPages(slot: RunSlot, nowFn: () => Date): Promise<PagesOutcome> {
+	const run = slot.run;
+	const input = slot.input;
+	const agentId = run.agentId;
+	const instance = createPersistentAgentInstance(agentId);
+	const signal = slot.controller.signal;
+	const pages: RunPage[] = run.sessions.filter((view) => view.outcome === "pending").map((view) => ({ view, session: slot.sessionsById.get(view.id)! }));
+	const records = prunePageFailureState(readPageFailures(instance.runtimeDir()), [...slot.sessionsById.values()].map(pageFailureKey));
+	// A window that cannot be looked up is unknown, never a reason on the card.
+	let window: CheckpointModelWindow | undefined;
+	try {
+		window = input.resolveModelWindow?.(input.model);
+	} catch {
+		window = undefined;
+	}
+	let current: { page: RunPage; areas: ReturnType<typeof listAreas>; prompt: string; promptEstimatedTokens: number; diagnostics: ReturnType<typeof recordMaintenanceWorkerCalls<AbsorbModelLock, AbsorbGenerateResult>>; throwSentences: string[] } | null = null;
+	const at = () => current!;
+
+	/** Runs one change to the working copy, and puts the copy back as it was when the change throws. */
+	const changeWorkingCopy = <T>(page: RunPage, change: () => T): T => {
+		const before = { doc: slot.workingDoc, next: slot.nextEntryNumber, superseded: slot.supersededArchive.length, history: slot.historyArchive.length, sorted: slot.sortedArchive.length };
+		try {
+			return change();
+		} catch (error) {
+			slot.workingDoc = before.doc;
+			slot.nextEntryNumber = before.next;
+			slot.supersededArchive.length = before.superseded;
+			slot.historyArchive.length = before.history;
+			slot.sortedArchive.length = before.sorted;
+			delete page.view.summary;
+			delete page.view.changes;
+			delete page.view.reason;
+			throw error;
+		}
+	};
+	/** A page's changes, counted from what was APPLIED, never from the model's prose. */
+	const commit = (page: RunPage, applied: { doc: MemoryDocument; record: FoldRecord; nextEntryNumber: number }) => {
+		const where = addressBook(applied.doc);
+		const counted = summarizeFold(applied.record);
+		page.view.summary = { added: counted.added, updated: counted.updated, superseded: counted.superseded, closed: counted.closed };
+		page.view.changes = foldChanges(applied.record, where);
+		collectSupersededArchive(slot, applied.record, applied.doc, where);
+		for (const row of applied.record.history) slot.historyArchive.push({ entry: { id: row.id, kind: row.kind, saved: slot.savedDate, from: applied.record.sessionId, pinned: false, text: row.text, ...(row.learned ? { learned: row.learned } : {}) }, why: "history", until: row.until, topic: row.topic, section: row.section, archived: slot.savedDate });
+		slot.workingDoc = applied.doc;
+		slot.nextEntryNumber = applied.nextEntryNumber;
+	};
+
+	const rereadKey = rereadModelKey(input.model);
+	const deps: PageDeps<RunPage> = {
+		key: runPageKey,
+		model: input.model,
+		now: nowFn,
+		cancelled: () => signal.aborted,
+		onPageStart: (page) => {
+			if (page.reread) slot.rereadsStarted += 1;
+			else slot.pagesStarted += 1;
+			page.view.outcome = "folding";
+			run.progress.current = { id: page.view.id, title: page.view.title };
+			// A re-read reads memory without its own note, so what it gives back is never the same as the note.
+			const doc = page.reread?.doc ?? slot.workingDoc!;
+			const areas = listAreas(doc);
+			const assembly = buildFoldPrompt({
+				agentId,
+				model: input.model,
+				coreContext: coreContextOf(doc),
+				areas,
+				assessmentMarkdown: input.assessmentMarkdown,
+				guidance: slot.guidance,
+				session: { id: page.session.id, text: page.session.text, date: page.session.date },
+				// A re-read counts among the re-reads, never among the conversations.
+				sessionIndex: page.reread ? slot.rereadsStarted : slot.pagesStarted,
+				sessionCount: page.reread ? run.rereads.length : run.progress.total,
+				now: nowFn(),
+			});
+			const diagnostics = recordMaintenanceWorkerCalls<AbsorbModelLock, AbsorbGenerateResult>(
+				{ roomRootDir: instance.rootDir, agentId, process: "memorize-fold", roomText: page.session.text },
+				(prompt, model) => input.generate(prompt, model, { signal, timeoutMs: ABSORB_FOLD_TIMEOUT_MS, thinkingLevel: "low", maxTokens: ABSORB_FOLD_MAX_OUTPUT_TOKENS }),
+			);
+			current = { page, areas, prompt: assembly.prompt, promptEstimatedTokens: assembly.telemetry.promptEstimatedTokens, diagnostics, throwSentences: [] };
+			touch(slot, nowFn());
+		},
+		onAttempt: (page, attempt) => {
+			page.view.attempts = attempt;
+			touch(slot, nowFn());
+		},
+		oversize: () => {
+			try {
+				refuseOversizedMaintenancePrompt({ agentId, processLabel: "Memorize fold", model: input.model, promptEstimatedTokens: at().promptEstimatedTokens, window, guidance: "" });
+				return false;
+			} catch {
+				return true;
+			}
+		},
+		call: async (_page, retry: PageRetryAsk | null) => {
+			const base = at().prompt;
+			const prompt = retry === null ? base : buildFoldUnreadableRetryPrompt(base, retry.cutOff);
+			let generated: AbsorbGenerateResult;
+			try {
+				generated = await at().diagnostics.generate(prompt, input.model);
+			} catch (error) {
+				at().throwSentences.push(foldFailureSentence(error));
+				throw error;
+			}
+			slot.usage.input += generated.usage?.input ?? 0;
+			slot.usage.output += generated.usage?.output ?? 0;
+			slot.usage.totalTokens += generated.usage?.totalTokens ?? 0;
+			slot.usage.cost += generated.usage?.cost ?? 0;
+			run.usage = { ...slot.usage };
+			return { text: generated.text, ...(generated.truncated ? { truncated: true } : {}) };
+		},
+		read: (page, reply): PageRead => {
+			const parsed = parseFoldOps(reply.text, { truncated: reply.truncated });
+			if (parsed.unreadable) {
+				at().diagnostics.annotate({ outcome: "refused", validatorErrors: parsed.problems });
+				return { usable: false, unreadable: parsed.unreadable };
+			}
+			const decided = decideFoldOps(parsed.items, at().areas, page.session, slot.keptForFolds ? { keptForFolds: slot.keptForFolds } : {});
+			at().diagnostics.annotate({ outcome: decided.landed ? "accepted" : "refused", fold: { ops: decided.decisions.map(({ index, op, fate, codes }) => ({ i: index, op, fate, ...(codes.length > 0 ? { codes } : {}) })), pairs: decided.pairs } });
+			const earlier = parsed.earlierFence ? { earlierFence: true as const } : {};
+			return decided.landed ? { usable: true, ops: decided.ops, ...earlier } : { usable: false, nothingLands: true, ...earlier };
+		},
+		apply: (page, ops) => changeWorkingCopy(page, () => {
+			const reread = page.reread;
+			if (reread) {
+				// Its notes say they came from the note's conversation, and carry its day.
+				const applied = applyFold(reread.doc, ops as FoldOp[], { sessionId: reread.from ?? "", savedDate: slot.savedDate, nextEntryNumber: slot.nextEntryNumber, ...(reread.date ? { sessionDate: reread.date } : {}) });
+				// A lone drop sorts nothing: the note stays where it was.
+				if (applied.record.dropped) {
+					page.view.reason = endsAsSentence(applied.record.dropped.reason);
+					return "dropped";
+				}
+				// Sorted: memory is the fold's, without the note, and the save
+				// archives the note whole, so what the reply did not give back
+				// stays restorable.
+				commit(page, applied);
+				const { disagrees: _pair, ...note } = reread.note;
+				slot.sortedArchive.push({ entry: note, why: "sorted", topic: reread.topic, section: reread.section, archived: slot.savedDate });
+				// A note it was kept beside no longer names it: the pair is the
+				// point it gave back, which the save marks again when it is kept.
+				for (const topic of slot.workingDoc!.topics) {
+					for (const entry of topic.entries) {
+						if (!entry.disagrees) continue;
+						const others = entry.disagrees.split(",").filter((id) => id !== reread.id);
+						if (others.length > 0) entry.disagrees = others.join(",");
+						else delete entry.disagrees;
+					}
+				}
+				return "folded";
+			}
+			const session = page.session;
+			const applied = applyFold(slot.workingDoc!, ops as FoldOp[], { sessionId: session.id, savedDate: slot.savedDate, nextEntryNumber: slot.nextEntryNumber, ...(session.date ? { sessionDate: session.date } : {}) });
+			commit(page, applied);
+			if (!applied.record.dropped) return "folded";
+			page.view.reason = endsAsSentence(applied.record.dropped.reason);
+			return "dropped";
+		}),
+		fileSummary: (page) => changeWorkingCopy(page, () => {
+			// A summary is never filed as a summary of itself: the note stays.
+			if (page.reread) return;
+			const session = page.session;
+			commit(page, fileSessionAsSummary(slot.workingDoc!, { id: session.id, title: session.title, text: session.text }, { savedDate: slot.savedDate, nextEntryNumber: slot.nextEntryNumber, ...(session.date ? { sessionDate: session.date } : {}) }));
+		}),
+		probe: async () => {
+			const probe = input.probe;
+			if (!probe) return true;
+			const diagnostics = recordMaintenanceWorkerCalls<AbsorbModelLock, AbsorbGenerateResult>(
+				{ roomRootDir: instance.rootDir, agentId, process: "memorize-probe" },
+				(prompt, model) => probe(prompt, model, { signal, timeoutMs: ABSORB_PROBE_TIMEOUT_MS, thinkingLevel: "low" }),
+			);
+			try {
+				await diagnostics.generate(ABSORB_PROBE_PROMPT, input.model);
+				return true;
+			} catch {
+				return false;
+			}
+		},
+		retryable: foldFailureRetryable,
+		failureMessage: foldFailureMessage,
+		failureCode: foldFailureCode,
+		pause: async (longMs) => {
+			// The call that never came back is recorded as retried once the retry
+			// is actually going to happen; the provider's own words stay on it.
+			at().diagnostics.annotate({ outcome: "retried" });
+			await foldRetryPause(signal, longMs);
+		},
+		onPageEnd: (page, ending: PageEnding, trace: PageTrace) => {
+			const view = page.view;
+			switch (ending.kind) {
+				case "folded":
+				case "dropped":
+				case "summarized":
+					view.outcome = ending.kind;
+					if (ending.kind !== "dropped") delete view.reason;
+					if (!page.reread) run.progress.folded += 1;
+					break;
+				case "waiting":
+					view.outcome = "failed";
+					view.reason = ending.reason === "first-failure" ? waitingSentence(at().throwSentences) : ABSORB_FOLD_WORKER_FAILED;
+					break;
+				case "outage":
+				case "cancelled":
+					// Neither is the page's doing: it goes back to waiting, untouched.
+					view.outcome = "pending";
+					delete view.reason;
+					break;
+			}
+			// The model answered for this note, or its size is too large for it: the
+			// save records that it tried. An outage or a cancel tried nothing.
+			if (page.reread && rereadTriedOn(ending)) {
+				const models = slot.rereadTried.get(view.id) ?? new Set<string>();
+				models.add(rereadKey);
+				slot.rereadTried.set(view.id, models);
+			}
+			writeMemorizePageRecord({
+				roomRootDir: instance.rootDir,
+				agentId,
+				model: input.model,
+				at: nowFn(),
+				page: {
+					key: runPageKey(page),
+					outcome: ending.kind === "outage" ? "outage-stop" : ending.kind,
+					...("reason" in ending ? { reason: ending.reason } : {}),
+					...(trace.unreadable ? { unreadable: trace.unreadable } : {}),
+					...(trace.unusable ? { unusable: trace.unusable } : {}),
+					...(trace.reader ? { reader: trace.reader } : {}),
+					attempts: trace.attempts,
+					...(trace.probe ? { probe: trace.probe } : {}),
+					...(trace.outageClass ? { outageClass: trace.outageClass } : {}),
+					...(trace.failureCode ? { failureCode: trace.failureCode } : {}),
+				},
+			});
+			touch(slot, nowFn());
+		},
+		flush: (held) => {
+			// A record file that cannot be written costs the next run its hint,
+			// never this run.
+			try {
+				writePageFailures(instance.runtimeDir(), held);
+			} catch {}
+		},
+	};
+	let outcome = await foldPages<RunPage>(pages, records, deps);
+	// The summary notes to re-read come after every conversation, in a pass of
+	// their own with no records, so a re-read never takes a conversation's place
+	// or leaves a record. Each page is made from memory as it stands when its
+	// turn comes: a note an earlier page superseded or closed is not read, and
+	// one this model tried already (a resume on another model) is not read again.
+	if (!outcome.stoppedForOutage && !outcome.cancelled) {
+		for (const view of run.rereads.filter((row) => row.outcome === "pending")) {
+			if (signal.aborted) break;
+			const reread = rereadPage(slot.workingDoc!, view.id);
+			if (!reread || (reread.note.tried ?? []).includes(rereadKey)) {
+				run.rereads = run.rereads.filter((row) => row !== view);
+				continue;
+			}
+			const session: AbsorbRecentContextSession = { id: reread.id, title: reread.title, date: reread.date, text: reread.text, tokens: estimateTokens(reread.text) };
+			outcome = await foldPages<RunPage>([{ view, session, reread }], NO_PAGE_RECORDS, { ...deps, flush: () => {} });
+			if (outcome.stoppedForOutage || outcome.cancelled) break;
+		}
+	}
+	run.progress.current = undefined;
+	if (outcome.stoppedForOutage) run.stop = { kind: "outage", model: { provider: input.model.provider, model: input.model.model }, cause: outcome.outageClass ? "busy" : "not-answering" };
+	return outcome;
 }
 
 function foldChanges(record: FoldRecord, where: Map<string, { section: MemorySection; topic: string }>): AbsorbRunChange[] {
@@ -920,12 +1187,13 @@ function foldChanges(record: FoldRecord, where: Map<string, { section: MemorySec
 	return [
 		...record.added.map((added) => {
 			const newTopic = opened.delete(added.topic);
-			return { kind: "added" as const, id: added.id, topic: added.topic, after: added.text, ...(newTopic ? { newTopic: true as const } : {}) };
+			return { kind: "added" as const, id: added.id, topic: added.topic, after: added.text, ...(newTopic ? { newTopic: true as const } : {}), ...(added.beside ? { beside: added.beside, ...(added.besideOf ? { besideOf: added.besideOf } : {}) } : {}) };
 		}),
 		...record.updated.map((change) => ({ kind: "updated" as const, id: change.id, topic: topicOf(change.id), before: change.before, after: change.after })),
 		...record.superseded.map((change) => ({ kind: "superseded" as const, id: change.id, topic: topicOf(change.id), before: change.before, after: change.after, ...(change.reason ? { reason: change.reason } : {}) })),
 		...record.closed.map((closed) => ({ kind: "closed" as const, id: closed.id, topic: topicOf(closed.id), before: closed.text })),
 		...record.pinned.map((id) => ({ kind: "pinned" as const, id, topic: topicOf(id) })),
+		...record.history.map((row) => ({ kind: "history" as const, id: row.id, topic: row.topic, after: row.text, of: row.of })),
 	];
 }
 
@@ -956,8 +1224,10 @@ function collectSupersededArchive(slot: RunSlot, record: FoldRecord, doc: Memory
 				pinned: false,
 				text: change.before,
 				...(current?.from ? { from: current.from } : {}),
+				...(change.learnedBefore ? { learned: change.learnedBefore } : {}),
 			},
 			why: "superseded",
+			...(current?.learned ? { until: current.learned } : {}),
 			topic: address?.topic ?? "General",
 			section: address?.section ?? "Deep Memory",
 			archived: slot.savedDate,
@@ -1033,7 +1303,6 @@ function recomputeDemotion(slot: RunSlot): void {
 	const budgetTokens = run.budget.budgetTokens;
 	const keepIds = [...run.demotion.keepIds];
 	const keepTopics = [...run.demotion.keepTopics];
-	const keep = new Set(keepIds);
 	// The pre-pass entries come BACK first, every one of them: they left so the
 	// folds could read a memory under its limit, not because anything was
 	// decided about them. The one budget pass below ranks them with everything
@@ -1043,12 +1312,10 @@ function recomputeDemotion(slot: RunSlot): void {
 	const doc = restoreEntries(slot.postFoldDoc, slot.prepassArchive.map((append) => ({ ...append.entry, archived: append.archived ?? slot.savedDate, why: append.why, topic: append.topic, section: append.section })));
 	const where = addressBook(doc);
 	const demoted = demoteToBudget(doc, budgetTokens, { keepIds, keepTopics, today: slot.savedDate, use: memoryUseForRanking(run.agentId) });
+	// A keep protects the note in this save only, by id or by topic: the pass
+	// above left it in, and it is never pinned. The save records a use for each
+	// kept note, so a later run's pass ranks it higher without making it immortal.
 	const candidate = cloneDocument(demoted.doc);
-	// Keeping by id IS pinning: the entry the user kept is the user's own from
-	// here on, and no later run's budget pass takes it either. A protected topic
-	// is protected today only — the person kept the topic in this run, not
-	// forever — so its entries are not pinned.
-	for (const topic of candidate.topics) for (const entry of topic.entries) if (keep.has(entry.id)) entry.pinned = true;
 	slot.candidateDoc = candidate;
 	slot.demotionArchive = demoted.demoted.map((entry) => ({ entry, why: "budget" as const, topic: where.get(entry.id)?.topic ?? "General", section: where.get(entry.id)?.section ?? "Deep Memory", archived: slot.savedDate, reason: entry.reason }));
 	const after = reviewTargetTokens(candidate);
@@ -1092,12 +1359,220 @@ function recomputeDemotion(slot: RunSlot): void {
 	publishArchiveList(slot, doc);
 	run.budget = { ...run.budget, after, budgetTokens, overBudgetAfter: overMemoryBudget(after, budgetTokens), ceilingTokens: MEMORY_BUDGET_MAX_TOKENS };
 	run.candidate = { sourceFingerprint: slot.sourceFingerprint, estimatedTokens: estimateTokens(renderMemoryDocument(candidate, "context")) };
+	settleBesideChoices(slot);
 }
 
 // --- Reading and adjusting a run -------------------------------------------------
 
 function snapshotRun(slot: RunSlot): AbsorbRun {
-	return JSON.parse(JSON.stringify(slot.run)) as AbsorbRun;
+	const run = JSON.parse(JSON.stringify(slot.run)) as AbsorbRun;
+	// The note a tagged row stands beside is named as the memory holds it now.
+	const doc = slot.postFoldDoc ?? slot.workingDoc;
+	if (doc) {
+		const leaving = leavingIds(slot);
+		for (const change of changeRows(run)) {
+			if (change.of) {
+				const text = besideTextOf(doc, change.of);
+				if (text !== undefined) change.ofLine = text.split("\n")[0];
+			}
+			if (!change.besideOf) continue;
+			const text = besideTextOf(doc, change.besideOf);
+			if (text !== undefined) change.besideLine = text.split("\n")[0];
+			const besideLearned = learnedOf(doc, change.besideOf);
+			const learned = learnedOf(doc, change.id);
+			if (besideLearned) change.besideLearned = besideLearned;
+			if (learned) change.learned = learned;
+			if (besideTextOf(doc, change.id) === undefined && closedByRun(slot, doc, change.id)) change.besideState = "self-closed";
+			else if (text === undefined) {
+				// A note this update closes is named by the text it had, so the card can say which.
+				const closed = closedTextOf(slot, doc, change.besideOf);
+				change.besideState = closed === undefined ? "gone" : "closed";
+				if (closed !== undefined) change.besideLine = closed.split("\n")[0];
+			}
+			else if (leaving.has(change.id) || leaving.has(change.besideOf)) change.besideState = "leaving";
+		}
+	}
+	return run;
+}
+
+/** Every row that carries changes: the conversations', then the re-read notes'. */
+function pageRows(run: AbsorbRun): AbsorbRunSessionView[] {
+	return [...run.sessions, ...run.rereads];
+}
+
+function changeRows(run: AbsorbRun): AbsorbRunChange[] {
+	return pageRows(run).flatMap((session) => session.changes ?? []);
+}
+
+/** The ids the current budget pass sends to the archive. */
+function leavingIds(slot: RunSlot): Set<string> {
+	return new Set([...slot.archiveRows.values()].filter((row) => row.leaving).map((row) => row.id));
+}
+
+/** A note's text as memory will hold it, or undefined when it is not there or is a finished item on its way out. */
+function learnedOf(doc: MemoryDocument, id: string): string | undefined {
+	for (const topic of doc.topics) for (const entry of topic.entries) if (entry.id === id) return entry.learned;
+	return undefined;
+}
+
+function besideTextOf(doc: MemoryDocument, id: string): string | undefined {
+	for (const topic of doc.topics) for (const entry of topic.entries) if (entry.id === id) return entry.status === "done" ? undefined : entry.text;
+	return undefined;
+}
+
+/** Whether this update closes the note: a finished item in the working document, or one that already left the core as done. */
+function closedByRun(slot: RunSlot, doc: MemoryDocument, id: string): boolean {
+	return closedTextOf(slot, doc, id) !== undefined;
+}
+
+/** The text of a note this update closes, or undefined when it does not close it. */
+function closedTextOf(slot: RunSlot, doc: MemoryDocument, id: string): string | undefined {
+	const archived = slot.closedArchive.find((append) => append.entry.id === id);
+	if (archived) return archived.entry.text;
+	for (const topic of doc.topics) for (const entry of topic.entries) if (entry.id === id && entry.status === "done") return entry.text;
+	return undefined;
+}
+
+/**
+ * A Replace stands only while what the person chose still holds: both notes
+ * stay, and the other note reads as it did when they chose (an edit of it on
+ * the card, a keep elsewhere, a lowered limit can each change that). Any other
+ * Replace goes back to Keep both, and the card shows it.
+ */
+function settleBesideChoices(slot: RunSlot): void {
+	const doc = slot.postFoldDoc;
+	if (!doc) return;
+	const leaving = leavingIds(slot);
+	for (const change of changeRows(slot.run)) {
+		if (!change.choice) continue;
+		if (!change.besideOf || leaving.has(change.id) || leaving.has(change.besideOf) || besideTextOf(doc, change.id) === undefined || besideTextOf(doc, change.besideOf) !== change.choiceText) {
+			delete change.choice;
+			delete change.choiceText;
+		}
+	}
+}
+
+/**
+ * The card's "Keep both" or "Replace": for a new note shown beside a pinned
+ * note or one it may disagree with. One Replace per note: choosing it on one
+ * row takes it from any other row aimed at the same note. Nothing is written;
+ * the save applies it.
+ */
+export function chooseAbsorbRunBeside(agentIdRaw: string, runId: string, entryIdRaw: unknown, choiceRaw: unknown, now = new Date()): AbsorbRun {
+	const slot = slotFor(createPersistentAgentInstance(agentIdRaw).agentId, runId);
+	requireReady(slot);
+	if (!slot.postFoldDoc) throw productError("This memory update has nothing to change yet.", "absorb_run_not_ready", 409);
+	const entryId = typeof entryIdRaw === "string" ? entryIdRaw.trim() : "";
+	if (!entryId || (choiceRaw !== "replace" && choiceRaw !== "keep-both")) throw productError("entryId and a choice of replace or keep-both are required.", "absorb_run_bad_choice");
+	const rows = changeRows(slot.run);
+	const row = rows.find((change) => change.kind === "added" && change.id === entryId && change.besideOf);
+	if (!row?.besideOf) throw productError("Only a new note shown beside another one can replace it.", "absorb_run_bad_choice", 404);
+	if (choiceRaw === "keep-both") {
+		delete row.choice;
+		delete row.choiceText;
+	} else {
+		if (besideTextOf(slot.postFoldDoc, row.id) === undefined) throw productError("This new note is closed later in this update, so it cannot replace another note.", "absorb_run_bad_choice", 409);
+		const text = besideTextOf(slot.postFoldDoc, row.besideOf);
+		if (text === undefined) throw productError("That note is no longer in memory, so there is nothing to replace.", "absorb_run_bad_choice", 409);
+		const leaving = leavingIds(slot);
+		if (leaving.has(row.id) || leaving.has(row.besideOf)) throw productError("That note is going to the archive, so nothing can replace it here. Keep it first.", "absorb_run_bad_choice", 409);
+		for (const other of rows) if (other !== row && other.besideOf === row.besideOf) {
+			delete other.choice;
+			delete other.choiceText;
+		}
+		row.choice = "replace";
+		row.choiceText = text;
+	}
+	slot.idleSince = Date.now();
+	touch(slot, now);
+	return snapshotRun(slot);
+}
+
+/**
+ * The person's Replace choices, applied to the document the save writes. The
+ * other note takes the new note's text and keeps its id, kind, place and
+ * status; a pinned one stays pinned, and a must-keep marker in the new text
+ * pins the other note (the marker itself is not kept, as on any pin). The new
+ * note goes, and its topic with it when nothing else is left there. The old
+ * text goes to the archive as a superseded version, so an undo brings it back.
+ * A choice whose notes are gone, or whose other note no longer reads as it did
+ * when the person chose, keeps both, and the record says so.
+ */
+/**
+ * A new note kept beside one it may disagree with, or beside a pinned note it
+ * disagrees with: at the save both notes name each other, so the room's own
+ * read shows the day each was learned. A Replace leaves one note, and a note
+ * that is gone or closed makes no pair.
+ */
+function markKeptPairs(slot: RunSlot, doc: MemoryDocument, choices: Array<{ id: string; applied: boolean }>): void {
+	const replaced = new Set(choices.filter((choice) => choice.applied).map((choice) => choice.id));
+	const byId = new Map(doc.topics.flatMap((topic) => topic.entries).map((entry) => [entry.id, entry]));
+	const name = (entry: MemoryEntry, other: string) => {
+		const ids = entry.disagrees ? entry.disagrees.split(",") : [];
+		if (!ids.includes(other)) entry.disagrees = [...ids, other].join(",");
+	};
+	for (const change of changeRows(slot.run)) {
+		if (change.kind !== "added" || (change.beside !== "may-disagree" && change.beside !== "pinned") || !change.besideOf || replaced.has(change.id)) continue;
+		const note = byId.get(change.id);
+		const other = byId.get(change.besideOf);
+		if (!note || !other || note.status === "done" || other.status === "done") continue;
+		if (change.beside === "pinned" && !textDisagreesWith(note.text, other.text)) continue;
+		name(note, other.id);
+		name(other, note.id);
+	}
+}
+
+function applyBesideChoices(slot: RunSlot, doc: MemoryDocument): { archive: RankedArchiveAppend[]; choices: Array<{ id: string; other: string; choice: "replace"; applied: boolean }>; removedTopics: Set<string>; pinnedBefore: Set<string> } {
+	const archive: RankedArchiveAppend[] = [];
+	const choices: Array<{ id: string; other: string; choice: "replace"; applied: boolean }> = [];
+	const removedTopics = new Set<string>();
+	/** The replacing notes whose other note was pinned already. */
+	const pinnedBefore = new Set<string>();
+	const taken = [...slot.archiveIds, ...slot.supersededArchive.map((append) => append.entry.id)];
+	const at = (id: string) => {
+		for (const topic of doc.topics) for (const entry of topic.entries) if (entry.id === id) return { topic, entry };
+		return undefined;
+	};
+	// A chain (the newest note replaces a new note that replaces a note in
+	// memory) applies from its newest end, so each note takes the words that
+	// replaced it before its own words move on. A row is tagged only against a
+	// note that existed before it, so a chain has no cycle.
+	const replacing = changeRows(slot.run).filter((change) => change.choice === "replace" && change.besideOf);
+	const replacedBy = new Map(replacing.map((change) => [change.besideOf!, change]));
+	const depth = (change: AbsorbRunChange): number => {
+		let n = 0;
+		for (let next = replacedBy.get(change.id); next && n < replacing.length; next = replacedBy.get(next.id)) n++;
+		return n;
+	};
+	for (const change of [...replacing].sort((x, y) => depth(x) - depth(y))) {
+		if (!change.besideOf) continue;
+		const target = at(change.besideOf);
+		const added = at(change.id);
+		const applied = !!target && !!added && target.entry.status !== "done" && target.entry.text === change.choiceText;
+		choices.push({ id: change.id, other: change.besideOf, choice: "replace", applied });
+		if (!applied) continue;
+		const id = nextVersionedEntryId(target.entry.id, taken);
+		taken.push(id);
+		// The note keeps the newer of the two days: the person chose the words,
+		// and the day a note was learned never goes back.
+		const newer = [target.entry.learned, added.entry.learned].filter((day): day is string => !!day).sort().at(-1);
+		archive.push({ entry: { id, kind: target.entry.kind, saved: target.entry.saved, pinned: false, text: target.entry.text, ...(target.entry.from ? { from: target.entry.from } : {}), ...(target.entry.learned ? { learned: target.entry.learned } : {}) }, why: "superseded", ...(newer ? { until: newer } : {}), topic: target.topic.title, section: target.topic.section, archived: slot.savedDate });
+		if (newer) target.entry.learned = newer;
+		const text = added.entry.text;
+		if (target.entry.pinned) pinnedBefore.add(change.id);
+		target.entry.text = withoutMustKeepMarkers(text);
+		delete target.entry.disagrees;
+		// The person confirmed it: touched like a fold's rewrite, so the ranker reads it as used.
+		target.entry.updated = slot.savedDate;
+		target.entry.refs = (target.entry.refs ?? 0) + 1;
+		if (added.entry.pinned || hasMustKeepMarker(text)) target.entry.pinned = true;
+		added.topic.entries = added.topic.entries.filter((entry) => entry !== added.entry);
+		if (added.topic.entries.length === 0 && !added.topic.intro.trim()) {
+			doc.topics = doc.topics.filter((topic) => topic !== added.topic);
+			removedTopics.add(change.id);
+		}
+	}
+	return { archive, choices, removedTopics, pinnedBefore };
 }
 
 export function getAbsorbRun(agentIdRaw: string, runId: string): AbsorbRun {
@@ -1148,7 +1623,7 @@ export function parseRunKeepRequest(raw: unknown, rows: Iterable<{ id: string; s
 	return { keepIds, keepTopics };
 }
 
-/** The card's keep toggles: the kept entries are pinned, the protected topics are left whole, and the demotion is derived again. */
+/** The card's keep toggles: the kept notes and the protected topics stay in this save, and the demotion is derived again. */
 export function keepAbsorbRunEntries(agentIdRaw: string, runId: string, keepRaw: unknown, now = new Date()): AbsorbRun {
 	const slot = slotFor(createPersistentAgentInstance(agentIdRaw).agentId, runId);
 	requireReady(slot);
@@ -1182,7 +1657,7 @@ export function editAbsorbRunEntry(agentIdRaw: string, runId: string, entryIdRaw
 	if (!entryId) throw productError("entryId is required.", "absorb_run_bad_edit");
 	if (!text) throw productError("A note cannot be empty. If it should go, delete it from Room settings after saving.", "absorb_run_bad_edit");
 	if (text.length > ABSORB_RUN_EDIT_MAX_CHARS) throw productError(`A note is at most ${ABSORB_RUN_EDIT_MAX_CHARS} characters.`, "absorb_run_bad_edit");
-	const editable = slot.run.sessions.some((session) => (session.changes ?? []).some((change) => change.id === entryId && (change.kind === "added" || change.kind === "updated" || change.kind === "superseded")));
+	const editable = pageRows(slot.run).some((session) => (session.changes ?? []).some((change) => change.id === entryId && (change.kind === "added" || change.kind === "updated" || change.kind === "superseded")));
 	if (!editable) throw productError("Only a note this update adds or rewrites can be edited here.", "absorb_run_bad_edit", 404);
 	let entry: MemoryEntry | undefined;
 	for (const topic of slot.postFoldDoc.topics) for (const candidate of topic.entries) if (candidate.id === entryId) entry = candidate;
@@ -1190,7 +1665,8 @@ export function editAbsorbRunEntry(agentIdRaw: string, runId: string, entryIdRaw
 	// A topic written as bullets stays bullets: the person edits the words, not the markup.
 	const next = /^[-*]\s/.test(entry.text) && !/^[-*]\s/.test(text) ? `- ${text}` : text;
 	entry.text = next;
-	for (const session of slot.run.sessions) for (const change of session.changes ?? []) if (change.id === entryId) change.after = next;
+	delete entry.disagrees;
+	for (const session of pageRows(slot.run)) for (const change of session.changes ?? []) if (change.id === entryId) change.after = next;
 	recomputeDemotion(slot);
 	slot.idleSince = Date.now();
 	touch(slot, now);
@@ -1214,6 +1690,71 @@ export function setAbsorbRunBudget(agentIdRaw: string, runId: string, budgetToke
 	recomputeDemotion(slot);
 	slot.idleSince = Date.now();
 	touch(slot, now);
+	return snapshotRun(slot);
+}
+
+/**
+ * Try again, after an outage stopped the run: the same run folds the pages
+ * still waiting, with the same first read and guidance, on top of what already
+ * finished. It is not a restart: the finished pages stay on the card as they
+ * are, and a keep, an edit or a raised limit made meanwhile stands.
+ *
+ * The model is the room's Memory model as it is now, which the person may have
+ * changed from the notice. It replaces the run's lock, so the prompts, the
+ * probe, the window, the records and the save all read the model the rest is
+ * read with; the pages read before the stop keep their model on their own
+ * diagnostics.
+ */
+export function resumeAbsorbRun(agentIdRaw: string, runId: string, model: AbsorbModelLock, now = new Date()): AbsorbRun {
+	const slot = slotFor(createPersistentAgentInstance(agentIdRaw).agentId, runId);
+	requireReady(slot);
+	if (!slot.run.stop || !slot.postFoldDoc) throw productError("This memory update has nothing left to read.", "absorb_run_nothing_waiting", 409);
+	const run = slot.run;
+	const nowFn = slot.input.now ?? (() => new Date());
+	slot.input = { ...slot.input, model };
+	slot.model = model;
+	delete run.stop;
+	run.state = "folding";
+	slot.idleSince = null;
+	// The resumed folds start from the card as the person left it. Their edits
+	// are in the document already, so a fold reads their words and an update
+	// builds on them, its before being their text. A note they kept reads as
+	// pinned, so a fold may add beside it and never rewrite what they chose to
+	// keep. That pin is the folds' only: a keep never pins a note, and a keep
+	// taken back after this must leave the note as it was.
+	slot.workingDoc = cloneDocument(slot.postFoldDoc);
+	// A note the person chose to replace is held the same way, so the resumed
+	// folds cannot change what they chose to put in its place.
+	const keep = new Set([...run.demotion.keepIds, ...changeRows(run).filter((change) => change.choice === "replace" && change.besideOf).map((change) => change.besideOf!)]);
+	const pinnedForFolds = new Set<string>();
+	slot.keptForFolds = pinnedForFolds;
+	for (const topic of slot.workingDoc.topics) {
+		for (const entry of topic.entries) {
+			if (!keep.has(entry.id) || entry.pinned) continue;
+			entry.pinned = true;
+			pinnedForFolds.add(entry.id);
+		}
+	}
+	slot.nextEntryNumber = slot.postFoldDoc.nextEntryNumber;
+	slot.postFoldDoc = null;
+	touch(slot, now);
+	slot.work = (async () => {
+		await foldWaitingPages(slot, nowFn);
+		delete slot.keptForFolds;
+		// A fold that pinned a kept note itself, because the conversation asked
+		// for it, made a change the card shows: that pin stays. The folds before
+		// the stop are read too, which is harmless: a note they pinned was pinned
+		// on the card already, so it was never pinned for the folds.
+		for (const session of pageRows(run)) for (const change of session.changes ?? []) if (change.kind === "pinned") pinnedForFolds.delete(change.id);
+		for (const topic of slot.workingDoc?.topics ?? []) for (const entry of topic.entries) if (pinnedForFolds.has(entry.id)) entry.pinned = false;
+		if (slot.controller.signal.aborted) {
+			finish(slot, "cancelled", nowFn());
+			return;
+		}
+		settleRun(slot, nowFn);
+	})().catch((error) => {
+		if (isActive(slot.run.state)) finish(slot, "failed", nowFn(), endsAsSentence((error as Error).message));
+	});
 	return snapshotRun(slot);
 }
 
@@ -1281,7 +1822,7 @@ export function rebaseOntoDisk(sourceL1b: string, diskL1b: string): ApproveRebas
 }
 
 /**
- * ONE write: the candidate document (post-fold, post-demotion, keeps pinned),
+ * ONE write: the candidate document (post-fold, post-demotion, the kept notes back in),
  * Recent Context with the folded, dropped and skipped sessions taken out and
  * the failed and pending ones kept, everything that left the core appended to
  * the archive with its reason, Chronos stamped, and the run's own account in
@@ -1313,7 +1854,7 @@ export function approveAbsorbRun(agentIdRaw: string, runId: string, now = new Da
 	const candidate = slot.candidateDoc;
 	if (!candidate) throw productError("This memory update has nothing to save.", "absorb_run_empty");
 
-	const removed = new Set(run.sessions.filter((session) => session.outcome === "folded" || session.outcome === "dropped" || session.outcome === "skipped").map((session) => session.id));
+	const removed = new Set(run.sessions.filter((session) => session.outcome === "folded" || session.outcome === "dropped" || session.outcome === "summarized" || session.outcome === "skipped").map((session) => session.id));
 	const doc = cloneDocument(candidate);
 	doc.recentContext = recentContextWithout(rebase ? rebase.disk.recentContext : candidate.recentContext, removed);
 	// The Remember stamped its own Chronos lines; the write stamps the
@@ -1325,12 +1866,28 @@ export function approveAbsorbRun(agentIdRaw: string, runId: string, now = new Da
 	// the last pass's, pre-pass entries included: one the user kept, by id or
 	// by topic, or one a raised limit made room for, is back in the candidate
 	// instead and is not among them.
+	const beside = applyBesideChoices(slot, doc);
+	markKeptPairs(slot, doc, beside.choices);
+	// A Replace takes a note out after the last budget pass: the numbers the
+	// record and the saved screen show are the written document's.
+	const replaced = beside.choices.some((choice) => choice.applied);
+	const budgetAfter = replaced ? reviewTargetTokens(doc) : run.budget.after;
+	const overBudgetAfter = replaced ? overMemoryBudget(budgetAfter, run.budget.budgetTokens) : run.budget.overBudgetAfter;
+	// Each summary note a re-read tried says so, in memory or in its archive
+	// row, only in this write: an undo takes it back, and an unsaved run leaves
+	// nothing.
+	const withRereadTried = (entry: MemoryEntry): MemoryEntry => [...(slot.rereadTried.get(entry.id) ?? [])].reduce(withTried, entry);
+	for (const topic of doc.topics) topic.entries = topic.entries.map(withRereadTried);
 	const archiveAppend: RankedArchiveAppend[] = [
 		...slot.demotionArchive,
 		...slot.supersededArchive,
+		...slot.historyArchive,
 		...slot.closedArchive,
-	];
-	const foldedSessions = run.sessions.filter((session) => session.outcome === "folded" || session.outcome === "dropped").map((session) => session.id);
+		...beside.archive,
+		...slot.sortedArchive,
+	].map((append) => (slot.rereadTried.has(append.entry.id) ? { ...append, entry: withRereadTried(append.entry) } : append));
+	// A conversation kept as its summary is memorized too: its notes are in this save.
+	const foldedSessions = run.sessions.filter((session) => session.outcome === "folded" || session.outcome === "dropped" || session.outcome === "summarized").map((session) => session.id);
 	const remainingSessions = run.sessions.filter((session) => session.outcome === "failed" || session.outcome === "pending").map((session) => session.id);
 
 	run.state = "approving";
@@ -1391,8 +1948,9 @@ export function approveAbsorbRun(agentIdRaw: string, runId: string, now = new Da
 					foldedSessions,
 					remainingSessions,
 					archived: archiveAppend.map((append) => ({ id: append.entry.id, why: append.why, topic: append.topic, section: append.section, ...(append.reason ? { reason: append.reason } : {}) })),
-					budget: { before: run.budget.before, after: run.budget.after, budgetTokens: run.budget.budgetTokens, overBudgetAfter: run.budget.overBudgetAfter, ...(recordsRaise ? { raisedFrom } : {}) },
+					budget: { before: run.budget.before, after: budgetAfter, budgetTokens: run.budget.budgetTokens, overBudgetAfter, ...(recordsRaise ? { raisedFrom } : {}) },
 					...(run.migration?.pending ? { migration: { entriesAssigned: run.migration.entriesAssigned } } : {}),
+					...(beside.choices.length > 0 ? { besideChoices: beside.choices } : {}),
 				},
 				warnings: run.warnings,
 			}),
@@ -1414,6 +1972,31 @@ export function approveAbsorbRun(agentIdRaw: string, runId: string, now = new Da
 	}
 
 	finish(slot, "saved", now);
+	// A keep is a use: each kept note that was written counts one, so the next
+	// run's budget pass ranks it higher. A kept new note that replaced another
+	// note lives on under that note's id, so the use goes there. Use is use, so
+	// an undo of this save leaves it.
+	const replacedInto = new Map(beside.choices.filter((choice) => choice.applied).map((choice) => [choice.id, choice.other]));
+	const savedIds = new Set(doc.topics.flatMap((topic) => topic.entries).map((entry) => entry.id));
+	const keptUsed = [...new Set(run.demotion.keepIds.map((id) => replacedInto.get(id) ?? id))].filter((id) => savedIds.has(id));
+	if (keptUsed.length > 0) recordMemoryUse(agentId, keptUsed.map((id) => ({ id, source: "note" as const })), { now });
+	if (replaced) {
+		run.budget = { ...run.budget, after: budgetAfter, overBudgetAfter };
+		if (run.candidate) run.candidate = { ...run.candidate, estimatedTokens: estimateTokens(renderMemoryDocument(doc, "context")) };
+	}
+	// A replaced note's rows say where its words went: a pin its marker made is
+	// the other note's now (and says nothing when that note was pinned already),
+	// and a topic it opened and left empty is not new.
+	for (const choice of beside.choices) {
+		if (!choice.applied) continue;
+		for (const session of pageRows(run)) {
+			if (beside.pinnedBefore.has(choice.id)) session.changes = session.changes?.filter((change) => !(change.kind === "pinned" && change.id === choice.id));
+			for (const change of session.changes ?? []) {
+				if (change.kind === "pinned" && change.id === choice.id) change.id = choice.other;
+				if (change.id === choice.id && beside.removedTopics.has(choice.id)) delete change.newTopic;
+			}
+		}
+	}
 	// The write that just landed performed the migration, so the saved card reads
 	// it as done rather than as something still owed.
 	if (run.migration?.pending) run.migration = { pending: false, entriesAssigned: run.migration.entriesAssigned };
@@ -1438,8 +2021,11 @@ export function approveAbsorbRun(agentIdRaw: string, runId: string, now = new Da
 		warnings: run.warnings,
 		foldedSessions,
 		remainingSessions,
-		archivedEntries: archiveAppend.length,
+		archivedEntries: archiveAppend.filter((append) => append.why !== "history" && append.why !== "sorted").length,
 		archivedForBudget: archiveAppend.filter((append) => append.why === "budget").length,
+		replacedEntries: archiveAppend.filter((append) => append.why === "superseded").length,
+		historyKept: slot.historyArchive.length,
+		sortedNotes: slot.sortedArchive.length,
 		...(budgetRaisedTo === undefined ? {} : { budgetRaisedTo }),
 		rebasedOnto,
 	};
@@ -1479,9 +2065,10 @@ export function absorbRunStatusFields(agentIdRaw: string): {
  * the run.
  */
 export function parseAbsorbRunProposeRequest(raw: any): { assessmentMarkdown: string; guidance: FoldGuidance; sourceFingerprint?: L1bSourceFingerprint; limitRaisedFrom?: number } {
-	const assessmentMarkdown = String(raw?.assessmentMarkdown ?? "").trim();
-	if (!assessmentMarkdown) throw productError("assessmentMarkdown is required", "absorb_run_no_assessment");
-	if (assessmentMarkdown.length > ABSORB_RUN_ASSESSMENT_MAX_CHARS) throw productError("assessmentMarkdown is too large", "absorb_run_assessment_too_large");
+	// The first read never blocks the run: a missing one, or one too long to
+	// carry, folds with none, as a failed first read does.
+	const sent = String(raw?.assessmentMarkdown ?? "").trim();
+	const assessmentMarkdown = sent && sent.length <= ABSORB_RUN_ASSESSMENT_MAX_CHARS ? sent : FIRST_READ_NONE;
 	const fingerprint = raw?.source?.l1bFingerprint ?? raw?.source;
 	const algorithm = String(fingerprint?.algorithm ?? "").trim();
 	const value = String(fingerprint?.value ?? "").trim();

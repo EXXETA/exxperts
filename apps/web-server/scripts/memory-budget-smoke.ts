@@ -23,10 +23,8 @@ fs.writeFileSync(path.join(smokeAppDir, "persistent-agent-ai-profile.json"), JSO
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "exxeta-memory-budget-"));
 process.env.EXXETA_PERSISTENT_AGENTS_ROOT = root;
 
-const { buildMemoryBudgetImpact, createPersistentAgentFromScaffoldInput, getPersistentAgentStatus, readPersistentAgentReviewTargetEstimatedTokens, reviewTargetEstimatedTokensFromL1b } = await import("../src/persistent-agents.js");
-const { overMemoryBudget, persistentRoomMaintenanceSettingsPath, readPersistentRoomMaintenanceSettings, writePersistentRoomMaintenanceSettings, MEMORY_BUDGET_MAX_TOKENS, MEMORY_BUDGET_MIN_TOKENS } = await import("../src/persistent-room-maintenance-settings.js");
-const { buildAbsorbProposalPrompt, buildSectionPurposeMap } = await import("../src/absorb-consolidation.js");
-const { getAbsorbModelLock } = await import("../src/persistent-agent-ai-profiles.js");
+const { createPersistentAgentFromScaffoldInput, getPersistentAgentStatus, readPersistentAgentReviewTargetEstimatedTokens } = await import("../src/persistent-agents.js");
+const { persistentRoomMaintenanceSettingsPath, readPersistentRoomMaintenanceSettings, writePersistentRoomMaintenanceSettings, MEMORY_BUDGET_MAX_TOKENS, MEMORY_BUDGET_MIN_TOKENS } = await import("../src/persistent-room-maintenance-settings.js");
 const { estimateTokens } = await import("../src/token-estimate.js");
 
 function assert(condition: unknown, message: string): asserts condition {
@@ -96,41 +94,11 @@ try {
 	assert(over.memoryBudget!.reviewTargetEstimatedTokens > budget, "fixture should put the review target over budget");
 	assert(over.memoryBudget!.overBudget === true, "a fat review target is over budget");
 
-	// --- Approval-card impact: the one builder, wired to the one numerator ---
-	// (slice 3): both proposal builders attach buildMemoryBudgetImpact computed
-	// from reviewTargetEstimatedTokensFromL1b on the source and the candidate;
-	// this pins the builder's verdicts to the shared predicate on both crossing
-	// directions so the card can never disagree with the meters.
-	const overTokens = over.memoryBudget!.reviewTargetEstimatedTokens;
-	const slimCandidate = "## Deep Memory\n\n- One durable fact.\n\n## Active Items\n\n- One thread.\n";
-	const slimTokens = reviewTargetEstimatedTokensFromL1b(slimCandidate);
-	assert(slimTokens > 0 && slimTokens < budget, "slim candidate fixture should sit under the budget");
-	const shrink = buildMemoryBudgetImpact(overTokens, slimTokens, budget);
-	assert(shrink.overBudgetBefore === true && shrink.overBudgetAfter === false, "a slim candidate brings an over-budget room back under");
-	assert(shrink.reviewTargetEstimatedTokensBefore === overTokens && shrink.reviewTargetEstimatedTokensAfter === slimTokens && shrink.budgetTokens === budget, "impact carries the numerator's numbers verbatim");
-	const cross = buildMemoryBudgetImpact(slimTokens, overTokens, budget);
-	assert(cross.overBudgetBefore === false && cross.overBudgetAfter === true, "a fat candidate crosses the ceiling");
-	assert(cross.overBudgetAfter === overMemoryBudget(overTokens, budget) && cross.overBudgetBefore === overMemoryBudget(slimTokens, budget), "impact verdicts are the one predicate, not a re-derivation");
-
-	// --- The Memorize prompt hears the denominator it can act on --------------
-	// Review no longer hears a budget at all: the run enforces it deterministically
-	// after the tidy, by rank, and review-run-smoke pins that. Memorize still
-	// rewrites a whole document, so its prompt must name the denominator it can
-	// act on.
-	const sectionPurposeMap = buildSectionPurposeMap(JSON.parse(fs.readFileSync(path.join(root, agentId, "section_registry.json"), "utf-8")));
-	const absorbPrompt = buildAbsorbProposalPrompt({
-		agentId,
-		l1b: fs.readFileSync(l1bPath, "utf-8"),
-		model: getAbsorbModelLock("openai-compatible"),
-		sectionPurposeMap,
-		assessmentMarkdown: "## Absorb assessment\n\nAssessment fixture.",
-		memoryBudgetTokens: budget,
-	}).prompt;
-	assert(absorbPrompt.includes("## Memory Budget"), "absorb proposal prompt should carry a budget section when a budget is set");
-	assert(!/whole L1b/i.test(absorbPrompt), "absorb budget line should name where the budget binds instead of a whole-L1b ceiling");
-	assert(/binds on Deep Memory \+ Active Items/.test(absorbPrompt), "absorb budget line should name the binding denominator");
-	assert(/Recent Context does not count toward it/.test(absorbPrompt), "absorb budget line should say RC clears rather than counting");
-	assert(absorbPrompt.includes("ceiling, not a goal"), "absorb budget line keeps the ceiling-not-target constitution");
+	// --- The Maintain chooser reads the room's automatic save off the status ---
+	assert(over.fastPathSecondApproval === false, "the status carries the automatic save, off by default");
+	writePersistentRoomMaintenanceSettings(agentId, { fastPathSecondApproval: true });
+	assert(getPersistentAgentStatus(agentId).fastPathSecondApproval === true, "the status follows the setting when it is turned on");
+	writePersistentRoomMaintenanceSettings(agentId, { fastPathSecondApproval: false });
 
 	// --- The setting's range: the ceiling is 80k, and it is enforced ---------
 	// Raised from 50k with memory v2, because the server now enforces the budget

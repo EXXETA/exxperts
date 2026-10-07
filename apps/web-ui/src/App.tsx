@@ -47,18 +47,18 @@ import { MarkdownRenderer } from "./components/Markdown";
 import { RoomSettingsModal, type SettingsPane } from "./components/RoomSettingsModal";
 import { AddProviderPanel, ApiKeyForm, ConfigureProfileModal, GatewayApproveModelsModal, GatewayConfigModal, useProviderLogin } from "./components/add-provider-panel";
 import { AiDefaultsGroup } from "./components/ai-defaults-group";
-import { apiFetch, fetchJson } from "./api";
+import { apiErrorCode, apiFetch, fetchJson, isUnexplainedRequestFailure } from "./api";
 import { canonicalModelName, modelDisplayName, modelTooltipName } from "./model-names";
 import type { ApprovalPreviewData } from "./approval-preview";
-import { describeMaintenanceWarning, describeValidationError, meaningfulMaintenanceWarnings, sectionLabel } from "./maintenance-warnings";
+import { describeMaintenanceWarning, formatAbsorbRunSaveError, isStaleMaintenanceMessage, meaningfulMaintenanceWarnings, sectionLabel } from "./maintenance-warnings";
 import { fetchRememberReadEstimate, isPlainRememberSentence, quickRememberBlockers, rememberEstimateSentence, rememberSendsTranscript, rememberProgressSentence, rememberReadSentences, rememberToolOutputSentence, type RememberReadEstimate } from "./remember-read";
-import { AbsorbRunActiveError, approveAbsorbRun, cancelAbsorbRun, fetchAbsorbRun, isAbsorbRunStart, keepAbsorbRunEntries, setAbsorbRunBudget, startAbsorbRun, editAbsorbRunEntry } from "./absorb-run-api";
-import { ABSORB_RUN_ACTIVE_ACTION, ABSORB_RUN_ACTIVE_SENTENCE, absorbRunFastPathBlockers, AUTOMATIC_APPLY_ON_SENTENCE, automaticApplyNeedsReviewSentence, absorbRunIsWorking, absorbRunNewTopics, absorbRunSavedSentence, KEEP_DEBOUNCE_MS, keepBatchAction, LIMIT_RAISED_ON_SAVE_SENTENCE, nextKeepIds, nextKeepTopics, overLimitFirstRead, RUN_POLL_INTERVAL_MS, RUN_POLL_LOST_SENTENCE, RUN_POLL_MAX_RETRIES, absorbRunSavedHeadline, absorbRunFullPercent, absorbRunNotesChanged, reviewChangeCounts, reviewRunFastPathBlockers, reviewRunFullPercent, reviewRunIsWorking, REVIEW_RUN_ACTIVE_ACTION, REVIEW_RUN_ACTIVE_SENTENCE } from "./memory-v2-copy";
+import { AbsorbRunActiveError, approveAbsorbRun, cancelAbsorbRun, fetchAbsorbRun, keepAbsorbRunEntries, resumeAbsorbRun, setAbsorbRunBudget, startAbsorbRun, editAbsorbRunEntry, chooseAbsorbRunBeside } from "./absorb-run-api";
+import { ABSORB_ALL_SUMMARIZED_SENTENCE, ABSORB_CHOOSE_MODEL_LABEL, DISCUSS_FIRST_LABEL, DISCUSS_FIRST_TITLE, maintainChooserFootnote, memorizeChooserText, unsortedHintText, ABSORB_RUN_ACTIVE_ACTION, ABSORB_RUN_ACTIVE_SENTENCE, absorbRunAllSummarized, absorbRunFastPathBlockers, FIRST_READ_MISSING_SENTENCE, AUTOMATIC_APPLY_ON_SENTENCE, absorbRunIsWorking, absorbRunNewTopics, absorbRunSavedSentence, KEEP_DEBOUNCE_MS, keepBatchAction, LIMIT_RAISED_ON_SAVE_SENTENCE, nextKeepIds, nextKeepTopics, overLimitFirstRead, RUN_POLL_INTERVAL_MS, RUN_POLL_LOST_SENTENCE, RUN_POLL_MAX_RETRIES, absorbRunSavedHeadline, absorbRunFullPercent, absorbRunNotesChanged, reviewChangeCounts, reviewRunFastPathBlockers, reviewRunFullPercent, reviewRunIsWorking, REVIEW_RUN_ACTIVE_ACTION, REVIEW_RUN_ACTIVE_SENTENCE } from "./memory-v2-copy";
 import { AbsorbRunCard, AbsorbRunFailedScreen, placeholderAbsorbRun } from "./components/absorb-run-screen";
 import { ReviewCard, ReviewDepthPicker, ReviewFirstReadSections, ReviewRunFailedScreen, ReviewRunProgressScreen, ReviewSavedScreen, reviewPercent, type ReviewUndoState } from "./components/review-screen";
 import { approveReviewRun, cancelReviewRun, editReviewRunEntry, fetchReviewRun, fetchReviewStatus, keepReviewRunEntries, requestReviewAssessment, requestReviewDiscussionSignoff, requestReviewDiscussionTurn, ReviewRunActiveError, setReviewRunBudget, startReviewRun, type ReviewDiscussionMessage } from "./review-api";
 import { undoMemorySave } from "./memory-entries-api";
-import type { AbsorbApprovalResponse, AbsorbAssessmentResponse, AbsorbAvailability, AbsorbDiscussionMessage, AbsorbDiscussionSignoffResponse, AbsorbDiscussionTokenBudget, AbsorbDiscussionTurnResponse, AbsorbProposalResponse, AbsorbProposalSourceMetadata, AbsorbReviewAction, AbsorbReviewEntryChange, AbsorbReviewSectionChange, AbsorbRun, AuthStatusResponse, ChatItem, CheckpointApprovalResponse, CheckpointProposalResponse, ContextHealthStatus, LoginProviderCatalogEntry, PersistentAgentAiProfileSelectionStatus, PersistentAgentAiProfileStatus, ArchivedPersistentAgentSummary, MemoryBudgetImpact, PersistentAgentArchiveResponse, PersistentAgentCreateRequest, PersistentAgentCreateResponse, PersistentAgentId, PersistentAgentMementoBoundaryResponse, PersistentAgentPurgeResponse, PersistentAgentStatus, PersistentAgentThreadOrigin, PersistentAgentThreadRecord, ReviewAssessmentResponse, ReviewAvailability, ReviewDepth, ReviewDiscussionTokenBudget, ReviewGuidance, ReviewRun, ReviewRunApprovalResponse, RoomModelLockView, WebChatModelOption, WebChatModelStatus } from "./types";
+import type { AbsorbApprovalResponse, AbsorbAssessmentResponse, AbsorbAvailability, AbsorbDiscussionMessage, AbsorbDiscussionSignoffResponse, AbsorbDiscussionTokenBudget, AbsorbDiscussionTurnResponse, AbsorbProposalSourceMetadata, AbsorbRun, AuthStatusResponse, ChatItem, CheckpointApprovalResponse, CheckpointProposalResponse, ContextHealthStatus, LoginProviderCatalogEntry, PersistentAgentAiProfileSelectionStatus, PersistentAgentAiProfileStatus, ArchivedPersistentAgentSummary, PersistentAgentArchiveResponse, PersistentAgentCreateRequest, PersistentAgentCreateResponse, PersistentAgentId, PersistentAgentMementoBoundaryResponse, PersistentAgentPurgeResponse, PersistentAgentStatus, PersistentAgentThreadOrigin, PersistentAgentThreadRecord, ReviewAssessmentResponse, ReviewAvailability, ReviewDepth, ReviewDiscussionTokenBudget, ReviewGuidance, ReviewRun, ReviewRunApprovalResponse, RoomModelLockView, WebChatModelOption, WebChatModelStatus } from "./types";
 import type { ConversationSwitchNotice } from "./room-models-api";
 import { archivePersistentRoom, fetchArchivedPersistentRooms, fetchPersistentRoomMaintenanceSettings, purgePersistentRoom, restorePersistentRoom, updatePersistentRoomMaintenanceSettings, type PersistentRoomPurgeError } from "./persistent-room-management-api";
 import { ARRIVAL_REVEAL_PACING, createAssistantStreamState, DEFAULT_REVEAL_PACING, isAssistantStreamActive, outputLimitNoticeForTurn, reduceAssistantStream, type AssistantStreamAction, type AssistantStreamEffect, type AssistantStreamState, type RevealPacing } from "./assistant-stream";
@@ -83,7 +83,7 @@ type MainView = "home" | "chat" | "dashboard" | "memory";
 type CheckpointDensity = "compact" | "standard" | "rich";
 // "running", "run_card" and "run_failed" are the Memorize v2 steps: propose
 // starts a run the client polls instead of returning a finished draft.
-type AbsorbWorkflowStep = "closed" | "checking" | "assessing" | "assessment" | "discussing" | "signing_off" | "proposing" | "running" | "run_card" | "run_failed" | "proposal" | "approving" | "saved" | "unavailable" | "error";
+type AbsorbWorkflowStep = "closed" | "checking" | "assessing" | "assessment" | "discussing" | "signing_off" | "proposing" | "running" | "run_card" | "run_failed" | "approving" | "saved" | "unavailable" | "error";
 type ReviewWorkflowStep = "closed" | "checking" | "assessing" | "assessment" | "discussing" | "signing_off" | "running" | "run_card" | "run_failed" | "approving" | "saved" | "unavailable" | "error";
 type AbsorbWorkflowState = {
 	step: AbsorbWorkflowStep;
@@ -92,7 +92,6 @@ type AbsorbWorkflowState = {
 	/** The conversations waiting, from the status read at the start; the card shell lists them before the run reports. */
 	conversations?: { id: string; title: string; date: string }[];
 	assessment: AbsorbAssessmentResponse | null;
-	proposal: AbsorbProposalResponse | null;
 	approvalResult: AbsorbApprovalResponse | null;
 	discussionMessages?: AbsorbDiscussionMessage[];
 	discussionTokenBudget?: AbsorbDiscussionTokenBudget | null;
@@ -108,9 +107,6 @@ type AbsorbWorkflowState = {
 	fastPathEnabled?: boolean;
 	fastPathApplied?: boolean;
 	fastPathBlockedReasons?: string[];
-	// Approval failed because memory changed underneath: the shown proposal can
-	// no longer be applied, so the approve action is disarmed until a redraft.
-	proposalStale?: boolean;
 	// Memorize v2: the run this flow is watching. runId is known from the 202
 	// answer, the run itself from the first poll that lands.
 	runId?: string | null;
@@ -138,7 +134,6 @@ const CLOSED_ABSORB_WORKFLOW: AbsorbWorkflowState = {
 	target: null,
 	availability: null,
 	assessment: null,
-	proposal: null,
 	approvalResult: null,
 	error: null,
 };
@@ -196,37 +191,6 @@ const CLOSED_REVIEW_WORKFLOW: ReviewWorkflowState = {
 	error: null,
 };
 
-// The worker's free-form Warnings section usually carries mild hedges
-// ("word counts are approximate"), so it is shown, not gating. Used to decide
-// whether the saved screen displays worker notes after an auto-apply.
-function maintenanceWorkerNotes(warningsField: string): string {
-	const normalized = warningsField.replace(/^[\s\-*•]+/, "").replace(/[\s.]+$/, "").trim().toLowerCase();
-	const noneLike = !normalized
-		|| normalized === "none"
-		|| normalized === "none detected"
-		|| normalized === "none noted"
-		|| normalized === "none, or concise uncertainty flags";
-	return noneLike ? "" : warningsField.trim();
-}
-
-// Draft again stops being blind: when the previous draft failed validation,
-// its reasons ride the redraft request so the worker corrects the named
-// failures. Only validator errors and structural parse warnings qualify —
-// informational warnings ("no memory has been written") are not feedback.
-// The "proposal " warnings ride even when the candidate itself validates: a
-// valid candidate can still omit or contradict its Dropped material section,
-// and a blind redraft would just fail the same way again.
-function proposalRetryFeedback(prior: { candidateValidation: { valid: boolean; errors: string[] }; warnings: string[]; construction?: { stampProblems?: Array<{ warning: string; reason: string }>; compressionProblems?: Array<{ warning: string; reason: string }>; depthFloorProblems?: Array<{ warning: string; reason: string }> } } | null | undefined): string[] | undefined {
-	if (!prior) return undefined;
-	// A stamp-carry warning is the person's rendering; the model gets its own
-	// (ids it may copy, the stamp grammar it must produce), carried beside it.
-	// Both problem kinds the ops construction reports with two renderings (stamp
-	// carry, and slice C's removal in disguise): Draft-again re-sends the model's.
-	const modelReason = new Map([...(prior.construction?.stampProblems ?? []), ...(prior.construction?.compressionProblems ?? []), ...(prior.construction?.depthFloorProblems ?? [])].map((p) => [p.warning, p.reason]));
-	const feedback = [...(prior.candidateValidation.valid ? [] : prior.candidateValidation.errors), ...prior.warnings.filter((warning) => warning.startsWith("proposal ")).map((warning) => modelReason.get(warning) ?? warning)];
-	return feedback.length ? feedback : undefined;
-}
-
 // The same for the Review first read, whose parser words a missing section its
 // own way; the read's prompt only accepts those sentences back.
 function reviewAssessmentRetryFeedback(assessment: { warnings: string[] } | null | undefined): string[] | undefined {
@@ -237,45 +201,28 @@ function reviewAssessmentRetryFeedback(assessment: { warnings: string[] } | null
 // Reassess carries the parser's own findings on the current assessment (raw
 // server vocabulary, which is what the worker prompt expects) so the regenerated
 // assessment fixes the named sections instead of re-rolling blind.
+/**
+ * The first read the client stands in when the request for one failed without
+ * the server saying why, or when a room that saves without the card started
+ * Memorize without one: "None.", like the server's own missing first read,
+ * with no source, so there is nothing to discuss and Continue goes on without.
+ */
+function missingFirstRead(agentId: PersistentAgentId, availability: AbsorbAvailability, why: "unreachable" | "skipped" = "unreachable"): AbsorbAssessmentResponse {
+	return {
+		agentId,
+		writesMemory: false,
+		process: { type: "absorb-consolidation-worker", model: availability.model ?? { provider: "", model: "" } },
+		availability,
+		assessmentMarkdown: "None.",
+		fields: { whatToRemember: [], whatToForget: [], stableMemoryChanges: { deepMemory: [], activeItems: [], recentContext: "" }, needsJudgment: [] },
+		warnings: [],
+		firstReadMissing: why,
+	};
+}
+
 function assessmentRetryFeedback(assessment: { warnings: string[] } | null | undefined): string[] | undefined {
 	const feedback = (assessment?.warnings ?? []).filter((warning) => warning.startsWith("assessment missing"));
 	return feedback.length ? feedback : undefined;
-}
-
-// The retry disclosures: the whole-rewrite path's budget-enforcement lines
-// (slice 4) and the ops path's one run-level line ("2 of 5 passes were drafted
-// twice…", or "The proposal was drafted twice…" on a single pass). A retry that
-// ended under budget is a resolved event, not a defect: it must not read as a
-// fast-path blocker ("needs manual review because it was drafted again" states
-// a false cause), and any still-over outcome is blocked by the impact clause
-// below regardless. The disclosure itself still renders — on the proposal
-// card, and on the saved screen after an auto-apply (the transcript-elision
-// shape).
-function isProposalRetryDisclosure(warning: string): boolean {
-	return /^the proposal (was drafted again once|could not be drafted again|was drafted twice)/i.test(warning) || /^\d+ of \d+ passes were drafted twice/.test(warning);
-}
-
-// Fast-path gate: structural/deterministic problems block, and so does any
-// mention of must-keep memory in the worker's Warnings section — that is the
-// vocabulary the maintenance constitutions require when protected memory is
-// touched. Free-form hedges do not block; they surface as worker notes.
-function maintenanceFastPathBlockers(proposal: { candidateValidation: { valid: boolean; warnings: string[] }; warnings: string[]; fields: { warnings: string }; memoryBudgetImpact?: MemoryBudgetImpact }): string[] {
-	const blockers: string[] = [];
-	if (!proposal.candidateValidation.valid) blockers.push("the candidate memory failed validation");
-	blockers.push(...meaningfulMaintenanceWarnings(proposal.candidateValidation.warnings));
-	blockers.push(...meaningfulMaintenanceWarnings(proposal.warnings.filter((warning) => !isProposalRetryDisclosure(warning))));
-	if (/must.?keep/i.test(proposal.fields.warnings)) {
-		const text = proposal.fields.warnings.trim();
-		blockers.push(`the proposal's Warnings section mentions must-keep memory: "${text.length > 220 ? `${text.slice(0, 220)}…` : text}"`);
-	}
-	// A room crosses its budget only with the user's approval — an over-budget
-	// outcome is never auto-applied, it falls to the card that states the impact.
-	if (proposal.memoryBudgetImpact?.overBudgetAfter) {
-		blockers.push(proposal.memoryBudgetImpact.overBudgetBefore
-			? "the room stays over its memory budget after this update"
-			: "approving would take the room over its memory budget");
-	}
-	return blockers;
 }
 
 
@@ -599,6 +546,8 @@ function withAbsorbStatusFields(availability: AbsorbAvailability, status: Absorb
 		sessions: availability.sessions ?? status.sessions,
 		budget: availability.budget ?? status.budget,
 		prepass: availability.prepass ?? status.prepass,
+		// The Memory model as the status named it, for the notices that name it.
+		model: availability.model ?? status.model,
 	};
 }
 
@@ -627,14 +576,6 @@ function requestAbsorbDiscussionSignoff(agentId: PersistentAgentId, request: { s
 		method: "POST",
 		headers: { "content-type": "application/json" },
 		body: JSON.stringify(request),
-	});
-}
-
-function requestAbsorbApproval(agentId: PersistentAgentId, proposal: AbsorbProposalResponse): Promise<AbsorbApprovalResponse> {
-	return fetchJson<AbsorbApprovalResponse>(`${absorbBaseUrl(agentId)}/approve`, {
-		method: "POST",
-		headers: { "content-type": "application/json" },
-		body: JSON.stringify({ proposal, approvedCandidateL1b: proposal.fields.candidateL1b }),
 	});
 }
 
@@ -1779,16 +1720,20 @@ function TaskStoreGcDialog({ assessment, busy, onConfirm, onClose }: { assessmen
 // option 4 (2026-07-19): both warned about the leave-abort, and the abort is
 // gone — a delegation belongs to the room, not to the tab that asked for it.
 
-function MaintainChooserShell({ target, roomStatus, onAbsorb, onPrune, onReturn, returnLabel }: { target: MaintainTarget; roomStatus: PersistentAgentStatus | null; onAbsorb: () => void; onPrune: () => void; onReturn: () => void; returnLabel: string }) {
+function MaintainChooserShell({ target, roomStatus, onAbsorb, onDiscussFirst, onPrune, onReturn, returnLabel }: { target: MaintainTarget; roomStatus: PersistentAgentStatus | null; onAbsorb: () => void; onDiscussFirst: () => void; onPrune: () => void; onReturn: () => void; returnLabel: string }) {
 	useEscapeKey(onReturn, true);
 	const memoryStatus = roomStatus?.memoryStatus ?? null;
 	const memoryBudget = roomStatus?.memoryBudget ?? null;
 	const waiting = memoryStatus?.recentContextCount ?? null;
 	const sessionBlockCap = roomStatus?.recentContext?.blockCap ?? 20;
 	const nothingWaiting = waiting === 0;
+	// A room that saves a clean update without the card starts Memorize
+	// without a first read; Discuss first is its way to one.
+	const automatic = roomStatus?.fastPathSecondApproval === true;
 	// The belt for a deep link: the card and maintainBlockedReason already
 	// keep Maintain closed on a room whose memory is still its scaffold.
 	const nothingToReview = nothingToMaintain(memoryStatus);
+	const unsorted = memoryStatus?.unsortedAfterReread ?? 0;
 	const fullPercent = memoryBudget && memoryBudget.budgetTokens > 0 ? Math.round((memoryBudget.reviewTargetEstimatedTokens / memoryBudget.budgetTokens) * 100) : null;
 	const overLimit = fullPercent !== null && fullPercent > 100;
 	// One recommendation at a time: waiting conversations come first, because
@@ -1797,6 +1742,20 @@ function MaintainChooserShell({ target, roomStatus, onAbsorb, onPrune, onReturn,
 	const waitingWords = waiting === null ? null : waiting === 0 ? "Nothing waiting to be memorized" : <><strong>{waiting}</strong> {waiting === 1 ? "conversation" : "conversations"} waiting to be memorized</>;
 	const fullWords = fullPercent === null ? null : overLimit ? <>memory is <strong className="over">above its budget</strong></> : <>memory <strong>{fullPercent}%</strong> full</>;
 	const statusTitle = memoryBudget ? `The memory budget is set in Room settings: ${fmtTokensK(memoryBudget.reviewTargetEstimatedTokens)} of ${fmtTokensK(memoryBudget.budgetTokens)} tokens in use. Chat keeps working until the room holds ${sessionBlockCap} waiting conversations.` : undefined;
+	const memorizeCard = (
+		<button type="button" className={`maintain-action${recommended === "memorize" ? " recommended" : ""}`} disabled={nothingWaiting} title={nothingWaiting ? "Have a conversation with this room first." : undefined} onClick={onAbsorb}>
+			<span className="maintain-action-body">
+				<span className="maintain-action-head">
+					<span className="maintain-action-title">Memorize</span>
+					{recommended === "memorize" && <span className="maintain-action-tag">Recommended</span>}
+				</span>
+				<span className="maintain-action-text">{nothingWaiting
+					? `Nothing to memorize yet. Have a conversation with ${target.displayName} first.`
+					: memorizeChooserText(waiting ?? 0, automatic)}</span>
+			</span>
+			<span className="maintain-action-go" aria-hidden="true">Start</span>
+		</button>
+	);
 	return (
 		<div className="absorb-workspace maintain-workspace" aria-label="Memory maintenance chooser">
 			<header className="absorb-workspace-header">
@@ -1812,18 +1771,15 @@ function MaintainChooserShell({ target, roomStatus, onAbsorb, onPrune, onReturn,
 			<main className="absorb-workspace-main maintain-workspace-main">
 				<div className="maintain-chooser-column">
 					<section className="maintain-actions" aria-label="Memory maintenance workflows">
-						<button type="button" className={`maintain-action${recommended === "memorize" ? " recommended" : ""}`} disabled={nothingWaiting} title={nothingWaiting ? "Have a conversation with this room first." : "Turn the remembered conversations into lasting notes"} onClick={onAbsorb}>
-							<span className="maintain-action-body">
-								<span className="maintain-action-head">
-									<span className="maintain-action-title">Memorize</span>
-									{recommended === "memorize" && <span className="maintain-action-tag">Recommended</span>}
-								</span>
-								<span className="maintain-action-text">{nothingWaiting
-									? `Nothing to memorize yet. Have a conversation with ${target.displayName} first.`
-									: `Turn the ${waiting === 1 ? "remembered conversation" : `${waiting} remembered conversations`} into lasting notes. You read what will be kept before it is saved; whatever does not fit in the budget goes to the archive.`}</span>
-							</span>
-							<span className="maintain-action-go" aria-hidden="true">Start</span>
-						</button>
+						{automatic ? (
+							// Discuss first sits beside the card, never inside it: the card is one button.
+							// The row around them starts Memorize too, as its shading says; a click on a
+							// child is that child's own, so nothing fires twice.
+							<div className="maintain-action-row" onClick={(event) => { if (event.target === event.currentTarget && !nothingWaiting) onAbsorb(); }}>
+								{memorizeCard}
+								<button type="button" className="rs-btn maintain-action-aside" disabled={nothingWaiting} title={DISCUSS_FIRST_TITLE} onClick={(event) => { event.stopPropagation(); onDiscussFirst(); }}>{DISCUSS_FIRST_LABEL}</button>
+							</div>
+						) : memorizeCard}
 						<button type="button" className={`maintain-action${recommended === "review" ? " recommended" : ""}`} disabled={nothingToReview} title={nothingToReview ? NOTHING_TO_MAINTAIN_SENTENCE : "Tidy this room's notes"} onClick={onPrune}>
 							<span className="maintain-action-body">
 								<span className="maintain-action-head">
@@ -1837,7 +1793,13 @@ function MaintainChooserShell({ target, roomStatus, onAbsorb, onPrune, onReturn,
 							<span className="maintain-action-go" aria-hidden="true">Start</span>
 						</button>
 					</section>
-					<p className="maintain-footnote">Nothing is saved until you approve it. The memory budget is set in Room settings.</p>
+					{unsorted > 0 && (
+						<div className="maintain-hint">
+							<p>{unsortedHintText(unsorted)}</p>
+							<button type="button" className="rs-btn" disabled={nothingToReview} onClick={onPrune}>Review</button>
+						</div>
+					)}
+					<p className="maintain-footnote">{maintainChooserFootnote(automatic)}</p>
 				</div>
 			</main>
 		</div>
@@ -1853,17 +1815,6 @@ function buildApprovedRecentContextMarkdown(proposal: CheckpointProposalResponse
 
 
 
-// The full error list lives at the top of the proposal page; the approve
-// button lives at the bottom, below long proposal sections. This line keeps
-// the blocking reason next to the button the user is staring at, so a
-// disabled approve never needs a scroll (or a hover) to explain itself.
-function ProposalApproveBlockedReason({ validation, stale }: { validation?: { valid: boolean; errors: string[] } | null; stale?: boolean }) {
-	if (!validation || validation.valid || stale) return null;
-	const first = validation.errors.length > 0 ? describeValidationError(validation.errors[0]).replace(/\.$/, "") : undefined;
-	const more = validation.errors.length - 1;
-	return <span className="proposal-approve-blocked-reason">{`Can't approve yet: ${first ?? "The candidate memory failed validation"}${more > 0 ? ` · ${more} more issue${more === 1 ? "" : "s"} listed above` : ""}`}</span>;
-}
-
 function ReviewWorkflowShell({ state, loadingMessage, waitingMessage, keepIds, onStopAbandonedRun, onAbort, onDiscuss, onSendDiscussionMessage, onContinueFromDiscussion, onContinueWithoutDiscussion, onContinue, onBackToAssessment, onReassess, onRestart, onSetDepth, onCancelRun, onToggleRunKeep, onToggleRunKeepTopic, onRaiseRunBudget, onEditRunEntry, onSaveRun, onRunBackToAssessment, onUndo, returnLabel }: { state: ReviewWorkflowState; loadingMessage: string; waitingMessage: string; keepIds: string[]; onStopAbandonedRun: () => void; onAbort: () => void; onDiscuss: () => void; onSendDiscussionMessage: (message: string) => void; onContinueFromDiscussion: () => void; onContinueWithoutDiscussion: () => void; onContinue: () => void; onBackToAssessment: () => void; onReassess: () => void; onRestart: () => void; onSetDepth: (depth: ReviewDepth) => void; onCancelRun: () => void; onToggleRunKeep: (entryIds: string[], next: boolean) => void; onToggleRunKeepTopic: (section: "Deep Memory" | "Active Items", topic: string, next: boolean) => void; onRaiseRunBudget: (budgetTokens: number) => void; onEditRunEntry: (entryId: string, text: string) => Promise<void>; onSaveRun: () => void; onRunBackToAssessment: () => void; onUndo: () => void; returnLabel: string }) {
 	if (state.step === "closed") return null;
 	const loading = state.step === "checking" || state.step === "assessing";
@@ -1878,6 +1829,8 @@ function ReviewWorkflowShell({ state, loadingMessage, waitingMessage, keepIds, o
 	// A first read that named stale notes is why the deeper tidy is offered
 	// first, so the picker says so in the same words the read used.
 	const staleFlagged = (assessment?.fields.staleOrContradicts.length ?? 0) > 0;
+	const lookAlike = (assessment?.fields.lookAlikeTopics?.length ?? 0) > 0;
+	const disagreeing = assessment?.fields.disagree?.length ?? 0;
 	const savedCounts = reviewChangeCounts(run?.changes ?? []);
 	const savedBudget = state.approvalResult?.memoryBudget;
 	const savedPercent = savedBudget ? reviewPercent(savedBudget.reviewTargetEstimatedTokens, savedBudget.budgetTokens) : run ? reviewRunFullPercent(run) : 0;
@@ -2040,7 +1993,7 @@ function ReviewWorkflowShell({ state, loadingMessage, waitingMessage, keepIds, o
 								<ReviewFirstReadSections fields={assessment.fields} />
 							</div>
 							{availability && (
-								<ReviewDepthPicker availability={availability} staleFlagged={staleFlagged} chosen={state.depth ?? availability.recommendedDepth} onChoose={onSetDepth} />
+								<ReviewDepthPicker availability={availability} staleFlagged={staleFlagged} lookAlike={lookAlike} disagreeing={disagreeing} chosen={state.depth ?? availability.recommendedDepth} onChoose={onSetDepth} />
 							)}
 							{assessment.fields.needsYourCall.length > 0 && <p className="absorb-help-note">Answer these in Discuss first, and the tidy follows your answers. Continue lets the room decide on its own.</p>}
 							{meaningfulMaintenanceWarnings(assessment.warnings).length > 0 && <div className="checkpoint-proposal-warnings">{meaningfulMaintenanceWarnings(assessment.warnings).map((warning) => <div key={warning}>{warning}</div>)}</div>}
@@ -2059,17 +2012,11 @@ function ReviewWorkflowShell({ state, loadingMessage, waitingMessage, keepIds, o
 	);
 }
 
-function AbsorbWorkflowShell({ state, loadingMessage, waitingMessage, keepIds, onStopAbandonedRun, onAbort, onDiscuss, onSendDiscussionMessage, onGenerateFromDiscussion, onGenerate, onApprove, onBackToDiscussion, onBackToAssessment, onReassess, onDraftWithoutDiscussion, onRestart, onCancelRun, onToggleRunKeep, onToggleRunKeepTopic, onRaiseRunBudget, onRaiseLimitBeforeRun, onReviewFirst, onEditRunEntry, onApproveRun, onRunBackToAssessment, returnLabel }: { state: AbsorbWorkflowState; loadingMessage: string; waitingMessage: string; keepIds: string[]; onStopAbandonedRun: () => void; onAbort: () => void; onDiscuss: () => void; onSendDiscussionMessage: (message: string) => void; onGenerateFromDiscussion: () => void; onGenerate: () => void; onApprove: () => void; onBackToDiscussion: () => void; onBackToAssessment: () => void; onReassess: () => void; onDraftWithoutDiscussion: () => void; onRestart: () => void; onCancelRun: () => void; onToggleRunKeep: (entryIds: string[], next: boolean) => void; onToggleRunKeepTopic: (section: "Deep Memory" | "Active Items", topic: string, next: boolean) => void; onRaiseRunBudget: (budgetTokens: number) => void; onRaiseLimitBeforeRun: (budgetTokens: number) => void; onReviewFirst: () => void; onEditRunEntry: (entryId: string, text: string) => Promise<void>; onApproveRun: () => void; onRunBackToAssessment: () => void; returnLabel: string }) {
+function AbsorbWorkflowShell({ state, loadingMessage, waitingMessage, keepIds, onStopAbandonedRun, onAbort, onDiscuss, onSendDiscussionMessage, onGenerateFromDiscussion, onGenerate, onBackToAssessment, onReassess, onDraftWithoutDiscussion, onRestart, onCancelRun, onToggleRunKeep, onToggleRunKeepTopic, onRaiseRunBudget, onRaiseLimitBeforeRun, onReviewFirst, onEditRunEntry, onChooseRunBeside, onApproveRun, onRunBackToAssessment, onResumeRun, onChooseModel, returnLabel }: { state: AbsorbWorkflowState; loadingMessage: string; waitingMessage: string; keepIds: string[]; onStopAbandonedRun: () => void; onAbort: () => void; onDiscuss: () => void; onSendDiscussionMessage: (message: string) => void; onGenerateFromDiscussion: () => void; onGenerate: () => void; onBackToAssessment: () => void; onReassess: () => void; onDraftWithoutDiscussion: () => void; onRestart: () => void; onCancelRun: () => void; onToggleRunKeep: (entryIds: string[], next: boolean) => void; onToggleRunKeepTopic: (section: "Deep Memory" | "Active Items", topic: string, next: boolean) => void; onRaiseRunBudget: (budgetTokens: number) => void; onRaiseLimitBeforeRun: (budgetTokens: number) => void; onReviewFirst: () => void; onEditRunEntry: (entryId: string, text: string) => Promise<void>; onChooseRunBeside: (entryId: string, choice: "replace" | "keep-both") => Promise<void>; onApproveRun: () => void; onRunBackToAssessment: () => void; onResumeRun: () => void; onChooseModel: () => void; returnLabel: string }) {
 	if (state.step === "closed") return null;
 	const loading = state.step === "checking" || state.step === "assessing";
 	const availability = state.availability;
 	const assessment = state.assessment;
-	const proposal = state.proposal;
-	const validation = proposal?.candidateValidation;
-	const proposalWarnings = meaningfulMaintenanceWarnings([...(state.signoffWarnings ?? []), ...(proposal?.warnings ?? []), ...(validation?.warnings ?? [])].filter(Boolean));
-	const proposalErrors = (validation?.errors ?? []).map(describeValidationError);
-	const stableMemoryDelta = proposal ? formatStableMemoryDelta(proposal) : null;
-	const budgetImpact = proposal?.memoryBudgetImpact ? memoryBudgetImpactCopy(proposal.memoryBudgetImpact) : null;
 	const discussionMessages = state.discussionMessages ?? [];
 	const discussionBudget = state.discussionTokenBudget;
 	const targetLabel = state.target?.displayName ?? "this room";
@@ -2081,7 +2028,7 @@ function AbsorbWorkflowShell({ state, loadingMessage, waitingMessage, keepIds, o
 		? "Reading the waiting conversations…"
 		: state.step === "assessment" || state.step === "discussing"
 			? "Step 1 of 2 · a first read of what the waiting conversations hold"
-			: state.step === "running" || state.step === "run_card" || state.step === "proposing" || state.step === "proposal"
+			: state.step === "running" || state.step === "run_card" || state.step === "proposing"
 				? `Step 2 of 2 · what ${targetLabel} will keep`
 				: state.step === "approving"
 					? "Saving…"
@@ -2098,7 +2045,7 @@ function AbsorbWorkflowShell({ state, loadingMessage, waitingMessage, keepIds, o
 				</div>
 				{state.step === "approving" ? (
 					<button className="rs-btn" disabled title="The memory update is being written and cannot be cancelled.">Updating memory…</button>
-				) : state.step === "assessment" || state.step === "proposal" || state.step === "running" || state.step === "run_card" ? null : (
+				) : state.step === "assessment" || state.step === "running" || state.step === "run_card" ? null : (
 					// Assessment, the run screens and the proposal keep a single Cancel
 					// in their action row instead of a duplicate header exit.
 					<button className="rs-btn" onClick={onAbort}>{state.step === "saved" || state.step === "unavailable" || state.step === "error" ? returnLabel : "Cancel"}</button>
@@ -2171,6 +2118,7 @@ function AbsorbWorkflowShell({ state, loadingMessage, waitingMessage, keepIds, o
 					<AbsorbRunCard
 						run={state.run}
 						roomName={targetLabel}
+						memoryModel={availability?.model}
 						fastPathBlockedReasons={state.fastPathBlockedReasons}
 						keepIds={keepIds}
 						busy={state.runBusy === true}
@@ -2179,9 +2127,12 @@ function AbsorbWorkflowShell({ state, loadingMessage, waitingMessage, keepIds, o
 						onToggleKeepTopic={onToggleRunKeepTopic}
 						onRaiseBudget={onRaiseRunBudget}
 						onEditEntry={onEditRunEntry}
+						onChooseBeside={onChooseRunBeside}
 						onApprove={onApproveRun}
 						onCancel={onCancelRun}
 						onBackToAssessment={onRunBackToAssessment}
+						onResume={onResumeRun}
+						onChooseModel={onChooseModel}
 					/>
 				) : state.step === "saved" && state.approvalResult && state.run ? (
 					<div className="checkpoint-proposal-page checkpoint-saved-page absorb-saved-state">
@@ -2191,6 +2142,13 @@ function AbsorbWorkflowShell({ state, loadingMessage, waitingMessage, keepIds, o
 							{state.approvalResult.budgetRaisedTo !== undefined && <p>{LIMIT_RAISED_ON_SAVE_SENTENCE}</p>}
 							{state.fastPathApplied && <p className="absorb-fast-path-note">This room applies memory updates automatically, so this update was saved without a second look.</p>}
 						</div>
+						{/* Saved without a second look, so the notice the card would have shown is shown here. */}
+						{state.fastPathApplied && absorbRunAllSummarized(state.run) && (
+							<div className="absorb-help-note absorb-run-summaries-note" role="status">
+								<p>{ABSORB_ALL_SUMMARIZED_SENTENCE}</p>
+								<div className="absorb-run-note-actions"><button className="rs-btn" onClick={onChooseModel}>{ABSORB_CHOOSE_MODEL_LABEL}</button></div>
+							</div>
+						)}
 						<div className="absorb-review-strip">
 							<div className="absorb-review-status"><span>Conversations</span><strong>{(state.approvalResult.foldedSessions?.length ?? 0)} of {state.run.progress.total}</strong></div>
 							<div className="absorb-review-status"><span>Notes</span><strong>{absorbRunNotesChanged(state.run)} added or updated</strong></div>
@@ -2200,58 +2158,6 @@ function AbsorbWorkflowShell({ state, loadingMessage, waitingMessage, keepIds, o
 						{state.approvalResult.warnings.length > 0 && <div className="checkpoint-proposal-warnings">{state.approvalResult.warnings.map((warning) => <div key={warning}>{warning}</div>)}</div>}
 						<p className="checkpoint-footnote">The previous memory is kept, so this update can be undone from Room settings → Memory.</p>
 						<div className="checkpoint-preview-actions">
-							<button className="rs-btn rs-btn-primary" onClick={onAbort}>{returnLabel}</button>
-						</div>
-					</div>
-				) : state.step === "saved" && state.approvalResult ? (
-					<div className="checkpoint-proposal-page checkpoint-saved-page absorb-saved-state">
-						<div className="checkpoint-input-heading">
-							<h2>Saved to memory</h2>
-							<p>{targetLabel === "this room" ? "This room memorized its waiting conversations." : `${targetLabel} memorized its waiting conversations.`}</p>
-							{state.fastPathApplied && <p className="absorb-fast-path-note">This room saves its notes automatically, so this save happened without a second look.</p>}
-							{state.fastPathApplied && state.proposal && maintenanceWorkerNotes(state.proposal.fields.warnings) && (
-								<p className="absorb-fast-path-note">Notes from the update: {maintenanceWorkerNotes(state.proposal.fields.warnings)}</p>
-							)}
-						</div>
-						<div className="absorb-result-grid">
-							{(() => {
-								const remain = state.approvalResult.recentContextEntryCount;
-								const before = proposal?.review?.keyMetrics.recentContextEntriesBefore ?? state.assessment?.availability.recentContextEntryCount ?? null;
-								const cleared = before !== null && before >= remain ? `${before - remain} of ${before} cleared` : `${remain} remain`;
-								return <div className="absorb-result-card"><span>Recent Sessions</span><strong title={`${remain} ${remain === 1 ? "entry remains" : "entries remain"}`}>{cleared}</strong></div>;
-							})()}
-							{stableMemoryDelta && <div className="absorb-result-card"><span>Deep Memory</span><strong>{stableMemoryDelta}</strong></div>}
-							{state.approvalResult.memoryBudget && (
-								<div className="absorb-result-card"><span>Memory budget</span><strong title={`${state.approvalResult.memoryBudget.reviewTargetEstimatedTokens} of ${state.approvalResult.memoryBudget.budgetTokens} estimated tokens of deep memory and active items`}>{`~${fmtTokensK(state.approvalResult.memoryBudget.reviewTargetEstimatedTokens)} of ${fmtTokensK(state.approvalResult.memoryBudget.budgetTokens)}${state.approvalResult.memoryBudget.overBudget ? " — over" : ""}`}</strong></div>
-							)}
-							<div className="absorb-result-card"><span>Previous memory</span><strong>Archived first</strong></div>
-							<div className="absorb-result-card"><span>Timeline</span><strong title="The room's timeline now records this Memorize and when it was applied">Stamped</strong></div>
-							<div className="absorb-result-card"><span>Audit record</span><strong>Created</strong></div>
-						</div>
-						{state.approvalResult.memoryBudget?.overBudget && (
-							<div className="absorb-help-note memory-budget-nudge" role="status">
-								{/* "took the room over" is only claimed when the proposal's impact
-							    block proves the crossing; without it the copy stays neutral.
-							    The numbers live on the Memory budget result card above — the
-							    sentence carries the verdict, not a rounded fraction. */}
-								{!proposal?.memoryBudgetImpact
-									? "This room is over its memory budget."
-									: proposal.memoryBudgetImpact.overBudgetBefore
-										? "This room is still over its memory budget."
-										: "This Memorize took the room over its memory budget."}
-								{" "}The budget is a ceiling on deep memory and active items — run Review from Maintain to bring it back under. Chatting still works meanwhile.
-							</div>
-						)}
-						{proposal && (
-							<div className="absorb-proposal-sections">
-								<ProposalSection title="What changed" body={proposal.review?.summary || proposal.fields.primacyMap} />
-								<SectionChangesDetail changes={proposal.review?.sectionChanges} fallback={proposal.fields.sectionLevelChangeLog} />
-								<EntryChangesDetail changes={proposal.review?.entryChanges} fallback={proposal.fields.entryLevelDetail} />
-							</div>
-						)}
-						{state.approvalResult.warnings.length > 0 && <div className="checkpoint-proposal-warnings">{state.approvalResult.warnings.map((warning) => <div key={warning}>{warning}</div>)}</div>}
-						<div className="checkpoint-preview-actions">
-							{state.approvalResult.memoryBudget?.overBudget && <button className="rs-btn" onClick={onRestart} title="Return to Maintain, where Review can tighten deep memory and active items">Open Maintain</button>}
 							<button className="rs-btn rs-btn-primary" onClick={onAbort}>{returnLabel}</button>
 						</div>
 					</div>
@@ -2287,56 +2193,11 @@ function AbsorbWorkflowShell({ state, loadingMessage, waitingMessage, keepIds, o
 							onDraftWithoutDiscussion={onDraftWithoutDiscussion}
 						/>
 					</div>
-				) : proposal ? (
-					<div className="checkpoint-proposal-page absorb-proposal-page">
-						<div className="checkpoint-input-heading checkpoint-proposal-heading">
-							<p className="card-kicker">Memory update · not saved</p>
-							<h2>Review memory update</h2>
-							<p>Review the high-level summary first. Nothing changes until you approve the candidate memory update for this room.</p>
-						</div>
-						<div className="absorb-review-strip">
-							<div className={`absorb-review-status ${state.proposalStale ? "error" : validation?.valid ? "ok" : "error"}`}><span>Candidate check</span><strong>{state.proposalStale ? "Out of date" : validation?.valid ? "Ready to approve" : "Needs review"}</strong></div>
-							{stableMemoryDelta && <div className="absorb-review-status"><span>Deep Memory delta</span><strong>{stableMemoryDelta}</strong></div>}
-							{budgetImpact && !state.proposalStale && <div className="absorb-review-status"><span>Memory budget</span><strong>{budgetImpact.meter}</strong></div>}
-						</div>
-						{budgetImpact?.note && !state.proposalStale && <div className="absorb-help-note memory-budget-impact-note">{budgetImpact.note}</div>}
-						{proposalErrors.length > 0 && <div className="checkpoint-proposal-error" role="alert">{proposalErrors.map((error) => <div key={error}>{error}</div>)}</div>}
-						{state.error && <div className="checkpoint-proposal-error" role="alert">{state.error}</div>}
-						{proposalWarnings.length > 0 && <div className="checkpoint-proposal-warnings absorb-warning-list">{proposalWarnings.map((warning) => <div key={warning}>{warning}</div>)}</div>}
-						{(state.fastPathBlockedReasons?.length ?? 0) > 0 && !state.proposalStale && (
-							<div className="absorb-help-note fast-path-blocked-note">
-								{automaticApplyNeedsReviewSentence(state.fastPathBlockedReasons!)}
-							</div>
-						)}
-						<div className="absorb-proposal-sections">
-							<ProposalSection title="Summary" body={proposal.review?.summary || proposal.fields.primacyMap} />
-							<SectionChangesDetail changes={proposal.review?.sectionChanges} fallback={proposal.fields.sectionLevelChangeLog} />
-							<EntryChangesDetail changes={proposal.review?.entryChanges} fallback={proposal.fields.entryLevelDetail} />
-							{proposal.fields.warnings && <ProposalDetail title="Proposal warnings" body={proposal.fields.warnings} />}
-							<details className="absorb-candidate-disclosure">
-								<summary>Full candidate memory rewrite</summary>
-								<MarkdownPreview body={stripLeadingHtmlComments(proposal.fields.candidateL1b)} />
-								<details className="absorb-raw-markdown-disclosure">
-									<summary>Raw markdown</summary>
-									<pre className="checkpoint-full-entry">{proposal.fields.candidateL1b}</pre>
-								</details>
-							</details>
-						</div>
-
-						<div className="checkpoint-preview-actions">
-							<ProposalApproveBlockedReason validation={validation} stale={state.proposalStale} />
-							<button className="rs-btn" onClick={onAbort}>Cancel</button>
-							{(state.discussionMessages?.length ?? 0) > 0 && <button className="rs-btn" title="Return to the discussion; the transcript is kept and only this draft is dropped" onClick={onBackToDiscussion}>Back to discussion</button>}
-							<button className="rs-btn" title="Generate a fresh memory update from the same assessment" onClick={onGenerate}>Draft again</button>
-							<button className="rs-btn rs-btn-primary" disabled={!validation?.valid || state.proposalStale} title={state.proposalStale ? "This draft can no longer be applied. Draft the update again to continue." : validation?.valid ? "Approve and update long-term memory" : "Candidate memory must pass validation before approval"} onClick={onApprove}>Approve and update memory</button>
-						</div>
-						<p className="checkpoint-footnote">Approve writes the candidate update · the current memory is archived first · this Memorize is stamped on the room's timeline</p>
-					</div>
 				) : assessment ? (
 					<div className="checkpoint-proposal-page absorb-assessment-page">
 						<div className="checkpoint-input-heading checkpoint-proposal-heading">
-							<h2>What these {assessment.availability.recentContextEntryCount} conversations hold</h2>
-							<p>A first read.</p>
+							<h2>{assessment.availability.recentContextEntryCount === 1 ? "What this conversation holds" : `What these ${assessment.availability.recentContextEntryCount} conversations hold`}</h2>
+							<p>{assessment.firstReadMissing ? FIRST_READ_MISSING_SENTENCE : "A first read."}</p>
 						</div>
 						{state.error && <div className="checkpoint-proposal-error" role="alert">{state.error}</div>}
 						{state.activeRunConflictId && (
@@ -2362,15 +2223,30 @@ function AbsorbWorkflowShell({ state, loadingMessage, waitingMessage, keepIds, o
 								</div>
 							);
 						})()}
-						<div className="absorb-assessment-grid absorb-assessment-flow">
-							<AbsorbFirstReadSections fields={assessment.fields} />
-						</div>
+						{!assessment.firstReadMissing && (
+							<div className="absorb-assessment-grid absorb-assessment-flow">
+								<AbsorbFirstReadSections fields={assessment.fields} />
+							</div>
+						)}
+						{assessment.firstReadMissing && (assessment.waitingConversations?.length ?? 0) > 0 && (
+							<div className="absorb-run-change-groups absorb-first-read-waiting">
+								{assessment.waitingConversations!.map((conversation, index) => (
+									<div className="absorb-run-change-group absorb-run-conversation plain" key={`${conversation.date}-${conversation.title}-${index}`}>
+										<span className="absorb-run-session-head">
+											<strong>{conversation.title}</strong>
+											{conversation.date && <span className="absorb-run-session-date">{conversation.date}</span>}
+										</span>
+									</div>
+								))}
+							</div>
+						)}
 						{assessment.fields.needsJudgment.length > 0 && <p className="absorb-help-note">Answer these in Discuss first, and the update follows your answers. Continue lets the room decide on its own.</p>}
 						{meaningfulMaintenanceWarnings(assessment.warnings).length > 0 && <div className="checkpoint-proposal-warnings">{meaningfulMaintenanceWarnings(assessment.warnings).map((warning) => <div key={warning}>{warning}</div>)}</div>}
 						<div className="checkpoint-preview-actions">
 							<button className="rs-btn" onClick={onAbort}>Cancel</button>
-							<button className="rs-btn" onClick={onReassess} title="Read the conversations again, asking the model to fix what this read got wrong. Nothing is saved.">Read again</button>
-							<button className={`rs-btn${assessment.fields.needsJudgment.length > 0 ? " rs-btn-primary" : ""}`} onClick={onDiscuss} title="Answer the questions and give instructions first; the discussion itself is not saved">Discuss first</button>
+							<button className="rs-btn" onClick={onReassess} title={assessment.firstReadMissing ? "Read the conversations again. Nothing is saved." : "Read the conversations again, asking the model to fix what this read got wrong. Nothing is saved."}>Read again</button>
+							{/* A first read the client could not ask for has no source, so nothing to discuss. */}
+							{assessment.source && <button className={`rs-btn${assessment.fields.needsJudgment.length > 0 ? " rs-btn-primary" : ""}`} onClick={onDiscuss} title="Answer the questions and give instructions first; the discussion itself is not saved">Discuss first</button>}
 							<button className={`rs-btn${assessment.fields.needsJudgment.length > 0 ? "" : " rs-btn-primary"}`} onClick={onGenerate} title="Memorize the conversations and show what the room will keep">Continue →</button>
 						</div>
 						{state.fastPathEnabled && <p className="checkpoint-footnote">{AUTOMATIC_APPLY_ON_SENTENCE} · a clean update is saved without a second look</p>}
@@ -2491,12 +2367,6 @@ function MaintenanceDiscussion({ assessmentMarkdown, aside, generateLabel = "Dra
 	);
 }
 
-// The candidate memory begins with an engine schema comment — hide it in the
-// rendered view only; the raw markdown and saved bytes keep it.
-function stripLeadingHtmlComments(markdown: string): string {
-	return markdown.replace(/^(\s*<!--[\s\S]*?-->\s*)+/, "");
-}
-
 // Assessment bullets carry inline markdown (e.g. **must-keep** markers) —
 // render it instead of showing raw asterisks.
 function BulletList({ items }: { items: string[] }) {
@@ -2525,123 +2395,6 @@ function AssessmentSection({ title, items, wide = false }: { title: string; item
 			<BulletList items={items} />
 		</section>
 	);
-}
-
-function ProposalSection({ title, body }: { title: string; body: string }) {
-	return (
-		<section className="absorb-proposal-section">
-			<h3>{title}</h3>
-			<MarkdownPreview body={body || "None"} />
-		</section>
-	);
-}
-
-// verbatim: quoted memory text (the derived Dropped material and consolidated
-// source) is byte-exact memory, not a worker-authored table — it renders as
-// plain markdown, never lifted into the change table with action pills.
-function ProposalDetail({ title, body, verbatim }: { title: string; body: string; verbatim?: boolean }) {
-	return (
-		<details className="absorb-candidate-disclosure absorb-detail-disclosure">
-			<summary>{title}</summary>
-			{verbatim ? <MarkdownPreview body={body || "None"} /> : <StructuredProposalBody body={body || "None"} />}
-		</details>
-	);
-}
-
-// The absorb parser folds the worker table's word counts into the description
-// as a "Prior: N; Candidate: M. " prefix — lift it back out as a quiet delta
-// line, falling back to the raw text when the prefix is absent.
-function SectionChangeDescription({ description }: { description: string }) {
-	const match = /^Prior:\s*([\d,]+);\s*Candidate:\s*([\d,]+)\.\s*(.*)$/.exec(description.trim());
-	if (!match) return <>{description}</>;
-	return (
-		<>
-			{match[3] || "No rationale provided."}
-			<span className="absorb-count-delta">{match[1]} → {match[2]} words</span>
-		</>
-	);
-}
-
-function SectionChangesDetail({ changes, fallback }: { changes?: AbsorbReviewSectionChange[]; fallback: string }) {
-	if (!changes?.length) return <ProposalDetail title="Section-level changes" body={fallback} />;
-	return (
-		<details className="absorb-candidate-disclosure absorb-detail-disclosure">
-			<summary>Section-level changes</summary>
-			<div className="absorb-table-wrap">
-				<table className="absorb-change-table">
-					<thead><tr><th>Memory area</th><th>Action</th><th>What changes</th></tr></thead>
-					<tbody>{changes.map((change, index) => <tr key={`${change.section}-${index}`}><td>{change.section}</td><td><AbsorbActionBadge action={change.action} /></td><td><SectionChangeDescription description={change.description} /></td></tr>)}</tbody>
-				</table>
-			</div>
-		</details>
-	);
-}
-
-function EntryChangesDetail({ changes, fallback }: { changes?: AbsorbReviewEntryChange[]; fallback: string }) {
-	if (!changes?.length) return <ProposalDetail title="Entry-level detail" body={fallback} />;
-	return (
-		<details className="absorb-candidate-disclosure absorb-detail-disclosure">
-			<summary>Entry-level detail</summary>
-			<div className="absorb-table-wrap">
-				<table className="absorb-change-table">
-					<thead><tr><th>Source</th><th>Action</th><th>Destination</th><th>Why</th></tr></thead>
-					<tbody>{changes.map((change, index) => <tr key={`${change.sourceEntry}-${index}`}><td>{change.sourceEntry}</td><td><AbsorbActionBadge action={change.action} /></td><td>{change.targetSection || "–"}</td><td>{change.rationale}</td></tr>)}</tbody>
-				</table>
-			</div>
-		</details>
-	);
-}
-
-function AbsorbActionBadge({ action }: { action: AbsorbReviewAction }) {
-	const label = absorbActionLabel(action);
-	return <span className={`absorb-action-pill ${absorbActionTone(action)}`}>{label}</span>;
-}
-
-
-
-
-
-
-
-// A body that mixes a table with prose or bullets renders BOTH, in the
-// worker's own order — dropping or reordering the non-table lines would
-// silently distort worker disclosures (the Dropped material section is
-// exactly where a worker mixes bullets into a tabular habit). Only lines the
-// table actually rendered are excluded from the text.
-function tableRemainders(body: string, consumedLineIndexes: number[]): { before: string; after: string } {
-	const consumed = new Set(consumedLineIndexes);
-	const firstConsumed = Math.min(...consumedLineIndexes);
-	const lines = body.split(/\r?\n/);
-	return {
-		before: lines.filter((_, index) => index < firstConsumed && !consumed.has(index)).join("\n").trim(),
-		after: lines.filter((_, index) => index > firstConsumed && !consumed.has(index)).join("\n").trim(),
-	};
-}
-
-function StructuredProposalBody({ body }: { body: string }) {
-	const table = parseMarkdownTable(body);
-	if (table) {
-		const { before, after } = tableRemainders(body, table.consumedLineIndexes);
-		return (
-			<>
-				{before && <MarkdownPreview body={before} />}
-				<div className="absorb-table-wrap">
-					<table className="absorb-change-table">
-						<thead><tr>{table.headers.map((header) => <th key={header}>{header}</th>)}</tr></thead>
-						<tbody>{table.rows.map((row, rowIndex) => <tr key={rowIndex}>{row.map((cell, cellIndex) => <td key={`${rowIndex}-${cellIndex}`}>{renderActionCell(cell)}</td>)}</tr>)}</tbody>
-					</table>
-				</div>
-				{after && <MarkdownPreview body={after} />}
-			</>
-		);
-	}
-	return <MarkdownPreview body={body} />;
-}
-
-
-
-function normalizeTableHeader(header: string): string {
-	return header.toLowerCase().replace(/[^a-z0-9]+/g, "").trim();
 }
 
 function MarkdownPreview({ body }: { body: string }) {
@@ -2681,138 +2434,6 @@ function MarkdownPreview({ body }: { body: string }) {
 function renderInlineMarkdown(text: string) {
 	const parts = text.split(/(\*\*[^*]+\*\*)/g).filter(Boolean);
 	return parts.map((part, index) => part.startsWith("**") && part.endsWith("**") ? <strong key={index}>{part.slice(2, -2)}</strong> : <span key={index}>{part}</span>);
-}
-
-// consumedLineIndexes names exactly the body lines the rendered table shows.
-// A pipe-line the table rejects (a row whose cell count mismatches the header,
-// e.g. from an unescaped pipe inside a cell) is deliberately NOT consumed, so
-// it falls to the text remainder instead of disappearing from both surfaces.
-function parseMarkdownTable(body: string): { headers: string[]; rows: string[][]; consumedLineIndexes: number[] } | null {
-	// The table is the CONTIGUOUS run of pipe lines that follows the first
-	// header + delimiter pair. Quoted memory (the derived Dropped material) can
-	// hold several tables; hoisting every pipe line in the body would merge them
-	// and misattribute rows (light-pass round 3).
-	const allLines = body.split(/\r?\n/).map((line, index) => ({ line: line.trim(), index }));
-	const isPipe = (line: string) => line.startsWith("|") && line.endsWith("|");
-	const isDelimiter = (line: string) => /^\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?$/.test(line);
-	const headerAt = allLines.findIndex(({ line }, index) => isPipe(line) && index + 1 < allLines.length && isPipe(allLines[index + 1].line) && isDelimiter(allLines[index + 1].line));
-	if (headerAt < 0) return null;
-	const pipeLines: Array<{ line: string; index: number }> = [];
-	for (let i = headerAt; i < allLines.length && isPipe(allLines[i].line); i++) pipeLines.push(allLines[i]);
-	if (pipeLines.length < 3) return null;
-	const parseRow = (line: string) => line.replace(/^\|/, "").replace(/\|$/, "").split("|").map((cell) => cell.trim());
-	const headers = parseRow(pipeLines[0].line);
-	const consumedLineIndexes = [pipeLines[0].index, pipeLines[1].index];
-	const rows: string[][] = [];
-	for (const { line, index } of pipeLines.slice(2)) {
-		const row = parseRow(line);
-		if (row.length !== headers.length) continue;
-		rows.push(row);
-		consumedLineIndexes.push(index);
-	}
-	return rows.length ? { headers, rows, consumedLineIndexes } : null;
-}
-
-function renderActionCell(cell: string) {
-	const action = classifyAbsorbAction(cell);
-	return action ? <span className={`absorb-action-pill ${action}`}>{cell}</span> : renderInlineMarkdown(cell);
-}
-
-function classifyAbsorbAction(value: string): "drop" | "promote" | "update" | null {
-	const normalized = value.toLowerCase();
-	if (/\b(drop|clear|remove|forget|discard)\b/.test(normalized)) return "drop";
-	if (/\b(promote|preserve|keep|remember|carry forward)\b/.test(normalized)) return "promote";
-	if (/\b(update|move|merge|consolidate|revise)\b/.test(normalized)) return "update";
-	return null;
-}
-
-function absorbActionLabel(action: AbsorbReviewAction): string {
-	if (action === "drop") return "Forget";
-	if (action === "clear") return "Clear";
-	if (action === "merge") return "Combine";
-	if (action === "promote") return "Add to memory";
-	if (action === "update") return "Update memory";
-	if (action === "preserve") return "Keep";
-	if (action === "needs_judgment") return "Needs your judgment";
-	return "No change";
-}
-
-function absorbActionTone(action: AbsorbReviewAction): "drop" | "promote" | "update" | "neutral" {
-	if (action === "drop" || action === "clear") return "drop";
-	if (action === "promote" || action === "preserve" || action === "merge") return "promote";
-	if (action === "update" || action === "needs_judgment") return "update";
-	return "neutral";
-}
-
-function formatStableMemoryDelta(proposal: AbsorbProposalResponse): string | null {
-	const delta = proposal.review?.keyMetrics.stableMemoryDeltaTokens;
-	if (typeof delta === "number") return `${delta >= 0 ? "+" : ""}${delta} estimated tokens`;
-	return extractStableMemoryDelta(proposal.fields.compressionMetrics);
-}
-
-// One copy source for the budget-impact line on the Memorize and Review
-// approval cards. Renders the server's verdicts only — the comparison is never
-// re-derived here. Ceiling-not-target: under-budget copy states the position
-// and never invites growth into headroom, so a quiet position gets no note.
-function memoryBudgetImpactCopy(impact: MemoryBudgetImpact): { meter: string; over: boolean; note: string | null } {
-	const after = fmtTokensK(impact.reviewTargetEstimatedTokensAfter);
-	const budget = fmtTokensK(impact.budgetTokens);
-	// The verdict word rides the meter: near the ceiling the chars/4 estimate
-	// rounds to the same "~20k of 20k" on both sides, so the fraction alone
-	// must never be what tells the user which side they are on.
-	const meter = `~${after} of ${budget} after approval${impact.overBudgetAfter ? " — over" : ""}`;
-	if (impact.overBudgetAfter && !impact.overBudgetBefore) {
-		// Sub-1k margins stay unnumbered: naming "~1 tokens" would claim a
-		// precision the chars/4 estimate does not have (and at 950-999 the
-		// formatter would round to "0.9k"/"1k", so the cut sits at 1000).
-		const margin = impact.reviewTargetEstimatedTokensAfter - impact.budgetTokens;
-		return { meter, over: true, note: margin < 1000
-			? `Approving takes this room just over its ${budget}-token memory budget.`
-			: `Approving puts this room about ${fmtTokensK(margin)} tokens over its ${budget}-token memory budget.` };
-	}
-	if (impact.overBudgetAfter) {
-		return { meter, over: true, note: `This room stays over its ${budget}-token memory budget after this update.` };
-	}
-	if (impact.overBudgetBefore) {
-		return { meter, over: false, note: `Approving brings this room back under its ${budget}-token memory budget.` };
-	}
-	return { meter, over: false, note: null };
-}
-
-
-
-
-
-function extractStableMemoryDelta(compressionMetrics: string): string | null {
-	const line = compressionMetrics.split(/\r?\n/).map((entry) => entry.replace(/^[-*]\s*/, "").trim()).find((entry) => /stable|l1b|memory/i.test(entry) && /delta|change|growth|shrink|reduction|tokens|chars|bytes/i.test(entry));
-	return line ? line.replace(/^stable memory\s*:?\s*/i, "") : null;
-}
-
-// Matches only the server's actual concurrent-change messages; bare substrings
-// like "stale" or "source" would misclassify unrelated transient errors and,
-// via proposalStale, permanently disarm a perfectly applicable proposal.
-function isStaleMaintenanceMessage(message: string): boolean {
-	return /fingerprint changed|source is stale|proposal is stale|Recent Context entry count changed/i.test(message);
-}
-
-// The budget-staleness guard rejects an approval without any memory changing —
-// the user edited the room's memory budget mid-flow. Saying "Memory changed"
-// there states a false cause, so this branch outranks the generic stale copy
-// everywhere approve errors are translated. (Remember has no budget guard by
-// design — its budget impact is zero — so its formatter keeps only the generic.)
-// Today only the approval formatter's branch is reachable — the server throws
-// this string from the two approve writers alone; the workflow/draft formatter
-// branches are defensive breadth, kept so a future guard inherits true copy.
-function isBudgetStaleMessage(message: string): boolean {
-	return /memory budget changed/i.test(message);
-}
-
-// Failures where retrying the same approval is guaranteed to fail again; the
-// draft must be regenerated, so the Approve button is disarmed. Budget-stale
-// is named explicitly: its disarm must not hinge on the server string keeping
-// its "proposal is stale" prefix.
-function isUnappliableProposalMessage(message: string): boolean {
-	return isStaleMaintenanceMessage(message) || isBudgetStaleMessage(message) || /token growth exceeds|hard limit|> 5%/i.test(message);
 }
 
 // Provider wording for a rejected or missing credential. Applied only to a
@@ -2865,7 +2486,7 @@ function formatMaintenanceRequestError(message: string): string | null {
 	if (/was aborted before it answered/i.test(message)) return "This step was stopped before the maintenance model answered. No memory was updated. Run it again.";
 	if (/produced no text/i.test(message)) return "The maintenance model returned an empty reply. No memory was updated. Try again.";
 	if (/model not found/i.test(message)) return "The maintenance model set in the AI profile is not available. No memory was updated. Check AI setup.";
-	if (/was cut off at the model's output limit|too large to rewrite in one response|came back at \d+ characters after \d+ attempt/i.test(message)) return message;
+	if (/was cut off at the model's output limit|came back at \d+ characters after \d+ attempt/i.test(message)) return message;
 	// The Review ops refusal is written server-side as one product sentence with its remedy; wrapping it would state the non-mutation twice.
 	if (/^The Review draft could not be built/.test(message)) return message;
 	// Last line of defence: a bare field-name rejection never reaches the screen as-is.
@@ -2874,7 +2495,6 @@ function formatMaintenanceRequestError(message: string): string | null {
 }
 
 function formatAbsorbWorkflowError(message: string): string {
-	if (isBudgetStaleMessage(message)) return "This room's memory budget changed while this workflow was open. No memory was updated. Please restart Maintain to work from the current budget.";
 	if (isStaleMaintenanceMessage(message)) return "Memory changed while this workflow was open. No memory was updated. Please restart Maintain to review the latest memory state.";
 	const request = formatMaintenanceRequestError(message);
 	if (request) return request;
@@ -2934,36 +2554,12 @@ function recentSessionsHeadsUp(remaining: number | null | undefined): string | n
 	return null;
 }
 
-// Approval failures are shown on the proposal screen, so the instructions must
-// point at actions that exist there (Draft again), and unmapped failures need
-// the was-my-memory-changed reassurance the raw server text never gives.
-function formatMaintenanceApprovalError(message: string): string {
-	if (isBudgetStaleMessage(message)) return "This room's memory budget changed while this proposal was open. No memory was updated. Draft the update again to work from the current budget.";
-	if (isStaleMaintenanceMessage(message)) return "Memory changed while this proposal was open. No memory was updated. Draft the update again to work from the latest memory state.";
-	// The approve body carries the whole proposal back; a 413 here is not a
-	// discussion-size problem, so it gets its own sentence before the shared one.
-	if (/Request failed \(413\)|FST_ERR_CTP_BODY_TOO_LARGE|body is too large|Payload Too Large/i.test(message)) return "This proposal was too large to send back to the server. No memory was updated. Draft again; if it repeats, this is a bug worth reporting.";
-	const request = formatMaintenanceRequestError(message);
-	if (request) return request;
-	// Already product-worded server-side (the filesystem detail stays in the
-	// server log); passing it through avoids the double "memory is unchanged".
-	if (/could not be saved to this room's Files/i.test(message)) return message;
-	if (/token growth exceeds|hard limit|> 5%/i.test(message)) return "This candidate grows deep memory beyond the Review safety limit. No memory was updated. Draft the update again.";
-	return `The memory update could not be applied. Your memory is unchanged and this proposal is still here. Details: ${message}`;
-}
-
-function formatAbsorbApprovalError(message: string): string {
-	return formatMaintenanceApprovalError(message);
-}
-
 // Draft failures land back on the assessment screen, so the copy reassures
 // that the assessment survived and points at the Draft action on that screen.
 function formatMaintenanceDraftError(message: string): string {
-	if (isBudgetStaleMessage(message)) return "This room's memory budget changed while this workflow was open. No memory was updated. Restart Maintain to work from the current budget.";
 	if (isStaleMaintenanceMessage(message)) return "Memory changed while this workflow was open. No memory was updated. Restart Maintain to work from the latest memory state.";
 	const request = formatMaintenanceRequestError(message);
 	if (request) return request;
-	if (/token growth exceeds|hard limit|> 5%/i.test(message)) return "The draft grows deep memory beyond the safety limit. No memory was updated. You can draft again.";
 	return `The memory update draft could not be generated. No memory was updated and your assessment is untouched. Details: ${message}`;
 }
 
@@ -2971,7 +2567,6 @@ function formatMaintenanceDraftError(message: string): string {
 // was saved, and the one thing to do next. The server's refusals are already
 // product-worded, so an unmapped one is passed straight through.
 function formatReviewWorkflowError(message: string): string {
-	if (isBudgetStaleMessage(message)) return "This room's memory budget changed while Review was open. Nothing was saved. Start Review again to work from the current budget.";
 	if (isStaleMaintenanceMessage(message)) return "The memory changed while Review was open. Nothing was saved. Start Review again to read the notes as they are now.";
 	const request = formatMaintenanceRequestError(message);
 	if (request) return request;
@@ -2982,7 +2577,6 @@ function formatReviewWorkflowError(message: string): string {
 // A save that failed lands back on the card, so the way out it names is the one
 // that screen has: reading the notes again from the start.
 function formatReviewApprovalError(message: string): string {
-	if (isBudgetStaleMessage(message)) return "This room's memory budget changed while this tidy was open. Nothing was saved. Start Review again to work from the current budget.";
 	if (isStaleMaintenanceMessage(message)) return "The memory changed while this tidy was open. Nothing was saved. Start Review again to read the notes as they are now.";
 	const request = formatMaintenanceRequestError(message);
 	if (request) return request;
@@ -3759,6 +3353,8 @@ export function App() {
 	const absorbKeepQueuedRef = useRef<string[] | null>(null);
 	// The room whose settings the Memory tab opened, on its Memory pane.
 	const [memorySettingsRoomId, setMemorySettingsRoomId] = useState<PersistentAgentId | null>(null);
+	// Memorize's "Choose another model": the room's settings at its Memory model, over the Memorize screen.
+	const [absorbModelSettingsOpen, setAbsorbModelSettingsOpen] = useState(false);
 	const [absorbLoadingIndex, setAbsorbLoadingIndex] = useState(0);
 	const [absorbWaitingIndex, setAbsorbWaitingIndex] = useState(0);
 	const [reviewWaitingIndex, setReviewWaitingIndex] = useState(0);
@@ -4195,6 +3791,9 @@ export function App() {
 			headers: { "content-type": "application/json" },
 			body: JSON.stringify({ state, origin, model: thread.model, items: nextItems, ...(pendingHandoffs !== undefined ? { pendingHandoffs } : {}) }),
 		});
+		// The server refuses the body before the handler runs, so the stored
+		// conversation is the one from the last save that was accepted.
+		if (res.status === 413) throw new Error("This conversation is too large to save. What was saved before is kept.");
 		if (!res.ok) throw await persistentAgentResponseError(res, `Failed to save persistent-agent thread (${res.status})`);
 		const body = await res.json() as { thread: PersistentAgentThreadRecord; runtime: PersistentAgentStatus["runtime"] };
 		applyPersistentRuntime(thread.agentId, body.runtime);
@@ -5503,6 +5102,26 @@ export function App() {
 					flushAssistantStream();
 					setBusy(false);
 					busyRef.current = false;
+					return;
+				}
+				// The room holds as many remembered conversations as it can: every
+				// redial reaches the same refusal, and the way out (Maintain, then
+				// Memorize) is on Home. So the ladder stands down, the room is left
+				// the ordinary way, and Home says why. The room is marked so its
+				// Maintain opens although its conversation is still open.
+				if (msg.code === "room_full") {
+					const refusedRoom = persistentChat?.agentId ?? null;
+					if (refusedRoom) setMemoryOverflowRooms((rooms) => rooms.has(refusedRoom) ? rooms : new Set([...rooms, refusedRoom]));
+					if (wsRef.current !== ws) return;
+					suppressReconnectRef.current = true;
+					cancelScheduledReconnect();
+					setRoomReconnect("failed");
+					flushAssistantStream();
+					setBusy(false);
+					busyRef.current = false;
+					const text = typeof msg.message === "string" && msg.message ? msg.message : "This room is holding as many remembered conversations as it can. Memorize them first: use Maintain on its card, then open it again.";
+					// A save refused on the way out has already said so on Home; both stay.
+					void finishLeaveRoom().then(() => setPersistentResumeError((current) => current ? `${current} ${text}` : text));
 					return;
 				}
 				if (msg.code === "memory_overflow") {
@@ -7563,10 +7182,6 @@ export function App() {
 			setMaintainConfirm({ title: "Abort this memory discussion?", body: "The discussion transcript is temporary and will be discarded. No memory has been changed.", confirmLabel: "Discard discussion", cancelLabel: "Keep discussing", onConfirm: exitMaintainWorkflows });
 			return;
 		}
-		if (absorbWorkflow.step === "proposal") {
-			setMaintainConfirm({ title: "Discard this memory update draft?", body: "It has not been saved and will need to be generated again.", confirmLabel: "Discard draft", cancelLabel: "Keep reviewing", onConfirm: exitMaintainWorkflows });
-			return;
-		}
 		// A run is live work on the server: leaving it has to stop it too.
 		if (absorbWorkflow.step === "running" || absorbWorkflow.step === "run_card") {
 			confirmCancelAbsorbRun();
@@ -7587,22 +7202,18 @@ export function App() {
 		leave();
 	}
 
-	// Return from the proposal screen to the discussion it came from, keeping
-	// the transcript; only the drafted proposal is dropped.
-	function backToAbsorbDiscussion() {
-		if (absorbWorkflow.step !== "proposal" || !(absorbWorkflow.discussionMessages?.length)) return;
-		setAbsorbWorkflow({ ...absorbWorkflow, step: "discussing", proposal: null, approvalResult: null, discussionSending: false, fastPathBlockedReasons: undefined, proposalStale: false, error: null });
-	}
-
 	function setAbsorbUnavailable(availability: AbsorbAvailability, target: MaintainTarget | null = absorbWorkflow.target) {
-		setAbsorbWorkflow({ step: "unavailable", target, availability, assessment: null, proposal: null, approvalResult: null, error: null });
+		setAbsorbWorkflow({ step: "unavailable", target, availability, assessment: null, approvalResult: null, error: null });
 	}
 
 	function setAbsorbError(error: string, availability: AbsorbAvailability | null = null, target: MaintainTarget | null = absorbWorkflow.target) {
-		setAbsorbWorkflow({ step: "error", target, availability, assessment: null, proposal: null, approvalResult: null, error });
+		setAbsorbWorkflow({ step: "error", target, availability, assessment: null, approvalResult: null, error });
 	}
 
-	async function startAbsorbWorkflow() {
+	// Start, or Discuss first from the chooser. A room that saves a clean update
+	// without the card starts on Start with no first read: the run begins at
+	// once. Discuss first, and every other room, reads first as always.
+	async function startAbsorbWorkflow(options?: { discuss?: boolean }) {
 		// The overflow exemption must mirror maintainBlockedReason: when the
 		// server refused this room's memory at the window, the latched standby
 		// thread is exactly what Maintain exists to fix — without the exemption
@@ -7617,7 +7228,7 @@ export function App() {
 		}
 		setAbsorbLoadingIndex(Math.floor(Math.random() * ABSORB_LOADING_MESSAGES.length));
 		const run = maintainRunRef.current;
-		setAbsorbWorkflow({ step: "checking", target, availability: null, assessment: null, proposal: null, approvalResult: null, error: null });
+		setAbsorbWorkflow({ step: "checking", target, availability: null, assessment: null, approvalResult: null, error: null });
 		try {
 			const availability = await fetchAbsorbStatus(target.agentId);
 			if (run !== maintainRunRef.current) return;
@@ -7625,11 +7236,27 @@ export function App() {
 				setAbsorbUnavailable(availability, target);
 				return;
 			}
-			setAbsorbWorkflow({ step: "assessing", target, availability, assessment: null, proposal: null, approvalResult: null, error: null });
-			const assessment = await requestAbsorbAssessment(target.agentId);
 			const fastPathEnabled = await roomFastPathEnabled(target.agentId);
 			if (run !== maintainRunRef.current) return;
-			setAbsorbWorkflow({ step: "assessment", target, availability: withAbsorbStatusFields(assessment.availability, availability), conversations: availability.sessions, assessment, proposal: null, approvalResult: null, fastPathEnabled, error: null });
+			if (fastPathEnabled && !options?.discuss) {
+				const from: AbsorbWorkflowState = { step: "assessment", target, availability, conversations: availability.sessions, assessment: missingFirstRead(target.agentId, availability, "skipped"), approvalResult: null, fastPathEnabled, error: null };
+				setAbsorbWorkflow(from);
+				await generateAbsorbProposal({ from });
+				return;
+			}
+			setAbsorbWorkflow({ step: "assessing", target, availability, assessment: null, approvalResult: null, error: null });
+			// The first read never blocks Memorize: when the request itself fails
+			// without the server saying why, the screen goes on without one. A
+			// sentence the server wrote is its answer and is shown as before.
+			const assessment = await requestAbsorbAssessment(target.agentId).catch((error: unknown) => {
+				if (!isUnexplainedRequestFailure(error)) throw error;
+				return missingFirstRead(target.agentId, availability);
+			});
+			if (run !== maintainRunRef.current) return;
+			const read: AbsorbWorkflowState = { step: "assessment", target, availability: withAbsorbStatusFields(assessment.availability, availability), conversations: availability.sessions, assessment, approvalResult: null, fastPathEnabled, error: null };
+			// Discuss first opens the discussion on the read it just made; a read
+			// with no source has nothing to discuss and stays on the first read.
+			setAbsorbWorkflow(options?.discuss && assessment.source ? { ...read, step: "discussing", discussionMessages: [], discussionTokenBudget: null, discussionSending: false, assessmentHandoff: null } : read);
 		} catch (e) {
 			if (run !== maintainRunRef.current) return;
 			setAbsorbError(formatAbsorbWorkflowError((e as Error).message), null, target);
@@ -7646,11 +7273,14 @@ export function App() {
 		}
 		const run = maintainRunRef.current;
 		setAbsorbLoadingIndex(Math.floor(Math.random() * ABSORB_LOADING_MESSAGES.length));
-		setAbsorbWorkflow({ ...absorbWorkflow, step: "assessing", proposal: null, approvalResult: null, error: null });
+		setAbsorbWorkflow({ ...absorbWorkflow, step: "assessing", approvalResult: null, error: null });
 		try {
-			const assessment = await requestAbsorbAssessment(target.agentId, { retryFeedback: assessmentRetryFeedback(prior) });
+			const assessment = await requestAbsorbAssessment(target.agentId, { retryFeedback: assessmentRetryFeedback(prior) }).catch((error: unknown) => {
+				if (!isUnexplainedRequestFailure(error)) throw error;
+				return missingFirstRead(target.agentId, prior.availability);
+			});
 			if (run !== maintainRunRef.current) return;
-			setAbsorbWorkflow({ ...absorbWorkflow, step: "assessment", availability: withAbsorbStatusFields(assessment.availability, absorbWorkflow.availability), assessment, proposal: null, approvalResult: null, assessmentHandoff: null, discussionMessages: [], discussionTokenBudget: null, discussionWarnings: null, signoffWarnings: undefined, proposalStale: false, error: null });
+			setAbsorbWorkflow({ ...absorbWorkflow, step: "assessment", availability: withAbsorbStatusFields(assessment.availability, absorbWorkflow.availability), assessment, approvalResult: null, assessmentHandoff: null, discussionMessages: [], discussionTokenBudget: null, discussionWarnings: null, signoffWarnings: undefined, error: null });
 		} catch (e) {
 			if (run !== maintainRunRef.current) return;
 			// The previous assessment is still valid: keep it on screen with the reason.
@@ -7693,12 +7323,11 @@ export function App() {
 
 	function startAbsorbDiscussion() {
 		const assessment = absorbWorkflow.assessment;
-		if (!assessment || absorbWorkflow.step !== "assessment") return;
+		if (!assessment?.source || absorbWorkflow.step !== "assessment") return;
 		setAbsorbWorkflow({
 			...absorbWorkflow,
 			step: "discussing",
-			proposal: null,
-			approvalResult: null,
+					approvalResult: null,
 			discussionMessages: [],
 			discussionTokenBudget: null,
 			discussionSending: false,
@@ -7710,7 +7339,7 @@ export function App() {
 	async function sendAbsorbDiscussionMessage(message: string) {
 		const assessment = absorbWorkflow.assessment;
 		const target = absorbWorkflow.target;
-		if (!assessment || absorbWorkflow.step !== "discussing" || absorbWorkflow.discussionSending) return;
+		if (!assessment?.source || absorbWorkflow.step !== "discussing" || absorbWorkflow.discussionSending) return;
 		if (!target) {
 			setAbsorbWorkflow({ ...absorbWorkflow, error: "The Memorize target is missing. Return to the launcher and choose a room again." });
 			return;
@@ -7749,7 +7378,7 @@ export function App() {
 		const assessment = absorbWorkflow.assessment;
 		const target = absorbWorkflow.target;
 		const messages = absorbWorkflow.discussionMessages ?? [];
-		if (!assessment || absorbWorkflow.step !== "discussing" || messages.length === 0 || absorbWorkflow.discussionSending) return;
+		if (!assessment?.source || absorbWorkflow.step !== "discussing" || messages.length === 0 || absorbWorkflow.discussionSending) return;
 		if (!target) {
 			setAbsorbWorkflow({ ...absorbWorkflow, error: "The Memorize target is missing. Return to the launcher and choose a room again." });
 			return;
@@ -7775,12 +7404,11 @@ export function App() {
 			});
 			if (run !== maintainRunRef.current) return;
 			const base: AbsorbWorkflowState = {
-				step: "proposal",
+				step: "running",
 				target,
 				availability: signoff.availability,
 				assessment,
-				proposal: null,
-				approvalResult: null,
+							approvalResult: null,
 				discussionMessages: messages,
 				discussionTokenBudget: signoff.tokenBudget,
 				assessmentHandoff: signoff.assessmentHandoff,
@@ -7789,50 +7417,38 @@ export function App() {
 				limitRaisedFrom: absorbWorkflow.limitRaisedFrom,
 				error: null,
 			};
-			if (isAbsorbRunStart(response)) {
-				beginAbsorbRunWatch(base, response.runId);
-				return;
-			}
-			const proposalState: AbsorbWorkflowState = { ...base, availability: response.availability, proposal: response };
-			if (await maybeFastPathAbsorbApproval(target, response, proposalState, run)) return;
-			setAbsorbWorkflow(proposalState);
+			beginAbsorbRunWatch(base, response.runId);
 		} catch (e) {
 			if (run !== maintainRunRef.current) return;
 			setAbsorbWorkflow({ ...absorbWorkflow, step: "discussing", discussionSending: false, error: formatAbsorbWorkflowError((e as Error).message) });
 		}
 	}
 
-	async function generateAbsorbProposal(options?: { withoutDiscussion?: boolean; afterStoppingRun?: boolean }) {
-		const assessment = absorbWorkflow.assessment;
-		const target = absorbWorkflow.target;
-		if (!assessment || absorbWorkflow.step === "proposing") return;
+	// `from` is the state to start from when it was set in this same event, before
+	// React has rendered it (the chooser's Start in a room without a first read).
+	async function generateAbsorbProposal(options?: { withoutDiscussion?: boolean; afterStoppingRun?: boolean; from?: AbsorbWorkflowState }) {
+		const current = options?.from ?? absorbWorkflow;
+		const assessment = current.assessment;
+		const target = current.target;
+		if (!assessment || current.step === "proposing") return;
 		// From the discussion panel the draft deliberately leaves the discussion
 		// out (no stored handoff), and a failure returns there — the transcript is
 		// promised to be kept, so it must stay reachable.
-		const fromDiscussion = absorbWorkflow.step === "discussing";
+		const fromDiscussion = current.step === "discussing";
 		if (!target) {
-			setAbsorbWorkflow({ ...absorbWorkflow, error: "The Memorize target is missing. Return to the launcher and choose a room again." });
+			setAbsorbWorkflow({ ...current, error: "The Memorize target is missing. Return to the launcher and choose a room again." });
 			return;
 		}
 		const run = maintainRunRef.current;
-		const priorProposal = absorbWorkflow.proposal;
-		const priorStale = absorbWorkflow.proposalStale;
-		setAbsorbWorkflow({ ...absorbWorkflow, step: "proposing", proposal: null, approvalResult: null, proposalStale: false, activeRunConflictId: null, error: null });
+		setAbsorbWorkflow({ ...current, step: "proposing", approvalResult: null, activeRunConflictId: null, error: null });
 		try {
 			// Redrafts keep honoring a discussion the user already had — unless the
 			// user explicitly asked to draft without it.
-			const handoff = options?.withoutDiscussion ? null : absorbWorkflow.assessmentHandoff;
-			const retryFeedback = proposalRetryFeedback(priorProposal);
-			const response = await startAbsorbRun(target.agentId, assessment.assessmentMarkdown, { ...(handoff ? { assessmentHandoff: handoff, source: assessment.source } : {}), ...(retryFeedback ? { retryFeedback } : {}), ...(absorbWorkflow.limitRaisedFrom === undefined ? {} : { limitRaisedFrom: absorbWorkflow.limitRaisedFrom }) });
+			const handoff = options?.withoutDiscussion ? null : current.assessmentHandoff;
+			const response = await startAbsorbRun(target.agentId, assessment.assessmentMarkdown, { ...(handoff ? { assessmentHandoff: handoff, source: assessment.source } : {}), ...(current.limitRaisedFrom === undefined ? {} : { limitRaisedFrom: current.limitRaisedFrom }) });
 			if (run !== maintainRunRef.current) return;
-			const base: AbsorbWorkflowState = { step: "proposal", target, availability: absorbWorkflow.availability, assessment, proposal: null, approvalResult: null, discussionMessages: absorbWorkflow.discussionMessages, discussionTokenBudget: absorbWorkflow.discussionTokenBudget, assessmentHandoff: handoff, signoffWarnings: handoff ? absorbWorkflow.signoffWarnings : undefined, fastPathEnabled: absorbWorkflow.fastPathEnabled, limitRaisedFrom: absorbWorkflow.limitRaisedFrom, error: null };
-			if (isAbsorbRunStart(response)) {
-				beginAbsorbRunWatch(base, response.runId);
-				return;
-			}
-			const proposalState: AbsorbWorkflowState = { ...base, availability: response.availability, proposal: response };
-			if (await maybeFastPathAbsorbApproval(target, response, proposalState, run)) return;
-			setAbsorbWorkflow(proposalState);
+			const base: AbsorbWorkflowState = { step: "running", target, availability: current.availability, assessment, approvalResult: null, discussionMessages: current.discussionMessages, discussionTokenBudget: current.discussionTokenBudget, assessmentHandoff: handoff, signoffWarnings: handoff ? current.signoffWarnings : undefined, fastPathEnabled: current.fastPathEnabled, limitRaisedFrom: current.limitRaisedFrom, error: null };
+			beginAbsorbRunWatch(base, response.runId);
 		} catch (e) {
 			if (run !== maintainRunRef.current) return;
 			// A run left behind by a closed tab is not a failed draft: the room is
@@ -7841,15 +7457,14 @@ export function App() {
 			// offer is made once; a room that refuses again after the stop gets
 			// the plain error, so the two can never loop.
 			if (e instanceof AbsorbRunActiveError && e.runId && !options?.afterStoppingRun) {
-				setAbsorbWorkflow({ ...absorbWorkflow, step: "assessment", proposal: null, approvalResult: null, activeRunConflictId: e.runId, error: null });
+				setAbsorbWorkflow({ ...current, step: "assessment", approvalResult: null, activeRunConflictId: e.runId, error: null });
 				return;
 			}
-			// A failed draft never destroys work: a prior proposal (Draft again)
-			// is restored, otherwise the assessment survives with an inline error.
+			// A run that could not start never destroys work: the discussion or the
+			// first read survives with an inline error.
 			const draftError = formatMaintenanceDraftError((e as Error).message);
-			if (fromDiscussion) setAbsorbWorkflow({ ...absorbWorkflow, step: "discussing", discussionSending: false, proposal: null, approvalResult: null, assessmentHandoff: null, error: draftError });
-			else if (priorProposal) setAbsorbWorkflow({ ...absorbWorkflow, step: "proposal", proposal: priorProposal, approvalResult: null, proposalStale: priorStale, error: draftError });
-			else setAbsorbWorkflow({ ...absorbWorkflow, step: "assessment", proposal: null, approvalResult: null, error: draftError });
+			if (fromDiscussion) setAbsorbWorkflow({ ...current, step: "discussing", discussionSending: false, approvalResult: null, assessmentHandoff: null, error: draftError });
+			else setAbsorbWorkflow({ ...current, step: "assessment", approvalResult: null, error: draftError });
 		}
 	}
 
@@ -7861,7 +7476,7 @@ export function App() {
 	function beginAbsorbRunWatch(base: AbsorbWorkflowState, runId: string): void {
 		absorbRunSettledRef.current = null;
 		clearAbsorbKeepDraft();
-		setAbsorbWorkflow({ ...base, step: "running", runId, run: null, runBusy: false, runPollError: null, proposal: null, approvalResult: null, error: null });
+		setAbsorbWorkflow({ ...base, step: "running", runId, run: null, runBusy: false, runPollError: null, approvalResult: null, error: null });
 	}
 
 	// A run that reaches a resting state is handled exactly once: the poll that
@@ -8025,6 +7640,9 @@ export function App() {
 	function editAbsorbRunEntryText(entryId: string, text: string): Promise<void> {
 		return withAbsorbRunRequest((target, runId) => editAbsorbRunEntry(target.agentId, runId, entryId, text));
 	}
+	function chooseAbsorbRunBesideNote(entryId: string, choice: "replace" | "keep-both"): Promise<void> {
+		return withAbsorbRunRequest((target, runId) => chooseAbsorbRunBeside(target.agentId, runId, entryId, choice));
+	}
 
 	/** Cancel always asks first: a run costs minutes of model work to redo. */
 	function confirmCancelAbsorbRun(): void {
@@ -8054,6 +7672,40 @@ export function App() {
 		setAbsorbWorkflow((current) => ({ ...current, step: "assessment", run: null, runId: null, runBusy: false, runPollError: null, fastPathBlockedReasons: undefined, error: null }));
 	}
 
+	/**
+	 * Try again, after the run stopped because its model was not answering:
+	 * the same run reads the conversations still waiting, under the same id,
+	 * so the screen watches it again from here. A run another tab already
+	 * resumed, or one with nothing left to read, is simply watched; a run the
+	 * server no longer holds (a newer one replaced it, or it expired) starts
+	 * Memorize again.
+	 */
+	async function resumeAbsorbRunAfterStop(): Promise<void> {
+		const target = absorbWorkflow.target;
+		const runId = absorbWorkflow.run?.runId ?? absorbWorkflow.runId;
+		if (!target || !runId || absorbWorkflow.runBusy) return;
+		const runToken = maintainRunRef.current;
+		setAbsorbWorkflow((current) => ({ ...current, runBusy: true, error: null }));
+		try {
+			await resumeAbsorbRun(target.agentId, runId);
+		} catch (e) {
+			if (runToken !== maintainRunRef.current) return;
+			const code = apiErrorCode(e);
+			if (code === "absorb_run_unknown") {
+				void startAbsorbWorkflow();
+				return;
+			}
+			if (code !== "absorb_run_not_ready" && code !== "absorb_run_nothing_waiting") {
+				setAbsorbWorkflow((current) => ({ ...current, runBusy: false, error: (e as Error).message }));
+				return;
+			}
+		}
+		if (runToken !== maintainRunRef.current) return;
+		// The same id settles a second time, so the once-per-run guard is cleared.
+		absorbRunSettledRef.current = null;
+		setAbsorbWorkflow((current) => ({ ...current, step: "running", runId, runBusy: false, runPollError: null, fastPathBlockedReasons: undefined, error: null }));
+	}
+
 	function approveAbsorbRunUpdate(): void {
 		const target = absorbWorkflow.target;
 		const absorbRun = absorbWorkflow.run;
@@ -8080,7 +7732,7 @@ export function App() {
 			setAbsorbWorkflow((current) => ({ ...current, step: "saved", run: absorbRun, approvalResult, runBusy: false, error: null }));
 		} catch (e) {
 			if (runToken !== maintainRunRef.current) return;
-			setAbsorbWorkflow((current) => ({ ...current, step: "run_card", run: absorbRun, runBusy: false, error: formatAbsorbApprovalError((e as Error).message) }));
+			setAbsorbWorkflow((current) => ({ ...current, step: "run_card", run: absorbRun, runBusy: false, error: formatAbsorbRunSaveError((e as Error).message) }));
 		}
 	}
 
@@ -8111,76 +7763,6 @@ export function App() {
 		}
 	}
 
-	/**
-	 * Fast path: when the room opts in and the proposal is warning-free, apply
-	 * it immediately instead of showing the second approval screen. Returns
-	 * true when it has taken over the workflow state (applied or failed back
-	 * to the manual proposal screen); false means show the proposal as usual.
-	 */
-	async function maybeFastPathAbsorbApproval(target: MaintainTarget, proposal: AbsorbProposalResponse, proposalState: AbsorbWorkflowState, run: number): Promise<boolean> {
-		const fastPathOn = await roomFastPathEnabled(target.agentId);
-		// A cancelled run must never reach the automatic write, and must not
-		// return false here either: the caller would then restore the cancelled
-		// run's proposal state unguarded.
-		if (run !== maintainRunRef.current) return true;
-		if (!fastPathOn) return false;
-		const blockers = maintenanceFastPathBlockers(proposal);
-		if (blockers.length > 0) {
-			setAbsorbWorkflow({ ...proposalState, fastPathBlockedReasons: blockers });
-			return true;
-		}
-		setAbsorbWorkflow({ ...proposalState, step: "approving", fastPathApplied: true, error: null });
-		try {
-			const approvalResult = await requestAbsorbApproval(target.agentId, proposal);
-			await refreshPersistentAgentStatus();
-			if (run !== maintainRunRef.current) return true;
-			setAbsorbWorkflow({ ...proposalState, step: "saved", availability: { ...proposal.availability, recentContextEntryCount: approvalResult.recentContextEntryCount }, approvalResult, fastPathApplied: true, error: null });
-		} catch (e) {
-			if (run !== maintainRunRef.current) return true;
-			const raw = (e as Error).message;
-			// Stale and safety-limit failures already tell the user what to do;
-			// the manual-approval framing would contradict them.
-			const blocked = isUnappliableProposalMessage(raw);
-			setAbsorbWorkflow({ ...proposalState, step: "proposal", proposalStale: blocked, error: blocked ? formatAbsorbApprovalError(raw) : `${AUTOMATIC_APPLY_ON_SENTENCE}, but this proposal could not be applied. Review it and approve it yourself. ${raw}` });
-		}
-		return true;
-	}
-
-	async function approveAbsorbProposal() {
-		const proposal = absorbWorkflow.proposal;
-		const target = absorbWorkflow.target;
-		if (!proposal || !proposal.candidateValidation.valid || absorbWorkflow.step === "approving") return;
-		if (!target) {
-			setAbsorbWorkflow({ ...absorbWorkflow, step: "proposal", error: "The Memorize target is missing. No memory was updated. Return to the launcher and choose a room again." });
-			return;
-		}
-		if (proposal.agentId !== target.agentId) {
-			setAbsorbWorkflow({ ...absorbWorkflow, step: "proposal", error: "This proposal belongs to a different room. No memory was updated. Restart Maintain for this room." });
-			return;
-		}
-		setMaintainConfirm({
-			title: `Apply this memory update to ${target.displayName}?`,
-			body: "Recent Sessions are consolidated into deep memory. The current memory is archived first, so nothing is lost.",
-			confirmLabel: "Approve and update",
-			cancelLabel: "Keep reviewing",
-			onConfirm: () => { void performAbsorbApproval(target, proposal); },
-		});
-	}
-
-	async function performAbsorbApproval(target: MaintainTarget, proposal: AbsorbProposalResponse) {
-		const run = maintainRunRef.current;
-		setAbsorbWorkflow({ ...absorbWorkflow, step: "approving", error: null });
-		try {
-			const approvalResult = await requestAbsorbApproval(target.agentId, proposal);
-			await refreshPersistentAgentStatus();
-			if (run !== maintainRunRef.current) return;
-			setAbsorbWorkflow({ step: "saved", target, availability: { ...proposal.availability, recentContextEntryCount: approvalResult.recentContextEntryCount }, assessment: absorbWorkflow.assessment, proposal, approvalResult, error: null });
-		} catch (e) {
-			if (run !== maintainRunRef.current) return;
-			const raw = (e as Error).message;
-			setAbsorbWorkflow({ ...absorbWorkflow, step: "proposal", proposal, approvalResult: null, proposalStale: isUnappliableProposalMessage(raw), error: formatAbsorbApprovalError(raw) });
-		}
-	}
 
 	async function openPersistentAgent(target: PersistentAgentTarget) {
 		const label = target.displayName?.trim() || "Exxpert";
@@ -8896,7 +8478,9 @@ export function App() {
 				try {
 					await closePersistentAgentRoom(liveThread, "home");
 				} catch (e) {
-					setItems((s) => [...s, { kind: "system", id: nid(), text: (e as Error).message, level: "error" }]);
+					// The chat closes on the next line, so a line in it would never be
+					// read: the failed save is said on Home, where the person lands.
+					setPersistentResumeError(`${persistentChat.displayName || "This room"}: ${(e as Error).message}`);
 				}
 			}
 			setPersistentChat(null);
@@ -9104,10 +8688,14 @@ export function App() {
 
 	if (view === "home") {
 		if (absorbWorkflowOpen) {
+			const absorbModelSettingsRoom = absorbModelSettingsOpen && absorbWorkflow.target ? persistentAgentStatuses.find((status) => status.id === absorbWorkflow.target!.agentId) ?? null : null;
 			return withConnectionBanner(
 				<>
 					{maintainConfirm && <MaintainConfirmDialog confirm={maintainConfirm} onClose={() => setMaintainConfirm(null)} />}
-					<AbsorbWorkflowShell state={absorbWorkflow} loadingMessage={ABSORB_LOADING_MESSAGES[absorbLoadingIndex]} waitingMessage={ABSORB_WAITING_MESSAGES[absorbWaitingIndex]} keepIds={absorbKeepDraft ?? absorbWorkflow.run?.demotion.keepIds ?? []} onStopAbandonedRun={() => void stopAbandonedAbsorbRun()} onAbort={abortAbsorbWorkflow} onDiscuss={startAbsorbDiscussion} onSendDiscussionMessage={sendAbsorbDiscussionMessage} onGenerateFromDiscussion={generateAbsorbProposalFromDiscussion} onGenerate={() => void generateAbsorbProposal()} onApprove={approveAbsorbProposal} onBackToDiscussion={backToAbsorbDiscussion} onBackToAssessment={backToAbsorbAssessment} onReassess={reassessAbsorb} onDraftWithoutDiscussion={() => void generateAbsorbProposal({ withoutDiscussion: true })} onRestart={restartMaintain} onCancelRun={confirmCancelAbsorbRun} onToggleRunKeep={toggleAbsorbRunKeep} onToggleRunKeepTopic={toggleAbsorbRunKeepTopic} onRaiseRunBudget={raiseAbsorbRunBudget} onRaiseLimitBeforeRun={(tokens) => void raiseAbsorbLimitBeforeRun(tokens)} onReviewFirst={reviewFirstFromAbsorb} onEditRunEntry={editAbsorbRunEntryText} onApproveRun={approveAbsorbRunUpdate} onRunBackToAssessment={() => void absorbRunBackToAssessment()} returnLabel={maintainReturnLabel} />
+					<AbsorbWorkflowShell state={absorbWorkflow} loadingMessage={ABSORB_LOADING_MESSAGES[absorbLoadingIndex]} waitingMessage={ABSORB_WAITING_MESSAGES[absorbWaitingIndex]} keepIds={absorbKeepDraft ?? absorbWorkflow.run?.demotion.keepIds ?? []} onStopAbandonedRun={() => void stopAbandonedAbsorbRun()} onAbort={abortAbsorbWorkflow} onDiscuss={startAbsorbDiscussion} onSendDiscussionMessage={sendAbsorbDiscussionMessage} onGenerateFromDiscussion={generateAbsorbProposalFromDiscussion} onGenerate={() => void generateAbsorbProposal()} onBackToAssessment={backToAbsorbAssessment} onReassess={reassessAbsorb} onDraftWithoutDiscussion={() => void generateAbsorbProposal({ withoutDiscussion: true })} onRestart={restartMaintain} onCancelRun={confirmCancelAbsorbRun} onToggleRunKeep={toggleAbsorbRunKeep} onToggleRunKeepTopic={toggleAbsorbRunKeepTopic} onRaiseRunBudget={raiseAbsorbRunBudget} onRaiseLimitBeforeRun={(tokens) => void raiseAbsorbLimitBeforeRun(tokens)} onReviewFirst={reviewFirstFromAbsorb} onEditRunEntry={editAbsorbRunEntryText} onChooseRunBeside={chooseAbsorbRunBesideNote} onApproveRun={approveAbsorbRunUpdate} onRunBackToAssessment={() => void absorbRunBackToAssessment()} onResumeRun={() => void resumeAbsorbRunAfterStop()} onChooseModel={() => setAbsorbModelSettingsOpen(true)} returnLabel={maintainReturnLabel} />
+					{absorbModelSettingsRoom && (
+						<RoomSettingsModal status={absorbModelSettingsRoom} initialPane="model" onClose={() => setAbsorbModelSettingsOpen(false)} onArchive={archivePersistentAgentRoom} onPurge={purgePersistentAgentRoom} onRefresh={refreshPersistentAgentStatus} onOpenSkillsLibrary={() => openSettings("skills")} onOpenConnectors={() => openSettings("connectors")} />
+					)}
 				</>
 			);
 		}
@@ -9120,7 +8708,7 @@ export function App() {
 			);
 		}
 		if (maintainChooserOpen && maintainTarget) {
-			return withConnectionBanner(<MaintainChooserShell target={maintainTarget} roomStatus={persistentAgentStatuses.find((status) => status.id === maintainTarget.agentId) ?? null} onAbsorb={startAbsorbWorkflow} onPrune={startPruneMemoryWorkflow} onReturn={closeMaintainChooser} returnLabel={maintainReturnLabel} />);
+			return withConnectionBanner(<MaintainChooserShell target={maintainTarget} roomStatus={persistentAgentStatuses.find((status) => status.id === maintainTarget.agentId) ?? null} onAbsorb={() => void startAbsorbWorkflow()} onDiscussFirst={() => void startAbsorbWorkflow({ discuss: true })} onPrune={startPruneMemoryWorkflow} onReturn={closeMaintainChooser} returnLabel={maintainReturnLabel} />);
 		}
 		return withConnectionBanner(
 			<>

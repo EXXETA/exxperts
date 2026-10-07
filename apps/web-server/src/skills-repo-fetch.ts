@@ -9,8 +9,9 @@
  *   - `git clone --depth 1 --no-tags --single-branch` via a child_process ARGS
  *     ARRAY (never a shell string), so a hostile URL cannot inject a command;
  *   - hooks neutralized (`core.hooksPath=/dev/null`, empty `GIT_TEMPLATE_DIR`),
- *     submodules never recursed, credential prompts disabled, transports
- *     allow-listed;
+ *     submodules never recursed, credential prompts disabled (a private repo
+ *     authenticates only through a sign-in git already stored, which the clone
+ *     reads and never stores or erases), transports allow-listed;
  *   - temp checkouts live under the OS temp dir, are traversal-guarded on read,
  *     and are swept on TTL / cleaned on process exit;
  *   - nothing enters the library here — vendoring happens only on review-accept.
@@ -102,8 +103,10 @@ export interface ResolvedRepoSource {
 	cloneArg: string;
 	/** Optional branch/ref to check out shallowly. */
 	ref?: string;
-	/** Human-readable source recorded in provenance and shown in the UI. */
+	/** Human-readable source recorded in provenance and shown in the UI; never carries a user name. */
 	display: string;
+	/** The remote's host, named in a sign-in failure. Absent for a local source. */
+	host?: string;
 }
 
 function looksLikeLocalPath(input: string): boolean {
@@ -150,7 +153,7 @@ export function resolveRepoSource(rawInput: string, opts: { allowLocal?: boolean
 		if (scpLike[1].startsWith("-")) return { ok: false, error: "invalid git host" };
 		const repoPath = scpLike[2].replace(/\.git$/, "");
 		if (repoPath.split("/").filter(Boolean).length < 2) return { ok: false, error: "expected a git@host:user/repo URL" };
-		return { ok: true, value: { kind: "git", cloneArg: urlPart, ref, display: urlPart } };
+		return { ok: true, value: { kind: "git", cloneArg: urlPart, ref, display: urlPart, host: scpLike[1] } };
 	}
 
 	const protoMatch = urlPart.match(/^(https?|ssh|git):\/\//i);
@@ -172,10 +175,39 @@ export function resolveRepoSource(rawInput: string, opts: { allowLocal?: boolean
 	} catch {
 		return { ok: false, error: "invalid repository URL" };
 	}
+	if (addressHasPassword(cloneArg)) return { ok: false, error: PASSWORD_IN_ADDRESS };
 	if (parsed.hostname.startsWith("-") || SHELL_META.test(parsed.hostname) || parsed.pathname.replace(/\.git$/, "").split("/").filter(Boolean).length < 2) {
 		return { ok: false, error: "expected a git URL with a user/repo path" };
 	}
-	return { ok: true, value: { kind: "git", cloneArg, ref, display: cloneArg } };
+	return { ok: true, value: { kind: "git", cloneArg, ref, display: shownAddress(parsed, cloneArg), host: parsed.host } };
+}
+
+/**
+ * A password in the address would be kept as the skill's source, shown in the app
+ * and written into its provenance file, so it is refused: the sign-in git already
+ * stores is the way in. An address with only a user name stays allowed.
+ */
+const PASSWORD_IN_ADDRESS = "This address contains a password. Sign in with git once instead, then import again.";
+
+/**
+ * The address as the app shows it and the skill's provenance keeps it. A user name
+ * can be a token (GitHub accepts one there), so it is left out; the clone itself
+ * keeps the address as typed.
+ */
+function shownAddress(parsed: URL, cloneArg: string): string {
+	if (!parsed.username) return cloneArg;
+	const shown = new URL(parsed.href);
+	shown.username = "";
+	shown.password = "";
+	return shown.href;
+}
+
+function addressHasPassword(cloneArg: string): boolean {
+	try {
+		return new URL(cloneArg).password !== "";
+	} catch {
+		return false;
+	}
 }
 
 function finishLocal(localPath: string, allowLocal?: boolean): { ok: true; value: ResolvedRepoSource } | { ok: false; error: string } {
@@ -188,35 +220,65 @@ function finishLocal(localPath: string, allowLocal?: boolean): { ok: true; value
 // --- Shallow clone -----------------------------------------------------------
 
 const CLONE_TIMEOUT_MS = 90_000;
+const CONFIG_READ_TIMEOUT_MS = 5_000;
 
-function runGit(args: string[], timeoutMs: number): Promise<{ code: number; stderr: string }> {
+// Hardened environment: no credential prompts, no system config, no hooks or
+// templates, transports allow-listed (file: included for local smoke repos).
+// Hooks are never fetched from a remote, but a poisoned template dir is closed
+// off too, belt-and-braces.
+function hardenedGitEnv(): NodeJS.ProcessEnv {
+	return {
+		...process.env,
+		GIT_TERMINAL_PROMPT: "0",
+		GIT_ASKPASS: "",
+		GIT_CONFIG_NOSYSTEM: "1",
+		GIT_TEMPLATE_DIR: "",
+		GIT_ALLOW_PROTOCOL: "https:http:ssh:git:file",
+		GCM_INTERACTIVE: "never",
+	};
+}
+
+/**
+ * Kill a git child together with everything it started. git hands the transfer
+ * to `git-remote-http` and the sign-in to a credential helper; killing only the
+ * parent leaves those holding the output pipes, so a helper that waits (a
+ * keychain dialog nobody answers) would outlast the timeout.
+ */
+function killProcessTree(child: ChildProcess): void {
+	if (child.pid === undefined) return;
+	try {
+		if (process.platform === "win32") spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"], { stdio: "ignore" }).once("error", () => {});
+		else process.kill(-child.pid, "SIGKILL");
+	} catch {
+		child.kill("SIGKILL");
+	}
+}
+
+function runGit(args: string[], what: string, timeoutMs: number, env: NodeJS.ProcessEnv, cwd?: string): Promise<{ code: number; stdout: string; stderr: string }> {
 	return new Promise((resolve, reject) => {
-		// Hardened environment: no credential prompts, no system/global config, no
-		// hooks or templates, transports allow-listed (file: included for local
-		// smoke repos). Hooks are never fetched from a remote, but a poisoned
-		// template dir is closed off too, belt-and-braces.
-		const env: NodeJS.ProcessEnv = {
-			...process.env,
-			GIT_TERMINAL_PROMPT: "0",
-			GIT_ASKPASS: "",
-			GIT_CONFIG_NOSYSTEM: "1",
-			GIT_TEMPLATE_DIR: "",
-			GIT_ALLOW_PROTOCOL: "https:http:ssh:git:file",
-			GCM_INTERACTIVE: "never",
-		};
 		let child: ChildProcess;
 		try {
-			child = spawn("git", args, { stdio: ["ignore", "pipe", "pipe"], env });
+			// Its own process group off Windows, so the timeout can end the whole tree.
+			child = spawn("git", args, { stdio: ["ignore", "pipe", "pipe"], env, cwd, detached: process.platform !== "win32" });
 		} catch (err) {
 			reject(err);
 			return;
 		}
+		let stdout = "";
 		let stderr = "";
 		let timedOut = false;
 		const timer = setTimeout(() => {
 			timedOut = true;
-			child.kill("SIGKILL");
+			killProcessTree(child);
+			// On Windows a helper that Git for Windows started through its own shell
+			// can fall outside the tree taskkill sees and keep the output pipes open.
+			// Let go of them, so the call ends once git itself has gone.
+			child.stdout?.destroy();
+			child.stderr?.destroy();
 		}, timeoutMs);
+		child.stdout?.on("data", (chunk) => {
+			if (stdout.length < 262_144) stdout += String(chunk);
+		});
 		child.stderr?.on("data", (chunk) => {
 			if (stderr.length < 8192) stderr += String(chunk);
 		});
@@ -227,12 +289,159 @@ function runGit(args: string[], timeoutMs: number): Promise<{ code: number; stde
 		child.once("close", (code) => {
 			clearTimeout(timer);
 			if (timedOut) {
-				reject(new Error(`git clone timed out after ${timeoutMs}ms`));
+				reject(new Error(`git ${what} timed out after ${timeoutMs}ms`));
 				return;
 			}
-			resolve({ code: code ?? -1, stderr: stderr.trim() });
+			resolve({ code: code ?? -1, stdout, stderr: stderr.trim() });
 		});
 	});
+}
+
+// --- Stored sign-ins ---------------------------------------------------------
+//
+// A private repo authenticates through the sign-in git already holds for its
+// host, the one a `git clone` in a terminal would use. The hardened clone shuts
+// the system config out, and that is where git installs register the credential
+// helper (osxkeychain, manager, libsecret; Apple's own git keeps osxkeychain in
+// a file of its own that git lists with the scope "unknown"), so the helpers are
+// resolved here the way git itself resolves them and handed to the clone
+// explicitly. Three rules:
+//
+//   - read only: a helper is asked for a sign-in (`get`) and never told to
+//     `store` or `erase` one, so an import cannot write a sign-in into the
+//     person's credential store or delete one the host turned down;
+//   - encrypted transport only: helpers answer for https, and for http on this
+//     machine's own loopback (nothing leaves it; the smoke's test server);
+//   - nothing else of the system config comes along.
+
+/**
+ * The scopes whose helpers a `git clone` in a terminal would use, outside any
+ * repository: the system file, Apple git's own file ("unknown") and the person's
+ * global file. Never a repository's, a worktree's or the command line's.
+ */
+const SIGN_IN_SCOPES = new Set(["system", "unknown", "global"]);
+
+/**
+ * git's whole config as ONE scoped listing (`scope NUL key LF value NUL`), in
+ * git's own order, includes followed. Run in an empty folder, so no repository's
+ * config joins; the environment is the person's own, so a git that ignores the
+ * system file in their terminal ignores it here too. Empty when unreadable.
+ */
+async function readGitConfigListing(): Promise<string> {
+	let cwd: string | undefined;
+	try {
+		cwd = fs.mkdtempSync(path.join(os.tmpdir(), "exxperts-git-config-"));
+		const res = await runGit(["config", "--list", "--show-scope", "--includes", "--null"], "config", CONFIG_READ_TIMEOUT_MS, { ...process.env, GIT_TERMINAL_PROMPT: "0" }, cwd);
+		return res.code === 0 ? res.stdout : "";
+	} catch {
+		return "";
+	} finally {
+		if (cwd) fs.rmSync(cwd, { recursive: true, force: true });
+	}
+}
+
+/** Does a `credential.<pattern>.*` section apply to this remote? Scheme and host must agree; a user or path in the pattern must too. */
+function credentialSectionApplies(pattern: string, remote: URL): boolean {
+	let wanted: URL;
+	try {
+		wanted = new URL(pattern);
+	} catch {
+		return false;
+	}
+	if (wanted.protocol !== remote.protocol || wanted.host !== remote.host) return false;
+	if (wanted.username && wanted.username !== remote.username) return false;
+	const wantedPath = wanted.pathname.replace(/^\/+|\/+$/g, "");
+	if (!wantedPath) return true;
+	const remotePath = remote.pathname.replace(/^\/+|\/+$/g, "");
+	return remotePath === wantedPath || remotePath.startsWith(`${wantedPath}/`);
+}
+
+/** A helper as git would run it, answering `get` only: `store` and `erase` end before they reach it. */
+function readOnlyHelper(helper: string): string {
+	// git's own three forms: `!shell snippet`, an absolute path, or the short name of a `git credential-<name>`.
+	const command = helper.startsWith("!") ? helper.slice(1) : path.isAbsolute(helper) ? helper : `git credential-${helper}`;
+	return `!f() { test "$1" = get || return 0; ${command} get; }; f`;
+}
+
+/** The remote a stored sign-in may be used for, or null: https, or http on this machine's loopback. */
+function signInRemote(cloneArg: string): URL | null {
+	let remote: URL;
+	try {
+		remote = new URL(cloneArg);
+	} catch {
+		return null; // scp-style `git@host:user/repo`: ssh, no credential helper involved
+	}
+	if (remote.protocol === "https:") return remote;
+	const loopback = remote.hostname === "localhost" || remote.hostname === "127.0.0.1" || remote.hostname === "[::1]";
+	return remote.protocol === "http:" && loopback ? remote : null;
+}
+
+/**
+ * The `-c credential.*` args of a clone, from a scoped config listing. They
+ * always begin by clearing the helper list, so no helper reaches the clone in its
+ * writing form; then, for a remote a stored sign-in may be used for, come the
+ * helpers of the sign-in scopes in git's own order (an empty `helper =` resets
+ * what came before it), each read-only.
+ */
+export function signInArgsFromConfigListing(listing: string, cloneArg: string): string[] {
+	const args = ["-c", "credential.helper="];
+	const remote = signInRemote(cloneArg);
+	if (!remote) return args;
+	const fields = listing.split("\0");
+	let helpers: string[] = [];
+	const settings = new Map<string, string>();
+	for (let i = 0; i + 1 < fields.length; i += 2) {
+		if (!SIGN_IN_SCOPES.has(fields[i])) continue;
+		// `key\nvalue`; a key written without `=` has no value part at all.
+		const at = fields[i + 1].indexOf("\n");
+		const key = at < 0 ? fields[i + 1] : fields[i + 1].slice(0, at);
+		const value = at < 0 ? undefined : fields[i + 1].slice(at + 1);
+		const parts = key.match(/^credential\.(?:(.+)\.)?([^.]+)$/);
+		if (!parts || (parts[1] !== undefined && !credentialSectionApplies(parts[1], remote))) continue;
+		if (parts[2] === "helper") helpers = value ? [...helpers, value] : [];
+		else if (parts[2] === "usehttppath" || parts[2] === "username") settings.set(parts[2], value ?? "true");
+	}
+	for (const helper of helpers) args.push("-c", `credential.helper=${readOnlyHelper(helper)}`);
+	for (const [name, value] of settings) args.push("-c", `credential.${name}=${value}`);
+	return args;
+}
+
+/**
+ * The `-c credential.*` args of a clone, read fresh on every clone, so a sign-in
+ * made after a failed attempt counts on the retry. Never throws.
+ */
+export async function storedSignInArgs(cloneArg: string): Promise<string[]> {
+	if (!signInRemote(cloneArg)) return ["-c", "credential.helper="];
+	return signInArgsFromConfigListing(await readGitConfigListing(), cloneArg);
+}
+
+/** What to do about a sign-in failure, by what the host answered; null when the failure is something else. */
+function signInAdvice(stderr: string, host: string): string | null {
+	if (/Permission denied \(publickey/i.test(stderr)) {
+		return `${host} did not accept your SSH key. Add the key to your account there, or use the repository's https address.`;
+	}
+	if (/Authentication failed|HTTP Basic: Access denied/i.test(stderr)) {
+		return `${host} turned down the sign-in git has stored for it; it may have expired. Sign in to ${host} again with git in a terminal, then retry.`;
+	}
+	if (/returned error: 403/i.test(stderr)) {
+		return `${host} refused access to this repository. Your sign-in there may not include it, or an access token may lack the right to read repositories.`;
+	}
+	if (/could not read (?:Username|Password)|terminal prompts disabled/i.test(stderr)) {
+		return `this repository needs a sign-in to ${host} and git has none stored for it, or the address is wrong. Clone it once in a terminal so git stores the sign-in, or use the repository's SSH address (git@${host}:group/repo.git).`;
+	}
+	return null;
+}
+
+/**
+ * Turn git's sign-in failure into words that say what to do; other failures pass
+ * through. Any user name or password in an address is taken out first: newer git
+ * hides them itself, older git prints the address as typed, and `remote:` lines
+ * are the server's own text.
+ */
+export function describeCloneFailure(rawStderr: string, source: ResolvedRepoSource): string {
+	const stderr = rawStderr.replace(/:\/\/[^/@\s]+@/g, "://");
+	const advice = source.kind === "git" && source.host ? signInAdvice(stderr, source.host) : null;
+	return advice ? `${advice} (${stderr})` : stderr;
 }
 
 /**
@@ -240,9 +449,11 @@ function runGit(args: string[], timeoutMs: number): Promise<{ code: number; stde
  * path. Depth 1, no tags, single branch, submodules NOT recursed, hooks/templates
  * neutralized. On any failure the temp dir is removed and an Error is thrown.
  */
-export async function cloneRepoShallow(source: ResolvedRepoSource): Promise<string> {
+export async function cloneRepoShallow(source: ResolvedRepoSource, timeoutMs = CLONE_TIMEOUT_MS): Promise<string> {
+	if (source.kind === "git" && addressHasPassword(source.cloneArg)) throw new Error(PASSWORD_IN_ADDRESS);
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "exxperts-skill-repo-"));
 	const args = [
+		...(source.kind === "git" ? await storedSignInArgs(source.cloneArg) : []),
 		"-c",
 		"core.hooksPath=/dev/null",
 		"-c",
@@ -266,11 +477,15 @@ export async function cloneRepoShallow(source: ResolvedRepoSource): Promise<stri
 	// read as a git flag even if it somehow began with "-".
 	args.push("--", source.cloneArg, dir);
 	try {
-		const result = await runGit(args, CLONE_TIMEOUT_MS);
-		if (result.code !== 0) throw new Error(result.stderr || `git clone exited with code ${result.code}`);
+		const result = await runGit(args, "clone", timeoutMs, hardenedGitEnv());
+		if (result.code !== 0) throw new Error(describeCloneFailure(result.stderr, source) || `git clone exited with code ${result.code}`);
 		return dir;
 	} catch (err) {
-		fs.rmSync(dir, { recursive: true, force: true });
+		// Best effort: such a leftover helper can still hold the folder on Windows,
+		// and the person should see why the import failed, not the cleanup.
+		try {
+			fs.rmSync(dir, { recursive: true, force: true });
+		} catch {}
 		throw err instanceof Error ? err : new Error(String(err));
 	}
 }

@@ -31,6 +31,12 @@
  * an explicit `server` so the adapter's own cross-server scan (which would
  * lazily connect to ungranted servers) never runs for a room.
  *
+ * A room's connectors are the ones in the person's own settings
+ * (~/.config/mcp/mcp.json, ~/.exxperts/agent/mcp.json), never a connector file
+ * in the room's folder: every config read for a room, the adapter's own session
+ * load included, resolves the folder-relative files (`.mcp.json`,
+ * `.pi/mcp.json`, a `.vscode/mcp.json` import) against roomConnectorConfigCwd().
+ *
  * Wording rule (product): refusals say the room's settings "control which
  * connectors this room can use" - never more than that.
  */
@@ -136,21 +142,26 @@ function noConnectorsEnabledResult(): ProxyToolResultLike {
 }
 
 /**
- * `cwd` matters: the adapter's session loads its config against the SESSION
- * cwd (a workspace room's runtime cwd, not the server's launch cwd), and the
- * grant context must see the same configured baseline or project-local
- * connectors become granted-but-refused. Callers pass the execution ctx cwd
- * when they have one; registration-time callers fall back to process.cwd(),
- * matching the adapter's own factory-time config read.
+ * The folder a room's connector config is read against, in place of its working
+ * folder. The adapter reads `.mcp.json`, `.pi/mcp.json` and a `.vscode/mcp.json`
+ * import relative to the folder it is given; this one sits in the person's own
+ * state and is never created, so a room sees only the connectors from the
+ * person's settings. It is used for config discovery only: a connector still
+ * starts in its own `cwd`, or else in the process's working folder.
  */
-async function loadRoomGrantContext(roomId: string, cwd?: string): Promise<RoomGrantContext> {
+export function roomConnectorConfigCwd(): string {
+	return path.join(stateHome(), ".exxperts", "agent", "room-connectors");
+}
+
+async function loadRoomGrantContext(roomId: string): Promise<RoomGrantContext> {
 	ensureAgentDirEnv();
 	const [configMod, utilsMod] = await Promise.all([import(ADAPTER_CONFIG), import(ADAPTER_UTILS)]);
-	// Same baseline as the adapter's own loads: the --mcp-config argv override
-	// (which the adapter factory and directToolSpecServers honor) plus the
-	// session cwd - otherwise a connector defined only in the override file
-	// would be granted-but-refused by the configured intersection.
-	const config = configMod.loadMcpConfig(utilsMod.getConfigPathFromArgv(), cwd ?? process.cwd());
+	// Same baseline as the adapter's own session load for a room: the
+	// --mcp-config argv override (which the adapter factory and
+	// directToolSpecServers honor) plus the person's global files - otherwise a
+	// connector defined only in the override file would be granted-but-refused
+	// by the configured intersection.
+	const config = configMod.loadMcpConfig(utilsMod.getConfigPathFromArgv(), roomConnectorConfigCwd());
 	const configuredNames = Object.keys(config.mcpServers ?? {});
 	const settings = readPersistentRoomMcpSettings(roomId);
 	const granted = new Set(effectiveGrantedMcpConnectors(settings.grantedConnectors, configuredNames));
@@ -344,8 +355,7 @@ export interface RoomScopeExecuteOptions {
 
 function createRoomScopedProxyExecute(roomId: string, originalExecute: ProxyExecute, executeOptions: RoomScopeExecuteOptions = {}): ProxyExecute {
 	return async (toolCallId, params, signal, onUpdate, ctx) => {
-		const sessionCwd = typeof (ctx as { cwd?: unknown } | undefined)?.cwd === "string" ? (ctx as { cwd: string }).cwd : undefined;
-		const context = await loadRoomGrantContext(roomId, sessionCwd);
+		const context = await loadRoomGrantContext(roomId);
 		const granted = context.granted;
 		const delegate = async (overrides: Partial<McpProxyParams> = {}): Promise<ProxyToolResultLike> => {
 			const result = await originalExecute(toolCallId, { ...params, ...overrides }, signal, onUpdate, ctx);
@@ -496,9 +506,9 @@ export async function buildRoomScopedProxyDescription(roomId: string, onBoundGra
 	return description;
 }
 
-async function loadRoomMcpGrantContextSafe(roomId: string, cwd?: string): Promise<RoomGrantContext> {
+async function loadRoomMcpGrantContextSafe(roomId: string): Promise<RoomGrantContext> {
 	try {
-		return await loadRoomGrantContext(roomId, cwd);
+		return await loadRoomGrantContext(roomId);
 	} catch {
 		return { granted: new Set(), configuredNames: [], config: { mcpServers: {} }, prefixMode: "server", storedGrantedConnectors: [] };
 	}
@@ -521,7 +531,7 @@ async function directToolSpecServers(): Promise<Map<string, string>> {
 			import(ADAPTER_DIRECT_TOOLS),
 			import(ADAPTER_UTILS),
 		]);
-		const config = configMod.loadMcpConfig(utilsMod.getConfigPathFromArgv());
+		const config = configMod.loadMcpConfig(utilsMod.getConfigPathFromArgv(), roomConnectorConfigCwd());
 		const cache = cacheMod.loadMetadataCache();
 		const prefix: PrefixMode = config.settings?.toolPrefix ?? "server";
 		const envRaw = process.env.MCP_DIRECT_TOOLS;
@@ -560,7 +570,7 @@ export async function ensureRoomScopedMcpGrantsMigration(options: PersistentRoom
 	const overridePath = utilsMod.getConfigPathFromArgv();
 	const definedNames = new Set<string>();
 	const declaredImportKinds = new Set<string>();
-	const discoveryPaths: Array<{ path: string; exists: boolean }> = configMod.getConfigDiscoveryPaths(overridePath);
+	const discoveryPaths: Array<{ path: string; exists: boolean }> = configMod.getConfigDiscoveryPaths(overridePath, roomConnectorConfigCwd());
 	for (const source of discoveryPaths) {
 		if (!source.exists) continue;
 		let parsed: unknown;
@@ -591,7 +601,7 @@ export async function ensureRoomScopedMcpGrantsMigration(options: PersistentRoom
 	// config. Symmetric guard: every EXISTING import file a discovery config
 	// declares must parse, or the migration aborts without the marker.
 	if (declaredImportKinds.size > 0) {
-		const availableImports: Array<{ kind: string; path: string }> = configMod.findAvailableImportConfigs();
+		const availableImports: Array<{ kind: string; path: string }> = configMod.findAvailableImportConfigs(roomConnectorConfigCwd());
 		for (const entry of availableImports) {
 			if (!declaredImportKinds.has(entry.kind)) continue;
 			let parsedImport: unknown;
@@ -603,7 +613,7 @@ export async function ensureRoomScopedMcpGrantsMigration(options: PersistentRoom
 			if (!parsedImport || typeof parsedImport !== "object") return { migrated: [], skipped: "unreadable-config" };
 		}
 	}
-	const merged = configMod.loadMcpConfig(overridePath);
+	const merged = configMod.loadMcpConfig(overridePath, roomConnectorConfigCwd());
 	const configuredNames: string[] = Object.keys(merged.mcpServers ?? {});
 	const configuredSet = new Set(configuredNames);
 	for (const name of definedNames) {

@@ -85,6 +85,8 @@ const PLANT_IN_TRANSCRIPT = "ZEPHYRQUILL";
 // A fact said only in the conversation the fold DROPPED: no note was taken
 // from it, so the transcript is the one place the room can still find it.
 const PLANT_IN_DROPPED = "fifty-five";
+/** Said only in a conversation the fold could not sort, which was kept as its summary instead. */
+const PLANT_IN_KEPT = "WILLOWCASKET";
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -349,6 +351,13 @@ try {
 	], new Date(`${REMEMBER_DAY}T08:30:00.000Z`));
 	assert(droppedRcId !== conversationRcId && !fs.readFileSync(l1bPath, "utf-8").includes(PLANT_IN_DROPPED), `${PLANT_IN_DROPPED} must exist only in the dropped conversation's transcript`);
 
+	// A third, which the fold cannot sort (an empty list, twice), so it is kept
+	// as its approved summary: one note, and its transcript searchable.
+	const keptRcId = remember(roomId, "c_recall_0003", "The loading bay", "The loading bay's opening hours came up.", [
+		{ speaker: "user", text: `The loading bay door code is ${PLANT_IN_KEPT} until the lock is replaced.` },
+		{ speaker: "assistant", text: "Noted for the drivers." },
+	], new Date(`${REMEMBER_DAY}T09:15:00.000Z`));
+
 	const run = startAbsorbRun({
 		agentId: roomId,
 		assessmentMarkdown: "## What this session leaves behind\n\n- The delivery window changed.",
@@ -356,13 +365,14 @@ try {
 		generate: scriptedFold({
 			[conversationRcId]: [{ op: "add", topic: "Delivery", kind: "fact", text: "- The signed addendum moves delivery to four weeks." }],
 			[droppedRcId]: [{ op: "drop", reason: "Nothing in this conversation changes what memory holds." }],
+			[keptRcId]: [],
 		}),
 		now: RUN_CLOCK,
 	});
 	const settled = await settle(roomId, run.runId);
 	assert(settled.state === "ready", `the run should come to rest ready to save, got "${settled.state}"${settled.error ? `: ${settled.error}` : ""}`);
 	const outcomes = Object.fromEntries(settled.sessions.map((session) => [session.id, session.outcome]));
-	assert(outcomes[conversationRcId] === "folded" && outcomes[droppedRcId] === "dropped", `one conversation should fold and the other drop, got ${JSON.stringify(outcomes)}`);
+	assert(outcomes[conversationRcId] === "folded" && outcomes[droppedRcId] === "dropped" && outcomes[keptRcId] === "summarized", `one conversation should fold, one drop and one be kept as its summary, got ${JSON.stringify(outcomes)}`);
 	approveAbsorbRun(roomId, run.runId, APPROVED_AT);
 	resetAbsorbRunsForTests();
 
@@ -422,6 +432,13 @@ try {
 	assert(fromDropped.text.includes(`\nfrom a conversation on ${REMEMBER_DAY} at 08:30 UTC (no notes taken)\n`), `a row from a dropped conversation says no notes were taken from it, got:\n${fromDropped.text}`);
 	assert(!/RC-\d/.test(fromDropped.text), `a dropped conversation's printed row holds no Recent Context id either, got:\n${fromDropped.text}`);
 	assert(!fromTranscript.text.includes("(no notes taken)"), `a row from a folded conversation does not say so, got:\n${fromTranscript.text}`);
+
+	// A fact said only in the conversation kept as its summary: the transcript
+	// answers, and the row says the conversation was kept as one note.
+	const fromKept = await recall(tool, { query: PLANT_IN_KEPT });
+	const keptRow = (fromKept.details.rows ?? []).find((row) => row.source === "conversation");
+	assert(fromKept.details.outcome === "ok" && keptRow?.rcId === keptRcId, `a fact said only in a conversation kept as its summary is returned from its transcript, got ${JSON.stringify(fromKept.details)}`);
+	assert(fromKept.text.includes(`\nfrom a conversation on ${REMEMBER_DAY} at 09:15 UTC (kept as one note)\n`), `a row from a conversation kept as its summary says so, got:\n${fromKept.text}`);
 
 	// By topic, with no query at all: every row filed under it, newest first.
 	const byTopic = await recall(tool, { query: "", topic: "Pricing history" });

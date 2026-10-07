@@ -8,13 +8,13 @@
 //   - an entry the fold does not NAME is never touched, so stamps, provenance
 //     and pinned entries survive by construction;
 //   - pinned entries are the user's: a fold may add beside them and nothing
-//     else, and the refusal says so;
-//   - a pin or unpin carries the line of the session that asked for it, and the
-//     server checks that the line is really there;
+//     else, and a change aimed at one is added beside it;
+//   - a pin carries the line of the session that asked for it, and the server
+//     checks that the line is really there;
 //   - "this session held nothing durable" is an operation (drop) with a reason,
-//     not silence, and it cannot travel with other operations;
-//   - the reply is bounded by construction: at most twelve operations, each at
-//     most 120 words, so no fold call can produce a twenty-five-minute reply.
+//     not silence, and it stands only when nothing else changed;
+//   - each op is decided alone: no rule costs the reply, and content is never
+//     dropped, only redirected or left out when memory already says it.
 //
 // Nothing here talks to a model, a route or the disk: the prompt is a string,
 // the parser is a reader, the applier works on a document value. The route owns
@@ -25,8 +25,8 @@
 // definitions, and TypeScript's structural typing makes the two compatible
 // without this module importing it. Sizes go through the ONE estimator.
 
-import { classifyNotePair, conflictReason, conflictValuePairs, noteTextsLookAlike } from "./memory-duplicates.js";
-import { dayWords } from "./memory-entries.js";
+import { classifyNotePair, conflictReason, dropsNoteValue, negationDiffers, noteValueTokens, noteWordsWithin, textDisagreesWith } from "./memory-duplicates.js";
+import { findStructuralLine, hasMustKeepMarker, ISO_DAY, saysMoreThanMustKeep, withoutMustKeepMarkers } from "./memory-entries.js";
 import { estimateTokens } from "./token-estimate.js";
 
 export const ABSORB_FOLD_WORKER_TYPE = "absorb-fold-worker" as const;
@@ -47,7 +47,13 @@ export interface MemoryEntry {
 	pinned: boolean;
 	status?: "open" | "done";
 	updated?: string;
+	/** YYYY-MM-DD of the conversation that last wrote the text. */
+	learned?: string;
+	/** The notes the person kept beside this one though they may disagree; a rewrite clears it. */
+	disagrees?: string;
 	refs?: number;
+	summary?: true;
+	extra?: Record<string, string>;
 	text: string;
 }
 
@@ -75,18 +81,19 @@ export interface AreaRow {
 	kind: EntryKind;
 	pinned: boolean;
 	saved: string;
-	/** YYYY-MM-DD of the last update or supersede, when a fold has rewritten it. The prompt shows it beside the saved date so a fold can tell which of the two is newer: the entry or the session. */
-	updated?: string;
 	/**
-	 * The saved date is a floor, not the day the point was learned: an entry no
-	 * conversation wrote (one that came through the upgrade from a memory
-	 * without ids, or one typed by hand) carries the day it was given its id,
-	 * and may be far older. The prompt writes it as "in memory since".
+	 * YYYY-MM-DD of the conversation that last wrote the text. Without it the
+	 * note came through the upgrade or before dates were kept: the prompt writes
+	 * "saved" for one a fold wrote, and "in memory since" for one nothing wrote,
+	 * whose saved date is only the day it was given its id.
 	 */
-	since?: true;
+	learned?: string;
+	/** Read only without `learned`: the conversation that wrote the note, and the run day a later fold rewrote it. A note a fold wrote is as new as the later of `saved` and `updated`; one nothing wrote only as new as `updated`. */
+	from?: string;
+	updated?: string;
 	tokens: number;
 	firstLine: string;
-	/** The whole note, so an add that repeats it can be refused. Nothing else reads it. */
+	/** The whole note, so an add that repeats it or may disagree with it is known. Nothing else reads it. */
 	text: string;
 }
 
@@ -103,34 +110,26 @@ export const FOLD_ACTIVE_ITEMS_TOPIC = "Active Items";
 
 // --- Grammar -----------------------------------------------------------------
 
-export const FOLD_OP_KINDS = ["add", "update", "supersede", "close", "pin", "unpin", "drop"] as const;
+export const FOLD_OP_KINDS = ["add", "update", "supersede", "close", "pin", "drop"] as const;
 export type FoldOpKind = (typeof FOLD_OP_KINDS)[number];
 
 /** The kinds an `add` may mint: an event is what a session IS, never what a fold writes. */
 export const FOLD_ADD_KINDS = ["fact", "practice", "item"] as const;
 export type FoldAddKind = (typeof FOLD_ADD_KINDS)[number];
 
-/**
- * Keys the grammar does not define, kept by the parser so the validator can
- * refuse them by name: an op carrying a foreign key is an op whose author was
- * writing a different grammar, and the fields it did fill cannot be trusted.
- */
-interface FoldOpExtras {
-	foreignKeys?: string[];
-}
+/** The tag a new note carries on the card: it sits beside a note the person pinned, or it may disagree with a note. Either holds the automatic save. */
+export type FoldBesideTag = "pinned" | "may-disagree";
 
-export type FoldOp = FoldOpExtras & (
-	| { op: "add"; topic: string; kind: FoldAddKind; text: string }
+export type FoldOp =
+	| { op: "add"; topic: string; kind: FoldAddKind; text: string; beside?: FoldBesideTag; besideOf?: string }
 	| { op: "update"; id: string; text: string }
 	| { op: "supersede"; id: string; text: string }
 	| { op: "close"; id: string }
 	| { op: "pin"; id: string; because?: string }
-	| { op: "unpin"; id: string; because?: string }
 	| { op: "drop"; reason: string }
-);
+	/** Never written by a model: an older page's text that disagrees with a newer note goes to the archive as history, `until` the day the note `of` was learned. */
+	| { op: "history"; of: string; until: string; text: string };
 
-/** The ops a pinned entry refuses: the fold may add beside it and nothing else. */
-const PIN_PROTECTED_OPS = ["update", "supersede", "close", "unpin"] as const;
 
 // --- Discussion guidance -----------------------------------------------------
 
@@ -240,14 +239,6 @@ function normalizeLine(value: string): string {
 /** A bullet the way the memory writes one: "- ", "* " or "+ " at the start of the line. */
 const BULLET_START = /^\s*[-*+]\s+\S/;
 
-/**
- * The must-keep marker as the memory writes it — "**must-keep**", and equally
- * "**must-keep:**" or "**must-keep —", which the product's own entries use. The
- * same predicate the review layer reads it with, so a marker that pins an entry
- * on migration pins it after a fold too.
- */
-const MUST_KEEP_MARKER = /\*\*must-keep\b/i;
-
 export function countWords(text: string): number {
 	const trimmed = text.trim();
 	return trimmed ? trimmed.split(/\s+/).length : 0;
@@ -307,7 +298,7 @@ This operation must not write memory, archive files, mutate core memory, update 
 
 ## Governing Principle
 
-Maximize durable signal density. A fold is not append-only memory growth. It folds one session into memory so the future persistent agent understands more with fewer, sharper tokens. Integration should make memory denser, not merely larger: prefer folding new understanding into the entry that already carries the point (update, supersede) over adding a parallel entry beside it. A point memory already holds is updated, never repeated: an add that says what an existing entry says is refused with that entry's id.
+Maximize durable signal density. A fold is not append-only memory growth. It folds one session into memory so the future persistent agent understands more with fewer, sharper tokens. Integration should make memory denser, not merely larger: prefer folding new understanding into the entry that already carries the point (update, supersede) over adding a parallel entry beside it. A point memory already holds is updated, never repeated.
 
 ## Scope
 
@@ -326,11 +317,11 @@ A session is a chronological compression of one working stretch: Session arc, th
 
 ## Dates Decide What Is Newer
 
-Against memory, dates decide, not the order of folding: a session can reach you after a later one has already been folded. Every entry's address carries the day it was saved and, when a later fold rewrote it, the day it was updated; the task below names the day this session is from. This session is newer than every entry saved or updated BEFORE its date, so where it conflicts with such an entry it wins, unless it explicitly defers to the older one. An entry saved or updated AFTER this session's date already knows more than this session does: never supersede or update it with this session's older information. An entry that reads "in memory since" a day carries no saved date at all, only the day it was given its id: it is older than this session unless it also carries an updated date after the session's, and this session wins against it as against any older entry. Where the older point still matters beside the newer one, add it as its own entry and say in your narrative that it is the earlier state; otherwise leave the newer entry alone.
+Against memory, dates decide, not the order of folding: a session can reach you after a later one has already been folded. Every entry's address carries the day it was learned, the day of the conversation that last wrote its text; the task below names the day this session is from. This session is newer than every entry learned BEFORE its date, so where it conflicts with such an entry it wins, unless it explicitly defers to the older one. An entry learned AFTER this session's date already knows more than this session does: never supersede or update it with this session's older information. An entry a fold wrote before days were learned reads "saved" a day instead, and "rewritten" a day when a later fold rewrote it: an entry saved or rewritten AFTER this session's date also knows more than this session does, so never supersede or update it either. An entry that reads "in memory since" a day carries no saved date at all, only the day it was given its id: it is older than this session unless it also carries a rewritten date after the session's, and this session wins against it as against any older entry. Where the older point still matters beside the newer one, add it as its own entry and say in your narrative that it is the earlier state; otherwise leave the newer entry alone.
 
 ## Date Stamps
 
-The system stamps every entry it adds or changes with the approval date, so never write a saved-on stamp of your own and never invent a date. When the session names the day something was decided, agreed, or is due, keep that date inside the entry's own words, because it is part of the point. Never present a saved-on date as the day something happened. A later pass reads the stamps to judge staleness; the text carries the facts.
+The system stamps every entry it adds or changes, so never write a saved-on stamp of your own and never invent a date. When the session names the day something was decided, agreed, or is due, keep that date inside the entry's own words, because it is part of the point. Never present a saved-on date as the day something happened. A later pass reads the stamps to judge staleness; the text carries the facts.
 
 ## Must-Keep Material
 
@@ -338,7 +329,7 @@ A session may carry content marked **must-keep** — explicit user remember-requ
 
 ## Pinned Entries
 
-A pinned entry is the user's own, and says so in its address: it reads \`[m-0032 · pinned · saved …]\`. A fold never updates, supersedes, closes or unpins one; where the session changes what a pinned entry says, add the newer point beside it and say so in your narrative, and the user decides. Pinning and unpinning are things only the user asks for: emit pin or unpin only when the session itself records that request, and quote the line that records it.
+A pinned entry is the user's own, and says so in its address: it reads \`[m-0032 · pinned · saved …]\`. A fold never updates, supersedes or closes one; where the session changes what a pinned entry says, add the newer point beside it and say so in your narrative, and the user decides. Pinning is something only the user asks for: emit pin only when the session itself records that request, and quote the line that records it.
 
 ## Boundaries
 
@@ -364,7 +355,7 @@ A pinned entry is the user's own, and says so in its address: it reads \`[m-0032
 function renderAddressLegend(areas: AreaRow[]): string {
 	if (areas.length === 0) return "Core memory holds no entries yet. Every operation is an add.";
 	return [
-		`Every entry of the memory above opens with its own id in square brackets, followed by its dates: \`- [m-0031 · saved 2026-08-02] The Nordwind contract renews annually…\` is the entry \`m-0031\`, saved into memory on 2026-08-02. \`[m-0031 · saved 2026-08-02 · updated 2026-09-01]\` says a later fold rewrote it on 2026-09-01, so the entry is as new as that day. \`[m-0033 · in memory since 2026-09-12]\` says the entry was in memory by that day and no conversation wrote it — it came with the room or was typed by hand, and may be far older than that day; read it as older than the session unless an updated date says otherwise. An entry written as \`- [m-0032 · pinned · saved …] …\` is pinned — it is the user's own, and a fold may only add beside it.`,
+		`Every entry of the memory above opens with its own id in square brackets, followed by its date: \`- [m-0031 · learned 2026-08-02] The Nordwind contract renews annually…\` is the entry \`m-0031\`, whose text a conversation of 2026-08-02 wrote, so the entry is as new as that day. \`[m-0034 · saved 2026-08-02 · rewritten 2026-09-01]\` is an entry a fold wrote before days were learned: saved into memory on 2026-08-02 and rewritten by a later fold on 2026-09-01, so it is as new as the later day. \`[m-0033 · in memory since 2026-09-12]\` says the entry was in memory by that day and no conversation wrote it: it came with the room or was typed by hand, and may be far older than that day; read it as older than the session unless a rewritten date says otherwise. An entry written as \`- [m-0032 · pinned · learned …] …\` is pinned: it is the user's own, and a fold may only add beside it.`,
 		`The brackets are the address, not part of the entry's words. Copy the id alone — \`m-0031\`, never the dates or the pin marker — exactly as it stands there, address only the ids that memory carries (there are ${areas.length}), and never write a bracketed id into the text of an operation.`,
 	].join("\n\n");
 }
@@ -380,10 +371,12 @@ function entryAddressPattern(id: string): RegExp {
 }
 
 function entryDatesLabel(area: AreaRow): string {
-	const parts: string[] = [];
-	if (area.saved) parts.push(area.since ? `in memory since ${area.saved}` : `saved ${area.saved}`);
-	if (area.updated) parts.push(`updated ${area.updated}`);
-	return parts.join(" · ");
+	if (area.learned) return `learned ${area.learned}`;
+	if (!area.saved) return "";
+	// Without a learned day: a note a fold wrote has a saved day of its own, one
+	// nothing wrote only the day it was given its id; a rewrite is newer than both.
+	const rewritten = area.updated ? ` · rewritten ${area.updated}` : "";
+	return `${area.from ? "saved" : "in memory since"} ${area.saved}${rewritten}`;
 }
 
 /**
@@ -396,7 +389,7 @@ function entryDatesLabel(area: AreaRow): string {
  * after sessions newer than it have already landed. The render itself is the
  * entry model's, shared by every other reader of the addresses (Review, the
  * room's own boot), so the dates are dressed onto the addresses HERE, from the
- * same area map the validator judges the reply against, and the validator goes
+ * same area map the decision judges the reply against, and the decision goes
  * on reading bare ids. Each address is replaced once, at the line it opens; an
  * entry the map has no date for keeps its address as it was.
  */
@@ -410,9 +403,22 @@ function withEntryDates(coreContext: string, areas: AreaRow[]): string {
 	return out;
 }
 
-/** The guidance the user signed off, rendered as instructions the fold must honour. */
-export function renderFoldGuidance(guidance: FoldGuidance): string {
-	if (foldGuidanceIsEmpty(guidance)) return "The user signed off without further instructions. Follow the assessment.";
+/**
+ * What a run folds with when there is no first read: the assessment failed,
+ * was refused, came back too long or was never sent. The fold's prompt shows
+ * it as the signed-off assessment, as it shows an empty one.
+ */
+export const FIRST_READ_NONE = "None.";
+
+/** Whether an assessment is a real first read, not a missing one. */
+export function hasFirstRead(assessmentMarkdown: string): boolean {
+	const text = assessmentMarkdown.trim();
+	return text !== "" && text !== FIRST_READ_NONE;
+}
+
+/** The guidance the user signed off, rendered as instructions the fold must honour. Without a first read there is no assessment to follow. */
+export function renderFoldGuidance(guidance: FoldGuidance, firstRead = true): string {
+	if (foldGuidanceIsEmpty(guidance)) return firstRead ? "The user signed off without further instructions. Follow the assessment." : "The user signed off without further instructions.";
 	const parts: string[] = [];
 	if (guidance.pin.length > 0) {
 		parts.push(`The user asked to pin these entries: ${guidance.pin.join(", ")}. The system pins them; do not emit pin operations for them, and do not update, supersede or close them.`);
@@ -439,16 +445,16 @@ function foldTaskSection(input: FoldPromptInput): string {
 		`- \`{"op":"update","id":"<entry id>","text":"- <the entry, rewritten>"}\` — the entry stays the same point and says it better, or absorbs a detail this session added. The previous text is kept as superseded by the same entry, so nothing is lost.`,
 		`- \`{"op":"supersede","id":"<entry id>","text":"- <the entry, as it now stands>"}\` — the point itself changed: a reversal, a new decision, a commitment replaced. Use this rather than update whenever a reader would be misled by the old text, and rather than an add whenever the new point is the same subject as the old one.`,
 		`- \`{"op":"close","id":"<entry id>"}\` — an ${FOLD_ACTIVE_ITEMS_TOPIC} entry the session finished. Close it rather than rewriting it as done.`,
-		`- \`{"op":"pin","id":"<entry id>","because":"<the line of the session that asks for it>"}\` and \`{"op":"unpin","id":"<entry id>","because":"<the line>"}\` — only when the session records the user asking for it. "because" quotes that line as it appears in the session; an operation whose quote is not in the session is refused.`,
+		`- \`{"op":"pin","id":"<entry id>","because":"<the line of the session that asks for it>"}\`: only when the session records the user asking for it. "because" quotes that line as it appears in the session; an operation whose quote is not in the session is ignored.`,
 		`- \`{"op":"drop","reason":"<why nothing here is durable>"}\` — the session is chatter, a repeat of what memory already holds, or work whose result is already an entry. The session is consolidated and memory does not change; the reason is disclosed to the user, so write it for them in one sentence: call this a conversation, never a session or an RC number, and never name "Deep Memory" or "Active Items". A drop travels alone: it cannot appear beside any other operation.`,
 	];
-	const dated = input.session.date ? `This conversation is from ${input.session.date}: it is newer than every entry saved or updated before that day, and older than every entry saved or updated after it. ` : "";
+	const dated = input.session.date ? `This conversation is from ${input.session.date}: it is newer than every entry learned, saved or rewritten before that day, and older than every entry learned, saved or rewritten after it. ` : "";
 	return [
 		"## Task: Fold This Session Into Memory (operations)",
 		`${dated}You do not rewrite memory. You emit operations against the entries of the memory above, each named by the id in its first line; the system applies them and builds the candidate. An entry you do not name is copied through unchanged — its text, its provenance and its saved-on date survive without any effort on your part, so name only what this session changes.`,
 		`Operation shapes (copy the id alone from an entry's brackets — without the brackets, the dates or the pin marker):\n\n${shapes.join("\n")}`,
-		`Rules: at most ${FOLD_MAX_OPS} operations for this session — a fold is a handful of decisions, and a session that seems to need more is a session whose durable core you have not found yet; each "text" is at most ${FOLD_MAX_TEXT_WORDS} words and is written the way its topic is written (a bullet starting "- " unless the topic's entries are paragraphs), carrying no bracketed id of its own; one operation per entry id; every id is one the memory above carries; pinned entries take no update, supersede, close or unpin. An operation that breaks a rule is refused with its reason and this session is asked for again, so prefer fewer, exact operations.`,
-		`Answer with the narrative and then the operations: at most three lines saying what this session leaves behind and what you chose to do with it, then exactly one \`\`\`json fence holding \`{"ops": [ ... ]}\`. Nothing follows the fence. An empty list is not an answer — choose add, update, supersede, close, pin or unpin, or say the session holds nothing durable with drop. Do not claim anything has been saved.`,
+		`Rules: at most ${FOLD_MAX_OPS} operations for this session: a fold is a handful of decisions, and a session that seems to need more is a session whose durable core you have not found yet; each "text" is at most ${FOLD_MAX_TEXT_WORDS} words and is written the way its topic is written (a bullet starting "- " unless the topic's entries are paragraphs), carrying no bracketed id of its own; one operation per entry id; every id is one the memory above carries; pinned entries take no update, supersede or close. An operation that breaks a rule is not applied as written, so prefer fewer, exact operations.`,
+		`Answer with the narrative and then the operations: at most three lines saying what this session leaves behind and what you chose to do with it, then exactly one \`\`\`json fence holding \`{"ops": [ ... ]}\`. Nothing follows the fence. An empty list is not an answer: choose add, update, supersede, close or pin, or say the session holds nothing durable with drop. Do not claim anything has been saved.`,
 	].join("\n\n");
 }
 
@@ -466,7 +472,7 @@ function foldTaskSection(input: FoldPromptInput): string {
  * session itself) come after them, so a provider that caches a prompt prefix
  * reuses the memory instead of re-reading it once per session.
  *
- * `areas` is the map the validator judges the reply against; the prompt reads
+ * `areas` is the map the decision judges the reply against; the prompt reads
  * it for the dates it writes into the addresses and for the count.
  */
 export function buildFoldPrompt(input: FoldPromptInput): FoldPromptAssembly {
@@ -476,8 +482,8 @@ export function buildFoldPrompt(input: FoldPromptInput): FoldPromptAssembly {
 		absorbFoldConstitution().trim(),
 		`## Material: Core Memory As The Room Reads It\n\nThis is the memory as it stands after every earlier fold in this run — Deep Memory and Active Items, the two sections a fold changes. Entry metadata is stripped; each entry carries its own address and its dates in its first line, which is how you name a piece of it and how you tell whether it is older or newer than the session.\n\n${withEntryDates(input.coreContext.trim(), input.areas)}`,
 		`## Material: Entries You Can Address\n\n${renderAddressLegend(input.areas)}`,
-		`## Material: Signed-Off Assessment\n\n${input.assessmentMarkdown.trim() || "None."}`,
-		`## Material: The User's Instructions From The Discussion\n\n${renderFoldGuidance(guidance)}`,
+		`## Material: Signed-Off Assessment\n\n${input.assessmentMarkdown.trim() || FIRST_READ_NONE}`,
+		`## Material: The User's Instructions From The Discussion\n\n${renderFoldGuidance(guidance, hasFirstRead(input.assessmentMarkdown))}`,
 		`## Process Metadata\n\n- Agent id: ${input.agentId}\n- Process type: ${ABSORB_FOLD_WORKER_TYPE}\n- Mode: ${ABSORB_FOLD_MODE}\n- Trigger time: ${now.toISOString()}\n- System-selected model: ${input.model.provider}/${input.model.model}\n- Writes memory: false\n- Session being folded: ${input.session.id} (${input.sessionIndex} of ${input.sessionCount})${input.session.date ? `\n- Session date: ${input.session.date}` : ""}\n- Entries in core memory: ${input.areas.length}`,
 		`## Material: The Session To Fold (${input.sessionIndex} of ${input.sessionCount})\n\nThis is the only session you fold. Earlier sessions of this run are already in the memory above; later ones are folded after you.${input.session.date ? ` This session is from ${input.session.date}.` : ""}\n\n${input.session.text.trim()}`,
 		foldTaskSection(input),
@@ -492,79 +498,360 @@ export function buildFoldPrompt(input: FoldPromptInput): FoldPromptAssembly {
 	};
 }
 
+/**
+ * The second ask of a reply that held no readable operations: the same prompt
+ * plus one line. A reply cut off at the output limit is told so.
+ */
+export function buildFoldUnreadableRetryPrompt(prompt: string, cutOff: boolean): string {
+	const line = cutOff
+		? "Your last answer ran to the output limit and had no readable operations. Answer with a short narrative and one json fence."
+		: "Your last answer had no readable operations. Answer with the narrative and one json fence.";
+	return `${prompt.trimEnd()}\n\n${line}\n`;
+}
+
 // --- Reading the reply -------------------------------------------------------
 
 /**
- * An unreadable fence, returned rather than thrown: a fold call that came back
- * cut is an ordinary outcome of the loop (that session stays in Recent Context
- * with this reason and the run continues), never an exception the route has to
- * catch to stay alive.
+ * Why a reply held no operations the run can use, as the diagnostics count it:
+ * per provider, these classes are how the unreadable rate is measured.
  */
-export class FoldOpsJsonProblem {
-	constructor(readonly problem: string) {}
-}
+export type FoldUnreadableClass = "no-fence" | "invalid-json" | "not-a-list" | "empty-list" | "cut-off";
 
-export function isFoldOpsJsonProblem(value: unknown): value is FoldOpsJsonProblem {
-	return value instanceof FoldOpsJsonProblem;
-}
-
-/** A complete fenced block: the label, the body, and where the fence started. */
+/** A fenced block: the label, the body, and where the fence started. */
 interface Fence {
 	label: string;
 	body: string;
 	start: number;
 }
 
-function completeFences(raw: string): Fence[] {
-	const fences: Fence[] = [];
-	const fenceRe = /^[ \t]*```([^\s`]*)[^\n]*\r?\n([\s\S]*?)\r?\n[ \t]*```/gm;
-	for (let m = fenceRe.exec(raw); m; m = fenceRe.exec(raw)) {
-		fences.push({ label: m[1].toLowerCase(), body: m[2], start: m.index });
+/** Fence markers sit at line starts only: a ``` inside a JSON string is mid-line and never a fence. */
+const FENCE_MARKER_LINE = /^[ \t]*```([^\s`]*)[^\n]*$/;
+
+interface FenceMarker {
+	label: string;
+	/** Offset of the marker line. */
+	start: number;
+	/** Offset just past the marker line's newline. */
+	bodyStart: number;
+}
+
+function fenceMarkers(raw: string): FenceMarker[] {
+	const markers: FenceMarker[] = [];
+	let offset = 0;
+	for (const line of raw.split("\n")) {
+		const m = FENCE_MARKER_LINE.exec(line);
+		if (m) markers.push({ label: m[1].toLowerCase(), start: offset, bodyStart: offset + line.length + 1 });
+		offset += line.length + 1;
 	}
-	return fences;
-}
-
-/** Fence markers are counted at line starts only: a ``` inside a JSON string is mid-line and never a fence. */
-function fenceMarkerCount(raw: string): number {
-	return (toLf(raw).match(/^[ \t]*```/gm) ?? []).length;
-}
-
-function chooseFence(fences: Fence[]): Fence | undefined {
-	const labelled = fences.filter((fence) => fence.label === "json" || fence.label === "");
-	const pool = labelled.length > 0 ? labelled : fences;
-	return pool[pool.length - 1];
+	return markers;
 }
 
 /**
- * The operations JSON of a fold reply: the LAST fence, labelled json or not,
- * whatever prose or `###`-decorated narrative surrounds it. Returns the parsed
- * value, or a FoldOpsJsonProblem naming why the reply carries no readable
- * fence. Never throws.
+ * Every complete fence a reply could mean, in reply order. A ```json marker
+ * always OPENS a fence and closes at the next marker, whatever the markers
+ * before it did, so a stray ``` line in the narrative can neither swallow the
+ * operations block nor make the reply read as cut off. The plain pairs (each
+ * marker with the one after it) are candidates too, for a reply that fenced its
+ * operations without the json label.
  */
-export function extractFoldOpsJson(reply: string): unknown {
-	const raw = toLf(reply);
-	const fences = completeFences(raw);
-	if (fenceMarkerCount(raw) % 2 === 1) {
-		return new FoldOpsJsonProblem(fences.length > 0
-			? "the reply was cut off inside a ```json fence; the operations after the last complete fence are unreadable"
-			: "the reply was cut off inside its ```json fence and holds no complete operations block");
+function candidateFences(raw: string): { json: Fence[]; any: Fence[]; openJson?: { start: number; bodyStart: number } } {
+	const markers = fenceMarkers(raw);
+	const body = (open: FenceMarker, close: FenceMarker) => raw.slice(open.bodyStart, Math.max(open.bodyStart, close.start - 1));
+	const json: Fence[] = [];
+	const any: Fence[] = [];
+	for (let i = 0; i < markers.length; i++) {
+		const open = markers[i];
+		const close = markers[i + 1];
+		if (!close) continue;
+		const fence = { label: open.label, body: body(open, close), start: open.start };
+		if (open.label === "json") json.push(fence);
+		any.push(fence);
 	}
-	const fence = chooseFence(fences);
-	if (!fence) return new FoldOpsJsonProblem('the reply has no ```json fence; end the answer with exactly one fence holding {"ops": [ ... ]}');
-	if (!fence.body.trim()) return new FoldOpsJsonProblem('the reply\'s ```json fence is empty; it must hold {"ops": [ ... ]}');
+	// The reply ends inside a ```json fence it never closed: it was cut off, and
+	// that fence's body is no candidate for anything.
+	const last = markers[markers.length - 1];
+	return { json, any, ...(last?.label === "json" ? { openJson: { start: last.start, bodyStart: last.bodyStart } } : {}) };
+}
+
+/** JSON with the one slip models make most, a comma before a closing bracket, forgiven. Strings are left alone. */
+function parseJsonLenient(text: string): { ok: true; value: unknown } | { ok: false } {
 	try {
-		return JSON.parse(fence.body);
-	} catch (error) {
-		return new FoldOpsJsonProblem(`the reply's \`\`\`json fence is not valid JSON (${(error as Error).message})`);
+		return { ok: true, value: JSON.parse(text) };
+	} catch {
+		// fall through to the forgiving pass
+	}
+	let out = "";
+	let inString = false;
+	for (let i = 0; i < text.length; i++) {
+		const ch = text[i];
+		if (inString) {
+			out += ch;
+			if (ch === "\\") { out += text[i + 1] ?? ""; i++; }
+			else if (ch === "\"") inString = false;
+			continue;
+		}
+		if (ch === "\"") { inString = true; out += ch; continue; }
+		if (ch === ",") {
+			let j = i + 1;
+			while (j < text.length && /\s/.test(text[j])) j++;
+			if (text[j] === "}" || text[j] === "]") continue;
+		}
+		out += ch;
+	}
+	try {
+		return { ok: true, value: JSON.parse(out) };
+	} catch {
+		return { ok: false };
 	}
 }
 
+/**
+ * The JSON values a reply carries outside any fence, in ONE pass: each `{` or
+ * `[` is pushed, each `}` or `]` pops the latest opener and records the pair,
+ * and strings are respected while any opener is open. A raw newline ends a
+ * string, since a JSON string never holds one: a quote in the narrative after
+ * an unbalanced bracket swallows only the rest of its own line. Openers still
+ * on the stack at the end never balanced (prose, or a value cut short). The
+ * candidates are the maximal recorded pairs, those inside no other recorded
+ * pair, so a value NESTED in an unbalanced one is a candidate too; that is why
+ * only an op list of objects is ever taken from here. Linear in the reply.
+ */
+function balancedValues(raw: string): { text: string; start: number }[] {
+	const stack: number[] = [];
+	const pairs: Array<[number, number]> = [];
+	let inString = false;
+	for (let i = 0; i < raw.length; i++) {
+		const c = raw[i];
+		if (inString) {
+			if (c === "\\") i++;
+			else if (c === "\"" || c === "\n") inString = false;
+			continue;
+		}
+		if (c === "\"" && stack.length > 0) inString = true;
+		else if (c === "{" || c === "[") stack.push(i);
+		else if ((c === "}" || c === "]") && stack.length > 0) pairs.push([stack.pop()!, i]);
+	}
+	pairs.sort((a, b) => a[0] - b[0] || b[1] - a[1]);
+	const values: { text: string; start: number }[] = [];
+	let coveredTo = -1;
+	for (const [open, close] of pairs) {
+		if (open <= coveredTo) continue;
+		values.push({ text: raw.slice(open, close + 1), start: open });
+		coveredTo = close;
+	}
+	return values;
+}
+
+/**
+ * The one value that starts at `start`, with a string state of its own: the
+ * text up to the bracket that closes it, or undefined when it never closes.
+ * Linear from `start`.
+ */
+function balancedValueAt(raw: string, start: number): string | undefined {
+	let depth = 0;
+	let inString = false;
+	for (let i = start; i < raw.length; i++) {
+		const c = raw[i];
+		if (inString) {
+			if (c === "\\") i++;
+			else if (c === "\"" || c === "\n") inString = false;
+			continue;
+		}
+		if (c === "\"") inString = true;
+		else if (c === "{" || c === "[") depth += 1;
+		else if ((c === "}" || c === "]") && --depth === 0) return raw.slice(start, i + 1);
+	}
+	return undefined;
+}
+
+/**
+ * The last usable op list among a text's balanced values; failing that, the
+ * value that starts at the LAST `{"ops"` or the last `[{"op"`, read with a
+ * string state of its own, so a quote in the prose on the same line before
+ * them hides nothing. Two anchored starts keep it linear.
+ */
+function lastBalancedOpList(text: string): { list: unknown[]; start: number } | undefined {
+	const values = balancedValues(text);
+	for (let i = values.length - 1; i >= 0; i--) {
+		const read = parseJsonLenient(values[i].text);
+		const list = read.ok ? usableOpList(read.value) : undefined;
+		if (list) return { list, start: values[i].start };
+	}
+	for (const anchor of [/\{\s*"ops"\s*:/g, /\[\s*\{\s*"op"\s*:/g]) {
+		let start = -1;
+		for (const m of text.matchAll(anchor)) start = m.index!;
+		if (start < 0) continue;
+		const value = balancedValueAt(text, start);
+		const read = value === undefined ? undefined : parseJsonLenient(value);
+		const list = read?.ok ? usableOpList(read.value) : undefined;
+		if (list) return { list, start };
+	}
+	return undefined;
+}
+
+const isPlainObject = (value: unknown): boolean => typeof value === "object" && value !== null && !Array.isArray(value);
+
+/** An item that is shaped like an op: an object that names its kind. */
+const isOpShaped = (value: unknown): boolean => isPlainObject(value) && typeof (value as { op?: unknown }).op === "string";
+
+/**
+ * The op list inside a parsed value: `{"ops": [...]}` or a bare array, with at
+ * least one op-shaped item among its items (an empty list is a list too). Each
+ * item is read alone later, so a stray string beside real ops costs only
+ * itself; an array with no op-shaped item (strings, numbers, other objects) is
+ * never an op list, so a quoted array after the real list cannot replace it.
+ * Undefined when the value has neither shape.
+ */
+function opListOf(value: unknown): unknown[] | undefined {
+	const list = Array.isArray(value) ? value : (value as { ops?: unknown } | null)?.ops;
+	return Array.isArray(list) && (list.length === 0 || list.some(isOpShaped)) ? list : undefined;
+}
+
+/** An op list with at least one op: the only thing the reader takes. */
+function usableOpList(value: unknown): unknown[] | undefined {
+	const list = opListOf(value);
+	return list && list.length > 0 ? list : undefined;
+}
+
+/**
+ * Where a reply's LAST complete ```json fence starts, when that fence holds an
+ * empty op list and is the reply's last block: a tidy reply's final "nothing
+ * to change", which outranks any draft list the model wrote before it and took
+ * back. A fence of any label, an open json fence or an op list after it means
+ * the empty list was quoted as an example, and is no answer; a stray ``` line
+ * after it is ignored, as everywhere else.
+ */
+export function lastJsonFenceIsEmptyList(reply: string): number | undefined {
+	const raw = toLf(reply);
+	const { json, any, openJson } = candidateFences(raw);
+	const last = json.at(-1);
+	if (!last || openJson || any.filter((fence) => fence.body.trim()).at(-1)?.start !== last.start) return undefined;
+	const read = parseJsonLenient(last.body);
+	if (!read.ok || opListOf(read.value)?.length !== 0) return undefined;
+	const close = fenceMarkers(raw).find((marker) => marker.start > last.start)!;
+	return lastBalancedOpList(raw.slice(close.bodyStart)) ? undefined : last.start;
+}
+
+/** What the reader made of a reply: the op list it found, or why there is none. */
+export interface FoldReplyRead {
+	list?: unknown[];
+	unreadable?: FoldUnreadableClass;
+	/** Where the chosen block started, so the narrative is what came before it. */
+	start?: number;
+	/** The list came from before a last json fence holding an empty list: maybe a draft the model took back. Counted in the diagnostics only. */
+	earlierFence?: true;
+}
+
+/**
+ * THE READER. It finds the operations wherever a model put them:
+ *   1. the last complete ```json fence, when its body parses;
+ *   2. else the last complete fence of any label whose body parses;
+ *   3. else the last balanced top-level JSON value in the reply, or the value
+ *      at the last `{"ops"` or `[{"op"` (so an op list wrapped in another
+ *      object, `{"result":{"ops":[...]}}`, is read too). The last value wins:
+ *      an unfenced real list FOLLOWED by a quoted example takes the example,
+ *      a known limit, rare because the prompt asks for the fenced list last.
+ *      A reply ending in an unclosed json fence skips this pass.
+ * In every pass the last list wins when its items name any kind, a fold kind
+ * or not: a later [{"op":"note"}] replaces the real list, so that a reply of
+ * only unknown kinds is still read and its words kept, not called unreadable.
+ * The value may be `{"ops": [...]}` or a bare array, trailing commas are
+ * forgiven, and stray ``` lines outside the chosen fence are ignored. An empty
+ * list is never a drop: it is unusable, and the run treats it as unreadable;
+ * when the last json fence holds an empty list, an earlier fence's usable op
+ * list is taken instead (pass 2), since the empty one says nothing.
+ * A reply that ends inside a ```json fence it never closed is read from that
+ * fence's whole remaining body first: when it parses as an op list the reply
+ * was complete but for the closing marker, and that open fence wins over any
+ * complete fence before it, as the last list does everywhere. A reply that was
+ * NOT cut by the cap may have closing prose after the list instead of a marker,
+ * so its open body's balanced values are read next. Otherwise the reply was
+ * cut off, and that body is left out of every other pass.
+ * `truncated` says the reply ran to its output limit; the reader salvages the
+ * last complete fence of such a reply like any other, and names the reply cut
+ * off only when nothing was salvaged. Never throws.
+ */
+export function readFoldReply(reply: string, opts: { truncated?: boolean } = {}): FoldReplyRead {
+	const raw = toLf(reply);
+	const { json, any, openJson } = candidateFences(raw);
+	// The first value found that parsed but holds no usable op list, in the
+	// order the passes run: it names the class when no pass finds a usable one.
+	let shapeOnly: { value: unknown; start: number } | undefined;
+	let openParsed = false;
+	if (openJson) {
+		// A closing marker the cap cut short ("``") is no part of the body.
+		const body = raw.slice(openJson.bodyStart).trim().replace(/\n[ \t]*`{1,2}$/, "").trim();
+		const read = parseJsonLenient(body);
+		const list = read.ok ? usableOpList(read.value) : undefined;
+		if (list) return { list, start: openJson.start };
+		if (read.ok && typeof read.value === "object" && read.value !== null) {
+			// Complete, but no usable list (an empty one, say): not cut off.
+			openParsed = true;
+			shapeOnly = { value: read.value, start: openJson.start };
+		} else if (opts.truncated !== true) {
+			const found = lastBalancedOpList(body);
+			if (found) return { list: found.list, start: openJson.start };
+		}
+	}
+	const cutOff = opts.truncated === true || (openJson !== undefined && !openParsed);
+	let sawBlock = false;
+	const take = (value: unknown, start: number): FoldReplyRead | undefined => {
+		const list = usableOpList(value);
+		if (list) return { list, start };
+		shapeOnly ??= { value, start };
+		return undefined;
+	};
+	const lastJson = json[json.length - 1];
+	// A block was seen only when a ```json fence had something in it: a reply
+	// with a bash sample and no ops is "no-fence", not broken JSON.
+	if (json.some((fence) => fence.body.trim())) sawBlock = true;
+	let lastEmpty = false;
+	if (lastJson) {
+		const read = parseJsonLenient(lastJson.body);
+		if (read.ok) {
+			const found = take(read.value, lastJson.start);
+			if (found) return found;
+			lastEmpty = opListOf(read.value)?.length === 0;
+		}
+	}
+	/** A list found before a last json fence that held an empty one is marked, for the diagnostics. */
+	const marked = (found: FoldReplyRead): FoldReplyRead => (lastEmpty && found.start !== undefined && found.start < lastJson.start ? { ...found, earlierFence: true } : found);
+	for (let i = any.length - 1; i >= 0; i--) {
+		if (!any[i].body.trim()) continue;
+		const read = parseJsonLenient(any[i].body);
+		if (!read.ok || typeof read.value !== "object" || read.value === null) continue;
+		const found = take(read.value, any[i].start);
+		if (found) return marked(found);
+	}
+	// A reply that ends in a json fence it never closed put its list there: the
+	// prose before it may quote an example list, which is never the answer.
+	const found = openJson === undefined ? lastBalancedOpList(raw) : undefined;
+	if (found) return marked(found);
+	if (cutOff) return { unreadable: "cut-off", ...(shapeOnly ? { start: shapeOnly.start } : {}) };
+	if (!shapeOnly) return { unreadable: sawBlock ? "invalid-json" : "no-fence" };
+	const list = opListOf(shapeOnly.value);
+	return { unreadable: list && list.length === 0 ? "empty-list" : "not-a-list", start: shapeOnly.start };
+}
+
+const UNREADABLE_PROBLEMS: Readonly<Record<FoldUnreadableClass, string>> = {
+	"no-fence": 'the reply has no ```json fence; end the answer with exactly one fence holding {"ops": [ ... ]}',
+	"invalid-json": "the reply's ```json fence is not valid JSON",
+	"not-a-list": 'the JSON must be an object with an "ops" array, each item an object whose "op" names its kind',
+	"empty-list": 'the "ops" list is empty; a session with nothing durable is one drop op with its reason',
+	"cut-off": "the reply was cut off at the output limit and holds no complete operations block",
+};
+
 export interface ParsedFoldOps {
-	ops: FoldOp[];
-	/** Named reasons the reply is not an op list; empty means it parsed. Written for the model's retry. */
+	/** Every op of the list, each read alone with its place in the reply. */
+	items: ReadFoldOp[];
+	/** Why the reply is not an op list, for the diagnostics; empty when it is one. */
 	problems: string[];
 	/** What the model said before the fence — shown to nobody as truth, kept for the record and the diagnostics. */
 	narrative: string;
+	/** Set when the reader found no usable op list at all: the class the diagnostics count. Per-op problems leave it unset. */
+	unreadable?: FoldUnreadableClass;
+	/** The list came from before a last json fence holding an empty list (see FoldReplyRead). */
+	earlierFence?: true;
 }
 
 const NARRATIVE_TRAILING_LABEL = /(?:^|\n)[ \t]*#{1,6}[ \t]*[^\n]*$/;
@@ -584,73 +871,70 @@ const OP_FIELDS: Readonly<Record<FoldOpKind, readonly string[]>> = {
 	supersede: ["op", "id", "text"],
 	close: ["op", "id"],
 	pin: ["op", "id", "because"],
-	unpin: ["op", "id", "because"],
 	drop: ["op", "reason"],
 };
 
-function foreignKeysOf(item: Record<string, unknown>, kind: FoldOpKind): string[] {
-	const known = new Set(OP_FIELDS[kind]);
-	return Object.keys(item).filter((key) => !known.has(key));
+/**
+ * One op as the reply wrote it, read ALONE, with its place in the reply's
+ * list: its kind and every field it carries as text. Nothing is judged here:
+ * a missing topic, an unknown kind or a stray key is settled per op later, so
+ * one malformed op never costs the ops beside it. A list item that is a
+ * string is words with no kind; any other item that is not an object is an op
+ * with no kind and no words. A text given as a list of lines is those lines, a
+ * number or a yes/no is its own spelling, and any other field that is not
+ * text is absent.
+ */
+export interface ReadFoldOp {
+	/** Its place in the reply's list, from 0. */
+	index: number;
+	/** The kind as written, trimmed and lowercased; "" when there is none. */
+	op: string;
+	topic?: string;
+	kind?: string;
+	text?: string;
+	id?: string;
+	because?: string;
+	reason?: string;
+	/** Keys the kind does not define; for an unknown kind, every key but "op". */
+	foreignKeys?: string[];
+	/** The op had a "text" that is no text at all (an object, say): traced with its code. */
+	textNotText?: true;
+}
+
+const READ_FIELDS = ["topic", "kind", "text", "id", "because", "reason"] as const;
+
+export function readFoldOp(value: unknown, index: number): ReadFoldOp {
+	if (isString(value)) return { index, op: "", text: value };
+	const item = (isPlainObject(value) ? value : {}) as Record<string, unknown>;
+	const read: ReadFoldOp = { index, op: isString(item.op) ? item.op.trim().toLowerCase() : "" };
+	for (const field of READ_FIELDS) {
+		const found = item[field];
+		if (isString(found)) read[field] = found;
+	}
+	if (isString(read.kind)) read.kind = read.kind.trim().toLowerCase();
+	const text = item.text;
+	if (Array.isArray(text) && text.every(isString)) read.text = text.join("\n");
+	else if (typeof text === "number" || typeof text === "boolean") read.text = String(text);
+	else if (text !== undefined && text !== null && !isString(text)) read.textNotText = true;
+	const known = new Set(["op", ...((OP_FIELDS as Readonly<Record<string, readonly string[]>>)[read.op] ?? [])]);
+	const foreign = Object.keys(item).filter((key) => !known.has(key));
+	if (foreign.length > 0) read.foreignKeys = foreign;
+	return read;
 }
 
 /** The parsed ops of a fold reply plus the narrative that preceded them. Never throws. */
-export function parseFoldOps(reply: string): ParsedFoldOps {
+export function parseFoldOps(reply: string, opts: { truncated?: boolean } = {}): ParsedFoldOps {
 	const raw = toLf(reply);
-	const fence = chooseFence(completeFences(raw));
-	const narrative = narrativeBefore(raw, fence?.start);
-	const parsed = extractFoldOpsJson(reply);
-	if (isFoldOpsJsonProblem(parsed)) return { ops: [], problems: [parsed.problem], narrative };
-	const list = Array.isArray(parsed) ? parsed : (parsed as { ops?: unknown })?.ops;
-	if (!Array.isArray(list)) return { ops: [], problems: ['the JSON must be an object with an "ops" array'], narrative };
-	const ops: FoldOp[] = [];
-	const problems: string[] = [];
-	list.forEach((value: unknown, index: number) => {
-		const label = `op ${index + 1}`;
-		const item = (value && typeof value === "object" ? value : {}) as Record<string, unknown>;
-		const kind = item.op;
-		if (!isString(kind) || !(FOLD_OP_KINDS as readonly string[]).includes(kind)) {
-			problems.push(`${label}: "op" must be one of ${FOLD_OP_KINDS.join(", ")}`);
-			return;
-		}
-		const opKind = kind as FoldOpKind;
-		const foreign = foreignKeysOf(item, opKind);
-		const extras: FoldOpExtras = foreign.length > 0 ? { foreignKeys: foreign } : {};
-		const id = isString(item.id) ? item.id.trim() : "";
-		const text = isString(item.text) ? item.text : "";
-		switch (opKind) {
-			case "add": {
-				const topic = isString(item.topic) ? item.topic.trim() : "";
-				if (!topic) return problems.push(`${label} (add): "topic" is required — a topic title from the list, or a new one`);
-				if (!isString(item.kind) || !(FOLD_ADD_KINDS as readonly string[]).includes(item.kind)) return problems.push(`${label} (add): "kind" must be one of ${FOLD_ADD_KINDS.join(", ")}`);
-				if (!text.trim()) return problems.push(`${label} (add): "text" must be the entry as it should read in memory`);
-				return void ops.push({ ...extras, op: "add", topic, kind: item.kind as FoldAddKind, text });
-			}
-			case "update":
-			case "supersede": {
-				if (!id) return problems.push(`${label} (${opKind}): "id" is required — copy an entry id exactly as it is listed`);
-				if (!text.trim()) return problems.push(`${label} (${opKind}): "text" must be the entry as it should now read`);
-				return void ops.push({ ...extras, op: opKind, id, text });
-			}
-			case "close": {
-				if (!id) return problems.push(`${label} (close): "id" is required — copy an entry id exactly as it is listed`);
-				return void ops.push({ ...extras, op: "close", id });
-			}
-			case "pin":
-			case "unpin": {
-				if (!id) return problems.push(`${label} (${opKind}): "id" is required — copy an entry id exactly as it is listed`);
-				const because = isString(item.because) ? item.because : undefined;
-				return void ops.push({ ...extras, op: opKind, id, ...(because === undefined ? {} : { because }) });
-			}
-			case "drop": {
-				if (!isString(item.reason)) return problems.push(`${label} (drop): "reason" must say why this session holds nothing durable`);
-				return void ops.push({ ...extras, op: "drop", reason: item.reason });
-			}
-		}
-	});
-	return { ops, problems, narrative };
+	const read = readFoldReply(reply, opts);
+	const narrative = narrativeBefore(raw, read.start);
+	if (!read.list) {
+		const unreadable = read.unreadable ?? "no-fence";
+		return { items: [], problems: [UNREADABLE_PROBLEMS[unreadable]], narrative, unreadable };
+	}
+	return { items: read.list.map(readFoldOp), problems: [], narrative, ...(read.earlierFence ? { earlierFence: true as const } : {}) };
 }
 
-// --- Validation --------------------------------------------------------------
+// --- Deciding each op ---------------------------------------------------------
 
 function nearestEntryId(id: string, areas: AreaRow[]): string | undefined {
 	// An id copied with its whole address — "m-0031 · saved 2026-08-02" — names
@@ -662,8 +946,8 @@ function nearestEntryId(id: string, areas: AreaRow[]): string | undefined {
 }
 
 /**
- * The ONE topic match, shared by the validator and the applier: trimmed and
- * case-insensitive. They must agree — a validator that read "commercial terms"
+ * The ONE topic match, shared by the decision and the applier: trimmed and
+ * case-insensitive. They must agree: a decision that read "commercial terms"
  * as a NEW topic while the applier filed it under the existing "Commercial
  * terms" would judge the op by rules that do not govern where it lands.
  */
@@ -730,192 +1014,570 @@ function topicWantsBullets(topic: string, areas: AreaRow[]): boolean {
 	return rows.some((row) => BULLET_START.test(row.firstLine));
 }
 
-function refuseTextShape(text: string, topic: string, areas: AreaRow[], label: string, refusals: string[]): void {
-	const words = countWords(text);
-	if (words > FOLD_MAX_TEXT_WORDS) {
-		refusals.push(`${label}: the text is ${words} words; an entry is at most ${FOLD_MAX_TEXT_WORDS} — say the durable point, or split it across two entries`);
-	}
-	if (topicWantsBullets(topic, areas) && !BULLET_START.test(firstLineOf(text))) {
-		refusals.push(`${label}: the entries of "${topic}" are bullets, so the text must start with "- "`);
-	}
-	const structural = splitTextLines(text).find((line) => STRUCTURAL_LINE.test(line));
-	if (structural !== undefined) {
-		refusals.push(`${label}: the text carries a heading or a comment line (${JSON.stringify(structural.trim())}); an entry is plain text`);
-	}
+/** A copied entry metadata line or a conversation's rc_metadata line, whole on its own line: bookkeeping, never words of a note. */
+const COPIED_COMMENT_LINE = /^\s*<!--\s*(?:e\s*:|rc_metadata\b).*-->\s*$/;
+
+/** The topic a change goes to when the reply gives it no home of its own: the holding topic the next Memorize or Review sorts. */
+export const FOLD_UNSORTED_TOPIC = "Unsorted";
+
+/** How one op of a reply ended. `normalised` is applied after a fix by code. */
+export type FoldOpFate = "applied" | "normalised" | "redirected" | "left-out" | "traced";
+
+/** One op's ending with its codes, for the diagnostics. Codes only, never room text. */
+export interface FoldOpDecision {
+	index: number;
+	/** The op's kind: one of the grammar's, "unpin", or "other". */
+	op: string;
+	fate: FoldOpFate;
+	codes: string[];
 }
 
 /**
- * A heading line or a comment line inside an entry is not an entry: written
- * into the memory file it would open a topic or forge a metadata line. The
- * same rule the entry model applies to a hand edit (`findStructuralLine`),
- * kept here as its twin because this module does not import that one.
+ * Pairs of a new text and a note it looks like, by what became of the new
+ * text; the pairs within one reply are counted apart from those against memory.
  */
-const STRUCTURAL_LINE = /^\s*(?:#+(?:\s|$)|<!--)/;
-
-function splitTextLines(text: string): string[] {
-	return text.split(/\r?\n/);
+export interface FoldPairCounts {
+	/** Left out: a note says the same, and the words of the new text are in it in the same order. A close's or a pin's text that only repeats its note counts here too. */
+	subset: number;
+	/** Left out: another text of the same reply says it the same way. */
+	subsetInReply: number;
+	/** Kept beside a note that says the same in fewer words. */
+	beside: number;
+	/** Kept and tagged: it may disagree with a note. */
+	mayDisagree: number;
+	/** Kept untagged: it may disagree with an earlier add of the same reply. */
+	mayDisagreeInReply: number;
+	/** Kept beside a note the person pinned, and tagged. */
+	besidePinned: number;
 }
 
-function refuseTopicTitle(title: string, label: string, refusals: string[]): void {
-	if (/^#{1,6}\s/.test(title) || /^#{1,6}$/.test(title)) {
-		refusals.push(`${label}: give the topic title without "#" heading marks`);
-		return;
-	}
-	if (title.length < FOLD_TOPIC_TITLE_MIN_CHARS || title.length > FOLD_TOPIC_TITLE_MAX_CHARS) {
-		refusals.push(`${label}: a new topic title is ${FOLD_TOPIC_TITLE_MIN_CHARS}–${FOLD_TOPIC_TITLE_MAX_CHARS} characters; "${truncate(title)}" is ${title.length}`);
-		return;
-	}
-	if (/^[\s:]*$/.test(title) || /^:+$/.test(title.replace(/\s+/g, ""))) {
-		refusals.push(`${label}: "${truncate(title)}" is punctuation, not a topic title`);
-	}
+export interface FoldDecisions {
+	/** What the applier applies: every id names an area, and no text op names a pinned note. */
+	ops: FoldOp[];
+	decisions: FoldOpDecision[];
+	pairs: FoldPairCounts;
+	/** False when nothing of the reply landed: no op applied or redirected, none left out as already in memory, and no drop. */
+	landed: boolean;
 }
 
-/** The session text as a quote is checked against it: one line, one space run, case kept. */
-function sessionQuoteHaystack(session: { text: string }): string {
-	return normalizeLine(session.text);
+export interface FoldDecideContext {
+	/** Notes pinned for this run's folds only (a resume's kept notes): a change to one is added beside it, but untagged, since the person did not pin it. */
+	keptForFolds?: ReadonlySet<string>;
 }
 
-/** Today as the local YYYY-MM-DD: the day the person reading a refusal's date words is in. The validator carries no clock of its own. */
-function localDay(date = new Date()): string {
-	return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+/** A new note on its way to the repeat rules. */
+interface AddCandidate {
+	index: number;
+	/** It is not the op as written: its text was redirected here. */
+	redirected: boolean;
+	topic: string;
+	kind: FoldAddKind;
+	text: string;
+	/** The note the text was aimed at, judged first. */
+	target?: AreaRow;
+	/** The op wanted to change a note the person pinned. */
+	besidePinned?: boolean;
+	/** The text rode on a close or a pin: when it says nothing new, it is traced rather than left out. */
+	foreign?: boolean;
+	/** An older rewrite judged to disagree with the note it was aimed at, however it is worded: tagged against that note. */
+	disagrees?: boolean;
 }
 
-/** The first note, in document order, that a text says again or contradicts, and which of the two it does. */
-function twinNoteOf(text: string, areas: AreaRow[]): { area: AreaRow; kind: "duplicate" | "conflict" } | undefined {
-	for (const area of areas) {
-		if (!area.id) continue;
-		const kind = classifyNotePair(text, area.text);
-		if (kind !== "different") return { area, kind };
-	}
-	return undefined;
+/** The kind a note keeps when its text is added beside it: an event is what a session IS, never what a fold writes. */
+function besideKind(area: AreaRow): FoldAddKind {
+	return area.kind === "event" ? "fact" : area.kind;
+}
+
+/** A quote and the page as a quote is found in them: typographic quotes and dashes folded, case and space runs ignored, outer quote marks dropped. */
+function quoteKey(text: string): string {
+	return text
+		.replace(/[“”„‟″«»]/g, '"')
+		.replace(/[‘’‚‛′]/g, "'")
+		.replace(/[‐-―−]/g, "-")
+		.toLowerCase()
+		.replace(/\s+/g, " ")
+		.trim()
+		.replace(/^["']+|["']+$/g, "")
+		.trim();
 }
 
 /**
- * Refusals, each a named reason the model can act on, one line per problem,
- * naming the op's position and the entry it addressed. An empty list means the
- * ops can be applied.
+ * An op's text as a note of `topic` is written: LF lines, blank lines at the
+ * ends trimmed, a copied metadata line removed, a bullet on the first line
+ * when the topic writes bullets, and any other line that could change the
+ * memory file's structure (a heading, a comment) escaped with a backslash and
+ * kept. Nothing a note says can open a topic or forge a metadata line.
  */
-export function validateFoldOps(ops: FoldOp[], areas: AreaRow[], session: { id: string; text: string }): string[] {
-	const refusals: string[] = [];
-	if (ops.length === 0) {
-		return [`no operations: a fold answers with what it changes, or with a single drop saying why ${session.id} holds nothing durable`];
+function noteTextOf(raw: string, bullets: boolean, codes: string[]): string {
+	const lines = toLines(raw.replace(/\s+$/, "")).filter((line) => {
+		if (!COPIED_COMMENT_LINE.test(line)) return true;
+		codes.push("comment-removed");
+		return false;
+	});
+	while (lines.length > 0 && !lines[0].trim()) lines.shift();
+	while (lines.length > 0 && !lines[lines.length - 1].trim()) lines.pop();
+	// A text of marks only ("###", "---"), or of the must-keep marker only, says
+	// nothing, like a title of marks only: as an update it would empty a note.
+	if (!saysMoreThanMustKeep(lines.join("\n"))) return "";
+	if (bullets && !BULLET_START.test(lines[0])) {
+		lines[0] = `- ${lines[0].trimStart()}`;
+		codes.push("bullet");
 	}
-	if (ops.length > FOLD_MAX_OPS) {
-		refusals.push(`${ops.length} operations for one session: at most ${FOLD_MAX_OPS} are applied — fold the session's durable core, not every line of it`);
-	}
-	const drops = ops.filter((op) => op.op === "drop");
-	if (drops.length > 0 && ops.length > 1) {
-		refusals.push(`a drop says this session changes nothing, so it travels alone; this list holds a drop and ${ops.length - 1} other operation${ops.length - 1 === 1 ? "" : "s"} — choose one or the other`);
-	}
-	if (drops.length > 1) {
-		refusals.push(`${drops.length} drop operations: one session is dropped once, with one reason`);
-	}
-	const byId = new Map(areas.map((area) => [area.id, area]));
-	const claimed = new Map<string, number>();
-	const haystack = sessionQuoteHaystack(session);
-	/** The adds already judged, so a second add that repeats one is refused against it. */
-	const addsSoFar: { index: number; text: string }[] = [];
+	return lines.map((line) => {
+		// A heading or a comment line would open a topic or forge a metadata
+		// line: the rule a hand edit meets too.
+		if (!findStructuralLine(line)) return line;
+		codes.push("escaped");
+		return line.replace(/^(\s*)/, "$1\\");
+	}).join("\n");
+}
 
-	ops.forEach((op, index) => {
-		const label = `op ${index + 1} (${op.op})`;
-		if (op.foreignKeys?.length) {
-			refusals.push(`${label}: the key${op.foreignKeys.length === 1 ? "" : "s"} ${op.foreignKeys.map((key) => `"${key}"`).join(", ")} ${op.foreignKeys.length === 1 ? "is" : "are"} not part of this operation; write it with exactly ${OP_FIELDS[op.op].map((field) => `"${field}"`).join(", ")}`);
-		}
-		if (op.op === "drop") {
-			if (!op.reason.trim()) refusals.push(`${label}: a drop carries the reason the user is shown; say why ${session.id} holds nothing durable`);
-			return;
-		}
-		if (op.op === "add") {
-			const existing = areas.find((area) => sameTopic(area.topic, op.topic));
-			if (!existing) {
-				refuseTopicTitle(op.topic, `${label} "${truncate(op.topic, 40)}"`, refusals);
-				// A title that is an existing topic in other words would open a
-				// second heading for one subject; the refusal names the heading
-				// that already holds it.
-				const twin = nearDuplicateTopicTitle(op.topic, new Set(areas.map((area) => area.topic)));
-				if (twin) refusals.push(`${label}: "${truncate(op.topic, 40)}" is the topic "${twin}"; write "topic":"${twin}"`);
+/** A new topic title made usable, or the holding topic when nothing of it names a subject. */
+function addTopicOf(raw: string | undefined, rawKind: string | undefined, areas: AreaRow[], codes: string[]): string {
+	let topic = (raw ?? "").trim();
+	if (!topic) {
+		codes.push("topic-missing");
+		return FOLD_UNSORTED_TOPIC;
+	}
+	const stripped = topic.replace(/^#+\s*/, "").trim();
+	if (stripped !== topic) codes.push("topic-marks");
+	topic = stripped;
+	if (!/[\p{L}\p{N}]/u.test(topic)) {
+		codes.push("topic-empty");
+		return FOLD_UNSORTED_TOPIC;
+	}
+	if (sameTopic(topic, FOLD_UNSORTED_TOPIC) || sameTopic(topic, FOLD_ACTIVE_ITEMS_TOPIC) || areas.some((area) => sameTopic(area.topic, topic))) return topic;
+	if (topic.length > FOLD_TOPIC_TITLE_MAX_CHARS) {
+		codes.push("topic-length");
+		const cut = topic.slice(0, FOLD_TOPIC_TITLE_MAX_CHARS + 1).replace(/\s+\S*$/, "").trim();
+		topic = cut || topic.slice(0, FOLD_TOPIC_TITLE_MAX_CHARS).trim();
+	}
+	if (topic.length < FOLD_TOPIC_TITLE_MIN_CHARS) {
+		codes.push("topic-length");
+		return FOLD_UNSORTED_TOPIC;
+	}
+	// A title that is an existing topic in other words files under it, except
+	// that a fact or a practice keeps its own title rather than become an item.
+	const twin = nearDuplicateTopicTitle(topic, new Set(areas.map((area) => area.topic)));
+	const twinIsActiveItems = twin !== undefined && areas.some((area) => sameTopic(area.topic, twin) && area.section === "Active Items");
+	if (twin && !(twinIsActiveItems && rawKind !== "item")) {
+		codes.push("topic-twin");
+		return twin;
+	}
+	return topic;
+}
+
+/** The kind an add gets under its topic: the topic wins, so an item only ever sits in Active Items and nothing else does. */
+function addKindOf(rawKind: string | undefined, topic: string, areas: AreaRow[], codes: string[]): FoldAddKind {
+	const activeItems = sameTopic(topic, FOLD_ACTIVE_ITEMS_TOPIC) || areas.some((area) => sameTopic(area.topic, topic) && area.section === "Active Items");
+	const kind = (FOLD_ADD_KINDS as readonly string[]).includes(rawKind ?? "") ? (rawKind as FoldAddKind) : undefined;
+	if (!kind) {
+		codes.push("kind-fixed");
+		return activeItems ? "item" : "fact";
+	}
+	if (kind === "item" && !activeItems) {
+		codes.push("item-to-fact");
+		return "fact";
+	}
+	if (kind !== "item" && activeItems) {
+		codes.push("fact-to-item");
+		return "item";
+	}
+	return kind;
+}
+
+/**
+ * What the repeat rules make of a new text against the notes: the first note
+ * it says again in fewer or the same words (so it is left out), else the first
+ * it may disagree with, else the first it repeats with more words. The note it
+ * was aimed at is read first. This is the default verdict a later adjudication
+ * would replace. A text carrying the must-keep marker is never the same as a
+ * note that is not pinned: its words are there, but the person's request to
+ * keep them is not, and the add is what pins them.
+ */
+function repeatVerdictOf(text: string, notes: readonly AreaRow[]): { verdict: "same" | "disagree" | "beside" | "new"; note?: AreaRow } {
+	let disagree: AreaRow | undefined;
+	let beside: AreaRow | undefined;
+	const mustKeep = hasMustKeepMarker(text);
+	for (const note of notes) {
+		if (!note.id) continue;
+		const pair = classifyNotePair(text, note.text);
+		if (pair === "duplicate") {
+			if (noteWordsWithin(text, note.text) && (!mustKeep || note.pinned)) return { verdict: "same", note };
+			beside ??= note;
+		} else if (pair === "conflict") disagree ??= note;
+	}
+	if (disagree) return { verdict: "disagree", note: disagree };
+	if (beside) return { verdict: "beside", note: beside };
+	return { verdict: "new" };
+}
+
+/**
+ * THE DECISION, one op at a time. No rule costs the reply: an op is applied,
+ * fixed by code, redirected as a new note, left out because memory already
+ * says every word of it in the same order, or, only when it carries no
+ * content, traced. Content
+ * is never dropped:
+ *   - normalise first (topic, kind, bullet, structure, an id copied with its
+ *     address), then the gates (an unknown id, a pinned or kept note, a close
+ *     on what is not an open item, a pin with no quote from the page), then
+ *     the repeat rules against memory and between the reply's own adds;
+ *   - a change aimed at a pinned note is added beside it, tagged, and holds
+ *     the automatic save; one aimed at a kept note is added beside it untagged;
+ *   - a text that may disagree with a note is kept, tagged, and holds the save;
+ *   - the same id named twice: the last text wins, an earlier text that says
+ *     something the winner does not is added beside the note, and a close or
+ *     a pin applies after the text;
+ *   - a drop stands only when nothing else was applied or redirected;
+ *   - dates decide an older page: when the page's day and a note's learned
+ *     day are both known and the page is older, a text that may disagree with
+ *     the note goes to the archive as history and the note is untouched, and
+ *     any other text aimed at the note is added beside it, untagged (beside a
+ *     pinned note it keeps its tag).
+ */
+export function decideFoldOps(items: readonly ReadFoldOp[], areas: AreaRow[], session: { text: string; date?: string }, ctx: FoldDecideContext = {}): FoldDecisions {
+	const kept = ctx.keptForFolds ?? new Set<string>();
+	const pageDay = session.date && ISO_DAY.test(session.date) ? session.date : undefined;
+	/** The note was learned after this page's day: the page cannot rewrite it. */
+	const newerThanPage = (area: AreaRow) => pageDay !== undefined && area.learned !== undefined && ISO_DAY.test(area.learned) && pageDay < area.learned;
+	/** No learned day, but saved by a fold or rewritten after this page's day: the floor the prompt calls newer than the page. */
+	const rewrittenAfterPage = (area: AreaRow) => {
+		const floor = area.learned ? undefined : area.updated ?? (area.from ? area.saved : undefined);
+		return pageDay !== undefined && floor !== undefined && ISO_DAY.test(floor) && pageDay < floor;
+	};
+	/** History is for an older value of the note's fact: a text with no value of its own is another fact, kept beside the note. */
+	const olderValueOf = (text: string, area: AreaRow) => classifyNotePair(text, area.text) === "conflict" || negationDiffers(text, area.text) || (noteValueTokens(text).length > 0 && dropsNoteValue(text, area.text));
+	const byId = new Map(areas.filter((area) => area.id).map((area) => [area.id, area]));
+	const pairs: FoldPairCounts = { subset: 0, subsetInReply: 0, beside: 0, mayDisagree: 0, mayDisagreeInReply: 0, besidePinned: 0 };
+	const codesOf = new Map<number, string[]>();
+	const code = (item: ReadFoldOp, value: string) => {
+		const codes = codesOf.get(item.index) ?? [];
+		if (!codes.includes(value)) codes.push(value);
+		codesOf.set(item.index, codes);
+	};
+	/** Each op's fate as it is decided, by reply index; an op with none is traced. */
+	const fates = new Map<number, FoldOpFate>();
+	/** The ops fixed by code: one that then applies is "normalised". */
+	const fixed = new Set<number>();
+	const fix = (item: ReadFoldOp, value: string) => {
+		code(item, value);
+		fixed.add(item.index);
+	};
+	const itemAt = new Map(items.map((item) => [item.index, item]));
+	const adds: AddCandidate[] = [];
+	const bulletsFor = (topic: string) => topicWantsBullets(topic, areas);
+	const history: FoldOp[] = [];
+	/** A text kept in the archive as an older value of `area`, which stays as it is. */
+	const toHistory = (item: ReadFoldOp, area: AreaRow, text: string) => {
+		code(item, "older-history");
+		fates.set(item.index, "redirected");
+		history.push({ op: "history", of: area.id, until: area.learned!, text });
+	};
+
+	/** The area an op names: exact, or the one its id was copied from with its address. */
+	const areaOf = (item: ReadFoldOp): AreaRow | "no-id" | "unknown-id" => {
+		const id = item.id?.trim() ?? "";
+		if (!id) return "no-id";
+		const exact = byId.get(id);
+		if (exact) return exact;
+		const nearest = nearestEntryId(id, areas);
+		if (!nearest) return "unknown-id";
+		fix(item, "id-repaired");
+		return byId.get(nearest)!;
+	};
+	/** A text redirected as a new note: to the holding topic, or beside the note it was aimed at. */
+	const redirect = (item: ReadFoldOp, raw: string, why: string, where: { beside?: AreaRow; target?: AreaRow; kind?: FoldAddKind; besidePinned?: boolean; foreign?: boolean; disagrees?: boolean } = {}) => {
+		const topic = where.beside?.topic ?? FOLD_UNSORTED_TOPIC;
+		const codes: string[] = [];
+		const text = noteTextOf(raw, bulletsFor(topic), codes);
+		if (!text) return code(item, "empty-text");
+		code(item, why);
+		for (const value of codes) fix(item, value);
+		const candidate: AddCandidate = { index: item.index, redirected: true, topic, kind: where.kind ?? (where.beside ? besideKind(where.beside) : "fact"), text, ...(where.beside ?? where.target ? { target: where.beside ?? where.target } : {}), ...(where.besidePinned ? { besidePinned: true } : {}), ...(where.foreign ? { foreign: true } : {}), ...(where.disagrees ? { disagrees: true } : {}) };
+		adds.push(candidate);
+	};
+	/** A text on a close or a pin: kept unless the note it rode on already says every word of it, in order. */
+	const foreignText = (item: ReadFoldOp, area: AreaRow | undefined) => {
+		if (!item.text?.trim()) return;
+		if (item.op === "pin" && area) redirect(item, item.text, "pin-text", { beside: area, foreign: true });
+		else redirect(item, item.text, "close-text", { kind: "fact", foreign: true, ...(area ? { target: area } : {}) });
+	};
+
+	const textOps: { item: ReadFoldOp; op: "update" | "supersede"; area: AreaRow; text: string }[] = [];
+	const closes = new Map<string, ReadFoldOp>();
+	const pins = new Map<string, { item: ReadFoldOp; because: string }>();
+	const drops: ReadFoldOp[] = [];
+	const haystack = normalizeLine(session.text);
+	const haystackKey = quoteKey(session.text);
+
+	for (const item of items) {
+		const foreign = item.foreignKeys?.filter((key) => !(key === "id" && item.op === "add") && !(key === "text" && (item.op === "drop" || item.op === "close" || item.op === "pin"))) ?? [];
+		if (foreign.length > 0 && (FOLD_OP_KINDS as readonly string[]).includes(item.op)) fix(item, "foreign-keys");
+		if (item.textNotText) fix(item, "text-not-text");
+		switch (item.op) {
+			case "add": {
+				const codes: string[] = [];
+				const topic = addTopicOf(item.topic, item.kind, areas, codes);
+				const kind = addKindOf(item.kind, topic, areas, codes);
+				const text = noteTextOf(item.text ?? "", bulletsFor(topic), codes);
+				for (const value of codes) fix(item, value);
+				if (!text) {
+					code(item, "empty-text");
+					break;
+				}
+				// An add carrying an existing note's id is judged against THAT note
+				// first; it is never turned into an update by look-alike.
+				const named = item.id !== undefined ? areaOf(item) : undefined;
+				adds.push({ index: item.index, redirected: false, topic, kind, text, ...(typeof named === "object" ? { target: named } : {}) });
+				break;
 			}
-			const wantsActiveItems = op.kind === "item";
-			const isActiveItems = sameTopic(op.topic, FOLD_ACTIVE_ITEMS_TOPIC) || existing?.section === "Active Items";
-			if (wantsActiveItems && !isActiveItems) {
-				refusals.push(`${label}: an item is an open loop and lives in ${FOLD_ACTIVE_ITEMS_TOPIC}; write "topic":"${FOLD_ACTIVE_ITEMS_TOPIC}", or make this a fact or a practice under "${truncate(op.topic, 40)}"`);
-			}
-			if (!wantsActiveItems && isActiveItems) {
-				refusals.push(`${label}: ${FOLD_ACTIVE_ITEMS_TOPIC} holds open loops only; a ${op.kind} belongs under a Deep Memory topic`);
-			}
-			refuseTextShape(op.text, op.topic, areas, label, refusals);
-			// A point memory already holds is updated, never repeated; a point whose
-			// value changed (a date, a number, a negation) is superseded, never added
-			// beside the old value. The areas are read off the run's WORKING COPY
-			// before every fold, so a note added by conversation 3 is among the
-			// areas conversation 7 is judged against without any further work: the
-			// twin check sees this run's own adds.
-			const twin = twinNoteOf(op.text, areas);
-			if (twin?.kind === "conflict") {
-				const pairs = conflictValuePairs(twin.area.text, op.text).map((pair) => `${pair.older || "nothing"} → ${pair.newer || "nothing"}`).join(", ");
-				refusals.push(`${label}: this changes what note "${twin.area.id}" under "${twin.area.topic}" says (${pairs}): supersede "${twin.area.id}" if this session is newer than it (saved ${dayWords(twin.area.updated ?? twin.area.saved, localDay())}), otherwise leave it out and say in the narrative that memory already holds a later value`);
-			} else if (twin) {
-				refusals.push(`${label}: this says what note "${twin.area.id}" under "${twin.area.topic}" already says — update "${twin.area.id}" if the point changed, or leave it out`);
-			}
-			const earlier = addsSoFar.find((add) => noteTextsLookAlike(op.text, add.text));
-			if (earlier) refusals.push(`${label}: this says what op ${earlier.index + 1} (add) already says — keep one of them`);
-			addsSoFar.push({ index, text: op.text });
-			return;
-		}
-		// Every remaining op names an entry by id.
-		const area = byId.get(op.id);
-		const seen = (claimed.get(op.id) ?? 0) + 1;
-		claimed.set(op.id, seen);
-		if (seen === 2) refusals.push(`${label}: "${op.id}" is named by more than one operation; one entry takes one operation per fold`);
-		if (!area) {
-			const nearest = nearestEntryId(op.id, areas);
-			refusals.push(`${label}: "${op.id}" is not an entry of this memory${nearest ? ` — did you mean "${nearest}"? Copy ids exactly as they are listed` : "; copy ids exactly as they are listed"}`);
-			return;
-		}
-		if (area.pinned && (PIN_PROTECTED_OPS as readonly string[]).includes(op.op)) {
-			refusals.push(`${label}: "${op.id}" is pinned — a pinned entry is the user's own, and a fold may only add an entry beside it; add the newer point as its own entry and say so in the narrative`);
-			return;
-		}
-		switch (op.op) {
 			case "update":
-			case "supersede":
-				refuseTextShape(op.text, area.topic, areas, label, refusals);
-				return;
-			case "close":
-				if (area.section !== "Active Items" || area.kind !== "item") {
-					refusals.push(`${label}: "${op.id}" is a ${area.kind} under "${area.topic}", not an open item; only ${FOLD_ACTIVE_ITEMS_TOPIC} entries are closed — supersede it if the point changed`);
+			case "supersede": {
+				if (!item.text?.trim()) {
+					code(item, "empty-text");
+					break;
 				}
-				return;
-			case "pin":
-			case "unpin": {
-				const quote = normalizeLine(op.because ?? "");
-				if (!quote) {
-					refusals.push(`${label}: ${op.op} carries "because" — the line of ${session.id} in which the user asks for it, quoted as it appears there`);
-					return;
+				const area = areaOf(item);
+				if (typeof area === "string") redirect(item, item.text, area);
+				else if (newerThanPage(area) && olderValueOf(item.text, area)) {
+					const codes: string[] = [];
+					const text = noteTextOf(item.text, bulletsFor(area.topic), codes);
+					for (const value of codes) fix(item, value);
+					if (text) toHistory(item, area, text);
+					else code(item, "empty-text");
+				} else if (kept.has(area.id)) redirect(item, item.text, "beside-kept", { beside: area });
+				// An older text that does not disagree keeps the tag beside a pinned note.
+				else if (area.pinned) redirect(item, item.text, "beside-pinned", { beside: area, besidePinned: true });
+				else if (newerThanPage(area)) redirect(item, item.text, "older-beside", { beside: area });
+				// A note with no learned day rewritten after the page may be newer: a
+				// text that disagrees with it is added beside it, tagged, never over it.
+				else if (rewrittenAfterPage(area) && textDisagreesWith(item.text, area.text)) redirect(item, item.text, "older-than-floor", { beside: area, disagrees: true });
+				else {
+					const codes: string[] = [];
+					const text = noteTextOf(item.text, bulletsFor(area.topic), codes);
+					for (const value of codes) fix(item, value);
+					if (!text) {
+						code(item, "empty-text");
+						break;
+					}
+					fates.set(item.index, "applied");
+					textOps.push({ item, op: item.op, area, text });
 				}
-				if (!haystack.includes(quote)) {
-					refusals.push(`${label}: the quoted line "${truncate(quote)}" is not in ${session.id}; ${op.op} only ever follows the user asking for it, quoted from the session`);
-				}
-				return;
+				break;
 			}
+			case "close": {
+				const area = areaOf(item);
+				if (typeof area === "string") code(item, area);
+				else if (kept.has(area.id)) code(item, "close-kept");
+				else if (area.pinned) code(item, "close-pinned");
+				else if (area.section !== "Active Items" || area.kind !== "item") code(item, "close-not-item");
+				else if (closes.has(area.id)) code(item, "same-id-again");
+				else {
+					closes.set(area.id, item);
+					fates.set(item.index, "applied");
+				}
+				foreignText(item, typeof area === "object" ? area : undefined);
+				break;
+			}
+			case "pin": {
+				const area = areaOf(item);
+				const quote = normalizeLine(item.because ?? "");
+				if (typeof area === "string") code(item, area);
+				else if (area.pinned && !kept.has(area.id)) code(item, "already-pinned");
+				else if (!quote) code(item, "pin-no-quote");
+				else if (!haystack.includes(quote) && !haystackKey.includes(quoteKey(quote))) code(item, "quote-missing");
+				else if (pins.has(area.id)) code(item, "same-id-again");
+				else {
+					if (!haystack.includes(quote)) fix(item, "quote-normalised");
+					pins.set(area.id, { item, because: item.because ?? "" });
+					fates.set(item.index, "applied");
+				}
+				foreignText(item, typeof area === "object" ? area : undefined);
+				break;
+			}
+			case "drop":
+				drops.push(item);
+				if (item.text?.trim()) redirect(item, item.text, "drop-text");
+				break;
+			default: {
+				const why = item.op === "unpin" ? "unpin" : item.op === "" ? "no-kind" : "kind-unknown";
+				if (!item.text?.trim()) {
+					code(item, why);
+					break;
+				}
+				const named = item.id !== undefined ? areaOf(item) : undefined;
+				redirect(item, item.text, why, typeof named === "object" ? { target: named } : {});
+			}
+		}
+	}
+
+	// The same id named twice: the last text wins; an earlier text is added
+	// beside the note, and left out below only when the winner says it all.
+	const winners = new Map<string, (typeof textOps)[number]>();
+	for (const textOp of textOps) winners.set(textOp.area.id, textOp);
+	for (const textOp of textOps) {
+		const winner = winners.get(textOp.area.id)!;
+		if (winner === textOp) continue;
+		fates.delete(textOp.item.index);
+		redirect(textOp.item, textOp.text, "same-id-earlier", { beside: textOp.area });
+	}
+
+	// The repeat rules. First between the reply's own adds, each pair read
+	// once: one that says what another says the same way is left out for it,
+	// and a pair that may disagree is kept for the count below.
+	adds.sort((a, b) => a.index - b.index);
+	const alive = adds.map(() => true);
+	/** Each tagged add's tag, and the note it is beside or may disagree with. */
+	const tags = new Map<AddCandidate, { tag: FoldBesideTag; of: string }>();
+	/** For each add, the earlier adds of the reply it may disagree with. */
+	const disagreesWith = adds.map((): number[] => []);
+	const leaveOut = (candidate: AddCandidate, why: string) => {
+		if (why === "same-in-reply") pairs.subsetInReply += 1;
+		else pairs.subset += 1;
+		code(itemAt.get(candidate.index)!, why);
+		if (!candidate.foreign) fates.set(candidate.index, "left-out");
+	};
+	/** The words of `inner` are in `outer` in the same order, and so is its must-keep marker if it carries one. */
+	const saidBy = (inner: string, outer: string) => noteWordsWithin(inner, outer) && (!hasMustKeepMarker(inner) || hasMustKeepMarker(outer));
+	for (let j = 0; j < adds.length; j++) {
+		for (let i = 0; i < j && alive[j]; i++) {
+			if (!alive[i]) continue;
+			const pair = classifyNotePair(adds[j].text, adds[i].text);
+			if (pair === "conflict") disagreesWith[j].push(i);
+			if (pair !== "duplicate") continue;
+			if (saidBy(adds[j].text, adds[i].text)) {
+				alive[j] = false;
+				leaveOut(adds[j], "same-in-reply");
+			} else if (saidBy(adds[i].text, adds[j].text)) {
+				alive[i] = false;
+				leaveOut(adds[i], "same-in-reply");
+			}
+		}
+	}
+	// Then against memory, the note aimed at first. A note this reply rewrites
+	// or closes is not what memory will say: a text is never left out for its
+	// old words, and never tagged against them. The texts that rewrite notes
+	// are read instead, as texts of the same reply: an add one of them says in
+	// full is left out, and one that disagrees with one is counted, untagged.
+	const changing = new Set([...winners.keys(), ...closes.keys()]);
+	const lasting = areas.filter((area) => !changing.has(area.id));
+	/** The adds that may disagree with another text of the reply. */
+	const disagreeInReply = new Set<AddCandidate>();
+	adds.forEach((candidate, n) => {
+		if (!alive[n]) return;
+		const item = itemAt.get(candidate.index)!;
+		for (const winner of winners.values()) {
+			const pair = classifyNotePair(candidate.text, winner.text);
+			if (pair === "duplicate" && saidBy(candidate.text, winner.text)) {
+				alive[n] = false;
+				return leaveOut(candidate, "same-in-reply");
+			}
+			if (pair === "conflict") disagreeInReply.add(candidate);
+		}
+		// A close's or a pin's own text is still read against the note it rode on,
+		// for the words it repeats; a note this reply closes or rewrites is never
+		// what it is tagged against.
+		if (candidate.foreign && candidate.target && changing.has(candidate.target.id) && repeatVerdictOf(candidate.text, [candidate.target]).verdict === "same") {
+			alive[n] = false;
+			return leaveOut(candidate, "foreign-text");
+		}
+		const target = candidate.target && !changing.has(candidate.target.id) ? candidate.target : undefined;
+		const notes = target ? [target, ...lasting.filter((area) => area !== target)] : lasting;
+		const { verdict, note } = repeatVerdictOf(candidate.text, notes);
+		if (verdict === "same") {
+			alive[n] = false;
+			return leaveOut(candidate, candidate.foreign ? "foreign-text" : "subset");
+		}
+		// A text that may disagree with a note learned after its page is an older
+		// value: history against the newest such note, pinned or not, with no tag.
+		const newest = notes.filter((area) => area.id && newerThanPage(area) && classifyNotePair(candidate.text, area.text) === "conflict").reduce<AreaRow | undefined>((best, area) => (!best || area.learned! > best.learned! ? area : best), undefined);
+		if (newest) {
+			alive[n] = false;
+			return toHistory(item, newest, candidate.text);
+		}
+		// An add naming a note learned after its page lands beside it, as an older rewrite does.
+		if (!candidate.redirected && target && newerThanPage(target)) code(item, "older-beside");
+		if (candidate.besidePinned || (verdict === "disagree" && note!.pinned && !kept.has(note!.id))) {
+			tags.set(candidate, { tag: "pinned", of: candidate.besidePinned ? candidate.target!.id : note!.id });
+			pairs.besidePinned += 1;
+			// A redirect off a pinned note says so in its own code.
+			if (!candidate.besidePinned) code(item, "tag-pinned");
+		} else if (verdict === "disagree" || (candidate.disagrees && target)) {
+			tags.set(candidate, { tag: "may-disagree", of: candidate.disagrees && target ? target.id : note!.id });
+			pairs.mayDisagree += 1;
+			code(item, "may-disagree");
+		} else if (verdict === "beside") {
+			pairs.beside += 1;
+			code(item, "beside");
 		}
 	});
-	return refusals;
+
+	const ops: FoldOp[] = [];
+	adds.forEach((candidate, n) => {
+		if (!alive[n]) return;
+		// Two texts of one reply that may disagree (two adds, or an add and a text
+		// that rewrites a note) are both kept, untagged: a reply that lists "step
+		// 1", "step 2" is no disagreement with memory, so it holds no automatic
+		// save. Each add is counted once.
+		if (disagreeInReply.has(candidate) || disagreesWith[n].some((i) => alive[i])) {
+			pairs.mayDisagreeInReply += 1;
+			code(itemAt.get(candidate.index)!, "disagree-in-reply");
+		}
+		fates.set(candidate.index, candidate.redirected ? "redirected" : "applied");
+		const tag = tags.get(candidate);
+		ops.push({ op: "add", topic: candidate.topic, kind: candidate.kind, text: candidate.text, ...(tag ? { beside: tag.tag, besideOf: tag.of } : {}) });
+	});
+	ops.push(...history);
+	for (const winner of winners.values()) {
+		// A page with no day rewrites a dated note and takes its day away: counted, so real rooms show how often.
+		if (!pageDay && winner.area.learned) code(winner.item, "undated-rewrite");
+		ops.push({ op: winner.op, id: winner.area.id, text: winner.text });
+	}
+	for (const [id] of closes) ops.push({ op: "close", id });
+	for (const [id, pin] of pins) ops.push({ op: "pin", id, because: pin.because });
+
+	// A drop stands only when nothing else landed as a change; its reason is
+	// the first one given, or none (the card has its own sentence).
+	const changed = ops.length > 0;
+	if (drops.length > 0) {
+		if (changed) for (const drop of drops) code(drop, "drop-with-content");
+		else {
+			const reason = drops.map((drop) => drop.reason?.trim() ?? "").find(Boolean) ?? "";
+			if (!reason) fix(drops[0], "reason-empty");
+			fates.set(drops[0].index, "applied");
+			for (const drop of drops.slice(1)) code(drop, "extra-drop");
+			ops.push({ op: "drop", reason });
+		}
+	}
+
+	const decisions = items.map((item): FoldOpDecision => {
+		const fate = fates.get(item.index) ?? "traced";
+		const op = FOLD_OP_KIND_NAMES.has(item.op) ? item.op : "other";
+		return { index: item.index, op, fate: fate === "applied" && fixed.has(item.index) ? "normalised" : fate, codes: codesOf.get(item.index) ?? [] };
+	});
+	const landed = ops.length > 0 || decisions.some((decision) => decision.fate === "left-out");
+	return { ops, decisions, pairs, landed };
 }
+
+/** The kinds the diagnostics name as they are; any other is "other". An unpin is named: the grammar dropped it, models still write it. */
+const FOLD_OP_KIND_NAMES = new Set<string>([...FOLD_OP_KINDS, "unpin"]);
 
 // --- Application -------------------------------------------------------------
 
 export interface FoldRecord {
 	sessionId: string;
 	dropped?: { reason: string };
-	added: { id: string; topic: string; kind: EntryKind; text: string }[];
-	updated: { id: string; before: string; after: string }[];
+	/** `beside` is the tag the card shows: next to a note the person pinned, or it may disagree with a note. */
+	added: { id: string; topic: string; kind: EntryKind; text: string; beside?: FoldBesideTag; besideOf?: string }[];
+	/** `learnedBefore`: the day the old text was learned, for its archive row. */
+	updated: { id: string; before: string; after: string; learnedBefore?: string }[];
 	/** `reason` says which value replaced which and why, when the old and the new text disagree on a date, a number or a negation; a mere rewording carries none. */
-	superseded: { id: string; before: string; after: string; reason?: string }[];
+	superseded: { id: string; before: string; after: string; reason?: string; learnedBefore?: string }[];
 	closed: { id: string; text: string }[];
 	pinned: string[];
-	unpinned: string[];
 	newTopics: string[];
+	/** Older values kept as history: never a note, each an archive row of its own id, beside the note `of` that stays as it is. */
+	history: { id: string; of: string; topic: string; section: MemoryTopic["section"]; kind: FoldAddKind; text: string; learned?: string; until: string }[];
 }
 
 export interface AppliedFold {
@@ -928,16 +1590,8 @@ export interface FoldApplyContext {
 	sessionId: string;
 	/** YYYY-MM-DD — the approval date the whole run is stamped with. */
 	savedDate: string;
-	/** YYYY-MM-DD: the day the session is from, as its heading names it and the fold prompt says "this session is from"; absent when the heading carries no date. A superseded row's reason names it as the newer day. */
+	/** YYYY-MM-DD: the day the session is from, as its heading names it and the fold prompt says "this session is from"; absent when the heading carries no date. Every text the session writes is learned on this day. */
 	sessionDate?: string;
-	/**
-	 * The day a conversation of this run is from, by its Recent Context id. A
-	 * note this same run added carries the run's day as its saved day, which is
-	 * after every conversation the run folds; a supersede's reason dates such a
-	 * note by the conversation that said it instead, so the two days it names
-	 * are the two conversations', not a fold day against a conversation.
-	 */
-	sessionDateOf?: (sessionId: string) => string | undefined;
 	nextEntryNumber: number;
 }
 
@@ -948,7 +1602,7 @@ export function foldEntryId(n: number): string {
 function cloneDocument(doc: MemoryDocument): MemoryDocument {
 	return {
 		...doc,
-		topics: doc.topics.map((topic) => ({ ...topic, entries: topic.entries.map((entry) => ({ ...entry })) })),
+		topics: doc.topics.map((topic) => ({ ...topic, entries: topic.entries.map((entry) => ({ ...entry, ...(entry.extra ? { extra: { ...entry.extra } } : {}) })) })),
 		otherSections: doc.otherSections.map((section) => ({ ...section })),
 	};
 }
@@ -981,34 +1635,49 @@ function resolveAddTopic(doc: MemoryDocument, title: string, kind: FoldAddKind, 
 }
 
 /**
- * Applies validated ops to a copy of the document. Unnamed entries are the
+ * Applies decided ops (decideFoldOps) to a copy of the document. Unnamed entries are the
  * document's own objects copied through, so nothing a fold did not address can
  * change. Recent Context is left exactly as it is: removing the folded entry is
  * the route's job, after the write is approved.
  *
- * Ops that were not validated throw rather than half-apply — an unknown id here
- * means the caller skipped the validator.
+ * Ops that were not decided throw rather than half-apply: an unknown id here
+ * means the caller skipped the decision.
  */
 export function applyFoldOps(doc: MemoryDocument, ops: FoldOp[], ctx: FoldApplyContext): AppliedFold {
 	const next = cloneDocument(doc);
-	const record: FoldRecord = { sessionId: ctx.sessionId, added: [], updated: [], superseded: [], closed: [], pinned: [], unpinned: [], newTopics: [] };
+	const record: FoldRecord = { sessionId: ctx.sessionId, added: [], updated: [], superseded: [], closed: [], pinned: [], newTopics: [], history: [] };
 	let counter = ctx.nextEntryNumber;
 	const entryAt = (id: string) => {
 		const found = findEntry(next, id);
-		if (!found) throw new Error(`ops were not validated: unknown entry "${id}"`);
+		if (!found) throw new Error(`ops were not decided: unknown entry "${id}"`);
 		return found;
 	};
 	const touch = (entry: MemoryEntry) => {
 		entry.updated = ctx.savedDate;
 		entry.refs = (entry.refs ?? 0) + 1;
 	};
+	// A text is learned on its page's day; a page with no real day leaves none
+	// on the text it writes, and never guesses one.
+	const learned = ctx.sessionDate && ISO_DAY.test(ctx.sessionDate) ? ctx.sessionDate : undefined;
+	// A rewrite is learned on its page's day; its pair mark is read again after the reply.
+	const rewritten = new Set<MemoryEntry>();
+	const learn = (entry: MemoryEntry) => {
+		if (learned) entry.learned = learned;
+		else delete entry.learned;
+		rewritten.add(entry);
+	};
 	// A must-keep marker in the text is the user's own remember-request travelling
 	// with the words, and migration reads the same marker as a pin — so an entry a
 	// fold writes carrying one is pinned here too, and the next fold may only add
 	// beside it. It needs no "because": the request is the text, not a judgement
-	// the model made about the user.
+	// the model made about the user. Once pinned, the marker leaves the text: the
+	// pin keeps the note, and a pinned note reads as its words, not as a label.
+	// The pin is recorded even on a note that reads as pinned already: a note
+	// pinned only for a resume's folds is unpinned after them unless a record
+	// says a fold pinned it.
 	const pinIfMustKeep = (entry: MemoryEntry) => {
-		if (!MUST_KEEP_MARKER.test(entry.text) || entry.pinned) return;
+		if (!hasMustKeepMarker(entry.text)) return;
+		entry.text = withoutMustKeepMarkers(entry.text);
 		entry.pinned = true;
 		if (!record.pinned.includes(entry.id)) record.pinned.push(entry.id);
 	};
@@ -1030,36 +1699,36 @@ export function applyFoldOps(doc: MemoryDocument, ops: FoldOp[], ctx: FoldApplyC
 					pinned: false,
 					text: op.text,
 					...(op.kind === "item" ? { status: "open" as const } : {}),
+					...(learned ? { learned } : {}),
 				};
 				topic.entries.push(entry);
 				pinIfMustKeep(entry);
-				record.added.push({ id, topic: topic.title, kind: op.kind, text: op.text });
+				record.added.push({ id, topic: topic.title, kind: op.kind, text: entry.text, ...(op.beside ? { beside: op.beside, ...(op.besideOf ? { besideOf: op.besideOf } : {}) } : {}) });
 				break;
 			}
 			case "update": {
 				const { entry } = entryAt(op.id);
 				const before = entry.text;
+				const learnedBefore = entry.learned;
 				entry.text = op.text;
 				touch(entry);
+				learn(entry);
 				pinIfMustKeep(entry);
-				record.updated.push({ id: op.id, before, after: op.text });
+				record.updated.push({ id: op.id, before, after: entry.text, ...(learnedBefore ? { learnedBefore } : {}) });
 				break;
 			}
 			case "supersede": {
 				const { entry } = entryAt(op.id);
 				const before = entry.text;
-				// The day the old text stood on, read before the touch stamps the run's
-				// day over it; a note stamped with this run's own day is dated by the
-				// conversation it came from.
-				const stood = entry.updated ?? entry.saved;
-				const olderDate = (stood === ctx.savedDate && entry.from && ctx.sessionDateOf?.(entry.from)) || stood;
+				const learnedBefore = entry.learned;
 				entry.text = op.text;
 				touch(entry);
+				learn(entry);
 				pinIfMustKeep(entry);
 				// Two texts that disagree on a value say why the newer one won: the
-				// session's day against the entry's. A rewording says nothing.
-				const reason = classifyNotePair(before, op.text) === "conflict" ? conflictReason(before, op.text, olderDate, ctx.sessionDate ?? ctx.savedDate, ctx.savedDate) : undefined;
-				record.superseded.push({ id: op.id, before, after: op.text, ...(reason ? { reason } : {}) });
+				// day each was learned, when both are known. A rewording says nothing.
+				const reason = classifyNotePair(before, entry.text) === "conflict" ? conflictReason(before, entry.text, learnedBefore, entry.learned, ctx.savedDate) : undefined;
+				record.superseded.push({ id: op.id, before, after: entry.text, ...(reason ? { reason } : {}), ...(learnedBefore ? { learnedBefore } : {}) });
 				break;
 			}
 			case "close": {
@@ -1076,13 +1745,24 @@ export function applyFoldOps(doc: MemoryDocument, ops: FoldOp[], ctx: FoldApplyC
 				record.pinned.push(op.id);
 				break;
 			}
-			case "unpin": {
-				const { entry } = entryAt(op.id);
-				entry.pinned = false;
-				record.unpinned.push(op.id);
+			case "history": {
+				// A fresh id, never a version of the note: a restore can never bring it back as the current text.
+				const { topic, entry } = entryAt(op.of);
+				record.history.push({ id: foldEntryId(counter), of: op.of, topic: topic.title, section: topic.section, kind: entry.kind === "event" ? "fact" : entry.kind, text: withoutMustKeepMarkers(op.text), ...(learned ? { learned } : {}), until: op.until });
+				counter += 1;
 				break;
 			}
 		}
+	}
+	// A rewritten note stays marked beside a note the person kept it with only
+	// while that note is there and the two still disagree, read on the final texts.
+	for (const entry of rewritten) {
+		const kept = entry.disagrees?.split(",").filter((id) => {
+			const other = findEntry(next, id)?.entry;
+			return other !== undefined && textDisagreesWith(entry.text, other.text);
+		});
+		if (kept?.length) entry.disagrees = kept.join(",");
+		else delete entry.disagrees;
 	}
 	next.nextEntryNumber = counter;
 	return { doc: next, record, nextEntryNumber: counter };

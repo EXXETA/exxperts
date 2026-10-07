@@ -201,6 +201,46 @@ export interface BenchHome {
 let benchHome: BenchHome | null = null;
 
 /**
+ * The agent dir a real-model run reads its sign-ins from IN PLACE, when
+ * RECALL_BENCH_AGENT_DIR names one: nothing is copied, so a sign-in the
+ * runtime refreshes during the run is refreshed where it lives. A COPY that
+ * refreshes leaves the original's pair dead, which is why this exists. The
+ * files are never opened here, only found.
+ */
+export function benchSharedAgentDir(): string | null {
+	const dir = process.env.RECALL_BENCH_AGENT_DIR?.trim();
+	return dir ? path.resolve(dir) : null;
+}
+
+/** The agent dir this run's workers and its server read: the shared one when named, else the temp home's own. */
+function benchAgentDir(home: string): string {
+	return benchSharedAgentDir() ?? path.join(home, ".exxperts", "agent");
+}
+
+/**
+ * The profile id a provider's sign-in belongs to, where it is not the
+ * provider's own id: the state reader looks the profile up by this id, and an
+ * unknown one falls back to another profile.
+ */
+const PROFILE_ID_OF_PROVIDER: Readonly<Record<string, string>> = { "openai-codex": "chatgpt-codex" };
+export function benchProfileIdFor(provider: string): string {
+	return PROFILE_ID_OF_PROVIDER[provider] ?? provider;
+}
+
+/** A model spec, "provider/model", as the bench's environment names one. */
+export function parseBenchModelSpec(spec: string, name: string): { provider: string; model: string } {
+	const slash = spec.indexOf("/");
+	if (slash < 1 || slash === spec.length - 1) throw new Error(`${name} must read provider/model, for example anthropic/claude-sonnet-5, and it reads "${spec}"`);
+	return { provider: spec.slice(0, slash), model: spec.slice(slash + 1) };
+}
+
+/** RECALL_BENCH_FOLD_MODEL: the Memorize model lock, when named; else the profile's own absorb lock is used. */
+export function benchFoldModelFromEnv(): { provider: string; model: string } | null {
+	const spec = process.env.RECALL_BENCH_FOLD_MODEL?.trim();
+	return spec ? parseBenchModelSpec(spec, "RECALL_BENCH_FOLD_MODEL") : null;
+}
+
+/**
  * The person's own home, read at import time — BEFORE `prepareBenchHome` puts
  * the temp one in the environment. A real-model run copies its provider records
  * out of here, and reading it later would read the temp home back.
@@ -227,7 +267,7 @@ export function prepareBenchHome(label = "recall-bench"): BenchHome {
 	fs.mkdirSync(threadCwd, { recursive: true });
 	process.env.HOME = home;
 	process.env.USERPROFILE = home;
-	process.env.EXXPERTS_CODING_AGENT_DIR = path.join(home, ".exxperts", "agent");
+	process.env.EXXPERTS_CODING_AGENT_DIR = benchAgentDir(home);
 	process.env.EXXETA_PERSISTENT_AGENTS_ROOT = root;
 	benchHome = { home, root, threadCwd };
 	return benchHome;
@@ -261,7 +301,8 @@ async function load() {
 	const consolidation = await import("../../src/absorb-consolidation.js");
 	const searchSources = await import("../../src/memory-search-sources.js");
 	const duplicates = await import("../../src/memory-duplicates.js");
-	return { absorbRun, absorbOps, persistentAgents, entries, store, settings, recallTool, consolidation, searchSources, duplicates };
+	const diagnostics = await import("../../src/maintenance-diagnostics.js");
+	return { absorbRun, absorbOps, persistentAgents, entries, store, settings, recallTool, consolidation, searchSources, duplicates, diagnostics };
 }
 
 // --- The room ----------------------------------------------------------------
@@ -507,12 +548,15 @@ export interface MemorizeOutcome {
 	sessions: string[];
 	/**
 	 * What the run made of each of them, in the run's own words: `folded`,
-	 * `dropped`, `skipped` or `failed`. A folded and a dropped conversation
-	 * were both memorized, which is what the claim audit counts; the other two
-	 * are still waiting in Recent Context.
+	 * `dropped`, `summarized`, `skipped` or `failed`. A folded, a dropped and a
+	 * summarized conversation (kept whole as one note) were all memorized,
+	 * which is what the claim audit counts; the other two are still waiting in
+	 * Recent Context.
 	 */
 	outcomes: Array<{ id: string; outcome: string }>;
 	folded: number;
+	/** Conversations kept whole as their approved summary, because the fold could not sort them. */
+	summarized: number;
 	skipped: number;
 	/**
 	 * The conversations the memory refused, with the sentence the card shows.
@@ -520,19 +564,17 @@ export interface MemorizeOutcome {
 	 * refusal is the FIXTURE's problem — a planted note the memory cannot
 	 * accept — so it is reported rather than thrown: the run carries on, the
 	 * conversation stays in Recent Context where a refused fold leaves it, and
-	 * the caller decides what a disagreement costs. `RECALL_BENCH_DUMP=1`
-	 * prints what was refused, in the memory's own words.
+	 * the caller decides what a disagreement costs.
 	 */
 	failures: Array<{ id: string; reason: string }>;
 	/** Operations the folds actually applied, summed over the run's sessions. */
 	opsApplied: number;
 	/**
-	 * Adds the memory refused as a repeat of a note it already holds, which the
-	 * scripted fold then left out of its second answer, the way the refusal
-	 * asks. A real fold's own retry is the model's business and counts nothing
-	 * here.
+	 * New texts the run left out because a note (or another add of the same
+	 * reply) already says every word of them, read off the run's own fold
+	 * records: what the repeat rules did, whoever answered the folds.
 	 */
-	twinsRefused: number;
+	twinsLeftOut: number;
 }
 
 /** The directive lines a session carries, and the body line each one is about. */
@@ -673,42 +715,6 @@ function promptWithDirectives(prompt: string, directiveBlockFor: (rcId: string) 
 	return parts.join(PROMPT_SECTION_SPLIT);
 }
 
-const RETRY_NOTICE_HEADING = "## Retry Notice";
-/** A refusal that calls an add a repeat: `op 3 (add): this says what note "m-0031" under "Topic" already says …`, or what an earlier add of the same reply already says. */
-const TWIN_REFUSAL_LINE = /^-\s*op (\d+) \(add\): .*already says/;
-const JSON_FENCE = /```json\n([\s\S]*?)\n```/;
-
-/**
- * The scripted fold's answer to a Retry Notice, the way the refusal asks. An
- * add the memory refused as a repeat of a note it already holds is left out
- * of the second reply and everything else is answered as before: the fixture
- * planted the sentence twice on purpose, and leaving the second out is what a
- * fold that reads its refusal does. Every other refusal is answered as before,
- * so a fixture the memory genuinely disagrees with still fails twice and is
- * reported. A reply whose every operation was a repeat drops the session,
- * which is the one shape a fold with nothing left to say may take.
- */
-function answerTwinRefusals(prompt: string, reply: string): { reply: string; leftOut: number } {
-	const notice = prompt.indexOf(RETRY_NOTICE_HEADING);
-	if (notice < 0) return { reply, leftOut: 0 };
-	const refused = new Set<number>();
-	for (const line of prompt.slice(notice).split(/\r?\n/)) {
-		const match = TWIN_REFUSAL_LINE.exec(line.trim());
-		if (match) refused.add(Number(match[1]) - 1);
-	}
-	if (refused.size === 0) return { reply, leftOut: 0 };
-	const fence = JSON_FENCE.exec(reply);
-	if (!fence || fence.index === undefined) return { reply, leftOut: 0 };
-	const parsed = JSON.parse(fence[1]) as { ops?: unknown[] };
-	const before = Array.isArray(parsed.ops) ? parsed.ops : [];
-	const kept = before.filter((_, index) => !refused.has(index));
-	const leftOut = before.length - kept.length;
-	if (leftOut === 0) return { reply, leftOut: 0 };
-	const ops = kept.length > 0 ? kept : [{ op: "drop", reason: "everything this conversation settled is in memory already" }];
-	const narrative = reply.slice(0, fence.index).trimEnd();
-	return { reply: `${narrative}\n\n\`\`\`json\n${JSON.stringify({ ops }, null, 2)}\n\`\`\``, leftOut };
-}
-
 /** The states a run is still working in; the client polls exactly these. */
 const WORKING_RUN_STATES = new Set(["prepass", "folding", "budget"]);
 
@@ -720,27 +726,35 @@ const WORKING_RUN_STATES = new Set(["prepass", "folding", "budget"]);
  */
 export const scriptedMemorize: MemorizeFn = async ({ roomId, now, directiveBlockFor }) => {
 	const { absorbRun } = await stateModules();
-	let twinsRefused = 0;
+	const startedAt = new Date();
 	const started = absorbRun.startAbsorbRun({
 		agentId: roomId,
 		assessmentMarkdown: BENCH_ASSESSMENT,
 		guidance: { pin: [], drop: [], corrections: [], topics: [], instructions: [] },
 		model: benchModel(),
-		generate: async (prompt: string) => {
-			// RECALL_BENCH_DUMP=1: what the memory refused, in its own words. A
-			// refusal only ever shows up as a failed session otherwise, and the
-			// reason a fixture's planted operation was refused is the fixture's
-			// business rather than the room's.
-			if (process.env.RECALL_BENCH_DUMP && prompt.includes("## Retry Notice")) {
-				console.log(`\n--- ${sessionIdFromPrompt(prompt)} was refused ---\n${prompt.slice(prompt.indexOf("## Retry Notice"))}`);
-			}
-			const answered = answerTwinRefusals(prompt, exactFoldModel(promptWithDirectives(prompt, directiveBlockFor)));
-			twinsRefused += answered.leftOut;
-			return { text: answered.reply };
-		},
+		generate: async (prompt: string) => ({ text: exactFoldModel(promptWithDirectives(prompt, directiveBlockFor)) }),
 		now: () => now,
 	});
-	return settleAndApprove({ absorbRun, roomId, runId: started.runId, now, timeoutMs: 120_000, twinsRefused: () => twinsRefused });
+	return settleAndApprove({ absorbRun, roomId, runId: started.runId, now, startedAt, timeoutMs: 120_000 });
+};
+
+/**
+ * A Memorize whose every fold reply holds no operations, through the real run:
+ * each conversation is kept whole as its approved summary. It is what a model
+ * that never answers in operations leaves behind, and every conversation is
+ * still memorized and searchable.
+ */
+export const unsortableMemorize: MemorizeFn = async ({ roomId, now }) => {
+	const { absorbRun } = await stateModules();
+	const startedAt = new Date();
+	const started = absorbRun.startAbsorbRun({
+		agentId: roomId,
+		assessmentMarkdown: BENCH_ASSESSMENT,
+		model: benchModel(),
+		generate: async () => ({ text: "There is something worth keeping here, but no operations follow." }),
+		now: () => now,
+	});
+	return settleAndApprove({ absorbRun, roomId, runId: started.runId, now, startedAt, timeoutMs: 120_000 });
 };
 
 /**
@@ -749,7 +763,17 @@ export const scriptedMemorize: MemorizeFn = async ({ roomId, now, directiveBlock
  * conversation came to. A refused conversation is a row, never a throw — it
  * stays in Recent Context, which is where a refused fold leaves it.
  */
-async function settleAndApprove(input: { absorbRun: StateModules["absorbRun"]; roomId: string; runId: string; now: Date; timeoutMs: number; twinsRefused?: () => number }): Promise<MemorizeOutcome> {
+/** The new texts a Memorize left out as already said, from the fold records it wrote since it started. */
+async function twinsLeftOutSince(roomId: string, startedAt: Date): Promise<number> {
+	const { persistentAgents, diagnostics } = await stateModules();
+	const since = startedAt.toISOString();
+	return diagnostics
+		.listMaintenanceDiagnostics(persistentAgents.createPersistentAgentInstance(roomId).rootDir, diagnostics.MAINTENANCE_DIAGNOSTICS_KEEP)
+		.filter((record) => record.process === "memorize-fold" && record.at >= since)
+		.reduce((total, record) => total + (record.fold?.ops.filter((op) => op.fate === "left-out").length ?? 0), 0);
+}
+
+async function settleAndApprove(input: { absorbRun: StateModules["absorbRun"]; roomId: string; runId: string; now: Date; startedAt: Date; timeoutMs: number }): Promise<MemorizeOutcome> {
 	const { absorbRun, roomId, runId, now } = input;
 	let run = absorbRun.getAbsorbRun(roomId, runId);
 	const deadline = Date.now() + input.timeoutMs;
@@ -794,12 +818,13 @@ async function settleAndApprove(input: { absorbRun: StateModules["absorbRun"]; r
 		sessions: run.sessions.map((session) => session.id),
 		outcomes: run.sessions.map((session) => ({ id: session.id, outcome: session.outcome })),
 		folded: run.sessions.filter((session) => session.outcome === "folded").length,
+		summarized: run.sessions.filter((session) => session.outcome === "summarized").length,
 		skipped: run.sessions.filter((session) => session.outcome === "skipped").length,
 		failures: run.sessions
 			.filter((session) => session.outcome === "failed")
 			.map((session) => ({ id: session.id, reason: session.reason ?? "no reason given" })),
 		opsApplied: summed,
-		twinsRefused: input.twinsRefused?.() ?? 0,
+		twinsLeftOut: await twinsLeftOutSince(roomId, input.startedAt),
 	};
 }
 
@@ -831,11 +856,12 @@ export interface IngestStep {
 	/** The Recent Context ids this Memorize folded. */
 	sessions: string[];
 	folded: number;
+	summarized: number;
 	skipped: number;
 	failed: number;
 	opsApplied: number;
-	/** Adds this Memorize refused as repeats and the scripted fold then left out. */
-	twinsRefused: number;
+	/** New texts this Memorize left out as repeats. */
+	twinsLeftOut: number;
 	/** Rows in the room's archive after this fold, and how many of them left because of the budget. */
 	archiveRows: number;
 	archivedByBudget: number;
@@ -858,8 +884,8 @@ export interface IngestReport {
 	foldEvery: number;
 	/** Conversations the memory refused, across every fold of this ingest. */
 	failures: Array<{ session: string; rcId: string; reason: string }>;
-	/** Adds refused as repeats and left out, summed over every fold of this ingest. */
-	twinsRefused: number;
+	/** New texts left out as repeats, summed over every fold of this ingest. */
+	twinsLeftOut: number;
 	/** The claim audit, taken once after the last Memorize; both defect counts are zero on a sound pipeline. */
 	claims: ClaimAudit;
 }
@@ -867,8 +893,9 @@ export interface IngestReport {
 /**
  * Whether the room's search index holds exactly the conversations the room
  * memorized, each under the conversation it was. `memorized` is the number of
- * conversations whose final outcome was folded or dropped: the room was told
- * them and a Memorize took them out of Recent Context, with notes or without.
+ * conversations whose final outcome was folded, dropped or summarized: the
+ * room was told them and a Memorize took them out of Recent Context, with
+ * notes, without, or kept whole as one note.
  * `unindexed` are memorized conversations with no conversation document at
  * all, which a question can therefore never reach by searching. `misassigned`
  * are conversations the index holds under the wrong name: a document whose
@@ -904,7 +931,7 @@ async function auditClaims(input: { roomId: string; sessions: readonly RecallSes
 	const rcIdByConversation = new Map<string, string>();
 	for (const session of input.sessions) {
 		const outcome = input.finalOutcomeBySession.get(session.id);
-		if (outcome !== "folded" && outcome !== "dropped") continue;
+		if (outcome !== "folded" && outcome !== "dropped" && outcome !== "summarized") continue;
 		rcIdByConversation.set(conversationIdOf(session), input.rcIdBySession[session.id] ?? "");
 	}
 	const indexed = new Set<string>();
@@ -1005,10 +1032,11 @@ export async function ingestSessions(input: IngestSessionsInput): Promise<Ingest
 			afterSession: session.id,
 			sessions: outcome.sessions,
 			folded: outcome.folded,
+			summarized: outcome.summarized,
 			skipped: outcome.skipped,
 			failed: outcome.failures.length,
 			opsApplied: outcome.opsApplied,
-			twinsRefused: outcome.twinsRefused,
+			twinsLeftOut: outcome.twinsLeftOut,
 			archiveRows: after.archiveRows,
 			archivedByBudget: after.archivedByBudget,
 			memoryTokens: after.memoryTokens,
@@ -1018,7 +1046,7 @@ export async function ingestSessions(input: IngestSessionsInput): Promise<Ingest
 		if (input.afterFold) await input.afterFold({ ingestedSessionIds: ordered.slice(0, index + 1).map((done) => done.id), step });
 	}
 	const claims = await auditClaims({ roomId: input.roomId, sessions: ordered, rcIdBySession, finalOutcomeBySession });
-	return { remembered: ordered.length, rcIdBySession, steps, foldEvery, failures, twinsRefused: steps.reduce((total, step) => total + step.twinsRefused, 0), claims };
+	return { remembered: ordered.length, rcIdBySession, steps, foldEvery, failures, twinsLeftOut: steps.reduce((total, step) => total + step.twinsLeftOut, 0), claims };
 }
 
 // --- Where the evidence sits -------------------------------------------------
@@ -2053,14 +2081,14 @@ export interface ConflictShapeVerdict {
  * What a run made of the notes that say one thing twice, or nearly: the
  * conflicts it found (rows a Memorize superseded with a reason, plus the pairs
  * still disagreeing in the final core), how many it resolved, how many it left
- * standing as both, the repeats it refused as twins, and one verdict per
+ * standing as both, the repeats it left out, and one verdict per
  * planted pair the run held whole.
  */
 export interface ConflictsSummary {
 	found: number;
 	supersededWithReason: number;
 	leftAsBoth: number;
-	twinsRefused: number;
+	twinsLeftOut: number;
 	shapes: ConflictShapeVerdict[];
 }
 
@@ -2216,8 +2244,8 @@ export async function buildRunSummary(input: { roomId: string; language: string;
  * the locator, the Memorize records for the reasons, and the product's own
  * pair predicate over the final core. Per planted pair the run held whole:
  *   - duplicate: exactly one note carries the sentence, the second member's
- *     code reached no note (its add was refused and left out), the ingest
- *     refused at least one repeat, and no row was superseded for it;
+ *     code reached no note (its add was left out as a repeat), the ingest
+ *     left out at least one repeat, and no row was superseded for it;
  *   - conflict-long, conflict-short, moved-event: the newer wording is a note
  *     (in the core, or moved out by budget afterwards, which is the ordinary
  *     forgetting of a long run and not the conflict's doing), the older
@@ -2228,7 +2256,7 @@ export async function buildRunSummary(input: { roomId: string; language: string;
  *     either, so two events with two numbers and two dates stayed two.
  * A pair the fixture holds only half of is not judged; the caller says so.
  */
-export async function conflictsSummary(input: { roomId: string; plants: readonly RecallPlant[]; twinsRefused: number }): Promise<ConflictsSummary> {
+export async function conflictsSummary(input: { roomId: string; plants: readonly RecallPlant[]; twinsLeftOut: number }): Promise<ConflictsSummary> {
 	const { store, duplicates } = await stateModules();
 	const archive = store.readArchive(input.roomId);
 	const reasons = conflictRowsInEvents(input.roomId);
@@ -2264,12 +2292,12 @@ export async function conflictsSummary(input: { roomId: string; plants: readonly
 			const problems: string[] = [];
 			if (carrying.length !== 1) problems.push(`${carrying.length} notes carry the sentence, not one`);
 			if (secondLanded) problems.push(`the second add landed as a note of its own (${newerAt.location})`);
-			if (input.twinsRefused < 1) problems.push("the ingest refused no repeat");
+			if (input.twinsLeftOut < 1) problems.push("the ingest left out no repeat");
 			if (superseded) problems.push("a row was superseded for it");
 			shapes.push({
 				shape,
 				ok: problems.length === 0,
-				detail: problems.length === 0 ? `one note carries the sentence, the second add was refused as a repeat and left out (${newer.marker} reads ${newerAt.location}, found by ${newerAt.how ?? "nothing"})` : problems.join("; "),
+				detail: problems.length === 0 ? `one note carries the sentence, the second add was left out as a repeat (${newer.marker} reads ${newerAt.location}, found by ${newerAt.how ?? "nothing"})` : problems.join("; "),
 			});
 			continue;
 		}
@@ -2308,7 +2336,7 @@ export async function conflictsSummary(input: { roomId: string; plants: readonly
 		found: reasons.length + pairs.length,
 		supersededWithReason: reasons.length,
 		leftAsBoth: pairs.length,
-		twinsRefused: input.twinsRefused,
+		twinsLeftOut: input.twinsLeftOut,
 		shapes,
 	};
 }
@@ -2483,6 +2511,12 @@ export interface ScriptedRoomGateway {
 	calls: number;
 	/** Completions the `fail` option answered with an error instead. */
 	failed: number;
+	/** First-read prompts it answered. */
+	firstReads: number;
+	/** The signed-off assessment each fold prompt carried, in order: what a Memorize's folds were given as the first read. */
+	assessments: string[];
+	/** The `reasoning_effort` each first-read and each fold request carried, null for none: the level the worker asked for. */
+	reasoningEfforts: { firstRead: Array<string | null>; fold: Array<string | null> };
 	close(): Promise<void>;
 }
 
@@ -2552,7 +2586,36 @@ function sectionLines(lines: readonly string[], heading: string): string[] {
  * the facts in memory in words that no code search can find, which is exactly
  * the shape a real model's ingest leaves behind.
  */
-function maintenanceReply(lines: readonly string[], body: string): string | null {
+/** The line only a Memorize first-read prompt carries, and the one only a fold prompt carries. */
+const FIRST_READ_TASK_MARKER = "## Task: Compact Initial Assessment";
+const FOLD_TRIGGER_MARKER = "Fold this session into memory now.";
+
+/** The scripted first read: small, fixed, and carrying one line a test can find in every fold prompt after it. */
+export const SCRIPTED_FIRST_READ = [
+	"## Absorb assessment",
+	"",
+	"I found the waiting conversations. Here is the proposed direction.",
+	"",
+	"### What to remember",
+	"- The scripted first read asks to keep every date and number.",
+	"",
+	"### What to forget",
+	"- Small talk.",
+	"",
+	"### What changes in stable memory",
+	"- Deep Memory: the dates and numbers.",
+	"- Active Items: none.",
+	"- Recent Context: all entries are expected to be cleared after approval.",
+	"",
+	"### Needs your judgment",
+	"None",
+].join("\n");
+
+function maintenanceReply(lines: readonly string[], body: string, longFirstRead = false): string | null {
+	// A first read over the length the next step accepts, on cue, is what a
+	// model that rambles gives back: the product asks once more, then goes on
+	// without it.
+	if (body.includes(FIRST_READ_TASK_MARKER)) return longFirstRead ? `${SCRIPTED_FIRST_READ}\n\n${"- A remark that goes on. ".repeat(700)}` : SCRIPTED_FIRST_READ;
 	if (body.includes("Produce the checkpoint compression fields now.")) {
 		// Only the TRANSCRIPT's sentences: the same prompt also carries the whole
 		// current memory, and compressing that back into a Recent Context entry
@@ -2568,7 +2631,7 @@ function maintenanceReply(lines: readonly string[], body: string): string | null
 			"PARKED: None",
 		].join("\n");
 	}
-	if (body.includes("Fold this session into memory now.")) {
+	if (body.includes(FOLD_TRIGGER_MARKER)) {
 		const facts = plantedLinesIn(sectionLines(lines, "Material: The Session To Fold")).slice(0, 6).map(withoutMarkerCode).filter((line) => line.length > 0);
 		const ops = facts.length === 0
 			? [{ op: "drop", reason: "nothing in this conversation outlives it" }]
@@ -2593,10 +2656,13 @@ function notKnownSentence(language: string): string {
  * answered with "I don't know", which is the right answer to a question about
  * something the room no longer has and the wrong answer to everything else.
  */
-export async function startScriptedRoomGateway(input: { questions: readonly RecallQuestion[]; plants?: readonly RecallPlant[]; sources?: readonly RecallSource[]; fail?: ScriptedGatewayFailure }): Promise<ScriptedRoomGateway> {
+export async function startScriptedRoomGateway(input: { questions: readonly RecallQuestion[]; plants?: readonly RecallPlant[]; sources?: readonly RecallSource[]; fail?: ScriptedGatewayFailure; longFirstRead?: boolean }): Promise<ScriptedRoomGateway> {
 	const lineByMarker = new Map((input.plants ?? []).map((plant) => [plant.marker, plant.line] as const));
 	let calls = 0;
 	let failed = 0;
+	let firstReads = 0;
+	const assessments: string[] = [];
+	const reasoningEfforts: { firstRead: Array<string | null>; fold: Array<string | null> } = { firstRead: [], fold: [] };
 	/** Requests held open by a hang on cue, so closing the gateway can end them. */
 	const hung = new Set<http.ServerResponse>();
 	const server = http.createServer((req, res) => {
@@ -2622,8 +2688,10 @@ export async function startScriptedRoomGateway(input: { questions: readonly Reca
 				res.end(JSON.stringify({ error: { message: `scripted provider failure ${failed}`, type: "server_error", code: "scripted_failure" } }));
 				return;
 			}
-			let parsed: { messages?: Array<{ role?: string; content?: unknown }>; model?: string } = {};
+			let parsed: { messages?: Array<{ role?: string; content?: unknown }>; model?: string; reasoning_effort?: string } = {};
 			try { parsed = JSON.parse(body); } catch { /* an unreadable body is answered like an unknown question */ }
+			if (body.includes(FIRST_READ_TASK_MARKER)) reasoningEfforts.firstRead.push(parsed.reasoning_effort ?? null);
+			if (body.includes(FOLD_TRIGGER_MARKER)) reasoningEfforts.fold.push(parsed.reasoning_effort ?? null);
 			const messages = parsed.messages ?? [];
 			const lines = requestLines(parsed);
 			const userText = messages.filter((message) => message.role === "user").map((message) => (typeof message.content === "string" ? message.content : Array.isArray(message.content) ? message.content.map((part) => (part as { text?: string })?.text ?? "").join(" ") : "")).join("\n");
@@ -2637,7 +2705,9 @@ export async function startScriptedRoomGateway(input: { questions: readonly Reca
 			// careful model answers them — the facts kept, the fixture's reference
 			// codes DROPPED, which is what a real fold does and what the wording
 			// fallback in `locateEvidenceInDetail` exists for.
-			const maintenance = maintenanceReply(lines, body);
+			if (body.includes(FIRST_READ_TASK_MARKER)) firstReads += 1;
+			if (body.includes(FOLD_TRIGGER_MARKER)) assessments.push(/## Material: Signed-Off Assessment\n\n([\s\S]*?)\n\n---\n\n/.exec(lines.join("\n"))?.[1] ?? "");
+			const maintenance = maintenanceReply(lines, body, input.longFirstRead === true);
 			if (maintenance !== null) {
 				res.write(sseChunk({ ...base, choices: [{ index: 0, delta: { role: "assistant", content: maintenance }, finish_reason: null }] }));
 				res.write(sseChunk({ ...base, choices: [{ index: 0, delta: {}, finish_reason: "stop" }], usage: { prompt_tokens: 2400, completion_tokens: estimateTokens(maintenance), total_tokens: 2400 + estimateTokens(maintenance) } }));
@@ -2676,6 +2746,9 @@ export async function startScriptedRoomGateway(input: { questions: readonly Reca
 		port,
 		get calls() { return calls; },
 		get failed() { return failed; },
+		get firstReads() { return firstReads; },
+		assessments,
+		reasoningEfforts,
 		close: () => new Promise<void>((resolve) => {
 			for (const res of hung) res.destroy();
 			hung.clear();
@@ -2725,7 +2798,7 @@ async function startBenchServerOnce(input: { home: string; model: { provider: st
 	env.PORT = String(port);
 	Object.assign(env, SMOKE_SERVER_AUTH_ENV);
 	env.EXXETA_HOME = repoRoot;
-	env.EXXPERTS_CODING_AGENT_DIR = path.join(home.home, ".exxperts", "agent");
+	env.EXXPERTS_CODING_AGENT_DIR = benchAgentDir(home.home);
 	const child = spawn("npx", ["tsx", "src/index.ts"], { shell: process.platform === "win32", ...SMOKE_SERVER_SPAWN_TREE_OPTIONS, cwd: webServerDir, env });
 	const output: string[] = [];
 	child.stdout.on("data", (chunk) => output.push(String(chunk)));
@@ -2750,15 +2823,17 @@ async function startBenchServerOnce(input: { home: string; model: { provider: st
  * two AI-profile files. `baseUrl` points the provider at the scripted gateway;
  * a real run copies the machine's own records instead (`useRealProviderRecords`).
  */
-export function writeScriptedProviderRecords(input: { gatewayPort: number; modelId?: string }): { provider: string; model: string } {
+export function writeScriptedProviderRecords(input: { gatewayPort: number; modelId?: string; reasoning?: boolean }): { provider: string; model: string } {
 	const home = homeOrThrow();
+	// A scripted run writes its own records; it never writes into a shared dir.
+	if (benchSharedAgentDir()) throw new Error("a scripted run writes its own provider records, so RECALL_BENCH_AGENT_DIR does not apply; unset it");
 	const agentDir = path.join(home.home, ".exxperts", "agent");
 	const appDir = path.join(home.home, ".exxperts", "app");
 	const modelId = input.modelId ?? BENCH_MODEL.model;
 	fs.mkdirSync(agentDir, { recursive: true, mode: 0o700 });
 	fs.writeFileSync(
 		path.join(agentDir, "models.json"),
-		JSON.stringify({ providers: { [SCRIPTED_PROVIDER_ID]: { name: "Synthetic Gateway", baseUrl: `http://127.0.0.1:${input.gatewayPort}/v1`, api: "openai-completions", models: [{ id: modelId, name: "Room Model", contextWindow: 128_000, maxTokens: 16_384 }] } } }, null, 2),
+		JSON.stringify({ providers: { [SCRIPTED_PROVIDER_ID]: { name: "Synthetic Gateway", baseUrl: `http://127.0.0.1:${input.gatewayPort}/v1`, api: "openai-completions", models: [{ id: modelId, name: "Room Model", contextWindow: 128_000, maxTokens: 16_384, ...(input.reasoning ? { reasoning: true } : {}) }] } } }, null, 2),
 		{ mode: 0o600 },
 	);
 	fs.writeFileSync(path.join(agentDir, "auth.json"), JSON.stringify({ [SCRIPTED_PROVIDER_ID]: { type: "api_key", key: "synthetic-recall-bench-key" } }, null, 2), { mode: 0o600 });
@@ -2779,21 +2854,26 @@ export function writeScriptedProviderRecords(input: { gatewayPort: number; model
  */
 export function useRealProviderRecords(input: { spec: string }): { provider: string; model: string } {
 	const home = homeOrThrow();
-	const slash = input.spec.indexOf("/");
-	if (slash < 1) throw new Error(`the model must read provider/model, e.g. anthropic/claude-sonnet-5 — got "${input.spec}"`);
-	const provider = input.spec.slice(0, slash);
-	const model = input.spec.slice(slash + 1);
-	const realAgentDir = path.join(realHomeDir, ".exxperts", "agent");
-	const agentDir = path.join(home.home, ".exxperts", "agent");
+	const { provider, model } = parseBenchModelSpec(input.spec, "the model");
 	const appDir = path.join(home.home, ".exxperts", "app");
-	fs.mkdirSync(agentDir, { recursive: true, mode: 0o700 });
-	for (const file of ["models.json", "auth.json"]) {
-		const from = path.join(realAgentDir, file);
-		if (!fs.existsSync(from)) throw new Error(`${from} is not there, so this machine has nothing signed in to copy; sign the provider in under AI setup first`);
-		fs.copyFileSync(from, path.join(agentDir, file));
-		fs.chmodSync(path.join(agentDir, file), 0o600);
+	const shared = benchSharedAgentDir();
+	if (shared) {
+		// Read in place: found, never opened, never copied.
+		for (const file of ["models.json", "auth.json"]) {
+			if (!fs.existsSync(path.join(shared, file))) throw new Error(`${path.join(shared, file)} is not there, so RECALL_BENCH_AGENT_DIR names no signed-in agent dir`);
+		}
+	} else {
+		const realAgentDir = path.join(realHomeDir, ".exxperts", "agent");
+		const agentDir = path.join(home.home, ".exxperts", "agent");
+		fs.mkdirSync(agentDir, { recursive: true, mode: 0o700 });
+		for (const file of ["models.json", "auth.json"]) {
+			const from = path.join(realAgentDir, file);
+			if (!fs.existsSync(from)) throw new Error(`${from} is not there, so this machine has nothing signed in to copy; sign the provider in under AI setup first`);
+			fs.copyFileSync(from, path.join(agentDir, file));
+			fs.chmodSync(path.join(agentDir, file), 0o600);
+		}
 	}
-	fs.writeFileSync(path.join(appDir, "persistent-agent-ai-profile.json"), JSON.stringify({ profileId: provider }, null, 2), { mode: 0o600 });
+	fs.writeFileSync(path.join(appDir, "persistent-agent-ai-profile.json"), JSON.stringify({ profileId: benchProfileIdFor(provider) }, null, 2), { mode: 0o600 });
 	return { provider, model };
 }
 
@@ -2988,6 +3068,12 @@ export interface MaintenanceWorkerCall {
 	 * applied by handing the worker the model with this `maxTokens`.
 	 */
 	maxOutputTokens?: number;
+	/**
+	 * Run at the model's own reasoning default, with no thinking level passed,
+	 * as the product's first-read route does. Every other call runs at "low",
+	 * the level every earlier number was measured with.
+	 */
+	modelDefaultThinking?: boolean;
 }
 
 // --- Waiting a provider out ----------------------------------------------------
@@ -3145,6 +3231,8 @@ export interface MaintenanceWorker {
 	call(input: MaintenanceWorkerCall): Promise<Awaited<ReturnType<typeof import("../../src/persistent-agent-worker-runtime.js").runIsolatedPersistentAgentWorker>>>;
 	/** The model's context window as the registry reports it, and null when it declares none. */
 	contextWindow(modelLock: { provider: string; model: string }): number | null;
+	/** The window as the product's own lookup gives it to a run: the registry's context window and output limit. */
+	modelWindow(modelLock: { provider: string; model: string }): { contextWindow: number; maxOutputTokens: number };
 	/** Everything this worker spent, summed as the product records it. */
 	usage(): { input: number; output: number; totalTokens: number; cost: number; calls: number };
 }
@@ -3188,8 +3276,9 @@ export async function createMaintenanceWorker(): Promise<MaintenanceWorker> {
 				agentDir: getAgentDir(),
 				modelRegistry: registry,
 				// A single-shot transform either way: reasoning tokens would count
-				// against the output cap and starve the reply itself.
-				thinkingLevel: "low",
+				// against the output cap and starve the reply itself. The first read
+				// alone runs at the model's default, as the product's route does.
+				...(input.modelDefaultThinking ? {} : { thinkingLevel: "low" as const }),
 				...(input.timeoutMs ? { timeoutMs: input.timeoutMs } : {}),
 				...(input.signal ? { signal: input.signal } : {}),
 			}), { signal: input.signal });
@@ -3203,6 +3292,10 @@ export async function createMaintenanceWorker(): Promise<MaintenanceWorker> {
 		contextWindow: (modelLock) => {
 			const window = found(modelLock).contextWindow;
 			return typeof window === "number" && window > 0 ? window : null;
+		},
+		modelWindow: (modelLock) => {
+			const model = found(modelLock);
+			return { contextWindow: model.contextWindow, maxOutputTokens: model.maxTokens };
 		},
 		usage: () => ({ ...spent }),
 	};
@@ -3224,11 +3317,44 @@ export async function createMaintenanceWorker(): Promise<MaintenanceWorker> {
 // No server is needed. The registry is built from the provider records in this
 // run's temp home, which `useRealProviderRecords` copied there.
 
+/**
+ * The first read each Memorize run folds with. `fixed` is BENCH_ASSESSMENT,
+ * the text every earlier number was measured with; `none` is what the fast
+ * Start hands the run; `real` is the room's own first read, one call per
+ * Memorize run, handed to the run as the direct Start hands it.
+ */
+export type FirstReadMode = "fixed" | "none" | "real";
+export const FIRST_READ_MODES: readonly FirstReadMode[] = ["fixed", "none", "real"];
+
+/** What the real first reads came to: the calls and their tokens, and the runs that folded with "None." instead, by why. */
+export interface FirstReadTally {
+	mode: FirstReadMode;
+	model: string;
+	runs: number;
+	calls: number;
+	input: number;
+	output: number;
+	totalTokens: number;
+	cost: number;
+	/** The read came back missing (failed, cut off, too large to send) or threw: the run carried "None.". */
+	missing: number;
+	/** The read was too long to carry: the run carried "None.". */
+	tooLong: number;
+}
+
+export function firstReadTallyLine(tally: FirstReadTally): string {
+	if (tally.mode === "fixed") return `first reads (fixed): none asked; all ${tally.runs} Memorize run(s) folded with the bench's fixed text`;
+	if (tally.mode === "none") return `first reads (none): none asked; all ${tally.runs} Memorize run(s) folded with "None."`;
+	return `first reads (real, ${tally.model}): ${tally.calls} call(s) over ${tally.runs} Memorize run(s) · in ${tally.input} tok · out ${tally.output} tok${tally.cost > 0 ? ` · $${tally.cost.toFixed(4)}` : ""} · ${tally.missing} missing and ${tally.tooLong} too long, whose runs folded with "None."`;
+}
+
 export interface RealIngest {
 	remember: RememberFn;
 	memorize: MemorizeFn;
-	/** Everything the ingest's workers spent, summed as the product records it. */
+	/** Everything the ingest's workers spent, summed as the product records it; the first reads included. */
 	usage(): { input: number; output: number; totalTokens: number; cost: number; calls: number };
+	/** The first reads alone. */
+	firstReads(): FirstReadTally;
 }
 
 /**
@@ -3240,7 +3366,7 @@ export interface RealIngest {
  * model and fold on a larger one, and a bench that ignored that would measure a
  * pipeline nobody runs.
  */
-export async function createRealIngest(input: { roomModel: { provider: string; model: string; label?: string } }): Promise<RealIngest> {
+export async function createRealIngest(input: { roomModel: { provider: string; model: string; label?: string }; firstRead?: FirstReadMode }): Promise<RealIngest> {
 	const { persistentAgents, absorbRun, absorbOps, consolidation } = await stateModules();
 	const profiles = await import("../../src/persistent-agent-ai-profiles.js");
 	const profileState = await import("../../src/persistent-agent-ai-profile-state.js");
@@ -3249,17 +3375,21 @@ export async function createRealIngest(input: { roomModel: { provider: string; m
 	// product now runs it on the room's memory row (backlog 49 decides the
 	// rerun). Kept on the room model so this harness measures what it did.
 	const checkpointModel = { provider: input.roomModel.provider, model: input.roomModel.model };
-	const foldModel = profiles.getAbsorbModelLock(profileId);
+	const foldModel = benchFoldModelFromEnv() ?? profiles.getAbsorbModelLock(profileId);
+	console.log(`memorize folds on ${foldModel.provider}/${foldModel.model}${process.env.RECALL_BENCH_FOLD_MODEL?.trim() ? " (RECALL_BENCH_FOLD_MODEL)" : " (the profile's Memorize model)"}`);
 	const worker = await createMaintenanceWorker();
 
 	/** One worker call, the way every maintenance call in the product makes one. */
-	const callWorker = (prompt: string, modelLock: { provider: string; model: string }, label: string, triggerPrompt: string, emptyTextError: string, options?: { signal?: AbortSignal; timeoutMs?: number }) =>
+	const callWorker = (prompt: string, modelLock: { provider: string; model: string }, label: string, triggerPrompt: string, emptyTextError: string, options?: { signal?: AbortSignal; timeoutMs?: number; maxTokens?: number; modelDefaultThinking?: boolean }) =>
 		worker.call({
 			prompt,
 			modelLock,
 			label,
 			triggerPrompt,
 			emptyTextError,
+			...(options?.modelDefaultThinking ? { modelDefaultThinking: true } : {}),
+			// The fold's own output cap, as the product passes it.
+			...(options?.maxTokens ? { maxOutputTokens: options.maxTokens } : {}),
 			// The fold brings the product's own limit; the checkpoint, which the
 			// product runs without one, gets the same limit here, because a call
 			// that never comes back would otherwise hold a run of hours forever.
@@ -3307,18 +3437,56 @@ export async function createRealIngest(input: { roomModel: { provider: string; m
 	 * conversation stays in Recent Context, which is where a refused fold leaves
 	 * it, and which is the honest outcome to report rather than to throw.
 	 */
-	const memorize: MemorizeFn = async ({ roomId, now }) => {
-		const started = absorbRun.startAbsorbRun({
-			agentId: roomId,
-			assessmentMarkdown: BENCH_ASSESSMENT,
-			guidance: { pin: [], drop: [], corrections: [], topics: [], instructions: [] },
-			model: foldModel,
-			generate: (prompt: string, modelLock: { provider: string; model: string }, options: { signal?: AbortSignal; timeoutMs?: number }) =>
-				callWorker(prompt, modelLock, "memorize fold worker", absorbOps.FOLD_TRIGGER_PROMPT, "the fold worker produced no text", options),
-			now: () => now,
-		});
-		return settleAndApprove({ absorbRun, roomId, runId: started.runId, now, timeoutMs: benchSettleTimeoutMs(20 * 60_000) });
+	const firstRead = input.firstRead ?? "fixed";
+	const tally: FirstReadTally = { mode: firstRead, model: `${foldModel.provider}/${foldModel.model}`, runs: 0, calls: 0, input: 0, output: 0, totalTokens: 0, cost: 0, missing: 0, tooLong: 0 };
+	/**
+	 * The first read a run folds with. A real one is the room's own, on the fold
+	 * model, through the route's call. A read that comes back missing reaches
+	 * the run as "None." and is counted, too long apart: the read's own
+	 * guard caps it below what the run would swap out (ABSORB_RUN_ASSESSMENT_MAX_CHARS),
+	 * so "too long" is that guard's answer.
+	 */
+	const firstReadFor = async (roomId: string): Promise<string> => {
+		tally.runs += 1;
+		if (firstRead === "fixed") return BENCH_ASSESSMENT;
+		if (firstRead === "none") return absorbOps.FIRST_READ_NONE;
+		// A call that fails, is cut off or runs too long comes back missing, never
+		// as a throw; a room that is not ready throws here as the fold's start would.
+		const read = await persistentAgents.buildAbsorbAssessment(roomId, foldModel, async (prompt, modelLock) => {
+			const result = await callWorker(prompt, modelLock, "memorize assessment worker", "Produce the compact absorb assessment now.", "absorb assessment worker produced no text", { modelDefaultThinking: true });
+			tally.calls += 1;
+			tally.input += result.usage?.input ?? 0;
+			tally.output += result.usage?.output ?? 0;
+			tally.totalTokens += result.usage?.totalTokens ?? 0;
+			tally.cost += result.usage?.cost ?? 0;
+			return result;
+		}, { resolveModelWindow: (modelLock) => worker.modelWindow(modelLock) });
+		if (read.firstReadMissing === "too-long") tally.tooLong += 1;
+		else if (read.firstReadMissing) tally.missing += 1;
+		return read.assessmentMarkdown;
 	};
 
-	return { remember, memorize, usage: () => worker.usage() };
+	const memorize: MemorizeFn = async ({ roomId, now }) => {
+		const assessmentMarkdown = await firstReadFor(roomId);
+		const startedAt = new Date();
+		const started = absorbRun.startAbsorbRun({
+			agentId: roomId,
+			assessmentMarkdown,
+			guidance: { pin: [], drop: [], corrections: [], topics: [], instructions: [] },
+			model: foldModel,
+			generate: (prompt: string, modelLock: { provider: string; model: string }, options: { signal?: AbortSignal; timeoutMs?: number; maxTokens?: number }) =>
+				callWorker(prompt, modelLock, "memorize fold worker", absorbOps.FOLD_TRIGGER_PROMPT, "the fold worker produced no text", options),
+			// Every call here, the probe too, still waits out the provider through
+			// withProviderRetry: this bench measures fold outcomes, not outage handling.
+			// As the propose route passes them: the tiny fixed question that tells a
+			// page's failure from an outage, and the window the oversize path reads.
+			probe: (prompt: string, modelLock: { provider: string; model: string }, options: { signal?: AbortSignal; timeoutMs?: number }) =>
+				callWorker(prompt, modelLock, "memorize probe worker", prompt, "the probe worker produced no text", options),
+			resolveModelWindow: (modelLock: { provider: string; model: string }) => worker.modelWindow(modelLock),
+			now: () => now,
+		});
+		return settleAndApprove({ absorbRun, roomId, runId: started.runId, now, startedAt, timeoutMs: benchSettleTimeoutMs(20 * 60_000) });
+	};
+
+	return { remember, memorize, usage: () => worker.usage(), firstReads: () => ({ ...tally }) };
 }

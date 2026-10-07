@@ -168,6 +168,27 @@ try {
 		assert((await localPage.locator(".add-provider-toggle").count()) === 1, "loopback: Add another provider must render");
 		assert((await localPage.locator(".settings-overlay").getByText(SECTIONS[0].honest, { exact: true }).count()) === 0, "loopback: the remote honest line must not render");
 		await localCtx.close();
+		// Loopback Remote access with a tunnel found and remote access off: the
+		// Tunnel row says what the phone needs and claims nothing about who can
+		// reach this computer (a shared tailnet reaches it too).
+		const tunnelCtx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+		await tunnelCtx.route("**/api/remote/status", (route) =>
+			route.fulfill({ contentType: "application/json", body: JSON.stringify({ enabled: false, address: null, port, tunnelAddress: "100.64.0.1", scheme: null, dnsName: null, tlsFallbackReason: null, degradedReason: null, stateFile: "absent", keepAwake: true }) }));
+		const tunnelPage = await tunnelCtx.newPage();
+		await tunnelPage.goto(`${baseUrl}/auth/session?token=${SMOKE_AUTH_TOKEN}`);
+		await tunnelPage.waitForLoadState("networkidle");
+		const tunnelDismiss = tunnelPage.locator(".whats-new-foot .btn-primary");
+		if (await tunnelDismiss.count()) await tunnelDismiss.click();
+		await tunnelPage.locator(".product-sidebar-footer button").first().click();
+		await tunnelPage.locator(".sidebar-config-menu button, .sidebar-config-menu a").filter({ hasText: /Settings/ }).first().click();
+		await tunnelPage.waitForSelector(".settings-overlay", { timeout: 10000 });
+		await tunnelPage.locator(".settings-dialog-nav button").filter({ hasText: "Remote access" }).first().click();
+		await tunnelPage.waitForSelector(".settings-overlay .workspaces-tool-switch", { timeout: 10000 });
+		const tunnelLine = "Found. Your phone needs Tailscale on too, signed in to the same account as this computer.";
+		const tunnelLineCount = await tunnelPage.locator(".settings-overlay").getByText(tunnelLine, { exact: true }).count();
+		assert(tunnelLineCount === 1, `loopback Remote access: expected the Tunnel row's sentence once, saw ${tunnelLineCount}`);
+		assert((await tunnelPage.locator(".settings-overlay").getByText(/Only devices signed in to your Tailscale account/).count()) === 0, "loopback Remote access: the Tunnel row must not claim who can reach this computer");
+		await tunnelCtx.close();
 	} finally {
 		await browser.close();
 	}

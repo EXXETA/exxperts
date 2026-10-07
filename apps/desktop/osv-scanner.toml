@@ -1,0 +1,13 @@
+# Documented exceptions for the OSV dependency scan (release gate + weekly).
+# Every entry must say why the finding does not apply; delete entries the
+# moment they stop being true.
+
+[[IgnoredVulns]]
+id = "GHSA-ch52-4w7c-c8xp"
+ignoreUntil = 2026-10-19
+reason = "http-cache-semantics max-stale handling in a shared cache; no fixed version exists yet (4.3.0 changes only Vary matching). Development only: electron-builder pulls it in to download Electron at build time, for one user and never as a shared cache, and the installed app does not include it. The date is on purpose: by then, upgrade if a fix exists, or decide again."
+
+[[IgnoredVulns]]
+id = "GHSA-hp3w-g68c-fv3c"
+ignoreUntil = 2026-10-19
+reason = "sprintf-js denial of service through unbounded precision specifiers; no fixed version exists yet (1.1.3 is the latest). Development only: electron-builder's Electron download helper pulls it in (through global-agent and roarr) for its log lines, it runs only while the desktop app is built, and the installed app does not include it. The date is on purpose: by then, upgrade if a fix exists, or decide again."

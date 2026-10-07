@@ -1,10 +1,13 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
+import http from "node:http";
+import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { sha256 } from "../src/skills-store.js";
 import {
 	cloneRepoShallow,
+	describeCloneFailure,
 	disposeAllCheckouts,
 	getCheckout,
 	parseSkillFrontmatter,
@@ -13,6 +16,8 @@ import {
 	resolveFeaturedSources,
 	resolveRepoSource,
 	scanRepoSkills,
+	signInArgsFromConfigListing,
+	storedSignInArgs,
 	vendorRepoSkill,
 } from "../src/skills-repo-fetch.js";
 
@@ -72,6 +77,250 @@ try {
 	assert(scp.ok && scp.value.kind === "git", "scp-style git@host:user/repo must validate");
 	const localResolved = resolveRepoSource(repoDir, { allowLocal: true });
 	assert(localResolved.ok && localResolved.value.kind === "local", "an existing local repo dir must validate when allowed");
+
+	// A token can sit in the user-name part of an address (GitHub accepts it). The
+	// clone keeps the address as typed, but what the app shows and writes into the
+	// skill's provenance carries no user name.
+	const tokenUrl = "https://TOKEN-FIXTURE-123@gitlab.example.com/team/skills.git";
+	const tokenResolved = resolveRepoSource(tokenUrl);
+	assert(tokenResolved.ok, `an address with a token as its user name must validate, got ${JSON.stringify(tokenResolved)}`);
+	assert(tokenResolved.value.cloneArg === tokenUrl, `the clone must keep the address as typed, got ${tokenResolved.value.cloneArg}`);
+	assert(!tokenResolved.value.display.includes("@") && !tokenResolved.value.display.includes("TOKEN-FIXTURE-123"), `the shown source must carry no user name, got ${tokenResolved.value.display}`);
+	assert(tokenResolved.value.display === "https://gitlab.example.com/team/skills.git", `the shown source must be the address without its user name, got ${tokenResolved.value.display}`);
+	const shorthandToken = resolveRepoSource("TOKEN-FIXTURE-123@gitlab.example.com/team/skills");
+	assert(shorthandToken.ok && !shorthandToken.value.display.includes("TOKEN-FIXTURE-123"), `a shorthand address must not show its user name either, got ${JSON.stringify(shorthandToken)}`);
+	const plainResolved = resolveRepoSource("https://gitlab.example.com/team/skills.git");
+	assert(plainResolved.ok && plainResolved.value.display === plainResolved.value.cloneArg, "an address without a user name is shown exactly as typed");
+
+	// --- Stored sign-ins: a private repo over http(s), read-only helpers ---------
+	// A loopback git server behind basic auth plus a fixture credential helper
+	// that logs every operation it is asked for. The machine's own git config and
+	// credential store are never touched: the system scope and Apple git's own
+	// file are switched off and the global scope points at a fixture. The scopes
+	// that cannot be faked here (system, Apple's "unknown") are held through the
+	// listing parser below.
+	const gitVersion = (spawnSync("git", ["--version"], { encoding: "utf-8" }).stdout.match(/(\d+)\.(\d+)/) ?? []).slice(1).map(Number);
+	const execPath = spawnSync("git", ["--exec-path"], { encoding: "utf-8" }).stdout.trim();
+	const hasHttpBackend = fs.existsSync(path.join(execPath, "git-http-backend")) || fs.existsSync(path.join(execPath, "git-http-backend.exe"));
+	// GIT_CONFIG_GLOBAL needs git 2.32.
+	if (hasHttpBackend && (gitVersion[0] > 2 || (gitVersion[0] === 2 && gitVersion[1] >= 32))) {
+		const serveRoot = path.join(workDir, "serve");
+		fs.mkdirSync(path.join(serveRoot, "team"), { recursive: true });
+		git(["clone", "-q", "--bare", repoDir, path.join(serveRoot, "team", "skills.git")], workDir);
+
+		const wanted = `Basic ${Buffer.from("fixture-user:fixture-pass").toString("base64")}`;
+		let requests = 0;
+		const server = http.createServer((req, res) => {
+			requests += 1;
+			const url = new URL(req.url ?? "/", "http://fixture");
+			if (url.pathname.startsWith("/forbidden/")) {
+				res.writeHead(403).end("forbidden");
+				return;
+			}
+			if (req.headers.authorization !== wanted) {
+				res.writeHead(401, { "www-authenticate": 'Basic realm="fixture"' }).end("HTTP Basic: Access denied\n");
+				return;
+			}
+			const cgi = spawn("git", ["http-backend"], {
+				env: {
+					...process.env,
+					GIT_PROJECT_ROOT: serveRoot,
+					GIT_HTTP_EXPORT_ALL: "1",
+					PATH_INFO: url.pathname,
+					QUERY_STRING: url.search.slice(1),
+					REQUEST_METHOD: req.method ?? "GET",
+					CONTENT_TYPE: String(req.headers["content-type"] ?? ""),
+					HTTP_CONTENT_ENCODING: String(req.headers["content-encoding"] ?? ""),
+					GIT_PROTOCOL: String(req.headers["git-protocol"] ?? ""),
+					REMOTE_USER: "fixture-user",
+				},
+			});
+			req.pipe(cgi.stdin);
+			let head = Buffer.alloc(0);
+			let headed = false;
+			cgi.stdout.on("data", (chunk: Buffer) => {
+				if (headed) {
+					res.write(chunk);
+					return;
+				}
+				head = Buffer.concat([head, chunk]);
+				const at = head.indexOf("\r\n\r\n");
+				if (at < 0) return;
+				headed = true;
+				let status = 200;
+				for (const line of head.subarray(0, at).toString().split("\r\n")) {
+					const colon = line.indexOf(": ");
+					if (line.slice(0, colon).toLowerCase() === "status") status = Number.parseInt(line.slice(colon + 2), 10);
+					else res.setHeader(line.slice(0, colon), line.slice(colon + 2));
+				}
+				res.writeHead(status);
+				res.write(head.subarray(at + 4));
+			});
+			cgi.once("close", () => res.end());
+		});
+		await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+		const port = (server.address() as AddressInfo).port;
+
+		const helperLog = path.join(workDir, "helper.log");
+		const helperScript = path.join(workDir, "fixture-helper.sh");
+		fs.writeFileSync(
+			helperScript,
+			[
+				"#!/bin/sh",
+				'echo "$1" >> "$FIXTURE_HELPER_LOG"',
+				"cat > /dev/null",
+				'test "$1" = get || exit 0',
+				'case "$FIXTURE_HELPER_MODE" in',
+				"  good) echo username=fixture-user; echo password=fixture-pass ;;",
+				"  stale) echo username=fixture-user; echo password=expired ;;",
+				"  waiting) sleep 60 ;;",
+				"esac",
+				"",
+			].join("\n"),
+		);
+		const helperEntry = `!sh '${helperScript.replace(/\\/g, "/")}'`;
+		const globalConfig = path.join(workDir, "global-gitconfig");
+		const writeGlobal = (global: string): void => fs.writeFileSync(globalConfig, global);
+		const helperOps = (): string[] => (fs.existsSync(helperLog) ? fs.readFileSync(helperLog, "utf-8").split(/\r?\n/).filter(Boolean) : []);
+		const failureOf = async (run: Promise<string>): Promise<string> => {
+			try {
+				cleanup.push(await run);
+			} catch (err) {
+				return err instanceof Error ? err.message : String(err);
+			}
+			return "";
+		};
+
+		const envBefore = { ...process.env };
+		process.env.GIT_CONFIG_NOSYSTEM = "1";
+		process.env.GIT_CONFIG_GLOBAL = globalConfig;
+		process.env.FIXTURE_HELPER_LOG = helperLog;
+		try {
+			const privateUrl = `http://127.0.0.1:${port}/team/skills.git`;
+			const privateRepo = resolveRepoSource(privateUrl);
+			assert(privateRepo.ok && privateRepo.value.host === `127.0.0.1:${port}`, "a git URL must carry its host for the sign-in messages");
+			const withHelper = `[credential]\n\thelper = ${helperEntry}\n[core]\n\thooksPath = /must/not/apply\n`;
+
+			// A stored sign-in signs the clone in, and the helper is only ever asked `get`.
+			writeGlobal(withHelper);
+			process.env.FIXTURE_HELPER_MODE = "good";
+			const signedIn = await cloneRepoShallow(privateRepo.value);
+			cleanup.push(signedIn);
+			assert(fs.existsSync(path.join(signedIn, "cite-sources", "SKILL.md")), "a private repo must clone with the stored sign-in");
+			assert(helperOps().join(",") === "get", `a successful import must only read the sign-in (no store), helper saw: ${helperOps().join(",")}`);
+
+			// An address that carries a password is refused before anything is fetched:
+			// it would otherwise be kept as the skill's source and shown in the app.
+			fs.rmSync(helperLog, { force: true });
+			const passwordError = "This address contains a password. Sign in with git once instead, then import again.";
+			const pastedUrl = `http://fixture-user:fixture-pass@127.0.0.1:${port}/team/skills.git`;
+			const pasted = resolveRepoSource(pastedUrl);
+			assert(!pasted.ok && pasted.error === passwordError, `an address with a password must be refused with the sign-in advice, got ${JSON.stringify(pasted)}`);
+			const shorthand = resolveRepoSource(`fixture-user:fixture-pass@gitlab.example.com/group/repo`);
+			assert(!shorthand.ok && shorthand.error === passwordError, `a shorthand address with a password must be refused too, got ${JSON.stringify(shorthand)}`);
+			const requestsBefore = requests;
+			const tempBefore = fs.readdirSync(os.tmpdir()).filter((name) => name.startsWith("exxperts-skill-repo-")).length;
+			const bypass = await failureOf(cloneRepoShallow({ kind: "git", cloneArg: pastedUrl, display: pastedUrl, host: `127.0.0.1:${port}` }));
+			assert(bypass === passwordError, `the clone itself must refuse an address with a password, got: ${bypass}`);
+			assert(requests === requestsBefore && helperOps().length === 0, "an address with a password must reach neither the host nor a helper");
+			assert(fs.readdirSync(os.tmpdir()).filter((name) => name.startsWith("exxperts-skill-repo-")).length === tempBefore, "a refused address must leave no checkout behind");
+
+			// An address with only a user name stays allowed and signs in with the stored password.
+			const named = resolveRepoSource(`http://fixture-user@127.0.0.1:${port}/team/skills.git`);
+			assert(named.ok, `an address with only a user name must validate, got ${JSON.stringify(named)}`);
+			cleanup.push(await cloneRepoShallow(named.value));
+			assert(helperOps().join(",") === "get", `an address with a user name must sign in read-only, helper saw: ${helperOps().join(",")}`);
+
+			// A sign-in the host turns down is reported as such and NOT erased.
+			fs.rmSync(helperLog, { force: true });
+			process.env.FIXTURE_HELPER_MODE = "stale";
+			const stale = await failureOf(cloneRepoShallow(privateRepo.value));
+			assert(/turned down the sign-in/.test(stale), `a rejected sign-in must be named as rejected, got: ${stale}`);
+			assert(!helperOps().includes("erase"), "a rejected sign-in must never be erased from the credential store");
+
+			// The failure text for an address with a token as its user name names the host, never the token.
+			const tokenRepo = resolveRepoSource(`http://TOKEN-FIXTURE-123@127.0.0.1:${port}/team/skills.git`);
+			assert(tokenRepo.ok, "the token fixture address must validate");
+			const tokenFailure = await failureOf(cloneRepoShallow(tokenRepo.value));
+			assert(/turned down the sign-in/.test(tokenFailure) && !tokenFailure.includes("TOKEN-FIXTURE-123"), `a failure must not repeat the address's user name, got: ${tokenFailure}`);
+			const tokenForbidden = resolveRepoSource(`http://TOKEN-FIXTURE-123@127.0.0.1:${port}/forbidden/skills.git`);
+			assert(tokenForbidden.ok, "the token 403 fixture address must validate");
+			const tokenForbiddenFailure = await failureOf(cloneRepoShallow(tokenForbidden.value));
+			assert(/refused access to this repository/.test(tokenForbiddenFailure) && !tokenForbiddenFailure.includes("TOKEN-FIXTURE-123"), `a 403 must not repeat the address's user name, got: ${tokenForbiddenFailure}`);
+			// Whatever git version or server wrote the error, the text shown names no user name:
+			// older git prints the address as typed, and "remote:" lines are the server's own words.
+			const olderGit = "fatal: unable to access 'https://TOKEN-FIXTURE-123@gitlab.example.com/team/skills.git/': The requested URL returned error: 403\nremote: see https://name:TOKEN-FIXTURE-123@gitlab.example.com/help";
+			const shown = describeCloneFailure(olderGit, { kind: "git", cloneArg: "https://TOKEN-FIXTURE-123@gitlab.example.com/team/skills.git", display: "https://gitlab.example.com/team/skills.git", host: "gitlab.example.com" });
+			assert(/refused access to this repository/.test(shown) && !shown.includes("TOKEN-FIXTURE-123") && shown.includes("https://gitlab.example.com/team/skills.git/"), `git's error text must lose any user name before it is shown, got: ${shown}`);
+
+			// 403: signed in, but no access to this repository.
+			process.env.FIXTURE_HELPER_MODE = "good";
+			const forbidden = resolveRepoSource(`http://127.0.0.1:${port}/forbidden/skills.git`);
+			assert(forbidden.ok, "the forbidden fixture URL must validate");
+			assert(/refused access to this repository/.test(await failureOf(cloneRepoShallow(forbidden.value))), "a 403 must be explained as missing access");
+
+			// No helper anywhere: the failure says what to do.
+			writeGlobal("[core]\n\teditor = vim\n");
+			const signedOut = await failureOf(cloneRepoShallow(privateRepo.value));
+			assert(/needs a sign-in to 127\.0\.0\.1/.test(signedOut) && /Clone it once in a terminal/.test(signedOut), `a missing sign-in must say what to do, got: ${signedOut}`);
+
+			// A later empty `helper =` switches the helpers before it off, as in plain git.
+			fs.rmSync(helperLog, { force: true });
+			writeGlobal(`${withHelper}[credential]\n\thelper =\n`);
+			assert((await storedSignInArgs(privateUrl)).join("|") === "-c|credential.helper=", "an empty `helper =` must reset the helpers that came before it");
+			assert(/needs a sign-in/.test(await failureOf(cloneRepoShallow(privateRepo.value))), "a reset helper must not sign the clone in");
+			assert(helperOps().length === 0, "a reset helper must never be run");
+
+			// The helpers come from ONE scoped listing (`git config --list --show-scope --null`),
+			// in git's order: the system file, Apple git's own file (scope "unknown", where
+			// osxkeychain lives on a Mac without Homebrew git), then the person's global file;
+			// a host-scoped one only for its host. Repository, worktree and command-line
+			// entries never count: the import is not run inside the person's repository.
+			const entry = (scope: string, key: string, value?: string): string => (value === undefined ? `${scope}\0${key}\0` : `${scope}\0${key}\n${value}\0`);
+			const listing = [
+				entry("unknown", "credential.helper", "osxkeychain"),
+				entry("system", "credential.helper", "sys-helper"),
+				entry("global", "credential.helper", "global-helper"),
+				entry("global", "credential.https://gitlab.example.com.helper", "scoped-helper"),
+				entry("global", "credential.https://gitlab.example.com.usehttppath", "true"),
+				entry("local", "credential.helper", "repo-helper"),
+				entry("worktree", "credential.helper", "worktree-helper"),
+				entry("command", "credential.helper", "command-helper"),
+			].join("");
+			const scoped = signInArgsFromConfigListing(listing, "https://gitlab.example.com/group/repo").filter((arg) => arg !== "-c");
+			assert(
+				scoped.length === 6 && scoped[0] === "credential.helper=" && scoped[1].includes("git credential-osxkeychain get") && scoped[2].includes("git credential-sys-helper get") && scoped[3].includes("git credential-global-helper get") && scoped[4].includes("git credential-scoped-helper get") && scoped[5] === "credential.usehttppath=true",
+				`helpers must resolve in git's order across the system, Apple and global scopes, got ${scoped.join(" | ")}`,
+			);
+			const elsewhere = signInArgsFromConfigListing(listing, "https://other.example.com/group/repo").join(" ");
+			assert(!elsewhere.includes("scoped-helper") && !elsewhere.includes("usehttppath"), "a host-scoped section must not apply to another host");
+			assert(!/repo-helper|worktree-helper|command-helper/.test(elsewhere), `repository, worktree and command-line helpers must never count, got ${elsewhere}`);
+			const appleReset = signInArgsFromConfigListing(entry("unknown", "credential.helper", "osxkeychain") + entry("global", "credential.helper", ""), "https://gitlab.example.com/group/repo");
+			assert(appleReset.join("|") === "-c|credential.helper=", `a global reset must switch Apple's helper off, got ${appleReset.join("|")}`);
+			const named2 = signInArgsFromConfigListing(entry("global", "credential.helper", "global-helper") + entry("global", "credential.username"), "https://gitlab.example.com/group/repo");
+			assert(named2.includes("credential.username=true"), `a key without a value must still parse, got ${named2.join("|")}`);
+
+			// Stored sign-ins never travel unencrypted, and ssh has no use for them.
+			assert((await storedSignInArgs("http://gitlab.example.com/group/repo")).join("|") === "-c|credential.helper=", "plain http to another machine must get no helper");
+			assert((await storedSignInArgs("git@gitlab.example.com:group/repo.git")).join("|") === "-c|credential.helper=", "an ssh address must get no helper");
+
+			// A helper that waits forever (an unanswered keychain dialog) ends with the timeout.
+			writeGlobal(withHelper);
+			process.env.FIXTURE_HELPER_MODE = "waiting";
+			const startedAt = Date.now();
+			const waited = await failureOf(cloneRepoShallow(privateRepo.value, 2_000));
+			assert(/timed out after 2000ms/.test(waited), `a waiting helper must end in the timeout, got: ${waited}`);
+			assert(Date.now() - startedAt < 15_000, `the timeout must end the helper too, took ${Date.now() - startedAt}ms`);
+		} finally {
+			for (const name of ["GIT_CONFIG_NOSYSTEM", "GIT_CONFIG_GLOBAL", "FIXTURE_HELPER_LOG", "FIXTURE_HELPER_MODE"]) {
+				if (envBefore[name] === undefined) delete process.env[name];
+				else process.env[name] = envBefore[name];
+			}
+			await new Promise<void>((resolve) => server.close(() => resolve()));
+		}
+	} else {
+		console.log("skills-repo-fetch-smoke: stored sign-in checks skipped (needs git 2.32+ with git-http-backend)");
+	}
 
 	// --- Shallow clone (clone/read only) ---------------------------------------
 	const checkout = await cloneRepoShallow((localResolved as { value: { kind: "local"; cloneArg: string; display: string } }).value);
@@ -238,6 +487,14 @@ try {
 } finally {
 	disposeAllCheckouts();
 	if (process.exitCode == null || process.exitCode === 0) {
-		for (const dir of cleanup) fs.rmSync(dir, { recursive: true, force: true });
+		// The waiting helper of the timeout check may still run on Windows and
+		// hold its script; a folder left in the temp directory is harmless there.
+		for (const dir of cleanup) {
+			try {
+				fs.rmSync(dir, { recursive: true, force: true });
+			} catch (error) {
+				console.warn(`could not remove ${dir} yet: ${error instanceof Error ? error.message : String(error)}`);
+			}
+		}
 	}
 }

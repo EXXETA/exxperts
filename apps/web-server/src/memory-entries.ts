@@ -67,8 +67,18 @@ export interface MemoryEntry {
 	status?: ItemStatus;
 	/** YYYY-MM-DD of the last update or supersede. */
 	updated?: string;
+	/** YYYY-MM-DD of the conversation that last wrote the text, from its page's heading; absent when no dated conversation did, and never guessed. */
+	learned?: string;
+	/** The ids, comma-separated, of notes the person kept beside this one though the two may disagree: a Memorize save writes it on both, and any rewrite of the text clears it. */
+	disagrees?: string;
 	/** Times referenced (recall or update); a ranking input. */
 	refs?: number;
+	/** The note is a conversation's approved summary, filed whole because the fold gave nothing usable; stored as `summary=true`. */
+	summary?: true;
+	/** The Memory models that re-read this summary note in a saved Memorize, each as rereadModelKey writes it (a comma in an id encoded); stored as `tried=` with the models comma-separated. A model on the list does not re-read it again. */
+	tried?: string[];
+	/** Metadata keys this version does not write itself, in file order: carried through every rewrite, so a field it does not know is never lost. */
+	extra?: Record<string, string>;
 	/** The entry's markdown lines exactly, without its metadata comment. */
 	text: string;
 }
@@ -113,7 +123,7 @@ export interface MemoryDocument {
  * gives: "stale" (the note no longer holds) and "duplicate" (another note
  * already carries the point).
  */
-export const ARCHIVE_REASONS = ["budget", "superseded", "done", "user", "stale", "duplicate"] as const;
+export const ARCHIVE_REASONS = ["budget", "superseded", "done", "user", "stale", "duplicate", "history", "sorted"] as const;
 
 export type ArchiveReason = (typeof ARCHIVE_REASONS)[number];
 
@@ -121,6 +131,8 @@ export interface ArchivedEntry extends MemoryEntry {
 	/** YYYY-MM-DD the entry left the core. */
 	archived: string;
 	why: ArchiveReason;
+	/** YYYY-MM-DD the text stopped holding: the day a newer text that replaced it was learned. Archive rows only; a restore never brings it back. */
+	until?: string;
 	/** The topic it was taken from, so a restore knows where it belongs. */
 	topic: string;
 	section: MemorySection;
@@ -205,6 +217,71 @@ export function memoryDocumentEol(doc: MemoryDocument): string {
 
 /** The Review layer's marker, same predicate: a marked entry is pinned. */
 const MUST_KEEP_MARKER = /\*\*must-keep\b/i;
+/** A code span, whose words are quoted, never a marker: `x` and ``x``. */
+const CODE_SPAN = /(`+)[^`\r\n]*?\1/g;
+
+/**
+ * Whether a text carries the must-keep marker outside a code span: the
+ * applier and a hand edit pin on it. A marker quoted in a code span is text.
+ */
+export function hasMustKeepMarker(text: string): boolean {
+	return MUST_KEEP_MARKER.test(text.replace(CODE_SPAN, ""));
+}
+
+/** One stretch of a line outside code spans, the must-keep labels taken out. */
+function withoutMarkersIn(plain: string): string {
+	return plain
+		// "**must-keep - words**" keeps its words, bold.
+		.replace(/\*\*must-keep[ \t]*[\u2014\u2013-][ \t]*(?=[^*\r\n]*\*\*)/gi, "**")
+		// A label that ends the sentence takes the space before it along.
+		.replace(/[ \t]*\*\*must-keep:?\*\*:?(?=[ \t]*(?:[.,;!?)]|$))/gi, "")
+		// A label that opens the words goes with the space and any dash after it.
+		.replace(/\*\*must-keep:?\*\*:?[ \t]*(?:[\u2014\u2013-][ \t]+)?/gi, "")
+		.replace(/\*\*must-keep\b:?[ \t]*(?:[\u2014\u2013-][ \t]+)?/gi, "");
+}
+
+/**
+ * A note's text once its must-keep marker has done its work: the note is
+ * pinned, and the pin, not the words, is what keeps it, so the marker does not
+ * stay on as a label. "**must-keep**" and "**must-keep:**" leave with the space
+ * and any dash after them; "**must-keep - words**" keeps its words bold; a
+ * marker in a code span stays, being text. Only the lines that held a marker
+ * change. A text that would be left with no words keeps its marker.
+ */
+export function withoutMustKeepMarkers(text: string): string {
+	const stripped = stripMustKeepMarkers(text);
+	return hasWords(stripped) ? stripped : text;
+}
+
+/**
+ * Whether a text says anything but its must-keep markers and list marks: a
+ * text of "**must-keep**" alone, or "- ###", says nothing. A marker in a code
+ * span is text.
+ */
+export function saysMoreThanMustKeep(text: string): boolean {
+	return hasWords(stripMustKeepMarkers(text));
+}
+
+function hasWords(text: string): boolean {
+	return /[\p{L}\p{N}]/u.test(text.replace(/^\s*(?:[-*+]|\d+[.)])\s*/gm, ""));
+}
+
+/** The text with its must-keep markers taken out, outside code spans; only the lines that held one change. */
+function stripMustKeepMarkers(text: string): string {
+	const parts = text.split(/(\r\n|\n|\r|\u2028|\u2029)/);
+	for (let i = 0; i < parts.length; i += 2) {
+		const line = parts[i];
+		if (!hasMustKeepMarker(line)) continue;
+		let out = "";
+		let last = 0;
+		for (const span of line.matchAll(CODE_SPAN)) {
+			out += withoutMarkersIn(line.slice(last, span.index)) + span[0];
+			last = span.index! + span[0].length;
+		}
+		parts[i] = (out + withoutMarkersIn(line.slice(last))).replace(/[ \t]+$/, "");
+	}
+	return parts.join("");
+}
 const BULLET_LINE = /^(\s*)(?:[-*+]|\d+[.)])\s/;
 const TOP_LEVEL_HEADING = /^##\s+(.+?)\s*$/;
 const SUBSECTION_HEADING = /^###\s+(.+?)\s*$/;
@@ -227,7 +304,8 @@ function indentOf(line: string): number {
 
 // --- Metadata comments -------------------------------------------------------
 
-const META_FIELD = /([A-Za-z_][A-Za-z0-9_]*)=(?:"((?:[^"\\]|\\.)*)"|(\S*))/g;
+/** A field starts the line or follows whitespace, so `learned-at=x` is one key, never `at`. */
+const META_FIELD = /(?:^|\s)([A-Za-z_][A-Za-z0-9_.-]*)=(?:"((?:[^"\\]|\\.)*)"|(\S*))/g;
 
 function parseMetaFields(raw: string): Record<string, string> {
 	const out: Record<string, string> = {};
@@ -250,7 +328,17 @@ function entryMetaFields(entry: MemoryEntry): string[] {
 	if (entry.pinned) fields.push("pinned=true");
 	if (entry.status) fields.push(`status=${entry.status}`);
 	if (entry.updated) fields.push(`updated=${entry.updated}`);
+	if (entry.learned) fields.push(`learned=${entry.learned}`);
+	if (entry.disagrees) fields.push(`disagrees=${entry.disagrees}`);
 	if (entry.refs !== undefined) fields.push(`refs=${entry.refs}`);
+	// The order is canonical: known keys first, then the unknown ones in the
+	// order they were read. A newer version's key written between two known
+	// ones is moved, never lost (parsing is order-free).
+	if (entry.summary) fields.push("summary=true");
+	if (entry.tried && entry.tried.length > 0) fields.push(`tried=${metaValue(entry.tried.join(","))}`);
+	// An untrusted date kept as written gives way to a real one, so no key is written twice.
+	const written = (key: string) => (key === "learned" && entry.learned) || (key === "disagrees" && entry.disagrees) || (key === "until" && (entry as Partial<ArchivedEntry>).until);
+	for (const [key, value] of Object.entries(entry.extra ?? {})) if (!written(key)) fields.push(`${key}=${metaValue(value)}`);
 	return fields;
 }
 
@@ -261,9 +349,18 @@ export function entryMetadataLine(entry: MemoryEntry): string | null {
 }
 
 function archivedMetadataLine(entry: ArchivedEntry): string {
-	const fields = [...entryMetaFields(entry), `archived=${entry.archived}`, `why=${entry.why}`, `topic=${metaValue(entry.topic)}`, `section=${metaValue(entry.section)}`];
+	const fields = [...entryMetaFields(entry), `archived=${entry.archived}`, `why=${entry.why}`, ...(entry.until ? [`until=${entry.until}`] : []), `topic=${metaValue(entry.topic)}`, `section=${metaValue(entry.section)}`];
 	return `<!-- e: ${fields.join(" ")} -->`;
 }
+
+/** The keys an entry's or an archive row's metadata line is written with here; every other key is the entry's `extra`. */
+const OWN_META_KEYS = new Set(["id", "kind", "saved", "from", "pinned", "status", "updated", "learned", "disagrees", "refs", "summary", "tried", "archived", "why", "until", "topic", "section"]);
+
+/** A day as the dates are written, YYYY-MM-DD; anything else is no date to compare. */
+export const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
+
+/** The ids a `disagrees` key holds: entry ids, comma-separated; anything else is kept as written and trusted by nothing. */
+const PAIR_IDS = /^[A-Za-z][\w-]*(?:,[A-Za-z][\w-]*)*$/;
 
 function entryFromMeta(fields: Record<string, string>, text: string): MemoryEntry {
 	const kind = (ENTRY_KINDS as readonly string[]).includes(fields.kind) ? (fields.kind as EntryKind) : "fact";
@@ -272,7 +369,16 @@ function entryFromMeta(fields: Record<string, string>, text: string): MemoryEntr
 	if (fields.from) entry.from = fields.from;
 	if (fields.status === "open" || fields.status === "done") entry.status = fields.status;
 	if (fields.updated) entry.updated = fields.updated;
+	if (fields.learned && ISO_DAY.test(fields.learned)) entry.learned = fields.learned;
+	if (fields.disagrees && PAIR_IDS.test(fields.disagrees)) entry.disagrees = fields.disagrees;
 	if (fields.refs !== undefined && Number.isFinite(refs)) entry.refs = refs;
+	if (fields.summary === "true") entry.summary = true;
+	const tried = (fields.tried ?? "").split(",").map((model) => model.trim()).filter(Boolean);
+	if (tried.length > 0) entry.tried = tried;
+	// A learned that is no day is kept as written, and trusted by nothing. An
+	// until belongs to archive rows, which read it themselves.
+	const extra = Object.entries(fields).filter(([key]) => !OWN_META_KEYS.has(key) || (key === "learned" && !entry.learned) || (key === "disagrees" && !entry.disagrees));
+	if (extra.length > 0) entry.extra = Object.fromEntries(extra);
 	return entry;
 }
 
@@ -425,6 +531,29 @@ export function parseMemoryDocument(l1b: string): MemoryDocument {
 		otherSections,
 		nextEntryNumber: deepParsed.nextEntryNumber ?? highestEntryNumber(topics.flatMap((topic) => topic.entries.map((entry) => entry.id))) + 1,
 	};
+}
+
+/**
+ * The entries of the first Deep Memory section, each with its topic's title
+ * and an empty text, read from their metadata lines with the lines and rules
+ * parseMemoryDocument uses, without building the document: for the room's
+ * status, which reads the file on every refresh.
+ */
+export function scanDeepMemoryEntries(l1b: string): Array<{ topic: string; entry: MemoryEntry }> {
+	const out: Array<{ topic: string; entry: MemoryEntry }> = [];
+	let seen = false;
+	let inDeep = false;
+	let topic = MEMORY_GENERAL_TOPIC;
+	for (const line of splitLines(l1b)) {
+		const top = TOP_LEVEL_HEADING.exec(line);
+		if (top) { inDeep = !seen && top[1].trim() === "Deep Memory"; seen ||= inDeep; topic = MEMORY_GENERAL_TOPIC; continue; }
+		if (!inDeep) continue;
+		const sub = SUBSECTION_HEADING.exec(line);
+		if (sub) { topic = sub[1]; continue; }
+		const meta = ENTRY_META_LINE.exec(line);
+		if (meta) out.push({ topic, entry: entryFromMeta(parseMetaFields(meta[1]), "") });
+	}
+	return out;
 }
 
 // --- Migration ---------------------------------------------------------------
@@ -621,6 +750,13 @@ export interface MemoryRenderOptions {
 	 */
 	entryIds?: boolean;
 	/**
+	 * The room's own read: a note kept beside one it may disagree with carries
+	 * the day it was learned at the end of its first line, "(learned
+	 * 2026-08-02)", while both notes still name each other and the day is
+	 * known. Never the fold's render, whose addresses carry the day already.
+	 */
+	pairDays?: boolean;
+	/**
 	 * Render ONLY these sections and nothing else — no preamble, no Chronos, no
 	 * Recent Context, no other section. This is how the fold prompt reads a
 	 * memory: the two sections a fold changes, in their canonical order.
@@ -686,8 +822,24 @@ function archivePointerLine(row: ArchiveTopicIndexRow): string {
 	return `_Archived: ${noun}${months ? ` from ${months}` : ""}; use memory_recall to read them._`;
 }
 
+/** The day a kept pair's note shows in the room's read, or none: both notes still there and naming each other, and this one's day known. */
+function pairDayOf(entry: MemoryEntry, byId: Map<string, MemoryEntry>): string | undefined {
+	if (!entry.disagrees || !entry.learned) return undefined;
+	const mutual = entry.disagrees.split(",").some((id) => byId.get(id)?.disagrees?.split(",").includes(entry.id));
+	return mutual ? entry.learned : undefined;
+}
+
+function withPairDay(text: string, day: string, eol: string): string {
+	const lines = splitLines(text);
+	const at = lines.findIndex((line) => !isBlank(line));
+	if (at < 0) return text;
+	lines[at] = `${lines[at].replace(/\s+$/, "")} (learned ${day})`;
+	return lines.join(eol);
+}
+
 function renderSection(doc: MemoryDocument, section: MemorySection, mode: MemoryRenderMode, eol: string, opts?: MemoryRenderOptions): string {
 	const inlineIds = mode === "context" && opts?.entryIds === true;
+	const byId = mode === "context" && opts?.pairDays ? new Map(doc.topics.flatMap((topic) => topic.entries).map((entry) => [entry.id, entry])) : undefined;
 	const out: string[] = [`## ${section}`, ""];
 	if (section === "Deep Memory" && mode === "storage") out.push(`<!-- entries: next=${doc.nextEntryNumber} -->`, "");
 	for (const topic of doc.topics) {
@@ -699,7 +851,9 @@ function renderSection(doc: MemoryDocument, section: MemorySection, mode: Memory
 				const meta = entryMetadataLine(entry);
 				if (meta) out.push(meta);
 			}
-			out.push(...splitLines(inlineIds ? withInlineEntryId(entry, eol) : entry.text), "");
+			const day = byId ? pairDayOf(entry, byId) : undefined;
+			const shown = day ? { ...entry, text: withPairDay(entry.text, day, eol) } : entry;
+			out.push(...splitLines(inlineIds ? withInlineEntryId(shown, eol) : shown.text), "");
 		}
 		const row = opts?.archiveIndex?.[memoryAreaId(section, topic.title)];
 		if (mode === "context" && row && row.count > 0) out.push(archivePointerLine(row), "");
@@ -781,10 +935,10 @@ export function isMigratedMemoryDocument(l1b: string): boolean {
  * belongs to the migration write, which is a deliberate, archived, recorded
  * event; never to a read.
  */
-export function renderMemoryContext(l1b: string, archiveText?: string): string {
+export function renderMemoryContext(l1b: string, archiveText?: string, opts: { pairDays?: boolean } = {}): string {
 	if (!isMigratedMemoryDocument(l1b)) return l1b;
 	const index = archiveText && archiveText.trim() ? archiveIndex(parseArchive(archiveText)) : undefined;
-	return renderMemoryDocument(parseMemoryDocument(l1b), "context", index ? { archiveIndex: index } : undefined);
+	return renderMemoryDocument(parseMemoryDocument(l1b), "context", { ...(index ? { archiveIndex: index } : {}), ...(opts.pairDays ? { pairDays: true } : {}) });
 }
 
 /**
@@ -833,6 +987,11 @@ export interface MemoryAreaRow {
 	firstLine: string;
 	/** The whole entry, so the fold can refuse an add that repeats it. */
 	text: string;
+	/** YYYY-MM-DD of the conversation that last wrote the text, when one did: the day the fold weighs a page against. */
+	learned?: string;
+	/** Without `learned`, what dates the note instead: the conversation that wrote it, and the day a fold last rewrote it. */
+	from?: string;
+	updated?: string;
 }
 
 /** Every entry as one row, in document order: the map the fold prompt and the Memory pane read. */
@@ -850,6 +1009,9 @@ export function listAreas(doc: MemoryDocument): MemoryAreaRow[] {
 				tokens: entryTokens(entry),
 				firstLine: (splitLines(entry.text).find((line) => !isBlank(line)) ?? "").trim(),
 				text: entry.text,
+				...(entry.learned ? { learned: entry.learned } : {}),
+				...(entry.from ? { from: entry.from } : {}),
+				...(entry.updated ? { updated: entry.updated } : {}),
 			});
 		}
 	}
@@ -1103,7 +1265,8 @@ export function parseArchive(text: string): ArchivedEntry[] {
 		const entry = entryFromMeta(fields, stripBlankEdges(lines.slice(at + 1, end)).join(eol));
 		const section: MemorySection = fields.section === "Active Items" ? "Active Items" : "Deep Memory";
 		const why = ARCHIVE_REASONS.find((w) => w === fields.why) ?? "budget";
-		return { ...entry, archived: fields.archived ?? "", why, topic: fields.topic ?? (section === "Active Items" ? MEMORY_ACTIVE_ITEMS_TOPIC : MEMORY_GENERAL_TOPIC), section };
+		if (fields.until && !ISO_DAY.test(fields.until)) entry.extra = { ...entry.extra, until: fields.until };
+		return { ...entry, archived: fields.archived ?? "", why, ...(fields.until && ISO_DAY.test(fields.until) ? { until: fields.until } : {}), topic: fields.topic ?? (section === "Active Items" ? MEMORY_ACTIVE_ITEMS_TOPIC : MEMORY_GENERAL_TOPIC), section };
 	});
 }
 
@@ -1116,7 +1279,7 @@ export function renderArchive(entries: ArchivedEntry[], eol = "\n"): string {
 }
 
 /** Appends demoted, superseded, closed or deleted entries; an empty file gets the header first. */
-export function appendToArchive(text: string, entries: MemoryEntry[], meta: Array<{ archived: string; why: ArchiveReason; topic: string; section: MemorySection }>): string {
+export function appendToArchive(text: string, entries: MemoryEntry[], meta: Array<{ archived: string; why: ArchiveReason; until?: string; topic: string; section: MemorySection }>): string {
 	const eol = firstEol(text) ?? "\n";
 	if (meta.length !== entries.length) throw new Error("appendToArchive needs one metadata record per entry");
 	const archived: ArchivedEntry[] = entries.map((entry, i) => ({ ...cloneEntry(entry), ...meta[i] }));
@@ -1194,13 +1357,21 @@ export function findEntryVersion(doc: MemoryDocument, id: string): { entry: Memo
 
 /** Restores one row into a document already copied: the one-place rule, then the push and the counter. */
 function restoreInto(next: MemoryDocument, archived: ArchivedEntry): void {
+	if (archived.why === "history") throw new Error(`a restore was not checked: "${archived.id}" is an older value kept as history`);
 	if (findEntryVersion(next, archived.id)) throw new Error(`a restore was not checked: "${archived.id}" is already in memory`);
 	const topic = topicFor(next, archived.section, archived.topic);
 	const entry: MemoryEntry = { id: archived.id, kind: archived.kind, saved: archived.saved, pinned: archived.pinned, text: archived.text };
 	if (archived.from) entry.from = archived.from;
 	if (archived.status) entry.status = archived.status;
 	if (archived.updated) entry.updated = archived.updated;
+	if (archived.learned) entry.learned = archived.learned;
 	if (archived.refs !== undefined) entry.refs = archived.refs;
+	// A summary note stays one when restored, and keys this build does not know
+	// are kept; the day it stopped holding stays with the archive.
+	if (archived.summary) entry.summary = true;
+	if (archived.tried) entry.tried = [...archived.tried];
+	const { until: _until, ...extra } = archived.extra ?? {};
+	if (Object.keys(extra).length > 0) entry.extra = extra;
 	topic.entries.push(entry);
 	const n = entryNumber(entryBaseId(entry.id));
 	if (n !== null && n >= next.nextEntryNumber) next.nextEntryNumber = n + 1;
@@ -1272,7 +1443,10 @@ export function applyUserEdit(doc: MemoryDocument, edit: MemoryUserEdit): { doc:
 	const next = cloneDocument(doc);
 	if (edit.op === "add") {
 		const topic = topicFor(next, edit.kind === "item" ? "Active Items" : "Deep Memory", edit.topic);
-		const entry: MemoryEntry = { id: formatEntryId(next.nextEntryNumber), kind: edit.kind, saved: edit.saved, pinned: MUST_KEEP_MARKER.test(edit.text), text: edit.text };
+		// A must-keep marker pins the note and leaves its words, as a fold's does.
+		const marked = hasMustKeepMarker(edit.text);
+		// The person's own words are learned the day they are typed.
+		const entry: MemoryEntry = { id: formatEntryId(next.nextEntryNumber), kind: edit.kind, saved: edit.saved, pinned: marked, text: marked ? withoutMustKeepMarkers(edit.text) : edit.text, ...(ISO_DAY.test(edit.saved) ? { learned: edit.saved } : {}) };
 		if (edit.kind === "item") entry.status = "open";
 		next.nextEntryNumber++;
 		topic.entries.push(entry);
@@ -1283,9 +1457,17 @@ export function applyUserEdit(doc: MemoryDocument, edit: MemoryUserEdit): { doc:
 	const { entry, topic } = found;
 	switch (edit.op) {
 		case "edit":
-			entry.text = edit.text;
-			entry.pinned = entry.pinned || MUST_KEEP_MARKER.test(edit.text);
+			if (hasMustKeepMarker(edit.text)) {
+				entry.text = withoutMustKeepMarkers(edit.text);
+				entry.pinned = true;
+			} else {
+				entry.text = edit.text;
+			}
 			if (edit.today) entry.updated = edit.today;
+			// A correction is as new as the day it was made, so no older
+			// conversation folded later can overwrite it.
+			if (edit.today && ISO_DAY.test(edit.today)) entry.learned = edit.today;
+			delete entry.disagrees;
 			return { doc: next };
 		case "delete":
 			topic.entries.splice(topic.entries.indexOf(entry), 1);
@@ -1335,7 +1517,9 @@ function topicFor(doc: MemoryDocument, intendedSection: MemorySection, title: st
 // --- Copies ------------------------------------------------------------------
 
 function cloneEntry(entry: MemoryEntry): MemoryEntry {
-	return { ...entry };
+	const copy = entry.extra ? { ...entry, extra: { ...entry.extra } } : { ...entry };
+	if (entry.tried) copy.tried = [...entry.tried];
+	return copy;
 }
 
 export function cloneDocument(doc: MemoryDocument): MemoryDocument {

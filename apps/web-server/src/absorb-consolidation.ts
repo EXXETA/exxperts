@@ -113,18 +113,6 @@ export interface AbsorbAssessmentPromptInput {
 	memoryMaterial?: string;
 }
 
-export interface AbsorbProposalPromptInput extends AbsorbAssessmentPromptInput {
-	assessmentMarkdown: string;
-	assessmentHandoff?: AbsorbAssessmentHandoffInput;
-	memoryBudgetTokens?: number;
-	/**
-	 * Validation reasons from a previous rejected draft ("Draft again").
-	 * When present, the prompt closes with a Retry Notice so the worker
-	 * corrects the named failures instead of re-rolling blind.
-	 */
-	retryFeedback?: string[];
-}
-
 export interface AbsorbDiscussionPromptInput extends AbsorbAssessmentPromptInput {
 	assessmentMarkdown: string;
 	messages: AbsorbDiscussionMessage[];
@@ -141,65 +129,9 @@ export interface AbsorbAssessmentPromptAssembly {
 	telemetry: AbsorbPromptTelemetry;
 }
 
-export interface AbsorbProposalPromptAssembly extends AbsorbAssessmentPromptAssembly {
-	assessmentHandoff?: AbsorbAssessmentHandoffInput;
-}
-
 export interface AbsorbDiscussionPromptAssembly extends AbsorbAssessmentPromptAssembly {
 	tokenBudget: AbsorbDiscussionTokenBudget;
 	telemetry: AbsorbDiscussionPromptTelemetry;
-}
-
-export interface AbsorbProposalFields {
-	mode: string;
-	primacyMap: string;
-	sectionLevelChangeLog: string;
-	entryLevelDetail: string;
-	compressionMetrics: string;
-	warnings: string;
-	candidateL1b: string;
-}
-
-export type AbsorbReviewAction = "preserve" | "promote" | "update" | "merge" | "clear" | "drop" | "none" | "needs_judgment";
-
-export interface AbsorbReviewSectionChange {
-	section: string;
-	action: AbsorbReviewAction;
-	description: string;
-}
-
-export interface AbsorbReviewEntryChange {
-	sourceEntry: string;
-	action: AbsorbReviewAction;
-	targetSection?: string;
-	rationale: string;
-}
-
-export interface AbsorbReviewMetrics {
-	recentContextEntriesBefore: number;
-	recentContextEntriesAfter: number;
-	sourceBytes: number;
-	candidateBytes: number;
-	stableMemoryDeltaBytes: number;
-	sourceEstimatedTokens: number;
-	candidateEstimatedTokens: number;
-	stableMemoryDeltaTokens: number;
-}
-
-export interface AbsorbProposalReview {
-	summary: string;
-	sectionChanges: AbsorbReviewSectionChange[];
-	entryChanges: AbsorbReviewEntryChange[];
-	keyMetrics: AbsorbReviewMetrics;
-}
-
-export interface AbsorbCandidateValidationResult {
-	valid: boolean;
-	warnings: string[];
-	errors: string[];
-	sourceTopLevelSections: string[];
-	candidateTopLevelSections: string[];
-	recentContextEntryCount: number;
 }
 
 const MANDATORY_L1B_SECTIONS = ["Chronos", "Deep Memory", "Active Items", "Recent Context"] as const;
@@ -226,27 +158,6 @@ function normalizeLine(value: string): string {
 
 function uniqueStrings(values: string[]): string[] {
 	return [...new Set(values)];
-}
-
-export function extractTopLevelSections(markdown: string): string[] {
-	const sections: string[] = [];
-	for (const match of markdown.matchAll(/^##\s+(.+?)\s*$/gm)) sections.push(match[1].trim());
-	return sections;
-}
-
-function normalizeSectionBodyLines(body: string): string {
-	return body.split(/\r?\n/).map((line) => line.trimEnd()).join("\n").trim();
-}
-
-export function extractTopLevelSectionBody(markdown: string, title: string): string | null {
-	const pattern = new RegExp(`^##\\s+${title.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*$`, "m");
-	const match = pattern.exec(markdown);
-	if (!match || match.index == null) return null;
-	const start = match.index + match[0].length;
-	const rest = markdown.slice(start);
-	const next = /^##\s+/m.exec(rest);
-	const end = next?.index == null ? markdown.length : start + next.index;
-	return markdown.slice(start, end);
 }
 
 export function extractRecentContextForAbsorb(l1b: string): { before: string; recentContext: string; after: string; exists: boolean; entryIds: string[]; entryCount: number } {
@@ -664,60 +575,6 @@ None.`,
 	};
 }
 
-export function buildAbsorbProposalPrompt(input: AbsorbProposalPromptInput): AbsorbProposalPromptAssembly {
-	const now = input.now ?? new Date();
-	const metrics = absorbRecentContextMetrics(input.l1b);
-	const handoff = input.assessmentHandoff?.text.trim()
-		? `## Optional Signed-Off Assessment Handoff\n\nSource: ${input.assessmentHandoff.source}\n\n${input.assessmentHandoff.text.trim()}`
-		: `## Optional Signed-Off Assessment Handoff\n\nNone. The proposal should follow the direct initial assessment.`;
-	const budgetSection = typeof input.memoryBudgetTokens === "number"
-		? `## Memory Budget\n\n- Advisory memory budget: ~${input.memoryBudgetTokens} estimated tokens (~${input.memoryBudgetTokens * 4} characters). It binds on Deep Memory + Active Items: Recent Context does not count toward it — this consolidation clears Recent Context — but what you fold into stable memory does.\n- The budget is a ceiling, not a goal. Never add, expand, or pad content because headroom remains — at any size, the densest faithful memory wins.\n- This is advisory. Never drop must-keep content or violate the constitution to satisfy it.`
-		: null;
-	const retrySection = input.retryFeedback?.length
-		? `## Retry Notice\n\nA previous draft of this proposal was not accepted for these reasons:\n\n${input.retryFeedback.map((reason) => `- ${reason}`).join("\n")}\n\nProduce a complete, corrected proposal that resolves every reason above while following the Task structure exactly.`
-		: null;
-	const prompt = [
-		absorbConsolidationConstitution().trim(),
-		`## Process Metadata\n\n- Agent id: ${input.agentId}\n- Process type: ${ABSORB_CONSOLIDATION_WORKER_TYPE}\n- Mode: ${ABSORB_CONSOLIDATION_MODE}\n- Trigger time: ${now.toISOString()}\n- System-selected model: ${input.model.provider}/${input.model.model}\n- Writes memory: false\n- Recent Context entries: ${metrics.recentContextEntryCount}`,
-		`## Section Purpose Map\n\n${formatSectionPurposeMap(input.sectionPurposeMap)}`,
-		`## Material: Current L1b Memory State\n\nThe following is the complete current L1b. It includes stable sections and Recent Context. Do not expect or require L1a.\n\n${input.l1b.trim()}`,
-		`## Material: Signed-Off Initial Assessment\n\n${input.assessmentMarkdown.trim()}`,
-		handoff,
-		...(budgetSection ? [budgetSection] : []),
-		`## Task: Memory Absorption Proposal\n\nProduce a parseable Memory Absorption Proposal plus complete Candidate L1b.\n\nThe Candidate L1b must preserve the exact top-level section topology and order from the source L1b. It must include Chronos, Deep Memory, Active Items, and Recent Context. Copy the ## Chronos section through unchanged from the source L1b: Chronos is system-managed, and a candidate that edits it is rejected. It must clear all Recent Context entries: no headings starting with \`### RC-\` may remain under Recent Context. Preserve the Recent Context section with this placeholder unless a future system prompt says otherwise:\n\n${ABSORB_EMPTY_RECENT_CONTEXT_PLACEHOLDER}\n\nUse exactly this markdown structure:\n\n## Memory Absorption Proposal\n\n### Mode\nRC_CONSOLIDATION\n\n### Primacy Map\n[Concise summary of what the RC chain represented as a whole.]\n\n### Section-Level Change Log\n| Section | Prior Words | Candidate Words | Action | Rationale |\n|---|---:|---:|---|---|\n\n### Entry-Level Detail\n| Entry / Block | Operation | Target Section | Rationale |\n|---|---|---|---|\n\n### Compression Metrics\n- RC input words: [n]\n- RC removed words: [n]\n- RC removed percent: [x]%\n- Stable memory words before: [n]\n- Stable memory words after: [n]\n- Stable memory delta: [+/- n]\n- Compression ratio: [ratio]\n\n### Warnings\nNone, or concise uncertainty flags.\n\n### Candidate L1b\n[Complete rewritten L1b.]\n\nReturn only the proposal markdown. Do not claim anything has been saved.`,
-		...(retrySection ? [retrySection] : []),
-	].join("\n\n---\n\n") + "\n";
-	return {
-		prompt,
-		metrics,
-		assessmentHandoff: input.assessmentHandoff,
-		telemetry: {
-			...metrics,
-			promptChars: prompt.length,
-			promptEstimatedTokens: estimateTokens(prompt),
-			sectionPurposeCount: Object.keys(input.sectionPurposeMap ?? {}).length,
-		},
-	};
-}
-
-function extractMarkdownSection(raw: string, heading: string, nextLevel = "###"): string {
-	const escaped = heading.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-	const start = raw.search(new RegExp(`^${nextLevel}\\s+${escaped}\\s*$`, "im"));
-	if (start < 0) return "";
-	const afterHeading = raw.slice(start).replace(new RegExp(`^${nextLevel}\\s+${escaped}\\s*\\r?\\n?`, "i"), "");
-	const next = afterHeading.search(new RegExp(`^${nextLevel}\\s+`, "m"));
-	return (next >= 0 ? afterHeading.slice(0, next) : afterHeading).trim();
-}
-
-function markdownByteLength(value: string): number {
-	return Buffer.byteLength(value.trimEnd() + "\n", "utf-8");
-}
-
-function stableL1bText(l1b: string): string {
-	const recent = extractRecentContextForAbsorb(l1b);
-	return `${recent.before}${recent.after}`.trimEnd() + "\n";
-}
-
 function extractBullets(section: string): string[] {
 	const bullets = section
 		.split(/\r?\n/)
@@ -759,153 +616,4 @@ export function parseAbsorbAssessment(raw: string): { fields: AbsorbAssessmentFi
 // a notice carrying the validator's own reasons, asked once.
 export function buildAbsorbAssessmentRetryPrompt(prompt: string, reasons: string[]): string {
 	return `${prompt.trimEnd()}\n\n---\n\n## Retry Notice\n\nYour previous assessment was not accepted:\n\n${reasons.map((reason) => `- ${reason}`).join("\n")}\n\nProduce the complete assessment again using exactly the markdown structure from the Task: plain \`### \` headings, and under "What changes in stable memory" plain bullets that start with \`- Deep Memory:\`, \`- Active Items:\` and \`- Recent Context:\`. Stay under ${ASSESSMENT_MAX_CHARS} characters (about ${ASSESSMENT_TARGET_WORDS} words). Return only the assessment markdown.\n`;
-}
-
-function extractCandidateL1b(raw: string): string {
-	const start = raw.search(/^###\s+Candidate L1b\s*$/im);
-	if (start < 0) return "";
-	return raw.slice(start).replace(/^###\s+Candidate L1b\s*\r?\n?/i, "").trim();
-}
-
-export function parseAbsorbProposal(raw: string): { fields: AbsorbProposalFields; warnings: string[] } {
-	const fields: AbsorbProposalFields = {
-		mode: extractMarkdownSection(raw, "Mode"),
-		primacyMap: extractMarkdownSection(raw, "Primacy Map"),
-		sectionLevelChangeLog: extractMarkdownSection(raw, "Section-Level Change Log"),
-		entryLevelDetail: extractMarkdownSection(raw, "Entry-Level Detail"),
-		compressionMetrics: extractMarkdownSection(raw, "Compression Metrics"),
-		warnings: extractMarkdownSection(raw, "Warnings"),
-		candidateL1b: extractCandidateL1b(raw),
-	};
-	const warnings: string[] = [];
-	if (!/RC_CONSOLIDATION/i.test(fields.mode)) warnings.push("proposal mode is not RC_CONSOLIDATION");
-	if (!fields.primacyMap) warnings.push("proposal missing Primacy Map");
-	if (!fields.sectionLevelChangeLog) warnings.push("proposal missing Section-Level Change Log");
-	if (!fields.entryLevelDetail) warnings.push("proposal missing Entry-Level Detail");
-	if (!fields.compressionMetrics) warnings.push("proposal missing Compression Metrics");
-	if (!fields.candidateL1b) warnings.push("proposal missing Candidate L1b");
-	return { fields, warnings };
-}
-
-function parseMarkdownTableRows(markdown: string): Record<string, string>[] {
-	const tableLines = markdown.split(/\r?\n/).map((line) => line.trim()).filter((line) => line.startsWith("|") && line.endsWith("|"));
-	if (tableLines.length < 3 || !/^\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?$/.test(tableLines[1])) return [];
-	const parseRow = (line: string) => line.replace(/^\|/, "").replace(/\|$/, "").split("|").map((cell) => cell.trim());
-	const headers = parseRow(tableLines[0]).map((header) => normalizeLine(header).toLowerCase());
-	return tableLines.slice(2).map(parseRow).filter((row) => row.length === headers.length).map((row) => Object.fromEntries(row.map((cell, index) => [headers[index], cell])));
-}
-
-function normalizeAbsorbReviewAction(value: string): AbsorbReviewAction {
-	const normalized = value.toLowerCase();
-	if (/\b(needs? judgment|uncertain|review)\b/.test(normalized)) return "needs_judgment";
-	if (/\b(drop|forget|discard|omit|shed)\b/.test(normalized)) return "drop";
-	if (/\b(clear|remove|drain)\b/.test(normalized)) return "clear";
-	if (/\b(merge|consolidate|combine|integrate)\b/.test(normalized)) return "merge";
-	if (/\b(promote|memorize|learn|carry forward)\b/.test(normalized)) return "promote";
-	if (/\b(update|revise|sharpen|rewrite|refresh)\b/.test(normalized)) return "update";
-	if (/\b(preserve|keep|retain|unchanged|maintain)\b/.test(normalized)) return "preserve";
-	if (/\b(none|no change|unchanged)\b/.test(normalized)) return "none";
-	return value.trim() ? "update" : "none";
-}
-
-function firstTableCell(row: Record<string, string>, names: string[]): string {
-	for (const name of names) {
-		const found = row[name];
-		if (found) return found;
-	}
-	return "";
-}
-
-function parseSectionReviewChanges(markdown: string): AbsorbReviewSectionChange[] {
-	return parseMarkdownTableRows(markdown).map((row) => {
-		const section = firstTableCell(row, ["section", "target section"]);
-		const actionText = firstTableCell(row, ["action", "operation"]);
-		const rationale = firstTableCell(row, ["rationale", "description"]);
-		const prior = firstTableCell(row, ["prior words", "before", "prior"]);
-		const candidate = firstTableCell(row, ["candidate words", "after", "candidate"]);
-		const sizeText = prior || candidate ? `Prior: ${prior || "unknown"}; Candidate: ${candidate || "unknown"}. ` : "";
-		return {
-			section: section || "Unspecified section",
-			action: normalizeAbsorbReviewAction(actionText || rationale),
-			description: normalizeLine(`${sizeText}${rationale || actionText || "No rationale provided."}`),
-		};
-	});
-}
-
-function parseEntryReviewChanges(markdown: string): AbsorbReviewEntryChange[] {
-	return parseMarkdownTableRows(markdown).map((row) => {
-		const sourceEntry = firstTableCell(row, ["entry / block", "entry", "source entry", "block"]);
-		const operation = firstTableCell(row, ["operation", "action"]);
-		const targetSection = firstTableCell(row, ["target section", "section"]);
-		const rationale = firstTableCell(row, ["rationale", "description"]);
-		return {
-			sourceEntry: sourceEntry || "Unspecified Recent Context",
-			action: normalizeAbsorbReviewAction(operation || rationale),
-			targetSection: targetSection || undefined,
-			rationale: rationale || operation || "No rationale provided.",
-		};
-	});
-}
-
-export function buildAbsorbProposalReview(sourceL1b: string, fields: AbsorbProposalFields): AbsorbProposalReview {
-	const sourceRecent = extractRecentContextForAbsorb(sourceL1b);
-	const candidateRecent = extractRecentContextForAbsorb(fields.candidateL1b);
-	const sourceStable = stableL1bText(sourceL1b);
-	const candidateStable = stableL1bText(fields.candidateL1b);
-	const stableMemoryDeltaBytes = markdownByteLength(candidateStable) - markdownByteLength(sourceStable);
-	const stableMemoryDeltaTokens = estimateTokens(candidateStable) - estimateTokens(sourceStable);
-	return {
-		summary: fields.primacyMap || "No summary provided.",
-		sectionChanges: parseSectionReviewChanges(fields.sectionLevelChangeLog),
-		entryChanges: parseEntryReviewChanges(fields.entryLevelDetail),
-		keyMetrics: {
-			recentContextEntriesBefore: sourceRecent.entryCount,
-			recentContextEntriesAfter: candidateRecent.entryCount,
-			sourceBytes: markdownByteLength(sourceL1b),
-			candidateBytes: markdownByteLength(fields.candidateL1b),
-			stableMemoryDeltaBytes,
-			sourceEstimatedTokens: estimateTokens(sourceL1b),
-			candidateEstimatedTokens: estimateTokens(fields.candidateL1b),
-			stableMemoryDeltaTokens,
-		},
-	};
-}
-
-export function validateAbsorbCandidateL1b(sourceL1b: string, candidateL1b: string): AbsorbCandidateValidationResult {
-	const sourceTopLevelSections = extractTopLevelSections(sourceL1b);
-	const candidateTopLevelSections = extractTopLevelSections(candidateL1b);
-	const errors: string[] = [];
-	const warnings: string[] = [];
-	if (candidateL1b.trim().length === 0) errors.push("Candidate L1b is empty");
-	for (const section of MANDATORY_L1B_SECTIONS) {
-		if (!candidateTopLevelSections.includes(section)) errors.push(`Candidate L1b missing mandatory section: ${section}`);
-	}
-	if (sourceTopLevelSections.join("\n") !== candidateTopLevelSections.join("\n")) {
-		errors.push("Candidate L1b top-level section topology/order differs from source L1b");
-	}
-	// Chronos is system-managed (written by the checkpoint apply path), so a
-	// candidate must carry it through unchanged. Review enforces this with a
-	// byte-exact graft; Absorb takes back a full rewrite, so it verifies here.
-	// Line-normalized so an honest copy is never rejected over whitespace reflow.
-	const sourceChronos = extractTopLevelSectionBody(sourceL1b, "Chronos");
-	const candidateChronos = extractTopLevelSectionBody(candidateL1b, "Chronos");
-	if (sourceChronos != null && candidateChronos != null && normalizeSectionBodyLines(sourceChronos) !== normalizeSectionBodyLines(candidateChronos)) {
-		errors.push("Candidate L1b must carry the Chronos section through unchanged; Chronos is system-managed");
-	}
-	const candidateRecent = extractRecentContextForAbsorb(candidateL1b);
-	if (!candidateRecent.exists) errors.push("Candidate L1b missing Recent Context section");
-	if (candidateRecent.entryCount > 0) errors.push("Candidate L1b must clear all Recent Context entries for strict absorb");
-	if (candidateRecent.exists) {
-		const body = candidateRecent.recentContext.replace(/^##\s+Recent Context\s*$/m, "").trim();
-		if (!body) warnings.push("Candidate Recent Context is empty; checkpoint append may expect a placeholder");
-		if (/section purpose map|absorb consolidation constitution|memory absorption proposal/i.test(body)) errors.push("Candidate Recent Context appears to contain prompt/proposal scaffolding");
-	}
-	return {
-		valid: errors.length === 0,
-		warnings,
-		errors,
-		sourceTopLevelSections,
-		candidateTopLevelSections,
-		recentContextEntryCount: candidateRecent.entryCount,
-	};
 }

@@ -6,9 +6,11 @@
 // a second look. The gate must block on anything a person would want to weigh:
 // an archived entry, a budget crossing, an unfinished session, a warning.
 
-import { absorbRunFailedSessionNote, absorbRunFastPathBlockers, absorbRunGuidanceSummary, absorbRunIsWorking, absorbRunMigrationSentence, absorbRunNewTopics, absorbRunProgressLine, absorbRunSavedSentence, absorbRunScreen, absorbRunSessionLine, ARCHIVE_EXPLANATION, ARCHIVE_ROW_TAG_INSTEAD, ARCHIVE_ROW_TAG_STAYS, archiveCountsLine, archiveHeading, archiveLimitSummary, archivedDuplicateReason, archiveReasonLabel, archiveRowTag, archiveTopicGroupSummary, archiveTopicKey, AUTOMATIC_APPLY_ON_SENTENCE, AUTOMATIC_APPLY_SETTING_LABEL, automaticApplyNeedsReviewSentence, entryFirstLine, entryGroupPage, entryOriginSentence, filterEntriesByText, fmtTokenCount, fmtTokenLimit, groupEntriesByTopic, isEntryIdMigrationNotice, KEEP_DEBOUNCE_MS, KEEP_TOPIC_LABEL, keepBatchAction, LIMIT_LOWERED_ON_UNDO_SENTENCE, LIMIT_RAISED_ON_SAVE_SENTENCE, MEMORY_LIMIT_BAR_LABEL, MEMORY_LIMIT_CEILING_TOKENS, memoryFullPercent, NEW_TOPIC_TAG, nextKeepIds, nextKeepTopics, overLimitFirstRead, raiseLimitTarget, REVIEW_DEPTH_ORDER, REVIEW_DEPTH_ROWS, REVIEW_FIRST_LABEL, reviewCardHeadline, reviewCardSentence, reviewChangeCounts, reviewChangeKindLabel, reviewDepthSentence, reviewRunArchiveCount, reviewRunFastPathBlockers, reviewRunFullPercent, reviewRunGuidanceSummary, reviewRunIsWorking, reviewRunProgressLine, reviewSavedArchiveSentence, reviewSavedHeadline, reviewSavedSentence, reviewTopicFoldedLine, reviewTopicGroupSummary, reviewTopicName, roundUpToThousand, showMoreLabel, topicKept, type ReviewChange } from "../../web-ui/src/memory-v2-copy.js";
+import { absorbRunFailedSessionNote, absorbRunFastPathBlockers, changeBesideTag, changeKindLabel, HISTORY_ROW_LINE, KEEP_BOTH_LABEL, MAY_DISAGREE_TAG, REPLACE_OLDER_LABEL, REPLACE_PINNED_LABEL, absorbRunGuidanceSummary, absorbRunIsWorking, absorbRunMigrationSentence, absorbRunNewTopics, absorbRunProgressLine, absorbRunSavedSentence, absorbRunScreen, absorbRunSessionLine, ARCHIVE_EXPLANATION, ARCHIVE_ROW_TAG_INSTEAD, ARCHIVE_ROW_TAG_STAYS, archiveCountsLine, archiveHeading, archiveLimitSummary, archivedDuplicateReason, archiveReasonLabel, archiveRowTag, archiveTopicGroupSummary, archiveTopicKey, AUTOMATIC_APPLY_ON_SENTENCE, AUTOMATIC_APPLY_SETTING_LABEL, automaticApplyNeedsReviewSentence, DISCUSS_FIRST_LABEL, maintainChooserFootnote, memorizeChooserText, unsortedHintText, entryFirstLine, entryGroupPage, entryOriginSentence, filterEntriesByText, fmtTokenCount, fmtTokenLimit, groupEntriesByTopic, isEntryIdMigrationNotice, KEEP_DEBOUNCE_MS, KEEP_NOTE_HINT, KEEP_TOPIC_LABEL, keepBatchAction, LIMIT_LOWERED_ON_UNDO_SENTENCE, LIMIT_RAISED_ON_SAVE_SENTENCE, MEMORY_LIMIT_BAR_LABEL, MEMORY_LIMIT_CEILING_TOKENS, memoryFullPercent, NEW_TOPIC_TAG, nextKeepIds, nextKeepTopics, overLimitFirstRead, raiseLimitTarget, REVIEW_DEPTH_ORDER, REVIEW_DEPTH_ROWS, REVIEW_FIRST_LABEL, reviewCardHeadline, reviewCardSentence, reviewChangeCounts, reviewChangeKindLabel, reviewDepthSentence, reviewRunArchiveCount, reviewRunFastPathBlockers, reviewRunFullPercent, reviewRunGuidanceSummary, reviewRunIsWorking, reviewRunProgressLine, reviewSavedArchiveSentence, reviewSavedHeadline, reviewSavedSentence, reviewTopicFoldedLine, reviewTopicGroupSummary, reviewTopicName, roundUpToThousand, showMoreLabel, topicKept, type ReviewChange } from "../../web-ui/src/memory-v2-copy.js";
+import { AUTOMATIC_APPLY_INFO } from "../../web-ui/src/memory-surface-copy.js";
 import { allRoomsFactsLine, archivedLabel, archiveRowMeta, asOfSentence, budgetSettledHint, CHANGE_CONVERSATIONS_BLOCK, CHANGE_LINES_META, CHANGE_META, CHANGE_NONE, CHANGE_READ_ERROR, CHANGE_READING, CHANGE_UNVERIFIED, changeMetaLine, countNoteChanges, emptyNoteChangeCounts, fmtMemoryDay, fmtMemoryMoment, HIDE_CHANGE_LABEL, inMemorySinceLine, memorizedConversationsTitle, MEMORY_OVER_LIMIT_SENTENCE, memoryArchiveReason, memoryFullLine, memoryFullShort, memoryHistoryRows, memoryPercentFull, memoryTopicName, memoryUsageTitle, movedLabel, noteChangeTotals, noteFlagLabel, noteRowMeta, notesSummaryLine, roomMemoryFactsLine, topicChangeSummary, topicRowLine, type MemorySaveEvent, undoableHistoryRow, WHAT_CHANGED_LABEL } from "../../web-ui/src/memory-surface-copy.js";
 import { diffWords, plainNoteText } from "../../web-ui/src/memory-diff.js";
+import { recommendedReviewDepth } from "../src/review-assess.js";
 import type { AbsorbRun, AbsorbRunSession, ArchiveRow, EntryCard, ReviewRun, RunBudget, RunDemotion } from "../../web-ui/src/types.js";
 
 function assert(condition: unknown, message: string): asserts condition {
@@ -90,6 +92,9 @@ function run(overrides: Partial<AbsorbRun> = {}): AbsorbRun {
 {
 	assert(absorbRunSessionLine(session()) === "Memorized · 2 added, 1 updated, 1 replaced, 1 closed", `the counts read as words (got: ${absorbRunSessionLine(session())})`);
 	assert(absorbRunSessionLine(session({ summary: { added: 0, updated: 0, superseded: 0, closed: 0 } })).endsWith("no changes"), "a fold that changed nothing says so instead of listing zeroes");
+	const older = { kind: "history" as const, id: "m-0950", topic: "Renewals", after: "- The contract renews in May." };
+	assert(absorbRunSessionLine(session({ summary: { added: 0, updated: 0, superseded: 0, closed: 0 }, changes: [older] })) === "Memorized · 1 older value kept as history", "a page whose text was all older than memory says what became of it, not no changes");
+	assert(absorbRunSessionLine(session({ summary: { added: 1, updated: 0, superseded: 0, closed: 0 }, changes: [older, { ...older, id: "m-0951" }] })) === "Memorized · 1 added, 2 older values kept as history", "older values are counted after the changes");
 	assert(absorbRunSessionLine(session({ outcome: "dropped", reason: "it was small talk about the weather" })) === "Nothing to keep · it was small talk about the weather", "a dropped session carries its reason");
 	const failed = absorbRunSessionLine(session({ outcome: "failed", reason: "The model took too long to answer." }));
 	assert(failed.includes("It stays for next time."), `a failed session promises the next run (got: ${failed})`);
@@ -151,7 +156,7 @@ function run(overrides: Partial<AbsorbRun> = {}): AbsorbRun {
 	for (const text of [over.fillLabel, over.overflowLabel, over.countsLine, fits.fitsSentence ?? "", past.raise?.ceilingSentence ?? "", ARCHIVE_EXPLANATION]) {
 		assert(!/token/i.test(text), `no token count outside the raise button (got: ${text})`);
 	}
-	assert(ARCHIVE_EXPLANATION === "Keep marks a note that must stay; another note leaves in its place. The budget decides how many stay. Notes in the archive stay readable in Room settings and can come back any time.", `the one explanation above the list (got: ${ARCHIVE_EXPLANATION})`);
+	assert(ARCHIVE_EXPLANATION === "Keep holds a note for this update only; another note leaves in its place. The budget decides how many stay. Notes in the archive stay readable in Room settings and can come back any time.", `the one explanation above the list (got: ${ARCHIVE_EXPLANATION})`);
 	assert(!/least[- ]used/i.test(ARCHIVE_EXPLANATION), "nothing records chat use, so the copy never claims least-used");
 }
 
@@ -169,6 +174,48 @@ function run(overrides: Partial<AbsorbRun> = {}): AbsorbRun {
 	assert(absorbRunFastPathBlockers(clean({ demotion: demotion([row({ leaving: false, kept: true })]) })).length === 0, "a list where nothing leaves any more does not block");
 	assert(absorbRunFastPathBlockers(clean({ budget: budget({ after: 21_000, overBudgetAfter: true }) }))[0].includes("above its budget"), "a budget crossing is never automatic");
 	assert(absorbRunFastPathBlockers(clean({ sessions: [folded(), folded({ id: "RC-0008", outcome: "failed", reason: "The model took too long to answer." })] }))[0].includes("did not finish"), "an unfinished session falls to the card");
+	// A new note beside a pinned note, or one that may disagree with memory, holds the save; a plain add does not.
+	const added = (beside?: "pinned" | "may-disagree") => ({ kind: "added" as const, id: `m-${beside ?? "plain"}`, topic: "Pricing", after: "- A note.", ...(beside ? { beside } : {}) });
+	const tagged = (...changes: ReturnType<typeof added>[]) => clean({ sessions: [folded({ changes })] });
+	assert(absorbRunFastPathBlockers(tagged(added())).length === 0, "a plain add holds nothing");
+	assert(absorbRunFastPathBlockers(tagged(added("pinned"))).join("|") === "1 new note may disagree with a pinned note", `a note beside a pinned note holds the save (got: ${absorbRunFastPathBlockers(tagged(added("pinned"))).join("|")})`);
+	assert(absorbRunFastPathBlockers(tagged(added("pinned"), added("pinned"))).join("|") === "2 new notes may disagree with pinned notes", "two say so in the plural");
+	assert(absorbRunFastPathBlockers(tagged(added("may-disagree"))).join("|") === "1 new note may disagree with one already in memory", "a note that may disagree holds the save");
+	assert(absorbRunFastPathBlockers(tagged(added("may-disagree"), added("may-disagree"), added("pinned"))).join("|") === "1 new note may disagree with a pinned note|2 new notes may disagree with notes already in memory", "both reasons, each counted");
+	// The line under a tagged row names the other note by its first line, always in view, with the two answers.
+	const withLine = (beside: "pinned" | "may-disagree", extra: object = {}) => ({ ...added(beside), besideLine: "- Send commercial summaries as one page, numbers first.", ...extra });
+	const pinnedTag = changeBesideTag(withLine("pinned"));
+	assert(pinnedTag?.tag === MAY_DISAGREE_TAG && pinnedTag.line === 'May disagree with your pinned note: "Send commercial summaries as one page, numbers first."' && pinnedTag.replaceLabel === REPLACE_PINNED_LABEL && REPLACE_PINNED_LABEL === "Replace my pinned note with this", `beside a pinned note, the one tag, its line and its Replace (got ${JSON.stringify(pinnedTag)})`);
+	const pinnedGone = changeBesideTag({ ...added("pinned"), besideState: "gone" as const });
+	assert(pinnedGone?.tag === MAY_DISAGREE_TAG && pinnedGone.line === "The pinned note it may disagree with is no longer in memory.", `a pinned note that left says so in the same words (got ${JSON.stringify(pinnedGone)})`);
+	const disagreeTag = changeBesideTag(withLine("may-disagree"));
+	assert(disagreeTag?.tag === MAY_DISAGREE_TAG && MAY_DISAGREE_TAG === "may disagree" && disagreeTag.line === 'May disagree with: "Send commercial summaries as one page, numbers first."' && disagreeTag.replaceLabel === REPLACE_OLDER_LABEL && REPLACE_OLDER_LABEL === "Replace the older note with this" && KEEP_BOTH_LABEL === "Keep both", `the may-disagree tag, its line and its Replace (got ${JSON.stringify(disagreeTag)})`);
+	// Two notes that may disagree say the day each was learned, when known; a pinned note's line does not.
+	const dated = changeBesideTag(withLine("may-disagree", { besideLearned: "2026-08-02", learned: "2026-09-11" }));
+	assert(dated?.line === 'May disagree with: "Send commercial summaries as one page, numbers first." (as of 2 Aug; new note as of 11 Sep)', `a may-disagree line shows both days (got ${JSON.stringify(dated?.line)})`);
+	assert(changeBesideTag(withLine("may-disagree", { learned: "2026-09-11" }))?.line.endsWith('first." (new note as of 11 Sep)') && changeBesideTag(withLine("may-disagree", { besideLearned: "2026-08-02" }))?.line.endsWith('first." (as of 2 Aug)'), "only a known day is shown");
+	assert(changeBesideTag(withLine("pinned", { besideLearned: "2026-08-02", learned: "2026-09-11" }))?.line === 'May disagree with your pinned note: "Send commercial summaries as one page, numbers first." (as of 2 Aug; new note as of 11 Sep)', "a pinned note's line carries the days too: the person weighs a Replace there as well");
+	assert(changeBesideTag(withLine("may-disagree", { besideState: "leaving", besideLearned: "2026-08-02", learned: "2026-09-11" }))?.line.startsWith('May disagree with: "Send commercial summaries as one page, numbers first." (as of 2 Aug; new note as of 11 Sep). One of the two'), "the days sit after the other note, and a period ends them before what the state adds");
+	assert(changeBesideTag(withLine("may-disagree", { besideState: "self-closed", learned: "2026-09-11" }))?.line === 'May disagree with: "Send commercial summaries as one page, numbers first." (new note as of 11 Sep). This new note is closed later in this update, so it replaces nothing.', "a period ends the days before the self-closed sentence");
+	const leavingTag = changeBesideTag(withLine("may-disagree", { besideState: "leaving" }));
+	assert(leavingTag?.replaceLabel === null && leavingTag.line.startsWith('May disagree with: "Send') && leavingTag.line.includes("going to the archive"), `a note going to the archive offers no Replace and says why (got ${JSON.stringify(leavingTag)})`);
+	const goneTag = changeBesideTag({ ...added("may-disagree"), besideState: "gone" as const });
+	assert(goneTag?.replaceLabel === null && goneTag.line === "The note it may disagree with is no longer in memory.", `a note whose other note left says so, never a blank line (got ${JSON.stringify(goneTag)})`);
+	const closedTag = changeBesideTag({ ...added("may-disagree"), besideState: "closed" as const });
+	assert(closedTag?.replaceLabel === null && closedTag.line === "The note it may disagree with is closed by this update.", `a note this same update closes is still in memory until the save, and the line says it is closed (got ${JSON.stringify(closedTag)})`);
+	const closedNamed = changeBesideTag(withLine("may-disagree", { besideState: "closed", besideLearned: "2026-08-02", learned: "2026-09-11" }));
+	assert(closedNamed?.replaceLabel === null && closedNamed.line === 'May disagree with: "Send commercial summaries as one page, numbers first." (as of 2 Aug; new note as of 11 Sep). That note is closed by this update.', `a closed note whose line is known is named, as the self-closed line does (got ${JSON.stringify(closedNamed)})`);
+	assert(changeBesideTag(withLine("pinned", { besideState: "closed", choice: "replace" }))?.line === 'May disagree with your pinned note: "Send commercial summaries as one page, numbers first." That note is closed by this update.', "a closed pinned note is named the same way, and a stale Replace changes nothing");
+	const selfClosedTag = changeBesideTag(withLine("may-disagree", { besideState: "self-closed" }));
+	assert(selfClosedTag?.replaceLabel === null && selfClosedTag.line === 'May disagree with: "Send commercial summaries as one page, numbers first." This new note is closed later in this update, so it replaces nothing.', `a new note this update closes later names the other note and offers no Replace (got ${JSON.stringify(selfClosedTag)})`);
+	assert(absorbRunFastPathBlockers(tagged({ ...added("pinned"), choice: "replace" } as ReturnType<typeof added>)).join("|") === "1 new note may disagree with a pinned note", "a Replace chosen still holds the automatic save: the person looks anyway");
+	assert(changeBesideTag(added()) === null, "a plain add carries no tag");
+	// The line follows the choice: with Replace pressed it says what the save will do; Keep both keeps the line as it was.
+	const replacingPinned = changeBesideTag(withLine("pinned", { choice: "replace", besideLearned: "2026-08-02", learned: "2026-09-11" }));
+	assert(replacingPinned?.line === 'Replaces your pinned note: "Send commercial summaries as one page, numbers first." (as of 2 Aug; new note as of 11 Sep)' && replacingPinned.replaceLabel === REPLACE_PINNED_LABEL, `with Replace pressed, the pinned line says it replaces (got ${JSON.stringify(replacingPinned)})`);
+	assert(changeBesideTag(withLine("may-disagree", { choice: "replace" }))?.line === 'Replaces the older note: "Send commercial summaries as one page, numbers first."', "with Replace pressed, the older note's line says it replaces");
+	assert(changeBesideTag(withLine("may-disagree", { choice: "keep-both" }))?.line === 'May disagree with: "Send commercial summaries as one page, numbers first."' && changeBesideTag(withLine("pinned", { choice: "keep-both" }))?.line === 'May disagree with your pinned note: "Send commercial summaries as one page, numbers first."', "with Keep both, the line stays");
+	assert(changeBesideTag(withLine("may-disagree", { choice: "replace", besideState: "leaving" }))?.line.startsWith('May disagree with: "Send'), "where no Replace is offered, a stale choice changes nothing");
 	const dropped = absorbRunFastPathBlockers(clean({ sessions: [folded(), folded({ id: "RC-0008", outcome: "dropped", reason: "small talk" })] }));
 	assert(dropped.join("|") === "1 conversation would be dropped as nothing to keep", `a conversation the model judged not worth keeping is a judgement a person sees (got: ${dropped.join("|")})`);
 	assert(absorbRunFastPathBlockers(clean({ sessions: [folded({ outcome: "dropped" }), folded({ id: "RC-0008", outcome: "dropped" })] }))[0] === "2 conversations would be dropped as nothing to keep", "two dropped conversations read in the plural");
@@ -195,6 +242,15 @@ function run(overrides: Partial<AbsorbRun> = {}): AbsorbRun {
 	const topics = absorbRunSavedSentence({ foldedSessions: ["RC-0007"], remainingSessions: [], archivedEntries: 0, newTopics: 2 });
 	assert(topics === "1 conversation became lasting notes. 2 new topics.", `topics the update created are counted (got: ${topics})`);
 	assert(absorbRunSavedSentence({ foldedSessions: ["RC-0007"], newTopics: 1 }).includes("1 new topic."), "one new topic reads in the singular");
+	// A note replaced is said apart: it did not leave memory, a newer text took its place.
+	const replaced = absorbRunSavedSentence({ foldedSessions: ["RC-0007"], remainingSessions: [], archivedEntries: 1, replacedEntries: 1 });
+	assert(replaced === "1 conversation became lasting notes. 1 note replaced; the old one is in the archive.", `one replaced note (got: ${replaced})`);
+	const replacedAndMoved = absorbRunSavedSentence({ foldedSessions: ["RC-0007", "RC-0008"], remainingSessions: [], archivedEntries: 5, replacedEntries: 2 });
+	assert(replacedAndMoved === "2 conversations became lasting notes. 2 notes replaced; the old ones are in the archive. 3 notes moved to the archive.", `replaced notes apart from the ones moved to the archive (got: ${replacedAndMoved})`);
+	const history = absorbRunSavedSentence({ foldedSessions: ["RC-0007", "RC-0008"], remainingSessions: [], archivedEntries: 1, historyKept: 2 });
+	assert(history === "2 conversations became lasting notes. 1 note moved to the archive. 2 older values kept as history.", `older values kept as history are counted apart from notes that left memory (got: ${history})`);
+	assert(absorbRunSavedSentence({ foldedSessions: ["RC-0007"], historyKept: 1 }).endsWith("1 older value kept as history."), "one older value reads in the singular");
+	assert(changeKindLabel("history") === "Older" && HISTORY_ROW_LINE === "An older conversation said this. A newer note says otherwise, so this is kept in the archive as history.", `an older value's row is labelled Older and never says the newer note stays, since a Replace on another row may archive it (got: ${JSON.stringify(HISTORY_ROW_LINE)})`);
 	assert(LIMIT_RAISED_ON_SAVE_SENTENCE === "The memory budget was raised with this save." && !/\d/.test(LIMIT_RAISED_ON_SAVE_SENTENCE), "the saved screen says the budget rose, without repeating the number");
 	assert(LIMIT_LOWERED_ON_UNDO_SENTENCE(20_000) === "The budget is back at 20k." && LIMIT_LOWERED_ON_UNDO_SENTENCE(52_000) === "The budget is back at 52k.", `an undo that took a raise back names the budget the way the slider does (got: ${LIMIT_LOWERED_ON_UNDO_SENTENCE(20_000)})`);
 }
@@ -227,6 +283,8 @@ function run(overrides: Partial<AbsorbRun> = {}): AbsorbRun {
 	assert(archiveHeading(584) === "584 notes going to the archive" && archiveHeading(1) === "1 note going to the archive", "the heading counts what leaves");
 	assert(archiveHeading(0) === "Nothing goes to the archive", `when nothing leaves the heading says so instead of counting to zero (got: ${archiveHeading(0)})`);
 	assert(KEEP_TOPIC_LABEL === "Keep this topic", "the topic checkbox keeps the topic, not every row in it");
+	assert(/for this update only/.test(KEEP_NOTE_HINT) && /not pinned/.test(KEEP_NOTE_HINT) && /for this update only/.test(ARCHIVE_EXPLANATION), `a keep says it lasts for this update and pins nothing (got: ${KEEP_NOTE_HINT})`);
+	assert(reviewChangeKindLabel("pinned") === "Pinned", `a pin row reads as a pin, never as a keep (got: ${reviewChangeKindLabel("pinned")})`);
 	assert(filterEntriesByText(rows, "berlin").length === 1, "the search box finds an entry by its text");
 	assert(filterEntriesByText(rows, "COMMERCIAL").length === 2, "and by its topic, whatever the case");
 	assert(filterEntriesByText(rows, "  ").length === rows.length, "an empty search hides nothing");
@@ -304,7 +362,18 @@ function run(overrides: Partial<AbsorbRun> = {}): AbsorbRun {
 
 // 12. One name for applying updates automatically, wherever it is named.
 {
-	assert(AUTOMATIC_APPLY_SETTING_LABEL === "Memorize without the card", "the room setting has one label");
+	assert(AUTOMATIC_APPLY_SETTING_LABEL === "Memorize without the first read or the card", "the room setting has one label, and it names both things the room goes without");
+	// In such a room the chooser promises neither a first read nor a look before the save.
+	const automatic = memorizeChooserText(3, true);
+	assert(automatic.includes("3 remembered conversations") && automatic.includes("with no first read") && automatic.includes("saved without the card"), `the Memorize card says what Start does there (got: ${automatic})`);
+	assert(!/You read what will be kept/.test(automatic) && !/Nothing is saved until you approve/.test(maintainChooserFootnote(true)), "and neither it nor the footnote promises a look before the save");
+	assert(memorizeChooserText(1, false) === "Turn the remembered conversation into lasting notes. You read what will be kept before it is saved; whatever does not fit in the budget goes to the archive.", "every other room's card is as it was");
+	assert(maintainChooserFootnote(false) === "Nothing is saved until you approve it. The memory budget is set in Room settings.", "and so is its footnote");
+	assert(unsortedHintText(3) === "3 notes aren't sorted into topics yet · Review can sort them", "the chooser's hint for notes a Memorize could not sort, in the agreed words");
+	assert(unsortedHintText(1) === "1 note isn't sorted into a topic yet · Review can sort it", "and in the singular");
+	assert(AUTOMATIC_APPLY_INFO.startsWith("Start on Memorize goes straight to the update, with no first read; Discuss first still reads the conversations with you."), `the setting's info says the first read is skipped (got: ${AUTOMATIC_APPLY_INFO})`);
+	assert(AUTOMATIC_APPLY_INFO.endsWith("A memory update with nothing to weigh is saved as soon as it is ready, instead of being shown to you one last time. Anything you need to weigh always waits for you, for example a note leaving memory or a new note that may disagree with another. You can always see what changed afterwards in History."), `the setting's info says anything to weigh waits, not only three of the reasons the card stays (got: ${AUTOMATIC_APPLY_INFO})`);
+	assert(DISCUSS_FIRST_LABEL === "Discuss first", "the way to a first read there keeps the name it has on the first read");
 	assert(AUTOMATIC_APPLY_ON_SENTENCE === "This room applies memory updates automatically", "and the sentences build on that same name");
 	const sentence = automaticApplyNeedsReviewSentence(["2 entries would move to the archive to stay under budget", "1 session did not finish."]);
 	assert(
@@ -414,6 +483,19 @@ function run(overrides: Partial<AbsorbRun> = {}): AbsorbRun {
 	assert(depth(false, false) === "Memory is 80% full and nothing looks stale, so tidying the wording is enough.", `the wording depth (got: ${depth(false, false)})`);
 	assert(depth(false, true) === "The first read found stale notes, so moving them to the archive is recommended.", `a stale first read points at the archive (got: ${depth(false, true)})`);
 	assert(depth(true, false, 3_000) === "Memory is above its budget, so moving what is finished or stale to the archive is recommended.", `above the budget points at the archive (got: ${depth(true, false, 3_000)})`);
+	const disagreeing = (count: number, overBudget = false, staleFlagged = false) => reviewDepthSentence({ overBudget, staleFlagged, disagreeing: count, budgetTokens: 20_000, reviewTargetTokens: overBudget ? 23_000 : 16_000 });
+	assert(disagreeing(1) === "Two notes disagree. Either tidy can merge them into one note, and the text it replaces is kept in the archive.", `one disagreeing pair says how either tidy settles it (got: ${disagreeing(1)})`);
+	assert(disagreeing(2) === "Some notes disagree. Either tidy can merge each pair into one note, and the texts it replaces are kept in the archive.", `several pairs read in the plural (got: ${disagreeing(2)})`);
+	assert(disagreeing(0) === depth(false, false) && disagreeing(1, true) === depth(true, false, 3_000) && disagreeing(1, false, true) === depth(false, true), "with none, or over the budget, or with stale notes, the sentence is as it was");
+	const lookAlike = reviewDepthSentence({ overBudget: false, staleFlagged: false, lookAlike: true, disagreeing: 1, budgetTokens: 20_000, reviewTargetTokens: 16_000 });
+	assert(lookAlike === "Some topics look the same, and only the second option can join them, so it is recommended.", `topics that look the same say why the second option is recommended, before any disagreement (got: ${lookAlike})`);
+	// The sentence never contradicts the recommendation: "tidying the wording is enough" only where the server recommends the wording tidy.
+	for (const overBudget of [false, true]) for (const staleFlagged of [false, true]) for (const lookAlikeTopics of [false, true]) for (const count of [0, 1, 2]) {
+		const sentence = reviewDepthSentence({ overBudget, staleFlagged, lookAlike: lookAlikeTopics, disagreeing: count, budgetTokens: 20_000, reviewTargetTokens: overBudget ? 23_000 : 16_000 });
+		const recommended = recommendedReviewDepth({ overBudget, staleOrContradicts: staleFlagged ? ["a stale note"] : [], lookAlikeTopics });
+		assert(!sentence.includes("tidying the wording is enough") || recommended === "wording", `the depth sentence never says the wording is enough when the second option is recommended (${JSON.stringify({ overBudget, staleFlagged, lookAlikeTopics, count, recommended })}, got: ${sentence})`);
+	}
+	assert(REVIEW_DEPTH_ROWS.wording.text === "Make the notes shorter and clearer, and merge notes that repeat or disagree.", `the wording row says what it does, merges included (got: ${REVIEW_DEPTH_ROWS.wording.text})`);
 	assert(REVIEW_DEPTH_ORDER.length === 2 && REVIEW_DEPTH_ROWS.wording.title === "Tidy the wording" && REVIEW_DEPTH_ROWS.tidy.text.includes("brought back"), "two depths, each saying what leaves memory");
 
 	const tidy = (overrides: Partial<ReviewRun> = {}): ReviewRun => ({
@@ -588,6 +670,110 @@ function run(overrides: Partial<AbsorbRun> = {}): AbsorbRun {
 	assert(updatedWords.map((t) => `${t.type}:${t.text}`).join(" ") === "same:the same:cat del:sat add:lay same:on same:the del:mat add:rug", `an updated note's words, each with its type (got: ${updatedWords.map((t) => `${t.type}:${t.text}`).join(" ")})`);
 	assert(diffWords("", "").length === 0 && diffWords("  a  b ", "a b").every((t) => t.type === "same"), "whitespace is not a word");
 	assert(plainNoteText("- **Budget** is `fixed`  at\n  ten") === "Budget is fixed at ten", `a note reads as one plain line in the fold (got: ${plainNoteText("- **Budget** is `fixed`  at\n  ten")})`);
+}
+
+// A conversation kept whole as its summary, a run the model stopped
+// answering, and a run whose every conversation was kept whole: the card's
+// words, and a summary never holds the automatic save back.
+{
+	const copy: Record<string, unknown> = await import("../../web-ui/src/memory-v2-copy.js");
+	const kept = session({ id: "RC-0002", outcome: "summarized" as AbsorbRun["sessions"][number]["outcome"], summary: { added: 1, updated: 0, superseded: 0, closed: 0 } });
+	assert(absorbRunSessionLine(kept) === "Memorized · kept as one note in Unsorted · Review can sort it", `a summary's card line (got: ${absorbRunSessionLine(kept)})`);
+	assert(copy.ABSORB_SUMMARIZED_HOVER === "This conversation's summary, the one you approved, was kept as one note instead of being split into topics. The next Memorize tries to sort it into topics, and so can Review.", "a summary's hover");
+	const readCount = copy.absorbRunReadCount as (r: AbsorbRun) => number;
+	assert(readCount(run({ sessions: [session(), kept] })) === 2, "a summary counts as read");
+	const blockers = absorbRunFastPathBlockers(run({ sessions: [session(), kept] }));
+	assert(!blockers.some((reason) => /did not finish/.test(reason)), `a summary never holds the automatic save back (got: ${JSON.stringify(blockers)})`);
+	const waiting = session({ id: "RC-0003", outcome: "pending" });
+	assert(absorbRunFastPathBlockers(run({ sessions: [session(), waiting] })).includes("1 conversation did not finish"), "a conversation still waiting does");
+	const outage = copy.absorbRunOutageSentence as ((model: string, cause: "not-answering" | "busy", waiting: number) => string) | undefined;
+	assert(outage, "the outage sentence exists");
+	assert(outage("Claude Opus 5.5", "not-answering", 3) === "Memorize paused because Claude Opus 5.5 isn't answering right now. 3 conversations are still waiting.", `the outage sentence (got: ${outage("Claude Opus 5.5", "not-answering", 3)})`);
+	assert(outage("GPT-5.5", "busy", 1) === "Memorize paused because GPT-5.5 is busy or at its usage limit right now. 1 conversation is still waiting.", `the busy sentence, one waiting (got: ${outage("GPT-5.5", "busy", 1)})`);
+	// The notice names the model that stopped, from the run's own stop, even
+	// after the person chose another Memory model and that one stopped too.
+	const outageModel = copy.absorbRunOutageModelName as ((stopped: { provider: string; model: string }, memoryModel?: { provider: string; model: string; label?: string } | null) => string) | undefined;
+	assert(outageModel, "the notice's model name comes from the run's stop");
+	const swapped = outageModel({ provider: "anthropic", model: "claude-opus-5-5" }, { provider: "openai", model: "gpt-5.5", label: "GPT-5.5" });
+	assert(swapped === "Claude Opus 5.5 (Anthropic / Claude)", `a notice after a switch names the model that stopped, never the room's earlier one (got: ${swapped})`);
+	const sameModel = outageModel({ provider: "openai-compatible", model: "rm-7" }, { provider: "openai-compatible", model: "rm-7", label: "Room Model" });
+	assert(sameModel === "Room Model (OpenAI-compatible gateway)", `the room's label names the model that stopped when it is that model (got: ${sameModel})`);
+	const otherLabel = outageModel({ provider: "openai-compatible", model: "rm-7" }, { provider: "openai-compatible", model: "narrow-7", label: "Narrow Model" });
+	assert(!otherLabel.includes("Narrow Model"), `another model's label never names the one that stopped (got: ${otherLabel})`);
+	const waitingCount = copy.absorbRunWaitingCount as (r: AbsorbRun) => number;
+	assert(waitingCount(run({ sessions: [session(), kept, waiting, session({ id: "RC-0004", outcome: "failed" }), session({ id: "RC-0005", outcome: "skipped" })] })) === 2, "the waiting count is the pending and failed conversations");
+	assert(copy.ABSORB_TRY_AGAIN_LABEL === "Try again" && copy.ABSORB_CHOOSE_MODEL_LABEL === "Choose another model", "the two ways out");
+	const allSummarized = copy.absorbRunAllSummarized as (r: AbsorbRun) => boolean;
+	assert(allSummarized(run({ sessions: [kept, session({ id: "RC-0006", outcome: "summarized" }), session({ id: "RC-0007", outcome: "skipped" })] })) && !allSummarized(run({ sessions: [kept, session()] })) && !allSummarized(run({ sessions: [session({ id: "RC-0008", outcome: "skipped" })] })), "every conversation read was kept whole, and at least one was");
+	assert(copy.ABSORB_ALL_SUMMARIZED_SENTENCE === "Each conversation's summary was kept as one note in Unsorted. Another Memory model may sort them into topics.", "the all-summaries sentence");
+}
+
+// The first read never blocks Memorize: one sentence when there is none, and
+// the client stands in only for a request that failed without the server
+// saying why (the network, or a server error with no code).
+{
+	const copy: Record<string, unknown> = await import("../../web-ui/src/memory-v2-copy.js");
+	assert(copy.FIRST_READ_MISSING_SENTENCE === "No first read this time. Read again, or continue without it.", `the missing first read's sentence (got: ${copy.FIRST_READ_MISSING_SENTENCE})`);
+	const api: Record<string, unknown> = await import("../../web-ui/src/api.js");
+	const unexplained = api.isUnexplainedRequestFailure as ((error: unknown) => boolean) | undefined;
+	const RequestError = api.ApiRequestError as (new (message: string, status: number, code?: string) => Error) | undefined;
+	assert(unexplained && RequestError, "the api module tells an unexplained request failure apart");
+	assert(unexplained(new TypeError("Failed to fetch")) && unexplained(new RequestError("Request failed (502)", 502)), "a network failure and an uncoded server error are unexplained");
+	assert(!unexplained(new RequestError("This room is busy right now.", 409, "room_busy")) && !unexplained(new RequestError("This room has no Memory model.", 400)) && !unexplained(new RequestError("Failed.", 503, "absorb_x")), "a sentence the server wrote, or a code it sent, is its answer");
+	assert(!unexplained(new DOMException("The operation was aborted.", "AbortError")), "the person's own cancel is never a failed first read");
+	assert((api.apiErrorCode as (error: unknown) => string | undefined)(new RequestError("Gone.", 404, "absorb_run_unknown")) === "absorb_run_unknown", "the server's code is kept on a failed request");
+}
+
+// 13. The summary notes a run reads again: their own rows, apart from the conversations.
+{
+	const { ABSORB_REREAD_HOVER, absorbRunAllSummarized, absorbRunNotesChanged, absorbRunRereadLine, absorbRunUnfinishedCount, archivedEntryRestorable } = await import("../../web-ui/src/memory-v2-copy.js");
+	const reread = (overrides: Partial<AbsorbRunSession> = {}): AbsorbRunSession => session({ id: "m-0101", title: "Call about the renewal", date: "2026-08-01", summary: { added: 2, updated: 0, superseded: 0, closed: 0 }, ...overrides });
+	// A re-read's note that may disagree holds the automatic save like any row.
+	const tagged = run({ sessions: [session({ summary: { added: 1, updated: 0, superseded: 0, closed: 0 } })], rereads: [reread({ changes: [{ kind: "added", id: "m-0901", section: "Deep Memory", topic: "Maintenance terms", after: "- It renews on 1 July.", beside: "may-disagree", besideOf: "m-0003" } as any] })] });
+	assert(absorbRunFastPathBlockers(tagged).some((reason) => /may disagree/.test(reason)), `a re-read's note that may disagree holds the automatic save (got: ${JSON.stringify(absorbRunFastPathBlockers(tagged))})`);
+	assert(absorbRunRereadLine(reread()) === "Sorted into topics · 2 added · the note goes to the archive", `a sorted note says where its points went and where it goes (got: ${absorbRunRereadLine(reread())})`);
+	const nothingNew = reread({ summary: { added: 0, updated: 0, superseded: 0, closed: 0 } });
+	assert(absorbRunRereadLine(nothingNew) === "Read again · nothing new to add · the note goes to the archive", `a sorted note with nothing new says it was read again, not that nothing happened (got: ${absorbRunRereadLine(nothingNew)})`);
+	const olderOnly = reread({ summary: { added: 0, updated: 0, superseded: 0, closed: 0 }, changes: [{ kind: "history", id: "m-0902", topic: "Maintenance terms", after: "- It renewed on 1 June." }] });
+	assert(absorbRunRereadLine(olderOnly) === "Sorted into topics · 1 older value kept as history · the note goes to the archive", `a note whose text was all older still says what it did (got: ${absorbRunRereadLine(olderOnly)})`);
+	for (const outcome of ["dropped", "summarized", "failed"] as const) assert(absorbRunRereadLine(reread({ outcome })) === "Not sorted this time · it stays in Unsorted", `a ${outcome} re-read leaves the note where it was`);
+	assert(absorbRunRereadLine(reread({ outcome: "pending" })) === "Waiting to be sorted" && absorbRunRereadLine(reread({ outcome: "folding" })) === "Sorting this note into topics now", "and says so while it waits and while it is read");
+	assert(ABSORB_REREAD_HOVER === "A conversation's summary kept as one note in an earlier update, read again to sort its points into topics.", `its hover says what the row is, a summary and not a whole conversation (got: ${ABSORB_REREAD_HOVER})`);
+	const sorting = run({ state: "folding", progress: { folded: 3, total: 3, current: { id: "m-0101", title: "Call about the renewal" } }, rereads: [reread({ outcome: "folding" })] });
+	assert(absorbRunProgressLine(sorting) === "Sorting a note from Unsorted · Call about the renewal", `a note read again is not counted as a conversation (got: ${absorbRunProgressLine(sorting)})`);
+	// A re-read that never finished holds nothing back and is no conversation left unfinished.
+	const unfinished = run({ sessions: [session()], rereads: [reread({ outcome: "failed" }), reread({ id: "m-0102", outcome: "pending" })] });
+	assert(absorbRunUnfinishedCount(unfinished) === 0 && absorbRunFastPathBlockers(run({ sessions: [session({ summary: { added: 1, updated: 0, superseded: 0, closed: 0 } })], rereads: [reread({ outcome: "failed" })] })).length === 0, "an unsorted note is not an unfinished conversation, and does not hold the automatic save");
+	assert(absorbRunNotesChanged(run({ sessions: [session({ summary: { added: 1, updated: 0, superseded: 0, closed: 0 } })], rereads: [reread()] })) === 3, "the notes a re-read added are counted with the rest");
+	assert(absorbRunAllSummarized(run({ sessions: [session({ outcome: "summarized" })], rereads: [reread()] })), "a sorted note does not stop the all-summaries notice");
+	// An outage in the re-read pass: the notice names the note Try again reads, never "0 conversations", and its row stays.
+	const { absorbRunOutageSentence, absorbRunRereadRows, absorbRunRereadsWaiting, absorbRunWaitingCount } = await import("../../web-ui/src/memory-v2-copy.js");
+	const stopped = run({ state: "ready", stop: { kind: "outage", model: { provider: "openai", model: "gpt-5.5" }, cause: "not-answering" }, sessions: [session()], rereads: [reread(), reread({ id: "m-0102", outcome: "pending" })] });
+	const notice = absorbRunOutageSentence("GPT-5.5", "not-answering", absorbRunWaitingCount(stopped), absorbRunRereadsWaiting(stopped));
+	assert(notice === "Memorize paused because GPT-5.5 isn't answering right now. 1 note from Unsorted is still waiting to be sorted.", `the notice names the waiting note, and no conversation count of 0 (got: ${notice})`);
+	assert(absorbRunOutageSentence("GPT-5.5", "busy", 2, 3).endsWith("2 conversations are still waiting. 3 notes from Unsorted are still waiting to be sorted."), "both wait: the conversations first, then the notes");
+	assert(absorbRunRereadRows(stopped, false).map((row) => row.id).join() === "m-0101,m-0102" && absorbRunRereadRows({ ...stopped, stop: undefined }, false).map((row) => row.id).join() === "m-0101", "a stopped run keeps the waiting note's row; a saved one shows only the notes it reached");
+	// A paused run that read no conversation has nothing to save; one that read any has.
+	const { absorbRunNothingRead, absorbRunNothingToSave, ABSORB_NOTHING_READ_SENTENCE, ABSORB_NOTHING_READ_SAVE_TITLE } = await import("../../web-ui/src/memory-v2-copy.js");
+	const busyFromTheStart = run({ state: "ready", stop: { kind: "outage", model: { provider: "openai", model: "gpt-5.5" }, cause: "busy" }, sessions: [session({ outcome: "pending" }), session({ id: "RC-0002", outcome: "pending" })] });
+	assert(absorbRunNothingRead(busyFromTheStart) && ABSORB_NOTHING_READ_SENTENCE === "No conversation was read yet." && ABSORB_NOTHING_READ_SAVE_TITLE === "Nothing to save yet: no conversation was read.", "a paused run that read nothing says so, and Save says why it is off");
+	for (const outcome of ["folded", "dropped", "summarized"] as const) assert(!absorbRunNothingRead(run({ ...busyFromTheStart, sessions: [session({ outcome }), session({ id: "RC-0002", outcome: "pending" })] })), `a run with a ${outcome} conversation has something to save`);
+	assert(!absorbRunNothingRead(run({ ...busyFromTheStart, rereads: [reread()] })) && absorbRunNothingRead(run({ ...busyFromTheStart, rereads: [reread({ outcome: "pending" })] })), "a sorted note from Unsorted counts as read; one still waiting does not");
+	// Save is off only when a save would change nothing; four things a save still records keep it on while the sentence says nothing was read.
+	assert(absorbRunNothingToSave(busyFromTheStart), "the busy-from-the-start run (room 14h) has nothing to save");
+	const stillSaves: Array<[string, AbsorbRun]> = [
+		["a conversation left out", run({ ...busyFromTheStart, sessions: [session({ outcome: "skipped" }), session({ id: "RC-0002", outcome: "pending" })] })],
+		["notes leaving for the budget", run({ ...busyFromTheStart, demotion: demotion([row()]) })],
+		["a limit raised on the card", run({ ...busyFromTheStart, budget: budget({ budgetTokens: 24_000 }) })],
+		...(["failed", "dropped", "summarized"] as const).map((outcome): [string, AbsorbRun] => [`a re-read note that was tried (${outcome})`, run({ ...busyFromTheStart, rereads: [reread({ outcome })] })]),
+	];
+	for (const [what, candidate] of stillSaves) assert(absorbRunNothingRead(candidate) && !absorbRunNothingToSave(candidate), `${what} keeps Save on while no conversation was read`);
+	assert(absorbRunNothingToSave(run({ ...busyFromTheStart, rereads: [reread({ outcome: "pending" }), reread({ id: "m-0102", outcome: "folding" })] })), "a re-read note not tried yet saves nothing");
+	// The saved screen and the archive.
+	assert(absorbRunSavedSentence({ foldedSessions: ["RC-0001"], sortedNotes: 2 }).endsWith("2 notes from Unsorted were sorted into topics; each whole note is in the archive."), `the saved screen counts sorted notes apart (got: ${absorbRunSavedSentence({ foldedSessions: ["RC-0001"], sortedNotes: 2 })})`);
+	assert(absorbRunSavedSentence({ foldedSessions: ["RC-0001"], sortedNotes: 1 }).endsWith("1 note from Unsorted was sorted into topics; the whole note is in the archive."), "in the singular too");
+	assert(!absorbRunSavedSentence({ foldedSessions: ["RC-0001"] }).includes("Unsorted"), "and says nothing when none was");
+	assert(archiveReasonLabel("sorted") === "sorted into topics" && memoryArchiveReason("sorted") === "sorted into topics" && archivedEntryRestorable({ why: "sorted" }), "a sorted note's archive row names why, and can be brought back");
 }
 
 console.log("memory v2 copy smoke passed: the run card, the limit bar, the automatic-maintenance gate, the Review sentences, and the words both memory surfaces speak");

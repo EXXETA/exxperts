@@ -10,12 +10,10 @@ process.env.EXXETA_PERSISTENT_AGENTS_ROOT = tempAgentsRoot;
 
 const {
 	createPersistentAgentFromScaffoldInput,
-	fingerprintL1bSource,
 	getAbsorbAvailability,
-	parseAbsorbApprovalRequest,
-	writeApprovedAbsorb,
 } = await import("../src/persistent-agents.js");
-const { ABSORB_CONSOLIDATION_WORKER_TYPE, ABSORB_EMPTY_RECENT_CONTEXT_PLACEHOLDER } = await import("../src/absorb-consolidation.js");
+const { ABSORB_EMPTY_RECENT_CONTEXT_PLACEHOLDER } = await import("../src/absorb-consolidation.js");
+const { approveAbsorbRun, getAbsorbRun, startAbsorbRun } = await import("../src/absorb-run.js");
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -99,44 +97,23 @@ function selectedSourceL1b(agentId: string): string {
 	return `<!-- exxeta:l1b schema_version=1 -->\n\n## Chronos\n\n- Current scaffold timestamp: 2026-05-30T10:00:00.000Z\n- Persistent agent id: ${agentId}\n- Lifecycle state: ready\n- Last checkpoint: cp_selected_maintenance_smoke\n- Last consolidation: none\n\n## Deep Memory\n\n### Collaboration\n\n- This selected room validates non-default maintenance targeting.\n- Stable memory should change only under the selected room root.\n\n## Active Items\n\n### Current Focus\n\n- Prove selected Memorize write boundaries.\n\n### Parked\n\n- Keep provider-dependent workflows out of this smoke.\n\n## Recent Context\n\n${Array.from({ length: 5 }, (_, i) => rcEntry(i + 1)).join("\n")}\n`;
 }
 
-function absorbCandidateL1b(agentId: string): string {
-	return `<!-- exxeta:l1b schema_version=1 -->\n\n## Chronos\n\n- Current scaffold timestamp: 2026-05-30T10:00:00.000Z\n- Persistent agent id: ${agentId}\n- Lifecycle state: ready\n- Last checkpoint: cp_selected_maintenance_smoke\n- Last consolidation: none\n\n## Deep Memory\n\n### Collaboration\n\n- This selected room validates non-default maintenance targeting.\n- Selected Absorb consolidated durable insight into stable memory without touching the control room.\n\n### Maintenance Boundaries\n\n- Persistent-agent maintenance writes must target the route-selected room root.\n\n## Active Items\n\n### Current Focus\n\n- Prove selected Memorize write boundaries.\n- Keep the selected room the only room a maintenance write touches.\n\n### Parked\n\n- Keep provider-dependent workflows out of this smoke.\n\n## Recent Context\n\n${ABSORB_EMPTY_RECENT_CONTEXT_PLACEHOLDER}\n`;
+const FIXTURE_MODEL = { provider: "fixture-provider", model: "fixture-absorb", label: "Fixture Absorb" };
+
+/** Each conversation folds into one note, so the save writes the selected room's memory. */
+async function foldAll(prompt: string) {
+	const session = /Session being folded: (RC-\d+)/.exec(prompt)?.[1] ?? "RC-0000";
+	return { text: `\`\`\`json\n${JSON.stringify({ ops: [{ op: "add", topic: "Selected insights", kind: "fact", text: `- The selected-room insight from ${session} is kept.` }] })}\n\`\`\``, usage: { input: 1, output: 1, totalTokens: 2, cost: 0 } };
 }
 
-function absorbProposal(agentId: string, sourceL1b = readText(path.join(tempAgentsRoot, agentId, "L1b", "current.md"))) {
-	return {
-		agentId,
-		writesMemory: false,
-		process: {
-			type: ABSORB_CONSOLIDATION_WORKER_TYPE,
-			model: { provider: "fixture-provider", model: "fixture-absorb", label: "Fixture Absorb" },
-		},
-		availability: { recentContextEntryCount: 5 },
-		source: {
-			l1bFingerprint: fingerprintL1bSource(sourceL1b),
-			generatedAt: "2026-05-30T11:00:00.000Z",
-		},
-		fields: { candidateL1b: absorbCandidateL1b(agentId) },
-		review: {
-			keyMetrics: {
-				recentContextEntriesBefore: 5,
-				recentContextEntriesAfter: 0,
-				stableMemoryDeltaBytes: 64,
-				stableMemoryDeltaTokens: 16,
-			},
-		},
-		absorbTelemetry: {
-			l1bChars: sourceL1b.length,
-			stableL1bChars: 100,
-			recentContextChars: 200,
-			recentContextEntryCount: 5,
-			recentContextEntryIds: ["RC-0001", "RC-0002", "RC-0003", "RC-0004", "RC-0005"],
-			promptChars: 300,
-			promptEstimatedTokens: 75,
-			sectionPurposeCount: 4,
-		},
-		absorbUsage: { input: 1, output: 1, totalTokens: 2, cost: 0 },
-	};
+async function settledRun(agentId: string, runId: string) {
+	const deadline = Date.now() + 30_000;
+	let run = getAbsorbRun(agentId, runId);
+	while (["prepass", "folding", "budget"].includes(run.state)) {
+		assert(Date.now() < deadline, `the run was still "${run.state}" after 30 seconds`);
+		await new Promise((resolve) => setTimeout(resolve, 5));
+		run = getAbsorbRun(agentId, runId);
+	}
+	return run;
 }
 
 try {
@@ -165,17 +142,22 @@ try {
 	assert(absorbAvailability.available, "non-default absorb availability should be available");
 	assert(absorbAvailability.recentContextEntryCount === 5, "non-default absorb availability should read selected Recent Context count");
 
+	const started = startAbsorbRun({ agentId, assessmentMarkdown: "None.", model: FIXTURE_MODEL, generate: foldAll });
+	const ready = await settledRun(agentId, started.runId);
+	assert(ready.state === "ready", `the selected room's run should be ready, got ${ready.state}`);
+
+	// The run belongs to the room it was started in: approving it under another
+	// room's id is refused, and neither room changes.
 	const beforeAbsorbMismatchSelected = snapshot(selectedRoot);
 	expectThrows(
-		() => parseAbsorbApprovalRequest({ proposal: { ...absorbProposal(agentId), agentId: controlAgentId } }, agentId),
-		/proposal agentId does not match/i,
-		"absorb proposal/route agentId mismatch should reject",
+		() => approveAbsorbRun(controlAgentId, started.runId, new Date("2026-05-30T11:00:00.000Z")),
+		/That memory update is no longer open/,
+		"approving the selected room's run under the control room's id should reject",
 	);
 	assertSnapshotUnchanged(selectedRoot, beforeAbsorbMismatchSelected, "absorb mismatch selected room");
 	assertSnapshotUnchanged(controlRoot, controlBaseline, "absorb mismatch control room");
 
-	const parsedAbsorb = parseAbsorbApprovalRequest({ proposal: absorbProposal(agentId) }, agentId);
-	const absorbResult = writeApprovedAbsorb(parsedAbsorb.request, parsedAbsorb.warnings, new Date("2026-05-30T11:00:00.000Z"));
+	const absorbResult = approveAbsorbRun(agentId, started.runId, new Date("2026-05-30T11:00:00.000Z"));
 	const afterAbsorbSelected = snapshot(selectedRoot);
 	assert(absorbResult.agentId === agentId, "absorb approval response should identify selected room");
 	assert(afterAbsorbSelected.l1b !== selectedBaseline.l1b, "selected L1b/current.md should change after absorb approval");

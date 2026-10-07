@@ -7,7 +7,7 @@
  * is.
  */
 import { useState } from "react";
-import type { ArchiveRow, ReviewAssessmentFields, ReviewAvailability, ReviewDepth, ReviewRun } from "../types";
+import type { ArchivedEntryCard, ArchiveRow, ReviewAssessmentFields, ReviewAvailability, ReviewDepth, ReviewRun } from "../types";
 import { MarkdownRenderer } from "./Markdown";
 import { ArchiveSection, NoteEditor } from "./absorb-run-screen";
 import { meaningfulMaintenanceWarnings } from "../maintenance-warnings";
@@ -60,29 +60,33 @@ function ReadSection({ title, items, wide }: { title: string; items: string[]; w
  * The first read: what could be shorter, what looks stale, what says the same
  * twice, which topics look like one, and what the room cannot decide alone.
  * The two machine-found lists are absent on an older server, and absent reads
- * as empty.
+ * as empty. The notes the app found disagreeing join the model's own stale
+ * or contradicting ones, after them, so one section says it.
  */
 export function ReviewFirstReadSections({ fields, compact = false }: { fields: ReviewAssessmentFields; compact?: boolean }) {
 	const saysTheSameTwice = fields.saysTheSameTwice ?? [];
 	const disagree = fields.disagree ?? [];
 	const topicsThatLookTheSame = fields.topicsThatLookTheSame ?? [];
+	const waitInUnsorted = fields.waitInUnsorted ?? [];
 	return (
 		<>
 			<ReadSection title="Could be shorter" items={fields.couldBeShorter} wide={!compact} />
-			<ReadSection title="Looks stale or contradicts itself" items={fields.staleOrContradicts} wide={!compact} />
+			<ReadSection title="Looks stale or contradicts itself" items={[...fields.staleOrContradicts, ...disagree]} wide={!compact} />
 			{saysTheSameTwice.length > 0 && <ReadSection title="Says the same twice" items={saysTheSameTwice} wide={!compact} />}
-			{disagree.length > 0 && <ReadSection title="Disagrees with itself" items={disagree} wide={!compact} />}
 			{topicsThatLookTheSame.length > 0 && <ReadSection title="Topics that look the same" items={topicsThatLookTheSame} wide={!compact} />}
+			{waitInUnsorted.length > 0 && <ReadSection title="Not sorted into topics yet" items={waitInUnsorted} wide={!compact} />}
 			{fields.needsYourCall.length > 0 && <ReadSection title="Needs your call" items={fields.needsYourCall} wide={!compact} />}
 		</>
 	);
 }
 
 /** How much to tidy: two rows in the chooser's shape, one of them the room's own recommendation. */
-export function ReviewDepthPicker({ availability, staleFlagged, chosen, onChoose }: { availability: ReviewAvailability; staleFlagged: boolean; chosen: ReviewDepth; onChoose: (depth: ReviewDepth) => void }) {
+export function ReviewDepthPicker({ availability, staleFlagged, lookAlike = false, disagreeing = 0, chosen, onChoose }: { availability: ReviewAvailability; staleFlagged: boolean; lookAlike?: boolean; disagreeing?: number; chosen: ReviewDepth; onChoose: (depth: ReviewDepth) => void }) {
 	const sentence = reviewDepthSentence({
 		overBudget: availability.overBudget,
 		staleFlagged,
+		lookAlike,
+		disagreeing,
 		budgetTokens: availability.budgetTokens,
 		reviewTargetTokens: availability.reviewTargetTokens,
 	});
@@ -141,7 +145,7 @@ export function ReviewRunProgressScreen({ run, onCancel }: { run: ReviewRun; onC
 /** The reason an archived note carries, in the person's words. */
 function archiveReasonWord(why: string | undefined): string {
 	if (!why) return "no longer needed";
-	return archiveReasonLabel(why as "budget" | "superseded" | "done" | "user" | "stale" | "duplicate");
+	return archiveReasonLabel(why as ArchivedEntryCard["why"]);
 }
 
 function ChangeRow({ change, busy, onEditEntry }: { change: ReviewChange; busy: boolean; onEditEntry?: (entryId: string, text: string) => Promise<void> }) {

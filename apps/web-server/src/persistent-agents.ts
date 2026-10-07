@@ -4,13 +4,15 @@ import { estimateTokens, estimateTokensFromChars } from "./token-estimate.js";
 import type { MemoryMapRow } from "./memory-shape.js";
 import { listAreas, MEMORY_ARCHIVE_ENTRIES_FILE, parseMemoryDocument, renderMemoryContext, reviewTargetTokens, stripRecentContextMetadata } from "./memory-entries.js";
 import { settleMemoryBudget } from "./memory-entries-store.js";
+import { unsortedAfterRereadCount } from "./absorb-reread.js";
+import { summaryPageHead } from "./absorb-summary.js";
 import { analyzeRecentContextIds, countRecentContextEntries } from "./recent-context-entries.js";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { SessionManager } from "@exxeta/exxperts-runtime";
-import { ABSORB_CONSOLIDATION_WORKER_TYPE, ABSORB_DISCUSSION_TOKEN_BUDGET, ABSORB_DISCUSSION_WORKER_TYPE, absorbAvailabilityFromL1b, absorbRecentContextPlaceholderSection, recentContextSessions, buildAbsorbAssessmentPrompt, buildAbsorbAssessmentRetryPrompt, extractRecentContextForAbsorb, buildAbsorbDiscussionPrompt, buildAbsorbProposalPrompt, buildAbsorbProposalReview, buildSectionPurposeMap, parseAbsorbAssessment, parseAbsorbProposal, validateAbsorbCandidateL1b } from "./absorb-consolidation.js";
-import type { AbsorbAssessmentFields, AbsorbAssessmentHandoffInput, AbsorbAvailability, AbsorbDiscussionMessage, AbsorbDiscussionPromptTelemetry, AbsorbDiscussionTokenBudget, AbsorbModelLock, AbsorbPromptTelemetry, AbsorbProposalFields, AbsorbProposalReview } from "./absorb-consolidation.js";
+import { ABSORB_CONSOLIDATION_WORKER_TYPE, ABSORB_DISCUSSION_TOKEN_BUDGET, ABSORB_DISCUSSION_WORKER_TYPE, absorbAvailabilityFromL1b, recentContextSessions, buildAbsorbAssessmentPrompt, buildAbsorbAssessmentRetryPrompt, extractRecentContextForAbsorb, buildAbsorbDiscussionPrompt, buildSectionPurposeMap, parseAbsorbAssessment } from "./absorb-consolidation.js";
+import type { AbsorbAssessmentFields, AbsorbAssessmentHandoffInput, AbsorbAvailability, AbsorbDiscussionMessage, AbsorbDiscussionPromptTelemetry, AbsorbDiscussionTokenBudget, AbsorbModelLock, AbsorbPromptTelemetry } from "./absorb-consolidation.js";
 import { assembleProposedRecentContext, buildCheckpointCompressionPrompt, buildCheckpointCompressionRetryPrompt, buildCheckpointProposalPreview, CHECKPOINT_COMPRESSION_WORKER_TYPE, CHECKPOINT_PROMPT_TOOL_RESULT_TEXT_CAP, CheckpointPromptOverflowError, parseCheckpointCompressionFields } from "./checkpoint-compression.js";
 import { buildRememberFinalPrompt, buildRememberPartPrompt, buildRememberPartShortenPrompt, countBodyMustKeeps, countPartNoteMustKeeps, planRememberParts, REMEMBER_PART_NOTE_CEILING_TOKENS, REMEMBER_PART_PARALLELISM, REMEMBER_PART_TRIGGER, rememberPartCapTokens, rememberNotesTooLongMessage, rememberPartsTelemetry, rememberWindowTooSmallMessage, RememberTooLargeError, type RememberPartsPlan, type RememberPromptContext } from "./remember-two-stage.js";
 import { buildConsultPrompt, CONSULT_MAX_STACK_EXCHANGES, CONSULT_PRIOR_ANSWER_BOUNDARY_MAX_CHARS, CONSULT_QUESTION_MAX_CHARS, CONSULT_WORKER_TYPE } from "./consult.js";
@@ -18,8 +20,8 @@ import type { ConsultPriorExchange, ConsultPromptTelemetry } from "./consult.js"
 import { buildConsultHandoffBlock, buildConsultHandoffBlockFromStack, readConsultHandoffQueue, validateConsultHandoffQueue, type ConsultHandoffExchange } from "./consult-handoff.js";
 import { buildSpecialistHandoffBlock } from "./specialist-handoff.js";
 import type { CheckpointCompressionFields, CheckpointCompressionPromptTelemetry, CheckpointProposalPreview } from "./checkpoint-compression.js";
-import { buildFoldGuidanceSignoffTask, foldGuidanceToWire, parseFoldGuidance, type FoldGuidanceWire } from "./absorb-ops.js";
-import { ABSORB_HANDOFF_SHED_ORDER, ASSESSMENT_MAX_CHARS, ASSESSMENT_TARGET_WORDS, describeHandoffTrim, describeTranscriptReduction, DISCUSSION_HANDOFF_MAX_CHARS, DISCUSSION_TRANSCRIPT_REDUCTION_STAGES, fitDiscussionHandoff, reduceDiscussionTranscript } from "./discussion-handoff.js";
+import { buildFoldGuidanceSignoffTask, FIRST_READ_NONE, foldGuidanceToWire, parseFoldGuidance, type FoldGuidanceWire } from "./absorb-ops.js";
+import { ABSORB_HANDOFF_SHED_ORDER, ASSESSMENT_MAX_CHARS, ASSESSMENT_TARGET_WORDS, describeHandoffTrim, describeTranscriptReduction, DISCUSSION_TRANSCRIPT_REDUCTION_STAGES, fitDiscussionHandoff, reduceDiscussionTranscript } from "./discussion-handoff.js";
 import type { DiscussionTranscriptMessage, DiscussionTranscriptReduction } from "./discussion-handoff.js";
 import { persistentAgentModelLocksEqual } from "./persistent-agent-ai-profiles.js";
 import { isRoomModelOffered } from "./room-models.js";
@@ -31,7 +33,7 @@ import { listTaskLedgerRecords } from "./persistent-room-task-ledger.js";
 import { backgroundRunsDirectoryPath, isValidBackgroundRunId } from "./background-runs.js";
 import { artifactRoot } from "../../../pi-package/extensions/artifacts/index.js";
 import { overMemoryBudget, readPersistentRoomMaintenanceSettings } from "./persistent-room-maintenance-settings.js";
-import { MAINTENANCE_DIAGNOSTICS_DIRNAME, maintenanceDiagnosticsDir, recordMaintenanceWorkerCalls, type MaintenanceDiagnosticsProcess } from "./maintenance-diagnostics.js";
+import { MAINTENANCE_DIAGNOSTICS_DIRNAME, maintenanceDiagnosticsDir, recordMaintenanceWorkerCalls, writeMaintenanceDiagnosticsRecord, type MaintenanceDiagnosticsProcess } from "./maintenance-diagnostics.js";
 import { readPersistentRoomLastUsed, recordPersistentRoomLastUsed, recordPersistentRoomLastUsedIfAbsent, type PersistentRoomLastUsed } from "./persistent-room-last-used.js";
 import { readSessionPathMessages } from "./session-path-reader.js";
 import { buildPersistentRoomInstructionsLayer, composePersistentRoomInstructions, readPersistentRoomInstructions, validatePersistentRoomInstructionsText, writePersistentRoomInstructions, type ComposedPersistentRoomInstructions, type PersistentRoomInstructions } from "./persistent-room-instructions.js";
@@ -68,7 +70,18 @@ const RECENT_CONTEXT_HARD_CAP = 10;
 // further entry is context the room carries on every turn. Refusing here names
 // Memorize as the way out instead of leaving the room to grow unbounded.
 export const RECENT_CONTEXT_BLOCK_CAP = 20;
-const PERSISTENT_AGENT_THREAD_ITEM_CAP = 1000;
+// A saved conversation keeps its newest items; the browser draws every item it
+// holds, so the count stays bounded. The bytes are bounded separately by the
+// thread save's body limit (64 MB): 2000 items of about 32 KB each fill it, so
+// a conversation of very large items is refused at the save (in one plain
+// sentence) before it reaches this count.
+const PERSISTENT_AGENT_THREAD_ITEM_CAP = 2000;
+// Stands at the head of a conversation whose oldest items were cut. Its id is
+// fixed, so the copy a reloaded browser sends back is recognised and replaced,
+// never doubled. A resumed room's context reads only user and assistant items,
+// so the room never takes it for part of the conversation.
+const PERSISTENT_AGENT_THREAD_EARLIER_ITEMS_NOTICE_ID = "thread-earlier-items-omitted";
+const PERSISTENT_AGENT_THREAD_EARLIER_ITEMS_NOTICE = "Earlier messages are not shown here; they are still part of this conversation.";
 
 export type PersistentAgentId = string;
 export type PersistentAgentStatusValue = "missing" | "ready" | "needs_absorb" | "error";
@@ -337,6 +350,10 @@ export interface AbsorbAssessmentResponse {
 	absorbTelemetry: AbsorbPromptTelemetry;
 	absorbUsage?: AbsorbGenerateResult["usage"];
 	warnings: string[];
+	/** Set when there is no first read, with the reason; the assessment is then "None.". */
+	firstReadMissing?: AbsorbFirstReadMissing;
+	/** With a missing first read: the conversations waiting, read from their Recent Context headings, so the screen still says what Memorize will read. */
+	waitingConversations?: Array<{ title: string; date?: string }>;
 }
 
 export interface AbsorbDiscussionSourceMetadata {
@@ -388,24 +405,6 @@ export interface AbsorbProposalSourceMetadata {
 	generatedAt: string;
 }
 
-export interface AbsorbProposalResponse {
-	agentId: PersistentAgentId;
-	writesMemory: false;
-	process: {
-		type: typeof ABSORB_CONSOLIDATION_WORKER_TYPE;
-		model: AbsorbModelLock;
-	};
-	availability: AbsorbAvailability;
-	source: AbsorbProposalSourceMetadata;
-	fields: AbsorbProposalFields;
-	review: AbsorbProposalReview;
-	candidateValidation: ReturnType<typeof validateAbsorbCandidateL1b>;
-	memoryBudgetImpact: MemoryBudgetImpact;
-	absorbTelemetry: AbsorbPromptTelemetry;
-	absorbUsage?: AbsorbGenerateResult["usage"];
-	warnings: string[];
-}
-
 /**
  * The shape of the save the Review that came before the run wrote. Nothing
  * writes one any more; the type stays so a room that ran that Review can still
@@ -427,26 +426,6 @@ export interface StructuralReviewReviewMetrics {
 	reviewTargetEstimatedTokenDelta: number;
 	sourceMemoryMap: MemoryMapRow[];
 	candidateMemoryMap: MemoryMapRow[];
-}
-
-export interface AbsorbApprovalProposalReference {
-	agentId?: string;
-	writesMemory?: boolean;
-	process?: Partial<AbsorbProposalResponse["process"]>;
-	availability?: Partial<AbsorbAvailability>;
-	source?: Partial<AbsorbProposalSourceMetadata>;
-	fields?: Partial<AbsorbProposalFields>;
-	review?: Partial<AbsorbProposalReview>;
-	candidateValidation?: ReturnType<typeof validateAbsorbCandidateL1b>;
-	memoryBudgetImpact?: Partial<MemoryBudgetImpact>;
-	absorbTelemetry?: Partial<AbsorbPromptTelemetry>;
-	absorbUsage?: AbsorbGenerateResult["usage"];
-}
-
-export interface AbsorbApprovalAcceptedRequest {
-	agentId: PersistentAgentId;
-	proposal: AbsorbApprovalProposalReference;
-	approvedCandidateL1b: string;
 }
 
 export interface AbsorbApprovalResponse {
@@ -702,6 +681,8 @@ export interface AbsorbEventRecord {
 		 * and this is the row a rollback would be read from.
 		 */
 		migration?: { entriesAssigned: number };
+		/** The new notes the person chose to put in place of the note they stood beside: `applied` is false when the save kept both, because that note had changed or gone. */
+		besideChoices?: Array<{ id: string; other: string; choice: "replace"; applied: boolean }>;
 	};
 	validation: {
 		valid: true;
@@ -1078,11 +1059,16 @@ export interface PersistentAgentStatus {
 		 * still exactly what the room was created with.
 		 */
 		lastMemoryWriteAt: string | null;
+		/** Summary notes still in Unsorted after a saved Memorize read them again: the Maintain hint offers Review for them. */
+		unsortedAfterReread: number;
 	};
 	scheduleSummary: PersistentRoomScheduleSummary;
 	promptBudget?: PersistentAgentPromptBudget;
 	memoryBudgetTokens?: number;
 	memoryBudget?: PersistentAgentMemoryBudget;
+	// The room saves a clean Memorize without the card; the Maintain chooser
+	// starts such a room's Memorize without a first read.
+	fastPathSecondApproval?: boolean;
 	errors: string[];
 	warnings: string[];
 }
@@ -3104,7 +3090,13 @@ function normalizePersistentAgentThreadState(raw: unknown): PersistentAgentThrea
 
 function normalizePersistentAgentThreadItems(raw: unknown): unknown[] {
 	if (!Array.isArray(raw)) return [];
-	const capped = raw.slice(0, PERSISTENT_AGENT_THREAD_ITEM_CAP);
+	// The newest items are the ones that matter: what the person reads last, the
+	// answer the room just landed, and what a reconnect compares against.
+	// A thread cut once stays cut, so a notice it already carries is kept (once).
+	const items = raw.filter((item) => !(item && typeof item === "object" && (item as { id?: unknown }).id === PERSISTENT_AGENT_THREAD_EARLIER_ITEMS_NOTICE_ID));
+	const capped = items.length > PERSISTENT_AGENT_THREAD_ITEM_CAP || items.length < raw.length
+		? [{ kind: "system", id: PERSISTENT_AGENT_THREAD_EARLIER_ITEMS_NOTICE_ID, text: PERSISTENT_AGENT_THREAD_EARLIER_ITEMS_NOTICE, level: "info" }, ...items.slice(-PERSISTENT_AGENT_THREAD_ITEM_CAP)]
+		: items;
 	try {
 		return JSON.parse(JSON.stringify(capped)) as unknown[];
 	} catch {
@@ -3955,15 +3947,6 @@ function buildL1bMutationEventPaths(root: PersistentAgentPathContext, archivedL1
 	};
 }
 
-function sanitizeProposalProcessModel(rawModel: unknown): PersistentAgentModelLock | undefined {
-	const candidate = rawModel as Partial<PersistentAgentModelLock> | null | undefined;
-	const provider = String(candidate?.provider ?? "").trim();
-	const model = String(candidate?.model ?? "").trim();
-	if (!provider || !model) return undefined;
-	const label = String(candidate?.label ?? "").trim();
-	return { provider, model, label: label || undefined };
-}
-
 function sanitizeNumericUsage(rawUsage: unknown): SanitizedUsageMetrics | undefined {
 	const source = rawUsage as Partial<Record<keyof SanitizedUsageMetrics, unknown>> | null | undefined;
 	const sanitized: SanitizedUsageMetrics = {};
@@ -3972,34 +3955,6 @@ function sanitizeNumericUsage(rawUsage: unknown): SanitizedUsageMetrics | undefi
 		if (typeof value === "number" && Number.isFinite(value)) sanitized[key] = value;
 	}
 	return Object.keys(sanitized).length > 0 ? sanitized : undefined;
-}
-
-function isFingerprintLike(value: unknown): value is L1bSourceFingerprint {
-	const candidate = value as Partial<L1bSourceFingerprint> | null | undefined;
-	return candidate?.algorithm === "sha256" && typeof candidate.value === "string" && /^[a-f0-9]{64}$/i.test(candidate.value);
-}
-
-function sanitizeNumericHashTelemetryValue(value: unknown): SanitizedNumericHashTelemetryValue | undefined {
-	if (typeof value === "number" && Number.isFinite(value)) return value;
-	if (isFingerprintLike(value)) return { algorithm: "sha256", value: value.value.toLowerCase() };
-	if (Array.isArray(value)) {
-		const sanitizedArray = value.map((item) => sanitizeNumericHashTelemetryValue(item)).filter((item): item is SanitizedNumericHashTelemetryValue => item !== undefined);
-		return sanitizedArray.length > 0 ? sanitizedArray : undefined;
-	}
-	if (value && typeof value === "object") {
-		const sanitizedObject: Record<string, SanitizedNumericHashTelemetryValue> = {};
-		for (const [key, nestedValue] of Object.entries(value)) {
-			const sanitizedValue = sanitizeNumericHashTelemetryValue(nestedValue);
-			if (sanitizedValue !== undefined) sanitizedObject[key] = sanitizedValue;
-		}
-		return Object.keys(sanitizedObject).length > 0 ? sanitizedObject : undefined;
-	}
-	return undefined;
-}
-
-function sanitizeNumericHashTelemetry(rawTelemetry: unknown): SanitizedNumericHashTelemetry | undefined {
-	const sanitized = sanitizeNumericHashTelemetryValue(rawTelemetry);
-	return sanitized && !Array.isArray(sanitized) && typeof sanitized === "object" && !isFingerprintLike(sanitized) ? sanitized : undefined;
 }
 
 function stableMemoryAggregateMetrics(state: L1bEventStateMetrics, sectionTitles: StableDurableL1bSection[] = [...STABLE_DURABLE_L1B_SECTIONS]): StableMemoryEventMetrics {
@@ -4038,29 +3993,6 @@ export function readPersistentAgentReviewTargetEstimatedTokens(agentIdRaw: strin
 	const l1bPath = path.join(instance.rootDir, "L1b", "current.md");
 	if (!fs.existsSync(l1bPath)) return null;
 	return reviewTargetEstimatedTokensFromL1b(fs.readFileSync(l1bPath, "utf-8"));
-}
-
-// Approval-card budget impact: both maintenance proposals carry before/after
-// review-target numbers so the card can state the impact in tokens BEFORE the
-// user approves. Built from the ONE numerator above and the ONE predicate in
-// persistent-room-maintenance-settings — a render site must never re-derive
-// either, or the card and the meters drift apart.
-export interface MemoryBudgetImpact {
-	budgetTokens: number;
-	reviewTargetEstimatedTokensBefore: number;
-	reviewTargetEstimatedTokensAfter: number;
-	overBudgetBefore: boolean;
-	overBudgetAfter: boolean;
-}
-
-export function buildMemoryBudgetImpact(reviewTargetEstimatedTokensBefore: number, reviewTargetEstimatedTokensAfter: number, budgetTokens: number): MemoryBudgetImpact {
-	return {
-		budgetTokens,
-		reviewTargetEstimatedTokensBefore,
-		reviewTargetEstimatedTokensAfter,
-		overBudgetBefore: overMemoryBudget(reviewTargetEstimatedTokensBefore, budgetTokens),
-		overBudgetAfter: overMemoryBudget(reviewTargetEstimatedTokensAfter, budgetTokens),
-	};
 }
 
 function isCheckpointDensity(value: string): value is CheckpointDensity {
@@ -4135,9 +4067,8 @@ function updateChronosForCheckpoint(l1b: string, checkpointId: string, sessionId
 	return `${l1b.slice(0, start)}\n\n${chronosBody.trim()}\n\n${l1b.slice(end).replace(/^\n+/, "")}`;
 }
 
-// Chronos is system-managed: the absorb worker must copy it through unchanged
-// (validateAbsorbCandidateL1b rejects edits), so the consolidation stamp is
-// written here at apply time — the mirror of updateChronosForCheckpoint.
+// Chronos is system-managed: no worker writes it, so the consolidation stamp
+// is written here at apply time, the mirror of updateChronosForCheckpoint.
 //
 // The heading match is `[ \t]`, never `\s`: `\s*$` under /m happily eats the
 // blank line under the heading and hands it back, so every stamp left one more
@@ -4256,18 +4187,6 @@ function appendRecentContextEntry(l1b: string, entry: string): string {
 	return `${l1b.slice(0, start)}\n\n${newBody}${after ? `\n${after}` : ""}`;
 }
 
-export function normalizeAbsorbRecentContextPlaceholder(l1b: string): string {
-	const match = /^##[ \t]+Recent Context[ \t]*$/m.exec(l1b);
-	if (!match || match.index == null) throw new Error("L1b missing mandatory section: Recent Context");
-	const start = match.index + match[0].length;
-	const rest = l1b.slice(start);
-	const next = /^##\s+/m.exec(rest);
-	const end = next?.index == null ? l1b.length : start + next.index;
-	const after = l1b.slice(end).replace(/^\n+/, "");
-	const emptied = absorbRecentContextPlaceholderSection(match[0]).slice(match[0].length);
-	return `${l1b.slice(0, start)}${emptied}${after ? `\n${after}` : ""}`;
-}
-
 function writeFileAtomic(file: string, content: string): void {
 	const tmp = `${file}.tmp-${process.pid}-${Date.now()}`;
 	fs.writeFileSync(tmp, content, { mode: 0o600 });
@@ -4311,7 +4230,7 @@ function extractChronosLine(markdown: string, label: string): string | null {
 	return line && !/^none$/i.test(line) ? line : null;
 }
 
-function buildMemoryStatus(count: number, softCap: number, hardCap: number, lastCheckpointId: string | null, lastCheckpointAt: string | null, lastMemoryWriteAt: string | null): PersistentAgentStatus["memoryStatus"] {
+function buildMemoryStatus(count: number, softCap: number, hardCap: number, lastCheckpointId: string | null, lastCheckpointAt: string | null, lastMemoryWriteAt: string | null, unsortedAfterReread = 0): PersistentAgentStatus["memoryStatus"] {
 	return {
 		recentContextCount: count,
 		recentContextSoftCap: softCap,
@@ -4320,6 +4239,7 @@ function buildMemoryStatus(count: number, softCap: number, hardCap: number, last
 		lastCheckpointId,
 		lastCheckpointAt,
 		lastMemoryWriteAt,
+		unsortedAfterReread,
 	};
 }
 
@@ -5142,7 +5062,8 @@ export function buildPersistentAgentBootContext(contract: PersistentAgentBootCon
 	// a room that has not opted into entries yet. The checkpoint provenance
 	// comments of the remembered conversations are stripped here, at the boot
 	// alone, for the same reason the entry comments are.
-	const l1b = stripRecentContextMetadata(renderMemoryContext(fs.readFileSync(l1bPath, "utf-8"), readMemoryArchiveTextForBoot(instance, meta)));
+	// A note kept beside one it may disagree with carries the day it was learned, so the room can weigh the two.
+	const l1b = stripRecentContextMetadata(renderMemoryContext(fs.readFileSync(l1bPath, "utf-8"), readMemoryArchiveTextForBoot(instance, meta), { pairDays: true }));
 	const l2 = persistentAgentRuntimeEnvelope(new Date(), normalizedContract.workspaceCapability, normalizedContract.enabledSkillsIndex);
 	const displayName = String(meta.displayName ?? "").trim() || instance.agentId;
 	// The user's standing instructions ride between the constitution and the
@@ -5690,6 +5611,7 @@ export function getPersistentAgentStatus(agentIdRaw: string): PersistentAgentSta
 	let fullEntries = 0;
 	let lastCheckpointAt: string | null = null;
 	let lastMemoryWriteAt: string | null = null;
+	let unsortedAfterReread = 0;
 	let reviewTargetEstimatedTokens: number | undefined;
 	if (l1bExists) {
 		const l1b = fs.readFileSync(l1bPath, "utf-8");
@@ -5709,6 +5631,7 @@ export function getPersistentAgentStatus(agentIdRaw: string): PersistentAgentSta
 		// means the memory is still the scaffold the room was created with.
 		lastMemoryWriteAt = latestStamp(["Last checkpoint at", "Last consolidation at", "Last review at", "Last edit at"]);
 		reviewTargetEstimatedTokens = reviewTargetEstimatedTokensFromL1b(l1b);
+		unsortedAfterReread = unsortedAfterRereadCount(l1b);
 	}
 	const missingSections = REQUIRED_L1B_SECTIONS.filter((section) => !sections.includes(section));
 	for (const section of missingSections) errors.push(`L1b missing mandatory section: ${section}`);
@@ -5788,10 +5711,11 @@ export function getPersistentAgentStatus(agentIdRaw: string): PersistentAgentSta
 		l1b: { path: l1bPath, exists: l1bExists, bytes: l1bExists ? fs.statSync(l1bPath).size : undefined, sections, missingSections },
 		sectionRegistry: { path: registryPath, exists: registryExists, missingSections: registryMissingSections },
 		recentContext: { fullEntries, softCap: RECENT_CONTEXT_SOFT_CAP, hardCap: RECENT_CONTEXT_HARD_CAP, blockCap: RECENT_CONTEXT_BLOCK_CAP },
-		memoryStatus: buildMemoryStatus(fullEntries, RECENT_CONTEXT_SOFT_CAP, RECENT_CONTEXT_HARD_CAP, typeof meta?.lastCheckpointId === "string" ? meta.lastCheckpointId : null, lastCheckpointAt, lastMemoryWriteAt),
+		memoryStatus: buildMemoryStatus(fullEntries, RECENT_CONTEXT_SOFT_CAP, RECENT_CONTEXT_HARD_CAP, typeof meta?.lastCheckpointId === "string" ? meta.lastCheckpointId : null, lastCheckpointAt, lastMemoryWriteAt, unsortedAfterReread),
 		scheduleSummary,
 		promptBudget,
 		memoryBudgetTokens: maintenanceSettings.memoryBudgetTokens,
+		fastPathSecondApproval: maintenanceSettings.fastPathSecondApproval,
 		...(reviewTargetEstimatedTokens !== undefined ? {
 			memoryBudget: {
 				budgetTokens: maintenanceSettings.memoryBudgetTokens,
@@ -5977,158 +5901,6 @@ export function parseCheckpointApprovalRequest(raw: any, agentIdRaw: string, opt
 			proposal: { ...proposal, source: proposalSource },
 			approvedRecentContext,
 		},
-		warnings,
-	};
-}
-
-export function parseAbsorbApprovalRequest(raw: any, agentIdRaw: string): { request: AbsorbApprovalAcceptedRequest; warnings: string[] } {
-	const instance = createPersistentAgentInstance(agentIdRaw);
-	const proposal = raw?.proposal ?? {};
-	if (String(proposal?.agentId ?? instance.agentId).trim() !== instance.agentId) throw new Error("proposal agentId does not match persistent agent");
-	if (proposal?.writesMemory !== false) throw new Error("proposal must be non-mutating before approval");
-	const sourceFingerprintAlgorithm = String(proposal?.source?.l1bFingerprint?.algorithm ?? "").trim();
-	const sourceFingerprintValue = String(proposal?.source?.l1bFingerprint?.value ?? "").trim();
-	if (sourceFingerprintAlgorithm !== "sha256") throw new Error("proposal source L1b fingerprint algorithm must be sha256");
-	if (!/^[a-f0-9]{64}$/i.test(sourceFingerprintValue)) throw new Error("proposal source L1b fingerprint is required");
-	const approvedCandidateL1b = String(raw?.approvedCandidateL1b ?? proposal?.fields?.candidateL1b ?? "").trim();
-	if (!approvedCandidateL1b) throw new Error("approvedCandidateL1b is required");
-	if (approvedCandidateL1b.length > 300000) throw new Error("approvedCandidateL1b is too large");
-	return {
-		request: {
-			agentId: instance.agentId,
-			proposal,
-			approvedCandidateL1b,
-		},
-		warnings: [],
-	};
-}
-
-export function writeApprovedAbsorb(request: AbsorbApprovalAcceptedRequest, validationWarnings: string[] = [], now = new Date()): AbsorbApprovalResponse {
-	const instance = createPersistentAgentInstance(request.agentId);
-	const status = getPersistentAgentStatus(instance.agentId);
-	if (!status.exists || status.status === "error") throw new Error(`persistent agent scaffold is not ready: ${status.status}`);
-	const root = instance.rootDir;
-	const agentJsonPath = instance.agentJsonPath();
-	const meta = instance.readAgentJson();
-	if (!meta) throw new Error("agent.json is missing or invalid JSON");
-	const l1bPath = instance.l1bCurrentPath(meta);
-	const archiveDir = instance.l1bArchiveDir(meta);
-	if (!fs.existsSync(l1bPath)) throw new Error("L1b/current.md is missing");
-	ensureDir(archiveDir);
-
-	const currentL1b = fs.readFileSync(l1bPath, "utf-8");
-	const availability = absorbAvailabilityFromL1b(currentL1b, true);
-	if (!availability.available) throw new Error(availability.message);
-	const proposalCount = request.proposal.availability?.recentContextEntryCount;
-	if (typeof proposalCount === "number" && proposalCount !== availability.recentContextEntryCount) throw new Error("proposal is stale: Recent Context entry count changed since proposal generation");
-	const proposalSourceFingerprint = request.proposal.source?.l1bFingerprint;
-	if (proposalSourceFingerprint?.algorithm !== "sha256" || !/^[a-f0-9]{64}$/i.test(proposalSourceFingerprint.value)) throw new Error("proposal source L1b fingerprint is required");
-	const currentSourceFingerprint = fingerprintL1bSource(currentL1b);
-	if (proposalSourceFingerprint.value.toLowerCase() !== currentSourceFingerprint.value) throw new Error("proposal is stale: source L1b fingerprint changed since proposal generation");
-	// The budget is a proposal input like the L1b: the card's impact line was
-	// computed against it, so an edit between propose and approve stales the
-	// proposal (older clients that don't echo the impact block skip this guard).
-	const memoryBudgetTokens = readPersistentRoomMaintenanceSettings(instance.agentId).memoryBudgetTokens;
-	const proposalBudgetTokens = request.proposal.memoryBudgetImpact?.budgetTokens;
-	if (typeof proposalBudgetTokens === "number" && proposalBudgetTokens !== memoryBudgetTokens) throw new Error("proposal is stale: memory budget changed since proposal generation");
-
-	const initialValidation = validateAbsorbCandidateL1b(currentL1b, request.approvedCandidateL1b);
-	if (!initialValidation.valid) throw new Error(`Candidate L1b is invalid: ${initialValidation.errors.join("; ")}`);
-	const normalizedCandidateL1b = normalizeAbsorbRecentContextPlaceholder(request.approvedCandidateL1b);
-	const finalValidation = validateAbsorbCandidateL1b(currentL1b, normalizedCandidateL1b);
-	if (!finalValidation.valid) throw new Error(`Candidate L1b is invalid after Recent Context placeholder normalization: ${finalValidation.errors.join("; ")}`);
-	const normalizedCandidateBody = normalizedCandidateL1b.trimEnd() + "\n";
-	const resultRecentContextEntryCount = countRecentContextEntries(normalizedCandidateBody);
-	const warnings = [...validationWarnings, ...initialValidation.warnings, ...finalValidation.warnings];
-
-	const stamp = slugTimestamp(now);
-	const suffix = shortRandomId();
-	const absorbId = `absorb_${stamp}_${suffix}`;
-	const writtenL1b = updateChronosForAbsorb(normalizedCandidateBody, absorbId, now);
-	const archivedL1bPath = path.join(archiveDir, `${stamp}-before-${absorbId}.md`);
-	const eventRecordPath = absorbEventRecordPath(instance, absorbId);
-	ensureDir(path.dirname(eventRecordPath));
-	fs.writeFileSync(archivedL1bPath, currentL1b, { mode: 0o600, flag: "wx" });
-	writeFileAtomic(l1bPath, writtenL1b);
-
-	const updatedMeta: AgentJson = {
-		...(meta as AgentJson),
-		updatedAt: now.getTime(),
-	};
-	writeFileAtomic(agentJsonPath, JSON.stringify(updatedMeta, null, 2) + "\n");
-	const sourceMetrics = l1bStateMetrics(currentL1b);
-	const resultMetrics = l1bStateMetrics(writtenL1b);
-	const sourceStableMemory = stableMemoryAggregateMetrics(sourceMetrics);
-	const resultStableMemory = stableMemoryAggregateMetrics(resultMetrics);
-	const mutationSections = deriveL1bMutationSections(sourceMetrics, resultMetrics);
-	const paths = buildL1bMutationEventPaths(instance, archivedL1bPath, l1bPath, eventRecordPath);
-	const proposalProcessModel = sanitizeProposalProcessModel(request.proposal.process?.model);
-	const proposalTelemetry = sanitizeNumericHashTelemetry(request.proposal.absorbTelemetry);
-	const proposalUsage = sanitizeNumericUsage(request.proposal.absorbUsage);
-	const eventRecord: AbsorbEventRecord = {
-		schemaVersion: 1,
-		operation: "absorb",
-		mode: "rc_consolidation",
-		mutation: {
-			target: "l1b",
-			kind: "recent_context_consolidation",
-			...mutationSections,
-		},
-		paths,
-		process: proposalProcessModel ? {
-			type: ABSORB_CONSOLIDATION_WORKER_TYPE,
-			mode: "rc_consolidation",
-			model: proposalProcessModel,
-			source: "proposal_time",
-		} : undefined,
-		proposal: {
-			generatedAt: typeof request.proposal.source?.generatedAt === "string" && request.proposal.source.generatedAt.trim() ? request.proposal.source.generatedAt.trim() : undefined,
-			sourceL1bFingerprint: currentSourceFingerprint,
-			telemetry: proposalTelemetry,
-			usage: proposalUsage,
-		},
-		agentId: instance.agentId,
-		absorbId,
-		approvedAt: now.toISOString(),
-		source: sourceMetrics,
-		result: resultMetrics,
-		absorb: {
-			recentContextEntryCountBefore: sourceMetrics.recentContextEntryCount,
-			recentContextEntryCountAfter: resultMetrics.recentContextEntryCount,
-			recentContextBytesBefore: sourceMetrics.sections.recentContext.bytes,
-			recentContextBytesAfter: resultMetrics.sections.recentContext.bytes,
-			stableMemoryBytesBefore: sourceStableMemory.bytes,
-			stableMemoryBytesAfter: resultStableMemory.bytes,
-			stableMemoryDeltaBytes: resultStableMemory.bytes - sourceStableMemory.bytes,
-			stableMemoryEstimatedTokensBefore: sourceStableMemory.estimatedTokens,
-			stableMemoryEstimatedTokensAfter: resultStableMemory.estimatedTokens,
-			stableMemoryEstimatedTokenDelta: resultStableMemory.estimatedTokens - sourceStableMemory.estimatedTokens,
-		},
-		validation: {
-			valid: true,
-			warnings,
-			errors: [],
-		},
-		warnings,
-	};
-	writeAbsorbEventRecord(instance, eventRecord);
-
-	// resultStableMemory sums Deep Memory + Active Items of the written L1b —
-	// the same quantity reviewTargetEstimatedTokensFromL1b reports to status.
-	return {
-		agentId: instance.agentId,
-		writesMemory: true,
-		absorbId,
-		archivedL1bPath,
-		updatedL1bPath: l1bPath,
-		eventRecordPath,
-		eventRelPath: paths.eventRelPath,
-		recentContextEntryCount: resultRecentContextEntryCount,
-		memoryBudget: (() => {
-			const reviewTargetEstimatedTokens = reviewTargetEstimatedTokensFromL1b(writtenL1b);
-			return { budgetTokens: memoryBudgetTokens, reviewTargetEstimatedTokens, overBudget: overMemoryBudget(reviewTargetEstimatedTokens, memoryBudgetTokens) };
-		})(),
-		postAbsorb: { returnToLauncher: true },
 		warnings,
 	};
 }
@@ -6651,17 +6423,6 @@ function ensureAbsorbReady(agent: PersistentAgentInstance | string): { availabil
 	};
 }
 
-function parseAssessmentHandoff(raw: any): AbsorbAssessmentHandoffInput | undefined {
-	if (raw == null) return undefined;
-	const source = String(raw?.source ?? "").trim();
-	const text = String(raw?.text ?? "").trim();
-	if (!source && !text) return undefined;
-	if (source !== "direct_assessment" && source !== "discussion_signoff") throw new Error("assessmentHandoff.source must be direct_assessment or discussion_signoff");
-	if (!text) throw new Error("assessmentHandoff.text is required when assessmentHandoff is provided");
-	if (text.length > DISCUSSION_HANDOFF_MAX_CHARS) throw new Error("assessmentHandoff.text is too large");
-	return { source, text };
-}
-
 function parseAbsorbSourceFingerprint(raw: any, label = "source"): L1bSourceFingerprint {
 	const algorithm = String(raw?.l1bFingerprint?.algorithm ?? raw?.algorithm ?? "").trim();
 	const value = String(raw?.l1bFingerprint?.value ?? raw?.value ?? "").trim();
@@ -6759,6 +6520,12 @@ export interface MaintenanceWorkerOptions {
 // material and cannot be elided honestly, so an oversized maintenance prompt
 // refuses with guidance instead of erroring at the provider or running
 // against a silently degraded read.
+/** The prompt budget a maintenance prompt is checked against, or undefined when the window is not known. */
+export function maintenancePromptTokenBudget(window: CheckpointModelWindow | undefined): number | undefined {
+	if (window == null || !Number.isFinite(window.contextWindow) || !Number.isFinite(window.maxOutputTokens)) return undefined;
+	return checkpointPromptTokenBudget(window);
+}
+
 export function refuseOversizedMaintenancePrompt(input: {
 	agentId: string;
 	processLabel: string;
@@ -6767,10 +6534,8 @@ export function refuseOversizedMaintenancePrompt(input: {
 	window?: CheckpointModelWindow;
 	guidance: string;
 }): void {
-	const window = input.window;
-	if (window == null || !Number.isFinite(window.contextWindow) || !Number.isFinite(window.maxOutputTokens)) return;
-	const budget = checkpointPromptTokenBudget(window);
-	if (input.promptEstimatedTokens <= budget) return;
+	const budget = maintenancePromptTokenBudget(input.window);
+	if (budget === undefined || input.promptEstimatedTokens <= budget) return;
 	throw new MaintenancePromptOverflowError(
 		`the ${input.processLabel} prompt for ${input.agentId} is too large for the locked model ${input.model.provider}/${input.model.model}: ` +
 			`~${input.promptEstimatedTokens} estimated tokens exceeds the ~${budget}-token prompt budget. ${input.guidance} No memory has been written.`,
@@ -6836,13 +6601,6 @@ function refuseTruncatedWorkerOutput(input: {
 	processLabel: string;
 	model: { provider: string; model: string };
 	generated: { truncated?: boolean; usage?: { output?: number }; modelMaxOutputTokens?: number };
-	/**
-	 * Set for the whole-document rewrites (Memorize and Review): their
-	 * output scales with the room's memory, so truncation there means the
-	 * memory has outgrown what the model can rewrite in a single response —
-	 * the refusal says that instead of the generic cut-off line.
-	 */
-	wholeDocumentRewriteLabel?: string;
 	/** A remedy sentence for the generic lead — every refusal names a way out (light-pass C1). */
 	remedy?: string;
 }): void {
@@ -6855,10 +6613,15 @@ function refuseTruncatedWorkerOutput(input: {
 	console.warn(
 		`[worker-truncated] agent=${input.agentId} process=${input.processLabel} model=${input.model.provider}/${input.model.model} outputTokens=${produced ?? "unknown"} maxOutputTokens=${ceiling ?? "unknown"}`,
 	);
-	const lead = input.wholeDocumentRewriteLabel
-		? `This room's memory is too large to rewrite in one response: the ${input.wholeDocumentRewriteLabel} draft was cut off at the model's output limit${numbers}. The current memory is untouched and the room keeps working; a model with a larger output limit can complete this.`
-		: `The ${input.processLabel} response was cut off at the model's output limit${numbers}.${input.remedy ? ` ${input.remedy}` : ""}`;
-	throw new Error(`${lead} No memory has been written.`);
+	const lead = `The ${input.processLabel} response was cut off at the model's output limit${numbers}.${input.remedy ? ` ${input.remedy}` : ""}`;
+	throw new WorkerOutputRefusedError(`${lead} No memory has been written.`, "cut-off");
+}
+
+/** A worker's reply refused before anything reads it: cut off at the output limit, or longer than the next step accepts. */
+export class WorkerOutputRefusedError extends Error {
+	constructor(message: string, readonly reason: "cut-off" | "too-long") {
+		super(message);
+	}
 }
 
 // Discussion prompts (turns and signoff alike) carry the room's memory plus
@@ -7022,9 +6785,10 @@ async function generateAssessmentWithRetry<TResult extends AssessmentWorkerResul
 	// Terminal for assessments: an oversized assessment cannot flow to the next
 	// step, so this path throws where the proposal path degrades to a warning.
 	if (draft.text.length > ASSESSMENT_MAX_CHARS) {
-		throw new Error(
+		throw new WorkerOutputRefusedError(
 			`The ${input.processLabel} came back at ${draft.text.length} characters after ${draft.attempts} attempt(s), over the ${ASSESSMENT_MAX_CHARS}-character limit the next step accepts. ` +
 				`Try Reassess or start Maintain again; if this keeps happening, the maintenance model set in AI setup is writing assessments that are too long and a different one will be needed. No memory has been written.`,
+			"too-long",
 		);
 	}
 	return draft;
@@ -7038,51 +6802,122 @@ async function generateAssessmentWithRetry<TResult extends AssessmentWorkerResul
  * address and every session's content, and none of the entries' full text. On
  * a room the size of the field case this is the difference between an 8k
  * prompt and a 68k one.
+ *
+ * Given a size in characters, the material is fitted to it: the sessions come
+ * first, whole and oldest first, because they are what the first read is
+ * about; a session that does not fit is named by its heading line alone, and
+ * after them come as many entry rows as fit. Each part says how many it left
+ * out. It is never empty, since an empty material would send the whole file.
  */
-export function buildAbsorbAssessmentMaterial(l1b: string): string {
+export function buildAbsorbAssessmentMaterial(l1b: string, maxChars = Number.POSITIVE_INFINITY): string {
 	const doc = parseMemoryDocument(l1b);
 	const areas = listAreas(doc);
 	const sessions = recentContextSessions(extractRecentContextForAbsorb(l1b).recentContext);
-	const rows = areas.length === 0
-		? "This room's memory holds no entries yet."
-		: areas.map((area) => `- ${area.id} · ${area.topic} · ${area.kind}${area.pinned ? " · pinned" : ""} · ${area.firstLine || "(empty)"}`).join("\n");
-	const blocks = sessions.length === 0
-		? "No sessions are waiting."
-		: sessions.map((session) => session.text.trim()).join("\n\n");
-	return [
-		`### Entries already in memory (${areas.length})\n\nEach row is \`id · topic · kind · first line\`, with pinned entries marked. Their full text is not shown here; the fold reads it one topic at a time.\n\n${rows}`,
-		`### Sessions waiting (${sessions.length})\n\n${blocks}`,
-	].join("\n\n");
+	const rowOf = (area: (typeof areas)[number]) => `- ${area.id} · ${area.topic} · ${area.kind}${area.pinned ? " · pinned" : ""} · ${area.firstLine || "(empty)"}`;
+	const entriesHead = `### Entries already in memory (${areas.length})\n\nEach row is \`id · topic · kind · first line\`, with pinned entries marked. Their full text is not shown here; the fold reads it one topic at a time.`;
+	const sessionsHead = `### Sessions waiting (${sessions.length})`;
+	const assemble = (rows: string, blocks: string) => [`${entriesHead}\n\n${rows}`, `${sessionsHead}\n\n${blocks}`].join("\n\n");
+	const allRows = areas.length === 0 ? "This room's memory holds no entries yet." : areas.map(rowOf).join("\n");
+	const allBlocks = sessions.length === 0 ? "No sessions are waiting." : sessions.map((session) => session.text.trim()).join("\n\n");
+	const whole = assemble(allRows, allBlocks);
+	if (whole.length <= maxChars) return whole;
+	// Every session that fits is shown whole, oldest first, so one long page
+	// never pushes out the ones behind it; the rest are named by their heading
+	// while those fit, then counted. `room` is what the sessions and rows may
+	// take; what the headings, the tails and the joins take is measured on the
+	// assembled material, and a material still too long is fitted again with
+	// the room short by exactly the overshoot.
+	const fitted = (room: number): string => {
+		const shown: string[] = [];
+		const left: string[] = [];
+		for (const session of sessions) {
+			const text = session.text.trim();
+			// Each block costs its text and the blank line before the next.
+			if (text.length + 2 <= room) {
+				shown.push(text);
+				room -= text.length + 2;
+			} else left.push(text.split("\n")[0]!.trim());
+		}
+		const named: string[] = [];
+		for (const heading of left) {
+			if (heading.length + 1 > room) break;
+			named.push(heading);
+			room -= heading.length + 1;
+		}
+		const unnamed = left.length - named.length;
+		const rows: string[] = [];
+		for (const area of areas) {
+			const row = rowOf(area);
+			if (row.length + 1 > room) break;
+			rows.push(row);
+			room -= row.length + 1;
+		}
+		const blocks = [
+			...shown,
+			...(named.length > 0 ? [`${named.length} more ${named.length === 1 ? "session is" : "sessions are"} waiting and too long to show here; their headings:\n${named.join("\n")}`] : []),
+			...(unnamed > 0 ? [`${unnamed} more ${unnamed === 1 ? "session is" : "sessions are"} waiting and not shown here.`] : []),
+		];
+		const leftOut = areas.length - rows.length;
+		const rowText = areas.length === 0 ? "This room's memory holds no entries yet." : [...rows, ...(leftOut > 0 ? [`(${leftOut} more ${leftOut === 1 ? "entry is" : "entries are"} in memory and not shown here.)`] : [])].join("\n");
+		return assemble(rowText, blocks.length > 0 ? blocks.join("\n\n") : "No sessions are waiting.");
+	};
+	let room = maxChars - entriesHead.length - sessionsHead.length;
+	let material = fitted(room);
+	for (let pass = 0; pass < 8 && material.length > maxChars && room > 0; pass++) {
+		room -= material.length - maxChars;
+		material = fitted(Math.max(0, room));
+	}
+	return material;
 }
+
+/**
+ * The waiting conversations as the missing first read lists them. A block with
+ * no title of its own is named as the filer would head its note, by its first
+ * line, never by its Recent Context id; a block with no date shows none.
+ */
+function waitingConversationsOf(l1b: string): Array<{ title: string; date?: string }> {
+	return recentContextSessions(extractRecentContextForAbsorb(l1b).recentContext).map((session) => {
+		const title = session.title !== session.id ? session.title : summaryPageHead({ id: session.id, title: session.title, text: session.text }) || session.id;
+		return { title, ...(session.date ? { date: session.date } : {}) };
+	});
+}
+
+/** Why a Memorize has no first read: its call failed, the reply was cut or too long, or the prompt could not fit the window. */
+export type AbsorbFirstReadMissing = "failed" | "cut-off" | "too-long" | "too-large";
+
+/** What the prompt must leave the first read's retry notice, in characters, when the material is fitted. */
+const ASSESSMENT_FIT_RESERVE_CHARS = 2_000;
 
 export async function buildAbsorbAssessment(agentId: string, model: AbsorbModelLock, generate: (prompt: string, model: AbsorbModelLock) => Promise<AbsorbGenerateResult>, options?: MaintenanceWorkerOptions): Promise<AbsorbAssessmentResponse> {
 	const instance = createPersistentAgentInstance(agentId);
 	const loaded = ensureAbsorbReady(instance);
 	if (!loaded.availability.available) throw new Error(loaded.availability.message);
-	const promptInput = {
+	const baseInput = {
 		agentId: instance.agentId,
 		l1b: loaded.l1b,
 		model,
 		sectionPurposeMap: buildSectionPurposeMap(loaded.sectionRegistry),
-		memoryMaterial: buildAbsorbAssessmentMaterial(loaded.l1b),
 	};
-	const assembly = buildAbsorbAssessmentPrompt({ ...promptInput, retryFeedback: options?.retryFeedback });
+	// A window lookup that fails reads as unknown: the material is built whole,
+	// as it always was, and nothing of the lookup reaches the screen.
+	let window: CheckpointModelWindow | undefined;
+	try {
+		window = options?.resolveModelWindow?.(model);
+	} catch {
+		window = undefined;
+	}
+	const budget = maintenancePromptTokenBudget(window);
+	let promptInput = { ...baseInput, memoryMaterial: buildAbsorbAssessmentMaterial(loaded.l1b) };
+	let assembly = buildAbsorbAssessmentPrompt({ ...promptInput, retryFeedback: options?.retryFeedback });
+	if (budget !== undefined && assembly.telemetry.promptEstimatedTokens > budget) {
+		// The same estimate the check below uses (characters over four), so a
+		// material fitted to the characters left is a prompt that passes it.
+		const frameChars = assembly.prompt.length - promptInput.memoryMaterial.trim().length;
+		promptInput = { ...baseInput, memoryMaterial: buildAbsorbAssessmentMaterial(loaded.l1b, budget * 4 - frameChars - ASSESSMENT_FIT_RESERVE_CHARS) };
+		assembly = buildAbsorbAssessmentPrompt({ ...promptInput, retryFeedback: options?.retryFeedback });
+	}
 	const basePrompt = options?.retryFeedback?.length ? buildAbsorbAssessmentPrompt(promptInput).prompt : assembly.prompt;
-	refuseOversizedMaintenancePrompt({ agentId: instance.agentId, processLabel: "Memorize assessment", model, promptEstimatedTokens: assembly.telemetry.promptEstimatedTokens, window: options?.resolveModelWindow?.(model), guidance: ABSORB_OVERFLOW_GUIDANCE });
-	const diagnostics = maintenanceDiagnosticsRecorder(instance.agentId, "memorize-assessment", generate, { roomText: loaded.l1b });
-	const generated = await generateAssessmentWithRetry({
-		agentId: instance.agentId,
-		processLabel: "Memorize assessment",
-		model,
-		prompt: assembly.prompt,
-		basePrompt,
-		priorReasons: options?.retryFeedback,
-		generate: (prompt) => diagnostics.generate(prompt, model),
-		parse: parseAbsorbAssessment,
-		buildRetryPrompt: buildAbsorbAssessmentRetryPrompt,
-	});
-	diagnostics.annotate({ outcome: "accepted", validatorWarnings: [...generated.parsed.warnings, ...generated.warnings] });
-	return {
+	const response = (text: string, fields: AbsorbAssessmentFields, warnings: string[], usage?: AbsorbGenerateResult["usage"], missing?: AbsorbFirstReadMissing): AbsorbAssessmentResponse => ({
 		agentId: instance.agentId,
 		writesMemory: false,
 		process: { type: ABSORB_CONSOLIDATION_WORKER_TYPE, model },
@@ -7091,12 +6926,51 @@ export async function buildAbsorbAssessment(agentId: string, model: AbsorbModelL
 			l1bFingerprint: fingerprintL1bSource(loaded.l1b),
 			generatedAt: new Date().toISOString(),
 		},
-		assessmentMarkdown: generated.text,
-		fields: generated.parsed.fields,
+		assessmentMarkdown: text,
+		fields,
 		absorbTelemetry: assembly.telemetry,
-		absorbUsage: generated.usage,
-		warnings: [...generated.parsed.warnings, ...generated.warnings, "no memory has been written"],
+		...(usage ? { absorbUsage: usage } : {}),
+		warnings: [...warnings, "no memory has been written"],
+		...(missing ? { firstReadMissing: missing, waitingConversations: waitingConversationsOf(loaded.l1b) } : {}),
+	});
+	const diagnostics = maintenanceDiagnosticsRecorder(instance.agentId, "memorize-assessment", generate, { roomText: loaded.l1b });
+	// The first read never blocks Memorize. When it cannot be had, the answer
+	// is "None." with the one reason why and none of the parser's findings
+	// about the missing sections: the screen says there is no first read, and
+	// a Read again must not send those findings back as the reasons.
+	const missing = (why: AbsorbFirstReadMissing): AbsorbAssessmentResponse => {
+		// A call that threw or was cut is already on its record as such.
+		diagnostics.annotate({ ...(why === "too-long" ? { outcome: "refused" as const } : {}), validatorErrors: [`first read missing: ${why}`] });
+		return response(FIRST_READ_NONE, parseAbsorbAssessment(FIRST_READ_NONE).fields, [], undefined, why);
 	};
+	if (budget !== undefined && assembly.telemetry.promptEstimatedTokens > budget) {
+		// No call is made, so the record is written here: the reason still counts per provider.
+		writeMaintenanceDiagnosticsRecord(instance.rootDir, {
+			schemaVersion: 1, agentId: instance.agentId, process: "memorize-assessment", at: new Date().toISOString(), attempt: 0, provider: model.provider, model: model.model,
+			promptChars: assembly.prompt.length, promptEstimatedTokens: assembly.telemetry.promptEstimatedTokens, replyChars: 0, truncated: false, wallTimeMs: 0,
+			parseSignature: { markers: [], unexpectedHeadings: 0, jsonFence: "absent" }, validatorErrors: ["first read missing: too-large"], validatorWarnings: [], outcome: "refused",
+		});
+		return missing("too-large");
+	}
+	let generated;
+	try {
+		generated = await generateAssessmentWithRetry({
+			agentId: instance.agentId,
+			processLabel: "Memorize assessment",
+			model,
+			prompt: assembly.prompt,
+			basePrompt,
+			priorReasons: options?.retryFeedback,
+			generate: (prompt) => diagnostics.generate(prompt, model),
+			parse: parseAbsorbAssessment,
+			buildRetryPrompt: buildAbsorbAssessmentRetryPrompt,
+		});
+	} catch (error) {
+		return missing(error instanceof WorkerOutputRefusedError ? error.reason : "failed");
+	}
+	if (!generated.text.trim()) return missing("failed");
+	diagnostics.annotate({ outcome: "accepted", validatorWarnings: [...generated.parsed.warnings, ...generated.warnings] });
+	return response(generated.text, generated.parsed.fields, [...generated.parsed.warnings, ...generated.warnings], generated.usage);
 }
 
 export async function buildAbsorbDiscussionTurn(raw: any, model: AbsorbModelLock, generate: (prompt: string, model: AbsorbModelLock) => Promise<AbsorbGenerateResult>, options?: MaintenanceWorkerOptions): Promise<AbsorbDiscussionTurnResponse> {
@@ -7197,72 +7071,6 @@ export async function buildAbsorbDiscussionSignoff(raw: any, model: AbsorbModelL
 			describeHandoffTrim(handoff) ?? "",
 			"no memory has been written",
 		].filter(Boolean),
-	};
-}
-
-/**
- * RETIRED FROM THE PRODUCT, KEPT FOR THE BENCH (memory v2).
- *
- * This is the whole-document Memorize: one call carrying the room's entire
- * memory, answering with a rewrite of it. No route reaches it any more —
- * `absorb/propose` starts a run (absorb-run.ts) and `absorb/approve` writes
- * that run — because this shape is what produced twenty-five-minute calls,
- * replies cut at the output ceiling, and a Draft-again loop that could not be
- * won. It stays reachable from the size bench and the smokes that measure it,
- * so the claim "the fold is smaller and bounded" keeps a baseline to be
- * measured against, and for nothing else. The same applies to
- * `parseAbsorbApprovalRequest` and `writeApprovedAbsorb` below it.
- */
-export async function buildAbsorbProposal(raw: any, model: AbsorbModelLock, generate: (prompt: string, model: AbsorbModelLock) => Promise<AbsorbGenerateResult>, options?: MaintenanceWorkerOptions): Promise<AbsorbProposalResponse> {
-	const agentId = validatePersistentAgentId(raw?.agentId);
-	const assessmentMarkdown = String(raw?.assessmentMarkdown ?? "").trim();
-	if (!assessmentMarkdown) throw new Error("assessmentMarkdown is required");
-	if (assessmentMarkdown.length > ASSESSMENT_MAX_CHARS) throw new Error("assessmentMarkdown is too large");
-	const assessmentHandoff = parseAssessmentHandoff(raw?.assessmentHandoff);
-	const loaded = ensureAbsorbReady(agentId);
-	if (!loaded.availability.available) throw new Error(loaded.availability.message);
-	if (assessmentHandoff?.source === "discussion_signoff" && raw?.source != null) {
-		assertAbsorbSourceFingerprintCurrent(parseAbsorbSourceFingerprint(raw.source, "discussion source"), loaded.l1b, "discussion source");
-	}
-	const memoryBudgetTokens = readPersistentRoomMaintenanceSettings(agentId).memoryBudgetTokens;
-	const assembly = buildAbsorbProposalPrompt({
-		agentId,
-		l1b: loaded.l1b,
-		model,
-		sectionPurposeMap: buildSectionPurposeMap(loaded.sectionRegistry),
-		assessmentMarkdown,
-		assessmentHandoff,
-		memoryBudgetTokens,
-		retryFeedback: parseProposalRetryFeedback(raw?.retryFeedback),
-	});
-	refuseOversizedMaintenancePrompt({ agentId, processLabel: "Memorize proposal", model, promptEstimatedTokens: assembly.telemetry.promptEstimatedTokens, window: options?.resolveModelWindow?.(model), guidance: ABSORB_OVERFLOW_GUIDANCE });
-	const diagnostics = maintenanceDiagnosticsRecorder(agentId, "memorize-proposal", generate, { roomText: loaded.l1b });
-	const generated = await diagnostics.generate(assembly.prompt, model);
-	refuseTruncatedWorkerOutput({ agentId, processLabel: "Memorize proposal", model, generated, wholeDocumentRewriteLabel: "Memorize" });
-	const parsed = parseAbsorbProposal(generated.text);
-	const review = buildAbsorbProposalReview(loaded.l1b, parsed.fields);
-	const candidateValidation = validateAbsorbCandidateL1b(loaded.l1b, parsed.fields.candidateL1b);
-	diagnostics.annotate({
-		outcome: candidateValidation.valid ? "accepted" : "refused",
-		validatorErrors: candidateValidation.errors,
-		validatorWarnings: [...parsed.warnings, ...candidateValidation.warnings],
-	});
-	return {
-		agentId,
-		writesMemory: false,
-		process: { type: ABSORB_CONSOLIDATION_WORKER_TYPE, model },
-		availability: loaded.availability,
-		source: {
-			l1bFingerprint: fingerprintL1bSource(loaded.l1b),
-			generatedAt: new Date().toISOString(),
-		},
-		fields: parsed.fields,
-		review,
-		candidateValidation,
-		memoryBudgetImpact: buildMemoryBudgetImpact(reviewTargetEstimatedTokensFromL1b(loaded.l1b), reviewTargetEstimatedTokensFromL1b(parsed.fields.candidateL1b), memoryBudgetTokens),
-		absorbTelemetry: assembly.telemetry,
-		absorbUsage: generated.usage,
-		warnings: [...parsed.warnings, ...candidateValidation.warnings, "no memory has been written"],
 	};
 }
 

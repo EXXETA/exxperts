@@ -65,7 +65,7 @@ import { migrateBuiltInAiProfiles } from "./built-in-ai-profile-migration.js";
 import { deleteCustomAiProfile, isCustomAiProfileId, isReservedCustomProfileProvider, readCustomAiProfiles, writeCustomAiProfile } from "./custom-ai-profiles.js";
 import { ConsultPromptOverflowError } from "./consult.js";
 import { exportMaintenanceDiagnostics, listMaintenanceDiagnostics, MAINTENANCE_DIAGNOSTICS_DEFAULT_LIMIT, MAINTENANCE_DIAGNOSTICS_KEEP } from "./maintenance-diagnostics.js";
-import { appendPersistentAgentThreadPendingHandoff, archivePersistentAgent, assertPersistentAgentAcceptsCheckpoint, assertPersistentAgentAcceptsSession, createPersistentAgentInstance, parsePersistentAgentL1aMarker, planPersistentAgentConstitutionUpgrade, upgradePersistentAgentConstitution, PERSISTENT_AGENT_L1A_TEMPLATE_VERSION, getPersistentAgentLifecycleCounts, listArchivedPersistentAgents, purgePersistentAgent, restorePersistentAgent, sweepPersistentAgentPurgeTombstones, beginPersistentAgentTurn, buildAbsorbAssessment, buildAbsorbDiscussionSignoff, buildAbsorbDiscussionTurn, beginRememberGeneration, buildCheckpointProposal, estimateCheckpointRead, getRememberGeneration, REMEMBER_WORKER_MAX_OUTPUT_TOKENS, buildConsultAnswer, buildPersistentAgentBootContext, buildPersistentAgentCurrentIdentitySection, buildPersistentRoomCurrentWorkspaceSection, createPersistentAgentFromScaffoldInput, createPersistentAgentPiSessionJsonlThreadRuntime, createPersistentRoomAutoDeclinedQuestionLog, clearPersistentAgentThreadPendingHandoffs, clearPersistentAgentUnseenLandedAnswerForBind, deletePersistentAgentThread, PERSISTENT_AGENT_L1A_DEFAULT_MODE_ID, PERSISTENT_AGENT_L1A_MODES, discardEmptyPreparedBoundaryThread, finishPersistentAgentTurn, getAbsorbAvailability, getPersistentAgentActiveTurnState, getPersistentAgentRuntimeState, getPersistentAgentStatus, getPersistentAgentThread, getPersistentRoomInstructionsView, savePersistentRoomGlobalInstructionsEnabled, isPersistentAgentArchived, listPersistentAgents, markPersistentAgentTurnCancelling, openPersistentAgentPiSessionManager, parseCheckpointApprovalRequest, readPersistentAgentBootPromptSnapshot, refreshEmptyPersistentAgentThreadBootSnapshot, refreshEmptyPersistentAgentThreadModel, emptyPersistentAgentThreadModelTarget, persistentAgentThreadFollowsConversationPick, switchPersistentAgentThreadModel, estimatePersistentAgentThreadContext, SWITCH_WHILE_REMEMBERING_MESSAGE, readPersistentAgentReviewTargetEstimatedTokens, recordPersistentAgentUnseenLandedAnswer, renamePersistentAgent, validatePersistentAgentId, writeApprovedCheckpoint, writePersistentAgentMementoBoundary, writePersistentAgentRuntimeState, writePersistentAgentThread, parseAssessmentRetryFeedback, assertPersistentAgentBootPromptFitsWindow, PersistentAgentMemoryOverflowError } from "./persistent-agents.js";
+import { appendPersistentAgentThreadPendingHandoff, archivePersistentAgent, assertPersistentAgentAcceptsCheckpoint, assertPersistentAgentAcceptsSession, createPersistentAgentInstance, parsePersistentAgentL1aMarker, planPersistentAgentConstitutionUpgrade, upgradePersistentAgentConstitution, PERSISTENT_AGENT_L1A_TEMPLATE_VERSION, getPersistentAgentLifecycleCounts, listArchivedPersistentAgents, purgePersistentAgent, restorePersistentAgent, sweepPersistentAgentPurgeTombstones, beginPersistentAgentTurn, buildAbsorbAssessment, buildAbsorbDiscussionSignoff, buildAbsorbDiscussionTurn, beginRememberGeneration, buildCheckpointProposal, estimateCheckpointRead, getRememberGeneration, REMEMBER_WORKER_MAX_OUTPUT_TOKENS, buildConsultAnswer, buildPersistentAgentBootContext, buildPersistentAgentCurrentIdentitySection, buildPersistentRoomCurrentWorkspaceSection, createPersistentAgentFromScaffoldInput, createPersistentAgentPiSessionJsonlThreadRuntime, createPersistentRoomAutoDeclinedQuestionLog, clearPersistentAgentThreadPendingHandoffs, clearPersistentAgentUnseenLandedAnswerForBind, deletePersistentAgentThread, PERSISTENT_AGENT_L1A_DEFAULT_MODE_ID, PERSISTENT_AGENT_L1A_MODES, discardEmptyPreparedBoundaryThread, finishPersistentAgentTurn, getAbsorbAvailability, getPersistentAgentActiveTurnState, getPersistentAgentRuntimeState, getPersistentAgentStatus, getPersistentAgentThread, getPersistentRoomInstructionsView, savePersistentRoomGlobalInstructionsEnabled, isPersistentAgentArchived, listPersistentAgents, markPersistentAgentTurnCancelling, openPersistentAgentPiSessionManager, parseCheckpointApprovalRequest, readPersistentAgentBootPromptSnapshot, refreshEmptyPersistentAgentThreadBootSnapshot, refreshEmptyPersistentAgentThreadModel, emptyPersistentAgentThreadModelTarget, persistentAgentThreadFollowsConversationPick, switchPersistentAgentThreadModel, estimatePersistentAgentThreadContext, SWITCH_WHILE_REMEMBERING_MESSAGE, readPersistentAgentReviewTargetEstimatedTokens, recordPersistentAgentUnseenLandedAnswer, renamePersistentAgent, validatePersistentAgentId, writeApprovedCheckpoint, writePersistentAgentMementoBoundary, writePersistentAgentRuntimeState, writePersistentAgentThread, parseAssessmentRetryFeedback, assertPersistentAgentBootPromptFitsWindow, PersistentAgentMemoryOverflowError, RECENT_CONTEXT_BLOCK_CAP } from "./persistent-agents.js";
 import { buildPersistentRoomRestoredLiveThreadContext } from "./persistent-room-resume-context.js";
 import {
 	getPersistentRoomToolPolicy,
@@ -170,7 +170,7 @@ import { buildMemoryAskContext, buildMemoryDigest, buildMemoryOverview, buildRoo
 import { registerMemoryEntryRoutes } from "./memory-entries-api.js";
 import { registerReviewAssessRoutes } from "./review-assess-routes.js";
 import { undoMemorySave } from "./memory-undo.js";
-import { absorbRunStatusFields, approveAbsorbRun, cancelAbsorbRun, editAbsorbRunEntry, getAbsorbRun, keepAbsorbRunEntries, parseAbsorbRunProposeRequest, setAbsorbRunBudget, startAbsorbRun, type AbsorbRunApprovalResponse } from "./absorb-run.js";
+import { absorbRunStatusFields, approveAbsorbRun, cancelAbsorbRun, chooseAbsorbRunBeside, editAbsorbRunEntry, getAbsorbRun, keepAbsorbRunEntries, parseAbsorbRunProposeRequest, resumeAbsorbRun, setAbsorbRunBudget, startAbsorbRun, type AbsorbRunApprovalResponse } from "./absorb-run.js";
 import { FOLD_TRIGGER_PROMPT } from "./absorb-ops.js";
 import { registerReviewRunRoutes } from "./review-run-routes.js";
 import { hasActiveReviewRun } from "./review-run.js";
@@ -1970,6 +1970,9 @@ function browserSafeAbsorbApprovalResponse(result: AbsorbRunApprovalResponse) {
 		remainingSessions: result.remainingSessions,
 		archivedEntries: result.archivedEntries,
 		archivedForBudget: result.archivedForBudget,
+		...(result.replacedEntries > 0 ? { replacedEntries: result.replacedEntries } : {}),
+		...(result.historyKept > 0 ? { historyKept: result.historyKept } : {}),
+		...(result.sortedNotes > 0 ? { sortedNotes: result.sortedNotes } : {}),
 		// The limit the card raised, now the room's own; absent when it was not raised.
 		...(result.budgetRaisedTo === undefined ? {} : { budgetRaisedTo: result.budgetRaisedTo }),
 		// Conversations remembered while the run was open, which the save kept waiting.
@@ -2207,7 +2210,13 @@ function mergeLandedAnswerTailIntoClientItems(agentId: string, threadId: string,
 	}
 	return merged;
 }
-app.put("/api/persistent-agents/:id/threads/:threadId", async (req, reply) => {
+// The save carries every chat item of the open conversation, and opening a
+// room re-saves the thread it read, so a save the server refuses keeps the
+// room shut. Items are text (attachments are metadata; files go through the
+// shelf route) and each tool result is cut near 50 KB by the runtime, so 64
+// MB holds over a thousand full tool results, far past the default 1 MiB a
+// long conversation reaches.
+app.put("/api/persistent-agents/:id/threads/:threadId", { bodyLimit: 64 * 1024 * 1024 }, async (req, reply) => {
 	const idRaw = String((req.params as any).id ?? "").trim();
 	const threadId = String((req.params as any).threadId ?? "").trim();
 	try {
@@ -2948,6 +2957,8 @@ app.post("/api/persistent-agents/:id/absorb/propose", async (req, reply) => {
 			model: selection.modelLock,
 			resolveModelWindow: consultModelWindow,
 			generate: (prompt, modelLock, options) => runIsolatedLifecycleWorker(prompt, modelLock, resolveAbsorbModel, "memorize fold worker", FOLD_TRIGGER_PROMPT, "the fold worker produced no text", { agent: id, kind: "upkeep" }, options),
+			// The tiny fixed question that tells a page's failure from an outage.
+			probe: (prompt, modelLock, options) => runIsolatedLifecycleWorker(prompt, modelLock, resolveAbsorbModel, "memorize probe worker", prompt, "the probe worker produced no text", { agent: id, kind: "upkeep" }, options),
 		});
 		return reply.code(202).send({ runId: run.runId });
 	} catch (e) {
@@ -2987,6 +2998,16 @@ app.post("/api/persistent-agents/:id/absorb/runs/:runId/edit", async (req, reply
 		return persistentAgentNormalUseErrorReply(reply, e);
 	}
 });
+// Keep both or Replace, for a new note shown beside another: `{ entryId, choice }`.
+app.post("/api/persistent-agents/:id/absorb/runs/:runId/beside-choice", async (req, reply) => {
+	const idRaw = String((req.params as any).id ?? "").trim();
+	try {
+		const status = getPersistentAgentStatusForMaintenance(idRaw);
+		return chooseAbsorbRunBeside(status.id, String((req.params as any).runId ?? "").trim(), (req.body as any)?.entryId, (req.body as any)?.choice);
+	} catch (e) {
+		return persistentAgentNormalUseErrorReply(reply, e);
+	}
+});
 // The limit on the run only; the room's setting follows on approve.
 app.post("/api/persistent-agents/:id/absorb/runs/:runId/budget", async (req, reply) => {
 	const idRaw = String((req.params as any).id ?? "").trim();
@@ -3002,6 +3023,23 @@ app.post("/api/persistent-agents/:id/absorb/runs/:runId/cancel", async (req, rep
 	try {
 		const status = getPersistentAgentStatusForMaintenance(idRaw);
 		return cancelAbsorbRun(status.id, String((req.params as any).runId ?? "").trim());
+	} catch (e) {
+		return persistentAgentNormalUseErrorReply(reply, e);
+	}
+});
+// Try again after an outage stopped the run: the same run reads the
+// conversations still waiting, on top of what already finished, with the
+// room's Memory model as it is now. The person may have chosen another one
+// from the notice, so the resume checks it the way propose does: a model that
+// cannot run refuses here, before any conversation is read.
+app.post("/api/persistent-agents/:id/absorb/runs/:runId/resume", async (req, reply) => {
+	const idRaw = String((req.params as any).id ?? "").trim();
+	try {
+		const status = getPersistentAgentStatusForMaintenance(idRaw);
+		const selection = roomMemoryModelSelection(status.id);
+		const availability = getAbsorbAvailability(status.id);
+		if (!availability.available) throw new Error(availability.message);
+		return resumeAbsorbRun(status.id, String((req.params as any).runId ?? "").trim(), selection.modelLock);
 	} catch (e) {
 		return persistentAgentNormalUseErrorReply(reply, e);
 	}
@@ -3999,9 +4037,11 @@ async function runIsolatedLifecycleWorker<TModelLock extends { provider: string;
 	// A step that can be cancelled (the Memorize run) passes its signal, and a
 	// step with its own ceiling passes that; everything else keeps the shared
 	// maintenance timeout and no abort hook, exactly as before. A mechanical
-	// step (fold, ops proposal) asks for reasoning off: single-shot transforms
-	// whose reasoning tokens would count against the output cap and starve the reply.
-	options?: { signal?: AbortSignal; timeoutMs?: number; thinkingLevel?: "low" },
+	// step (fold, probe) asks for low reasoning: single-shot transforms whose
+	// reasoning tokens would count against the output cap and starve the reply,
+	// or run a two-word probe into its ceiling.
+	// A step with its own output cap (the fold) passes it too.
+	options?: { signal?: AbortSignal; timeoutMs?: number; thinkingLevel?: "low"; maxTokens?: number },
 ) {
 	const result = await runIsolatedPersistentAgentWorker({
 		workerSystemPrompt: prompt,
@@ -4016,6 +4056,7 @@ async function runIsolatedLifecycleWorker<TModelLock extends { provider: string;
 		timeoutMs: options?.timeoutMs ?? MAINTENANCE_WORKER_TIMEOUT_MS,
 		...(options?.signal ? { signal: options.signal } : {}),
 		...(options?.thinkingLevel ? { thinkingLevel: options.thinkingLevel } : {}),
+		...(options?.maxTokens ? { maxTokens: options.maxTokens } : {}),
 	});
 	if (attribution) recordWorkerUsage(attribution.agent, attribution.kind, modelLock, result.usage);
 	return result;
@@ -6150,7 +6191,22 @@ app.get("/ws", { websocket: true }, async (socket, req) => {
 	socket.on("message", holdFrameUntilListener);
 
 	const status = getUsablePersistentAgentStatusForNormalUse(persistentAgentIdRaw);
-	assertPersistentAgentAcceptsSession(status);
+	try {
+		assertPersistentAgentAcceptsSession(status);
+	} catch (error) {
+		// A room holding as many remembered conversations as it can: a bare close
+		// reads as a lost connection and the client redials into the same refusal.
+		// A coded frame lets it stand down and name the way out. A room hidden
+		// from a remote device still fails as a missing room does, below.
+		const entries = status.recentContext?.fullEntries ?? 0;
+		const roomFull = status.exists && (status.status === "ready" || status.status === "needs_absorb") && entries >= RECENT_CONTEXT_BLOCK_CAP;
+		const hiddenFromDevice = !!(req as any).exxRemoteDevice && remoteRoomExposure.isHidden(status.id);
+		if (!roomFull || hiddenFromDevice) throw error;
+		const message = `${status.displayName || "This room"} is holding ${entries} remembered conversations, as many as it can hold. Memorize them first: use Maintain on its card, then open it again.`;
+		try { socket.send(JSON.stringify({ type: "error", code: "room_full", message })); } catch {}
+		socket.close();
+		return;
+	}
 	// Remote devices: a hidden room's socket fails exactly like a
 	// nonexistent room's (same thrown shape as the unknown-room path above),
 	// and capability is re-derived from the device record at attach, with

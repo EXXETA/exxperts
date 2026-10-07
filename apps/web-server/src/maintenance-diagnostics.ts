@@ -30,8 +30,15 @@ export const MAINTENANCE_DIAGNOSTICS_PROCESSES = [
 	"memorize-assessment",
 	"memorize-discussion",
 	"memorize-discussion-signoff",
+	// The whole-document Memorize wrote this name before Memorize became a run
+	// of folds: no call writes it any more, and it stays on the list so a
+	// room's older records still read.
 	"memorize-proposal",
 	"memorize-fold",
+	// The tiny fixed question a run asks when a fold call failed, and the one
+	// record per conversation that says how it ended.
+	"memorize-probe",
+	"memorize-page",
 	// The four Review names below belong to records written before Review
 	// became a run: no call writes them any more, and they stay on the list so
 	// a room's older records still read. A run writes "review-tidy".
@@ -68,6 +75,8 @@ const DEFAULT_MARKERS: Readonly<Record<MaintenanceDiagnosticsProcess, readonly s
 	// its parse signature is the fence's state, which the recorder reads on
 	// every reply whatever the marker list says.
 	"memorize-fold": [],
+	"memorize-probe": [],
+	"memorize-page": [],
 	"review-assessment": REVIEW_ASSESSMENT_MARKERS,
 	"review-discussion": [],
 	"review-discussion-signoff": [],
@@ -126,6 +135,67 @@ export interface MaintenanceDiagnosticsRecord {
 	 * technical cause survives, so a report can name it without the card doing so.
 	 */
 	errorSentence?: string;
+	/** memorize-page only: how one conversation ended. Codes only, never room text. */
+	page?: MemorizePageDiagnostics;
+	/** memorize-fold only, on a readable reply: how each op ended and the pairs the repeat rules found. Codes only. */
+	fold?: MemorizeFoldDiagnostics;
+}
+
+/**
+ * Each op of a readable fold reply as it was decided, by its place in the
+ * reply: its kind (one of the grammar's, "unpin", or "other"), its fate and
+ * the codes that say why. Never room text.
+ */
+export interface MemorizeFoldDiagnostics {
+	ops: Array<{ i: number; op: string; fate: "applied" | "normalised" | "redirected" | "left-out" | "traced"; codes?: string[] }>;
+	/** The new texts that looked like a note, by what became of them: left out as already said (by memory, or by the same reply), kept beside, tagged as maybe disagreeing, kept untagged though it may disagree with an add of the same reply, kept beside a pinned note. */
+	pairs: { subset: number; subsetInReply: number; beside: number; mayDisagree: number; mayDisagreeInReply: number; besidePinned: number };
+}
+
+/**
+ * How one conversation of a Memorize run ended, as the per-provider numbers
+ * read it: the Remember's checkpoint id (or a hash of a hand-written page),
+ * never the Recent Context id, which a later conversation reuses.
+ */
+export interface MemorizePageDiagnostics {
+	key: string;
+	outcome: "folded" | "dropped" | "summarized" | "waiting" | "outage-stop" | "cancelled";
+	/** summarized: unreadable-twice, nothing-usable, oversize, too-large, apply-threw, failed-twice, stopped-twice (and refused-twice on records written before each op was decided alone). waiting: first-failure, filing-threw. */
+	reason?: string;
+	/** The last unreadable class a reply of this conversation had: no-fence, invalid-json, not-a-list, empty-list, cut-off. */
+	unreadable?: string;
+	/** Each unreadable reply in order, by its class ("refused" on older records, when the rules refused it). */
+	unusable?: string[];
+	/** A code per reply whose list the reader took from before a last json fence holding an empty list: "earlier-fence". */
+	reader?: string[];
+	attempts: number;
+	probe?: "answered" | "failed";
+	/** The outage words a failure named: rate-limit, quota, too-many-requests, overload. */
+	outageClass?: string;
+	failureCode?: string;
+}
+
+/** Writes the one record that says how a conversation of a Memorize run ended. Never throws. */
+export function writeMemorizePageRecord(input: { roomRootDir: string; agentId: string; model: { provider: string; model: string }; at: Date; page: MemorizePageDiagnostics }): string | null {
+	return writeMaintenanceDiagnosticsRecord(input.roomRootDir, {
+		schemaVersion: 1,
+		agentId: input.agentId,
+		process: "memorize-page",
+		at: input.at.toISOString(),
+		attempt: input.page.attempts,
+		provider: input.model.provider,
+		model: input.model.model,
+		promptChars: 0,
+		promptEstimatedTokens: 0,
+		replyChars: 0,
+		truncated: false,
+		wallTimeMs: 0,
+		parseSignature: { markers: [], unexpectedHeadings: 0, jsonFence: "absent" },
+		validatorErrors: [],
+		validatorWarnings: [],
+		outcome: input.page.outcome === "folded" || input.page.outcome === "dropped" ? "accepted" : input.page.outcome === "summarized" ? "refused" : "error",
+		page: input.page,
+	});
 }
 
 export function maintenanceDiagnosticsDir(roomRootDir: string): string {
@@ -328,7 +398,7 @@ export interface MaintenanceDiagnosticsRecorder<TModel, TResult> {
 	/** Drop-in replacement for the worker's generate function; records one file per call. */
 	generate: (prompt: string, model: TModel) => Promise<TResult>;
 	/** Final judgement of the most recent call, once the caller knows it. */
-	annotate: (update: { outcome?: MaintenanceDiagnosticsOutcome; validatorErrors?: readonly string[]; validatorWarnings?: readonly string[]; group?: { index: number; count: number } }) => void;
+	annotate: (update: { outcome?: MaintenanceDiagnosticsOutcome; validatorErrors?: readonly string[]; validatorWarnings?: readonly string[]; group?: { index: number; count: number }; fold?: MemorizeFoldDiagnostics }) => void;
 	/** Paths written so far, oldest first — for callers that want to name them. */
 	recordPaths: () => string[];
 }
@@ -421,6 +491,7 @@ export function recordMaintenanceWorkerCalls<TModel extends { provider: string; 
 				...slot.record,
 				...(update.outcome ? { outcome: update.outcome } : {}),
 				...(update.group ? { group: update.group } : {}),
+				...(update.fold ? { fold: update.fold } : {}),
 				...(update.validatorErrors ? { validatorErrors: update.validatorErrors.map((message) => redactMaintenanceDiagnosticsSentence(message, undefined, normalizedRoomText)) } : {}),
 				...(update.validatorWarnings ? { validatorWarnings: update.validatorWarnings.map((message) => redactMaintenanceDiagnosticsSentence(message, undefined, normalizedRoomText)) } : {}),
 			}, slot.file);

@@ -24,6 +24,8 @@
 // applier (review-ops.ts), the entry model (memory-entries.ts), the files
 // (memory-entries-store.ts), and the worker itself (the route injects it).
 
+import { recordMemoryUse } from "./memory-use.js";
+import { isUnsortedSummary } from "./absorb-reread.js";
 import { hasActiveAbsorbRun, memoryUseForRanking, parseRunKeepRequest, rebaseOntoDisk, type AbsorbRunArchiveRow, type AbsorbRunBudget, type AbsorbRunDemotion, type AbsorbRunEntryCard, type RankedArchiveAppend } from "./absorb-run.js";
 import { recordMaintenanceWorkerCalls } from "./maintenance-diagnostics.js";
 import {
@@ -349,7 +351,7 @@ interface RunSlot {
 	sourceL1b: string;
 	/** The document as it stands after the groups landed — what keep/budget/edit recompute from. */
 	postTidyDoc: MemoryDocument | null;
-	/** The document as it will be written: post-tidy, post-demotion, keeps pinned. */
+	/** The document as it will be written: post-tidy, post-demotion, the kept notes back in. */
 	candidateDoc: MemoryDocument | null;
 	/** Rows the tidy set aside; the member of a disagreeing pair a merge resolved carries the merged row's reason. */
 	tidyArchive: RankedArchiveAppend[];
@@ -592,6 +594,7 @@ async function performRun(slot: RunSlot, input: ReviewRunStartInput, nowFn: () =
 				context: renderReviewGroupContext(topics, doc),
 				allTitles: doc.topics.map((topic) => topic.title),
 				memoryTopics: doc.topics.map((topic) => ({ section: topic.section, title: topic.title, intro: topic.intro })),
+				unsortedSummaries: doc.topics.filter((topic) => titles.has(topic.title)).flatMap((topic) => topic.entries.filter((entry) => isUnsortedSummary(topic.title, entry)).map((entry) => entry.id)),
 			};
 		});
 		const notes = reviewGroupNotes(readNotes.topics);
@@ -621,6 +624,7 @@ async function performRun(slot: RunSlot, input: ReviewRunStartInput, nowFn: () =
 			duplicateNotes,
 			conflictNotes,
 			lookAlikeTopics,
+			unsortedSummaries: readNotes.unsortedSummaries,
 			now: nowFn(),
 		});
 		try {
@@ -838,11 +842,10 @@ function recomputeDemotion(slot: RunSlot): void {
 	}
 	const where = addressBook(doc);
 	const demoted = demoteToBudget(doc, budgetTokens, { keepIds, keepTopics, today: slot.savedDate, use: memoryUseForRanking(run.agentId) });
+	// A keep protects the note in this save only, by id or by topic: the pass
+	// above left it in, and it is never pinned. The save records a use for each
+	// kept note, so a later run's pass ranks it higher without making it immortal.
 	const candidate = cloneDocument(demoted.doc);
-	// Keeping by id IS pinning: the note the user kept is the user's own from
-	// here on, and no later run's budget pass takes it either. A protected topic
-	// is protected today only, so its notes are not pinned.
-	for (const topic of candidate.topics) for (const entry of topic.entries) if (keep.has(entry.id)) entry.pinned = true;
 	slot.candidateDoc = candidate;
 	slot.demotionArchive = demoted.demoted.map((entry) => ({ entry, why: "budget" as const, topic: where.get(entry.id)?.topic ?? MEMORY_ACTIVE_ITEMS_TOPIC, section: where.get(entry.id)?.section ?? "Deep Memory", archived: slot.savedDate, reason: entry.reason }));
 	const after = reviewTargetTokens(candidate);
@@ -900,7 +903,7 @@ function requireReady(slot: RunSlot): void {
 	if (slot.run.state !== "ready") throw productError("This review is not ready to change yet.", "review_run_not_ready", 409);
 }
 
-/** The card's keep toggles: the kept notes are pinned, the protected topics are left whole, and the demotion is derived again. */
+/** The card's keep toggles: the kept notes and the protected topics stay in this save, and the demotion is derived again. */
 export function keepReviewRunEntries(agentIdRaw: string, runId: string, keepRaw: unknown, now = new Date()): ReviewRun {
 	const slot = slotFor(createPersistentAgentInstance(agentIdRaw).agentId, runId);
 	requireReady(slot);
@@ -986,7 +989,7 @@ export function cancelReviewRun(agentIdRaw: string, runId: string, now = new Dat
 // --- Approval --------------------------------------------------------------------
 
 /**
- * ONE write: the candidate document (post-tidy, post-demotion, keeps pinned),
+ * ONE write: the candidate document (post-tidy, post-demotion, the kept notes back in),
  * everything that left the core appended to the archive with its reason,
  * Chronos stamped, and the run's own account in the review event record.
  * Anything else that changed the file since the run started makes the run
@@ -1085,6 +1088,11 @@ export function approveReviewRun(agentIdRaw: string, runId: string, now = new Da
 	}
 
 	finish(slot, "saved", now);
+	// A keep is a use: each kept note that was written counts one. Use is use,
+	// so an undo of this save leaves it.
+	const savedIds = new Set(candidate.topics.flatMap((topic) => topic.entries).map((entry) => entry.id));
+	const keptUsed = run.demotion.keepIds.filter((id) => savedIds.has(id));
+	if (keptUsed.length > 0) recordMemoryUse(agentId, keptUsed.map((id) => ({ id, source: "note" as const })), { now });
 	if (run.migration?.pending) run.migration = { pending: false, entriesAssigned: run.migration.entriesAssigned };
 	return {
 		agentId,

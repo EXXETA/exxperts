@@ -31,12 +31,15 @@
 import {
 	applyFoldOps,
 	buildFoldPrompt,
+	buildFoldUnreadableRetryPrompt,
+	decideFoldOps,
 	EMPTY_FOLD_GUIDANCE,
 	FOLD_TRIGGER_PROMPT,
+	FOLD_UNSORTED_TOPIC,
 	parseFoldOps,
 	summarizeFold,
-	validateFoldOps,
 	type FoldOp,
+	type FoldOpDecision,
 	type FoldRecord,
 } from "../../src/absorb-ops.js";
 import {
@@ -46,11 +49,12 @@ import {
 	parseMemoryDocument,
 	renderMemoryDocument,
 	reviewTargetTokens,
+	withoutMustKeepMarkers,
 	type MemoryDocument,
 } from "../../src/memory-entries.js";
 import { estimateTokens } from "../../src/token-estimate.js";
 import { buildFoldFixture, type FoldFixture, type Plant } from "./fold-fixtures.mjs";
-import { refusingThenExactFoldModel, SCRIPTED_FOLD_MODELS, SCRIPTED_FOLD_VARIANTS, type ScriptedFoldVariant } from "./fold-models.mjs";
+import { unknownIdFoldModel, SCRIPTED_FOLD_MODELS, SCRIPTED_FOLD_VARIANTS, type ScriptedFoldVariant } from "./fold-models.mjs";
 
 // --- The run's fixed points --------------------------------------------------
 
@@ -120,10 +124,12 @@ type FoldGenerator = (prompt: string) => Promise<{ text: string; usage?: { input
 interface SessionRun {
 	sessionId: string;
 	attempts: number;
-	/** Refusals that still stood after the one retry; a refused session changes nothing. */
-	refusals: string[];
-	/** Refusals the first attempt drew, whether or not the retry cleared them. */
-	firstRefusals: string[];
+	/** Why the session changed nothing: an unreadable reply after its one retry, a call that failed, or a reply of which nothing landed. */
+	failed?: string;
+	/** The unreadable class of the first reply, when the retry was needed. */
+	firstUnreadable?: string;
+	/** How each op of the last reply ended. */
+	decisions: FoldOpDecision[];
 	record?: FoldRecord;
 	opCount: number;
 	promptTokens: number[];
@@ -146,15 +152,6 @@ function coreContextOf(doc: MemoryDocument): string {
 	return renderMemoryDocument(doc, "context", { entryIds: true, sections: MEMORY_SECTIONS }).trim();
 }
 
-/**
- * The Retry Notice, built the way the maintenance workers build theirs: the
- * original prompt, then the reasons as they were named, then the ask again.
- * One retry per session, and never two notices stacked on one prompt.
- */
-function buildFoldRetryPrompt(prompt: string, reasons: string[]): string {
-	return `${prompt.trimEnd()}\n\n---\n\n## Retry Notice\n\nYour previous operations were refused:\n\n${reasons.map((reason) => `- ${reason}`).join("\n")}\n\nAnswer again with the narrative and exactly one \`\`\`json fence holding \`{"ops": [ ... ]}\`, resolving every reason above. Copy entry ids exactly as they are listed, and name only what this session changes.\n`;
-}
-
 function countEntries(doc: MemoryDocument): number {
 	return doc.topics.reduce((total, topic) => total + topic.entries.length, 0);
 }
@@ -174,7 +171,7 @@ async function runFold(fixture: FoldFixture, generate: FoldGenerator, opts: { pl
 
 	for (const [index, session] of fixture.sessions.entries()) {
 		const text = opts.plain ? session.plainText : session.annotatedText;
-		const run: SessionRun = { sessionId: session.id, attempts: 0, refusals: [], firstRefusals: [], opCount: 0, promptTokens: [], replyTokens: [], usage: { input: 0, output: 0, cost: 0 } };
+		const run: SessionRun = { sessionId: session.id, attempts: 0, decisions: [], opCount: 0, promptTokens: [], replyTokens: [], usage: { input: 0, output: 0, cost: 0 } };
 		const areas = listAreas(doc);
 		const assembly = buildFoldPrompt({
 			agentId: AGENT_ID,
@@ -190,9 +187,10 @@ async function runFold(fixture: FoldFixture, generate: FoldGenerator, opts: { pl
 		});
 		if (opts.showPrompt && index === 0) console.log(`\n--- the fold prompt of ${session.id} ---\n${assembly.prompt}\n--- end of prompt ---\n`);
 
+		// As the run does it: one more ask for an unreadable reply, and each op of
+		// a readable one decided alone.
 		let prompt = assembly.prompt;
 		let ops: FoldOp[] = [];
-		let refusals: string[] = [];
 		for (let attempt = 1; attempt <= 2; attempt++) {
 			run.attempts = attempt;
 			run.promptTokens.push(estimateTokens(prompt));
@@ -200,7 +198,7 @@ async function runFold(fixture: FoldFixture, generate: FoldGenerator, opts: { pl
 			try {
 				reply = await generate(prompt);
 			} catch (error) {
-				refusals = [`the fold call failed: ${(error as Error).message}`];
+				run.failed = `the fold call failed: ${(error as Error).message}`;
 				run.replyTokens.push(0);
 				break;
 			}
@@ -208,25 +206,28 @@ async function runFold(fixture: FoldFixture, generate: FoldGenerator, opts: { pl
 			run.usage.input += reply.usage?.input ?? 0;
 			run.usage.output += reply.usage?.output ?? 0;
 			run.usage.cost += reply.usage?.cost ?? 0;
-			const read = parseFoldOps(reply.text);
-			ops = read.ops;
-			refusals = read.problems.length > 0 ? read.problems : validateFoldOps(read.ops, areas, { id: session.id, text });
-			if (reply.truncated) refusals = [...refusals, "the reply was cut at the model's output limit"];
-			if (attempt === 1) run.firstRefusals = refusals;
-			if (refusals.length === 0) break;
-			if (attempt === 2) break;
-			prompt = buildFoldRetryPrompt(assembly.prompt, refusals);
+			const read = parseFoldOps(reply.text, { truncated: reply.truncated });
+			if (read.unreadable) {
+				run.failed = `unreadable: ${read.unreadable}`;
+				if (attempt === 1) run.firstUnreadable = read.unreadable;
+				prompt = buildFoldUnreadableRetryPrompt(assembly.prompt, read.unreadable === "cut-off");
+				continue;
+			}
+			const decided = decideFoldOps(read.items, areas, { text });
+			run.decisions = decided.decisions;
+			ops = decided.ops;
+			run.failed = decided.landed ? undefined : "nothing landed";
+			break;
 		}
 
-		run.refusals = refusals;
-		if (refusals.length === 0) {
+		if (!run.failed) {
 			try {
 				const applied = applyFoldOps(doc, ops, { sessionId: session.id, savedDate: RUN_DATE, nextEntryNumber: doc.nextEntryNumber });
 				doc = applied.doc;
 				run.record = applied.record;
 				run.opCount = ops.length;
 			} catch (error) {
-				mechanical.push(`${session.id}: applying validated operations threw — ${(error as Error).message}`);
+				mechanical.push(`${session.id}: applying decided operations threw: ${(error as Error).message}`);
 			}
 		}
 		runs.push(run);
@@ -236,7 +237,7 @@ async function runFold(fixture: FoldFixture, generate: FoldGenerator, opts: { pl
 	// miss by eye — a fact the scorer calls missing may be there in other words.
 	if (process.env.FOLD_BENCH_DUMP) {
 		const { writeFileSync } = await import("node:fs");
-		writeFileSync(process.env.FOLD_BENCH_DUMP, `${renderMemoryDocument(doc, "context", { entryIds: true, sections: MEMORY_SECTIONS })}\n\n---\n\n${runs.map((run) => `## ${run.sessionId} · ${run.opCount} ops · ${run.refusals.length ? `refused: ${run.refusals.join("; ")}` : "applied"}`).join("\n")}\n`);
+		writeFileSync(process.env.FOLD_BENCH_DUMP, `${renderMemoryDocument(doc, "context", { entryIds: true, sections: MEMORY_SECTIONS })}\n\n---\n\n${runs.map((run) => `## ${run.sessionId} · ${run.opCount} ops · ${run.failed ?? "applied"}`).join("\n")}\n`);
 	}
 
 	return { doc, runs, mechanical, tokensBefore, tokensAfter: reviewTargetTokens(doc), entriesBefore, entriesAfter: countEntries(doc) };
@@ -353,7 +354,8 @@ function score(fixture: FoldFixture, result: RunResult): Category[] {
 		name: "must-keep pinned and exact",
 		lines: plantsOf("mustkeep").map((plant) => {
 			const found = carrying(entries, plant.marker);
-			const withoutCode = (text: string) => normalize(text.replace(/\s*\(ref [^)]*\)/g, ""));
+			// The applier takes the marker out where it pins, so the words are compared without it on both sides.
+			const withoutCode = (text: string) => normalize(withoutMustKeepMarkers(text).replace(/\s*\(ref [^)]*\)/g, ""));
 			const exact = found.some((entry) => withoutCode(entry.text).includes(withoutCode(plant.exactText ?? "")));
 			const pinned = found.some((entry) => entry.pinned);
 			return {
@@ -373,7 +375,7 @@ function score(fixture: FoldFixture, result: RunResult): Category[] {
 			return {
 				subject: plant.session,
 				passed: Boolean(reason) && added === 0,
-				detail: !record ? "the session was refused, not dropped" : reason ? (added === 0 ? `dropped: ${reason.slice(0, 48)}` : "dropped, but entries were added too") : `not dropped: ${added} entr${added === 1 ? "y" : "ies"} added`,
+				detail: !record ? "the session changed nothing, not dropped" : reason ? (added === 0 ? `dropped: ${reason.slice(0, 48)}` : "dropped, but entries were added too") : `not dropped: ${added} entr${added === 1 ? "y" : "ies"} added`,
 			};
 		}),
 	});
@@ -441,7 +443,8 @@ function printSessionTable(result: RunResult): void {
 	for (const run of result.runs) {
 		const summary = run.record ? summarizeFold(run.record) : undefined;
 		const pinned = run.record?.pinned.length ?? 0;
-		const outcome = run.refusals.length > 0 ? `REFUSED: ${run.refusals[0].slice(0, 60)}` : run.firstRefusals.length > 0 ? `applied after one retry (${run.firstRefusals.length} refusal${run.firstRefusals.length === 1 ? "" : "s"})` : "applied";
+		const reshaped = run.decisions.filter((decision) => decision.fate !== "applied").map((decision) => `${decision.fate}:${decision.codes.join("+")}`);
+		const outcome = run.failed ? `NOT APPLIED: ${run.failed.slice(0, 60)}` : `applied${run.firstUnreadable ? ` after one retry (${run.firstUnreadable})` : ""}${reshaped.length ? ` (${reshaped.join(", ")})` : ""}`;
 		console.log(
 			pad(run.sessionId, 9) +
 				pad(run.opCount, 4, true) +
@@ -496,22 +499,23 @@ function totalScore(categories: Category[]): { passed: number; total: number } {
 	);
 }
 
-// --- The refusal rehearsal ---------------------------------------------------
+// --- The redirect rehearsal --------------------------------------------------
 
 /**
  * One session folded by a model that names an entry the memory does not hold,
- * so every offline run exercises the validator's refusal and the Retry Notice
- * rather than leaving that path to a real model's bad day.
+ * so every offline run exercises the decision's redirect (the text is kept in
+ * Unsorted, in one call) rather than leaving that path to a real model's bad day.
  */
-async function rehearseRefusal(fixture: FoldFixture): Promise<string> {
-	const model = refusingThenExactFoldModel();
+async function rehearseRedirect(fixture: FoldFixture): Promise<string> {
+	const model = unknownIdFoldModel();
 	const single: FoldFixture = { ...fixture, sessions: fixture.sessions.slice(0, 1) };
 	const result = await runFold(single, async (prompt) => ({ text: model(prompt) }), { plain: false, showPrompt: false });
 	const run = result.runs[0];
 	if (result.mechanical.length > 0) return `MECHANICAL: ${result.mechanical.join("; ")}`;
-	if (run.firstRefusals.length === 0) return "the first reply was not refused — the refusal rehearsal proved nothing";
-	if (run.refusals.length > 0) return `the retry was refused too: ${run.refusals[0]}`;
-	return `first reply refused (${run.firstRefusals[0].slice(0, 72)}), retry applied ${run.opCount} operations`;
+	const redirected = run.decisions.find((decision) => decision.fate === "redirected" && decision.codes.includes("unknown-id"));
+	const kept = result.doc.topics.some((topic) => topic.title === FOLD_UNSORTED_TOPIC && topic.entries.some((entry) => entry.text.includes("An entry this memory does not hold.")));
+	if (run.failed || !redirected || !kept || run.attempts !== 1) return `the unknown id was not redirected in one call (${run.failed ?? `${run.attempts} calls`})`;
+	return `an update of an unknown id was kept in ${FOLD_UNSORTED_TOPIC} in one call`;
 }
 
 // --- The real model ----------------------------------------------------------
@@ -579,7 +583,7 @@ if (realSpec) {
 	for (const failure of result.mechanical) console.log(`MECHANICAL FAILURE: ${failure}`);
 	mechanicalFailures += result.mechanical.length;
 } else {
-	console.log(`\nrefusal rehearsal: ${await rehearseRefusal(fixture)}`);
+	console.log(`\nredirect rehearsal: ${await rehearseRedirect(fixture)}`);
 	for (const variant of args.variants) {
 		const model = SCRIPTED_FOLD_MODELS[variant];
 		console.log(`\n=== scripted model: ${variant} ===`);
@@ -596,6 +600,7 @@ if (realSpec) {
 		mechanicalFailures += result.mechanical.length;
 		if (variant === "exact" && total.passed !== total.total) {
 			console.log("NOTE: the exact variant answers with the planted operations, so anything below a perfect score here is a bug in the bench, not a fold failure.");
+			process.exitCode = 1;
 		}
 	}
 }

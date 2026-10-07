@@ -447,7 +447,7 @@ export function RemoteAccessPage() {
 						<span className="settings-row-label">Tunnel</span>
 						<span className="settings-row-sub">
 							{tunnelReady
-								? "Running. Only devices signed in to your Tailscale account can reach this computer."
+								? "Found. Your phone needs Tailscale on too, signed in to the same account as this computer."
 								: "Not found yet. Install Tailscale here and on your phone, signed in to the same account; this screen notices it by itself, and any other compatible tunnel too."}
 						</span>
 					</div>

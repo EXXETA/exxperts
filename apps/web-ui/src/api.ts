@@ -23,6 +23,28 @@ export async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Pr
 	return res;
 }
 
+/** A request the server answered with an error: its sentence, plus the HTTP status and the machine code when it sent one. */
+export class ApiRequestError extends Error {
+	constructor(message: string, readonly status: number, readonly code?: string) {
+		super(message);
+	}
+}
+
+/** The server's machine code on a failed request, if it sent one. */
+export function apiErrorCode(error: unknown): string | undefined {
+	return error instanceof ApiRequestError ? error.code : undefined;
+}
+
+/**
+ * A request that failed without the server saying why in its own words: the
+ * network, or a server error with no code. A sentence the server wrote (a busy
+ * room, no Memory model) is the server's answer and is shown as it is.
+ */
+export function isUnexplainedRequestFailure(error: unknown): boolean {
+	if (error instanceof ApiRequestError) return error.status >= 500 && error.code === undefined;
+	return error instanceof TypeError;
+}
+
 // One JSON fetch helper for the whole UI: parses {error} (our endpoints) and
 // {message} (framework defaults) into a thrown Error the caller can render.
 export async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
@@ -30,12 +52,14 @@ export async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> 
 	redirectToSignInOn401(res);
 	if (!res.ok) {
 		let message = `Request failed (${res.status})`;
+		let code: string | undefined;
 		try {
 			const body = await res.json();
 			if (body?.error) message = String(body.error);
 			else if (body?.message) message = String(body.message);
+			if (typeof body?.code === "string") code = body.code;
 		} catch {}
-		throw new Error(message);
+		throw new ApiRequestError(message, res.status, code);
 	}
 	return await res.json() as T;
 }

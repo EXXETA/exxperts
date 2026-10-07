@@ -37,7 +37,7 @@ const REPLY_SENTINEL = "REPLY_ONLY_SENTINEL_QUARTERLY_FORECAST";
 const PROMPT_SENTINEL = "PROMPT_ONLY_SENTINEL_ASSESSMENT_STEER";
 
 const {
-	buildAbsorbProposal,
+	buildAbsorbAssessment,
 	buildConsultAnswer,
 	createPersistentAgentFromScaffoldInput,
 	createPersistentAgentInstance,
@@ -48,6 +48,7 @@ const {
 	listMaintenanceDiagnostics,
 	maintenanceDiagnosticsDir,
 	maintenanceDiagnosticsParseSignature,
+	MEMORIZE_ASSESSMENT_MARKERS,
 	MEMORIZE_PROPOSAL_MARKERS,
 	writeMaintenanceDiagnosticsRecord,
 } = await import("../src/maintenance-diagnostics.js");
@@ -94,82 +95,32 @@ ${Array.from({ length: 5 }, (_, i) => `### RC-000${i + 1} | OPEN | 2026-08-2${i}
 	fs.writeFileSync(l1bPath, l1b, "utf-8");
 }
 
-const assessmentFixture = `## Absorb assessment
+// A complete reply whose headings are BOLDED: the field failure that reads as
+// a missing section everywhere and is invisible in the numbers.
+function bolded(reply: string): string {
+	return reply.replace(/^### (.+)$/gm, "### **$1**");
+}
 
-I found 5 Recent Context entries. ${PROMPT_SENTINEL}
+// A first read with every heading kept and its own words: the reply's only
+// sentinel sits in a bullet, the prompt's only one in the retry notice.
+const memorizeAssessment = `## Absorb assessment
+
+I found 5 Recent Context entries.
 
 ### What to remember
-- The durable commercial terms.
+- ${REPLY_SENTINEL} is the durable commercial term.
 
 ### What to forget
 - Chatter.
 
 ### What changes in stable memory
 - Deep Memory: sharpen.
+- Active Items: keep the live thread.
+- Recent Context: all entries are expected to be cleared after approval.
 
 ### Needs your judgment
 - None
 `;
-
-// A complete Memorize proposal whose headings are BOLDED: the field failure
-// that reads as thirteen structural complaints and is invisible in the numbers.
-function bolded(reply: string): string {
-	return reply.replace(/^### (.+)$/gm, "### **$1**");
-}
-
-function memorizeProposal(): string {
-	return `## Memory Absorption Proposal
-
-### Mode
-RC_CONSOLIDATION
-
-### Primacy Map
-${REPLY_SENTINEL} summarises the chain.
-
-### Section-Level Change Log
-| Section | Prior Words | Candidate Words | Action | Rationale |
-|---|---:|---:|---|---|
-| Deep Memory | 20 | 20 | keep | Durable. |
-
-### Entry-Level Detail
-| Entry / Block | Operation | Target Section | Rationale |
-|---|---|---|---|
-| RC-0001 | fold | Deep Memory | Durable. |
-
-### Compression Metrics
-- RC input words: 10
-- RC removed words: 10
-- RC removed percent: 100%
-- Stable memory words before: 20
-- Stable memory words after: 20
-- Stable memory delta: 0
-- Compression ratio: 1.0
-
-### Warnings
-None
-
-### Candidate L1b
-<!-- exxeta:l1b schema_version=1 -->
-
-## Chronos
-
-- Lifecycle state: ready
-
-## Deep Memory
-
-### ${MEMORY_SENTINEL} terms
-
-- The contract renews annually and legal signs before June. (saved 2026-07-08)
-
-## Active Items
-
-- One live thread. (saved 2026-08-01)
-
-## Recent Context
-
-_No sessions are waiting to be memorized._
-`;
-}
 
 /**
  * A room whose memory is notes with ids, dates and pins — what a Review run
@@ -257,23 +208,25 @@ async function waitForServer(child: ChildProcessWithoutNullStreams): Promise<voi
 }
 
 try {
-	// --- 1. A Memorize proposal whose headings deviate ------------------------
+	// --- 1. A Memorize first read whose headings deviate ----------------------
 	createPersistentAgentFromScaffoldInput({ displayName: "Diagnostics Smoke Room", userName: "Synthetic User", preferredUserAddress: "Synthetic User" });
 	const agentId = "diagnostics-smoke-room";
 	const roomRootDir = createPersistentAgentInstance(agentId).rootDir;
 	assert(fs.existsSync(maintenanceDiagnosticsDir(roomRootDir)), "the scaffold should create the diagnostics directory");
 	seedMemory(agentId);
 
-	const deviating = await buildAbsorbProposal({ agentId, assessmentMarkdown: assessmentFixture }, ABSORB_MODEL, async () => ({
-		text: bolded(memorizeProposal()),
-		usage: { input: 6000, output: 900, totalTokens: 6900, cost: 0 },
-	}));
-	assert(deviating.candidateValidation.valid === false, "a bolded-heading proposal is exactly the field failure: complete, and unparseable");
+	let deviatingCalls = 0;
+	const deviating = await buildAbsorbAssessment(agentId, ABSORB_MODEL, async (prompt) => {
+		deviatingCalls += 1;
+		assert(prompt.includes(PROMPT_SENTINEL) && prompt.includes(MEMORY_SENTINEL), "the prompt carries the retry notice's words and the room's memory");
+		return { text: bolded(memorizeAssessment), usage: { input: 6000, output: 900, totalTokens: 6900, cost: 0 } };
+	}, { retryFeedback: [`assessment missing What to remember bullets ${PROMPT_SENTINEL}`] });
+	assert(deviatingCalls === 1 && deviating.fields.whatToRemember.length === 1, `the first read's parser reads bolded headings, so one call is enough, got ${deviatingCalls} calls`);
 
 	const afterFirst = listMaintenanceDiagnostics(roomRootDir);
 	assert(afterFirst.length === 1, `one worker call should leave one record, got ${afterFirst.length}`);
 	const record = afterFirst[0];
-	assert(record.process === "memorize-proposal", `the record should name the process, got ${record.process}`);
+	assert(record.process === "memorize-assessment", `the record should name the process, got ${record.process}`);
 	assert(record.provider === ABSORB_MODEL.provider && record.model === ABSORB_MODEL.model, `the record should name the model, got ${record.provider}/${record.model}`);
 	assert(record.promptChars > 0 && record.promptEstimatedTokens > 0, "the record should carry the prompt's size");
 	assert(record.promptEstimatedTokens === Math.ceil(record.promptChars / 4), "the prompt estimate should be the product's own chars/4");
@@ -282,15 +235,15 @@ try {
 	assert(record.truncated === false, "a complete reply is not truncated");
 	assert(typeof record.wallTimeMs === "number" && record.wallTimeMs >= 0, "the record should carry a wall time");
 	assert(record.attempt === 1, `the first call is attempt one, got ${record.attempt}`);
-	assert(record.outcome === "refused", `a proposal the validator rejects is refused, got ${record.outcome}`);
-	assert(record.validatorErrors.length > 0, "the record should carry the validator's reasons");
+	assert(record.outcome === "accepted" && record.validatorErrors.length === 0, `a first read the parser read is accepted, got ${record.outcome} ${JSON.stringify(record.validatorErrors)}`);
 
 	// The parse signature is the whole point: it separates "the reply was cut"
-	// from "the reply was complete and its headings deviated".
+	// from "the reply was complete and its headings deviated", even when the
+	// parser copes with the deviation.
 	const states = new Map(record.parseSignature.markers.map((m) => [m.marker, m.state]));
-	assert(states.get("Mode") === "deviating", `a bolded heading should read as deviating, got ${states.get("Mode")}`);
-	assert(states.get("Candidate L1b") === "deviating", `every bolded heading should read as deviating, got ${states.get("Candidate L1b")}`);
-	assert(record.parseSignature.markers.length === MEMORIZE_PROPOSAL_MARKERS.length, "every expected marker is reported");
+	assert(states.get("What to remember") === "deviating", `a bolded heading should read as deviating, got ${states.get("What to remember")}`);
+	assert(states.get("Needs your judgment") === "deviating", `every bolded heading should read as deviating, got ${states.get("Needs your judgment")}`);
+	assert(record.parseSignature.markers.length === MEMORIZE_ASSESSMENT_MARKERS.length, "every expected marker is reported");
 
 	// --- 2. Nothing private in the record -------------------------------------
 	const serialized = JSON.stringify(record);
@@ -365,10 +318,10 @@ try {
 	assert(!JSON.stringify(afterRefusal).includes(MEMORY_SENTINEL), "neither attempt may carry the room's words");
 
 	// --- 4. The signature reads a cut reply differently ------------------------
-	const cut = maintenanceDiagnosticsParseSignature("## Memory Absorption Proposal\n\n### Mode\nRC_CONSOLIDATION\n\n### Primacy Map\nThe chain", MEMORIZE_PROPOSAL_MARKERS);
+	const cut = maintenanceDiagnosticsParseSignature("## Absorb assessment\n\n### What to remember\n- The dur", MEMORIZE_ASSESSMENT_MARKERS);
 	const cutStates = new Map(cut.markers.map((m) => [m.marker, m.state]));
-	assert(cutStates.get("Mode") === "exact", "a cut reply's surviving headings read as exact");
-	assert(cutStates.get("Candidate L1b") === "missing", "a cut reply's lost headings read as missing, not deviating");
+	assert(cutStates.get("What to remember") === "exact", "a cut reply's surviving headings read as exact");
+	assert(cutStates.get("Needs your judgment") === "missing", "a cut reply's lost headings read as missing, not deviating");
 
 	// --- 4b. Newest first does not depend on file names -----------------------
 	// A retry can land in the same millisecond as the call it retried, and the

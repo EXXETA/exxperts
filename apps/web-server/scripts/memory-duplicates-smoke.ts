@@ -57,6 +57,8 @@ interface Note {
 	kind?: MemoryEntry["kind"];
 	saved?: string;
 	updated?: string;
+	learned?: string;
+	disagrees?: string;
 	status?: "open" | "done";
 	text: string;
 }
@@ -70,6 +72,8 @@ function meta(note: Note): string {
 	const fields = [`id=${note.id}`, `kind=${note.kind ?? "fact"}`, `saved=${note.saved ?? "2026-01-01"}`];
 	if (note.status) fields.push(`status=${note.status}`);
 	if (note.updated) fields.push(`updated=${note.updated}`);
+	if (note.learned) fields.push(`learned=${note.learned}`);
+	if (note.disagrees) fields.push(`disagrees=${note.disagrees}`);
 	return `<!-- e: ${fields.join(" ")} -->`;
 }
 
@@ -130,7 +134,7 @@ const NOTICE = "- The renewal notice must go out six weeks ahead of the date.";
 	if (missing || !listed) finish();
 }
 
-const { NOTE_VALUE_WORDS, classifyNotePair, conflictNoteSentence, conflictPromptLine, conflictReason, conflictValuePairs, findConflictingNotePairs, findNotePairs, noteValueTokens } = duplicates;
+const { NOTE_VALUE_WORDS, classifyNotePair, conflictNoteSentence, conflictPromptLine, conflictReason, conflictValuePairs, dropsNoteValue, findConflictingNotePairs, findNotePairs, negationDiffers, noteValueTokens } = duplicates;
 
 // --- 3. The classification table ------------------------------------------------
 
@@ -167,6 +171,12 @@ classified("Sprint review on 3 May", "Sprint review on 3 June", "conflict", "may
 classified("Die Wartung läuft im März aus", "Die Wartung läuft im Juli aus", "conflict", "German month names carry a value");
 classified("Die Wartung läuft im Mär aus", "Die Wartung läuft im Sept aus", "conflict", "German abbreviations carry a value");
 classified("The contract is renewed", "The contract is not renewed", "conflict", "a negation is a value group of its own");
+classified("The Nordwind deposit is 5,000 euros", "The Nordwind deposit is 5000 euros", "duplicate", "a number with a group separator is one number");
+classified("The Nordwind deposit is 5.000 euros", "The Nordwind deposit is 5000 euros", "duplicate", "a German group separator too");
+check(`group separators join, decimals do not, got ${JSON.stringify(noteValueTokens("5,000 and 1.250.000 against 1,5 and 10.25"))}`, noteValueTokens("5,000 and 1.250.000 against 1,5 and 10.25").join(" ") === "5000 1250000 1 5 10 25");
+check("a respelt number drops no value", !dropsNoteValue("- The deposit is 5.000 euros, paid before the handover.", "- The deposit is 5000 euros.") && dropsNoteValue("- The deposit is 7000 euros.", "- The deposit is 5000 euros."));
+check("a negation on one side only differs, on both sides it does not", negationDiffers("- The contract does not renew automatically.", "- The contract renews automatically.") && !negationDiffers("- It never renews.", "- It does not renew.") && !negationDiffers("- It renews.", "- It renews each year."));
+check(`a conflict keeps the person's spelling of a grouped number, got ${JSON.stringify(conflictValuePairs("Budget for the pilot is 55,000 EUR", "Budget for the pilot is 60,000 EUR"))}`, JSON.stringify(conflictValuePairs("Budget for the pilot is 55,000 EUR", "Budget for the pilot is 60,000 EUR")) === JSON.stringify([{ older: "55,000", newer: "60,000" }]));
 classified("Der Vertrag wird verlängert", "Der Vertrag wird nicht verlängert", "conflict", "a German negation is a value group of its own");
 classified("Revenue target holds for Q3", "Revenue target holds for Q4", "conflict", "a digit inside a word is a value");
 classified("The gateway context limit is 16k", "The gateway context limit is 32k", "conflict", "a number with a unit letter is a value");
@@ -195,9 +205,9 @@ check("a digit is a rule, not a list entry", !NOTE_VALUE_WORDS.some((w) => /\d/.
 
 {
 	const german = noteValueTokens("- Am Montag, 1.6.2026, kostet die Wartung 55.000 Euro, nicht 45.000, und läuft im Sept aus.");
-	check(`German value tokens in note order, got ${german.join(" ")}`, german.join(" ") === "montag 1 6 2026 55 000 nicht 45 000 sept");
+	check(`German value tokens in note order, got ${german.join(" ")}`, german.join(" ") === "montag 1 6 2026 55000 nicht 45000 sept");
 	const english = noteValueTokens("- On Monday 3 May 2026 the budget is 55,000 and not 16k; Q3 stays without a review.");
-	check(`English value tokens in note order, got ${english.join(" ")}`, english.join(" ") === "monday 3 may 2026 55 000 not 16k q3 without");
+	check(`English value tokens in note order, got ${english.join(" ")}`, english.join(" ") === "monday 3 may 2026 55000 not 16k q3 without");
 	check("a note without a value has no tokens", noteValueTokens("Invoices go out monthly").length === 0);
 	check("the marks are stripped before the tokens are read", noteValueTokens("- **must-keep** Renews on 1 June (saved 2026-06-02) [m-0031]").join(" ") === "1 june");
 }
@@ -222,13 +232,14 @@ check("a digit is a rule, not a list entry", !NOTE_VALUE_WORDS.some((w) => /\d/.
 // --- 6. The reason on the card ---------------------------------------------------
 
 {
-	check("the reason names the changed value with both days", conflictReason(NINE_JUNE, NINE_JULY, "2026-06-02", "2026-09-14", TODAY) === "1 July (saved 14 Sep) replaces 1 June (saved 2 Jun); the newer date decides");
-	check("several changed values are joined by commas", conflictReason("Budget is 45,000 and renews on 1 June", "Budget is 55,000 and renews on 1 July", "2026-06-02", "2026-09-14", TODAY) === "55,000, 1 July (saved 14 Sep) replaces 45,000, 1 June (saved 2 Jun); the newer date decides");
-	check("equal days say both saved", conflictReason(NINE_JUNE, NINE_JULY, "2026-09-14", "2026-09-14", TODAY) === "1 July replaces 1 June (both saved 14 Sep)");
-check("a conversation older than the note it replaces says the fold order decided, not a date", conflictReason(NINE_JUNE, NINE_JULY, "2026-09-14", "2026-09-12", TODAY) === "1 July replaces 1 June (saved 14 Sep); the conversation of 12 Sep was folded after it");
-	check("a day in another year names the year", conflictReason(NINE_JUNE, NINE_JULY, "2025-06-02", "2026-09-14", TODAY) === "1 July (saved 14 Sep) replaces 1 June (saved 2 Jun 2025); the newer date decides");
-	check("a German reason keeps the German spelling", conflictReason("- Die Wartung läuft am 3. Mai 2026 aus.", "- Die Wartung läuft am 4. Juni 2026 aus.", "2026-06-02", "2026-09-14", TODAY) === "4. Juni 2026 (saved 14 Sep) replaces 3. Mai 2026 (saved 2 Jun); the newer date decides");
-	check("a negation that arrived replaces nothing", conflictReason("Der Vertrag wird verlängert", "Der Vertrag wird nicht verlängert", "2026-06-02", "2026-09-14", TODAY) === "nicht (saved 14 Sep) replaces nothing (saved 2 Jun); the newer date decides");
+	check("the reason names the changed value with both days", conflictReason(NINE_JUNE, NINE_JULY, "2026-06-02", "2026-09-14", TODAY) === "1 July (as of 14 Sep) replaces 1 June (as of 2 Jun); the newer date decides");
+	check("several changed values are joined by commas", conflictReason("Budget is 45,000 and renews on 1 June", "Budget is 55,000 and renews on 1 July", "2026-06-02", "2026-09-14", TODAY) === "55,000, 1 July (as of 14 Sep) replaces 45,000, 1 June (as of 2 Jun); the newer date decides");
+	check("equal days say both as of", conflictReason(NINE_JUNE, NINE_JULY, "2026-09-14", "2026-09-14", TODAY) === "1 July replaces 1 June (both as of 14 Sep)");
+check("a newer text whose day is the earlier names no day: no date decided", conflictReason(NINE_JUNE, NINE_JULY, "2026-09-14", "2026-09-12", TODAY) === "1 July replaces 1 June");
+	check("an unknown day names no day", conflictReason(NINE_JUNE, NINE_JULY, undefined, "2026-09-12", TODAY) === "1 July replaces 1 June" && conflictReason(NINE_JUNE, NINE_JULY, "2026-09-12", undefined, TODAY) === "1 July replaces 1 June");
+	check("a day in another year names the year", conflictReason(NINE_JUNE, NINE_JULY, "2025-06-02", "2026-09-14", TODAY) === "1 July (as of 14 Sep) replaces 1 June (as of 2 Jun 2025); the newer date decides");
+	check("a German reason keeps the German spelling", conflictReason("- Die Wartung läuft am 3. Mai 2026 aus.", "- Die Wartung läuft am 4. Juni 2026 aus.", "2026-06-02", "2026-09-14", TODAY) === "4. Juni 2026 (as of 14 Sep) replaces 3. Mai 2026 (as of 2 Jun); the newer date decides");
+	check("a negation that arrived replaces nothing", conflictReason("Der Vertrag wird verlängert", "Der Vertrag wird nicht verlängert", "2026-06-02", "2026-09-14", TODAY) === "nicht (as of 14 Sep) replaces nothing (as of 2 Jun); the newer date decides");
 	check("today defaults to the local day", typeof conflictReason(NINE_JUNE, NINE_JULY, "2026-06-02", "2026-09-14") === "string");
 }
 
@@ -243,14 +254,14 @@ function pairOf(a: Partial<ConflictNotePair["a"]>, b: Partial<ConflictNotePair["
 }
 
 {
-	check("one topic disagrees with itself, older first", conflictNoteSentence(pairOf({}, {}, "b"), TODAY) === `"The Nordwind contract" disagrees with itself: 1 June (saved 2 Jun) or 1 July (saved 14 Sep)`);
-	check("two topics disagree, the older topic first", conflictNoteSentence(pairOf({}, { topic: "Renewals" }, "b"), TODAY) === `"The Nordwind contract" and "Renewals" disagree: 1 June (saved 2 Jun) or 1 July (saved 14 Sep)`);
-	check("when the first member is newer the older still comes first", conflictNoteSentence(pairOf({ text: NINE_JULY, date: "2026-09-14" }, { topic: "Renewals", text: NINE_JUNE, date: "2026-06-02" }, "a"), TODAY) === `"Renewals" and "The Nordwind contract" disagree: 1 June (saved 2 Jun) or 1 July (saved 14 Sep)`);
-	check("an undecided pair says both saved, in document order", conflictNoteSentence(pairOf({ date: "2026-09-14" }, {}, null), TODAY) === `"The Nordwind contract" disagrees with itself: 1 June or 1 July, both saved 14 Sep`);
-	check("a German pair reads its own spelling", conflictNoteSentence(pairOf({ text: "- Die Wartung läuft im März aus." }, { text: "- Die Wartung läuft im Juli aus." }, "b"), TODAY) === `"The Nordwind contract" disagrees with itself: März (saved 2 Jun) or Juli (saved 14 Sep)`);
-	check("the prompt line quotes both notes with their days and the rule", conflictPromptLine(pairOf({}, {}, "b"), TODAY) === `m-0101 (saved 2 Jun) says "The Nordwind maintenance contract renews automatically on 1 June."; m-0301 (saved 14 Sep) says "The Nordwind maintenance contract renews automatically on 1 July.": the newer date decides; merge them keeping the newer text, or say in the narrative why both stay`);
-	check("the prompt line puts the older note first whichever member it is", conflictPromptLine(pairOf({ id: "m-0301", text: NINE_JULY, date: "2026-09-14" }, { id: "m-0101", text: NINE_JUNE, date: "2026-06-02" }, "a"), TODAY).startsWith(`m-0101 (saved 2 Jun) says`));
-	check("the undecided prompt line says both saved and leaves the choice to the conversation", conflictPromptLine(pairOf({ date: "2026-09-14" }, {}, null), TODAY) === `m-0101 says "The Nordwind maintenance contract renews automatically on 1 June."; m-0301 says "The Nordwind maintenance contract renews automatically on 1 July.": both saved 14 Sep; keep the one the conversation confirms, or both`);
+	check("one topic disagrees with itself, older first", conflictNoteSentence(pairOf({}, {}, "b"), TODAY) === `"The Nordwind contract" disagrees with itself: 1 June (as of 2 Jun) or 1 July (as of 14 Sep)`);
+	check("two topics disagree, the older topic first", conflictNoteSentence(pairOf({}, { topic: "Renewals" }, "b"), TODAY) === `"The Nordwind contract" and "Renewals" disagree: 1 June (as of 2 Jun) or 1 July (as of 14 Sep)`);
+	check("when the first member is newer the older still comes first", conflictNoteSentence(pairOf({ text: NINE_JULY, date: "2026-09-14" }, { topic: "Renewals", text: NINE_JUNE, date: "2026-06-02" }, "a"), TODAY) === `"Renewals" and "The Nordwind contract" disagree: 1 June (as of 2 Jun) or 1 July (as of 14 Sep)`);
+	check("an undecided pair says both as of, in document order", conflictNoteSentence(pairOf({ date: "2026-09-14" }, {}, null), TODAY) === `"The Nordwind contract" disagrees with itself: 1 June or 1 July, both as of 14 Sep`);
+	check("a German pair reads its own spelling", conflictNoteSentence(pairOf({ text: "- Die Wartung läuft im März aus." }, { text: "- Die Wartung läuft im Juli aus." }, "b"), TODAY) === `"The Nordwind contract" disagrees with itself: März (as of 2 Jun) or Juli (as of 14 Sep)`);
+	check("the prompt line quotes both notes with their days and the rule", conflictPromptLine(pairOf({}, {}, "b"), TODAY) === `m-0101 (as of 2 Jun) says "The Nordwind maintenance contract renews automatically on 1 June."; m-0301 (as of 14 Sep) says "The Nordwind maintenance contract renews automatically on 1 July.": the newer date decides; merge them keeping the newer text, or say in the narrative why both stay`);
+	check("the prompt line puts the older note first whichever member it is", conflictPromptLine(pairOf({ id: "m-0301", text: NINE_JULY, date: "2026-09-14" }, { id: "m-0101", text: NINE_JUNE, date: "2026-06-02" }, "a"), TODAY).startsWith(`m-0101 (as of 2 Jun) says`));
+	check("the undecided prompt line says both as of and leaves the choice to the conversation", conflictPromptLine(pairOf({ date: "2026-09-14" }, {}, null), TODAY) === `m-0101 says "The Nordwind maintenance contract renews automatically on 1 June."; m-0301 says "The Nordwind maintenance contract renews automatically on 1 July.": both as of 14 Sep; keep the one the conversation confirms, or both`);
 	check("the prompt line strips the marks and cuts a long line", conflictPromptLine(pairOf({ text: `- **must-keep** ${"word ".repeat(40)}renews on 1 June` }, {}, "b"), TODAY).includes(`says "word word`) && !conflictPromptLine(pairOf({ text: `- **must-keep** ${"word ".repeat(40)}renews on 1 June` }, {}, "b"), TODAY).includes("must-keep"));
 }
 
@@ -262,18 +273,18 @@ function pairOf(a: Partial<ConflictNotePair["a"]>, b: Partial<ConflictNotePair["
 			{
 				title: "The Nordwind contract",
 				notes: [
-					{ id: "m-0101", saved: "2026-06-02", text: NINE_JUNE },
-					{ id: "m-0102", kind: "event", saved: "2026-04-01", text: "- Sprint 12 review on 3 May." },
-					{ id: "m-0103", saved: "2026-01-01", updated: "2026-09-14", text: "- Der Vertrag wird nicht verlängert." },
+					{ id: "m-0101", saved: "2026-06-02", learned: "2026-06-02", text: NINE_JUNE },
+					{ id: "m-0102", kind: "event", saved: "2026-04-01", learned: "2026-04-01", text: "- Sprint 12 review on 3 May." },
+					{ id: "m-0103", saved: "2026-01-01", updated: "2026-09-14", learned: "2026-09-14", text: "- Der Vertrag wird nicht verlängert." },
 					{ id: "m-0104", saved: "2026-06-02", text: NOTICE },
 				],
 			},
 			{
 				title: "Renewals",
 				notes: [
-					{ id: "m-0301", saved: "2026-09-14", text: NINE_JULY },
-					{ id: "m-0302", kind: "event", saved: "2026-05-20", text: "- Sprint 12 review on 2 June." },
-					{ id: "m-0303", saved: "2026-06-02", text: "- Der Vertrag wird verlängert." },
+					{ id: "m-0301", saved: "2026-09-14", learned: "2026-09-14", text: NINE_JULY },
+					{ id: "m-0302", kind: "event", saved: "2026-05-20", learned: "2026-05-20", text: "- Sprint 12 review on 2 June." },
+					{ id: "m-0303", saved: "2026-06-02", learned: "2026-06-02", text: "- Der Vertrag wird verlängert." },
 					{ id: "m-0304", saved: "2026-06-02", text: NOTICE },
 					{ id: "m-0305", kind: "event", saved: "2026-04-01", text: "- Sprint 14 review on 3 June." },
 					{ id: "m-0306", kind: "event", saved: "2026-04-01", text: "- Sprint 15 review on 17 May." },
@@ -282,16 +293,16 @@ function pairOf(a: Partial<ConflictNotePair["a"]>, b: Partial<ConflictNotePair["
 			},
 		],
 		[
-			{ id: "m-0501", kind: "item", status: "open", saved: "2026-04-01", text: "- Send the Nordwind offer by 3 May." },
-			{ id: "m-0502", kind: "item", status: "open", saved: "2026-04-01", text: "- Send the Nordwind offer by 10 May." },
+			{ id: "m-0501", kind: "item", status: "open", saved: "2026-04-01", learned: "2026-04-01", text: "- Send the Nordwind offer by 3 May." },
+			{ id: "m-0502", kind: "item", status: "open", saved: "2026-04-01", learned: "2026-04-01", text: "- Send the Nordwind offer by 10 May." },
 		],
 	);
 	const pairs = findConflictingNotePairs(doc);
 	const listed = pairs.map((p) => `${p.a.id}+${p.b.id}:${p.newer ?? "-"}`).join(" ");
 	check(`the pairs come in document order of the first member, got ${listed}`, listed === "m-0101+m-0301:b m-0102+m-0302:b m-0103+m-0303:a m-0501+m-0502:-");
-	check("a fact pair names the newer by saved", pairs[0]?.newer === "b" && pairs[0].b.date === "2026-09-14" && pairs[0].a.date === "2026-06-02");
+	check("a fact pair names the newer by the day each was learned", pairs[0]?.newer === "b" && pairs[0].b.date === "2026-09-14" && pairs[0].a.date === "2026-06-02");
 	check("an event pair is paired like a fact", pairs[1]?.a.id === "m-0102" && pairs[1].b.id === "m-0302");
-	check("updated beats saved when naming the newer", pairs[2]?.newer === "a" && pairs[2].a.date === "2026-09-14");
+	check("the day learned names the newer, whatever the saved day", pairs[2]?.newer === "a" && pairs[2].a.date === "2026-09-14");
 	check("an open item pair is paired, and equal days are undecided", pairs[3]?.newer === null && pairs[3].a.section === "Active Items");
 	check("a Deep Memory note and an Active Items note are never paired", !pairs.some((p) => p.a.id === "m-0307" || p.b.id === "m-0307"));
 	check("the decoy of two sprints on two dates is not a pair", !pairs.some((p) => p.a.id === "m-0305" && p.b.id === "m-0306"));
@@ -299,7 +310,15 @@ function pairOf(a: Partial<ConflictNotePair["a"]>, b: Partial<ConflictNotePair["
 	check("the pair carries topic, section and text", pairs[0]?.a.topic === "The Nordwind contract" && pairs[0].b.topic === "Renewals" && pairs[0].a.section === "Deep Memory" && pairs[0].a.text === NINE_JUNE);
 	const twice = findDuplicateNotePairs(doc);
 	check(`what memory says twice lists the twin pair only, got ${twice.map((p) => `${p.a.id}+${p.b.id}`).join(" ")}`, twice.length === 1 && twice[0].a.id === "m-0104" && twice[0].b.id === "m-0304");
-	check("the sentences read the document's pairs", conflictNoteSentence(pairs[0], TODAY) === `"The Nordwind contract" and "Renewals" disagree: 1 June (saved 2 Jun) or 1 July (saved 14 Sep)` && conflictNoteSentence(pairs[3], TODAY) === `"Active Items" disagrees with itself: 3 May or 10 May, both saved 1 Apr`);
+	// A saved or updated day is no day a point was learned: without both learned days nothing decides.
+	const undated = findConflictingNotePairs(docOf([{ title: "Terms", notes: [{ id: "m-0701", saved: "2026-06-02", text: NINE_JUNE }, { id: "m-0702", saved: "2026-09-14", updated: "2026-09-20", text: NINE_JULY }, { id: "m-0703", saved: "2026-09-14", learned: "2026-09-14", text: "- The Nordwind maintenance contract renews automatically on 1 August." }] }]));
+	check(`a pair with a day unknown is undecided, whatever its saved days, got ${undated.map((p) => `${p.a.id}+${p.b.id}:${p.newer ?? "-"}`).join(" ")}`, undated.length === 3 && undated.every((p) => p.newer === null) && undated[0].a.date === undefined);
+	check("an undecided pair with a day unknown names only the day it knows", conflictNoteSentence(undated[1], TODAY) === `"Terms" disagrees with itself: 1 June or 1 August (as of 14 Sep)` && conflictPromptLine(undated[0], TODAY) === `m-0701 says "${NINE_JUNE.slice(2)}"; m-0702 says "${NINE_JULY.slice(2)}": no day decides; keep the one the conversation confirms, or both`);
+	// A pair a Memorize save kept beside each other says so in Review's prompt: a fact to weigh, never a decision.
+	const keptPairs = findConflictingNotePairs(docOf([{ title: "Terms", notes: [{ id: "m-0801", learned: "2026-06-02", disagrees: "m-0802", text: NINE_JUNE }, { id: "m-0802", learned: "2026-09-14", disagrees: "m-0801", text: NINE_JULY }, { id: "m-0803", learned: "2026-09-20", disagrees: "m-0801", text: "- The Nordwind maintenance contract renews automatically on 1 August." }] }]));
+	check(`a pair both notes of which name each other is kept, one that names only one way is not, got ${keptPairs.map((p) => `${p.a.id}+${p.b.id}:${p.kept ? "kept" : "-"}`).join(" ")}`, keptPairs.map((p) => `${p.a.id}+${p.b.id}:${p.kept ? "kept" : "-"}`).join(" ") === "m-0801+m-0802:kept m-0801+m-0803:- m-0802+m-0803:-");
+	check(`a kept pair's prompt line says it was saved as kept both, with both days, got ${conflictPromptLine(keptPairs[0], TODAY)}`, conflictPromptLine(keptPairs[0], TODAY) === `m-0801 (as of 2 Jun) says "${NINE_JUNE.slice(2)}"; m-0802 (as of 14 Sep) says "${NINE_JULY.slice(2)}": saved as kept both; the newer date decides; merge them keeping the newer text, or say in the narrative why both stay` && !conflictPromptLine(keptPairs[1], TODAY).includes("kept both"));
+	check("the sentences read the document's pairs", conflictNoteSentence(pairs[0], TODAY) === `"The Nordwind contract" and "Renewals" disagree: 1 June (as of 2 Jun) or 1 July (as of 14 Sep)` && conflictNoteSentence(pairs[3], TODAY) === `"Active Items" disagrees with itself: 3 May or 10 May, both as of 1 Apr`);
 }
 
 {

@@ -69,14 +69,17 @@ export type NotePairClass = "duplicate" | "conflict" | "different";
 
 /** One note as a conflict pair names it: a duplicate ref plus the day that decides, `updated ?? saved` as YYYY-MM-DD. */
 export interface ConflictNoteRef extends DuplicateNoteRef {
-	date: string;
+	/** The day the note's text was learned; absent when no dated conversation wrote it, and then no day decides. */
+	date?: string;
 }
 
-/** `a` sits before `b` in the document; `newer` names the member with the later date, null when the dates are equal and nothing decides. */
+/** `a` sits before `b` in the document; `newer` names the member learned later, null when the days are equal or one is unknown and nothing decides. */
 export interface ConflictNotePair {
 	a: ConflictNoteRef;
 	b: ConflictNoteRef;
 	newer: "a" | "b" | null;
+	/** A Memorize save kept both notes beside each other (each names the other in `disagrees`); Keep both is the default, so it is a fact to weigh, not a decision. */
+	kept?: true;
 }
 
 /** At most this many pairs come back from one document; a memory that says more than this twice is a memory for a Review, not a list. */
@@ -120,6 +123,9 @@ const VALUE_WORD_SET = new Set(NOTE_VALUE_WORDS);
 const NEGATION_SET = new Set(NEGATIONS);
 const HAS_DIGIT = /\p{N}/u;
 const WORD_RUNS = /[\p{L}\p{N}]+/gu;
+/** A number written with group separators, "5,000", "5.000" or "1.250.000": one number, never "5" and "000". "1,5" and "10.25" stay two runs. */
+const GROUPED_NUMBER = /(?<!\p{N})\p{N}{1,3}(?:[.,]\p{N}{3})+(?!\p{N})/gu;
+const GROUPED_NUMBER_OR_WORD_RUNS = new RegExp(`${GROUPED_NUMBER.source}|${WORD_RUNS.source}`, "gu");
 const NOT_WORD = /[^\p{L}\p{N}]+/u;
 
 const LEADING_BULLET = /^\s*[-*+]\s+/;
@@ -148,6 +154,7 @@ function stripNoteMarks(text: string): string {
  */
 export function normalizeNoteText(text: string): string {
 	return stripNoteMarks(text)
+		.replace(GROUPED_NUMBER, (number) => number.replace(/[.,]/g, ""))
 		.toLowerCase()
 		.replace(/[^\p{L}\p{N}]+/gu, " ")
 		.trim();
@@ -175,6 +182,24 @@ function normalizedLookAlike(a: string, b: string): boolean {
 	if (wordsA.length < NOTE_LOOKALIKE_MIN_WORDS || wordsB.length < NOTE_LOOKALIKE_MIN_WORDS) return false;
 	if (` ${a} `.includes(` ${b} `) || ` ${b} `.includes(` ${a} `)) return true;
 	return jaccard(wordsA, wordsB) >= NOTE_LOOKALIKE_JACCARD;
+}
+
+/**
+ * Whether the words of `inner` appear in `outer` in the same order, not
+ * necessarily next to each other: "Anna pays Bert" is within "Anna pays Bert
+ * the deposit", never within "Bert pays Anna the deposit". On its own this is
+ * no judgement of meaning ("never on weekends" holds "on weekends"); a caller
+ * reads it only for a pair the classifier calls a duplicate.
+ */
+export function noteWordsWithin(inner: string, outer: string): boolean {
+	const have = wordsOf(normalizeNoteText(outer));
+	let at = 0;
+	for (const word of wordsOf(normalizeNoteText(inner))) {
+		while (at < have.length && have[at] !== word) at += 1;
+		if (at === have.length) return false;
+		at += 1;
+	}
+	return true;
 }
 
 /**
@@ -243,10 +268,11 @@ function isMonthOfMay(words: readonly string[], at: number): boolean {
 function analyzeNote(text: string): AnalyzedNote {
 	const stripped = stripNoteMarks(text);
 	const placed: Array<{ word: string; start: number; end: number }> = [];
-	for (const match of stripped.matchAll(WORD_RUNS)) {
+	for (const match of stripped.matchAll(GROUPED_NUMBER_OR_WORD_RUNS)) {
 		const start = match.index ?? 0;
 		const end = start + match[0].length;
-		for (const word of match[0].toLowerCase().split(NOT_WORD)) if (word) placed.push({ word, start, end });
+		const run = /^\p{N}+[.,]/u.test(match[0]) ? match[0].replace(/[.,]/g, "") : match[0];
+		for (const word of run.toLowerCase().split(NOT_WORD)) if (word) placed.push({ word, start, end });
 	}
 	const words = placed.map((token) => token.word);
 	const values: string[] = [];
@@ -276,6 +302,27 @@ function analyzeNote(text: string): AnalyzedNote {
 /** The normalised words of a note that carry a value, in note order: any word with a digit, or a word in `NOTE_VALUE_WORDS`. */
 export function noteValueTokens(text: string): string[] {
 	return analyzeNote(text).values;
+}
+
+/**
+ * The note holds a value the text does not say: a number, an amount, a date
+ * or a negation dropped or replaced, however the rest is worded. A note with
+ * no values drops none.
+ */
+export function dropsNoteValue(text: string, note: string): boolean {
+	const said = new Set(analyzeNote(text).values.map(comparableToken));
+	return analyzeNote(note).values.some((value) => !said.has(comparableToken(value)));
+}
+
+/** A text disagrees with a note when the two may disagree, when one says no and the other does not, or when it drops or replaces a value the note holds, however it is worded. */
+export function textDisagreesWith(text: string, note: string): boolean {
+	return classifyNotePair(text, note) === "conflict" || negationDiffers(text, note) || dropsNoteValue(text, note);
+}
+
+/** One of the two texts says no, not, never or without, and the other does not: "renews" against "does not renew". */
+export function negationDiffers(a: string, b: string): boolean {
+	const negated = (text: string) => analyzeNote(text).values.some((value) => NEGATION_SET.has(value));
+	return negated(a) !== negated(b);
 }
 
 /** A value word as two notes compare it: a run of digits loses its leading zeros, so "01" and "1", "06" and "6" are one value; every other word is itself. */
@@ -370,6 +417,8 @@ export function classifyNotePair(a: string, b: string): NotePairClass {
 
 interface AnalyzedNoteRef extends ConflictNoteRef {
 	analyzed: AnalyzedNote;
+	/** The notes a save kept beside this one though they may disagree. */
+	keptWith: string[];
 }
 
 function analyzedNotesOf(doc: MemoryDocument): AnalyzedNoteRef[] {
@@ -377,7 +426,7 @@ function analyzedNotesOf(doc: MemoryDocument): AnalyzedNoteRef[] {
 	for (const topic of doc.topics) {
 		for (const entry of topic.entries) {
 			if (!entry.id) continue;
-			notes.push({ id: entry.id, topic: topic.title, section: topic.section, text: entry.text, date: entry.updated ?? entry.saved, analyzed: analyzeNote(entry.text) });
+			notes.push({ id: entry.id, topic: topic.title, section: topic.section, text: entry.text, ...(entry.learned ? { date: entry.learned } : {}), analyzed: analyzeNote(entry.text), keptWith: entry.disagrees ? entry.disagrees.split(",") : [] });
 		}
 	}
 	return notes;
@@ -405,14 +454,16 @@ export function findNotePairs(doc: MemoryDocument): NotePairs {
 		for (let j = i + 1; j < notes.length && !full(); j++) {
 			const kind = classifyAnalyzed(notes[i].analyzed, notes[j].analyzed);
 			if (kind === "duplicate" && duplicates.length < DUPLICATE_NOTE_PAIRS_MAX) {
-				const { analyzed: _a, date: _da, ...a } = notes[i];
-				const { analyzed: _b, date: _db, ...b } = notes[j];
+				const { analyzed: _a, date: _da, keptWith: _ka, ...a } = notes[i];
+				const { analyzed: _b, date: _db, keptWith: _kb, ...b } = notes[j];
 				duplicates.push({ a, b });
 			} else if (kind === "conflict" && conflicts.length < CONFLICT_NOTE_PAIRS_MAX && notes[i].section === notes[j].section) {
-				const { analyzed: _a, ...a } = notes[i];
-				const { analyzed: _b, ...b } = notes[j];
-				const newer = a.date === b.date ? null : a.date > b.date ? "a" : "b";
-				conflicts.push({ a, b, newer });
+				const { analyzed: _a, keptWith: keptA, ...a } = notes[i];
+				const { analyzed: _b, keptWith: keptB, ...b } = notes[j];
+				// A saved day is no day the point was learned: without both learned days nothing decides.
+				const newer = !a.date || !b.date || a.date === b.date ? null : a.date > b.date ? "a" : "b";
+				const kept = keptA.includes(b.id) && keptB.includes(a.id);
+				conflicts.push({ a, b, newer, ...(kept ? { kept: true as const } : {}) });
 			}
 		}
 	}
@@ -526,22 +577,21 @@ function valuesSide(pairs: ReadonlyArray<{ older: string; newer: string }>, side
 
 /**
  * Why the newer note replaced the older, for the card and History:
- * `1 July (saved 14 Sep) replaces 1 June (saved 2 Jun); the newer date decides`,
+ * `1 July (as of 14 Sep) replaces 1 June (as of 2 Jun); the newer date decides`,
  * several values joined by commas, and with equal days
- * `1 July replaces 1 June (both saved 14 Sep)`. When the newer text comes
- * from a day BEFORE the older one's (a conversation folded after a note it
- * predates), no date decides and the sentence says what did:
- * `1 July replaces 1 June (saved 23 Apr); the conversation of 21 Apr was
- * folded after it`. Only the values that differ are named, in the notes'
- * own spelling; the year is written only when it is not the year of `today`.
+ * `1 July replaces 1 June (both as of 14 Sep)`. The days are the ones each
+ * text was learned; when either is unknown, or the newer text's day is not
+ * the later one, no date decides and none is named: `1 July replaces 1 June`.
+ * Only the values that differ are named, in the notes' own spelling; the year
+ * is written only when it is not the year of `today`.
  */
-export function conflictReason(before: string, after: string, olderDate: string, newerDate: string, today = localDay()): string {
+export function conflictReason(before: string, after: string, olderDate: string | undefined, newerDate: string | undefined, today = localDay()): string {
 	const pairs = conflictValuePairs(before, after);
 	const was = pairs.length > 0 ? valuesSide(pairs, "older") : noteLine(before);
 	const is = pairs.length > 0 ? valuesSide(pairs, "newer") : noteLine(after);
-	if (olderDate === newerDate) return `${is} replaces ${was} (both saved ${dayWords(newerDate, today)})`;
-	if (newerDate < olderDate) return `${is} replaces ${was} (saved ${dayWords(olderDate, today)}); the conversation of ${dayWords(newerDate, today)} was folded after it`;
-	return `${is} (saved ${dayWords(newerDate, today)}) replaces ${was} (saved ${dayWords(olderDate, today)}); the newer date decides`;
+	if (!olderDate || !newerDate || newerDate < olderDate) return `${is} replaces ${was}`;
+	if (olderDate === newerDate) return `${is} replaces ${was} (both as of ${dayWords(newerDate, today)})`;
+	return `${is} (as of ${dayWords(newerDate, today)}) replaces ${was} (as of ${dayWords(olderDate, today)}); the newer date decides`;
 }
 
 /** The pair's members with the older first; document order when nothing decides. */
@@ -549,11 +599,16 @@ function orderedMembers(pair: ConflictNotePair): [ConflictNoteRef, ConflictNoteR
 	return pair.newer === "a" ? [pair.b, pair.a] : [pair.a, pair.b];
 }
 
+/** " (as of 2 Jun)" for a note learned that day; nothing when no day is known. */
+function asOf(ref: ConflictNoteRef, today: string): string {
+	return ref.date ? ` (as of ${dayWords(ref.date, today)})` : "";
+}
+
 /**
- * `"Topic" disagrees with itself: 1 June (saved 2 Jun) or 1 July (saved 14 Sep)`
+ * `"Topic" disagrees with itself: 1 June (as of 2 Jun) or 1 July (as of 14 Sep)`
  * under one topic, `"A" and "B" disagree: …` across two, the older note's
- * value and topic first; with equal days `…: 1 June or 1 July, both saved 14 Sep`
- * in document order.
+ * value and topic first; with equal days `…: 1 June or 1 July, both as of 14 Sep`
+ * in document order, and a day nobody knows is not named.
  */
 export function conflictNoteSentence(pair: ConflictNotePair, today = localDay()): string {
 	const [first, second] = orderedMembers(pair);
@@ -562,22 +617,27 @@ export function conflictNoteSentence(pair: ConflictNotePair, today = localDay())
 	const secondValues = pairs.length > 0 ? valuesSide(pairs, "newer") : noteLine(second.text);
 	const sameTopic = pair.a.topic === pair.b.topic && pair.a.section === pair.b.section;
 	const subject = sameTopic ? `"${pair.a.topic}" disagrees with itself` : `"${first.topic}" and "${second.topic}" disagree`;
-	if (pair.newer === null) return `${subject}: ${firstValues} or ${secondValues}, both saved ${dayWords(first.date, today)}`;
-	return `${subject}: ${firstValues} (saved ${dayWords(first.date, today)}) or ${secondValues} (saved ${dayWords(second.date, today)})`;
+	if (first.date && first.date === second.date) return `${subject}: ${firstValues} or ${secondValues}, both as of ${dayWords(first.date, today)}`;
+	return `${subject}: ${firstValues}${asOf(first, today)} or ${secondValues}${asOf(second, today)}`;
 }
 
 /**
  * The line the Review's prompt carries for one pair, quoting each note's
  * first line the way `duplicateNoteSentence` quotes one:
- * `m-0101 (saved 2 Jun) says "…"; m-0301 (saved 14 Sep) says "…": the newer
+ * `m-0101 (as of 2 Jun) says "…"; m-0301 (as of 14 Sep) says "…": the newer
  * date decides; merge them keeping the newer text, or say in the narrative
- * why both stay`, and with equal days `m-0101 says "…"; m-0301 says "…": both
- * saved 14 Sep; keep the one the conversation confirms, or both`.
+ * why both stay`; with equal days `m-0101 says "…"; m-0301 says "…": both
+ * as of 14 Sep; keep the one the conversation confirms, or both`, and when a
+ * day is unknown `…: no day decides; keep the one the conversation confirms,
+ * or both`.
  */
 export function conflictPromptLine(pair: ConflictNotePair, today = localDay()): string {
 	const [first, second] = orderedMembers(pair);
+	// A pair a save kept says so: the default, so a fact to weigh, never a decision.
+	const kept = pair.kept ? "saved as kept both; " : "";
 	if (pair.newer === null) {
-		return `${first.id} says "${noteLine(first.text)}"; ${second.id} says "${noteLine(second.text)}": both saved ${dayWords(first.date, today)}; keep the one the conversation confirms, or both`;
+		if (first.date && first.date === second.date) return `${first.id} says "${noteLine(first.text)}"; ${second.id} says "${noteLine(second.text)}": ${kept}both as of ${dayWords(first.date, today)}; keep the one the conversation confirms, or both`;
+		return `${first.id}${asOf(first, today)} says "${noteLine(first.text)}"; ${second.id}${asOf(second, today)} says "${noteLine(second.text)}": ${kept}no day decides; keep the one the conversation confirms, or both`;
 	}
-	return `${first.id} (saved ${dayWords(first.date, today)}) says "${noteLine(first.text)}"; ${second.id} (saved ${dayWords(second.date, today)}) says "${noteLine(second.text)}": the newer date decides; merge them keeping the newer text, or say in the narrative why both stay`;
+	return `${first.id}${asOf(first, today)} says "${noteLine(first.text)}"; ${second.id}${asOf(second, today)} says "${noteLine(second.text)}": ${kept}the newer date decides; merge them keeping the newer text, or say in the narrative why both stay`;
 }

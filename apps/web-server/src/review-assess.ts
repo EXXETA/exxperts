@@ -20,6 +20,7 @@
 import { extractAssessmentSection } from "./assessment-parsing.js";
 import { conflictNoteSentence, duplicateNoteSentence, findLookAlikeTopics, findNotePairs, lookAlikeTopicSentence, type LookAlikeTopicPair } from "./memory-duplicates.js";
 import type { MemoryDocument } from "./memory-entries.js";
+import { unsortedAfterRereadTopics } from "./absorb-reread.js";
 import { emptyReviewGuidance, type ReviewGuidance } from "./review-guidance.js";
 import { estimateTokens } from "./token-estimate.js";
 
@@ -133,6 +134,8 @@ export interface ReviewAssessmentFields {
 	topicsThatLookTheSame: string[];
 	/** Machine-read: the pairs behind those sentences. Never shown. */
 	lookAlikeTopics: LookAlikeTopicPair[];
+	/** The machine's own finding, shown: one sentence naming how many summary notes a Memorize read again still wait in Unsorted, or none. */
+	waitInUnsorted?: string[];
 	/** Machine-read: the titles the run tidies. Never shown. */
 	topics: string[];
 }
@@ -150,6 +153,9 @@ export interface ReviewMachineFindings {
 	conflictNotes: { ids: [string, string]; topics: [string, string] }[];
 	topicsThatLookTheSame: string[];
 	lookAlikeTopics: LookAlikeTopicPair[];
+	waitInUnsorted: string[];
+	/** The topics those notes wait in; never shown. */
+	unsortedTopics: string[];
 }
 
 /** `today` (YYYY-MM-DD) decides whether a year is written in the disagree sentences; left out, it is the local day. */
@@ -157,6 +163,8 @@ export function reviewMachineFindings(doc: MemoryDocument, today?: string): Revi
 	// One walk over the pairs for both lists: on a large memory the walk is what the first read costs.
 	const { duplicates: pairs, conflicts } = findNotePairs(doc);
 	const lookAlike = findLookAlikeTopics(doc);
+	const unsorted = unsortedAfterRereadTopics(doc);
+	const waiting = unsorted.reduce((sum, topic) => sum + topic.count, 0);
 	return {
 		saysTheSameTwice: pairs.map(duplicateNoteSentence),
 		duplicateNotes: pairs.map((pair) => ({ ids: [pair.a.id, pair.b.id], topics: [pair.a.topic, pair.b.topic] })),
@@ -164,6 +172,8 @@ export function reviewMachineFindings(doc: MemoryDocument, today?: string): Revi
 		conflictNotes: conflicts.map((pair) => ({ ids: [pair.a.id, pair.b.id], topics: [pair.a.topic, pair.b.topic] })),
 		topicsThatLookTheSame: lookAlike.map(lookAlikeTopicSentence),
 		lookAlikeTopics: lookAlike.map((pair) => ({ a: pair.a, b: pair.b })),
+		waitInUnsorted: waiting === 0 ? [] : [waiting === 1 ? "1 note waits in Unsorted: a conversation's summary that Memorize could not sort. The tidy sorts it into topics." : `${waiting} notes wait in Unsorted: conversation summaries that Memorize could not sort. The tidy sorts them into topics.`],
+		unsortedTopics: unsorted.map((topic) => topic.title),
 	};
 }
 
@@ -173,7 +183,7 @@ export function reviewMachineFindings(doc: MemoryDocument, today?: string): Revi
  * them), so the tidy is handed the pair whether or not the model named it.
  */
 export function withMachineFindings(fields: ReviewAssessmentFields, findings: ReviewMachineFindings, knownTopics: readonly string[]): ReviewAssessmentFields {
-	const wanted = new Set([...findings.duplicateNotes.flatMap((pair) => pair.topics), ...findings.conflictNotes.flatMap((pair) => pair.topics), ...findings.lookAlikeTopics.flatMap((pair) => [pair.a, pair.b])]);
+	const wanted = new Set([...findings.duplicateNotes.flatMap((pair) => pair.topics), ...findings.conflictNotes.flatMap((pair) => pair.topics), ...findings.lookAlikeTopics.flatMap((pair) => [pair.a, pair.b]), ...findings.unsortedTopics]);
 	const topics = [...fields.topics];
 	for (const title of knownTopics) if (wanted.has(title) && !topics.includes(title)) topics.push(title);
 	return {
@@ -184,6 +194,7 @@ export function withMachineFindings(fields: ReviewAssessmentFields, findings: Re
 		conflictNotes: findings.conflictNotes.map((pair) => ({ ids: [...pair.ids] as [string, string], topics: [...pair.topics] as [string, string] })),
 		topicsThatLookTheSame: [...findings.topicsThatLookTheSame],
 		lookAlikeTopics: findings.lookAlikeTopics.map((pair) => ({ a: pair.a, b: pair.b })),
+		waitInUnsorted: [...findings.waitInUnsorted],
 		topics,
 	};
 }

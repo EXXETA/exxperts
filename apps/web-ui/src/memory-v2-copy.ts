@@ -5,8 +5,10 @@
 // gate are checkable without a browser — see
 // apps/web-server/scripts/memory-v2-copy-smoke.ts.
 
-import type { AbsorbRun, AbsorbRunChangeKind, AbsorbRunSession, ArchivedEntryCard, ArchiveRow, EntryCard, EntryKind, ReviewDepth, ReviewRun, ReviewRunChange, ReviewRunChangeKind, RunBudget, RunDemotion } from "./types";
+import type { AbsorbRun, AbsorbRunChange, AbsorbRunChangeKind, AbsorbRunSession, ArchivedEntryCard, ArchiveRow, EntryCard, EntryKind, ReviewDepth, ReviewRun, ReviewRunChange, ReviewRunChangeKind, RunBudget, RunDemotion } from "./types";
 import { meaningfulMaintenanceWarnings } from "./maintenance-warnings";
+import { fmtMemoryDay } from "./memory-surface-copy";
+import { modelTooltipName } from "./model-names";
 
 /** Token counts are read, not scanned: group them the way the budget line does. */
 export function fmtTokenCount(value: number): string {
@@ -37,18 +39,22 @@ export function absorbRunProgressLine(run: AbsorbRun): string {
 	// held nothing included: "4 of 10" is the person's own list, not the engine's.
 	const total = run.progress.total;
 	const current = run.progress.current;
+	// A summary note read again is not one of the conversations.
+	if (current && (run.rereads ?? []).some((row) => row.id === current.id)) return `Sorting a note from Unsorted · ${current.title}`;
 	const at = current ? run.sessions.findIndex((session) => session.id === current.id) : -1;
 	const position = at >= 0 ? at + 1 : Math.min(run.progress.folded + 1, Math.max(total, 1));
 	if (!current) return `Working through ${total} ${total === 1 ? "conversation" : "conversations"}…`;
 	return `Memorizing conversation ${position} of ${total} · ${current.title}`;
 }
 
-function countsClause(summary: NonNullable<AbsorbRunSession["summary"]>): string {
+function countsClause(summary: AbsorbRunSession["summary"], history: number): string {
 	const parts: string[] = [];
-	if (summary.added > 0) parts.push(`${summary.added} added`);
-	if (summary.updated > 0) parts.push(`${summary.updated} updated`);
-	if (summary.superseded > 0) parts.push(`${summary.superseded} replaced`);
-	if (summary.closed > 0) parts.push(`${summary.closed} closed`);
+	if (summary && summary.added > 0) parts.push(`${summary.added} added`);
+	if (summary && summary.updated > 0) parts.push(`${summary.updated} updated`);
+	if (summary && summary.superseded > 0) parts.push(`${summary.superseded} replaced`);
+	if (summary && summary.closed > 0) parts.push(`${summary.closed} closed`);
+	// A page whose text was all older than memory still did something: it is said, not "no changes".
+	if (history > 0) parts.push(history === 1 ? "1 older value kept as history" : `${history} older values kept as history`);
 	return parts.length ? parts.join(", ") : "no changes";
 }
 
@@ -70,11 +76,36 @@ export function absorbRunSessionLine(session: AbsorbRunSession): string {
 	switch (session.outcome) {
 		case "pending": return "Waiting";
 		case "folding": return "Reading this conversation now";
-		case "folded": return `Memorized · ${session.summary ? countsClause(session.summary) : "no changes"}`;
+		case "folded": return `Memorized · ${countsClause(session.summary, session.changes?.filter((change) => change.kind === "history").length ?? 0)}`;
 		case "dropped": return `Nothing to keep · ${session.reason || "this conversation held nothing worth remembering"}`;
+		case "summarized": return ABSORB_SUMMARIZED_LINE;
 		case "failed": return failedSessionLine(session.reason);
 		case "skipped": return `Left out · ${session.reason || "you asked for this conversation to be left out"}`;
 	}
+}
+
+/**
+ * One line per summary note the run read again. A sorted note's points are in
+ * their topics and the note goes to the archive whole; any other ending leaves
+ * it in Unsorted, and the model that tried it does not read it again.
+ */
+export function absorbRunRereadLine(row: AbsorbRunSession): string {
+	switch (row.outcome) {
+		case "pending": return "Waiting to be sorted";
+		case "folding": return "Sorting this note into topics now";
+		case "folded": {
+			const counts = countsClause(row.summary, row.changes?.filter((change) => change.kind === "history").length ?? 0);
+			// Nothing new still means the note was read and leaves Unsorted: say that, not "no changes".
+			return counts === "no changes" ? "Read again · nothing new to add · the note goes to the archive" : `Sorted into topics · ${counts} · the note goes to the archive`;
+		}
+		default: return "Not sorted this time · it stays in Unsorted";
+	}
+}
+export const ABSORB_REREAD_HOVER = "A conversation's summary kept as one note in an earlier update, read again to sort its points into topics.";
+
+/** Every row that carries changes: the conversations', then the summary notes read again. */
+function changeRowsOf(run: AbsorbRun): AbsorbRunSession[] {
+	return [...run.sessions, ...(run.rereads ?? [])];
 }
 
 /** Conversations that keep waiting because their run leg failed. */
@@ -92,14 +123,89 @@ export function absorbRunFullPercent(run: AbsorbRun): number {
 	return Math.round(((run.budget.after + Math.max(0, run.demotion.overageTokens)) / run.budget.budgetTokens) * 100);
 }
 
-/** Conversations the run finished reading, whether they added notes or held nothing. */
+/** Conversations the run finished reading, whether they added notes, were kept whole or held nothing. */
 export function absorbRunReadCount(run: AbsorbRun): number {
-	return run.sessions.filter((session) => session.outcome === "folded" || session.outcome === "dropped").length;
+	return run.sessions.filter((session) => session.outcome === "folded" || session.outcome === "dropped" || session.outcome === "summarized").length;
 }
 
-/** Notes this update adds, rewrites, replaces or closes, across every conversation. */
+/** The card line of a conversation kept whole as its approved summary, and its hover. */
+export const ABSORB_SUMMARIZED_LINE = "Memorized · kept as one note in Unsorted · Review can sort it";
+export const ABSORB_SUMMARIZED_HOVER = "This conversation's summary, the one you approved, was kept as one note instead of being split into topics. The next Memorize tries to sort it into topics, and so can Review.";
+
+/** The two ways out of a Memorize that stopped because its model is not answering. */
+export const ABSORB_TRY_AGAIN_LABEL = "Try again";
+export const ABSORB_CHOOSE_MODEL_LABEL = "Choose another model";
+
+/** Conversations a stopped run leaves waiting: the ones it did not finish. */
+export function absorbRunWaitingCount(run: AbsorbRun): number {
+	return run.sessions.filter((session) => session.outcome === "pending" || session.outcome === "folding" || session.outcome === "failed").length;
+}
+
+/** The re-read rows the card shows: every one while the run works or an outage holds it (Try again reads the waiting ones); once it is saved, only the ones it reached. */
+export function absorbRunRereadRows(run: AbsorbRun, working: boolean): AbsorbRunSession[] {
+	return (run.rereads ?? []).filter((row) => working || run.stop || row.outcome !== "pending");
+}
+
+/**
+ * A run with nothing a save would record: no conversation folded, dropped or
+ * kept as its summary, and no note from Unsorted sorted. A save then changes
+ * nothing and every conversation stays waiting, so the card says so and Save is off.
+ */
+export function absorbRunNothingRead(run: AbsorbRun): boolean {
+	return !run.sessions.some((row) => row.outcome === "folded" || row.outcome === "dropped" || row.outcome === "summarized")
+		&& !(run.rereads ?? []).some((row) => row.outcome === "folded");
+}
+/**
+ * Save is off only when a save would change nothing: no conversation read, and
+ * none of the four things a save still records: a conversation left out (taken
+ * off the waiting list), notes leaving for the budget (archived), a limit raised
+ * on the card (made the room's setting), or a note from Unsorted the model tried
+ * (marked as tried).
+ */
+export function absorbRunNothingToSave(run: AbsorbRun): boolean {
+	return absorbRunNothingRead(run)
+		&& !run.sessions.some((row) => row.outcome === "skipped")
+		&& run.demotion.counts.leaving === 0
+		&& run.budget.budgetTokens === run.budget.savedBudgetTokens
+		&& !(run.rereads ?? []).some((row) => row.outcome !== "pending" && row.outcome !== "folding");
+}
+export const ABSORB_NOTHING_READ_SENTENCE = "No conversation was read yet.";
+export const ABSORB_NOTHING_READ_SAVE_TITLE = "Nothing to save yet: no conversation was read.";
+
+/** Summary notes a stopped run did not get to read again: Try again reads them after the conversations. */
+export function absorbRunRereadsWaiting(run: AbsorbRun): number {
+	return (run.rereads ?? []).filter((row) => row.outcome === "pending" || row.outcome === "folding").length;
+}
+
+/** The one notice of a run that stopped because its Memory model is not answering, or is busy. It names the conversations still waiting, then the notes; never "0 conversations" when notes wait. */
+export function absorbRunOutageSentence(model: string, cause: "not-answering" | "busy", waiting: number, notesWaiting = 0): string {
+	const why = cause === "busy" ? "is busy or at its usage limit right now" : "isn't answering right now";
+	const still = waiting === 0 && notesWaiting > 0 ? "" : waiting === 1 ? " 1 conversation is still waiting." : ` ${waiting} conversations are still waiting.`;
+	const notes = notesWaiting === 0 ? "" : notesWaiting === 1 ? " 1 note from Unsorted is still waiting to be sorted." : ` ${notesWaiting} notes from Unsorted are still waiting to be sorted.`;
+	return `Memorize paused because ${model} ${why}.${still}${notes}`;
+}
+
+/**
+ * The model the outage notice names: the one that stopped, from the run's own
+ * stop. The room's Memory model as last read lends its label only when it is
+ * that same model; the person may have chosen another since, and the notice
+ * must not blame the new one for the old one's silence.
+ */
+export function absorbRunOutageModelName(stopped: { provider: string; model: string }, memoryModel?: { provider: string; model: string; label?: string } | null): string {
+	const label = memoryModel && memoryModel.provider === stopped.provider && memoryModel.model === stopped.model ? memoryModel.label : undefined;
+	return modelTooltipName({ provider: stopped.provider, model: stopped.model, ...(label ? { modelLabel: label } : {}) });
+}
+
+/** Every conversation this run read was kept whole as its summary: the model sorted none of them into topics. */
+export function absorbRunAllSummarized(run: AbsorbRun): boolean {
+	const read = run.sessions.filter((session) => session.outcome !== "skipped");
+	return read.length > 0 && read.every((session) => session.outcome === "summarized");
+}
+export const ABSORB_ALL_SUMMARIZED_SENTENCE = "Each conversation's summary was kept as one note in Unsorted. Another Memory model may sort them into topics.";
+
+/** Notes this update adds, rewrites, replaces or closes, across every conversation and every note read again. */
 export function absorbRunNotesChanged(run: AbsorbRun): number {
-	return run.sessions.reduce((sum, session) => sum + (session.summary ? session.summary.added + session.summary.updated + session.summary.superseded + session.summary.closed : 0), 0);
+	return changeRowsOf(run).reduce((sum, session) => sum + (session.summary ? session.summary.added + session.summary.updated + session.summary.superseded + session.summary.closed : 0), 0);
 }
 
 /** Notes leaving for the archive if the update is saved as it stands. The server counts; the card reads. */
@@ -156,7 +262,7 @@ export function archiveCountsLine(counts: RunDemotion["counts"]): string {
 export const MEMORY_LIMIT_BAR_LABEL = "Memory budget";
 
 /** The one sentence under the bar: what the budget does, what Keep does, and where the archive is. */
-export const ARCHIVE_EXPLANATION = "Keep marks a note that must stay; another note leaves in its place. The budget decides how many stay. Notes in the archive stay readable in Room settings and can come back any time.";
+export const ARCHIVE_EXPLANATION = "Keep holds a note for this update only; another note leaves in its place. The budget decides how many stay. Notes in the archive stay readable in Room settings and can come back any time.";
 
 export interface ArchiveLimitSummary {
 	/** How full memory is after saving, kept notes included. */
@@ -225,6 +331,8 @@ export function archiveHeading(leaving: number): string {
 
 /** The topic checkbox in the archive list. */
 export const KEEP_TOPIC_LABEL = "Keep this topic";
+/** The Keep control's hover: a keep is for this update and pins nothing. */
+export const KEEP_NOTE_HINT = "Keeps this note for this update only. It is not pinned.";
 
 /** The tags a row can carry: a replacement, and a row that stopped leaving. */
 export const ARCHIVE_ROW_TAG_INSTEAD = "leaves instead";
@@ -232,6 +340,42 @@ export const ARCHIVE_ROW_TAG_STAYS = "stays";
 
 /** The tag next to a topic the update created. */
 export const NEW_TOPIC_TAG = "new topic";
+
+/** The one tag on a new note that may say something different from a note already in memory, pinned or not. */
+export const MAY_DISAGREE_TAG = "may disagree";
+
+/** The two answers a tagged note offers: keep it next to the other note, which is what happens if the person does nothing, or put it in that note's place at the save. */
+export const KEEP_BOTH_LABEL = "Keep both";
+export const REPLACE_PINNED_LABEL = "Replace my pinned note with this";
+export const REPLACE_OLDER_LABEL = "Replace the older note with this";
+
+/**
+ * What a tagged change row says: its tag, the line under it naming the other
+ * note by its first line, and the Replace answer when one is offered (never
+ * while either note is going to the archive, when the other note left or is
+ * closed by this update, or when this update closes the new note itself).
+ */
+export function changeBesideTag(change: Pick<AbsorbRunChange, "beside" | "besideLine" | "besideState" | "besideLearned" | "learned" | "choice">): { tag: string; line: string; replaceLabel: string | null } | null {
+	if (!change.beside) return null;
+	const pinned = change.beside === "pinned";
+	const tag = MAY_DISAGREE_TAG;
+	const other = pinned ? "The pinned note it may disagree with" : "The note it may disagree with";
+	const selfClosed = "This new note is closed later in this update, so it replaces nothing.";
+	if (change.besideState === "closed" && change.besideLine === undefined) return { tag, line: `${other} is closed by this update.`, replaceLabel: null };
+	if (change.besideLine === undefined) return { tag, line: change.besideState === "self-closed" ? selfClosed : `${other} is no longer in memory.`, replaceLabel: null };
+	// A tagged note and the one beside it say the day each was learned, when known, so the newer one shows.
+	const dates = [change.besideLearned ? `as of ${fmtMemoryDay(change.besideLearned)}` : "", change.learned ? `new note as of ${fmtMemoryDay(change.learned)}` : ""].filter(Boolean);
+	const quoted = `"${entryFirstLine(change.besideLine)}"${dates.length > 0 ? ` (${dates.join("; ")})` : ""}`;
+	const line = `${pinned ? "May disagree with your pinned note" : "May disagree with"}: ${quoted}`;
+	// A sentence after the days starts once they are closed with a period.
+	const lead = line.endsWith(")") ? `${line}.` : line;
+	if (change.besideState === "closed") return { tag, line: `${lead} That note is closed by this update.`, replaceLabel: null };
+	if (change.besideState === "self-closed") return { tag, line: `${lead} ${selfClosed}`, replaceLabel: null };
+	if (change.besideState === "leaving") return { tag, line: `${lead} One of the two is going to the archive, so neither can replace the other here.`, replaceLabel: null };
+	// With Replace pressed, the line says what the save will do.
+	const chosen = change.choice === "replace" ? `${pinned ? "Replaces your pinned note" : "Replaces the older note"}: ${quoted}` : line;
+	return { tag, line: chosen, replaceLabel: pinned ? REPLACE_PINNED_LABEL : REPLACE_OLDER_LABEL };
+}
 
 /** What a row says beside its text, or nothing. A kept row is dimmed instead of tagged. */
 export function archiveRowTag(row: Pick<ArchiveRow, "leaving" | "kept" | "instead">): string | null {
@@ -352,21 +496,36 @@ export function absorbRunFastPathBlockers(run: AbsorbRun): string[] {
 			: `${leaving} notes would move to the archive to stay within the budget`);
 	}
 	if (run.budget.overBudgetAfter) blockers.push("saving would leave memory above its budget");
-	const closed = run.sessions.reduce((sum, session) => sum + absorbSessionChangeCount(session, "closed"), 0);
+	const closed = changeRowsOf(run).reduce((sum, session) => sum + absorbSessionChangeCount(session, "closed"), 0);
 	if (closed > 0) blockers.push(closed === 1 ? "1 open item would be closed" : `${closed} open items would be closed`);
+	const besidePinned = absorbRunBesideCount(run, "pinned");
+	if (besidePinned > 0) blockers.push(besidePinned === 1 ? "1 new note may disagree with a pinned note" : `${besidePinned} new notes may disagree with pinned notes`);
+	const mayDisagree = absorbRunBesideCount(run, "may-disagree");
+	if (mayDisagree > 0) blockers.push(mayDisagree === 1 ? "1 new note may disagree with one already in memory" : `${mayDisagree} new notes may disagree with notes already in memory`);
 	const dropped = run.sessions.filter((session) => session.outcome === "dropped").length;
 	if (dropped > 0) {
 		blockers.push(dropped === 1
 			? "1 conversation would be dropped as nothing to keep"
 			: `${dropped} conversations would be dropped as nothing to keep`);
 	}
-	const unfinished = run.sessions.filter((session) => session.outcome !== "folded" && session.outcome !== "dropped");
-	if (unfinished.length > 0) {
-		blockers.push(unfinished.length === 1
-			? "1 conversation did not finish"
-			: `${unfinished.length} conversations did not finish`);
-	}
+	const unfinished = absorbRunUnfinishedCount(run);
+	if (unfinished > 0) blockers.push(absorbRunUnfinishedReason(unfinished));
 	return blockers;
+}
+
+/** New notes of the run that carry one `beside` tag. */
+function absorbRunBesideCount(run: AbsorbRun, beside: NonNullable<AbsorbRunChange["beside"]>): number {
+	return changeRowsOf(run).reduce((sum, session) => sum + (session.changes?.filter((change) => change.kind === "added" && change.beside === beside).length ?? 0), 0);
+}
+
+/** Conversations the run did not finish. One kept as its summary is finished: nothing is lost and there is nothing to decide, so it never holds the automatic save back. */
+export function absorbRunUnfinishedCount(run: AbsorbRun): number {
+	return run.sessions.filter((session) => session.outcome !== "folded" && session.outcome !== "dropped" && session.outcome !== "summarized").length;
+}
+
+/** The automatic save's reason for a run that did not finish every conversation. */
+export function absorbRunUnfinishedReason(count: number): string {
+	return count === 1 ? "1 conversation did not finish" : `${count} conversations did not finish`;
 }
 
 /** The saved screen's headline: what the room now remembers, or what the update did instead. */
@@ -378,7 +537,7 @@ export function absorbRunSavedHeadline(result: { foldedSessions?: string[]; arch
 
 /** Topics this update created, counted across every conversation it read. */
 export function absorbRunNewTopics(run: AbsorbRun): number {
-	return run.sessions.reduce((sum, session) => sum + (session.changes?.filter((change) => change.newTopic === true).length ?? 0), 0);
+	return changeRowsOf(run).reduce((sum, session) => sum + (session.changes?.filter((change) => change.newTopic === true).length ?? 0), 0);
 }
 
 /** What the saved screen says once the run is written. */
@@ -393,7 +552,7 @@ export function rememberedMeanwhileSentence(rebasedOnto: string[] | undefined): 
 	return rebased === 1 ? "1 conversation remembered meanwhile stays waiting." : `${rebased} conversations remembered meanwhile stay waiting.`;
 }
 
-export function absorbRunSavedSentence(result: { foldedSessions?: string[]; remainingSessions?: string[]; archivedEntries?: number; archivedForBudget?: number; newTopics?: number; rebasedOnto?: string[] }): string {
+export function absorbRunSavedSentence(result: { foldedSessions?: string[]; remainingSessions?: string[]; archivedEntries?: number; archivedForBudget?: number; replacedEntries?: number; historyKept?: number; sortedNotes?: number; newTopics?: number; rebasedOnto?: string[] }): string {
 	const folded = result.foldedSessions?.length ?? 0;
 	const remaining = result.remainingSessions?.length ?? 0;
 	const archived = result.archivedEntries ?? 0;
@@ -416,7 +575,15 @@ export function absorbRunSavedSentence(result: { foldedSessions?: string[]; rema
 	parts.push(folded === 1 ? "1 conversation became lasting notes." : `${folded} conversations became lasting notes.`);
 	if (newTopics > 0) parts.push(newTopics === 1 ? "1 new topic." : `${newTopics} new topics.`);
 	if (remaining > 0) parts.push(remaining === 1 ? "1 conversation keeps waiting for the next update." : `${remaining} conversations keep waiting for the next update.`);
-	if (archived > 0) parts.push(archived === 1 ? "1 note moved to the archive." : `${archived} notes moved to the archive.`);
+	// A note a newer text replaced did not leave memory: it is said apart from the notes that did.
+	const replaced = Math.min(result.replacedEntries ?? 0, archived);
+	if (replaced > 0) parts.push(replaced === 1 ? "1 note replaced; the old one is in the archive." : `${replaced} notes replaced; the old ones are in the archive.`);
+	const moved = archived - replaced;
+	if (moved > 0) parts.push(moved === 1 ? "1 note moved to the archive." : `${moved} notes moved to the archive.`);
+	const history = result.historyKept ?? 0;
+	if (history > 0) parts.push(history === 1 ? "1 older value kept as history." : `${history} older values kept as history.`);
+	const sorted = result.sortedNotes ?? 0;
+	if (sorted > 0) parts.push(sorted === 1 ? "1 note from Unsorted was sorted into topics; the whole note is in the archive." : `${sorted} notes from Unsorted were sorted into topics; each whole note is in the archive.`);
 	if (meanwhile) parts.push(meanwhile);
 	return parts.join(" ");
 }
@@ -427,7 +594,11 @@ const CHANGE_LABELS: Record<AbsorbRunChangeKind, string> = {
 	superseded: "Replaced",
 	closed: "Closed",
 	pinned: "Pinned",
+	history: "Older",
 };
+
+/** The line under an "Older" row: an older conversation's value, kept as history. It names no newer note, since a Replace on another row may change which one stays. */
+export const HISTORY_ROW_LINE = "An older conversation said this. A newer note says otherwise, so this is kept in the archive as history.";
 
 export function changeKindLabel(kind: AbsorbRunChangeKind): string {
 	return CHANGE_LABELS[kind] ?? kind;
@@ -463,7 +634,14 @@ const ARCHIVE_REASONS: Record<ArchivedEntryCard["why"], string> = {
 	user: "removed by you",
 	stale: "no longer holds",
 	duplicate: "already said elsewhere",
+	history: "older value",
+	sorted: "sorted into topics",
 };
+
+/** Whether an archived note can come back: an older value kept as history cannot be made current again, nor a text whose note still stands in memory. */
+export function archivedEntryRestorable(entry: Pick<ArchivedEntryCard, "why" | "standing">): boolean {
+	return entry.why !== "history" && !entry.standing;
+}
 
 export function archiveReasonLabel(why: ArchivedEntryCard["why"]): string {
 	return ARCHIVE_REASONS[why] ?? why;
@@ -628,7 +806,32 @@ export function absorbRunGuidanceSummary(run: AbsorbRun): AbsorbRunGuidanceSumma
 // than the name and stays as it is.
 
 /** The room setting's label, wherever it is named. */
-export const AUTOMATIC_APPLY_SETTING_LABEL = "Memorize without the card";
+export const AUTOMATIC_APPLY_SETTING_LABEL = "Memorize without the first read or the card";
+
+/**
+ * The Maintain chooser's Memorize card. In a room with the setting on, Start
+ * goes straight to the update and a clean one is saved without the card, so
+ * the card and the footnote under the cards say that instead of promising a
+ * look before the save; Discuss first is the way to the first read there.
+ */
+export function memorizeChooserText(waiting: number, automatic: boolean): string {
+	const conversations = waiting === 1 ? "remembered conversation" : `${waiting} remembered conversations`;
+	return automatic
+		? `Turn the ${conversations} into lasting notes, with no first read. A clean update is saved without the card; one with anything to weigh waits for you.`
+		: `Turn the ${conversations} into lasting notes. You read what will be kept before it is saved; whatever does not fit in the budget goes to the archive.`;
+}
+export function maintainChooserFootnote(automatic: boolean): string {
+	return automatic
+		? "A clean update is saved as soon as it is ready. The memory budget is set in Room settings."
+		: "Nothing is saved until you approve it. The memory budget is set in Room settings.";
+}
+export const DISCUSS_FIRST_LABEL = "Discuss first";
+
+/** The chooser's line under the cards while summary notes a Memorize read again still wait in Unsorted; its [Review] button starts Review. */
+export function unsortedHintText(count: number): string {
+	return count === 1 ? "1 note isn't sorted into a topic yet · Review can sort it" : `${count} notes aren't sorted into topics yet · Review can sort them`;
+}
+export const DISCUSS_FIRST_TITLE = "Read the conversations first and talk through what to keep. Nothing is saved yet.";
 
 /** The same fact as a clause, for the sentences that build on it. */
 export const AUTOMATIC_APPLY_ON_SENTENCE = "This room applies memory updates automatically";
@@ -647,6 +850,9 @@ export function automaticApplyNeedsReviewSentence(reasons: string[]): string {
  */
 export const ABSORB_RUN_ACTIVE_SENTENCE = "This room is still working on a previous memory update.";
 export const ABSORB_RUN_ACTIVE_ACTION = "Stop that update";
+
+/** The first-read screen when there is no first read: it failed, was cut, came back too long or could not be asked. Memorize goes on without it. */
+export const FIRST_READ_MISSING_SENTENCE = "No first read this time. Read again, or continue without it.";
 
 /** The same fact for a tidy the room never finished. */
 export const REVIEW_RUN_ACTIVE_SENTENCE = "This room is still working on a previous tidy of its notes.";
@@ -719,7 +925,7 @@ const REVIEW_CHANGE_LABELS: Record<ReviewRunChangeKind, string> = {
 	archived: "Moved to the archive",
 	closed: "Closed",
 	moved: "Moved",
-	pinned: "Kept",
+	pinned: "Pinned",
 	topic_folded: "Topic folded",
 };
 
@@ -752,7 +958,7 @@ export function reviewChangeParts(counts: ReviewChangeCounts): string {
 	if (counts.archived > 0) parts.push(`${counts.archived} moved to the archive`);
 	if (counts.closed > 0) parts.push(`${counts.closed} closed`);
 	if (counts.moved > 0) parts.push(`${counts.moved} filed under another topic`);
-	if (counts.pinned > 0) parts.push(`${counts.pinned} kept`);
+	if (counts.pinned > 0) parts.push(`${counts.pinned} pinned`);
 	// A fold is a topic, not a note, so it comes last and names itself.
 	if (counts.topic_folded > 0) parts.push(`${counts.topic_folded} ${counts.topic_folded === 1 ? "topic" : "topics"} folded`);
 	return parts.join(", ");
@@ -796,14 +1002,19 @@ export function reviewTopicGroupSummary(topic: string, changes: ReviewChange[]):
 export const REVIEW_DEPTH_ORDER: readonly ReviewDepth[] = ["wording", "tidy"];
 
 export const REVIEW_DEPTH_ROWS: Record<ReviewDepth, { title: string; text: string }> = {
-	wording: { title: "Tidy the wording", text: "Make the notes shorter and clearer. Nothing leaves memory." },
+	wording: { title: "Tidy the wording", text: "Make the notes shorter and clearer, and merge notes that repeat or disagree." },
 	tidy: { title: "Tidy and move what is finished or stale to the archive", text: "Shorter wording, and notes that are finished, stale or said twice move to the archive, where they can be brought back." },
 };
 
 /** Why one depth is offered first, in the person's terms: how full the memory is, never tokens. */
-export function reviewDepthSentence(input: { overBudget: boolean; staleFlagged: boolean; budgetTokens: number; reviewTargetTokens: number }): string {
+export function reviewDepthSentence(input: { overBudget: boolean; staleFlagged: boolean; lookAlike?: boolean; disagreeing?: number; budgetTokens: number; reviewTargetTokens: number }): string {
 	if (input.overBudget) return "Memory is above its budget, so moving what is finished or stale to the archive is recommended.";
 	if (input.staleFlagged) return "The first read found stale notes, so moving them to the archive is recommended.";
+	// `lookAlike`: the same finding the server's recommendation reads, so the sentence never contradicts it.
+	if (input.lookAlike) return "Some topics look the same, and only the second option can join them, so it is recommended.";
+	// `disagreeing`: the pairs of notes the first read found disagreeing. Both depths settle them the same way, by a merge.
+	if ((input.disagreeing ?? 0) === 1) return "Two notes disagree. Either tidy can merge them into one note, and the text it replaces is kept in the archive.";
+	if ((input.disagreeing ?? 0) > 1) return "Some notes disagree. Either tidy can merge each pair into one note, and the texts it replaces are kept in the archive.";
 	return `Memory is ${memoryFullPercent(input.reviewTargetTokens, input.budgetTokens)}% full and nothing looks stale, so tidying the wording is enough.`;
 }
 

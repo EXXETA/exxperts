@@ -905,6 +905,17 @@ try {
 	// edit goes through. That is lighter than driving the real fold worker for
 	// a single note and lands the same state: the words in the core, the code
 	// only in the transcript.
+	// A model that never answers in operations: every conversation is kept
+	// whole as its summary, and the claim audit counts each one memorized and
+	// indexed under its own name, never as a mechanical failure.
+	const unsortableFixture = fixtures.get("en");
+	assert(unsortableFixture, "the en fixture was not built");
+	const unsortableRoom = await createBenchRoom({ home, name: "Recall Unsortable EN", backHistoryTokens: 0 });
+	const unsortable = await ingestSessions({ roomId: unsortableRoom.roomId, sessions: unsortableFixture.sessions.slice(0, 3), memorize: engineModule.unsortableMemorize });
+	const keptWhole = unsortable.steps.reduce((total, step) => total + (step.summarized ?? 0), 0);
+	assert(keptWhole === 3 && unsortable.claims && !claimsFailed(unsortable.claims) && unsortable.claims.memorized === 3, `three conversations kept as their summaries are counted and memorized, got ${keptWhole} summarized and ${unsortable.claims ? claimsLine(unsortable.claims) : "no audit"}`);
+	pass(`a Memorize that keeps every conversation as its summary reads "${claimsLine(unsortable.claims)}" with ${keptWhole} summarized`);
+
 	const wordingFixture = fixtures.get("de");
 	assert(wordingFixture, "the de fixture was not built");
 	const wordingPlants = wordingFixture.sessions.flatMap((session) => session.plants);
@@ -1204,14 +1215,14 @@ try {
 	const conflictsOut = path.join(home, "recall-smoke-conflicts.json");
 	const conflictsRun = bench(["--language", "both", "--sessions", "13", "--per-ability", "2", "--fold-every", "3", "--gate-conflicts", "--out", conflictsOut]);
 	assert(conflictsRun.status === 0, `the run over the planted pairs exited ${conflictsRun.status}:\n${conflictsRun.stdout.slice(-1600)}\n${conflictsRun.stderr.slice(-400)}`);
-	const conflictLines = conflictsRun.stdout.split("\n").filter((line) => /^conflicts: \d+ found, \d+ superseded with a reason, \d+ left as both, \d+ repeats refused as twins$/.test(line));
-	assert(conflictLines.length === 2, `the run prints one conflicts line per language in the shape "conflicts: N found, N superseded with a reason, N left as both, N repeats refused as twins", and printed ${conflictLines.length}:\n${conflictsRun.stdout.split("\n").filter((line) => line.startsWith("conflicts")).join("\n")}`);
+	const conflictLines = conflictsRun.stdout.split("\n").filter((line) => /^conflicts: \d+ found, \d+ superseded with a reason, \d+ left as both, \d+ repeats left out$/.test(line));
+	assert(conflictLines.length === 2, `the run prints one conflicts line per language in the shape "conflicts: N found, N superseded with a reason, N left as both, N repeats left out", and printed ${conflictLines.length}:\n${conflictsRun.stdout.split("\n").filter((line) => line.startsWith("conflicts")).join("\n")}`);
 	for (const shape of CONFLICT_SHAPES) {
 		const lines = conflictsRun.stdout.split("\n").filter((line) => new RegExp(`^  ${shape}\\s+(ok|FAIL)\\s`).test(line));
 		assert(lines.length === 2 && lines.every((line) => /\s+ok\s/.test(line)), `the run prints "  ${shape}  ok  <detail>" once per language, and printed:\n${lines.join("\n") || "(nothing)"}`);
 	}
 	assert(/^conflicts gate: passed for de, en$/m.test(conflictsRun.stdout), `--gate-conflicts says the gate passed for both languages, and printed:\n${conflictsRun.stdout.slice(-600)}`);
-	const conflictsFile = JSON.parse(fs.readFileSync(conflictsOut, "utf-8")) as { runs: Array<{ summary: RecallRunSummary; steps: Array<{ twinsRefused: number }>; rows: RecallResultRow[] }> };
+	const conflictsFile = JSON.parse(fs.readFileSync(conflictsOut, "utf-8")) as { runs: Array<{ summary: RecallRunSummary; steps: Array<{ twinsLeftOut: number }>; rows: RecallResultRow[] }> };
 	assert(conflictsFile.runs.length === 2, `the results file holds ${conflictsFile.runs.length} run(s); one per language was expected`);
 	for (const run of conflictsFile.runs) {
 		const language = run.summary.language;
@@ -1219,15 +1230,15 @@ try {
 		assert(block, `${language}: the results file carries no summary.conflicts block`);
 		assert(block.shapes.length === CONFLICT_SHAPES.length && block.shapes.every((verdict) => verdict.ok), `${language}: summary.conflicts judges ${block.shapes.length} shape(s), ${block.shapes.filter((verdict) => !verdict.ok).map((verdict) => `${verdict.shape}: ${verdict.detail}`).join("; ") || "all ok"}`);
 		assert(JSON.stringify(block.shapes.map((verdict) => verdict.shape)) === JSON.stringify(CONFLICT_SHAPES), `${language}: the shapes are judged in the fixture's order, and the block reads ${block.shapes.map((verdict) => verdict.shape).join(", ")}`);
-		assert(block.twinsRefused >= 1, `${language}: the duplicate's second add is refused as a repeat and left out, so the ingest counts at least one, and it counts ${block.twinsRefused}`);
-		assert(run.steps.reduce((total, step) => total + step.twinsRefused, 0) === block.twinsRefused, `${language}: the steps' repeats add up to ${run.steps.reduce((total, step) => total + step.twinsRefused, 0)} and the block says ${block.twinsRefused}`);
+		assert(block.twinsLeftOut >= 1, `${language}: the duplicate's second add is left out as a repeat, so the ingest counts at least one, and it counts ${block.twinsLeftOut}`);
+		assert(run.steps.reduce((total, step) => total + step.twinsLeftOut, 0) === block.twinsLeftOut, `${language}: the steps' repeats add up to ${run.steps.reduce((total, step) => total + step.twinsLeftOut, 0)} and the block says ${block.twinsLeftOut}`);
 		assert(block.supersededWithReason === 3 && block.leftAsBoth === 0 && block.found === 3, `${language}: three conflicts are planted and each is superseded with a reason, so the block reads 3 found, 3 with a reason, 0 left as both, and it reads ${block.found}, ${block.supersededWithReason}, ${block.leftAsBoth}`);
 		const shapeRows = run.rows.filter((row) => row.shape);
 		assert(shapeRows.length === CONFLICT_SHAPES.length, `${language}: ${shapeRows.length} result rows carry a shape; one per pair was expected`);
 		for (const verdict of block.shapes.filter((candidate) => candidate.shape !== "duplicate" && candidate.shape !== "decoy")) {
 			assert(/replaces .* the newer date decides/.test(verdict.detail), `${language}: the ${verdict.shape} verdict quotes the reason the card shows, and reads "${verdict.detail}"`);
 		}
-		pass(`${language}: the run over all five pairs reads ${block.found} found, ${block.supersededWithReason} superseded with a reason, ${block.leftAsBoth} left as both, ${block.twinsRefused} repeat(s) refused, every shape ok`);
+		pass(`${language}: the run over all five pairs reads ${block.found} found, ${block.supersededWithReason} superseded with a reason, ${block.leftAsBoth} left as both, ${block.twinsLeftOut} repeat(s) left out, every shape ok`);
 	}
 
 	// --- 11. Searchable conversations: the clock, the audit, the dropped place --

@@ -590,6 +590,8 @@ const RANKING_DOC = `<!-- exxeta:l1b schema_version=1 -->
 	const ranking = index[memoryAreaId("Deep Memory", "Ranking")];
 	assert(ranking.count === 6 && ranking.earliest === "2026-08" && ranking.latest === "2026-09", `the index counts per topic with its archived-month range (${JSON.stringify(ranking)})`);
 	assert(index[memoryAreaId("Active Items", "Active Items")].count === 1, "Active Items is indexed like any other topic");
+	const withHistory = archiveIndex([...parsed, { ...parsed.find((e) => e.topic === "Ranking")!, id: "m-0950", why: "history" as const, until: "2026-09-20" }]);
+	assert(withHistory[memoryAreaId("Deep Memory", "Ranking")].count === 7, "an older value kept as history is counted in its topic's pointer: the room can read it there");
 	const context = renderMemoryDocument(demoted.doc, "context", { archiveIndex: index });
 	assert(context.includes("_Archived: 6 older notes from Aug to Sep 2026; use memory_recall to read them._"), `the topic's pointer line is appended at the end of the topic (${context})`);
 	assert(context.includes("_Archived: 1 older note from Aug 2026; use memory_recall to read them._"), "Active Items carries its own pointer line");
@@ -804,6 +806,101 @@ const COUNTERLESS_DOC = `<!-- exxeta:l1b schema_version=1 -->
 	assert(findEntry(restoreEntry(applyUserEdit(withOlder, { op: "delete", id: "m-0001-v1" }).doc, row("m-0001")), "m-0001"), "and it restores once the older one has left");
 	assert(restoreEntry(doc, row("m-0100-v3")).nextEntryNumber === 101, "a restored version lifts the counter past its base");
 	console.log("  restore: one note, one place");
+}
+
+// --- 13. The day a note was learned, and the day an archived text stopped holding ---
+
+{
+	const file = [
+		"<!-- exxeta:l1b schema_version=1 -->", "", "## Deep Memory", "", "<!-- entries: next=5 -->", "", "### Terms", "",
+		"<!-- e: id=m-0001 kind=fact saved=2026-09-29 learned=2026-06-02 -->", "- The deposit is 5000 euros.", "",
+		"<!-- e: id=m-0002 kind=fact saved=2026-09-29 -->", "- The deposit is refundable.", "",
+		"<!-- e: id=m-0003 kind=fact saved=2026-09-29 learned=June -->", "- A date nobody can read.", "",
+		"<!-- e: id=m-0004 kind=fact saved=2026-09-29 until=2026-07-01 -->", "- A core note never holds an until.", "",
+	].join("\n");
+	const doc = parseMemoryDocument(file);
+	const entry = (id: string) => findEntry(doc, id)!;
+	assert(entry("m-0001").learned === "2026-06-02" && entry("m-0001").extra === undefined, `learned is read as the note's own field, never as an unknown key, got ${JSON.stringify(entry("m-0001"))}`);
+	assert(entry("m-0002").learned === undefined, "a note without learned has none, and none is guessed");
+	assert(entry("m-0003").learned === undefined && entry("m-0003").extra?.learned === "June", `a learned that is no day is kept as written, untrusted, got ${JSON.stringify(entry("m-0003"))}`);
+	assert(entry("m-0004").extra === undefined && !("until" in entry("m-0004")), `an until on a core note is dropped: it belongs to archive rows only, got ${JSON.stringify(entry("m-0004"))}`);
+	const stored = renderMemoryDocument(doc, "storage");
+	assert(stored.includes("<!-- e: id=m-0001 kind=fact saved=2026-09-29 learned=2026-06-02 -->") && stored.includes("learned=June") && !stored.includes("until="), `learned is written back, and an untrusted one as it was: ${stored}`);
+	assert(renderMemoryDocument(parseMemoryDocument(stored), "storage") === stored, "the storage render with learned is a fixed point");
+	assert(entryMetadataLine({ ...entry("m-0003"), learned: "2026-09-30" }) === "<!-- e: id=m-0003 kind=fact saved=2026-09-29 learned=2026-09-30 -->", "a real learned replaces an untrusted one, never beside it");
+	assert(entryMetadataLine({ ...entry("m-0001"), updated: "2026-09-30", refs: 2 }) === "<!-- e: id=m-0001 kind=fact saved=2026-09-29 updated=2026-09-30 learned=2026-06-02 refs=2 -->", "learned sits after updated");
+
+	// An archived text keeps the day it was learned and the day a newer text replaced it.
+	const archiveText = renderArchive([
+		{ id: "m-0001-v1", kind: "fact", saved: "2026-09-29", pinned: false, learned: "2026-03-01", until: "2026-06-02", text: "- The deposit is 4000 euros.", archived: "2026-09-30", why: "superseded", topic: "Terms", section: "Deep Memory" },
+		{ id: "m-0009", kind: "fact", saved: "2026-09-30", pinned: false, from: "RC-0003", learned: "2026-01-10", until: "2026-06-02", text: "- The deposit is 3000 euros.", archived: "2026-09-30", why: "history", topic: "Terms", section: "Deep Memory" },
+		{ id: "m-0010", kind: "fact", saved: "2026-09-30", pinned: false, text: "- An odd row.", archived: "2026-09-30", why: "superseded", topic: "Terms", section: "Deep Memory", extra: { until: "soon" } },
+	]);
+	const rows = parseArchive(archiveText);
+	assert(rows[0].learned === "2026-03-01" && rows[0].until === "2026-06-02" && rows[0].extra === undefined, `an archive row reads learned and until as its own fields, got ${JSON.stringify(rows[0])}`);
+	assert(rows[1].why === "history" && rows[1].from === "RC-0003", `a history row keeps its reason and its conversation, got ${JSON.stringify(rows[1])}`);
+	assert(rows[2].until === undefined && rows[2].extra?.until === "soon", `an until that is no day is kept as written, untrusted, got ${JSON.stringify(rows[2])}`);
+	assert(renderArchive(rows) === archiveText, "the archive render with learned and until is a fixed point");
+
+	// A restore brings back the day it was learned, never the day it stopped holding; a history row is never current again.
+	const out = applyUserEdit(doc, { op: "delete", id: "m-0001" }).doc;
+	const back = findEntry(restoreEntry(out, rows[0]), "m-0001-v1")!;
+	assert(back.learned === "2026-03-01" && !("until" in back) && back.extra === undefined, `a restored text is learned when it was, and holds no until, got ${JSON.stringify(back)}`);
+	const odd = findEntry(restoreEntry(out, rows[2]), "m-0010")!;
+	assert(odd.extra === undefined, `an untrusted until does not come back with a restore either, got ${JSON.stringify(odd)}`);
+	let refused = false;
+	try { restoreEntry(out, rows[1]); } catch { refused = true; }
+	assert(refused, "an older value kept as history cannot be restored as current");
+	const added = applyUserEdit(doc, { op: "add", topic: "Terms", kind: "fact", text: "- Typed by hand.", saved: "2026-09-30" }).doc;
+	assert(added.topics.flatMap((topic) => topic.entries).find((e) => e.text === "- Typed by hand.")?.learned === "2026-09-30", "a note typed by hand is learned the day it was typed");
+	assert(findEntry(applyUserEdit(doc, { op: "edit", id: "m-0001", text: "- The deposit is 6000 euros.", today: "2026-09-30" }).doc, "m-0001")?.learned === "2026-09-30", "a hand edit is learned the day it was made, so no older conversation can overwrite it");
+	console.log("  dates: learned on notes, until on archive rows, both round-trip; a history row is never restored");
+}
+
+// --- 14. A pair the person kept though the two may disagree ---------------------
+
+{
+	const file = [
+		"<!-- exxeta:l1b schema_version=1 -->", "", "## Deep Memory", "", "<!-- entries: next=9 -->", "", "### Terms", "",
+		"<!-- e: id=m-0001 kind=fact saved=2026-09-29 learned=2026-08-02 disagrees=m-0002 -->", "- The deposit is 5000 euros.", "",
+		"<!-- e: id=m-0002 kind=fact saved=2026-09-29 learned=2026-09-11 disagrees=m-0001 -->", "- The deposit is 7000 euros.", "",
+		"<!-- e: id=m-0003 kind=fact saved=2026-09-29 learned=2026-09-11 disagrees=m-0004 -->", "- One side of a pair.", "",
+		"<!-- e: id=m-0004 kind=fact saved=2026-09-29 learned=2026-08-02 -->", "- The other side no longer names it.", "",
+		"<!-- e: id=m-0005 kind=fact saved=2026-09-29 disagrees=m-0006 -->", "- A kept note with no day.", "",
+		"<!-- e: id=m-0006 kind=fact saved=2026-09-29 learned=2026-09-11 disagrees=m-0005 -->", "- Its pair, dated.", "",
+		"<!-- e: id=m-0007 kind=fact saved=2026-09-29 learned=2026-09-11 disagrees=m-0099 -->", "- Its pair is gone.", "",
+		"<!-- e: id=m-0008 kind=fact saved=2026-09-29 disagrees=\"not ids\" -->", "- A key nobody can read.", "",
+	].join("\n");
+	const doc = parseMemoryDocument(file);
+	const entry = (id: string) => findEntry(doc, id)!;
+	assert(entry("m-0001").disagrees === "m-0002" && entry("m-0001").extra === undefined && entry("m-0008").disagrees === undefined && entry("m-0008").extra?.disagrees === "not ids", `disagrees is read as the note's own field, and one that is no list of ids is kept as written, got ${JSON.stringify([entry("m-0001"), entry("m-0008")])}`);
+	const stored = renderMemoryDocument(doc, "storage");
+	assert(renderMemoryDocument(parseMemoryDocument(stored), "storage") === stored && stored.includes("learned=2026-08-02 disagrees=m-0002 -->"), "the storage render with disagrees is a fixed point, the key after learned");
+	const room = renderMemoryDocument(doc, "context", { pairDays: true });
+	assert(room.includes("- The deposit is 5000 euros. (learned 2026-08-02)") && room.includes("- The deposit is 7000 euros. (learned 2026-09-11)"), `the room's read gives each note of a kept pair the day it was learned: ${room}`);
+	assert(!room.includes("One side of a pair. (") && !room.includes("no longer names it. (") && !room.includes("Its pair is gone. ("), "a pair that no longer names each other, or whose other note is gone, shows nothing");
+	assert(room.includes("- Its pair, dated. (learned 2026-09-11)") && !room.includes("A kept note with no day. ("), "a note with no day shows none, and its pair shows its own");
+	assert(!renderMemoryDocument(doc, "context").includes("(learned") && !renderMemoryDocument(doc, "context", { entryIds: true, sections: ["Deep Memory"] }).includes("(learned") && !stored.includes("(learned"), "only the room's own read shows it: not the plain context render, not the fold's, not the file");
+	assert(renderMemoryContext(file).includes("(learned") === false && renderMemoryContext(file, undefined, { pairDays: true }).includes("5000 euros. (learned 2026-08-02)"), "renderMemoryContext shows it only when asked");
+	assert(findEntry(applyUserEdit(doc, { op: "edit", id: "m-0001", text: "- The deposit is 6000 euros.", today: "2026-09-30" }).doc, "m-0001")?.disagrees === undefined, "a hand edit clears the mark: the note is no longer the text kept beside the other");
+	// A fold's rewrite keeps the mark while the pair still disagrees, and drops it once it does not.
+	const { applyFoldOps } = await import("../src/absorb-ops.js");
+	const foldAll = (ops: Array<{ id: string; text: string }>) => applyFoldOps(doc, ops.map((op) => ({ op: "update" as const, ...op })), { sessionId: "RC-0009", savedDate: "2026-09-30", sessionDate: "2026-08-20", nextEntryNumber: 9 }).doc;
+	const fold = (text: string) => foldAll([{ id: "m-0001", text }]);
+	const pairOf = (d: typeof doc) => [findEntry(d, "m-0001")?.disagrees ?? null, findEntry(d, "m-0002")?.disagrees ?? null, (renderMemoryDocument(d, "context", { pairDays: true }).match(/deposit[^\n]*\(learned /g) ?? []).length];
+	const still = fold("- The deposit is 6000 euros.");
+	const stillRoom = renderMemoryDocument(still, "context", { pairDays: true });
+	assert(findEntry(still, "m-0001")?.disagrees === "m-0002" && findEntry(still, "m-0002")?.disagrees === "m-0001" && stillRoom.includes("- The deposit is 6000 euros. (learned 2026-08-20)") && stillRoom.includes("- The deposit is 7000 euros. (learned 2026-09-11)"), `a fold's rewrite that still disagrees with its pair keeps the mark, and the room's read shows both days: ${JSON.stringify(findEntry(still, "m-0001"))}`);
+	const agreed = fold("- The deposit is 7000 euros.");
+	assert(findEntry(agreed, "m-0001")?.disagrees === undefined && !renderMemoryDocument(agreed, "context", { pairDays: true }).includes("7000 euros. (learned"), `a fold's rewrite that no longer disagrees with its pair clears the mark: ${JSON.stringify(findEntry(agreed, "m-0001"))}`);
+	// Still disagreeing however it is worded: a dropped value or a negation keeps the mark, as on the older-page gates.
+	for (const text of ["- The deposit is now 6000 euros, due before the handover.", "- The deposit is not 5000 euros any more."]) {
+		assert(JSON.stringify(pairOf(fold(text))) === JSON.stringify(["m-0002", "m-0001", 2]), `a reworded rewrite that still disagrees keeps the mark on both notes and both days: ${text} gives ${JSON.stringify(pairOf(fold(text)))}`);
+	}
+	// Both notes rewritten in one reply are judged on their final texts, whatever the order.
+	assert(JSON.stringify(pairOf(foldAll([{ id: "m-0001", text: "- The deposit is 6000 euros." }, { id: "m-0002", text: "- The deposit is 6000 euros." }]))) === JSON.stringify([null, null, 0]), "two notes rewritten to one value both lose the mark");
+	assert(JSON.stringify(pairOf(foldAll([{ id: "m-0001", text: "- The deposit is 7000 euros." }, { id: "m-0002", text: "- The deposit is 8000 euros." }]))) === JSON.stringify(["m-0002", "m-0001", 2]), "a note that agreed with the other's old text, rewritten away from in the same reply, keeps the mark on both");
+	console.log("  pairs: disagrees round-trips, the room's read alone shows a kept pair's days while both name each other, and a fold keeps the mark while the two still disagree");
 }
 
 console.log("memory-entries smoke passed");

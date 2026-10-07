@@ -26,7 +26,7 @@ import {
 	type ReviewTopicRow,
 } from "../src/review-assess.js";
 import { emptyReviewGuidance, reviewGuidanceFromWire, reviewGuidanceIsEmpty } from "../src/review-guidance.js";
-import type { MemoryDocument, MemoryEntry } from "../src/memory-entries.js";
+import { parseMemoryDocument, type MemoryDocument, type MemoryEntry } from "../src/memory-entries.js";
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -170,8 +170,8 @@ const DOC: MemoryDocument = {
 		{ section: "Active Items", title: "Active Items", heading: null, intro: "", entries: [note("m-0051", "- Send the renewal notice.", { kind: "item", status: "open" })] },
 		// The same nine words with a different date: one point with two values, not one point said twice.
 		{ section: "Deep Memory", title: "Maintenance renewals", heading: "### Maintenance renewals", intro: "", entries: [
-			note("m-0061", "- The Nordwind maintenance contract renews automatically on 1 June.", { saved: "2026-06-02" }),
-			note("m-0062", "- The Nordwind maintenance contract renews automatically on 1 July.", { saved: "2026-09-14" }),
+			note("m-0061", "- The Nordwind maintenance contract renews automatically on 1 June.", { saved: "2026-06-02", learned: "2026-06-02" }),
+			note("m-0062", "- The Nordwind maintenance contract renews automatically on 1 July.", { saved: "2026-09-14", learned: "2026-09-14" }),
 		] },
 	],
 };
@@ -185,7 +185,7 @@ assert(findings.topicsThatLookTheSame.join("|") === `"The Nordwind contract" and
 // (the three pairs above are the whole of that list) and listed on its own,
 // the older value first with its day, then the newer with its day.
 assert(findings.saysTheSameTwice.every((line) => !line.includes("renews automatically")), `a pair that disagrees on a date is not listed as saying the same thing, got ${JSON.stringify(findings.saysTheSameTwice)}`);
-assert(findings.disagree.length === 1 && findings.disagree[0] === `"Maintenance renewals" disagrees with itself: 1 June (saved 2 Jun) or 1 July (saved 14 Sep)`, `a pair that shares its words but not its date is listed under disagree with both values and both days, got ${JSON.stringify(findings.disagree)}`);
+assert(findings.disagree.length === 1 && findings.disagree[0] === `"Maintenance renewals" disagrees with itself: 1 June (as of 2 Jun) or 1 July (as of 14 Sep)`, `a pair that shares its words but not its date is listed under disagree with both values and both days, got ${JSON.stringify(findings.disagree)}`);
 assert(JSON.stringify(findings.conflictNotes) === JSON.stringify([{ ids: ["m-0061", "m-0062"], topics: ["Maintenance renewals", "Maintenance renewals"] }]), `the machine's disagreeing pair carries both ids and both topics, got ${JSON.stringify(findings.conflictNotes)}`);
 const filled = withMachineFindings(parsed.fields, findings, DOC.topics.map((topic) => topic.title));
 assert(filled.saysTheSameTwice.join("|") === findings.saysTheSameTwice.join("|") && filled.saysTheSameTwice !== findings.saysTheSameTwice, "the first read carries the sentences, as its own copy");
@@ -198,6 +198,18 @@ assert(fromNothing.topics.join(" | ") === "The Nordwind contract | How this team
 const quiet = reviewMachineFindings({ ...DOC, topics: [DOC.topics[1], DOC.topics[3]] });
 assert(quiet.saysTheSameTwice.length === 0 && quiet.lookAlikeTopics.length === 0 && quiet.disagree.length === 0 && quiet.conflictNotes.length === 0, "a memory that says nothing twice or differently has empty findings");
 assert(!assessment.prompt.includes("Notes That Say The Same Twice") && !assessment.prompt.includes("Topics That Look The Same"), "the first read prompt never asks the model to find duplicates");
+// The summary notes a saved Memorize read again and left in Unsorted: one
+// line on the first read, and their topic joins the tidy. The count is the
+// Maintain hint's: Deep Memory only, tried set. None means no line, no join.
+assert(findings.waitInUnsorted.length === 0 && quiet.waitInUnsorted.length === 0 && !filled.topics.includes("Unsorted"), "no summary note waits: no line and no join");
+const CALLS: Record<string, string> = { "m-0002": "Pricing for the Nordwind renewal", "m-0003": "Hiring plan for the spring", "m-0004": "Legal review of the draft", "m-0005": "Office move logistics" };
+const triedNote = (id: string, tried = " tried=openai-compatible/gpt-5.5") => [`<!-- e: id=${id} kind=fact saved=2026-06-01 summary=true${tried} -->`, `- ${CALLS[id]}`, ""];
+const unsortedDoc = parseMemoryDocument(["## Deep Memory", "", "### Terms", "", "<!-- e: id=m-0001 kind=fact saved=2026-06-01 -->", "- A term.", "", "### Unsorted", "", ...triedNote("m-0002"), ...triedNote("m-0003"), ...triedNote("m-0004", ""), "## Active Items", "", "### Unsorted", "", ...triedNote("m-0005"), ""].join("\n"));
+const waiting = reviewMachineFindings(unsortedDoc, "2026-09-14");
+assert(JSON.stringify(waiting.waitInUnsorted) === JSON.stringify(["2 notes wait in Unsorted: conversation summaries that Memorize could not sort. The tidy sorts them into topics."]), `the first read names the two tried notes, got ${JSON.stringify(waiting.waitInUnsorted)}`);
+const joined = withMachineFindings({ ...parsed.fields, topics: [] }, waiting, unsortedDoc.topics.map((topic) => topic.title));
+assert(waiting.duplicateNotes.length === 0 && waiting.conflictNotes.length === 0 && joined.topics.join(" | ") === "Unsorted" && joined.waitInUnsorted?.join("") === waiting.waitInUnsorted.join(""), `Unsorted joins the topics to tidy, got ${JSON.stringify(joined.topics)}`);
+assert(reviewMachineFindings(parseMemoryDocument(["## Deep Memory", "", "### Unsorted", "", ...triedNote("m-0002")].join("\n"))).waitInUnsorted[0] === "1 note waits in Unsorted: a conversation's summary that Memorize could not sort. The tidy sorts it into topics.", "one note reads in the singular");
 
 const available = reviewAvailability({ roomBusy: false, migrated: true, runActive: false, topics: TOPICS, budgetTokens: 20000, reviewTargetTokens: 820 });
 assert(available.available && available.reason === "available", "a quiet migrated room with notes can be reviewed");
@@ -256,7 +268,7 @@ assert(signedWith.prompt.includes("## Material: Notes That Say The Same Twice") 
 // The pairs that disagree are material of their own, between the twins and the look-alike topics; a discussion given none has no such section.
 assert(!talked.prompt.includes("Notes That Disagree") && !signedWith.prompt.includes("Notes That Disagree"), "a discussion given no disagreeing pair carries no section for one");
 const disagreed = buildReviewDiscussionTurnPrompt({ ...discussionInput, saysTheSameTwice: findings.saysTheSameTwice, disagree: findings.disagree, topicsThatLookTheSame: findings.topicsThatLookTheSame });
-assert(disagreed.prompt.includes(`## Material: Notes That Disagree\n\n- "Maintenance renewals" disagrees with itself: 1 June (saved 2 Jun) or 1 July (saved 14 Sep)`), "the discussion turn carries the disagreeing pair as the person saw it");
+assert(disagreed.prompt.includes(`## Material: Notes That Disagree\n\n- "Maintenance renewals" disagrees with itself: 1 June (as of 2 Jun) or 1 July (as of 14 Sep)`), "the discussion turn carries the disagreeing pair as the person saw it");
 assert(disagreed.prompt.indexOf("## Material: Notes That Say The Same Twice") < disagreed.prompt.indexOf("## Material: Notes That Disagree") && disagreed.prompt.indexOf("## Material: Notes That Disagree") < disagreed.prompt.indexOf("## Material: Topics That Look The Same"), "the disagreeing pairs sit after the twins and before the look-alike topics");
 assert(buildReviewSignoffPrompt({ ...discussionInput, disagree: findings.disagree }).prompt.includes("## Material: Notes That Disagree"), "the sign-off carries the disagreeing pairs too");
 

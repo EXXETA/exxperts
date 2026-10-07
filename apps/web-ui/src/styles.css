@@ -3536,6 +3536,11 @@ strong, b { font-weight: 700; }
 	color: var(--muted);
 	font-size: 13.5px;
 }
+/* An older value's line sits under its row, not beside it. */
+.absorb-run-change.compact .absorb-run-change-reason {
+	flex-basis: 100%;
+	margin: 0;
+}
 /* The archive section starts closed: one line and a Show. */
 .absorb-run-archive > summary {
 	list-style: none;
@@ -3762,8 +3767,37 @@ strong, b { font-weight: 700; }
 	padding: 24px 26px;
 	transition: background 120ms ease;
 }
-.maintain-action + .maintain-action {
+.maintain-action + .maintain-action,
+.maintain-action-row + .maintain-action {
 	border-top: 1px solid var(--border-soft);
+}
+/* A card with a second way in beside it: Discuss first sits next to Start,
+   outside the card's own button. */
+.maintain-action-row {
+	display: flex;
+	align-items: center;
+	transition: background 120ms ease;
+}
+/* The whole row is the way in, so the whole row is shaded, once, except while
+   the pointer is on Discuss first, which shows only its own hover. */
+.maintain-action-row:has(> .maintain-action:not(:disabled)) {
+	cursor: pointer;
+}
+.maintain-action-row:hover:has(> .maintain-action:not(:disabled)):not(:has(.maintain-action-aside:hover)) {
+	background: color-mix(in srgb, var(--fg) 4%, transparent);
+}
+.maintain-action-row > .maintain-action:hover:not(:disabled) {
+	background: transparent;
+}
+.maintain-action-row > .maintain-action {
+	flex: 1 1 auto;
+	min-width: 0;
+	padding-right: 12px;
+}
+.maintain-action-aside {
+	flex: 0 0 auto;
+	height: 32px;
+	margin-right: 26px;
 }
 .maintain-action:hover:not(:disabled),
 .maintain-action:focus-visible {
@@ -3828,6 +3862,17 @@ strong, b { font-weight: 700; }
 	background: var(--exx-action-primary-bg);
 	border-color: var(--exx-action-primary-bg);
 	color: var(--exx-action-primary-fg);
+}
+/* Summary notes a Memorize could not sort: a line and its way to Review. */
+.maintain-hint {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+}
+.maintain-hint p {
+	margin: 0;
+	font-size: 14px;
 }
 .maintain-footnote {
 	margin: 0;
@@ -4280,6 +4325,37 @@ strong, b { font-weight: 700; }
 	font-size: 12px;
 	line-height: 1.4;
 }
+/* A tagged note: the line naming the other note, and its two answers. */
+.absorb-run-change-beside {
+	display: grid;
+	gap: 6px;
+}
+.absorb-run-change-beside-line {
+	margin: 0;
+	color: var(--muted);
+	font-size: 12px;
+	line-height: 1.4;
+}
+.absorb-run-change-beside-choice {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+}
+.absorb-run-change-beside-choice button {
+	font: inherit;
+	font-size: 12px;
+	padding: 3px 10px;
+	border-radius: 999px;
+	border: 1px solid color-mix(in srgb, var(--border-soft) 70%, transparent);
+	background: none;
+	color: var(--muted);
+	cursor: pointer;
+}
+.absorb-run-change-beside-choice button[aria-pressed="true"] {
+	border-color: currentColor;
+	color: inherit;
+	font-weight: 600;
+}
 /* The reason under a superseded row's Before/After pair: a paragraph, so its own margin is set. */
 .absorb-run-change-reason {
 	margin: 6px 0 0;
@@ -4335,6 +4411,25 @@ strong, b { font-weight: 700; }
 	align-items: center;
 	justify-content: space-between;
 	gap: 14px;
+	flex-wrap: wrap;
+}
+
+/* A run that stopped for its model, or kept every conversation whole: one
+   notice, its sentence and the ways on. */
+.absorb-run-stop-note,
+.absorb-run-summaries-note {
+	display: grid;
+	gap: 10px;
+	font-size: 13px;
+}
+.absorb-run-stop-note p,
+.absorb-run-summaries-note p {
+	margin: 0;
+	color: var(--fg);
+}
+.absorb-run-note-actions {
+	display: flex;
+	gap: 10px;
 	flex-wrap: wrap;
 }
 
@@ -4406,10 +4501,11 @@ strong, b { font-weight: 700; }
 	font-variant-numeric: tabular-nums;
 }
 .absorb-run-archive[open] > summary .absorb-run-archive-summary-line { display: none; }
-.absorb-run-archive-explanation {
+/* At the section's specificity, so `.absorb-proposal-section p { margin: 0 }` does not take its space away. */
+.absorb-proposal-section .absorb-run-archive-explanation {
 	color: var(--fg-soft);
 	font-size: 13.5px;
-	margin: 4px 0 18px;
+	margin: 14px 0 18px;
 }
 /* The limit bar: the filled part is the limit and keeps its width; the grey
    part is what leaves because of it, to the same scale, and never wider than

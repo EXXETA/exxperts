@@ -74,13 +74,14 @@ function tokenServerEntry(url: string, token: string): Record<string, unknown> {
 	return { url, auth: "bearer", bearerToken: token };
 }
 
-async function loadRows(): Promise<{ rows: ConnectorRow[]; configKey: string }> {
+/** `configCwd` is the folder config files are found against: a room passes its connector folder, so the panel lists the connectors the room has. */
+async function loadRows(configCwd?: string): Promise<{ rows: ConnectorRow[]; configKey: string }> {
 	const [configMod, authMod, cacheMod] = await Promise.all([
 		import(ADAPTER_CONFIG),
 		import(ADAPTER_AUTH_STORE),
 		import(ADAPTER_CACHE),
 	]);
-	const config = configMod.loadMcpConfig();
+	const config = configCwd ? configMod.loadMcpConfig(undefined, configCwd) : configMod.loadMcpConfig();
 	const cache = cacheMod.loadMetadataCache();
 	const rows: ConnectorRow[] = Object.entries(config.mcpServers ?? {}).map(([name, rawEntry]) => {
 		const entry = rawEntry as ConnectorRow["entry"] & {
@@ -201,6 +202,7 @@ class ConnectorsPanel {
 		private tui: PanelTui,
 		private theme: PanelTheme,
 		private done: (result: "setup" | undefined) => void,
+		private configCwd?: string,
 	) {
 		this.rows = rows;
 		this.configDrift = configDrift;
@@ -247,7 +249,7 @@ class ConnectorsPanel {
 
 	private async refresh(): Promise<void> {
 		try {
-			const { rows } = await loadRows();
+			const { rows } = await loadRows(this.configCwd);
 			this.rows = rows;
 			this.rebuildVisible();
 		} catch (e) {
@@ -1049,12 +1051,13 @@ export async function openConnectorsPanel(
 		};
 	},
 	sessionConfigKey: string | null,
+	configCwd?: string,
 ): Promise<"setup" | undefined> {
-	const [{ rows, configKey }, panelKeysMod] = await Promise.all([loadRows(), import(ADAPTER_PANEL_KEYS)]);
+	const [{ rows, configKey }, panelKeysMod] = await Promise.all([loadRows(configCwd), import(ADAPTER_PANEL_KEYS)]);
 	const configDrift = sessionConfigKey !== null && sessionConfigKey !== configKey;
 	return await ctx.ui.custom<"setup" | undefined>(
 		(tui, theme, keybindings, done) =>
-			new ConnectorsPanel(rows, configDrift, panelKeysMod.createPanelKeys(keybindings), tui, theme, done),
+			new ConnectorsPanel(rows, configDrift, panelKeysMod.createPanelKeys(keybindings), tui, theme, done, configCwd),
 		{ overlay: true, overlayOptions: { anchor: "center", width: 88, maxHeight: "90%" } },
 	);
 }
