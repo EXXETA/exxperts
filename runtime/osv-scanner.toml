@@ -9,3 +9,13 @@ reason = "xlsx prototype pollution, fixed upstream in 0.19.3. We ship 0.20.3 str
 [[IgnoredVulns]]
 id = "GHSA-5pgg-2g8v-p4x9"
 reason = "xlsx ReDoS, fixed upstream in 0.20.2. Same situation: we ship 0.20.3 from the vendor's CDN, which the npm-ecosystem advisory record cannot see."
+
+[[IgnoredVulns]]
+id = "GHSA-vfj7-8cjw-p6xm"
+ignoreUntil = 2026-10-19
+reason = "braces stack exhaustion on deeply nested patterns; no fixed version exists yet (3.0.3 is the latest). Development only: it reaches us through shx, which runs fixed commands from our own build scripts, so no outside pattern ever reaches it, and the installed app does not include it. Upstream Pi has the same chain. The date is on purpose: by then, upgrade if a fix exists, or decide again."
+
+[[IgnoredVulns]]
+id = "GHSA-238p-pmpm-9mq7"
+ignoreUntil = 2026-10-19
+reason = "KaTeX: an existing prototype pollution can bypass its trust restrictions; fixed in 0.18.2. KaTeX reaches the web app only through mermaid, which draws math in diagrams, and mermaid still asks for KaTeX 0.16 in its newest releases (11.17.2 and 12.1.0), as does the runtime's mini-lit, so the fixed version cannot be used yet. The flaw needs a separate prototype pollution in the page before it can do anything. The date is on purpose: by then, upgrade if mermaid allows it, or decide again."
