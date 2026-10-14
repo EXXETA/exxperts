@@ -5,10 +5,10 @@
 // gate are checkable without a browser — see
 // apps/web-server/scripts/memory-v2-copy-smoke.ts.
 
-import type { AbsorbRun, AbsorbRunChange, AbsorbRunChangeKind, AbsorbRunSession, ArchivedEntryCard, ArchiveRow, EntryCard, EntryKind, ReviewDepth, ReviewRun, ReviewRunChange, ReviewRunChangeKind, RunBudget, RunDemotion } from "./types";
-import { meaningfulMaintenanceWarnings } from "./maintenance-warnings";
+import type { AbsorbRun, AbsorbRunChange, AbsorbRunChangeKind, AbsorbRunSession, ArchivedEntryCard, ArchiveRow, EntryCard, EntryKind, MemoryModelStopCause, ReviewDepth, ReviewRun, ReviewRunChange, ReviewRunChangeKind, RunBudget, RunDemotion } from "./types";
 import { fmtMemoryDay } from "./memory-surface-copy";
 import { modelTooltipName } from "./model-names";
+import { notOnAccountWhy } from "../../web-server/src/model-not-on-account";
 
 /** Token counts are read, not scanned: group them the way the budget line does. */
 export function fmtTokenCount(value: number): string {
@@ -39,8 +39,8 @@ export function absorbRunProgressLine(run: AbsorbRun): string {
 	// held nothing included: "4 of 10" is the person's own list, not the engine's.
 	const total = run.progress.total;
 	const current = run.progress.current;
-	// A summary note read again is not one of the conversations.
-	if (current && (run.rereads ?? []).some((row) => row.id === current.id)) return `Sorting a note from Unsorted · ${current.title}`;
+	// A note kept as one, read again, is not one of the conversations: its line names it alone.
+	if (current && (run.rereads ?? []).some((row) => row.id === current.id)) return `Memorizing · ${current.title}`;
 	const at = current ? run.sessions.findIndex((session) => session.id === current.id) : -1;
 	const position = at >= 0 ? at + 1 : Math.min(run.progress.folded + 1, Math.max(total, 1));
 	if (!current) return `Working through ${total} ${total === 1 ? "conversation" : "conversations"}…`;
@@ -58,63 +58,54 @@ function countsClause(summary: AbsorbRunSession["summary"], history: number): st
 	return parts.length ? parts.join(", ") : "no changes";
 }
 
-/**
- * A failed session's line ends in what becomes of the session, once.
- *
- * Most reasons are a cause on their own — a reply cut at the output limit, a
- * reply the memory could not accept — so the promise is written here, in one
- * voice, for all of them. A reason that already says where the session goes
- * (the worker failures do) keeps its own words instead of saying it twice.
- */
-function failedSessionLine(reason: string | undefined): string {
-	const cause = (reason ?? "").trim() || "This conversation could not be read.";
-	return /(?:next update|next time)\.$/i.test(cause) ? cause : `${cause} It stays for next time.`;
+/** Every waiting case, in one sentence: conversations the next Memorize reads. */
+export function waitsForNextMemorizeSentence(count: number): string {
+	return count === 1 ? "1 conversation waits for the next Memorize." : `${count} conversations wait for the next Memorize.`;
 }
 
-/** One line per session, on the working screen and on the card. */
+/**
+ * One line per session, on the working screen and on the card. A page placed
+ * as one note reads like any other; a page that waits says so, with no cause.
+ */
 export function absorbRunSessionLine(session: AbsorbRunSession): string {
 	switch (session.outcome) {
 		case "pending": return "Waiting";
 		case "folding": return "Reading this conversation now";
-		case "folded": return `Memorized · ${countsClause(session.summary, session.changes?.filter((change) => change.kind === "history").length ?? 0)}`;
+		case "folded":
+		case "summarized": return `Memorized · ${countsClause(session.summary, session.changes?.filter((change) => change.kind === "history").length ?? 0)}`;
 		case "dropped": return `Nothing to keep · ${session.reason || "this conversation held nothing worth remembering"}`;
-		case "summarized": return ABSORB_SUMMARIZED_LINE;
-		case "failed": return failedSessionLine(session.reason);
+		case "failed": return "Waits for the next Memorize.";
 		case "skipped": return `Left out · ${session.reason || "you asked for this conversation to be left out"}`;
 	}
 }
 
 /**
- * One line per summary note the run read again. A sorted note's points are in
- * their topics and the note goes to the archive whole; any other ending leaves
- * it in Unsorted, and the model that tried it does not read it again.
+ * The card's rows: every conversation while the run works, then only the ones
+ * that changed memory, followed by the notes read again, whose rows say they
+ * come from a note. A note read again that changed nothing has no row once done.
  */
-export function absorbRunRereadLine(row: AbsorbRunSession): string {
-	switch (row.outcome) {
-		case "pending": return "Waiting to be sorted";
-		case "folding": return "Sorting this note into topics now";
-		case "folded": {
-			const counts = countsClause(row.summary, row.changes?.filter((change) => change.kind === "history").length ?? 0);
-			// Nothing new still means the note was read and leaves Unsorted: say that, not "no changes".
-			return counts === "no changes" ? "Read again · nothing new to add · the note goes to the archive" : `Sorted into topics · ${counts} · the note goes to the archive`;
-		}
-		default: return "Not sorted this time · it stays in Unsorted";
-	}
+export function absorbRunRows(run: AbsorbRun, working: boolean): Array<{ session: AbsorbRunSession; line: string; note?: true }> {
+	const changed = (session: AbsorbRunSession) => (session.changes?.length ?? 0) > 0;
+	const sessions = working ? run.sessions : run.sessions.filter((session) => changed(session) || session.outcome === "dropped" || session.outcome === "summarized" || session.outcome === "failed" || session.outcome === "skipped");
+	const rereads = (run.rereads ?? []).filter((row) => (working ? row.outcome === "pending" || row.outcome === "folding" || row.outcome === "folded" : row.outcome === "folded" && changed(row)));
+	return [
+		...sessions.map((session) => ({ session, line: absorbRunSessionLine(session) })),
+		...rereads.map((session) => ({ session, line: absorbRunSessionLine(session), note: true as const })),
+	];
 }
-export const ABSORB_REREAD_HOVER = "A conversation's summary kept as one note in an earlier update, read again to sort its points into topics.";
+
+/** Where a conversation's row shows its date, a row read from a note says so (draft). */
+export const ABSORB_REREAD_ROW_LABEL = "From a note in memory";
 
 /** Every row that carries changes: the conversations', then the summary notes read again. */
 function changeRowsOf(run: AbsorbRun): AbsorbRunSession[] {
 	return [...run.sessions, ...(run.rereads ?? [])];
 }
 
-/** Conversations that keep waiting because their run leg failed. */
+/** Conversations that wait because their run leg did not finish. */
 export function absorbRunFailedSessionNote(run: AbsorbRun): string | null {
 	const failed = run.sessions.filter((session) => session.outcome === "failed").length;
-	if (failed === 0) return null;
-	return failed === 1
-		? "1 conversation keeps waiting for the next update."
-		: `${failed} conversations keep waiting for the next update.`;
+	return failed === 0 ? null : waitsForNextMemorizeSentence(failed);
 }
 
 /** How full memory is after this update, as the percentage a person reads everywhere else. */
@@ -128,10 +119,6 @@ export function absorbRunReadCount(run: AbsorbRun): number {
 	return run.sessions.filter((session) => session.outcome === "folded" || session.outcome === "dropped" || session.outcome === "summarized").length;
 }
 
-/** The card line of a conversation kept whole as its approved summary, and its hover. */
-export const ABSORB_SUMMARIZED_LINE = "Memorized · kept as one note in Unsorted · Review can sort it";
-export const ABSORB_SUMMARIZED_HOVER = "This conversation's summary, the one you approved, was kept as one note instead of being split into topics. The next Memorize tries to sort it into topics, and so can Review.";
-
 /** The two ways out of a Memorize that stopped because its model is not answering. */
 export const ABSORB_TRY_AGAIN_LABEL = "Try again";
 export const ABSORB_CHOOSE_MODEL_LABEL = "Choose another model";
@@ -141,14 +128,9 @@ export function absorbRunWaitingCount(run: AbsorbRun): number {
 	return run.sessions.filter((session) => session.outcome === "pending" || session.outcome === "folding" || session.outcome === "failed").length;
 }
 
-/** The re-read rows the card shows: every one while the run works or an outage holds it (Try again reads the waiting ones); once it is saved, only the ones it reached. */
-export function absorbRunRereadRows(run: AbsorbRun, working: boolean): AbsorbRunSession[] {
-	return (run.rereads ?? []).filter((row) => working || run.stop || row.outcome !== "pending");
-}
-
 /**
  * A run with nothing a save would record: no conversation folded, dropped or
- * kept as its summary, and no note from Unsorted sorted. A save then changes
+ * kept as its summary, and no note read again sorted. A save then changes
  * nothing and every conversation stays waiting, so the card says so and Save is off.
  */
 export function absorbRunNothingRead(run: AbsorbRun): boolean {
@@ -159,7 +141,7 @@ export function absorbRunNothingRead(run: AbsorbRun): boolean {
  * Save is off only when a save would change nothing: no conversation read, and
  * none of the four things a save still records: a conversation left out (taken
  * off the waiting list), notes leaving for the budget (archived), a limit raised
- * on the card (made the room's setting), or a note from Unsorted the model tried
+ * on the card (made the room's setting), or a summary note the model read again
  * (marked as tried).
  */
 export function absorbRunNothingToSave(run: AbsorbRun): boolean {
@@ -172,17 +154,23 @@ export function absorbRunNothingToSave(run: AbsorbRun): boolean {
 export const ABSORB_NOTHING_READ_SENTENCE = "No conversation was read yet.";
 export const ABSORB_NOTHING_READ_SAVE_TITLE = "Nothing to save yet: no conversation was read.";
 
-/** Summary notes a stopped run did not get to read again: Try again reads them after the conversations. */
-export function absorbRunRereadsWaiting(run: AbsorbRun): number {
-	return (run.rereads ?? []).filter((row) => row.outcome === "pending" || row.outcome === "folding").length;
+/** Why a run stopped on its Memory model, as the notice's sentence says it (draft wording). The provider names the account a refusal is about. */
+export function memoryModelStopWhy(cause: MemoryModelStopCause, provider?: string): string {
+	switch (cause) {
+		case "busy": return "is still busy after several tries";
+		case "signed-out": return "cannot answer because its provider is signed out";
+		case "quota": return "has reached its usage limit";
+		case "not-offered": return "is no longer offered";
+		case "not-on-account": return notOnAccountWhy(provider);
+		default: return "isn't answering right now";
+	}
 }
 
-/** The one notice of a run that stopped because its Memory model is not answering, or is busy. It names the conversations still waiting, then the notes; never "0 conversations" when notes wait. */
-export function absorbRunOutageSentence(model: string, cause: "not-answering" | "busy", waiting: number, notesWaiting = 0): string {
-	const why = cause === "busy" ? "is busy or at its usage limit right now" : "isn't answering right now";
-	const still = waiting === 0 && notesWaiting > 0 ? "" : waiting === 1 ? " 1 conversation is still waiting." : ` ${waiting} conversations are still waiting.`;
-	const notes = notesWaiting === 0 ? "" : notesWaiting === 1 ? " 1 note from Unsorted is still waiting to be sorted." : ` ${notesWaiting} notes from Unsorted are still waiting to be sorted.`;
-	return `Memorize paused because ${model} ${why}.${still}${notes}`;
+/** The one notice of a run that stopped because its Memory model is not answering, or is busy. It names the conversations still waiting, never "0 conversations". */
+export function absorbRunOutageSentence(model: string, cause: MemoryModelStopCause, waiting: number, provider?: string): string {
+	const why = memoryModelStopWhy(cause, provider);
+	const still = waiting === 0 ? "" : waiting === 1 ? " 1 conversation is still waiting." : ` ${waiting} conversations are still waiting.`;
+	return `${cause === "restarted" ? "The app restarted. Finished conversations are on this card. Save keeps them." : `Memorize paused because ${model} ${why}.`}${still}`;
 }
 
 /**
@@ -201,7 +189,10 @@ export function absorbRunAllSummarized(run: AbsorbRun): boolean {
 	const read = run.sessions.filter((session) => session.outcome !== "skipped");
 	return read.length > 0 && read.every((session) => session.outcome === "summarized");
 }
-export const ABSORB_ALL_SUMMARIZED_SENTENCE = "Each conversation's summary was kept as one note in Unsorted. Another Memory model may sort them into topics.";
+/** That run's one notice, with Choose another model beside it. */
+export function absorbRunAllSummarizedSentence(model: string): string {
+	return `${model} could not sort these conversations into topics. Another Memory model may do better.`;
+}
 
 /** Notes this update adds, rewrites, replaces or closes, across every conversation and every note read again. */
 export function absorbRunNotesChanged(run: AbsorbRun): number {
@@ -450,24 +441,12 @@ export function overLimitFirstRead(input: { reviewTargetTokens: number; budgetTo
 /** The saved screen's line when the save also wrote a higher budget. The number stays on the button that chose it. */
 export const LIMIT_RAISED_ON_SAVE_SENTENCE = "The memory budget was raised with this save.";
 
+/** A Memorize or Review save while the room's open conversation had started (the server says so): that one keeps its start text. */
+export const OPEN_CONVERSATION_KEEPS_MEMORY_SENTENCE = "Your open conversation keeps the memory it started with. The changes apply from your next conversation.";
+
 /** An undo took back a save that had raised the budget, and the budget went with it. */
 export function LIMIT_LOWERED_ON_UNDO_SENTENCE(tokens: number): string {
 	return `The budget is back at ${fmtTokenLimit(tokens)}.`;
-}
-
-/**
- * Giving a room's entries their ids changes nothing a person would recognise in
- * what the room remembers, so it is never a reason to hold an update back. The
- * server still reports it; the card states it as a fact instead of a warning.
- */
-export function isEntryIdMigrationNotice(warning: string): boolean {
-	return /entry ids/i.test(warning);
-}
-
-/** The informational line a first-time migration puts on the card. */
-export function absorbRunMigrationSentence(run: AbsorbRun): string | null {
-	if (!run.migration?.pending) return null;
-	return `This update also gives the room's ${fmtTokenCount(run.migration.entriesAssigned)} entries their ids, so they can be edited one by one. Nothing changes in what the room remembers.`;
 }
 
 /** How many of a session's changes are of one kind, from the rows when the run carries them and from the summary's count otherwise. */
@@ -478,17 +457,17 @@ function absorbSessionChangeCount(session: AbsorbRunSession, kind: "closed"): nu
 
 /**
  * Automatic maintenance for a v2 run (the contract's client fast path): apply
- * only when there is nothing for a person to weigh. Anything archived for the
- * budget, any open item a fold closed, any crossing of the budget, any session
- * that did not finish, any conversation the model judged not worth keeping,
- * and any warning falls to the card with the reason named. An add, an update
- * and a replace are the fast path's own business: a fold's ordinary work,
- * each with its old words kept in the archive and its row in History. The
- * room setting is checked by the caller; this is the run's own verdict.
+ * unless the person has a real decision to make. Anything archived for the
+ * budget, any open item a fold closed, any crossing of the budget, any new
+ * note beside a pinned one or one it may disagree with, and any conversation
+ * the model judged not worth keeping falls to the card with the reason named.
+ * An engine warning never does, nor a conversation that did not finish: it
+ * waits for the next Memorize. An add, an update and a replace are the fast
+ * path's own business. The room setting is checked by the caller; this is
+ * the run's own verdict.
  */
 export function absorbRunFastPathBlockers(run: AbsorbRun): string[] {
 	const blockers: string[] = [];
-	blockers.push(...meaningfulMaintenanceWarnings(run.warnings.filter((warning) => !isEntryIdMigrationNotice(warning))));
 	const leaving = run.demotion.counts.leaving;
 	if (leaving > 0) {
 		blockers.push(leaving === 1
@@ -508,8 +487,6 @@ export function absorbRunFastPathBlockers(run: AbsorbRun): string[] {
 			? "1 conversation would be dropped as nothing to keep"
 			: `${dropped} conversations would be dropped as nothing to keep`);
 	}
-	const unfinished = absorbRunUnfinishedCount(run);
-	if (unfinished > 0) blockers.push(absorbRunUnfinishedReason(unfinished));
 	return blockers;
 }
 
@@ -518,20 +495,10 @@ function absorbRunBesideCount(run: AbsorbRun, beside: NonNullable<AbsorbRunChang
 	return changeRowsOf(run).reduce((sum, session) => sum + (session.changes?.filter((change) => change.kind === "added" && change.beside === beside).length ?? 0), 0);
 }
 
-/** Conversations the run did not finish. One kept as its summary is finished: nothing is lost and there is nothing to decide, so it never holds the automatic save back. */
-export function absorbRunUnfinishedCount(run: AbsorbRun): number {
-	return run.sessions.filter((session) => session.outcome !== "folded" && session.outcome !== "dropped" && session.outcome !== "summarized").length;
-}
-
-/** The automatic save's reason for a run that did not finish every conversation. */
-export function absorbRunUnfinishedReason(count: number): string {
-	return count === 1 ? "1 conversation did not finish" : `${count} conversations did not finish`;
-}
-
 /** The saved screen's headline: what the room now remembers, or what the update did instead. */
-export function absorbRunSavedHeadline(result: { foldedSessions?: string[]; archivedForBudget?: number }, roomName: string): string {
+export function absorbRunSavedHeadline(result: { foldedSessions?: string[]; archivedForBudget?: number; sortedNotes?: number }, roomName: string): string {
 	const folded = result.foldedSessions?.length ?? 0;
-	if (folded === 0) return (result.archivedForBudget ?? 0) > 0 ? `${roomName} made room in its memory` : `Nothing new for ${roomName} to remember`;
+	if (folded === 0) return (result.archivedForBudget ?? 0) > 0 ? `${roomName} made room in its memory` : (result.sortedNotes ?? 0) > 0 ? `${roomName} sorted its notes into topics` : `Nothing new for ${roomName} to remember`;
 	return `${roomName} memorized ${folded} ${folded === 1 ? "conversation" : "conversations"}`;
 }
 
@@ -548,33 +515,39 @@ export function absorbRunNewTopics(run: AbsorbRun): number {
  */
 export function rememberedMeanwhileSentence(rebasedOnto: string[] | undefined): string | null {
 	const rebased = rebasedOnto?.length ?? 0;
-	if (rebased === 0) return null;
-	return rebased === 1 ? "1 conversation remembered meanwhile stays waiting." : `${rebased} conversations remembered meanwhile stay waiting.`;
+	return rebased === 0 ? null : waitsForNextMemorizeSentence(rebased);
 }
 
-export function absorbRunSavedSentence(result: { foldedSessions?: string[]; remainingSessions?: string[]; archivedEntries?: number; archivedForBudget?: number; replacedEntries?: number; historyKept?: number; sortedNotes?: number; newTopics?: number; rebasedOnto?: string[] }): string {
-	const folded = result.foldedSessions?.length ?? 0;
+export function absorbRunSavedSentence(result: { foldedSessions?: string[]; notedSessions?: number; nothingToKeep?: number; remainingSessions?: string[]; archivedEntries?: number; archivedForBudget?: number; replacedEntries?: number; historyKept?: number; sortedNotes?: number; newTopics?: number; rebasedOnto?: string[] }): string {
+	// The counts the save applied; an older server sent only the read conversations.
+	const folded = result.notedSessions ?? result.foldedSessions?.length ?? 0;
+	const nothing = result.nothingToKeep ?? 0;
 	const remaining = result.remainingSessions?.length ?? 0;
 	const archived = result.archivedEntries ?? 0;
 	const archivedForBudget = result.archivedForBudget ?? 0;
 	const newTopics = result.newTopics ?? 0;
+	const sorted = result.sortedNotes ?? 0;
 	const meanwhile = rememberedMeanwhileSentence(result.rebasedOnto);
 	const parts: string[] = [];
 	// A room already at its ceiling can spend a whole update making room and add
 	// nothing: "0 sessions were saved into memory" reads as a failure when what
 	// actually happened is the work the budget needed.
-	if (folded === 0 && archivedForBudget > 0) {
+	if (folded === 0 && nothing === 0 && archivedForBudget > 0) {
 		parts.push("No conversation was memorized this time.");
 		parts.push(archivedForBudget === 1
 			? "1 note moved to the archive to keep memory within its budget."
 			: `${archivedForBudget} notes moved to the archive to keep memory within its budget.`);
-		if (remaining > 0) parts.push(remaining === 1 ? "1 conversation keeps waiting for the next update." : `${remaining} conversations keep waiting for the next update.`);
+		if (sorted > 0) parts.push(`${absorbRunSortedTitle(sorted)}.`);
+		if (remaining > 0) parts.push(waitsForNextMemorizeSentence(remaining));
 		if (meanwhile) parts.push(meanwhile);
 		return parts.join(" ");
 	}
-	parts.push(folded === 1 ? "1 conversation became lasting notes." : `${folded} conversations became lasting notes.`);
+	// A run that only sorted Unsorted says that, not "0 conversations".
+	if (folded > 0 || nothing > 0 || sorted === 0) parts.push(folded === 1 ? "1 conversation became lasting notes." : `${folded} conversations became lasting notes.`);
+	if (nothing > 0) parts.push(`${nothing} had nothing to keep.`);
+	if (sorted > 0) parts.push(`${absorbRunSortedTitle(sorted)}.`);
 	if (newTopics > 0) parts.push(newTopics === 1 ? "1 new topic." : `${newTopics} new topics.`);
-	if (remaining > 0) parts.push(remaining === 1 ? "1 conversation keeps waiting for the next update." : `${remaining} conversations keep waiting for the next update.`);
+	if (remaining > 0) parts.push(waitsForNextMemorizeSentence(remaining));
 	// A note a newer text replaced did not leave memory: it is said apart from the notes that did.
 	const replaced = Math.min(result.replacedEntries ?? 0, archived);
 	if (replaced > 0) parts.push(replaced === 1 ? "1 note replaced; the old one is in the archive." : `${replaced} notes replaced; the old ones are in the archive.`);
@@ -582,8 +555,6 @@ export function absorbRunSavedSentence(result: { foldedSessions?: string[]; rema
 	if (moved > 0) parts.push(moved === 1 ? "1 note moved to the archive." : `${moved} notes moved to the archive.`);
 	const history = result.historyKept ?? 0;
 	if (history > 0) parts.push(history === 1 ? "1 older value kept as history." : `${history} older values kept as history.`);
-	const sorted = result.sortedNotes ?? 0;
-	if (sorted > 0) parts.push(sorted === 1 ? "1 note from Unsorted was sorted into topics; the whole note is in the archive." : `${sorted} notes from Unsorted were sorted into topics; each whole note is in the archive.`);
 	if (meanwhile) parts.push(meanwhile);
 	return parts.join(" ");
 }
@@ -622,6 +593,108 @@ export function entryOriginSentence(entry: EntryCard): string | null {
 }
 
 /** The first line of an entry, for a row that has no room for the whole text. */
+// ── A page as the person sees it ───────────────────────────────────────────
+// The stored page keeps the format the models read (its section labels and
+// the must-keep marker); what the person reads says the same in plain words.
+// Display only: nothing here is ever written back, except through
+// storedMemoryBody, which gives the editor's "Keep:" back as the marker.
+
+/** The page's labels in plain words (drafts). */
+const PLAIN_PAGE_LABELS: Array<[RegExp, string]> = [
+	[/\*\*Session arc:\*\*/g, "**What happened:**"],
+	[/\*\*Body:\*\*/g, "**What to keep:**"],
+	[/\*\*Parked:\*\*/g, "**Still open:**"],
+];
+
+/** The must-keep marker taken out of one line's words, as the notes drop it once it has pinned them. */
+function withoutMustKeep(text: string): string {
+	return text
+		.replace(/\*\*must-keep[ \t]*[\u2014\u2013-][ \t]*(?=[^*\r\n]*\*\*)/gi, "**")
+		.replace(/[ \t]*\*\*must-keep:?\*\*:?(?=[ \t]*(?:[.,;!?)]|$))/gim, "")
+		.replace(/\*\*must-keep:?\*\*:?[ \t]*(?:[\u2014\u2013-][ \t]+)?/gi, "")
+		.replace(/\*\*must-keep\b:?[ \t]*(?:[\u2014\u2013-][ \t]+)?/gi, "");
+}
+
+/** The other importance words the Remember prompt asks the model to mark in bold. */
+const IMPORTANCE = "key|critical|provisional|parked|resolved|fragile|strategic";
+
+/** The importance markers and a quoted remember-trigger ("Note that") taken out, as must-keep is. */
+function withoutMarkers(text: string): string {
+	return text
+		.replace(new RegExp(String.raw`\*\*(?:${IMPORTANCE}):\*\*:?[ 	]*`, "gi"), "")
+		.replace(new RegExp(String.raw`^([ 	]*[-*][ 	]+)\*\*(?:${IMPORTANCE})\*\*:?[ 	]*`, "gim"), "$1")
+		.replace(new RegExp(String.raw`\*\*(${IMPORTANCE})\*\*`, "gi"), "$1")
+		.replace(/[ \t]*\(\s*["\u201c\u2018'](?:note that|remember|keep in mind|don['\u2019]?t forget|please note)[^"\u201d\u2019')]{0,40}["\u201d\u2019']\s*\)/gi, "");
+}
+
+/** A page, a note or a whole memory as the person reads it: plain labels and no marker. */
+export function plainMemoryText(markdown: string): string {
+	return withoutMarkers(PLAIN_PAGE_LABELS.reduce((text, [label, plain]) => text.replace(label, plain), withoutMustKeep(markdown)));
+}
+
+/** The budget refusal as Room settings' Memory pane says it: the Model pane is in the same list (draft). */
+export function roomSettingsBudgetRefusal(message: string): string {
+	return message.replace(/ Choose one in Room settings, Model first\.$/, " Choose a larger Memory model in Model first.");
+}
+
+/** The memory file's section names in the app's words, as Memory's legend says them. */
+const SECTION_WORDS: Array<[RegExp, string]> = [[/\bActive Items\b/g, "Open items"], [/\bDeep Memory\b/g, "Notes"], [/\bRecent Context\b/g, "Waiting conversations"]];
+
+/** A first read's line as the person reads it: no must-keep marker, bold or plain, stored days in the app's form, and sections by the app's names. */
+export function plainFirstReadLine(text: string): string {
+	return SECTION_WORDS.reduce((line, [name, words]) => line.replace(name, words), withoutMarkers(withoutMustKeep(text))
+		.replace(/\bmust-keep:[ \t]*/gi, "")
+		.replace(/\b(\d{4}-\d{2}-\d{2})\b/g, (day) => fmtMemoryDay(day)));
+}
+
+const MARKED_LINE = /^([ \t]*[-*][ \t]+)\*\*must-keep:?\*\*:?[ \t]*/gim;
+const KEEP_LINE = /^([ \t]*[-*][ \t]+)Keep:[ \t]*/;
+
+/** The Remember editor's body: a line's leading marker reads "Keep:". */
+export function editableMemoryBody(body: string): string {
+	return body.replace(MARKED_LINE, "$1Keep: ");
+}
+
+/**
+ * The editor's body as it is saved: "Keep:" at a line's start is the marker
+ * again, except on a line the page already held as written: only the person
+ * marks a note must-keep, so the quick save and the reviewed one store the same page.
+ */
+export function storedMemoryBody(body: string, original: string): string {
+	const written = new Set(original.split("\n").filter((line) => KEEP_LINE.test(line)));
+	return body.split("\n").map((line) => (written.has(line) ? line : line.replace(KEEP_LINE, "$1**must-keep:** "))).join("\n");
+}
+
+/** One part of a note as it shows: a plain line, a run of points as one list, or the gap a blank line leaves. */
+export type NoteBlock = { line: string } | { points: string[] } | { gap: true };
+
+const POINT_MARKER = /^\s*[-*+\u2022]\s+/;
+
+/**
+ * A note as the person wrote it: each line on its own line, in its order. A
+ * line that starts with a point marker is a point, without the marker, and
+ * points in a row are one list; every other line is plain. Blank lines in a
+ * row are one gap. The first line is the note's own, always plain.
+ */
+export function noteBlocks(text: string): NoteBlock[] {
+	const blocks: NoteBlock[] = [];
+	for (const raw of plainMemoryText(text).split("\n")) {
+		const last = blocks[blocks.length - 1];
+		if (!raw.trim()) {
+			if (last && !("gap" in last)) blocks.push({ gap: true });
+			continue;
+		}
+		const point = blocks.length > 0 && POINT_MARKER.test(raw);
+		const words = (blocks.length === 0 || point ? raw.replace(POINT_MARKER, "") : raw).trim();
+		if (!words) continue;
+		if (!point) blocks.push({ line: words });
+		else if (last && "points" in last) last.points.push(words);
+		else blocks.push({ points: [words] });
+	}
+	if (blocks.length > 0 && "gap" in blocks[blocks.length - 1]) blocks.pop();
+	return blocks;
+}
+
 export function entryFirstLine(text: string): string {
 	const line = text.split("\n").map((part) => part.replace(/^[\s\-*•]+/, "").trim()).find((part) => part.length > 0) ?? "";
 	return line.length > 180 ? `${line.slice(0, 180)}…` : line;
@@ -755,7 +828,19 @@ export interface AbsorbRunGuidanceSummary {
 	drops: { text: string; leftOut: boolean }[];
 	corrections: string[];
 	topics: string[];
+	/** The entries this run removed by code before Save, as the person asked: each by its first line. */
+	removed: string[];
+	/** Removals it could not do: nothing in memory matched the words exactly, or more than one entry did. */
+	notDone: Array<{ text: string; several: boolean }>;
+	/** The other instructions: what the Memory model was told, not something the run checks. */
 	instructions: string[];
+}
+
+/** The line for a removal the run could not do (draft). */
+export function absorbRunNotDoneSentence(text: string, several = false): string {
+	return several
+		? `Not done: ${text.trim()} More than one entry in memory matches those words; you can delete the right one on the Memory page.`
+		: `Not done: ${text.trim()} Nothing in memory matched it exactly; you can delete the entry on the Memory page.`;
 }
 
 function joinList(items: string[]): string {
@@ -794,9 +879,11 @@ export function absorbRunGuidanceSummary(run: AbsorbRun): AbsorbRunGuidanceSumma
 		drops,
 		corrections: guidance.corrections ?? [],
 		topics,
-		instructions: guidance.instructions ?? [],
+		removed: (run.requests ?? []).filter((request) => request.done).map((request) => (request.entry ? entryFirstLine(request.entry) : request.text)),
+		notDone: (run.requests ?? []).filter((request) => !request.done).map((request) => ({ text: request.text, several: request.several === true })),
+		instructions: (guidance.instructions ?? []).filter((text) => !(run.requests ?? []).some((request) => request.text === text)),
 	};
-	const empty = summary.pins.length === 0 && summary.drops.length === 0 && summary.corrections.length === 0 && summary.topics.length === 0 && summary.instructions.length === 0;
+	const empty = summary.pins.length === 0 && summary.drops.length === 0 && summary.corrections.length === 0 && summary.topics.length === 0 && summary.removed.length === 0 && summary.notDone.length === 0 && summary.instructions.length === 0;
 	return empty ? null : summary;
 }
 
@@ -820,6 +907,26 @@ export function memorizeChooserText(waiting: number, automatic: boolean): string
 		? `Turn the ${conversations} into lasting notes, with no first read. A clean update is saved without the card; one with anything to weigh waits for you.`
 		: `Turn the ${conversations} into lasting notes. You read what will be kept before it is saved; whatever does not fit in the budget goes to the archive.`;
 }
+/** The card's heading over the notes the one-time sort placed (draft). */
+export function absorbRunSortedTitle(count: number): string {
+	return count === 1 ? "1 note waiting in Unsorted was sorted into a topic" : `${count} notes waiting in Unsorted were sorted into topics`;
+}
+
+/**
+ * The notes the one-time sort placed, less any the same run reads again into
+ * notes: that row tells its story. A note is left out from the moment it waits
+ * to be read, so the count holds from the run to its end; one whose read kept
+ * nothing comes back.
+ */
+export function absorbRunSortedRows(run: AbsorbRun): NonNullable<AbsorbRun["sorted"]> {
+	const reread = new Set((run.rereads ?? []).filter((row) => row.outcome === "pending" || row.outcome === "folding" || (row.outcome === "folded" && (row.changes?.length ?? 0) > 0)).map((row) => row.id));
+	return (run.sorted ?? []).filter((row) => !reread.has(row.id));
+}
+
+/** The Memorize card's text when no conversation waits but notes in Unsorted do. */
+export function memorizeNotesText(notes: number): string {
+	return notes === 1 ? "1 note in Unsorted can be sorted into a topic." : `${notes} notes in Unsorted can be sorted into topics.`;
+}
 export function maintainChooserFootnote(automatic: boolean): string {
 	return automatic
 		? "A clean update is saved as soon as it is ready. The memory budget is set in Room settings."
@@ -827,10 +934,6 @@ export function maintainChooserFootnote(automatic: boolean): string {
 }
 export const DISCUSS_FIRST_LABEL = "Discuss first";
 
-/** The chooser's line under the cards while summary notes a Memorize read again still wait in Unsorted; its [Review] button starts Review. */
-export function unsortedHintText(count: number): string {
-	return count === 1 ? "1 note isn't sorted into a topic yet · Review can sort it" : `${count} notes aren't sorted into topics yet · Review can sort them`;
-}
 export const DISCUSS_FIRST_TITLE = "Read the conversations first and talk through what to keep. Nothing is saved yet.";
 
 /** The same fact as a clause, for the sentences that build on it. */
@@ -859,7 +962,7 @@ export const REVIEW_RUN_ACTIVE_SENTENCE = "This room is still working on a previ
 export const REVIEW_RUN_ACTIVE_ACTION = "Stop that tidy";
 
 /** The one sentence a busy room shows instead of its memory editing actions. */
-export const MEMORY_EDIT_BLOCKED_SENTENCE = "Finish or forget the current conversation to edit memory.";
+export const MEMORY_EDIT_BLOCKED_SENTENCE = "Memory can be edited once the room finishes its answer.";
 
 /** Lost contact with a run after the poll retries ran out. */
 export const RUN_POLL_LOST_SENTENCE = "This screen lost contact with the update, which may still be running. Check your connection, then try again.";
@@ -1063,7 +1166,6 @@ export function reviewRunArchiveCount(run: ReviewRun): number {
  */
 export function reviewRunFastPathBlockers(run: ReviewRun): string[] {
 	const blockers: string[] = [];
-	blockers.push(...meaningfulMaintenanceWarnings(run.warnings.filter((warning) => !isEntryIdMigrationNotice(warning))));
 	const leaving = run.demotion.counts.leaving;
 	if (leaving > 0) {
 		blockers.push(leaving === 1
@@ -1078,11 +1180,13 @@ export function reviewRunFastPathBlockers(run: ReviewRun): string[] {
 	if (merged > 0) blockers.push(merged === 1 ? "1 note would be merged" : `${merged} notes would be merged`);
 	if (counts.closed > 0) blockers.push(counts.closed === 1 ? "1 open item would be closed" : `${counts.closed} open items would be closed`);
 	if (counts.topic_folded > 0) blockers.push(counts.topic_folded === 1 ? "1 topic would be folded into another" : `${counts.topic_folded} topics would be folded into another`);
-	const leftAsIs = run.leftAsIs.reduce((sum, group) => sum + group.topics.length, 0);
-	if (leftAsIs > 0) {
-		blockers.push(leftAsIs === 1 ? "1 topic was left as it was" : `${leftAsIs} topics were left as they were`);
-	}
+	// A topic left as it was asks nothing of the person: it never stops the save.
 	return blockers;
+}
+
+/** The Review card's one line for the topics it left as they were; why is for the diagnostics. */
+export function reviewLeftAsIsSentence(count: number): string {
+	return count === 1 ? "1 topic was left as it was." : `${count} topics were left as they were.`;
 }
 
 /** What the person agreed in the discussion, as the card lists it back. */
@@ -1090,21 +1194,48 @@ export interface ReviewGuidanceSummary {
 	keepAsIs: string[];
 	shorten: string[];
 	remove: string[];
+	/** The archive lines this save would not carry out, each as its whole "Not done" sentence. */
+	removeNotDone: string[];
 	answers: string[];
 	instructions: string[];
 	topics: string[];
 }
 
+/**
+ * A sign-off line as the card shows it: the model wrote it for the run, with
+ * note ids and the file's section names; the person reads it with neither,
+ * and as said to them.
+ */
+export function reviewGuidanceLine(text: string): string {
+	return text
+		.replace(/\s*[([]\s*m-\d{3,}(?:\s*[,·;]\s*(?:m-\d{3,}|pinned))*\s*[)\]]/g, "")
+		.replace(/\s*\bm-\d{3,}\b/g, "")
+		.replace(/\bActive Items\b/g, "Open items")
+		.replace(/\b(?:The person|The user) asked\b/g, "You asked")
+		.replace(/\b(?:the person|the user) asked\b/g, "you asked")
+		.replace(/\s+([.,;:])/g, "$1")
+		.trim();
+}
+
+/** An archive the person asked for that this save would not make (draft). */
+export function reviewRemovalNotDoneSentence(line: string): string {
+	const text = reviewGuidanceLine(line);
+	return `Not done: ${text}${/[.!?]$/.test(text) ? "" : "."} It is still in memory; you can delete it on the Memory page.`;
+}
+
 export function reviewRunGuidanceSummary(run: ReviewRun): ReviewGuidanceSummary | null {
 	const guidance = run.guidance;
 	if (!guidance) return null;
+	const plain = (lines: string[] | undefined) => (lines ?? []).map(reviewGuidanceLine).filter(Boolean);
+	const notDone = new Set(run.removeNotDone ?? []);
 	const summary: ReviewGuidanceSummary = {
-		keepAsIs: guidance.keepAsIs ?? [],
-		shorten: guidance.shorten ?? [],
-		remove: guidance.remove ?? [],
-		answers: guidance.answers ?? [],
-		instructions: guidance.instructions ?? [],
-		topics: guidance.topics ?? [],
+		keepAsIs: plain(guidance.keepAsIs),
+		shorten: plain(guidance.shorten),
+		remove: plain((guidance.remove ?? []).filter((line) => !notDone.has(line))),
+		removeNotDone: (guidance.remove ?? []).filter((line) => notDone.has(line)).map(reviewRemovalNotDoneSentence),
+		answers: plain(guidance.answers),
+		instructions: plain(guidance.instructions),
+		topics: (guidance.topics ?? []).map(topicLabel),
 	};
 	const empty = Object.values(summary).every((list) => list.length === 0);
 	return empty ? null : summary;

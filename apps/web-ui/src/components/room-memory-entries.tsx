@@ -9,12 +9,15 @@
 // Below them, the archive; below that, everything that has ever changed this
 // room's memory, with Undo on the newest Memorize or Review.
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ArchivedEntryCard, BudgetState, EntryCard, EntryKind, MemoryEntriesTopicGroup, MemoryUndoResponse, PersistentAgentStatus } from "../types";
 import { createMemoryEntry, deleteArchivedMemoryEntry, deleteMemoryEntry, fetchMemoryArchive, fetchMemoryEntries, fetchMemoryHistory, restoreMemoryEntry, undoMemorySave, updateMemoryEntry } from "../memory-entries-api";
-import { archivedEntryRestorable, entryKindLabel, LIMIT_LOWERED_ON_UNDO_SENTENCE, MEMORY_EDIT_BLOCKED_SENTENCE } from "../memory-v2-copy";
+import { archivedEntryRestorable, entryKindLabel, LIMIT_LOWERED_ON_UNDO_SENTENCE, MEMORY_EDIT_BLOCKED_SENTENCE, noteBlocks, OPEN_CONVERSATION_KEEPS_MEMORY_SENTENCE } from "../memory-v2-copy";
 import { MemoryChangeFold } from "./memory-change-fold";
+import { askUntilAnswered, noteLimitLine, sameNoteWords, SAVE_ANSWER_LOST_SENTENCE, SAVE_NOT_LANDED_SENTENCE, saveAnswerLost, UNDO_NOT_LANDED_SENTENCE, lostUndoLanded } from "../memory-save-answer";
+import { MEMORY_NOTE_MAX_CHARS } from "../../../web-server/src/memory-typed-text";
 import { GroupHeader } from "./pane-header";
+import { TopicMove } from "./topic-move";
 import {
 	ADD_NOTE_LABEL,
 	archiveRowMeta,
@@ -77,11 +80,12 @@ function groupByTopic(entries: EntryCard[], order: { section: MemoryEntriesTopic
 	return [...groups.values()].filter((group) => group.entries.length > 0);
 }
 
-// Delete for good: the one action here nothing brings back, so it asks first
-// and says exactly that. The sentences live here, beside the button that says them.
-const DELETE_ARCHIVED_NOTE_TITLE = "Delete this archived note for good?";
-const DELETE_ARCHIVED_NOTE_BODY = "It leaves the archive and cannot be brought back or undone.";
-const DELETE_FOR_GOOD_LABEL = "Delete for good";
+// Delete: the one action here nothing brings back, so it asks first and says
+// exactly that, and what stays (the memory's history keeps earlier versions).
+// The sentences live here, beside the button that says them.
+const DELETE_ARCHIVED_NOTE_TITLE = "Delete this archived note?";
+const DELETE_ARCHIVED_NOTE_BODY = "It leaves the archive and cannot be brought back. Earlier versions in this memory's history still show it.";
+const DELETE_ARCHIVED_NOTE_LABEL = "Delete";
 const KEEP_IT_LABEL = "Keep it";
 
 /** The search box reads what a person can see: the note's words and its topic. */
@@ -105,6 +109,12 @@ export function RoomMemoryEntriesSection({ status, onMemoryTokens, onArchiveDele
 	// keeps its limit line and toggles rather than wearing a red error.
 	const [unavailable, setUnavailable] = useState(false);
 	const [actionError, setActionError] = useState<string | null>(null);
+	// The last change altered what a conversation reads while a started one is open: it keeps its memory, as after Memorize and Review.
+	const [openConversationLine, setOpenConversationLine] = useState(false);
+	const seen = <R,>(response: R): R => {
+		if ((response as { openConversationKeepsMemory?: true }).openConversationKeepsMemory) setOpenConversationLine(true);
+		return response;
+	};
 	// The server's own verdict on this room, and the sentence it sent with it.
 	// A room in a conversation still answers with its memory, so the pane shows
 	// everything and simply offers nothing that would write.
@@ -114,8 +124,6 @@ export function RoomMemoryEntriesSection({ status, onMemoryTokens, onArchiveDele
 	const [editingId, setEditingId] = useState<string | null>(null);
 	const [editText, setEditText] = useState("");
 	const [movingId, setMovingId] = useState<string | null>(null);
-	const [moveTopic, setMoveTopic] = useState("");
-	const [moveNewTopic, setMoveNewTopic] = useState("");
 	const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 	const [confirmArchiveDeleteId, setConfirmArchiveDeleteId] = useState<string | null>(null);
 	const [adding, setAdding] = useState(false);
@@ -123,6 +131,7 @@ export function RoomMemoryEntriesSection({ status, onMemoryTokens, onArchiveDele
 	const [addNewTopic, setAddNewTopic] = useState("");
 	const [addKind, setAddKind] = useState<EntryKind>("fact");
 	const [addText, setAddText] = useState("");
+	const addRequestId = useRef(newRequestId());
 	const [query, setQuery] = useState("");
 	// Topics start closed: 42 of them open at once is not a list, it is a wall.
 	const [openTopics, setOpenTopics] = useState<Set<string>>(new Set());
@@ -181,6 +190,12 @@ export function RoomMemoryEntriesSection({ status, onMemoryTokens, onArchiveDele
 	);
 	const topicNames = useMemo(() => [...new Set([...topicOrder.map((topic) => topic.title), ...(entries ?? []).map((entry) => entry.topic)])], [topicOrder, entries]);
 	const noteCount = entries?.length ?? 0;
+	// What each editor says before Save (drafts): Save waits, with its reason, for a topic and for words within the limit.
+	const editLimit = noteLimitLine(editText, MEMORY_NOTE_MAX_CHARS, "Write the note before saving.");
+	const addTextLimit = noteLimitLine(addText, MEMORY_NOTE_MAX_CHARS, "Write the note before saving.");
+	const addTopicChosen = Boolean((addTopic === NEW_TOPIC || !addTopic ? addNewTopic : addTopic).trim());
+	const addCanSave = addTopicChosen && addTextLimit.canSave;
+	const addLine = !addTopicChosen ? "Choose a topic, or name a new one, before saving." : addTextLimit.line;
 	const topicCount = groups.length;
 
 	function toggleTopic(title: string): void {
@@ -202,15 +217,51 @@ export function RoomMemoryEntriesSection({ status, onMemoryTokens, onArchiveDele
 		setBudget(nextBudget);
 	}
 
-	async function run(entryId: string, action: () => Promise<void>): Promise<void> {
+	/** The notes as the server has them now, once it answers: after a lost answer, what is true. */
+	async function reloadEntries(): Promise<EntryCard[]> {
+		const response = await askUntilAnswered(() => fetchMemoryEntries(status.id));
+		const list = response.topics.flatMap((topic) => topic.entries);
+		setEntries(list);
+		setTopicOrder(response.topics.map((topic) => ({ section: topic.section, title: topic.title })));
+		setBudget(response.budget);
+		setArchiveCount(response.archive.count);
+		setArchiveHistory(response.archive.history ?? 0);
+		if (archive !== null) setArchive((await askUntilAnswered(() => fetchMemoryArchive(status.id))).entries);
+		return list;
+	}
+
+	/**
+	 * One action. A refusal shows in the server's words. A lost answer says the
+	 * connection dropped, the notes are read again once the server answers, and
+	 * `landed` says from them whether the action took: then `done` closes the
+	 * form as a normal answer would, else the line says it was not saved.
+	 */
+	async function run(entryId: string, action: () => Promise<void>, landed?: (list: EntryCard[]) => boolean | Promise<boolean>, done?: () => void): Promise<void> {
 		if (readOnly || busyId) return;
 		setBusyId(entryId);
 		setActionError(null);
+		setOpenConversationLine(false);
 		try {
 			await action();
 			onChanged?.();
 		} catch (e) {
-			setActionError((e as Error).message);
+			if (!saveAnswerLost(e)) {
+				setActionError((e as Error).message);
+				return;
+			}
+			setActionError(SAVE_ANSWER_LOST_SENTENCE);
+			try {
+				const list = await reloadEntries();
+				if (landed && !(await landed(list))) {
+					setActionError(SAVE_NOT_LANDED_SENTENCE);
+					return;
+				}
+				setActionError(null);
+				done?.();
+				onChanged?.();
+			} catch (error) {
+				setActionError((error as Error).message);
+			}
 		} finally {
 			setBusyId(null);
 		}
@@ -225,64 +276,75 @@ export function RoomMemoryEntriesSection({ status, onMemoryTokens, onArchiveDele
 
 	function startMove(entry: EntryCard): void {
 		setMovingId(entry.id);
-		setMoveTopic(entry.topic);
-		setMoveNewTopic("");
 		setEditingId(null);
 		setConfirmDeleteId(null);
 	}
 
 	async function saveEdit(entry: EntryCard): Promise<void> {
 		const text = editText.trim();
-		if (!text || text === entry.text) { setEditingId(null); return; }
+		if (text === entry.text) { setEditingId(null); return; }
 		await run(entry.id, async () => {
-			const response = await updateMemoryEntry(status.id, entry.id, { text });
+			const response = seen(await updateMemoryEntry(status.id, entry.id, { text }));
 			applyEntry(response.entry, response.budget);
 			setEditingId(null);
-		});
+		}, (list) => sameNoteWords(list.find((candidate) => candidate.id === entry.id)?.text, text), () => setEditingId(null));
 	}
 
 	async function togglePin(entry: EntryCard): Promise<void> {
 		await run(entry.id, async () => {
-			const response = await updateMemoryEntry(status.id, entry.id, { pinned: !entry.pinned });
+			const response = seen(await updateMemoryEntry(status.id, entry.id, { pinned: !entry.pinned }));
 			applyEntry(response.entry, response.budget);
-		});
+		}, (list) => list.find((candidate) => candidate.id === entry.id)?.pinned === !entry.pinned);
 	}
 
-	async function saveMove(entry: EntryCard): Promise<void> {
-		const topic = (moveTopic === NEW_TOPIC ? moveNewTopic : moveTopic).trim();
-		if (!topic || topic === entry.topic) { setMovingId(null); return; }
+	async function saveMove(entry: EntryCard, topic: string, newTopic: boolean): Promise<void> {
+		if (topic === entry.topic) { setMovingId(null); return; }
 		await run(entry.id, async () => {
-			const response = await updateMemoryEntry(status.id, entry.id, { topic });
+			const response = seen(await updateMemoryEntry(status.id, entry.id, { topic, newTopic }));
 			applyEntry(response.entry, response.budget);
 			setMovingId(null);
-		});
+		}, (list) => list.find((candidate) => candidate.id === entry.id)?.topic !== entry.topic, () => setMovingId(null));
 	}
 
 	async function confirmDelete(entry: EntryCard): Promise<void> {
 		await run(entry.id, async () => {
-			const response = await deleteMemoryEntry(status.id, entry.id);
+			const response = seen(await deleteMemoryEntry(status.id, entry.id));
 			setEntries((current) => (current ?? []).filter((existing) => existing.id !== entry.id));
 			setBudget(response.budget);
-			setArchiveCount((count) => count + 1);
-			setArchive((current) => (current === null ? current : [response.archived, ...current]));
+			if (!response.alreadySaved) setArchiveCount((count) => count + 1);
+			setArchive((current) => (current === null || response.alreadySaved ? current : [response.archived, ...current]));
 			setConfirmDeleteId(null);
-		});
+		}, (list) => !list.some((candidate) => candidate.id === entry.id), () => setConfirmDeleteId(null));
+	}
+
+	/** Opening or cancelling the form starts a new note: it gets an id of its own, so a late answer for the last one never takes its place. */
+	function setAddOpen(open: boolean): void {
+		addRequestId.current = newRequestId();
+		setAdding(open);
 	}
 
 	async function addEntry(): Promise<void> {
-		const topic = (addTopic === NEW_TOPIC || !addTopic ? addNewTopic : addTopic).trim();
+		const typedNew = addTopic === NEW_TOPIC || !addTopic;
+		const topic = (typedNew ? addNewTopic : addTopic).trim();
 		const text = addText.trim();
-		if (!topic || !text) return;
-		await run("new-entry", async () => {
-			const response = await createMemoryEntry(status.id, { topic, kind: addKind, text });
-			applyEntry(response.entry, response.budget);
+		if (!topic || !noteLimitLine(text, MEMORY_NOTE_MAX_CHARS).canSave) return;
+		// The same id goes with every send of this note, so a Save sent again after a lost answer adds it once.
+		const requestId = addRequestId.current;
+		const before = new Set((entries ?? []).map((entry) => entry.id));
+		const added = () => {
 			setOpenTopics((current) => new Set(current).add(topic));
-			setAdding(false);
+			setAddOpen(false);
 			setAddTopic("");
 			setAddNewTopic("");
 			setAddKind("fact");
 			setAddText("");
-		});
+		};
+		await run("new-entry", async () => {
+			const response = seen(await createMemoryEntry(status.id, { topic, kind: addKind, text, newTopic: typedNew, requestId }));
+			if (response.entry) applyEntry(response.entry, response.budget);
+			else await reloadEntries();
+			added();
+		}, (list) => list.some((entry) => !before.has(entry.id) && sameNoteWords(entry.text, text)), added);
 	}
 
 	async function loadArchive(before?: string): Promise<void> {
@@ -302,20 +364,29 @@ export function RoomMemoryEntriesSection({ status, onMemoryTokens, onArchiveDele
 
 	async function restore(entry: ArchivedEntryCard): Promise<void> {
 		await run(entry.id, async () => {
-			const response = await restoreMemoryEntry(status.id, entry.id);
+			const response = seen(await restoreMemoryEntry(status.id, entry.id));
 			applyEntry(response.entry, response.budget);
 			setArchive((current) => (current ?? []).filter((existing) => existing.id !== entry.id));
-			setArchiveCount((count) => Math.max(0, count - 1));
+			if (!response.alreadySaved) setArchiveCount((count) => Math.max(0, count - 1));
 			setConfirmArchiveDeleteId(null);
-		});
+		}, (list) => list.some((candidate) => candidate.id === entry.id), () => setConfirmArchiveDeleteId(null));
 	}
 
 	async function deleteForGood(entry: ArchivedEntryCard): Promise<void> {
 		await run(entry.id, async () => {
-			const response = await deleteArchivedMemoryEntry(status.id, entry.id);
+			const response = seen(await deleteArchivedMemoryEntry(status.id, entry.id));
 			setArchive((current) => (current ?? []).filter((existing) => existing.id !== entry.id));
 			setArchiveCount(response.archive.count);
 			setArchiveHistory(response.archive.history ?? 0);
+			setConfirmArchiveDeleteId(null);
+			onArchiveDeleted?.();
+		}, async () => {
+			// The archive read again from just above this row: it landed when the row is not there.
+			const near = await fetchMemoryArchive(status.id, { limit: 10, before: `${entry.archived} ${entry.id}\uffff` });
+			return !near.entries.some((row) => row.id === entry.id);
+		}, () => {
+			setArchive((current) => (current ?? []).filter((existing) => existing.id !== entry.id));
+			setArchiveCount((current) => Math.max(0, current - 1));
 			setConfirmArchiveDeleteId(null);
 			onArchiveDeleted?.();
 		});
@@ -341,28 +412,17 @@ export function RoomMemoryEntriesSection({ status, onMemoryTokens, onArchiveDele
 				{editingId === entry.id ? (
 					<div className="memory-entry-edit">
 						<textarea value={editText} rows={4} onChange={(event) => setEditText(event.target.value)} aria-label="Note text" />
+						{editLimit.line && <p className="memory-editor-limit" role="status">{editLimit.line}</p>}
 						<div className="settings-form-foot">
 							<button className="rs-btn" type="button" disabled={busy} onClick={() => setEditingId(null)}>Cancel</button>
-							<button className="rs-btn rs-btn-primary" type="button" disabled={busy} onClick={() => void saveEdit(entry)}>{busy ? "Saving…" : "Save"}</button>
+							<button className="rs-btn rs-btn-primary" type="button" disabled={busy || !editLimit.canSave} onClick={() => void saveEdit(entry)}>{busy ? "Saving…" : "Save"}</button>
 						</div>
 					</div>
 				) : (
-					<p className="memory-entry-text">{entry.text}</p>
+					<NoteText text={entry.text} />
 				)}
 				{movingId === entry.id && (
-					<div className="memory-entry-move">
-						<select value={moveTopic} aria-label="Move to topic" onChange={(event) => setMoveTopic(event.target.value)}>
-							{topicNames.map((name) => <option key={name} value={name}>{memoryTopicName(name)}</option>)}
-							<option value={NEW_TOPIC}>new topic…</option>
-						</select>
-						{moveTopic === NEW_TOPIC && (
-							<input type="text" value={moveNewTopic} placeholder="Topic name" aria-label="New topic name" onChange={(event) => setMoveNewTopic(event.target.value)} />
-						)}
-						<span className="settings-form-foot">
-							<button className="rs-btn" type="button" disabled={busy} onClick={() => setMovingId(null)}>Cancel</button>
-							<button className="rs-btn rs-btn-primary" type="button" disabled={busy} onClick={() => void saveMove(entry)}>{busy ? "Moving…" : "Move"}</button>
-						</span>
-					</div>
+					<TopicMove topics={topicNames} current={entry.topic} busy={busy} onMove={(topic, newTopic) => void saveMove(entry, topic, newTopic)} onCancel={() => setMovingId(null)} />
 				)}
 				{confirmDeleteId === entry.id && (
 					<div className="memory-entry-confirm">
@@ -400,7 +460,7 @@ export function RoomMemoryEntriesSection({ status, onMemoryTokens, onArchiveDele
 				kicker="Notes"
 				line={notesSummaryLine(noteCount, topicCount)}
 				actions={!readOnly && entries !== null && !adding && (
-					<button className="rs-btn" type="button" onClick={() => setAdding(true)}>{ADD_NOTE_LABEL}</button>
+					<button className="rs-btn" type="button" onClick={() => setAddOpen(true)}>{ADD_NOTE_LABEL}</button>
 				)}
 			/>
 			{readOnly && <p className="settings-row-sub">{readOnlySentence}</p>}
@@ -432,14 +492,16 @@ export function RoomMemoryEntriesSection({ status, onMemoryTokens, onArchiveDele
 						<span>Note</span>
 						<textarea value={addText} rows={3} placeholder="What should this room remember?" aria-label="Note text" onChange={(event) => setAddText(event.target.value)} />
 					</label>
+					{addLine && <p className="memory-editor-limit" role="status">{addLine}</p>}
 					<div className="settings-form-foot">
-						<button className="rs-btn" type="button" disabled={busyId === "new-entry"} onClick={() => setAdding(false)}>Cancel</button>
-						<button className="rs-btn rs-btn-primary" type="button" disabled={busyId === "new-entry"} onClick={() => void addEntry()}>{busyId === "new-entry" ? "Saving…" : "Save note"}</button>
+						<button className="rs-btn" type="button" disabled={busyId === "new-entry"} onClick={() => setAddOpen(false)}>Cancel</button>
+						<button className="rs-btn rs-btn-primary" type="button" disabled={busyId === "new-entry" || !addCanSave} onClick={() => void addEntry()}>{busyId === "new-entry" ? "Saving…" : "Save note"}</button>
 					</div>
 				</div>
 			)}
 			{loadError && <div className="room-maintenance-error">{loadError}</div>}
 			{actionError && <div className="room-maintenance-error">{actionError}</div>}
+			{openConversationLine && <p className="memory-history-status" role="status">{OPEN_CONVERSATION_KEEPS_MEMORY_SENTENCE}</p>}
 			{entries === null && !loadError && <p className="settings-row-sub">{NOTES_LOADING_SENTENCE}</p>}
 			{entries !== null && groups.length === 0 && !adding && <p className="settings-empty">{NOTES_EMPTY_SENTENCE}</p>}
 			{entries !== null && groups.length > 0 && (
@@ -478,17 +540,17 @@ export function RoomMemoryEntriesSection({ status, onMemoryTokens, onArchiveDele
 									<span className="memory-entry-topic">{memoryTopicName(entry.topic)}</span>
 									<span className="memory-entry-saved">{archiveRowMeta(entry.archived, entry.why, entry)}</span>
 								</div>
-								<p className="memory-entry-text">{entry.text}</p>
+								<NoteText text={entry.text} />
 								{!readOnly && confirmArchiveDeleteId === entry.id ? (
 									<div className="memory-entry-confirm">
 										<span>{DELETE_ARCHIVED_NOTE_TITLE} {DELETE_ARCHIVED_NOTE_BODY}</span>
 										<button className="rs-quiet" type="button" disabled={busyId === entry.id} onClick={() => setConfirmArchiveDeleteId(null)}>{KEEP_IT_LABEL}</button>
-										<button className="rs-quiet rs-quiet-danger" type="button" disabled={busyId === entry.id} onClick={() => void deleteForGood(entry)}>{busyId === entry.id ? "Deleting…" : DELETE_FOR_GOOD_LABEL}</button>
+										<button className="rs-quiet rs-quiet-danger" type="button" disabled={busyId === entry.id} onClick={() => void deleteForGood(entry)}>{busyId === entry.id ? "Deleting…" : DELETE_ARCHIVED_NOTE_LABEL}</button>
 									</div>
 								) : !readOnly && (
 									<div className="memory-entry-actions">
 										{archivedEntryRestorable(entry) && <button className="rs-quiet" type="button" disabled={busyId === entry.id} onClick={() => void restore(entry)}>{busyId === entry.id ? "Restoring…" : "Restore"}</button>}
-										<button className="rs-quiet rs-quiet-danger" type="button" disabled={busyId === entry.id} onClick={() => setConfirmArchiveDeleteId(entry.id)}>{DELETE_FOR_GOOD_LABEL}</button>
+										<button className="rs-quiet rs-quiet-danger" type="button" disabled={busyId === entry.id} onClick={() => setConfirmArchiveDeleteId(entry.id)}>{DELETE_ARCHIVED_NOTE_LABEL}</button>
 									</div>
 								)}
 							</li>
@@ -518,6 +580,7 @@ export function RoomMemoryHistorySection({ status, onUndone, reloadKey }: { stat
 	const [undoError, setUndoError] = useState<string | null>(null);
 	// An undo that took a raised limit back with it says so, in the error's place.
 	const [limitLoweredTo, setLimitLoweredTo] = useState<number | null>(null);
+	const [openConversationLine, setOpenConversationLine] = useState(false);
 	const [undoing, setUndoing] = useState(false);
 	// One "What changed" open at a time, by row key.
 	const [changeOpen, setChangeOpen] = useState<string | null>(null);
@@ -550,14 +613,29 @@ export function RoomMemoryHistorySection({ status, onUndone, reloadKey }: { stat
 		setUndoing(true);
 		setUndoError(null);
 		setLimitLoweredTo(null);
+		setOpenConversationLine(false);
 		try {
 			const undone = await undoMemorySave(status.id, row.saveId);
 			const response = await fetchMemoryHistory(status.id);
 			setEvents(response.history ?? []);
 			setLimitLoweredTo(undone.limitLoweredTo ?? null);
+			setOpenConversationLine(undone.openConversationKeepsMemory === true);
 			onUndone?.(undone);
 		} catch (e) {
-			setUndoError((e as Error).message);
+			if (!saveAnswerLost(e)) {
+				setUndoError((e as Error).message);
+				return;
+			}
+			// The answer was lost: the line says so, and the history, read again, says whether it undid.
+			setUndoError(SAVE_ANSWER_LOST_SENTENCE);
+			try {
+				const landed = await lostUndoLanded(status.id, row.saveId, () => false);
+				const response = await askUntilAnswered(() => fetchMemoryHistory(status.id));
+				setEvents(response.history ?? []);
+				setUndoError(landed ? null : UNDO_NOT_LANDED_SENTENCE);
+			} catch (error) {
+				setUndoError((error as Error).message);
+			}
 		} finally {
 			setUndoing(false);
 		}
@@ -588,6 +666,23 @@ export function RoomMemoryHistorySection({ status, onUndone, reloadKey }: { stat
 				))}
 			</ul>
 			{limitLoweredTo !== null && <p className="memory-history-status" role="status">{LIMIT_LOWERED_ON_UNDO_SENTENCE(limitLoweredTo)}</p>}
+			{openConversationLine && <p className="memory-history-status" role="status">{OPEN_CONVERSATION_KEEPS_MEMORY_SENTENCE}</p>}
 		</div>
 	);
+}
+
+/** A note: its lines as written, its points as a list. */
+function NoteText({ text }: { text: string }) {
+	return (
+		<div className="memory-entry-text">
+			{noteBlocks(text).map((block, index) => "points" in block
+				? <ul key={index}>{block.points.map((line, point) => <li key={point}>{line}</li>)}</ul>
+				: "gap" in block ? <div key={index} className="memory-entry-gap" aria-hidden="true" /> : <p key={index}>{block.line}</p>)}
+		</div>
+	);
+}
+
+/** An id for one note being added, sent with each Save of it. */
+function newRequestId(): string {
+	return typeof crypto !== "undefined" && typeof crypto.randomUUID === "function" ? crypto.randomUUID() : `add-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }

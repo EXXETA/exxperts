@@ -1,12 +1,11 @@
 // Memorize never gets stuck: the summary fallback.
 //
-// When a fold gives nothing usable for a conversation (its reply stayed
-// unreadable after the one retry or nothing of it landed, its prompt did not
-// fit the window, its apply threw, or its call failed in two runs while the
-// model answered), the conversation is not left waiting forever. Its approved
-// page, the summary the person saw when they chose Remember, is filed as notes by
-// code, with no model call and no decision:
-//   - the title, the session arc and the Body become ONE note in "Unsorted",
+// When a conversation climbed Memorize's ladder (absorb-run-pages.ts) and no
+// rung folded it, it is not left waiting. Its approved page, the summary the
+// person saw when they chose Remember, is filed as notes by code, with no
+// decision of a model's but the topic it goes under:
+//   - the title, the session arc and the Body become ONE note under the topic
+//     the placement chose (memory-placement.ts; "Unsorted" in older files),
 //     the title its one top-level bullet and the rest nested under it, so it
 //     reads as one note, apart from the next, wherever memory is shown;
 //   - each Body line marked **must-keep** leaves that note and is filed as its
@@ -141,8 +140,8 @@ function oneBlock(head: string, lines: string[]): string {
 	return [`- ${head}`, ...nested].join("\n");
 }
 
-/** The ops that file one page as its summary: made by code, never by a model. */
-export function summaryFilingOps(page: SummaryPage): FoldOp[] {
+/** The ops that file one page as its summary under `topic`: made by code, never by a model. */
+export function summaryFilingOps(page: SummaryPage, topic = SUMMARY_TOPIC): FoldOp[] {
 	const fields = pageFields(page.text);
 	const arc = splitMustKeep(fields.arc);
 	const body = splitMustKeep(fields.body);
@@ -162,11 +161,34 @@ export function summaryFilingOps(page: SummaryPage): FoldOp[] {
 	if (content.length > 0 || (title && mustKeep.length === 0 && parked.length === 0)) {
 		// A page with no title of its own is headed by its first line.
 		const head = title || content[0].replace(BULLET, "").trim();
-		ops.push({ op: "add", topic: SUMMARY_TOPIC, kind: "fact", text: oneBlock(head, title ? content : content.slice(1)) });
+		ops.push({ op: "add", topic, kind: "fact", text: oneBlock(head, title ? content : content.slice(1)) });
 	}
-	for (const line of [...arc.mustKeep, ...body.mustKeep]) ops.push({ op: "add", topic: SUMMARY_TOPIC, kind: "fact", text: line });
-	for (const line of parked) ops.push({ op: "add", topic: SUMMARY_TOPIC, kind: "item", text: `- ${line}` });
+	for (const line of [...arc.mustKeep, ...body.mustKeep]) ops.push({ op: "add", topic, kind: "fact", text: line });
+	for (const line of parked) ops.push({ op: "add", topic, kind: "item", text: `- ${line}` });
 	return ops;
+}
+
+/**
+ * The ladder's rung 3: the page in smaller pieces, each folded alone. The
+ * Body is cut between its bullets into two or three runs of about the same
+ * length, each read with the session arc; Parked is a piece of its own. No
+ * heading line: the fold names the session apart. Fewer than two pieces
+ * (a page of one bullet, or a block written by hand): none.
+ */
+export function pagePieces(text: string): string[] {
+	const fields = pageFields(text);
+	if (!fields.structured) return [];
+	const groups = bulletGroups(fields.body);
+	const count = groups.length >= 6 ? 3 : groups.length >= 2 ? 2 : groups.length;
+	const arc = fields.arc.length ? [`**Session arc:** ${fields.arc.join(" ")}`, ""] : [];
+	const pieces: string[] = [];
+	for (let i = 0; i < count; i++) {
+		const runOf = groups.slice(Math.round((i * groups.length) / count), Math.round(((i + 1) * groups.length) / count)).flat();
+		pieces.push([...arc, "**Body:**", ...runOf].join("\n"));
+	}
+	const parked = fields.parked.filter((line) => !NOTHING_PARKED.test(line.replace(BULLET, "").trim()));
+	if (parked.length) pieces.push(["**Parked:**", ...parked].join("\n"));
+	return pieces.length >= 2 ? pieces : [];
 }
 
 /**
@@ -179,17 +201,19 @@ export function summaryPageHead(page: SummaryPage): string {
 	return first && first.op === "add" ? withoutMustKeepMarkers(first.text.split("\n")[0].replace(BULLET, "").trim()) : "";
 }
 
+/** A line that would still read as structure (one the cleaning above cannot see, after a rare line break) is escaped, as a fold's is. */
+const STRUCTURAL_AFTER_BREAK = /(^|\r\n|[\n\r\u2028\u2029])([ \t]*)(?=#+(?:\s|$)|<!--)/g;
+
 /**
  * Files one page as its summary into a copy of the working document. The
- * note that holds the page is marked `summary`, so a later re-read and the
- * Maintain hint can find it. Throws only when the applier throws; the caller
- * then leaves the page waiting.
+ * note that holds the page is marked `summary`, so a later re-read can find
+ * it. Throws only when the applier throws; the caller then leaves the page
+ * waiting.
  */
-export function fileSessionAsSummary(doc: MemoryDocument, page: SummaryPage, ctx: { savedDate: string; nextEntryNumber: number; sessionDate?: string }): AppliedFold & { summaryNoteId?: string } {
-	const ops = summaryFilingOps(page);
+export function fileSessionAsSummary(doc: MemoryDocument, page: SummaryPage, ctx: { savedDate: string; nextEntryNumber: number; sessionDate?: string; topic?: string }): AppliedFold & { summaryNoteId?: string } {
 	// The backstop: a line the memory file would read as structure never
-	// reaches the applier. The caller leaves the page waiting instead.
-	for (const op of ops) if (op.op === "add" && findStructuralLine(op.text) !== null) throw new Error("a summary line would read as structure");
+	// reaches the applier as structure. It is escaped, so the page is filed.
+	const ops = summaryFilingOps(page, ctx.topic).map((op) => (op.op === "add" && findStructuralLine(op.text) !== null ? { ...op, text: op.text.replace(STRUCTURAL_AFTER_BREAK, "$1$2\\") } : op));
 	const applied = applyFoldOps(doc, ops, { sessionId: page.id, savedDate: ctx.savedDate, nextEntryNumber: ctx.nextEntryNumber, ...(ctx.sessionDate ? { sessionDate: ctx.sessionDate } : {}) });
 	const first = ops[0];
 	const summaryNote = first && first.op === "add" && first.kind !== "item" && !hasMustKeepMarker(first.text) ? applied.record.added[0] : undefined;

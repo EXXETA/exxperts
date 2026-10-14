@@ -65,6 +65,8 @@ export interface AddMcpServerRequest {
 	args?: string[];
 	bearerToken?: string;
 	oauth?: { clientId: string; clientSecret?: string; scope?: string };
+	/** Extra headers sent with every request, such as a key in a header of its own. */
+	headers?: Record<string, string>;
 }
 
 export function addMcpServer(request: AddMcpServerRequest): Promise<{ name: string; path: string }> {

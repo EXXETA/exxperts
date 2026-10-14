@@ -34,6 +34,7 @@ const stubSource = `console.error(\`Docker is not installed. SearXNG runs in a c
 engine first (one-time setup, like installing Node):
   Docker Desktop             https://www.docker.com/products/docker-desktop/
   OrbStack (lighter, macOS)  https://orbstack.dev
+Colima and Podman work too.
 Install one, start it, then re-run: exxperts setup search\`);
 process.exit(1);
 `;

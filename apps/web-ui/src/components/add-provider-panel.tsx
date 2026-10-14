@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { GroupHeader } from "./pane-header";
 import type { LoginProviderCatalogEntry, PersistentAgentAiProfileStatus, ProviderModelCatalog } from "../types";
 import { useEscapeKey } from "./use-escape-key";
-import { apiFetch, fetchJson } from "../api";
+import { ApiRequestError, apiFetch, fetchJson } from "../api";
 import { modelDisplayName } from "../model-names";
 import { applyToApproved, approvedCount, detectionAnswers, draftEffective, isNonChatMode, setAllApproved, trustDetected, type BulkDetection } from "../gateway-model-bulk";
 
@@ -329,7 +329,8 @@ export type GatewayConfig = {
 type GatewayListResponse = { gateways: GatewayConfig[]; errors: string[]; unreadable?: boolean; defaultContextWindow: number };
 type GatewayDetection = BulkDetection & { id: string };
 type GatewayDiscoverResponse = { models: string[]; detected?: GatewayDetection[]; excludedNonChat?: Array<{ id: string; mode: string }> };
-type GatewaySaveResponse = { gateway?: GatewayConfig | null; error?: string };
+type GatewaySaveResponse = { gateway?: GatewayConfig | null; error?: string; code?: string };
+const GATEWAY_KEY_FOR_NEW_ADDRESS = "gateway_key_for_new_address";
 
 // What the runtime falls back to when a gateway model declares no window. Shown
 // in the field rather than left blank, so the number driving the context chip
@@ -776,6 +777,8 @@ export function GatewayConfigModal({ gatewayId, knownLabel, onClose, onSaved }: 
 	const [discovering, setDiscovering] = useState(false);
 	const [saving, setSaving] = useState(false);
 	const [error, setError] = useState<string | null>(null);
+	// A new address with no key of its own: said at the key field, where the answer goes.
+	const [keyError, setKeyError] = useState<string | null>(null);
 	// A create that succeeded (or failed after the gateway was already written)
 	// hands back its id. Keeping it means a second attempt edits that gateway
 	// instead of adding a twin beside it with the same name and address.
@@ -827,6 +830,7 @@ export function GatewayConfigModal({ gatewayId, knownLabel, onClose, onSaved }: 
 	async function discover() {
 		setDiscovering(true);
 		setError(null);
+		setKeyError(null);
 		try {
 			const result = await fetchJson<GatewayDiscoverResponse>(gatewaysUrl(targetGatewayId, "/discover"), {
 				method: "POST",
@@ -840,7 +844,8 @@ export function GatewayConfigModal({ gatewayId, knownLabel, onClose, onSaved }: 
 			setDiscoveredOnce(true);
 			setManualMode(false);
 		} catch (e) {
-			setError((e as Error).message);
+			if (e instanceof ApiRequestError && e.code === GATEWAY_KEY_FOR_NEW_ADDRESS) setKeyError(e.message);
+			else setError((e as Error).message);
 		} finally {
 			setDiscovering(false);
 		}
@@ -865,6 +870,7 @@ export function GatewayConfigModal({ gatewayId, knownLabel, onClose, onSaved }: 
 		}
 		setSaving(true);
 		setError(null);
+		setKeyError(null);
 		try {
 			const payload = {
 				label,
@@ -890,6 +896,10 @@ export function GatewayConfigModal({ gatewayId, knownLabel, onClose, onSaved }: 
 				// A body we cannot read changes nothing about the status below.
 			}
 			if (body.gateway?.id) setCreatedId(body.gateway.id);
+			if (!response.ok && body.code === GATEWAY_KEY_FOR_NEW_ADDRESS && body.error) {
+				setKeyError(body.error);
+				return;
+			}
 			if (!response.ok) throw new Error(body.error || `Request failed (${response.status})`);
 			onSaved(label.trim() || "Your gateway");
 			onClose();
@@ -934,8 +944,9 @@ export function GatewayConfigModal({ gatewayId, knownLabel, onClose, onSaved }: 
 							type="password"
 							placeholder={configured ? "leave blank to keep the saved key" : "sk-…"}
 							value={token}
-							onChange={(e) => setToken(e.target.value)}
+							onChange={(e) => { setToken(e.target.value); setKeyError(null); }}
 						/>
+						{keyError && <div className="checkpoint-proposal-error" role="alert">{keyError}</div>}
 					</div>
 					<div className="configure-profile-field">
 						<h3>Room models</h3>

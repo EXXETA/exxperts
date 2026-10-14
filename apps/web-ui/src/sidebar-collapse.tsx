@@ -6,25 +6,42 @@ import { useEscapeKey } from "./components/use-escape-key";
 // of app state so the sidebars' components stay ignorant of each other; the
 // class on <html> is what the CSS keys off, and localStorage persists it.
 const STORAGE_KEY = "exxperts.sidebarCollapsed";
-let collapsed = false;
-try {
-	const stored = localStorage.getItem(STORAGE_KEY);
-	// No stored choice on a phone-sized screen starts collapsed: at that
-	// width the rail overlays the content (see the mobile block in
-	// styles.css), so open-by-default would cover the very first screen. An
-	// explicit choice, either way, always wins.
-	collapsed = stored === null ? window.matchMedia("(max-width: 760px)").matches : stored === "1";
-} catch { /* private mode */ }
+// Phone width: the rail overlays the content (see the mobile block in
+// styles.css), so there it is a drawer that starts closed and is never
+// remembered; the stored choice is the wide screen's.
+const phoneQuery = window.matchMedia("(max-width: 760px)");
+function storedCollapsed(): boolean {
+	try {
+		return localStorage.getItem(STORAGE_KEY) === "1";
+	} catch {
+		return false;
+	}
+}
+let collapsed = phoneQuery.matches || storedCollapsed();
 document.documentElement.classList.toggle("sidebar-collapsed", collapsed);
 
 const listeners = new Set<() => void>();
 
-export function toggleSidebar(): void {
-	collapsed = !collapsed;
+function setCollapsed(next: boolean): void {
+	if (collapsed === next) return;
+	collapsed = next;
 	document.documentElement.classList.toggle("sidebar-collapsed", collapsed);
-	try { localStorage.setItem(STORAGE_KEY, collapsed ? "1" : "0"); } catch { /* private mode */ }
 	listeners.forEach((cb) => cb());
 }
+
+export function toggleSidebar(): void {
+	setCollapsed(!collapsed);
+	if (phoneQuery.matches) return;
+	try { localStorage.setItem(STORAGE_KEY, collapsed ? "1" : "0"); } catch { /* private mode */ }
+}
+
+/** A dialog opening at phone width closes the drawer, so the dialog is what the person sees. */
+export function closeSidebarOnPhone(): void {
+	if (phoneQuery.matches) setCollapsed(true);
+}
+
+// Narrowing to phone width closes the drawer; widening gives back the wide screen's choice.
+phoneQuery.addEventListener("change", () => setCollapsed(phoneQuery.matches || storedCollapsed()));
 
 function subscribe(cb: () => void): () => void {
 	listeners.add(cb);
@@ -37,7 +54,6 @@ function useSidebarCollapsed(): boolean {
 
 // Phone width, reactive: the drawer backdrop must appear/disappear when a
 // rotation or window resize crosses the breakpoint, not just on mount.
-const phoneQuery = window.matchMedia("(max-width: 760px)");
 function subscribePhone(cb: () => void): () => void {
 	phoneQuery.addEventListener("change", cb);
 	return () => phoneQuery.removeEventListener("change", cb);
@@ -76,8 +92,7 @@ export function SidebarToggleButton() {
 
 // Phone-only: at the breakpoint the in-room rail overlays the chat, so an
 // open rail dims what it covers; tapping the dim (or Escape, via the shared
-// stack so modals above it keep their own Escape) closes the rail. Closing
-// this way is the same explicit, remembered choice as the toggle.
+// stack so modals above it keep their own Escape) closes the rail.
 export function SidebarDrawerBackdrop() {
 	const isCollapsed = useSidebarCollapsed();
 	const isPhone = usePhoneWidth();

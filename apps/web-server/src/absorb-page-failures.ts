@@ -16,7 +16,7 @@ import type { PageFailureCode, PageFailureRecord, PageFailureState } from "./abs
 
 export const MEMORIZE_PAGE_FAILURES_FILE = "memorize-page-failures.json";
 
-const CODES: readonly PageFailureCode[] = ["timed-out", "provider-error", "worker-failed"];
+const CODES: readonly PageFailureCode[] = ["timed-out", "provider-error", "worker-failed", "restarted", "restarted-twice", "filing-threw"];
 
 export function pageFailuresPath(runtimeDir: string): string {
 	return path.join(runtimeDir, MEMORIZE_PAGE_FAILURES_FILE);

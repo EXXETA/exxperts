@@ -232,15 +232,17 @@ try {
 	await waitUntil(() => requests.slice(rememberBefore).some((request) => request.raw.includes("Checkpoint Compression Constitution")), "the Remember call reaches the provider");
 	const whileRemembering = await switchTo(GPT);
 	assert(whileRemembering.status === 409 && whileRemembering.body?.error === "Remember is reading this conversation. Switch the model when it has finished, or cancel it.", `a switch while Remember reads is refused with the plain sentence, got ${whileRemembering.status} ${JSON.stringify(whileRemembering.body)}`);
+	// Closing the request no longer stops a Remember (it runs as a job); Cancel does.
 	cancel.abort();
 	await propose;
+	await api(`/api/persistent-agents/${agentId}/checkpoint/cancel`, { method: "POST", body: JSON.stringify({ conversationId }) });
 	hangRemember = false;
-	await waitUntil(async () => (await api(`/api/persistent-agents/${agentId}/checkpoint/progress?conversationId=${conversationId}`)).status === 404, "the Remember ended");
+	await waitUntil(async () => (await api(`/api/persistent-agents/${agentId}/checkpoint/progress?conversationId=${conversationId}`)).body?.state === "cancelled", "the Remember ended");
 	pass("a switch while Remember reads the conversation is refused with the plain sentence");
 
 	// --- Refused when it does not fit ------------------------------------------------------
 	const tooSmall = await switchTo(TINY);
-	assert(tooSmall.status === 409 && /too long to continue on Gemma 3 12b:/.test(tooSmall.body?.error) && /Gemma 3 12b holds /.test(tooSmall.body?.error) && /Remember it and continue on Gemma 3 12b, or Forget it\.$/.test(tooSmall.body?.error) && !/gemma-3-12b/.test(tooSmall.body?.error), `a target too small is refused with Remember and Forget named, got ${tooSmall.status} ${JSON.stringify(tooSmall.body?.error)}`);
+	assert(tooSmall.status === 409 && /^This conversation is too long for Gemma 3 12b to read\. /.test(tooSmall.body?.error) && !/tokens|holds about/.test(tooSmall.body?.error) && /It stays on its current model\. To continue on Gemma 3 12b, Remember it and start a new conversation\.$/.test(tooSmall.body?.error) && !/Forget|compact/.test(tooSmall.body?.error) && !/gemma-3-12b/.test(tooSmall.body?.error), `a target too small is refused with Remember named, never Forget, got ${tooSmall.status} ${JSON.stringify(tooSmall.body?.error)}`);
 	const fit = tooSmall.body.fit;
 	assert(fit.window === 20000 && fit.reserve === 16384 && fit.available === 3616 && fit.margin === 1.15 && fit.needed > fit.available && fit.estimated.systemPrompt > 0 && fit.estimated.tools > 0 && fit.estimated.toolsFrom === "session", `the refusal carries the numbers the fit used, got ${JSON.stringify(fit)}`);
 	console.log(`      fit on Gemma 3 12b: measured ${fit.measured}, estimated messages ${fit.estimated.messages} + system prompt ${fit.estimated.systemPrompt} + tools ${fit.estimated.tools} (${fit.estimated.toolsFrom}), x${fit.margin} = ${fit.needed} needed against ${fit.window} - ${fit.reserve} = ${fit.available}`);

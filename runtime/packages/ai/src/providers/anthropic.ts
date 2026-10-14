@@ -950,10 +950,11 @@ function supportsAdaptiveThinking(model: Model<"anthropic-messages">): boolean {
  * messages. True for direct Anthropic requests to Claude Fable 5.1 and
  * Mythos 5.1 (ids "claude-fable-5-1" and "claude-mythos-5-1", the dotted
  * spelling "5.1" too, with or without a date suffix) and to Claude Opus 5.5
- * (id "claude-opus-5-5", released 2026-09-22) and Claude Sonnet 5.5 (id
- * "claude-sonnet-5-5", released 2026-09-28), which are bound the same way and
- * take the same beta and field. The Opus and Sonnet patterns stop at the
- * minor version, so "claude-opus-5" and "claude-sonnet-5" are not matched.
+ * (id "claude-opus-5-5", released 2026-09-22), Claude Sonnet 5.5 (id
+ * "claude-sonnet-5-5", released 2026-09-28) and Claude Haiku 5.5 (id
+ * "claude-haiku-5-5", released 2026-10-07), which are bound the same way and
+ * take the same beta and field. The Opus, Sonnet and Haiku patterns stop at
+ * the minor version, so "claude-opus-5" and "claude-sonnet-5" are not matched.
  *
  * This app rebuilds the system prompt with live room state on every turn and
  * replays every signed thinking block, so on these models a prefix change
@@ -977,7 +978,7 @@ function supportsAdaptiveThinking(model: Model<"anthropic-messages">): boolean {
  */
 export function usesThinkingBlockBinding(model: Model<"anthropic-messages">): boolean {
 	if (model.provider !== "anthropic") return false;
-	return /claude-(fable|mythos)-5[-.]1(?:$|[^0-9])|claude-(opus|sonnet)-5[-.]5(?:$|[^0-9])/.test(model.id);
+	return /claude-(fable|mythos)-5[-.]1(?:$|[^0-9])|claude-(opus|sonnet|haiku)-5[-.]5(?:$|[^0-9])/.test(model.id);
 }
 
 /**

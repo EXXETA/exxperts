@@ -20,7 +20,7 @@
 import { extractAssessmentSection } from "./assessment-parsing.js";
 import { conflictNoteSentence, duplicateNoteSentence, findLookAlikeTopics, findNotePairs, lookAlikeTopicSentence, type LookAlikeTopicPair } from "./memory-duplicates.js";
 import type { MemoryDocument } from "./memory-entries.js";
-import { unsortedAfterRereadTopics } from "./absorb-reread.js";
+import { isUnsorted } from "./memory-placement.js";
 import { emptyReviewGuidance, type ReviewGuidance } from "./review-guidance.js";
 import { estimateTokens } from "./token-estimate.js";
 
@@ -163,8 +163,9 @@ export function reviewMachineFindings(doc: MemoryDocument, today?: string): Revi
 	// One walk over the pairs for both lists: on a large memory the walk is what the first read costs.
 	const { duplicates: pairs, conflicts } = findNotePairs(doc);
 	const lookAlike = findLookAlikeTopics(doc);
-	const unsorted = unsortedAfterRereadTopics(doc);
-	const waiting = unsorted.reduce((sum, topic) => sum + topic.count, 0);
+	// Every note waiting in Unsorted, which the tidy always reads.
+	const unsorted = doc.topics.filter((topic) => topic.section === "Deep Memory" && isUnsorted(topic.title) && topic.entries.length > 0);
+	const waiting = unsorted.reduce((sum, topic) => sum + topic.entries.length, 0);
 	return {
 		saysTheSameTwice: pairs.map(duplicateNoteSentence),
 		duplicateNotes: pairs.map((pair) => ({ ids: [pair.a.id, pair.b.id], topics: [pair.a.topic, pair.b.topic] })),
@@ -172,7 +173,7 @@ export function reviewMachineFindings(doc: MemoryDocument, today?: string): Revi
 		conflictNotes: conflicts.map((pair) => ({ ids: [pair.a.id, pair.b.id], topics: [pair.a.topic, pair.b.topic] })),
 		topicsThatLookTheSame: lookAlike.map(lookAlikeTopicSentence),
 		lookAlikeTopics: lookAlike.map((pair) => ({ a: pair.a, b: pair.b })),
-		waitInUnsorted: waiting === 0 ? [] : [waiting === 1 ? "1 note waits in Unsorted: a conversation's summary that Memorize could not sort. The tidy sorts it into topics." : `${waiting} notes wait in Unsorted: conversation summaries that Memorize could not sort. The tidy sorts them into topics.`],
+		waitInUnsorted: waiting === 0 ? [] : [waiting === 1 ? "1 note waits in Unsorted. The tidy sorts it into a topic." : `${waiting} notes wait in Unsorted. The tidy sorts them into topics.`],
 		unsortedTopics: unsorted.map((topic) => topic.title),
 	};
 }
@@ -562,7 +563,7 @@ Return only the assistant discussion message.`;
 function signoffTask(): string {
 	return `## Task: Review discussion sign-off
 
-The person is ready to start the tidy. Produce the structured sign-off the run receives. It is read by the system, not by a person: every section is a list of lines, and a section with nothing in it holds the single word None.
+The person is ready to start the tidy. Produce the structured sign-off the run receives: every section is a list of lines, and a section with nothing in it holds the single word None. The card shows these lines to the person before they save, so write each one to them: name a note by its own words in quotes, then its id in square brackets, as in "Set up a shared calendar for the release dates" [m-0009]; call the open items "Open items"; say "you", never "the person" or "the user".
 
 Use exactly this markdown structure, with all six sections in this order:
 

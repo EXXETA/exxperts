@@ -21,11 +21,11 @@
 // is recorded as one — and it is pinned by a smoke, because a read that writes
 // on every call would rewrite a room's memory on every page load.
 
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import {
 	appendToArchive,
-	archiveIndex,
 	cloneDocument,
 	highestEntryNumber,
 	isMigratedMemoryDocument,
@@ -38,13 +38,13 @@ import {
 	renderMemoryDocument,
 	reviewTargetTokens,
 	type ArchivedEntry,
-	type ArchiveIndex,
 	type ArchiveReason,
 	type MemoryDocument,
 	type MemoryEntry,
 	type MemorySection,
 } from "./memory-entries.js";
 import { createPersistentAgentInstance, getPersistentAgentStatus, reviewTargetEstimatedTokensFromL1b, updateChronosForMemoryEdit, type PersistentAgentInstance } from "./persistent-agents.js";
+import { clearCommitIntent, readCommitIntent, registerCommitSettler, writeCommitIntent } from "./memory-commit.js";
 import { MEMORY_BUDGET_DEFAULT_TOKENS, MEMORY_BUDGET_MAX_TOKENS, MEMORY_BUDGET_MIN_TOKENS, readPersistentRoomMaintenanceSettings, writePersistentRoomMaintenanceSettings } from "./persistent-room-maintenance-settings.js";
 
 export { MEMORY_ARCHIVE_ENTRIES_FILE };
@@ -111,6 +111,8 @@ export interface MemoryWriteOptions {
 	/** The entry this write was about, and what was done to it — the history row's detail. */
 	entryId?: string;
 	operation?: MemoryEditOperation;
+	/** The page's id for this request: an add sent again after its answer was lost finds it here and adds nothing. */
+	requestId?: string;
 	/** How many entries the migration gave an id to. */
 	entriesAssigned?: number;
 	/**
@@ -120,11 +122,11 @@ export interface MemoryWriteOptions {
 	 */
 	stampChronos?: (l1b: string, now: Date, writeId: string) => string;
 	/**
-	 * Writes the event record instead of the default `events/memory-edit` one,
-	 * and says where it landed. The write still owns the snapshot, the archive,
-	 * the core file and the budget numbers — only the record moves.
+	 * Builds the event record instead of the default `events/memory-edit` one.
+	 * It only builds: the write keeps the record in its intent and writes it
+	 * after the core file, so the record lands with the memory or not at all.
 	 */
-	writeEventRecord?: (input: {
+	eventRecord?: (input: {
 		agentId: string;
 		writeId: string;
 		now: Date;
@@ -134,8 +136,16 @@ export interface MemoryWriteOptions {
 		updatedL1bPath: string;
 		budgetBefore: BudgetState;
 		budgetAfter: BudgetState;
-	}) => { eventRecordPath: string; eventRelPath: string };
+	}) => MemoryEventRecordPlan;
+	/** The room's memory limit this write sets (a limit the card raised): it lands with the core file or not at all, and the budget after is measured against it. */
+	limitTo?: number;
 	now?: Date;
+}
+
+/** An event record a write will put down after its core file, and where. */
+export interface MemoryEventRecordPlan {
+	eventRecordPath: string;
+	record: unknown;
 }
 
 export interface MemoryEditEventRecord {
@@ -148,6 +158,8 @@ export interface MemoryEditEventRecord {
 	approvedAt: string;
 	entryId?: string;
 	entryOperation?: MemoryEditOperation;
+	/** The page's id for the request that made this edit (an add), kept so a second send adds nothing. */
+	requestId?: string;
 	entriesAssigned?: number;
 	archived?: Array<{ id: string; why: ArchiveReason; topic: string; section: MemorySection }>;
 	restored?: string[];
@@ -334,6 +346,15 @@ export function memoryRoomBusy(agentIdRaw: string): boolean {
 	}
 }
 
+/**
+ * A Maintain save that meets a turn waits for it to end, up to two minutes,
+ * instead of refusing; past that the write refuses as before. The caller
+ * holds the save lock and writes with no await after this returns.
+ */
+export async function waitForMemoryRoomTurn(agentIdRaw: string, limitMs = 120_000): Promise<void> {
+	for (const until = Date.now() + limitMs; memoryRoomBusy(agentIdRaw) && Date.now() < until; ) await new Promise((resolve) => setTimeout(resolve, 250));
+}
+
 export function assertMemoryWriteAllowed(agentIdRaw: string): void {
 	if (memoryRoomBusy(agentIdRaw)) throw memoryRoomBusyError();
 }
@@ -347,9 +368,9 @@ export function assertMemoryWriteAllowed(agentIdRaw: string): void {
  * same render, so the status block, the settings meter, the room card, the
  * approval card and this module's enforcement pass all speak one number.
  */
-export function memoryBudgetState(agentIdRaw: string, doc: MemoryDocument): BudgetState {
+export function memoryBudgetState(agentIdRaw: string, doc: MemoryDocument, limitTo?: number): BudgetState {
 	settleMemoryBudget(agentIdRaw);
-	const budgetTokens = readPersistentRoomMaintenanceSettings(agentIdRaw).memoryBudgetTokens;
+	const budgetTokens = limitTo ?? readPersistentRoomMaintenanceSettings(agentIdRaw).memoryBudgetTokens;
 	const tokens = reviewTargetTokens(doc);
 	return { reviewTargetTokens: tokens, budgetTokens, overBudget: tokens > budgetTokens };
 }
@@ -409,10 +430,6 @@ export function settleMemoryBudget(agentIdRaw: string): MemoryBudgetSettlement {
 
 export function readArchive(agentIdRaw: string): ArchivedEntry[] {
 	return parseArchive(readArchiveText(roomFiles(agentIdRaw)));
-}
-
-export function readArchiveIndex(agentIdRaw: string): ArchiveIndex {
-	return archiveIndex(readArchive(agentIdRaw));
 }
 
 /**
@@ -580,11 +597,13 @@ export function loadMemoryDocument(agentIdRaw: string, options: LoadMemoryDocume
 	const now = options.now ?? new Date();
 	const raw = readL1bOrThrow(files);
 	const archive = parseArchive(readArchiveText(files));
-	if (isMigratedMemoryDocument(raw) || options.migrate === false) {
-		const doc = parseWithCounterAboveArchive(raw, archive);
-		return { doc, archive, budget: memoryBudgetState(files.agentId, doc), migrated: false };
-	}
 	const parsed = parseWithCounterAboveArchive(raw, archive);
+	// A marked file can still hold a note without its marker (the scaffold's
+	// starter goal): it is marked like a file nobody has migrated yet.
+	const unmarked = parsed.topics.some((topic) => topic.entries.some((entry) => !entry.id));
+	if ((isMigratedMemoryDocument(raw) && !unmarked) || options.migrate === false) {
+		return { doc: parsed, archive, budget: memoryBudgetState(files.agentId, parsed), migrated: false };
+	}
 	const migrated = migrateMemoryDocument(parsed, { fallbackSaved: fallbackSavedDate(parsed, now) });
 	if (options.migrate === "in-memory") {
 		return {
@@ -611,11 +630,49 @@ export function loadMemoryDocument(agentIdRaw: string, options: LoadMemoryDocume
 // --- write -------------------------------------------------------------------
 
 /**
- * The one write. Order is not an accident: the snapshot first (so the previous
- * file survives whatever follows), then the archive (so an entry is in the
- * archive before it is out of the core — a crash between the two costs a
- * duplicate, never a loss), then the core, then the event record.
+ * The one write. Order is not an accident: the intent first (memory-commit.ts),
+ * then the snapshot (so the previous file survives whatever follows), then the
+ * archive's new rows (so an entry is in the archive before it is out of the
+ * core: a crash between the two costs a duplicate, never a loss), then the
+ * core, which is the commit point, then the rows taken out of the archive, the
+ * limit and the event record, which a crash after the core leaves for the next
+ * request to finish (a row restored to the core leaves the archive only once
+ * it is there).
  */
+/**
+ * How many of a room's newest records a request sent again reads: it is sent
+ * again minutes after the first, so a room's long history is never read whole.
+ */
+export const RECENT_RECORDS_READ = 500;
+
+/**
+ * The names of a folder's newest records, newest first. A name is its label
+ * (`edit_`, `review_`, `undo_`...), then the time it was written, so the order
+ * is the time's, whatever the label.
+ */
+export function newestRecordFiles(dir: string): string[] {
+	const time = (file: string) => file.slice(file.indexOf("_") + 1);
+	return fs.readdirSync(dir).filter((file) => file.endsWith(".json")).sort((a, b) => time(b).localeCompare(time(a))).slice(0, RECENT_RECORDS_READ);
+}
+
+/** The newest of the room's recent edit records that matches, or null: what a request sent again finds out from. */
+export function findMemoryEditRecord(agentIdRaw: string, matches: (record: MemoryEditEventRecord) => boolean): MemoryEditEventRecord | null {
+	const dir = roomFiles(agentIdRaw).instance.memoryEditEventDir();
+	let files: string[];
+	try {
+		files = newestRecordFiles(dir);
+	} catch {
+		return null;
+	}
+	for (const file of files) {
+		try {
+			const record = JSON.parse(fs.readFileSync(path.join(dir, file), "utf-8")) as MemoryEditEventRecord;
+			if (matches(record)) return record;
+		} catch { /* an unreadable record matches nothing */ }
+	}
+	return null;
+}
+
 export function writeMemoryDocument(agentIdRaw: string, doc: MemoryDocument, options: MemoryWriteOptions): MemoryWriteResult {
 	const files = roomFiles(agentIdRaw);
 	assertMemoryWriteAllowed(files.agentId);
@@ -628,16 +685,12 @@ export function writeMemoryDocument(agentIdRaw: string, doc: MemoryDocument, opt
 	const archivedL1bPath = path.join(files.archiveDir, `${stamp}-before-${memoryEditId}.md`);
 	const stampChronos = options.stampChronos ?? ((l1b: string, at: Date) => updateChronosForMemoryEdit(l1b, at));
 	const nextL1b = stampChronos(renderMemoryDocument(cloneDocument(doc), "storage"), now, memoryEditId);
-	const archiveUpdate = archiveTextWith(readArchiveText(files), options.archiveAppend ?? [], options.archiveRemoveIds ?? [], now);
+	const archiveBefore = readArchiveText(files);
+	const archiveUpdate = archiveTextWith(archiveBefore, options.archiveAppend ?? [], options.archiveRemoveIds ?? [], now);
 
-	ensureDir(files.archiveDir);
-	fs.writeFileSync(archivedL1bPath, currentL1b, { mode: 0o600, flag: "wx" });
-	if ((options.archiveAppend?.length ?? 0) > 0 || (options.archiveRemoveIds?.length ?? 0) > 0) writeFileAtomic(files.archiveEntriesPath, archiveUpdate.text);
-	writeFileAtomic(files.l1bPath, nextL1b);
-
-	const after = memoryBudgetState(files.agentId, parseMemoryDocument(nextL1b));
-	if (options.writeEventRecord) {
-		const written = options.writeEventRecord({
+	const after = memoryBudgetState(files.agentId, parseMemoryDocument(nextL1b), options.limitTo);
+	const plan = options.eventRecord
+		? options.eventRecord({
 			agentId: files.agentId,
 			writeId: memoryEditId,
 			now,
@@ -647,19 +700,32 @@ export function writeMemoryDocument(agentIdRaw: string, doc: MemoryDocument, opt
 			updatedL1bPath: files.l1bPath,
 			budgetBefore: before,
 			budgetAfter: after,
-		});
-		return {
-			agentId: files.agentId,
-			memoryEditId,
-			archivedL1bPath,
-			updatedL1bPath: files.l1bPath,
-			eventRecordPath: written.eventRecordPath,
-			eventRelPath: written.eventRelPath,
-			budget: after,
-			archived: archiveUpdate.archived,
-			restored: archiveUpdate.restored,
-		};
-	}
+		})
+		: memoryEditRecordPlan(files, memoryEditId, now, archivedL1bPath, before, after, options);
+	commitMemoryWrite(files, {
+		writeId: memoryEditId,
+		currentL1b,
+		nextL1b,
+		archivedL1bPath,
+		...(options.archiveAppend?.length ? { archiveText: archiveTextWith(archiveBefore, options.archiveAppend, [], now).text } : {}),
+		...(options.archiveRemoveIds?.length ? { archiveRemoveIds: [...options.archiveRemoveIds] } : {}),
+		...(options.limitTo !== undefined ? { limitTo: options.limitTo } : {}),
+		plan,
+	});
+	return {
+		agentId: files.agentId,
+		memoryEditId,
+		archivedL1bPath,
+		updatedL1bPath: files.l1bPath,
+		eventRecordPath: plan.eventRecordPath,
+		eventRelPath: files.instance.rootRelativePath(plan.eventRecordPath),
+		budget: after,
+		archived: archiveUpdate.archived,
+		restored: archiveUpdate.restored,
+	};
+}
+
+function memoryEditRecordPlan(files: RoomFiles, memoryEditId: string, now: Date, archivedL1bPath: string, before: BudgetState, after: BudgetState, options: MemoryWriteOptions): MemoryEventRecordPlan {
 	const eventRecordPath = files.instance.memoryEditEventRecordPath(memoryEditId);
 	const record: MemoryEditEventRecord = {
 		schemaVersion: 1,
@@ -670,6 +736,7 @@ export function writeMemoryDocument(agentIdRaw: string, doc: MemoryDocument, opt
 		approvedAt: now.toISOString(),
 		...(options.entryId ? { entryId: options.entryId } : {}),
 		...(options.operation ? { entryOperation: options.operation } : {}),
+		...(options.requestId ? { requestId: options.requestId } : {}),
 		...(options.entriesAssigned !== undefined ? { entriesAssigned: options.entriesAssigned } : {}),
 		...(options.archiveAppend?.length ? { archived: options.archiveAppend.map((append) => ({ id: append.entry.id, why: append.why, topic: append.topic, section: append.section })) } : {}),
 		...(options.archiveRemoveIds?.length ? { restored: [...options.archiveRemoveIds] } : {}),
@@ -686,20 +753,112 @@ export function writeMemoryDocument(agentIdRaw: string, doc: MemoryDocument, opt
 			overBudgetAfter: after.overBudget,
 		},
 	};
-	ensureDir(path.dirname(eventRecordPath));
-	fs.writeFileSync(eventRecordPath, JSON.stringify(record, null, 2) + "\n", { mode: 0o600, flag: "wx" });
+	return { eventRecordPath, record };
+}
 
-	return {
-		agentId: files.agentId,
-		memoryEditId,
-		archivedL1bPath,
-		updatedL1bPath: files.l1bPath,
-		eventRecordPath,
-		eventRelPath: record.paths.eventRelPath,
-		budget: after,
-		archived: archiveUpdate.archived,
-		restored: archiveUpdate.restored,
+// --- the commit ----------------------------------------------------------------
+
+/** A memory write in flight (memory-commit.ts): ids, the hash of the core it writes, and what follows the core. */
+interface MemoryCommitIntent {
+	writeId: string;
+	l1bSha256: string;
+	archivedL1bRelPath: string;
+	limitTo?: number;
+	/** Archive rows that leave the archive after the core landed. */
+	archiveRemoveIds?: string[];
+	eventRecordRelPath: string;
+	record: unknown;
+	/** An earlier save whose rest could not be finished yet: finished first, never written over. */
+	earlier?: MemoryCommitIntent;
+}
+
+function sha256(text: string): string {
+	return crypto.createHash("sha256").update(text, "utf-8").digest("hex");
+}
+
+/**
+ * The intent, the snapshot, the archive's new rows, the core (the commit
+ * point), then the rest. A failure after the core does not undo the save: it is logged,
+ * its intent stays, and the next request finishes it, so the caller hears
+ * that the save landed, which is true.
+ */
+function commitMemoryWrite(files: RoomFiles, input: { writeId: string; currentL1b: string; nextL1b: string; archivedL1bPath: string; archiveText?: string; archiveRemoveIds?: string[]; limitTo?: number; plan: MemoryEventRecordPlan }): void {
+	const rootDir = files.instance.rootDir;
+	const intent: MemoryCommitIntent = {
+		writeId: input.writeId,
+		l1bSha256: sha256(input.nextL1b),
+		archivedL1bRelPath: files.instance.rootRelativePath(input.archivedL1bPath),
+		...(input.limitTo !== undefined ? { limitTo: input.limitTo } : {}),
+		...(input.archiveRemoveIds?.length ? { archiveRemoveIds: input.archiveRemoveIds } : {}),
+		eventRecordRelPath: files.instance.rootRelativePath(input.plan.eventRecordPath),
+		record: input.plan.record,
 	};
+	// A pending save rides along only when its core is the one on disk now; one
+	// whose core never landed is settled here, so nothing of it is finished.
+	const earlier = readCommitIntent<MemoryCommitIntent>(rootDir, "memory");
+	if (earlier && earlier.l1bSha256 === sha256(input.currentL1b)) intent.earlier = earlier;
+	else if (earlier) {
+		try {
+			settleMemoryIntent(files.agentId, rootDir, input.currentL1b, earlier);
+		} catch (error) {
+			console.error(`[memory-commit] a memory save in ${files.agentId} that never landed could not be cleared: ${(error as Error)?.name ?? "Error"}`);
+		}
+	}
+	// The save stays synchronous from the intent to its clear: the settle runs outside the
+	// save lock, so an await in between would let a status request finish or
+	// drop this save mid-flight. Keep it synchronous, or take the lock in the
+	// settle.
+	writeCommitIntent(rootDir, "memory", intent);
+	ensureDir(files.archiveDir);
+	fs.writeFileSync(input.archivedL1bPath, input.currentL1b, { mode: 0o600, flag: "wx" });
+	if (input.archiveText !== undefined) writeFileAtomic(files.archiveEntriesPath, input.archiveText);
+	writeFileAtomic(files.l1bPath, input.nextL1b);
+	try {
+		finishMemoryCommit(files.agentId, rootDir, intent);
+		clearCommitIntent(rootDir, "memory");
+	} catch (error) {
+		console.error(`[memory-commit] a memory save in ${files.agentId} landed; its record waits for the next request: ${(error as Error)?.name ?? "Error"}`);
+	}
+}
+
+/** What follows the core file, each step safe to run twice. */
+function finishMemoryCommit(agentId: string, rootDir: string, intent: MemoryCommitIntent): void {
+	if (intent.earlier) finishMemoryCommit(agentId, rootDir, intent.earlier);
+	if (intent.archiveRemoveIds?.length) {
+		const files = roomFiles(agentId);
+		let text = readArchiveText(files);
+		let removed = false;
+		for (const id of intent.archiveRemoveIds) {
+			const removal = removeFromArchive(text, id);
+			if (!removal.entry) continue; // already out: this step ran before
+			text = removal.text;
+			removed = true;
+		}
+		if (removed) writeFileAtomic(files.archiveEntriesPath, text);
+	}
+	if (intent.limitTo !== undefined && readPersistentRoomMaintenanceSettings(agentId).memoryBudgetTokens !== intent.limitTo) {
+		writePersistentRoomMaintenanceSettings(agentId, { memoryBudgetTokens: intent.limitTo });
+	}
+	const eventRecordPath = path.join(rootDir, intent.eventRecordRelPath);
+	if (!fs.existsSync(eventRecordPath)) {
+		ensureDir(path.dirname(eventRecordPath));
+		fs.writeFileSync(eventRecordPath, JSON.stringify(intent.record, null, 2) + "\n", { mode: 0o600, flag: "wx" });
+	}
+}
+
+/** A memory write a crash left pending: its core landed, so it is finished; it did not, so nothing was saved and its snapshot goes. */
+registerCommitSettler("memory", (agentId, rootDir, intent: MemoryCommitIntent) => {
+	const files = roomFiles(agentId);
+	const core = fs.existsSync(files.l1bPath) ? fs.readFileSync(files.l1bPath, "utf-8") : "";
+	settleMemoryIntent(files.agentId, rootDir, core, intent);
+	clearCommitIntent(rootDir, "memory");
+});
+
+/** The newest core that landed is finished with every earlier save it carries; one that did not land leaves its earlier saves to be settled on their own. */
+function settleMemoryIntent(agentId: string, rootDir: string, core: string, intent: MemoryCommitIntent): void {
+	if (sha256(core) === intent.l1bSha256) return finishMemoryCommit(agentId, rootDir, intent);
+	fs.rmSync(path.join(rootDir, intent.archivedL1bRelPath), { force: true });
+	if (intent.earlier) settleMemoryIntent(agentId, rootDir, core, intent.earlier);
 }
 
 // --- restore -----------------------------------------------------------------
@@ -711,8 +870,8 @@ export interface MemoryRestoreOptions {
 	snapshotLabel: string;
 	/** Archive rows the restored file's own write had appended, taken back out with it. */
 	archiveRemoveIds?: string[];
-	/** Where this write's event record lands, and what it says. Same seam Memorize uses. */
-	writeEventRecord(input: {
+	/** This write's event record and where it lands, built before the core is written. Same seam Memorize uses. */
+	eventRecord(input: {
 		agentId: string;
 		writeId: string;
 		now: Date;
@@ -722,7 +881,9 @@ export interface MemoryRestoreOptions {
 		updatedL1bPath: string;
 		budgetBefore: BudgetState;
 		budgetAfter: BudgetState;
-	}): { eventRecordPath: string; eventRelPath: string };
+	}): MemoryEventRecordPlan;
+	/** The room's memory limit this restore puts back with the file (an undo of a raise). */
+	limitTo?: number;
 	now?: Date;
 }
 
@@ -742,8 +903,9 @@ export interface MemoryRestoreResult {
  * The other write: an earlier file put back byte for byte. It is deliberately
  * NOT writeMemoryDocument with a parsed document — that re-renders, and a
  * restore that re-renders is a new file that merely resembles the old one. The
- * order is the same one every write here obeys: the file being replaced is
- * snapshotted first, then the archive, then the core, then the event record.
+ * order is the same one every write here obeys: the intent, the file being
+ * replaced snapshotted, the core, then the rows out of the archive and the
+ * event record.
  *
  * Chronos is not stamped: the restored file already carries the Chronos lines
  * of the state it is being put back to, and writing today's date over them
@@ -773,13 +935,8 @@ export function restoreMemoryFile(agentIdRaw: string, options: MemoryRestoreOpti
 		removedArchiveIds.push(id);
 	}
 
-	ensureDir(files.archiveDir);
-	fs.writeFileSync(archivedL1bPath, currentL1b, { mode: 0o600, flag: "wx" });
-	if (removedArchiveIds.length > 0) writeFileAtomic(files.archiveEntriesPath, archiveText);
-	writeFileAtomic(files.l1bPath, options.restoredL1b);
-
-	const after = memoryBudgetState(files.agentId, parseMemoryDocument(options.restoredL1b));
-	const written = options.writeEventRecord({
+	const after = memoryBudgetState(files.agentId, parseMemoryDocument(options.restoredL1b), options.limitTo);
+	const plan = options.eventRecord({
 		agentId: files.agentId,
 		writeId,
 		now,
@@ -790,13 +947,22 @@ export function restoreMemoryFile(agentIdRaw: string, options: MemoryRestoreOpti
 		budgetBefore: before,
 		budgetAfter: after,
 	});
+	commitMemoryWrite(files, {
+		writeId,
+		currentL1b,
+		nextL1b: options.restoredL1b,
+		archivedL1bPath,
+		...(removedArchiveIds.length > 0 ? { archiveRemoveIds: removedArchiveIds } : {}),
+		...(options.limitTo !== undefined ? { limitTo: options.limitTo } : {}),
+		plan,
+	});
 	return {
 		agentId: files.agentId,
 		writeId,
 		archivedL1bPath,
 		updatedL1bPath: files.l1bPath,
-		eventRecordPath: written.eventRecordPath,
-		eventRelPath: written.eventRelPath,
+		eventRecordPath: plan.eventRecordPath,
+		eventRelPath: files.instance.rootRelativePath(plan.eventRecordPath),
 		budget: after,
 		removedArchiveIds,
 	};

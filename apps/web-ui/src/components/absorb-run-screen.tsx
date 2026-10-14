@@ -7,25 +7,67 @@
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import type { AbsorbRun, AbsorbRunSession, ArchiveRow, MaintenanceWorkerModelStatus, RunBudget, RunDemotion } from "../types";
 import { MarkdownRenderer } from "./Markdown";
-import { meaningfulMaintenanceWarnings } from "../maintenance-warnings";
-import { protectedOpenItemsSentence } from "../memory-surface-copy";
-import { ABSORB_ALL_SUMMARIZED_SENTENCE, ABSORB_NOTHING_READ_SAVE_TITLE, ABSORB_NOTHING_READ_SENTENCE, absorbRunNothingRead, absorbRunNothingToSave, ABSORB_CHOOSE_MODEL_LABEL, ABSORB_REREAD_HOVER, ABSORB_SUMMARIZED_HOVER, absorbRunRereadLine, ABSORB_TRY_AGAIN_LABEL, absorbRunAllSummarized, absorbRunOutageModelName, absorbRunOutageSentence, absorbRunRereadRows, absorbRunRereadsWaiting, absorbRunUnfinishedCount, absorbRunUnfinishedReason, absorbRunWaitingCount, ARCHIVE_EXPLANATION, absorbRunFailedSessionNote, absorbRunGuidanceSummary, absorbRunNotesChanged, absorbRunProgressLine, absorbRunReadCount, absorbRunSessionLine, archiveHeading, archiveLimitSummary, archiveRowTag, archiveTopicGroupSummary, automaticApplyNeedsReviewSentence, changeBesideTag, changeKindLabel, entryFirstLine, HISTORY_ROW_LINE, KEEP_BOTH_LABEL, entryGroupPage, entryKindLabel, entryOriginSentence, filterEntriesByText, groupEntriesByTopic, isEntryIdMigrationNotice, KEEP_NOTE_HINT, KEEP_TOPIC_LABEL, MEMORY_LIMIT_BAR_LABEL, NEW_TOPIC_TAG, showMoreLabel, topicKept, topicLabel } from "../memory-v2-copy";
+import { fmtMemoryDay, protectedOpenItemsSentence } from "../memory-surface-copy";
+import { modelWaitLine } from "./model-notice";
+import { noteLimitLine } from "../memory-save-answer";
+import { TopicMove } from "./topic-move";
+import { MEMORY_CARD_NOTE_MAX_CHARS } from "../../../web-server/src/memory-typed-text";
+import { ABSORB_REREAD_ROW_LABEL, absorbRunSortedRows, absorbRunSortedTitle, absorbRunAllSummarizedSentence, ABSORB_NOTHING_READ_SAVE_TITLE, ABSORB_NOTHING_READ_SENTENCE, absorbRunNothingRead, absorbRunNothingToSave, ABSORB_CHOOSE_MODEL_LABEL, ABSORB_TRY_AGAIN_LABEL, absorbRunAllSummarized, absorbRunOutageModelName, absorbRunOutageSentence, absorbRunRows, absorbRunWaitingCount, ARCHIVE_EXPLANATION, absorbRunFailedSessionNote, absorbRunGuidanceSummary, absorbRunNotDoneSentence, absorbRunNotesChanged, absorbRunProgressLine, absorbRunReadCount, archiveHeading, archiveLimitSummary, archiveRowTag, archiveTopicGroupSummary, automaticApplyNeedsReviewSentence, changeBesideTag, changeKindLabel, entryFirstLine, HISTORY_ROW_LINE, KEEP_BOTH_LABEL, entryGroupPage, entryKindLabel, entryOriginSentence, filterEntriesByText, groupEntriesByTopic, KEEP_NOTE_HINT, KEEP_TOPIC_LABEL, MEMORY_LIMIT_BAR_LABEL, NEW_TOPIC_TAG, showMoreLabel, topicKept, topicLabel } from "../memory-v2-copy";
 
 /** The words of a note, editable in place: the textarea holds the text without its bullet marker. */
+/** A card's Move: rejects with the server's refusal; `onLost` shows the lost-answer line while the page finds out. */
+export type SortedMove = (entryId: string, topic: string, onLost: (line: string) => void) => Promise<void>;
+
+/** A note the one-time sort placed: its first line, its topic, and Move, which lists the topics this update saves. */
+function SortedRow({ row, topics, onMove }: { row: NonNullable<AbsorbRun["sorted"]>[number]; topics: string[]; onMove?: SortedMove }) {
+	const [moving, setMoving] = useState(false);
+	const [busy, setBusy] = useState(false);
+	const [error, setError] = useState<string | null>(null);
+	const save = async (topic: string) => {
+		if (!onMove) return;
+		if (topic === row.topic) { setMoving(false); return; }
+		setBusy(true);
+		setError(null);
+		try {
+			await onMove(row.id, topic, setError);
+			setMoving(false);
+			setError(null);
+		} catch (e) {
+			setError((e as Error).message);
+		} finally {
+			setBusy(false);
+		}
+	};
+	return (
+		<li className="absorb-run-sorted-row">
+			<span>{row.text.split("\n")[0].replace(/^\s*[-*]\s+/, "")}</span> <span className="absorb-run-sorted-topic">under {topicLabel(row.topic)}</span>
+			{onMove && !moving && <> <button type="button" className="rs-quiet" onClick={() => setMoving(true)}>Move</button></>}
+			{moving && <TopicMove topics={topics} current={row.topic} busy={busy} onMove={(topic) => void save(topic)} onCancel={() => { setMoving(false); setError(null); }} />}
+			{error && <p className="checkpoint-proposal-error" role="alert">{error}</p>}
+		</li>
+	);
+}
+
+/** A card's Edit: rejects with the server's refusal; `onLost` shows the lost-answer line while the page finds out. */
+export type NoteEdit = (entryId: string, text: string, onLost: (line: string) => void) => Promise<void>;
+
 export function NoteEditor({ text, busy, onSave, onCancel }: { text: string; busy: boolean; onSave: (text: string) => void; onCancel: () => void }) {
 	const [draft, setDraft] = useState(text.replace(/^[-*]\s+/, ""));
+	// The card's limit, counted as the server counts the note: said near it, and Save waits past it.
+	const limit = noteLimitLine(draft, MEMORY_CARD_NOTE_MAX_CHARS, "Write the note before saving.");
 	return (
 		<div className="absorb-run-note-editor">
 			<textarea value={draft} rows={4} autoFocus aria-label="Note text" onChange={(event) => setDraft(event.target.value)} />
+			{limit.line && <p className="memory-editor-limit" role="status">{limit.line}</p>}
 			<div className="memory-entry-actions">
-				<button className="rs-btn" type="button" disabled={busy || !draft.trim()} onClick={() => onSave(draft.trim())}>{busy ? "Saving…" : "Save"}</button>
+				<button className="rs-btn" type="button" disabled={busy || !limit.canSave} onClick={() => onSave(draft.trim())}>{busy ? "Saving…" : "Save"}</button>
 				<button className="rs-quiet" type="button" disabled={busy} onClick={onCancel}>Cancel</button>
 			</div>
 		</div>
 	);
 }
 
-function ChangeRow({ change, onEdit, onChoose }: { change: NonNullable<AbsorbRunSession["changes"]>[number]; onEdit?: (entryId: string, text: string) => Promise<void>; onChoose?: (entryId: string, choice: "replace" | "keep-both") => Promise<void> }) {
+function ChangeRow({ change, onEdit, onChoose }: { change: NonNullable<AbsorbRunSession["changes"]>[number]; onEdit?: NoteEdit; onChoose?: (entryId: string, choice: "replace" | "keep-both") => Promise<void> }) {
 	const label = changeKindLabel(change.kind);
 	const [editing, setEditing] = useState(false);
 	const [saving, setSaving] = useState(false);
@@ -47,8 +89,10 @@ function ChangeRow({ change, onEdit, onChoose }: { change: NonNullable<AbsorbRun
 		setSaving(true);
 		setEditError(null);
 		try {
-			await onEdit(change.id, text);
+			// A lost answer says so under the note while the page finds out; a refusal stays there, the editor open.
+			await onEdit(change.id, text, setEditError);
 			setEditing(false);
+			setEditError(null);
 		} catch (e) {
 			setEditError((e as Error).message);
 		} finally {
@@ -349,7 +393,7 @@ export function placeholderAbsorbRun(agentId: AbsorbRun["agentId"], sessions: { 
  * what would leave for the archive and where the limit lands. Save is the only
  * thing on this screen that writes.
  */
-export function AbsorbRunCard({ run, roomName, memoryModel, working = false, headline, fastPathBlockedReasons, keepIds, busy, error, onToggleKeep, onToggleKeepTopic, onRaiseBudget, onEditEntry, onChooseBeside, onApprove, onCancel, onBackToAssessment, onResume, onChooseModel }: {
+export function AbsorbRunCard({ run, roomName, memoryModel, working = false, headline, fastPathBlockedReasons, keepIds, busy, error, onToggleKeep, onToggleKeepTopic, onRaiseBudget, onEditEntry, onChooseBeside, onMoveSorted, onApprove, onCancel, onBackToAssessment, onResume, onChooseModel, onSignIn }: {
 	run: AbsorbRun;
 	roomName: string;
 	/** The room's Memory model as last read; it lends its label to the outage notice only when it is the model that stopped. */
@@ -358,13 +402,17 @@ export function AbsorbRunCard({ run, roomName, memoryModel, working = false, hea
 	onResume?: () => void;
 	/** Room settings at the Memory model. */
 	onChooseModel?: () => void;
+	/** AI setup at the provider, when the run stopped because it is signed out. */
+	onSignIn?: (provider: string) => void;
 	/** The run is still reading conversations: the card fills in as they land and cannot be saved yet. */
 	working?: boolean;
 	/** Working only: the headline for a step before the run reports progress. */
 	headline?: string;
 	/** The person's words for a note this update adds or rewrites; resolves with the run refreshed. */
-	onEditEntry?: (entryId: string, text: string) => Promise<void>;
+	onEditEntry?: NoteEdit;
 	onChooseBeside?: (entryId: string, choice: "replace" | "keep-both") => Promise<void>;
+	/** Moves a note the one-time sort placed to another topic. */
+	onMoveSorted?: SortedMove;
 	fastPathBlockedReasons?: string[];
 	/** The keep set as the person left it: the card answers a toggle before the server does. */
 	keepIds: string[];
@@ -377,21 +425,12 @@ export function AbsorbRunCard({ run, roomName, memoryModel, working = false, hea
 	onCancel: () => void;
 	onBackToAssessment: () => void;
 }) {
-	// Giving notes their ids is bookkeeping a person never needs to weigh, so
-	// the server's note about it is not shown on the card at all.
-	const warnings = meaningfulMaintenanceWarnings(run.warnings.filter((warning) => !isEntryIdMigrationNotice(warning)));
 	const overBudget = run.demotion.overageTokens > 0;
 	const failedNote = absorbRunFailedSessionNote(run);
 	const guidance = absorbRunGuidanceSummary(run);
 	// While the run works every conversation has a row, so the list fills in as
 	// they are read; once it is done only the ones that changed memory stay.
-	const changedSessions = working ? run.sessions : run.sessions.filter((session) => (session.changes?.length ?? 0) > 0 || session.outcome === "dropped" || session.outcome === "summarized" || session.outcome === "failed" || session.outcome === "skipped");
-	// The summary notes read again follow the conversations, each keyed by its note.
-	const rereadRows = absorbRunRereadRows(run, working);
-	const rows = [
-		...changedSessions.map((session) => ({ session, line: absorbRunSessionLine(session), hover: session.outcome === "summarized" ? ABSORB_SUMMARIZED_HOVER : undefined })),
-		...rereadRows.map((session) => ({ session, line: absorbRunRereadLine(session), hover: ABSORB_REREAD_HOVER })),
-	];
+	const rows = absorbRunRows(run, working);
 	// A conversation holding a tagged note opens by itself, so the tag and its
 	// choice are seen; once the person closes it, it stays closed.
 	const [closedTagged, setClosedTagged] = useState<Record<string, boolean>>({});
@@ -402,11 +441,9 @@ export function AbsorbRunCard({ run, roomName, memoryModel, working = false, hea
 	const nothingToSave = !working && absorbRunNothingToSave(run);
 	// One notice with the ways out: a run the model stopped answering, or else
 	// a run whose every conversation was kept whole as its summary.
-	const outage = !working && run.stop?.kind === "outage" ? run.stop : null;
+	const outage = !working && run.stop ? run.stop : null;
 	const allSummarized = !working && !outage && absorbRunAllSummarized(run);
-	// The outage notice already says what waits, so the automatic save's
-	// note does not say it again.
-	const fastPathReasons = outage ? (fastPathBlockedReasons ?? []).filter((reason) => reason !== absorbRunUnfinishedReason(absorbRunUnfinishedCount(run))) : fastPathBlockedReasons ?? [];
+	const fastPathReasons = fastPathBlockedReasons ?? [];
 	return (
 		<div className="checkpoint-proposal-page absorb-proposal-page absorb-run-card">
 			<div className="checkpoint-input-heading checkpoint-proposal-heading">
@@ -424,29 +461,37 @@ export function AbsorbRunCard({ run, roomName, memoryModel, working = false, hea
 				<div className="absorb-review-status"><span>Notes</span><strong>{notesChanged} added or updated</strong></div>
 			</div>
 			{error && <div className="checkpoint-proposal-error" role="alert">{error}</div>}
-			{warnings.length > 0 && <div className="checkpoint-proposal-warnings absorb-warning-list">{warnings.map((warning) => <div key={warning}>{warning}</div>)}</div>}
+			{run.wait && <p className="checkpoint-read-note" role="status">{modelWaitLine(run.wait)}</p>}
 			{outage && (
-				<div className="absorb-help-note absorb-run-stop-note" role="status">
-					<p>{absorbRunOutageSentence(absorbRunOutageModelName(outage.model, memoryModel), outage.cause, absorbRunWaitingCount(run), absorbRunRereadsWaiting(run))}</p>
+				<div className="memory-action-note absorb-run-stop-note" role="status">
+					<p>{absorbRunOutageSentence(absorbRunOutageModelName(outage.model, memoryModel), outage.cause, absorbRunWaitingCount(run), outage.model.provider)}</p>
 					<div className="absorb-run-note-actions">
-						{onResume && <button className="rs-btn" disabled={busy} onClick={onResume}>{ABSORB_TRY_AGAIN_LABEL}</button>}
-						{onChooseModel && <button className="rs-btn" disabled={busy} onClick={onChooseModel}>{ABSORB_CHOOSE_MODEL_LABEL}</button>}
+						{onResume && <button className="rs-btn" disabled={busy} onClick={onResume}>{outage.cause === "restarted" ? "Continue" : ABSORB_TRY_AGAIN_LABEL}</button>}
+						{/* A restart says nothing about the model: it answered, so Continue is the one way on. */}
+						{onChooseModel && outage.cause !== "restarted" && <button className="rs-btn" disabled={busy} onClick={onChooseModel}>{ABSORB_CHOOSE_MODEL_LABEL}</button>}
+						{onSignIn && outage.cause === "signed-out" && <button className="rs-btn rs-btn-primary" disabled={busy} onClick={() => onSignIn(outage.model.provider)}>Sign in</button>}
 					</div>
 				</div>
 			)}
 			{allSummarized && (
-				<div className="absorb-help-note absorb-run-summaries-note" role="status">
-					<p>{ABSORB_ALL_SUMMARIZED_SENTENCE}</p>
+				<div className="memory-action-note absorb-run-summaries-note" role="status">
+					<p>{absorbRunAllSummarizedSentence(memoryModel ? absorbRunOutageModelName(memoryModel, memoryModel) : "The Memory model")}</p>
 					{onChooseModel && <div className="absorb-run-note-actions"><button className="rs-btn" disabled={busy} onClick={onChooseModel}>{ABSORB_CHOOSE_MODEL_LABEL}</button></div>}
 				</div>
 			)}
 			{fastPathReasons.length > 0 && (
-				<div className="absorb-help-note fast-path-blocked-note">
+				<div className="memory-action-note fast-path-blocked-note">
 					{automaticApplyNeedsReviewSentence(fastPathReasons)}
 				</div>
 			)}
 			<div className="absorb-proposal-sections">
-				{guidance && (
+				{absorbRunSortedRows(run).length > 0 && (
+					<section className="absorb-proposal-section absorb-run-sorted">
+						<h3>{absorbRunSortedTitle(absorbRunSortedRows(run).length)}</h3>
+						<ul>{absorbRunSortedRows(run).map((row) => <SortedRow key={row.id} row={row} topics={run.topics ?? []} onMove={working ? undefined : onMoveSorted} />)}</ul>
+					</section>
+				)}
+				{guidance && (guidance.pins.length + guidance.drops.length + guidance.corrections.length + guidance.topics.length + guidance.removed.length + guidance.notDone.length) > 0 && (
 					<section className="absorb-proposal-section absorb-run-guidance">
 						<h3>What you asked for</h3>
 						{guidance.pins.length > 0 && (
@@ -478,19 +523,26 @@ export function AbsorbRunCard({ run, roomName, memoryModel, working = false, hea
 								<ul>{guidance.topics.map((topic) => <li key={topic}>{topic}</li>)}</ul>
 							</div>
 						)}
-						{guidance.instructions.length > 0 && (
+						{guidance.removed.length > 0 && (
 							<div className="absorb-run-guidance-block">
-								<strong>Other instructions</strong>
-								<ul>{guidance.instructions.map((instruction) => <li key={instruction}>{instruction}</li>)}</ul>
+								<strong>Removed</strong>
+								<ul>{guidance.removed.map((text) => <li key={text}>{text}</li>)}</ul>
 							</div>
 						)}
+						{guidance.notDone.map(({ text, several }) => <p key={text} className="absorb-run-guidance-not-done" role="status">{absorbRunNotDoneSentence(text, several)}</p>)}
+					</section>
+				)}
+				{guidance && guidance.instructions.length > 0 && (
+					<section className="absorb-proposal-section absorb-run-guidance">
+						<h3>What you told the Memory model</h3>
+						<ul>{guidance.instructions.map((instruction) => <li key={instruction}>{instruction}</li>)}</ul>
 					</section>
 				)}
 				<section className="absorb-proposal-section">
 					<h3>New in memory</h3>
 					{rows.length === 0 ? <p>{nothingRead ? ABSORB_NOTHING_READ_SENTENCE : "Nothing in these conversations changed memory."}</p> : (
 						<div className="absorb-run-change-groups">
-							{rows.map(({ session, line, hover }) => {
+							{rows.map(({ session, line, note }) => {
 								const tagged = (session.changes ?? []).some((change) => changeBesideTag(change) !== null);
 								return (session.changes?.length ?? 0) > 0 ? (
 									<details
@@ -505,9 +557,9 @@ export function AbsorbRunCard({ run, roomName, memoryModel, working = false, hea
 										<summary>
 											<span className="absorb-run-session-head">
 												<strong>{session.title}</strong>
-												<span className="absorb-run-session-date">{session.date}</span>
+												<span className="absorb-run-session-date">{note ? ABSORB_REREAD_ROW_LABEL : fmtMemoryDay(session.date)}</span>
 											</span>
-											<span className="absorb-run-session-state" title={hover}>{line}</span>
+											<span className="absorb-run-session-state">{line}</span>
 										</summary>
 										<div className="absorb-run-conversation-body">
 											{session.changes?.map((change, index) => <ChangeRow key={`${change.id}-${index}`} change={change} onEdit={onEditEntry} onChoose={onChooseBeside} />)}
@@ -517,15 +569,15 @@ export function AbsorbRunCard({ run, roomName, memoryModel, working = false, hea
 									<div className="absorb-run-change-group absorb-run-conversation plain" key={session.id}>
 										<span className="absorb-run-session-head">
 											<strong>{session.title}</strong>
-											<span className="absorb-run-session-date">{session.date}</span>
+											<span className="absorb-run-session-date">{note ? ABSORB_REREAD_ROW_LABEL : fmtMemoryDay(session.date)}</span>
 										</span>
-										<span className="absorb-run-session-state" title={hover}>{line}</span>
+										<span className="absorb-run-session-state">{line}</span>
 									</div>
 								);
 							})}
 						</div>
 					)}
-					{failedNote && <p className="absorb-help-note">{failedNote}</p>}
+					{failedNote && <p className="memory-action-note">{failedNote}</p>}
 				</section>
 				{!working && (
 					<ArchiveSection budget={run.budget} demotion={run.demotion} keepIds={keepIds} keepTopics={run.demotion.keepTopics} busy={busy} onToggleKeep={onToggleKeep} onToggleKeepTopic={onToggleKeepTopic} onRaiseBudget={onRaiseBudget} />
@@ -538,20 +590,19 @@ export function AbsorbRunCard({ run, roomName, memoryModel, working = false, hea
 					{overBudget && !working ? "Save over the budget" : "Save to memory"}
 				</button>
 			</div>
-			<p className="checkpoint-footnote">{working ? "Nothing is saved until you press Save to memory." : "Saving keeps a copy of today's memory, so this update can be undone from Room settings."}</p>
+			{working && <p className="checkpoint-footnote">Nothing is saved until you press Save to memory.</p>}
 		</div>
 	);
 }
 
-/** A run that stopped on its own: the server's sentence, and two ways on. */
-export function AbsorbRunFailedScreen({ error, onBackToAssessment, onRetry }: { error: string; onBackToAssessment: () => void; onRetry: () => void }) {
+/** A run that stopped on its own: what happened, and two ways on. Its cause goes to the console, never the screen. */
+export function AbsorbRunFailedScreen({ onBackToAssessment, onRetry }: { onBackToAssessment: () => void; onRetry: () => void }) {
 	return (
 		<div className="checkpoint-proposal-page absorb-error-state">
-			<div className="checkpoint-input-heading">
+			<div className="checkpoint-input-heading" role="alert">
 				<h2>The update stopped</h2>
 				<p>Nothing was saved. Your conversations are still waiting.</p>
 			</div>
-			<div className="checkpoint-proposal-error" role="alert">{error}</div>
 			<div className="checkpoint-preview-actions">
 				<button className="rs-btn" onClick={onBackToAssessment}>Back</button>
 				<button className="rs-btn rs-btn-primary" onClick={onRetry}>Try again</button>

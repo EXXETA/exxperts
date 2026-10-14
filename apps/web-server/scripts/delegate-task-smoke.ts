@@ -56,7 +56,7 @@ const templates = await import("../src/specialist-templates.js");
 
 // ── 2. Tool gate order ───────────────────────────────────────────────────────
 type Launched = { taskFolder: string; templateId: string };
-function makeTool(input: { running?: number; confirmResult?: boolean; launchOk?: boolean; userMessage?: string | null; autoBudget?: number }) {
+function makeTool(input: { running?: number; confirmResult?: boolean; launchOk?: boolean; launchPlain?: string; userMessage?: string | null; autoBudget?: number }) {
 	const calls = { confirms: [] as Array<{ title: string; detail: string }>, launches: [] as Launched[] };
 	let taskCounter = 0;
 	let autoBudget = input.autoBudget ?? 3;
@@ -69,6 +69,7 @@ function makeTool(input: { running?: number; confirmResult?: boolean; launchOk?:
 		consumeAutoDispatch: () => (autoBudget > 0 ? (autoBudget -= 1, true) : false),
 		launch: (plan: any) => {
 			calls.launches.push({ taskFolder: plan.taskFolder, templateId: plan.template.id });
+			if (input.launchPlain) return { ok: false as const, reason: input.launchPlain, plain: true as const };
 			return input.launchOk === false ? { ok: false as const, reason: "smoke launch refused" } : { ok: true as const };
 		},
 	});
@@ -149,6 +150,13 @@ function makeTool(input: { running?: number; confirmResult?: boolean; launchOk?:
 	const { tool, ctx } = makeTool({ launchOk: false });
 	const result = await tool.execute("1", { template: "deck", brief: "Make slides about X." }, undefined, undefined, ctx);
 	assert(result.details?.outcome === "launch-failed", "failed launch must refuse");
+	// A refusal that is a sentence for the person reaches the model as it is, to relay.
+	const sentence = "This room's memory model, Claude Opus 4.8, is no longer offered. Choose another Memory model in Room settings, Model.";
+	for (const userMessage of [null, "make me a deck now please"]) {
+		const plain = makeTool({ launchPlain: sentence, userMessage });
+		const plainResult = await plain.tool.execute("1", { template: "deck", brief: "Deck.", ...(userMessage ? { userRequest: userMessage } : {}) }, undefined, undefined, plain.ctx);
+		assert(plainResult.details?.outcome === "launch-failed" && (plainResult.content[0] as { text?: string }).text === sentence, `a plain launch refusal reads as it is, got ${JSON.stringify(plainResult.content)}`);
+	}
 }
 {
 	// Traversal-shaped inputArtifacts refuse before approval.

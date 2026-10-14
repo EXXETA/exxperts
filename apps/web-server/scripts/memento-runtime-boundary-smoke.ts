@@ -126,9 +126,9 @@ try {
 	assert(oldThread?.state === "closed", "old Pi thread should be closed");
 	assert(oldThread.closedReason === "memento", "old Pi thread should record Memento close reason");
 	assert(oldThread.closedByMementoId === result.mementoId, "old Pi thread should record closing Memento id");
-	assert(fs.existsSync(instance.runtimeThreadPath(oldThreadId)), "old Pi thread JSON should remain");
-	assert(fs.existsSync(oldJsonlPath), "old Pi JSONL artifact should remain");
-	assert(fs.existsSync(oldBootPath), "old boot artifact should remain");
+	assert(fs.existsSync(instance.runtimeThreadPath(oldThreadId)) && oldThread.items.length === 0, "old Pi thread JSON should remain as a closed record with no words");
+	assert(!fs.existsSync(oldJsonlPath), "Forget deletes the old Pi JSONL transcript");
+	assert(!fs.existsSync(oldBootPath), "Forget deletes the old boot artifact");
 
 	const freshThread = getPersistentAgentThread(agentId, result.postMemento.activeThreadId);
 	assert(freshThread?.state === "standby", "fresh Memento thread should be standby");

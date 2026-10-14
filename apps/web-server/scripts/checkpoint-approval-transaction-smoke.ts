@@ -170,15 +170,17 @@ try {
 	assert(!serializedEvent.includes(APPROVED_SENTINEL), "event JSON should not contain raw approved RC body");
 	assert(!serializedEvent.includes(newBootSnapshot), "event JSON should not contain raw boot prompt");
 
-	expectThrows(
-		() => writeApprovedCheckpoint(parsed.request, parsed.warnings, new Date("2026-06-14T13:01:00.000Z")),
-		/current persistent-room activeThread|stale|activeThread/i,
-		"double approval should fail after activeThread switches",
-	);
+	// A second approval of a conversation that was remembered answers with the
+	// save that landed (a second tab, a retry after a lost reply), and never
+	// writes a second page.
+	const l1bAfterFirst = fs.readFileSync(instance.l1bCurrentPath(instance.readAgentJson()), "utf-8");
+	const again = writeApprovedCheckpoint(parsed.request, parsed.warnings, new Date("2026-06-14T13:01:00.000Z"));
+	assert(again.checkpointId === result.checkpointId && again.postCheckpoint.activeThreadId === result.postCheckpoint.activeThreadId, "a second approval answers with the save that landed");
+	assert(fs.readFileSync(instance.l1bCurrentPath(instance.readAgentJson()), "utf-8") === l1bAfterFirst, "a second approval writes nothing");
 
-	// Half-applied boundary self-heal: a crash after the old thread closed but before the memory
-	// write / fresh thread landed used to strand the room ("stale" on every retry). Approving the
-	// same proposal again must complete the boundary instead of refusing.
+	// A conversation closed by a checkpoint that left no record (the old
+	// close-first order's crash state, which no save can produce now that the
+	// memory file is the commit point) is refused as stale, and nothing is written.
 	createPersistentAgentFromScaffoldInput({
 		displayName: "Checkpoint Halfway Smoke Room",
 		userName: "Synthetic User",
@@ -219,12 +221,12 @@ try {
 	closePersistentAgentThreadForCheckpoint(healAgentId, healOldThreadId, "cp_legacy_half_0001", new Date("2026-06-14T13:02:00.000Z").getTime());
 	const healL1bPath = healInstance.l1bCurrentPath(healInstance.readAgentJson());
 	const healL1bBefore = fs.readFileSync(healL1bPath, "utf-8");
-	const healed = writeApprovedCheckpoint(healParsed.request, healParsed.warnings, new Date("2026-06-14T13:03:00.000Z"));
-	assert(healed.runtimeBoundary.closedThreadId === healOldThreadId, "self-heal should reuse the already-closed old thread");
-	assert(healed.runtimeBoundary.closedByCheckpointId === "cp_legacy_half_0001", "self-heal should preserve the original closing checkpoint id");
-	assert(getPersistentAgentRuntimeState(healAgentId).activeThreadId === healed.postCheckpoint.activeThreadId, "self-heal should point the runtime at the fresh thread");
-	const healL1bAfter = fs.readFileSync(healL1bPath, "utf-8");
-	assert(healL1bAfter !== healL1bBefore && healL1bAfter.includes(healed.checkpointId), "self-heal should land the approved memory in L1b");
+	expectThrows(
+		() => writeApprovedCheckpoint(healParsed.request, healParsed.warnings, new Date("2026-06-14T13:03:00.000Z")),
+		/already closed|stale/i,
+		"a conversation closed by a checkpoint with no record is refused",
+	);
+	assert(fs.readFileSync(healL1bPath, "utf-8") === healL1bBefore, "a refused approval writes no memory");
 
 	fs.rmSync(tempHome, { recursive: true, force: true });
 	fs.rmSync(tempCwd, { recursive: true, force: true });

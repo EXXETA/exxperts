@@ -1,3 +1,4 @@
+import { notesToSortCount } from "./absorb-reread.js";
 import { extractAssessmentSection, extractLabeledBullets } from "./assessment-parsing.js";
 import { analyzeRecentContextIds, isStubRecentContextId } from "./recent-context-entries.js";
 import { estimateTokens } from "./token-estimate.js";
@@ -317,7 +318,8 @@ export function absorbAvailabilityFromL1b(l1b: string, scaffoldReady = true): Ab
 			message: "Recent Context section is missing.",
 		};
 	}
-	if (recent.entryCount < MIN_ABSORB_RECENT_CONTEXT_ENTRIES) {
+	// Notes waiting for a topic, or for their first re-read, are Memorize's work too.
+	if (recent.entryCount < MIN_ABSORB_RECENT_CONTEXT_ENTRIES && notesToSortCount(l1b) === 0) {
 		return {
 			available: false,
 			reason: "insufficient_recent_context",
@@ -575,13 +577,16 @@ None.`,
 	};
 }
 
+/** The section's top-level bullets; a deeper bullet stays under the one above it, as a nested list. */
 function extractBullets(section: string): string[] {
-	const bullets = section
-		.split(/\r?\n/)
-		.map((line) => line.trim())
-		.filter((line) => /^[-*•]\s+/.test(line))
-		.map((line) => line.replace(/^[-*•]\s+/, "").trim())
-		.filter(Boolean);
+	const lines = section.split(/\r?\n/).map((line) => /^(\s*)[-*•]\s+(.*)$/.exec(line)).filter((match): match is RegExpExecArray => match !== null && match[2]!.trim() !== "");
+	const top = Math.min(...lines.map((match) => match[1]!.length));
+	const bullets: string[] = [];
+	for (const match of lines) {
+		const depth = match[1]!.length - top;
+		if (depth > 0 && bullets.length > 0) bullets[bullets.length - 1] += `\n${" ".repeat(depth >= 2 ? depth : 2)}- ${match[2]!.trim()}`;
+		else bullets.push(match[2]!.trim());
+	}
 	if (bullets.length > 0) return bullets;
 	const normalized = normalizeLine(section);
 	return normalized && !/^none\.?$/i.test(normalized) ? [normalized] : [];

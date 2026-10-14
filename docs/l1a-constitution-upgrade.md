@@ -46,8 +46,8 @@ when nothing changed is safe; rooms already on the current template are skipped
    npx tsx apps/web-server/scripts/upgrade-l1a-constitution.ts --dry-run --all
    ```
 
-   Each room prints either `WOULD upgrade constitution v2 -> v3` or
-   `already at template v3, nothing to do`.
+   Each room prints either `WOULD upgrade constitution v3 -> v4` or
+   `already at template v4, nothing to do`.
 
 4. **Run the upgrade:**
 
@@ -70,7 +70,7 @@ when nothing changed is safe; rooms already on the current template are skipped
    head -3 ~/.exxperts/app/personalized-agents/<room-id>/L1a.md
    ```
 
-   The second line should contain `template_version=3`.
+   The second line should contain `template_version=4`.
 
 6. **Use the room normally.** New sessions boot with the upgraded
    constitution immediately. A room session that was saved before the upgrade

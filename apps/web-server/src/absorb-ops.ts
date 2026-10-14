@@ -308,7 +308,7 @@ Maximize durable signal density. A fold is not append-only memory growth. It fol
 - A preference the user states about how work should be done or presented (how a summary is written, what a number must carry, when to ask before acting) is a practice under the room's working-style topic, never chatter, even when it is said in passing.
 - Route unresolved live state to Active Items as an item.
 - Close the Active Items the session finished.
-- Drop noise, completed implementation chatter, redundant detail, and material better suited to files or telemetry. A session that holds nothing durable is dropped with its reason, not folded thinly.
+- Drop noise, completed implementation chatter, redundant detail, and material better suited to files or telemetry. A session that holds nothing durable is dropped with its reason, not folded thinly. Never say the user agreed, asked or decided to let it go unless their own instructions above say so: the first read's suggestions are not theirs.
 - Apply sensitive-material restraint: health, conflicts with named people, finances, religious or political identity, and third parties' private details become permanent only when load-bearing for future work or explicitly requested by the user.
 
 ## Reading the Session in Order
@@ -498,15 +498,22 @@ export function buildFoldPrompt(input: FoldPromptInput): FoldPromptAssembly {
 	};
 }
 
+/** What the stricter second ask adds to every reason (draft). */
+export const FOLD_STRICT_ASK_LINE = "Use at most 12 operations, and give every add an existing topic or a new topic title.";
+
 /**
- * The second ask of a reply that held no readable operations: the same prompt
- * plus one line. A reply cut off at the output limit is told so.
+ * The second, stricter ask of a page (the ladder's rung 2): the same prompt
+ * plus its reason and the strict line. A reply that held no readable
+ * operations is told so, and so is one cut off at the output limit; a reply
+ * of which nothing landed may answer with one drop (drafts).
  */
-export function buildFoldUnreadableRetryPrompt(prompt: string, cutOff: boolean): string {
-	const line = cutOff
-		? "Your last answer ran to the output limit and had no readable operations. Answer with a short narrative and one json fence."
-		: "Your last answer had no readable operations. Answer with the narrative and one json fence.";
-	return `${prompt.trimEnd()}\n\n${line}\n`;
+export function buildFoldRetryPrompt(prompt: string, ask: { kind: "unreadable"; cutOff: boolean } | { kind: "nothing-usable" }): string {
+	const line = ask.kind === "nothing-usable"
+		? "None of your operations changed memory: every change was empty or named nothing memory holds. If nothing in this session is new, answer with one drop."
+		: ask.cutOff
+			? "Your last answer ran to the output limit and had no readable operations. Answer with a short narrative and one json fence."
+			: "Your last answer had no readable operations. Answer with the narrative and one json fence.";
+	return `${prompt.trimEnd()}\n\n${line} ${FOLD_STRICT_ASK_LINE}\n`;
 }
 
 // --- Reading the reply -------------------------------------------------------
@@ -1063,6 +1070,12 @@ export interface FoldDecisions {
 export interface FoldDecideContext {
 	/** Notes pinned for this run's folds only (a resume's kept notes): a change to one is added beside it, but untagged, since the person did not pin it. */
 	keptForFolds?: ReadonlySet<string>;
+	/**
+	 * Where a change with no usable topic goes when no add of the reply names a
+	 * usable one (that add's topic comes first): asked only when needed, since
+	 * the run's answer builds an index. Unsorted only for a caller that names none.
+	 */
+	homeTopic?: string | (() => string);
 }
 
 /** A new note on its way to the repeat rules. */
@@ -1133,20 +1146,21 @@ function noteTextOf(raw: string, bullets: boolean, codes: string[]): string {
 }
 
 /** A new topic title made usable, or the holding topic when nothing of it names a subject. */
-function addTopicOf(raw: string | undefined, rawKind: string | undefined, areas: AreaRow[], codes: string[]): string {
+function addTopicOf(raw: string | undefined, rawKind: string | undefined, areas: AreaRow[], codes: string[], home: string): string {
 	let topic = (raw ?? "").trim();
 	if (!topic) {
 		codes.push("topic-missing");
-		return FOLD_UNSORTED_TOPIC;
+		return home;
 	}
 	const stripped = topic.replace(/^#+\s*/, "").trim();
 	if (stripped !== topic) codes.push("topic-marks");
 	topic = stripped;
 	if (!/[\p{L}\p{N}]/u.test(topic)) {
 		codes.push("topic-empty");
-		return FOLD_UNSORTED_TOPIC;
+		return home;
 	}
-	if (sameTopic(topic, FOLD_UNSORTED_TOPIC) || sameTopic(topic, FOLD_ACTIVE_ITEMS_TOPIC) || areas.some((area) => sameTopic(area.topic, topic))) return topic;
+	if (sameTopic(topic, FOLD_UNSORTED_TOPIC)) return home;
+	if (sameTopic(topic, FOLD_ACTIVE_ITEMS_TOPIC) || areas.some((area) => sameTopic(area.topic, topic))) return topic;
 	if (topic.length > FOLD_TOPIC_TITLE_MAX_CHARS) {
 		codes.push("topic-length");
 		const cut = topic.slice(0, FOLD_TOPIC_TITLE_MAX_CHARS + 1).replace(/\s+\S*$/, "").trim();
@@ -1154,7 +1168,7 @@ function addTopicOf(raw: string | undefined, rawKind: string | undefined, areas:
 	}
 	if (topic.length < FOLD_TOPIC_TITLE_MIN_CHARS) {
 		codes.push("topic-length");
-		return FOLD_UNSORTED_TOPIC;
+		return home;
 	}
 	// A title that is an existing topic in other words files under it, except
 	// that a fact or a practice keeps its own title rather than become an item.
@@ -1287,7 +1301,7 @@ export function decideFoldOps(items: readonly ReadFoldOp[], areas: AreaRow[], se
 	};
 	/** A text redirected as a new note: to the holding topic, or beside the note it was aimed at. */
 	const redirect = (item: ReadFoldOp, raw: string, why: string, where: { beside?: AreaRow; target?: AreaRow; kind?: FoldAddKind; besidePinned?: boolean; foreign?: boolean; disagrees?: boolean } = {}) => {
-		const topic = where.beside?.topic ?? FOLD_UNSORTED_TOPIC;
+		const topic = where.beside?.topic ?? home();
 		const codes: string[] = [];
 		const text = noteTextOf(raw, bulletsFor(topic), codes);
 		if (!text) return code(item, "empty-text");
@@ -1310,6 +1324,10 @@ export function decideFoldOps(items: readonly ReadFoldOp[], areas: AreaRow[], se
 	const haystack = normalizeLine(session.text);
 	const haystackKey = quoteKey(session.text);
 
+	// A change with no usable topic never opens one: it goes under the topic of
+	// the reply's first add that names a usable one, else the caller's home.
+	let homeCache: string | undefined;
+	const home = (): string => (homeCache ??= items.map((item) => (item.op === "add" ? addTopicOf(item.topic, item.kind, areas, [], "") : "")).find(Boolean) || (typeof ctx.homeTopic === "function" ? ctx.homeTopic() : ctx.homeTopic) || FOLD_UNSORTED_TOPIC);
 	for (const item of items) {
 		const foreign = item.foreignKeys?.filter((key) => !(key === "id" && item.op === "add") && !(key === "text" && (item.op === "drop" || item.op === "close" || item.op === "pin"))) ?? [];
 		if (foreign.length > 0 && (FOLD_OP_KINDS as readonly string[]).includes(item.op)) fix(item, "foreign-keys");
@@ -1317,7 +1335,7 @@ export function decideFoldOps(items: readonly ReadFoldOp[], areas: AreaRow[], se
 		switch (item.op) {
 			case "add": {
 				const codes: string[] = [];
-				const topic = addTopicOf(item.topic, item.kind, areas, codes);
+				const topic = addTopicOf(item.topic, item.kind, areas, codes, "") || home();
 				const kind = addKindOf(item.kind, topic, areas, codes);
 				const text = noteTextOf(item.text ?? "", bulletsFor(topic), codes);
 				for (const value of codes) fix(item, value);

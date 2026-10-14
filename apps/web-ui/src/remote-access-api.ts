@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { fetchJson } from "./api";
-import { fetchRemoteClientContext } from "./remote-client-context";
+import { fetchRemoteClientContext, showsComputerOnlyControls } from "./remote-client-context";
 
 // The Settings face of remote mode. Everything here talks to the loopback
 // admin API; on a remote device those routes answer 403 by design (a phone
@@ -172,8 +172,9 @@ function stopPollingWhenUnwatched(): void {
 
 /**
  * The current remote status, null while unknown (still loading, admin
- * surface refused, or the probe failed). On a remote device this stays null
- * forever, on purpose: the admin surface does not exist there.
+ * surface refused, or the probe failed). On a remote device and on a shared
+ * server this stays null forever, on purpose: the admin surface does not
+ * exist there.
  */
 export function useRemoteAccessStatus(): RemoteAccessStatus | null {
 	const [status, setStatus] = useState<RemoteAccessStatus | null>(sharedStatus);
@@ -184,7 +185,7 @@ export function useRemoteAccessStatus(): RemoteAccessStatus | null {
 		};
 		listeners.add(listener);
 		void fetchRemoteClientContext().then((context) => {
-			if (!alive || context.remote) return;
+			if (!alive || !showsComputerOnlyControls(context)) return;
 			ensurePolling();
 			void refreshSharedStatus();
 		});

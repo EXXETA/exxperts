@@ -312,7 +312,8 @@ try {
 	const refusedTwice = await settleReviewRun(reviewRoomId, refusedRun.runId);
 	assert(refusedTwice.leftAsIs.some((row) => row.reason === REVIEW_TIDY_REFUSED_TWICE), `a group refused twice is left as it was: ${JSON.stringify(refusedTwice.leftAsIs)}`);
 	const afterRefusal = listMaintenanceDiagnostics(reviewRootDir).filter((r) => r.process === "review-tidy");
-	assert(afterRefusal.length === retriedRecords.length + 2, `the refused run leaves its own two records, got ${afterRefusal.length - retriedRecords.length}`);
+	// The group of two topics is refused twice, then split, and each half is refused twice too: two records per group read.
+	assert(afterRefusal.length === retriedRecords.length + 6, `the refused run leaves two records for each group it read, got ${afterRefusal.length - retriedRecords.length}`);
 	assert(afterRefusal[0].outcome === "refused", `a run that ended in a refusal must not read as accepted, got ${afterRefusal[0].outcome}`);
 	assert(afterRefusal[0].attempt === 2, `the newest record is the last attempt, even when both land in the same millisecond, got attempt ${afterRefusal[0].attempt}`);
 	assert(!JSON.stringify(afterRefusal).includes(MEMORY_SENTINEL), "neither attempt may carry the room's words");

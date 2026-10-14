@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { PersistentAgentStatus } from "../types";
 import { fetchPersistentRoomSkillSettings, updatePersistentRoomSkillSetting, type PersistentRoomEnabledSkillStatus } from "../persistent-room-management-api";
+import { pausedSkills } from "../paused-skills";
 import { fetchSkill, fetchSkills, type SkillDetail, type SkillListItem } from "../skills-api";
 import { FileGroupList, groupFilesByFolder } from "./file-groups";
 import { MarkdownRenderer } from "./Markdown";
@@ -37,9 +38,16 @@ function runFilesLine(executeState: PersistentRoomEnabledSkillStatus["executeSta
 	return one ? "Off: the room follows its instructions but does not run its file." : `Off: the room follows its instructions but does not run its ${count} files.`;
 }
 
-export function RoomSkillsSection({ status, onOpenSkillsLibrary }: { status: PersistentAgentStatus; onOpenSkillsLibrary?: () => void }) {
+export function RoomSkillsSection({ status, onOpenSkillsLibrary, onPausedCount }: { status: PersistentAgentStatus; onOpenSkillsLibrary?: () => void; onPausedCount?: (count: number) => void }) {
 	const [library, setLibrary] = useState<SkillListItem[] | null>(null);
 	const [enabled, setEnabled] = useState<PersistentRoomEnabledSkillStatus[] | null>(null);
+	// The settings nav counts the paused skills; it hears each change here,
+	// so a review clears the count at once.
+	const onPausedCountRef = useRef(onPausedCount);
+	onPausedCountRef.current = onPausedCount;
+	useEffect(() => {
+		if (enabled) onPausedCountRef.current?.(pausedSkills(enabled).length);
+	}, [enabled]);
 	const [busyName, setBusyName] = useState<string | null>(null);
 	// Execution approval (executable skills): its own busy name so the enable/remove
 	// buttons keep their own labels while an approval is in flight.
@@ -139,7 +147,7 @@ export function RoomSkillsSection({ status, onOpenSkillsLibrary }: { status: Per
 			<PaneHeader
 				title="Skills"
 				line={<>
-					{okCount > 0 ? `${okCount} enabled, ~${okCount * 100} tokens per turn.` : "Abilities this room can use in its turns."}
+					{okCount > 0 ? `${okCount} enabled.` : "Abilities this room can use in its turns."}
 					<RsInfo text="Each enabled skill adds a ~100-token index entry to every turn of this room. Enabling or disabling takes effect right away, from the room's next reply on; a changed or removed skill stops being injected immediately. A skill's full instructions load only when the room reads it and are never memorized." />
 				</>}
 				actions={loaded && library.length > enabledNames.size && !pickerOpen

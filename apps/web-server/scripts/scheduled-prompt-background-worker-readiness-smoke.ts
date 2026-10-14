@@ -83,6 +83,7 @@ try {
 	} = backgroundRuns;
 	const { createScheduledPromptBackgroundRunPreflight } = await import("../src/scheduled-prompt-runs.js");
 	const { processScheduledPromptBackgroundRunReadinessOnce } = await import("../src/scheduled-prompt-background-worker.js");
+	const { scheduledRunMetCurrentConversation } = await import("../src/scheduled-prompt-background-readiness.js");
 	const { scanPersistentRoomScheduleDueRuns } = await import("../src/persistent-room-schedule-due-scan.js");
 	const { writePersistentAgentAiProfileState } = await import("../src/persistent-agent-ai-profile-state.js");
 	const scheduleModule = await import("../../../pi-package/extensions/schedule-prompt/index.js");
@@ -327,16 +328,18 @@ try {
 	// Transiently blocked runs must not be terminal: once the blocking condition clears, the revive
 	// pass returns them to deferred so the normal readiness re-check can queue them. Permanent and
 	// needs-a-human blocks stay put, and revival respects the backoff window.
-	const revivedTooSoon = reviveTransientlyBlockedBackgroundRuns({ kind: "scheduled-prompt", now: readyNow, limit: 100 });
+	const revivedTooSoon = reviveTransientlyBlockedBackgroundRuns({ kind: "scheduled-prompt", now: readyNow, limit: 100, metCurrentConversation: scheduledRunMetCurrentConversation });
 	assert(!revivedTooSoon.some((run: any) => run.runId === noAuthRun.runId), "revive must respect the backoff window right after the block");
 	const reviveNow = new Date("2026-01-01T02:05:00.000Z");
-	const revived = reviveTransientlyBlockedBackgroundRuns({ kind: "scheduled-prompt", now: reviveNow, limit: 100 });
+	const revived = reviveTransientlyBlockedBackgroundRuns({ kind: "scheduled-prompt", now: reviveNow, limit: 100, metCurrentConversation: scheduledRunMetCurrentConversation });
 	assert(revived.some((run: any) => run.runId === noAuthRun.runId && run.status === "deferred" && run.reason === "transient_block_revived"), "provider_not_connected block should revive to deferred after backoff");
-	assert(!revived.some((run: any) => run.runId === checkpointRun.runId), "prepared_runtime_boundary block must not be revived");
-	assert(readBackgroundRun(checkpointRun.runId).status === "blocked", "prepared boundary run should stay blocked");
+	// A run that met the empty conversation Remember prepared waits for it to start: rechecked, never final.
+	assert(revived.some((run: any) => run.runId === checkpointRun.runId && run.status === "deferred" && run.reason === "transient_block_revived"), "prepared_runtime_boundary block should revive to deferred after backoff");
 	fs.writeFileSync(authJsonPath, authBeforeReady ?? "{}");
 	const revivedSummary = processScheduledPromptBackgroundRunReadinessOnce({ workerId, now: reviveNow, limit: 10, leaseMs: 60_000 });
 	assert(revivedSummary.processed.some((item) => item.runId === noAuthRun.runId && item.finalStatus === "queued" && item.reason === "ready_for_execution"), "revived run should queue once the provider is connected again");
+	assert(revivedSummary.processed.some((item) => item.runId === checkpointRun.runId && item.finalStatus === "blocked" && item.reason === "prepared_runtime_boundary"), "while the prepared conversation is still empty, the revived run waits again");
+	assert(getPersistentAgentThread(checkpointRoom, checkpointThreadId) !== null && getPersistentAgentRuntimeState(checkpointRoom).activeThreadId === checkpointThreadId, "the recheck never retires the prepared conversation");
 
 	// A room's own pick that cannot run is never run and nothing runs in its
 	// place. On no list any more: refused at preflight with the sentence. On
@@ -347,7 +350,7 @@ try {
 	const delistedRoom = createRoom("Worker Delisted Pick Room");
 	writeRoomModels(delistedRoom, { conversation: { provider: "openai-compatible", model: "retired-model" } });
 	const delistedRun = preflight(delistedRoom, addSchedule(delistedRoom, "delisted pick job").id, "2026-01-01T00:20:00.000Z", reviveNow);
-	assert(delistedRun.status === "blocked" && delistedRun.reason === "model_policy_unavailable" && /^This room's model, retired-model on .+, is no longer offered\./.test(String(delistedRun.message)), `a pick on no list is refused at preflight with the sentence, got ${JSON.stringify({ status: delistedRun.status, reason: delistedRun.reason, message: delistedRun.message })}`);
+	assert(delistedRun.status === "blocked" && delistedRun.reason === "model_policy_unavailable" && /^This room's model, Retired Model on Synthetic Gateway, is no longer offered\./.test(String(delistedRun.message)), `a pick on no list is refused at preflight with the sentence, got ${JSON.stringify({ status: delistedRun.status, reason: delistedRun.reason, message: delistedRun.message })}`);
 	const unknownRoom = createRoom("Worker Unknown Listed Pick Room");
 	writeRoomModels(unknownRoom, { conversation: { provider: "openai-compatible", model: "listed-only" } });
 	const unknownRun = preflight(unknownRoom, addSchedule(unknownRoom, "unknown listed pick job").id, "2026-01-01T00:25:00.000Z", reviveNow);

@@ -360,6 +360,86 @@ try {
 	assert(checkpointSummary.processed.some((item: any) => item.runId === checkpointRun.runId && item.finalStatus === "blocked" && item.reason === "prepared_runtime_boundary"), "empty checkpoint boundary should block execution");
 	assert(getPersistentAgentThread(checkpointRoom, checkpointThreadId), "checkpoint boundary must not be retired");
 	assert(!scheduledPromptBackgroundRunHasInputArtifact(readBackgroundRun(checkpointRun.runId)), "blocked checkpoint run must not snapshot input");
+	// The run waits for the conversation Remember prepared, as the pane says: rechecked while it is empty, run once the person has started it.
+	const later = (minutes: number) => new Date(dueNow.getTime() + minutes * 60_000);
+	await processOne("checkpoint-still-empty", { now: later(5) });
+	assert(readBackgroundRun(checkpointRun.runId).status === "blocked" && fakeCalls.get(checkpointRun.runId) === undefined, "while the prepared conversation is empty, the run still waits and does not run");
+	writePersistentAgentThread(checkpointRoom, checkpointThreadId, { state: "standby", origin: "checkpoint", model: modelA, items: [{ kind: "user", id: "first", text: "Good morning." }, { kind: "assistant", id: "first-answer", text: "Good morning.", streaming: false }] });
+	const startedSummary = await processOne("checkpoint-started", { now: later(10) });
+	const startedRun = readBackgroundRun(checkpointRun.runId);
+	assert(startedRun.status === "succeeded" && fakeCalls.get(checkpointRun.runId) === 1 && startedRun.target?.kind === "resume-thread" && startedRun.target.threadId === checkpointThreadId, `once the person started the conversation, the run goes there, late, got ${startedRun.status}/${startedRun.reason} ${JSON.stringify(startedSummary.processed)}`);
+
+	// Only the newest run of a task that met the conversation the room has now comes back: an interval task blocked
+	// once per occurrence runs once, not once per occurrence, and a run blocked on an older conversation stays as it was.
+	const pileRoom = createRoom("Execution Pile-up Room");
+	const pileThreadId = "exec_pile_0001";
+	writePersistentAgentThread(pileRoom, pileThreadId, { state: "standby", origin: "checkpoint", model: modelA, items: [] });
+	const pileJob = addSchedule(pileRoom, "pile job");
+	const pileRuns = ["2026-01-01T00:30:00.000Z", "2026-01-01T00:40:00.000Z", "2026-01-01T00:50:00.000Z"].map((dueAt) => preflight(pileRoom, pileJob.id, dueAt));
+	assert(pileRuns.every((run) => readBackgroundRun(run.runId).status === "blocked"), "each occurrence meets the empty prepared conversation");
+	const olderRoom = createRoom("Execution Older Conversation Room");
+	writePersistentAgentThread(olderRoom, "exec_older_0001", { state: "standby", origin: "checkpoint", model: modelA, items: [] });
+	const olderRun = preflight(olderRoom, addSchedule(olderRoom, "older job").id, "2026-01-01T00:30:00.000Z");
+	assert(readBackgroundRun(olderRun.runId).status === "blocked", "the run meets the older prepared conversation");
+	const started = [{ kind: "user", id: "first", text: "Good morning." }, { kind: "assistant", id: "first-answer", text: "Good morning.", streaming: false }];
+	writePersistentAgentThread(pileRoom, pileThreadId, { state: "standby", origin: "checkpoint", model: modelA, items: started });
+	writePersistentAgentThread(olderRoom, "exec_older_0002", { state: "standby", origin: "home", model: modelA, items: started });
+	persistentAgents.writePersistentAgentRuntimeState(olderRoom, { state: "standby", activeThreadId: "exec_older_0002", model: modelA });
+	for (let minute = 20; minute <= 60; minute += 5) await processOne(`pile-${minute}`, { now: later(minute) });
+	const pileRan = pileRuns.filter((run) => fakeCalls.has(run.runId));
+	assert(pileRan.length === 1 && pileRan[0].runId === pileRuns[2].runId, `the task runs once, its newest run, got ${pileRan.length} run(s): ${pileRuns.map((run) => readBackgroundRun(run.runId).status).join(",")}`);
+	assert(pileRuns.slice(0, 2).every((run) => readBackgroundRun(run.runId).status === "blocked" && readBackgroundRun(run.runId).reason === "superseded_by_later_run"), `the older occurrences end, a later run having taken their place, got ${pileRuns.slice(0, 2).map((run) => readBackgroundRun(run.runId).reason).join(",")}`);
+	assert(!fakeCalls.has(olderRun.runId) && readBackgroundRun(olderRun.runId).status === "blocked" && readBackgroundRun(olderRun.runId).reason === "prepared_conversation_ended", `a run blocked on an older conversation ends with that, got ${readBackgroundRun(olderRun.runId).status}/${readBackgroundRun(olderRun.runId).reason}`);
+
+	// A second Remember or Forget before the person starts the prepared conversation prepares another: the
+	// waiting run follows the room to it, and runs once that one has started.
+	const movedRoom = createRoom("Execution Moved Conversation Room");
+	writePersistentAgentThread(movedRoom, "exec_moved_0001", { state: "standby", origin: "checkpoint", model: modelA, items: [] });
+	const movedRun = preflight(movedRoom, addSchedule(movedRoom, "moved job").id, "2026-01-01T00:30:00.000Z");
+	assert(readBackgroundRun(movedRun.runId).status === "blocked" && readBackgroundRun(movedRun.runId).target?.threadId === "exec_moved_0001", "the run meets the first prepared conversation");
+	writePersistentAgentThread(movedRoom, "exec_moved_0002", { state: "standby", origin: "checkpoint", model: modelA, items: [] });
+	persistentAgents.writePersistentAgentRuntimeState(movedRoom, { state: "standby", activeThreadId: "exec_moved_0002", model: modelA });
+	for (let minute = 70; minute <= 80; minute += 5) await processOne(`moved-${minute}`, { now: later(minute) });
+	assert(readBackgroundRun(movedRun.runId).status === "blocked" && readBackgroundRun(movedRun.runId).reason === "prepared_runtime_boundary" && !fakeCalls.has(movedRun.runId), `the run waits for the newer prepared conversation, got ${readBackgroundRun(movedRun.runId).status}/${readBackgroundRun(movedRun.runId).reason}`);
+	writePersistentAgentThread(movedRoom, "exec_moved_0002", { state: "standby", origin: "checkpoint", model: modelA, items: started });
+	for (let minute = 85; minute <= 95; minute += 5) await processOne(`moved-started-${minute}`, { now: later(minute) });
+	assert(fakeCalls.get(movedRun.runId) === 1 && readBackgroundRun(movedRun.runId).target?.threadId === "exec_moved_0002", `once it has started, the run goes there, got ${readBackgroundRun(movedRun.runId).status}/${readBackgroundRun(movedRun.runId).reason}`);
+
+	// The person presses Remember again and writes in the newer conversation before the next scan: the conversation the
+	// run waited for was closed by Remember, so the run goes to the one the person started, not "ended".
+	const quickRoom = createRoom("Execution Quick Start Room");
+	writePersistentAgentThread(quickRoom, "exec_quick_0001", { state: "standby", origin: "checkpoint", model: modelA, items: [] });
+	const quickRun = preflight(quickRoom, addSchedule(quickRoom, "quick job").id, "2026-01-01T00:30:00.000Z");
+	assert(readBackgroundRun(quickRun.runId).status === "blocked" && readBackgroundRun(quickRun.runId).target?.threadId === "exec_quick_0001", "the run meets the first prepared conversation");
+	persistentAgents.closePersistentAgentThreadForCheckpoint(quickRoom, "exec_quick_0001", "checkpoint_quick_0001");
+	writePersistentAgentThread(quickRoom, "exec_quick_0002", { state: "standby", origin: "checkpoint", model: modelA, items: started });
+	persistentAgents.writePersistentAgentRuntimeState(quickRoom, { state: "standby", activeThreadId: "exec_quick_0002", model: modelA });
+	assert(getPersistentAgentThread(quickRoom, "exec_quick_0001")?.closedReason === "checkpoint", "Remember closed the first prepared conversation");
+	for (let minute = 100; minute <= 110; minute += 5) await processOne(`quick-${minute}`, { now: later(minute) });
+	assert(fakeCalls.get(quickRun.runId) === 1 && readBackgroundRun(quickRun.runId).target?.threadId === "exec_quick_0002", `the run goes to the conversation the person started, got ${readBackgroundRun(quickRun.runId).status}/${readBackgroundRun(quickRun.runId).reason}`);
+
+	// The conversations Remember and Memorize prepare carry a time stamp with a capital T and Z in their ids: a run that
+	// waited for one runs there once the person has started it, never failing on the id.
+	for (const prefix of ["postcp", "postmem"]) {
+		const stampRoom = createRoom(`Execution Stamped ${prefix} Room`);
+		const stampedThreadId = `${prefix}_20261011T150343Z_v5ngbi`;
+		writePersistentAgentThread(stampRoom, stampedThreadId, { state: "standby", origin: prefix === "postcp" ? "checkpoint" : "memento", model: modelA, items: [] });
+		persistentAgents.writePersistentAgentRuntimeState(stampRoom, { state: "standby", activeThreadId: stampedThreadId, model: modelA });
+		const stampedRun = preflight(stampRoom, addSchedule(stampRoom, `${prefix} job`).id, "2026-01-01T00:30:00.000Z");
+		assert(readBackgroundRun(stampedRun.runId).status === "blocked" && readBackgroundRun(stampedRun.runId).target?.threadId === stampedThreadId, `the run meets the ${prefix} conversation, got ${readBackgroundRun(stampedRun.runId).status}/${readBackgroundRun(stampedRun.runId).reason}`);
+		writePersistentAgentThread(stampRoom, stampedThreadId, { state: "standby", origin: prefix === "postcp" ? "checkpoint" : "memento", model: modelA, items: started });
+		for (let minute = 115; minute <= 125; minute += 5) await processOne(`${prefix}-${minute}`, { now: later(minute) });
+		const stampedDone = readBackgroundRun(stampedRun.runId);
+		assert(fakeCalls.get(stampedRun.runId) === 1 && stampedDone.status === "succeeded" && stampedDone.target?.threadId === stampedThreadId, `once the ${prefix} conversation has started, the run goes there, got ${stampedDone.status}/${stampedDone.reason} ${stampedDone.message ?? ""}`);
+	}
+
+	// A run blocked before the update kept no conversation: it ends plainly, never saying a conversation ended.
+	const unrecordedRoom = createRoom("Execution Unrecorded Conversation Room");
+	writePersistentAgentThread(unrecordedRoom, "exec_unrecorded_0001", { state: "standby", origin: "checkpoint", model: modelA, items: [] });
+	const unrecordedRun = preflight(unrecordedRoom, addSchedule(unrecordedRoom, "unrecorded job").id, "2026-01-01T00:30:00.000Z");
+	backgroundRuns.updateBackgroundRun(unrecordedRun.runId, { target: { kind: "none", roomId: unrecordedRoom } as any, now: later(0) });
+	await processOne("unrecorded", { now: later(100) });
+	assert(!fakeCalls.has(unrecordedRun.runId) && readBackgroundRun(unrecordedRun.runId).reason === "prepared_conversation_not_recorded", `a run with no conversation recorded ends plainly, got ${readBackgroundRun(unrecordedRun.runId).status}/${readBackgroundRun(unrecordedRun.runId).reason}`);
 
 	const missingRoom = createRoom("Execution Missing Schedule Room");
 	const missingJob = addSchedule(missingRoom, "missing job");

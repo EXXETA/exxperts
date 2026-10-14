@@ -49,7 +49,7 @@ const STANZA_HEADING = "\n\n## Room tools\n\n";
 /** The most characters the stanza may cost with today's three room tools. */
 const STANZA_MAX_CHARS = 400;
 /** The recall tool's own line, word for word, so a rewrite has to come back here. */
-const MEMORY_RECALL_SNIPPET = "Search this room's memory, notes, archive and memorized conversations, by words, names or dates before saying you do not know";
+const MEMORY_RECALL_SNIPPET = "Search this room's memory, notes, archive and remembered conversations, by words, names or dates before saying you do not know";
 const SHELF_READ_SNIPPET = "Read this room's Files by exact filename (paged; pdf/docx extracted locally; .xlsx previewed; images and scanned PDFs shown visually)";
 const SHELF_SEARCH_SNIPPET = "Search across this room's Files for literal text (name:line matches)";
 /** Rides each prompt, so a captured request can be tied to the turn that caused it. */

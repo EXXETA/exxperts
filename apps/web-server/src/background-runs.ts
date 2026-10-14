@@ -187,6 +187,8 @@ const BACKGROUND_RUNS_ROOT_DIRNAME = "background-runs";
 const RUNS_DIRNAME = "runs";
 const RUN_ID_PATTERN = /^bg_[a-f0-9]{32}$/;
 const SAFE_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,119}$/;
+// Conversation ids carry a time stamp with a capital T and Z (postcp_20261011T150343Z_ab12cd).
+const THREAD_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,119}$/;
 const MAX_REASON_LENGTH = 120;
 const MAX_MESSAGE_LENGTH = 1000;
 const MAX_WORKER_ID_LENGTH = 240;
@@ -304,9 +306,9 @@ function normalizeIsoDateString(value: unknown, label: string): string {
 	return new Date(requireIsoDateString(value, label)).toISOString();
 }
 
-function validateSafeId(value: unknown, label: string): string {
+function validateSafeId(value: unknown, label: string, pattern = SAFE_ID_PATTERN): string {
 	const text = String(value ?? "").trim();
-	if (!SAFE_ID_PATTERN.test(text)) throw new Error(`invalid background run ${label}: ${text || "(empty)"}`);
+	if (!pattern.test(text)) throw new Error(`invalid background run ${label}: ${text || "(empty)"}`);
 	return text;
 }
 
@@ -414,7 +416,7 @@ function normalizeTarget(value: unknown): BackgroundRunTarget {
 	if (raw.kind !== "resume-thread" && raw.kind !== "fresh-thread" && raw.kind !== "no-room-mutation" && raw.kind !== "none") throw new Error("invalid background run target kind");
 	const target: BackgroundRunTarget = { kind: raw.kind };
 	if (raw.roomId !== undefined) target.roomId = validateSafeId(raw.roomId, "target room id");
-	if (raw.threadId !== undefined) target.threadId = validateSafeId(raw.threadId, "target thread id");
+	if (raw.threadId !== undefined) target.threadId = validateSafeId(raw.threadId, "target thread id", THREAD_ID_PATTERN);
 	if (raw.model !== undefined) target.model = normalizeModel(raw.model);
 	if (raw.modelPolicyKey !== undefined) target.modelPolicyKey = requireNonEmptyString(raw.modelPolicyKey, "model policy key", 120);
 	return target;
@@ -744,28 +746,72 @@ function recoverExpiredBackgroundRunLease(runId: string, now: Date, nowIso: stri
 
 // Blocked runs are otherwise terminal: the claimable listing skips them and the due scan sees the
 // occurrence as already handled, so a transient condition (provider offline, model missing) would
-// silently kill the occurrence — fatal for one-shot schedules. Reasons here are the ones expected
-// to clear without touching the schedule; missing/archived rooms, missing/disabled schedules, and
-// prepared-boundary rooms need a human and stay terminal.
+// silently kill the occurrence, fatal for one-shot schedules. Reasons here are the ones expected
+// to clear without touching the schedule; missing/archived rooms and missing/disabled schedules
+// need a human and stay terminal. A run that met the empty conversation Remember or Forget
+// prepared comes back only as the newest run of its task, and only while that conversation is
+// still the room's (see reviveTransientlyBlockedBackgroundRuns).
+const PREPARED_CONVERSATION_BLOCK = "prepared_runtime_boundary";
 const TRANSIENTLY_BLOCKED_REASONS = new Set([
 	"provider_not_connected",
 	"model_not_found",
 	"model_policy_unavailable",
 	"schedule_store_unreadable",
 	"room_error",
+	// The empty conversation Remember or Forget prepared: the run goes, late, once the person has started it.
+	PREPARED_CONVERSATION_BLOCK,
 ]);
 // Floor between revive attempts so a run that immediately re-blocks is not readiness-checked on
 // every tick, only about once per backoff window.
 const TRANSIENT_BLOCK_REVIVE_BACKOFF_MS = 60 * 1000;
 
-export function reviveTransientlyBlockedBackgroundRuns(input: RecoverExpiredBackgroundRunLeasesInput = {}): BackgroundRunRecord[] {
+export interface ReviveTransientlyBlockedBackgroundRunsInput extends RecoverExpiredBackgroundRunLeasesInput {
+	/** Whether a run blocked on a prepared conversation met the one its room has now (null: cannot tell yet); without it such a run stays blocked. */
+	metCurrentConversation?: (record: BackgroundRunRecord) => boolean | null;
+}
+
+/**
+ * A run blocked on a prepared conversation that will not come back: a later run of its task took its place, or
+ * that conversation ended, or (a run blocked before the update) no conversation was recorded to wait for.
+ */
+export const SUPERSEDED_BY_LATER_RUN = "superseded_by_later_run";
+export const PREPARED_CONVERSATION_ENDED = "prepared_conversation_ended";
+export const PREPARED_CONVERSATION_NOT_RECORDED = "prepared_conversation_not_recorded";
+
+/** The task a run belongs to: one schedule job in one place. */
+function runTaskKey(record: BackgroundRunRecord): string {
+	return JSON.stringify([record.kind, record.scope, record.source.schedulerJobId ?? record.runId]);
+}
+
+function runDueAt(record: BackgroundRunRecord): string {
+	return record.source.dueAt ? normalizeIsoDateString(record.source.dueAt, "dueAt") : record.createdAt;
+}
+
+export function reviveTransientlyBlockedBackgroundRuns(input: ReviveTransientlyBlockedBackgroundRunsInput = {}): BackgroundRunRecord[] {
 	const now = normalizeNow(input.now);
 	const nowIso = now.toISOString();
 	const limit = normalizeListLimit(input.limit);
 	const scope = input.scope ? normalizeScope(input.scope) : undefined;
-	const candidates = readBackgroundRunDirectoryEntries()
+	const records = readBackgroundRunDirectoryEntries()
 		.filter((entry) => entry.isDirectory() && isValidBackgroundRunId(entry.name))
-		.map((entry) => readBackgroundRun(entry.name))
+		.map((entry) => readBackgroundRun(entry.name));
+	// A run that met the prepared conversation comes back once per task: the newest run of its task, while that
+	// conversation is still the room's. Older occurrences, and runs that met an earlier conversation, stay blocked.
+	const newestDue = new Map<string, string>();
+	for (const record of records) {
+		const key = runTaskKey(record);
+		const due = runDueAt(record);
+		if (!newestDue.has(key) || due > newestDue.get(key)!) newestDue.set(key, due);
+	}
+	/** For a prepared-conversation block: null when it comes back, the final reason when it never will, "" when that cannot be told yet. */
+	const endsAs = (record: BackgroundRunRecord): string | null => {
+		if (record.reason !== PREPARED_CONVERSATION_BLOCK) return null;
+		if (runDueAt(record) !== newestDue.get(runTaskKey(record))) return SUPERSEDED_BY_LATER_RUN;
+		const met = input.metCurrentConversation?.(record) ?? null;
+		if (met === null) return "";
+		return met ? null : record.target?.threadId ? PREPARED_CONVERSATION_ENDED : PREPARED_CONVERSATION_NOT_RECORDED;
+	};
+	const candidates = records
 		.filter((record) => record.status === "blocked")
 		.filter((record) => !!record.reason && TRANSIENTLY_BLOCKED_REASONS.has(record.reason))
 		.filter((record) => now.getTime() - new Date(record.updatedAt).getTime() >= TRANSIENT_BLOCK_REVIVE_BACKOFF_MS)
@@ -776,12 +822,27 @@ export function reviveTransientlyBlockedBackgroundRuns(input: RecoverExpiredBack
 		.slice(0, limit);
 	const revived: BackgroundRunRecord[] = [];
 	for (const candidate of candidates) {
+		const ending = endsAs(candidate);
+		// Cannot tell yet: left as it is for a later pass.
+		if (ending === "") continue;
 		let updated: BackgroundRunRecord | null = null;
 		try {
 			updated = withBackgroundRunMutationLock(candidate.runId, () => {
 				const existing = readBackgroundRun(candidate.runId);
 				if (existing.status !== "blocked" || !existing.reason || !TRANSIENTLY_BLOCKED_REASONS.has(existing.reason)) return null;
 				if (existing.lease && isBackgroundRunLeaseActive(existing.lease, now)) return null;
+				if (ending) {
+					const ended = normalizeRecord(removeUndefinedOptionalFields({
+						...existing,
+						reason: ending,
+						updatedAt: nowIso,
+						revision: nextRevision(existing),
+						lease: undefined,
+						readiness: { checkedAt: nowIso, result: "blocked", reason: ending, message: existing.message ?? ending },
+					}));
+					atomicWriteJson(backgroundRunRecordPath(candidate.runId), ended);
+					return null;
+				}
 				const message = "Background run was blocked by a transient condition; it will be rechecked before execution.";
 				const record = normalizeRecord(removeUndefinedOptionalFields({
 					...existing,
@@ -791,10 +852,11 @@ export function reviveTransientlyBlockedBackgroundRuns(input: RecoverExpiredBack
 					updatedAt: nowIso,
 					revision: nextRevision(existing),
 					lease: undefined,
+					// The condition being rechecked: the pane keeps saying what the run waits for.
 					readiness: {
 						checkedAt: nowIso,
 						result: "deferred",
-						reason: "transient_block_revived",
+						reason: existing.reason,
 						message,
 					},
 				}));

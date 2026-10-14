@@ -9,7 +9,7 @@ import {
 	updateClaimedBackgroundRunStatus,
 } from "./background-runs.js";
 import type { BackgroundRunRecord, BackgroundRunStatus } from "./background-runs.js";
-import { checkScheduledPromptBackgroundRunExecutionReadiness } from "./scheduled-prompt-background-readiness.js";
+import { checkScheduledPromptBackgroundRunExecutionReadiness, scheduledRunMetCurrentConversation } from "./scheduled-prompt-background-readiness.js";
 
 export interface ScheduledPromptBackgroundWorkerTransitionSummary {
 	runId: string;
@@ -93,7 +93,7 @@ export function processScheduledPromptBackgroundRunReadinessOnce(
 	const leaseMs = normalizeLeaseMs(input.leaseMs);
 
 	const recoveredRecords = recoverExpiredBackgroundRunLeases({ kind: "scheduled-prompt", now, limit });
-	reviveTransientlyBlockedBackgroundRuns({ kind: "scheduled-prompt", now, limit });
+	reviveTransientlyBlockedBackgroundRuns({ kind: "scheduled-prompt", now, limit, metCurrentConversation: scheduledRunMetCurrentConversation });
 	const recovered = recoveredRecords.map((record) => ({
 		runId: record.runId,
 		finalStatus: record.status,

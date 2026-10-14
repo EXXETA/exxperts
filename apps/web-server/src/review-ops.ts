@@ -62,8 +62,6 @@ export const REVIEW_TRIGGER_PROMPT = "Tidy these notes now.";
  */
 export type ReviewDepth = "wording" | "tidy";
 
-export const REVIEW_DEPTHS: readonly ReviewDepth[] = ["wording", "tidy"];
-
 // --- Bounds ------------------------------------------------------------------
 
 /** The reply's hard shape: a tidy is a handful of operations over one group, never a rewrite. */
@@ -441,7 +439,7 @@ function groupFindingsSections(input: ReviewGroupPromptInput): string[] {
 		sections.push(`## Material: Topics That Look The Same\n\n${input.lookAlikeTopics.map((pair) => `- "${pair.a}" and "${pair.b}" look like one topic: fold the one with fewer notes into the other with merge_topics, unless they are two subjects after all.`).join("\n")}`);
 	}
 	if (input.unsortedSummaries?.length) {
-		sections.push(`## Material: Conversations Kept Whole In Unsorted\n\n- ${input.unsortedSummaries.join(", ")}: each is a conversation kept whole. File each under its topic with move, or merge it into the note that says the same.`);
+		sections.push(`## Material: Notes Waiting In Unsorted\n\n- ${input.unsortedSummaries.join(", ")}: each waits for a topic. File each under its topic with move, or merge it into the note that says the same.`);
 	}
 	return sections;
 }
@@ -1026,6 +1024,23 @@ export interface ReviewApplyContext {
  * it kept is the one said to stand. A merge whose survivor is neither member
  * names the first member as the one that left.
  */
+/**
+ * Each op judged alone (Memorize does the same since S2): an op is kept when
+ * the reply's ops kept before it and this one pass the validator together, so
+ * the rules between ops (one op per note, a fold then a move) still hold. A
+ * refused op is dropped with its reasons; the rest apply.
+ */
+export function keepValidReviewOps(ops: readonly ReviewOp[], notes: readonly ReviewNote[], depth: ReviewDepth, topics?: readonly string[], context: ReviewValidationContext = {}): { ops: ReviewOp[]; dropped: string[] } {
+	const kept: ReviewOp[] = [];
+	const dropped: string[] = [];
+	for (const op of ops) {
+		const refusals = validateReviewOps([...kept, op], notes, depth, topics, context);
+		if (refusals.length === 0) kept.push(op);
+		else dropped.push(...refusals.map((reason) => reason.replace(/^op \d+ /, `op ${ops.indexOf(op) + 1} `)));
+	}
+	return { ops: kept, dropped };
+}
+
 function resolvedConflict(pair: ReviewConflictPair, mergedText: string, survivorId: string, topicOf: (id: string) => string, today: string): { reason: string; conflictWith: { id: string; topic: string } } | undefined {
 	let [older, newer] = conflictMembers(pair);
 	if (pair.newer === null && keptOlderValues(older.text, newer.text, mergedText).length > 0) [older, newer] = [newer, older];

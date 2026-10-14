@@ -360,6 +360,20 @@ try {
 	assert(!fs.existsSync(path.join(trashDir, oldTok)), "the sweep finishes an expired window");
 	assert(fs.existsSync(path.join(trashDir, freshTok)), "the sweep leaves a live window alone");
 	commitShelfFileDelete(roomId, freshTok);
+	// A trash folder that is a link is not swept: the folders its target holds stay.
+	const linkTarget = fs.mkdtempSync(path.join(os.tmpdir(), "exxperts-shelf-link-target-"));
+	const linkedTok = path.join(linkTarget, "0123456789abcdef");
+	fs.mkdirSync(linkedTok);
+	fs.writeFileSync(path.join(linkedTok, "keep.md"), "not the shelf's");
+	fs.utimesSync(linkedTok, past, past);
+	fs.renameSync(trashDir, `${trashDir}.real`);
+	fs.symlinkSync(linkTarget, trashDir, "dir");
+	sweepExpiredShelfTrash(roomId);
+	const linkTargetKept = fs.existsSync(path.join(linkedTok, "keep.md"));
+	fs.unlinkSync(trashDir);
+	fs.renameSync(`${trashDir}.real`, trashDir);
+	fs.rmSync(linkTarget, { recursive: true, force: true });
+	assert(linkTargetKept, "the sweep leaves a linked trash folder's target alone");
 
 	// ---- Inline rename: collision rule + ledger rewrite + cache re-key -------
 	fs.writeFileSync(path.join(shelfDir, "rename-me.pdf"), minimalPdf());

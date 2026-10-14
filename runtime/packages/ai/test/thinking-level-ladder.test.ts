@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import { getModel, getThinkingLevelLadder } from "../src/models.js";
 
 describe("getThinkingLevelLadder", () => {
-	it("folds Anthropic's minimal and low into the one rung they both produce", () => {
-		const model = getModel("anthropic", "claude-opus-5");
+	it.each(["claude-opus-5", "claude-haiku-5-5"] as const)("folds Anthropic's minimal and low into the one rung they both produce on %s", (modelId) => {
+		const model = getModel("anthropic", modelId);
 		expect(model).toBeDefined();
 		const ladder = getThinkingLevelLadder(model!);
 		// Both internal tokens map to effort "low", so the dial shows it once,
@@ -22,12 +22,13 @@ describe("getThinkingLevelLadder", () => {
 		expect(ladder.map((rung) => rung.label)).toEqual(["low", "medium", "high", "xhigh", "max"]);
 	});
 
-	it.each(["claude-sonnet-5", "claude-sonnet-4-5"] as const)("still lets %s be switched off", (modelId) => {
+	it.each(["claude-sonnet-5", "claude-sonnet-4-5", "claude-haiku-5-5"] as const)("still lets %s be switched off", (modelId) => {
 		const model = getModel("anthropic", modelId);
 		expect(model).toBeDefined();
 		const ladder = getThinkingLevelLadder(model!);
 		// Only the Fable and Mythos families, Opus 5.5 and Sonnet 5.5 reject
 		// thinking disabled; every other Claude row keeps "off" as its first rung.
+		// Haiku 5.5 refuses disabled only beside xhigh or max, which off never sends.
 		expect(ladder[0]).toEqual({ level: "off", label: "off" });
 	});
 

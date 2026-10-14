@@ -156,6 +156,8 @@ const POLICY: Record<string, RemoteRouteClass> = {
 	"GET /api/persistent-agents/:id/checkpoint/estimate": "read",
 	// How far a running Remember has read: two counts.
 	"GET /api/persistent-agents/:id/checkpoint/progress": "read",
+	// A finished Remember's proposal (or its notice), for the dialog after a reload.
+	"GET /api/persistent-agents/:id/checkpoint/result": "read",
 	"GET /api/persistent-agents/:id/instructions": "read",
 	"GET /api/settings/instructions": "read",
 	// The order of the home screen: every device that sees the rooms sees
@@ -182,6 +184,7 @@ const POLICY: Record<string, RemoteRouteClass> = {
 	"POST /api/persistent-agents/:id/absorb/propose": "write",
 	"POST /api/persistent-agents/:id/absorb/runs/:runId/keep": "write",
 	"POST /api/persistent-agents/:id/absorb/runs/:runId/edit": "write",
+	"POST /api/persistent-agents/:id/absorb/runs/:runId/move": "write",
 	"POST /api/persistent-agents/:id/absorb/runs/:runId/beside-choice": "write",
 	"POST /api/persistent-agents/:id/absorb/runs/:runId/budget": "write",
 	"POST /api/persistent-agents/:id/absorb/runs/:runId/cancel": "write",
@@ -191,8 +194,10 @@ const POLICY: Record<string, RemoteRouteClass> = {
 	"POST /api/persistent-agents/:id/review/runs/:runId/budget": "write",
 	"POST /api/persistent-agents/:id/review/runs/:runId/edit": "write",
 	"POST /api/persistent-agents/:id/review/runs/:runId/cancel": "write",
+	"POST /api/persistent-agents/:id/review/runs/:runId/resume": "write",
 	"POST /api/persistent-agents/:id/review/runs/:runId/approve": "write",
 	"POST /api/persistent-agents/:id/checkpoint/approve": "write",
+	"POST /api/persistent-agents/:id/checkpoint/cancel": "write",
 	"POST /api/persistent-agents/:id/checkpoint/propose": "write",
 	// Review v2: reading the room's notes and talking the tidy over. Both run
 	// the model, so both are interaction, exactly like their Memorize twins.

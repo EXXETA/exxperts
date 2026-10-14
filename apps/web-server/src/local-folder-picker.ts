@@ -27,11 +27,32 @@ export function folderPickerPrompt(purpose: unknown): string {
 	return FOLDER_PICKER_PROMPTS.get(purpose as FolderPickerPurpose) ?? DEFAULT_FOLDER_PICKER_PROMPT;
 }
 
-// The prompt travels inside an AppleScript double-quoted string, where only the
-// backslash and the double quote need escaping.
-function macosChooseFolderScript(prompt: string): string {
-	const escaped = prompt.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
-	return `POSIX path of (choose folder with prompt "${escaped}")`;
+// The macOS folder window, from a JavaScript for Automation script. It is
+// still the "choose folder" of Standard Additions, which brings the window to
+// the front and takes the clicks and keys; but osascript alone has no menus,
+// and on a Mac Cut, Copy and Paste reach a text field only through an Edit
+// menu, so Cmd+V did nothing in New Folder or in Go to Folder (Cmd+Shift+G).
+// The script installs an Edit menu first. (Opening NSOpenPanel directly gets
+// the menu too, but its window never becomes the active one: the sidebar and
+// the keyboard stay dead.) A cancel throws the same -128 error as before. The
+// prompt travels as a JSON string literal, which is valid JavaScript for any
+// text.
+export function macosChooseFolderScript(prompt: string): string {
+	return [
+		'ObjC.import("AppKit");',
+		"const bar = $.NSMenu.alloc.init;",
+		"const editItem = $.NSMenuItem.alloc.init;",
+		"bar.addItem(editItem);",
+		'const edit = $.NSMenu.alloc.initWithTitle("Edit");',
+		'for (const [title, action, key] of [["Undo", "undo:", "z"], ["Redo", "redo:", "Z"], ["Cut", "cut:", "x"], ["Copy", "copy:", "c"], ["Paste", "paste:", "v"], ["Select All", "selectAll:", "a"]]) edit.addItemWithTitleActionKeyEquivalent(title, action, key);',
+		"editItem.submenu = edit;",
+		"$.NSApplication.sharedApplication.mainMenu = bar;",
+		"const app = Application.currentApplication();",
+		"app.includeStandardAdditions = true;",
+		`const chosen = app.chooseFolder({ withPrompt: ${JSON.stringify(prompt)} }).toString();`,
+		// AppleScript's POSIX path of a folder ends in a slash; keep that shape.
+		'chosen.endsWith("/") ? chosen : chosen + "/";',
+	].join("\n");
 }
 
 // zenity prints the selected path on stdout and exits 0; cancel exits 1 with empty stdout.
@@ -133,7 +154,7 @@ export async function chooseMacosFolder(options: ChooseMacosFolderOptions = {}):
 	const prompt = options.prompt ?? DEFAULT_FOLDER_PICKER_PROMPT;
 
 	try {
-		const result = await runner(osascriptPath, ["-e", macosChooseFolderScript(prompt)], { timeoutMs });
+		const result = await runner(osascriptPath, ["-l", "JavaScript", "-e", macosChooseFolderScript(prompt)], { timeoutMs });
 		const selectedPath = result.stdout.trim();
 		if (!selectedPath) {
 			return {

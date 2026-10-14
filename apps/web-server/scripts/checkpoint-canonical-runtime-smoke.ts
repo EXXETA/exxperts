@@ -252,12 +252,14 @@ try {
 	createPiThreadWithMessage(staleL1bId, "STALE_L1B_SOURCE_SENTINEL");
 	const staleL1bProposal = (await buildProposalAndCapturePrompt({ agentId, conversationId: staleL1bId, model, density: "standard", runtimeCwd: tempCwd })).proposal;
 	const l1bPath = instance.l1bCurrentPath(instance.readAgentJson());
-	fs.appendFileSync(l1bPath, "\n<!-- stale-l1b-change-after-proposal -->\n", "utf-8");
-	expectThrows(
-		() => approveProposal(staleL1bProposal, "Stale L1b"),
-		/L1b|stale|fingerprint/i,
-		"approval should reject when L1b changes after proposal",
-	);
+	// A memory change after the proposal (a Memorize, a Review, an edit) leaves
+	// the proposal valid: the page is appended to the memory as it is now, and
+	// both changes are kept. What the proposal summarized is the conversation.
+	fs.appendFileSync(l1bPath, "\n<!-- l1b-change-after-proposal -->\n", "utf-8");
+	approveProposal(staleL1bProposal, "Memory changed after proposal");
+	const landedL1b = fs.readFileSync(l1bPath, "utf-8");
+	assert(landedL1b.includes("Memory changed after proposal"), "approval should land its page after the memory changed");
+	assert(landedL1b.includes("<!-- l1b-change-after-proposal -->"), "approval should keep the memory change it landed on");
 
 	assert(getPersistentAgentThread(agentId, piThreadId)?.runtime.kind === "pi-session-jsonl", "source helper should not mutate Pi thread runtime");
 	fs.rmSync(root, { recursive: true, force: true });

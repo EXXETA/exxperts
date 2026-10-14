@@ -79,10 +79,13 @@ try {
 	assert(rejected, "built-in provider anthropic should be rejected on write");
 	const curated = profiles.getPersistentAgentAiProfile("anthropic");
 	const curatedRoomModels = curated.processes.persistentRoom.length;
-	assert(curatedRoomModels === 11 && curated.processes.persistentRoom[0].model === "claude-opus-5-5", "the curated Claude list has eleven rows with Opus 5.5 first");
-	assert(curated.processes.persistentRoom.some((lock) => lock.model === "claude-haiku-4-5"), "the curated Claude list carries Haiku 4.5");
+	assert(curatedRoomModels === 7 && curated.processes.persistentRoom[0].model === "claude-opus-5-5", "the curated Claude list has seven rows with Opus 5.5 first");
+	assert(curated.processes.persistentRoom.some((lock) => lock.model === "claude-haiku-5-5"), "the curated Claude list carries Haiku 5.5");
+	assert(!curated.processes.persistentRoom.some((lock) => /^claude-[a-z]+-4-/.test(lock.model)), "no Claude 4 model is left on the curated Claude list");
 	const curatedCodex = profiles.getPersistentAgentAiProfile("chatgpt-codex");
-	assert(curatedCodex.processes.persistentRoom.length === 7 && curatedCodex.processes.persistentRoom[0].model === "gpt-6-sol", "the curated ChatGPT list has seven rows with GPT-6 Sol first");
+	assert(curatedCodex.processes.persistentRoom.length === 7 && curatedCodex.processes.persistentRoom[0].model === "gpt-6.1-sol", "the curated ChatGPT list has seven rows with GPT-6.1 Sol first");
+	const codexOrder = curatedCodex.processes.persistentRoom.map((lock) => lock.model).join(", ");
+	assert(codexOrder === "gpt-6.1-sol, gpt-6-astra, gpt-6-luna, gpt-6-sol, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna", `the ChatGPT list puts the default first, then OpenAI's recommended models, then the previous ones, got ${codexOrder}`);
 	assert(!curatedCodex.processes.persistentRoom.some((lock) => lock.model === "gpt-5.5"), "gpt-5.5 has left the ChatGPT picker");
 
 	// First start after the update: a custom list saved earlier for a built-in

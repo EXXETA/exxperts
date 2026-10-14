@@ -72,18 +72,19 @@ export const PERSISTENT_AGENT_AI_PROFILES = {
 		providerLabel: "ChatGPT Plus/Pro",
 		description: "ChatGPT subscription profile for persistent-agent room and maintenance workflows.",
 		processes: {
-			// The order OpenAI's Codex app uses; the first entry is the default.
+			// The default first, then OpenAI's order on its Codex models page:
+			// its recommended models, then the previous ones.
 			persistentRoom: [
-				{ provider: "openai-codex", model: "gpt-6-sol" },
 				{ provider: "openai-codex", model: "gpt-6.1-sol" },
 				{ provider: "openai-codex", model: "gpt-6-astra" },
 				{ provider: "openai-codex", model: "gpt-6-luna" },
+				{ provider: "openai-codex", model: "gpt-6-sol" },
 				{ provider: "openai-codex", model: "gpt-5.6-sol" },
 				{ provider: "openai-codex", model: "gpt-5.6-terra" },
 				{ provider: "openai-codex", model: "gpt-5.6-luna" },
 			],
-			absorb: { provider: "openai-codex", model: "gpt-6-sol" },
-			structuralReview: { provider: "openai-codex", model: "gpt-6-sol" },
+			absorb: { provider: "openai-codex", model: "gpt-6.1-sol" },
+			structuralReview: { provider: "openai-codex", model: "gpt-6.1-sol" },
 		},
 	},
 	anthropic: {
@@ -93,19 +94,18 @@ export const PERSISTENT_AGENT_AI_PROFILES = {
 		providerLabel: "Anthropic / Claude",
 		description: "Claude subscription profile for persistent-agent room and maintenance workflows.",
 		processes: {
-			// Anthropic's tier order, newest first inside a tier; the first entry is the default.
+			// The default first, then Anthropic's order (Fable, Opus, Sonnet, Haiku),
+			// current models before the previous ones. A model that leaves this list
+			// keeps its catalogue row and its name: a conversation started on it
+			// keeps answering, and a new one is refused with a way out.
 			persistentRoom: [
 				{ provider: "anthropic", model: "claude-opus-5-5" },
 				{ provider: "anthropic", model: "claude-fable-5-1" },
 				{ provider: "anthropic", model: "claude-sonnet-5-5" },
-				{ provider: "anthropic", model: "claude-sonnet-5" },
-				{ provider: "anthropic", model: "claude-haiku-4-5" },
-				{ provider: "anthropic", model: "claude-opus-5" },
-				{ provider: "anthropic", model: "claude-opus-4-8" },
+				{ provider: "anthropic", model: "claude-haiku-5-5" },
 				{ provider: "anthropic", model: "claude-fable-5" },
-				{ provider: "anthropic", model: "claude-sonnet-4-6" },
-				{ provider: "anthropic", model: "claude-opus-4-7" },
-				{ provider: "anthropic", model: "claude-opus-4-6" },
+				{ provider: "anthropic", model: "claude-opus-5" },
+				{ provider: "anthropic", model: "claude-sonnet-5" },
 			],
 			absorb: { provider: "anthropic", model: "claude-opus-5-5" },
 			structuralReview: { provider: "anthropic", model: "claude-opus-5-5" },

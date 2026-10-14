@@ -29,10 +29,11 @@
 //      conversation says so on its origin line, so a row from it shows that
 //      the transcript is all memory kept of it; one kept whole as its approved
 //      summary, because the fold could not sort it, says that instead. A
-//      conversation remembered but not yet memorized is still in Recent
-//      Context and therefore still in view; a conversation never Remembered
-//      has no checkpoint event and is never indexed, whatever session files
-//      the room holds. The transcript itself is read through the session
+//      conversation remembered but not yet memorized is searchable from its
+//      Remember and says so: its page is in view, and the transcript holds
+//      what the page left out. A conversation left out at a Memorize is not
+//      indexed; a conversation never Remembered has no checkpoint event and
+//      is never indexed, whatever session files the room holds. The transcript itself is read through the session
 //      manager, never by parsing the session file by hand, and along the
 //      whole session path (the reader Remember uses), so the words before a
 //      compaction are findable too.
@@ -48,6 +49,7 @@ import path from "node:path";
 
 import { MEMORY_ARCHIVE_ENTRIES_FILE, parseMemoryDocument, type ArchivedEntry, type MemoryEntry } from "./memory-entries.js";
 import { readArchive } from "./memory-entries-store.js";
+import { recentContextSessions } from "./absorb-consolidation.js";
 import { buildIndex, type SearchDocument, type SearchIndex, type SearchSource } from "./memory-search-index.js";
 import { readSessionPathMessages } from "./session-path-reader.js";
 // The reason words live with the tool that reads them back to the room: a
@@ -123,7 +125,7 @@ function watchedStillHolds(files: readonly WatchedFile[]): boolean {
 
 // --- notes -------------------------------------------------------------------
 
-function noteDocuments(l1bPath: string): SearchDocument[] {
+function noteDocuments(l1bPath: string, inRecentContext: Set<string>): SearchDocument[] {
 	let raw: string;
 	try {
 		raw = fs.readFileSync(l1bPath, "utf-8");
@@ -131,6 +133,7 @@ function noteDocuments(l1bPath: string): SearchDocument[] {
 		return []; // a room with no memory file yet has no notes to search
 	}
 	const doc = parseMemoryDocument(raw);
+	for (const session of recentContextSessions(doc.recentContext)) if (session.checkpointId) inRecentContext.add(session.checkpointId);
 	const docs: SearchDocument[] = [];
 	let position = 0;
 	for (const topic of doc.topics) {
@@ -223,7 +226,7 @@ function readEventRecords<T extends { approvedAt: string }>(dir: string, watchLi
 interface MemorizedConversation {
 	recentContextId: string;
 	checkpoint: CheckpointEventRecord;
-	outcome: "folded" | "dropped" | "summarized";
+	outcome: "folded" | "dropped" | "summarized" | "remembered";
 }
 
 /**
@@ -272,7 +275,7 @@ interface MemorizedConversation {
  * about it. A dropped entry that claims nothing is passed over: no note stands
  * behind it, and the row would name nothing the room could act on.
  */
-function memorizedConversations(absorbEvents: readonly AbsorbEventRecord[], checkpoints: readonly CheckpointEventRecord[], skipped: SkippedConversation[]): MemorizedConversation[] {
+function memorizedConversations(absorbEvents: readonly AbsorbEventRecord[], checkpoints: readonly CheckpointEventRecord[], skipped: SkippedConversation[], inRecentContext: ReadonlySet<string>): MemorizedConversation[] {
 	// By id first, so a room with a long history does not walk its whole
 	// checkpoint list once per memorized conversation: a group holds only the
 	// times that one id was used, which is the number of Memorizes the room has
@@ -333,6 +336,10 @@ function memorizedConversations(absorbEvents: readonly AbsorbEventRecord[], chec
 			}
 			memorized.set(match.checkpointId, { recentContextId: session.id, checkpoint: match, outcome: session.outcome });
 		}
+	}
+	// A Remember whose page is still in Recent Context is remembered and not yet memorized.
+	for (const checkpoint of checkpoints) {
+		if (inRecentContext.has(checkpoint.checkpointId) && !memorized.has(checkpoint.checkpointId)) memorized.set(checkpoint.checkpointId, { recentContextId: checkpoint.recentContextId, checkpoint, outcome: "remembered" });
 	}
 	return [...memorized.values()];
 }
@@ -447,6 +454,11 @@ function chunkTurns(turns: readonly TranscriptTurn[], limit = CONVERSATION_CHUNK
 const NO_NOTES_TAKEN = " (no notes taken)";
 /** What a conversation kept whole as its approved summary says after the day: its notes are that summary, not topics. */
 const KEPT_AS_ONE_NOTE = " (kept as one note)";
+/** What a conversation remembered and not yet memorized says after the day (draft). */
+const NOT_YET_MEMORIZED = " (remembered, not yet memorized)";
+
+/** A closed transcript's turns, by file, size and mtime: a rebuild reads only the transcripts that are new. */
+const TURNS_BY_FILE = new Map<string, { size: number; mtimeMs: number; turns: TranscriptTurn[] }>();
 
 function conversationDocuments(
 	agentId: string,
@@ -459,6 +471,7 @@ function conversationDocuments(
 	// First pass: the conversations that can be read. Only these become
 	// documents, so only these count when a day is shared further down.
 	const readable: { entry: MemorizedConversation; turns: TranscriptTurn[] }[] = [];
+	const read = new Set<string>();
 	for (const entry of memorized) {
 		const { recentContextId, checkpoint } = entry;
 		const boundary = checkpoint.runtimeBoundary;
@@ -468,15 +481,24 @@ function conversationDocuments(
 			skipped.push({ recentContextId, checkpointId: checkpoint.checkpointId, why: "the conversation this Remember closed kept no session file" });
 			continue;
 		}
+		let file = "";
 		try {
-			watchList.push(watched(instance.resolveRootRelativePath(relPath, "memory search transcript path")));
+			file = instance.resolveRootRelativePath(relPath, "memory search transcript path");
+			watchList.push(watched(file));
 		} catch {
 			// a path that will not resolve is caught again by the read below
 		}
 		let turns: TranscriptTurn[];
 		try {
-			const session = openPersistentAgentPiSessionManager(agentId, { sessionFileRelPath: relPath, sessionId }, runtimeCwd);
-			turns = transcriptTurns(readSessionPathMessages(session));
+			const stat = file ? fs.statSync(file, { throwIfNoEntry: false }) : undefined;
+			if (stat) read.add(file);
+			const cached = stat ? TURNS_BY_FILE.get(file) : undefined;
+			if (cached && stat && cached.size === stat.size && cached.mtimeMs === stat.mtimeMs) turns = cached.turns;
+			else {
+				const session = openPersistentAgentPiSessionManager(agentId, { sessionFileRelPath: relPath, sessionId }, runtimeCwd);
+				turns = transcriptTurns(readSessionPathMessages(session));
+				if (stat) TURNS_BY_FILE.set(file, { size: stat.size, mtimeMs: stat.mtimeMs, turns });
+			}
 		} catch (error) {
 			skipped.push({ recentContextId, checkpointId: checkpoint.checkpointId, why: error instanceof Error ? error.message : String(error) });
 			continue;
@@ -487,6 +509,8 @@ function conversationDocuments(
 		}
 		readable.push({ entry, turns });
 	}
+	// The cache holds only what this room's corpus still reads: a transcript it left goes.
+	for (const file of TURNS_BY_FILE.keys()) if (file.startsWith(instance.rootDir + path.sep) && !read.has(file)) TURNS_BY_FILE.delete(file);
 	// How many indexed conversations share a day, and a minute of that day.
 	// approvedAt is an ISO string in UTC (Date.toISOString), read as stored:
 	// characters 0 to 10 are the day, 11 to 16 the minute, 11 to 19 the second.
@@ -521,7 +545,7 @@ function conversationDocuments(
 		const time = sharedDay ? ` at ${checkpoint.approvedAt.slice(11, sharedMinute ? 19 : 16)} UTC` : "";
 		// A dropped conversation says so where the row is read: the person and
 		// the room both see why no note carries the point.
-		const origin = `from a conversation on ${date}${time}${outcome === "dropped" ? NO_NOTES_TAKEN : outcome === "summarized" ? KEPT_AS_ONE_NOTE : ""}`;
+		const origin = `from a conversation on ${date}${time}${outcome === "dropped" ? NO_NOTES_TAKEN : outcome === "summarized" ? KEPT_AS_ONE_NOTE : outcome === "remembered" ? NOT_YET_MEMORIZED : ""}`;
 		chunks.forEach((chunk, index) => {
 			docs.push({
 				id: `${recentContextId}#${index + 1}@${conversation}`,
@@ -560,10 +584,12 @@ export function collectRoomDocuments(roomId: string, options: CollectRoomDocumen
 
 	const checkpoints = readEventRecords<CheckpointEventRecord>(instance.checkpointEventDir(), builtFrom);
 	const absorbs = readEventRecords<AbsorbEventRecord>(instance.absorbEventDir(), builtFrom);
+	// The Remembers whose pages are still in Recent Context, read with the notes.
+	const inRecentContext = new Set<string>();
 	const docs = [
-		...noteDocuments(l1bPath),
+		...noteDocuments(l1bPath, inRecentContext),
 		...archiveDocuments(instance.agentId),
-		...conversationDocuments(instance.agentId, memorizedConversations(absorbs, checkpoints, skipped), options.runtimeCwd || process.cwd(), builtFrom, skipped),
+		...conversationDocuments(instance.agentId, memorizedConversations(absorbs, checkpoints, skipped, inRecentContext), options.runtimeCwd || process.cwd(), builtFrom, skipped),
 	];
 	return { docs, builtFrom, skipped };
 }

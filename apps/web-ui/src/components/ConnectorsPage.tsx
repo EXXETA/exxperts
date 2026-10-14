@@ -13,7 +13,7 @@ import {
 } from "../mcp-api";
 import { CONNECTOR_CATALOG, type ConnectorCatalogEntry } from "../connector-catalog";
 import { CONNECTOR_ICONS } from "../connector-icons";
-import { useRemoteClientContext } from "../remote-client-context";
+import { fetchRemoteClientContext, SHARED_SERVER_ADMIN_LINE, useRemoteClientContext } from "../remote-client-context";
 import { GroupHeader } from "./pane-header";
 
 const APPLY_NOTE = "Config change saved. Rooms pick it up the next time you enter or resume them.";
@@ -292,6 +292,22 @@ function ConnectorRow({ server, expanded, onToggle, onChanged, onNotice, readOnl
 	);
 }
 
+/** The filled header rows as the request's headers; a half-filled row or a name twice is an error in words. */
+function headersFromRows(rows: Array<{ name: string; value: string }>): Record<string, string> | undefined {
+	const filled = rows.map((row) => ({ name: row.name.trim(), value: row.value.trim() })).filter((row) => row.name || row.value);
+	if (filled.length === 0) return undefined;
+	const headers: Record<string, string> = {};
+	const seen = new Set<string>();
+	for (const row of filled) {
+		if (!row.name) throw new Error("Give each custom header a name.");
+		if (!row.value) throw new Error(`The ${row.name} header needs a value.`);
+		if (seen.has(row.name.toLowerCase())) throw new Error(`The ${row.name} header is listed twice.`);
+		seen.add(row.name.toLowerCase());
+		headers[row.name] = row.value;
+	}
+	return headers;
+}
+
 function AddConnectorForm({ onAdded, onCancel, prefill }: { onAdded: () => Promise<void>; onCancel: () => void; prefill?: AddConnectorPrefill }) {
 	const [name, setName] = useState(prefill?.name ?? "");
 	const [kind, setKind] = useState<"url" | "command">("url");
@@ -302,6 +318,8 @@ function AddConnectorForm({ onAdded, onCancel, prefill }: { onAdded: () => Promi
 	const [oauthClientId, setOauthClientId] = useState("");
 	const [oauthClientSecret, setOauthClientSecret] = useState("");
 	const [oauthScope, setOauthScope] = useState("");
+	const [showHeaders, setShowHeaders] = useState(false);
+	const [headerRows, setHeaderRows] = useState<Array<{ name: string; value: string }>>([{ name: "", value: "" }]);
 	const [saving, setSaving] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const blockRef = useRef<HTMLDivElement | null>(null);
@@ -323,6 +341,7 @@ function AddConnectorForm({ onAdded, onCancel, prefill }: { onAdded: () => Promi
 					url: url.trim(),
 					bearerToken: bearerToken.trim() || undefined,
 					oauth: clientId ? { clientId, clientSecret: oauthClientSecret.trim() || undefined, scope: oauthScope.trim() || undefined } : undefined,
+					headers: headersFromRows(headerRows),
 				});
 			} else {
 				const parts = command.trim().split(/\s+/);
@@ -380,6 +399,27 @@ function AddConnectorForm({ onAdded, onCancel, prefill }: { onAdded: () => Promi
 								</label>
 							</div>
 						)}
+						<button type="button" className="connector-oauth-toggle" onClick={() => setShowHeaders((current) => !current)} aria-expanded={showHeaders}>
+							<span className="disclosure-chevron" aria-hidden="true" />
+							Custom headers (for servers that expect a key in a header of their own)
+						</button>
+						{showHeaders && (
+							<div className="connector-oauth-fields">
+								<p className="cli-note">Sent with every request to this server, for example <code>X-Api-Key</code> with your key as the value. A header named Authorization, or with api key, token or secret in its name, is taken as the sign-in, so this connector will not offer a login.</p>
+								{headerRows.map((row, index) => (
+									<div className="connector-header-row" key={index}>
+										<div className="connector-form-field">
+											<input type="text" aria-label={`Header ${index + 1} name`} value={row.name} placeholder="X-Api-Key" onChange={(e) => setHeaderRows((rows) => rows.map((r, i) => (i === index ? { ...r, name: e.target.value } : r)))} />
+										</div>
+										<div className="connector-form-field">
+											<input type="password" aria-label={`Header ${index + 1} value`} value={row.value} placeholder="value" onChange={(e) => setHeaderRows((rows) => rows.map((r, i) => (i === index ? { ...r, value: e.target.value } : r)))} />
+										</div>
+										<button type="button" className="connector-header-remove" aria-label={`Remove header ${index + 1}`} onClick={() => setHeaderRows((rows) => (rows.length > 1 ? rows.filter((_, i) => i !== index) : [{ name: "", value: "" }]))}>×</button>
+									</div>
+								))}
+								<button type="button" className="connector-header-add" onClick={() => setHeaderRows((rows) => [...rows, { name: "", value: "" }])}>+ Add header</button>
+							</div>
+						)}
 					</>
 				) : (
 					<label className="connector-form-field">
@@ -394,7 +434,7 @@ function AddConnectorForm({ onAdded, onCancel, prefill }: { onAdded: () => Promi
 						{saving ? "Saving…" : "Save connector"}
 					</button>
 				</div>
-				<p className="cli-note">Saved to ~/.exxperts/agent/mcp.json. Test the connection afterwards. It will tell you if the server needs a login.</p>
+				<p className="cli-note">Test the connection after saving. It will tell you if the server needs a login.</p>
 			</div>
 		</div>
 	);
@@ -547,7 +587,7 @@ function ConnectorDirectory({ status, onChanged, onNotice, customFor, onOpenCust
 		<section className="ai-setup-section settings-group" aria-label="Connector directory">
 			<GroupHeader
 				kicker="Directory"
-				line="Verified servers, one click to add. Same list on the web and in the CLI."
+				line="Verified servers, one click to add."
 				actions={(
 					<input
 						type="search"
@@ -580,7 +620,7 @@ function ConnectorDirectory({ status, onChanged, onNotice, customFor, onOpenCust
 						<span className="connector-avatar" style={{ width: 32, height: 32 }}>+</span>
 						<div className="settings-row-main">
 							<span className="settings-row-label">Custom connector<span className="connector-dir-kind">custom</span></span>
-							<span className="settings-row-sub">Add any MCP server that isn't in the list.</span>
+							<span className="settings-row-sub">Add any connector that isn't in the list.</span>
 						</div>
 						<button className="rs-btn" onClick={() => openCustom()} disabled={customFor === ""} title={customFor === "" ? "Fill in the form below" : "Add a custom connector"} aria-label="Add a custom connector">Add</button>
 					</div>
@@ -602,13 +642,17 @@ export function ConnectorsPage() {
 	const [notice, setNotice] = useState<string | null>(null);
 	// Remote devices may read connector status, but the server's remote route
 	// policy keeps add, remove, login, logout, and test local-only, so the
-	// whole section renders read-only over the tunnel.
+	// whole section renders read-only over the tunnel. On a shared server the
+	// status is not read at all (it shows every connector's address or
+	// command line, which only the admin may see): one line says who sets
+	// connectors up, and each room still chooses its own in room settings.
 	const remoteClient = useRemoteClientContext();
 
 	const refresh = useCallback(async () => {
 		setLoading(true);
 		setError(null);
 		try {
+			if ((await fetchRemoteClientContext()).sharedServer) return;
 			setStatus(await fetchMcpConnectorsStatus());
 		} catch (e) {
 			setError((e as Error).message);
@@ -625,6 +669,15 @@ export function ConnectorsPage() {
 	const exxSource = status?.configSources.find((source) => source.path.includes(".exxperts"));
 	const sharedSource = status?.configSources.find((source) => !source.path.includes(".exxperts"));
 
+	if (remoteClient.sharedServer) {
+		return (
+			<section className="ai-setup-section" aria-label="MCP connectors">
+				<p className="cli-note">{SHARED_SERVER_ADMIN_LINE}</p>
+				<p className="cli-note">Rooms choose their connectors in room settings.</p>
+			</section>
+		);
+	}
+
 	return (
 		<>
 			<section className="ai-setup-section" aria-label="MCP connectors">
@@ -634,7 +687,7 @@ export function ConnectorsPage() {
 				{!error && loading && !status && <p className="ai-setup-copy">Loading connectors…</p>}
 				{!error && servers.length > 0 && (
 					<>
-						<div className="connector-rows connector-table" aria-label="Configured MCP servers">
+						<div className="connector-rows connector-table" aria-label="Your connectors">
 							<div className="settings-table-head connector-table-head" aria-hidden="true">
 								<span className="connector-table-head-name">Connector</span>
 								<span>Type</span>

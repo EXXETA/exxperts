@@ -5,6 +5,7 @@ import { CopyButton } from "./CopyButton";
 import { ImageActions } from "./ImageActions";
 import { MarkdownRenderer, looksLikeMarkdown, unwrapOuterMarkdownFence } from "./Markdown";
 import { artifactBasename, artifactKindLabel, isSvgArtifact, taskArtifactUrl } from "../task-stream";
+import { MEMORY_RECALL_STEP, memoryRecallDisplayText } from "../memory-recall-display";
 
 // The message copy control (CopyButton.tsx): on assistant replies it sits
 // permanently below the text (the thing people quote); on the user's own
@@ -71,7 +72,7 @@ const GENERIC_TOOL_VIEWS: Record<string, { icon: string; running: string; done: 
 	// which tool did it.
 	read_file: { icon: "📄", running: "Reading file", done: "Read file" },
 	search_file: { icon: "🔎", running: "Searching file", done: "Searched file" },
-	memory_recall: { icon: "🗄️", running: "Reading archived notes", done: "Read archived notes" },
+	memory_recall: { icon: "🗄️", ...MEMORY_RECALL_STEP },
 	kb_search: { icon: "📚", running: "Searching knowledge base", done: "Searched knowledge base" },
 	artifact_list: { icon: "🗂️", running: "Listing artifacts", done: "Listed artifacts" },
 	artifact_read: { icon: "🗂️", running: "Reading artifact", done: "Read artifact" },
@@ -411,7 +412,7 @@ function ToolChip({ item, nested }: { item: ToolChatItem; nested?: boolean }) {
 				{item.result && item.status !== "running" ? (
 					<div className="chip-result">
 						<span className="label">{item.status === "error" ? "error" : "result"}</span>
-						<ResultBody text={item.result} />
+						<ResultBody text={item.name === "memory_recall" ? memoryRecallDisplayText(item.result) : item.result} />
 					</div>
 				) : (
 					<div className="chip-empty">

@@ -43,7 +43,6 @@ interface MatchResult {
 
 const CONFIG_PATH = productAppStatePath("content-policy.json");
 const DEFAULT_LOG_PATH = productAppStatePath("content-policy-blocks.jsonl");
-const MAX_PREVIEW_CHARS = 500;
 const INTERNAL_COORDINATION_TOOLS = new Set(["start_handoff", "return_handoff", "delegate"]);
 
 // The label rules below look at the value that follows "label: " or
@@ -203,16 +202,28 @@ export function scanArguments(args: unknown, rules: Rule[]): MatchResult | null 
 	return null;
 }
 
-function redactPreview(raw: string): string {
-	return raw
-		.replace(/(\b(?:api[_-]?key|access[_-]?token|auth[_-]?token|bearer[_-]?token|refresh[_-]?token|secret[_-]?key|client[_-]?secret|password)\b\s*[:=]\s*["']?)[^"'\\s,}]+/gi, "$1[REDACTED]")
-		.replace(/\bsk-[A-Za-z0-9_-]{12,}\b/g, "sk-[REDACTED]")
-		.replace(/\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{12,}\b/gi, "gh_[REDACTED]")
-		.replace(/\bgithub_pat_[A-Za-z0-9_]{12,}\b/gi, "github_pat_[REDACTED]")
-		.replace(/\bxox[baprs]-[A-Za-z0-9-]{12,}\b/gi, "xox*-[REDACTED]")
-		.replace(/\bAKIA[0-9A-Z]{16}\b/g, "AKIA[REDACTED]")
-		.replace(/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g, "eyJ[REDACTED]")
-		.slice(0, MAX_PREVIEW_CHARS);
+// The log keeps which tool a rule stopped, when and where, never the
+// arguments' text: they may quote a person's conversation or a secret. A log
+// written before this rule had a preview of them, removed once here.
+function stripArgumentPreviews(logPath: string): void {
+	try {
+		const raw = fs.readFileSync(logPath, "utf-8");
+		if (!raw.includes('"argumentsPreview"')) return;
+		const rows: string[] = [];
+		for (const line of raw.split("\n")) {
+			try {
+				const { argumentsPreview: _preview, ...row } = JSON.parse(line);
+				rows.push(`${JSON.stringify(row)}\n`);
+			} catch {
+				// A line that does not read is dropped with its text.
+			}
+		}
+		const tmp = `${logPath}.tmp-${process.pid}`;
+		fs.writeFileSync(tmp, rows.join(""), { mode: 0o600 });
+		fs.renameSync(tmp, logPath);
+	} catch {
+		// No log yet, or one that cannot be rewritten: the next start tries again.
+	}
 }
 
 function appendBlockedAttempt(logPath: string, row: Record<string, unknown>): void {
@@ -232,6 +243,7 @@ function appendBlockedAttempt(logPath: string, row: Record<string, unknown>): vo
 
 export default function (pi: ExtensionAPI) {
 	const policy = buildPolicy();
+	stripArgumentPreviews(policy.logPath);
 
 	// Enforcement happens in the tool_call hook below; we intentionally do not
 	// surface a "content policy: on" status line in the UI.
@@ -244,14 +256,12 @@ export default function (pi: ExtensionAPI) {
 		const match = scanArguments(input, policy.rules);
 		if (!match) return undefined;
 
-		const argsText = stableStringify(input);
 		appendBlockedAttempt(policy.logPath, {
 			ts: new Date().toISOString(),
 			cwd: ctx.cwd,
 			tool: event.toolName,
 			ruleId: match.rule.id,
 			reason: match.rule.reason,
-			argumentsPreview: redactPreview(argsText),
 		});
 
 		const reason = `Content policy blocked tool '${event.toolName}': ${match.rule.reason}. Do not retry with equivalent file/path/token access; explain the constraint to the user and ask for a safe alternative.`;

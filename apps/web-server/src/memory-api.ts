@@ -106,8 +106,6 @@ export interface RoomMemorySummary {
 	series: MemoryGrowthPoint[];
 	/** number of Recent Context session entries (awaiting absorb) */
 	sessions: number;
-	/** hard cap on recent sessions before a Memorize is required */
-	sessionsCap: number;
 	/** recent (pending, not-yet-consolidated) session titles, newest first */
 	topics: string[];
 	/** key things the room knows (bold phrases from durable memory) */
@@ -780,7 +778,6 @@ function summarizeRoom(status: PersistentAgentStatus, payoffByRoom: Map<string, 
 		lastReviewAt: lastReview ? lastReview.ts : null,
 		lastReviewTokenDelta: lastReview ? lastReview.added : 0,
 		sessions: info.sessionTitles.length,
-		sessionsCap: status.memoryStatus.recentContextHardCap || 10,
 		topics: info.sessionTitles.slice(-4).reverse(),
 		knows: info.knows.filter((k) => {
 			const kl = k.toLowerCase();
@@ -886,6 +883,8 @@ export interface MemoryAskContext {
 	context: string;
 	/** room display names in scope for this answer */
 	sources: string[];
+	/** the display names of the rooms with memory that `include` kept out */
+	leftOut: string[];
 }
 
 /**
@@ -893,11 +892,13 @@ export interface MemoryAskContext {
  * Hybrid: if every room's memory fits the budget, include it all (best
  * synthesis). Otherwise rank rooms by how well they match the question's
  * content words and include the most relevant, truncating to fit. Always
- * returns non-empty context when any memory exists. Read-only.
+ * returns non-empty context when any memory exists. Read-only. A room
+ * `include` refuses is left out and counted in `leftOut`.
  */
-export function buildMemoryAskContext(question: string, budgetTokens = ASK_BUDGET_TOKENS, roomIds?: string[]): MemoryAskContext {
+export function buildMemoryAskContext(question: string, budgetTokens = ASK_BUDGET_TOKENS, roomIds?: string[], include?: (roomId: string) => boolean): MemoryAskContext {
 	const scope = roomIds && roomIds.length ? new Set(roomIds) : null;
 	const blocks: Array<{ room: string; text: string; tokens: number }> = [];
+	const leftOut: string[] = [];
 	for (const status of listPersistentAgents()) {
 		if (scope && !scope.has(status.id)) continue;
 		let text = "";
@@ -908,15 +909,16 @@ export function buildMemoryAskContext(question: string, budgetTokens = ASK_BUDGE
 			try { text = createPersistentAgentInstance(status.id).readL1b(); } catch { continue; }
 		}
 		if (!text.trim()) continue;
+		if (include && !include(status.id)) { leftOut.push(safeRoomLabel(status.displayName?.trim() || status.id)); continue; }
 		blocks.push({ room: safeRoomLabel(status.displayName?.trim() || status.id), text, tokens: memoryMetrics(text).estimatedTokens });
 	}
-	if (blocks.length === 0) return { context: "", sources: [] };
+	if (blocks.length === 0) return { context: "", sources: [], leftOut };
 
 	const render = (chosen: Array<{ room: string; text: string }>) => chosen.map((b) => `# Exxpert: ${b.room}\n\n${b.text}`).join("\n\n---\n\n");
 
 	const total = blocks.reduce((sum, b) => sum + b.tokens, 0);
 	if (total <= budgetTokens) {
-		return { context: render(blocks), sources: blocks.map((b) => b.room) };
+		return { context: render(blocks), sources: blocks.map((b) => b.room), leftOut };
 	}
 
 	// Over budget — rank rooms by term-frequency match to the question.
@@ -950,7 +952,7 @@ export function buildMemoryAskContext(question: string, budgetTokens = ASK_BUDGE
 		const big = [...blocks].sort((a, z) => z.tokens - a.tokens)[0];
 		picked.push({ room: big.room, text: big.text.slice(0, budgetTokens * 4) + "\n\n…(truncated)" });
 	}
-	return { context: render(picked), sources: picked.map((b) => b.room) };
+	return { context: render(picked), sources: picked.map((b) => b.room), leftOut };
 }
 
 // --- catch-up digest: what each room learned since a given timestamp --------
@@ -2175,4 +2177,20 @@ export function buildRoomMemory(status: PersistentAgentStatus): RoomMemoryDetail
 		history: buildMemoryHistory(status.id),
 		maturity: roomMaturity(summary),
 	};
+}
+
+// The app's ids are padded to four digits at least (RC-0001, m-0012): a real "m-150" in the person's words stays.
+const MEMORY_ID = String.raw`(?:RC-\d{4,}|m-\d{4,})(?:\s*[\u2013\u2014-]\s*(?:RC-\d{4,}|m-\d{4,}))?`;
+
+/**
+ * An answer from memory as the person reads it: the ids the memory carries for
+ * the engine (RC-0001, m-0012) are taken out, with the separator or brackets
+ * that held them, so "Room · RC-0001" reads "Room".
+ */
+export function withoutMemoryIds(text: string): string {
+	return text
+		.replace(new RegExp(String.raw`\s*\(\s*${MEMORY_ID}(?:\s*,\s*${MEMORY_ID})*\s*\)`, "g"), "")
+		.replace(new RegExp(String.raw`\s*\[\s*${MEMORY_ID}(?:\s*,\s*${MEMORY_ID})*\s*\]`, "g"), "")
+		.replace(new RegExp(String.raw`\s*[·,;]\s*${MEMORY_ID}(?:\s*,\s*${MEMORY_ID})*`, "g"), "")
+		.replace(new RegExp(String.raw`[ \t]*\b${MEMORY_ID}\b`, "g"), "");
 }

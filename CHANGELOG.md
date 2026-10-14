@@ -2,6 +2,36 @@
 
 User-visible changes per release. Historical private/internal development notes are not part of this public-facing changelog.
 
+## 0.14.3 (2026-10-15)
+
+- Memory: Remember, Memorize and Review always finish while the Memory model answers, and nothing
+  ends up in Unsorted.
+- Memory: What you type is saved as you wrote it. If the connection drops while saving, the app
+  tells you whether it saved.
+- Forget: Now deletes a conversation for good, transcript included. Conversations forgotten before
+  this update are deleted too.
+- Rooms: A room with 20 remembered conversations asks for Memorize before a new one.
+- Models: Claude Haiku 5.5 joins the list and the Claude 4.x models leave it. Conversations on them
+  keep going.
+- Models: GPT-6.1 Sol is ChatGPT's new default. To keep GPT-6 Sol, choose it again in Settings, AI
+  setup.
+- Skills: Public GitHub skills and the featured skills no longer need Git. A changed skill waits for
+  your review before a room uses it.
+- Connectors: A custom connector can send its key in a header of its own. Figma leaves the list,
+  since it lets only approved apps connect.
+- Web search: The private search engine finds results again, now with Bing and Yahoo, and keeps
+  itself up to date. It also runs on Colima, Rancher Desktop and Podman.
+- Gateways: Setup says why a gateway refused, and changing a gateway's address asks for its key
+  again.
+- Fixed: Leaving a room mid-answer no longer asks first, and "Delete room" is now "Archive or
+  delete".
+- Fixed: Cmd+V works in the Mac folder picker, and connector sign-in screens show exxperts.
+- Fixed: Scheduled tasks in conversations started by Remember or Forget run again.
+- Security: The app ships exactly the package versions we test and scan. 0.14.1 and 0.14.2 had
+  picked up others, including an FTP library with a known issue.
+- Security: Connector sign-ins stay with the server that issued them, and the sign-in token stays
+  out of the server log.
+
 ## 0.14.2 (2026-10-07)
 
 - Memorize: Never gets stuck on a conversation. If it can't sort one, it keeps the conversation's

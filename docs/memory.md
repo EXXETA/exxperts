@@ -31,17 +31,17 @@ Beside them sit two more things:
 The room can **search what it has written down and what it was told**,
 by itself, when a question is about something that is no longer in
 front of it: the notes in its memory, the notes in its archive, and the
-conversations it has memorized, transcript and all. So a detail that
-was said once and never made it into a note is still answerable: the
-conversation kept it. That holds for every conversation you have
-memorized, including the ones a Memorize took no notes from. A Memorize
-decides what is worth keeping in front of the room every turn, not what
-stays findable, so a row the room recalls from such a conversation says
-**(no notes taken)**: the transcript is all memory kept of it. A
-conversation you have remembered but not yet memorized is still in the
-room's recent memory, so it is already in view and needs no search; one
-you never remembered is not searched at all. The chat shows a chip with
-what the room looked for.
+conversations you have remembered, transcript and all, from the moment
+you remember them. So a detail that was said once and never made it
+into a note is still answerable: the conversation kept it. That holds
+for every conversation you have remembered, memorized or not, including
+the ones a Memorize took no notes from. A Memorize decides what is worth
+keeping in front of the room every turn, not what stays findable, so a
+row the room recalls from such a conversation says **(no notes
+taken)**: the transcript is all memory kept of it. A row from a
+conversation not yet memorized says **(remembered, not yet
+memorized)**. A conversation you never remembered, or forgot, is not
+searched at all. The chat shows a chip with what the room looked for.
 
 The search takes words, names, dates or numbers rather than a literal
 text, in German or English, and the two spellings meet: **Überweisung**
@@ -133,33 +133,38 @@ index, costs tokens or disk on every save, and its misses are harder to
 explain than a word that was not there. The room is told to search
 again in other words before it concludes something is not there; you
 can help it the same way, by asking with the name, the number or the
-date you remember. It also does not search a conversation you have not
-memorized: one you remembered and not yet memorized is still in the
-room's recent memory and needs no search, and one you never remembered
-is not kept for searching at all.
+date you remember. It also does not search a conversation you never
+remembered, or forgot: neither is kept for searching.
 
 Nothing enters or leaves memory without you:
 
 1. **Remember**: at the end of a conversation (the room shows a context
    meter so you know when it is worth doing), a worker proposes a short
    summary of what happened. You can add a steering note; anything you
-   explicitly asked the room to remember is carried through and becomes
-   a pinned note when it is memorized. The default Remember button shows
-   you the proposal before saving; a room set to remember without the
-   preview saves clean proposals straight away and shows you anything
-   questionable. "Remember with options…" always opens the full preview.
-   Remember warns when the list of waiting conversations is nearly full
-   and asks you to Memorize before remembering more.
+   explicitly asked the room to remember is carried through word for word
+   (a summary that left one out gets it back as you said it) and becomes
+   a pinned note when it is memorized. The summary says only what the
+   conversation held, never how it was read or put together. The default
+   Remember button shows you the proposal before saving; a room set to
+   remember without the preview saves it straight away. "Remember with
+   options…" always opens the full preview. Remember warns when the list
+   of waiting conversations is nearly full and asks you to Memorize
+   before remembering more.
 2. **Memorize**: turns the waiting conversations into lasting notes, one
    conversation at a time. A first read says what the conversations hold
    and what needs your call; **Discuss first** lets you answer before
    anything runs. The card fills in as each conversation is read, with
    what it added or changed; you can edit a note on the card and keep
-   any note the room should not let go. A conversation whose reading
-   fails stays waiting for next time, with the reason beside it. When
-   the memory is over its budget, the card shows which notes would move
-   to the archive; **Keep** marks one that must stay, and you can raise
-   the budget from the card so that everything fits.
+   any note the room should not let go. A conversation the Memory model
+   cannot split into notes is kept whole as one note under its topic and
+   reads on the card like any other; when that happens to every
+   conversation of an update, the card says the model could not sort
+   them and offers **Choose another model**. A conversation that could
+   not be read at all (the model could not be reached) waits for the
+   next Memorize. When the memory is over its budget, the card shows
+   which notes would move to the archive; **Keep** marks one that must
+   stay, and you can raise the budget from the card so that everything
+   fits.
 3. **Review**: tidies the notes you already have, topic by topic. Its
    first read lists what the room finds by itself: notes that say the
    same thing twice, notes that disagree with each other (the same words
@@ -205,10 +210,11 @@ stored.
 
 Two per-room switches, off by default, under Saving in **Room settings,
 Memory**: **Remember without the preview** and **Memorize without the
-first read or the card**. A clean update is one with nothing for you to
-weigh. Anything you need to weigh always waits for you, for example a
-note leaving memory or a new note that may disagree with another. You
-can always see what changed afterwards in History.
+first read or the card**. Remember without the preview saves the summary
+as it comes. A Memorize that holds something for you to weigh always
+waits for you, for example a note leaving memory or a new note that may
+disagree with another. You can always see what changed afterwards in
+History.
 
 ## The memory budget
 
@@ -242,15 +248,30 @@ recalled". A room can be above its budget in between,
 for instance after hand edits; it keeps working, reads in a neutral
 colour everywhere, and the next Memorize or Review resolves it.
 
+The room's Memory model must be able to read the whole memory at its
+budget, beside one conversation, in one request: that is what Memorize
+does for every conversation. The smallest window that holds it is about
+47,000 tokens at the smallest budget, 69,000 at the default and 199,000
+at the largest on a Claude model (Claude counts more tokens for the same
+text), and about 31,000, 45,000 and 126,000 on other models. A model
+below that is refused where it is chosen: as the room's Memory model, as
+the default Memory model (the refusal names the first room on the
+default it cannot hold), and when the budget is raised past what the
+room's Memory model holds. If a gateway's window shrinks after it was
+picked, Memorize and Review stop before reading anything, with **Choose
+another model**.
+
 One refusal can meet you at the door: a room whose memory and setup no
 longer fit the usable window of its model refuses to start a
 conversation rather than failing on the first reply. Memory is
 unchanged and nothing is sent to the model. The way out is spelled out
-in the message: open Room settings, Conversation, and choose **Forget**
-(it closes the conversation without using a model and unlocks the room);
-then from Home open Maintain and run **Memorize** if the room has waiting
-conversations, or **Review** to tidy its notes; or pick a model with a
-larger window in Room settings, Model, and open the room again.
+in the message: from Home open Maintain and run **Memorize** if most of
+the memory is recent conversations, or **Review** if most of it is
+long-term notes; or pick a model that can read more at once in Room
+settings, Model. Then open the room again. A conversation that already has
+messages keeps the memory it started with, so a smaller memory reaches
+only the next one: to continue with it, pick a model that can read more
+at once in Room settings, Model, and switch the open conversation to it.
 
 **Upgrading from 0.11.2:** a room keeps everything it has. Its notes
 migrate on the first save, the old "(saved …)" stamps become dates,

@@ -1,3 +1,4 @@
+import { MEMORY_PAGE_MAX_CHARS, memoryTypedText } from "./memory-typed-text.js";
 import { countRecentContextEntries } from "./recent-context-entries.js";
 import { estimateTokens, estimateTokensFromChars } from "./token-estimate.js";
 import { canonicalModelName } from "../../web-ui/src/model-names.js";
@@ -28,7 +29,6 @@ export interface CheckpointCompressionPromptTelemetry extends CheckpointCompress
 	shortSessionMode: "none" | "short" | "very-short";
 	effectiveTargetTokens: { min?: number; max: number };
 	promptTokenBudget?: number;
-	reductionStage: CheckpointPromptReductionStage;
 	elidedItemCount: number;
 	elidedChars: number;
 }
@@ -54,8 +54,6 @@ export interface CheckpointCompressionPromptAssembly {
 	telemetry: CheckpointCompressionPromptTelemetry;
 }
 
-export type CheckpointPromptReductionStage = "standard" | "tight-tool-results";
-
 interface CheckpointTranscriptPromptCaps {
 	toolResultTextCap?: number;
 }
@@ -69,13 +67,10 @@ interface CheckpointTranscriptPromptCaps {
  */
 export const CHECKPOINT_PROMPT_TOOL_RESULT_TEXT_CAP = 4_000;
 
-// Only tool output is ever tightened: what the person and the room said is
-// never cut to fit. A transcript that still does not fit is read in parts
-// (remember-two-stage.ts).
-const CHECKPOINT_PROMPT_REDUCTION_STAGES: Array<{ stage: CheckpointPromptReductionStage; caps: CheckpointTranscriptPromptCaps }> = [
-	{ stage: "standard", caps: { toolResultTextCap: CHECKPOINT_PROMPT_TOOL_RESULT_TEXT_CAP } },
-	{ stage: "tight-tool-results", caps: { toolResultTextCap: 1_000 } },
-];
+// Nothing is cut further to fit: not what the person and the room said, and
+// not tool output below its cap. A transcript that does not fit one pass is
+// read in parts (remember-two-stage.ts).
+const CHECKPOINT_PROMPT_CAPS: CheckpointTranscriptPromptCaps = { toolResultTextCap: CHECKPOINT_PROMPT_TOOL_RESULT_TEXT_CAP };
 
 /**
  * A model's name in a sentence the room says (Remember, the switch): the
@@ -97,7 +92,7 @@ export class CheckpointPromptOverflowError extends Error {
 			`This conversation is too long for ${rememberSentenceModelName(input.model)} to remember in one read: about ${input.promptEstimatedTokens.toLocaleString("en-US")} tokens ` +
 				`(the conversation about ${input.transcriptEstimatedTokens.toLocaleString("en-US")}, this room's memory about ${input.memoryEstimatedTokens.toLocaleString("en-US")}) ` +
 				`against the ${input.promptTokenBudget.toLocaleString("en-US")} it can read. No memory has been written; the conversation and the memory are as they were. ` +
-				`Choose a memory model with a larger window in Room settings, Model, then generate again.`,
+				`Choose a Memory model that can read more at once in Room settings, Model, then generate again.`,
 		);
 		this.promptEstimatedTokens = input.promptEstimatedTokens;
 		this.promptTokenBudget = input.promptTokenBudget;
@@ -362,17 +357,13 @@ function renderCheckpointTranscript(items: CheckpointCompressionTranscriptItem[]
 	};
 }
 
-export function formatCheckpointTranscript(items: CheckpointCompressionTranscriptItem[]): string {
-	return renderCheckpointTranscript(items, CHECKPOINT_PROMPT_REDUCTION_STAGES[0].caps).transcript;
-}
-
 /**
  * A stretch of the transcript rendered the way the single pass renders it
- * (the standard caps), numbered from its place in the whole conversation, so
+ * (the same caps), numbered from its place in the whole conversation, so
  * a part and the verbatim end read as pieces of one transcript.
  */
 export function renderCheckpointTranscriptStretch(items: CheckpointCompressionTranscriptItem[], firstIndex: number): { transcript: string; elidedItemCount: number; elidedChars: number } {
-	return renderCheckpointTranscript(items, CHECKPOINT_PROMPT_REDUCTION_STAGES[0].caps, firstIndex);
+	return renderCheckpointTranscript(items, CHECKPOINT_PROMPT_CAPS, firstIndex);
 }
 
 /** The steering section every Remember prompt carries, single pass and parts alike. */
@@ -388,8 +379,8 @@ export function buildCheckpointCompressionPrompt(input: CheckpointCompressionPro
 	const memoryMetrics = checkpointCompressionMemoryMetrics(input.l1b);
 	const humanSteering = checkpointHumanSteeringSection(input.rememberText);
 
-	const assembleForStage = (stage: { stage: CheckpointPromptReductionStage; caps: CheckpointTranscriptPromptCaps }) => {
-		const rendered = renderCheckpointTranscript(input.items, stage.caps);
+	const assemble = () => {
+		const rendered = renderCheckpointTranscript(input.items, CHECKPOINT_PROMPT_CAPS);
 		const { targetTokens, shortSessionMode } = effectiveDensityTarget(input.density, estimateTokens(rendered.transcript));
 		const prompt = [
 			checkpointCompressionConstitution().trim(),
@@ -400,29 +391,21 @@ export function buildCheckpointCompressionPrompt(input: CheckpointCompressionPro
 			humanSteering,
 			`## Trigger\n\nProduce exactly the four fields required by the Output Contract: TITLE, SESSION_ARC, BODY, and PARKED. Do not produce final Recent Context markdown. Do not claim anything has been saved.`,
 		].join("\n\n---\n\n") + "\n";
-		return { stage: stage.stage, rendered, targetTokens, shortSessionMode, prompt };
+		return { rendered, targetTokens, shortSessionMode, prompt };
 	};
 
-	// Try the standard rendering first; if a prompt-token budget is set and the
-	// prompt overflows it, re-render with tighter declared caps on tool results
-	// (the lowest-signal material). User and assistant messages are never
-	// elided. If even the tightest stage overflows, refuse: Remember then reads
-	// the conversation in parts.
-	let chosen = assembleForStage(CHECKPOINT_PROMPT_REDUCTION_STAGES[0]);
+	// One rendering, tool results at their cap. If a prompt-token budget is set
+	// and the prompt overflows it, refuse: Remember then reads the conversation
+	// in parts, with the same caps.
+	const chosen = assemble();
 	if (input.promptTokenBudget != null && estimateTokens(chosen.prompt) > input.promptTokenBudget) {
-		for (const stage of CHECKPOINT_PROMPT_REDUCTION_STAGES.slice(1)) {
-			chosen = assembleForStage(stage);
-			if (estimateTokens(chosen.prompt) <= input.promptTokenBudget) break;
-		}
-		if (estimateTokens(chosen.prompt) > input.promptTokenBudget) {
-			throw new CheckpointPromptOverflowError({
-				model: input.model,
-				promptEstimatedTokens: estimateTokens(chosen.prompt),
-				promptTokenBudget: input.promptTokenBudget,
-				transcriptEstimatedTokens: estimateTokens(chosen.rendered.transcript),
-				memoryEstimatedTokens: estimateTokensFromChars(memoryMetrics.l1bChars),
-			});
-		}
+		throw new CheckpointPromptOverflowError({
+			model: input.model,
+			promptEstimatedTokens: estimateTokens(chosen.prompt),
+			promptTokenBudget: input.promptTokenBudget,
+			transcriptEstimatedTokens: estimateTokens(chosen.rendered.transcript),
+			memoryEstimatedTokens: estimateTokensFromChars(memoryMetrics.l1bChars),
+		});
 	}
 
 	// Shortened tool output is a fact about the read, not a problem with the
@@ -443,15 +426,10 @@ export function buildCheckpointCompressionPrompt(input: CheckpointCompressionPro
 			shortSessionMode: chosen.shortSessionMode,
 			effectiveTargetTokens: chosen.targetTokens,
 			...(input.promptTokenBudget != null ? { promptTokenBudget: input.promptTokenBudget } : {}),
-			reductionStage: chosen.stage,
 			elidedItemCount: chosen.rendered.elidedItemCount,
 			elidedChars: chosen.rendered.elidedChars,
 		},
 	};
-}
-
-export function buildCheckpointCompressionRetryPrompt(prompt: string, missingFields: string[]): string {
-	return `${prompt.trimEnd()}\n\n---\n\n## Retry Notice\n\nYour previous output was missing required field(s): ${missingFields.join(", ")}. Produce all four labeled fields — TITLE, SESSION_ARC, BODY, and PARKED — exactly as specified by the Output Contract, and nothing else.\n`;
 }
 
 function extractField(raw: string, label: string, nextLabels: string[]): string {
@@ -506,4 +484,117 @@ export function assembleProposedRecentContext(fields: CheckpointCompressionField
 	const parked = fields.parked.trim() || "None";
 	const status = /^none\.?$/i.test(parked) ? "CLOSED" : "OPEN";
 	return `### RC-DRAFT | ${status} | ${now.toISOString().slice(0, 10)} | ${title}\n\n**Session arc:** ${sessionArc}\n\n**Body:**\n${body}\n\n**Parked:**\n${parked}\n`;
+}
+
+// --- Remember never fails: the ladder and the repairs ---------------------------
+
+/** The most a memory page may hold; Save refuses more (validateApprovedRecentContextDraft). */
+export const CHECKPOINT_PAGE_MAX_CHARS = MEMORY_PAGE_MAX_CHARS;
+/** The words a reply cut at the output cap is asked for on its last try. */
+export const CHECKPOINT_CUT_WORD_TARGET = 150;
+
+/** The density one step shorter, or the same one at compact. */
+export function nextLowerDensity(density: CheckpointCompressionDensity): CheckpointCompressionDensity {
+	return density === "rich" ? "standard" : "compact";
+}
+
+const RETRY_REASONS = {
+	cut: "Your previous reply did not end with all four fields complete: it was cut off at the output limit, or BODY was missing.",
+	"still-cut": "Your previous replies did not end with all four fields complete.",
+	"too-long": `Your previous reply was longer than a memory entry may be (${CHECKPOINT_PAGE_MAX_CHARS.toLocaleString("en-US")} characters).`,
+};
+
+/**
+ * The ladder's asks again: the same prompt, with why the last reply did not
+ * do and how short to write, at a density's size or in a number of words.
+ */
+export function withRetryNotice(prompt: string, reason: keyof typeof RETRY_REASONS, size: CheckpointCompressionDensity | number): string {
+	const how = typeof size === "number" ? `in at most ${size} words in total` : `at ${size} density, under about ${baseDensityTarget(size).max} tokens in total`;
+	return `${prompt.trimEnd()}\n\n---\n\n## Retry Notice\n\n${RETRY_REASONS[reason]} Write all four fields again ${how}. Must-keep content stays; shorten everything else.\n`;
+}
+
+function paragraphsOf(text: string): string[] {
+	return text.split(/\n\s*\n/).map((paragraph) => paragraph.trim()).filter(Boolean);
+}
+
+/**
+ * Rung 3: what the last reply still holds. The fields that came complete
+ * stay; in a reply cut at the cap, the field the cut fell in keeps its full
+ * paragraphs (its last full line when it has one paragraph), with no marker:
+ * the caller's diagnostics say it was shortened. A missing BODY starts from
+ * the session arc.
+ */
+export function salvageCutCheckpointFields(raw: string, truncated = true): CheckpointCompressionFields {
+	const { fields } = parseCheckpointCompressionFields(raw);
+	if (!truncated) return { ...fields, body: fields.body.trim() || fields.sessionArc.trim() };
+	const order = ["TITLE", "SESSION_ARC", "BODY", "PARKED"] as const;
+	const key = { TITLE: "title", SESSION_ARC: "sessionArc", BODY: "body", PARKED: "parked" } as const;
+	const positions = order.map((label) => raw.search(new RegExp(`^\\s*${label}\\s*:`, "im")));
+	const last = order[positions.indexOf(Math.max(...positions))]!;
+	const cutField = key[last];
+	const text = fields[cutField];
+	const paragraphs = paragraphsOf(text);
+	const kept = paragraphs.length > 1 ? paragraphs.slice(0, -1).join("\n\n") : text.split(/\r?\n/).slice(0, -1).join("\n").trim();
+	const salvaged: CheckpointCompressionFields = { ...fields, [cutField]: cutField === "title" ? text.split(/\r?\n/)[0]!.trim() : kept };
+	salvaged.body = salvaged.body.trim() || salvaged.sessionArc.trim();
+	return salvaged;
+}
+
+function firstSentence(text: string): string {
+	const plain = text.replace(/^\s*[-*•]\s+/gm, "").replace(/\*\*/g, "").replace(/\s+/g, " ").trim();
+	const match = /^(.+?[.!?])(?:\s|$)/.exec(plain);
+	return (match ? match[1]! : plain).slice(0, 300).trim();
+}
+
+/** A field under the rule every text into memory meets (memory-typed-text.ts): no heading line, no comment mark, no part marker. */
+function repairFieldText(text: string): string {
+	return memoryTypedText(text).trim();
+}
+
+/**
+ * What Save would refuse, repaired by code before the preview, with no call:
+ * heading lines become bold text, comment markers go, an empty Parked becomes
+ * "None.", an empty Session arc becomes BODY's first sentence. TITLE is one
+ * plain line.
+ */
+export function repairCheckpointFields(fields: CheckpointCompressionFields): CheckpointCompressionFields {
+	const body = repairFieldText(fields.body);
+	const title = repairFieldText(fields.title).replace(/\*\*/g, "").split(/\r?\n/)[0]!.trim();
+	const sessionArc = repairFieldText(fields.sessionArc) || firstSentence(body);
+	const parked = repairFieldText(fields.parked) || "None.";
+	return { title, sessionArc, body, parked };
+}
+
+/** A field cut to at most `max` characters at its last line end (else its last space). */
+function cutAtLineEnd(text: string, max: number): string {
+	if (text.length <= max) return text;
+	const cut = text.slice(0, max);
+	const end = cut.lastIndexOf("\n") > 0 ? cut.lastIndexOf("\n") : cut.lastIndexOf(" ");
+	return (end > 0 ? cut.slice(0, end) : cut).trimEnd();
+}
+
+/**
+ * A page that still runs over CHECKPOINT_PAGE_MAX_CHARS fits, whichever field
+ * is long: TITLE keeps 200 characters, the session arc and Parked 2,000 each,
+ * cut at a line end, and BODY its first paragraphs that fit (its first lines
+ * when not even one paragraph does), with no marker: the caller's diagnostics
+ * say it was shortened. `endLine` (keep-requests put back) closes BODY after
+ * the fit, its room kept, so the fit never drops it.
+ */
+export function fitCheckpointFields(fields: CheckpointCompressionFields, now = new Date(), endLine?: string): CheckpointCompressionFields {
+	const end = endLine ? `\n\n${endLine}` : "";
+	const whole = { ...fields, body: `${fields.body.trimEnd()}${end}` };
+	if (assembleProposedRecentContext(whole, now).length <= CHECKPOINT_PAGE_MAX_CHARS) return whole;
+	fields = { ...fields, title: cutAtLineEnd(fields.title, 200), sessionArc: cutAtLineEnd(fields.sessionArc, 2_000), parked: cutAtLineEnd(fields.parked, 2_000) };
+	const room = CHECKPOINT_PAGE_MAX_CHARS - assembleProposedRecentContext({ ...fields, body: "" }, now).length - end.length;
+	const kept: string[] = [];
+	let length = 0;
+	for (const paragraph of paragraphsOf(fields.body)) {
+		const add = paragraph.length + (kept.length ? 2 : 0);
+		if (length + add > room) break;
+		kept.push(paragraph);
+		length += add;
+	}
+	if (kept.length === 0) kept.push(cutAtLineEnd(fields.body.trim(), Math.max(0, room)));
+	return { ...fields, body: `${kept.join("\n\n")}${end}` };
 }

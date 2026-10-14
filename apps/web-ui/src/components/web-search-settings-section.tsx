@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { fetchJson } from "../api";
-import { useRemoteClientContext } from "../remote-client-context";
+import { SHARED_SERVER_ADMIN_LINE, showsComputerOnlyControls, useRemoteClientContext } from "../remote-client-context";
 import { GroupHeader } from "./pane-header";
 
 /**
@@ -95,19 +95,19 @@ function setupLine(status: SearxngSetupStatus): ReactNode | null {
 		case "docker-missing":
 			return (
 				<>
-					This needs a container runtime first. Install{" "}
+					This needs a container engine first. Install{" "}
 					<a href="https://orbstack.dev" target="_blank" rel="noreferrer">OrbStack</a> or{" "}
-					<a href="https://www.docker.com/products/docker-desktop/" target="_blank" rel="noreferrer">Docker Desktop</a>,
-					then press Start one on this computer.
+					<a href="https://www.docker.com/products/docker-desktop/" target="_blank" rel="noreferrer">Docker Desktop</a>
+					{" "}(Colima and Podman work too), then press Start one on this computer.
 				</>
 			);
 		case "docker-stopped":
-			return "Docker is installed but not running. Start Docker Desktop or OrbStack, then press Start one on this computer.";
+			return "Your container engine is installed but not running. Start it (OrbStack, Docker Desktop, Colima or Podman), then press Start one on this computer.";
 		case "ready":
 			return (
 				<>
 					{status.baseUrl ? `Running at ${status.baseUrl}.` : "Running."} The engine keeps running in the
-					background even when the OrbStack or Docker Desktop window is closed.
+					background even when your container engine's window is closed.
 				</>
 			);
 		case "stopped":
@@ -124,6 +124,9 @@ type Pending = null | { kind: "providerSearch"; value: boolean } | { kind: "prov
 
 export function WebSearchSettingsSection() {
 	const remoteClient = useRemoteClientContext();
+	// The SearXNG setup starts a container on this computer: not on a remote
+	// device, and not on a shared server, where its status is not read either.
+	const computerOnlyControls = showsComputerOnlyControls(remoteClient);
 	const [settings, setSettings] = useState<WebSearchSettingsPayload | null>(null);
 	const [loadError, setLoadError] = useState<string | null>(null);
 	const [loading, setLoading] = useState(true);
@@ -216,7 +219,7 @@ export function WebSearchSettingsSection() {
 	// does not lose sight of it.
 	const setupRunning = setup?.running ?? false;
 	useEffect(() => {
-		if (remoteClient.remote || shownChoice !== "searxng") return;
+		if (!computerOnlyControls || shownChoice !== "searxng") return;
 		let stopped = false;
 		async function read() {
 			try {
@@ -234,12 +237,12 @@ export function WebSearchSettingsSection() {
 			stopped = true;
 			window.clearInterval(timer);
 		};
-	}, [remoteClient.remote, shownChoice, setupRunning]);
+	}, [computerOnlyControls, shownChoice, setupRunning]);
 
 	// A ready engine is only useful once the address is saved, so the flow
 	// finishes itself through the same save path the field uses.
 	useEffect(() => {
-		if (remoteClient.remote) return;
+		if (!computerOnlyControls) return;
 		const url = setup?.phase === "ready" ? setup.baseUrl : null;
 		if (!url || adoptedBaseUrl.current === url) return;
 		adoptedBaseUrl.current = url;
@@ -251,7 +254,7 @@ export function WebSearchSettingsSection() {
 			{ kind: "provider", value: "searxng" },
 			"Saved. The next search uses it.",
 		);
-	}, [remoteClient.remote, setup?.phase, setup?.baseUrl]);
+	}, [computerOnlyControls, setup?.phase, setup?.baseUrl]);
 
 	async function startSetup() {
 		setSetupStarting(true);
@@ -305,8 +308,9 @@ export function WebSearchSettingsSection() {
 
 	// A remote device can read this setting but not change it: the PUT route is
 	// local-only in the server's remote route policy, so every control here
-	// would refuse each tap. State the facts and offer nothing operable.
-	if (remoteClient.remote) {
+	// would refuse each tap. State the facts and offer nothing operable. A
+	// shared server reads the same way: only its admin changes the setting.
+	if (remoteClient.remote || remoteClient.sharedServer) {
 		return (
 			<section className="ai-setup-section" aria-label="Web search">
 				{settings.unreadable && (
@@ -339,7 +343,7 @@ export function WebSearchSettingsSection() {
 						</div>
 					</div>
 				</div>
-				<p className="cli-note">Web search is set up on the computer itself.</p>
+				<p className="cli-note">{remoteClient.sharedServer ? SHARED_SERVER_ADMIN_LINE : "Web search is set up on the computer itself."}</p>
 			</section>
 		);
 	}

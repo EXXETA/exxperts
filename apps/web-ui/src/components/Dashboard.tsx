@@ -224,9 +224,10 @@ export function Dashboard() {
 			// Sequence the polls: a slow older response must not overwrite a
 			// newer one after the server has answered again.
 			const seq = ++requestSeq;
+			// Only an OK answer is usage: a refusal's body would break the page.
 			apiFetch(`/api/usage?range=${range}&model=${encodeURIComponent(model)}&agent=${encodeURIComponent(agent)}`)
-				.then((r) => r.json())
-				.then((d) => { if (!cancelled && seq === requestSeq) setData(d); })
+				.then((r) => (r.ok ? r.json() : null))
+				.then((d) => { if (d && !cancelled && seq === requestSeq) setData(d); })
 				.catch(() => {});
 		};
 		load();

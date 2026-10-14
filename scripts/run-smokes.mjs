@@ -39,6 +39,16 @@ function killSmokeTree(child) {
 	try { process.kill(-child.pid, "SIGKILL"); } catch { try { child.kill("SIGKILL"); } catch {} }
 }
 
+// A smoke runs in its own process group, so Ctrl-C on the terminal does not
+// reach it: the runner passes the stop on to every smoke still running.
+const runningSmokes = new Set();
+for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
+	process.on(signal, () => {
+		for (const child of runningSmokes) killSmokeTree(child);
+		process.exit(130);
+	});
+}
+
 function runSmoke(name) {
 	return new Promise((resolve) => {
 		const startedAt = Date.now();
@@ -47,6 +57,7 @@ function runSmoke(name) {
 			stdio: ["ignore", "pipe", "pipe"],
 			...(process.platform === "win32" ? {} : { detached: true }),
 		});
+		runningSmokes.add(child);
 		let output = "";
 		let timedOut = false;
 		const timer = setTimeout(() => {
@@ -57,6 +68,7 @@ function runSmoke(name) {
 		child.stdout.on("data", (chunk) => { output += chunk; });
 		child.stderr.on("data", (chunk) => { output += chunk; });
 		child.on("close", (code) => {
+			runningSmokes.delete(child);
 			clearTimeout(timer);
 			resolve({ name, code: timedOut ? 1 : (code ?? 1), output, seconds: (Date.now() - startedAt) / 1000 });
 		});

@@ -76,6 +76,17 @@ function tildePath(p: string): string {
 	return p.startsWith(home) ? `~${p.slice(home.length)}` : p;
 }
 
+/**
+ * A header that carries a credential (an API key in its own header), by the
+ * words in its name: Authorization, a token, a secret, or an API key
+ * (X-Api-Key, Api-Key, ApiKey). Whole words, so Idempotency-Key or
+ * Notion-Version are not taken for a sign-in.
+ */
+export function isCredentialHeaderName(name: string): boolean {
+	const words = name.toLowerCase().split(/[-_.]/);
+	return ["authorization", "token", "secret", "apikey"].some((word) => words.includes(word)) || (words.includes("api") && words.includes("key"));
+}
+
 function authModeFor(entry: {
 	url?: string;
 	auth?: "oauth" | "bearer" | false;
@@ -85,10 +96,10 @@ function authModeFor(entry: {
 	oauth?: unknown;
 }): McpConnectorAuthStatus["mode"] {
 	if (entry.auth === "bearer" || entry.bearerToken || entry.bearerTokenEnv) return "bearer";
-	// Static credential headers (Figma's X-Figma-Token, API keys) come with
+	// Static credential headers (API keys in their own header) come with
 	// auth: false to switch off OAuth auto-detect, but to the UI they are
 	// token auth, not "no login needed".
-	if (entry.auth === false && Object.keys(entry.headers ?? {}).some((h) => /token|key|secret|authorization/i.test(h))) return "bearer";
+	if (entry.auth === false && Object.keys(entry.headers ?? {}).some(isCredentialHeaderName)) return "bearer";
 	// Mirrors the adapter's supportsOAuth: HTTP servers auto-detect OAuth
 	// unless auth/oauth is explicitly disabled.
 	if (entry.url && entry.auth !== false && entry.oauth !== false) return "oauth";

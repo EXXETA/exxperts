@@ -158,7 +158,41 @@ async function readCappedText(response: Response): Promise<string> {
 // never asked for one, and is reported as the plain status it is.
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 
-type ProbeFailure = { ok: false; status?: number; message: string; timedOut: boolean; redirected?: boolean };
+type ProbeFailure = { ok: false; status?: number; message: string; timedOut: boolean; redirected?: boolean; reason?: string };
+
+const REFUSAL_REASON_MAX_CHARS = 300;
+
+/**
+ * What a refusing gateway says for itself, as one short line a person can
+ * read: the message of an OpenAI- or LiteLLM-style error ("Budget has been
+ * exceeded! …"), a FastAPI detail, or plain text. JSON with none of those,
+ * JSON that does not parse, or a page of HTML says nothing a person can use,
+ * so there is no reason. A gateway that echoes the key gets it masked.
+ */
+function refusalReason(raw: string, key: string): string | undefined {
+	const text = raw.replace(/^﻿/, "").trim();
+	let said: unknown = text;
+	try {
+		const parsed = JSON.parse(text) as { error?: unknown; detail?: unknown; message?: unknown } | null;
+		const error = parsed?.error as { message?: unknown } | string | undefined;
+		// A plain error string is often only the status phrase beside the real
+		// message ("Unprocessable Entity"), so it comes last.
+		said = (typeof error === "object" ? error?.message : undefined) ?? parsed?.detail ?? parsed?.message ?? (typeof error === "string" ? error : undefined);
+		if (Array.isArray(said)) said = said.map((item) => (item as { msg?: unknown })?.msg).filter((msg) => typeof msg === "string").join("; ");
+	} catch {
+		if (/^[[{]/.test(text)) return undefined;
+	}
+	if (typeof said !== "string") return undefined;
+	let line = said.replace(/\s+/g, " ").trim();
+	if (key.length >= 8) line = line.split(key).join("…");
+	if (!line || /<\/?[a-z!][^>]*>/i.test(line)) return undefined;
+	// LiteLLM's budget refusal carries a member id and costs to many places:
+	// said plainly, the two amounts rounded (draft).
+	const budget = /budget has been exceeded!.*?current cost:\s*([\d.]+)[,;]?\s*max budget:\s*([\d.]+)/i.exec(line);
+	if (budget) return `this key's budget is used up (${Number(budget[1]).toFixed(2)} of ${Number(budget[2]).toFixed(2)}).`;
+	const chars = [...line];
+	return chars.length > REFUSAL_REASON_MAX_CHARS ? `${chars.slice(0, REFUSAL_REASON_MAX_CHARS - 1).join("")}…` : line;
+}
 
 async function fetchJsonWithTimeout(url: string, key: string): Promise<{ ok: true; payload: unknown } | ProbeFailure> {
 	const abort = new AbortController();
@@ -173,7 +207,10 @@ async function fetchJsonWithTimeout(url: string, key: string): Promise<{ ok: tru
 		if (REDIRECT_STATUSES.has(response.status)) {
 			return { ok: false, status: response.status, message: "redirected to another address", timedOut: false, redirected: true };
 		}
-		if (!response.ok) return { ok: false, status: response.status, message: `answered ${response.status}`, timedOut: false };
+		if (!response.ok) {
+			const reason = refusalReason(await readCappedText(response).catch(() => ""), key);
+			return { ok: false, status: response.status, message: `answered ${response.status}`, timedOut: false, reason };
+		}
 		return { ok: true, payload: JSON.parse(await readCappedText(response)) as unknown };
 	} catch (error) {
 		return { ok: false, message: abort.signal.aborted ? "timed out" : (error as Error).message, timedOut: abort.signal.aborted };
@@ -357,7 +394,12 @@ export async function discoverGatewayModels(baseUrl: string, key: string): Promi
 	if (!listed.ok) {
 		if (listed.redirected) throw new GatewayDiscoveryError(`${root}/models redirected to another address; enter the gateway's final URL.`);
 		if (listed.status === 401 || listed.status === 403) throw new GatewayDiscoveryError("The gateway rejected the API key.");
-		if (listed.status !== undefined) throw new GatewayDiscoveryError(`The gateway answered ${listed.status} for ${root}/models.`);
+		if (listed.status !== undefined) {
+			// A 404 is most often a wrong address, and the address is what helps.
+			throw new GatewayDiscoveryError(listed.reason && listed.status !== 404
+				? `The gateway refused: ${listed.reason}`
+				: `The gateway answered ${listed.status} for ${root}/models.`);
+		}
 		throw new GatewayDiscoveryError(`Could not reach ${root}/models: ${listed.message}`);
 	}
 	const payload = listed.payload;

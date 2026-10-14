@@ -24,10 +24,10 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { hasActiveAbsorbRun } from "./absorb-run.js";
-import { parseMemoryDocument, renderMemoryContext } from "./memory-entries.js";
-import { assertMemoryWriteAllowed, memoryBudgetState, restoreMemoryFile, type MemoryEditEventRecord } from "./memory-entries-store.js";
+import { renderMemoryContext } from "./memory-entries.js";
+import { assertMemoryWriteAllowed, findMemoryEditRecord, restoreMemoryFile, type MemoryEditEventRecord } from "./memory-entries-store.js";
 import { createPersistentAgentInstance, l1bStateMetrics, type AbsorbEventRecord, type PersistentAgentInstance, type ReviewEventRecord, type StructuralReviewEventRecord } from "./persistent-agents.js";
-import { overMemoryBudget, readPersistentRoomMaintenanceSettings, writePersistentRoomMaintenanceSettings } from "./persistent-room-maintenance-settings.js";
+import { overMemoryBudget, readPersistentRoomMaintenanceSettings } from "./persistent-room-maintenance-settings.js";
 import { hasActiveReviewRun } from "./review-run.js";
 import { countRecentContextEntries } from "./recent-context-entries.js";
 
@@ -44,6 +44,8 @@ export interface MemoryUndoResponse {
 	recentContextCount: number;
 	/** Present when the undone save had raised the room's limit and this undo put it back: the limit the room has again. */
 	limitLoweredTo?: number;
+	/** An Undo sent again after its answer was lost: the save was undone already, and nothing was written this time. */
+	alreadyUndone?: true;
 }
 
 // --- product sentences -------------------------------------------------------
@@ -229,6 +231,20 @@ export function undoMemorySave(agentIdRaw: string, saveIdRaw: unknown, now = new
 	if (hasActiveAbsorbRun(agentId) || hasActiveReviewRun(agentId)) throw productError(MEMORY_UNDO_RUN_ACTIVE_SENTENCE, "memory_undo_run_active", 409);
 
 	const save = findSave(instance, saveId);
+	// An Undo sent again after its answer was lost: it undid the save once, and says so.
+	const undoneBy = findMemoryEditRecord(agentId, (record) => record.kind === "undo" && record.undoneSaveId === saveId);
+	if (undoneBy) {
+		const l1b = instance.readL1b();
+		return {
+			agentId,
+			undoId: undoneBy.memoryEditId,
+			undone: { saveId: save.saveId, kind: save.kind, approvedAt: save.approvedAt },
+			memoryBudget: { budgetTokens: undoneBy.budget.budgetTokens, reviewTargetEstimatedTokens: undoneBy.budget.reviewTargetTokensAfter, overBudget: undoneBy.budget.overBudgetAfter },
+			recentContextCount: countRecentContextEntries(l1b),
+			...(undoneBy.limitLoweredTo !== undefined ? { limitLoweredTo: undoneBy.limitLoweredTo } : {}),
+			alreadyUndone: true,
+		};
+	}
 	// A record that never said what it wrote cannot be shown to be the latest
 	// save, and an undo that cannot prove that is a guess at someone's memory.
 	if (!save.resultFingerprint) throw staleError();
@@ -258,12 +274,12 @@ export function undoMemorySave(agentIdRaw: string, saveIdRaw: unknown, now = new
 		restoredL1b,
 		snapshotLabel: "undo",
 		archiveRemoveIds: save.archiveRowIds,
+		// The limit goes back down with the file, in the same save
+		// (memory-commit.ts), so the record's budget block is measured against
+		// the limit the room has once this undo is done.
+		...(limitLoweredTo !== undefined ? { limitTo: limitLoweredTo } : {}),
 		now,
-		writeEventRecord: (recorded) => {
-			// The file is back at this point; the limit follows it here, before the
-			// record is written, so the record's budget block is measured against
-			// the limit the room actually has once this undo is done.
-			if (limitLoweredTo !== undefined) writePersistentRoomMaintenanceSettings(agentId, { memoryBudgetTokens: limitLoweredTo });
+		eventRecord: (recorded) => {
 			const budgetTokens = limitLoweredTo ?? recorded.budgetAfter.budgetTokens;
 			const eventRecordPath = instance.memoryEditEventRecordPath(recorded.writeId);
 			const record: MemoryEditEventRecord = {
@@ -291,13 +307,10 @@ export function undoMemorySave(agentIdRaw: string, saveIdRaw: unknown, now = new
 					overBudgetAfter: overMemoryBudget(recorded.budgetAfter.reviewTargetTokens, budgetTokens),
 				},
 			};
-			fs.mkdirSync(path.dirname(eventRecordPath), { recursive: true, mode: 0o700 });
-			fs.writeFileSync(eventRecordPath, JSON.stringify(record, null, 2) + "\n", { mode: 0o600, flag: "wx" });
-			return { eventRecordPath, eventRelPath: record.paths.eventRelPath };
+			return { eventRecordPath, record };
 		},
 	});
-	// Measured after the settings write, so the block says what the room has now.
-	const budget = limitLoweredTo === undefined ? written.budget : memoryBudgetState(agentId, parseMemoryDocument(restoredL1b));
+	const budget = written.budget;
 
 	return {
 		agentId,

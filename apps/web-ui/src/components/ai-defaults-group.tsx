@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { modelDisplayName } from "../model-names";
-import { useRemoteClientContext } from "../remote-client-context";
+import { modelDisplayName, modelOnProvider } from "../model-names";
+import { SHARED_SERVER_ADMIN_LINE, useRemoteClientContext } from "../remote-client-context";
 import { fetchAiDefaults, fetchRoomModelProviders, putAiDefaults } from "../room-models-api";
 import type { AiDefaultsView, RoomModelLock, RoomModelLockView, RoomModelProviderView, RoomModelTask } from "../types";
 import { GroupHeader } from "./pane-header";
@@ -11,13 +11,16 @@ import { RoomModelPicker } from "./room-model-picker";
 // default that cannot run (its provider signed out, or no longer offered) says
 // so, and the rooms on it wait: nothing runs in its place.
 
+/** The line under the Memory list while a model is too small for a room on the default (draft). */
+const DEFAULT_TOO_SMALL_LINE = "A Memory model must read all of a room's memory at once. To use a smaller one as the default, give that room its own Memory model, or lower its memory budget.";
+
 function lockName(lock: RoomModelLockView): string {
 	return modelDisplayName({ model: lock.model, modelLabel: lock.label, provider: lock.provider }) || lock.name;
 }
 
 function defaultUnavailableSentence(row: AiDefaultsView[RoomModelTask]): string | null {
 	if (!row.stored || !row.reason || row.effective) return null;
-	const named = `${lockName(row.stored)} on ${row.stored.providerLabel}`;
+	const named = modelOnProvider(lockName(row.stored), row.stored.providerLabel);
 	return row.reason === "signed-out"
 		? `${named} is signed out. Rooms on this default wait until you sign in again or choose another here.`
 		: `${named} is no longer offered. Rooms on this default wait until you choose another here.`;
@@ -25,7 +28,9 @@ function defaultUnavailableSentence(row: AiDefaultsView[RoomModelTask]): string 
 
 export function AiDefaultsGroup({ refreshKey }: { refreshKey?: string }) {
 	const remoteClient = useRemoteClientContext();
-	const readOnly = remoteClient.remote && remoteClient.capability !== "full";
+	// A read-only device sees the defaults but cannot change them; on a shared
+	// server only its admin may, so they read the same way, with one line.
+	const readOnly = (remoteClient.remote && remoteClient.capability !== "full") || remoteClient.sharedServer;
 	const [defaults, setDefaults] = useState<AiDefaultsView | null>(null);
 	const [providers, setProviders] = useState<RoomModelProviderView[]>([]);
 	const [saving, setSaving] = useState(false);
@@ -71,6 +76,8 @@ export function AiDefaultsGroup({ refreshKey }: { refreshKey?: string }) {
 						value={value ? { provider: value.provider, model: value.model } : null}
 						disabled={readOnly || saving || !defaults}
 						ariaLabel={`Default ${label.toLowerCase()} model`}
+						unpickable={new Map((view?.tooSmall ?? []).map((lock) => [`${lock.provider}/${lock.model}`, `Too small for ${lock.room ?? "a room"}'s memory`]))}
+						unpickableLine={DEFAULT_TOO_SMALL_LINE}
 						onPick={(lock) => void save(task, lock)}
 					/>
 				</div>
@@ -85,6 +92,7 @@ export function AiDefaultsGroup({ refreshKey }: { refreshKey?: string }) {
 				{row("conversation", "Conversation")}
 				{row("memory", "Memory")}
 			</div>
+			{remoteClient.sharedServer && <p className="cli-note">{SHARED_SERVER_ADMIN_LINE}</p>}
 			{error && <p className="room-model-error" role="alert">{error}</p>}
 		</div>
 	);

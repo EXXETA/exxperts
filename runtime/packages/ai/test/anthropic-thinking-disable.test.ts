@@ -134,6 +134,23 @@ describe("Anthropic thinking disable payload", () => {
 		expect(payload.output_config).toBeUndefined();
 	});
 
+	it("sends thinking.type=disabled and no output_config for Claude Haiku 5.5 when thinking is off", async () => {
+		// Haiku 5.5 accepts "disabled" at effort high or below and refuses it
+		// at xhigh or max. Off sends no effort, so the API's default (medium)
+		// applies, and the top rungs below always think adaptively.
+		const payload = await capturePayload(getModel("anthropic", "claude-haiku-5-5"));
+
+		expect(payload.thinking).toEqual({ type: "disabled" });
+		expect(payload.output_config).toBeUndefined();
+	});
+
+	it.each(["low", "medium", "high", "xhigh", "max"] as const)("never pairs disabled with an effort on Claude Haiku 5.5 at %s", async (level) => {
+		const payload = await capturePayload(getModel("anthropic", "claude-haiku-5-5"), { reasoning: level });
+
+		expect(payload.thinking?.type).toBe("adaptive");
+		expect(payload.output_config).toEqual({ effort: level });
+	});
+
 	it("uses adaptive thinking for Claude Opus 4.7 when reasoning is enabled", async () => {
 		const payload = await capturePayload(getModel("anthropic", "claude-opus-4-7"), { reasoning: "high" });
 

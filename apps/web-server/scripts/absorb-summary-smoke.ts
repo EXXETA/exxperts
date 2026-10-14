@@ -232,6 +232,12 @@ const { fileSessionAsSummary, SUMMARY_TOPIC } = await import("../src/absorb-summ
 	const tried = parseMemoryDocument(renderMemoryDocument(restoreEntry(parseMemoryDocument(MEMORY), { ...row, topic: "Unsorted", tried: [rereadModelKey(comma), "openai/gpt-5"] }), "storage"));
 	assert(JSON.stringify(find(tried, "m-0003")?.entry.tried) === JSON.stringify(["gateway/gpt-5.5%2Cmini", "openai/gpt-5"]), `a model id with a comma round-trips as one key (${JSON.stringify(find(tried, "m-0003")?.entry.tried)})`);
 	assert(!selectRereads(tried, comma).some((entry) => entry.id === "m-0003") && selectRereads(tried, { provider: "gateway", model: "gpt-5.5" }).some((entry) => entry.id === "m-0003"), "the model with the comma does not re-read it again; the model without the comma still can");
+	// After a Memory model change, one Memorize re-reads at most ten summary notes, the oldest first; the rest wait for the next run.
+	const many = parseMemoryDocument(["<!-- exxeta:l1b schema_version=1 -->", "", "## Deep Memory", "", "<!-- entries: next=200 -->", "", "### Calls", "",
+		...Array.from({ length: 12 }, (_, index) => [`<!-- e: id=m-01${String(index).padStart(2, "0")} kind=fact saved=2026-09-01 learned=2026-08-${String(20 - index).padStart(2, "0")} summary=true -->`, `- Call ${index} about the renewal`, `  - Point ${index}.`, ""]).flat(),
+		"## Active Items", "", "## Recent Context", ""].join("\n"));
+	const capped = selectRereads(many, { provider: "gateway", model: "gpt-6" });
+	assert(capped.length === 10 && capped[0]!.id === "m-0111" && !capped.some((entry) => entry.id === "m-0100" || entry.id === "m-0101"), `ten, the oldest first, got ${JSON.stringify(capped.map((entry) => entry.id))}`);
 	console.log("5. summary: a restore keeps summary=true, tried and unknown keys; tried round-trips quoted, a comma in a model id encoded");
 }
 
@@ -281,6 +287,20 @@ const { fileSessionAsSummary, SUMMARY_TOPIC } = await import("../src/absorb-summ
 	const plainEdit = find(applyUserEdit(parseMemoryDocument(MEMORY), { op: "edit", id: "m-0001", text: "- Use `**must-keep**` here.", today: "2026-09-28" }).doc, "m-0001")!.entry;
 	assert(plainEdit.pinned === false && plainEdit.text === "- Use `**must-keep**` here.", "a hand edit that quotes the marker is text");
 	console.log("7. summary: the label's shapes (quoted, ending a sentence, before a dash) and a hand edit's marker");
+}
+
+// --- 8. A line that reads as structure is escaped, never a throw ------------------
+{
+	const doc = parseMemoryDocument(MEMORY);
+	const page = PAGE.replace("- The next review is in November.", "- The next review is in November.\u2028# Not a topic");
+	let filed: ReturnType<typeof fileSessionAsSummary> | null = null;
+	try { filed = fileSessionAsSummary(doc, { id: "RC-0007", title: "Pricing review with the Nordwind team", text: page }, ctx); } catch (error) { assert(false, `the page is filed, not thrown: ${(error as Error).message}`); }
+	const { findStructuralLine } = await import("../src/memory-entries.js");
+	assert(filed!.record.added.every((added: any) => findStructuralLine(added.text) === null) && filed!.record.added.some((added: any) => added.text.includes("\\# Not a topic")), "the line is escaped");
+	const { notesToSortCount } = await import("../src/absorb-reread.js");
+	const memory = "## Deep Memory\n\n### Unsorted\n\n<!-- e: id=m-0101 kind=fact saved=2026-09-01 -->\n- Invoices go out on the first working day.\n\n### Pricing\n\n<!-- e: id=m-0102 kind=fact saved=2026-09-01 summary=true -->\n- A pricing summary kept as one note.\n\n## Active Items\n";
+	assert(notesToSortCount(memory) === 1, `only the notes in Unsorted count, got ${notesToSortCount(memory)}`);
+	console.log("8. summary: a line that reads as structure is escaped; only Unsorted counts as notes to sort");
 }
 
 console.log("absorb-summary smoke passed");

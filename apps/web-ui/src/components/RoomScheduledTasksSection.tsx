@@ -1,5 +1,7 @@
 import { FormEvent, useEffect, useState } from "react";
 import { fetchPersistentRoomBackgroundRuns } from "../persistent-room-background-runs-api";
+import { formatFriendlyRunReason, runShownStatus } from "../scheduled-run-reason";
+import { fmtMemoryMoment } from "../memory-surface-copy";
 import {
 	createPersistentRoomSchedule,
 	deletePersistentRoomSchedule,
@@ -99,7 +101,7 @@ function formatTimestamp(value: string | null | undefined): string {
 	if (!value) return "not recorded";
 	const date = new Date(value);
 	if (Number.isNaN(date.getTime())) return value;
-	return date.toLocaleString();
+	return fmtMemoryMoment(date.getTime());
 }
 
 function shortId(value: string | undefined): string {
@@ -120,26 +122,6 @@ function formatRunStatus(status: PersistentRoomBackgroundRunView["status"]): str
 	}
 }
 
-function formatFriendlyRunReason(run: PersistentRoomBackgroundRunView): string | null {
-	const reason = run.reason || run.readiness?.reason || run.error?.code;
-	switch (reason) {
-		case "room_in_use": return "Room is in use; will retry.";
-		case "active_turn_in_flight": return "Room has work in progress.";
-		case "prepared_runtime_boundary": return "Remember or Forget needs a manual decision.";
-		case "model_not_found": return "Scheduled model is not available.";
-		case "provider_not_connected": return "AI provider is not connected.";
-		case "model_policy_unavailable": return "This room's model cannot run. See Room settings, Model.";
-		case "schedule_missing": return "Schedule was deleted before it ran.";
-		case "schedule_disabled": return "Schedule was disabled before it ran.";
-		case "completed": return "Completed.";
-		case "already_completed": return "Already completed; no duplicate execution was performed.";
-		default: break;
-	}
-	const fallback = run.message || run.readiness?.message || run.error?.message;
-	if (fallback?.trim()) return fallback.trim();
-	if (reason?.trim()) return reason.replace(/_/g, " ");
-	return null;
-}
 
 function formatRunScheduleLabel(run: PersistentRoomBackgroundRunView, jobsById: Map<string, PersistentRoomScheduleJob>): string {
 	const scheduleId = run.source.scheduleId;
@@ -195,10 +177,10 @@ function findRelevantRunForJob(job: PersistentRoomScheduleJob, runsByScheduleId:
 
 function deriveOneTimeState(job: PersistentRoomScheduleJob, latestRun: PersistentRoomBackgroundRunView | null): { label: string; tone: "default" | "disabled" | "success" | "warning" | "danger" } {
 	if (latestRun) {
-		switch (latestRun.status) {
+		switch (runShownStatus(latestRun)) {
 			case "queued": return { label: "Queued", tone: "warning" };
 			case "running": return { label: "Running", tone: "warning" };
-			case "deferred": return { label: "Waiting", tone: "warning" };
+			case "deferred": return { label: "Waiting", tone: "default" };
 			case "blocked": return { label: "Blocked", tone: "danger" };
 			case "succeeded": return { label: "Completed", tone: "success" };
 			case "failed": return { label: "Failed", tone: "danger" };
@@ -267,12 +249,12 @@ function hasDraftBuildError<T extends object>(value: T | { error: string }): val
 	return "error" in value;
 }
 
-function ScheduleSummary({ latestRun, nextDueAt, summary }: { latestRun: PersistentRoomBackgroundRunView | null; nextDueAt: string | null; summary: PersistentRoomScheduleSummary }) {
+function ScheduleSummary({ latestRun, nextDueAt, summary, enabledCount }: { latestRun: PersistentRoomBackgroundRunView | null; nextDueAt: string | null; summary: PersistentRoomScheduleSummary; enabledCount: number }) {
 	if (summary.totalCount === 0) return null;
 	const facts = [
-		`${pluralize(summary.totalCount, "schedule")} · ${summary.enabledCount} enabled`,
+		`${pluralize(summary.totalCount, "schedule")} · ${enabledCount} enabled`,
 		nextDueAt ? `next due ${formatTimestamp(nextDueAt)}` : null,
-		latestRun ? `last run: ${formatRunStatus(latestRun.status)}` : null,
+		latestRun ? `last run: ${formatRunStatus(runShownStatus(latestRun))}` : null,
 	].filter(Boolean);
 	return (
 		<div className="room-schedules-summary" aria-label="Scheduled tasks summary">
@@ -613,7 +595,7 @@ function RecentScheduledRunsSection({
 						return (
 							<article className="room-schedules-run" key={run.runId}>
 								<div className="room-schedules-run-primary">
-									<span className={`room-schedules-run-status status-${run.status}`}>{formatRunStatus(run.status)}</span>
+									<span className={`room-schedules-run-status status-${runShownStatus(run)}`}>{formatRunStatus(runShownStatus(run))}</span>
 									<strong>{formatRunScheduleLabel(run, jobsById)}</strong>
 									<span>{formatRunTiming(run)}</span>
 								</div>
@@ -669,7 +651,7 @@ function ScheduleJobCard({
 	const actionDisabled = disabled || Boolean(mutation);
 	const rowState = deriveScheduleState(job, latestRun);
 	const rowStateClass = rowState.tone === "default" ? "room-schedules-record-state" : `room-schedules-record-state ${rowState.tone}`;
-	const latestAttempt = latestRun ? `${formatRunStatus(latestRun.status)} at ${formatTimestamp(getRunEventTimestamp(latestRun))}` : null;
+	const latestAttempt = latestRun ? `${formatRunStatus(runShownStatus(latestRun))} at ${formatTimestamp(getRunEventTimestamp(latestRun))}` : null;
 	const latestReason = latestRun ? formatFriendlyRunReason(latestRun) : null;
 	return (
 		<article className="room-schedules-job">
@@ -892,7 +874,8 @@ export function RoomScheduledTasksSection({ status }: { status: PersistentAgentS
 					</button>
 				)}
 			/>
-			<ScheduleSummary latestRun={latestScheduledRun} nextDueAt={derivedNextDueAt} summary={summary} />
+			{/* A completed one-time task has nothing left to run, so it does not count as enabled. */}
+			<ScheduleSummary latestRun={latestScheduledRun} nextDueAt={derivedNextDueAt} summary={summary} enabledCount={activeScheduleRows.filter(({ job }) => job.enabled).length} />
 			{message && <p className="workspaces-success">{message}</p>}
 			{loading && <p className="settings-empty">Loading scheduled tasks…</p>}
 			{error && <div className="workspaces-error">Could not load scheduled tasks: {error}</div>}

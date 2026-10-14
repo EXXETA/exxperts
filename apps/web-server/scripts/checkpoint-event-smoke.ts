@@ -153,7 +153,8 @@ function invalidRequest(conversationId: string) {
 			writesMemory: false,
 			source: checkpointSource(conversationId),
 		},
-		approvedRecentContext: `${approvedRecentContext()}\n## Deep Memory\nInjected raw memory section.\n`,
+		// A part marker typed after the page's own: the one-string form cannot tell the parts apart.
+		approvedRecentContext: `${approvedRecentContext()}\n**Parked:**\nTyped again.\n`,
 	}, agentId);
 }
 
@@ -278,7 +279,7 @@ try {
 	const eventCountBeforeInvalid = checkpointEventCount();
 	expectThrows(
 		() => invalidRequest("c_checkpoint_event_invalid"),
-		/top-level L1b sections/,
+		/Reload the page, then save again/,
 		"invalid approved Recent Context should reject before write",
 	);
 	assert(archiveCount() === archiveCountBeforeInvalid, "invalid checkpoint should not create archive");

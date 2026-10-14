@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { modelDisplayName } from "../model-names";
+import { modelDisplayName, modelOnProvider } from "../model-names";
 import { useRemoteClientContext } from "../remote-client-context";
 import { fetchRoomModelProviders, putRoomModels, switchConversationModel, switchRoomBusySentence, type ConversationSwitchNotice } from "../room-models-api";
 import type { PersistentAgentStatus, RoomModelLock, RoomModelLockView, RoomModelProviderView, RoomModelRowView, RoomModelsView, RoomModelTask } from "../types";
@@ -9,7 +9,8 @@ import { RoomModelPicker } from "./room-model-picker";
 // Room settings, Model: what this room talks with, and what does its memory
 // work. Two rows. A row the room has not set inherits the default for new
 // rooms and says so; a row is set by picking, and the picker marks each
-// provider's recommended model. A model that cannot run (its provider signed
+// provider's recommended model. "Default (<model>)" first in the list clears
+// the room's own pick, so the row follows the default again. A model that cannot run (its provider signed
 // out, or no longer offered), the room's own or the default, stays on the
 // picker with the reason under it, and the room waits: nothing runs in its
 // place until it is ready again or another is picked. A conversation pick applies to the next
@@ -19,6 +20,9 @@ import { RoomModelPicker } from "./room-model-picker";
 const MODEL_PANE_LINE = "What this room talks with, and what does its memory work.";
 const CONVERSATION_SUB = "The model this room talks with.";
 const MEMORY_SUB = "Runs Remember, Memorize and Review.";
+/** A Memory model too small for this room's memory, greyed out in the picker (drafts). */
+const TOO_SMALL_REASON = "Too small for this room's memory";
+const TOO_SMALL_LINE = "A Memory model must read all of this room's memory at once. To use a smaller one, lower the memory budget in Memory.";
 
 function lockOf(view: { provider: string; model: string } | null | undefined): RoomModelLock | null {
 	return view ? { provider: view.provider, model: view.model } : null;
@@ -33,13 +37,13 @@ function lockName(lock: RoomModelLockView): string {
 }
 
 /** Why the row's model cannot run, in the pane's words. */
-function unavailableSentence(row: RoomModelRowView): string | null {
+function unavailableSentence(row: RoomModelRowView, task: RoomModelTask): string | null {
 	if (!row.chosen || !row.reason || row.effective) return null;
-	const named = `${lockName(row.chosen)} on ${row.chosen.providerLabel}`;
+	const named = modelOnProvider(lockName(row.chosen), row.chosen.providerLabel);
 	const what = row.source === "default" ? `The default, ${named},` : named;
 	return row.reason === "signed-out"
 		? `${what} is signed out. This room waits until you sign in again or choose another model.`
-		: `${what} is no longer offered. This room waits until you choose another model.`;
+		: `${what} is no longer offered. This room waits until you choose another ${task === "memory" ? "Memory model" : "model"}.`;
 }
 
 /** onSwitched: the open conversation continues on `model`, with the line the switch wrote (the pane closes). */
@@ -74,7 +78,7 @@ export function RoomModelSection({ status, onRefresh, onSwitched }: { status: Pe
 	// pane says so instead of offering a button the server would refuse.
 	const roomBusy = switchRoomBusySentence(status.activeLock);
 
-	async function save(task: RoomModelTask, lock: RoomModelLock) {
+	async function save(task: RoomModelTask, lock: RoomModelLock | null) {
 		setSaving(task);
 		setError(null);
 		setSwitchError(null);
@@ -110,9 +114,11 @@ export function RoomModelSection({ status, onRefresh, onSwitched }: { status: Pe
 		const stored = lockOf(view?.stored);
 		const effective = lockOf(view?.effective);
 		const inherited = !stored;
-		const unavailable = view ? unavailableSentence(view) : null;
+		const unavailable = view ? unavailableSentence(view, task) : null;
 		// The model the row is set to, even while it waits: never another.
 		const shown = unavailable ? lockOf(view?.chosen) : stored ?? effective;
+		const fallback = view?.default ?? null;
+		const tooSmall = new Map((view?.tooSmall ?? []).map((lock) => [`${lock.provider}/${lock.model}`, TOO_SMALL_REASON]));
 		return (
 			<div className="settings-row room-model-row">
 				<div className="settings-row-main">
@@ -127,6 +133,9 @@ export function RoomModelSection({ status, onRefresh, onSwitched }: { status: Pe
 						inherited={inherited}
 						disabled={readOnly || saving !== null || !models}
 						ariaLabel={`${label} model`}
+						unpickable={tooSmall}
+						unpickableLine={TOO_SMALL_LINE}
+						defaultChoice={fallback ? { name: lockName(fallback), reason: tooSmall.get(`${fallback.provider}/${fallback.model}`), onPick: () => void save(task, null) } : undefined}
 						onPick={(lock) => void save(task, lock)}
 					/>
 				</div>
@@ -143,13 +152,12 @@ export function RoomModelSection({ status, onRefresh, onSwitched }: { status: Pe
 			</div>
 			{canOfferSwitch && (
 				<div className="room-model-switch">
-					<p className="room-model-switch-line">Applies to your next conversation.</p>
 					{roomBusy ? (
 						<p className="room-model-switch-note">{roomBusy}</p>
 					) : (
 						<>
-							<button type="button" className="rs-btn" disabled={switching || readOnly} onClick={() => void switchOpenConversation()}>{switching ? "Switching…" : "Switch the open conversation too"}</button>
 							<p className="room-model-switch-note">The first answer after a switch reads the whole conversation again.</p>
+							<button type="button" className="rs-btn" disabled={switching || readOnly} onClick={() => void switchOpenConversation()}>{switching ? "Switching…" : "Switch the open conversation too"}</button>
 						</>
 					)}
 					{switchError && <p className="room-model-error" role="alert">{switchError}</p>}

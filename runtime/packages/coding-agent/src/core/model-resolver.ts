@@ -16,7 +16,7 @@ export const defaultModelPerProvider: Record<KnownProvider, string> = {
 	anthropic: "claude-opus-5-5",
 	openai: "gpt-5.4",
 	"azure-openai-responses": "gpt-5.4",
-	"openai-codex": "gpt-6-sol",
+	"openai-codex": "gpt-6.1-sol",
 	deepseek: "deepseek-v4-pro",
 	google: "gemini-3.1-pro-preview",
 	"google-vertex": "gemini-3.1-pro-preview",

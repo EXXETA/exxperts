@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { settingsChordHint } from "../platform";
 import { useRemoteAccessStatus } from "../remote-access-api";
-import { useRemoteClientContext } from "../remote-client-context";
+import { showsComputerOnlyControls, useRemoteClientContext } from "../remote-client-context";
 import { SidebarToggleButton } from "../sidebar-collapse";
 import { requestUpdate, useUpdateNotice } from "../update-notice";
 import { Help } from "./Help";
@@ -134,13 +134,13 @@ export function ConfigMenu({ onSettings, appearance, onSetAppearance }: { onSett
  * its own line above the gear row: as long as the tunnel listener is meant
  * to be up, the fact is one glance away without crowding the gear. "VPN off"
  * = remote stays enabled but the tunnel address is gone — a deliberate state,
- * so it renders calm grey, not amber. Renders nothing on remote devices and
- * while remote access is off.
+ * so it renders calm grey, not amber. Renders nothing on remote devices, on a
+ * shared server and while remote access is off.
  */
 export function RemoteOnPill({ onSettings }: { onSettings: (section?: "remote") => void }) {
 	const clientContext = useRemoteClientContext();
 	const remoteStatus = useRemoteAccessStatus();
-	const showRemote = !clientContext.remote;
+	const showRemote = showsComputerOnlyControls(clientContext);
 	const remoteOn = showRemote && remoteStatus?.enabled === true;
 	const remotePaused = showRemote && !remoteStatus?.enabled && remoteStatus?.stateFile === "valid";
 	if (!remoteOn && !remotePaused) return null;
@@ -158,6 +158,9 @@ export function RemoteOnPill({ onSettings }: { onSettings: (section?: "remote") 
 }
 
 export function ProductSidebar({ onHome, onSettings, onDashboard, onMemory, theme, appearance, onSetAppearance, active }: { onHome: () => void; onSettings: (section?: "remote") => void; onDashboard: () => void; onMemory?: () => void; theme: ThemeMode; appearance: AppearancePreference; onSetAppearance: (pref: AppearancePreference) => void; active: ProductSidebarActive }) {
+	// The Wallet reads the whole usage log, which on a shared server only its
+	// admin may read: it is not offered there.
+	const { sharedServer } = useRemoteClientContext();
 	return (
 		<aside className="product-sidebar">
 			<div className="product-sidebar-header">
@@ -174,9 +177,11 @@ export function ProductSidebar({ onHome, onSettings, onDashboard, onMemory, them
 						<button className={`list-btn ${active === "memory" ? "active" : ""}`} onClick={onMemory} title="What your rooms know, and questions across all of it">Memory</button>
 					</div>
 				)}
-				<div className="product-nav-section">
-					<button className={`list-btn ${active === "dashboard" ? "active" : ""}`} onClick={onDashboard} title="What your exxperts spend — API costs and plan usage">Wallet</button>
-				</div>
+				{!sharedServer && (
+					<div className="product-nav-section">
+						<button className={`list-btn ${active === "dashboard" ? "active" : ""}`} onClick={onDashboard} title="What your exxperts spend — API costs and plan usage">Wallet</button>
+					</div>
+				)}
 			</nav>
 			{/* No connection status here on purpose: a healthy app says nothing
 			    about its plumbing, and a sustained failure gets a banner that

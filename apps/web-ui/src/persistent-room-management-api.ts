@@ -145,6 +145,20 @@ export function updatePersistentRoomMaintenanceSettings(agentId: PersistentAgent
 	);
 }
 
+/** The refusal saving this memory budget would get with the room's Memory model as it is now, or null when it would save; nothing is saved. */
+export async function checkPersistentRoomMemoryBudget(agentId: PersistentAgentId, memoryBudgetTokens: number): Promise<string | null> {
+	const response = await fetchJson<PersistentRoomMaintenanceSettingsResponse & { budgetRefusal?: string | null }>(
+		`/api/persistent-agents/${encodeURIComponent(agentId)}/maintenance-settings`,
+		{
+			method: "PUT",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ memoryBudgetTokens, dryRun: true }),
+		},
+		"Failed to check the memory budget."
+	);
+	return response.budgetRefusal ?? null;
+}
+
 export interface PersistentRoomBashSettings {
 	schemaVersion: 1;
 	autoApprove: boolean;
@@ -180,6 +194,8 @@ export function updatePersistentRoomBashSettings(agentId: PersistentAgentId, upd
 
 export interface PersistentRoomEnabledSkillStatus {
 	name: string;
+	/** The name the Skills pane shows, when the library still holds the skill. */
+	displayName?: string;
 	sha256: string;
 	currentSha256: string | null;
 	status: "ok" | "hash-mismatch" | "missing";

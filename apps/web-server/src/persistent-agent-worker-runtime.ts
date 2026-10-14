@@ -34,6 +34,13 @@ export interface IsolatedPersistentAgentWorkerInput<TModelLock extends { provide
 	 */
 	timeoutMs?: number;
 	/**
+	 * Ceiling on silence: when no session event (a text or thinking delta
+	 * included) arrives for this many milliseconds, the turn is aborted and
+	 * the call fails as "stalled". The wait for the first event gets twice as
+	 * long, since a large prompt takes a while to read. Omitted, no idle limit.
+	 */
+	idleTimeoutMs?: number;
+	/**
 	 * Reasoning level for the worker session; omitted, the session inherits the
 	 * configured default. A single-shot transform (a fold, an ops proposal, a
 	 * checkpoint compression) passes "off": reasoning tokens count against the
@@ -47,6 +54,8 @@ export interface IsolatedPersistentAgentWorkerInput<TModelLock extends { provide
 	 * modelMaxOutputTokens, so a truncation names the limit that applied.
 	 */
 	maxTokens?: number;
+	/** The prompt cache this call asks for (memory-call-cache.ts); omitted, the provider default. */
+	cacheRetention?: CreateAgentSessionOptions["cacheRetention"];
 }
 
 export interface IsolatedPersistentAgentWorkerResult {
@@ -103,7 +112,11 @@ export class IsolatedPersistentAgentWorkerTurnError extends Error {
 	readonly workerLabel: string;
 	readonly stopReason: "error" | "aborted";
 	readonly providerMessage: string | undefined;
-	constructor(workerLabel: string, stopReason: "error" | "aborted", providerMessage: string | undefined) {
+	/** Why an aborted turn stopped when nobody cancelled it: its ceiling ran out, or the stream went silent. */
+	readonly reason: "timed-out" | "stalled" | undefined;
+	/** What the turn used before it failed: a failed call is paid for too. */
+	usage: IsolatedPersistentAgentWorkerResult["usage"];
+	constructor(workerLabel: string, stopReason: "error" | "aborted", providerMessage: string | undefined, extra: { reason?: "timed-out" | "stalled"; usage?: IsolatedPersistentAgentWorkerResult["usage"] } = {}) {
 		const detail = providerMessage?.trim() || undefined;
 		super(stopReason === "aborted"
 			? `${workerLabel} was aborted before it answered${detail ? `: ${detail}` : ""}`
@@ -112,6 +125,8 @@ export class IsolatedPersistentAgentWorkerTurnError extends Error {
 		this.workerLabel = workerLabel;
 		this.stopReason = stopReason;
 		this.providerMessage = detail;
+		this.reason = extra.reason;
+		this.usage = extra.usage;
 	}
 }
 
@@ -134,7 +149,8 @@ export function isolatedPersistentAgentWorkerFailure(input: {
 	if (input.stopReason === "error" || input.stopReason === "aborted") {
 		return new IsolatedPersistentAgentWorkerTurnError(input.workerLabel, input.stopReason, input.errorMessage);
 	}
-	if (!input.text.trim()) return new Error(input.emptyTextError);
+	// How the turn stopped rides along: a reply the thinking spent reads "length" in the diagnostics record.
+	if (!input.text.trim()) return Object.assign(new Error(input.emptyTextError), { stopReason: input.stopReason });
 	return undefined;
 }
 
@@ -142,6 +158,7 @@ export async function runIsolatedPersistentAgentWorker<TModelLock extends { prov
 	input: IsolatedPersistentAgentWorkerInput<TModelLock>,
 ): Promise<IsolatedPersistentAgentWorkerResult> {
 	const workerLabel = input.workerLabel ?? "persistent-agent worker";
+	const idleTimeoutMs = typeof input.idleTimeoutMs === "number" && input.idleTimeoutMs > 0 ? input.idleTimeoutMs : undefined;
 	const registry = input.modelRegistry;
 	const requested = registry.find(input.modelLock.provider, input.modelLock.model);
 	const model = input.resolveExpectedModel(registry, input.modelLock);
@@ -192,6 +209,7 @@ export async function runIsolatedPersistentAgentWorker<TModelLock extends { prov
 		model,
 		...(workerMaxTokens ? { maxTokens: workerMaxTokens } : {}),
 		...(input.thinkingLevel ? { thinkingLevel: input.thinkingLevel } : {}),
+		...(input.cacheRetention ? { cacheRetention: input.cacheRetention } : {}),
 		maxRetries: 0,
 		autoCompaction: false,
 		autoRetry: false,
@@ -206,6 +224,9 @@ export async function runIsolatedPersistentAgentWorker<TModelLock extends { prov
 	let errorMessage: string | undefined;
 	let truncated = false;
 	let timedOut = false;
+	let stalled = false;
+	let idleTimer: ReturnType<typeof setTimeout> | undefined;
+	let armIdle: (ms: number) => void = () => {};
 	try {
 		if (created.session.systemPrompt !== input.workerSystemPrompt) {
 			throw new Error(`${workerLabel} isolated worker system prompt was not exact`);
@@ -230,6 +251,12 @@ export async function runIsolatedPersistentAgentWorker<TModelLock extends { prov
 		}
 
 		created.session.subscribe((event: any) => {
+			// Only the provider's own events count: the runtime announces the
+			// turn and the prompt before it calls the provider, and some
+			// providers open the assistant message before the request is sent.
+			// A delta (text or thinking) or the finished reply is the provider
+			// answering; until the first one, the longer first wait holds.
+			if (event?.type === "message_update" || (event?.type === "message_end" && event?.message?.role === "assistant")) armIdle(idleTimeoutMs ?? 0);
 			if (input.onEvent) {
 				// A listener failure must never break the worker itself.
 				try { input.onEvent(event); } catch {}
@@ -272,15 +299,31 @@ export async function runIsolatedPersistentAgentWorker<TModelLock extends { prov
 		// step that is waiting for it.
 		const timeoutMs = typeof input.timeoutMs === "number" && input.timeoutMs > 0 ? input.timeoutMs : undefined;
 		const timer = timeoutMs ? setTimeout(() => { timedOut = true; onAbort(); }, timeoutMs) : undefined;
+		// The silence ceiling: every provider event, a text or thinking delta
+		// included, starts it again, so a long answer that is still arriving
+		// never trips it; only a stream that stopped coming does. The first
+		// event may take twice as long: a large prompt is read first.
+		armIdle = (ms: number) => {
+			if (!idleTimeoutMs) return;
+			if (idleTimer) clearTimeout(idleTimer);
+			idleTimer = setTimeout(() => { if (!timedOut) { stalled = true; onAbort(); } }, ms);
+		};
+		armIdle((idleTimeoutMs ?? 0) * 2);
 		try {
 			await created.session.prompt(input.triggerPrompt);
 		} finally {
 			if (timer) clearTimeout(timer);
+			if (idleTimer) clearTimeout(idleTimer);
+			armIdle = () => {};
 			input.signal?.removeEventListener("abort", onAbort);
 		}
 		if (timedOut) {
 			const seconds = Math.round((timeoutMs ?? 0) / 1000);
-			throw new IsolatedPersistentAgentWorkerTurnError(workerLabel, "aborted", `it ran past its ${seconds} second limit and was stopped`);
+			throw new IsolatedPersistentAgentWorkerTurnError(workerLabel, "aborted", `it ran past its ${seconds} second limit and was stopped`, { reason: "timed-out", usage });
+		}
+		if (stalled) {
+			const seconds = Math.round((idleTimeoutMs ?? 0) / 1000);
+			throw new IsolatedPersistentAgentWorkerTurnError(workerLabel, "aborted", `it sent nothing for ${seconds} seconds and was stopped`, { reason: "stalled", usage });
 		}
 	} finally {
 		try {
@@ -291,6 +334,9 @@ export async function runIsolatedPersistentAgentWorker<TModelLock extends { prov
 	}
 
 	const failure = isolatedPersistentAgentWorkerFailure({ workerLabel, text, stopReason, errorMessage, emptyTextError: input.emptyTextError });
-	if (failure) throw failure;
+	if (failure) {
+		(failure as Error & { usage?: unknown }).usage = usage;
+		throw failure;
+	}
 	return { text, usage, stopReason, truncated, ...(workerMaxTokens ? { modelMaxOutputTokens: workerMaxTokens } : {}) };
 }

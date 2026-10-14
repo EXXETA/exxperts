@@ -23,6 +23,7 @@ import {
 	type MemoryDocument,
 } from "./memory-entries.js";
 import { loadMemoryDocument, memoryRoomBusy, readArchive } from "./memory-entries-store.js";
+import { clearKeptDiscussion, firstReadOnce, keepDiscussionTurns } from "./memorize-discussion-keep.js";
 import { createPersistentAgentInstance, fingerprintL1bSource, refuseOversizedMaintenancePrompt } from "./persistent-agents.js";
 import {
 	buildReviewAssessmentPrompt,
@@ -44,7 +45,7 @@ import {
 
 /** The one sentence a room hears when its notes are too large for the model reading them. */
 const REVIEW_OVERFLOW_GUIDANCE =
-	"This room's notes are the material being read and cannot be shortened behind the person's back: choose a larger maintenance model in AI setup, then read the notes again.";
+	"This room's notes are the material being read and cannot be shortened behind the person's back: choose a Memory model that can read more at once in Room settings, Model, then read the notes again.";
 
 const NOTHING_WAS_WRITTEN = "no memory has been written";
 const ASSESSMENT_MAX_CHARS = 20_000;
@@ -181,44 +182,50 @@ export function registerReviewAssessRoutes(app: FastifyInstance, deps: ReviewAss
 			const notes = readNotes(id, model, deps);
 			assertAvailable(notes.availability);
 			const retryFeedback = parseReviewRetryFeedback((req.body as any)?.retryFeedback);
-			const basePrompt = buildReviewAssessmentPrompt(notes.promptInput);
-			const assembly = retryFeedback ? buildReviewAssessmentPrompt({ ...notes.promptInput, retryFeedback }) : basePrompt;
-			refuseOversizedMaintenancePrompt({
-				agentId: id,
-				processLabel: "Review first read",
-				model,
-				promptEstimatedTokens: assembly.telemetry.promptEstimatedTokens,
-				window: deps.resolveModelWindow?.(model),
-				guidance: REVIEW_OVERFLOW_GUIDANCE,
-			});
-			const titles = notes.promptInput.topics.map((topic) => topic.title);
-			const warnings: string[] = [];
-			let text = (await deps.generate(id, assembly.prompt, model, { thinkingLevel: "low" })).text.trim();
-			let parsed = parseReviewAssessment(text, titles);
-			const missing = parsed.warnings.filter((warning) => warning.includes("has no"));
-			if (missing.length > 0) {
-				const retried = (await deps.generate(id, buildReviewAssessmentRetryPrompt(basePrompt.prompt, missing), model, { thinkingLevel: "low" })).text.trim();
-				const reparsed = parseReviewAssessment(retried, titles);
-				if (retried && reparsed.warnings.length < parsed.warnings.length) {
-					text = retried;
-					parsed = reparsed;
-					warnings.push(`the first read was asked again once (first attempt: ${missing.join("; ")})`);
-				} else {
-					warnings.push(`the first read was asked again once (first attempt: ${missing.join("; ")}), but the second was not better, so the first is shown`);
+			// One first read per memory and model, kept for a reload and joined by a
+			// second tab; Reassess reads again with its feedback.
+			const roomDir = createPersistentAgentInstance(id).rootDir;
+			if (retryFeedback) clearKeptDiscussion(roomDir, "review");
+			return await firstReadOnce(roomDir, model, fingerprintL1bSource(notes.l1b).value, async () => {
+				const basePrompt = buildReviewAssessmentPrompt(notes.promptInput);
+				const assembly = retryFeedback ? buildReviewAssessmentPrompt({ ...notes.promptInput, retryFeedback }) : basePrompt;
+				refuseOversizedMaintenancePrompt({
+					agentId: id,
+					processLabel: "Review first read",
+					model,
+					promptEstimatedTokens: assembly.telemetry.promptEstimatedTokens,
+					window: deps.resolveModelWindow?.(model),
+					guidance: REVIEW_OVERFLOW_GUIDANCE,
+				});
+				const titles = notes.promptInput.topics.map((topic) => topic.title);
+				const warnings: string[] = [];
+				let text = (await deps.generate(id, assembly.prompt, model, { thinkingLevel: "low" })).text.trim();
+				let parsed = parseReviewAssessment(text, titles);
+				const missing = parsed.warnings.filter((warning) => warning.includes("has no"));
+				if (missing.length > 0) {
+					const retried = (await deps.generate(id, buildReviewAssessmentRetryPrompt(basePrompt.prompt, missing), model, { thinkingLevel: "low" })).text.trim();
+					const reparsed = parseReviewAssessment(retried, titles);
+					if (retried && reparsed.warnings.length < parsed.warnings.length) {
+						text = retried;
+						parsed = reparsed;
+						warnings.push(`the first read was asked again once (first attempt: ${missing.join("; ")})`);
+					} else {
+						warnings.push(`the first read was asked again once (first attempt: ${missing.join("; ")}), but the second was not better, so the first is shown`);
+					}
 				}
-			}
-			// The machine's findings are filled in after the model's read is parsed,
-			// and their topics join "Topics to tidy" so the tidy is handed them.
-			const fields = withMachineFindings(parsed.fields, notes.findings, titles);
-			return {
-				agentId: id,
-				writesMemory: false,
-				availability: { ...notes.availability, recommendedDepth: recommendedReviewDepth({ overBudget: notes.availability.overBudget, staleOrContradicts: fields.staleOrContradicts, lookAlikeTopics: fields.lookAlikeTopics.length > 0 }) },
-				assessmentMarkdown: text,
-				fields,
-				warnings: [...parsed.warnings, ...warnings, NOTHING_WAS_WRITTEN],
-				source: { l1bFingerprint: fingerprintL1bSource(notes.l1b) },
-			};
+				// The machine's findings are filled in after the model's read is parsed,
+				// and their topics join "Topics to tidy" so the tidy is handed them.
+				const fields = withMachineFindings(parsed.fields, notes.findings, titles);
+				return {
+					agentId: id,
+					writesMemory: false,
+					availability: { ...notes.availability, recommendedDepth: recommendedReviewDepth({ overBudget: notes.availability.overBudget, staleOrContradicts: fields.staleOrContradicts, lookAlikeTopics: fields.lookAlikeTopics.length > 0 }) },
+					assessmentMarkdown: text,
+					fields,
+					warnings: [...parsed.warnings, ...warnings, NOTHING_WAS_WRITTEN],
+					source: { l1bFingerprint: fingerprintL1bSource(notes.l1b) },
+				};
+			}, { fresh: Boolean(retryFeedback), kind: "review" });
 		} catch (e) {
 			return deps.errorReply(reply, e);
 		}
@@ -244,10 +251,13 @@ export function registerReviewAssessRoutes(app: FastifyInstance, deps: ReviewAss
 			});
 			if (!assembly.tokenBudget.canContinue) throw new Error("This discussion has grown too long to carry on. Press Continue to start the tidy with what you have agreed so far.");
 			const generated = await deps.generate(id, assembly.prompt, model, { thinkingLevel: "low" });
+			const message = { role: "assistant" as const, content: generated.text.trim() };
+			// The discussion as it stands, kept beside its first read for a reload.
+			keepDiscussionTurns(createPersistentAgentInstance(id).rootDir, fingerprintL1bSource(notes.l1b).value, [...request.messages, ...(request.userMessage ? [{ role: "user", content: request.userMessage }] : []), message], assembly.tokenBudget, "review");
 			return {
 				agentId: id,
 				writesMemory: false,
-				message: { role: "assistant" as const, content: generated.text.trim() },
+				message,
 				tokenBudget: assembly.tokenBudget,
 				warnings: [assembly.tokenBudget.state === "soft_warning" ? "this discussion is approaching the length the tidy can carry" : "", NOTHING_WAS_WRITTEN].filter(Boolean),
 			};

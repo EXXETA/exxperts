@@ -103,7 +103,7 @@ Current identities:
 | Web profile label | Claude |
 | Runtime provider id | `anthropic` |
 | CLI/TUI OAuth option | Anthropic (Claude Pro/Max) |
-| Recommended approved persistent-room model | `anthropic/claude-opus-4-8` |
+| Recommended approved persistent-room model | `anthropic/claude-opus-5-5` |
 
 Requirements:
 
@@ -323,10 +323,10 @@ Current `chatgpt-codex` mapping:
 
 | Process | Approved provider/model |
 | --- | --- |
-| Persistent-room conversation | `openai-codex/gpt-6-sol`, `openai-codex/gpt-6.1-sol`, `openai-codex/gpt-6-astra`, `openai-codex/gpt-6-luna`, `openai-codex/gpt-5.6-sol`, `openai-codex/gpt-5.6-terra`, `openai-codex/gpt-5.6-luna` |
-| Memory row (Remember, Memorize, Review, and the other memory work) | Any approved model; recommended: `openai-codex/gpt-6-sol` |
+| Persistent-room conversation | `openai-codex/gpt-6.1-sol`, `openai-codex/gpt-6-astra`, `openai-codex/gpt-6-luna`, `openai-codex/gpt-6-sol`, `openai-codex/gpt-5.6-sol`, `openai-codex/gpt-5.6-terra`, `openai-codex/gpt-5.6-luna` |
+| Memory row (Remember, Memorize, Review, and the other memory work) | Any approved model; recommended: `openai-codex/gpt-6.1-sol` |
 
-`gpt-6-sol` is the default/recommended model. The list follows the order of OpenAI's Codex app.
+`gpt-6.1-sol` is the default conversation model and the default Memory model. The list puts the default first, then follows the order of OpenAI's Codex models page: its recommended models, then the previous ones. On the update, a conversation or Memory default of GPT-6 Sol moves to GPT-6.1 Sol once, unless the app can tell it was chosen: kept from the conversation model last picked before 0.14, or changed after 0.14 first set it. To keep GPT-6 Sol, choose it again in **Settings, AI setup**; it then stays. A room's own pick, and a conversation already under way, keep their model.
 
 The room list of these two providers is fixed by the release. Each room picks its Conversation and Memory models from it in Room settings, Model. A conversation keeps the model it started on even after a list change; new conversations start on the room's Conversation row.
 
@@ -338,10 +338,10 @@ Current `anthropic` mapping:
 
 | Process | Approved provider/model |
 | --- | --- |
-| Persistent-room conversation | `anthropic/claude-opus-5-5`, `anthropic/claude-fable-5-1`, `anthropic/claude-sonnet-5-5`, `anthropic/claude-sonnet-5`, `anthropic/claude-haiku-4-5`, `anthropic/claude-opus-5`, `anthropic/claude-opus-4-8`, `anthropic/claude-fable-5`, `anthropic/claude-sonnet-4-6`, `anthropic/claude-opus-4-7`, `anthropic/claude-opus-4-6` |
+| Persistent-room conversation | `anthropic/claude-opus-5-5`, `anthropic/claude-fable-5-1`, `anthropic/claude-sonnet-5-5`, `anthropic/claude-haiku-5-5`, `anthropic/claude-fable-5`, `anthropic/claude-opus-5`, `anthropic/claude-sonnet-5` |
 | Memory row (Remember, Memorize, Review, and the other memory work) | Any approved model; recommended: `anthropic/claude-opus-5-5` |
 
-`claude-opus-5-5` is the default/recommended model. The list follows Anthropic's tier order, newest first inside a tier.
+`claude-opus-5-5` is the default/recommended model. The list puts the default first, then follows Anthropic's order (Fable, Opus, Sonnet, Haiku), current models before the previous ones. Claude Opus 4.8, Opus 4.7, Opus 4.6, Sonnet 4.6 and Haiku 4.5 are no longer on the list: a conversation started on one of them keeps answering, and a new conversation in a room set on one asks for another model.
 
 The room list of these two providers is fixed by the release. Each room picks its Conversation and Memory models from it in Room settings, Model. A conversation keeps the model it started on even after a list change; new conversations start on the room's Conversation row.
 

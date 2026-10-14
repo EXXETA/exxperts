@@ -330,6 +330,30 @@ No checkpointed sessions yet.
 	assert(fs.readFileSync(counterL1bPath, "utf-8").includes("<!-- entries: next=9 -->"), "and the file carries the lifted counter from here on");
 	assert(loadMemoryDocument(counterRoom, { migrate: false }).doc.nextEntryNumber === 9 && loadMemoryDocument(counterRoom, { migrate: "in-memory" }).doc.nextEntryNumber === 9, "every way of loading agrees on the counter");
 
+	// A marked file that still holds the scaffold's starter goal without a marker:
+	// the room reads it every turn, so it is a note the person can see and change.
+	const starterRoom = createPersistentAgentFromScaffoldInput({ displayName: "Starter Goal Smoke Room", userName: "Synthetic User", preferredUserAddress: "Sam" }).agent.agentId;
+	const starterL1bPath = path.join(root, starterRoom, "L1b", "current.md");
+	const scaffolded = fs.readFileSync(starterL1bPath, "utf-8");
+	const starterLine = "- Get to know Sam: current projects, priorities, and how they prefer to work.";
+	assert(scaffolded.includes(starterLine), "the scaffold writes the starter goal");
+	const markedDeep = "## Deep Memory\n\n<!-- entries: next=2 -->\n\n### Team\n\n<!-- e: id=m-0001 kind=fact saved=2026-09-01 -->\n- Jonas leads billing.\n\n";
+	const seeded = scaffolded.replace(/## Deep Memory[\s\S]*?(?=## Active Items)/, markedDeep);
+	const afterSave = seeded.replace(starterLine, `${starterLine}\n\n<!-- e: id=m-0002 kind=item saved=2026-10-11 status=open -->\n- Book the offsite venue.`).replace("next=2", "next=3");
+	for (const [label, text] of [["beside marked notes in other sections", seeded], ["above a marked item", afterSave]] as const) {
+		fs.writeFileSync(starterL1bPath, text);
+		const starterOf = (doc: ReturnType<typeof parseMemoryDocument>) => doc.topics.filter((topic) => topic.section === "Active Items").flatMap((topic) => topic.entries).find((entry) => entry.text.startsWith("- Get to know Sam"));
+		assert(parseMemoryDocument(text).topics.every((topic) => !topic.intro), `${label}: the starter goal is read as a note, never as hidden topic prose`);
+		const shown = loadMemoryDocument(starterRoom, { migrate: "in-memory" });
+		assert(starterOf(shown.doc)?.id && starterOf(shown.doc)?.status === "open", `${label}: Room settings shows the starter goal as an open item with an id`);
+		assert(fs.readFileSync(starterL1bPath, "utf-8") === text, `${label}: showing it writes nothing`);
+		const loaded = loadMemoryDocument(starterRoom);
+		const marked = starterOf(loaded.doc);
+		const ids = loaded.doc.topics.flatMap((topic) => topic.entries.map((entry) => entry.id));
+		assert(loaded.migrated && marked?.id && new Set(ids).size === ids.length, `${label}: the first write marks it once, with an id of its own, got ${ids.join(", ")}`);
+		assert(loadMemoryDocument(starterRoom).migrated === false, `${label}: and the next load writes nothing`);
+	}
+
 	console.log("memory-entries-store-smoke: OK");
 } catch (error) {
 	console.error(error instanceof Error ? error.stack || error.message : error);

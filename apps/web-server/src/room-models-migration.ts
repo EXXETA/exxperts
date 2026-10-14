@@ -17,6 +17,12 @@
 //   pick, written and read back before the old file is removed;
 // - a conversation already open keeps its own lock: nothing here touches a
 //   thread.
+// - a default a later release moved (room-models.ts, DEFAULT_MOVES) follows
+//   it once, unless something on disk shows the person chose it: this
+//   migration took the conversation default from their last pick, or they
+//   changed the row after this migration wrote it. The move is recorded so
+//   it is made once, and so a Remember page written before a memory move
+//   still saves.
 //
 // Nothing is removed before its replacement is written and read back. With no
 // provider signed in there is nothing to take the defaults from, so they are
@@ -30,7 +36,7 @@ import { persistentAgentModelLocksEqual, type PersistentAgentModelLock } from ".
 import { readPersistentAgentAiProfileState } from "./persistent-agent-ai-profile-state.js";
 import { readPersistentRoomPreferredModel, persistentRoomPreferredModelPath } from "./persistent-room-preferred-model.js";
 import { DEFAULT_PERSISTENT_ROOM_AGENTS_ROOT } from "./persistent-room-workspace-policy.js";
-import { createRoomModelCatalog, derivedAiDefault, LEGACY_ROOM_MODEL_SELECTION_FILE, readRoomModels, readStoredAiDefaults, ROOM_MODEL_TASKS, writeAiDefaults, writeRoomModels, type RoomModelCatalog, type RoomModelTask, type RoomModelUnavailableReason } from "./room-models.js";
+import { createRoomModelCatalog, derivedAiDefault, DEFAULT_MOVES, LEGACY_ROOM_MODEL_SELECTION_FILE, readDefaultMove, readRoomModels, readStoredAiDefaults, ROOM_MODEL_TASKS, writeAiDefaults, writeDefaultMove, writeRoomModels, type RoomModelCatalog, type RoomModelTask, type RoomModelUnavailableReason } from "./room-models.js";
 import { productAppStatePath } from "../../../pi-package/product-state-paths.js";
 
 export const ROOM_MODELS_MIGRATION_REPORT_FILE = productAppStatePath("room-models-migration.json");
@@ -80,6 +86,9 @@ export function migrateRoomModels(options: RoomModelsMigrationOptions = {}): Roo
 	const log = options.log ?? (() => {});
 	const now = options.now ?? new Date();
 	const catalog = options.catalog ?? createRoomModelCatalog();
+	// What an earlier start wrote, read before this one may write its own.
+	let previous: Partial<RoomModelsMigrationReport> | null = null;
+	try { previous = JSON.parse(fs.readFileSync(ROOM_MODELS_MIGRATION_REPORT_FILE, "utf-8")); } catch { /* none yet */ }
 	const report: RoomModelsMigrationReport = { schemaVersion: 1, migratedAt: now.toISOString(), defaults: { written: false }, collapsed: [], rooms: [], unavailable: [], errors: [] };
 
 	// 1. The defaults for new rooms, once.
@@ -121,6 +130,38 @@ export function migrateRoomModels(options: RoomModelsMigrationOptions = {}): Roo
 		report.errors.push(`defaults: ${(error as Error).message}`);
 	}
 
+	// 1b. A default a release moved, once, unless something on disk shows the
+	// person chose it. The record of what the migration wrote is this start's,
+	// or the earlier start's that wrote the defaults: a conversation default
+	// it took from the person's last pick stays, and so does a row the person
+	// changed since it was written. With no such record (none, or one that
+	// wrote nothing) nothing shows a choice, and the default moves. A room's
+	// own pick and a conversation's lock are never touched.
+	const proof = report.defaults.written ? report.defaults : previous?.defaults?.written === true ? previous.defaults : undefined;
+	for (const task of ROOM_MODEL_TASKS) {
+		try {
+			const stored = readStoredAiDefaults()[task];
+			const written = proof?.[task];
+			const chosen = (task === "conversation" && proof?.conversationFrom === "last-pick") || Boolean(stored && written && !persistentAgentModelLocksEqual(stored, written));
+			// A move whose last record did not save, though the default did, is made.
+			const cut = readDefaultMove(task);
+			if (cut && !cut.done && stored && persistentAgentModelLocksEqual(stored, cut.to)) writeDefaultMove(task, { ...cut, done: true });
+			const made = readDefaultMove(task);
+			const move = DEFAULT_MOVES[task].find((candidate) => stored && !chosen && persistentAgentModelLocksEqual(stored, candidate.from)
+				&& !(made?.done && persistentAgentModelLocksEqual(made.from, candidate.from) && persistentAgentModelLocksEqual(made.to, candidate.to)));
+			if (move) {
+				const record = { from: { ...move.from }, to: { ...move.to }, at: now.toISOString() };
+				writeDefaultMove(task, record);
+				const moved = writeAiDefaults({ [task]: { ...move.to } })[task];
+				if (!moved || !persistentAgentModelLocksEqual(moved, move.to)) throw new Error(`the moved ${task} default did not read back as written`);
+				writeDefaultMove(task, { ...record, done: true });
+				log(`room models migration: the ${task} default moved from ${move.from.model} to ${move.to.model}`);
+			}
+		} catch (error) {
+			report.errors.push(`${task} default: ${(error as Error).message}`);
+		}
+	}
+
 	// 2. Each room's preferred model becomes its conversation pick.
 	for (const agentId of listRoomIds(root)) {
 		try {
@@ -154,11 +195,17 @@ export function migrateRoomModels(options: RoomModelsMigrationOptions = {}): Roo
 	for (const error of report.errors) log(`room models migration: ${error}`);
 
 	// The report is kept only when something moved, so a start with nothing to
-	// do never overwrites the record of the start that did the work.
+	// do never overwrites the record of the start that did the work. A start
+	// that did not write the defaults (a room's move, an error, a default move
+	// that failed) keeps that start's record of them, so a later start can
+	// still tell which defaults the person chose.
 	if (report.defaults.written || report.defaults.lastPickRemoved || report.rooms.length > 0 || report.errors.length > 0) {
+		const kept = !report.defaults.written && previous?.defaults?.written === true
+			? { ...report, defaults: { ...previous.defaults, ...(report.defaults.lastPickRemoved ? { lastPickRemoved: true } : {}) } }
+			: report;
 		try {
 			fs.mkdirSync(path.dirname(ROOM_MODELS_MIGRATION_REPORT_FILE), { recursive: true, mode: 0o700 });
-			fs.writeFileSync(ROOM_MODELS_MIGRATION_REPORT_FILE, `${JSON.stringify(report, null, 2)}\n`, { mode: 0o600 });
+			fs.writeFileSync(ROOM_MODELS_MIGRATION_REPORT_FILE, `${JSON.stringify(kept, null, 2)}\n`, { mode: 0o600 });
 		} catch (error) {
 			log(`room models migration: the report could not be written: ${(error as Error).message}`);
 		}

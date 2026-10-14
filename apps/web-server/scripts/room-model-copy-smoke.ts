@@ -25,13 +25,19 @@ try {
 
 	const model = { provider: "openai-codex", model: "gpt-6-sol", label: "ChatGPT Plus/Pro \u2014 GPT-6 Sol" };
 
+	// 0. Consult's overflow names the Memory model as every other line does, in plain words.
+	{
+		const consult = await import("../src/consult.js");
+		const overflow = new consult.ConsultPromptOverflowError({ targetAgentId: "other-room", model: { provider: "openai-codex", model: "gpt-6-sol" }, promptEstimatedTokens: 300000, promptTokenBudget: 200000 }).message;
+		assert(overflow.includes("choose a Memory model that can read more at once for that room") && !/memory model|larger window/.test(overflow), `consult's overflow, got ${overflow}`);
+	}
+
 	// 1. Remember's own refusals reach the person as written.
 	const plain = [
 		agents.REMEMBER_GENERATING_MESSAGE,
 		agents.REMEMBER_ALREADY_GENERATING_MESSAGE,
 		agents.REMEMBER_MEMORY_MODEL_CHANGED_MESSAGE,
-		twoStage.rememberWindowTooSmallMessage(model, 272_000),
-		twoStage.rememberNotesTooLongMessage(model, 272_000, 3),
+		twoStage.rememberWindowTooSmallMessage(model),
 	];
 	for (const sentence of plain) {
 		assert(client.isPlainRememberSentence(sentence), `the client must pass this sentence through unchanged: ${sentence}`);
@@ -71,18 +77,16 @@ try {
 			{ kind: "assistant", id: "a1", text: "The listing shows two files that matter." },
 		],
 	});
-	// A shortened tool output is a count on the read, not a warning: the
-	// approval screen says it in words that name tool output.
+	// A shortened tool output is a count on the read, for the diagnostics only.
 	assert(trimmed.telemetry.elidedItemCount === 1, `one shortened tool output should be counted once, got ${trimmed.telemetry.elidedItemCount}`);
-	const trimmedSentences = client.rememberReadSentences({ mode: "one-pass", reads: 1, model, trimmedToolOutputs: trimmed.telemetry.elidedItemCount, toolOutputCapChars: 4_000 });
-	assert(trimmedSentences.includes("One tool output over 4,000 characters was shortened before reading.") && !trimmedSentences.some((sentence) => /longest message/.test(sentence)), `the read must name tool output: ${JSON.stringify(trimmedSentences)}`);
 
-	// 4. The approval screen names the model the way the app does everywhere.
+	// 4. The dialog names the model the way the app does everywhere, and says
+	// nothing of how it reads: only a window too small for any read.
 	const shown = client.rememberModelName(model);
-	assert(shown === "GPT-6 Sol", `the approval screen must name the model, not its wire label, got ${shown}`);
-	const read = client.rememberReadSentences({ mode: "parts", reads: 3, model, trimmedToolOutputs: 0, toolOutputCapChars: 4_000 });
-	assert(read[0] === "Read in 3 parts by GPT-6 Sol.", `the read line, got ${read[0]}`);
-	assert(client.rememberEstimateSentence({ mode: "one-pass", reads: 1, model }) === "Remember reads this conversation in one pass on GPT-6 Sol.", "the estimate line names the model plainly");
+	assert(shown === "GPT-6 Sol", `the dialog must name the model, not its wire label, got ${shown}`);
+	assert(client.rememberEstimateSentence({ mode: "one-pass", reads: 1, model }) === null, "one pass is not said");
+	assert(client.rememberEstimateSentence({ mode: "parts", reads: 3, model }) === null, "parts are not said");
+	assert(client.rememberEstimateSentence({ mode: "parts", reads: 0, model, fits: "no" }) === "This conversation and this room's memory are more than GPT-6 Sol can read, even in parts. Choose a Memory model that can read more at once in Room settings, Model.", "a model too small says so in plain words, with the Memory model capitalised");
 
 	console.log("room-model-copy smoke: ok");
 } finally {

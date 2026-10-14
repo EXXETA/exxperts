@@ -56,6 +56,14 @@ describe("clampThinkingLevel", () => {
 		expect(clampThinkingLevel(model!, "off")).toBe("minimal");
 	});
 
+	it("keeps every Haiku 5.5 level as asked, off included, since off never goes out beside an effort", () => {
+		const model = getModel("anthropic", "claude-haiku-5-5");
+		expect(getSupportedThinkingLevels(model!)).toEqual(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
+		for (const level of ["off", "low", "medium", "high", "xhigh", "max"] as const) {
+			expect(clampThinkingLevel(model!, level)).toBe(level);
+		}
+	});
+
 	it("keeps a reachable level exactly as asked", () => {
 		const model = getModel("anthropic", "claude-opus-5");
 		for (const level of ["off", "low", "medium", "high", "xhigh", "max"] as const) {

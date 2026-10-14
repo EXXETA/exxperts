@@ -7,7 +7,12 @@
 // the same depth as apps/web-server/src, so every "three folders up" root
 // lookup in the sources still lands on the install root.
 //
-//   node scripts/bundle-server.mjs [--map <file>]
+//   node scripts/bundle-server.mjs [--map <file>] [--entry <file>] [--out <folder>]
+//
+// --entry and --out bundle another entry file into another folder beside
+// dist (apps/web-server/dist-<name>), at the same depth so the root lookups
+// still hold. Only the default entry may write dist: the launcher and the
+// desktop app start whatever is there. Without them nothing changes.
 //
 // bundle-release.mjs runs it inside the installed app tree, after npm install
 // and the MCP adapter patch, so the bundle inlines exactly the dependency
@@ -23,6 +28,7 @@ import * as esbuild from "esbuild";
 
 const ENTRY = "apps/web-server/src/index.ts";
 const OUT_DIR = ["apps", "web-server", "dist"];
+const DEFAULT_OUT = OUT_DIR.join("/");
 export const LICENCES_FILE = "server.mjs.licenses.txt";
 
 // The runtime package folder as seen from the bundle file; getPackageDir() in
@@ -400,11 +406,11 @@ export function shippedPackageDirs(root, { exclude = [] } = {}) {
 // What a payload holding the bundled server lacks: the bundle, its licences
 // and assets, and the packages it loads as files. Empty when complete. Run
 // after every build and again on any payload trimmed around the bundle.
-export function checkServerFiles(root) {
-	const outDir = path.join(root, ...OUT_DIR);
+export function checkServerFiles(root, out = DEFAULT_OUT) {
+	const outDir = path.join(root, ...out.split("/"));
 	const problems = [];
 	for (const file of ["server.mjs", LICENCES_FILE, ...BUNDLE_ASSETS.map((asset) => asset.file)]) {
-		if (!fs.existsSync(path.join(outDir, file))) problems.push(`apps/web-server/dist/${file} is missing`);
+		if (!fs.existsSync(path.join(outDir, file))) problems.push(`${out}/${file} is missing`);
 	}
 	return [...problems, ...shippedPackageDirs(root).missing];
 }
@@ -428,7 +434,7 @@ async function workerPackages(root) {
 	return [...new Set(specifiers.filter((specifier) => !isBuiltin(specifier)))];
 }
 
-async function bundleProblems(root, text, metafile, packages) {
+async function bundleProblems(root, text, metafile, packages, out) {
 	const problems = [];
 	problems.push(
 		...siteProblems(text, DYNAMIC_LOAD, REVIEWED_DYNAMIC_LOADS, { list: "REVIEWED_DYNAMIC_LOADS", one: "loads a module by a computed name", many: "load a module by a computed name" }),
@@ -461,16 +467,28 @@ async function bundleProblems(root, text, metafile, packages) {
 		const hasLicenceFile = fs.readdirSync(pkg.dir).some((name) => LICENCE_FILE.test(name));
 		if (!hasLicenceFile && !pkg.license) problems.push(`${pkg.name} ${pkg.version} is inlined but has neither a licence file nor a license field`);
 	}
-	return [...problems, ...checkServerFiles(root)];
+	return [...problems, ...checkServerFiles(root, out)];
 }
 
-export async function bundleServer({ root, mapFile = null, log = (msg) => console.log(`[bundle-server] ${msg}`) }) {
-	const outDir = path.join(root, ...OUT_DIR);
+// Where a bundle may go: dist, or a folder beside it named dist-<name>, so
+// the bundle sits at the same depth as src. Another entry never writes dist.
+function bundleTarget(entry, out) {
+	if (!/^apps\/web-server\/dist(-[a-z0-9]+(-[a-z0-9]+)*)?$/.test(out)) {
+		throw new Error(`--out must be ${DEFAULT_OUT} or a folder beside it named dist-<name>, not ${out}`);
+	}
+	if (entry !== ENTRY && out === DEFAULT_OUT) {
+		throw new Error(`a bundle of ${entry} never goes to ${DEFAULT_OUT}: the launcher and the desktop app start whatever is there; use ${DEFAULT_OUT}-<name>`);
+	}
+	return out.split("/");
+}
+
+export async function bundleServer({ root, mapFile = null, entry = ENTRY, out = DEFAULT_OUT, log = (msg) => console.log(`[bundle-server] ${msg}`) }) {
+	const outDir = path.join(root, ...bundleTarget(entry, out));
 	fs.rmSync(outDir, { recursive: true, force: true });
 	const missingPeers = new Set();
 	const options = {
 		absWorkingDir: root,
-		entryPoints: { server: ENTRY },
+		entryPoints: { server: entry },
 		outdir: outDir,
 		outExtension: { ".js": ".mjs" },
 		bundle: true,
@@ -509,7 +527,7 @@ export async function bundleServer({ root, mapFile = null, log = (msg) => consol
 	fs.writeFileSync(path.join(outDir, LICENCES_FILE), licenceText(packages));
 
 	const inspectedText = inspected.outputFiles.find((file) => file.path.endsWith("server.mjs")).text;
-	const problems = await bundleProblems(root, inspectedText, result.metafile, packages);
+	const problems = await bundleProblems(root, inspectedText, result.metafile, packages, out);
 	const sameInputs = (build) => JSON.stringify(Object.keys(build.metafile.inputs).sort());
 	if (sameInputs(inspected) !== sameInputs(result)) problems.push("the checked build and the shipped build inlined different files");
 	if (problems.length > 0) {
@@ -533,7 +551,10 @@ export async function bundleServer({ root, mapFile = null, log = (msg) => consol
 // under /var on macOS, which the module URL reports as /private/var.
 if (process.argv[1] && fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(import.meta.url))) {
 	const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-	const mapIndex = process.argv.indexOf("--map");
-	const mapFile = mapIndex !== -1 && process.argv[mapIndex + 1] ? path.resolve(process.argv[mapIndex + 1]) : null;
-	await bundleServer({ root, mapFile });
+	const option = (name) => {
+		const index = process.argv.indexOf(name);
+		return index !== -1 && process.argv[index + 1] ? process.argv[index + 1] : null;
+	};
+	const mapFile = option("--map") ? path.resolve(option("--map")) : null;
+	await bundleServer({ root, mapFile, entry: option("--entry") ?? ENTRY, out: option("--out") ?? DEFAULT_OUT });
 }

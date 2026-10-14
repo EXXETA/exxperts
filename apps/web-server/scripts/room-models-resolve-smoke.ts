@@ -61,6 +61,7 @@ fs.writeFileSync(path.join(appDir, "persistent-agent-ai-profile.json"), JSON.str
 const { createPersistentAgentFromScaffoldInput } = await import("../src/persistent-agents.js");
 const {
 	createRoomModelCatalog,
+	derivedAiDefault,
 	readRoomModels,
 	catalogModelNames,
 	readStoredAiDefaults,
@@ -221,6 +222,17 @@ try {
 	row = resolveRoomModel(agentId, "conversation", catalog);
 	assert(key(row.effective) === key(OPUS) && row.source === "default", `a later sign-in moves nothing: the stored default runs, got ${JSON.stringify(row)}`);
 	pass("with nothing ever chosen the first ready model serves and becomes the default; with nothing signed in nothing runs");
+
+	// --- ChatGPT's Memory model --------------------------------------------------------------
+	// Its default is GPT-6.1 Sol; a room whose Memory model was chosen keeps it.
+	fs.writeFileSync(path.join(appDir, "persistent-agent-ai-profile.json"), JSON.stringify({ profileId: "chatgpt-codex" }, null, 2));
+	assert(key(derivedAiDefault("memory").lock) === "openai-codex/gpt-6.1-sol", `the ChatGPT profile's default Memory model is GPT-6.1 Sol, got ${key(derivedAiDefault("memory").lock)}`);
+	writeRoomModels(agentId, { memory: SOL });
+	catalog = createRoomModelCatalog();
+	row = resolveRoomModel(agentId, "memory", catalog);
+	assert(row.source === "room" && key(row.effective) === key(SOL), `a room that chose GPT-6 Sol for memory keeps it, got ${JSON.stringify(row)}`);
+	writeRoomModels(agentId, { memory: null });
+	pass("ChatGPT's default Memory model is GPT-6.1 Sol, and a room's own choice stays");
 
 	console.log("room models resolve smoke passed");
 } finally {

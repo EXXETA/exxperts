@@ -24,7 +24,6 @@ import {
 	ENTRY_KINDS,
 	findEntryLocation,
 	findEntryVersion,
-	findStructuralLine,
 	formatEntryId,
 	MEMORY_ACTIVE_ITEMS_TOPIC,
 	restoreEntry,
@@ -37,8 +36,12 @@ import {
 	type MemorySection,
 	type MemoryTopic,
 } from "./memory-entries.js";
+import { withRoomSaveLock } from "./memory-commit.js";
+import { createPersistentAgentInstance, saveWithOpenConversationCheck } from "./persistent-agents.js";
+import { MEMORY_NOTE_MAX_CHARS, MEMORY_TOPIC_NAME_MAX_CHARS, memoryTextHasWords, memoryTopicName, memoryTopicNameProblem, memoryTypedText, topicNameSentence } from "./memory-typed-text.js";
 import {
 	deleteArchivedEntry,
+	findMemoryEditRecord,
 	loadMemoryDocument,
 	memoryEntryAlreadyInCoreError,
 	memoryEntryHistoryError,
@@ -86,8 +89,6 @@ export interface MemoryEntryRouteDeps {
 
 const ARCHIVE_PAGE_DEFAULT = 50;
 const ARCHIVE_PAGE_MAX = 200;
-const ENTRY_TEXT_MAX_CHARS = 20_000;
-const TOPIC_TITLE_MAX_CHARS = 120;
 
 function entryCard(entry: MemoryEntry, topic: MemoryTopic): EntryCard {
 	return {
@@ -157,22 +158,35 @@ function badRequest(message: string, code = "memory_bad_request"): Error {
 	return error;
 }
 
+/**
+ * The person's words under the one rule (memory-typed-text.ts): every word is
+ * kept, and a heading line or a comment becomes plain words instead of the
+ * file's structure. Only a note with no words, or one past the limit, is refused.
+ */
 function requireText(raw: unknown): string {
-	const text = typeof raw === "string" ? raw.replace(/\s+$/, "") : "";
-	if (!text.trim()) throw badRequest("An entry needs some text.");
-	if (text.length > ENTRY_TEXT_MAX_CHARS) throw badRequest("That entry is too long to keep in memory. Shorten it and try again.");
-	// A heading line would become a topic and cut the note in two; a comment
-	// line is how the file writes ids, and a pasted one claims another note's.
-	if (findStructuralLine(text) !== null) throw badRequest("A note cannot contain a heading line or a hidden comment; write it as plain text.", "memory_entry_text_structural");
+	const text = typeof raw === "string" ? memoryTypedText(raw).replace(/\s+$/, "").replace(/^(?:[ \t]*\n)+/, "") : "";
+	if (!memoryTextHasWords(text)) throw badRequest("An entry needs some text.");
+	if (text.length > MEMORY_NOTE_MAX_CHARS) throw badRequest("That entry is too long to keep in memory. Shorten it and try again.");
 	return text;
 }
 
-function requireTopic(raw: unknown): string {
-	const topic = String(raw ?? "").trim();
-	if (!topic) throw badRequest("A topic needs a name.");
-	if (topic.length > TOPIC_TITLE_MAX_CHARS) throw badRequest("That topic name is too long.");
-	if (/[\r\n]/.test(topic)) throw badRequest("A topic name is one line.");
+/**
+ * A topic name: one line, its comment marks gone. A name the person typed as a
+ * new topic is refused when it starts with # or is the open-items list's own
+ * name; one chosen from the pane's list (the open-items list included) is taken.
+ * Only a name the page says was chosen (newTopic false) is taken as chosen.
+ */
+function requireTopic(raw: unknown, typedNew: boolean): string {
+	const topic = memoryTopicName(String(raw ?? ""));
+	const problem = memoryTopicNameProblem(topic);
+	if (problem && (typedNew || problem !== "reserved")) throw badRequest(topicNameSentence(problem, topic, MEMORY_TOPIC_NAME_MAX_CHARS), "memory_topic_name");
 	return topic;
+}
+
+/** The page's id for an add, so the add sent again after a lost answer finds its first one. */
+function requestIdOf(raw: unknown): string | undefined {
+	const id = typeof raw === "string" ? raw.trim() : "";
+	return /^[A-Za-z0-9_-]{1,64}$/.test(id) ? id : undefined;
 }
 
 function requireKind(raw: unknown): EntryKind {
@@ -203,8 +217,34 @@ function loadForRead(id: string): { load: MemoryDocumentLoad; readOnly: boolean 
 	return { load: loadMemoryDocument(id, { migrate: "in-memory" }), readOnly: memoryRoomBusy(id) };
 }
 
+/**
+ * Runs one pane write and, when it changed what a conversation reads while a
+ * started conversation is open, says so on its answer, as Memorize and Review
+ * do. A refusal is the route's own reply, never an answer to add to.
+ */
+async function withOpenConversationLine<T>(idRaw: string, save: () => Promise<T>): Promise<T> {
+	try {
+		createPersistentAgentInstance(idRaw);
+	} catch {
+		return save();
+	}
+	let answer: T | undefined;
+	const checked = await saveWithOpenConversationCheck(idRaw, async () => {
+		answer = await save();
+		return {};
+	});
+	const plain = answer !== null && typeof answer === "object" && Object.getPrototypeOf(answer) === Object.prototype;
+	return checked.openConversationKeepsMemory && plain ? ({ ...answer, openConversationKeepsMemory: true } as T) : (answer as T);
+}
+
 export function registerMemoryEntryRoutes(app: FastifyInstance, deps: MemoryEntryRouteDeps): void {
 	const roomId = (req: any): string => deps.usableRoom(String((req.params as any).id ?? "").trim()).id;
+	// Each write takes the room's save lock (memory-commit.ts), keyed by the id
+	// the request names, so it never interleaves with another save of the room.
+	const saveLocked = <T>(req: any, save: () => Promise<T>): Promise<T> => {
+		const idRaw = String((req.params as any).id ?? "");
+		return withRoomSaveLock(idRaw, () => withOpenConversationLine(idRaw, save));
+	};
 	const entryIdOf = (req: any): string => {
 		const id = String((req.params as any).entryId ?? "").trim();
 		if (!id) throw memoryEntryUnknownError();
@@ -248,28 +288,35 @@ export function registerMemoryEntryRoutes(app: FastifyInstance, deps: MemoryEntr
 		}
 	});
 
-	app.post("/api/persistent-agents/:id/memory/entries", async (req, reply) => {
+	app.post("/api/persistent-agents/:id/memory/entries", async (req, reply) => saveLocked(req, async () => {
 		try {
 			const id = roomId(req);
 			const body = (req.body ?? {}) as any;
 			const kind = requireKind(body.kind);
-			const topic = kind === "item" && !String(body.topic ?? "").trim() ? MEMORY_ACTIVE_ITEMS_TOPIC : requireTopic(body.topic);
+			const topic = kind === "item" && !String(body.topic ?? "").trim() ? MEMORY_ACTIVE_ITEMS_TOPIC : requireTopic(body.topic, body.newTopic !== false);
 			const text = requireText(body.text);
+			const requestId = requestIdOf(body.requestId);
 			const load = loadMemoryDocument(id);
+			// The same add sent again after its answer was lost: it landed once, and the answer names that note.
+			const sent = requestId ? findMemoryEditRecord(id, (record) => record.requestId === requestId && record.entryOperation === "add") : null;
+			if (sent?.entryId) {
+				const card = findEntryLocation(load.doc, sent.entryId) ? cardOf(load.doc, sent.entryId) : null;
+				return { agentId: id, entry: card, budget: load.budget, alreadySaved: true };
+			}
 			// The id the add is about to take: the document's own counter, which
 			// applyUserEdit consumes. Reading it here beats hunting for "the new
 			// one" in the result.
 			const addedId = formatEntryId(load.doc.nextEntryNumber);
 			const next = applyUserEdit(load.doc, { op: "add", topic, kind, text, saved: today() }).doc;
-			const write = writeMemoryDocument(id, next, { why: "user_edit", snapshotLabel: "edit", operation: "add", entryId: addedId });
+			const write = writeMemoryDocument(id, next, { why: "user_edit", snapshotLabel: "edit", operation: "add", entryId: addedId, ...(requestId ? { requestId } : {}) });
 			return { agentId: id, entry: cardOf(next, addedId), budget: write.budget };
 		} catch (e) {
 			return deps.errorReply(reply, e);
 		}
-	});
+	}));
 
 	// One field per request, exactly as the pane's controls are one action each.
-	app.put("/api/persistent-agents/:id/memory/entries/:entryId", async (req, reply) => {
+	app.put("/api/persistent-agents/:id/memory/entries/:entryId", async (req, reply) => saveLocked(req, async () => {
 		try {
 			const id = roomId(req);
 			const entryId = entryIdOf(req);
@@ -287,7 +334,7 @@ export function registerMemoryEntryRoutes(app: FastifyInstance, deps: MemoryEntr
 				next = applyUserEdit(load.doc, { op: body.pinned ? "pin" : "unpin", id: entryId }).doc;
 			} else if (body.topic !== undefined) {
 				operation = "move";
-				next = applyUserEdit(load.doc, { op: "move", id: entryId, topic: requireTopic(body.topic) }).doc;
+				next = applyUserEdit(load.doc, { op: "move", id: entryId, topic: requireTopic(body.topic, body.newTopic !== false) }).doc;
 			} else if (body.status !== undefined) {
 				const status = String(body.status ?? "").trim();
 				if (status !== "open" && status !== "done") throw badRequest("An open loop is either open or done.");
@@ -301,16 +348,19 @@ export function registerMemoryEntryRoutes(app: FastifyInstance, deps: MemoryEntr
 		} catch (e) {
 			return deps.errorReply(reply, e);
 		}
-	});
+	}));
 
 	// A delete is a demotion to the archive with why=user: nothing a person
 	// removes from the core is destroyed, and the archive list can restore it.
-	app.delete("/api/persistent-agents/:id/memory/entries/:entryId", async (req, reply) => {
+	app.delete("/api/persistent-agents/:id/memory/entries/:entryId", async (req, reply) => saveLocked(req, async () => {
 		try {
 			const id = roomId(req);
 			const entryId = entryIdOf(req);
 			const load = loadMemoryDocument(id);
 			const found = findEntryLocation(load.doc, entryId);
+			// A delete sent again after its answer was lost: the note is in the archive already, and the answer says so.
+			const gone = found ? undefined : load.archive.find((entry) => entry.id === entryId && entry.why === "user");
+			if (gone) return { agentId: id, archived: archivedCard(gone, load.doc), budget: load.budget, alreadySaved: true };
 			if (!found) throw memoryEntryUnknownError();
 			const section = found.topic.section;
 			const topicTitle = found.topic.title;
@@ -327,19 +377,22 @@ export function registerMemoryEntryRoutes(app: FastifyInstance, deps: MemoryEntr
 		} catch (e) {
 			return deps.errorReply(reply, e);
 		}
-	});
+	}));
 
 	// A restore may take the room over budget. That is allowed and disclosed:
 	// the person asked for this entry back, and the budget line says where the
 	// room now stands. A note the core already holds — in this version or
 	// another — is not put in beside itself: that is a conflict, with its own
 	// sentence, and the archive row stays where it is.
-	app.post("/api/persistent-agents/:id/memory/archive/:entryId/restore", async (req, reply) => {
+	app.post("/api/persistent-agents/:id/memory/archive/:entryId/restore", async (req, reply) => saveLocked(req, async () => {
 		try {
 			const id = roomId(req);
 			const entryId = entryIdOf(req);
 			const load = loadMemoryDocument(id);
 			const archived = load.archive.find((entry) => entry.id === entryId);
+			// A restore sent again after its answer was lost: the note is back in memory, and the answer says so.
+			const restored = archived ? null : findMemoryEditRecord(id, (record) => record.entryOperation === "restore" && record.entryId === entryId);
+			if (restored && findEntryLocation(load.doc, entryId)) return { agentId: id, entry: cardOf(load.doc, entryId), budget: load.budget, alreadySaved: true };
 			if (!archived) throw memoryEntryUnknownError(true);
 			if (archived.why === "history") throw memoryEntryHistoryError();
 			if (findEntryVersion(load.doc, entryId)) throw memoryEntryAlreadyInCoreError();
@@ -355,23 +408,29 @@ export function registerMemoryEntryRoutes(app: FastifyInstance, deps: MemoryEntr
 		} catch (e) {
 			return deps.errorReply(reply, e);
 		}
-	});
+	}));
 
 	// The one way out of the archive: the row is gone, nothing can bring it back
 	// and no undo serves it. The store refuses a busy room and an unknown row
 	// with the sentences every other write uses, and records the delete in the
 	// room's history with the note's first lines.
-	app.delete("/api/persistent-agents/:id/memory/archive/:entryId", async (req, reply) => {
+	app.delete("/api/persistent-agents/:id/memory/archive/:entryId", async (req, reply) => saveLocked(req, async () => {
 		try {
 			const id = roomId(req);
 			const entryId = entryIdOf(req);
+			// A delete for good sent again after its answer was lost: the row is gone already, and the answer says so.
+			const done = findMemoryEditRecord(id, (record) => record.entryOperation === "archive_delete" && record.entryId === entryId);
+			if (done && !readArchive(id).some((entry) => entry.id === entryId)) {
+				const doc = loadForRead(id).load.doc;
+				return { agentId: id, deleted: null, archive: archivePayload(readArchive(id), doc), alreadySaved: true };
+			}
 			const result = deleteArchivedEntry(id, entryId);
 			const doc = loadForRead(id).load.doc;
 			return { agentId: id, deleted: archivedCard(result.deleted, doc), archive: archivePayload(result.archive, doc) };
 		} catch (e) {
 			return deps.errorReply(reply, e);
 		}
-	});
+	}));
 
 	// Today's history, unchanged, on the room's own route: user edits and the
 	// migration appear in it beside checkpoints, Memorize and Review.

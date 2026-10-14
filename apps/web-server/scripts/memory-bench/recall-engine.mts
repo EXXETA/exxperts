@@ -2846,14 +2846,31 @@ export function writeScriptedProviderRecords(input: { gatewayPort: number; model
 	return { provider: SCRIPTED_PROVIDER_ID, model: modelId };
 }
 
+/** The flag a real run passes to copy the sign-in from ~/.exxperts/agent. */
+export const SIGN_IN_FROM_HOME_FLAG = "--sign-in-from-home";
+
+/** The line a real run stops with when it names no sign-in; null when it names one. */
+export function signInSourceProblem(signInFromHome: boolean): string | null {
+	if (benchSharedAgentDir() || signInFromHome) return null;
+	return `A real run needs a sign-in and reads none by default: set RECALL_BENCH_AGENT_DIR to a signed-in agent dir, or pass ${SIGN_IN_FROM_HOME_FLAG} to copy ~/.exxperts/agent for this run.`;
+}
+
 /**
  * The machine's own provider records, COPIED into the temp home read-only: the
  * model catalogue and the signed-in credentials, so a real-model run reaches
- * the provider the person is already signed in to. Nothing is ever written
- * back, and no key is ever printed — the copy is read, never echoed.
+ * the provider the person is already signed in to. Only when the run asked for
+ * it (SIGN_IN_FROM_HOME_FLAG); a run that names no sign-in stops here, before
+ * any call, and takes its temp home with it. Nothing is ever written back, and
+ * no key is ever printed: the copy is read, never echoed.
  */
-export function useRealProviderRecords(input: { spec: string }): { provider: string; model: string } {
+export function useRealProviderRecords(input: { spec: string; signInFromHome: boolean }): { provider: string; model: string } {
 	const home = homeOrThrow();
+	const problem = signInSourceProblem(input.signInFromHome);
+	if (problem) {
+		console.error(problem);
+		fs.rmSync(home.home, { recursive: true, force: true });
+		process.exit(2);
+	}
 	const { provider, model } = parseBenchModelSpec(input.spec, "the model");
 	const appDir = path.join(home.home, ".exxperts", "app");
 	const shared = benchSharedAgentDir();
@@ -2916,7 +2933,7 @@ export async function askRoom(input: { server: BenchServer; roomId: string; conv
 			return await askOnce(input);
 		} catch (error) {
 			lastError = error as Error;
-			if (!/requires the current activeThread|still running|is cancelling/.test(lastError.message)) throw lastError;
+			if (!/requires the current activeThread|went on in another window|still running|is cancelling/.test(lastError.message)) throw lastError;
 			await new Promise((resolve) => setTimeout(resolve, 200 * attempt));
 		}
 	}
@@ -3159,7 +3176,8 @@ function isProviderTurnError(error: unknown): error is Error & { stopReason: "er
  * `attempt`, waited out on the schedule when the provider says no: an
  * `IsolatedPersistentAgentWorkerTurnError` with stopReason "error" or "aborted"
  * is retried after 1, 5, 15, 30 and 60 minutes, six attempts in all, and then
- * becomes a `ProviderGaveUpError`. Every wait prints one line. Any other error
+ * becomes a `ProviderGaveUpError`; a refusal becomes one at its first attempt,
+ * since no wait changes it. Every wait prints one line. Any other error
  * propagates at once, because a prompt the parser refused or a model that is
  * not there will not be fixed by waiting. `retryOn` widens the rule for a
  * caller whose failure is not the worker's class, the room's own turn for one;
@@ -3194,11 +3212,18 @@ export function startProviderRetryUnit(): void {
 	providerGaveUpInThisUnit = false;
 }
 
+/** A refusal is the content's answer, not the provider's mood: the schedule cannot change it (a gate once waited about 111 minutes for one). */
+async function refusedByProvider(error: unknown): Promise<boolean> {
+	const { classifyModelFailure } = await import("../../src/model-call-causes.js");
+	return classifyModelFailure(error).cause === "refused";
+}
+
 export async function withProviderRetry<T>(label: string, attempt: (attemptNumber: number) => Promise<T>, options?: { retryOn?: (error: unknown) => boolean; signal?: AbortSignal }): Promise<T> {
 	const schedule = providerGaveUpInThisUnit ? [] : providerRetrySchedule();
 	const attempts = schedule.length + 1;
 	const retryable = options?.retryOn ?? isProviderTurnError;
 	let lastMessage = "";
+	let attemptsMade = attempts;
 	for (let number = 1; number <= attempts; number++) {
 		const startedAt = Date.now();
 		attemptsInFlight.add(startedAt);
@@ -3211,7 +3236,10 @@ export async function withProviderRetry<T>(label: string, attempt: (attemptNumbe
 			providerWaitedMs += Date.now() - startedAt;
 			const provider = (error as { providerMessage?: unknown }).providerMessage;
 			lastMessage = typeof provider === "string" && provider.trim() ? provider.trim() : (error as Error).message;
-			if (number === attempts) break;
+			if (number === attempts || (await refusedByProvider(error))) {
+				attemptsMade = number;
+				break;
+			}
 			const wait = schedule[number - 1];
 			console.log(`provider error on ${label} (${lastMessage}): waiting ${waitLabel(wait)} before attempt ${number + 1} of ${attempts}`);
 			providerWaitedMs += wait;
@@ -3220,7 +3248,7 @@ export async function withProviderRetry<T>(label: string, attempt: (attemptNumbe
 			attemptsInFlight.delete(startedAt);
 		}
 	}
-	const gaveUp = new ProviderGaveUpError(label, lastMessage, attempts);
+	const gaveUp = new ProviderGaveUpError(label, lastMessage, attemptsMade);
 	providerGaveUpCount += 1;
 	lastProviderGiveUp = gaveUp;
 	providerGaveUpInThisUnit = true;

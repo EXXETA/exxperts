@@ -42,6 +42,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { findPrunedTypeScriptImports, pruneNodeModules } from "./bundle-release-prune.mjs";
+import { checkPayloadAgainstLock } from "./payload-lock-check.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 // npm is npm.cmd on Windows; a shell is required to spawn it there.
@@ -194,61 +195,83 @@ if (!tarballName) {
 const tarball = path.join(root, tarballName);
 
 // ---------------------------------------------------------------------------
-// Step 2: install the tarball into a TEMP npm prefix. This is the same
-// pipeline install-global.mjs uses for the real global install, just pointed
-// at a throwaway prefix, so the staged tree is exactly what a global install
-// would produce (prod deps only, hoisted node_modules, bin links).
+// Step 2: install the packed app from package-lock.json. The tarball is
+// unpacked and installed as a root project with `npm ci --omit=dev`, so every
+// dependency gets the lockfile's version and integrity, as in the checkout. A
+// global install of the tarball (install-global.mjs) ignores the lockfile and
+// the root overrides and resolves everything fresh from the registry.
 // ---------------------------------------------------------------------------
 
-const npmPrefix = path.join(work, "prefix");
-fs.mkdirSync(npmPrefix, { recursive: true });
+const unpacked = path.join(work, "app");
+fs.mkdirSync(unpacked, { recursive: true });
+run(tarBin, ["-xf", tarball, "-C", unpacked]);
+const installedRoot = path.join(unpacked, "package");
 
-// npm reads neither the project .npmrc nor package.json allowScripts in
-// global mode, so npm 12's gates need explicit flags: allow-remote for the
-// SheetJS CDN tarball and allow-scripts for native deps. allow-scripts name
-// entries only match registry deps; the local tarball is matched by its exact
-// path, so the tarball path itself is an entry too. Passed unconditionally,
-// both as CLI flags and npm_config_* env: ungated npms accept the unknown
-// config with at worst a warning, gated npms need it (see install-global.mjs
-// for the full history).
-const scriptAllows = [tarball, pkg.name, ...Object.keys(pkg.allowScripts ?? {})];
-log(`installing ${tarballName} into a temp prefix...`);
-run(
-	"npm",
-	quoteForShell([
-		"install",
-		"-g",
-		tarball,
-		`--prefix=${npmPrefix}`,
-		"--allow-remote=all",
-		...scriptAllows.map((entry) => `--allow-scripts=${entry}`),
-	]),
-	{
-		shell,
-		env: {
-			...process.env,
-			npm_config_allow_remote: "all",
-			npm_config_allow_scripts: scriptAllows.join(","),
-			// Chromium is deliberately not bundled (per-user cache download);
-			// keep npm's own lifecycle from fetching it if it does run scripts.
-			EXXETA_SKIP_BROWSER_INSTALL: "1",
-		},
-	},
+// Two manifest edits for npm ci, undone right after the install:
+// - workspaces: their sources are not packed, and with the key kept npm
+//   links two of them, which the copy below would duplicate;
+// - the devDependencies of our file: packages (runtime/packages/*): npm
+//   installs a linked package's devDependencies even with --omit=dev, into
+//   runtime/node_modules; canvas's install then fails, and the check would
+//   find 69 dev-only packages there.
+const linkedDirs = Object.values(pkg.dependencies ?? {})
+	.filter((spec) => spec.startsWith("file:"))
+	.map((spec) => spec.slice("file:".length));
+const packedManifests = new Map(
+	[".", ...linkedDirs].map((dir) => {
+		const file = path.join(installedRoot, dir, "package.json");
+		return [file, fs.readFileSync(file)];
+	}),
 );
+for (const [file, bytes] of packedManifests) {
+	const manifest = JSON.parse(bytes);
+	delete manifest.workspaces;
+	delete manifest.devDependencies;
+	fs.writeFileSync(file, JSON.stringify(manifest, null, 2));
+}
+const lockText = fs.readFileSync(path.join(root, "package-lock.json"), "utf8");
+fs.writeFileSync(path.join(installedRoot, "package-lock.json"), lockText);
 
-// POSIX global installs land in <prefix>/lib/node_modules/<name>, Windows in
-// <prefix>/node_modules/<name>.
-const installedRoot = isWin
-	? path.join(npmPrefix, "node_modules", pkg.name)
-	: path.join(npmPrefix, "lib", "node_modules", pkg.name);
-if (!fs.existsSync(installedRoot)) {
-	console.error(`[bundle-release] the installed copy was not found at ${installedRoot}`);
+// No --allow-scripts flags or env: in a project install npm 11.21 and 12
+// refuse both (EALLOWSCRIPTS) and take the approvals from the packed
+// package.json's allowScripts instead. allow-remote stays a flag: the SheetJS
+// CDN tarball needs it and .npmrc is not packed. Ungated npms run every
+// script and only warn about the unknown flag.
+log(`installing ${tarballName} from package-lock.json...`);
+// --install-links=false pins npm's default (link our file: packages, not
+// copy them) against a developer's own npm config.
+run("npm", quoteForShell(["ci", "--omit=dev", "--install-links=false", "--no-audit", "--no-fund", "--allow-remote=all"]), {
+	cwd: installedRoot,
+	shell,
+	env: {
+		...process.env,
+		// Chromium is deliberately not bundled (per-user cache download);
+		// keep npm's own lifecycle from fetching it.
+		EXXETA_SKIP_BROWSER_INSTALL: "1",
+	},
+});
+
+// What ships must be what the release scan and the SBOM read: every
+// third-party package a non-dev entry of package-lock.json
+// (scripts/payload-lock-check.mjs).
+log("checking the installed tree against package-lock.json...");
+const lockCheck = checkPayloadAgainstLock(installedRoot, JSON.parse(lockText));
+if (lockCheck.problems.length) {
+	for (const line of lockCheck.problems) console.error(`  ${line}`);
+	console.error(`[bundle-release] ${lockCheck.problems.length} installed packages differ from package-lock.json`);
 	process.exit(1);
 }
+log(`all ${lockCheck.checked} installed packages match package-lock.json`);
 
-// npm's allow-scripts matching for a local tarball root is inconsistent
-// across versions and platforms, so the package postinstall is replayed
-// directly in the installed copy (both scripts are idempotent).
+// The archive keeps today's layout: the packed manifests as packed, and no
+// lockfiles.
+for (const [file, bytes] of packedManifests) fs.writeFileSync(file, bytes);
+fs.rmSync(path.join(installedRoot, "package-lock.json"));
+fs.rmSync(path.join(installedRoot, "node_modules", ".package-lock.json"), { force: true });
+
+// npm ci ran the package postinstall as the root project's own script; it is
+// replayed here so the patched adapter never depends on how a given npm
+// gates that script (both scripts are idempotent).
 // EXXETA_SKIP_BROWSER_INSTALL=1 makes install-chromium.mjs a no-op.
 log("replaying the package postinstall in the temp install...");
 for (const script of ["scripts/patch-mcp-adapter.mjs", "scripts/install-chromium.mjs"]) {
@@ -293,7 +316,7 @@ fs.mkdirSync(stagingTop, { recursive: true });
 // The installed tree contains symlinks (file: workspace deps, node_modules/
 // .bin entries on POSIX). Archives must contain NO symlinks: zip cannot
 // represent them portably, and npm's links point at absolute paths inside
-// the temp prefix that stops existing after this run. fs.cpSync's
+// the temp folder that stops existing after this run. fs.cpSync's
 // dereference option is NOT trusted here: on Node 24 it left nested
 // symlinks in place (rewritten to absolute targets), which shipped a broken
 // archive, so the copy walks the tree itself, always following links, and

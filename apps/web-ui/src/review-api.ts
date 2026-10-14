@@ -6,7 +6,7 @@
 // (keep, budget, edit) answers with the whole run so the card re-renders from
 // the server's numbers and never recomputes one of its own.
 
-import { apiFetch, fetchJson } from "./api";
+import { ApiRequestError, apiFetch, fetchJson } from "./api";
 import type { RunKeepRequest } from "./absorb-run-api";
 import type {
 	PersistentAgentId,
@@ -104,7 +104,8 @@ export async function startReviewRun(agentId: PersistentAgentId, input: { depth:
 		const activeRunId = typeof body.details?.runId === "string" && body.details.runId ? body.details.runId : typeof body.runId === "string" && body.runId ? body.runId : null;
 		throw new ReviewRunActiveError(message, activeRunId);
 	}
-	throw new Error(message);
+	// The code rides along (a Memory model too small, signed out): the room shows its one notice with the ways out.
+	throw new ApiRequestError(message, res.status, typeof body?.code === "string" ? body.code : undefined, body?.details);
 }
 
 export function fetchReviewRun(agentId: PersistentAgentId, runId: string): Promise<ReviewRun> {
@@ -139,6 +140,11 @@ export function editReviewRunEntry(agentId: PersistentAgentId, runId: string, en
 		headers: { "content-type": "application/json" },
 		body: JSON.stringify({ entryId, text }),
 	});
+}
+
+/** Try again, after an outage or a restart stopped the run: the same run tidies the groups not done. */
+export function resumeReviewRun(agentId: PersistentAgentId, runId: string): Promise<ReviewRun> {
+	return fetchJson<ReviewRun>(`${runBase(agentId, runId)}/resume`, { method: "POST" });
 }
 
 /** Stops a run, aborting the reading it is doing. Nothing is written. */

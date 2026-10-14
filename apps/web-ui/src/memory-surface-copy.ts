@@ -108,12 +108,19 @@ export function waitingConversationsPhrase(count: number): string {
 
 /** The one line a room's card carries: what it holds, what is waiting, when it last memorized. */
 export function roomMemoryFactsLine(room: { notes: number; waiting: number; lastMemorizedAt: number | null }): string {
+	// A room nothing was ever saved to holds only the text every new room starts with: its Home card's words.
+	if (room.lastMemorizedAt === null) return room.waiting === 0 ? "no memories saved yet" : `no memories saved yet \u00b7 ${waitingConversationsPhrase(room.waiting)}`;
 	const parts = [notesPhrase(room.notes), waitingConversationsPhrase(room.waiting)];
 	const ago = fmtMemoryAgo(room.lastMemorizedAt);
 	// The stamp is the newest save of any kind (a Remember or a Memorize), the
 	// same fact the Home card calls "memory saved", so it reads "saved" here too.
 	if (ago) parts.push(`saved ${ago}`);
 	return parts.join(" · ");
+}
+
+/** At a glance's notes: the sum of what the rows show, so a room never saved, whose row shows no count, adds none. */
+export function allRoomsNotesShown(rooms: ReadonlyArray<{ notes: number; lastCheckpointAt: number | null }>): number {
+	return rooms.reduce((sum, room) => sum + (room.lastCheckpointAt === null ? 0 : room.notes), 0);
 }
 
 // --- how full memory is ------------------------------------------------------

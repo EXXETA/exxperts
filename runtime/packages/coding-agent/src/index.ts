@@ -402,7 +402,7 @@ export {
 } from "./utils/image-resize.js";
 export { detectSupportedImageMimeTypeFromFile } from "./utils/mime.js";
 // Shell utilities
-export { getShellConfig } from "./utils/shell.js";
+export { findShellConfig, getShellConfig, isNoShellFoundMessage, setShellLookupPlatformForTests } from "./utils/shell.js";
 // Managed search binaries (hash-pinned fd/ripgrep)
 export { ensureTool, getToolPath } from "./utils/tools-manager.js";
 // Loop strategies (re-exported from @exxeta/exxperts-core)

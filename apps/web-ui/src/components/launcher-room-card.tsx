@@ -36,8 +36,6 @@ export type PersistentAgentCardProps = {
 	status: PersistentAgentStatus | null;
 	thread: LauncherRoomThread | null;
 	live: boolean;
-	/** The room refused to open because its memory does not fit the thread's model: the standby thread is not resumable, so it must not block Maintain. */
-	unresumable?: boolean;
 	duplicateDisplayName?: boolean;
 	/** Enters a new conversation; the server decides its model (the room's conversation row). */
 	onEnter: (status: PersistentAgentStatus) => Promise<void> | void;
@@ -62,7 +60,12 @@ export type PersistentAgentCardProps = {
 	arranging?: boolean;
 };
 
-export function PersistentAgentCard({ status, thread, live, unresumable = false, duplicateDisplayName = false, onEnter, onResume, onMaintain, onOpenSettings, onOpenModelSettings, providerLabels, backgroundReady = false, purging = false, arranging = false }: PersistentAgentCardProps) {
+/** Maintain is open whenever the room is ready and has something to maintain: an open conversation, here or elsewhere, never locks it. */
+export function roomCanMaintain(status: PersistentAgentStatus | null | undefined, purging = false): boolean {
+	return !!status && status.exists && !purging && (status.status === "ready" || status.status === "needs_absorb") && !nothingToMaintain(status.memoryStatus);
+}
+
+export function PersistentAgentCard({ status, thread, live, duplicateDisplayName = false, onEnter, onResume, onMaintain, onOpenSettings, onOpenModelSettings, providerLabels, backgroundReady = false, purging = false, arranging = false }: PersistentAgentCardProps) {
 	const [entering, setEntering] = useState(false);
 	// React 18 knows no `inert` prop: the attribute is passed as a string.
 	const inertWhileArranging = arranging ? ({ inert: "", "aria-hidden": true } as HTMLAttributes<HTMLElement>) : {};
@@ -70,21 +73,17 @@ export function PersistentAgentCard({ status, thread, live, unresumable = false,
 	const preparedBoundary = status?.activeThread?.preparedByBoundary ?? (status?.activeThread?.preparedByCheckpoint ? "checkpoint" : null);
 	const preparedBoundaryThread = !live && !!preparedBoundary && !!status?.runtime.activeThreadId;
 	const hasStandbyThread = thread?.state === "standby" || (!live && !preparedBoundaryThread && (status?.runtime.state === "standby" || status?.runtime.state === "active") && !!status.runtime.activeThreadId);
-	const hasActiveThread = live || hasStandbyThread || preparedBoundaryThread;
-	// Maintain waits only for a conversation someone has spoken in; the empty
-	// one Remember or Forget prepares boots on the memory as it is when next
-	// entered, so it holds nothing Maintain could leave behind.
 	const openConversationHasTurns = thread?.state === "standby"
 		? thread.items.some((item: any) => (item?.kind === "user" || item?.kind === "assistant") && typeof item.text === "string" && item.text.trim().length > 0)
 		: (status?.activeThread?.hasUserVisibleTurns ?? true);
-	const maintainWaitsForConversation = live || (hasActiveThread && openConversationHasTurns);
 	const state = hasStandbyThread ? "standby" : live ? "live" : status?.status ?? "missing";
-	const stateLabel = state === "needs_absorb" ? "ready to memorize" : state;
+	const stateLabel = state === "needs_absorb" ? "memorize due" : state;
 	// A room due for Memorize stays open until it holds as many remembered
-	// sessions as the server accepts; only then is entering blocked.
+	// sessions as the server accepts; then only a new conversation is blocked
+	// (a standby one with messages still resumes).
 	const rememberedSessions = status?.recentContext?.fullEntries ?? 0;
 	const sessionBlockCap = status?.recentContext?.blockCap ?? 20;
-	const entryBlocked = state === "needs_absorb" && rememberedSessions >= sessionBlockCap;
+	const entryBlocked = status?.status === "needs_absorb" && rememberedSessions >= sessionBlockCap && (state === "needs_absorb" || (hasStandbyThread && !openConversationHasTurns));
 	const label = status?.displayName || thread?.displayName || status?.id || "Room";
 	const memory = status?.memoryStatus;
 	const memoryLevel = memory?.recentContextLevel ?? "unknown";
@@ -155,29 +154,25 @@ export function PersistentAgentCard({ status, thread, live, unresumable = false,
 	const canEnter = !!status && (state === "ready" || (state === "needs_absorb" && !entryBlocked)) && !preparedBoundaryThread && !!conversationModel && !lockedElsewhere && !purging;
 	const maintainReadyState = !!status && (status.status === "ready" || status.status === "needs_absorb");
 	const nothingToMaintainYet = nothingToMaintain(status?.memoryStatus);
-	const canMaintain = !!status && status.exists && (!maintainWaitsForConversation || unresumable) && !lockedElsewhere && !purging && maintainReadyState && !nothingToMaintainYet;
+	const canMaintain = roomCanMaintain(status, purging);
 	// Disabled tooltips name the actual blocker and the way out; "resting" is
 	// not a state shown anywhere else on the card.
 	const enterDisabledReason = purging
 		? purgeNote
 		: entryBlocked
-		? `This room is holding ${rememberedSessions} remembered conversations, as many as it can hold. Memorize them first: use Maintain, then enter.`
+		? `This room holds ${rememberedSessions} remembered conversations, as many as it can. Memorize them from Maintain to start a new conversation.`
 		: state === "ready" || state === "needs_absorb"
 			? conversationModel
-				? "Enter persistent chat"
+				? "Enter the room"
 				: waitingSentence ?? "Sign in to an AI provider in Settings, AI setup."
 			: "This room is not ready to enter yet.";
 	const maintainDisabledReason = purging
 		? purgeNote
-		: lockedElsewhere
-			? lockNote
-		: maintainWaitsForConversation
-			? "Remember or Forget the open conversation first, then Maintain becomes available."
-			: !status || !status.exists
-				? "Maintain becomes available once the room is set up."
-				: !maintainReadyState
-					? "This room needs attention before it can be maintained."
-					: NOTHING_TO_MAINTAIN_SENTENCE;
+		: !status || !status.exists
+			? "Maintain becomes available once the room is set up."
+			: !maintainReadyState
+				? "This room needs attention before it can be maintained."
+				: NOTHING_TO_MAINTAIN_SENTENCE;
 	async function enter() {
 		if (!status || entering) return;
 		setEntering(true);
@@ -203,7 +198,7 @@ export function PersistentAgentCard({ status, thread, live, unresumable = false,
 								? <span className="persistent-agent-badge locked" title={lockNote}>🔒 {lockShort}</span>
 								: backgroundReady
 									? <span className="persistent-agent-badge ready" title="A response finished after you left this room. Resume to read it.">response ready</span>
-									: showBadge && <span className={`persistent-agent-badge ${badgeClass}`} title={badgeLabel === "memorize soon" ? `${rememberedSessions} conversations are waiting to be memorized. Use Maintain → Memorize when convenient; the room keeps working meanwhile.` : badgeLabel === "memorize due" ? `${rememberedSessions} conversations are waiting to be memorized. Use Maintain → Memorize; chatting and Remember keep working until the room holds ${sessionBlockCap}.` : badgeLabel === "memorize now" ? `This room holds ${rememberedSessions} remembered conversations, as many as it can. Memorize them (Maintain → Memorize) to enter it again.` : undefined}>{badgeLabel}</span>}
+									: showBadge && <span className={`persistent-agent-badge ${badgeClass}`} title={badgeLabel === "memorize soon" ? `${rememberedSessions} conversations are waiting to be memorized. Use Maintain → Memorize when convenient; the room keeps working meanwhile.` : badgeLabel === "memorize due" ? `${rememberedSessions} conversations are waiting to be memorized. Use Maintain → Memorize: once the room holds ${sessionBlockCap}, a new conversation needs Memorize first. Remember always saves.` : badgeLabel === "memorize now" ? `This room holds ${rememberedSessions} remembered conversations, as many as it can. Memorize them from Maintain to start a new conversation.` : undefined}>{badgeLabel}</span>}
 						{status?.exists && onOpenSettings && <button {...inertWhileArranging} className="card-gear-btn" aria-label="Room settings" title={purging ? purgeNote : "Room settings"} disabled={purging} onClick={onOpenSettings}>⚙</button>}
 					</div>
 				</div>
@@ -235,6 +230,8 @@ export function PersistentAgentCard({ status, thread, live, unresumable = false,
 				) : (
 					<div>{status ? "Memory status unavailable" : "Checking local scaffold…"}</div>
 				)}
+				{/* A full room says the way on where it can be read, not only in a tooltip (draft). */}
+				{entryBlocked && <p className="persistent-agent-full-line">Memorize from Maintain to start a new conversation.</p>}
 				</div>
 			</div>
 			<div className="persistent-agent-actions" {...inertWhileArranging}>
@@ -242,12 +239,12 @@ export function PersistentAgentCard({ status, thread, live, unresumable = false,
 					{state === "missing" ? (
 						<button className="landing-action" disabled title="This room's files are missing on this machine">Unavailable</button>
 					) : hasStandbyThread ? (
-						<button className="landing-action" title={purging ? purgeNote : lockedElsewhere ? lockNote : "Resume this standby thread"} disabled={!status || (lockedElsewhere && !canStepBackIn) || purging} onClick={() => status && onResume(status)}>Resume →</button>
+						<button className="landing-action" title={purging ? purgeNote : lockedElsewhere ? lockNote : entryBlocked ? enterDisabledReason : "Continue the conversation you left"} disabled={!status || (lockedElsewhere && !canStepBackIn) || entryBlocked || purging} onClick={() => status && onResume(status)}>Resume →</button>
 					) : preparedBoundaryThread ? (
 						<button
 							className="landing-action"
-							title={purging ? purgeNote : lockedElsewhere ? lockNote : "Enter the prepared room runtime"}
-							disabled={!status || lockedElsewhere || purging}
+							title={purging ? purgeNote : lockedElsewhere ? lockNote : entryBlocked ? enterDisabledReason : "Enter the room"}
+							disabled={!status || lockedElsewhere || entryBlocked || purging}
 							onClick={() => status && void onResume(status)}
 						>Enter →</button>
 					) : (

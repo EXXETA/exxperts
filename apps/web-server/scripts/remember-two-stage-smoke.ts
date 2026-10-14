@@ -40,16 +40,19 @@ const {
 	buildCheckpointProposal,
 	buildPersistentAgentCheckpointTranscriptSource,
 	createPersistentAgentFromScaffoldInput,
+	createPersistentAgentInstance,
 	createPersistentAgentPiSessionJsonlThreadRuntime,
 	estimateCheckpointRead,
 	openPersistentAgentPiSessionManager,
+	parseCheckpointApprovalRequest,
 	rememberPromptTokenBudget,
 	writePersistentAgentRuntimeState,
 	writePersistentAgentThread,
 } = await import("../src/persistent-agents.js");
-const { planRememberParts, REMEMBER_PART_TRIGGER, rememberPartsTargetTokens, RememberTooLargeError } = await import("../src/remember-two-stage.js");
+const { buildRememberPartPrompt, planRememberParts, rememberPartKeyPrompt, REMEMBER_PART_TRIGGER, rememberPartsTargetTokens, RememberTooLargeError } = await import("../src/remember-two-stage.js");
 const { baseDensityTarget } = await import("../src/checkpoint-compression.js");
 const { estimateTokens } = await import("../src/token-estimate.js");
+const { clearRememberWork, rememberPartKey } = await import("../src/remember-parts-cache.js");
 
 const agentId = "remember-two-stage-room";
 const threadId = "pi_parts_00000001";
@@ -140,7 +143,7 @@ async function waitOrAbort(ms: number, signal: AbortSignal | undefined, number: 
 	}
 }
 
-const generate = async (prompt: string, _model: unknown, call?: { trigger: string; workerLabel: string; signal?: AbortSignal }) => {
+const generate = async (prompt: string, _model: unknown, call?: { trigger?: string; workerLabel?: string; signal?: AbortSignal }) => {
 	const kind = call?.trigger === REMEMBER_PART_TRIGGER ? "part" : "final";
 	calls.push({ kind, prompt });
 	inFlight += 1;
@@ -185,7 +188,7 @@ try {
 	const totalTokens = items.reduce((sum, item) => sum + estimateTokens(String(item.text ?? "")), 0);
 	assert(totalTokens > BUDGET, `the conversation should not fit one pass (${totalTokens} against ${BUDGET})`);
 	const context = { agentId, conversationId: threadId, model, density: "standard" as const, l1b: fs.readFileSync(l1bPath(), "utf-8") };
-	const plan = planRememberParts(context, items, BUDGET, WINDOW.contextWindow);
+	const plan = planRememberParts(context, items, BUDGET);
 	assert(plan.parts.length === 3, `a 32k window reads this conversation in three parts, got ${plan.parts.length}`);
 	assert(plan.tail.items.length > 0 && plan.tailTokens <= Math.floor(BUDGET * 0.3), `the end is read verbatim within 30 percent of the budget, got ${plan.tailTokens} of ${BUDGET}`);
 	assert(plan.parts.every((part) => part.items[0]!.kind === "user"), `every part starts at a user turn, got ${JSON.stringify(plan.parts.map((part) => part.items[0]!.kind))}`);
@@ -208,7 +211,7 @@ try {
 		{ kind: "assistant", id: "ctx_0002", text: "Read it." },
 		...items.slice(-6).map((item, n) => ({ ...item, id: `ctx_${String(n + 3).padStart(4, "0")}` })),
 	];
-	const split = planRememberParts(context, oversized, BUDGET, WINDOW.contextWindow);
+	const split = planRememberParts(context, oversized, BUDGET);
 	const pieces = split.parts.flatMap((part) => part.items).filter((item) => item.id === "ctx_0001");
 	assert(pieces.length >= 2, `the pasted message is split across parts, got ${pieces.length} piece(s)`);
 	const rejoined = pieces.map((piece) => String(piece.text).replace(/\n\n\[message continues: piece \d+ of \d+\]$/, "")).join("\n\n");
@@ -235,12 +238,41 @@ try {
 	// same conversation would have fit, so the fixture is the case it was for.
 	const cutToOldCap = chatty.map((item) => item.kind === "assistant" ? { ...item, text: item.text.slice(0, 4_000) } : item);
 	buildCheckpointCompressionPrompt({ ...context, items: cutToOldCap, promptTokenBudget: BUDGET });
-	const chattyPlan = planRememberParts(context, chatty, BUDGET, WINDOW.contextWindow);
+	const chattyPlan = planRememberParts(context, chatty, BUDGET);
 	const renderedStretches = [...chattyPlan.parts, chattyPlan.tail].map((stretch) => stretch.items.map((item) => String(item.text)).join("\n"));
 	assert(chattyPlan.readCount >= 2, `the chat-heavy conversation is read in parts, got ${chattyPlan.readCount} reads`);
 	for (const answer of answers) assert(renderedStretches.some((text) => text.includes(answer)), `every answer is read whole in one stretch (${answer.slice(0, 9)})`);
 	assert(!renderedStretches.some((text) => /characters elided/.test(text)), "no answer carries an elision marker");
 	pass("a chat-heavy conversation that fits one pass only with its answers cut is read in parts, every answer whole");
+
+	// A tool-heavy conversation that would fit one pass only if its tool results
+	// were cut to 1,000 characters: it is read in parts, and every tool result
+	// keeps its first 4,000. Each result carries a mark past character 1,000.
+	const toolMarks = Array.from({ length: 12 }, (_, n) => `TOOLMARK_${String(n + 1).padStart(2, "0")}`);
+	const tooly = toolMarks.flatMap((mark, n) => [
+		{ kind: "user", id: `tool_${String(2 * n + 1).padStart(4, "0")}`, text: `Read file ${n + 1}, please.` },
+		{ kind: "toolResult", id: `tool_${String(2 * n + 2).padStart(4, "0")}`, name: "read", status: "success", text: `${"a line of the file the room read for the person. ".repeat(70)}${mark} ${"more of the same file. ".repeat(160)}` },
+	]);
+	assert(tooly.every((item) => item.kind !== "toolResult" || (item.text.indexOf("TOOLMARK_") > 1_000 && item.text.indexOf("TOOLMARK_") < 3_900 && item.text.length > 4_000)), "each tool result is longer than 4,000 characters with its mark between 1,000 and 4,000");
+	const cutToThousand = tooly.map((item) => item.kind === "toolResult" ? { ...item, text: item.text.slice(0, 1_000) } : item);
+	buildCheckpointCompressionPrompt({ ...context, items: cutToThousand, promptTokenBudget: BUDGET });
+	let toolySinglePassRefused = false;
+	try {
+		buildCheckpointCompressionPrompt({ ...context, items: tooly, promptTokenBudget: BUDGET });
+	} catch (error) {
+		toolySinglePassRefused = error instanceof CheckpointPromptOverflowError;
+	}
+	assert(toolySinglePassRefused, "the tool-heavy conversation does not fit one pass with its tool results at 4,000 characters, and none is cut further to fit");
+	const toolyPlan = planRememberParts(context, tooly, BUDGET);
+	assert(toolyPlan.readCount >= 2, `the tool-heavy conversation is read in parts, got ${toolyPlan.readCount} reads`);
+	const toolyPrompts = [...toolyPlan.parts.map((part, n) => buildRememberPartPrompt(context, part, n + 1, toolyPlan.parts.length)), [toolyPlan.tail].map((tail) => tail.items.map((item) => String(item.text)).join("\n"))[0]!];
+	for (const mark of toolMarks) assert(toolyPrompts.some((prompt) => prompt.includes(mark)), `every tool result is read to 4,000 characters (${mark})`);
+	pass("a tool-heavy conversation that fits one pass only with tool results at 1,000 is read in parts, each tool result at 4,000");
+	// The part reader has a place for plain facts, first after must-keep, and a repeated line is noted once, not shed.
+	const partPrompt = toolyPrompts[0]!;
+	assert(partPrompt.indexOf("\nFACTS:\n") > partPrompt.indexOf("\nMUST-KEEP:\n") && partPrompt.indexOf("\nFACTS:\n") < partPrompt.indexOf("\nDECISIONS AND CORRECTIONS:\n") && /2\. \*\*Facts\.\*\*/.test(partPrompt), "the part prompt asks for facts first after must-keep");
+	assert(partPrompt.includes("a line restated many times is noted once, not shed"), "a repeated line is noted once, not shed");
+	pass("the part reader notes plain facts, first after must-keep");
 
 	// --- The proposal ------------------------------------------------------------
 	const estimate = estimateCheckpointRead({ agentId, conversationId: threadId, runtimeCwd: tempCwd }, options);
@@ -269,38 +301,39 @@ try {
 	assert(twoReads.max === base.max + 250 && twoReads.min === base.min, `two reads add 250 tokens to the ceiling and keep the floor, got ${JSON.stringify(twoReads)}`);
 	pass(`the entry's ceiling grows by 250 tokens per read beyond the first and stops at twice the base (${proposal.targetTokens.max})`);
 	assert(proposal.rememberRead.mustKeep?.partNotes === 2 && proposal.rememberRead.mustKeep?.body === 1, `the must-keep check counts 2 in the notes and 1 in the draft, got ${JSON.stringify(proposal.rememberRead.mustKeep)}`);
-	assert(proposal.warnings.some((warning) => /hold 2 things you asked to keep and this draft marks 1/.test(warning)), `the person is told the draft marks fewer must-keeps, got ${JSON.stringify(proposal.warnings)}`);
-	pass("the must-keep check tells the person the draft marks fewer than the notes hold");
+	assert(!proposal.warnings.some((warning) => /asked to keep/.test(warning)), `no warning about it, got ${JSON.stringify(proposal.warnings)}`);
+	assert(proposal.fields.body.includes('- "Keep the second one too.": the second item') && !proposal.fields.body.includes('"Please remember that."'), `the lost request is put back word for word, the held one not twice, got ${JSON.stringify(proposal.fields.body)}`);
+	pass("a keep-request the draft lost is put back word for word, with no warning"); 
+
+	// Each Remember below reads the conversation afresh: the notes a run
+	// already paid for would otherwise be reused (remember-parts-cache.ts).
+	const freshProposal: typeof buildCheckpointProposal = (...args) => {
+		clearRememberWork(createPersistentAgentInstance(agentId).rootDir, threadId);
+		return buildCheckpointProposal(...args);
+	};
 
 	// --- A part that fails ----------------------------------------------------------
 	calls.length = 0;
 	failPart = { number: 2, times: 1 };
 	partFailures.clear();
-	const retried = await buildCheckpointProposal({ agentId, conversationId: threadId, model, density: "standard", runtimeCwd: tempCwd }, generate, options);
+	const retried = await freshProposal({ agentId, conversationId: threadId, model, density: "standard", runtimeCwd: tempCwd }, generate, options);
 	assert(retried.rememberRead.reads === 4 && calls.filter((call) => call.kind === "part" && partNumberOf(call.prompt) === 2).length === 2, "a part that fails once is read once more and the Remember goes on");
 	pass("a part that fails once is read once more");
 	calls.length = 0;
-	abortedCalls.length = 0;
 	failPart = { number: 2, times: 2 };
 	partFailures.clear();
-	partDelayMs = 2_000;
-	const failedAt = Date.now();
-	await expectRejects(() => buildCheckpointProposal({ agentId, conversationId: threadId, model, density: "standard", runtimeCwd: tempCwd }, generate, options), /^Remember could not read part 2 of 3 of this conversation \(synthetic provider failure\)\. Generate again; .* No memory has been written\.$/, "a part that fails twice");
-	assert(Date.now() - failedAt < 1_500, `the Remember fails as soon as the part has failed twice, not after the slower parts, took ${Date.now() - failedAt} ms`);
-	assert(!calls.some((call) => call.kind === "final"), "no final call after a part failed twice");
-	pass("a part that fails twice fails the Remember at once with a plain sentence and no final call");
-	await waitUntilAborted([1, 3]);
-	const partCallsAfter = calls.filter((call) => call.kind === "part").length;
-	await sleep(100);
-	assert(calls.filter((call) => call.kind === "part").length === partCallsAfter, "no part starts after the outcome is known");
-	pass("the parts still being read are aborted and none starts after the failure");
+	const halved = await freshProposal({ agentId, conversationId: threadId, model, density: "standard", runtimeCwd: tempCwd }, generate, options);
+	const partTwoReads = calls.filter((call) => call.kind === "part" && partNumberOf(call.prompt) === 2).length;
+	assert(partTwoReads === 4 && calls.some((call) => call.kind === "final") && halved.rememberRead.reads === 4, `a part that fails twice is read in two halves and the Remember goes on, got ${partTwoReads} reads of part 2`);
+	assert(calls.filter((call) => call.kind === "part" && partNumberOf(call.prompt) !== 2).length === 2, "the other parts are read once each, never stopped by the failing one");
+	pass("a part that fails twice is read in halves, and the other parts and the final call go on");
 	failPart = null;
 	partDelayMs = 15;
 
 	// --- A note far over its ceiling --------------------------------------------------
 	calls.length = 0;
 	longNotes = "once";
-	const shortened = await buildCheckpointProposal({ agentId, conversationId: threadId, model, density: "standard", runtimeCwd: tempCwd }, generate, options);
+	const shortened = await freshProposal({ agentId, conversationId: threadId, model, density: "standard", runtimeCwd: tempCwd }, generate, options);
 	const partReads = calls.filter((call) => call.kind === "part");
 	assert(partReads.length === 6 && partReads.filter((call) => call.prompt.includes("## Retry Notice")).length === 3, `each overlong note is read once more with the shorter instruction, got ${partReads.length} reads`);
 	assert(partReads.filter((call) => call.prompt.includes("## Retry Notice")).every((call) => /Write them again under 1,500 tokens: shorten everything except must-keep content/.test(call.prompt)), "the second read says how short, and that must-keep stays");
@@ -310,9 +343,11 @@ try {
 	pass("a note far over its ceiling is read once more with a shorter instruction, and the shorter note is used");
 	calls.length = 0;
 	longNotes = "always";
-	await expectRejects(() => buildCheckpointProposal({ agentId, conversationId: threadId, model, density: "standard", runtimeCwd: tempCwd }, generate, options), /^All 3 parts of this conversation were read, but their notes came out too long for GPT-5\.5 \(a window of 32,000 tokens\) to read next to this room's memory\. Generate again, or choose a memory model with a larger window in Room settings, Model\. No memory has been written\.$/, "notes still too long after the second read");
-	assert(!calls.some((call) => call.kind === "final"), "no final call when the notes do not fit");
-	pass("notes still too long after the second read fail with a sentence that says the parts were read");
+	const overlong = await freshProposal({ agentId, conversationId: threadId, model, density: "standard", runtimeCwd: tempCwd }, generate, options);
+	assert(calls.filter((call) => call.kind === "final").every((call) => estimateTokens(call.prompt) <= BUDGET), "no final call is sent over the budget");
+	assert(/PART_NOTE_1 started and ended/.test(overlong.proposedRecentContext) || calls.some((call) => call.kind === "final"), "the page comes from the notes when they do not fit beside the end");
+	parseCheckpointApprovalRequest({ conversationId: threadId, model, density: overlong.density, proposal: overlong, approvedRecentContext: overlong.proposedRecentContext }, agentId);
+	pass("notes still too long after the second read still give a page Save accepts");
 	longNotes = null;
 
 	// --- A cancel during the parts ---------------------------------------------------
@@ -320,7 +355,7 @@ try {
 	// flight end as aborted, none is read again, and no final call follows.
 	calls.length = 0;
 	const cancel = new AbortController();
-	const cancelling = async (prompt: string, model: unknown, call?: { trigger: string; workerLabel: string }) => {
+	const cancelling = async (prompt: string, model: unknown, call?: { trigger?: string; workerLabel?: string }) => {
 		cancel.abort();
 		await sleep(5);
 		const error = new Error("worker aborted") as Error & { stopReason?: string };
@@ -328,19 +363,31 @@ try {
 		calls.push({ kind: call?.trigger === REMEMBER_PART_TRIGGER ? "part" : "final", prompt });
 		throw error;
 	};
-	await expectRejects(() => buildCheckpointProposal({ agentId, conversationId: threadId, model, density: "standard", runtimeCwd: tempCwd }, cancelling, { ...options, signal: cancel.signal }), /worker aborted|Remember was cancelled/, "a cancel during the parts");
+	await expectRejects(() => freshProposal({ agentId, conversationId: threadId, model, density: "standard", runtimeCwd: tempCwd }, cancelling, { ...options, signal: cancel.signal }), /worker aborted|Remember was cancelled/, "a cancel during the parts");
 	assert(calls.every((call) => call.kind === "part") && calls.length <= 3, `a cancel reads no part again and makes no final call, got ${JSON.stringify(calls.map((call) => call.kind))}`);
 	pass("a cancel during the parts reads nothing again and makes no final call");
 
+	// --- A replan that adds a part ----------------------------------------------------
+	// A stretch's note is kept under its words, not under "part N of M": a
+	// replan that adds a part reads again only the stretches that changed.
+	const keyOf = (plan: ReturnType<typeof planRememberParts>, n: number) => rememberPartKey({ model, density: "standard", prompt: rememberPartKeyPrompt(context, plan.parts[n]!, false) });
+	const morePlan = planRememberParts(context, [...items, ...items.slice(-40)], BUDGET);
+	assert(morePlan.parts.length > plan.parts.length && JSON.stringify(morePlan.parts[0]!.items) === JSON.stringify(plan.parts[0]!.items), `a longer end adds a part and keeps the first stretch, got ${morePlan.parts.length} parts`);
+	assert(keyOf(morePlan, 0) === keyOf(plan, 0), "the first stretch's note is found again after a part is added");
+	pass("a replan that adds a part finds the notes of the stretches that did not change");
+
 	// --- A memory too large for the window --------------------------------------------
+	// The read compares against the memory only, so the final call carries its
+	// short view (an outline) instead of refusing.
 	const memory = fs.readFileSync(l1bPath(), "utf-8");
 	fs.writeFileSync(l1bPath(), memory.replace("## Recent Context", `## Notes\n\n${"A durable note the room keeps, at the length notes reach. ".repeat(500)}\n\n## Recent Context`));
 	calls.length = 0;
-	const tooLarge = await expectRejects(() => buildCheckpointProposal({ agentId, conversationId: threadId, model, density: "standard", runtimeCwd: tempCwd }, generate, options), /^This conversation is too long for GPT-5\.5 \(a window of 32,000 tokens\) to remember next to this room's memory, even read in parts\. Choose a memory model with a larger window in Room settings, Model, then generate again\. No memory has been written\.$/, "a memory too large for the window");
-	assert(tooLarge instanceof RememberTooLargeError && (tooLarge as { statusCode?: number }).statusCode === 413, "the refusal is the plain one, not the transcript overflow");
-	assert(calls.length === 0, `the refusal comes before any model call, got ${calls.length}`);
+	const outlined = await freshProposal({ agentId, conversationId: threadId, model, density: "standard", runtimeCwd: tempCwd }, generate, options);
+	const outlinedFinal = calls.find((call) => call.kind === "final")!.prompt;
+	assert(outlined.fields.body.length > 0, "a memory too large for the window still gives a page");
+	assert(/here is its outline/.test(outlinedFinal) && !outlinedFinal.includes("A durable note the room keeps"), "the final call carries the memory's outline, not its notes");
 	fs.writeFileSync(l1bPath(), memory);
-	pass("a memory too large for the window fails with the plain sentence naming the window and Room settings, Model");
+	pass("a memory too large for the window is read as its outline, and the page comes");
 
 	console.log("remember two-stage smoke passed");
 } finally {

@@ -62,7 +62,7 @@ const NARRATION_PARAGRAPH = `Use what you remember the way a colleague recalls s
 const NOT_HELD_SENTENCE = "If you do not hold it, say plainly that you do not know it, in one sentence, without describing the search, rather than filling it with a guess.";
 
 /** The recall tool's Room tools line, word for word. */
-const MEMORY_RECALL_SNIPPET = "Search this room's memory, notes, archive and memorized conversations, by words, names or dates before saying you do not know";
+const MEMORY_RECALL_SNIPPET = "Search this room's memory, notes, archive and remembered conversations, by words, names or dates before saying you do not know";
 
 const EM_DASH = "\u2014";
 
@@ -158,7 +158,7 @@ try {
 	const current = fs.readFileSync(path.join(agentRoot, "L1a.md"), "utf-8");
 
 	const marker = parsePersistentAgentL1aMarker(current);
-	assert(marker.templateVersion === 3, `a scaffolded room should carry template v3 (got v${marker.templateVersion})`);
+	assert(marker.templateVersion === 4, `a scaffolded room should carry template v4 (got v${marker.templateVersion})`);
 	assert(parsePersistentAgentL1aMarker(V2_CONSTITUTION).templateVersion === 2, "the frozen baseline should be the version-2 wording");
 
 	// The growth has to be attributable: everything outside the Memory section
@@ -166,7 +166,7 @@ try {
 	// aside. Otherwise the number below measures a rename or a mode edit too.
 	const before = splitConstitution(V2_CONSTITUTION);
 	const after = splitConstitution(current);
-	assert(after.head.replace("template_version=3", "template_version=2") === before.head, "everything above the Memory section must be unchanged from version 2");
+	assert(after.head.replace("template_version=4", "template_version=2") === before.head, "everything above the Memory section must be unchanged from version 2");
 	assert(after.tail === before.tail, "everything below the Memory section must be unchanged from version 2");
 
 	// The paragraphs version 2 shipped are field-tested wording: they come back
@@ -181,6 +181,9 @@ try {
 	// A conversation or a note is named by its date and its topic, never by an id, word for word.
 	assert(after.memory.includes(`when it matters. ${NO_INTERNAL_IDS_SENTENCE}\n`), "the Memory section must tell the room, word for word, to refer to a conversation or a note by its date and topic and never by an id");
 	assert(!V2_CONSTITUTION.includes(NO_INTERNAL_IDS_SENTENCE) && !V2_CONSTITUTION.includes("never by an id"), "the frozen baseline should not carry the sentence on internal ids");
+
+	// Version 4: every remembered conversation is searchable from its Remember, not from its Memorize.
+	assert(after.memory.includes("the transcripts of remembered conversations.") && !after.memory.includes("memorized conversations"), "the Memory section must say the transcripts of remembered conversations are behind the search");
 
 	// The do-not-narrate rule covers a miss as well as a hit, word for word.
 	assert(after.memory.includes(`\n\n${NARRATION_PARAGRAPH}\n\n`), "the Memory section must carry the do-not-narrate paragraph word for word, a miss included");
@@ -199,7 +202,7 @@ try {
 	const narrationGrowthChars = NARRATION_PARAGRAPH.length - v2Paragraphs.filter((part) => part.startsWith(V2_NARRATION_PARAGRAPH_START))[0].length;
 	const pointsGrowthChars = growthChars - RECONCILING_SENTENCE.length - 1 - narrationGrowthChars - NO_INTERNAL_IDS_SENTENCE.length - 1;
 	console.log(`constitution v2: ${V2_CONSTITUTION.length} chars, ~${estimateTokens(V2_CONSTITUTION)} estimated tokens (Memory section ${before.memory.length} chars)`);
-	console.log(`constitution v3: ${current.length} chars, ~${estimateTokens(current)} estimated tokens (Memory section ${after.memory.length} chars)`);
+	console.log(`constitution v4: ${current.length} chars, ~${estimateTokens(current)} estimated tokens (Memory section ${after.memory.length} chars)`);
 	console.log(`growth: +${growthChars} chars (bound ${MAX_GROWTH_CHARS}), of which the six points are +${pointsGrowthChars}, the reconciling sentence +${RECONCILING_SENTENCE.length + 1}, the do-not-narrate rewrite +${narrationGrowthChars} and the sentence on internal ids +${NO_INTERNAL_IDS_SENTENCE.length + 1}, ~+${growthTokens} estimated tokens`);
 	assert(growthChars <= MAX_GROWTH_CHARS, `the constitution grew by ${growthChars} characters, over the ${MAX_GROWTH_CHARS} the wording is allowed; tighten the wording rather than drop a point`);
 	assert(growthChars > 0, "version 3 should say more than version 2, not less");

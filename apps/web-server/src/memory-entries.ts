@@ -452,13 +452,16 @@ function parseTopicBody(bodyLines: string[], eol: string): { intro: string; entr
 			entries: splitUnmarkedBlocks(stripBlankEdges(bodyLines)).map((block) => ({ id: "", kind: "fact" as EntryKind, saved: "", pinned: false, text: block.join(eol) })),
 		};
 	}
-	const intro = stripBlankEdges(bodyLines.slice(0, metaIndexes[0])).join(eol);
+	// What sits above the first marker is read by the room like any note (the
+	// scaffold's starter goal kept unmarked in a marked file), so it is a note
+	// without an id, never hidden prose: the next write gives it one.
+	const unmarked = splitUnmarkedBlocks(stripBlankEdges(bodyLines.slice(0, metaIndexes[0]))).map((block) => ({ id: "", kind: "fact" as EntryKind, saved: "", pinned: false, text: block.join(eol) }));
 	const entries = metaIndexes.map((at, n) => {
 		const end = n + 1 < metaIndexes.length ? metaIndexes[n + 1] : bodyLines.length;
 		const fields = parseMetaFields(ENTRY_META_LINE.exec(bodyLines[at])![1]);
 		return entryFromMeta(fields, stripBlankEdges(bodyLines.slice(at + 1, end)).join(eol));
 	});
-	return { intro, entries };
+	return { intro: "", entries: [...unmarked, ...entries] };
 }
 
 function parseSectionTopics(sectionText: string, section: MemorySection, eol: string): { topics: MemoryTopic[]; nextEntryNumber: number | null } {
@@ -939,21 +942,6 @@ export function renderMemoryContext(l1b: string, archiveText?: string, opts: { p
 	if (!isMigratedMemoryDocument(l1b)) return l1b;
 	const index = archiveText && archiveText.trim() ? archiveIndex(parseArchive(archiveText)) : undefined;
 	return renderMemoryDocument(parseMemoryDocument(l1b), "context", { ...(index ? { archiveIndex: index } : {}), ...(opts.pairDays ? { pairDays: true } : {}) });
-}
-
-/**
- * One FRAGMENT of memory text as a person reads it: the storage render's
- * metadata comments and id counter dropped, every other byte kept. The context
- * render above does this for a whole document, through the parser; a surface
- * that quotes a single area's text — the Review changes, say — has no document
- * to parse and reads the same two patterns directly, so the two renderings can
- * never disagree about what metadata is.
- */
-export function stripMemoryMetadataLines(text: string): string {
-	const eol = firstEol(text) ?? "\n";
-	return splitLines(text)
-		.filter((line) => !ENTRY_META_LINE.test(line) && !ENTRY_COUNTER_LINE.test(line))
-		.join(eol);
 }
 
 // --- Sizes -------------------------------------------------------------------

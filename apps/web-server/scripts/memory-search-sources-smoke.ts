@@ -359,8 +359,9 @@ function withText(docs: readonly SearchDocument[], marker: string): SearchDocume
 	return found[0]!;
 }
 
+/** The memorized conversation's documents under one Recent Context id; a conversation remembered since may reuse the id. */
 function documentsOf(docs: readonly SearchDocument[], rcId: string): SearchDocument[] {
-	return docs.filter((doc) => doc.source === "conversation" && doc.meta?.rcId === rcId);
+	return docs.filter((doc) => doc.source === "conversation" && doc.meta?.rcId === rcId && doc.meta?.outcome !== "remembered");
 }
 
 try {
@@ -498,8 +499,8 @@ try {
 	assert(shortDocs.length === 1, `the short conversation fits one chunk, got ${shortDocs.length}`);
 	assert(longDocs.length >= 2, `the long conversation needs more than one chunk, got ${longDocs.length}`);
 	assert(droppedDocs.length === 1, `the dropped conversation is memorized too and fits one chunk, got ${droppedDocs.length}`);
-	const conversationDocCount = shortDocs.length + longDocs.length + droppedDocs.length;
-	assert(ofSource(first.docs, "conversation").length === conversationDocCount, `every memorized conversation is a document, folded or dropped, and nothing else is, got ${ofSource(first.docs, "conversation").length} against ${conversationDocCount}`);
+	const conversationDocCount = shortDocs.length + longDocs.length + droppedDocs.length + 1;
+	assert(ofSource(first.docs, "conversation").length === conversationDocCount, `every memorized conversation is a document, folded or dropped, the one remembered since is one more, and nothing else is, got ${ofSource(first.docs, "conversation").length} against ${conversationDocCount}`);
 
 	// The conversation itself is part of the address, because a Memorize hands a
 	// Recent Context id back to the conversation after it: two chunks two saves
@@ -528,9 +529,12 @@ try {
 	assert(droppedDocs[0]!.meta?.outcome === "dropped" && droppedDocs[0]!.meta?.conversationId === "c_drop_0003" && droppedDocs[0]!.id === `${droppedConversation.rcId}#1@c_drop_0003`, `a dropped conversation's chunk carries its outcome and is addressed like any other, got ${JSON.stringify({ id: droppedDocs[0]!.id, meta: droppedDocs[0]!.meta })}`);
 	assert(droppedDocs[0]!.date === REMEMBER_DAY, `a dropped conversation is dated the day it was remembered too, got ${droppedDocs[0]!.date}`);
 
-	const corpusText = JSON.stringify(first.docs);
-	assert(!corpusText.includes(PLANT_AFTER_THE_SAVE), `a conversation remembered after the save is still in Recent Context and is not searchable, and ${PLANT_AFTER_THE_SAVE} came back, which is what matching a fold to a transcript by Recent Context id alone would do`);
-	pass("every memorized conversation is chunked documents carrying words only its transcript held, the dropped one says no notes were taken, and the reused Recent Context id does not fetch the wrong transcript");
+	// A conversation remembered after the save is searchable from its Remember:
+	// its page is in view, and its transcript holds what the page left out.
+	const rememberedDocs = ofSource(first.docs, "conversation").filter((doc) => doc.text.includes(PLANT_AFTER_THE_SAVE));
+	assert(rememberedDocs.length === 1 && rememberedDocs[0]!.meta?.outcome === "remembered" && rememberedDocs[0]!.meta?.conversationId === "c_after_0004" && rememberedDocs[0]!.origin === `from a conversation on ${RUN_DAY} (remembered, not yet memorized)`, `a conversation remembered after the save is searchable at once and says it is not memorized yet, got ${JSON.stringify(rememberedDocs.map((doc) => ({ origin: doc.origin, meta: doc.meta })))}`);
+	assert(!ofSource(first.docs, "conversation").some((doc) => doc.meta?.conversationId !== "c_after_0004" && doc.text.includes(PLANT_AFTER_THE_SAVE)), `the reused Recent Context id does not hand ${PLANT_AFTER_THE_SAVE} to another conversation`);
+	pass("every memorized conversation is chunked documents carrying words only its transcript held, the dropped one says no notes were taken, a remembered one is searchable at once, and the reused Recent Context id does not fetch the wrong transcript");
 
 	// =====================================================================
 	// 4. The chunking.
@@ -918,6 +922,28 @@ try {
 	const keptGone = collectRoomDocuments(originId, { runtimeCwd: threadCwd });
 	assert(keptGone.skipped.length === 1 && `${keptGone.skipped[0]!.checkpointId}.json` === keptCheckpoint && /gone/.test(keptGone.skipped[0]!.why), `a conversation kept as its summary whose Remember record is gone is reported as skipped, got ${JSON.stringify(keptGone.skipped)}`);
 	pass("a conversation's origin names the day and never its id: alone on its day it says no time, on a shared day it says the hour and minute, in a shared minute the second too, a dropped one still says no notes were taken, and one kept as its summary says it was kept as one note and is reported when its Remember record is gone");
+
+	// =====================================================================
+	// A conversation the provider refused whole. Its page holds only its
+	// dated title, Memorize drops it by code with no call, and the room can
+	// still look it up after the save, as Remember's save line promises.
+	// =====================================================================
+	const datedRoom = createPersistentAgentFromScaffoldInput({ displayName: "Memory Search Dated Page Room", userName: "Synthetic User", preferredUserAddress: "Synthetic User" });
+	const datedId = datedRoom.agent.agentId;
+	fs.writeFileSync(path.join(root, datedId, "L1b", "current.md"), smallMemoryFixture(datedId), { mode: 0o600 });
+	const datedTitle = `Conversation of ${REMEMBER_DAY}`;
+	const datedRemember = remember(datedId, "c_dated_0001", datedTitle, datedTitle, [
+		{ speaker: "user", text: "The reference the safety check would not read is MARLINTHIMBLE." },
+		{ speaker: "assistant", text: "Noted: MARLINTHIMBLE." },
+	], new Date(`${REMEMBER_DAY}T11:00:00.000Z`));
+	const datedRun = startAbsorbRun({ agentId: datedId, assessmentMarkdown: "## What these sessions leave behind\n\n- Nothing.", model: MODEL, generate: scriptedGenerate({}), now: () => new Date("2026-09-15T09:00:00.000Z") });
+	const datedRested = await settle(datedId, datedRun.runId);
+	assert(datedRested.state === "ready" && datedRested.sessions.find((session) => session.id === datedRemember.rcId)?.outcome === "dropped", `the dated page is dropped by code, got "${datedRested.state}" ${JSON.stringify(datedRested.sessions)}`);
+	approveAbsorbRun(datedId, datedRun.runId, new Date("2026-09-15T09:05:00.000Z"));
+	resetAbsorbRunsForTests();
+	const datedDocs = documentsOf(collectRoomDocuments(datedId, { runtimeCwd: threadCwd }).docs, datedRemember.rcId);
+	assert(datedDocs.length === 1 && datedDocs[0]!.text.includes("MARLINTHIMBLE") && datedDocs[0]!.meta?.outcome === "dropped", `a conversation dropped as a dated page stays in the room's search after Save, got ${JSON.stringify(datedDocs.map((doc) => ({ id: doc.id, meta: doc.meta })))}`);
+	pass("a conversation the provider refused whole is dropped by code at Memorize and stays in the room's search after the save");
 
 	console.log("memory-search-sources-smoke: OK");
 } catch (error) {

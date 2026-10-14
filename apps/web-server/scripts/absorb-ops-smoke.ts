@@ -260,6 +260,7 @@ const CORE_CONTEXT = renderMemoryDocument(DOC, "context", { entryIds: true, sect
 	// A fold with no discussion still gets a rendered instruction block, never an empty section.
 	const bare = buildFoldPrompt({ agentId: "room-smoke", model: { provider: "gateway", model: "fold-model" }, coreContext: "## Deep Memory\n", areas: AREAS, assessmentMarkdown: ASSESSMENT, session: SESSION, sessionIndex: 1, sessionCount: 1 });
 	assert(bare.prompt.includes("The user signed off without further instructions."), "no guidance renders as a sentence, not as a hole");
+	assert(bare.prompt.includes("Never say the user agreed, asked or decided to let it go unless their own instructions above say so"), "a drop's reason claims no agreement the person never gave");
 	// A session whose date the caller does not know states no date, rather than an empty one.
 	const undated = buildFoldPrompt({ agentId: "room-smoke", model: { provider: "gateway", model: "fold-model" }, coreContext: CORE_CONTEXT, areas: AREAS, assessmentMarkdown: ASSESSMENT, session: { id: SESSION_ID, text: SESSION_TEXT }, sessionIndex: 1, sessionCount: 1 });
 	assert(!undated.prompt.includes("This conversation is from") && !undated.prompt.includes("Session date:"), "no date renders as no sentence");

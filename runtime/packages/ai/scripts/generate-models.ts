@@ -365,6 +365,10 @@ function applyThinkingLevelMetadata(model: Model<any>): void {
 	// setting is thinking.type "between_tools", which this app does not send,
 	// so it gets no "off" either and its cheapest rung is adaptive at effort
 	// "low" (platform.claude.com/docs/en/models/sonnet-5-5/whats-new-sonnet-5-5).
+	// Haiku 5.5 (released 2026-10-07) accepts disabled at effort high or below
+	// and returns a 400 only at xhigh or max; this app sends off as disabled
+	// with no effort (the API default, medium), so it keeps "off"
+	// (platform.claude.com/docs/en/models/haiku-5-5/whats-new-haiku-5-5).
 	// Opus 5, Sonnet 5 and the rest accept disabled and keep "off".
 	// models.dev publishes the same effort ladder for Opus 5 and Fable 5,
 	// so the ladder cannot be the rule; the family is, on every provider that
@@ -1424,6 +1428,33 @@ async function generateModels() {
 			},
 			contextWindow: 1000000,
 			maxTokens: 64000,
+		});
+	}
+
+	// Add missing Claude Haiku 5.5 (released 2026-10-07) until models.dev
+	// includes it: platform.claude.com/docs/en/models/haiku-5-5/overview. It
+	// takes all five efforts, so xhigh and max are pinned here (no upstream
+	// ladder to read them from), which also makes it adaptive in the provider.
+	// The catalogue holds one price: the tier for prompts up to 100K tokens
+	// and the 5-minute cache write, as earlier tiered rows store their base.
+	if (!allModels.some(m => m.provider === "anthropic" && m.id === "claude-haiku-5-5")) {
+		allModels.push({
+			id: "claude-haiku-5-5",
+			name: "Claude Haiku 5.5",
+			api: "anthropic-messages",
+			baseUrl: "https://api.anthropic.com",
+			provider: "anthropic",
+			reasoning: true,
+			thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+			input: ["text", "image"],
+			cost: {
+				input: 0.1,
+				output: 0.5,
+				cacheRead: 0.01,
+				cacheWrite: 0.125,
+			},
+			contextWindow: 1000000,
+			maxTokens: 128000,
 		});
 	}
 

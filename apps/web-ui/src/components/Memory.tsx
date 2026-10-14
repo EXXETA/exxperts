@@ -2,6 +2,7 @@ import { Fragment, useEffect, useRef, useState } from "react";
 import { apiFetch } from "../api";
 import {
 	allRoomsFactsLine,
+	allRoomsNotesShown,
 	ASOF_ERROR,
 	ASOF_READING,
 	asOfChip,
@@ -38,6 +39,7 @@ import {
 	YOU_ARE_VIEWING_HERE,
 	type MemorySaveEvent,
 } from "../memory-surface-copy";
+import { plainMemoryText } from "../memory-v2-copy";
 import { MarkdownRenderer } from "./Markdown";
 import { MemoryChangeFold } from "./memory-change-fold";
 import { MemoryGrowthChart, type GrowthPoint } from "./memory-growth-chart";
@@ -77,7 +79,6 @@ interface RoomSummary {
 	needsAbsorb: boolean;
 	series: GrowthPoint[];
 	sessions: number;
-	sessionsCap: number;
 	topics: string[];
 	knows: string[];
 	composition: { deep: number; active: number; recent: number; chronos: number };
@@ -293,7 +294,7 @@ export function Memory({ onMaintain, maintainBlocked, onOpenMemorySettings }: { 
 	const [searching, setSearching] = useState(false);
 	const [askMode, setAskMode] = useState<"ask" | "find">("ask");
 	const [ask, setAsk] = useState("");
-	const [messages, setMessages] = useState<Array<{ role: "user" | "assistant"; text: string; sources?: string[] }>>([]);
+	const [messages, setMessages] = useState<Array<{ role: "user" | "assistant"; text: string; sources?: string[]; note?: string; provider?: string }>>([]);
 	const [scope, setScope] = useState<Set<string>>(new Set()); // empty = all rooms
 	const [asking, setAsking] = useState(false);
 	const [askError, setAskError] = useState<string | null>(null);
@@ -516,7 +517,7 @@ export function Memory({ onMaintain, maintainBlocked, onOpenMemorySettings }: { 
 	const runAsk = (override?: string) => {
 		const q = (override ?? ask).trim();
 		if (!q || asking) return;
-		const history = messages.map((m) => ({ role: m.role, content: m.text }));
+		const history = messages.map((m) => ({ role: m.role, content: m.text, ...(m.provider ? { provider: m.provider } : {}) }));
 		setMessages((prev) => [...prev, { role: "user", text: q }]);
 		setAsk("");
 		setAsking(true);
@@ -532,7 +533,7 @@ export function Memory({ onMaintain, maintainBlocked, onOpenMemorySettings }: { 
 		})
 			.then((r) => r.json())
 			.then((d) => {
-				if (d.ok) setMessages((prev) => [...prev, { role: "assistant", text: d.answer, sources: d.sources ?? [] }]);
+				if (d.ok) setMessages((prev) => [...prev, { role: "assistant", text: d.answer, sources: d.sources ?? [], note: d.note, provider: d.provider }]);
 				else setAskError(d.message || "Couldn't answer that.");
 			})
 			.catch((e) => setAskError(e?.name === "AbortError" ? "That took too long. Try again." : "Request failed. Is the app still running?"))
@@ -622,6 +623,7 @@ export function Memory({ onMaintain, maintainBlocked, onOpenMemorySettings }: { 
 														</div>
 													);
 												})()}
+												{m.note && <div className="sub" style={{ marginTop: 8 }}>{m.note}</div>}
 											</div>
 										)
 									))}
@@ -703,7 +705,7 @@ export function Memory({ onMaintain, maintainBlocked, onOpenMemorySettings }: { 
 					<section className="dash-section">
 						<div className="dash-section-label">At a glance</div>
 						<div className="mem-glance">
-							<div className="sub">{allRoomsFactsLine({ rooms: t.rooms, notes: t.notes, waiting })}</div>
+							<div className="sub">{allRoomsFactsLine({ rooms: t.rooms, notes: allRoomsNotesShown(data.rooms), waiting })}</div>
 							<div className="mem-comp-legend mem-glance-legend">
 								<span><span className="sw durable" />{MEMORY_TAB_LEGEND[0]}</span>
 								<span><span className="sw items" />{MEMORY_TAB_LEGEND[1]}</span>
@@ -960,7 +962,7 @@ export function Memory({ onMaintain, maintainBlocked, onOpenMemorySettings }: { 
 														<>
 															{panelHead(panel.area, panel.full ? FULL_MEMORY_PANEL_SUB : topicPanelSub(panel.area))}
 															<div className="mem-area-content md assistant-markdown">
-																<MarkdownRenderer>{panel.content || (panel.full ? "*This room has no notes yet.*" : "*This topic is empty right now.*")}</MarkdownRenderer>
+																<MarkdownRenderer>{plainMemoryText(panel.content) || (panel.full ? "*This room has no notes yet.*" : "*This topic is empty right now.*")}</MarkdownRenderer>
 															</div>
 														</>
 													) : asOf !== null ? (
@@ -974,7 +976,7 @@ export function Memory({ onMaintain, maintainBlocked, onOpenMemorySettings }: { 
 																<div className="sub">{ASOF_READING}</div>
 															) : (
 																<div className="mem-area-content md assistant-markdown">
-																	<MarkdownRenderer>{past.content || "*This room has no notes yet.*"}</MarkdownRenderer>
+																	<MarkdownRenderer>{plainMemoryText(past.content) || "*This room has no notes yet.*"}</MarkdownRenderer>
 																</div>
 															)}
 														</>
@@ -1016,7 +1018,7 @@ export function Memory({ onMaintain, maintainBlocked, onOpenMemorySettings }: { 
 																			<div className="mem-prov-open">
 																				{s.content && (
 																					<div className="mem-prov-body md assistant-markdown">
-																						<MarkdownRenderer>{s.content}</MarkdownRenderer>
+																						<MarkdownRenderer>{plainMemoryText(s.content)}</MarkdownRenderer>
 																					</div>
 																				)}
 																				{s.approvedAt && (

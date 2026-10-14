@@ -399,7 +399,7 @@ try {
 	assert(/too large for the locked consult model/.test(consultOverflowPlain) && !consultOverflowPlain.includes("room's instructions are"), "and does not mention instructions when the room has none (the room id itself contains the word)");
 	const tinyWindow = { contextWindow: 2000, maxOutputTokens: 1000 };
 	const bootOverflow = overflowMessage(() => assertPersistentAgentBootPromptFitsWindow({ agentId, model, systemPrompt: consultBoot.systemPrompt, window: tinyWindow }));
-	assert(/do not fit the usable window/.test(bootOverflow) && /choose Forget/.test(bootOverflow), "the boot refusal keeps its memory remedies");
+	assert(/do not fit the usable window/.test(bootOverflow) && /open Maintain from Home and run (Memorize|Review)/.test(bootOverflow), "the boot refusal keeps its memory remedies");
 	assert(/This room's instructions are ~\d+ of those tokens/.test(bootOverflow) && bootOverflow.includes("Room settings → Instructions") && bootOverflow.includes("then choosing Forget"), "and names the instructions with their size, the pane, and that Forget is still the way to a fresh boot");
 	const instructionsTokens = Number(/instructions are ~(\d+) of those tokens/.exec(bootOverflow)![1]);
 	assert(Math.abs(instructionsTokens - consultBoot.layers.find((entry) => entry.id === "instructions")!.estimatedTokens) <= 1, "the size named is the layer's, framing included, as the boot carries it");

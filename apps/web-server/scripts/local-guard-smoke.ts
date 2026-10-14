@@ -18,6 +18,9 @@ import { fileURLToPath } from "node:url";
 // requests need the token (cookie via the /auth/session exchange, or the
 // X-Exxperts-Auth header), /healthz stays open for readiness probes, and a
 // tokenless browser navigation gets the sign-in hint page instead of JSON.
+//
+// And HEAD /ws has no route: a plain 404, nothing logged as an error. The
+// request log never shows the sign-in token, however the address spells it.
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -54,10 +57,10 @@ async function waitForServer(server: ChildProcessWithoutNullStreams): Promise<vo
 
 // fetch/undici forbids or normalizes several of the headers under test
 // (Host, Via), so every probe uses a raw node:http request.
-function requestWithHeaders(pathname: string, headers: Record<string, string>): Promise<{ status: number; body: string; headers: http.IncomingHttpHeaders }> {
+function requestWithHeaders(pathname: string, headers: Record<string, string>, method = "GET"): Promise<{ status: number; body: string; headers: http.IncomingHttpHeaders }> {
 	return new Promise((resolve, reject) => {
 		const req = http.request(
-			{ host: "127.0.0.1", port, path: pathname, method: "GET", headers },
+			{ host: "127.0.0.1", port, path: pathname, method, headers },
 			(res) => {
 				const chunks: Buffer[] = [];
 				res.on("data", (chunk) => chunks.push(chunk as Buffer));
@@ -72,11 +75,11 @@ function requestWithHeaders(pathname: string, headers: Record<string, string>): 
 // Raw upgrade probe, shared by the proxy-header and auth cases. Resolves the
 // HTTP status the server answered with (101 for an accepted handshake), or -1
 // when the plugin destroyed the socket before/while answering.
-function wsUpgradeProbe(headers: Record<string, string>): Promise<{ status: number }> {
+function wsUpgradeProbe(headers: Record<string, string>, pathname = "/ws"): Promise<{ status: number }> {
 	return new Promise((resolve, reject) => {
 		const req = http.request(
 			{
-				host: "127.0.0.1", port, path: "/ws", method: "GET",
+				host: "127.0.0.1", port, path: pathname, method: "GET",
 				agent: false,
 				headers: {
 					Connection: "Upgrade",
@@ -110,6 +113,51 @@ function wsUpgradeProbe(headers: Record<string, string>): Promise<{ status: numb
 
 let server: ChildProcessWithoutNullStreams | undefined;
 const serverOutput: string[] = [];
+
+// The server's JSON log lines written since serverOutput[from]. The output
+// arrives in chunks that may cut a line, so the chunks are joined first.
+function serverLogLinesSince(from: number): Array<Record<string, any>> {
+	return serverOutput.slice(from).join("").split("\n").flatMap((line) => {
+		try {
+			const parsed = JSON.parse(line);
+			return parsed && typeof parsed === "object" ? [parsed] : [];
+		} catch {
+			return [];
+		}
+	});
+}
+
+// Every log line of the first request logged since serverOutput[from], once
+// its "request completed" line has arrived. The probes run one at a time.
+async function logOfNextRequest(from: number): Promise<Array<Record<string, any>>> {
+	const deadline = Date.now() + 5000;
+	for (;;) {
+		const lines = serverLogLinesSince(from);
+		const incoming = lines.find((line) => line.msg === "incoming request");
+		if (incoming && lines.some((line) => line.reqId === incoming.reqId && line.msg === "request completed")) {
+			return lines.filter((line) => line.reqId === incoming.reqId);
+		}
+		if (Date.now() > deadline) throw new Error("the server logged no complete request within 5 s (this smoke pins its log level to info)");
+		await new Promise((resolve) => setTimeout(resolve, 50));
+	}
+}
+
+// The first log line since serverOutput[from] with this message, once it has arrived.
+async function logLineSince(from: number, msg: string): Promise<Record<string, any>> {
+	const deadline = Date.now() + 5000;
+	for (;;) {
+		const line = serverLogLinesSince(from).find((candidate) => candidate.msg === msg);
+		if (line) return line;
+		if (Date.now() > deadline) throw new Error(`the server logged no "${msg}" line within 5 s`);
+		await new Promise((resolve) => setTimeout(resolve, 50));
+	}
+}
+
+// The smoke's own token, named instead of shown in a failure message.
+function withoutSmokeToken(text: string): string {
+	return text.split(SMOKE_AUTH_TOKEN).join("<the smoke token>");
+}
+
 try {
 	server = spawn("npx", ["tsx", "src/index.ts"], {
 		shell: process.platform === "win32",
@@ -119,6 +167,8 @@ try {
 			...process.env,
 			HOME: tempHome, USERPROFILE: tempHome,
 			PORT: String(port),
+			// The request lines are info lines; the log checks below read them.
+			LOG_LEVEL: "info",
 			...SMOKE_SERVER_AUTH_ENV,
 			EXXETA_HOME: repoRoot,
 			EXXPERTS_CODING_AGENT_DIR: tempAgentRuntimeRoot,
@@ -261,6 +311,79 @@ try {
 	// The refusals above must not have wedged the server.
 	const afterAuthProbes = await requestWithHeaders("/healthz", {});
 	assert(afterAuthProbes.status === 200, `healthz after auth probes: expected 200, got ${afterAuthProbes.status}`);
+
+	// 12. HEAD /ws has no route. Fastify answers HEAD on every GET route, and
+	//     the websocket plugin leaves those HEAD routes alone, so HEAD /ws ran
+	//     the room handler without a socket: a 500 and a stack trace in the log
+	//     every time. Signed in, it is a plain 404 and nothing is logged as an
+	//     error.
+	const headWsFrom = serverOutput.length;
+	const headWs = await requestWithHeaders("/ws", { "X-Exxperts-Auth": SMOKE_AUTH_TOKEN }, "HEAD");
+	const headWsErrors = (await logOfNextRequest(headWsFrom)).filter((line) => Number(line.level) >= 50 || line.err);
+	assert(
+		headWs.status === 404 && headWsErrors.length === 0,
+		`HEAD /ws: expected a plain 404 with no error logged, got ${headWs.status} with ${headWsErrors.length} error line(s)${headWsErrors.map((line) => `: ${line.err?.message ?? line.msg}`).join("")}`,
+	);
+
+	// 13. The request log never shows the sign-in token. The server reads a
+	//     query parameter by its decoded name, so "%74oken" signs in just as
+	//     "token" does. Every spelling it reads as the token is logged as
+	//     [redacted] up to the next "&" (a "#" belongs to the value), and every
+	//     other parameter is logged as sent. Fastify's own line for an unknown
+	//     route, which prints the raw address, is redacted the same way.
+	const authHeader = { "X-Exxperts-Auth": SMOKE_AUTH_TOKEN };
+	const absolute = `http://127.0.0.1:${port}`;
+	const tokenLogProbes: Array<{ label: string; path: string; headers?: Record<string, string>; status: number; logged: string; notFound?: string }> = [
+		{ label: "the plain name", path: `/auth/session?token=${SMOKE_AUTH_TOKEN}`, status: 302, logged: "/auth/session?token=[redacted]" },
+		{ label: "an encoded name", path: `/auth/session?%74oken=${SMOKE_AUTH_TOKEN}`, status: 302, logged: "/auth/session?%74oken=[redacted]" },
+		{
+			label: "a repeated name among other parameters",
+			path: `/auth/session?keep=a%20b&%74%6F%6B%65%6E=${SMOKE_AUTH_TOKEN}&token=${SMOKE_AUTH_TOKEN}#x&next=%2F`,
+			status: 403,
+			logged: "/auth/session?keep=a%20b&%74%6F%6B%65%6E=[redacted]&token=[redacted]&next=%2F",
+		},
+		{ label: "an absolute address", path: `${absolute}/auth/session?%74oken=${SMOKE_AUTH_TOKEN}`, headers: authHeader, status: 302, logged: `${absolute}/auth/session?%74oken=[redacted]` },
+		{
+			label: "an unknown route",
+			path: `/auth/session/?keep=1&%74oken=${SMOKE_AUTH_TOKEN}`,
+			headers: authHeader,
+			status: 404,
+			logged: "/auth/session/?keep=1&%74oken=[redacted]",
+			notFound: "Route GET:/auth/session/?keep=1&%74oken=[redacted] not found",
+		},
+	];
+	const tokenLogFailures: string[] = [];
+	for (const probe of tokenLogProbes) {
+		const from = serverOutput.length;
+		const res = await requestWithHeaders(probe.path, probe.headers ?? {});
+		const lines = await logOfNextRequest(from);
+		const loggedUrl = withoutSmokeToken(String(lines.find((line) => line.msg === "incoming request")?.req?.url ?? ""));
+		const inClear = lines.filter((line) => JSON.stringify(line).includes(SMOKE_AUTH_TOKEN));
+		if (res.status !== probe.status) tokenLogFailures.push(`${probe.label}: expected ${probe.status}, got ${res.status}`);
+		else if (res.status === 302 && !String(res.headers["set-cookie"] ?? "").includes("exxperts_auth=")) tokenLogFailures.push(`${probe.label}: signed in without the session cookie`);
+		if (inClear.length > 0) {
+			const where = inClear.map((line) => withoutSmokeToken(line.msg === "incoming request" ? `incoming request ${line.req?.url}` : String(line.msg)));
+			tokenLogFailures.push(`${probe.label}: the token is in clear in ${inClear.length} log line(s): ${where.join(" | ")}`);
+		} else if (loggedUrl !== probe.logged) {
+			tokenLogFailures.push(`${probe.label}: expected the address logged as ${probe.logged}, got ${loggedUrl}`);
+		}
+		if (probe.notFound && !lines.some((line) => line.msg === probe.notFound)) tokenLogFailures.push(`${probe.label}: expected the line "${probe.notFound}"`);
+	}
+	assert(tokenLogFailures.length === 0, `the sign-in token in the request log:\n  ${tokenLogFailures.join("\n  ")}`);
+
+	// 14. An upgrade request to a route without a socket handler: the
+	//     websocket plugin completes the handshake, closes the socket and logs
+	//     the raw address under "path", outside the request serializer.
+	//     /auth/session needs no token, so anyone reaches that line.
+	const upgradeFrom = serverOutput.length;
+	await wsUpgradeProbe({}, `/auth/session?%74oken=${SMOKE_AUTH_TOKEN}&token=${SMOKE_AUTH_TOKEN}&keep=1`);
+	const noHandler = await logLineSince(upgradeFrom, "closed incoming websocket connection for path with no websocket handler");
+	const upgradeInClear = serverLogLinesSince(upgradeFrom).filter((line) => JSON.stringify(line).includes(SMOKE_AUTH_TOKEN)).length;
+	const expectedPath = "/auth/session?%74oken=[redacted]&token=[redacted]&keep=1";
+	assert(
+		noHandler.path === expectedPath && upgradeInClear === 0,
+		`upgrade to a route without a socket handler: expected the path logged as ${expectedPath} and no token in clear, got ${withoutSmokeToken(String(noHandler.path))} with ${upgradeInClear} log line(s) holding the token`,
+	);
 
 	console.log("local guard smoke passed");
 } catch (error) {

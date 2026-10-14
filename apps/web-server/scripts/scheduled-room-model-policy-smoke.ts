@@ -52,7 +52,7 @@ try {
 	// Nothing signed in: the run names the model the room would run on (the
 	// default), so its readiness check blocks it as not connected; resolving
 	// creates no state.
-	assertModelLock(roomModels.resolveScheduledRoomModel(agentId), { provider: "openai-codex", model: "gpt-6-sol" }, "with nothing signed in a scheduled run names the default's model");
+	assertModelLock(roomModels.resolveScheduledRoomModel(agentId), { provider: "openai-codex", model: "gpt-6.1-sol" }, "with nothing signed in a scheduled run names the default's model");
 	assert(!fs.existsSync(path.join(tempAgentRuntimeRoot, "models.json")), "resolving must not create runtime models.json");
 	assert(!fs.existsSync(path.join(tempAgentRuntimeRoot, "auth.json")), "resolving must not create runtime auth.json");
 	console.log("  ok  with nothing signed in a scheduled run names the default's model for the readiness check to block, and nothing is created");

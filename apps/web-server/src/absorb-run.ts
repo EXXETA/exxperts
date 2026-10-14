@@ -21,12 +21,15 @@
 // the applier (absorb-ops.ts), the entry model (memory-entries.ts), the files
 // (memory-entries-store.ts), and the worker itself (the route injects it).
 
+import fs from "node:fs";
+import path from "node:path";
 import {
 	applyFoldOps,
 	buildFoldPrompt,
-	buildFoldUnreadableRetryPrompt,
+	buildFoldRetryPrompt,
 	decideFoldOps,
 	EMPTY_FOLD_GUIDANCE,
+	FOLD_TOPIC_TITLE_MAX_CHARS,
 	FIRST_READ_NONE,
 	foldGuidanceFromWire,
 	foldGuidanceToWire,
@@ -40,9 +43,13 @@ import {
 	type FoldRecord,
 } from "./absorb-ops.js";
 import { pageFailureKey, readPageFailures, writePageFailures } from "./absorb-page-failures.js";
-import { connectionDropped, foldPages, prunePageFailureState, type PageDeps, type PageEnding, type PageFailureCode, type PageRead, type PageRetryAsk, type PageTrace, type PagesOutcome } from "./absorb-run-pages.js";
+import { buildPlacementPrompt, buildSortPrompt, codeSorter, isUnsorted, placeByCode, readPlacement, readSort, SORT_BATCH, topicNamed, topicView } from "./memory-placement.js";
+import { MEMORY_CARD_NOTE_MAX_CHARS, memoryTextHasWords, memoryTopicName, memoryTopicNameProblem, topicNameSentence, memoryTypedText } from "./memory-typed-text.js";
+import { withHighLevelLines } from "./remember-two-stage.js";
+import { classifyModelFailure, ModelUnreachableError, WaitLine, type PatienceWait, type UnreachableDetail } from "./model-call-causes.js";
+import { connectionDropped, foldPages, outageClassOf, prunePageFailureState, type PageDeps, type PageEnding, type PageFailureCode, type PageRead, type PageRetryAsk, type PageTrace, type PagesOutcome } from "./absorb-run-pages.js";
 import { rereadModelKey, rereadPage, rereadTriedOn, selectRereads, withTried, type RereadPage } from "./absorb-reread.js";
-import { fileSessionAsSummary } from "./absorb-summary.js";
+import { fileSessionAsSummary, pagePieces } from "./absorb-summary.js";
 import { ABSORB_EMPTY_RECENT_CONTEXT_PLACEHOLDER, extractRecentContextForAbsorb, parseRecentContextBlocks, recentContextSessions, recentContextWithout, type AbsorbModelLock, type AbsorbRecentContextSession } from "./absorb-consolidation.js";
 import {
 	cloneDocument,
@@ -57,6 +64,7 @@ import {
 	parseMemoryDocument,
 	renderMemoryDocument,
 	withoutMustKeepMarkers,
+	applyUserEdit,
 	restoreEntries,
 	reviewTargetTokens,
 	type MemoryDocument,
@@ -66,6 +74,7 @@ import {
 import {
 	loadMemoryDocument,
 	readArchive,
+	newestRecordFiles,
 	settleMemoryBudget,
 	writeMemoryDocument,
 	type MemoryArchiveAppend,
@@ -77,17 +86,20 @@ import { IsolatedPersistentAgentWorkerTurnError } from "./persistent-agent-worke
 import {
 	assertAbsorbSourceFingerprintCurrent,
 	createPersistentAgentInstance,
+	type AbsorbEventRecord,
 	fingerprintL1bSource,
 	refuseOversizedMaintenancePrompt,
 	updateChronosForAbsorb,
-	writeAbsorbRunEventRecord,
+	buildAbsorbRunEventRecord,
 	type AbsorbApprovalResponse,
 	type AbsorbGenerateResult,
 	type CheckpointModelWindow,
 	type L1bSourceFingerprint,
 } from "./persistent-agents.js";
-import { MEMORY_BUDGET_MAX_TOKENS, formatTokenLimit, overMemoryBudget, readPersistentRoomMaintenanceSettings, writePersistentRoomMaintenanceSettings, MEMORY_BUDGET_MIN_TOKENS } from "./persistent-room-maintenance-settings.js";
+import { MEMORY_BUDGET_MAX_TOKENS, formatTokenLimit, overMemoryBudget, readPersistentRoomMaintenanceSettings, MEMORY_BUDGET_MIN_TOKENS } from "./persistent-room-maintenance-settings.js";
 import { estimateTokens } from "./token-estimate.js";
+import { clearKeptDiscussion } from "./memorize-discussion-keep.js";
+import { hasActiveReviewRun } from "./review-run.js";
 
 // --- The wire shapes (the API contract, field for field) ----------------------
 
@@ -221,6 +233,10 @@ export interface AbsorbRun {
 	 * sessions (the count, Recent Context, the record's sessions) reads these.
 	 */
 	rereads: AbsorbRunSessionView[];
+	/** The notes an older Memorize left in Unsorted, and the topic this run sorted each under; the card can move one before Save. Absent when there were none. */
+	sorted?: Array<{ id: string; text: string; topic: string }>;
+	/** With `sorted`: the topics this update saves, its new ones included, for Move's list. Computed for each answer, never stored. */
+	topics?: string[];
 	/** What the prepass took, as it took it. Diagnostics and older smokes read it; the card reads `demotion.entries`, which carries these rows too. */
 	prepass: { demoted: AbsorbRunEntryCard[] };
 	budget: AbsorbRunBudget;
@@ -234,6 +250,14 @@ export interface AbsorbRun {
 	 * section out entirely.
 	 */
 	guidance: FoldGuidanceWire | null;
+	/**
+	 * The instructions that ask to remove, delete or close an entry they name,
+	 * and whether this run did it: code closes the item or removes the note
+	 * before Save. The card lists only these as done; other instructions were
+	 * guidance for the model. Absent when no instruction asked for a removal.
+	 */
+	/** The removals the person asked for: done by code (with the first line of the entry that went), or not and why. */
+	requests?: Array<{ text: string; done: boolean; several?: true; entry?: string }>;
 	/**
 	 * A room whose memory had no entry ids: the run gave them in memory and the
 	 * approval write is the first and only write. Null on a room that already had
@@ -251,7 +275,9 @@ export interface AbsorbRun {
 	 * limit). What finished is on the card; the rest wait, and the card offers
 	 * to try again (resume) or to choose another model. Absent otherwise.
 	 */
-	stop?: { kind: "outage"; model: { provider: string; model: string }; cause: AbsorbRunStopCause };
+	stop?: { kind: "outage" | "restart"; model: { provider: string; model: string }; cause: AbsorbRunStopCause };
+	/** A busy Memory model being waited out: the card says when the next try is. Absent otherwise. */
+	wait?: PatienceWait;
 }
 
 export interface AbsorbRunApprovalResponse extends AbsorbApprovalResponse {
@@ -262,7 +288,13 @@ export interface AbsorbRunApprovalResponse extends AbsorbApprovalResponse {
 	 * id, not one per kind.
 	 */
 	saveId: string;
+	/** A Save sent again for a run that already saved: nothing was written this time. */
+	alreadySaved?: true;
 	foldedSessions: string[];
+	/** What the saved screen counts, from what this save applied: conversations that became notes, those with nothing to keep, and topics memory did not have before. */
+	notedSessions: number;
+	nothingToKeep: number;
+	newTopics: number;
 	remainingSessions: string[];
 	archivedEntries: number;
 	/**
@@ -291,15 +323,25 @@ export interface AbsorbRunApprovalResponse extends AbsorbApprovalResponse {
 	rebasedOnto: string[];
 }
 
-/** Why an outage stopped the run: the probe went unanswered, or the provider named a rate limit, a quota or an overload. */
-export type AbsorbRunStopCause = "not-answering" | "busy";
+/**
+ * Why an outage stopped the run: the probe went unanswered, the provider named
+ * a rate limit or an overload past the shared patience ("busy"), or the model
+ * cannot be reached for a cause the notice names (signed out, out of quota,
+ * no longer offered, not available on this account).
+ */
+export type AbsorbRunStopCause = "not-answering" | "busy" | "signed-out" | "quota" | "not-offered" | "not-on-account" | "restarted";
+
+/** The run's stop cause for the shared classifier's unreachable detail. */
+export function absorbRunStopCauseOf(unreachable: UnreachableDetail | undefined, busy: boolean): AbsorbRunStopCause {
+	if (unreachable === "signed-out" || unreachable === "quota" || unreachable === "not-offered" || unreachable === "not-on-account") return unreachable;
+	if (unreachable === "still-busy" || busy) return "busy";
+	return "not-answering";
+}
 
 // --- Bounds and sentences ------------------------------------------------------
 
 /** One fold call's hard ceiling — the same eight minutes every maintenance worker gets. */
 export const ABSORB_FOLD_TIMEOUT_MS = 8 * 60 * 1000;
-/** A finished run stays readable this long, so a client that polls late still sees how it ended. */
-export const ABSORB_RUN_RETENTION_MS = 60 * 60 * 1000;
 /** The assessment's own cap, the same one the assessment screen accepts: a longer one runs without a first read. */
 export const ABSORB_RUN_ASSESSMENT_MAX_CHARS = 20_000;
 /**
@@ -318,63 +360,16 @@ export const ABSORB_FOLD_RETRY_PAUSE_MS = 2_000;
 export const ABSORB_FOLD_MAX_OUTPUT_TOKENS = 16_000;
 /** The probe's own ceiling: a two-word answer, so far short of the fold's eight minutes. */
 export const ABSORB_PROBE_TIMEOUT_MS = 45_000;
+/**
+ * The placement call answers with one topic title, the sort with one line per
+ * note. Both ask for no thinking; a model that cannot stop thinking takes its
+ * cheapest rung, and on some providers that thinking counts against the cap,
+ * so the cap leaves it room: a cap the thinking spent came back as no text.
+ */
+const ABSORB_PLACEMENT_MAX_OUTPUT_TOKENS = 1_024;
+const ABSORB_SORT_LINE_MAX_OUTPUT_TOKENS = 64;
 /** The probe's one fixed prompt, so its diagnostics records compare across runs. */
 export const ABSORB_PROBE_PROMPT = "Reply with OK";
-
-/**
- * The failure reasons a session that WAITS carries. Each is ONE cause
- * sentence, ending in a full stop; the consequence ("It stays for next time.")
- * belongs to the screen, which appends it to every failure reason alike, so
- * the two halves are never written twice or in two voices.
- */
-/** The turn was stopped: its own eight-minute ceiling, or a stall the ceiling caught. */
-export const ABSORB_FOLD_TIMED_OUT = "The model did not answer within the time limit, so this session waits for the next update.";
-/** The connection dropped mid-turn ("terminated", a reset socket, a failed fetch). */
-export const ABSORB_FOLD_CONNECTION_LOST = "The connection to the model dropped while this session was being added, so it waits for the next update.";
-/** Anything else the call threw: a provider error such as a content filter or a refused request. A person is told what it means for their memory, not what the stack said. */
-export const ABSORB_FOLD_WORKER_FAILED = "The model could not add this session this time, so it waits for the next update.";
-
-/**
- * The two causes that are asked again, when the second call failed the same
- * way as the first.
- *
- * A call that never came back is asked again, so the sentence a person reads
- * has to say which of the two happened. "Twice" is the whole difference: it
- * says the thing was tried again rather than given up on, and it says a second
- * ask will not be what fixes it. These end on the cause alone, so the screen
- * adds "It stays for next time." to them as it does to every other cause. A
- * timeout has no twice wording: a call that ran the whole eight minutes is not
- * asked for another eight, so its one-off sentence is the only one.
- */
-export const ABSORB_FOLD_CONNECTION_LOST_TWICE = "The connection dropped twice while memorizing this conversation.";
-export const ABSORB_FOLD_WORKER_FAILED_TWICE = "The model could not add this conversation, twice.";
-
-/** One cause, in its one-off wording and in its twice wording. */
-const FOLD_FAILURE_TWICE = new Map<string, string>([
-	[ABSORB_FOLD_CONNECTION_LOST, ABSORB_FOLD_CONNECTION_LOST_TWICE],
-	[ABSORB_FOLD_WORKER_FAILED, ABSORB_FOLD_WORKER_FAILED_TWICE],
-]);
-
-/**
- * A worker failure as the card says it.
- *
- * The runtime's own sentences are written for whoever is reading a log: a
- * connection dropped mid-reply reads "memorize fold worker failed: terminated",
- * which reached the field as a session's reason and told its user nothing about
- * their memory. What a person needs to know is what happened to this session
- * and what becomes of it, so the cause is mapped to one of three sentences and
- * the provider's own words go to the diagnostics record, which is redacted and
- * meant to be read by whoever is fixing it. The worker tells only "error" from
- * "aborted", so a dropped connection is told apart by its words; any other
- * provider error (a content filter, a refused request) is not a connection.
- */
-function foldFailureSentence(error: unknown): string {
-	if (error instanceof IsolatedPersistentAgentWorkerTurnError) {
-		if (error.stopReason === "aborted") return ABSORB_FOLD_TIMED_OUT;
-		return connectionDropped(error.providerMessage ?? "") ? ABSORB_FOLD_CONNECTION_LOST : ABSORB_FOLD_WORKER_FAILED;
-	}
-	return ABSORB_FOLD_WORKER_FAILED;
-}
 
 
 /**
@@ -390,16 +385,6 @@ function foldFailureRetryable(error: unknown): boolean {
 	return !(error instanceof IsolatedPersistentAgentWorkerTurnError && error.stopReason === "aborted");
 }
 
-/**
- * The sentence for a conversation whose retried call failed too.
- *
- * Only a pair that failed the SAME way is said "twice": a call that timed out
- * and then dropped is two different things going wrong, and the second one is
- * what a person should be told about, in its own words.
- */
-function foldFailureSentenceAfterRetry(first: string, second: string): string {
-	return first === second ? FOLD_FAILURE_TWICE.get(second) ?? second : second;
-}
 
 /**
  * The retry pause, as a module-level value a smoke can zero. Tests drive dozens
@@ -450,16 +435,22 @@ function foldFailureMessage(error: unknown): string {
 	return (error as Error)?.message ?? String(error);
 }
 
+/** A reason on the card is shown whole: the card has no way to read the rest. */
+const WHOLE = Number.POSITIVE_INFINITY;
+
 function oneLine(value: string, max = 240): string {
 	const line = value.replace(/\s+/g, " ").trim();
 	return line.length <= max ? line : `${line.slice(0, max - 1)}…`;
 }
 
-function endsAsSentence(value: string): string {
-	const line = oneLine(value);
+function endsAsSentence(value: string, max?: number): string {
+	const line = oneLine(value, max);
 	if (!line) return "";
 	return /[.!?…]$/.test(line) ? line : `${line}.`;
 }
+
+/** Memorize waits while Review tidies: both read the same memory, and the one saved second would be refused. */
+export const ABSORB_REVIEW_ACTIVE_SENTENCE = "This room is reviewing its memory right now. Wait for the review to finish, then run Memorize.";
 
 function productError(message: string, code: string, statusCode = 400, details?: unknown): Error {
 	const error = new Error(message);
@@ -540,12 +531,12 @@ function coreContextOf(doc: MemoryDocument): string {
 export type AbsorbRunGenerate = (
 	prompt: string,
 	model: AbsorbModelLock,
-	/** The fold is a single-shot transform: it asks for low reasoning, so reasoning tokens do not starve the reply under its output cap. */
-	options: { signal: AbortSignal; timeoutMs: number; thinkingLevel: "low"; maxTokens: number },
+	/** The fold is a single-shot transform: it asks for low reasoning, so reasoning tokens do not starve the reply under its output cap; the placement and sort calls, a title each, ask for none. */
+	options: { signal: AbortSignal; timeoutMs: number; thinkingLevel: "low" | "off"; maxTokens: number; onWait?: (wait: PatienceWait | null) => void },
 ) => Promise<AbsorbGenerateResult>;
 
-/** The probe's call: the fixed question on the same model, with its own short ceiling, at low reasoning so a reasoning model does not think its way to that ceiling. */
-export type AbsorbRunProbe = (prompt: string, model: AbsorbModelLock, options: { signal: AbortSignal; timeoutMs: number; thinkingLevel: "low" }) => Promise<AbsorbGenerateResult>;
+/** The probe's call: the fixed question on the same model, with its own short ceiling, with no thinking so a reasoning model does not think its way to that ceiling. */
+export type AbsorbRunProbe = (prompt: string, model: AbsorbModelLock, options: { signal: AbortSignal; timeoutMs: number; thinkingLevel: "off" }) => Promise<AbsorbGenerateResult>;
 
 export interface AbsorbRunStartInput {
 	agentId: string;
@@ -576,7 +567,23 @@ export interface AbsorbRunStartInput {
 	now?: () => Date;
 }
 
+/** A page's part of the working copy, as changeWorkingCopy and the ladder put it back. */
+interface PageSnapshot {
+	doc: MemoryDocument | null;
+	next: number;
+	superseded: number;
+	history: number;
+	sorted: number;
+	summary: AbsorbRunSessionView["summary"];
+	changes: AbsorbRunSessionView["changes"];
+	reason: AbsorbRunSessionView["reason"];
+}
+
 interface RunSlot {
+	/** The answer the save gave, kept while the run is: a Save sent again answers it once more. */
+	savedAnswer?: AbsorbRunApprovalResponse;
+	/** Set while a page is in its ladder: the page's start, which the journal holds instead of the pieces that landed. */
+	ladderStart?: PageSnapshot;
 	run: AbsorbRun;
 	controller: AbortController;
 	model: AbsorbModelLock;
@@ -609,14 +616,6 @@ interface RunSlot {
 	demotionArchive: RankedArchiveAppend[];
 	/** The archive list, by note id, for the life of the run: rows are added and re-flagged, never removed. */
 	archiveRows: Map<string, AbsorbRunArchiveRow>;
-	/**
-	 * When this run's retention clock started: the moment it stopped doing work
-	 * of its own. A finished run (saved, cancelled, failed) starts it once; a
-	 * READY run starts it too, and restarts it on every keep and budget change,
-	 * because a card a person is still working is not an abandoned run. Null only
-	 * while the run is genuinely working.
-	 */
-	idleSince: number | null;
 	work: Promise<void> | null;
 	/** What the run was started with: a resume folds the waiting pages with the same model, first read and guidance. */
 	input: AbsorbRunStartInput;
@@ -649,20 +648,105 @@ function blocksNewRun(state: AbsorbRunState): boolean {
 	return state === "prepass" || state === "folding" || state === "budget" || state === "approving";
 }
 
-function forgetExpiredRun(agentId: string, at: number): void {
-	const slot = RUNS.get(agentId);
-	if (slot && slot.idleSince !== null && at - slot.idleSince > ABSORB_RUN_RETENTION_MS) RUNS.delete(agentId);
-}
-
 function slotFor(agentId: string, runId: string): RunSlot {
-	forgetExpiredRun(agentId, Date.now());
-	const slot = RUNS.get(agentId);
+	const slot = RUNS.get(agentId) ?? reviveRun(agentId);
 	if (!slot || slot.run.runId !== runId) throw absorbRunUnknownError();
 	return slot;
 }
 
 function touch(slot: RunSlot, now: Date): void {
 	slot.run.updatedAt = now.toISOString();
+	writeJournal(slot);
+}
+
+// --- The journal: a run survives a restart -------------------------------------
+//
+// `<room>/runtime/memorize-run.json` holds the whole run as it stands, written
+// on every change and deleted when the run ends (saved, cancelled, failed). It
+// is room text in the room's own folder, like a snapshot; the map above is a
+// cache over it.
+
+function journalPath(agentId: string): string {
+	return path.join(createPersistentAgentInstance(agentId).runtimeDir(), "memorize-run.json");
+}
+
+/** Writes a run's journal atomically, its Maps and Sets kept; a run that ended has none. Review's journal is written the same way. */
+export function writeRunJournal(file: string, active: boolean, slot: () => object): void {
+	try {
+		if (!active) return fs.rmSync(file, { force: true });
+		const tmp = `${file}.${process.pid}.tmp`;
+		fs.mkdirSync(path.dirname(file), { recursive: true });
+		fs.writeFileSync(tmp, JSON.stringify({ schemaVersion: 1, slot: slot() }, (_key, value) => (value instanceof Map ? { $map: [...value] } : value instanceof Set ? { $set: [...value] } : value)), { mode: 0o600 });
+		fs.renameSync(tmp, file);
+	} catch (error) {
+		console.error(`[maintain] a run journal could not be written: ${(error as Error)?.name ?? "Error"}`);
+	}
+}
+
+/** A journal's run, or nothing when a restart cannot use it; such a journal holds room text all the same, so it goes. */
+export function readRunJournal(file: string): any {
+	try {
+		const saved = JSON.parse(fs.readFileSync(file, "utf8"), (_key, value) => (value?.$map ? new Map(value.$map) : value?.$set ? new Set(value.$set) : value));
+		if (saved?.schemaVersion === 1 && saved.slot?.run) return saved.slot;
+	} catch { /* unreadable: it goes */ }
+	return dropRunJournal(file);
+}
+
+/** Deletes a journal a restart cannot use; a delete that fails is ignored, and the next start writes over it. */
+export function dropRunJournal(file: string): undefined {
+	try { fs.rmSync(file, { force: true }); } catch { /* ignored */ }
+	return undefined;
+}
+
+function writeJournal(slot: RunSlot): void {
+	// A replaced run's late work never touches its successor's journal.
+	if (RUNS.get(slot.run.agentId) !== slot) return;
+	writeRunJournal(journalPath(slot.run.agentId), isActive(slot.run.state), () => {
+		const { controller: _controller, work: _work, ladderStart: held, input: { generate: _generate, probe: _probe, resolveModelWindow: _window, now: _now, ...input }, ...live } = slot;
+		// A page in its ladder is journaled as it was when the ladder began: a
+		// crash revives it whole, never with pieces that landed.
+		const kept = held ? { ...live, workingDoc: held.doc, nextEntryNumber: held.next, supersededArchive: live.supersededArchive.slice(0, held.superseded), historyArchive: live.historyArchive.slice(0, held.history), sortedArchive: live.sortedArchive.slice(0, held.sorted) } : live;
+		return { ...kept, input };
+	});
+}
+
+/**
+ * The run a restart left behind: a card as it was, or a run stopped mid-fold
+ * as a card with its folds so far and Continue for the pages not done. A page
+ * in flight at the restart is one of them, with a failure record: Continue
+ * redoes it down the ladder, and a second restart on it places it by code,
+ * so a page that brings the server down cannot loop.
+ */
+function reviveRun(agentId: string): RunSlot | undefined {
+	const file = journalPath(agentId);
+	const saved = readRunJournal(file);
+	if (!saved) return undefined;
+	const slot: RunSlot = { ...saved, controller: new AbortController(), work: null };
+	const run = slot.run;
+	if (slot.workingDoc) {
+		const runtimeDir = createPersistentAgentInstance(agentId).runtimeDir();
+		const failures = readPageFailures(runtimeDir);
+		for (const view of [...run.sessions, ...run.rereads].filter((row) => row.outcome === "folding")) {
+			view.outcome = "pending";
+			delete view.reason;
+			// The journal held the page as it began: nothing of it landed.
+			delete view.summary;
+			delete view.changes;
+			// A note read again gets the record a page gets.
+			const session = run.rereads.includes(view) ? undefined : slot.sessionsById.get(view.id);
+			if (!session && !run.rereads.includes(view)) continue;
+			const key = session ? pageFailureKey(session) : rereadRecordKey(view.id);
+			failures.records.set(key, { at: new Date().toISOString(), provider: slot.model.provider, model: slot.model.model, code: failures.records.get(key)?.code?.startsWith("restarted") ? "restarted-twice" : "restarted" });
+		}
+		writePageFailures(runtimeDir, failures);
+		delete run.progress.current;
+		run.stop = { kind: "restart", model: { provider: slot.model.provider, model: slot.model.model }, cause: "restarted" };
+		settleRun(slot, () => new Date());
+	} else if (run.state !== "ready" && run.state !== "approving") return dropRunJournal(file);
+	run.state = "ready";
+	RUNS.set(agentId, slot);
+	writeJournal(slot);
+	return slot;
 }
 
 /** Ends the run. A run that ended has nothing left to try again, so an outage stop goes with it. */
@@ -670,7 +754,6 @@ function finish(slot: RunSlot, state: AbsorbRunState, now: Date, error?: string)
 	slot.run.state = state;
 	delete slot.run.stop;
 	if (error) slot.run.error = error;
-	slot.idleSince = Date.now();
 	touch(slot, now);
 }
 
@@ -696,9 +779,9 @@ export function startAbsorbRun(input: AbsorbRunStartInput): AbsorbRun {
 	const agentId = createPersistentAgentInstance(input.agentId).agentId;
 	const nowFn = input.now ?? (() => new Date());
 	const now = nowFn();
-	forgetExpiredRun(agentId, Date.now());
-	const existing = RUNS.get(agentId);
+	const existing = RUNS.get(agentId) ?? reviveRun(agentId);
 	if (existing && blocksNewRun(existing.run.state)) throw absorbRunActiveError(existing.run.runId);
+	if (hasActiveReviewRun(agentId)) throw productError(ABSORB_REVIEW_ACTIVE_SENTENCE, "absorb_review_active", 409);
 	if (input.sourceFingerprint) assertAbsorbSourceFingerprintCurrent(input.sourceFingerprint, createPersistentAgentInstance(agentId).readL1b(), "assessment source");
 
 	settleMemoryBudget(agentId);
@@ -741,7 +824,6 @@ export function startAbsorbRun(input: AbsorbRunStartInput): AbsorbRun {
 		closedArchive: [],
 		demotionArchive: [],
 		archiveRows: new Map(),
-		idleSince: null,
 		work: null,
 		input,
 		guidance: input.guidance ?? { ...EMPTY_FOLD_GUIDANCE, pin: [], drop: [], corrections: [], topics: [], instructions: [] },
@@ -795,7 +877,7 @@ async function performRun(slot: RunSlot, input: AbsorbRunStartInput, nowFn: () =
 		const skipped = dropReasons.get(session.id.toUpperCase());
 		return skipped === undefined
 			? { id: session.id, title: session.title, date: session.date, outcome: "pending" as const, attempts: 0 }
-			: { id: session.id, title: session.title, date: session.date, outcome: "skipped" as const, reason: endsAsSentence(skipped) || "You asked for this session to be left out.", attempts: 0 };
+			: { id: session.id, title: session.title, date: session.date, outcome: "skipped" as const, reason: endsAsSentence(skipped, WHOLE) || "You asked for this session to be left out.", attempts: 0 };
 	});
 	run.progress.total = run.sessions.filter((session) => session.outcome === "pending").length;
 
@@ -824,30 +906,116 @@ async function performRun(slot: RunSlot, input: AbsorbRunStartInput, nowFn: () =
 		publishArchiveList(slot, doc);
 		doc = demoted.doc;
 	}
+	// The one-time sort goes first, so a re-read finds its note where it belongs.
+	const sorted = await sortUnsorted(slot, doc);
+	doc = sorted.doc;
+	if (sorted.unreachable) {
+		// The model cannot be reached: the run stops as a page outage stops it, with nothing read.
+		slot.workingDoc = doc;
+		slot.nextEntryNumber = doc.nextEntryNumber;
+		run.stop = { kind: "outage", model: { provider: input.model.provider, model: input.model.model }, cause: absorbRunStopCauseOf(sorted.unreachable.details.detail, false) };
+		settleRun(slot, nowFn);
+		return;
+	}
+	if (slot.controller.signal.aborted) {
+		finish(slot, "cancelled", nowFn());
+		return;
+	}
 	// The summary notes this run re-reads are chosen now, from the memory the
 	// folds start from: a note the prepass sent to the archive is not read, as
 	// the budget pass would bring it back whole, and a conversation this run
-	// files as its summary waits for a later run. They ride only on a run that
-	// has a conversation to read.
-	if (run.progress.total > 0) {
-		run.rereads = selectRereads(doc, input.model).flatMap((note) => {
-			const page = rereadPage(doc, note.id);
-			return page ? [{ id: page.id, title: page.title, date: page.date, outcome: "pending" as const, attempts: 0 }] : [];
-		});
-	}
+	// files as its summary waits for a later run. A run with no conversation
+	// reads them too.
+	run.rereads = selectRereads(doc, input.model).flatMap((note) => {
+		const page = rereadPage(doc, note.id);
+		return page ? [{ id: page.id, title: page.title, date: page.date, outcome: "pending" as const, attempts: 0 }] : [];
+	});
 	touch(slot, nowFn());
 
 	// --- folding ----------------------------------------------------------------
 	run.state = "folding";
-	touch(slot, nowFn());
 	slot.workingDoc = doc;
 	slot.nextEntryNumber = doc.nextEntryNumber;
+	touch(slot, nowFn());
+	// From here a restart brings the run back as a card, so the discussion it
+	// came from goes; until here a restart leaves the person their discussion.
+	clearKeptDiscussion(createPersistentAgentInstance(agentId).rootDir);
 	await foldWaitingPages(slot, nowFn);
 	if (slot.controller.signal.aborted) {
 		finish(slot, "cancelled", nowFn());
 		return;
 	}
 	settleRun(slot, nowFn);
+}
+
+const REMOVAL_REQUEST = /\b(remove|delete|close|drop|forget|get rid of|take out|retire|archive)\b/i;
+/** A negation or a keep word before the verb makes the instruction guidance: "Do not remove ...", "Keep ..., never close it". */
+const REMOVAL_GUARD = /\b(not|never|don['\u2019]?t|keep|leave)\b/i;
+const requestKey = (text: string) => text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+/** An entry's first line as a request compares it: the must-keep marker is not words the person quotes. */
+const entryKey = (text: string) => requestKey(text.split("\n")[0]!).replace(/^must keep /, "");
+/** The words before an entry's first colon: "Get to know Fernando: current projects, ..." is named by "Get to know Fernando". */
+const entryLabelKey = (text: string) => {
+	const line = text.split("\n")[0]!;
+	const colon = line.indexOf(":");
+	return colon > 0 ? entryKey(line.slice(0, colon)) : "";
+};
+
+const QUOTED_NAME = /["\u201c\u2018]([^"\u201d\u2019]{4,})["\u201d\u2019]/g;
+
+/**
+ * True when the instruction asks to remove an entry it names in quotes, with
+ * no negation or keep word before its verb, the quoted name as long as an
+ * entry's line must be to match. Anything else ("Drop the formal tone",
+ * `Remove "TODO" markers`, "remove the note about the Berlin office") is
+ * guidance for the Memory model, listed as told.
+ */
+/** A note brought back from the archive, where "archive" is a place, not a verb. */
+const FROM_ARCHIVE = /\b(bring back|restore|unarchive|from the archive|out of the archive)\b/i;
+
+function isRemovalRequest(text: string): boolean {
+	if (FROM_ARCHIVE.test(text)) return false;
+	const verb = REMOVAL_REQUEST.exec(text);
+	return verb !== null && !REMOVAL_GUARD.test(text.slice(0, verb.index)) && [...text.matchAll(QUOTED_NAME)].some((match) => requestKey(match[1]!).length >= 8);
+}
+
+/**
+ * The instructions that ask to remove an entry by its words, done by code: an
+ * open item is closed (and leaves the core with the run's other closed items),
+ * a note is removed to the archive. An instruction names its entry in quotes
+ * that are the entry's whole first line, or its words before the first colon; one that names no entry, or more
+ * than one, is not done, and the card says which. A removal carries the
+ * entry's first line, so the card names what went. An item the folds already closed counts as done. Once per
+ * run: a run settled again after a restart keeps what it decided.
+ */
+function applyRemovalRequests(slot: RunSlot): void {
+	const run = slot.run;
+	if (run.requests) return;
+	const asked = (run.guidance?.instructions ?? []).filter(isRemovalRequest);
+	if (asked.length === 0) return;
+	// Notes an earlier instruction of this run removed: a later one naming the same note finds it done.
+	const removedHere: Array<{ line: string; label: string; first: string }> = [];
+	run.requests = asked.map((text) => {
+		const quoted = [...text.matchAll(QUOTED_NAME)].map((match) => requestKey(match[1]!));
+		const doc = slot.workingDoc!;
+		const named = doc.topics.flatMap((topic) => topic.entries.map((entry) => ({ topic, entry, line: entryKey(entry.text), label: entryLabelKey(entry.text) })))
+			.filter(({ topic, line, label }) => (topic.section === "Active Items" || topic.section === "Deep Memory") && ((line.length >= 8 && quoted.includes(line)) || (label.length >= 8 && quoted.includes(label))));
+		if (named.length > 1) return { text, done: false, several: true as const };
+		if (named.length === 0) {
+			const earlier = removedHere.find(({ line, label }) => (line.length >= 8 && quoted.includes(line)) || (label.length >= 8 && quoted.includes(label)));
+			return earlier ? { text, done: true, entry: earlier.first } : { text, done: false };
+		}
+		const { topic, entry } = named[0]!;
+		const removed = { text, done: true, entry: entry.text.split("\n")[0]! };
+		if (entry.status === "done") return removed;
+		if (topic.section === "Active Items") slot.workingDoc = applyUserEdit(doc, { op: "status", id: entry.id, status: "done", today: slot.savedDate }).doc;
+		else {
+			slot.workingDoc = applyUserEdit(doc, { op: "delete", id: entry.id }).doc;
+			slot.closedArchive.push({ entry, why: "user", topic: topic.title, section: topic.section, archived: slot.savedDate });
+			removedHere.push({ line: entryKey(entry.text), label: entryLabelKey(entry.text), first: removed.entry });
+		}
+		return removed;
+	});
 }
 
 /**
@@ -863,16 +1031,13 @@ function settleRun(slot: RunSlot, nowFn: () => Date): void {
 	// "done items leave the core on the next Memorize", and this IS that
 	// Memorize. They go before the demotion so the budget numbers the card shows
 	// are the numbers the write produces.
+	applyRemovalRequests(slot);
 	const doc = removeClosedItems(slot, slot.workingDoc!);
 	doc.nextEntryNumber = slot.nextEntryNumber;
 	slot.postFoldDoc = doc;
 	slot.workingDoc = null;
 	recomputeDemotion(slot);
 	run.state = "ready";
-	// A ready run is waiting on a person, and a person can close the tab. Its
-	// retention clock starts here, so an abandoned card is reaped like any other
-	// finished run instead of holding the room for the life of the process.
-	slot.idleSince = Date.now();
 	touch(slot, nowFn());
 }
 
@@ -884,12 +1049,6 @@ export function setAbsorbFoldApplyForTests(apply: typeof applyFoldOps | null): v
 	applyFold = apply ?? applyFoldOps;
 }
 
-/** The sentence a waiting page carries: its failure, said "twice" when the retried call failed the same way. */
-function waitingSentence(sentences: string[]): string {
-	if (sentences.length === 0) return ABSORB_FOLD_WORKER_FAILED;
-	if (sentences.length === 1) return sentences[0];
-	return foldFailureSentenceAfterRetry(sentences[0], sentences[sentences.length - 1]);
-}
 
 interface RunPage {
 	view: AbsorbRunSessionView;
@@ -897,6 +1056,8 @@ interface RunPage {
 	session: AbsorbRecentContextSession;
 	/** Set on a summary note's re-read: the note, and the memory without it that its fold reads and applies to. */
 	reread?: RereadPage;
+	/** Where this page's changes with no usable topic go, once placed. */
+	home?: string;
 }
 
 /** The records a re-read page never carries: it is not a conversation, so it holds no failure record and no throttle note. */
@@ -904,7 +1065,141 @@ const NO_PAGE_RECORDS = { records: new Map(), throttled: new Map() };
 
 /** The key a page's record is written under; a re-read's can never be a conversation's. */
 function runPageKey(page: RunPage): string {
-	return page.reread ? `reread:${page.view.id}` : pageFailureKey(page.session);
+	return page.reread ? rereadRecordKey(page.view.id) : pageFailureKey(page.session);
+}
+
+/** The key of a re-read note's restart record; never a conversation's. */
+function rereadRecordKey(noteId: string): string {
+	return `reread:${noteId}`;
+}
+
+/** A reply's usage, added to the run's. */
+function addUsage(slot: RunSlot, generated: AbsorbGenerateResult): AbsorbGenerateResult {
+	slot.usage.input += generated.usage?.input ?? 0;
+	slot.usage.output += generated.usage?.output ?? 0;
+	slot.usage.totalTokens += generated.usage?.totalTokens ?? 0;
+	slot.usage.cost += generated.usage?.cost ?? 0;
+	slot.run.usage = { ...slot.usage };
+	return generated;
+}
+
+/** The tiny fixed question: true when the model answered, false when it did not; signed out, out of quota or no longer offered throws, for the notice. */
+async function probeMemoryModel(slot: RunSlot): Promise<boolean> {
+	const { input, run } = slot;
+	const probe = input.probe;
+	if (!probe) return true;
+	const diagnostics = recordMaintenanceWorkerCalls<AbsorbModelLock, AbsorbGenerateResult>(
+		{ roomRootDir: createPersistentAgentInstance(run.agentId).rootDir, agentId: run.agentId, process: "memorize-probe" },
+		(prompt, model) => probe(prompt, model, { signal: slot.controller.signal, timeoutMs: ABSORB_PROBE_TIMEOUT_MS, thinkingLevel: "off" }),
+	);
+	try {
+		await diagnostics.generate(ABSORB_PROBE_PROMPT, input.model);
+		return true;
+	} catch (error) {
+		const failure = classifyModelFailure(error);
+		if (failure.cause === "unreachable" && failure.detail !== "still-busy") throw new ModelUnreachableError(failure.detail, input.model, error);
+		return false;
+	}
+}
+
+/**
+ * A ladder or sort call that failed after the patience, read as the main
+ * loop reads a failure: a refusal and a call that ran out its time limit are
+ * said so; anything else asks the probe, and no answer is an outage, thrown;
+ * an answer makes it this call's own failure.
+ */
+async function ladderFailure(slot: RunSlot, error: unknown): Promise<"refused" | "timed-out" | "own"> {
+	if (error instanceof ModelUnreachableError || slot.controller.signal.aborted) throw error;
+	const failure = classifyModelFailure(error);
+	if (failure.cause === "refused") return "refused";
+	if (failure.cause === "too-large") return "own";
+	if (failure.cause === "unreachable") throw new ModelUnreachableError(failure.detail, slot.input.model, error);
+	// A rate limit, too many requests or an overload is an outage, as in the main loop; a dropped connection asks the probe.
+	if (outageClassOf(foldFailureMessage(error))) throw new ModelUnreachableError("still-busy", slot.input.model, error);
+	if (foldFailureCode(error) === "timed-out") return "timed-out";
+	if (!(await probeMemoryModel(slot))) throw new ModelUnreachableError("not-answering", slot.input.model, error);
+	return "own";
+}
+
+const slotWaitLines = new WeakMap<RunSlot, WaitLine>();
+
+/** A model being waited out, in a fold or a placement call: the card says when the next try is. Each call keeps its own wait on the run's one line. */
+function waitLine(slot: RunSlot): (wait: PatienceWait | null) => void {
+	let line = slotWaitLines.get(slot);
+	if (!line) {
+		line = new WaitLine((wait) => {
+			if (wait) slot.run.wait = wait;
+			else delete slot.run.wait;
+			touch(slot, (slot.input.now ?? (() => new Date()))());
+		});
+		slotWaitLines.set(slot, line);
+	}
+	return line.call();
+}
+
+/** One placement call (rung 5, or a batch of the one-time sort): the reply's text. Throws as ladderFailure says; a call's own failure gives null. */
+async function placementCall(slot: RunSlot, roomText: string, prompt: string, maxTokens: number, timeoutMs: number): Promise<string | null> {
+	const { input, run } = slot;
+	const diagnostics = recordMaintenanceWorkerCalls<AbsorbModelLock, AbsorbGenerateResult>(
+		{ roomRootDir: createPersistentAgentInstance(run.agentId).rootDir, agentId: run.agentId, process: "memorize-placement", roomText },
+		(asked, model) => input.generate(asked, model, { signal: slot.controller.signal, timeoutMs, thinkingLevel: "off", maxTokens, onWait: waitLine(slot) }),
+	);
+	try {
+		return addUsage(slot, await diagnostics.generate(prompt, input.model)).text;
+	} catch (error) {
+		await ladderFailure(slot, error);
+		return null;
+	}
+}
+
+/** The document without the Deep Memory topic of that title when nothing is left in it. */
+function withoutEmptyTopic(doc: MemoryDocument, title: string): MemoryDocument {
+	return { ...doc, topics: doc.topics.filter((topic) => !(topic.section === "Deep Memory" && topic.title === title && topic.entries.length === 0 && !topic.intro.trim())) };
+}
+
+/**
+ * The one-time sort, at a run's start: every note an older Memorize left in
+ * Unsorted goes under a topic, by one placement call for up to SORT_BATCH
+ * notes; when that call fails, by one placement call per note; and by code for
+ * any no reply named. A summary note keeps its
+ * mark, so a re-read refines it. A model that cannot be reached sorts
+ * nothing: the notes wait in Unsorted for the next run.
+ */
+async function sortUnsorted(slot: RunSlot, doc: MemoryDocument): Promise<{ doc: MemoryDocument; unreachable?: ModelUnreachableError }> {
+	const waiting = doc.topics.filter((topic) => topic.section === "Deep Memory" && isUnsorted(topic.title));
+	const notes = waiting.flatMap((topic) => topic.entries);
+	if (notes.length === 0) return { doc };
+	const { run } = slot;
+	const titles = new Map<string, string>();
+	for (let at = 0; at < notes.length && !slot.controller.signal.aborted; at += SORT_BATCH) {
+		const batch = notes.slice(at, at + SORT_BATCH);
+		try {
+			const reply = await placementCall(slot, batch.map((note) => note.text).join("\n"), buildSortPrompt(doc, batch), Math.max(ABSORB_PLACEMENT_MAX_OUTPUT_TOKENS, ABSORB_SORT_LINE_MAX_OUTPUT_TOKENS * batch.length), ABSORB_FOLD_TIMEOUT_MS);
+			for (const [id, title] of readSort(doc, reply ?? "")) titles.set(id, title);
+			if (reply !== null) continue;
+			// The batch's own failure (the probe answered): each note gets the ladder's placement call.
+			for (const note of batch) {
+				if (slot.controller.signal.aborted) break;
+				const placed = await placementCall(slot, note.text, buildPlacementPrompt(doc, note.text), ABSORB_PLACEMENT_MAX_OUTPUT_TOKENS, ABSORB_PROBE_TIMEOUT_MS);
+				const title = placed === null ? null : readPlacement(doc, placed);
+				if (title) titles.set(note.id, title);
+			}
+		} catch (error) {
+			// The model cannot be reached, or the person cancelled: nothing is sorted, the notes wait.
+			return { doc, ...(error instanceof ModelUnreachableError ? { unreachable: error } : {}) };
+		}
+	}
+	// Code places the rest.
+	let next = doc;
+	const placeRest = codeSorter();
+	run.sorted = notes.map((note) => {
+		const named = titles.get(note.id);
+		const topic = named ? topicNamed(next, named) : placeRest(next, note.text);
+		next = applyUserEdit(next, { op: "move", id: note.id, topic }).doc;
+		return { id: note.id, text: note.text, topic };
+	});
+	for (const topic of waiting) next = withoutEmptyTopic(next, topic.title);
+	return { doc: next };
 }
 
 /**
@@ -914,14 +1209,33 @@ function runPageKey(page: RunPage): string {
  * the diagnostics and the records file. A resume calls it again on the pages
  * an outage left waiting.
  */
+/** The card's reason for a page that holds only its dated title (draft, decision 43c). */
+const DATED_PAGE_REASON = "Its page holds no notes.";
+
+/** Whether a page is the day alone: its dated title as title, arc and only point, and nothing parked. */
+function holdsOnlyItsDate(session: { title: string; text: string }): boolean {
+	if (!/^Conversation of \d{4}-\d{2}-\d{2}$/.test(session.title.trim())) return false;
+	const rest = session.text.split("\n").filter((line) => !/^###\s/.test(line) && !/^<!--/.test(line.trim())).join("\n")
+		.replace(/\*\*(Session arc|Body|Parked):\*\*/g, "").split(session.title.trim()).join("").replace(/\bNone\b|[-*\s.]/g, "");
+	return rest === "";
+}
+
 async function foldWaitingPages(slot: RunSlot, nowFn: () => Date): Promise<PagesOutcome> {
 	const run = slot.run;
 	const input = slot.input;
 	const agentId = run.agentId;
 	const instance = createPersistentAgentInstance(agentId);
 	const signal = slot.controller.signal;
+	// A page that holds only its dated title (every part was refused at Remember)
+	// carries nothing to fold: it ends here, by code, with no call (decision 43c).
+	for (const view of run.sessions) {
+		if (view.outcome !== "pending" || !holdsOnlyItsDate(slot.sessionsById.get(view.id)!)) continue;
+		view.outcome = "dropped";
+		view.reason = DATED_PAGE_REASON;
+		run.progress.folded += 1;
+	}
 	const pages: RunPage[] = run.sessions.filter((view) => view.outcome === "pending").map((view) => ({ view, session: slot.sessionsById.get(view.id)! }));
-	const records = prunePageFailureState(readPageFailures(instance.runtimeDir()), [...slot.sessionsById.values()].map(pageFailureKey));
+	const records = prunePageFailureState(readPageFailures(instance.runtimeDir()), [...[...slot.sessionsById.values()].map(pageFailureKey), ...run.rereads.map((row) => rereadRecordKey(row.id))]);
 	// A window that cannot be looked up is unknown, never a reason on the card.
 	let window: CheckpointModelWindow | undefined;
 	try {
@@ -929,36 +1243,104 @@ async function foldWaitingPages(slot: RunSlot, nowFn: () => Date): Promise<Pages
 	} catch {
 		window = undefined;
 	}
-	let current: { page: RunPage; areas: ReturnType<typeof listAreas>; prompt: string; promptEstimatedTokens: number; diagnostics: ReturnType<typeof recordMaintenanceWorkerCalls<AbsorbModelLock, AbsorbGenerateResult>>; throwSentences: string[] } | null = null;
+	let current: { page: RunPage; areas: ReturnType<typeof listAreas>; prompt: string; promptEstimatedTokens: number; diagnostics: ReturnType<typeof recordMaintenanceWorkerCalls<AbsorbModelLock, AbsorbGenerateResult>> } | null = null;
 	const at = () => current!;
 
+	const snapshot = (page: RunPage): PageSnapshot => ({ doc: slot.workingDoc, next: slot.nextEntryNumber, superseded: slot.supersededArchive.length, history: slot.historyArchive.length, sorted: slot.sortedArchive.length, summary: page.view.summary, changes: page.view.changes, reason: page.view.reason });
+	/** Puts the working copy and the page's card row back as they were. */
+	const restore = (page: RunPage, before: PageSnapshot) => {
+		slot.workingDoc = before.doc;
+		slot.nextEntryNumber = before.next;
+		slot.supersededArchive.length = before.superseded;
+		slot.historyArchive.length = before.history;
+		slot.sortedArchive.length = before.sorted;
+		for (const field of ["summary", "changes", "reason"] as const) {
+			if (before[field] === undefined) delete page.view[field];
+			else (page.view as any)[field] = before[field];
+		}
+	};
 	/** Runs one change to the working copy, and puts the copy back as it was when the change throws. */
 	const changeWorkingCopy = <T>(page: RunPage, change: () => T): T => {
-		const before = { doc: slot.workingDoc, next: slot.nextEntryNumber, superseded: slot.supersededArchive.length, history: slot.historyArchive.length, sorted: slot.sortedArchive.length };
+		const before = snapshot(page);
 		try {
 			return change();
 		} catch (error) {
-			slot.workingDoc = before.doc;
-			slot.nextEntryNumber = before.next;
-			slot.supersededArchive.length = before.superseded;
-			slot.historyArchive.length = before.history;
-			slot.sortedArchive.length = before.sorted;
-			delete page.view.summary;
-			delete page.view.changes;
-			delete page.view.reason;
+			// A ladder's earlier rungs may have landed already: their rows stay.
+			restore(page, before);
 			throw error;
 		}
 	};
-	/** A page's changes, counted from what was APPLIED, never from the model's prose. */
+	/** A page's changes, counted from what was APPLIED, never from the model's prose; a ladder's rungs add to the rows the page has. */
 	const commit = (page: RunPage, applied: { doc: MemoryDocument; record: FoldRecord; nextEntryNumber: number }) => {
 		const where = addressBook(applied.doc);
 		const counted = summarizeFold(applied.record);
-		page.view.summary = { added: counted.added, updated: counted.updated, superseded: counted.superseded, closed: counted.closed };
-		page.view.changes = foldChanges(applied.record, where);
+		const was = page.view.summary;
+		page.view.summary = { added: counted.added + (was?.added ?? 0), updated: counted.updated + (was?.updated ?? 0), superseded: counted.superseded + (was?.superseded ?? 0), closed: counted.closed + (was?.closed ?? 0) };
+		page.view.changes = [...(page.view.changes ?? []), ...foldChanges(applied.record, where)];
 		collectSupersededArchive(slot, applied.record, applied.doc, where);
 		for (const row of applied.record.history) slot.historyArchive.push({ entry: { id: row.id, kind: row.kind, saved: slot.savedDate, from: applied.record.sessionId, pinned: false, text: row.text, ...(row.learned ? { learned: row.learned } : {}) }, why: "history", until: row.until, topic: row.topic, section: row.section, archived: slot.savedDate });
 		slot.workingDoc = applied.doc;
 		slot.nextEntryNumber = applied.nextEntryNumber;
+	};
+
+	/** Where a change with no usable topic goes (never Unsorted, never a topic of its own): placed once per page, and only when asked. */
+	const homeOf = (page: RunPage) => () => (page.home ??= placeByCode(slot.workingDoc!, page.session.text, page.session.title));
+	/** Whether a fold prompt of this size is too large for the Memory model's window. */
+	const overWindow = (promptEstimatedTokens: number): boolean => {
+		try {
+			refuseOversizedMaintenancePrompt({ agentId, processLabel: "Memorize fold", model: input.model, promptEstimatedTokens, window, guidance: "" });
+			return false;
+		} catch {
+			return true;
+		}
+	};
+	/**
+	 * One rung's fold (rungs 3 and 4): `text`, a piece of the page or what is
+	 * left of it, folded alone against the smaller memory `view`, and applied
+	 * when anything lands. A refusal is asked once more at a high level; a page
+	 * whose call already failed starts there. Throws only when the model cannot
+	 * be reached or the person cancelled.
+	 */
+	const foldText = async (page: RunPage, text: string, view: MemoryDocument, refused: boolean): Promise<"landed" | "failed" | "timed-out"> => {
+		const session = page.session;
+		const areas = listAreas(view);
+		const assembly = buildFoldPrompt({ agentId, model: input.model, coreContext: coreContextOf(view), areas, assessmentMarkdown: input.assessmentMarkdown, guidance: slot.guidance, session: { id: session.id, text, date: session.date }, sessionIndex: slot.pagesStarted, sessionCount: run.progress.total, now: nowFn() });
+		const prompt = assembly.prompt;
+		// Too large for the Memory model: never sent to be refused, the next rung takes it.
+		if (overWindow(assembly.telemetry.promptEstimatedTokens)) return "failed";
+		for (const highLevel of refused ? [true] : [false, true]) {
+			let reply: AbsorbGenerateResult;
+			try {
+				reply = addUsage(slot, await at().diagnostics.generate(highLevel ? withHighLevelLines(prompt) : prompt, input.model));
+			} catch (error) {
+				const failure = await ladderFailure(slot, error);
+				if (failure === "refused" && !highLevel) continue;
+				return failure === "timed-out" ? "timed-out" : "failed";
+			}
+			if (signal.aborted) throw new Error("cancelled");
+			const parsed = parseFoldOps(reply.text, { truncated: reply.truncated });
+			if (parsed.unreadable) return "failed";
+			const decided = decideFoldOps(parsed.items, areas, { ...session, text }, { homeTopic: homeOf(page), ...(slot.keptForFolds ? { keptForFolds: slot.keptForFolds } : {}) });
+			if (!decided.landed) return "failed";
+			try {
+				changeWorkingCopy(page, () => commit(page, applyFold(slot.workingDoc!, decided.ops as FoldOp[], { sessionId: session.id, savedDate: slot.savedDate, nextEntryNumber: slot.nextEntryNumber, ...(session.date ? { sessionDate: session.date } : {}) })));
+			} catch {
+				return "failed";
+			}
+			return "landed";
+		}
+		return "failed";
+	};
+	/** `text` kept whole as one summary note under `topic`. */
+	const fileAsNote = (page: RunPage, text: string, topic: string) => {
+		const session = page.session;
+		commit(page, fileSessionAsSummary(slot.workingDoc!, { id: session.id, title: session.title, text }, { savedDate: slot.savedDate, nextEntryNumber: slot.nextEntryNumber, topic, ...(session.date ? { sessionDate: session.date } : {}) }));
+	};
+	/** Rungs 5 and 6: `text` kept whole as one note, under the topic one tiny call names, or the one code finds. Throws when the model cannot be reached. */
+	const placeAsNote = async (page: RunPage, text: string): Promise<void> => {
+		const reply = signal.aborted ? null : await placementCall(slot, text, buildPlacementPrompt(slot.workingDoc!, text), ABSORB_PLACEMENT_MAX_OUTPUT_TOKENS, ABSORB_PROBE_TIMEOUT_MS);
+		const topic = (reply === null ? null : readPlacement(slot.workingDoc!, reply)) ?? placeByCode(slot.workingDoc!, text, page.session.title);
+		changeWorkingCopy(page, () => fileAsNote(page, text, topic));
 	};
 
 	const rereadKey = rereadModelKey(input.model);
@@ -990,38 +1372,26 @@ async function foldWaitingPages(slot: RunSlot, nowFn: () => Date): Promise<Pages
 			});
 			const diagnostics = recordMaintenanceWorkerCalls<AbsorbModelLock, AbsorbGenerateResult>(
 				{ roomRootDir: instance.rootDir, agentId, process: "memorize-fold", roomText: page.session.text },
-				(prompt, model) => input.generate(prompt, model, { signal, timeoutMs: ABSORB_FOLD_TIMEOUT_MS, thinkingLevel: "low", maxTokens: ABSORB_FOLD_MAX_OUTPUT_TOKENS }),
+				(prompt, model) => input.generate(prompt, model, {
+					signal,
+					timeoutMs: ABSORB_FOLD_TIMEOUT_MS,
+					thinkingLevel: "low",
+					maxTokens: ABSORB_FOLD_MAX_OUTPUT_TOKENS,
+					onWait: waitLine(slot),
+				}),
 			);
-			current = { page, areas, prompt: assembly.prompt, promptEstimatedTokens: assembly.telemetry.promptEstimatedTokens, diagnostics, throwSentences: [] };
+			current = { page, areas, prompt: assembly.prompt, promptEstimatedTokens: assembly.telemetry.promptEstimatedTokens, diagnostics };
 			touch(slot, nowFn());
 		},
 		onAttempt: (page, attempt) => {
 			page.view.attempts = attempt;
 			touch(slot, nowFn());
 		},
-		oversize: () => {
-			try {
-				refuseOversizedMaintenancePrompt({ agentId, processLabel: "Memorize fold", model: input.model, promptEstimatedTokens: at().promptEstimatedTokens, window, guidance: "" });
-				return false;
-			} catch {
-				return true;
-			}
-		},
+		oversize: () => overWindow(at().promptEstimatedTokens),
 		call: async (_page, retry: PageRetryAsk | null) => {
 			const base = at().prompt;
-			const prompt = retry === null ? base : buildFoldUnreadableRetryPrompt(base, retry.cutOff);
-			let generated: AbsorbGenerateResult;
-			try {
-				generated = await at().diagnostics.generate(prompt, input.model);
-			} catch (error) {
-				at().throwSentences.push(foldFailureSentence(error));
-				throw error;
-			}
-			slot.usage.input += generated.usage?.input ?? 0;
-			slot.usage.output += generated.usage?.output ?? 0;
-			slot.usage.totalTokens += generated.usage?.totalTokens ?? 0;
-			slot.usage.cost += generated.usage?.cost ?? 0;
-			run.usage = { ...slot.usage };
+			const prompt = retry === null ? base : buildFoldRetryPrompt(base, retry);
+			const generated = addUsage(slot, await at().diagnostics.generate(prompt, input.model));
 			return { text: generated.text, ...(generated.truncated ? { truncated: true } : {}) };
 		},
 		read: (page, reply): PageRead => {
@@ -1030,7 +1400,7 @@ async function foldWaitingPages(slot: RunSlot, nowFn: () => Date): Promise<Pages
 				at().diagnostics.annotate({ outcome: "refused", validatorErrors: parsed.problems });
 				return { usable: false, unreadable: parsed.unreadable };
 			}
-			const decided = decideFoldOps(parsed.items, at().areas, page.session, slot.keptForFolds ? { keptForFolds: slot.keptForFolds } : {});
+			const decided = decideFoldOps(parsed.items, at().areas, page.session, { homeTopic: homeOf(page), ...(slot.keptForFolds ? { keptForFolds: slot.keptForFolds } : {}) });
 			at().diagnostics.annotate({ outcome: decided.landed ? "accepted" : "refused", fold: { ops: decided.decisions.map(({ index, op, fate, codes }) => ({ i: index, op, fate, ...(codes.length > 0 ? { codes } : {}) })), pairs: decided.pairs } });
 			const earlier = parsed.earlierFence ? { earlierFence: true as const } : {};
 			return decided.landed ? { usable: true, ops: decided.ops, ...earlier } : { usable: false, nothingLands: true, ...earlier };
@@ -1042,7 +1412,7 @@ async function foldWaitingPages(slot: RunSlot, nowFn: () => Date): Promise<Pages
 				const applied = applyFold(reread.doc, ops as FoldOp[], { sessionId: reread.from ?? "", savedDate: slot.savedDate, nextEntryNumber: slot.nextEntryNumber, ...(reread.date ? { sessionDate: reread.date } : {}) });
 				// A lone drop sorts nothing: the note stays where it was.
 				if (applied.record.dropped) {
-					page.view.reason = endsAsSentence(applied.record.dropped.reason);
+					page.view.reason = endsAsSentence(applied.record.dropped.reason, WHOLE);
 					return "dropped";
 				}
 				// Sorted: memory is the fold's, without the note, and the save
@@ -1064,32 +1434,82 @@ async function foldWaitingPages(slot: RunSlot, nowFn: () => Date): Promise<Pages
 				return "folded";
 			}
 			const session = page.session;
-			const applied = applyFold(slot.workingDoc!, ops as FoldOp[], { sessionId: session.id, savedDate: slot.savedDate, nextEntryNumber: slot.nextEntryNumber, ...(session.date ? { sessionDate: session.date } : {}) });
+			const ctx = { sessionId: session.id, savedDate: slot.savedDate, ...(session.date ? { sessionDate: session.date } : {}) };
+			let applied: ReturnType<typeof applyFold>;
+			try {
+				applied = applyFold(slot.workingDoc!, ops as FoldOp[], { ...ctx, nextEntryNumber: slot.nextEntryNumber });
+			} catch (error) {
+				// Op by op: each op that applies is kept, and the text of one that
+				// throws is kept whole as one note, placed by code. Nothing applies:
+				// the page climbs the ladder.
+				const left: string[] = [];
+				let kept = false;
+				for (const op of ops as FoldOp[]) {
+					try {
+						commit(page, applyFold(slot.workingDoc!, [op], { ...ctx, nextEntryNumber: slot.nextEntryNumber }));
+						kept = true;
+					} catch {
+						if ("text" in op && op.text?.trim()) left.push(op.text.trim());
+					}
+				}
+				if (!kept) throw error;
+				if (left.length > 0) {
+					const text = `${session.text.split("\n")[0]}\n\n**Body:**\n${left.join("\n")}`;
+					fileAsNote(page, text, placeByCode(slot.workingDoc!, text, session.title));
+				}
+				return "folded";
+			}
 			commit(page, applied);
 			if (!applied.record.dropped) return "folded";
-			page.view.reason = endsAsSentence(applied.record.dropped.reason);
+			page.view.reason = endsAsSentence(applied.record.dropped.reason, WHOLE);
 			return "dropped";
 		}),
-		fileSummary: (page) => changeWorkingCopy(page, () => {
-			// A summary is never filed as a summary of itself: the note stays.
-			if (page.reread) return;
+		ladder: async (page, reason) => {
+			// A summary note is not read in pieces: it stays where it is. A page
+			// whose call ran out its time limit is placed: each rung could take as long.
+			if (page.reread || reason === "timed-out") return null;
 			const session = page.session;
-			commit(page, fileSessionAsSummary(slot.workingDoc!, { id: session.id, title: session.title, text: session.text }, { savedDate: slot.savedDate, nextEntryNumber: slot.nextEntryNumber, ...(session.date ? { sessionDate: session.date } : {}) }));
-		}),
-		probe: async () => {
-			const probe = input.probe;
-			if (!probe) return true;
-			const diagnostics = recordMaintenanceWorkerCalls<AbsorbModelLock, AbsorbGenerateResult>(
-				{ roomRootDir: instance.rootDir, agentId, process: "memorize-probe" },
-				(prompt, model) => probe(prompt, model, { signal, timeoutMs: ABSORB_PROBE_TIMEOUT_MS, thinkingLevel: "low" }),
-			);
+			// Only a refusal starts at the high level: any other failure keeps its specifics.
+			const refused = reason === "refused";
+			// The page as it began: an outage or a cancel inside the ladder puts
+			// it back whole, and until the ladder ends the journal holds this.
+			const start = snapshot(page);
+			slot.ladderStart = start;
 			try {
-				await diagnostics.generate(ABSORB_PROBE_PROMPT, input.model);
-				return true;
-			} catch {
-				return false;
+				// Rung 3: the page in pieces, each against the topics it matches. A
+				// call that ran out its time limit ends the folds: what is left is placed.
+				const pieces = pagePieces(session.text);
+				const left: string[] = [];
+				let stalled = false;
+				for (const piece of pieces) {
+					const folded: "landed" | "failed" | "timed-out" = stalled ? "failed" : await foldText(page, piece, topicView(slot.workingDoc!, piece), refused);
+					stalled ||= folded === "timed-out";
+					if (folded !== "landed") left.push(piece);
+				}
+				const landed = left.length < pieces.length;
+				if (pieces.length > 0 && left.length === 0) return "folded";
+				// Rung 4: what is left (the whole page when it has no pieces) asked as notes, against the topic map alone.
+				const rest = pieces.length > 0 ? left.join("\n\n") : session.text;
+				if (!stalled && (await foldText(page, rest, topicView(slot.workingDoc!, rest, 0), refused)) === "landed") return "folded";
+				if (!landed) return null;
+				// Some pieces folded: what is left is one note, placed as a whole page would be.
+				await placeAsNote(page, `${session.text.split("\n")[0]}\n\n${rest}`);
+				return "folded";
+			} catch (error) {
+				restore(page, start);
+				throw error;
+			} finally {
+				delete slot.ladderStart;
 			}
 		},
+		fileSummary: async (page, reason) => {
+			// A summary is never filed as a summary of itself: the note stays.
+			if (page.reread) return;
+			// A page a restart caught twice, or whose filing threw before: placed by code, with no call at all.
+			if (reason === "restarted-twice" || reason === "filing-threw") return changeWorkingCopy(page, () => fileAsNote(page, page.session.text, placeByCode(slot.workingDoc!, page.session.text, page.session.title)));
+			await placeAsNote(page, page.session.text);
+		},
+		probe: () => probeMemoryModel(slot),
 		retryable: foldFailureRetryable,
 		failureMessage: foldFailureMessage,
 		failureCode: foldFailureCode,
@@ -1106,12 +1526,14 @@ async function foldWaitingPages(slot: RunSlot, nowFn: () => Date): Promise<Pages
 				case "dropped":
 				case "summarized":
 					view.outcome = ending.kind;
+					// Placed as one note or not, the card reads it like any other conversation.
 					if (ending.kind !== "dropped") delete view.reason;
 					if (!page.reread) run.progress.folded += 1;
 					break;
 				case "waiting":
+					// A filing that threw is a quiet guard: the conversation waits, with no cause shown.
 					view.outcome = "failed";
-					view.reason = ending.reason === "first-failure" ? waitingSentence(at().throwSentences) : ABSORB_FOLD_WORKER_FAILED;
+					delete view.reason;
 					break;
 				case "outage":
 				case "cancelled":
@@ -1165,7 +1587,9 @@ async function foldWaitingPages(slot: RunSlot, nowFn: () => Date): Promise<Pages
 		for (const view of run.rereads.filter((row) => row.outcome === "pending")) {
 			if (signal.aborted) break;
 			const reread = rereadPage(slot.workingDoc!, view.id);
-			if (!reread || (reread.note.tried ?? []).includes(rereadKey)) {
+			// A note that a restart caught twice while it was read stays where it is, with no call.
+			const restartedTwice = records.records.get(rereadRecordKey(view.id))?.code === "restarted-twice";
+			if (!reread || (reread.note.tried ?? []).includes(rereadKey) || restartedTwice) {
 				run.rereads = run.rereads.filter((row) => row !== view);
 				continue;
 			}
@@ -1175,7 +1599,8 @@ async function foldWaitingPages(slot: RunSlot, nowFn: () => Date): Promise<Pages
 		}
 	}
 	run.progress.current = undefined;
-	if (outcome.stoppedForOutage) run.stop = { kind: "outage", model: { provider: input.model.provider, model: input.model.model }, cause: outcome.outageClass ? "busy" : "not-answering" };
+	delete run.wait;
+	if (outcome.stoppedForOutage) run.stop = { kind: "outage", model: { provider: input.model.provider, model: input.model.model }, cause: absorbRunStopCauseOf(outcome.unreachable, !!outcome.outageClass) };
 	return outcome;
 }
 
@@ -1368,6 +1793,7 @@ function snapshotRun(slot: RunSlot): AbsorbRun {
 	const run = JSON.parse(JSON.stringify(slot.run)) as AbsorbRun;
 	// The note a tagged row stands beside is named as the memory holds it now.
 	const doc = slot.postFoldDoc ?? slot.workingDoc;
+	if (run.sorted?.length && slot.postFoldDoc) run.topics = slot.postFoldDoc.topics.filter((topic) => topic.section === "Deep Memory" && !isUnsorted(topic.title)).map((topic) => topic.title);
 	if (doc) {
 		const leaving = leavingIds(slot);
 		for (const change of changeRows(run)) {
@@ -1483,7 +1909,6 @@ export function chooseAbsorbRunBeside(agentIdRaw: string, runId: string, entryId
 		row.choice = "replace";
 		row.choiceText = text;
 	}
-	slot.idleSince = Date.now();
 	touch(slot, now);
 	return snapshotRun(slot);
 }
@@ -1582,8 +2007,7 @@ export function getAbsorbRun(agentIdRaw: string, runId: string): AbsorbRun {
 /** Whether a run currently holds this room — the same test `propose` refuses on. */
 export function hasActiveAbsorbRun(agentIdRaw: string): boolean {
 	const agentId = createPersistentAgentInstance(agentIdRaw).agentId;
-	forgetExpiredRun(agentId, Date.now());
-	const slot = RUNS.get(agentId);
+	const slot = RUNS.get(agentId) ?? reviveRun(agentId);
 	return Boolean(slot && blocksNewRun(slot.run.state));
 }
 
@@ -1633,14 +2057,12 @@ export function keepAbsorbRunEntries(agentIdRaw: string, runId: string, keepRaw:
 	slot.run.demotion.keepIds = request.keepIds;
 	slot.run.demotion.keepTopics = request.keepTopics;
 	recomputeDemotion(slot);
-	// Someone is working this card: the retention clock starts again.
-	slot.idleSince = Date.now();
 	touch(slot, now);
 	return snapshotRun(slot);
 }
 
 /** The longest a note edited by hand may be: generous, and still a note rather than a page. */
-export const ABSORB_RUN_EDIT_MAX_CHARS = 2000;
+export const ABSORB_RUN_EDIT_MAX_CHARS = MEMORY_CARD_NOTE_MAX_CHARS;
 
 /**
  * The card's Edit on a note this update adds or rewrites: the person's words
@@ -1653,9 +2075,10 @@ export function editAbsorbRunEntry(agentIdRaw: string, runId: string, entryIdRaw
 	requireReady(slot);
 	if (!slot.postFoldDoc) throw productError("This memory update has nothing to edit yet.", "absorb_run_not_ready", 409);
 	const entryId = typeof entryIdRaw === "string" ? entryIdRaw.trim() : "";
-	const text = typeof textRaw === "string" ? textRaw.trim() : "";
+	// The person's words under the one rule: nothing typed becomes the file's structure.
+	const text = typeof textRaw === "string" ? memoryTypedText(textRaw).trim() : "";
 	if (!entryId) throw productError("entryId is required.", "absorb_run_bad_edit");
-	if (!text) throw productError("A note cannot be empty. If it should go, delete it from Room settings after saving.", "absorb_run_bad_edit");
+	if (!memoryTextHasWords(text)) throw productError("A note cannot be empty. If it should go, delete it from Room settings after saving.", "absorb_run_bad_edit");
 	if (text.length > ABSORB_RUN_EDIT_MAX_CHARS) throw productError(`A note is at most ${ABSORB_RUN_EDIT_MAX_CHARS} characters.`, "absorb_run_bad_edit");
 	const editable = pageRows(slot.run).some((session) => (session.changes ?? []).some((change) => change.id === entryId && (change.kind === "added" || change.kind === "updated" || change.kind === "superseded")));
 	if (!editable) throw productError("Only a note this update adds or rewrites can be edited here.", "absorb_run_bad_edit", 404);
@@ -1668,7 +2091,24 @@ export function editAbsorbRunEntry(agentIdRaw: string, runId: string, entryIdRaw
 	delete entry.disagrees;
 	for (const session of pageRows(slot.run)) for (const change of session.changes ?? []) if (change.id === entryId) change.after = next;
 	recomputeDemotion(slot);
-	slot.idleSince = Date.now();
+	touch(slot, now);
+	return snapshotRun(slot);
+}
+
+/** The card moves a note the one-time sort placed to another topic before Save. */
+export function moveAbsorbRunSortedNote(agentIdRaw: string, runId: string, entryIdRaw: unknown, topicRaw: unknown, now = new Date()): AbsorbRun {
+	const slot = slotFor(createPersistentAgentInstance(agentIdRaw).agentId, runId);
+	requireReady(slot);
+	const move = slot.run.sorted?.find((row) => row.id === entryIdRaw);
+	if (!move || !slot.postFoldDoc) throw productError("Only a note this update sorted can be moved here.", "absorb_run_bad_move", 404);
+	const topic = typeof topicRaw === "string" ? memoryTopicName(topicRaw) : "";
+	const problem = memoryTopicNameProblem(topic, { maxChars: FOLD_TOPIC_TITLE_MAX_CHARS }) ?? (isUnsorted(topic) ? "reserved" : null);
+	if (problem) throw productError(topicNameSentence(problem, topic, FOLD_TOPIC_TITLE_MAX_CHARS), "absorb_run_bad_move");
+	const from = slot.postFoldDoc.topics.find((candidate) => candidate.entries.some((entry) => entry.id === move.id));
+	if (!from) throw productError("That note is not in this update any more.", "absorb_run_bad_move", 404);
+	slot.postFoldDoc = withoutEmptyTopic(applyUserEdit(slot.postFoldDoc, { op: "move", id: move.id, topic }).doc, from.title);
+	move.topic = topic;
+	recomputeDemotion(slot);
 	touch(slot, now);
 	return snapshotRun(slot);
 }
@@ -1688,7 +2128,6 @@ export function setAbsorbRunBudget(agentIdRaw: string, runId: string, budgetToke
 	}
 	slot.run.budget.budgetTokens = budgetTokens;
 	recomputeDemotion(slot);
-	slot.idleSince = Date.now();
 	touch(slot, now);
 	return snapshotRun(slot);
 }
@@ -1705,17 +2144,21 @@ export function setAbsorbRunBudget(agentIdRaw: string, runId: string, budgetToke
  * read with; the pages read before the stop keep their model on their own
  * diagnostics.
  */
-export function resumeAbsorbRun(agentIdRaw: string, runId: string, model: AbsorbModelLock, now = new Date()): AbsorbRun {
+export function resumeAbsorbRun(agentIdRaw: string, runId: string, model: AbsorbModelLock, now = new Date(), calls: Partial<Pick<AbsorbRunStartInput, "generate" | "probe" | "resolveModelWindow">> = {}): AbsorbRun {
 	const slot = slotFor(createPersistentAgentInstance(agentIdRaw).agentId, runId);
 	requireReady(slot);
 	if (!slot.run.stop || !slot.postFoldDoc) throw productError("This memory update has nothing left to read.", "absorb_run_nothing_waiting", 409);
+	// Save's staleness check, before any call: a memory changed some other way
+	// since the card (a Review save, an edit) would make Save refuse these folds.
+	const diskL1b = createPersistentAgentInstance(slot.run.agentId).readL1b();
+	if (fingerprintL1bSource(diskL1b).value !== slot.sourceFingerprint.value && !rebaseOntoDisk(slot.sourceL1b, diskL1b)) assertAbsorbSourceFingerprintCurrent(slot.sourceFingerprint, diskL1b, "proposal");
 	const run = slot.run;
 	const nowFn = slot.input.now ?? (() => new Date());
-	slot.input = { ...slot.input, model };
+	// A run a restart left behind has no calls of its own: the route hands them in.
+	slot.input = { ...slot.input, ...calls, model };
 	slot.model = model;
 	delete run.stop;
 	run.state = "folding";
-	slot.idleSince = null;
 	// The resumed folds start from the card as the person left it. Their edits
 	// are in the document already, so a fold reads their words and an update
 	// builds on them, its before being their text. A note they kept reads as
@@ -1739,7 +2182,11 @@ export function resumeAbsorbRun(agentIdRaw: string, runId: string, model: Absorb
 	slot.postFoldDoc = null;
 	touch(slot, now);
 	slot.work = (async () => {
-		await foldWaitingPages(slot, nowFn);
+		// A stop at the one-time sort left its notes in Unsorted: they are sorted first.
+		const sorted = await sortUnsorted(slot, slot.workingDoc!);
+		slot.workingDoc = sorted.doc;
+		if (sorted.unreachable) run.stop = { kind: "outage", model: { provider: model.provider, model: model.model }, cause: absorbRunStopCauseOf(sorted.unreachable.details.detail, false) };
+		else await foldWaitingPages(slot, nowFn);
 		delete slot.keptForFolds;
 		// A fold that pinned a kept note itself, because the conversation asked
 		// for it, made a change the card shows: that pin stays. The folds before
@@ -1835,8 +2282,85 @@ export function rebaseOntoDisk(sourceL1b: string, diskL1b: string): ApproveRebas
  * Active Items — and the new conversations stay waiting for next time. Any
  * other change makes the run stale, and nothing is written.
  */
+/** The Deep Memory topics the saved memory has that the memory the run started from did not. */
+function newTopicCount(before: MemoryDocument, after: MemoryDocument): number {
+	const titles = (doc: MemoryDocument) => new Set(doc.topics.filter((topic) => topic.section === "Deep Memory" && topic.entries.length > 0 && !isUnsorted(topic.title)).map((topic) => topic.title.trim().toLowerCase()));
+	const had = titles(before);
+	return [...titles(after)].filter((title) => !had.has(title)).length;
+}
+
+/** The new topics a save made, from the memory before it and the memory it wrote, both kept with its record; 0 when either is gone. */
+function savedNewTopicCount(beforePath: string, afterPath: string): number {
+	try {
+		return newTopicCount(parseMemoryDocument(fs.readFileSync(beforePath, "utf-8")), parseMemoryDocument(fs.readFileSync(afterPath, "utf-8")));
+	} catch {
+		return 0;
+	}
+}
+
+/**
+ * The event record a run's save left in one of the room's history folders, or
+ * null: how a Save sent again finds out that it saved once the run itself is
+ * gone (a restart, or the room's next run).
+ */
+export function savedRunRecord<T extends { run?: { runId?: string } }>(dir: string, runId: string): T | null {
+	let files: string[];
+	try {
+		files = newestRecordFiles(dir);
+	} catch {
+		return null;
+	}
+	for (const file of files) {
+		try {
+			const record = JSON.parse(fs.readFileSync(path.join(dir, file), "utf-8")) as T;
+			if (record?.run?.runId === runId) return record;
+		} catch { /* an unreadable record names no run */ }
+	}
+	return null;
+}
+
+/** A Memorize save already made, told again: from the run while it is kept, from the room's history once it is gone. Null: this run never saved. */
+function savedAbsorbAnswer(agentId: string, runId: string): AbsorbRunApprovalResponse | null {
+	const live = RUNS.get(agentId);
+	if (live?.run.runId === runId) return live.run.state === "saved" && live.savedAnswer ? { ...live.savedAnswer, alreadySaved: true } : null;
+	const instance = createPersistentAgentInstance(agentId);
+	const record = savedRunRecord<AbsorbEventRecord>(instance.absorbEventDir(), runId);
+	if (!record?.run) return null;
+	const sessions = record.run.sessions;
+	const archived = record.run.archived;
+	return {
+		agentId,
+		writesMemory: true,
+		absorbId: record.absorbId,
+		saveId: record.absorbId,
+		archivedL1bPath: path.join(instance.rootDir, record.paths.archivedL1bRelPath),
+		updatedL1bPath: path.join(instance.rootDir, record.paths.updatedL1bRelPath),
+		eventRecordPath: path.join(instance.rootDir, record.paths.eventRelPath),
+		eventRelPath: record.paths.eventRelPath,
+		recentContextEntryCount: record.absorb?.recentContextEntryCountAfter ?? record.run.remainingSessions.length,
+		memoryBudget: { budgetTokens: record.run.budget.budgetTokens, reviewTargetEstimatedTokens: record.run.budget.after, overBudget: record.run.budget.overBudgetAfter },
+		postAbsorb: { returnToLauncher: true },
+		warnings: record.warnings ?? [],
+		foldedSessions: record.run.foldedSessions,
+		notedSessions: sessions.filter((session) => session.outcome === "folded" || session.outcome === "summarized").length,
+		nothingToKeep: sessions.filter((session) => session.outcome === "dropped").length,
+		newTopics: savedNewTopicCount(path.join(instance.rootDir, record.paths.archivedL1bRelPath), path.join(instance.rootDir, record.paths.updatedL1bRelPath)),
+		remainingSessions: record.run.remainingSessions,
+		archivedEntries: archived.filter((row) => row.why !== "history" && row.why !== "sorted").length,
+		archivedForBudget: archived.filter((row) => row.why === "budget").length,
+		replacedEntries: archived.filter((row) => row.why === "superseded").length,
+		historyKept: archived.filter((row) => row.why === "history").length,
+		sortedNotes: archived.filter((row) => row.why === "sorted").length,
+		rebasedOnto: [],
+		alreadySaved: true,
+	};
+}
+
 export function approveAbsorbRun(agentIdRaw: string, runId: string, now = new Date()): AbsorbRunApprovalResponse {
 	const agentId = createPersistentAgentInstance(agentIdRaw).agentId;
+	// A Save sent again after its answer was lost: it saved once, and says so.
+	const already = savedAbsorbAnswer(agentId, runId);
+	if (already) return already;
 	const slot = slotFor(agentId, runId);
 	const run = slot.run;
 	// The staleness check comes first, and it is what refuses a second approve:
@@ -1891,12 +2415,11 @@ export function approveAbsorbRun(agentIdRaw: string, runId: string, now = new Da
 	const remainingSessions = run.sessions.filter((session) => session.outcome === "failed" || session.outcome === "pending").map((session) => session.id);
 
 	run.state = "approving";
-	// The write is work: the retention clock stops until it lands or fails.
-	slot.idleSince = null;
 	touch(slot, now);
-	// A limit the card raised becomes the room's setting in this same approval,
-	// before the memory write, so the memory that lands is measured against the
-	// limit it was built to. A cancelled run never reaches this line.
+	// A limit the card raised becomes the room's setting in this same approval:
+	// it lands with the memory file or not at all (memory-commit.ts), and the
+	// memory that lands is measured against the limit it was built to. A
+	// cancelled run never reaches this line.
 	// The record says where the limit came from: the first read's raise, which
 	// already wrote the setting, or the card's, written here — so an undo takes
 	// either back. The setting before the card is what a failed save restores.
@@ -1904,19 +2427,16 @@ export function approveAbsorbRun(agentIdRaw: string, runId: string, now = new Da
 	const raisedFrom = slot.limitRaisedFrom ?? settingBeforeCard;
 	const budgetRaisedTo = run.budget.budgetTokens !== run.budget.savedBudgetTokens ? run.budget.budgetTokens : undefined;
 	const recordsRaise = budgetRaisedTo !== undefined || slot.limitRaisedFrom !== undefined;
-	if (budgetRaisedTo !== undefined) {
-		writePersistentRoomMaintenanceSettings(agentId, { memoryBudgetTokens: budgetRaisedTo });
-		run.budget.savedBudgetTokens = budgetRaisedTo;
-	}
 	let written;
 	try {
 		written = writeMemoryDocument(agentId, doc, {
 			why: "absorb",
 			snapshotLabel: "absorb",
 			archiveAppend,
+			...(budgetRaisedTo !== undefined ? { limitTo: budgetRaisedTo } : {}),
 			now,
 			stampChronos: (l1b, at, writeId) => updateChronosForAbsorb(l1b, writeId, at),
-			writeEventRecord: (recorded) => writeAbsorbRunEventRecord({
+			eventRecord: (recorded) => buildAbsorbRunEventRecord({
 				agentId,
 				absorbId: recorded.writeId,
 				now: recorded.now,
@@ -1960,16 +2480,12 @@ export function approveAbsorbRun(agentIdRaw: string, runId: string, now = new Da
 		// room the limit it had before the card, and the failure says so, so the
 		// card is not left showing a limit the room does not have. A first read's
 		// raise stays: it was written on purpose. The error keeps its code and status.
-		if (budgetRaisedTo !== undefined) {
-			writePersistentRoomMaintenanceSettings(agentId, { memoryBudgetTokens: settingBeforeCard });
-			run.budget.savedBudgetTokens = settingBeforeCard;
-			if (error instanceof Error) error.message = `${error.message} The budget stays at ${formatTokenLimit(settingBeforeCard)}.`;
-		}
+		if (budgetRaisedTo !== undefined && error instanceof Error) error.message = `${error.message} The budget stays at ${formatTokenLimit(settingBeforeCard)}.`;
 		run.state = "ready";
-		slot.idleSince = Date.now();
 		touch(slot, now);
 		throw error;
 	}
+	if (budgetRaisedTo !== undefined) run.budget.savedBudgetTokens = budgetRaisedTo;
 
 	finish(slot, "saved", now);
 	// A keep is a use: each kept note that was written counts one, so the next
@@ -2000,7 +2516,7 @@ export function approveAbsorbRun(agentIdRaw: string, runId: string, now = new Da
 	// The write that just landed performed the migration, so the saved card reads
 	// it as done rather than as something still owed.
 	if (run.migration?.pending) run.migration = { pending: false, entriesAssigned: run.migration.entriesAssigned };
-	return {
+	slot.savedAnswer = {
 		agentId,
 		writesMemory: true,
 		absorbId: written.memoryEditId,
@@ -2020,6 +2536,9 @@ export function approveAbsorbRun(agentIdRaw: string, runId: string, now = new Da
 		postAbsorb: { returnToLauncher: true },
 		warnings: run.warnings,
 		foldedSessions,
+		notedSessions: run.sessions.filter((session) => session.outcome === "folded" || session.outcome === "summarized").length,
+		nothingToKeep: run.sessions.filter((session) => session.outcome === "dropped").length,
+		newTopics: newTopicCount(parseMemoryDocument(slot.sourceL1b), doc),
 		remainingSessions,
 		archivedEntries: archiveAppend.filter((append) => append.why !== "history" && append.why !== "sorted").length,
 		archivedForBudget: archiveAppend.filter((append) => append.why === "budget").length,
@@ -2029,6 +2548,7 @@ export function approveAbsorbRun(agentIdRaw: string, runId: string, now = new Da
 		...(budgetRaisedTo === undefined ? {} : { budgetRaisedTo }),
 		rebasedOnto,
 	};
+	return slot.savedAnswer;
 }
 
 /** The status block's v2 fields: what this room would fold and what it would archive first. */
@@ -2037,8 +2557,11 @@ export function absorbRunStatusFields(agentIdRaw: string): {
 	sessions: Array<{ id: string; title: string; date: string; tokens: number }>;
 	budget: { reviewTargetTokens: number; budgetTokens: number; overBudget: boolean };
 	prepass: { demotionRequired: boolean; entriesOverBudget: number };
+	waitingRunId?: string;
 } {
 	const agentId = createPersistentAgentInstance(agentIdRaw).agentId;
+	// A card waiting for Save or Discard (a restart included) is opened, never replaced unseen.
+	const waiting = RUNS.get(agentId) ?? reviveRun(agentId);
 	// A status read never migrates: a room's memory changes when a person asks
 	// for it, not when a screen looks at it.
 	const loaded = loadMemoryDocument(agentId, { migrate: false });
@@ -2053,6 +2576,7 @@ export function absorbRunStatusFields(agentIdRaw: string): {
 		sessions,
 		budget: { reviewTargetTokens: tokens, budgetTokens, overBudget: demotionRequired },
 		prepass: { demotionRequired, entriesOverBudget },
+		...(waiting && isActive(waiting.run.state) ? { waitingRunId: waiting.run.runId } : {}),
 	};
 }
 
@@ -2091,17 +2615,7 @@ export function parseAbsorbRunProposeRequest(raw: any): { assessmentMarkdown: st
 }
 
 /** Test seam: the registry is process-local state, and a smoke that drives two rooms must be able to clear it. */
+/** It is also how a smoke restarts the server: the journals stay. */
 export function resetAbsorbRunsForTests(): void {
 	RUNS.clear();
-}
-
-/**
- * Test seam: moves a run's retention clock back, so a smoke can prove the
- * reaping an hour of real waiting would otherwise be needed to see. It never
- * deletes anything itself — the run is still there until the next read applies
- * `forgetExpiredRun` to it, which is exactly the path being tested.
- */
-export function rewindAbsorbRunClockForTests(agentIdRaw: string, ms: number): void {
-	const slot = RUNS.get(createPersistentAgentInstance(agentIdRaw).agentId);
-	if (slot && slot.idleSince !== null) slot.idleSince -= ms;
 }

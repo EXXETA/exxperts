@@ -5,6 +5,7 @@
  * enrichment fields are optional because historical rows predate them.
  */
 
+import type { MemoryCallKind } from "./memory-call-cache.js";
 import fs from "node:fs";
 import { AuthStorage } from "@exxeta/exxperts-runtime";
 import { productAppStatePath, productAppStateRoot } from "../../../pi-package/product-state-paths.js";
@@ -32,6 +33,8 @@ export interface UsageRow {
 	tools?: string[];
 	/** Background-run id for runs billed via appendUsageOnce. Recorded since Jul 2026. */
 	runId?: string;
+	/** Which Memory model call it was (memory-call-cache.ts), so cache settings can be compared. Recorded since Oct 2026. */
+	callKind?: MemoryCallKind;
 }
 
 const USAGE_DIR = productAppStateRoot();

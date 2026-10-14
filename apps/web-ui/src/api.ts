@@ -25,7 +25,7 @@ export async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Pr
 
 /** A request the server answered with an error: its sentence, plus the HTTP status and the machine code when it sent one. */
 export class ApiRequestError extends Error {
-	constructor(message: string, readonly status: number, readonly code?: string) {
+	constructor(message: string, readonly status: number, readonly code?: string, readonly details?: unknown) {
 		super(message);
 	}
 }
@@ -53,13 +53,15 @@ export async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> 
 	if (!res.ok) {
 		let message = `Request failed (${res.status})`;
 		let code: string | undefined;
+		let details: unknown;
 		try {
 			const body = await res.json();
 			if (body?.error) message = String(body.error);
 			else if (body?.message) message = String(body.message);
 			if (typeof body?.code === "string") code = body.code;
+			if (body?.details !== undefined) details = body.details;
 		} catch {}
-		throw new ApiRequestError(message, res.status, code);
+		throw new ApiRequestError(message, res.status, code, details);
 	}
 	return await res.json() as T;
 }

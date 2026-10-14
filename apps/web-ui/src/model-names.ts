@@ -239,6 +239,16 @@ export function formatModelWithProvider(name: string, provider: string | null | 
 	return provider ? `${name} (${provider})` : name;
 }
 
+/**
+ * "<model> on <provider>", for a sentence that needs the provider, or the
+ * model alone when its name already says it: "Claude Opus 4.8", never
+ * "Claude Opus 4.8 on Claude".
+ */
+export function modelOnProvider(name: string, provider: string | null | undefined): string {
+	if (!provider || name.toLowerCase().startsWith(`${provider.toLowerCase()} `)) return name;
+	return `${name} on ${provider}`;
+}
+
 /** The canonical name with its provider, ready for a title attribute. */
 export function modelTooltipName(input: ModelNameInput): string {
 	const { name, provider } = canonicalModelName(input);

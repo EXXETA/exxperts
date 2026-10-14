@@ -24,6 +24,8 @@ import {
 	type PersistentAgentModelLock,
 	type PersistentAgentThreadRecord,
 } from "./persistent-agents.js";
+import { rememberSentenceModelName } from "./checkpoint-compression.js";
+import { modelNotOnAccount, modelNotOnAccountSentence } from "./model-not-on-account.js";
 import { buildPersistentRoomRestoredLiveThreadContext } from "./persistent-room-resume-context.js";
 import { buildPersistentRoomCurrentInstructionsSection } from "./persistent-room-instructions.js";
 import {
@@ -237,6 +239,19 @@ function upsertItem(items: unknown[], item: Record<string, unknown>): unknown[] 
 // transcript, deterministically, instead of hoping the answer mentions it.
 export function scheduledPromptBackgroundDeclinedQuestionItemIdPrefix(executionId: string): string {
 	return `scheduled-declined-${safeExecutionId(executionId)}`;
+}
+
+/**
+ * The provider refused the room's model for this account (its plan, its
+ * admin): the run fails with the plain sentence and its own code, which the
+ * Scheduled tasks pane says in the same words. The raw words stay out.
+ */
+export class ScheduledModelNotOnAccountError extends Error {
+	readonly code = "model_not_on_account";
+	constructor(model: { provider: string; model: string; label?: string }) {
+		super(modelNotOnAccountSentence(rememberSentenceModelName(model), model.provider));
+		this.name = "ScheduledModelNotOnAccountError";
+	}
 }
 
 function appendFailureItem(items: unknown[], executionId: string, message: string): unknown[] {
@@ -504,6 +519,7 @@ export async function executePersistentRoomBackgroundPrompt(input: PersistentRoo
 	let thread = prepared.thread;
 	let userItemPersisted = false;
 	let assistantText = "";
+	let providerRefusal = "";
 	let usage: PersistentRoomBackgroundExecutionResult["usage"];
 	let terminalReason: "completed" | "failed" = "failed";
 	const autoDeclinedQuestions = createPersistentRoomAutoDeclinedQuestionLog();
@@ -544,6 +560,7 @@ export async function executePersistentRoomBackgroundPrompt(input: PersistentRoo
 		activeTurnId = startedTurn.turnId;
 		session.subscribe((event: any) => {
 			if (event?.type !== "message_end" || event?.message?.role !== "assistant") return;
+			if (event.message.stopReason === "error") providerRefusal = String(event.message.errorMessage ?? "");
 			const text = textFromMessageParts(event.message.content);
 			if (text) assistantText = [assistantText, text].filter(Boolean).join("\n\n");
 			const messageUsage = usageFromMessageUsage(event.message.usage);
@@ -563,6 +580,7 @@ export async function executePersistentRoomBackgroundPrompt(input: PersistentRoo
 		});
 		const promptText = prepared.promptPrefix ? [prepared.promptPrefix, "", prompt].join("\n") : prompt;
 		await session.prompt(promptText);
+		if (!assistantText.trim() && modelNotOnAccount(providerRefusal)) throw new ScheduledModelNotOnAccountError(modelLock);
 		if (!assistantText.trim()) throw new Error("scheduled persistent-room execution produced no assistant text");
 		terminalReason = "completed";
 	} catch (error) {
@@ -573,7 +591,7 @@ export async function executePersistentRoomBackgroundPrompt(input: PersistentRoo
 					state: current.state === "active" ? "active" : "standby",
 					origin: current.origin,
 					model: current.model,
-					items: appendFailureItem(noteItemsOrJustTheItems(current.items ?? []), executionId, "Scheduled background task failed before an assistant response was saved."),
+					items: appendFailureItem(noteItemsOrJustTheItems(current.items ?? []), executionId, error instanceof ScheduledModelNotOnAccountError ? error.message : "Scheduled background task failed before an assistant response was saved."),
 				}).thread;
 			} catch {
 				// Preserve the original execution error. Worker finalization records status.

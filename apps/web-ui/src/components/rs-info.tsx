@@ -4,6 +4,20 @@ import { useEffect, useId, useState } from "react";
 // bubble with the text; Escape or leaving closes it. The trigger is a button so
 // it is natively focusable, and clicks are prevented from bubbling so a mark
 // inside a <label> row never flips the row's switch.
+/**
+ * A row label with its info mark: the label's last word and the mark never
+ * part, so on a narrow screen the mark never sits alone on a line of its own.
+ */
+export function RsInfoLabel({ label, info }: { label: string; info: string }) {
+	const cut = label.lastIndexOf(" ");
+	return (
+		<>
+			{cut === -1 ? "" : label.slice(0, cut + 1)}
+			<span className="rs-info-keep">{label.slice(cut + 1)}<RsInfo text={info} /></span>
+		</>
+	);
+}
+
 export function RsInfo({ text }: { text: string }) {
 	const [open, setOpen] = useState(false);
 	const tipId = useId();

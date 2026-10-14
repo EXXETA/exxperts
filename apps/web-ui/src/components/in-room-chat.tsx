@@ -3,7 +3,6 @@ import type { ClipboardEvent, CSSProperties, KeyboardEvent, MutableRefObject, Re
 import { Approval, confirmApprovalLabels } from "./Approval";
 import { ConsultThreadItem, Message, TaskThreadItem, ToolBundle, isBundleableToolItem, type MessageAttachmentAccess } from "./Message";
 import { MentionConsultPopover, MentionConsultPopoverBusy, type MentionSupport } from "./mention-consult-popover";
-import { rememberChipValue, type RememberReadEstimate } from "../remember-read";
 import { useEscapeKey } from "./use-escape-key";
 import { SpinnerIcon } from "./icons";
 import { SidebarDrawerBackdrop } from "../sidebar-collapse";
@@ -35,8 +34,6 @@ export interface InRoomChatShellViewProps {
 	busy: boolean;
 	usage: InRoomChatUsage;
 	contextHealth?: ContextHealthStatus | null;
-	/** How a Remember would read the open conversation; asked when the chip's popover opens, never on a turn. */
-	loadRememberEstimate?: () => Promise<RememberReadEstimate>;
 	currentModelLabel?: string | null;
 	/** Provider behind that label. Tooltip only; the face stays the bare name. */
 	currentModelProvider?: string | null;
@@ -129,7 +126,12 @@ export interface ConnectionStopped {
 	/** Settings, AI setup, at the provider's row; absent when signing in cannot help. */
 	onSignIn?: () => void;
 	/** This room's Room settings, Model. */
-	onChooseModel: () => void;
+	onChooseModel?: () => void;
+	/** A conversation the room closed (the save that filled it): Home, or Memorize. */
+	onReturnHome?: () => void;
+	onMemorize?: () => void;
+	/** A window the room moved on from: join the room's conversation. */
+	onReload?: () => void;
 }
 
 function bottomDistance(el: HTMLElement): number {
@@ -205,7 +207,6 @@ function fmtExact(n: number): string {
 function ContextPill({
 	status,
 	usage,
-	loadRememberEstimate,
 	currentModelLabel,
 	currentModelProvider,
 	connected,
@@ -214,7 +215,6 @@ function ContextPill({
 }: {
 	status: ContextHealthStatus;
 	usage: InRoomChatUsage;
-	loadRememberEstimate?: () => Promise<RememberReadEstimate>;
 	currentModelLabel?: string | null;
 	currentModelProvider?: string | null;
 	connected: boolean;
@@ -246,21 +246,6 @@ function ContextPill({
 
 	useEscapeKey(() => setOpen(false), open);
 
-	// Whether a Remember now would need parts: asked each time the popover
-	// opens, so the line follows the conversation without touching a turn.
-	// The loader is read through a ref so a parent re-render (every streamed
-	// token) never asks again while the popover stays open.
-	const [rememberEstimate, setRememberEstimate] = useState<RememberReadEstimate | null>(null);
-	const loadRememberEstimateRef = useRef(loadRememberEstimate);
-	loadRememberEstimateRef.current = loadRememberEstimate;
-	useEffect(() => {
-		const load = loadRememberEstimateRef.current;
-		if (!open || !load) return;
-		let cancelled = false;
-		load().then((estimate) => { if (!cancelled) setRememberEstimate(estimate); }, () => { if (!cancelled) setRememberEstimate(null); });
-		return () => { cancelled = true; };
-	}, [open]);
-	const rememberParts = rememberChipValue(rememberEstimate);
 
 	useEffect(() => {
 		if (!open) return;
@@ -332,12 +317,6 @@ function ContextPill({
 						<span>cost</span>
 						<strong>{fmtCost(usage.cost)}</strong>
 					</div>
-					{rememberParts && (
-						<div className="composer-context-popover-row" title="A memory model with a larger window reads it in one pass (Room settings, Model)">
-							<span>remember</span>
-							<strong>{rememberParts}</strong>
-						</div>
-					)}
 					<div className="composer-context-popover-row">
 						<span>connection</span>
 						<strong>{connected ? "online" : stopped ? "paused" : reconnecting ? "reconnecting…" : "offline"}</strong>
@@ -382,8 +361,11 @@ function ConnectionBanner({ connected, reconnectState, onReconnect, stopped }: {
 			<div className="room-workspace-nudge room-model-notice" role="status">
 				<span className="room-workspace-nudge-text">{stopped.line}</span>
 				<div className="room-workspace-nudge-actions">
-					<button type="button" className="rs-btn" onClick={stopped.onChooseModel}>Choose another model</button>
+					{stopped.onChooseModel && <button type="button" className="rs-btn" onClick={stopped.onChooseModel}>Choose another model</button>}
 					{stopped.onSignIn && <button type="button" className="rs-btn rs-btn-primary" onClick={stopped.onSignIn}>Sign in</button>}
+					{stopped.onReturnHome && <button type="button" className="rs-btn" onClick={stopped.onReturnHome}>Return Home</button>}
+					{stopped.onMemorize && <button type="button" className="rs-btn rs-btn-primary" onClick={stopped.onMemorize}>Memorize</button>}
+					{stopped.onReload && <button type="button" className="rs-btn rs-btn-primary" onClick={stopped.onReload}>Reload</button>}
 				</div>
 			</div>
 		);
@@ -839,7 +821,6 @@ export function InRoomChatShellView({
 	busy,
 	usage,
 	contextHealth,
-	loadRememberEstimate,
 	currentModelLabel,
 	currentModelProvider,
 	topbarActions,
@@ -884,6 +865,9 @@ export function InRoomChatShellView({
 }: InRoomChatShellViewProps) {
 	const messagesElRef = useRef<HTMLDivElement | null>(null);
 	const dockElRef = useRef<HTMLDivElement | null>(null);
+	// The column holding the dock and the composer, where the dock's height is
+	// kept for the composer's notices to read.
+	const columnElRef = useRef<HTMLElement | null>(null);
 	const autoFollowRef = useRef(true);
 	const lastItemIdRef = useRef<string | null>(null);
 	const lastScrollTopRef = useRef(0);
@@ -1041,6 +1025,13 @@ export function InRoomChatShellView({
 		const el = messagesElRef.current;
 		if (!el || typeof ResizeObserver === "undefined") return;
 		const dock = dockElRef.current;
+		// With no dock nothing is measured, so what the last dock left behind
+		// is cleared here.
+		const column = columnElRef.current;
+		if (!dock) {
+			setDockPresent(false);
+			column?.style.removeProperty("--above-composer-dock-height");
+		}
 		// Re-pins only while following; a resize never moves a reader who
 		// stopped following, it only refreshes the pill.
 		const pinOrRefresh = () => {
@@ -1049,7 +1040,12 @@ export function InRoomChatShellView({
 			else setShowJumpToLatest(shouldShowJumpToLatest(el, empty));
 		};
 		const observer = new ResizeObserver(() => {
-			if (dock) setDockPresent(dock.offsetHeight > 0);
+			if (dock) {
+				setDockPresent(dock.offsetHeight > 0);
+				// The room's notices float above the composer; this keeps them
+				// above the dock too (the workspace hint, a consult card).
+				column?.style.setProperty("--above-composer-dock-height", `${dock.offsetHeight}px`);
+			}
 			pinOrRefresh();
 			requestAnimationFrame(pinOrRefresh);
 		});
@@ -1118,7 +1114,7 @@ export function InRoomChatShellView({
 			{sidebar}
 
 			<div ref={workbenchRef} className={`workbench ${withPreview ? "with-preview" : ""} ${workbenchClassName ?? ""}`.trim()} style={workbenchStyle}>
-				<main className="main">
+				<main className="main" ref={columnElRef}>
 					<div className="topbar">
 						<div className="left">
 							{onHome && (
@@ -1194,7 +1190,6 @@ export function InRoomChatShellView({
 										<ContextPill
 											status={contextHealth}
 											usage={usage}
-											loadRememberEstimate={loadRememberEstimate}
 											currentModelLabel={currentModelLabel}
 											currentModelProvider={currentModelProvider}
 											connected={connected}

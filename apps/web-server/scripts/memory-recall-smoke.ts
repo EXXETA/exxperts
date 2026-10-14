@@ -294,7 +294,7 @@ try {
 	fs.writeFileSync(l1bPath, "<!-- exxeta:l1b schema_version=1 -->\n\n## Deep Memory\n\n## Active Items\n\n## Recent Context\n", { mode: 0o600 });
 	invalidateRoomCorpus(roomId);
 	const fresh = await recall(tool, { query: "rebate" });
-	assert(fresh.details.outcome === "empty" && /memorized conversations/.test(fresh.text), `a room with nothing to search says so in one sentence that counts conversations too, got: ${fresh.text}`);
+	assert(fresh.details.outcome === "empty" && /remembered conversations/.test(fresh.text), `a room with nothing to search says so in one sentence that counts conversations too, got: ${fresh.text}`);
 
 	// A room nobody can read answers in a sentence too. An id that is not an id
 	// is the one that gets there: an unreadable file of a real room costs that
@@ -672,8 +672,8 @@ try {
 	for (const name of ["query", "topic", "since", "until", "sources", "maxResults"]) {
 		assert(parameterNames.includes(name), `the tool's schema should take ${name}, got ${JSON.stringify(parameterNames)}`);
 	}
-	assert(!/literal text/i.test(tool.description ?? "") && /memorized/i.test(tool.description ?? ""), "the description no longer promises literal text, and says memorized conversations are searchable");
-	assert((tool.description ?? "").includes("Every conversation the room memorized is searchable, including the ones it took no notes from."), "the description says every memorized conversation is searchable, the ones no notes were taken from included");
+	assert(!/literal text/i.test(tool.description ?? "") && /remembered/i.test(tool.description ?? ""), "the description no longer promises literal text, and says remembered conversations are searchable");
+	assert((tool.description ?? "").includes("Every conversation the room remembered is searchable from its Remember, including the ones a Memorize took no notes from."), "the description says every memorized conversation is searchable, the ones no notes were taken from included");
 	assert(/read-only/i.test(tool.description ?? ""), "the description keeps the read-only sentence");
 
 	console.log("memory-recall-smoke: OK");

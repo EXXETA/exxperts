@@ -109,6 +109,10 @@ export interface RoomModelRowView {
 	reason?: "signed-out" | "not-offered";
 	/** The server's refusal while the chosen model cannot run: the model, its provider, why, and the way out. */
 	refusal?: string;
+	/** Memory row only: the offered models too small for this room's memory (on the defaults, for the room named). */
+	tooSmall?: Array<{ provider: string; model: string; room?: string }>;
+	/** A room's row only: the default it goes back to when its own pick is cleared. */
+	default?: RoomModelLockView | null;
 }
 
 export type RoomModelsView = Record<RoomModelTask, RoomModelRowView>;
@@ -197,6 +201,8 @@ export interface PersistentRoomWorkspaceDefaultResponse {
 	policy: PersistentRoomCapabilityPolicyView | null;
 	warnings?: string[];
 	deleted?: boolean;
+	/** The line to show when this computer has no shell for commands (Windows without Git); null when one is found. */
+	shellMissingNote?: string | null;
 }
 
 export type SystemChooseFolderResponse =
@@ -296,6 +302,8 @@ export type CheckpointDensity = "compact" | "standard" | "rich";
 export type AbsorbAvailabilityReason = "available" | "not_ready" | "insufficient_recent_context" | "missing_recent_context" | "error";
 
 export interface AbsorbAvailability {
+	/** A first read or a discussion turn waiting out a busy Memory model. */
+	wait?: { cause: "busy" | "unreached"; detail: string; attempt: number; nextTryAt: string; again?: boolean };
 	available: boolean;
 	reason: AbsorbAvailabilityReason;
 	recentContextEntryCount: number;
@@ -310,6 +318,8 @@ export interface AbsorbAvailability {
 	sessions?: { id: string; title: string; date: string; tokens: number }[];
 	budget?: BudgetState;
 	prepass?: { demotionRequired: boolean; entriesOverBudget: number };
+	/** A Memorize card waiting for Save or Discard: Memorize opens it. */
+	waitingRunId?: string;
 }
 
 export interface AbsorbAssessmentFields {
@@ -362,6 +372,8 @@ export interface AbsorbAssessmentResponse {
 	firstReadMissing?: "failed" | "cut-off" | "too-long" | "too-large" | "unreachable" | "skipped";
 	/** With a missing first read the server answered: the conversations waiting, by title and date. The client's own stand-in has none. */
 	waitingConversations?: Array<{ title: string; date?: string }>;
+	/** The discussion of this first read as it stood (kept on the server until the run starts): a reload comes back to it. */
+	keptDiscussion?: { messages: AbsorbDiscussionMessage[]; tokenBudget: AbsorbDiscussionTokenBudget | null };
 }
 
 export interface L1bSourceFingerprint {
@@ -454,6 +466,10 @@ export interface AbsorbApprovalResponse {
 	warnings: string[];
 	/** Memorize v2: which sessions were written into memory, which stay for the next update, and how many entries went to the archive. */
 	foldedSessions?: string[];
+	/** What the saved screen counts, from what the save applied: conversations that became notes, those with nothing to keep, and topics new to memory. */
+	notedSessions?: number;
+	nothingToKeep?: number;
+	newTopics?: number;
 	remainingSessions?: string[];
 	archivedEntries?: number;
 	/** How many of those left for the budget alone (pre-pass plus post-fold demotions), so the saved screen can say so even when nothing folded. */
@@ -468,6 +484,8 @@ export interface AbsorbApprovalResponse {
 	budgetRaisedTo?: number;
 	/** Conversations remembered while the run was open: the save was rebased onto the file with them, and they stay waiting. */
 	rebasedOnto?: string[];
+	/** The save changed what a conversation reads while the room's open conversation had started: that one keeps the memory it started with. */
+	openConversationKeepsMemory?: true;
 }
 
 // ── Memory v2 (api contract 2026-09-13) ────────────────────────────────────
@@ -637,6 +655,10 @@ export interface ReviewAssessmentResponse {
 	fields: ReviewAssessmentFields;
 	warnings: string[];
 	source: { l1bFingerprint: L1bSourceFingerprint };
+	/** The discussion kept with this first read from before a reload, or from another tab. */
+	keptDiscussion?: { messages: Array<{ role: "user" | "assistant"; content: string }>; tokenBudget: ReviewDiscussionTokenBudget | null };
+	/** Set by the screen when no first read could be made: the tidy reads every topic. */
+	firstReadMissing?: boolean;
 }
 
 export type ReviewDiscussionTokenBudgetState = "ok" | "soft_warning" | "hard_stop";
@@ -721,6 +743,10 @@ export interface AbsorbRun {
 	sessions: AbsorbRunSession[];
 	/** The summary notes the run re-reads after its conversations, each row keyed by the NOTE's id. Absent from a server that has none. */
 	rereads?: AbsorbRunSession[];
+	/** The notes an older Memorize left in Unsorted and the topic this run sorted each under; one can be moved before Save. Absent when there were none. */
+	sorted?: Array<{ id: string; text: string; topic: string }>;
+	/** With `sorted`: the topics this update saves, its new ones included, for Move's list. */
+	topics?: string[];
 	/** Entries archived before any model call, because the room was already over its budget. Diagnostics and the older smokes; the card reads `demotion` alone. */
 	prepass: { demoted: EntryCard[] };
 	budget: RunBudget;
@@ -729,6 +755,8 @@ export interface AbsorbRun {
 	candidate: { sourceFingerprint: L1bSourceFingerprint; estimatedTokens: number } | null;
 	/** The sign-off this run was started with, echoed so the card can list it; null when nothing was asked for. */
 	guidance: FoldGuidance | null;
+	/** The instructions that asked to remove an entry they name, and whether the run did it before Save. */
+	requests?: Array<{ text: string; done: boolean; several?: true; entry?: string }>;
 	/**
 	 * A room whose memory had no entry ids: the run gave them in memory and the
 	 * approval write performs the migration. A note for the card, never a blocker
@@ -744,8 +772,13 @@ export interface AbsorbRun {
 	 * model was not answering, or was busy or at its usage limit. What finished
 	 * is on the card; the rest wait. Absent otherwise.
 	 */
-	stop?: { kind: "outage"; model: { provider: string; model: string }; cause: "not-answering" | "busy" };
+	stop?: { kind: "outage" | "restart"; model: { provider: string; model: string }; cause: MemoryModelStopCause };
+	/** A busy Memory model being waited out: the card says when the next try is. */
+	wait?: { cause: "busy" | "unreached"; detail: string; attempt: number; nextTryAt: string; again?: boolean };
 }
+
+/** Why a Memorize or Review run stopped on its Memory model: the notice's sentence and its buttons follow it. */
+export type MemoryModelStopCause = "not-answering" | "busy" | "signed-out" | "quota" | "not-offered" | "not-on-account" | "restarted";
 
 /** The 202 answer to a v2 propose: the run to poll, not a finished draft. */
 export interface AbsorbRunStart {
@@ -827,6 +860,8 @@ export interface ReviewRun {
 	candidate: { sourceFingerprint: L1bSourceFingerprint; estimatedTokens: number } | null;
 	/** What the person agreed in the discussion; null when nothing was asked for. */
 	guidance: ReviewGuidance | null;
+	/** The "move to the archive" lines this save would not carry out. */
+	removeNotDone?: string[];
 	/**
 	 * A room whose memory had no note ids: the run gave them in memory and the
 	 * approval write performs the migration. A note for the card, never a blocker.
@@ -836,6 +871,10 @@ export interface ReviewRun {
 	usage?: { input?: number; output?: number; totalTokens?: number; cost?: number };
 	/** failed: one product sentence. */
 	error?: string;
+	/** The run stopped before every group was tidied because the Memory model cannot be reached: the card shows the one notice. */
+	stop?: { kind: "outage" | "restart"; model: { provider: string; model: string }; cause: MemoryModelStopCause };
+	/** A busy Memory model being waited out: the card says when the next try is. */
+	wait?: { cause: "busy" | "unreached"; detail: string; attempt: number; nextTryAt: string; again?: boolean };
 }
 
 /** The 202 answer to starting a review: the run to poll. */
@@ -860,11 +899,15 @@ export interface ReviewRunApprovalResponse {
 	budgetRaisedTo?: number;
 	/** Conversations remembered while the run was open; the save kept them waiting. */
 	rebasedOnto?: string[];
+	/** The save changed what a conversation reads while the room's open conversation had started: that one keeps the memory it started with. */
+	openConversationKeepsMemory?: true;
 	warnings: string[];
 }
 
 /** What a room says about Review before anything starts. */
 export interface ReviewStatusResponse {
+	/** A first read or a discussion turn waiting out a busy Memory model. */
+	wait?: { cause: "busy" | "unreached"; detail: string; attempt: number; nextTryAt: string; again?: boolean };
 	agentId: PersistentAgentId;
 	available: boolean;
 	/** Why not, in the product's own words; absent when it is available. */
@@ -875,6 +918,8 @@ export interface ReviewStatusResponse {
 	/** "tidy" when the memory is over its limit, else "wording". */
 	recommendedDepth: ReviewDepth;
 	writesMemory: false;
+	/** A card waiting for Save or Discard, a restarted one included. */
+	waitingRunId?: string;
 }
 
 export interface MemoryEntriesTopicGroup {
@@ -900,13 +945,18 @@ export interface MemoryArchiveResponse {
 }
 
 export interface MemoryEntryWriteResponse {
+	/** Absent only on an add sent again whose note was deleted since. */
 	entry: EntryCard;
 	budget: BudgetState;
+	/** The same request sent again after its answer was lost: it had landed, and nothing was written this time. */
+	alreadySaved?: true;
 }
 
 export interface MemoryEntryDeleteResponse {
 	archived: ArchivedEntryCard;
 	budget: BudgetState;
+	/** A delete sent again after its answer was lost: the note was in the archive already. */
+	alreadySaved?: true;
 }
 
 /** What the server answers when the room's latest Memorize or Review save is taken back. */
@@ -914,6 +964,8 @@ export interface MemoryUndoResponse {
 	agentId: PersistentAgentId;
 	/** The undo's own id in the room's memory history. */
 	undoId: string;
+	/** The undo changed what a conversation reads while a started conversation is open: that one keeps the memory it started with. */
+	openConversationKeepsMemory?: true;
 	undone: { saveId: string; kind: "memorize" | "review"; approvedAt: string };
 	memoryBudget: { budgetTokens: number; reviewTargetEstimatedTokens: number; overBudget: boolean };
 	/** Conversations back in Recent Context now the save is taken back. */
@@ -974,6 +1026,8 @@ export interface CheckpointApprovalResponse {
 		runtime: PersistentAgentPiSessionJsonlThreadRuntime;
 	};
 	warnings: string[];
+	/** The save had already landed (another window, or a Save after a crash): this window does not switch over. */
+	alreadySaved?: boolean;
 }
 
 export interface PersistentAgentMementoRuntimeBoundary {
@@ -1362,8 +1416,8 @@ export interface PersistentAgentStatus {
 		lastCheckpointAt: string | null;
 		/** The latest memory write of any kind; null while the memory is still the creation scaffold. */
 		lastMemoryWriteAt?: string | null;
-		/** Summary notes still in Unsorted after a saved Memorize read them again. Absent on an older server. */
-		unsortedAfterReread?: number;
+		/** Notes Memorize has work for with no conversation waiting: to sort into topics, or to read again. Absent on an older server. */
+		notesToSort?: number;
 	};
 	scheduleSummary: PersistentRoomScheduleSummary;
 	promptBudget?: {

@@ -39,6 +39,8 @@ export const MAINTENANCE_DIAGNOSTICS_PROCESSES = [
 	// record per conversation that says how it ended.
 	"memorize-probe",
 	"memorize-page",
+	// The ladder's tiny call that names one topic for a note.
+	"memorize-placement",
 	// The four Review names below belong to records written before Review
 	// became a run: no call writes them any more, and they stay on the list so
 	// a room's older records still read. A run writes "review-tidy".
@@ -64,7 +66,7 @@ export const REVIEW_OPS_PROPOSAL_MARKERS = ["Summary", "Staleness Flags", "Warni
 export const MEMORIZE_ASSESSMENT_MARKERS = ["What to remember", "What to forget", "What changes in stable memory", "Needs your judgment"] as const;
 export const REVIEW_ASSESSMENT_MARKERS = ["Memory map", "Looks healthy", "Stale or drift-prone", "Could be denser", "Structure opportunities", "Proposed direction"] as const;
 export const REMEMBER_MARKERS = ["TITLE", "SESSION_ARC", "BODY", "PARKED"] as const;
-export const REMEMBER_PART_MARKERS = ["MUST-KEEP", "DECISIONS AND CORRECTIONS", "PRODUCED", "OPEN THREADS", "ARC", "OPEN AT THE END OF THIS PART"] as const;
+export const REMEMBER_PART_MARKERS = ["MUST-KEEP", "FACTS", "DECISIONS AND CORRECTIONS", "PRODUCED", "OPEN THREADS", "ARC", "OPEN AT THE END OF THIS PART"] as const;
 
 const DEFAULT_MARKERS: Readonly<Record<MaintenanceDiagnosticsProcess, readonly string[]>> = {
 	"memorize-assessment": MEMORIZE_ASSESSMENT_MARKERS,
@@ -77,6 +79,7 @@ const DEFAULT_MARKERS: Readonly<Record<MaintenanceDiagnosticsProcess, readonly s
 	"memorize-fold": [],
 	"memorize-probe": [],
 	"memorize-page": [],
+	"memorize-placement": [],
 	"review-assessment": REVIEW_ASSESSMENT_MARKERS,
 	"review-discussion": [],
 	"review-discussion-signoff": [],
@@ -160,7 +163,7 @@ export interface MemorizeFoldDiagnostics {
 export interface MemorizePageDiagnostics {
 	key: string;
 	outcome: "folded" | "dropped" | "summarized" | "waiting" | "outage-stop" | "cancelled";
-	/** summarized: unreadable-twice, nothing-usable, oversize, too-large, apply-threw, failed-twice, stopped-twice (and refused-twice on records written before each op was decided alone). waiting: first-failure, filing-threw. */
+	/** summarized: unreadable-twice, nothing-usable, oversize, too-large, apply-threw, failed, timed-out, restarted, restarted-twice, filing-threw (and, on older records, failed-twice, stopped-twice and refused-twice). waiting: filing-threw (and first-failure on older records). */
 	reason?: string;
 	/** The last unreadable class a reply of this conversation had: no-fence, invalid-json, not-a-list, empty-list, cut-off. */
 	unreadable?: string;
@@ -471,9 +474,14 @@ export function recordMaintenanceWorkerCalls<TModel extends { provider: string; 
 				});
 				return result;
 			} catch (error) {
+				// A call that failed is paid for too: its stop reason and what it used, when the error carries them.
+				const { stopReason, usage } = (error ?? {}) as { stopReason?: unknown; usage?: { input?: unknown; output?: unknown } };
 				put({
 					...base,
 					replyChars: 0,
+					...(typeof usage?.input === "number" ? { inputTokens: usage.input } : {}),
+					...(typeof usage?.output === "number" ? { outputTokens: usage.output } : {}),
+					...(typeof stopReason === "string" ? { stopReason } : {}),
 					truncated: false,
 					wallTimeMs: Date.now() - startedAt,
 					parseSignature: maintenanceDiagnosticsParseSignature("", markers),

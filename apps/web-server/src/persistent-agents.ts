@@ -1,10 +1,12 @@
+import type { MemoryCallKind } from "./memory-call-cache.js";
 import crypto from "node:crypto";
 import fs from "node:fs";
-import { estimateTokens, estimateTokensFromChars } from "./token-estimate.js";
+import { estimateTokens, estimateTokensFromChars, modelTokenFactor, PROMPT_MIN_TOKEN_BUDGET, PROMPT_OUTPUT_RESERVE_TOKENS, promptRealTokenBudget, promptTokenBudget } from "./token-estimate.js";
 import type { MemoryMapRow } from "./memory-shape.js";
-import { listAreas, MEMORY_ARCHIVE_ENTRIES_FILE, parseMemoryDocument, renderMemoryContext, reviewTargetTokens, stripRecentContextMetadata } from "./memory-entries.js";
+import { listAreas, MEMORY_ARCHIVE_ENTRIES_FILE, parseMemoryDocument, renderMemoryContext, renderMemoryDocument, reviewTargetTokens, stripRecentContextMetadata } from "./memory-entries.js";
 import { settleMemoryBudget } from "./memory-entries-store.js";
-import { unsortedAfterRereadCount } from "./absorb-reread.js";
+import { memoryTextHasWords, rememberPageFromParts, rememberPartsOfPage, rememberPartsTyped } from "./memory-typed-text.js";
+import { notesToSortCount } from "./absorb-reread.js";
 import { summaryPageHead } from "./absorb-summary.js";
 import { analyzeRecentContextIds, countRecentContextEntries } from "./recent-context-entries.js";
 import { createRequire } from "node:module";
@@ -13,8 +15,9 @@ import { fileURLToPath } from "node:url";
 import { SessionManager } from "@exxeta/exxperts-runtime";
 import { ABSORB_CONSOLIDATION_WORKER_TYPE, ABSORB_DISCUSSION_TOKEN_BUDGET, ABSORB_DISCUSSION_WORKER_TYPE, absorbAvailabilityFromL1b, recentContextSessions, buildAbsorbAssessmentPrompt, buildAbsorbAssessmentRetryPrompt, extractRecentContextForAbsorb, buildAbsorbDiscussionPrompt, buildSectionPurposeMap, parseAbsorbAssessment } from "./absorb-consolidation.js";
 import type { AbsorbAssessmentFields, AbsorbAssessmentHandoffInput, AbsorbAvailability, AbsorbDiscussionMessage, AbsorbDiscussionPromptTelemetry, AbsorbDiscussionTokenBudget, AbsorbModelLock, AbsorbPromptTelemetry } from "./absorb-consolidation.js";
-import { assembleProposedRecentContext, buildCheckpointCompressionPrompt, buildCheckpointCompressionRetryPrompt, buildCheckpointProposalPreview, CHECKPOINT_COMPRESSION_WORKER_TYPE, CHECKPOINT_PROMPT_TOOL_RESULT_TEXT_CAP, CheckpointPromptOverflowError, parseCheckpointCompressionFields } from "./checkpoint-compression.js";
-import { buildRememberFinalPrompt, buildRememberPartPrompt, buildRememberPartShortenPrompt, countBodyMustKeeps, countPartNoteMustKeeps, planRememberParts, REMEMBER_PART_NOTE_CEILING_TOKENS, REMEMBER_PART_PARALLELISM, REMEMBER_PART_TRIGGER, rememberPartCapTokens, rememberNotesTooLongMessage, rememberPartsTelemetry, rememberWindowTooSmallMessage, RememberTooLargeError, type RememberPartsPlan, type RememberPromptContext } from "./remember-two-stage.js";
+import { assembleProposedRecentContext, buildCheckpointCompressionPrompt, buildCheckpointProposalPreview, CHECKPOINT_COMPRESSION_WORKER_TYPE, CHECKPOINT_PAGE_MAX_CHARS, CHECKPOINT_PROMPT_TOOL_RESULT_TEXT_CAP, CheckpointPromptOverflowError, CHECKPOINT_CUT_WORD_TARGET, fitCheckpointFields, nextLowerDensity, parseCheckpointCompressionFields, repairCheckpointFields, salvageCutCheckpointFields, rememberSentenceModelName, withRetryNotice, type CheckpointCompressionPromptInput } from "./checkpoint-compression.js";
+import { buildRememberFinalPrompt, buildRememberPageFromNotes, rememberShortMemoryView, buildRememberPartPrompt, buildRememberPartShortenPrompt, countBodyMustKeeps, countPartNoteMustKeeps, planRememberParts, REMEMBER_PART_NOTE_CEILING_TOKENS, REMEMBER_PART_PARALLELISM, REMEMBER_PART_TRIGGER, REMEMBER_SPLIT_DEPTH, rememberPartCapTokens, missingKeepRequests, rememberDatedTitle, rememberLocalDay, rememberTitleFromWords, rememberPartsTelemetry, rememberPartKeyPrompt, rememberNoLineMessage, rememberWindowTooSmallMessage, RememberTooLargeError, splitRememberStretch, withHighLevelLines, type RememberPartsPlan, type RememberPromptContext, type RememberStretch, type RememberUnreadRange } from "./remember-two-stage.js";
+import { clearRememberWork, keepRememberPartNote, readRememberPartNote, rememberPartKey } from "./remember-parts-cache.js";
 import { buildConsultPrompt, CONSULT_MAX_STACK_EXCHANGES, CONSULT_PRIOR_ANSWER_BOUNDARY_MAX_CHARS, CONSULT_QUESTION_MAX_CHARS, CONSULT_WORKER_TYPE } from "./consult.js";
 import type { ConsultPriorExchange, ConsultPromptTelemetry } from "./consult.js";
 import { buildConsultHandoffBlock, buildConsultHandoffBlockFromStack, readConsultHandoffQueue, validateConsultHandoffQueue, type ConsultHandoffExchange } from "./consult-handoff.js";
@@ -28,18 +31,21 @@ import { isRoomModelOffered } from "./room-models.js";
 import { readOrgIdentityState } from "./org-identity.js";
 import type { OrgIdentity } from "./org-identity.js";
 import { resolvePersistentRoomEffectiveWorkspacePolicy, type PersistentRoomEffectiveWorkspacePolicy } from "./persistent-room-workspace-policy.js";
-import { listShelfFilesWithOrigin, resolveShelfFilePath, writeDocumentOntoShelf } from "./persistent-room-shelf.js";
+import { listShelfFilesWithOrigin, resolveShelfFilePath } from "./persistent-room-shelf.js";
 import { listTaskLedgerRecords } from "./persistent-room-task-ledger.js";
 import { backgroundRunsDirectoryPath, isValidBackgroundRunId } from "./background-runs.js";
 import { artifactRoot } from "../../../pi-package/extensions/artifacts/index.js";
 import { overMemoryBudget, readPersistentRoomMaintenanceSettings } from "./persistent-room-maintenance-settings.js";
+import { clearCommitIntent, registerCommitSettler, settleCommits, writeCommitIntent } from "./memory-commit.js";
+import { conversationForgotten, eraseAgainIfForgotten, eraseConversationWords, sweepForgotten } from "./forget-erase.js";
 import { MAINTENANCE_DIAGNOSTICS_DIRNAME, maintenanceDiagnosticsDir, recordMaintenanceWorkerCalls, writeMaintenanceDiagnosticsRecord, type MaintenanceDiagnosticsProcess } from "./maintenance-diagnostics.js";
 import { readPersistentRoomLastUsed, recordPersistentRoomLastUsed, recordPersistentRoomLastUsedIfAbsent, type PersistentRoomLastUsed } from "./persistent-room-last-used.js";
 import { readSessionPathMessages } from "./session-path-reader.js";
+import { callWithPatience, classifyModelFailure, failureWords, ModelUnreachableError, patienceSpent, WaitLine, type PatienceOptions, type PatienceWait } from "./model-call-causes.js";
 import { buildPersistentRoomInstructionsLayer, composePersistentRoomInstructions, readPersistentRoomInstructions, validatePersistentRoomInstructionsText, writePersistentRoomInstructions, type ComposedPersistentRoomInstructions, type PersistentRoomInstructions } from "./persistent-room-instructions.js";
 import { readPersistentRoomGlobalInstructionsSetting, writePersistentRoomGlobalInstructionsEnabled } from "./persistent-room-global-instructions-setting.js";
 import { parsePersistentRoomInstructionsLayerFingerprint } from "./persistent-room-instructions-text.js";
-import { abortAllSpecialistTasks, runningSpecialistCount } from "./persistent-room-specialist-registry.js";
+import { abortAllSpecialistTasks, abortConversationSpecialistTasks, runningSpecialistCount } from "./persistent-room-specialist-registry.js";
 import { computePersistentRoomScheduleDueOccurrence, listPersistentRoomScheduleJobs, parsePersistentRoomSchedule, readPersistentRoomScheduleStore, summarizePersistentRoomScheduleJobs, writePersistentRoomScheduleStore } from "../../../pi-package/extensions/schedule-prompt/index.js";
 import type { PersistentRoomScheduleSummary } from "../../../pi-package/extensions/schedule-prompt/index.js";
 import { productAppStatePath } from "../../../pi-package/product-state-paths.js";
@@ -201,6 +207,12 @@ export interface CheckpointProposalOptions {
 	 * only when this is absent, by direct callers such as the smokes.
 	 */
 	model?: PersistentAgentModelLock;
+	/**
+	 * The shared patience every call gets (model-call-causes.ts): the line
+	 * that shows each wait, the probe asked when a failure outlasts it, and,
+	 * for the smokes, the clock and the sleep.
+	 */
+	patience?: Omit<PatienceOptions, "model" | "signal">;
 }
 
 /** How Remember read the conversation, for the approval screen. */
@@ -215,6 +227,8 @@ export interface CheckpointRememberRead {
 	toolOutputCapChars: number;
 	/** On the multi-part path: must-keep items in the part notes against must-keep markers in BODY (a floor, never a proof). */
 	mustKeep?: { partNotes: number; body: number };
+	/** Every part was refused and the page holds only the date (decision 40): the save says so, once. */
+	refusedWhole?: true;
 }
 
 export interface CheckpointApprovalProposalReference {
@@ -302,6 +316,8 @@ export interface CheckpointApprovalResponse {
 		runtime: PersistentAgentPiSessionJsonlThreadRuntime;
 	};
 	warnings: string[];
+	/** The save had already landed (another window, or a Save after a crash): no window switches over again. */
+	alreadySaved?: true;
 }
 
 export interface CheckpointCompressionGenerateResult {
@@ -1020,7 +1036,7 @@ export type PersistentRoomBackgroundRunClassification =
 	| { status: "queued"; reason: "resume_thread"; target: { kind: "resume-thread"; roomId: string; threadId: string; model?: PersistentAgentModelLock }; warnings: string[] }
 	| { status: "queued"; reason: "fresh_thread"; target: { kind: "fresh-thread"; roomId: string; modelPolicyKey: "scheduledRoom" }; warnings: string[] }
 	| { status: "deferred"; reason: "room_in_use" | "active_turn_in_flight"; target?: { kind: "none"; roomId: string }; message: string; warnings: string[] }
-	| { status: "blocked"; reason: "prepared_runtime_boundary" | "room_missing" | "room_archived" | "room_error"; target?: { kind: "none"; roomId: string }; message: string; warnings: string[] };
+	| { status: "blocked"; reason: "prepared_runtime_boundary" | "room_missing" | "room_archived" | "room_error"; target?: { kind: "none"; roomId: string; threadId?: string }; message: string; warnings: string[] };
 
 export interface PersistentAgentStatus {
 	id: string;
@@ -1059,8 +1075,8 @@ export interface PersistentAgentStatus {
 		 * still exactly what the room was created with.
 		 */
 		lastMemoryWriteAt: string | null;
-		/** Summary notes still in Unsorted after a saved Memorize read them again: the Maintain hint offers Review for them. */
-		unsortedAfterReread: number;
+		/** Notes Memorize has work for with no conversation waiting (notesToSortCount): Memorize stays open for them. */
+		notesToSort: number;
 	};
 	scheduleSummary: PersistentRoomScheduleSummary;
 	promptBudget?: PersistentAgentPromptBudget;
@@ -1649,10 +1665,10 @@ export function assertPersistentAgentThreadNotInFlight(agentIdRaw: string, threa
 // or a scheduled run) would make the paid proposal stale at approval. In
 // memory on purpose: a server restart ends every generation with it, and the
 // client's progress poll then reads "gone" instead of spinning forever.
-const rememberGenerations = new Map<string, { read: number; of: number; startedAt: number }>();
+const rememberGenerations = new Map<string, { read: number; of: number; startedAt: number; wait: PatienceWait | null; stop?: (reason?: "saved" | "forgotten") => void }>();
 
 export const REMEMBER_GENERATING_MESSAGE = "Remember is reading this conversation. Send your message when it has finished, or cancel it.";
-export const REMEMBER_ALREADY_GENERATING_MESSAGE = "Remember is already reading this conversation, on this or another device. Wait for it to finish, or cancel it there.";
+export const REMEMBER_ALREADY_GENERATING_MESSAGE = "Remember is already reading this conversation, on this or another device. Wait for it to finish, or cancel it.";
 
 function rememberGenerationKey(agentIdRaw: string, threadIdRaw: string): string {
 	const instance = createPersistentAgentInstance(agentIdRaw);
@@ -1661,26 +1677,39 @@ function rememberGenerationKey(agentIdRaw: string, threadIdRaw: string): string 
 	return persistentAgentActiveTurnKey(instance.agentId, threadId);
 }
 
-/** Marks a Remember as reading this conversation; refuses a second one with 409. Returns the function that ends it. */
-export function beginRememberGeneration(agentIdRaw: string, threadIdRaw: string): { update: (progress: { read: number; of: number }) => void; end: () => void } {
+/**
+ * Marks a Remember as reading this conversation; refuses a second one with
+ * 409. Returns the function that ends it. `stop` is how Save and Forget of
+ * the conversation stop it, so nothing it reads outlives them.
+ */
+export function beginRememberGeneration(agentIdRaw: string, threadIdRaw: string, stop?: (reason?: "saved" | "forgotten") => void): { update: (progress: { read: number; of: number }) => void; wait: (wait: PatienceWait | null) => void; end: () => void } {
 	const key = rememberGenerationKey(agentIdRaw, threadIdRaw);
 	if (rememberGenerations.has(key)) {
 		const error = new Error(REMEMBER_ALREADY_GENERATING_MESSAGE);
 		(error as any).statusCode = 409;
 		throw error;
 	}
-	const entry = { read: 0, of: 1, startedAt: Date.now() };
+	const entry = { read: 0, of: 1, startedAt: Date.now(), wait: null as PatienceWait | null, stop };
 	rememberGenerations.set(key, entry);
 	return {
 		update: (progress) => { entry.read = progress.read; entry.of = progress.of; },
+		// A busy model being waited out: the dialog shows the next try's time.
+		wait: (wait) => { entry.wait = wait; },
 		end: () => { if (rememberGenerations.get(key) === entry) rememberGenerations.delete(key); },
 	};
 }
 
 /** How far a running Remember has read this conversation, or null when none is running. */
-export function getRememberGeneration(agentIdRaw: string, threadIdRaw: string): { read: number; of: number } | null {
+export function getRememberGeneration(agentIdRaw: string, threadIdRaw: string): { read: number; of: number; wait?: PatienceWait } | null {
 	const entry = rememberGenerations.get(rememberGenerationKey(agentIdRaw, threadIdRaw));
-	return entry ? { read: entry.read, of: entry.of } : null;
+	return entry ? { read: entry.read, of: entry.of, ...(entry.wait ? { wait: entry.wait } : {}) } : null;
+}
+
+/** A window still showing a conversation the room has moved on from (another window saved, forgot or started fresh). */
+export const CONVERSATION_MOVED_MESSAGE = "This room went on in another window. Reload to continue there.";
+
+export function conversationMovedError(): Error {
+	return Object.assign(new Error(CONVERSATION_MOVED_MESSAGE), { statusCode: 409, code: "conversation_moved" });
 }
 
 export function assertNoRememberGeneration(agentIdRaw: string, threadIdRaw: string): void {
@@ -1694,13 +1723,13 @@ export function beginPersistentAgentTurn(agentIdRaw: string, threadIdRaw: string
 	const instance = createPersistentAgentInstance(agentIdRaw);
 	const threadId = safeRuntimeThreadId(threadIdRaw);
 	if (!threadId) throw new Error("invalid persistent-agent thread id");
+	// Every turn passes here, the socket's and the scheduler's: a save a crash
+	// left half done is finished first, so no turn lands on a conversation
+	// whose page is already saved.
+	settleCommits(instance.agentId, instance.rootDir);
 	assertNoRememberGeneration(instance.agentId, threadId);
 	const runtime = getPersistentAgentRuntimeState(instance.agentId);
-	if ((runtime.state !== "active" && runtime.state !== "standby") || runtime.activeThreadId !== threadId) {
-		const error = new Error("persistent-agent prompt requires the current activeThread");
-		(error as any).statusCode = 409;
-		throw error;
-	}
+	if ((runtime.state !== "active" && runtime.state !== "standby") || runtime.activeThreadId !== threadId) throw conversationMovedError();
 	const thread = getPersistentAgentThread(instance.agentId, threadId);
 	if (!thread || thread.state === "closed") {
 		const error = new Error("persistent-agent activeThread is missing or closed");
@@ -1750,6 +1779,8 @@ export function finishPersistentAgentTurn(agentIdRaw: string, threadIdRaw: strin
 	const instance = createPersistentAgentInstance(agentIdRaw);
 	const threadId = safeRuntimeThreadId(threadIdRaw);
 	if (!threadId) throw new Error("invalid persistent-agent thread id");
+	// A turn that outlived Forget's stop may have written into the erased transcript.
+	eraseAgainIfForgotten(instance.agentId, instance.rootDir, threadId);
 	const existing = getPersistentAgentActiveTurnState(instance.agentId, threadId);
 	const turnId = normalizePersistentAgentActiveTurnToken(outcome.turnId, "turn id");
 	if (existing.state === "idle" && existing.updatedAt > 0) return existing;
@@ -2879,6 +2910,13 @@ export function renamePersistentAgent(agentIdRaw: string, displayNameRaw: unknow
 		(error as any).statusCode = 400;
 		throw error;
 	}
+	// A rename rewrites every whole-name mention in the memory file: a name that
+	// starts like a heading or a comment could stand alone on a line as one.
+	if (/^(?:#|<!--)/.test(displayName)) {
+		const error = new Error("A room name can't start with # or <!--. Choose another name.");
+		(error as any).statusCode = 400;
+		throw error;
+	}
 	const previousDisplayName = typeof meta.displayName === "string" ? collapseHumanWhitespace(meta.displayName) : "";
 	if (displayName === previousDisplayName) {
 		const error = new Error(`the room is already named ${displayName}`);
@@ -3316,7 +3354,7 @@ export function writePersistentAgentThread(agentIdRaw: string, threadIdRaw: stri
 	};
 	const file = instance.runtimeThreadPath(threadId);
 	ensureDir(path.dirname(file));
-	fs.writeFileSync(file, JSON.stringify(thread, null, 2) + "\n", { mode: 0o600, flag: "w" });
+	writeFileAtomic(file, JSON.stringify(thread, null, 2) + "\n");
 	// The room moved on to another conversation while this one was being
 	// written (a turn that landed after the switch, a late standby save):
 	// the answer is kept in the conversation it belongs to and the pointer
@@ -3349,7 +3387,7 @@ export function clearPersistentAgentThreadPendingHandoffs(agentIdRaw: string, th
 	const cleared: PersistentAgentThreadRecord = { ...rest, updatedAt: Date.now() };
 	const file = instance.runtimeThreadPath(threadId);
 	ensureDir(path.dirname(file));
-	fs.writeFileSync(file, JSON.stringify(cleared, null, 2) + "\n", { mode: 0o600, flag: "w" });
+	writeFileAtomic(file, JSON.stringify(cleared, null, 2) + "\n");
 }
 
 /**
@@ -3379,7 +3417,7 @@ export function appendPersistentAgentThreadPendingHandoff(agentIdRaw: string, th
 	const next: PersistentAgentThreadRecord = { ...existing, pendingHandoffs, updatedAt: Date.now() };
 	const file = instance.runtimeThreadPath(threadId);
 	ensureDir(path.dirname(file));
-	fs.writeFileSync(file, JSON.stringify(next, null, 2) + "\n", { mode: 0o600, flag: "w" });
+	writeFileAtomic(file, JSON.stringify(next, null, 2) + "\n");
 	return true;
 }
 
@@ -3401,7 +3439,7 @@ export function closePersistentAgentThreadForCheckpoint(agentIdRaw: string, thre
 	};
 	const file = instance.runtimeThreadPath(threadId);
 	ensureDir(path.dirname(file));
-	fs.writeFileSync(file, JSON.stringify(thread, null, 2) + "\n", { mode: 0o600, flag: "w" });
+	writeFileAtomic(file, JSON.stringify(thread, null, 2) + "\n");
 	return thread;
 }
 
@@ -3424,7 +3462,7 @@ export function closePersistentAgentThreadForMemento(agentIdRaw: string, threadI
 	};
 	const file = instance.runtimeThreadPath(threadId);
 	ensureDir(path.dirname(file));
-	fs.writeFileSync(file, JSON.stringify(thread, null, 2) + "\n", { mode: 0o600, flag: "w" });
+	writeFileAtomic(file, JSON.stringify(thread, null, 2) + "\n");
 	return thread;
 }
 
@@ -3435,6 +3473,8 @@ export function deletePersistentAgentThread(agentIdRaw: string, threadIdRaw: str
 	const existingRuntime = getPersistentAgentRuntimeState(instance.agentId);
 	if (existingRuntime.activeThreadId === threadId) assertPersistentAgentThreadNotInFlight(instance.agentId, threadId);
 	const file = instance.runtimeThreadPath(threadId);
+	// The transcript goes with the record, unless a Remember closed it: search reads it.
+	if (getPersistentAgentThread(instance.agentId, threadId)?.closedReason !== "checkpoint") for (const transcript of [instance.runtimePiSessionPath(threadId), instance.runtimeBootPromptSnapshotPath(threadId)]) fs.rmSync(transcript, { force: true });
 	if (fs.existsSync(file)) fs.unlinkSync(file);
 	const runtime = existingRuntime.activeThreadId === threadId ? writePersistentAgentRuntimeState(instance.agentId, { state: "idle" }, { allowInFlightActiveThread: true }) : existingRuntime;
 	return { ok: true, runtime };
@@ -3473,6 +3513,7 @@ export function discardEmptyPreparedBoundaryThread(agentIdRaw: string, threadIdR
 	}
 	assertPersistentAgentThreadNotInFlight(instance.agentId, threadId);
 	const file = instance.runtimeThreadPath(threadId);
+	for (const transcript of [instance.runtimePiSessionPath(threadId), instance.runtimeBootPromptSnapshotPath(threadId)]) fs.rmSync(transcript, { force: true });
 	if (fs.existsSync(file)) fs.unlinkSync(file);
 	const nextRuntime = writePersistentAgentRuntimeState(instance.agentId, { state: "idle" }, { allowInFlightActiveThread: true });
 	return { ok: true, discarded: true, threadId, boundary, runtime: nextRuntime };
@@ -3750,7 +3791,8 @@ export function classifyPersistentRoomBackgroundRunTarget(agentIdRaw: string, op
 		return {
 			status: "blocked",
 			reason: "prepared_runtime_boundary",
-			target: noneTarget,
+			// The conversation it met: the run may go there, late, once the person has started it (decision 47).
+			target: { ...noneTarget, threadId: activeThread.threadId },
 			message: `Persistent room is parked at an empty prepared ${activeThread.preparedByBoundary} boundary; background work must not consume or retire it automatically.`,
 			warnings,
 		};
@@ -3843,13 +3885,6 @@ function absorbEventRecordPath(root: PersistentAgentPathContext, absorbId: strin
 		: path.join(absorbEventDir(root), `${safePersistentAgentEventRecordId(absorbId, "absorb event id")}.json`);
 }
 
-function writeAbsorbEventRecord(root: PersistentAgentPathContext, record: AbsorbEventRecord): string {
-	const file = absorbEventRecordPath(root, record.absorbId);
-	ensureDir(path.dirname(file));
-	fs.writeFileSync(file, JSON.stringify(record, null, 2) + "\n", { mode: 0o600, flag: "wx" });
-	return file;
-}
-
 function reviewEventDir(root: PersistentAgentPathContext): string {
 	return root instanceof PersistentAgentInstance ? root.reviewEventDir() : path.join(root, "events", "review");
 }
@@ -3858,13 +3893,6 @@ function reviewEventRecordPath(root: PersistentAgentPathContext, reviewId: strin
 	return root instanceof PersistentAgentInstance
 		? root.reviewEventRecordPath(reviewId)
 		: path.join(reviewEventDir(root), `${safePersistentAgentEventRecordId(reviewId, "review event id")}.json`);
-}
-
-function writeReviewEventRecord(root: PersistentAgentPathContext, record: ReviewEventRecord): string {
-	const file = reviewEventRecordPath(root, record.reviewId);
-	ensureDir(path.dirname(file));
-	fs.writeFileSync(file, JSON.stringify(record, null, 2) + "\n", { mode: 0o600, flag: "wx" });
-	return file;
 }
 
 function topLevelL1bSections(l1b: string): L1bEventSectionMetric[] {
@@ -4013,28 +4041,62 @@ function extractApprovedRecentContextField(markdown: string, label: "Session arc
 	return markdown.slice(start, end).trim();
 }
 
-function validateApprovedRecentContextDraft(markdown: string): string[] {
+/** What a page sent as one string may not hold (the backstop: Save sends the parts, and the rule makes them plain). */
+const REMEMBER_ENTRY_MARKUP_MESSAGE = "A heading line or an HTML comment can't be saved in an entry. Remove it and save again.";
+/** Save with nothing to keep, as the editor says it. */
+const REMEMBER_ENTRY_NOTHING_TO_KEEP_MESSAGE = "Write what to keep before saving.";
+/** A page sent as one string whose parts cannot be told apart: only an older page sends that form (draft). */
+const REMEMBER_PAGE_FORM_MESSAGE = "This window is out of date. Reload the page, then save again.";
+/** An entry with an empty What to keep or Still open, or a part's label typed inside another part (draft). */
+const REMEMBER_ENTRY_PARTS_MESSAGE = "Part of this entry can't be read: What to keep and Still open each need their own words. Check the entry and save again.";
+const REMEMBER_ENTRY_TOO_LONG_MESSAGE = `This entry is too long to save (at most ${CHECKPOINT_PAGE_MAX_CHARS.toLocaleString("en-US")} characters). Shorten it and save again.`;
+const REMEMBER_ENTRY_IDENTITY_MESSAGE = "A line saying checkpoint_id or session_id is none can't be saved in an entry. Remove it and save again.";
+
+export function validateApprovedRecentContextDraft(markdown: string): void {
 	const trimmed = markdown.trim();
 	if (!trimmed) throw new Error("approvedRecentContext is required");
-	if (trimmed.length > 8000) throw new Error("approvedRecentContext is too large");
-	if (/^##\s+/m.test(trimmed)) throw new Error("approvedRecentContext must not contain top-level L1b sections such as Chronos, Deep Memory, Active Items, or Recent Context");
+	if (trimmed.length > CHECKPOINT_PAGE_MAX_CHARS) throw new Error(REMEMBER_ENTRY_TOO_LONG_MESSAGE);
+	if (/^##\s+/m.test(trimmed)) throw new Error(REMEMBER_ENTRY_MARKUP_MESSAGE);
 	if (!/^###\s+RC-(?:DRAFT|[A-Za-z0-9_-]+)/.test(trimmed)) throw new Error("approvedRecentContext must start with a Recent Context entry heading");
 	// One entry per approval. A second "### " heading in the body would split
 	// into a separate Recent Context entry after the write — a smuggled entry
 	// the reviewer never approved as its own memory.
-	if ((trimmed.match(/^###\s+/gm) ?? []).length > 1) throw new Error("approvedRecentContext must contain exactly one Recent Context entry heading");
+	if ((trimmed.match(/^###\s+/gm) ?? []).length > 1) throw new Error(REMEMBER_ENTRY_MARKUP_MESSAGE);
 	// Provenance metadata is written by the gate, never accepted from the
 	// draft: an embedded rc_metadata comment carrying a real checkpoint id
 	// would earn a forged receipt, and HTML comments are invisible in the
 	// rendered approval view, so nothing hidden gets into approved memory.
-	if (/<!--/.test(trimmed)) throw new Error("approvedRecentContext must not contain HTML comments; the checkpoint gate writes the rc_metadata provenance line itself");
-	if (!extractApprovedRecentContextField(trimmed, "Session arc", ["Body", "Parked"])) throw new Error("approvedRecentContext must include a non-empty Session arc field");
-	if (!extractApprovedRecentContextField(trimmed, "Body", ["Parked"])) throw new Error("approvedRecentContext must include a non-empty Body field");
-	if (!extractApprovedRecentContextField(trimmed, "Parked", [])) throw new Error("approvedRecentContext must include a non-empty Parked field");
-	if (/checkpoint_id\s*=\s*(?:null|none)|session_id\s*=\s*(?:null|none)/i.test(trimmed)) throw new Error("approvedRecentContext must not include null durable identity metadata");
-	const warnings: string[] = [];
-	if (/memory has been saved|memory was saved|written to memory/i.test(trimmed)) warnings.push("approved entry appears to claim memory was already saved");
-	return warnings;
+	if (/<!--/.test(trimmed)) throw new Error(REMEMBER_ENTRY_MARKUP_MESSAGE);
+	// "What happened" may be absent; what to keep and what is still open may not.
+	if (!extractApprovedRecentContextField(trimmed, "Body", ["Parked"])) throw new Error(REMEMBER_ENTRY_PARTS_MESSAGE);
+	if (!extractApprovedRecentContextField(trimmed, "Parked", [])) throw new Error(REMEMBER_ENTRY_PARTS_MESSAGE);
+	// The heading is the page's identity; the person's words are never read as one.
+	if (/checkpoint_id\s*=\s*(?:null|none)|session_id\s*=\s*(?:null|none)/i.test(trimmed.split(/\r?\n/, 1)[0] ?? "")) throw new Error(REMEMBER_ENTRY_IDENTITY_MESSAGE);
+}
+
+/**
+ * The page Save writes. Save sends Remember's three parts, and the server
+ * builds the page from the proposal's heading with each part under the one
+ * rule (memory-typed-text.ts), so a part marker or a heading typed into a part
+ * stays that part's words. The one-string form is kept for a caller that still
+ * sends it.
+ */
+function approvedRecentContextFrom(raw: any, proposal: any): string {
+	const fields = raw?.approvedFields;
+	let heading = String(proposal?.proposedRecentContext ?? "").split(/\r?\n/, 1)[0] ?? "";
+	let parts: { sessionArc: string; body: string; parked: string };
+	if (fields && typeof fields === "object") {
+		parts = { sessionArc: String(fields.sessionArc ?? ""), body: String(fields.body ?? ""), parked: String(fields.parked ?? "") };
+	} else {
+		// The older one-string form: taken only when its parts can be told apart, and then saved as parts too.
+		const page = String(raw?.approvedRecentContext ?? "").trim();
+		if (!page) throw new Error("approvedRecentContext is required");
+		const read = rememberPartsOfPage(page);
+		if (!read) throw new Error(REMEMBER_PAGE_FORM_MESSAGE);
+		({ heading, parts } = read);
+	}
+	if (!memoryTextHasWords(rememberPartsTyped(parts).body)) throw new Error(REMEMBER_ENTRY_NOTHING_TO_KEEP_MESSAGE);
+	return rememberPageFromParts(heading, parts);
 }
 
 function slugTimestamp(date: Date): string {
@@ -4138,7 +4200,7 @@ function stableRecentContextEntry(approvedMarkdown: string, rcId: string, checkp
 		: "Approved checkpoint";
 	const body = lines.join("\n").trim();
 	return [
-		`### ${rcId} | ${status} | ${now.toISOString().slice(0, 10)} | ${title}`,
+		`### ${rcId} | ${status} | ${rememberLocalDay(now)} | ${title}`,
 		`<!-- rc_metadata: checkpoint_id=${checkpointId}; session_id=${sessionId}; conversation_id=${request.conversationId}; density=${request.density}; model=${request.model.provider}/${request.model.model}; approved_at=${now.toISOString()} -->`,
 		body,
 	].join("\n\n") + "\n";
@@ -4230,7 +4292,7 @@ function extractChronosLine(markdown: string, label: string): string | null {
 	return line && !/^none$/i.test(line) ? line : null;
 }
 
-function buildMemoryStatus(count: number, softCap: number, hardCap: number, lastCheckpointId: string | null, lastCheckpointAt: string | null, lastMemoryWriteAt: string | null, unsortedAfterReread = 0): PersistentAgentStatus["memoryStatus"] {
+function buildMemoryStatus(count: number, softCap: number, hardCap: number, lastCheckpointId: string | null, lastCheckpointAt: string | null, lastMemoryWriteAt: string | null, notesToSort = 0): PersistentAgentStatus["memoryStatus"] {
 	return {
 		recentContextCount: count,
 		recentContextSoftCap: softCap,
@@ -4239,7 +4301,7 @@ function buildMemoryStatus(count: number, softCap: number, hardCap: number, last
 		lastCheckpointId,
 		lastCheckpointAt,
 		lastMemoryWriteAt,
-		unsortedAfterReread,
+		notesToSort,
 	};
 }
 
@@ -4290,8 +4352,10 @@ function genericPersistentAgentJson(agentId: PersistentAgentId, input: Normalize
  * 3: the Memory section learned that memory has parts beyond the two in front
  * of the room — the notes that left and the memorized transcripts — and how to
  * reach them, read them and stay honest when they come back empty.
+ * 4: the transcripts behind the search are the remembered conversations, from
+ * their Remember on, not only the memorized ones.
  */
-export const PERSISTENT_AGENT_L1A_TEMPLATE_VERSION = 3;
+export const PERSISTENT_AGENT_L1A_TEMPLATE_VERSION = 4;
 export const PERSISTENT_AGENT_L1A_DEFAULT_MODE_ID = "default";
 
 export interface PersistentAgentL1aMode {
@@ -4371,7 +4435,7 @@ Persistent agent id: \`${agentId}\`.
 
 Your durable memory is the memory document appended after this constitution. At session start, read it silently for orientation.
 
-Your memory has four parts. Two are in front of you: the notes, grouped by topic, and Recent Context, the conversations remembered but not yet folded into notes. Two are behind \`memory_recall\`: the notes that left memory because they were replaced, finished, removed or moved out to make room, and the transcripts of memorized conversations.
+Your memory has four parts. Two are in front of you: the notes, grouped by topic, and Recent Context, the conversations remembered but not yet folded into notes. Two are behind \`memory_recall\`: the notes that left memory because they were replaced, finished, removed or moved out to make room, and the transcripts of remembered conversations.
 
 Use what you remember the way a colleague recalls shared history: woven in naturally, stated as things you know. Unprompted, never describe where a fact sits or how you looked for it: no "in my memory", "in my notes", "in the archive", "on record", "let me check", and no account of a search, whether it found something or not. When you do not hold something, say in one plain sentence what you do not know ("I don't have a number for that"), then what you do know if it helps, without naming memory, notes, archive or records. If the user asks where something comes from, tell them plainly: which earlier conversation or note, and its date. Otherwise the mechanism stays invisible even while the content is used.
 
@@ -4786,6 +4850,27 @@ function assertConstitutionUpgradeAllowed(instance: PersistentAgentInstance, met
 	if (lock) throw new Error(`${instance.agentId}: room is currently open on surface "${lock.surface ?? "unknown"}"; close it before upgrading`);
 }
 
+/**
+ * The constitution an upgrade writes. A step that changes only a phrase is
+ * made in place, so a room someone edited by hand keeps its own lines; from
+ * any other version the template is rendered anew.
+ */
+const L1A_IN_PLACE_STEPS: Record<number, { from: string; to: string }> = {
+	3: { from: "the transcripts of memorized conversations", to: "the transcripts of remembered conversations" },
+};
+
+function constitutionUpgradeCandidate(agentId: PersistentAgentId, currentL1a: string, fromTemplateVersion: number, normalized: NormalizedPersistentAgentScaffoldInput): { l1a: string; inPlace: boolean } {
+	let l1a = currentL1a;
+	let version = fromTemplateVersion;
+	while (L1A_IN_PLACE_STEPS[version] && version < PERSISTENT_AGENT_L1A_TEMPLATE_VERSION) {
+		const step = L1A_IN_PLACE_STEPS[version];
+		version += 1;
+		l1a = l1a.replace(L1A_MARKER_PATTERN, (marker) => marker.replace(/template_version=\d+/, `template_version=${version}`)).replace(step.from, step.to);
+	}
+	if (version === PERSISTENT_AGENT_L1A_TEMPLATE_VERSION && version !== fromTemplateVersion) return { l1a, inPlace: true };
+	return { l1a: genericL1a(agentId, normalized), inPlace: false };
+}
+
 export function planPersistentAgentConstitutionUpgrade(agentIdRaw: string): PersistentAgentConstitutionUpgradePlan {
 	const instance = createPersistentAgentInstance(agentIdRaw);
 	const meta = instance.readAgentJson();
@@ -4793,7 +4878,7 @@ export function planPersistentAgentConstitutionUpgrade(agentIdRaw: string): Pers
 	const currentL1a = instance.readL1a(meta);
 	const marker = parsePersistentAgentL1aMarker(currentL1a);
 	const normalized = constitutionUpgradeScaffoldInput(instance, meta);
-	const candidateL1a = genericL1a(instance.agentId, normalized);
+	const candidateL1a = constitutionUpgradeCandidate(instance.agentId, currentL1a, marker.templateVersion, normalized).l1a;
 	return {
 		agentId: instance.agentId,
 		action: marker.templateVersion >= PERSISTENT_AGENT_L1A_TEMPLATE_VERSION ? "up_to_date" : "upgrade",
@@ -4818,7 +4903,7 @@ export function upgradePersistentAgentConstitution(agentIdRaw: string, options: 
 	if (plan.action === "up_to_date") return { plan, upgradeId: null, archivedL1aRelPath: null, eventRecordRelPath: null };
 
 	const normalized = constitutionUpgradeScaffoldInput(instance, meta);
-	const candidateL1a = genericL1a(instance.agentId, normalized);
+	const { l1a: candidateL1a, inPlace } = constitutionUpgradeCandidate(instance.agentId, currentL1a, plan.fromTemplateVersion, normalized);
 	const candidateFingerprint = fingerprintL1bSource(candidateL1a);
 
 	const stamp = slugTimestamp(now);
@@ -4843,7 +4928,7 @@ export function upgradePersistentAgentConstitution(agentIdRaw: string, options: 
 	const eventRecord = {
 		schemaVersion: 1,
 		operation: "constitution_upgrade",
-		mutation: { target: "l1a", kind: "template_rerender" },
+		mutation: { target: "l1a", kind: inPlace ? "template_phrase" : "template_rerender" },
 		agentId: instance.agentId,
 		upgradeId,
 		upgradedAt: now.toISOString(),
@@ -4910,25 +4995,34 @@ export class PersistentAgentMemoryOverflowError extends Error {
 
 export function assertPersistentAgentBootPromptFitsWindow(input: {
 	agentId: string;
+	/** The conversation that would boot: the refusal's way out depends on whether it has messages. */
+	conversationId?: string;
 	model: { provider: string; model: string; label?: string };
 	systemPrompt: string;
 	window?: CheckpointModelWindow;
 }): void {
 	const window = input.window;
 	if (window == null || !Number.isFinite(window.contextWindow) || !Number.isFinite(window.maxOutputTokens)) return;
-	const budget = checkpointPromptTokenBudget(window);
+	const budget = checkpointPromptTokenBudget(window, input.model);
 	const bootEstimatedTokens = estimateTokens(input.systemPrompt);
 	if (bootEstimatedTokens <= budget) return;
-	const modelName = input.model.label?.trim() || `${input.model.provider}/${input.model.model}`;
-	// The remedy must be reachable from where the user stands: a refused room
-	// has a standby thread, which keeps Maintain disabled and the model picker
-	// locked — so the first step is Forget (model-free), and the Maintain run
-	// must match the heavy layer: Review never touches Recent Context, so an
-	// intake-heavy room needs Memorize.
+	const modelName = rememberSentenceModelName(input.model);
+	// The way out must be reachable from where the person stands, and true for
+	// this conversation. An empty one (the one Remember or Forget prepared)
+	// boots fresh at the next open: its snapshot is rebuilt on the memory as it
+	// is then and it moves to the room's model pick, both before this gate. So
+	// Maintain (never locked) or a larger model fixes it, and the Maintain run
+	// matches the heavy layer: Review never touches Recent Context, so an
+	// intake-heavy room needs Memorize. A conversation with messages keeps the
+	// boot it started with, so only a switch to a larger window reaches it.
+	const withMessages = input.conversationId !== undefined && persistentAgentThreadBootStaysFrozen(input.agentId, input.conversationId);
 	const heavyLayer = persistentAgentHeavyMemoryLayer(input.agentId);
 	const maintainRun = heavyLayer === "recent"
-		? "Memorize (most of this room's memory is recent sessions)"
-		: "Review (most of this room's memory is long-term)";
+		? "Memorize (most of this room's memory is recent conversations)"
+		: "Review (most of this room's memory is long-term notes)";
+	const wayOut = withMessages
+		? "This conversation keeps the memory it started with, so a smaller memory reaches only the next one. To continue here, choose a model that can read more at once in Room settings, Model, and switch the open conversation to it."
+		: `To fix it, open Maintain from Home and run ${maintainRun} to make the memory smaller, or choose a model that can read more at once in Room settings, Model. Then open the room again.`;
 	// The instructions are part of "setup" and the one part the user can
 	// shorten by hand, from the pane, without a model. The refused room holds
 	// a standby thread whose frozen boot still carries the long text, so the
@@ -4936,13 +5030,57 @@ export function assertPersistentAgentBootPromptFitsWindow(input: {
 	// sentence says so instead of promising an immediate effect.
 	const instructionsParts = persistentAgentInstructionsSetupParts(input.agentId);
 	throw new PersistentAgentMemoryOverflowError(
-		`This room's memory and setup (~${bootEstimatedTokens} estimated tokens) do not fit the usable window of ${modelName} (~${budget} tokens), so a conversation cannot start on this model. ` +
-			`Memory is unchanged and nothing was sent to the model. The way out from here: open Room settings, Conversation and choose Forget (it closes this conversation without using a model and unlocks the room), ` +
-			`then from Home open Maintain and run ${maintainRun}, or choose a model with a larger window in Room settings, Model before you open the room again.` +
-			instructionsBootRefusalSentence(instructionsParts),
+		`This room's memory and setup (~${bootEstimatedTokens} estimated tokens) do not fit the usable window of ${modelName} (~${budget} tokens), so ${withMessages ? "this conversation cannot continue" : "a conversation cannot start"} on this model. ` +
+			`Memory is unchanged and nothing was sent to the model. ${wayOut}` +
+			instructionsBootRefusalSentence(instructionsParts, withMessages),
 		bootEstimatedTokens,
 		budget,
 	);
+}
+
+/** Whether a conversation boots on its frozen snapshot at the next open: Pi-backed with messages. A legacy thread builds its boot at every connect; on a read failure, the empty case. */
+function persistentAgentThreadBootStaysFrozen(agentIdRaw: string, threadIdRaw: string): boolean {
+	try {
+		const instance = createPersistentAgentInstance(agentIdRaw);
+		const threadId = safeRuntimeThreadId(threadIdRaw);
+		const thread = threadId ? getPersistentAgentThread(instance.agentId, threadId) : null;
+		return thread?.runtime.kind === "pi-session-jsonl" && emptyPersistentAgentThread(instance.agentId, threadId!) === null;
+	} catch {
+		return false;
+	}
+}
+
+/** The room's notes and waiting conversations as a conversation reads them, less the Chronos dates every save stamps. */
+function persistentAgentReadMemoryFingerprint(agentId: string): string {
+	const doc = parseMemoryDocument(createPersistentAgentInstance(agentId).readL1b());
+	return crypto.createHash("sha256").update(renderMemoryDocument({ ...doc, chronos: "" }, "context"), "utf-8").digest("hex");
+}
+
+/**
+ * Runs one Memorize or Review save and says whether it leaves the room's open
+ * conversation on the memory it started with: the save changed what a
+ * conversation reads, and the open one has started, so its start text stays
+ * frozen and the change reaches the next conversation. An empty prepared
+ * conversation is never behind: its start text is rebuilt on the memory as it
+ * is at its next open. A read that fails here says nothing; the save stands.
+ */
+export async function saveWithOpenConversationCheck<T extends object>(agentIdRaw: string, save: () => T | Promise<T>): Promise<T & { openConversationKeepsMemory?: true }> {
+	const agentId = createPersistentAgentInstance(agentIdRaw).agentId;
+	let before: string | null = null;
+	try {
+		before = persistentAgentReadMemoryFingerprint(agentId);
+	} catch {
+		before = null;
+	}
+	const result = await save();
+	try {
+		if (before === null || persistentAgentReadMemoryFingerprint(agentId) === before) return result;
+		const runtime = getPersistentAgentRuntimeState(agentId);
+		if ((runtime.state !== "active" && runtime.state !== "standby") || !runtime.activeThreadId) return result;
+		return persistentAgentThreadBootStaysFrozen(agentId, runtime.activeThreadId) ? { ...result, openConversationKeepsMemory: true } : result;
+	} catch {
+		return result;
+	}
 }
 
 /**
@@ -4969,17 +5107,19 @@ function persistentAgentInstructionsSetupParts(agentIdRaw: string): PersistentAg
  * the room's switch), or both. A room with only its own text gets the
  * sentence it always got, with the layer's size, framing included.
  */
-function instructionsBootRefusalSentence(parts: PersistentAgentBootInstructionsParts | null): string {
+function instructionsBootRefusalSentence(parts: PersistentAgentBootInstructionsParts | null, withMessages: boolean): string {
 	if (!parts || parts.layerEstimatedTokens == null) return "";
+	// With messages, Forget deletes a conversation that has content: the sentence says so.
+	const forget = withMessages ? "choosing Forget (which deletes this conversation)" : "choosing Forget";
 	const room = parts.roomEstimatedTokens;
 	const global = parts.globalEstimatedTokens;
 	if (global == null) {
-		return ` This room's instructions are ~${parts.layerEstimatedTokens} of those tokens: shortening them in Room settings → Instructions and then choosing Forget starts the room again with the shorter text, without touching its memory.`;
+		return ` This room's instructions are ~${parts.layerEstimatedTokens} of those tokens: shortening them in Room settings → Instructions and then ${forget} starts the room again with the shorter text, without touching its memory.`;
 	}
 	if (room == null) {
-		return ` The global instructions are ~${parts.layerEstimatedTokens} of those tokens: shortening them in Settings → Instructions, or switching them off for this room in Room settings → Instructions, and then choosing Forget starts the room again with the shorter setup, without touching its memory.`;
+		return ` The global instructions are ~${parts.layerEstimatedTokens} of those tokens: shortening them in Settings → Instructions, or switching them off for this room in Room settings → Instructions, and then ${forget} starts the room again with the shorter setup, without touching its memory.`;
 	}
-	return ` This room's instructions and the global instructions are ~${parts.layerEstimatedTokens} of those tokens together (~${room} this room's, ~${global} global): shortening either (Room settings → Instructions for this room's, Settings → Instructions for the global ones), or switching the global instructions off for this room, and then choosing Forget starts the room again with the shorter setup, without touching its memory.`;
+	return ` This room's instructions and the global instructions are ~${parts.layerEstimatedTokens} of those tokens together (~${room} this room's, ~${global} global): shortening either (Room settings → Instructions for this room's, Settings → Instructions for the global ones), or switching the global instructions off for this room, and then ${forget} starts the room again with the shorter setup, without touching its memory.`;
 }
 
 function persistentAgentHeavyMemoryLayer(agentIdRaw: string): "recent" | "stable" {
@@ -5315,7 +5455,7 @@ export function refreshEmptyPersistentAgentThreadBootSnapshot(agentIdRaw: string
 		updatedAt: Date.now(),
 	};
 	const file = instance.runtimeThreadPath(threadId);
-	fs.writeFileSync(file, JSON.stringify(refreshed, null, 2) + "\n", { mode: 0o600, flag: "w" });
+	writeFileAtomic(file, JSON.stringify(refreshed, null, 2) + "\n");
 	return { thread: refreshed, rebuilt: { before: runtime.l1bFingerprint, after: l1bFingerprint } };
 }
 
@@ -5375,7 +5515,7 @@ export function refreshEmptyPersistentAgentThreadModel(agentIdRaw: string, threa
 	if (turn.state === "running" || turn.state === "cancelling") return { thread, moved: null };
 	if (!piSessionHasNoMessages(instance.agentId, thread.runtime)) return { thread, moved: null };
 	const refreshed: PersistentAgentThreadRecord = { ...thread, model: { provider: lock.provider, model: lock.model }, updatedAt: Date.now() };
-	fs.writeFileSync(instance.runtimeThreadPath(threadId), JSON.stringify(refreshed, null, 2) + "\n", { mode: 0o600, flag: "w" });
+	writeFileAtomic(instance.runtimeThreadPath(threadId), JSON.stringify(refreshed, null, 2) + "\n");
 	const runtime = getPersistentAgentRuntimeState(instance.agentId);
 	if (runtime.state !== "idle" && runtime.activeThreadId === threadId) {
 		writePersistentAgentRuntimeState(instance.agentId, { state: runtime.state, activeThreadId: threadId, model: refreshed.model }, { allowInFlightActiveThread: true });
@@ -5430,7 +5570,7 @@ export function switchPersistentAgentThreadModel(agentIdRaw: string, threadIdRaw
 		items: [...thread.items, { kind: "system", id: `model_switch_${now.toString(36)}`, text: options.notice, level: "info" }],
 		updatedAt: now,
 	};
-	fs.writeFileSync(instance.runtimeThreadPath(threadId), JSON.stringify(switched, null, 2) + "\n", { mode: 0o600, flag: "w" });
+	writeFileAtomic(instance.runtimeThreadPath(threadId), JSON.stringify(switched, null, 2) + "\n");
 	const runtime = getPersistentAgentRuntimeState(instance.agentId);
 	if (runtime.state !== "idle" && runtime.activeThreadId === threadId) {
 		writePersistentAgentRuntimeState(instance.agentId, { state: runtime.state, activeThreadId: threadId, model: switched.model }, { allowInFlightActiveThread: true });
@@ -5555,6 +5695,11 @@ export function openPersistentAgentPiSessionManager(agentIdRaw: string, runtime:
 export function getPersistentAgentStatus(agentIdRaw: string): PersistentAgentStatus {
 	const instance = createPersistentAgentInstance(agentIdRaw);
 	const root = instance.rootDir;
+	// Status is what every route, the scheduler's classification and the CLI
+	// bootstrap read first: a save a crash left pending is settled before the
+	// room is described, so nobody sees it half done.
+	settleCommits(instance.agentId, root);
+	sweepForgotten(instance.agentId, root);
 	let scheduleSummary: PersistentRoomScheduleSummary = summarizePersistentRoomScheduleJobs([]);
 	const agentJsonPath = instance.agentJsonPath();
 	const fallbackL1aPath = path.join(root, "L1a.md");
@@ -5611,7 +5756,7 @@ export function getPersistentAgentStatus(agentIdRaw: string): PersistentAgentSta
 	let fullEntries = 0;
 	let lastCheckpointAt: string | null = null;
 	let lastMemoryWriteAt: string | null = null;
-	let unsortedAfterReread = 0;
+	let notesToSort = 0;
 	let reviewTargetEstimatedTokens: number | undefined;
 	if (l1bExists) {
 		const l1b = fs.readFileSync(l1bPath, "utf-8");
@@ -5631,7 +5776,7 @@ export function getPersistentAgentStatus(agentIdRaw: string): PersistentAgentSta
 		// means the memory is still the scaffold the room was created with.
 		lastMemoryWriteAt = latestStamp(["Last checkpoint at", "Last consolidation at", "Last review at", "Last edit at"]);
 		reviewTargetEstimatedTokens = reviewTargetEstimatedTokensFromL1b(l1b);
-		unsortedAfterReread = unsortedAfterRereadCount(l1b);
+		notesToSort = notesToSortCount(l1b);
 	}
 	const missingSections = REQUIRED_L1B_SECTIONS.filter((section) => !sections.includes(section));
 	for (const section of missingSections) errors.push(`L1b missing mandatory section: ${section}`);
@@ -5711,7 +5856,7 @@ export function getPersistentAgentStatus(agentIdRaw: string): PersistentAgentSta
 		l1b: { path: l1bPath, exists: l1bExists, bytes: l1bExists ? fs.statSync(l1bPath).size : undefined, sections, missingSections },
 		sectionRegistry: { path: registryPath, exists: registryExists, missingSections: registryMissingSections },
 		recentContext: { fullEntries, softCap: RECENT_CONTEXT_SOFT_CAP, hardCap: RECENT_CONTEXT_HARD_CAP, blockCap: RECENT_CONTEXT_BLOCK_CAP },
-		memoryStatus: buildMemoryStatus(fullEntries, RECENT_CONTEXT_SOFT_CAP, RECENT_CONTEXT_HARD_CAP, typeof meta?.lastCheckpointId === "string" ? meta.lastCheckpointId : null, lastCheckpointAt, lastMemoryWriteAt, unsortedAfterReread),
+		memoryStatus: buildMemoryStatus(fullEntries, RECENT_CONTEXT_SOFT_CAP, RECENT_CONTEXT_HARD_CAP, typeof meta?.lastCheckpointId === "string" ? meta.lastCheckpointId : null, lastCheckpointAt, lastMemoryWriteAt, notesToSort),
 		scheduleSummary,
 		promptBudget,
 		memoryBudgetTokens: maintenanceSettings.memoryBudgetTokens,
@@ -5729,15 +5874,6 @@ export function getPersistentAgentStatus(agentIdRaw: string): PersistentAgentSta
 }
 
 /**
- * The one gate every Remember step passes through — proposing, parsing an
- * approval, writing it, and the routes in front of all three. A room that is
- * merely due for Memorize keeps saving sessions; only the block cap refuses,
- * and it names Memorize as the way out.
- *
- * The refusal keeps the exact phrase "not ready: needs_absorb" so the surfaces
- * that translate it into a remedy keep recognising it.
- */
-/**
  * The one gate every door into a room passes through — the chat socket and the
  * CLI's bootstrap alike. It is the sibling of the Remember gate below, for the
  * same reason: the hard cap means "Memorize is due", and the product says so
@@ -5746,9 +5882,10 @@ export function getPersistentAgentStatus(agentIdRaw: string): PersistentAgentSta
  * room could not be entered at all — and Memorize is reached from outside the
  * room, which made the promise a false one rather than a small inaccuracy.
  *
- * Entering stops at the block cap, where the backlog is large enough that
- * every further turn carries it, and the refusal names Memorize as the way
- * out. The exact phrase "not ready: needs_absorb" is kept, because that is what
+ * At the block cap only a NEW conversation is refused: one whose open
+ * conversation has messages (a scheduled task's, an undo's, another
+ * device's) always opens, so nothing is trapped. The refusal names Memorize
+ * as the way out and keeps the exact phrase "not ready: needs_absorb", which
  * the surfaces match on to offer the remedy.
  */
 export function assertPersistentAgentAcceptsSession(status: PersistentAgentStatus): void {
@@ -5756,19 +5893,14 @@ export function assertPersistentAgentAcceptsSession(status: PersistentAgentStatu
 		throw new Error(`persistent agent is not ready: ${status.status}`);
 	}
 	const entries = status.recentContext?.fullEntries ?? 0;
-	if (entries >= RECENT_CONTEXT_BLOCK_CAP) {
+	if (entries >= RECENT_CONTEXT_BLOCK_CAP && !status.activeThread?.hasUserVisibleTurns) {
 		throw new Error(`persistent agent is not ready: needs_absorb — this room is holding ${entries} saved sessions and cannot be opened until they are folded into its memory. Memorize it from Home → Maintain, then open it again.`);
 	}
 }
 
+/** The gate every Remember step passes through (409). It never refuses on count: a page past the block cap is saved like any other. */
 export function assertPersistentAgentAcceptsCheckpoint(status: PersistentAgentStatus): void {
-	if (!status.exists || (status.status !== "ready" && status.status !== "needs_absorb")) {
-		throw new Error(`persistent agent scaffold is not ready: ${status.status}`);
-	}
-	const entries = status.recentContext?.fullEntries ?? 0;
-	if (entries >= RECENT_CONTEXT_BLOCK_CAP) {
-		throw new Error(`persistent agent scaffold is not ready: needs_absorb — this room is holding ${entries} saved sessions and cannot hold another. Memorize it to fold them into its memory, then Remember again.`);
-	}
+	if (!status.exists || (status.status !== "ready" && status.status !== "needs_absorb")) throw Object.assign(new Error(`persistent agent scaffold is not ready: ${status.status}`), { statusCode: 409 });
 }
 
 function parseCheckpointSourceFingerprint(raw: unknown, label: string): L1bSourceFingerprint {
@@ -5823,6 +5955,17 @@ function assertCheckpointFingerprintMatches(actual: L1bSourceFingerprint, expect
 	throw new Error(`${label} fingerprint changed; this memory proposal is stale`);
 }
 
+/** Whether a kept proposal still fits its conversation (a memory change does not make it stale). */
+export function checkpointProposalStillFresh(agentId: string, conversationId: string, proposal: { source?: CheckpointTranscriptSourceMetadata } | null | undefined, runtimeCwd?: string): boolean {
+	if (!proposal?.source) return false;
+	try {
+		assertCheckpointSourceFresh({ agentId, conversationId, source: proposal.source, ...(runtimeCwd ? { runtimeCwd } : {}) });
+		return true;
+	} catch {
+		return false;
+	}
+}
+
 function assertCheckpointSourceFresh(input: {
 	agentId: string;
 	conversationId: string;
@@ -5845,7 +5988,10 @@ function assertCheckpointSourceFresh(input: {
 		runtimeCwd: input.runtimeCwd,
 	});
 	if (currentSource.source.runtimeKind !== input.source.runtimeKind) throw new Error("the conversation's runtime changed; this memory proposal is stale");
-	assertCheckpointFingerprintMatches(currentSource.source.l1bFingerprint, input.source.l1bFingerprint, "checkpoint proposal source L1b");
+	// The memory itself is not checked: a page is appended to it whatever else
+	// it holds, and its Recent Context id is chosen at write time, so a Memorize,
+	// a Review or an edit saved since the proposal leaves the proposal valid.
+	// What the proposal summarized is the conversation, and that is checked.
 	assertCheckpointFingerprintMatches(currentSource.source.transcriptFingerprint, input.source.transcriptFingerprint, "checkpoint proposal transcript");
 	if (currentSource.source.transcriptItemCount !== input.source.transcriptItemCount) throw new Error("the conversation gained or lost messages; this memory proposal is stale");
 	if (input.source.runtimeKind === "pi-session-jsonl" && currentSource.source.runtimeKind === "pi-session-jsonl") {
@@ -5859,9 +6005,9 @@ function assertCheckpointSourceFresh(input: {
 }
 
 /** The sentence an approval gets when the room's memory model changed after its proposal was written. */
-export const REMEMBER_MEMORY_MODEL_CHANGED_MESSAGE = "The memory model changed after this proposal was written. Nothing was saved. Generate the proposal again.";
+export const REMEMBER_MEMORY_MODEL_CHANGED_MESSAGE = "The Memory model changed after this entry was written. Nothing was saved. Generate again.";
 
-export function parseCheckpointApprovalRequest(raw: any, agentIdRaw: string, options: { expectedMemoryModel?: PersistentAgentModelLock | null } = {}): { request: CheckpointApprovalAcceptedRequest; warnings: string[] } {
+export function parseCheckpointApprovalRequest(raw: any, agentIdRaw: string, options: { expectedMemoryModel?: PersistentAgentModelLock | null; movedFromMemoryModel?: PersistentAgentModelLock } = {}): { request: CheckpointApprovalAcceptedRequest; warnings: string[] } {
 	const instance = createPersistentAgentInstance(agentIdRaw);
 	const status = getPersistentAgentStatus(instance.agentId);
 	assertPersistentAgentAcceptsCheckpoint(status);
@@ -5881,17 +6027,19 @@ export function parseCheckpointApprovalRequest(raw: any, agentIdRaw: string, opt
 	if (proposalSource.activeThreadId !== conversationId) throw new Error("proposal source activeThreadId does not match approval request");
 	// The model that read the conversation is the proposal's own; the event
 	// records it. A proposal written on another memory model than the room's
-	// row now is not saved: it was paid for on a model the room no longer uses.
+	// row now is not saved: it was paid for on a model the room no longer uses,
+	// unless an update moved the room's default away from it.
 	const proposalProcessModel = normalizeRuntimeModel(proposal?.process?.model);
 	const model = proposalProcessModel
 		? { ...proposalProcessModel, ...(typeof proposal?.process?.model?.label === "string" && proposal.process.model.label.trim() ? { label: proposal.process.model.label.trim() } : {}) }
 		: requestBodyModelLock(raw);
-	if (options.expectedMemoryModel && !persistentAgentModelLocksEqual(model, options.expectedMemoryModel)) {
+	if (options.expectedMemoryModel && !persistentAgentModelLocksEqual(model, options.expectedMemoryModel) && !(options.movedFromMemoryModel && persistentAgentModelLocksEqual(model, options.movedFromMemoryModel))) {
 		throw persistentAgentConflictError(REMEMBER_MEMORY_MODEL_CHANGED_MESSAGE);
 	}
 
-	const approvedRecentContext = String(raw?.approvedRecentContext ?? "").trim();
-	const warnings = validateApprovedRecentContextDraft(approvedRecentContext);
+	const approvedRecentContext = approvedRecentContextFrom(raw, proposal);
+	validateApprovedRecentContextDraft(approvedRecentContext);
+	const warnings: string[] = [];
 	return {
 		request: {
 			agentId: instance.agentId,
@@ -5912,7 +6060,7 @@ export function parseCheckpointApprovalRequest(raw: any, agentIdRaw: string, opt
  * same metrics family, the same paths block, the same id — plus the run's own
  * session-by-session account. Returns where it landed.
  */
-export function writeAbsorbRunEventRecord(input: {
+export function buildAbsorbRunEventRecord(input: {
 	agentId: string;
 	absorbId: string;
 	now: Date;
@@ -5924,7 +6072,7 @@ export function writeAbsorbRunEventRecord(input: {
 	usage?: AbsorbGenerateResult["usage"];
 	run: NonNullable<AbsorbEventRecord["run"]>;
 	warnings: string[];
-}): { eventRecordPath: string; eventRelPath: string } {
+}): { eventRecordPath: string; record: AbsorbEventRecord } {
 	const instance = createPersistentAgentInstance(input.agentId);
 	const eventRecordPath = absorbEventRecordPath(instance, input.absorbId);
 	// Measured on what the room reads (entry metadata stripped), the ONE
@@ -5965,8 +6113,8 @@ export function writeAbsorbRunEventRecord(input: {
 		validation: { valid: true, warnings: input.warnings, errors: [] },
 		warnings: input.warnings,
 	};
-	writeAbsorbEventRecord(instance, record);
-	return { eventRecordPath, eventRelPath: record.paths.eventRelPath };
+	// Built, not written: the memory write puts it down after its core file (memory-commit.ts).
+	return { eventRecordPath, record };
 }
 
 /**
@@ -5974,7 +6122,7 @@ export function writeAbsorbRunEventRecord(input: {
  * measurement the Memorize run's record uses, so the room's history, the undo
  * and the diff read one arithmetic whichever save they are looking at.
  */
-export function writeReviewRunEventRecord(input: {
+export function buildReviewRunEventRecord(input: {
 	agentId: string;
 	reviewId: string;
 	now: Date;
@@ -5986,7 +6134,7 @@ export function writeReviewRunEventRecord(input: {
 	usage?: AbsorbGenerateResult["usage"];
 	run: NonNullable<ReviewEventRecord["run"]>;
 	warnings: string[];
-}): { eventRecordPath: string; eventRelPath: string } {
+}): { eventRecordPath: string; record: ReviewEventRecord } {
 	const instance = createPersistentAgentInstance(input.agentId);
 	const eventRecordPath = reviewEventRecordPath(instance, input.reviewId);
 	// Measured on what the room reads (note metadata stripped), the ONE
@@ -6022,8 +6170,8 @@ export function writeReviewRunEventRecord(input: {
 		validation: { valid: true, warnings: input.warnings, errors: [] },
 		warnings: input.warnings,
 	};
-	writeReviewEventRecord(instance, record);
-	return { eventRecordPath, eventRelPath: record.paths.eventRelPath };
+	// Built, not written: the memory write puts it down after its core file (memory-commit.ts).
+	return { eventRecordPath, record };
 }
 
 export interface CheckpointApprovalWriteOptions {
@@ -6067,15 +6215,16 @@ export function writeApprovedCheckpoint(request: CheckpointApprovalAcceptedReque
 	const proposalSource = parseCheckpointTranscriptSourceMetadata(request.proposal.source);
 	const oldThread = getPersistentAgentThread(instance.agentId, request.conversationId);
 	if (!oldThread) throw new Error("the conversation this proposal came from is missing; this memory proposal is stale");
-	// A crashed or previously-failed approval can leave the boundary half applied: the old thread
-	// already closed with closedReason "checkpoint" but the memory write / fresh thread never
-	// landed, so the room dead-ends on resume. Approving again completes that boundary instead of
-	// refusing. Threads closed by anything other than a checkpoint are still refused (genuinely
-	// stale proposal).
-	const completingHalfAppliedBoundary = oldThread.state === "closed";
-	if (completingHalfAppliedBoundary && oldThread.closedReason !== "checkpoint") throw new Error("the conversation this proposal came from is already closed; this memory proposal is stale");
-	if (!completingHalfAppliedBoundary) assertPersistentAgentThreadNotInFlight(instance.agentId, request.conversationId);
-	assertCheckpointSourceFresh({ agentId: instance.agentId, conversationId: request.conversationId, source: proposalSource, currentL1b, runtimeCwd });
+	// A conversation a save already closed was remembered: Save again (after a
+	// crash the room finished, or a second tab) answers with that save, and
+	// never writes a second page.
+	if (oldThread.state === "closed" && oldThread.closedReason === "checkpoint" && oldThread.closedByCheckpointId) {
+		const landed = checkpointApprovalResponseFromRecord(instance, request.conversationId, oldThread.closedByCheckpointId);
+		if (landed) return landed;
+	}
+	if (oldThread.state === "closed") throw new Error("the conversation this proposal came from is already closed; this memory proposal is stale");
+	assertPersistentAgentThreadNotInFlight(instance.agentId, request.conversationId);
+	assertCheckpointSourceFresh({ agentId: instance.agentId, conversationId: request.conversationId, source: proposalSource, runtimeCwd });
 	const sections = extractMarkdownSections(currentL1b);
 	const missingSections = REQUIRED_L1B_SECTIONS.filter((section) => !sections.includes(section));
 	if (missingSections.length > 0) throw new Error(`L1b missing mandatory section(s): ${missingSections.join(", ")}`);
@@ -6092,135 +6241,54 @@ export function writeApprovedCheckpoint(request: CheckpointApprovalAcceptedReque
 	const nextRcNumber = recentContextIds.numericIds.length > 0 ? Math.max(...recentContextIds.numericIds) + 1 : 1;
 	const rcId = `RC-${String(nextRcNumber).padStart(4, "0")}`;
 	const stableEntry = stableRecentContextEntry(request.approvedRecentContext, rcId, checkpointId, sessionId, request, now);
-	if (/RC-DRAFT|checkpoint_id\s*=\s*(?:null|none)|session_id\s*=\s*(?:null|none)/i.test(stableEntry)) throw new Error("canonical Recent Context entry still contains draft or null durable identity metadata");
+	// The identity the write stamps: the heading and the metadata line, never the person's words.
+	const stampedIdentity = stableEntry.split("\n\n", 2).join("\n");
+	if (/RC-DRAFT|checkpoint_id\s*=\s*(?:null|none)|session_id\s*=\s*(?:null|none)/i.test(stampedIdentity)) throw new Error("canonical Recent Context entry still contains draft or null durable identity metadata");
 
 	const archivedL1bPath = path.join(archiveDir, `${stamp}-before-${checkpointId}.md`);
-	const eventRecordPath = checkpointEventRecordPath(instance, checkpointId);
-	fs.writeFileSync(archivedL1bPath, currentL1b, { mode: 0o600, flag: "wx" });
+	const intent: RememberCommitIntent = {
+		checkpointId,
+		sessionId,
+		rcId,
+		conversationId: request.conversationId,
+		freshThreadId,
+		freshModel: normalizeRuntimeModel(options.freshModel) ?? oldThread.model,
+		runtimeCwd,
+		approvedAt: now.toISOString(),
+		leafId: proposalSource.runtimeKind === "pi-session-jsonl" ? proposalSource.leafId ?? null : null,
+		archivedL1bRelPath: agentRootRelativePath(instance, archivedL1bPath),
+		density: request.density,
+		model: request.model,
+		warnings: validationWarnings,
+		metrics: {
+			source: sourceMetrics,
+			approvedEntry: recentContextEntryEventMetrics(stableEntry),
+			...(typeof request.proposal.proposedRecentContext === "string" && request.proposal.proposedRecentContext.trim()
+				? { proposedEntry: proposedRecentContextEventMetrics(request.proposal.proposedRecentContext) }
+				: {}),
+		},
+	};
 
-	// Memory first, boundary second (mirrors the Memento flow): the approved Recent Context entry
-	// is durable before anything destructive happens, and the runtime pointer swaps to the fresh
-	// thread inside writePersistentAgentThread, so no failure can leave the room pointing at a
-	// closed thread with the approved memory lost.
+	// The save is one step (memory-commit.ts): the intent first, then the
+	// archive copy, then the memory file, which is the commit point. Everything
+	// after it is finished by the same code a crash recovery runs, so a save
+	// that stops anywhere after the memory file is completed by the next
+	// request, and one that stops before it saved nothing. It stays
+	// synchronous from the intent to its clear: the settle runs outside the
+	// save lock, so an await in between would let a status request finish or
+	// drop this save mid-flight. Keep it synchronous, or take the lock in the
+	// settle.
+	writeCommitIntent(root, "remember", intent);
+	fs.writeFileSync(archivedL1bPath, currentL1b, { mode: 0o600, flag: "wx" });
 	let updatedL1b = appendRecentContextEntry(currentL1b, stableEntry);
 	updatedL1b = updateChronosForCheckpoint(updatedL1b, checkpointId, sessionId, now);
 	writeFileAtomic(l1bPath, updatedL1b);
 
-	const freshWrite = writePersistentAgentThread(instance.agentId, freshThreadId, {
-		state: "standby",
-		origin: "checkpoint",
-		model: normalizeRuntimeModel(options.freshModel) ?? oldThread.model,
-		items: [],
-	}, {
-		createRuntime: ({ model }) => createPersistentAgentPiSessionJsonlThreadRuntime({
-			agentId: instance.agentId,
-			threadId: freshThreadId,
-			model,
-			cwd: runtimeCwd,
-		}),
-		// Approval never invokes a model — the fresh thread inherits the old thread's lock, which
-		// may belong to a profile that is no longer active (switched mid-approval). The approved
-		// memory must still land; prompting/resume keep full enforcement.
-		allowInactiveProfileModel: true,
-	});
-	if (freshWrite.thread.runtime.kind !== "pi-session-jsonl") throw new Error("fresh post-checkpoint runtime must be Pi-backed");
-	let closedThread: PersistentAgentThreadRecord;
-	if (completingHalfAppliedBoundary) {
-		closedThread = oldThread;
-	} else {
-		try {
-			closedThread = closePersistentAgentThreadForCheckpoint(instance.agentId, oldThread.threadId, checkpointId, now.getTime());
-		} catch {
-			// The runtime pointer already moved to the fresh thread, so a caller retry would
-			// complete a half-applied boundary rather than close this one. One immediate retry
-			// keeps a transient write hiccup from stranding the old transcript as an open orphan.
-			closedThread = closePersistentAgentThreadForCheckpoint(instance.agentId, oldThread.threadId, checkpointId, now.getTime());
-		}
-	}
-	const runtimeBoundary: PersistentAgentCheckpointRuntimeBoundary = {
-		closedThreadId: closedThread.threadId,
-		closedReason: "checkpoint",
-		closedAt: closedThread.closedAt ?? now.getTime(),
-		closedByCheckpointId: closedThread.closedByCheckpointId ?? checkpointId,
-		oldRuntime: oldThread.runtime,
-		newThreadId: freshWrite.thread.threadId,
-		newRuntime: freshWrite.thread.runtime,
-	};
-
-	const updatedMeta: AgentJson = {
-		...(meta as AgentJson),
-		currentSessionId: sessionId,
-		lastCheckpointId: checkpointId,
-		updatedAt: now.getTime(),
-	};
-	writeFileAtomic(agentJsonPath, JSON.stringify(updatedMeta, null, 2) + "\n");
-
-	const resultMetrics = l1bStateMetrics(renderMemoryContext(updatedL1b));
-	const eventRelPath = agentRootRelativePath(instance, eventRecordPath);
-	const eventRuntimeBoundary: NonNullable<CheckpointEventRecord["runtimeBoundary"]> = {
-		closedThreadId: runtimeBoundary.closedThreadId,
-		closedReason: runtimeBoundary.closedReason,
-		closedAt: runtimeBoundary.closedAt,
-		closedByCheckpointId: runtimeBoundary.closedByCheckpointId,
-		oldRuntimeKind: runtimeBoundary.oldRuntime.kind,
-		...(runtimeBoundary.oldRuntime.kind === "pi-session-jsonl" ? {
-			oldRuntimeSessionId: runtimeBoundary.oldRuntime.sessionId,
-			oldSessionFileRelPath: runtimeBoundary.oldRuntime.sessionFileRelPath,
-			oldBootPromptSha256: runtimeBoundary.oldRuntime.bootPromptSha256,
-		} : {}),
-		newThreadId: runtimeBoundary.newThreadId,
-		newRuntimeKind: "pi-session-jsonl",
-		newRuntimeSessionId: runtimeBoundary.newRuntime.sessionId,
-		newSessionFileRelPath: runtimeBoundary.newRuntime.sessionFileRelPath,
-		newBootPromptSnapshotRelPath: runtimeBoundary.newRuntime.bootPromptSnapshotRelPath,
-		newBootPromptSha256: runtimeBoundary.newRuntime.bootPromptSha256,
-		newRuntimeL1bFingerprint: runtimeBoundary.newRuntime.l1bFingerprint,
-	};
-	const eventRecord: CheckpointEventRecord = {
-		schemaVersion: 1,
-		operation: "checkpoint",
-		mutation: {
-			target: "l1b",
-			kind: "recent_context_append",
-			sectionsAffected: ["Chronos", "Recent Context"],
-			sectionsPreserved: ["Deep Memory", "Active Items"],
-		},
-		agentId: instance.agentId,
-		conversationId: request.conversationId,
-		sessionId,
-		checkpointId,
-		recentContextId: rcId,
-		approvedAt: now.toISOString(),
-		paths: {
-			archivedL1bRelPath: agentRootRelativePath(instance, archivedL1bPath),
-			updatedL1bRelPath: agentRootRelativePath(instance, l1bPath),
-			eventRelPath,
-		},
-		process: {
-			type: CHECKPOINT_COMPRESSION_WORKER_TYPE,
-			density: request.density,
-			model: request.model,
-		},
-		source: sourceMetrics,
-		result: resultMetrics,
-		runtimeBoundary: eventRuntimeBoundary,
-		checkpoint: {
-			recentContextEntryCountBefore: sourceMetrics.recentContextEntryCount,
-			recentContextEntryCountAfter: resultMetrics.recentContextEntryCount,
-			approvedEntry: recentContextEntryEventMetrics(stableEntry),
-			proposedEntry: typeof request.proposal.proposedRecentContext === "string" && request.proposal.proposedRecentContext.trim()
-				? proposedRecentContextEventMetrics(request.proposal.proposedRecentContext)
-				: undefined,
-		},
-		validation: {
-			valid: true,
-			warnings: validationWarnings,
-			errors: [],
-		},
-		warnings: validationWarnings,
-	};
-	writeCheckpointEventRecord(instance, eventRecord);
-
+	// The conversation was just checked against the proposal, so its leaf is the proposal's.
+	const finished = finishRememberCommit(instance, intent, { leafChecked: true });
+	clearCommitIntent(root, "remember");
+	if (!finished.runtimeBoundary || !finished.freshThread) throw new Error("the remembered conversation could not be closed");
+	if (finished.freshThread.runtime.kind !== "pi-session-jsonl") throw new Error("fresh post-checkpoint runtime must be Pi-backed");
 	return {
 		agentId: instance.agentId,
 		conversationId: request.conversationId,
@@ -6229,14 +6297,247 @@ export function writeApprovedCheckpoint(request: CheckpointApprovalAcceptedReque
 		writesMemory: true,
 		archivedL1bPath,
 		updatedL1bPath: l1bPath,
-		eventRecordPath,
-		eventRelPath,
-		recentContextEntryCount: resultMetrics.recentContextEntryCount,
-		runtimeBoundary,
-		postCheckpoint: { canContinue: true, canRest: true, activeThreadId: freshWrite.thread.threadId, runtime: freshWrite.thread.runtime },
+		eventRecordPath: finished.eventRecordPath,
+		eventRelPath: agentRootRelativePath(instance, finished.eventRecordPath),
+		recentContextEntryCount: finished.recentContextEntryCount,
+		runtimeBoundary: finished.runtimeBoundary,
+		postCheckpoint: { canContinue: true, canRest: true, activeThreadId: finished.freshThread.threadId, runtime: finished.freshThread.runtime },
 		warnings: validationWarnings,
 	};
 }
+
+/** A Remember save in flight: ids, times and counts, never the conversation's words. */
+interface RememberCommitIntent {
+	checkpointId: string;
+	sessionId: string;
+	rcId: string;
+	conversationId: string;
+	freshThreadId: string;
+	freshModel: PersistentAgentModelLock;
+	runtimeCwd: string;
+	approvedAt: string;
+	/** The conversation's last entry when its proposal was read; null for a runtime without one. */
+	leafId: string | null;
+	archivedL1bRelPath: string;
+	density: CheckpointApprovalAcceptedRequest["density"];
+	model: CheckpointApprovalAcceptedRequest["model"];
+	warnings: string[];
+	metrics: {
+		source: L1bEventStateMetrics;
+		approvedEntry: CheckpointEventRecord["checkpoint"]["approvedEntry"];
+		proposedEntry?: CheckpointEventRecord["checkpoint"]["proposedEntry"];
+	};
+}
+
+/**
+ * Everything a Remember save does after its memory file landed, each step
+ * safe to run twice: the fresh conversation and the pointer to it, the old
+ * conversation closed, agent.json, the event record. The normal save and the
+ * crash recovery both run it.
+ *
+ * A conversation that moved on after its proposal was read (a writer outside
+ * the turn gate) keeps the page, which is a true summary up to the proposal's
+ * leaf, gets its event record, and stays open: its later turns are
+ * remembered next time.
+ */
+function finishRememberCommit(instance: PersistentAgentInstance, intent: RememberCommitIntent, options: { leafChecked: boolean }): {
+	runtimeBoundary?: PersistentAgentCheckpointRuntimeBoundary;
+	freshThread?: PersistentAgentThreadRecord;
+	eventRecordPath: string;
+	recentContextEntryCount: number;
+} {
+	const agentId = instance.agentId;
+	const now = new Date(intent.approvedAt);
+	const oldThread = getPersistentAgentThread(agentId, intent.conversationId);
+	if (!oldThread) throw new Error("the remembered conversation is missing");
+	rememberGenerations.get(rememberGenerationKey(agentId, intent.conversationId))?.stop?.("saved");
+	clearRememberWork(instance.rootDir, intent.conversationId);
+	const moved = !options.leafChecked && oldThread.state !== "closed" && conversationLeafMoved(agentId, oldThread, intent);
+
+	let runtimeBoundary: PersistentAgentCheckpointRuntimeBoundary | undefined;
+	let freshThread: PersistentAgentThreadRecord | undefined;
+	if (!moved) {
+		// The pointer swaps to the fresh conversation inside this write, before
+		// the old one closes, so the room never points at a closed conversation.
+		const runtime = getPersistentAgentRuntimeState(agentId);
+		const existingFresh = getPersistentAgentThread(agentId, intent.freshThreadId);
+		if (!existingFresh || runtime.activeThreadId !== intent.freshThreadId) {
+			writePersistentAgentThread(agentId, intent.freshThreadId, {
+				state: existingFresh?.state === "active" ? "active" : "standby",
+				origin: "checkpoint",
+				model: existingFresh?.model ?? intent.freshModel,
+				...(existingFresh ? {} : { items: [] }),
+			}, {
+				createRuntime: ({ model }) => createPersistentAgentPiSessionJsonlThreadRuntime({ agentId, threadId: intent.freshThreadId, model, cwd: intent.runtimeCwd }),
+				// Approval never invokes a model: the fresh thread inherits the old
+				// thread's lock, which may belong to a profile that is no longer
+				// active. The approved memory must still land; prompting and resume
+				// keep full enforcement.
+				allowInactiveProfileModel: true,
+			});
+		}
+		freshThread = getPersistentAgentThread(agentId, intent.freshThreadId) ?? undefined;
+		if (!freshThread) throw new Error("the fresh conversation could not be written");
+		const closedThread = oldThread.state === "closed"
+			? oldThread
+			: closePersistentAgentThreadForCheckpoint(agentId, oldThread.threadId, intent.checkpointId, now.getTime());
+		runtimeBoundary = {
+			closedThreadId: closedThread.threadId,
+			closedReason: "checkpoint",
+			closedAt: closedThread.closedAt ?? now.getTime(),
+			closedByCheckpointId: closedThread.closedByCheckpointId ?? intent.checkpointId,
+			oldRuntime: oldThread.runtime,
+			newThreadId: freshThread.threadId,
+			newRuntime: freshThread.runtime as PersistentAgentPiSessionJsonlThreadRuntime,
+		};
+	}
+
+	const meta = instance.readAgentJson();
+	if (!meta) throw new Error("agent.json is missing or invalid JSON");
+	if (meta.lastCheckpointId !== intent.checkpointId) {
+		writeFileAtomic(instance.agentJsonPath(), JSON.stringify({ ...(meta as AgentJson), currentSessionId: intent.sessionId, lastCheckpointId: intent.checkpointId, updatedAt: now.getTime() }, null, 2) + "\n");
+	}
+
+	const l1bPath = instance.l1bCurrentPath(meta);
+	const resultMetrics = l1bStateMetrics(renderMemoryContext(fs.readFileSync(l1bPath, "utf-8")));
+	const eventRecordPath = checkpointEventRecordPath(instance, intent.checkpointId);
+	if (!fs.existsSync(eventRecordPath)) {
+		const eventRecord: CheckpointEventRecord = {
+			schemaVersion: 1,
+			operation: "checkpoint",
+			mutation: {
+				target: "l1b",
+				kind: "recent_context_append",
+				sectionsAffected: ["Chronos", "Recent Context"],
+				sectionsPreserved: ["Deep Memory", "Active Items"],
+			},
+			agentId,
+			conversationId: intent.conversationId,
+			sessionId: intent.sessionId,
+			checkpointId: intent.checkpointId,
+			recentContextId: intent.rcId,
+			approvedAt: intent.approvedAt,
+			paths: {
+				archivedL1bRelPath: intent.archivedL1bRelPath,
+				updatedL1bRelPath: agentRootRelativePath(instance, l1bPath),
+				eventRelPath: agentRootRelativePath(instance, eventRecordPath),
+			},
+			process: {
+				type: CHECKPOINT_COMPRESSION_WORKER_TYPE,
+				density: intent.density,
+				model: intent.model,
+			},
+			source: intent.metrics.source,
+			result: resultMetrics,
+			...(runtimeBoundary ? { runtimeBoundary: checkpointEventRuntimeBoundary(runtimeBoundary) } : {}),
+			checkpoint: {
+				recentContextEntryCountBefore: intent.metrics.source.recentContextEntryCount,
+				recentContextEntryCountAfter: resultMetrics.recentContextEntryCount,
+				approvedEntry: intent.metrics.approvedEntry,
+				proposedEntry: intent.metrics.proposedEntry,
+			},
+			validation: {
+				valid: true,
+				warnings: intent.warnings,
+				errors: [],
+			},
+			warnings: intent.warnings,
+		};
+		writeCheckpointEventRecord(instance, eventRecord);
+	}
+	return { runtimeBoundary, freshThread, eventRecordPath, recentContextEntryCount: resultMetrics.recentContextEntryCount };
+}
+
+function checkpointEventRuntimeBoundary(boundary: PersistentAgentCheckpointRuntimeBoundary): NonNullable<CheckpointEventRecord["runtimeBoundary"]> {
+	return {
+		closedThreadId: boundary.closedThreadId,
+		closedReason: boundary.closedReason,
+		closedAt: boundary.closedAt,
+		closedByCheckpointId: boundary.closedByCheckpointId,
+		oldRuntimeKind: boundary.oldRuntime.kind,
+		...(boundary.oldRuntime.kind === "pi-session-jsonl" ? {
+			oldRuntimeSessionId: boundary.oldRuntime.sessionId,
+			oldSessionFileRelPath: boundary.oldRuntime.sessionFileRelPath,
+			oldBootPromptSha256: boundary.oldRuntime.bootPromptSha256,
+		} : {}),
+		newThreadId: boundary.newThreadId,
+		newRuntimeKind: "pi-session-jsonl",
+		newRuntimeSessionId: boundary.newRuntime.sessionId,
+		newSessionFileRelPath: boundary.newRuntime.sessionFileRelPath,
+		newBootPromptSnapshotRelPath: boundary.newRuntime.bootPromptSnapshotRelPath,
+		newBootPromptSha256: boundary.newRuntime.bootPromptSha256,
+		newRuntimeL1bFingerprint: boundary.newRuntime.l1bFingerprint,
+	};
+}
+
+/** Whether the conversation gained an entry after its proposal was read. A session file that cannot be read has not moved. */
+function conversationLeafMoved(agentId: string, thread: PersistentAgentThreadRecord, intent: RememberCommitIntent): boolean {
+	if (thread.runtime.kind !== "pi-session-jsonl" || intent.leafId === null) return false;
+	try {
+		return openPersistentAgentPiSessionManager(agentId, thread.runtime, intent.runtimeCwd).getLeafId() !== intent.leafId;
+	} catch {
+		return false;
+	}
+}
+
+/** The answer a save that already landed gives again, read from its own record; null when there is none to read. */
+function checkpointApprovalResponseFromRecord(instance: PersistentAgentInstance, conversationId: string, checkpointId: string): CheckpointApprovalResponse | null {
+	const eventRecordPath = checkpointEventRecordPath(instance, checkpointId);
+	let record: CheckpointEventRecord;
+	try {
+		record = JSON.parse(fs.readFileSync(eventRecordPath, "utf-8"));
+	} catch {
+		return null;
+	}
+	if (record.conversationId !== conversationId || !record.runtimeBoundary) return null;
+	const oldThread = getPersistentAgentThread(instance.agentId, conversationId);
+	const freshThread = getPersistentAgentThread(instance.agentId, record.runtimeBoundary.newThreadId);
+	if (!oldThread || !freshThread || freshThread.runtime.kind !== "pi-session-jsonl") return null;
+	const meta = instance.readAgentJson();
+	return {
+		agentId: instance.agentId,
+		conversationId,
+		sessionId: record.sessionId,
+		checkpointId,
+		writesMemory: true,
+		archivedL1bPath: path.join(instance.rootDir, record.paths.archivedL1bRelPath),
+		updatedL1bPath: instance.l1bCurrentPath(meta),
+		eventRecordPath,
+		eventRelPath: record.paths.eventRelPath,
+		recentContextEntryCount: record.result.recentContextEntryCount,
+		runtimeBoundary: {
+			closedThreadId: conversationId,
+			closedReason: "checkpoint",
+			closedAt: oldThread.closedAt ?? Date.parse(record.approvedAt),
+			closedByCheckpointId: checkpointId,
+			oldRuntime: oldThread.runtime,
+			newThreadId: freshThread.threadId,
+			newRuntime: freshThread.runtime,
+		},
+		postCheckpoint: { canContinue: true, canRest: true, activeThreadId: freshThread.threadId, runtime: freshThread.runtime },
+		warnings: record.warnings ?? [],
+		alreadySaved: true,
+	};
+}
+
+/**
+ * A Remember save a crash left pending. Its page is in the memory file: the
+ * save is finished. It is not: nothing was saved, the intent and its archive
+ * copy go, and the proposal can be saved again.
+ */
+function settleRememberCommit(agentId: string, roomDir: string, intent: RememberCommitIntent): void {
+	const instance = createPersistentAgentInstance(agentId);
+	const meta = instance.readAgentJson();
+	const l1bPath = meta ? instance.l1bCurrentPath(meta) : path.join(roomDir, "L1b", "current.md");
+	const l1b = fs.existsSync(l1bPath) ? fs.readFileSync(l1bPath, "utf-8") : "";
+	if (l1b.includes(`checkpoint_id=${intent.checkpointId}`)) {
+		finishRememberCommit(instance, intent, { leafChecked: false });
+	} else {
+		fs.rmSync(path.join(roomDir, intent.archivedL1bRelPath), { force: true });
+	}
+	clearCommitIntent(roomDir, "remember");
+}
+registerCommitSettler("remember", settleRememberCommit);
 
 export function writePersistentAgentMementoBoundary(agentIdRaw: string, conversationIdRaw: string, now = new Date(), options: PersistentAgentMementoBoundaryWriteOptions = {}): PersistentAgentMementoBoundaryResponse {
 	const instance = createPersistentAgentInstance(agentIdRaw);
@@ -6263,93 +6564,115 @@ export function writePersistentAgentMementoBoundary(agentIdRaw: string, conversa
 
 	const meta = instance.readAgentJson();
 	if (!meta) throw new Error("agent.json is missing or invalid JSON");
-	const l1bPath = instance.l1bCurrentPath(meta);
-	if (!fs.existsSync(l1bPath)) throw new Error("L1b/current.md is missing");
-	const currentL1b = fs.readFileSync(l1bPath, "utf-8");
-	const l1bFingerprint = fingerprintL1bSource(currentL1b);
+	if (!fs.existsSync(instance.l1bCurrentPath(meta))) throw new Error("L1b/current.md is missing");
 	const runtimeCwd = typeof options.runtimeCwd === "string" && options.runtimeCwd.trim() ? options.runtimeCwd : process.cwd();
 	const stamp = slugTimestamp(now);
 	const suffix = shortRandomId();
-	const mementoId = `mm_${stamp}_${suffix}`;
-	const freshThreadId = `postmem_${stamp}_${suffix}`;
-	const freshModel = normalizeRuntimeModel(options.freshModel) ?? oldThread.model;
-	const freshRuntime = createPersistentAgentPiSessionJsonlThreadRuntime({
-		agentId: instance.agentId,
-		threadId: freshThreadId,
-		model: freshModel,
-		cwd: runtimeCwd,
-	});
-	if (freshRuntime.kind !== "pi-session-jsonl") throw new Error("the fresh conversation could not be prepared on a supported runtime");
+	const intent: ForgetCommitIntent = {
+		oldThreadId: conversationId,
+		mementoId: `mm_${stamp}_${suffix}`,
+		freshThreadId: `postmem_${stamp}_${suffix}`,
+		freshModel: normalizeRuntimeModel(options.freshModel) ?? oldThread.model,
+		runtimeCwd,
+		at: now.toISOString(),
+	};
 
-	// Create the fresh thread BEFORE closing the old one: the runtime pointer
-	// swaps to the fresh thread inside this write, so no failure can leave the
-	// room pointing at a closed thread (the dead-end "cannot be resumed" state).
-	const freshWrite = writePersistentAgentThread(instance.agentId, freshThreadId, {
-		state: "standby",
-		origin: "memento",
-		model: freshModel,
-		items: [],
-	}, {
-		createRuntime: () => freshRuntime,
-		// Memento never invokes a model (runtime_boundary_only). When no
-		// currently-available model was resolved, the fresh thread inherits the
-		// old thread's lock, which may belong to a profile that is no longer
-		// active — Memento is exactly how a user frees a room stuck on a model
-		// they no longer have access to, so the active-profile gate must not
-		// block this write. Prompting/resume keep full enforcement.
-		allowInactiveProfileModel: true,
-	});
-	if (freshWrite.thread.runtime.kind !== "pi-session-jsonl") throw new Error("the fresh conversation could not be prepared on a supported runtime");
-	let closedThread: PersistentAgentThreadRecord;
-	if (completingHalfAppliedBoundary) {
-		closedThread = oldThread;
-	} else {
-		try {
-			closedThread = closePersistentAgentThreadForMemento(instance.agentId, oldThread.threadId, mementoId, now.getTime());
-		} catch {
-			// The runtime pointer already moved to the fresh thread, so a caller
-			// retry would target the fresh thread and never close this one. One
-			// immediate retry keeps a transient write hiccup from stranding the
-			// discarded transcript as a permanently open orphan.
-			closedThread = closePersistentAgentThreadForMemento(instance.agentId, oldThread.threadId, mementoId, now.getTime());
-		}
+	// Forget is one step (memory-commit.ts): the intent, then the conversation
+	// closed as forgotten, which is the commit point. A crash before it leaves
+	// the conversation open and untouched; a crash after it is finished by the
+	// next request (the fresh conversation, the pointer, the record). It stays
+	// synchronous from the intent to its clear: the settle runs outside the
+	// save lock, so an await in between would let a status request finish or
+	// drop this save mid-flight. Keep it synchronous, or take the lock in the
+	// settle.
+	writeCommitIntent(instance.rootDir, "forget", intent);
+	if (!completingHalfAppliedBoundary) closePersistentAgentThreadForMemento(instance.agentId, conversationId, intent.mementoId, now.getTime());
+	const finished = finishForgetCommit(instance, intent);
+	clearCommitIntent(instance.rootDir, "forget");
+	return {
+		agentId: instance.agentId,
+		conversationId,
+		mementoId: finished.eventRecord.mementoId,
+		writesMemory: false,
+		eventRecordPath: finished.eventRecordPath,
+		eventRelPath: finished.eventRecord.paths.eventRelPath,
+		runtimeBoundary: finished.runtimeBoundary,
+		postMemento: { canContinue: true, canRest: true, activeThreadId: finished.runtimeBoundary.newThreadId, runtime: finished.runtimeBoundary.newRuntime },
+		memory: finished.eventRecord.memory,
+		warnings: [],
+	};
+}
+
+/** A Forget in flight: ids and times only. */
+interface ForgetCommitIntent {
+	oldThreadId: string;
+	mementoId: string;
+	freshThreadId: string;
+	freshModel: PersistentAgentModelLock;
+	runtimeCwd: string;
+	at: string;
+}
+
+/**
+ * Everything a Forget does after the conversation is closed, each step safe
+ * to run twice: the fresh conversation and the pointer to it, the unseen
+ * marker cleared, the memento record. The Forget itself and the crash
+ * recovery both run it.
+ */
+function finishForgetCommit(instance: PersistentAgentInstance, intent: ForgetCommitIntent): { runtimeBoundary: PersistentAgentMementoRuntimeBoundary; eventRecord: MementoEventRecord; eventRecordPath: string } {
+	const agentId = instance.agentId;
+	const now = new Date(intent.at);
+	const closedThread = getPersistentAgentThread(agentId, intent.oldThreadId);
+	if (!closedThread || closedThread.state !== "closed") throw new Error("the forgotten conversation is not closed");
+	rememberGenerations.get(rememberGenerationKey(agentId, intent.oldThreadId))?.stop?.("forgotten");
+	clearRememberWork(instance.rootDir, intent.oldThreadId);
+	const existingFresh = getPersistentAgentThread(agentId, intent.freshThreadId);
+	if (!existingFresh || getPersistentAgentRuntimeState(agentId).activeThreadId !== intent.freshThreadId) {
+		writePersistentAgentThread(agentId, intent.freshThreadId, {
+			state: existingFresh?.state === "active" ? "active" : "standby",
+			origin: "memento",
+			model: existingFresh?.model ?? intent.freshModel,
+			...(existingFresh ? {} : { items: [] }),
+		}, {
+			createRuntime: ({ model }) => createPersistentAgentPiSessionJsonlThreadRuntime({ agentId, threadId: intent.freshThreadId, model, cwd: intent.runtimeCwd }),
+			// Forget never invokes a model (runtime_boundary_only). When no
+			// currently-available model was resolved, the fresh thread inherits the
+			// old thread's lock, which may belong to a profile that is no longer
+			// active: Forget is exactly how a person frees a room stuck on a model
+			// they no longer have, so the active-profile gate must not block this
+			// write. Prompting and resume keep full enforcement.
+			allowInactiveProfileModel: true,
+		});
 	}
+	const freshThread = getPersistentAgentThread(agentId, intent.freshThreadId);
+	if (!freshThread || freshThread.runtime.kind !== "pi-session-jsonl") throw new Error("the fresh conversation could not be prepared on a supported runtime");
 	// The forgotten conversation takes its unseen-landed-answer marker with it:
-	// a fresh-session badge must not point at a transcript Memento just closed.
+	// a fresh-session badge must not point at a transcript Forget just closed.
 	// Only that conversation's marker, though: a scheduled answer waiting in
 	// another conversation of this room is still there to be read, and a
 	// boundary on the live thread is no reason to throw its badge away.
-	clearPersistentAgentUnseenLandedAnswerForClosedThread(instance.agentId, closedThread.threadId);
+	clearPersistentAgentUnseenLandedAnswerForClosedThread(agentId, closedThread.threadId);
+	const mementoId = closedThread.closedByMementoId ?? intent.mementoId;
 	const runtimeBoundary: PersistentAgentMementoRuntimeBoundary = {
 		closedThreadId: closedThread.threadId,
 		closedReason: "memento",
 		closedAt: closedThread.closedAt ?? now.getTime(),
-		closedByMementoId: closedThread.closedByMementoId ?? mementoId,
-		oldRuntime: oldThread.runtime,
-		newThreadId: freshWrite.thread.threadId,
-		newRuntime: freshWrite.thread.runtime,
+		closedByMementoId: mementoId,
+		oldRuntime: closedThread.runtime,
+		newThreadId: freshThread.threadId,
+		newRuntime: freshThread.runtime,
 	};
-	const eventRecordPath = mementoEventRecordPath(instance, mementoId);
+	// Forget is the trash icon: a task still running from the conversation stops, and its result goes.
+	abortConversationSpecialistTasks(agentId, closedThread.threadId);
+	const eventRecordPath = mementoEventRecordPath(instance, intent.mementoId);
 	const eventRelPath = agentRootRelativePath(instance, eventRecordPath);
-	const eventRuntimeBoundary: MementoEventRecord["runtimeBoundary"] = {
-		closedThreadId: runtimeBoundary.closedThreadId,
-		closedReason: runtimeBoundary.closedReason,
-		closedAt: runtimeBoundary.closedAt,
-		closedByMementoId: runtimeBoundary.closedByMementoId,
-		oldRuntimeKind: runtimeBoundary.oldRuntime.kind,
-		...(runtimeBoundary.oldRuntime.kind === "pi-session-jsonl" ? {
-			oldRuntimeSessionId: runtimeBoundary.oldRuntime.sessionId,
-			oldSessionFileRelPath: runtimeBoundary.oldRuntime.sessionFileRelPath,
-			oldBootPromptSha256: runtimeBoundary.oldRuntime.bootPromptSha256,
-		} : {}),
-		newThreadId: runtimeBoundary.newThreadId,
-		newRuntimeKind: "pi-session-jsonl",
-		newRuntimeSessionId: runtimeBoundary.newRuntime.sessionId,
-		newSessionFileRelPath: runtimeBoundary.newRuntime.sessionFileRelPath,
-		newBootPromptSnapshotRelPath: runtimeBoundary.newRuntime.bootPromptSnapshotRelPath,
-		newBootPromptSha256: runtimeBoundary.newRuntime.bootPromptSha256,
-		newRuntimeL1bFingerprint: runtimeBoundary.newRuntime.l1bFingerprint,
-	};
+	if (fs.existsSync(eventRecordPath)) {
+		eraseConversationWords(agentId, instance.rootDir, closedThread.threadId);
+		return { runtimeBoundary, eventRecord: JSON.parse(fs.readFileSync(eventRecordPath, "utf-8")), eventRecordPath };
+	}
+	const meta = instance.readAgentJson();
+	const l1bPath = meta ? instance.l1bCurrentPath(meta) : path.join(instance.rootDir, "L1b", "current.md");
+	const l1bFingerprint = fingerprintL1bSource(fs.existsSync(l1bPath) ? fs.readFileSync(l1bPath, "utf-8") : "");
 	const eventRecord: MementoEventRecord = {
 		schemaVersion: 1,
 		operation: "memento",
@@ -6357,12 +6680,29 @@ export function writePersistentAgentMementoBoundary(agentIdRaw: string, conversa
 			target: "none",
 			kind: "runtime_boundary_only",
 		},
-		agentId: instance.agentId,
-		conversationId,
-		mementoId,
-		appliedAt: now.toISOString(),
+		agentId,
+		conversationId: closedThread.threadId,
+		mementoId: intent.mementoId,
+		appliedAt: intent.at,
 		paths: { eventRelPath },
-		runtimeBoundary: eventRuntimeBoundary,
+		runtimeBoundary: {
+			closedThreadId: runtimeBoundary.closedThreadId,
+			closedReason: runtimeBoundary.closedReason,
+			closedAt: runtimeBoundary.closedAt,
+			closedByMementoId: runtimeBoundary.closedByMementoId,
+			oldRuntimeKind: runtimeBoundary.oldRuntime.kind,
+			...(runtimeBoundary.oldRuntime.kind === "pi-session-jsonl" ? {
+				oldRuntimeSessionId: runtimeBoundary.oldRuntime.sessionId,
+				oldBootPromptSha256: runtimeBoundary.oldRuntime.bootPromptSha256,
+			} : {}),
+			newThreadId: runtimeBoundary.newThreadId,
+			newRuntimeKind: "pi-session-jsonl",
+			newRuntimeSessionId: runtimeBoundary.newRuntime.sessionId,
+			newSessionFileRelPath: runtimeBoundary.newRuntime.sessionFileRelPath,
+			newBootPromptSnapshotRelPath: runtimeBoundary.newRuntime.bootPromptSnapshotRelPath,
+			newBootPromptSha256: runtimeBoundary.newRuntime.bootPromptSha256,
+			newRuntimeL1bFingerprint: runtimeBoundary.newRuntime.l1bFingerprint,
+		},
 		memory: {
 			l1bMutated: false,
 			l1bFingerprint,
@@ -6370,23 +6710,22 @@ export function writePersistentAgentMementoBoundary(agentIdRaw: string, conversa
 		warnings: [],
 	};
 	writeMementoEventRecord(instance, eventRecord);
-
-	return {
-		agentId: instance.agentId,
-		conversationId,
-		mementoId,
-		writesMemory: false,
-		eventRecordPath,
-		eventRelPath,
-		runtimeBoundary,
-		postMemento: { canContinue: true, canRest: true, activeThreadId: freshWrite.thread.threadId, runtime: freshWrite.thread.runtime },
-		memory: {
-			l1bMutated: false,
-			l1bFingerprint,
-		},
-		warnings: [],
-	};
+	// Forget means gone: every stored copy of the conversation's words is erased.
+	eraseConversationWords(agentId, instance.rootDir, closedThread.threadId);
+	return { runtimeBoundary, eventRecord, eventRecordPath };
 }
+
+/**
+ * A Forget a crash left pending. The conversation was closed as forgotten:
+ * the Forget is finished. It was not: nothing happened, and the intent goes.
+ */
+function settleForgetCommit(agentId: string, roomDir: string, intent: ForgetCommitIntent): void {
+	const instance = createPersistentAgentInstance(agentId);
+	const thread = getPersistentAgentThread(instance.agentId, intent.oldThreadId);
+	if (thread?.state === "closed" && thread.closedReason === "memento") finishForgetCommit(instance, intent);
+	clearCommitIntent(roomDir, "forget");
+}
+registerCommitSettler("forget", settleForgetCommit);
 
 function readCurrentL1bAndRegistry(agent: PersistentAgentInstance | string): { l1b: string; sectionRegistry: unknown } {
 	const instance = persistentAgentInstanceFrom(agent);
@@ -6521,9 +6860,9 @@ export interface MaintenanceWorkerOptions {
 // refuses with guidance instead of erroring at the provider or running
 // against a silently degraded read.
 /** The prompt budget a maintenance prompt is checked against, or undefined when the window is not known. */
-export function maintenancePromptTokenBudget(window: CheckpointModelWindow | undefined): number | undefined {
+export function maintenancePromptTokenBudget(window: CheckpointModelWindow | undefined, model?: { provider: string; model: string } | null): number | undefined {
 	if (window == null || !Number.isFinite(window.contextWindow) || !Number.isFinite(window.maxOutputTokens)) return undefined;
-	return checkpointPromptTokenBudget(window);
+	return checkpointPromptTokenBudget(window, model);
 }
 
 export function refuseOversizedMaintenancePrompt(input: {
@@ -6534,7 +6873,7 @@ export function refuseOversizedMaintenancePrompt(input: {
 	window?: CheckpointModelWindow;
 	guidance: string;
 }): void {
-	const budget = maintenancePromptTokenBudget(input.window);
+	const budget = maintenancePromptTokenBudget(input.window, input.model);
 	if (budget === undefined || input.promptEstimatedTokens <= budget) return;
 	throw new MaintenancePromptOverflowError(
 		`the ${input.processLabel} prompt for ${input.agentId} is too large for the locked model ${input.model.provider}/${input.model.model}: ` +
@@ -6545,7 +6884,7 @@ export function refuseOversizedMaintenancePrompt(input: {
 }
 
 const ABSORB_OVERFLOW_GUIDANCE =
-	"This room's memory is the prompt material and cannot be elided honestly: run Review to shrink stable memory, or choose a memory model with a larger window in Room settings, Model, then Memorize again.";
+	"This room's memory is the prompt material and cannot be elided honestly: run Review to shrink stable memory, or choose a Memory model that can read more at once in Room settings, Model, then Memorize again.";
 // Draft-again feedback is client input bound for a worker prompt: it should
 // only ever carry the validator's own reasons, so flatten to short plain
 // lines and cap hard — anything beyond that is not validation feedback.
@@ -6610,9 +6949,7 @@ function refuseTruncatedWorkerOutput(input: {
 	const numbers = produced
 		? ` (the model returned ${produced}${ceiling ? ` of a maximum ${ceiling}` : ""} output tokens)`
 		: "";
-	console.warn(
-		`[worker-truncated] agent=${input.agentId} process=${input.processLabel} model=${input.model.provider}/${input.model.model} outputTokens=${produced ?? "unknown"} maxOutputTokens=${ceiling ?? "unknown"}`,
-	);
+	console.warn(`[worker-truncated] agent=${input.agentId} process=${input.processLabel} model=${input.model.provider}/${input.model.model} outputTokens=${produced ?? "unknown"} maxOutputTokens=${ceiling ?? "unknown"}`);
 	const lead = `The ${input.processLabel} response was cut off at the model's output limit${numbers}.${input.remedy ? ` ${input.remedy}` : ""}`;
 	throw new WorkerOutputRefusedError(`${lead} No memory has been written.`, "cut-off");
 }
@@ -6636,6 +6973,7 @@ function assembleDiscussionPromptWithinBudget<TMessage extends DiscussionTranscr
 	messages: TMessage[];
 	hardStopTokens: number;
 	window?: CheckpointModelWindow;
+	model?: { provider: string; model: string };
 	build: (messages: TMessage[]) => TAssembly;
 }): { assembly: TAssembly; reduction: DiscussionTranscriptReduction<TMessage> | null } {
 	const window = input.window;
@@ -6645,7 +6983,7 @@ function assembleDiscussionPromptWithinBudget<TMessage extends DiscussionTranscr
 	// models whose window would fit more. Without window metadata (gateway
 	// models) the hard stop is the only bound.
 	const windowKnown = window != null && Number.isFinite(window.contextWindow) && Number.isFinite(window.maxOutputTokens);
-	const target = windowKnown ? Math.min(checkpointPromptTokenBudget(window), input.hardStopTokens) : input.hardStopTokens;
+	const target = windowKnown ? Math.min(checkpointPromptTokenBudget(window, input.model), input.hardStopTokens) : input.hardStopTokens;
 	let assembly = input.build(input.messages);
 	if (assembly.telemetry.promptEstimatedTokens <= target) return { assembly, reduction: null };
 	// A stage is skipped only when its transcript is literally the one already
@@ -6906,7 +7244,7 @@ export async function buildAbsorbAssessment(agentId: string, model: AbsorbModelL
 	} catch {
 		window = undefined;
 	}
-	const budget = maintenancePromptTokenBudget(window);
+	const budget = maintenancePromptTokenBudget(window, model);
 	let promptInput = { ...baseInput, memoryMaterial: buildAbsorbAssessmentMaterial(loaded.l1b) };
 	let assembly = buildAbsorbAssessmentPrompt({ ...promptInput, retryFeedback: options?.retryFeedback });
 	if (budget !== undefined && assembly.telemetry.promptEstimatedTokens > budget) {
@@ -6984,6 +7322,7 @@ export async function buildAbsorbDiscussionTurn(raw: any, model: AbsorbModelLock
 		messages: request.messages,
 		hardStopTokens: ABSORB_DISCUSSION_TOKEN_BUDGET.hardStop,
 		window,
+		model,
 		build: (messages) => buildAbsorbDiscussionPrompt({
 			agentId: request.agentId,
 			l1b: loaded.l1b,
@@ -7028,6 +7367,7 @@ export async function buildAbsorbDiscussionSignoff(raw: any, model: AbsorbModelL
 		messages: request.messages,
 		hardStopTokens: ABSORB_DISCUSSION_TOKEN_BUDGET.hardStop,
 		window,
+		model,
 		build: (messages) => buildAbsorbDiscussionPrompt({
 			agentId: request.agentId,
 			l1b: loaded.l1b,
@@ -7195,7 +7535,7 @@ export async function buildConsultAnswer(raw: any, model: ConsultModelLock, gene
 		...(instructionsParts?.includesGlobal ? { instructionsParts: { roomEstimatedTokens: instructionsParts.roomEstimatedTokens, globalEstimatedTokens: instructionsParts.globalEstimatedTokens } } : {}),
 		l1b,
 		model,
-		...(windowArmed ? { promptTokenBudget: checkpointPromptTokenBudget(window) } : {}),
+		...(windowArmed ? { promptTokenBudget: checkpointPromptTokenBudget(window, model) } : {}),
 	});
 	// A consult's record belongs to the room that ASKED, never to the room that
 	// was read: the consulted room is promised it records no trace of having
@@ -7225,17 +7565,22 @@ export async function buildConsultAnswer(raw: any, model: ConsultModelLock, gene
 	};
 }
 
-// The prompt budget keeps a margin under the model's context window: the
-// chars/4 estimator undercounts for code-heavy text (hence the window factor),
-// and the worker's own output (including any reasoning tokens) needs room.
-// Shared by the checkpoint and consult workers (same estimator, same margins).
-const CHECKPOINT_PROMPT_WINDOW_FACTOR = 0.85;
-const CHECKPOINT_PROMPT_OUTPUT_RESERVE_TOKENS = 4_000;
-const CHECKPOINT_PROMPT_MIN_TOKEN_BUDGET = 1_000;
+// The prompt budget keeps a margin under the model's context window, divided
+// by the model's factor: the one formula in token-estimate.ts
+// (promptTokenBudget), which minimumMemoryWindow reads too, so the Memory
+// model's size check and these guards cannot disagree. Shared by the
+// checkpoint and consult workers, the maintenance guard and the boot gate.
+const CHECKPOINT_PROMPT_OUTPUT_RESERVE_TOKENS = PROMPT_OUTPUT_RESERVE_TOKENS;
+const CHECKPOINT_PROMPT_MIN_TOKEN_BUDGET = PROMPT_MIN_TOKEN_BUDGET;
 
-function checkpointPromptTokenBudget(window: CheckpointModelWindow): number {
-	const outputReserve = Math.min(Math.max(window.maxOutputTokens, 1_000), CHECKPOINT_PROMPT_OUTPUT_RESERVE_TOKENS);
-	return Math.max(CHECKPOINT_PROMPT_MIN_TOKEN_BUDGET, Math.floor(window.contextWindow * CHECKPOINT_PROMPT_WINDOW_FACTOR) - outputReserve);
+/** The budget in the model's own tokens, before its factor. */
+function checkpointPromptRealTokenBudget(window: CheckpointModelWindow): number {
+	return promptRealTokenBudget(window);
+}
+
+/** In estimated tokens: a model that counts more per estimated token (modelTokenFactor) gets less. */
+function checkpointPromptTokenBudget(window: CheckpointModelWindow, model?: { provider: string; model: string } | null): number {
+	return promptTokenBudget(window, model);
 }
 
 /**
@@ -7255,10 +7600,10 @@ export const REMEMBER_WORKER_MAX_OUTPUT_TOKENS = 16_000;
  * checkpointPromptTokenBudget itself stays as it is: the boot gate, the
  * maintenance checks and consult share it.
  */
-export function rememberPromptTokenBudget(window: CheckpointModelWindow): number {
+export function rememberPromptTokenBudget(window: CheckpointModelWindow, model?: { provider: string; model: string } | null): number {
 	const requestedOutput = rememberWorkerMaxOutputTokens(window);
 	const underTheWindow = window.contextWindow - requestedOutput - CHECKPOINT_PROMPT_OUTPUT_RESERVE_TOKENS;
-	return Math.max(CHECKPOINT_PROMPT_MIN_TOKEN_BUDGET, Math.min(checkpointPromptTokenBudget(window), underTheWindow));
+	return Math.max(CHECKPOINT_PROMPT_MIN_TOKEN_BUDGET, Math.floor(Math.min(checkpointPromptRealTokenBudget(window), underTheWindow) / modelTokenFactor(model)));
 }
 
 /** The output cap Remember's worker asks for: 16k, or the model's own ceiling when that is lower. */
@@ -7281,9 +7626,11 @@ function mergeCheckpointCompressionUsage(a: CheckpointCompressionGenerateResult[
 
 /** What one worker call is for, when it is not the single pass or the final call: its trigger line, its label, and the signal that stops it. */
 export interface CheckpointWorkerCall {
-	trigger: string;
-	workerLabel: string;
+	trigger?: string;
+	workerLabel?: string;
 	signal?: AbortSignal;
+	/** Which Remember call it is: its prompt cache and its usage row follow it (memory-call-cache.ts). */
+	callKind?: MemoryCallKind;
 }
 
 export type CheckpointCompressionGenerate = (prompt: string, model: PersistentAgentModelLock, call?: CheckpointWorkerCall) => Promise<CheckpointCompressionGenerateResult>;
@@ -7301,6 +7648,19 @@ export async function buildCheckpointProposal(raw: any, generate: CheckpointComp
 	if (!conversationId) throw new Error("conversationId is required");
 
 	const model = options?.model ?? requestBodyModelLock(raw);
+	// Every call this Remember makes, the single pass, each part and the
+	// final call, waits out a busy model the same way, and ends in the one
+	// notice (ModelUnreachableError) when the model cannot be reached.
+	// Parts read side by side: each keeps its own wait on the dialog's one line.
+	const unpatientGenerate = generate;
+	const sharedWait = options?.patience?.onWait;
+	const waits = sharedWait ? new WaitLine((wait) => sharedWait(wait ?? null)) : null;
+	generate = (prompt, modelLock, call) => callWithPatience(() => unpatientGenerate(prompt, modelLock, call), {
+		...options?.patience,
+		...(waits ? { onWait: waits.call() } : {}),
+		model: modelLock,
+		...(call?.signal ?? options?.signal ? { signal: call?.signal ?? options?.signal } : {}),
+	});
 
 	const densityRaw = String(raw?.density ?? "").trim();
 	if (!isCheckpointDensity(densityRaw)) throw new Error("density must be compact, standard, or rich");
@@ -7317,90 +7677,220 @@ export async function buildCheckpointProposal(raw: any, generate: CheckpointComp
 	});
 
 	const window = options?.resolveModelWindow ? options.resolveModelWindow(model) : undefined;
-	const budget = window ? rememberPromptTokenBudget(window) : undefined;
-	const context = { agentId: instance.agentId, conversationId, model, density: densityRaw, rememberText, l1b };
-	// One pass whenever it fits, exactly as before; parts only when the single
-	// pass refuses (see remember-two-stage.ts).
-	let assembly: ReturnType<typeof buildCheckpointCompressionPrompt> | null = null;
-	let plan: RememberPartsPlan | null = null;
+	const budget = window ? rememberPromptTokenBudget(window, model) : undefined;
+	// The room's memory goes in whole when it fits beside the conversation,
+	// else as its short view: the read only compares against it, so the page
+	// stays correct and may at most repeat a fact.
+	const readContext = (memory: string): RememberPromptContext => ({ agentId: instance.agentId, conversationId, model, density: densityRaw, rememberText, l1b: memory });
+	let context = readContext(l1b);
+	let read: ReturnType<typeof planRememberRead>;
 	try {
-		assembly = buildCheckpointCompressionPrompt({
-			...context,
-			items: transcriptSource.items,
-			...(budget != null ? { promptTokenBudget: rememberPartCapTokens(budget) } : {}),
-		});
+		read = planRememberRead(context, transcriptSource.items, budget);
 	} catch (error) {
-		if (!(error instanceof CheckpointPromptOverflowError) || budget == null) throw error;
-		plan = planRememberParts(context, transcriptSource.items, budget, window?.contextWindow);
+		if (!(error instanceof RememberTooLargeError)) throw error;
+		context = readContext(rememberShortMemoryView(l1b));
+		read = planRememberRead(context, transcriptSource.items, budget);
 	}
+	const { assembly } = read;
+	let plan = read.plan;
+	// Parts again, smaller, after the provider refused or counted a call too long.
+	const replan = (limits: { maxPartTokens?: number; maxTailTokens?: number }) => planRememberParts(context, transcriptSource.items, budget!, limits);
 	options?.onProgress?.({ read: 0, of: plan ? plan.readCount : 1 });
-	const diagnostics = maintenanceDiagnosticsRecorder(instance.agentId, "remember-compression", generate, { roomText: l1b });
+	// The single pass and the final call share this recorder; the kind says which one a call is.
+	let compressKind: MemoryCallKind = "remember-single";
+	const diagnostics = maintenanceDiagnosticsRecorder(instance.agentId, "remember-compression", (prompt: string, modelLock: PersistentAgentModelLock) => generate(prompt, modelLock, { callKind: compressKind }), { roomText: l1b });
 
-	// The four fields from one prompt: truncation is checked before the
-	// missing-fields retry, since a draft cut at the output ceiling is missing
-	// its tail for size reasons, and a retry re-rolls the same dice at full cost.
-	const compress = async (prompt: string) => {
+	// The four fields, and a page whatever the model does while it answers.
+	// A refused single pass is read in parts instead (below); a refused final
+	// call is asked once more at a high level, then the page is put together
+	// from the notes. A reply cut at the output cap (or with no BODY) climbs
+	// the ladder: the next lower density, a named word target, then what came
+	// complete; when no reply held a BODY at all (an answer in prose), a
+	// single pass is read in parts and a final call's BODY comes from the
+	// notes. A missing TITLE comes from the reply's own words, then the day.
+	const now = new Date();
+	const refused = (error: unknown) => classifyModelFailure(error).cause === "refused";
+	// A prompt the provider counts too long though the estimate let it through.
+	const tooLarge = (error: unknown) => classifyModelFailure(error).cause === "too-large";
+	// A call the patience gave up on while the model answers the probe, or an
+	// empty reply (a reasoning model that spent its output on thinking): a
+	// smaller prompt may land, so either goes the way of a too-long one.
+	const spentOrEmpty = (error: unknown) => patienceSpent(error) || /produced no text/.test(failureWords(error));
+	// Whether the model still answers, by the probe every Remember call's patience gets: no probe
+	// keeps the failure as it came, and no answer is the one notice.
+	const modelAnswersProbe = async (error: unknown) => {
+		const probe = options?.patience?.probe;
+		if (!probe) throw error;
+		try {
+			await probe(options?.signal);
+		} catch (probeError) {
+			if (options?.signal?.aborted) throw error;
+			const probeFailure = classifyModelFailure(probeError);
+			throw probeFailure.cause === "unreachable" ? new ModelUnreachableError(probeFailure.detail, model, probeError) : new ModelUnreachableError("not-answering", model, error);
+		}
 		throwIfRememberCancelled(options?.signal);
-		const generated = await diagnostics.generate(prompt, model);
-		refuseTruncatedWorkerOutput({ agentId: instance.agentId, processLabel: "Remember", model, generated });
-		let parsed = parseCheckpointCompressionFields(generated.text);
-		let usage = generated.usage;
-		let attempts = 1;
+	};
+	const compress = async (prompt: string, notes: string[] | null) => {
+		let usage: CheckpointCompressionGenerateResult["usage"];
+		let attempts = 0;
 		const retryWarnings: string[] = [];
-		if (parsed.missingFields.length > 0) {
-			const missingBeforeRetry = [...parsed.missingFields];
+		const ask = async (text: string) => {
 			throwIfRememberCancelled(options?.signal);
-			const retried = await diagnostics.generate(buildCheckpointCompressionRetryPrompt(prompt, missingBeforeRetry), model);
-			attempts = 2;
-			usage = mergeCheckpointCompressionUsage(usage, retried.usage);
-			refuseTruncatedWorkerOutput({ agentId: instance.agentId, processLabel: "Remember", model, generated: retried });
-			const retriedParsed = parseCheckpointCompressionFields(retried.text);
-			if (retriedParsed.missingFields.length <= parsed.missingFields.length) parsed = retriedParsed;
-			retryWarnings.push(`compression worker output was regenerated once (first attempt was missing ${missingBeforeRetry.join(", ")})`);
+			attempts += 1;
+			const generated = await diagnostics.generate(text, model);
+			usage = mergeCheckpointCompressionUsage(usage, generated.usage);
+			return generated;
+		};
+		let generated: CheckpointCompressionGenerateResult;
+		try {
+			generated = await ask(prompt);
+		} catch (error) {
+			if (!notes || !refused(error)) throw error;
+			try {
+				generated = await ask(withHighLevelLines(prompt));
+			} catch (again) {
+				if (!refused(again)) throw again;
+				retryWarnings.push("the model declined twice to write the entry, so it was put together from the notes");
+				return { fields: buildRememberPageFromNotes(notes, now), usage, attempts, retryWarnings, fromNotes: true };
+			}
 		}
-		const missingRequired = parsed.missingFields.filter((field) => field === "TITLE" || field === "BODY");
-		if (missingRequired.length > 0) {
-			throw new Error(
-				`checkpoint compression worker did not produce required field(s) ${missingRequired.join(", ")} after ${attempts} attempt(s). ` +
-					`Generate the checkpoint proposal again; if this repeats, the locked checkpoint model ${model.provider}/${model.model} is not following the compression output contract. No memory has been written.`,
-			);
+		let fields = parseCheckpointCompressionFields(generated.text).fields;
+		let fromNotes = false;
+		const isCut = (reply: CheckpointCompressionGenerateResult, parsedFields: CheckpointCompressionFields) => reply.truncated === true || !parsedFields.body;
+		if (isCut(generated, fields)) {
+			if (generated.truncated) console.warn(`[worker-truncated] agent=${instance.agentId} process=Remember model=${model.provider}/${model.model} outputTokens=${generated.usage?.output ?? "unknown"} maxOutputTokens=${generated.modelMaxOutputTokens ?? "unknown"}`);
+			let last = generated;
+			let landed = false;
+			const earlier = [fields];
+			const rungs = [...(densityRaw !== "compact" ? [withRetryNotice(prompt, "cut", nextLowerDensity(densityRaw))] : []), withRetryNotice(prompt, "still-cut", CHECKPOINT_CUT_WORD_TARGET)];
+			for (const rung of rungs) {
+				try {
+					last = await ask(rung);
+				} catch (error) {
+					// An optional shorter ask: what came complete is kept below.
+					if (isAbortError(error) || error instanceof ModelUnreachableError) throw error;
+					break;
+				}
+				fields = parseCheckpointCompressionFields(last.text).fields;
+				earlier.push(fields);
+				if (!isCut(last, fields)) {
+					landed = true;
+					break;
+				}
+			}
+			const noBody = !earlier.some((reply) => reply.body.trim());
+			if (landed) retryWarnings.push("the first reply was cut off, so the model was asked for a shorter one");
+			else if (noBody && !notes && budget != null) throw new RememberNoBodyError();
+			else {
+				// What the last reply holds, its empty fields taken from an earlier reply that had them.
+				const kept = salvageCutCheckpointFields(last.text, last.truncated === true);
+				const from = (key: "title" | "sessionArc" | "parked") => kept[key] || earlier.map((reply) => reply[key]).find(Boolean) || "";
+				fields = { ...kept, title: from("title"), sessionArc: from("sessionArc"), parked: from("parked") };
+				if (noBody && notes) {
+					const page = buildRememberPageFromNotes(notes, now);
+					fields = { title: fields.title || page.title, sessionArc: fields.sessionArc || page.sessionArc, body: page.body, parked: fields.parked || page.parked };
+					fromNotes = true;
+				}
+				retryWarnings.push(noBody && notes ? "no reply held the entry's body, so it was put together from the notes" : "no reply came complete, so the entry keeps what did");
+			}
 		}
-		return { parsed, usage, attempts, retryWarnings };
+		// No TITLE: the reply's own words, its arc's first words, its first point's, the day last.
+		if (!fields.title) fields.title = rememberTitleFromWords(fields.sessionArc) || rememberTitleFromWords(fields.body) || rememberDatedTitle(now);
+		return { fields, usage, attempts, retryWarnings, fromNotes };
 	};
 
-	let result: Awaited<ReturnType<typeof compress>>;
-	let targetTokens: { min?: number; max: number };
-	let telemetry: CheckpointCompressionPromptTelemetry;
-	let promptWarnings: string[];
-	let rememberRead: CheckpointRememberRead;
+	let result: Awaited<ReturnType<typeof compress>> | null = null;
+	let finalPrompt = "";
+	let targetTokens: { min?: number; max: number } = { max: 0 };
+	let telemetry!: CheckpointCompressionPromptTelemetry;
+	let rememberRead!: CheckpointRememberRead;
+	let unread = 0;
+	// The part notes, when the conversation was read in parts.
+	let readNotes: string[] = [];
 	if (assembly) {
-		result = await compress(assembly.prompt);
-		targetTokens = assembly.targetTokens;
-		telemetry = assembly.telemetry;
-		promptWarnings = [];
-		rememberRead = {
-			mode: "one-pass",
-			reads: 1,
-			model,
-			trimmedToolOutputs: assembly.telemetry.elidedItemCount,
-			toolOutputCapChars: assembly.telemetry.reductionStage === "standard" ? CHECKPOINT_PROMPT_TOOL_RESULT_TEXT_CAP : 1_000,
+		try {
+			result = await compress(assembly.prompt, null);
+			finalPrompt = assembly.prompt;
+			targetTokens = assembly.targetTokens;
+			telemetry = assembly.telemetry;
+			rememberRead = {
+				mode: "one-pass",
+				reads: 1,
+				model,
+				trimmedToolOutputs: assembly.telemetry.elidedItemCount,
+				toolOutputCapChars: CHECKPOINT_PROMPT_TOOL_RESULT_TEXT_CAP,
+			};
+		} catch (error) {
+			// A refused single pass, one the provider calls too long, one that
+			// timed out or came back empty, or one answered with no BODY three
+			// times, is read again in parts of at most half the transcript.
+			// Any other failure is too, once the model answers the probe: a
+			// gateway may count the prompt too long in words no rule knows.
+			if (budget == null || isAbortError(error) || error instanceof ModelUnreachableError) throw error;
+			if (!(refused(error) || tooLarge(error) || spentOrEmpty(error) || error instanceof RememberNoBodyError)) await modelAnswersProbe(error);
+			const transcriptTokens = estimateTokens(transcriptSource.items.map((item) => String(item.text ?? "")).join("\n"));
+			const limits = { maxPartTokens: Math.ceil(transcriptTokens / 2) };
+			try {
+				plan = replan(limits);
+			} catch (tooSmall) {
+				// The parts' note slots do not fit beside the whole memory: its short view, as the final call does.
+				if (!(tooSmall instanceof RememberTooLargeError) || context.l1b !== l1b) throw tooSmall;
+				context = readContext(rememberShortMemoryView(l1b));
+				plan = replan(limits);
+			}
+			options?.onProgress?.({ read: 0, of: plan.readCount });
+		}
+	}
+	if (!result) {
+		let parts = plan!;
+		let partsUsage: CheckpointCompressionGenerateResult["usage"];
+		// The notes on every part and the final call over them; notes and end
+		// too long for the budget by our own count go with the memory's short view.
+		const readAndPlan = async (readPlan: RememberPartsPlan) => {
+			const notes = await readRememberParts({ agentId: instance.agentId, roomDir: instance.rootDir, conversationId, context, plan: readPlan, generate, model, onProgress: options?.onProgress, signal: options?.signal });
+			partsUsage = mergeCheckpointCompressionUsage(partsUsage, notes.usage);
+			const input = { notes: notes.notes, parts: readPlan.parts, tail: readPlan.tail, readCount: readPlan.readCount, unread: notes.unread };
+			let finalCall = buildRememberFinalPrompt(context, input);
+			if (estimateTokens(finalCall.prompt) > readPlan.budget) finalCall = buildRememberFinalPrompt({ ...context, l1b: rememberShortMemoryView(l1b) }, input);
+			return { notes, finalCall, fits: estimateTokens(finalCall.prompt) <= readPlan.budget };
 		};
-	} else {
-		const parts = plan!;
-		const partNotes = await readRememberParts({ agentId: instance.agentId, context, plan: parts, generate, model, onProgress: options?.onProgress, signal: options?.signal });
-		const final = buildRememberFinalPrompt(context, { notes: partNotes.notes, parts: parts.parts, tail: parts.tail, readCount: parts.readCount });
-		if (estimateTokens(final.prompt) > parts.budget) throw new RememberTooLargeError(rememberNotesTooLongMessage(model, window?.contextWindow, parts.parts.length));
-		result = await compress(final.prompt);
-		result.usage = mergeCheckpointCompressionUsage(partNotes.usage, result.usage);
+		let partsRead = await readAndPlan(parts);
+		compressKind = "remember-final";
+		// Too long, by our count or the provider's, timed out or empty: once
+		// more with the verbatim end halved (the rest read as parts), then the
+		// page put together from the notes. Never a failed Remember.
+		for (let round = 0; !result; round++) {
+			if (partsRead.fits) {
+				try {
+					result = await compress(partsRead.finalCall.prompt, partsRead.notes.notes);
+					break;
+				} catch (error) {
+					if (!(tooLarge(error) || spentOrEmpty(error))) throw error;
+				}
+			}
+			let smaller: RememberPartsPlan | null = null;
+			try {
+				if (round === 0) smaller = replan({ maxTailTokens: Math.floor(parts.tailTokens / 2) });
+			} catch (error) {
+				if (!(error instanceof RememberTooLargeError)) throw error;
+			}
+			if (!smaller) {
+				result = { fields: buildRememberPageFromNotes(partsRead.notes.notes, now), usage: undefined, attempts: 0, retryWarnings: ["the notes and the last part of the conversation were too long for the model together, so this entry was put together from the notes"], fromNotes: true };
+				break;
+			}
+			parts = smaller;
+			partsRead = await readAndPlan(parts);
+		}
+		const { notes: partNotes, finalCall: final } = partsRead;
+		unread = partNotes.unread.length;
+		readNotes = partNotes.notes;
+		finalPrompt = final.prompt;
+		result.usage = mergeCheckpointCompressionUsage(partsUsage, result.usage);
 		targetTokens = final.targetTokens;
 		const trimmedToolOutputs = transcriptSource.items.filter((item) => item.kind === "toolResult" && String(item.text ?? "").trim().length > CHECKPOINT_PROMPT_TOOL_RESULT_TEXT_CAP).length;
 		telemetry = rememberPartsTelemetry({ l1b, prompt: final.prompt, tailTranscript: final.tailTranscript, targetTokens, budget: parts.budget, elidedItemCount: trimmedToolOutputs });
 		const partMustKeeps = partNotes.notes.reduce((sum, note) => sum + countPartNoteMustKeeps(note), 0);
-		const bodyMustKeeps = countBodyMustKeeps(result.parsed.fields.body);
-		promptWarnings = [];
-		if (bodyMustKeeps < partMustKeeps) {
-			promptWarnings.push(`the notes on the earlier parts hold ${partMustKeeps} thing${partMustKeeps === 1 ? "" : "s"} you asked to keep and this draft marks ${bodyMustKeeps}; check that nothing you asked to keep is missing`);
-		}
+		const bodyMustKeeps = countBodyMustKeeps(result.fields.body);
 		rememberRead = {
 			mode: "parts",
 			reads: parts.readCount,
@@ -7408,13 +7898,44 @@ export async function buildCheckpointProposal(raw: any, generate: CheckpointComp
 			trimmedToolOutputs,
 			toolOutputCapChars: CHECKPOINT_PROMPT_TOOL_RESULT_TEXT_CAP,
 			mustKeep: { partNotes: partMustKeeps, body: bodyMustKeeps },
+			...(result.fromNotes && unread > 0 && partNotes.notes.every((note) => !note.trim()) ? { refusedWhole: true as const } : {}),
 		};
 	}
 	options?.onProgress?.({ read: rememberRead.reads, of: rememberRead.reads });
-	const { parsed, usage, attempts, retryWarnings } = result;
-	const proposedRecentContext = assembleProposedRecentContext(parsed.fields);
-	const preview = buildCheckpointProposalPreview(parsed.fields);
-	diagnostics.annotate({ outcome: "accepted", validatorWarnings: [...retryWarnings, ...parsed.warnings] });
+
+	// What Save would refuse is repaired here, before the preview, with no
+	// call; only a page over 8,000 characters is asked once more, shorter,
+	// then cut at a paragraph end.
+	let fields = repairCheckpointFields(result.fields);
+	// A title the repair emptied (only markup) is filled as a missing one is, never with a placeholder.
+	const titled = (repaired: typeof fields) => (repaired.title ? repaired : { ...repaired, title: rememberTitleFromWords(repaired.sessionArc) || rememberTitleFromWords(repaired.body) || rememberDatedTitle(now) });
+	fields = titled(fields);
+	if (!result.fromNotes && assembleProposedRecentContext(fields, now).length > CHECKPOINT_PAGE_MAX_CHARS) {
+		try {
+			throwIfRememberCancelled(options?.signal);
+			const shorter = await diagnostics.generate(withRetryNotice(finalPrompt, "too-long", nextLowerDensity(densityRaw)), model);
+			result.usage = mergeCheckpointCompressionUsage(result.usage, shorter.usage);
+			result.attempts += 1;
+			const shorterFields = parseCheckpointCompressionFields(shorter.text).fields;
+			if (!shorter.truncated && shorterFields.body) fields = titled(repairCheckpointFields({ ...shorterFields, title: shorterFields.title || fields.title }));
+		} catch (error) {
+			// An optional shorter ask: the page it had is fitted below.
+			if (isAbortError(error) || error instanceof ModelUnreachableError) throw error;
+		}
+	}
+	// Keep-requests the notes quote that the entry lost, put back word for word
+	// (at most 2,000 characters of them); they close BODY after the fit, so it never cuts them.
+	// How the page was made goes to the diagnostics only, never into the page.
+	const keepRequests = missingKeepRequests(readNotes, fields.body).filter((line, index, lines) => lines.slice(0, index + 1).join("\n").length <= 2_000);
+	const restored = keepRequests.join("\n");
+	const shortened = assembleProposedRecentContext({ ...fields, body: `${fields.body.trimEnd()}${restored ? `\n\n${restored}` : ""}` }, now).length > CHECKPOINT_PAGE_MAX_CHARS;
+	fields = fitCheckpointFields(fields, now, restored || undefined);
+	const { usage, attempts, retryWarnings } = result;
+	const proposedRecentContext = assembleProposedRecentContext(fields, now);
+	// The checks Save makes, made now: a page that would fail them is a bug here, not the person's to fix.
+	validateApprovedRecentContextDraft(proposedRecentContext);
+	const preview = buildCheckpointProposalPreview(fields);
+	diagnostics.annotate({ outcome: "accepted", validatorWarnings: [...retryWarnings, ...(unread > 0 ? ["refused-net"] : []), ...(shortened ? ["shortened"] : []), ...(keepRequests.length ? [`keep-requests-restored:${keepRequests.length}`] : [])] });
 	return {
 		agentId: instance.agentId,
 		conversationId,
@@ -7427,7 +7948,7 @@ export async function buildCheckpointProposal(raw: any, generate: CheckpointComp
 		},
 		density: densityRaw,
 		targetTokens,
-		fields: parsed.fields,
+		fields,
 		preview,
 		proposedRecentContext,
 		estimatedTokens: estimateTokens(proposedRecentContext),
@@ -7436,14 +7957,44 @@ export async function buildCheckpointProposal(raw: any, generate: CheckpointComp
 		compressionAttempts: attempts,
 		rememberRead,
 		source: transcriptSource.source,
-		warnings: [...promptWarnings, ...retryWarnings, ...parsed.warnings, "no memory has been written"],
+		// How the entry was made is in the diagnostics (validatorWarnings), never on screen.
+		warnings: ["no memory has been written"],
 	};
 }
+
+/**
+ * The single pass's prompt budget: everything but the transcript (the
+ * constitution, the memory, the steering), plus at most a part's worth of
+ * transcript, and never more than the budget. The cap is on the conversation:
+ * a large memory never pushes a short conversation into parts.
+ */
+function rememberOnePassBudget(context: Omit<CheckpointCompressionPromptInput, "items" | "promptTokenBudget">, budget: number): number {
+	const fixed = estimateTokens(buildCheckpointCompressionPrompt({ ...context, items: [] }).prompt);
+	return Math.min(budget, fixed + rememberPartCapTokens(budget));
+}
+
+/**
+ * One pass whenever it fits, parts when it does not (remember-two-stage.ts).
+ * A Remember and its estimate both plan here, so the dialog says what Generate does.
+ */
+function planRememberRead(context: RememberPromptContext, items: CheckpointCompressionPromptInput["items"], budget: number | undefined): { assembly: ReturnType<typeof buildCheckpointCompressionPrompt> | null; plan: RememberPartsPlan | null } {
+	try {
+		return { assembly: buildCheckpointCompressionPrompt({ ...context, items, ...(budget != null ? { promptTokenBudget: rememberOnePassBudget(context, budget) } : {}) }), plan: null };
+	} catch (error) {
+		if (!(error instanceof CheckpointPromptOverflowError) || budget == null) throw error;
+		return { assembly: null, plan: planRememberParts(context, items, budget) };
+	}
+}
+
+/** A single pass with no BODY in any reply: it is read in parts instead. */
+class RememberNoBodyError extends Error {}
 
 /** How a Remember would read the open conversation now, without calling any model. */
 export interface CheckpointReadEstimate {
 	mode: "one-pass" | "parts";
 	reads: number;
+	/** The memory beside the conversation: whole, as its short view, or a window too small for any read. */
+	fits: "full" | "short-memory" | "no";
 	model: PersistentAgentModelLock;
 	contextWindow?: number;
 }
@@ -7473,69 +8024,125 @@ export function estimateCheckpointRead(raw: any, options?: CheckpointProposalOpt
 		runtimeCwd: typeof raw?.runtimeCwd === "string" && raw.runtimeCwd.trim() ? raw.runtimeCwd : process.cwd(),
 	});
 	const window = options?.resolveModelWindow ? options.resolveModelWindow(model) : undefined;
-	const budget = window ? rememberPromptTokenBudget(window) : undefined;
+	const budget = window ? rememberPromptTokenBudget(window, model) : undefined;
 	const base = { model, ...(window ? { contextWindow: window.contextWindow } : {}) };
-	if (budget == null) return { mode: "one-pass", reads: 1, ...base };
-	const context = { agentId: instance.agentId, conversationId, model, density: "standard" as const, l1b };
-	try {
-		buildCheckpointCompressionPrompt({ ...context, items: transcriptSource.items, promptTokenBudget: rememberPartCapTokens(budget) });
-		return { mode: "one-pass", reads: 1, ...base };
-	} catch (error) {
-		if (!(error instanceof CheckpointPromptOverflowError)) throw error;
+	if (budget == null) return { mode: "one-pass", reads: 1, fits: "full", ...base };
+	// The same plan a Remember makes: the whole memory, else its short view,
+	// else a window too small for anything, said in the dialog before Generate.
+	for (const [fits, memory] of [["full", l1b], ["short-memory", rememberShortMemoryView(l1b)]] as const) {
+		try {
+			const { plan } = planRememberRead({ agentId: instance.agentId, conversationId, model, density: "standard", l1b: memory }, transcriptSource.items, budget);
+			return { mode: plan ? "parts" : "one-pass", reads: plan ? plan.readCount : 1, fits, ...base };
+		} catch (error) {
+			if (!(error instanceof RememberTooLargeError)) throw error;
+		}
 	}
-	const plan = planRememberParts(context, transcriptSource.items, budget, window?.contextWindow);
-	return { mode: "parts", reads: plan.readCount, ...base };
+	return { mode: "parts", reads: 0, fits: "no", ...base };
 }
 
 /**
  * Stage A: every part read on its own, at most three at a time, in order of
- * their place in the conversation. A part that fails (an error, a reply cut at
- * the output limit, an empty reply) is read once more; a second failure fails
- * the whole Remember, and nothing is written. The moment the outcome is known
- * (that failure, or a cancel) the reads still running are aborted and no new
- * part starts, so nothing is paid for after it. A note far over its ceiling is
- * read once more with a shorter instruction; if it is still long, the shorter
- * of the two stays and the final call's budget check decides.
+ * their place in the conversation. A part ends on its own and never stops the
+ * others: a reply that fails for no named cause is read once more; a refused
+ * one is read again in halves with the high-level lines, and a reply cut at
+ * the output limit (or failing twice) in plain halves, down to quarters. A
+ * stretch still not read leaves no words in the notes: its messages are
+ * returned in `unread`, and the final call is told once that they were not
+ * read. Only a cancel or a model that cannot be
+ * reached stops every lane, and every note read until then stays in the
+ * parts cache, so Generate again pays only for what is missing. A note far
+ * over its ceiling is read once more with a shorter instruction; if it is
+ * still long, the shorter of the two stays and the final call's budget check
+ * decides.
  */
 async function readRememberParts(input: {
 	agentId: string;
+	roomDir: string;
+	conversationId: string;
 	context: RememberPromptContext;
 	plan: RememberPartsPlan;
 	generate: CheckpointCompressionGenerate;
 	model: PersistentAgentModelLock;
 	onProgress?: CheckpointProposalOptions["onProgress"];
 	signal?: AbortSignal;
-}): Promise<{ notes: string[]; usage: CheckpointCompressionGenerateResult["usage"] }> {
+}): Promise<{ notes: string[]; usage: CheckpointCompressionGenerateResult["usage"]; unread: RememberUnreadRange[] }> {
 	const { parts, readCount } = input.plan;
 	const notes: string[] = new Array(parts.length).fill("");
 	let usage: CheckpointCompressionGenerateResult["usage"];
 	let done = 0;
+	const unread: RememberUnreadRange[] = [];
 	const stop = new AbortController();
+	// The failure that stopped the parts: the other lanes' aborts race it to the end, and must not pass for a cancel.
+	let stoppedBy: unknown;
+	const stopParts = (error: unknown): unknown => {
+		stoppedBy ??= error;
+		stop.abort();
+		return error;
+	};
 	const onCancel = () => stop.abort();
 	if (input.signal?.aborted) stop.abort();
 	else input.signal?.addEventListener("abort", onCancel, { once: true });
-	const call: CheckpointWorkerCall = { trigger: REMEMBER_PART_TRIGGER, workerLabel: "Remember part reader", signal: stop.signal };
-	const readPart = async (index: number): Promise<void> => {
-		const prompt = buildRememberPartPrompt(input.context, parts[index]!, index + 1, parts.length);
+	const call: CheckpointWorkerCall = { trigger: REMEMBER_PART_TRIGGER, workerLabel: "Remember part reader", signal: stop.signal, callKind: "remember-part" };
+	// One stretch: a whole part, or a half or quarter of a refused one.
+	const readStretch = async (stretch: RememberStretch, partNumber: number, depth: number, highLevel: boolean): Promise<string | null> => {
+		const basePrompt = buildRememberPartPrompt(input.context, stretch, partNumber, parts.length);
+		const prompt = highLevel ? withHighLevelLines(basePrompt) : basePrompt;
+		const key = rememberPartKey({ model: input.model, density: input.context.density, prompt: rememberPartKeyPrompt(input.context, stretch, highLevel) });
+		const kept = readRememberPartNote(input.roomDir, input.conversationId, key);
+		if (kept) return kept;
 		const recorder = maintenanceDiagnosticsRecorder(input.agentId, "remember-part", (text: string, model: PersistentAgentModelLock) => input.generate(text, model, call));
-		let lastFailure = "";
 		let note: string | null = null;
-		for (let attempt = 1; attempt <= 2 && note === null; attempt++) {
+		let split: "refused" | "plain" | null = null;
+		let cut = "";
+		let failed: unknown = new Error("checkpoint compression worker produced no text");
+		for (let attempt = 1; attempt <= 2 && note === null && split === null; attempt++) {
 			throwIfRememberCancelled(stop.signal);
 			try {
 				const generated = await recorder.generate(prompt, input.model);
 				usage = mergeCheckpointCompressionUsage(usage, generated.usage);
-				if (generated.truncated) lastFailure = "the notes were cut off at the model's output limit";
-				else if (!generated.text.trim()) lastFailure = "the reply was empty";
-				else note = generated.text.trim();
+				if (generated.truncated) {
+					split = "plain";
+					// Its complete lines, kept for a stretch too small to halve.
+					cut = generated.text.slice(0, generated.text.lastIndexOf("\n") + 1).trim();
+					// Cut before its first line: at the last size this is the stop, and the same model would meet it again.
+					if (!cut) failed = new Error(rememberNoLineMessage(input.model));
+				} else if (generated.text.trim()) note = generated.text.trim();
 			} catch (error) {
 				if (isAbortError(error) || stop.signal.aborted) throw error;
-				lastFailure = error instanceof Error ? error.message : String(error);
+				// The model cannot be reached: no part can be read, so the
+				// others stop too and the one notice says why.
+				if (error instanceof ModelUnreachableError) throw stopParts(error);
+				failed = error;
+				const failure = classifyModelFailure(error);
+				if (failure.cause === "refused") split = "refused";
+				// The provider counted it too long (chars/4 undercounts some tokenizers), or the
+				// patience already waited a timeout out: halves at once, never the same call again.
+				else if (failure.cause === "too-large" || patienceSpent(error) || (failure.cause === "busy" && (failure.detail === "timed-out" || failure.detail === "stalled"))) split = "plain";
 			}
 		}
+		const halves = note === null && depth < REMEMBER_SPLIT_DEPTH ? splitRememberStretch(stretch) : null;
+		if (note === null && !halves && cut) note = cut;
 		if (note === null) {
-			stop.abort();
-			throw new Error(`Remember could not read part ${index + 1} of ${parts.length} of this conversation (${lastFailure}). Generate again; if this repeats, choose another memory model in Room settings, Model. No memory has been written.`);
+			// A refused read that goes on (a high-level read or halves) says so in its record.
+			if (split === "refused" && (halves || !highLevel)) recorder.annotate({ outcome: "refused" });
+			// A refused stretch with no halves (one short message) is read once more, whole, with the high-level lines.
+			if (!halves && split === "refused" && !highLevel) return readStretch(stretch, partNumber, depth, true);
+			// Only a refusal may leave a stretch unread; any other failure that outlasts the halves stops Remember.
+			if (!halves && split !== "refused") throw stopParts(failed);
+			if (!halves) {
+				recorder.annotate({ outcome: "refused", validatorWarnings: ["refused-net"] });
+				unread.push({ first: stretch.firstIndex + 1, last: stretch.firstIndex + stretch.items.length });
+				return null;
+			}
+			const read: Array<string | null> = [];
+			for (const half of halves) read.push(await readStretch(half, partNumber, depth + 1, highLevel || split === "refused"));
+			const joined = read.filter((text): text is string => text !== null).join("\n\n") || null;
+			// Every half read: the joined notes are kept for the whole stretch too, so Generate again never sends it whole again.
+			if (joined && read.every((text) => text !== null)) {
+				throwIfRememberCancelled(input.signal);
+				if (!conversationForgotten(input.roomDir, input.conversationId)) keepRememberPartNote(input.roomDir, input.conversationId, key, joined);
+			}
+			return joined;
 		}
 		const noteTokens = estimateTokens(note);
 		if (noteTokens > 2 * REMEMBER_PART_NOTE_CEILING_TOKENS) {
@@ -7547,10 +8154,19 @@ async function readRememberParts(input: {
 				if (!shorter.truncated && text && text.length < note.length) note = text;
 			} catch (error) {
 				if (isAbortError(error) || stop.signal.aborted) throw error;
+				if (error instanceof ModelUnreachableError) throw stopParts(error);
 			}
 		}
-		notes[index] = note;
+		// A call that answered after Cancel, Save or Forget keeps nothing; one
+		// that answered as another lane met an unreachable model is kept.
+		throwIfRememberCancelled(input.signal);
+		if (conversationForgotten(input.roomDir, input.conversationId)) throw new Error("the conversation was forgotten");
+		keepRememberPartNote(input.roomDir, input.conversationId, key, note);
 		recorder.annotate({ outcome: "accepted", validatorWarnings: [] });
+		return note;
+	};
+	const readPart = async (index: number): Promise<void> => {
+		notes[index] = (await readStretch(parts[index]!, index + 1, 0, false)) ?? "";
 		done += 1;
 		input.onProgress?.({ read: done, of: readCount });
 	};
@@ -7565,10 +8181,20 @@ async function readRememberParts(input: {
 	});
 	try {
 		await Promise.all(lanes);
+	} catch (error) {
+		throw stoppedBy ?? error;
 	} finally {
 		input.signal?.removeEventListener("abort", onCancel);
 	}
-	return { notes, usage };
+	// In the conversation's order, neighbours joined, so the final call reads one span per gap.
+	unread.sort((a, b) => a.first - b.first);
+	const spans = unread.reduce<RememberUnreadRange[]>((joined, range) => {
+		const last = joined.at(-1);
+		if (last && range.first <= last.last + 1) last.last = Math.max(last.last, range.last);
+		else joined.push({ ...range });
+		return joined;
+	}, []);
+	return { notes, usage, unread: spans };
 }
 
 /** Stops a cancelled Remember before its next model call. */

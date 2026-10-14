@@ -1,10 +1,9 @@
 // How Remember reads a conversation: in one pass, or in parts when it is too
-// long for the memory model's window. The server decides and says so; these
-// are the sentences the Remember dialog, its approval screen and the context
-// chip's popover say it with, kept in one place so the three never disagree.
+// long for the Memory model's window. The server decides; the person is told
+// only what they must act on (a window too small for any read) and where the
+// read is (the progress line). How it read goes to the diagnostics.
 
 import { fetchJson } from "./api";
-import { meaningfulMaintenanceWarnings } from "./maintenance-warnings";
 import { modelDisplayName } from "./model-names";
 
 export interface RememberReadModel {
@@ -19,6 +18,8 @@ export interface RememberReadEstimate {
 	reads: number;
 	model: RememberReadModel;
 	contextWindow?: number;
+	/** The memory beside the conversation: whole, as its outline, or a window too small for any read. */
+	fits?: "full" | "short-memory" | "no";
 }
 
 /** What the server did, on the proposal. */
@@ -29,6 +30,8 @@ export interface RememberRead {
 	trimmedToolOutputs: number;
 	toolOutputCapChars: number;
 	mustKeep?: { partNotes: number; body: number };
+	/** Every part was refused and the page holds only the date. */
+	refusedWhole?: boolean;
 }
 
 export async function fetchRememberReadEstimate(agentId: string, conversationId: string): Promise<RememberReadEstimate> {
@@ -40,18 +43,10 @@ export function rememberModelName(model: RememberReadModel): string {
 	return modelDisplayName({ model: model.model, modelLabel: model.label, provider: model.provider }) || model.model;
 }
 
-/** The Remember dialog, before generating. */
-export function rememberEstimateSentence(estimate: RememberReadEstimate): string {
-	const name = rememberModelName(estimate.model);
-	return estimate.reads > 1
-		? `This conversation is long: Remember reads it in ${estimate.reads} parts on ${name}. A memory model with a larger window reads it in one pass (Room settings, Model).`
-		: `Remember reads this conversation in one pass on ${name}.`;
-}
-
-/** The context chip's popover: said only when the conversation no longer fits one pass. */
-export function rememberChipValue(estimate: RememberReadEstimate | null): string | null {
-	if (!estimate || estimate.reads <= 1) return null;
-	return `in ${estimate.reads} parts on ${rememberModelName(estimate.model)}`;
+/** The Remember dialog, before generating: only a window too small for any read is said. */
+export function rememberEstimateSentence(estimate: RememberReadEstimate): string | null {
+	if (estimate.fits !== "no") return null;
+	return `This conversation and this room's memory are more than ${rememberModelName(estimate.model)} can read, even in parts. Choose a Memory model that can read more at once in Room settings, Model.`;
 }
 
 /**
@@ -65,36 +60,13 @@ export function rememberSendsTranscript(runtimeKind: string | undefined): boolea
 	return runtimeKind !== "pi-session-jsonl";
 }
 
-/** The approval screen: how it was read, by which model, and what was shortened. */
-export function rememberReadSentences(read: RememberRead): string[] {
-	const name = rememberModelName(read.model);
-	const sentences = [read.reads > 1 ? `Read in ${read.reads} parts by ${name}.` : `Read in one pass by ${name}.`];
-	const trimmed = rememberToolOutputSentence(read);
-	if (trimmed) sentences.push(trimmed);
-	return sentences;
-}
-
-/** What the read shortened, in plain words, or null when it shortened nothing. */
-export function rememberToolOutputSentence(read: Pick<RememberRead, "trimmedToolOutputs" | "toolOutputCapChars"> | null | undefined): string | null {
-	if (!read || read.trimmedToolOutputs <= 0) return null;
-	const cap = read.toolOutputCapChars.toLocaleString("en-US");
-	return read.trimmedToolOutputs === 1
-		? `One tool output over ${cap} characters was shortened before reading.`
-		: `${read.trimmedToolOutputs} tool outputs over ${cap} characters were shortened before reading.`;
-}
-
 /**
- * What keeps "Remember without the preview" from saving on its own, so the
- * preview opens with these reasons instead: the worker's parse warnings or an
- * incomplete proposal. The server's status line ("no memory has been
- * written") is not a problem, and shortened tool output is a count on the
- * read, not a warning: the saved line discloses it.
+ * Whether "Remember without the preview" opens the preview instead of saving:
+ * only for an entry with no arc or no body (a bug, since the server repairs
+ * both). No engine warning stops the quick save, and no reason is shown.
  */
-export function quickRememberBlockers(proposal: { warnings: string[]; fields: { sessionArc: string; body: string } }): string[] {
-	const blockers = meaningfulMaintenanceWarnings(proposal.warnings);
-	if (!proposal.fields.sessionArc.trim()) blockers.push("the proposal is missing its session arc");
-	if (!proposal.fields.body.trim()) blockers.push("the proposal is missing its body");
-	return blockers;
+export function quickRememberNeedsPreview(proposal: { fields: { sessionArc: string; body: string } }): boolean {
+	return !proposal.fields.sessionArc.trim() || !proposal.fields.body.trim();
 }
 
 /** The generating dialog's line: which part is being read, once there are parts. */
@@ -103,11 +75,84 @@ export function rememberProgressSentence(progress: { read: number; of: number } 
 	return `Remember is reading the conversation (part ${Math.min(progress.read + 1, progress.of)} of ${progress.of}).`;
 }
 
+/** A Remember stopped because another window saved its conversation: an outcome, not an error. */
+export const REMEMBER_SAVED_ELSEWHERE = "This conversation was saved from another window.";
+/** A Remember stopped because another window forgot its conversation: an outcome too. */
+export const REMEMBER_FORGOTTEN_ELSEWHERE = "This conversation was forgotten from another window.";
+
 /**
- * The sentences the server writes for Remember in the person's words (the
- * generation gate, a conversation too long for the memory model, a part that
- * could not be read, notes too long after every part was read, a cancel). The dialog shows them as they are.
+ * The sentences Remember says in the person's words (the generation gate, a
+ * conversation too long for the Memory model, a cancel, a conversation that
+ * changed or another one open, an entry Save cannot take). The dialog shows
+ * them as they are.
  */
 export function isPlainRememberSentence(message: string): boolean {
-	return /^(Remember is (already )?reading this conversation|This conversation is too long for .+ to remember|Remember could not read part \d+ of \d+|All \d+ parts of this conversation were read|Remember was cancelled|The memory model changed after this proposal was written)/.test(message);
+	return /^(Remember is (already )?reading this conversation|This conversation is too long for .+ to remember|.+ could not write notes for part of this conversation\. Choose another Memory model|Remember was cancelled|Remember could not store the entry on this computer|Remember stopped (unexpectedly|because another conversation is open)|This conversation (changed after Remember read it|was (saved|forgotten) from another window)|The Memory model changed after this entry was written|The app restarted while Remember was reading|A heading line or an HTML comment|Write what to keep before saving|Part of this entry can't be read|This entry is too long to save|A line saying checkpoint_id or session_id is none|This window is out of date)/.test(message);
+}
+
+/** Whether a Remember line is the plain outcome of what happened, shown as a status, not an error. */
+export function isRememberOutcome(message: string): boolean {
+	return message === REMEMBER_SAVED_ELSEWHERE || message === REMEMBER_FORGOTTEN_ELSEWHERE;
+}
+
+/** The dialog after the app restarted while Remember was reading; the notes it read are kept either way. */
+export function rememberRestartSentence(): string {
+	return "The app restarted while Remember was reading. Generate again to finish.";
+}
+
+/** Whose safety check refused a conversation: the maker of the Memory model, from the model itself. */
+function safetyCheckOwner(model: { provider: string; model: string; label?: string }): string {
+	if (model.provider === "anthropic" || /claude/i.test(model.model) || /claude/i.test(model.label ?? "")) return "Claude";
+	if (model.provider === "openai-codex" || model.provider === "openai") return "ChatGPT";
+	return modelDisplayName({ provider: model.provider, model: model.model, modelLabel: model.label ?? null });
+}
+
+/**
+ * The one line at the save of a page the provider refused whole (decision 40:
+ * the day alone, as title, arc and point), else null (draft). Its words stay
+ * searchable: the room finds a remembered conversation from its Remember on.
+ */
+export function rememberRefusedWholeSentence(proposal: { process: { model: { provider: string; model: string; label?: string } }; rememberRead?: { refusedWhole?: boolean } }): string | null {
+	// The server says it: a dated page also comes from a conversation of greetings, which no safety check refused.
+	if (proposal.rememberRead?.refusedWhole !== true) return null;
+	return `Saved. ${safetyCheckOwner(proposal.process.model)}'s safety check would not read this conversation, so its memory keeps only the date. The room can still look it up when you ask about it.`;
+}
+
+/** A sentence written for the person: plain words, ending a sentence, with no code, path or status in it. */
+export function isPlainProductSentence(message: string): boolean {
+	return /^[A-Z][^{}<>\[\]=]*[.!?]$/.test(message.trim()) && !/\b(?:Error|failed|ENOENT|EACCES|ENOSPC|ECONN\w*|HTTP|status \d+)\b|\(\d{3}\)|\/[\w.-]+\//.test(message);
+}
+
+/** The one plain stop for a Remember failure nothing classified (a full disk, an odd provider reply); its detail goes to the console. */
+export const REMEMBER_STOPPED_SENTENCE = "Remember stopped unexpectedly. Nothing was saved. Generate again.";
+/** The conversations a room holds before Memorize must make room; mirrors RECENT_CONTEXT_BLOCK_CAP in persistent-agents.ts. */
+export const RECENT_SESSIONS_BLOCK_CAP = 20;
+
+/** The warning one Remember before the room fills, and the line once it is full. */
+export function recentSessionsHeadsUp(count: number | null | undefined, room = "This room"): string | null {
+	if (count === RECENT_SESSIONS_BLOCK_CAP - 1) return "One more remembered conversation fills this room. Then Memorize before starting a new one.";
+	if (typeof count === "number" && count >= RECENT_SESSIONS_BLOCK_CAP) return `${room} now holds ${count} conversations, as many as it can. Memorize them to start a new conversation.`;
+	return null;
+}
+
+/**
+ * Before Save: the heads-up for the count this save leaves. The proposal
+ * counts the room's conversations before the save; the save adds one.
+ */
+export function rememberFillsRoomHeadsUp(countBefore: number | null | undefined, room = "this room"): string | null {
+	if (typeof countBefore !== "number") return null;
+	if (countBefore + 1 >= RECENT_SESSIONS_BLOCK_CAP) return `This save fills ${room}: it will hold ${countBefore + 1} conversations, as many as it can. Then Memorize them to start a new conversation.`;
+	return recentSessionsHeadsUp(countBefore + 1);
+}
+
+/** A save that landed whose fresh conversation could not be opened (draft): the plain outcome, never "did not work". */
+export const REMEMBER_SAVED_REOPEN_SENTENCE = "Saved. Enter the room again from its card.";
+
+/** A Save that finds the entry saved by another window: the plain outcome, and why this window is on Home. */
+export const REMEMBER_SAVED_ELSEWHERE_SENTENCE = "Already saved in another window. Enter the room again from its card.";
+
+export function rememberFailureSentence(message: string): string {
+	if (isPlainProductSentence(message)) return message;
+	console.info(`[remember] ${message}`);
+	return REMEMBER_STOPPED_SENTENCE;
 }

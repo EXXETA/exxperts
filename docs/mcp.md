@@ -72,6 +72,26 @@ token-based servers (GitHub: paste an API token once), OAuth-app servers
 card opens the custom form with the Custom OAuth client fields prefilled),
 and guided entries for providers that require your own credentials.
 
+Servers that expect their key in a header of their own (for example
+`X-Api-Key`) are added under **Custom headers** in the add-connector form,
+instead of or next to the API token. The headers are sent with every
+request. A header named Authorization, or with api key, token or secret
+as a word in its name (`X-Api-Key`, `X-Auth-Token`), is taken as the
+sign-in and switches off the automatic OAuth login for that connector. In a config file the same is a `headers` object on the server
+entry, with `"auth": false` when the header is the sign-in:
+
+```json
+{
+  "mcpServers": {
+    "my-server": {
+      "url": "https://example.com/mcp",
+      "auth": false,
+      "headers": { "X-Api-Key": "your-key" }
+    }
+  }
+}
+```
+
 Providers whose auth servers do not support dynamic client registration
 (HubSpot is one; most enterprise identity providers are configured this
 way) fail the one-click login with "does not support dynamic client

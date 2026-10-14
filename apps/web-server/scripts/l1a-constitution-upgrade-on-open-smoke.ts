@@ -11,7 +11,7 @@
 // gate that wanted an idle runtime would refuse all of this.
 //
 // Four rooms, one real server, one synthetic gateway, one turn each:
-//   1. a room frozen at template v2, its thread selected and active, is at v3
+//   1. a room frozen at template v2, its thread selected and active, is at v4
 //      after its first open — one archive, one event record, its durable memory
 //      and everything else it already had untouched — and a second open changes
 //      nothing;
@@ -413,10 +413,10 @@ try {
 	assert(firstAnswer.includes(ANSWER), `the room should open and answer, got ${JSON.stringify(firstAnswer.slice(0, 200))}`);
 
 	const v3L1a = readText(l1aPath);
-	assert(parsePersistentAgentL1aMarker(v3L1a).templateVersion === 3, `the opened room should carry template v3, got ${JSON.stringify(parsePersistentAgentL1aMarker(v3L1a))}`);
+	assert(parsePersistentAgentL1aMarker(v3L1a).templateVersion === 4, `the opened room should carry template v4, got ${JSON.stringify(parsePersistentAgentL1aMarker(v3L1a))}`);
 	assert(v3L1a.includes("You work with **Alice Example**"), "the upgraded constitution should be rebuilt from the room's own identity");
 	for (const point of V3_MEMORY_POINTS) assert(v3L1a.includes(point), `the upgraded constitution should carry this memory point: ${point}`);
-	pass("a room frozen at template v2 is at v3 after its first open");
+	pass("a room frozen at template v2 is at v4 after its first open");
 
 	const archives = listFiles(archiveDir);
 	assert(archives.length === 1, `the open should archive the previous constitution exactly once, got ${JSON.stringify(archives)}`);
@@ -424,7 +424,7 @@ try {
 	const events = listFiles(eventDir);
 	assert(events.length === 1, `the open should write exactly one event record, got ${JSON.stringify(events)}`);
 	const event = JSON.parse(readText(path.join(eventDir, events[0])));
-	assert(event.operation === "constitution_upgrade" && event.fromTemplateVersion === 2 && event.toTemplateVersion === 3, `the event record should read v2 -> v3, got ${JSON.stringify({ operation: event.operation, from: event.fromTemplateVersion, to: event.toTemplateVersion })}`);
+	assert(event.operation === "constitution_upgrade" && event.fromTemplateVersion === 2 && event.toTemplateVersion === 4, `the event record should read v2 -> v4, got ${JSON.stringify({ operation: event.operation, from: event.fromTemplateVersion, to: event.toTemplateVersion })}`);
 	assert(event.source.l1aFingerprint.value === sha256(V2_ROOM_L1A) && event.result.l1aFingerprint.value === sha256(v3L1a), "the event record should fingerprint both constitutions");
 	pass("the open leaves one archive copy and one event record, exactly as the runner does");
 
@@ -489,7 +489,7 @@ try {
 	finishPersistentAgentTurn(midTurnRoom.roomId, midTurnThreadId, { turnId: midTurnId, terminalReason: "completed" });
 	const midTurnAnswer = await openRoomAndAsk(midTurnRoom.roomId, `midturnopen_${Date.now().toString(36)}`);
 	assert(midTurnAnswer.includes(ANSWER), `the room the upgrade was refused on should open and answer, got ${JSON.stringify(midTurnAnswer.slice(0, 200))}`);
-	assert(parsePersistentAgentL1aMarker(readText(midTurnL1aPath)).templateVersion === 3, "the room catches up at a later open");
+	assert(parsePersistentAgentL1aMarker(readText(midTurnL1aPath)).templateVersion === 4, "the room catches up at a later open");
 	assert(listFiles(path.join(midTurnRoom.root, "L1a-archive")).length === 1, "the later open archives the old constitution once");
 	assert(listFiles(path.join(midTurnRoom.root, "events/constitution-upgrade")).length === 1, "the later open writes one event record");
 	pass("the room catches up at its next open, once the turn is done");

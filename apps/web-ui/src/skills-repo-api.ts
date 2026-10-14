@@ -58,6 +58,8 @@ export interface FeaturedSourceResult {
 	token: string | null;
 	skills: RepoFoundSkill[];
 	error?: string;
+	/** The error is a tool this machine lacks (Git, or Apple's developer tools), the same for every source. */
+	missingTool?: boolean;
 }
 
 /** Shallow-clone + scan a pasted git/GitHub URL, returning the found skills + a checkout token. */

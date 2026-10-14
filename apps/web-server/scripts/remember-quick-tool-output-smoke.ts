@@ -1,9 +1,9 @@
 // "Remember without the preview" with a shortened tool output. A real
 // Remember over a conversation holding one tool output longer than the
 // 4,000-character cap: the proposal carries no warning for it, only the count
-// on its read, so the quick path finds nothing to block on and the saved line
-// says what was shortened, in the approval screen's words. The in-parts read
-// says it the same way, and a real problem still blocks.
+// on its read (for the diagnostics), so the quick path saves on its own and
+// nothing on screen speaks of it. No engine warning stops the quick save; only
+// an entry with no arc or body opens the preview, with no reason shown.
 
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import fs from "node:fs";
@@ -189,19 +189,14 @@ try {
 	assert(proposal.body.rememberRead?.mode === "one-pass" && proposal.body.rememberRead?.trimmedToolOutputs === 1 && proposal.body.rememberRead?.toolOutputCapChars === 4000, `the read counts the one shortened tool output, got ${JSON.stringify(proposal.body.rememberRead)}`);
 	pass("the proposal carries the shortened tool output as a count on its read, not as a warning");
 
-	const blockers = client.quickRememberBlockers(proposal.body);
-	assert(blockers.length === 0, `the quick path finds nothing to block on, got ${JSON.stringify(blockers)}`);
-	const savedNote = client.rememberToolOutputSentence(proposal.body.rememberRead);
-	assert(savedNote === "One tool output over 4,000 characters was shortened before reading.", `the saved line says what was shortened, got ${JSON.stringify(savedNote)}`);
-	const screen = [...client.rememberReadSentences(proposal.body.rememberRead), ...warnings];
-	assert(screen.filter((line) => /tool output/i.test(line)).length === 1, `the approval screen says it once, got ${JSON.stringify(screen)}`);
-	pass("Remember without the preview saves on its own, and the saved line and the approval screen each say it once");
-
-	const partsRead = { mode: "parts" as const, reads: 3, model: CLAUDE, trimmedToolOutputs: 2, toolOutputCapChars: 4000 };
-	assert(client.rememberToolOutputSentence(partsRead) === "2 tool outputs over 4,000 characters were shortened before reading.", "the in-parts read says it the same way");
-	assert(client.quickRememberBlockers({ warnings: ["the notes on the earlier parts hold 2 things you asked to keep and this draft marks 1; check that nothing you asked to keep is missing"], fields: { sessionArc: "Arc.", body: "- Body." } }).length === 1, "a real problem still blocks the quick path");
-	assert(client.quickRememberBlockers({ warnings: [], fields: { sessionArc: "Arc.", body: " " } }).length === 1, "an incomplete proposal still blocks the quick path");
-	pass("the in-parts read states it in the same words, and real problems still block");
+	const needsPreview = (client as any).quickRememberNeedsPreview;
+	assert(typeof needsPreview === "function" && needsPreview(proposal.body) === false, "Remember without the preview saves on its own");
+	assert(needsPreview({ warnings: ["the model declined twice to write the entry, so it was put together from the notes"], fields: { sessionArc: "Arc.", body: "- Body." } }) === false, "an engine warning never stops the quick save");
+	assert(needsPreview({ warnings: [], fields: { sessionArc: "Arc.", body: " " } }) === true, "an entry with no body opens the preview");
+	for (const gone of ["quickRememberBlockers", "rememberToolOutputSentence", "rememberReadSentences", "rememberChipValue"]) assert(!(gone in client), `${gone} is gone`);
+	const appSource = fs.readFileSync(path.join(process.cwd(), "apps", "web-ui", "src", "App.tsx"), "utf8");
+	assert(!/shortened before reading|rememberReadSentences|displayWarnings|approval\.warnings/.test(appSource), "the preview and the saved line say nothing of how the entry was read");
+	pass("no engine warning stops the quick save, and nothing on screen says how the entry was read");
 
 	console.log("remember quick path tool output smoke passed");
 } catch (error) {

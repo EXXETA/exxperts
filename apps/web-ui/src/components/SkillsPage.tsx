@@ -15,7 +15,7 @@ import {
 import { SkillReview } from "./SkillReview";
 import { SkillDetailPage, formatSkillDate } from "./skill-detail";
 import { skillTierLabel } from "../skill-source-copy";
-import { useRemoteClientContext } from "../remote-client-context";
+import { SHARED_SERVER_ADMIN_LINE, useRemoteClientContext } from "../remote-client-context";
 import { SkillImportFromRepo } from "./SkillImportFromRepo";
 import { SkillBrowseDirectory } from "./SkillBrowseDirectory";
 import { useEscapeKey } from "./use-escape-key";
@@ -230,8 +230,11 @@ export function SkillsPage() {
 	// Remote devices browse the library read-only: the remote route policy
 	// (web-server remote-route-policy) serves the skill GET routes but refuses every
 	// write, upload, and repo import, so those affordances are not rendered there
-	// instead of failing per tap.
+	// instead of failing per tap. A shared server reads the same way: only its
+	// admin adds or removes skills, and the featured directory and repository
+	// import are not offered there.
 	const remoteClient = useRemoteClientContext();
+	const readOnly = remoteClient.remote || remoteClient.sharedServer;
 
 	const refresh = useCallback(async () => {
 		setLoading(true);
@@ -320,7 +323,7 @@ export function SkillsPage() {
 					skill={mode.skill}
 					onBack={() => backToList()}
 					onDeleted={(message) => { setError(null); void refresh(); backToList(message); }}
-					readOnly={remoteClient.remote}
+					readOnly={readOnly}
 				/>
 			</div>
 		);
@@ -330,7 +333,7 @@ export function SkillsPage() {
 		<div className="landing skills-page">
 			{header(mode.kind === "import-repo" || mode.kind === "browse"
 				? backToLibrary
-				: mode.kind === "write" || remoteClient.remote
+				: mode.kind === "write" || readOnly
 					? undefined
 					: <>
 						<button className="rs-btn" onClick={() => setMode({ kind: "browse" })}>Browse featured</button>
@@ -359,12 +362,12 @@ export function SkillsPage() {
 				</section>
 			) : (
 				<section className="ai-setup-section" aria-label="Skills library">
-					{remoteClient.remote && <p className="cli-note">Skills are uploaded and edited on the computer itself.</p>}
+					{readOnly && <p className="cli-note">{remoteClient.sharedServer ? SHARED_SERVER_ADMIN_LINE : "Skills are uploaded and edited on the computer itself."}</p>}
 					{notice && <p className="cli-note" role="status">{notice}</p>}
 					{error && <div className="checkpoint-proposal-error">{error}</div>}
 					{loading && skills.length === 0 && <p className="ai-setup-copy">Loading your skills…</p>}
 					{!loading && skills.length === 0 && !error && (
-						<p className="settings-empty">{remoteClient.remote ? "No skills yet." : "No skills yet. Use Add skill to write, upload, or import one."}</p>
+						<p className="settings-empty">{readOnly ? "No skills yet." : "No skills yet. Use Add skill to write, upload, or import one."}</p>
 					)}
 					{skills.length > 0 && (
 						<div className="skill-rows skill-table">

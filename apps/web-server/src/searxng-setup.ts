@@ -53,6 +53,8 @@ const DEFAULT_BASE_URL = `http://127.0.0.1:${process.env.SEARXNG_PORT || "8888"}
 
 type Run = {
 	child: ChildProcess;
+	/** "update" only ever touches a container that already runs. */
+	command: "start" | "update";
 	phase: SearxngSetupPhase;
 	baseUrl: string | null;
 	message: string | null;
@@ -73,8 +75,11 @@ function snapshot(run: Run): SearxngSetupStatus {
 }
 
 /** A quick real question to the engine: a status shown as running must be one
- * somebody just checked, not one remembered from a run that finished well. */
-export async function probeSearxng(baseUrl: string, timeoutMs = 1500): Promise<boolean> {
+ * somebody just checked, not one remembered from a run that finished well.
+ * The engine answers once its slowest search site has answered or timed out,
+ * which is SearXNG's 3 s default, so a shorter wait reads a healthy engine as
+ * silent. */
+export async function probeSearxng(baseUrl: string, timeoutMs = 6000): Promise<boolean> {
 	try {
 		const res = await fetch(`${baseUrl}/search?q=exxperts&format=json`, { signal: AbortSignal.timeout(timeoutMs) });
 		return res.ok;
@@ -148,7 +153,7 @@ export async function searxngSetupStatus(repoRoot: string, configuredBaseUrl?: s
 		return {
 			phase: "docker-missing",
 			baseUrl: null,
-			message: "This needs a container runtime. Install OrbStack (orbstack.dev) or Docker Desktop (docker.com), then press Start one on this computer.",
+			message: "This needs a container engine. Install OrbStack (orbstack.dev) or Docker Desktop (docker.com); Colima and Podman work too. Then press Start one on this computer.",
 			running: false,
 		};
 	}
@@ -156,7 +161,7 @@ export async function searxngSetupStatus(repoRoot: string, configuredBaseUrl?: s
 		return {
 			phase: "docker-stopped",
 			baseUrl: null,
-			message: "Docker is installed but not running. Start Docker Desktop or OrbStack, then press Start one on this computer.",
+			message: "Your container engine is installed but not running. Start it (OrbStack, Docker Desktop, Colima or Podman), then press Start one on this computer.",
 			running: false,
 		};
 	}
@@ -165,7 +170,7 @@ export async function searxngSetupStatus(repoRoot: string, configuredBaseUrl?: s
 		baseUrl: null,
 		message: runtime === "up"
 			? `The search engine at ${candidate} is not answering. Press Start one on this computer to bring it back.`
-			: `The search engine at ${candidate} is not answering. If Docker Desktop or OrbStack is not running, start it. Then press Start one on this computer to bring the search engine back.`,
+			: `The search engine at ${candidate} is not answering. If your container engine (OrbStack, Docker Desktop, Colima or Podman) is not running, start it. Then press Start one on this computer to bring the search engine back.`,
 		running: false,
 	};
 }
@@ -187,17 +192,17 @@ function absorb(run: Run, chunk: string) {
 		if (!text) continue;
 		if (/docker is not installed/i.test(text)) {
 			run.phase = "docker-missing";
-			run.message = "This needs Docker Desktop or OrbStack installed first.";
+			run.message = "This needs a container engine installed first: OrbStack or Docker Desktop, or Colima or Podman.";
 			continue;
 		}
 		if (/installed but not running/i.test(text)) {
 			run.phase = "docker-stopped";
-			run.message = "Docker is installed but not running. Start Docker Desktop or OrbStack, then try again.";
+			run.message = "Your container engine is installed but not running. Start it (OrbStack, Docker Desktop, Colima or Podman), then try again.";
 			continue;
 		}
 		// The engine prints these itself while it fetches the image, and this is
 		// the slow part people are waiting through.
-		if (/unable to find image|pulling from|downloading|extracting/i.test(text)) {
+		if (/unable to find image|pulling from|downloading|extracting|trying to pull|copying blob/i.test(text)) {
 			if (run.phase === "checking-docker") run.phase = "pulling-image";
 			continue;
 		}
@@ -221,7 +226,7 @@ function absorb(run: Run, chunk: string) {
  * Start the engine, or report the run already doing it. Never spawns a second
  * child, and never waits for the first one.
  */
-export function startSearxngSetup(repoRoot: string): SearxngSetupStatus {
+export function startSearxngSetup(repoRoot: string, command: Run["command"] = "start"): SearxngSetupStatus {
 	if (current && current.child.exitCode === null && !current.child.killed) return snapshot(current);
 	const script = searxngScriptPath(repoRoot);
 	if (!fs.existsSync(script)) {
@@ -238,12 +243,12 @@ export function startSearxngSetup(repoRoot: string): SearxngSetupStatus {
 	// the helper prints at people, and nothing here shows them a command.
 	const env = { ...process.env };
 	delete env.EXXPERTS_SETUP;
-	const child = spawn(process.execPath, [script, "start"], {
+	const child = spawn(process.execPath, [script, command], {
 		cwd: repoRoot,
 		env,
 		stdio: ["ignore", "pipe", "pipe"],
 	});
-	const run: Run = { child, phase: "checking-docker", baseUrl: null, message: null, output: [] };
+	const run: Run = { child, command, phase: "checking-docker", baseUrl: null, message: null, output: [] };
 	current = run;
 	child.stdout?.on("data", (data) => absorb(run, String(data)));
 	child.stderr?.on("data", (data) => absorb(run, String(data)));
@@ -253,6 +258,11 @@ export function startSearxngSetup(repoRoot: string): SearxngSetupStatus {
 		last = snapshot(run);
 	});
 	child.on("close", (code) => {
+		// An update that found nothing to update says nothing about the engine.
+		if (run.command === "update" && code === 0 && !/ready at/i.test(run.output.join(""))) {
+			current = null;
+			return;
+		}
 		if (code === 0) {
 			run.phase = "ready";
 			run.baseUrl = run.baseUrl ?? DEFAULT_BASE_URL;
@@ -268,6 +278,27 @@ export function startSearxngSetup(repoRoot: string): SearxngSetupStatus {
 		current = null;
 	});
 	return snapshot(run);
+}
+
+/**
+ * The engine this app set up stays on whatever image it was created with: its
+ * container restarts by itself, so the helper's start, which brings it up to
+ * date, may never run again. So when the app starts and the saved search is
+ * the local engine at the helper's own address, and that engine answers, the
+ * helper is asked to update it. It replaces the container only when its image
+ * or settings are behind, and it never starts one that is not running. The
+ * check is the engine's health page, not a search, so no search site sees it.
+ */
+export async function updateSearxngOnBoot(repoRoot: string, configuredBaseUrl: string | null | undefined): Promise<SearxngSetupStatus | null> {
+	if (!configuredBaseUrl || !isLoopback(configuredBaseUrl)) return null;
+	try {
+		if (new URL(configuredBaseUrl).port !== new URL(DEFAULT_BASE_URL).port) return null;
+		const res = await fetch(`${configuredBaseUrl.replace(/\/+$/, "")}/healthz`, { signal: AbortSignal.timeout(1500) });
+		if (!res.ok) return null;
+	} catch {
+		return null;
+	}
+	return startSearxngSetup(repoRoot, "update");
 }
 
 /** Test seam: forget any finished run so a smoke can assert from a clean slate. */

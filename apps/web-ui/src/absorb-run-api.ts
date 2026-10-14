@@ -3,7 +3,7 @@
 // before approval writes it. Every adjustment answers with the whole run, so
 // the screen re-renders from the server's numbers and never recomputes one.
 
-import { apiFetch, fetchJson } from "./api";
+import { ApiRequestError, apiFetch, fetchJson } from "./api";
 import type { AbsorbApprovalResponse, AbsorbDiscussionSignoffResponse, AbsorbProposalSourceMetadata, AbsorbRun, AbsorbRunStart, FoldGuidance, PersistentAgentId } from "./types";
 
 function absorbBase(agentId: PersistentAgentId): string {
@@ -49,7 +49,8 @@ export async function startAbsorbRun(agentId: PersistentAgentId, assessmentMarkd
 		const activeRunId = typeof body.details?.runId === "string" && body.details.runId ? body.details.runId : typeof body.runId === "string" && body.runId ? body.runId : null;
 		throw new AbsorbRunActiveError(message, activeRunId);
 	}
-	throw new Error(message);
+	// The code rides along (a Memory model too small, signed out): the room shows its one notice with the ways out.
+	throw new ApiRequestError(message, res.status, typeof body?.code === "string" ? body.code : undefined, body?.details);
 }
 
 export function fetchAbsorbRun(agentId: PersistentAgentId, runId: string): Promise<AbsorbRun> {
@@ -72,6 +73,15 @@ export function keepAbsorbRunEntries(agentId: PersistentAgentId, runId: string, 
 			...(keep.keepIds ? { keepIds: keep.keepIds } : {}),
 			...(keep.keepTopics ? { keepTopics: keep.keepTopics } : {}),
 		}),
+	});
+}
+
+/** Move a note the one-time sort placed to another topic before Save; the server answers with the run. */
+export function moveAbsorbRunSortedNote(agentId: PersistentAgentId, runId: string, entryId: string, topic: string): Promise<AbsorbRun> {
+	return fetchJson<AbsorbRun>(`${absorbBase(agentId)}/runs/${encodeURIComponent(runId)}/move`, {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify({ entryId, topic }),
 	});
 }
 

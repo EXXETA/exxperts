@@ -263,7 +263,9 @@ try {
 	}, ABSORB_MODEL, async (prompt) => {
 		ladderPrompt = prompt;
 		return { text: signoffMarkdown, usage: { input: 20, output: 15, totalTokens: 35, cost: 0 } };
-	}, { resolveModelWindow: () => ({ contextWindow: 24000, maxOutputTokens: 1000 }) });
+		// The gateway's Memorize model is a Claude model, counted at 1.6 times
+		// (modelTokenFactor): this window leaves the same 19,400 estimated tokens.
+	}, { resolveModelWindow: () => ({ contextWindow: 37700, maxOutputTokens: 1000 }) });
 	assert(ladderPrompt.includes(DISCUSSION_TRANSCRIPT_TRIM_MARKER), "ladder should trim long older messages in the signoff prompt");
 	assert(ladderPrompt.includes(ladderMessages[19].content), "ladder must keep the latest messages whole");
 	assert(ladderPrompt.includes("Turn 1: long discussion turn") && !ladderPrompt.includes(ladderMessages[0].content), "ladder should shorten, not drop, older messages at this stage");

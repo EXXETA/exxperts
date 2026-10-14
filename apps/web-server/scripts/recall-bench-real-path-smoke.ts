@@ -9,13 +9,16 @@
 //     "chatgpt-codex" profile), and a model spec reads provider/model;
 //   - with RECALL_BENCH_AGENT_DIR set, the run's home gets no models.json or
 //     auth.json, the workers and the server read the named dir, and its files
-//     are left byte for byte as they were.
+//     are left byte for byte as they were;
+//   - a real run that names no sign-in is told both ways to name one. Only the
+//     answer is checked, never the copy from the home: that path reads the
+//     person's real sign-in, so no test here goes near it.
 
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { benchProfileIdFor, parseBenchModelSpec, prepareBenchHome, useRealProviderRecords } from "./memory-bench/recall-engine.mjs";
+import { benchProfileIdFor, parseBenchModelSpec, prepareBenchHome, SIGN_IN_FROM_HOME_FLAG, signInSourceProblem, useRealProviderRecords } from "./memory-bench/recall-engine.mjs";
 
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "recall-bench-real-path-"));
 process.env.HOME = scratch;
@@ -51,7 +54,7 @@ function assert(condition: unknown, message: string): asserts condition {
 	process.env.RECALL_BENCH_AGENT_DIR = shared;
 	const { home } = prepareBenchHome("real-path-smoke");
 	assert(process.env.EXXPERTS_CODING_AGENT_DIR === shared, `the workers read the named agent dir, and EXXPERTS_CODING_AGENT_DIR is ${process.env.EXXPERTS_CODING_AGENT_DIR}`);
-	const lock = useRealProviderRecords({ spec: "openai-codex/gpt-6-sol" });
+	const lock = useRealProviderRecords({ spec: "openai-codex/gpt-6-sol", signInFromHome: false });
 	assert(lock.provider === "openai-codex" && lock.model === "gpt-6-sol", `the lock is the spec, got ${JSON.stringify(lock)}`);
 	for (const file of ["models.json", "auth.json"]) assert(!fs.existsSync(path.join(home, ".exxperts", "agent", file)), `no ${file} is copied into the run's home`);
 	const profile = JSON.parse(fs.readFileSync(path.join(home, ".exxperts", "app", "persistent-agent-ai-profile.json"), "utf-8"));
@@ -59,6 +62,16 @@ function assert(condition: unknown, message: string): asserts condition {
 	assert(fs.readFileSync(path.join(shared, "models.json"), "utf-8") === before[0] && fs.readFileSync(path.join(shared, "auth.json"), "utf-8") === before[1], "the named dir's files are left as they were");
 	fs.rmSync(home, { recursive: true, force: true });
 	console.log("ok RECALL_BENCH_AGENT_DIR is read in place");
+}
+
+// --- 3. No sign-in named: the run is told both ways ------------------------------
+{
+	assert(signInSourceProblem(false) === null, "with RECALL_BENCH_AGENT_DIR set, a run needs no flag");
+	delete process.env.RECALL_BENCH_AGENT_DIR;
+	const problem = signInSourceProblem(false);
+	assert(problem !== null && problem.includes("RECALL_BENCH_AGENT_DIR") && problem.includes(SIGN_IN_FROM_HOME_FLAG) && !problem.includes("\n"), `a run with neither stops with one line naming both, got ${JSON.stringify(problem)}`);
+	assert(signInSourceProblem(true) === null, "the flag is the other way to name the sign-in");
+	console.log("ok a run that names no sign-in is told both ways");
 }
 
 fs.rmSync(scratch, { recursive: true, force: true });

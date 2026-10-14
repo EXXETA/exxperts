@@ -171,6 +171,23 @@ describe("Agent", () => {
 		expect(seenMaxTokens).toBeUndefined();
 	});
 
+	it("forwards an explicit cacheRetention to the stream function and omits it by default", async () => {
+		let seen: string | undefined | null = null;
+		const capture = (options?: { cacheRetention?: string }) => {
+			seen = options?.cacheRetention;
+			throw new Error("capture only");
+		};
+
+		const long = new Agent({ cacheRetention: "long", streamFn: (_model, _context, options) => capture(options) });
+		await long.prompt("hello");
+		expect(seen).toBe("long");
+
+		seen = null;
+		const defaulted = new Agent({ streamFn: (_model, _context, options) => capture(options) });
+		await defaulted.prompt("hello");
+		expect(seen).toBeUndefined();
+	});
+
 	it("forwards an explicit maxRetries to the stream function and omits it by default", async () => {
 		let seenMaxRetries: number | undefined | null = null;
 		const capture = (options?: { maxRetries?: number }) => {

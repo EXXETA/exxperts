@@ -45,8 +45,8 @@ import {
 	createPersistentRoomWorkspaceTools,
 	isPersistentRoomWorkspaceToolPolicyEnabled,
 } from "../../../apps/web-server/src/persistent-room-workspace-tools.js";
+import { rememberPageFromParts } from "../../../apps/web-server/src/memory-typed-text.js";
 import { catalogModelNames, createRoomModelCatalog, resolveAiDefault, resolveRoomModel, roomModelUnavailableError, writeAiDefaults } from "../../../apps/web-server/src/room-models.js";
-import { toolOutputTrimSentence } from "../../../apps/web-server/src/remember-two-stage.js";
 import { recordPersistentRoomLastUsed } from "../../../apps/web-server/src/persistent-room-last-used.js";
 import { cliLauncherStatePath } from "../../product-state-paths.js";
 
@@ -426,10 +426,11 @@ function checkpointFieldsFromProposal(proposal: any): CheckpointEditFields {
 	};
 }
 
+/** The page Save writes, built as the server builds it from the parts (memory-typed-text.ts). */
 function buildApprovedRecentContextMarkdown(proposal: any, fields: CheckpointEditFields): string {
 	const heading = String(proposal?.proposedRecentContext ?? "").split(/\r?\n/)[0]?.trim()
-		|| `### RC-DRAFT | ${fields.parked.trim().toLowerCase() === "none" ? "CLOSED" : "OPEN"} | ${new Date().toISOString().slice(0, 10)} | ${String(proposal?.preview?.title ?? "Untitled checkpoint proposal")}`;
-	return `${heading}\n\n**Session arc:** ${fields.sessionArc.trim()}\n\n**Body:**\n${fields.body.trim()}\n\n**Parked:**\n${fields.parked.trim() || "None"}\n`;
+		|| `### RC-DRAFT | OPEN | ${new Date().toISOString().slice(0, 10)} | ${String(proposal?.preview?.title ?? "Untitled checkpoint proposal")}`;
+	return rememberPageFromParts(heading, fields);
 }
 
 function truncateDetail(value: string, max = 3000): string {
@@ -443,13 +444,10 @@ function formatCheckpointProposalDetail(proposal: any, draft: string): string {
 	const warnings = Array.isArray(proposal?.warnings) && proposal.warnings.length > 0
 		? `\n\nWarnings:\n${proposal.warnings.map((warning: string) => `- ${warning}`).join("\n")}`
 		: "";
-	// What the read shortened is a count on the proposal, said once here.
-	const trimmed = toolOutputTrimSentence(Number(proposal?.rememberRead?.trimmedToolOutputs ?? 0), Number(proposal?.rememberRead?.toolOutputCapChars) || undefined);
 	return truncateDetail([
 		String(proposal?.preview?.summary ?? "").trim(),
 		points,
 		`\n\nDraft Recent Context entry:\n\n${draft}`,
-		trimmed ? `\n\n${trimmed}` : "",
 		warnings,
 	].join(""));
 }
@@ -594,7 +592,7 @@ async function runCheckpointCommand(args: string, ctx: ExtensionCommandContext):
 			model: env.model,
 			density: proposal.density,
 			proposal,
-			approvedRecentContext: draft,
+			approvedFields: fields,
 		}, env.agentId, { expectedMemoryModel: resolveRoomModel(env.agentId, "memory").effective });
 		const result = writeApprovedCheckpoint(parsedApproval.request, parsedApproval.warnings, new Date(), { runtimeCwd: process.cwd() });
 		suppressRoomStandbyOnShutdown = true;

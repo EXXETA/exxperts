@@ -65,15 +65,6 @@ export function connectorConfigKey(config: { mcpServers?: Record<string, { url?:
 	);
 }
 
-// Figma personal access tokens (figd_…) must travel in Figma's own
-// X-Figma-Token header — mcp.figma.com rejects them in Authorization
-// ("figd_ tokens must be passed via X-Figma-Token header"). auth: false
-// also switches off OAuth auto-detect for the entry.
-function tokenServerEntry(url: string, token: string): Record<string, unknown> {
-	if (token.startsWith("figd_")) return { url, auth: false, headers: { "X-Figma-Token": token } };
-	return { url, auth: "bearer", bearerToken: token };
-}
-
 /** `configCwd` is the folder config files are found against: a room passes its connector folder, so the panel lists the connectors the room has. */
 async function loadRows(configCwd?: string): Promise<{ rows: ConnectorRow[]; configKey: string }> {
 	const [configMod, authMod, cacheMod] = await Promise.all([
@@ -91,7 +82,7 @@ async function loadRows(configCwd?: string): Promise<{ rows: ConnectorRow[]; con
 			headers?: Record<string, string>;
 			oauth?: unknown;
 		};
-		// Static credential headers (Figma's X-Figma-Token) come with auth:
+		// Static credential headers (an API key header, say) come with auth:
 		// false to switch off OAuth auto-detect, but they are still token auth.
 		const headerToken = entry.auth === false && Object.keys(entry.headers ?? {}).some((h) => /token|key|secret|authorization/i.test(h));
 		const mode: ConnectorRow["mode"] =
@@ -456,7 +447,7 @@ class ConnectorsPanel {
 						this.setNotice("Cancelled. No token entered.", "warn");
 						return;
 					}
-					void this.writeServer(entry.id, tokenServerEntry(entry.url, value.trim()));
+					void this.writeServer(entry.id, { url: entry.url, auth: "bearer", bearerToken: value.trim() });
 				},
 				cancel: () => {
 					this.input = null;
@@ -579,7 +570,7 @@ class ConnectorsPanel {
 				submit: (token) => {
 					this.input = null;
 					if (token.trim()) {
-						void this.writeServer(name, tokenServerEntry(url, token.trim()));
+						void this.writeServer(name, { url, auth: "bearer", bearerToken: token.trim() });
 						return;
 					}
 					askOAuthClientId(name, url);

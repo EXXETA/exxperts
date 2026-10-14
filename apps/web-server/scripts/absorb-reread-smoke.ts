@@ -60,7 +60,7 @@ function summary(id: string, head: string, points: string[], meta = ""): string[
 	return [`<!-- e: id=${id} kind=fact saved=2026-09-01${meta} summary=true -->`, `- ${head}`, ...points.map((point) => `  - ${point}`), ""];
 }
 
-/** A room whose memory holds a fact (m-0003), an open item (m-0002) and the given Unsorted notes. */
+/** A room whose memory holds a fact (m-0003), an open item (m-0002) and the given summary notes, placed under "Calls" (Unsorted is sorted before any re-read). */
 function createRoom(name: string, pages: string[], unsorted: string[], extraDeep: string[] = []): { agentId: string; l1bPath: string } {
 	const created = createPersistentAgentFromScaffoldInput({ displayName: name, userName: "Synthetic User", preferredUserAddress: "Synthetic User" });
 	const agentId = created.agent.agentId;
@@ -70,7 +70,7 @@ function createRoom(name: string, pages: string[], unsorted: string[], extraDeep
 		"## Deep Memory", "", "<!-- entries: next=900 -->", "",
 		"### Maintenance terms", "", "<!-- e: id=m-0003 kind=fact saved=2026-09-01 -->", JUNE, "",
 		...extraDeep,
-		"### Unsorted", "", ...unsorted,
+		"### Calls", "", ...unsorted,
 		"## Active Items", "", "<!-- e: id=m-0002 kind=item saved=2026-09-01 status=open -->", "- Send the draft to legal.", "",
 		"## Recent Context", "", pages.join("\n"),
 	].join("\n"), { mode: 0o600 });
@@ -172,6 +172,31 @@ await section("no-from", async () => {
 	assert(delta && delta.from === undefined && !delta.learned && !/from=/.test(fs.readFileSync(room.l1bPath, "utf-8").split("\n").find((line) => line.includes(delta.id)) ?? ""), `a note with no from gives its points none, got ${JSON.stringify(delta)}`);
 });
 
+// A page placed by code is a summary note under any Deep Memory topic, not
+// only Unsorted, and a run reads every such note, with no cap: six here, four
+// of them placed under topics. A pinned one and a plain note are never read.
+await section("placed-anywhere", async () => {
+	const placed = ["m-0111", "m-0112", "m-0113", "m-0114"];
+	const room = createRoom("Placed Room", [page("RC-0001", "Pricing")], [
+		...summary("m-0115", "Unsorted call one", ["The zqu1 point is open."], " learned=2026-08-05"),
+		...summary("m-0116", "Unsorted call two", ["The zqu2 point is open."], " learned=2026-08-06"),
+	], [
+		"### Billing calls", "",
+		...placed.flatMap((id, n) => summary(id, `Placed call ${n}`, [`The zqp${n} point is agreed.`], ` learned=2026-08-0${n + 1}`)),
+		...summary("m-0117", "Pinned call", ["The zqpin point is pinned."], " pinned=true"),
+		"<!-- e: id=m-0118 kind=fact saved=2026-09-01 -->", "- A plain billing note.", "",
+	]);
+	const scripts: Record<string, Script> = { "RC-0001": () => adds("- Pricing zqgamma holds for the year.") };
+	placed.forEach((id, n) => { scripts[id] = () => adds(`- The zqp${n} point is agreed.`); });
+	scripts["m-0115"] = () => adds("- The zqu1 point is open.");
+	scripts["m-0116"] = () => adds("- The zqu2 point is open.");
+	const { runId, run: ready } = await started(room, scripts);
+	assert(JSON.stringify(ready.rereads.map((row) => [row.id, row.outcome])) === JSON.stringify([...placed, "m-0115", "m-0116"].map((id) => [id, "folded"])), `every summary note in any topic is read, oldest learned first, got ${JSON.stringify(ready.rereads.map((row) => [row.id, row.outcome]))}`);
+	approveAbsorbRun(room.agentId, runId, SAVE_AT);
+	for (const id of [...placed, "m-0115", "m-0116"]) assert(!entry(room.l1bPath, id), `${id} is sorted and leaves memory`);
+	assert(entry(room.l1bPath, "m-0117")?.summary && entry(room.l1bPath, "m-0118"), "the pinned summary and the plain note stay");
+});
+
 // What sorts a note and what does not. A reply of empty texts lands nothing;
 // a reply that only repeats what memory holds sorts it, and the line it never
 // mentioned is found by search in the archived row.
@@ -195,14 +220,14 @@ await section("endings", async () => {
 	}, { prompts });
 	assert(/Session being folded: m-0103 \(3 of 5\)/.test(prompts.get("m-0103") ?? "") && /Session being folded: RC-0001 \(1 of 1\)/.test(prompts.get("RC-0001") ?? ""), "the re-reads count among themselves, apart from the conversations");
 	const outcome = (id: string) => ready.rereads.find((row) => row.id === id)?.outcome;
-	assert(outcome("m-0101") === "summarized" && outcome("m-0102") === "folded" && outcome("m-0103") === "dropped" && outcome("m-0104") === "summarized" && outcome("m-0105") === "failed" && failed === 2, `each re-read ends as its reply decides, got ${JSON.stringify(ready.rereads.map((row) => [row.id, row.outcome]))}`);
+	assert(outcome("m-0101") === "summarized" && outcome("m-0102") === "folded" && outcome("m-0103") === "dropped" && outcome("m-0104") === "summarized" && outcome("m-0105") === "summarized" && failed === 2, `each re-read ends as its reply decides, a failure while the model answers leaving the note where it is, got ${JSON.stringify(ready.rereads.map((row) => [row.id, row.outcome]))}`);
 	assert(ready.state === "ready" && !ready.stop, "a failure the model answered for is the page's, not an outage");
 	const held = readPageFailures(createPersistentAgentInstance(room.agentId).runtimeDir());
 	assert(![...held.records.keys(), ...held.throttled.keys()].some((key) => key.startsWith("reread:") || key.startsWith("m-")), `a re-read never leaves a failure record, got ${JSON.stringify([...held.records.keys()])}`);
 	const saved = approveAbsorbRun(room.agentId, runId, SAVE_AT);
 	for (const id of ["m-0101", "m-0103", "m-0104", "m-0105"]) {
 		const kept = entry(room.l1bPath, id);
-		assert(kept && kept.summary && kept.topic === "Unsorted" && JSON.stringify(kept.tried) === JSON.stringify([KEY]), `${id} is not sorted: it stays, with the model that tried it, got ${JSON.stringify(kept)}`);
+		assert(kept && kept.summary && kept.topic === "Calls" && JSON.stringify(kept.tried) === JSON.stringify([KEY]), `${id} is not sorted: it stays, with the model that tried it, got ${JSON.stringify(kept)}`);
 	}
 	assert(!entry(room.l1bPath, "m-0102") && withWord(room.l1bPath, "zqorphan").length === 0, "a reply that only repeats memory sorts the note, and archives it whole");
 	assert(saved.sortedNotes === 1, `one note sorted, got ${saved.sortedNotes}`);
@@ -238,31 +263,31 @@ await section("update-and-history", async () => {
 	assert(archive.some((row) => row.why === "superseded" && row.text === HOURS) && archive.filter((row) => row.why === "sorted").length === 2, "the note's old text is a superseded version, and both summaries are sorted");
 });
 
-// At most five a run, oldest first; once per model; one more try on another.
-await section("cap-and-models", async () => {
+// Every note a run, oldest first and undated last; once per model; one more try on another.
+await section("all-and-models", async () => {
 	const unsorted = Array.from({ length: 7 }, (_, n) => summary(`m-01${10 + n}`, `Call ${n}`, [`The zqcap${String.fromCharCode(97 + n)} point is open.`], n === 6 ? "" : ` learned=2026-08-${String(20 - n).padStart(2, "0")}`)).flat();
-	const room = createRoom("Cap Room", [page("RC-0001", "Pricing")], unsorted);
+	const room = createRoom("All Room", [page("RC-0001", "Pricing")], unsorted);
 	const drops: Record<string, Script> = Object.fromEntries(Array.from({ length: 7 }, (_, n) => [`m-01${10 + n}`, () => fence([{ op: "drop", reason: "Nothing to sort." }])]));
 	const first = await started(room, { "RC-0001": () => adds("- Pricing zqgamma holds."), ...drops });
-	assert(JSON.stringify(first.run.rereads.map((row) => row.id)) === JSON.stringify(["m-0115", "m-0114", "m-0113", "m-0112", "m-0111"]), `five a run, oldest learned first, got ${JSON.stringify(first.run.rereads.map((row) => [row.id, row.date]))}`);
+	assert(JSON.stringify(first.run.rereads.map((row) => row.id)) === JSON.stringify(["m-0115", "m-0114", "m-0113", "m-0112", "m-0111", "m-0110", "m-0116"]), `every note a run, oldest learned first, the undated last, got ${JSON.stringify(first.run.rereads.map((row) => [row.id, row.date]))}`);
 	approveAbsorbRun(room.agentId, first.runId, SAVE_AT);
 	fs.appendFileSync(room.l1bPath, page("RC-0002", "Delivery"));
 	resetAbsorbRunsForTests();
 	const second = await started(room, { "RC-0002": () => adds("- Delivery zqdelivery takes a week."), ...drops });
-	assert(JSON.stringify(second.run.rereads.map((row) => row.id)) === JSON.stringify(["m-0110", "m-0116"]), `the same model reads only what it has not tried, the undated last, got ${JSON.stringify(second.run.rereads.map((row) => row.id))}`);
+	assert(second.run.rereads.length === 0, `the same model reads only what it has not tried, got ${JSON.stringify(second.run.rereads.map((row) => row.id))}`);
 	approveAbsorbRun(room.agentId, second.runId, SAVE_AT);
 	fs.appendFileSync(room.l1bPath, page("RC-0003", "Support"));
 	resetAbsorbRunsForTests();
 	const third = await started(room, { "RC-0003": () => adds("- Support zqsupport answers in a day."), ...drops }, { model: OTHER });
-	assert(third.run.rereads.length === 5 && third.run.rereads[0].id === "m-0115", `another model gets one more try, got ${JSON.stringify(third.run.rereads.map((row) => row.id))}`);
+	assert(third.run.rereads.length === 7 && third.run.rereads[0].id === "m-0115", `another model gets one more try, got ${JSON.stringify(third.run.rereads.map((row) => row.id))}`);
 	approveAbsorbRun(room.agentId, third.runId, SAVE_AT);
-	assert(JSON.stringify(entry(room.l1bPath, "m-0115")?.tried) === JSON.stringify([KEY, OTHER_KEY]) && JSON.stringify(entry(room.l1bPath, "m-0116")?.tried) === JSON.stringify([KEY]), `tried lists each model once, got ${JSON.stringify([entry(room.l1bPath, "m-0115")?.tried, entry(room.l1bPath, "m-0116")?.tried])}`);
-	// Nothing waiting, nothing re-read: the re-reads ride on a run with a conversation.
+	assert(JSON.stringify(entry(room.l1bPath, "m-0115")?.tried) === JSON.stringify([KEY, OTHER_KEY]) && JSON.stringify(entry(room.l1bPath, "m-0116")?.tried) === JSON.stringify([KEY, OTHER_KEY]), `tried lists each model once, got ${JSON.stringify([entry(room.l1bPath, "m-0115")?.tried, entry(room.l1bPath, "m-0116")?.tried])}`);
+	// Nothing waiting: a run with no conversation re-reads the notes too, on a model that has not tried them.
 	resetAbsorbRunsForTests();
 	fs.writeFileSync(room.l1bPath, fs.readFileSync(room.l1bPath, "utf-8").replace(/## Recent Context[\s\S]*$/, `## Recent Context\n\n${page("RC-0004", "Dropped by the person")}`));
 	const dropped = startAbsorbRun({ agentId: room.agentId, assessmentMarkdown: ASSESSMENT, model: { provider: "openai-compatible", model: "gpt-5.3", label: "GPT-5.3" }, generate: scripted({}), probe: probeAnswers, now: RUN_CLOCK, guidance: { pin: [], drop: [{ session: "RC-0004", reason: "Leave it out." }], corrections: [], topics: [], instructions: [] } });
 	const droppedRun = await settle(room.agentId, dropped.runId);
-	assert(droppedRun.rereads.length === 0, `a run with no conversation to read re-reads nothing, got ${JSON.stringify(droppedRun.rereads.map((row) => row.id))}`);
+	assert(droppedRun.rereads.length === 7, `a run with no conversation to read re-reads every note, got ${JSON.stringify(droppedRun.rereads.map((row) => row.id))}`);
 });
 
 // An outage tries nothing; a resume reads the rest; a run not saved writes nothing.
@@ -299,6 +324,42 @@ await section("outage-and-unsaved", async () => {
 	const unsaved = await started(third, { "RC-0001": () => adds("- Pricing zqgamma holds."), "m-0101": () => fence([{ op: "drop", reason: "Nothing." }]) });
 	cancelAbsorbRun(third.agentId, unsaved.runId);
 	assert(fs.readFileSync(third.l1bPath, "utf-8") === before, "a run not saved leaves the note untried");
+});
+
+// A note read again that a restart caught gets the record a page gets: Continue
+// reads it once more; caught a second time, Continue leaves it where it is,
+// with no call, so a note that brings the server down cannot do it again.
+await section("restart", async () => {
+	const room = createRoom("Restart Room", [page("RC-0001", "Pricing")], summary("m-0101", "First call", ["The zqrestart point is open."], " learned=2026-08-01"));
+	const record = () => readPageFailures(createPersistentAgentInstance(room.agentId).runtimeDir()).records.get("reread:m-0101")?.code;
+	let inFlight = 0;
+	const hangs: Script = () => {
+		inFlight += 1;
+		return new Promise<AbsorbGenerateResult>(() => {});
+	};
+	const caught = async () => {
+		const deadline = Date.now() + 30_000;
+		while (inFlight < 1) {
+			assert(Date.now() < deadline, "the note is being read");
+			await sleep(2);
+		}
+		await sleep(20);
+		resetAbsorbRunsForTests(); // the server restarts while the note is read
+	};
+	const { runId } = startAbsorbRun({ agentId: room.agentId, assessmentMarkdown: ASSESSMENT, model: MODEL, generate: scripted({ "RC-0001": () => adds("- Pricing zqgamma holds."), "m-0101": hangs }), probe: probeAnswers, now: RUN_CLOCK });
+	await caught();
+	const revived = getAbsorbRun(room.agentId, runId);
+	assert(revived.rereads.find((row) => row.id === "m-0101")?.outcome === "pending" && record() === "restarted", `the note waits for Continue with a restart record, got ${JSON.stringify([revived.rereads.map((row) => [row.id, row.outcome]), record()])}`);
+	inFlight = 0;
+	resumeAbsorbRun(room.agentId, runId, MODEL, new Date(), { generate: scripted({ "m-0101": hangs }), probe: probeAnswers });
+	await caught();
+	getAbsorbRun(room.agentId, runId);
+	assert(inFlight === 1 && record() === "restarted-twice", `Continue read it once more, and a second restart marks it, got ${JSON.stringify([inFlight, record()])}`);
+	const prompts = new Map<string, string>();
+	resumeAbsorbRun(room.agentId, runId, MODEL, new Date(), { generate: scripted({}, prompts), probe: probeAnswers });
+	const settled = await settle(room.agentId, runId);
+	assert(!prompts.has("m-0101") && settled.state === "ready" && !settled.rereads.some((row) => row.id === "m-0101" && row.outcome === "pending"), `a note a restart caught twice is left where it is, with no call, got ${JSON.stringify([[...prompts.keys()], settled.state, settled.rereads.map((row) => [row.id, row.outcome])])}`);
+	assert(entry(room.l1bPath, "m-0101"), "the note is still in memory");
 });
 
 // A note sorted away leaves its partner's pair mark; the point it gave back
@@ -346,43 +407,31 @@ await section("prepass", async () => {
 	assert((back && back.text.includes("zqhugezf")) || (archived && archived.why === "budget" && archived.text.includes("zqhugezf")), `the long note is whole, in memory or in the archive, got ${JSON.stringify([back?.id, archived?.why])}`);
 });
 
-// The Maintain hint's count: summary notes left in Unsorted after a saved
-// re-read, by a line scan of the file on every status refresh. A saved run
-// that could not sort a note makes it 1, undo takes it back, and on every
-// fixture the scan counts what a parse of the same file counts.
-await section("hint-count", async () => {
+// The Maintain chooser no longer shows a hint for notes left in Unsorted:
+// every Memorize sorts them at its start, and the Memorize card says so. The
+// status keeps only what the card reads (notesToSort), and a saved run leaves
+// nothing in Unsorted.
+await section("no-unsorted-hint", async () => {
 	const { getPersistentAgentStatus } = await import("../src/persistent-agents.js");
-	const { unsortedAfterRereadCount, unsortedAfterRereadTopics } = await import("../src/absorb-reread.js");
-	const count = (agentId: string) => getPersistentAgentStatus(agentId).memoryStatus.unsortedAfterReread;
-	const room = createRoom("Hint Room", [page("RC-0001", "Pricing")], [
+	const reread = await import("../src/absorb-reread.js");
+	const room = createRoom("Hint Room", [page("RC-0001", "Pricing")], [], [
+		"### Unsorted", "",
 		...summary("m-0101", "Dropped call", ["The zqdrop point is small talk."], " learned=2026-08-01"),
 		...summary("m-0102", "Sorted call", ["The zqsorted point is agreed."], " learned=2026-08-02"),
 	]);
-	assert(count(room.agentId) === 0, `no note was tried yet, got ${count(room.agentId)}`);
+	const status = (agentId: string) => getPersistentAgentStatus(agentId).memoryStatus as Record<string, unknown>;
+	assert(!("unsortedAfterReread" in status(room.agentId)), `the status carries no count for a hint, got ${JSON.stringify(status(room.agentId))}`);
+	assert(!("unsortedAfterRereadCount" in reread) && !("waitsUnsortedAfterReread" in reread), "nothing is left that only counted for the hint");
+	const toSort = (agentId: string) => getPersistentAgentStatus(agentId).memoryStatus.notesToSort;
+	assert(toSort(room.agentId) === 2, `the notes waiting in Unsorted, and untried summary notes, keep Memorize open, got ${toSort(room.agentId)}`);
 	const { runId } = await started(room, {
 		"RC-0001": () => adds("- Pricing zqgamma holds."),
 		"m-0101": () => fence([{ op: "drop", reason: "Nothing here to keep." }]),
 		"m-0102": () => adds("- The zqsorted point is agreed."),
 	});
-	const saved = approveAbsorbRun(room.agentId, runId, SAVE_AT);
-	assert(count(room.agentId) === 1, `the note the save could not sort is counted, the sorted one is not, got ${count(room.agentId)}`);
-	undoMemorySave(room.agentId, saved.saveId, new Date("2026-09-13T09:10:00.000Z"));
-	assert(count(room.agentId) === 0, `undo takes the try back, got ${count(room.agentId)}`);
-	const tried = (id: string, extra = "") => [`<!-- e: id=${id} kind=fact saved=2026-09-01 summary=true tried=${KEY}${extra} -->`, `- Call ${id}`, ""];
-	const deep = (...lines: string[]) => ["## Deep Memory", "", "<!-- entries: next=900 -->", "", ...lines];
-	const fixtures: Array<[string, string[], number]> = [
-		["tried, untried, pinned and a plain note", deep("### Unsorted", "", ...tried("m-0201"), ...tried("m-0202", " pinned=true"), ...summary("m-0203", "Untried", ["x"]), `<!-- e: id=m-0204 kind=fact saved=2026-09-01 tried=${KEY} -->`, "- Not a summary", ""), 2],
-		["a lowercase heading", deep("### unsorted", "", ...tried("m-0211")), 1],
-		["tried outside Unsorted", deep("### Maintenance terms", "", ...tried("m-0221")), 0],
-		["Unsorted outside Deep Memory", [...deep("### Terms", ""), "## Active Items", "", "### Unsorted", "", ...tried("m-0231"), "## Notes", "", "### Unsorted", "", ...tried("m-0232")], 0],
-		["a second Deep Memory", [...deep("### Terms", ""), "## Deep Memory", "", "### Unsorted", "", ...tried("m-0241")], 0],
-	];
-	for (const [name, lines, expected] of fixtures) {
-		const l1b = ["<!-- exxeta:l1b schema_version=1 -->", "", "## Chronos", "", "- Last checkpoint: none", "", ...lines, "## Recent Context", ""].join("\n");
-		fs.writeFileSync(room.l1bPath, l1b);
-		const parsed = unsortedAfterRereadTopics(parseMemoryDocument(l1b)).reduce((sum, topic) => sum + topic.count, 0);
-		assert(count(room.agentId) === expected && unsortedAfterRereadCount(l1b) === parsed, `${name}: the status counts ${expected} and the scan equals the parse, got ${JSON.stringify([count(room.agentId), unsortedAfterRereadCount(l1b), parsed])}`);
-	}
+	approveAbsorbRun(room.agentId, runId, SAVE_AT);
+	assert(!/^### Unsorted$/m.test(fs.readFileSync(room.l1bPath, "utf-8")), "a saved run leaves nothing in Unsorted");
+	assert(toSort(room.agentId) === 0, `and nothing waits for Memorize once the note it could not sort was tried, got ${toSort(room.agentId)}`);
 });
 
 console.log("absorb-reread smoke passed");

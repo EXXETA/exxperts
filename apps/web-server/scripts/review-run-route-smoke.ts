@@ -220,6 +220,18 @@ const gateway = http.createServer((req, res) => {
 
 // --- The spawned server ------------------------------------------------------
 
+/** A conversation open in the room that has started (a question and its answer), written as the room's own code writes one: Pi-backed, so its start text stays frozen. */
+async function openStartedConversation(agentId: string): Promise<void> {
+	process.env.HOME = tempHome;
+	process.env.USERPROFILE = tempHome;
+	process.env.EXXPERTS_CODING_AGENT_DIR = agentDir;
+	const agents = await import("../src/persistent-agents.js");
+	const threadId = "pi_started_0001";
+	agents.writePersistentAgentThread(agentId, threadId, { state: "active", origin: "home", model: { provider: "openai-compatible", model: "room-model" }, items: [{ kind: "user", id: "u1", text: "A question." }, { kind: "assistant", id: "a1", text: "An answer." }] }, {
+		createRuntime: ({ model }) => agents.createPersistentAgentPiSessionJsonlThreadRuntime({ agentId, threadId, model, cwd: tempHome }),
+	});
+}
+
 function smokeEnv(): NodeJS.ProcessEnv {
 	const env: NodeJS.ProcessEnv = { ...process.env };
 	for (const key of ["ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN", "OPENAI_API_KEY", "AZURE_OPENAI_API_KEY", "EXXETA_AI_API_KEY", "COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN", "GEMINI_API_KEY", "GOOGLE_CLOUD_API_KEY", "OPENROUTER_API_KEY"]) {
@@ -398,6 +410,18 @@ try {
 	// --- 7. Raising the limit on the run ---------------------------------------
 	const tooSmall = await requestJson(`${runUrl}/budget`, jsonBody("POST", { budgetTokens: 9000 }));
 	assert(tooSmall.status === 400 && /between 10000 and 80000/.test(String(tooSmall.body?.error ?? "")), `a budget below the floor should be refused with what a budget may be, got ${tooSmall.status}: ${JSON.stringify(tooSmall.body)}`);
+	// A limit the room's Memory model cannot hold (its gateway window shrank to
+	// 60k, which holds 10k and not 60k) is refused before it reaches the run.
+	const modelsFile = path.join(agentDir, "models.json");
+	const roomModelWindow = (contextWindow: number) => {
+		const models = JSON.parse(fs.readFileSync(modelsFile, "utf-8"));
+		models.providers["openai-compatible"].models[0].contextWindow = contextWindow;
+		fs.writeFileSync(modelsFile, JSON.stringify(models, null, 2), { mode: 0o600 });
+	};
+	roomModelWindow(60_000);
+	const pastTheModel = await requestJson(`${runUrl}/budget`, jsonBody("POST", { budgetTokens: RAISED_BUDGET_TOKENS }));
+	roomModelWindow(400_000);
+	assert(pastTheModel.status === 400 && pastTheModel.body?.error === "A memory budget of 60k needs a larger Memory model than Room Model. Choose one in Room settings, Model first.", `a limit the Memory model cannot hold is refused on the card, got ${pastTheModel.status}: ${JSON.stringify(pastTheModel.body)}`);
 	const raised = await requestJson(`${runUrl}/budget`, jsonBody("POST", { budgetTokens: RAISED_BUDGET_TOKENS }));
 	assert(raised.status === 200 && raised.body.budget.budgetTokens === RAISED_BUDGET_TOKENS, `POST review/runs/:runId/budget should return the run measured against the new budget, got ${raised.status}: ${JSON.stringify(raised.body?.budget)}`);
 	assert(raised.body.demotion.counts.leaving === 0 && raised.body.demotion.entries.length >= kept.body.demotion.entries.length, `at ${RAISED_BUDGET_TOKENS} tokens nothing has to leave this memory and the rows stay listed, got ${JSON.stringify(raised.body.demotion.counts)}`);
@@ -405,8 +429,11 @@ try {
 	assert(settingsAfterRaise.body?.settings?.memoryBudgetTokens === MIN_BUDGET_TOKENS && raised.body.budget.savedBudgetTokens === MIN_BUDGET_TOKENS, `raising the limit on the card must not store it on the room before Save, got ${JSON.stringify({ settings: settingsAfterRaise.body?.settings, budget: raised.body.budget })}`);
 
 	// --- 8. Approving: the one write ------------------------------------------
+	// A conversation open in the room that has started keeps the memory it started with, and the save says so.
+	await openStartedConversation(roomId);
 	const approved = await requestJson(`${runUrl}/approve`, jsonBody("POST", {}));
 	assert(approved.status === 200, `POST review/runs/:runId/approve should return 200, got ${approved.status}: ${JSON.stringify(approved.body)}`);
+	assert(approved.body.openConversationKeepsMemory === true, `the save says the started open conversation keeps the memory it started with, got ${JSON.stringify(approved.body.openConversationKeepsMemory)}`);
 	assert(approved.body.budgetRaisedTo === RAISED_BUDGET_TOKENS && approved.body.memoryBudget?.budgetTokens === RAISED_BUDGET_TOKENS, `the limit the card raised is written by the save and named to the saved screen, got ${JSON.stringify({ budgetRaisedTo: approved.body.budgetRaisedTo, memoryBudget: approved.body.memoryBudget })}`);
 	const settingsAfterApproval = await requestJson(`${room}/maintenance-settings`);
 	assert(settingsAfterApproval.body?.settings?.memoryBudgetTokens === RAISED_BUDGET_TOKENS, `the limit the card raised is the room's from the save on, got ${JSON.stringify(settingsAfterApproval.body?.settings)}`);

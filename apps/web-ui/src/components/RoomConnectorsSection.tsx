@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { PersistentAgentStatus } from "../types";
 import { fetchPersistentRoomMcpConnectors, updatePersistentRoomMcpConnector, type PersistentRoomGrantedConnectorStatus } from "../persistent-room-management-api";
 import { fetchMcpConnectorsStatus, type McpConnectorStatus } from "../mcp-api";
+import { fetchRemoteClientContext } from "../remote-client-context";
 import { CONNECTOR_ICONS } from "../connector-icons";
 import { RsInfo } from "./rs-info";
 import { PaneHeader } from "./pane-header";
@@ -29,7 +30,13 @@ export function RoomConnectorsSection({ status, onOpenConnectors }: { status: Pe
 		setGranted(null);
 		setConfigured(null);
 		setError(null);
-		Promise.all([fetchPersistentRoomMcpConnectors(status.id), fetchMcpConnectorsStatus().catch(() => null)])
+		// The connector status only adds detail to the rows, and the pane works
+		// without it. On a shared server only the admin may read it (it shows
+		// every connector's address or command line), so it is not asked for.
+		const globalStatus = fetchRemoteClientContext()
+			.then((context) => (context.sharedServer ? null : fetchMcpConnectorsStatus()))
+			.catch(() => null);
+		Promise.all([fetchPersistentRoomMcpConnectors(status.id), globalStatus])
 			.then(([room, global]) => {
 				if (cancelled) return;
 				setGranted(room.granted);

@@ -30,6 +30,11 @@ assert.equal(
 	"real filesystem/action tool arguments mentioning .env are still detected",
 );
 
+// A log written before this update holds a preview of a blocked call's arguments.
+const logPath = path.join(tempHome, ".exxperts", "app", "content-policy-blocks.jsonl");
+fs.mkdirSync(path.dirname(logPath), { recursive: true });
+fs.writeFileSync(logPath, `${JSON.stringify({ ts: "2026-09-01T10:00:00.000Z", cwd: "/old", tool: "bash", ruleId: "dot-env", reason: "blocked .env access", argumentsPreview: "cat .env OLD-PREVIEW-TEXT" })}\n`);
+
 let toolCallHandler: ((event: any, ctx: any) => Promise<any>) | undefined;
 let notification: string | undefined;
 registerContentPolicy({
@@ -64,6 +69,16 @@ const filesystemResult = await toolCallHandler!({ toolName: "read", input: { pat
 assert.equal(filesystemResult?.block, true, "real filesystem/action tool arguments mentioning .env are still blocked");
 assert.match(filesystemResult?.reason, /blocked \.env access/);
 assert.match(notification || "", /blocked \.env access/);
+
+// The log keeps the tool, the rule, the time and the folder, never the arguments' text.
+const rows = fs.readFileSync(logPath, "utf-8").trim().split("\n").map((line) => JSON.parse(line));
+assert.equal(rows.length, 2, "the old row and the new one");
+assert.ok(rows.every((row) => !("argumentsPreview" in row)), "no row of the log holds a preview of the arguments");
+assert.deepEqual(rows[0], { ts: "2026-09-01T10:00:00.000Z", cwd: "/old", tool: "bash", ruleId: "dot-env", reason: "blocked .env access" }, "the update strips the preview from an old row and keeps the rest");
+assert.equal(rows[1].tool, "read");
+assert.equal(rows[1].ruleId, "dot-env");
+assert.equal(rows[1].cwd, tempHome);
+assert.ok(typeof rows[1].ts === "string" && rows[1].reason === "blocked .env access");
 
 if (previousHome === undefined) delete process.env.HOME;
 else process.env.HOME = previousHome;

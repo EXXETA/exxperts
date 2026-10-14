@@ -24,11 +24,16 @@
 // applier (review-ops.ts), the entry model (memory-entries.ts), the files
 // (memory-entries-store.ts), and the worker itself (the route injects it).
 
+import path from "node:path";
+
+import { MEMORY_CARD_NOTE_MAX_CHARS, memoryTextHasWords, memoryTypedText } from "./memory-typed-text.js";
+import { ModelUnreachableError, patienceSpent, WaitLine, type PatienceWait } from "./model-call-causes.js";
 import { recordMemoryUse } from "./memory-use.js";
-import { isUnsortedSummary } from "./absorb-reread.js";
-import { hasActiveAbsorbRun, memoryUseForRanking, parseRunKeepRequest, rebaseOntoDisk, type AbsorbRunArchiveRow, type AbsorbRunBudget, type AbsorbRunDemotion, type AbsorbRunEntryCard, type RankedArchiveAppend } from "./absorb-run.js";
+import { codeSorter, isUnsorted } from "./memory-placement.js";
+import { hasActiveAbsorbRun, memoryUseForRanking, savedRunRecord, dropRunJournal, readRunJournal, writeRunJournal, parseRunKeepRequest, rebaseOntoDisk, type AbsorbRunArchiveRow, type AbsorbRunBudget, type AbsorbRunDemotion, type AbsorbRunEntryCard, type RankedArchiveAppend } from "./absorb-run.js";
 import { recordMaintenanceWorkerCalls } from "./maintenance-diagnostics.js";
 import {
+	applyUserEdit,
 	cloneDocument,
 	demoteToBudget,
 	entryTokens,
@@ -51,21 +56,21 @@ import {
 	writeMemoryDocument,
 } from "./memory-entries-store.js";
 import { conflictPromptLine, findLookAlikeTopics, findNotePairs, type DuplicateNotePair } from "./memory-duplicates.js";
-import { IsolatedPersistentAgentWorkerTurnError } from "./persistent-agent-worker-runtime.js";
 import {
 	assertAbsorbSourceFingerprintCurrent,
 	createPersistentAgentInstance,
 	fingerprintL1bSource,
 	refuseOversizedMaintenancePrompt,
 	updateChronosForReview,
-	writeReviewRunEventRecord,
+	buildReviewRunEventRecord,
 	type AbsorbGenerateResult,
 	type CheckpointModelWindow,
 	type L1bSourceFingerprint,
 	type PersistentAgentModelLock,
+	type ReviewEventRecord,
 } from "./persistent-agents.js";
-import { MEMORY_BUDGET_MAX_TOKENS, MEMORY_BUDGET_MIN_TOKENS, formatTokenLimit, overMemoryBudget, readPersistentRoomMaintenanceSettings, writePersistentRoomMaintenanceSettings } from "./persistent-room-maintenance-settings.js";
-import { emptyReviewGuidance, reviewGuidanceIsEmpty, type ReviewGuidance } from "./review-guidance.js";
+import { MEMORY_BUDGET_MAX_TOKENS, MEMORY_BUDGET_MIN_TOKENS, formatTokenLimit, overMemoryBudget, readPersistentRoomMaintenanceSettings } from "./persistent-room-maintenance-settings.js";
+import { emptyReviewGuidance, reviewGuidanceIsEmpty, reviewRemovalsNotDone, type ReviewGuidance } from "./review-guidance.js";
 import {
 	applyReviewOps,
 	buildReviewGroupPrompt,
@@ -77,7 +82,7 @@ import {
 	reviewGroupNotes,
 	reviewGroupTopic,
 	reviewReplySourceBudget,
-	validateReviewOps,
+	keepValidReviewOps,
 	type ReviewArchiveRow,
 	type ReviewChange,
 	type ReviewChangeKind,
@@ -88,6 +93,7 @@ import {
 	type ReviewTopicBond,
 } from "./review-ops.js";
 import { estimateTokens } from "./token-estimate.js";
+import { clearKeptDiscussion } from "./memorize-discussion-keep.js";
 
 // --- The wire shapes (the API contract, field for field) ----------------------
 
@@ -145,6 +151,8 @@ export interface ReviewRun {
 	candidate: { sourceFingerprint: L1bSourceFingerprint; estimatedTokens: number } | null;
 	/** What the person agreed in the discussion, echoed back so the card can list it; null when nothing was asked for. */
 	guidance: ReviewGuidance | null;
+	/** The guidance's "move to the archive" lines whose note this save would still keep: the card says they were not done. */
+	removeNotDone?: string[];
 	/**
 	 * A room whose memory had no note ids: the run gave them in memory and the
 	 * approval write is the first and only write. Null on a room that already had
@@ -154,6 +162,14 @@ export interface ReviewRun {
 	warnings: string[];
 	usage?: { input?: number; output?: number; totalTokens?: number; cost?: number };
 	error?: string;
+	/**
+	 * The run stopped before every group was tidied because the Memory model
+	 * cannot be reached: the card shows the one notice (Try again, Choose
+	 * another model, Sign in when that is the cause). What finished can be saved.
+	 */
+	stop?: { kind: "outage" | "restart"; model: { provider: string; model: string }; cause: "not-answering" | "busy" | "signed-out" | "quota" | "not-offered" | "not-on-account" | "restarted" };
+	/** A busy Memory model being waited out: the card says when the next try is. */
+	wait?: PatienceWait;
 }
 
 export interface ReviewRunApprovalResponse {
@@ -162,6 +178,8 @@ export interface ReviewRunApprovalResponse {
 	reviewId: string;
 	/** This save under the name the undo route takes — the same value as `reviewId`. */
 	saveId: string;
+	/** A Save sent again for a review that already saved: nothing was written this time. */
+	alreadySaved?: true;
 	eventRelPath: string;
 	memoryBudget: { budgetTokens: number; reviewTargetEstimatedTokens: number; overBudget: boolean };
 	/** What the saved screen says: how many notes were tidied, and how many left for the archive. */
@@ -188,20 +206,20 @@ export interface ReviewStatusResponse {
 	/** "tidy" when the memory is over its limit, else "wording". */
 	recommendedDepth: ReviewDepth;
 	writesMemory: false;
+	/** A card waiting for Save or Discard, a restarted one included: the screen opens it. */
+	waitingRunId?: string;
 }
 
 // --- Bounds and sentences ------------------------------------------------------
 
 /** One tidy call's hard ceiling — the same eight minutes every maintenance worker gets. */
 export const REVIEW_TIDY_TIMEOUT_MS = 8 * 60 * 1000;
-/** A finished run stays readable this long, so a client that polls late still sees how it ended. */
-export const REVIEW_RUN_RETENTION_MS = 60 * 60 * 1000;
 /** How many groups are asked for at once. Three keeps a large room's run short without flooding a gateway. */
 export const REVIEW_GROUPS_IN_FLIGHT = 3;
 /** The wait before a call that never came back is asked again. */
 export const REVIEW_TIDY_RETRY_PAUSE_MS = 2_000;
 /** The longest a note edited by hand may be: generous, and still a note rather than a page. */
-export const REVIEW_RUN_EDIT_MAX_CHARS = 2000;
+export const REVIEW_RUN_EDIT_MAX_CHARS = MEMORY_CARD_NOTE_MAX_CHARS;
 
 /**
  * The reasons a group carries when it is left as it was. Each is ONE cause
@@ -209,35 +227,17 @@ export const REVIEW_RUN_EDIT_MAX_CHARS = 2000;
  * screen, which appends it to every reason alike.
  */
 export const REVIEW_TIDY_REFUSED_TWICE = "The tidy for these notes did not come back in a form the memory could accept.";
-export const REVIEW_TIDY_TIMED_OUT = "The model did not answer within the time limit.";
-export const REVIEW_TIDY_CONNECTION_LOST = "The connection to the model dropped while these notes were being tidied.";
+/** A call that failed while the model answers, whatever the cause: the tidy failed, not the memory. */
 export const REVIEW_TIDY_WORKER_FAILED = "The model could not tidy these notes this time.";
-export const REVIEW_TIDY_TIMED_OUT_TWICE = "The model did not answer within the time limit, twice.";
-export const REVIEW_TIDY_CONNECTION_LOST_TWICE = "The connection dropped twice while these notes were being tidied.";
-export const REVIEW_TIDY_WORKER_FAILED_TWICE = "The model could not tidy these notes, twice.";
-
-const TIDY_FAILURE_TWICE = new Map<string, string>([
-	[REVIEW_TIDY_TIMED_OUT, REVIEW_TIDY_TIMED_OUT_TWICE],
-	[REVIEW_TIDY_CONNECTION_LOST, REVIEW_TIDY_CONNECTION_LOST_TWICE],
-	[REVIEW_TIDY_WORKER_FAILED, REVIEW_TIDY_WORKER_FAILED_TWICE],
-]);
+/** A group the run did not reach because the Memory model could not be reached (draft). */
+export const REVIEW_TIDY_NOT_REACHED = "The Memory model could not be reached, so these notes were not tidied.";
+/** A group a restart caught before it finished (draft). */
+export const REVIEW_TIDY_RESTARTED = "The app restarted before these notes were tidied.";
 
 export const REVIEW_NOTHING_TO_TIDY_SENTENCE = "This room's memory has no notes to tidy yet.";
 export const REVIEW_ABSORB_ACTIVE_SENTENCE = "This room is updating its memory right now. Wait for that update to finish, then review.";
 /** The same fact the first read states when the room is mid-turn; status and the routes behind it must agree. */
 export const REVIEW_ROOM_BUSY_SENTENCE = "This room is in the middle of a turn. Wait for it to finish, then review its notes.";
-
-function tidyFailureSentence(error: unknown): string {
-	if (error instanceof IsolatedPersistentAgentWorkerTurnError) {
-		return error.stopReason === "aborted" ? REVIEW_TIDY_TIMED_OUT : REVIEW_TIDY_CONNECTION_LOST;
-	}
-	return REVIEW_TIDY_WORKER_FAILED;
-}
-
-/** Only a pair that failed the SAME way is said "twice". */
-function tidyFailureSentenceAfterRetry(first: string, second: string): string {
-	return first === second ? TIDY_FAILURE_TWICE.get(second) ?? second : second;
-}
 
 function truncatedTidySentence(generated: { usage?: { output?: number }; modelMaxOutputTokens?: number }): string {
 	const produced = generated.usage?.output;
@@ -325,7 +325,7 @@ export type ReviewRunGenerate = (
 	prompt: string,
 	model: PersistentAgentModelLock,
 	/** The tidy is a single-shot transform: reasoning tokens would count against the output cap and starve the reply. */
-	options: { signal: AbortSignal; timeoutMs: number; thinkingLevel: "low" },
+	options: { signal: AbortSignal; timeoutMs: number; thinkingLevel: "low"; onWait?: (wait: PatienceWait | null) => void },
 ) => Promise<AbsorbGenerateResult>;
 
 export interface ReviewRunStartInput {
@@ -341,7 +341,25 @@ export interface ReviewRunStartInput {
 	now?: () => Date;
 }
 
+const tidyWaitLines = new WeakMap<RunSlot, WaitLine>();
+
+/** The run's one wait line: each tidy group's call keeps its own wait on it, so one group ending never takes down another's. */
+function tidyWaitLine(slot: RunSlot, now: () => Date): WaitLine {
+	let line = tidyWaitLines.get(slot);
+	if (!line) {
+		line = new WaitLine((wait) => {
+			if (wait) slot.run.wait = wait;
+			else delete slot.run.wait;
+			touch(slot, now());
+		});
+		tidyWaitLines.set(slot, line);
+	}
+	return line;
+}
+
 interface RunSlot {
+	/** The answer the save gave, kept while the run is: a Save sent again answers it once more. */
+	savedAnswer?: ReviewRunApprovalResponse;
 	run: ReviewRun;
 	controller: AbortController;
 	model: PersistentAgentModelLock;
@@ -358,8 +376,19 @@ interface RunSlot {
 	demotionArchive: RankedArchiveAppend[];
 	/** The archive list, by note id, for the life of the run: rows are added and re-flagged, never removed. */
 	archiveRows: Map<string, ReviewRunArchiveRow>;
-	idleSince: number | null;
 	work: Promise<void> | null;
+	/** What the run was started with: a resume tidies the groups not done with the same depth and guidance. */
+	input: ReviewRunStartInput;
+	/** The ids the room's archive held when the run read the memory. */
+	archiveIdsOnDisk: string[];
+	/** The document while groups are tidied; it holds only the groups that finished. */
+	workingDoc: MemoryDocument | null;
+	/** The groups of the tidy in progress, and which of them finished: a restart leaves the rest as they were. */
+	planned: PlannedGroup[];
+	finished: Set<number>;
+	/** A resumed tidy's notes the person kept or this run already changed: the groups never see them. */
+	held?: string[];
+	usage: { input: number; output: number; totalTokens: number; cost: number };
 }
 
 const RUNS = new Map<string, RunSlot>();
@@ -378,26 +407,63 @@ function blocksNewRun(state: ReviewRunState): boolean {
 	return state === "prepass" || state === "tidying" || state === "budget" || state === "approving";
 }
 
-function forgetExpiredRun(agentId: string, at: number): void {
-	const slot = RUNS.get(agentId);
-	if (slot && slot.idleSince !== null && at - slot.idleSince > REVIEW_RUN_RETENTION_MS) RUNS.delete(agentId);
-}
-
 function slotFor(agentId: string, runId: string): RunSlot {
-	forgetExpiredRun(agentId, Date.now());
-	const slot = RUNS.get(agentId);
+	const slot = RUNS.get(agentId) ?? reviveRun(agentId);
 	if (!slot || slot.run.runId !== runId) throw reviewRunUnknownError();
 	return slot;
 }
 
 function touch(slot: RunSlot, now: Date): void {
 	slot.run.updatedAt = now.toISOString();
+	writeJournal(slot);
+}
+
+// --- The journal: a run survives a restart -------------------------------------
+//
+// `<room>/runtime/review-run.json` holds the run as it stands, written on every
+// change and deleted when the run ends, the same as Memorize's journal.
+
+function journalPath(agentId: string): string {
+	return path.join(createPersistentAgentInstance(agentId).runtimeDir(), "review-run.json");
+}
+
+function writeJournal(slot: RunSlot): void {
+	// A replaced run's late work never touches its successor's journal.
+	if (RUNS.get(slot.run.agentId) !== slot) return;
+	writeRunJournal(journalPath(slot.run.agentId), isActive(slot.run.state), () => {
+		const { controller: _controller, work: _work, input: { generate: _generate, resolveModelWindow: _window, now: _now, ...input }, ...live } = slot;
+		return { ...live, input };
+	});
+}
+
+/**
+ * The run a restart left behind: a card as it was, or a run stopped mid-tidy
+ * as a card with the groups that finished and Continue for the rest.
+ */
+function reviveRun(agentId: string): RunSlot | undefined {
+	const saved = readRunJournal(journalPath(agentId));
+	if (!saved) return undefined;
+	const slot: RunSlot = { ...saved, controller: new AbortController(), work: null };
+	const run = slot.run;
+	RUNS.set(agentId, slot);
+	if (slot.workingDoc) {
+		for (const group of slot.planned) if (!slot.finished.has(group.index)) run.leftAsIs.push({ topics: group.titles, reason: REVIEW_TIDY_RESTARTED });
+		run.stop = { kind: "restart", model: { provider: slot.model.provider, model: slot.model.model }, cause: "restarted" };
+		settleTidy(slot, () => new Date());
+		return slot;
+	}
+	if (run.state !== "ready" && run.state !== "approving") {
+		RUNS.delete(agentId);
+		return dropRunJournal(journalPath(agentId));
+	}
+	run.state = "ready";
+	writeJournal(slot);
+	return slot;
 }
 
 function finish(slot: RunSlot, state: ReviewRunState, now: Date, error?: string): void {
 	slot.run.state = state;
 	if (error) slot.run.error = error;
-	slot.idleSince = Date.now();
 	touch(slot, now);
 }
 
@@ -408,8 +474,7 @@ function shortRunId(): string {
 /** Whether a run currently holds this room. */
 export function hasActiveReviewRun(agentIdRaw: string): boolean {
 	const agentId = createPersistentAgentInstance(agentIdRaw).agentId;
-	forgetExpiredRun(agentId, Date.now());
-	const slot = RUNS.get(agentId);
+	const slot = RUNS.get(agentId) ?? reviveRun(agentId);
 	return Boolean(slot && blocksNewRun(slot.run.state));
 }
 
@@ -427,10 +492,12 @@ function sameTitle(a: string, b: string): boolean {
  */
 export function chooseReviewTopics(doc: MemoryDocument, asked: readonly string[], guidanceTopics: readonly string[]): MemoryTopic[] {
 	const withNotes = doc.topics.filter((topic) => topic.entries.some((entry) => entry.id));
+	// Unsorted is always read when it holds a note, whatever was asked.
+	const unsorted = withNotes.filter((topic) => topic.section === "Deep Memory" && isUnsorted(topic.title));
 	for (const wanted of [asked, guidanceTopics]) {
 		if (wanted.length === 0) continue;
 		const matched = withNotes.filter((topic) => wanted.some((title) => sameTitle(title, topic.title)));
-		if (matched.length > 0) return matched;
+		if (matched.length > 0) return [...matched, ...unsorted.filter((topic) => !matched.includes(topic))];
 	}
 	return withNotes;
 }
@@ -447,8 +514,7 @@ export function startReviewRun(agentIdRaw: string, input: ReviewRunStartInput): 
 	const agentId = createPersistentAgentInstance(agentIdRaw).agentId;
 	const nowFn = input.now ?? (() => new Date());
 	const now = nowFn();
-	forgetExpiredRun(agentId, Date.now());
-	const existing = RUNS.get(agentId);
+	const existing = RUNS.get(agentId) ?? reviveRun(agentId);
 	if (existing && blocksNewRun(existing.run.state)) throw reviewRunActiveError(existing.run.runId);
 	if (hasActiveAbsorbRun(agentId)) throw productError(REVIEW_ABSORB_ACTIVE_SENTENCE, "review_absorb_active", 409);
 	// Memory is what a running turn is reading; tidying it underneath that turn
@@ -489,13 +555,18 @@ export function startReviewRun(agentIdRaw: string, input: ReviewRunStartInput): 
 		tidyArchive: [],
 		demotionArchive: [],
 		archiveRows: new Map(),
-		idleSince: null,
 		work: null,
+		input,
+		archiveIdsOnDisk: [],
+		workingDoc: null,
+		planned: [],
+		finished: new Set(),
+		usage: { input: 0, output: 0, totalTokens: 0, cost: 0 },
 	};
 	RUNS.set(agentId, slot);
 	// The work starts on the next tick: the caller gets the run back in its
 	// prepass state, as the screens expect, before a single step has run.
-	slot.work = Promise.resolve().then(() => performRun(slot, input, nowFn)).catch((error) => {
+	slot.work = Promise.resolve().then(() => performRun(slot, nowFn)).catch((error) => {
 		// The loop already turns every expected failure into an outcome; this is
 		// the backstop for the unexpected one, so a run never hangs in "tidying".
 		if (isActive(slot.run.state)) finish(slot, "failed", nowFn(), endsAsSentence((error as Error).message));
@@ -510,10 +581,10 @@ interface PlannedGroup {
 	label: string;
 }
 
-async function performRun(slot: RunSlot, input: ReviewRunStartInput, nowFn: () => Date): Promise<void> {
+async function performRun(slot: RunSlot, nowFn: () => Date): Promise<void> {
 	const run = slot.run;
 	const agentId = run.agentId;
-	const guidance = input.guidance ?? emptyReviewGuidance();
+	const guidance = slot.input.guidance ?? emptyReviewGuidance();
 
 	// --- prepass ---------------------------------------------------------------
 	// A file that has never carried note ids is migrated IN MEMORY and nothing is
@@ -522,46 +593,63 @@ async function performRun(slot: RunSlot, input: ReviewRunStartInput, nowFn: () =
 	// write, which is the run's one write either way.
 	const loaded = loadMemoryDocument(agentId, { migrate: "in-memory", now: nowFn() });
 	if (loaded.pendingMigration) run.migration = { pending: true, entriesAssigned: loaded.pendingMigration.entriesAssigned };
-	let doc = loaded.doc;
+	slot.workingDoc = loaded.doc;
 	// The ids the room's archive already holds, read once with the memory: a
 	// note tidied in an earlier save has its `-v1` row there, and this run's
 	// version of it must be `-v2`, or two rows would claim one address.
-	const archiveIdsOnDisk = loaded.archive.map((row) => row.id);
+	slot.archiveIdsOnDisk = loaded.archive.map((row) => row.id);
 	slot.sourceL1b = createPersistentAgentInstance(agentId).readL1b();
 	slot.sourceFingerprint = fingerprintL1bSource(slot.sourceL1b);
 
-	const chosen = chooseReviewTopics(doc, input.topics ?? [], guidance.topics);
+	const chosen = chooseReviewTopics(loaded.doc, slot.input.topics ?? [], guidance.topics);
 	run.topics = chosen.map((topic) => topic.title);
-	run.budget.before = reviewTargetTokens(doc);
+	run.budget.before = reviewTargetTokens(loaded.doc);
+	run.state = "tidying";
+	await tidyGroups(slot, run.topics, nowFn);
+	if (slot.controller.signal.aborted) return finish(slot, "cancelled", nowFn());
+	settleTidy(slot, nowFn);
+}
 
-	// What the machine finds on its own, computed here on the migrated-in-memory
-	// document and never taken from the client: the pairs of notes that say one
-	// thing, the pairs that disagree, and the pairs of topics that look like
-	// one. The two topics of every pair are BONDED for the planning below, so a
-	// pair always reaches one call; each group is then handed the pairs it holds.
-	const { duplicates: duplicatePairs, conflicts: conflictPairs } = findNotePairs(doc);
-	const lookAlikePairs = findLookAlikeTopics(doc);
+/**
+ * Tidies the given topics of the working document, three groups at a time.
+ * Only a group's whole apply changes the document, and the group is marked
+ * finished in that same step, so the journal never holds half a group.
+ */
+async function tidyGroups(slot: RunSlot, titles: readonly string[], nowFn: () => Date): Promise<void> {
+	const run = slot.run;
+	const agentId = run.agentId;
+	const guidance = slot.input.guidance ?? emptyReviewGuidance();
+	const doc0 = slot.workingDoc!;
+	const chosen = doc0.topics.filter((topic) => topic.entries.some((entry) => entry.id) && titles.some((title) => sameTitle(title, topic.title)));
+
+	// What the machine finds on its own, computed here on the working document
+	// and never taken from the client: the pairs of notes that say one thing,
+	// the pairs that disagree, and the pairs of topics that look like one. The
+	// two topics of every pair are BONDED for the planning below, so a pair
+	// always reaches one call; each group is then handed the pairs it holds.
+	const { duplicates: duplicatePairs, conflicts: conflictPairs } = findNotePairs(doc0);
+	const lookAlikePairs = findLookAlikeTopics(doc0);
 	const bonds: ReviewTopicBond[] = [
 		...duplicatePairs.filter((pair) => pair.a.section === pair.b.section && pair.a.topic !== pair.b.topic).map((pair): ReviewTopicBond => [pair.a.topic, pair.b.topic]),
 		...conflictPairs.filter((pair) => pair.a.topic !== pair.b.topic).map((pair): ReviewTopicBond => [pair.a.topic, pair.b.topic]),
 		...lookAlikePairs.map((pair): ReviewTopicBond => [pair.a, pair.b]),
 	];
 
-	const replyBudget = reviewReplySourceBudget(input.resolveModelWindow?.(input.model)?.maxOutputTokens);
+	const replyBudget = reviewReplySourceBudget(slot.input.resolveModelWindow?.(slot.model)?.maxOutputTokens);
 	const planned: PlannedGroup[] = partitionReviewTopics(chosen.map(reviewGroupTopic), replyBudget, bonds).map((topics, index) => ({
 		index: index + 1,
 		topics,
 		titles: topics.map((topic) => topic.title),
 		label: reviewGroupLabel(topics),
 	}));
+	const finished = new Set<number>();
+	slot.planned = planned;
+	slot.finished = finished;
 	run.progress = { group: 0, groups: planned.length, ...(planned[0] ? { label: planned[0].label } : {}) };
 	touch(slot, nowFn());
+	// From here a restart brings the run back as a card, so the discussion it came from goes.
+	clearKeptDiscussion(createPersistentAgentInstance(agentId).rootDir, "review");
 
-	// --- tidying ----------------------------------------------------------------
-	run.state = "tidying";
-	touch(slot, nowFn());
-	const usage = { input: 0, output: 0, totalTokens: 0, cost: 0 };
-	const finished = new Set<number>();
 	// The apply step is the one place two groups could collide, so it is
 	// serialized on this chain: whatever order the three in flight come back in,
 	// their operations land on the working document one after another.
@@ -571,6 +659,12 @@ async function performRun(slot: RunSlot, input: ReviewRunStartInput, nowFn: () =
 		applyChain = next.then(() => undefined, () => undefined);
 		return next;
 	};
+	// The Memory model cannot be reached: no further group starts, and the card
+	// shows the one notice. Set by the first group that learns it.
+	let unreachable: ModelUnreachableError | null = null;
+	// The groups' calls stop with the run, and at once when one learns the model cannot be reached.
+	const groupsStop = new AbortController();
+	slot.controller.signal.addEventListener("abort", () => groupsStop.abort(), { once: true });
 	const markFinished = (group: PlannedGroup) => {
 		finished.add(group.index);
 		run.progress.group = finished.size;
@@ -579,22 +673,42 @@ async function performRun(slot: RunSlot, input: ReviewRunStartInput, nowFn: () =
 		touch(slot, nowFn());
 	};
 
+	/**
+	 * A group that failed while the model answers is read again in two halves,
+	 * down to one topic: only a one-topic group that fails is left as it was.
+	 */
+	const leftOrSplit = (group: PlannedGroup, reason: string) => {
+		if (group.topics.length > 1 && !unreachable) {
+			const half = Math.ceil(group.topics.length / 2);
+			for (const topics of [group.topics.slice(0, half), group.topics.slice(half)]) {
+				planned.push({ index: planned.length + 1, topics, titles: topics.map((topic) => topic.title), label: reviewGroupLabel(topics) });
+			}
+			run.progress.groups = planned.length;
+		} else {
+			run.leftAsIs.push({ topics: group.titles, reason });
+		}
+		markFinished(group);
+	};
+
 	const runGroup = async (group: PlannedGroup): Promise<void> => {
-		if (slot.controller.signal.aborted) return;
+		if (slot.controller.signal.aborted || unreachable) return;
 		// The group's notes as they stand NOW: earlier groups may have moved a
 		// note into one of these topics, and the model must address what is there.
 		const readNotes = await serialize(() => {
+			const doc = slot.workingDoc!;
 			const titles = new Set(group.titles);
-			const topics = doc.topics.filter((topic) => titles.has(topic.title)).map(reviewGroupTopic);
+			const held = new Set(slot.held);
+			const view = held.size ? { ...doc, topics: doc.topics.map((topic) => ({ ...topic, entries: topic.entries.filter((entry) => !held.has(entry.id)) })) } : doc;
+			const topics = view.topics.filter((topic) => titles.has(topic.title)).map(reviewGroupTopic);
 			// Every title the memory holds rides along: a move may file under a
 			// topic outside this group, and a new title is judged against them all;
 			// a fold lands in any of them, so their sections ride along too.
 			return {
 				topics,
-				context: renderReviewGroupContext(topics, doc),
+				context: renderReviewGroupContext(topics, view),
 				allTitles: doc.topics.map((topic) => topic.title),
 				memoryTopics: doc.topics.map((topic) => ({ section: topic.section, title: topic.title, intro: topic.intro })),
-				unsortedSummaries: doc.topics.filter((topic) => titles.has(topic.title)).flatMap((topic) => topic.entries.filter((entry) => isUnsortedSummary(topic.title, entry)).map((entry) => entry.id)),
+				unsortedSummaries: doc.topics.filter((topic) => titles.has(topic.title) && topic.section === "Deep Memory" && isUnsorted(topic.title)).flatMap((topic) => topic.entries.map((entry) => entry.id)),
 			};
 		});
 		const notes = reviewGroupNotes(readNotes.topics);
@@ -614,7 +728,7 @@ async function performRun(slot: RunSlot, input: ReviewRunStartInput, nowFn: () =
 
 		const assembly = buildReviewGroupPrompt({
 			agentId,
-			model: input.model,
+			model: slot.model,
 			topics: readNotes.context,
 			notes,
 			depth: run.depth,
@@ -631,20 +745,25 @@ async function performRun(slot: RunSlot, input: ReviewRunStartInput, nowFn: () =
 			refuseOversizedMaintenancePrompt({
 				agentId,
 				processLabel: "Review tidy",
-				model: input.model,
+				model: slot.model,
 				promptEstimatedTokens: assembly.telemetry.promptEstimatedTokens,
-				window: input.resolveModelWindow?.(input.model),
-				guidance: "Choose a memory model with a larger window in Room settings, Model, then review again.",
+				window: slot.input.resolveModelWindow?.(slot.model),
+				guidance: "Choose a Memory model that can read more at once in Room settings, Model, then review again.",
 			});
 		} catch (error) {
-			run.leftAsIs.push({ topics: group.titles, reason: endsAsSentence((error as Error).message) });
-			markFinished(group);
+			leftOrSplit(group, endsAsSentence((error as Error).message));
 			return;
 		}
 
 		const diagnostics = recordMaintenanceWorkerCalls<PersistentAgentModelLock, AbsorbGenerateResult>(
 			{ roomRootDir: createPersistentAgentInstance(agentId).rootDir, agentId, process: "review-tidy" },
-			(prompt, model) => input.generate(prompt, model, { signal: slot.controller.signal, timeoutMs: REVIEW_TIDY_TIMEOUT_MS, thinkingLevel: "low" }),
+			(prompt, model) => slot.input.generate(prompt, model, {
+				signal: groupsStop.signal,
+				timeoutMs: REVIEW_TIDY_TIMEOUT_MS,
+				thinkingLevel: "low",
+				// A busy model being waited out: the card says when the next try is.
+				onWait: tidyWaitLine(slot, nowFn).call(),
+			}),
 		);
 
 		let prompt = assembly.prompt;
@@ -658,41 +777,51 @@ async function performRun(slot: RunSlot, input: ReviewRunStartInput, nowFn: () =
 		// either kind.
 		let maxAttempts = 2;
 		let retriedAfterThrow = false;
-		let firstThrowSentence = "";
 		for (let attempt = 1; attempt <= maxAttempts; attempt++) {
 			let generated: AbsorbGenerateResult;
 			try {
-				generated = await diagnostics.generate(prompt, input.model);
+				generated = await diagnostics.generate(prompt, slot.model);
 			} catch (error) {
-				const sentence = tidyFailureSentence(error);
-				if (slot.controller.signal.aborted) { failed = sentence; break; }
-				if (!retriedAfterThrow) {
+				if (error instanceof ModelUnreachableError) {
+					unreachable ??= error;
+					groupsStop.abort();
+				}
+				if (unreachable) {
+					failed = REVIEW_TIDY_NOT_REACHED;
+					break;
+				}
+				failed = REVIEW_TIDY_WORKER_FAILED;
+				if (slot.controller.signal.aborted) break;
+				// A failure the shared patience already waited out gets no second wait here.
+				if (!retriedAfterThrow && !patienceSpent(error)) {
 					retriedAfterThrow = true;
 					maxAttempts = 3;
-					firstThrowSentence = sentence;
+					failed = null;
 					await tidyRetryPause(slot.controller.signal);
-					if (slot.controller.signal.aborted) { failed = sentence; break; }
+					if (slot.controller.signal.aborted) break;
 					diagnostics.annotate({ outcome: "retried" });
 					continue;
 				}
-				failed = tidyFailureSentenceAfterRetry(firstThrowSentence, sentence);
 				break;
 			}
-			usage.input += generated.usage?.input ?? 0;
-			usage.output += generated.usage?.output ?? 0;
-			usage.totalTokens += generated.usage?.totalTokens ?? 0;
-			usage.cost += generated.usage?.cost ?? 0;
-			run.usage = { ...usage };
+			slot.usage.input += generated.usage?.input ?? 0;
+			slot.usage.output += generated.usage?.output ?? 0;
+			slot.usage.totalTokens += generated.usage?.totalTokens ?? 0;
+			slot.usage.cost += generated.usage?.cost ?? 0;
+			run.usage = { ...slot.usage };
 			if (generated.truncated) {
 				failed = truncatedTidySentence(generated);
 				diagnostics.annotate({ outcome: "refused" });
 				break;
 			}
 			const parsed = parseReviewOps(generated.text);
-			ops = parsed.ops;
-			refusals = parsed.problems.length > 0 ? parsed.problems : validateReviewOps(parsed.ops, notes, run.depth, readNotes.allTitles, { group: readNotes.topics, memoryTopics: readNotes.memoryTopics, conflictNotes: conflictContext, today: slot.savedDate });
+			// Each op is judged alone: the valid ones apply, a refused one is
+			// dropped with a trace. Only a reply of which nothing is valid is asked again.
+			const judged = parsed.problems.length > 0 ? { ops: [], dropped: parsed.problems } : keepValidReviewOps(parsed.ops, notes, run.depth, readNotes.allTitles, { group: readNotes.topics, memoryTopics: readNotes.memoryTopics, conflictNotes: conflictContext, today: slot.savedDate });
+			ops = judged.ops;
+			refusals = parsed.problems.length === 0 && (ops.length > 0 || parsed.ops.length === 0) ? [] : judged.dropped;
 			if (refusals.length === 0) {
-				diagnostics.annotate({ outcome: "accepted" });
+				diagnostics.annotate({ outcome: "accepted", ...(judged.dropped.length > 0 ? { validatorErrors: judged.dropped } : {}) });
 				break;
 			}
 			diagnostics.annotate({ outcome: "refused", validatorErrors: refusals });
@@ -702,17 +831,16 @@ async function performRun(slot: RunSlot, input: ReviewRunStartInput, nowFn: () =
 
 		if (slot.controller.signal.aborted) return;
 		if (failed || refusals.length > 0) {
-			run.leftAsIs.push({ topics: group.titles, reason: failed ?? REVIEW_TIDY_REFUSED_TWICE });
-			markFinished(group);
+			leftOrSplit(group, failed ?? REVIEW_TIDY_REFUSED_TWICE);
 			return;
 		}
 		await serialize(() => {
-			const applied = applyReviewOps(doc, ops, { savedDate: slot.savedDate, takenArchiveIds: [...archiveIdsOnDisk, ...slot.tidyArchive.map((append) => append.entry.id)], conflictNotes: conflictContext });
-			doc = applied.doc;
+			const applied = applyReviewOps(slot.workingDoc!, ops, { savedDate: slot.savedDate, takenArchiveIds: [...slot.archiveIdsOnDisk, ...slot.tidyArchive.map((append) => append.entry.id)], conflictNotes: conflictContext });
+			slot.workingDoc = applied.doc;
 			for (const row of applied.archive) slot.tidyArchive.push({ ...row, archived: slot.savedDate });
 			run.changes.push(...applied.changes.map((change) => withDuplicatePartner(runChange(change), duplicatePairs)));
+			markFinished(group);
 		});
-		markFinished(group);
 	};
 
 	// Three groups at a time: the queue is walked by that many workers, each
@@ -721,6 +849,7 @@ async function performRun(slot: RunSlot, input: ReviewRunStartInput, nowFn: () =
 	const worker = async (): Promise<void> => {
 		for (;;) {
 			if (slot.controller.signal.aborted) return;
+			if (unreachable) return;
 			const group = planned[nextGroup++];
 			if (!group) return;
 			await runGroup(group);
@@ -729,21 +858,48 @@ async function performRun(slot: RunSlot, input: ReviewRunStartInput, nowFn: () =
 	await Promise.all(Array.from({ length: Math.min(REVIEW_GROUPS_IN_FLIGHT, Math.max(planned.length, 1)) }, worker));
 	await applyChain;
 
-	if (slot.controller.signal.aborted) {
-		finish(slot, "cancelled", nowFn());
-		return;
+	if (unreachable && !slot.controller.signal.aborted) {
+		// What finished stays and can be saved; the groups not reached are left
+		// as they were, with the reason, and the card shows the one notice.
+		const stopped: ModelUnreachableError = unreachable;
+		for (const group of planned) {
+			if (!finished.has(group.index)) run.leftAsIs.push({ topics: group.titles, reason: REVIEW_TIDY_NOT_REACHED });
+		}
+		const detail = stopped.details.detail;
+		run.stop = {
+			kind: "outage",
+			model: { provider: slot.model.provider, model: slot.model.model },
+			cause: detail === "signed-out" || detail === "quota" || detail === "not-offered" || detail === "not-on-account" ? detail : detail === "still-busy" ? "busy" : "not-answering",
+		};
 	}
-	run.progress.label = undefined;
+}
 
-	// --- budget -------------------------------------------------------------------
+/** The tidy's tail: what is left in Unsorted placed, the budget pass, and the card. */
+function settleTidy(slot: RunSlot, nowFn: () => Date): void {
+	const run = slot.run;
+	run.progress.label = undefined;
+	delete run.wait;
 	run.state = "budget";
-	touch(slot, nowFn());
+	let doc = slot.workingDoc!;
+	// Nothing is left in Unsorted while the model answers: a note the tidy did
+	// not file is placed by code as Memorize's sort places it. A stopped run
+	// leaves them waiting for its Try again.
+	const placeRest = codeSorter();
+	for (const waiting of run.stop ? [] : doc.topics.filter((topic) => topic.section === "Deep Memory" && isUnsorted(topic.title))) {
+		for (const entry of [...waiting.entries]) {
+			const topic = placeRest(doc, entry.text);
+			doc = applyUserEdit(doc, { op: "move", id: entry.id, topic }).doc;
+			run.changes.push({ id: entry.id, section: "Deep Memory", topic, kind: "moved", before: waiting.title, after: topic });
+		}
+		doc = { ...doc, topics: doc.topics.filter((topic) => topic.title !== waiting.title || topic.entries.length > 0) };
+	}
 	slot.postTidyDoc = doc;
+	slot.workingDoc = null;
+	slot.planned = [];
+	slot.finished = new Set();
+	delete slot.held;
 	recomputeDemotion(slot);
 	run.state = "ready";
-	// A ready run is waiting on a person, and a person can close the tab. Its
-	// retention clock starts here.
-	slot.idleSince = Date.now();
 	touch(slot, nowFn());
 }
 
@@ -847,6 +1003,11 @@ function recomputeDemotion(slot: RunSlot): void {
 	// kept note, so a later run's pass ranks it higher without making it immortal.
 	const candidate = cloneDocument(demoted.doc);
 	slot.candidateDoc = candidate;
+	if (run.guidance && run.guidance.remove.length > 0) {
+		const named = [...slot.postTidyDoc.topics.flatMap((topic) => topic.entries), ...slot.tidyArchive.map((append) => append.entry)];
+		const after = candidate.topics.flatMap((topic) => topic.entries.map((entry) => ({ id: entry.id, open: topic.section !== "Active Items" || entry.status !== "done" })));
+		run.removeNotDone = reviewRemovalsNotDone(run.guidance.remove, named, after);
+	}
 	slot.demotionArchive = demoted.demoted.map((entry) => ({ entry, why: "budget" as const, topic: where.get(entry.id)?.topic ?? MEMORY_ACTIVE_ITEMS_TOPIC, section: where.get(entry.id)?.section ?? "Deep Memory", archived: slot.savedDate, reason: entry.reason }));
 	const after = reviewTargetTokens(candidate);
 
@@ -922,7 +1083,6 @@ export function keepReviewRunEntries(agentIdRaw: string, runId: string, keepRaw:
 	slot.run.demotion.keepIds = request.keepIds;
 	slot.run.demotion.keepTopics = request.keepTopics.filter((topic) => [...slot.archiveRows.values()].some((row) => rowTopicKey(row) === memoryTopicAddressKey(topic)));
 	recomputeDemotion(slot);
-	slot.idleSince = Date.now();
 	touch(slot, now);
 	return snapshotRun(slot);
 }
@@ -937,9 +1097,10 @@ export function editReviewRunEntry(agentIdRaw: string, runId: string, entryIdRaw
 	requireReady(slot);
 	if (!slot.postTidyDoc) throw productError("This review has nothing to edit yet.", "review_run_not_ready", 409);
 	const entryId = typeof entryIdRaw === "string" ? entryIdRaw.trim() : "";
-	const text = typeof textRaw === "string" ? textRaw.trim() : "";
+	// The person's words under the one rule: nothing typed becomes the file's structure.
+	const text = typeof textRaw === "string" ? memoryTypedText(textRaw).trim() : "";
 	if (!entryId) throw productError("entryId is required.", "review_run_bad_edit");
-	if (!text) throw productError("A note cannot be empty. If it should go, move it to the archive instead.", "review_run_bad_edit");
+	if (!memoryTextHasWords(text)) throw productError("A note cannot be empty. If it should go, move it to the archive instead.", "review_run_bad_edit");
 	if (text.length > REVIEW_RUN_EDIT_MAX_CHARS) throw productError(`A note is at most ${REVIEW_RUN_EDIT_MAX_CHARS} characters.`, "review_run_bad_edit");
 	const editable = slot.run.changes.some((change) => change.id === entryId && (change.kind === "shortened" || change.kind === "merged"));
 	if (!editable) throw productError("Only a note this review rewrote can be edited here.", "review_run_bad_edit", 404);
@@ -951,7 +1112,6 @@ export function editReviewRunEntry(agentIdRaw: string, runId: string, entryIdRaw
 	entry.text = next;
 	for (const change of slot.run.changes) if (change.id === entryId) change.after = next;
 	recomputeDemotion(slot);
-	slot.idleSince = Date.now();
 	touch(slot, now);
 	return snapshotRun(slot);
 }
@@ -971,8 +1131,46 @@ export function setReviewRunBudget(agentIdRaw: string, runId: string, budgetToke
 	}
 	slot.run.budget.budgetTokens = budgetTokens;
 	recomputeDemotion(slot);
-	slot.idleSince = Date.now();
 	touch(slot, now);
+	return snapshotRun(slot);
+}
+
+/**
+ * Try again, after an outage or a restart stopped the run: the same run tidies
+ * the groups not done, on top of the card as the person left it, with the
+ * room's Memory model as it is now.
+ */
+export function resumeReviewRun(agentIdRaw: string, runId: string, model: PersistentAgentModelLock, now = new Date(), calls: Partial<Pick<ReviewRunStartInput, "generate" | "resolveModelWindow">> = {}): ReviewRun {
+	const agentId = createPersistentAgentInstance(agentIdRaw).agentId;
+	const slot = slotFor(agentId, runId);
+	requireReady(slot);
+	const run = slot.run;
+	const waiting = run.leftAsIs.filter((row) => row.reason === REVIEW_TIDY_NOT_REACHED || row.reason === REVIEW_TIDY_RESTARTED);
+	if (!run.stop || !slot.postTidyDoc) throw productError("This review has nothing left to tidy.", "review_run_nothing_waiting", 409);
+	if (hasActiveAbsorbRun(agentId)) throw productError(REVIEW_ABSORB_ACTIVE_SENTENCE, "review_absorb_active", 409);
+	assertMemoryWriteAllowed(agentId);
+	// Save's staleness check, before any call.
+	const diskL1b = createPersistentAgentInstance(agentId).readL1b();
+	if (fingerprintL1bSource(diskL1b).value !== slot.sourceFingerprint.value && !rebaseOntoDisk(slot.sourceL1b, diskL1b)) assertAbsorbSourceFingerprintCurrent(slot.sourceFingerprint, diskL1b, "review");
+	const nowFn = slot.input.now ?? (() => new Date());
+	// A run a restart left behind has no calls of its own: the route hands them in.
+	slot.input = { ...slot.input, ...calls, model };
+	slot.model = model;
+	run.leftAsIs = run.leftAsIs.filter((row) => !waiting.includes(row));
+	delete run.stop;
+	run.state = "tidying";
+	slot.workingDoc = cloneDocument(slot.postTidyDoc);
+	slot.postTidyDoc = null;
+	// What the person kept or edited on the card, and what this run changed already, stays as it is.
+	slot.held = [...run.demotion.keepIds, ...run.changes.map((change) => change.id)];
+	touch(slot, now);
+	slot.work = (async () => {
+		await tidyGroups(slot, waiting.flatMap((row) => row.topics), nowFn);
+		if (slot.controller.signal.aborted) return finish(slot, "cancelled", nowFn());
+		settleTidy(slot, nowFn);
+	})().catch((error) => {
+		if (isActive(slot.run.state)) finish(slot, "failed", nowFn(), endsAsSentence((error as Error).message));
+	});
 	return snapshotRun(slot);
 }
 
@@ -995,8 +1193,35 @@ export function cancelReviewRun(agentIdRaw: string, runId: string, now = new Dat
  * Anything else that changed the file since the run started makes the run
  * stale, and nothing is written.
  */
+/** A Review save already made, told again: from the run while it is kept, from the room's history once it is gone. Null: this run never saved. */
+function savedReviewAnswer(agentId: string, runId: string): ReviewRunApprovalResponse | null {
+	const live = RUNS.get(agentId);
+	if (live?.run.runId === runId) return live.run.state === "saved" && live.savedAnswer ? { ...live.savedAnswer, alreadySaved: true } : null;
+	const record = savedRunRecord<ReviewEventRecord>(createPersistentAgentInstance(agentId).reviewEventDir(), runId);
+	if (!record?.run) return null;
+	const archived = record.run.archived;
+	return {
+		agentId,
+		writesMemory: true,
+		reviewId: record.reviewId,
+		saveId: record.reviewId,
+		alreadySaved: true,
+		eventRelPath: record.paths.eventRelPath,
+		memoryBudget: { budgetTokens: record.run.budget.budgetTokens, reviewTargetEstimatedTokens: record.run.budget.after, overBudget: record.run.budget.overBudgetAfter },
+		topicsTidied: record.review.topicsTidied,
+		notesChanged: record.review.notesChanged,
+		archivedEntries: archived.length,
+		archivedForBudget: archived.filter((row) => row.why === "budget").length,
+		rebasedOnto: [],
+		warnings: [],
+	};
+}
+
 export function approveReviewRun(agentIdRaw: string, runId: string, now = new Date()): ReviewRunApprovalResponse {
 	const agentId = createPersistentAgentInstance(agentIdRaw).agentId;
+	// A Save sent again after its answer was lost: it saved once, and says so.
+	const already = savedReviewAnswer(agentId, runId);
+	if (already) return already;
 	const slot = slotFor(agentId, runId);
 	const run = slot.run;
 	// The staleness check comes first, and it is what refuses a second approve:
@@ -1030,26 +1255,22 @@ export function approveReviewRun(agentIdRaw: string, runId: string, now = new Da
 	];
 
 	run.state = "approving";
-	slot.idleSince = null;
 	touch(slot, now);
-	// A limit the card raised becomes the room's setting in this same approval,
-	// before the memory write, so the memory that lands is measured against the
-	// limit it was built to. A cancelled run never reaches this line.
+	// A limit the card raised becomes the room's setting with the memory file,
+	// in the save's one commit, so the memory that lands is measured against
+	// the limit it was built to. A cancelled run never reaches this line.
 	const raisedFrom = run.budget.savedBudgetTokens;
 	const budgetRaisedTo = run.budget.budgetTokens !== run.budget.savedBudgetTokens ? run.budget.budgetTokens : undefined;
-	if (budgetRaisedTo !== undefined) {
-		writePersistentRoomMaintenanceSettings(agentId, { memoryBudgetTokens: budgetRaisedTo });
-		run.budget.savedBudgetTokens = budgetRaisedTo;
-	}
 	let written;
 	try {
 		written = writeMemoryDocument(agentId, cloneDocument(candidate), {
 			why: "review",
 			snapshotLabel: "review",
 			archiveAppend,
+			...(budgetRaisedTo !== undefined ? { limitTo: budgetRaisedTo } : {}),
 			now,
 			stampChronos: (l1b, at, writeId) => updateChronosForReview(l1b, writeId, at),
-			writeEventRecord: (recorded) => writeReviewRunEventRecord({
+			eventRecord: (recorded) => buildReviewRunEventRecord({
 				agentId,
 				reviewId: recorded.writeId,
 				now: recorded.now,
@@ -1073,20 +1294,15 @@ export function approveReviewRun(agentIdRaw: string, runId: string, now = new Da
 			}),
 		});
 	} catch (error) {
-		// The raise was this save's: a save that did not land leaves the room the
-		// limit it had, and the failure says so, so the card is not left showing a
-		// limit the room does not have. The error keeps its code and status.
-		if (budgetRaisedTo !== undefined) {
-			writePersistentRoomMaintenanceSettings(agentId, { memoryBudgetTokens: raisedFrom });
-			run.budget.savedBudgetTokens = raisedFrom;
-			if (error instanceof Error) error.message = `${error.message} The budget stays at ${formatTokenLimit(raisedFrom)}.`;
-		}
+		// A save that did not land leaves the room the limit it had, and the
+		// failure says so. The error keeps its code and status.
+		if (budgetRaisedTo !== undefined && error instanceof Error) error.message = `${error.message} The budget stays at ${formatTokenLimit(raisedFrom)}.`;
 		run.state = "ready";
-		slot.idleSince = Date.now();
 		touch(slot, now);
 		throw error;
 	}
 
+	if (budgetRaisedTo !== undefined) run.budget.savedBudgetTokens = budgetRaisedTo;
 	finish(slot, "saved", now);
 	// A keep is a use: each kept note that was written counts one. Use is use,
 	// so an undo of this save leaves it.
@@ -1094,7 +1310,7 @@ export function approveReviewRun(agentIdRaw: string, runId: string, now = new Da
 	const keptUsed = run.demotion.keepIds.filter((id) => savedIds.has(id));
 	if (keptUsed.length > 0) recordMemoryUse(agentId, keptUsed.map((id) => ({ id, source: "note" as const })), { now });
 	if (run.migration?.pending) run.migration = { pending: false, entriesAssigned: run.migration.entriesAssigned };
-	return {
+	slot.savedAnswer = {
 		agentId,
 		writesMemory: true,
 		reviewId: written.memoryEditId,
@@ -1113,6 +1329,7 @@ export function approveReviewRun(agentIdRaw: string, runId: string, now = new Da
 		...(budgetRaisedTo === undefined ? {} : { budgetRaisedTo }),
 		warnings: run.warnings,
 	};
+	return slot.savedAnswer;
 }
 
 // --- Status ----------------------------------------------------------------------
@@ -1125,6 +1342,7 @@ export function approveReviewRun(agentIdRaw: string, runId: string, now = new Da
  */
 export function reviewRunStatus(agentIdRaw: string): ReviewStatusResponse {
 	const agentId = createPersistentAgentInstance(agentIdRaw).agentId;
+	const waiting = RUNS.get(agentId) ?? reviveRun(agentId);
 	const doc = loadMemoryDocument(agentId, { migrate: false }).doc;
 	const topics = doc.topics.filter((topic) => topic.entries.length > 0);
 	const notes = topics.reduce((sum, topic) => sum + topic.entries.length, 0);
@@ -1147,6 +1365,7 @@ export function reviewRunStatus(agentIdRaw: string): ReviewStatusResponse {
 		budget: { reviewTargetTokens: tokens, budgetTokens, overBudget },
 		recommendedDepth: overBudget ? "tidy" : "wording",
 		writesMemory: false,
+		...(waiting && isActive(waiting.run.state) ? { waitingRunId: waiting.run.runId } : {}),
 	};
 }
 
@@ -1172,10 +1391,4 @@ export function parseReviewRunStartRequest(raw: any): { depth: ReviewDepth; topi
 /** Test seam: the registry is process-local state, and a smoke that drives two rooms must be able to clear it. */
 export function resetReviewRunsForTests(): void {
 	RUNS.clear();
-}
-
-/** Test seam: moves a run's retention clock back, so a smoke can prove the reaping without an hour of waiting. */
-export function rewindReviewRunClockForTests(agentIdRaw: string, ms: number): void {
-	const slot = RUNS.get(createPersistentAgentInstance(agentIdRaw).agentId);
-	if (slot && slot.idleSince !== null) slot.idleSince -= ms;
 }

@@ -115,17 +115,15 @@ system **writes**, never the worker.
 Freezes the active thread and asks a compression worker to distill it
 into a proposed summary of the conversation. The default Remember button
 runs a fast path at standard density and shows you the proposal before
-it is saved; a room can be set to save without that preview unless
-something needs your review (Room settings, Memory, **Remember without
-the preview**). "Remember with options…" opens the full flow, where you
+it is saved; a room can be set to save without that preview (Room
+settings, Memory, **Remember without the preview**). "Remember with options…" opens the full flow, where you
 choose a density (compact/standard/rich) and can add an optional
 steering note. Things
 you explicitly asked the agent to remember are carried through and
 become pinned notes when the conversation is memorized. Remember runs on
 the room's Memory model and reads the whole conversation: in one pass
 when it fits that model's window, in parts when it does not. Very long
-tool outputs are shortened and counted on the proposal; nothing else is
-cut. On approval, the summary joins the waiting conversations, the thread closes at
+tool outputs are shortened for the reading; nothing else is cut. On approval, the summary joins the waiting conversations, the thread closes at
 a clean boundary, and the previous memory file is archived. Remember
 warns when one more save would fill the room's waiting list; the
 budget behavior behind that is in [`memory.md`](memory.md).
@@ -260,9 +258,9 @@ delete them.
   client auth token on API and WebSocket requests (see `SECURITY.md`).
 - Durable memory has no silent write path: every mutation goes through
   the proposal/approval workflow and a server-side fingerprint check.
-  Warning-free proposals from an action you triggered can apply
-  automatically; anything questionable always comes back for a manual
-  approval screen.
+  Proposals from an action you triggered can apply automatically when
+  they hold no decision for you; anything you need to weigh always comes
+  back for a manual approval screen.
 - State directories are created with restrictive modes under
   `~/.exxperts/`.
 

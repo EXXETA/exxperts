@@ -246,11 +246,9 @@ try {
 		restoreMemoryFile(roomId, {
 			restoredL1b: fs.readFileSync(l1bPath, "utf-8"),
 			snapshotLabel: "undo",
-			writeEventRecord: (recorded) => {
-				fs.mkdirSync(eventsDir, { recursive: true, mode: 0o700 });
+			eventRecord: (recorded) => {
 				const eventRecordPath = path.join(eventsDir, `${recorded.writeId}.json`);
-				fs.writeFileSync(eventRecordPath, JSON.stringify({ writeId: recorded.writeId }), { mode: 0o600 });
-				return { eventRecordPath, eventRelPath: path.relative(path.join(root, roomId), eventRecordPath) };
+				return { eventRecordPath, record: { writeId: recorded.writeId } };
 			},
 		});
 		check("the sidecar's bytes are unchanged by an undo", fs.readFileSync(sidecarPath).equals(sidecarBefore));

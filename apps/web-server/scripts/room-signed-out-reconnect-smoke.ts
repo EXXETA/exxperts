@@ -6,7 +6,8 @@
 // (Room settings, Model); no Reconnect, no offline chip, no second sentence,
 // and the room stops dialing. Once the provider is signed in again (noticed
 // when the window comes back to the front), the room dials again by itself
-// and Send is back, without leaving the room. Then the key stops working
+// and Send is back, without leaving the room, with no "Connected again."
+// (nothing dropped). Then the key stops working
 // while the catalog still counts it (an expired sign-in, the provider answers
 // 401): the next turn fails on it, and the room shows the same one notice
 // instead of the raw error, and once the person signs in again the next send
@@ -166,7 +167,15 @@ try {
 	const browser = await chromium.launch();
 	try {
 		const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+		// Every appearance of "Connected again." counts, however briefly it shows.
+		await ctx.addInitScript(() => {
+			(window as any).__connectedAgain = 0;
+			document.addEventListener("DOMContentLoaded", () => new MutationObserver(() => {
+				if (document.body.innerText.includes("Connected again.")) (window as any).__connectedAgain += 1;
+			}).observe(document.body, { childList: true, subtree: true, characterData: true }));
+		});
 		const page = await ctx.newPage();
+		const connectedAgain = () => page.evaluate(() => (window as any).__connectedAgain as number);
 		const roomDials: string[] = [];
 		page.on("websocket", (ws) => { if (ws.url().includes("persistentAgentId=")) roomDials.push(ws.url()); });
 		await page.goto(`${baseUrl}/auth/session?token=${SMOKE_AUTH_TOKEN}`);
@@ -203,6 +212,7 @@ try {
 		await banner.waitFor({ state: "detached", timeout: 10000 });
 		assert(roomDials.length > dialsWhileOut, "the room dialed again by itself");
 		await page.waitForTimeout(800);
+		assert(await connectedAgain() === 0, `a sign-in brings no "Connected again.", it showed ${await connectedAgain()} time(s)`);
 		const composer = page.locator("textarea").first();
 		await composer.fill("Back on GPT.");
 		await composer.press("Enter");

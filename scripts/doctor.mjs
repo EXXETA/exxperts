@@ -460,7 +460,7 @@ section("Optional features");
 	}
 	// One source of truth with `exxperts setup search`: spawn searxng.mjs (a CLI
 	// script, so spawn it rather than import it) and interpret its `status` line.
-	// Its resolveDocker() knows the OrbStack/Docker Desktop off-PATH install
+	// Its resolveDocker() knows the container engines' off-PATH install
 	// locations that a bare which/where docker probe misses.
 	const containerName = process.env.SEARXNG_CONTAINER_NAME || "exxperts-searxng";
 	const searxngProbe = spawnSync(process.execPath, [path.join(root, "scripts", "searxng.mjs"), "status"], { encoding: "utf8", timeout: 15_000 });
@@ -484,7 +484,7 @@ section("Optional features");
 		} else {
 			warn(
 				`web search: SearXNG configured but not answering at ${baseUrl} (${detail}); the built-in DuckDuckGo backend covers searches meanwhile`,
-				"run `exxperts setup search` and make sure the container engine (Docker Desktop/OrbStack) is running",
+				"run `exxperts setup search` and make sure the container engine (OrbStack, Docker Desktop, Colima or Podman) is running",
 			);
 		}
 	} else if (provider === "disabled") {

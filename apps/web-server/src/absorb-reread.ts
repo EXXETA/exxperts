@@ -1,14 +1,15 @@
 // Memorize re-reads a summary note: the rules for a note a fold filed whole.
 //
-// A conversation the fold could not read is filed as its summary, one note in
-// "Unsorted" marked `summary`. A later Memorize reads that note again as if it
-// were a page, after its waiting conversations, so the conversation's points
-// can still reach their topics. This module holds the rules; the run
-// (absorb-run.ts) folds the page through the same page core as any other and
-// asks these helpers what to read, how, and what the ending means:
-//   - which notes: summary notes in Unsorted, not pinned, that the run's Memory
-//     model has not tried, oldest learned first and undated last, at most
-//     REREAD_CAP a run;
+// A conversation the fold could not read is filed as its summary, one note
+// marked `summary` under the topic code placed it in (older files have it in
+// "Unsorted"). A later Memorize reads that note again as if it were a page,
+// after its waiting conversations, so the conversation's points can still
+// reach their topics. This module holds the rules; the run (absorb-run.ts)
+// folds the page through the same page core as any other and asks these
+// helpers what to read, how, and what the ending means:
+//   - which notes: every summary note in Deep Memory, under any topic, not
+//     pinned, that the run's Memory model has not tried, oldest learned first
+//     and undated last;
 //   - the page: the note's text without its must-keep lines, dated with the
 //     note's learned day or with none. The note itself is left out of the
 //     memory the fold reads and decides against: otherwise every point it gives
@@ -26,9 +27,6 @@ import type { PageEnding } from "./absorb-run-pages.js";
 import { SUMMARY_TOPIC } from "./absorb-summary.js";
 import { cloneDocument, hasMustKeepMarker, scanDeepMemoryEntries, withoutMustKeepMarkers, type MemoryDocument, type MemoryEntry, type MemorySection } from "./memory-entries.js";
 
-/** At most this many summary notes are re-read in one run. */
-export const REREAD_CAP = 5;
-
 /**
  * A Memory model as a note's `tried` names it: provider/model, with "%" and ","
  * written as %25 and %2C, since `tried` holds its models comma-separated and a
@@ -43,27 +41,9 @@ function inSummaryTopic(title: string): boolean {
 	return title.trim().toLowerCase() === SUMMARY_TOPIC.toLowerCase();
 }
 
-/** A summary note filed in Unsorted: what Review's tidy is told to file under its topic. */
-export function isUnsortedSummary(topic: string, entry: Pick<MemoryEntry, "summary">): boolean {
-	return inSummaryTopic(topic) && entry.summary === true;
-}
-
-/** An Unsorted summary note a saved Memorize already read again: the Maintain hint and Review's first read count these. */
-export function waitsUnsortedAfterReread(topic: string, entry: Pick<MemoryEntry, "summary" | "tried">): boolean {
-	return isUnsortedSummary(topic, entry) && (entry.tried ?? []).length > 0;
-}
-
-/** How many notes wait unsorted after a re-read, by a line scan of the memory file: the Maintain hint's count. */
-export function unsortedAfterRereadCount(l1b: string): number {
-	return scanDeepMemoryEntries(l1b).filter(({ topic, entry }) => waitsUnsortedAfterReread(topic, entry)).length;
-}
-
-/** The same notes in a parsed memory, by the Deep Memory topic they wait in: Review's first read counts and tidies these. */
-export function unsortedAfterRereadTopics(doc: MemoryDocument): Array<{ title: string; count: number }> {
-	return doc.topics
-		.filter((topic) => topic.section === "Deep Memory")
-		.map((topic) => ({ title: topic.title, count: topic.entries.filter((entry) => waitsUnsortedAfterReread(topic.title, entry)).length }))
-		.filter((topic) => topic.count > 0);
+/** Notes the next Memorize has work for with no conversation waiting: every note in Unsorted (the one-time sort). A note kept as one is read again with the next conversations, never on its own. */
+export function notesToSortCount(l1b: string): number {
+	return scanDeepMemoryEntries(l1b).filter(({ topic }) => inSummaryTopic(topic)).length;
 }
 
 /**
@@ -72,15 +52,18 @@ export function unsortedAfterRereadTopics(doc: MemoryDocument): Array<{ title: s
  * nothing left once its must-keep lines are out has nothing to re-read, so it
  * never takes one of the run's places.
  */
-export function selectRereads(doc: MemoryDocument, model: { provider: string; model: string }, cap = REREAD_CAP): MemoryEntry[] {
+export function selectRereads(doc: MemoryDocument, model: { provider: string; model: string }): MemoryEntry[] {
 	const key = rereadModelKey(model);
 	const notes = doc.topics
-		.filter((topic) => inSummaryTopic(topic.title))
+		.filter((topic) => topic.section === "Deep Memory")
 		.flatMap((topic) => topic.entries)
 		.filter((entry) => entry.summary && !entry.pinned && !(entry.tried ?? []).includes(key) && withoutMustKeepLines(entry.text) !== "");
 	const dated = notes.filter((entry) => entry.learned).sort((a, b) => (a.learned! < b.learned! ? -1 : a.learned! > b.learned! ? 1 : 0));
-	return [...dated, ...notes.filter((entry) => !entry.learned)].slice(0, cap);
+	return [...dated, ...notes.filter((entry) => !entry.learned)].slice(0, REREADS_PER_RUN);
 }
+
+/** The summary notes one Memorize re-reads at most, the oldest first (decision 45a): after a Memory model change the rest wait for the next run. */
+export const REREADS_PER_RUN = 10;
 
 const BULLET = /^(\s*)(?:[-*+]|\d+[.)])\s+/;
 

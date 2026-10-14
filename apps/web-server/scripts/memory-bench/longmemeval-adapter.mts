@@ -57,6 +57,7 @@ import {
 	startBenchServer,
 	startProviderRetryUnit,
 	startScriptedRoomGateway,
+	SIGN_IN_FROM_HOME_FLAG,
 	useRealProviderRecords,
 	withProviderRetry,
 	writeScriptedProviderRecords,
@@ -130,6 +131,8 @@ interface AdapterArgs {
 	scripted: boolean;
 	out?: string;
 	keepHome: boolean;
+	/** Copy the sign-in from ~/.exxperts/agent for a real run (else RECALL_BENCH_AGENT_DIR names one). */
+	signInFromHome?: boolean;
 	/** Carry on into an existing hypothesis file: its instances are skipped, the rest appended. */
 	resume: boolean;
 	firstRead: FirstReadMode;
@@ -163,6 +166,7 @@ function parseArgs(argv: string[]): AdapterArgs {
 		else if (flag === "--scripted") args.scripted = true;
 		else if (flag === "--out") args.out = next();
 		else if (flag === "--keep-home") args.keepHome = true;
+		else if (flag === SIGN_IN_FROM_HOME_FLAG) args.signInFromHome = true;
 		else if (flag === "--resume") {
 			// `--resume` alone carries on into the --out file or the default path;
 			// `--resume <file>` names the file and stands in for --out.
@@ -648,7 +652,7 @@ try {
 		console.log("  what this run proves is that the pipeline runs end to end and that the files come out in the shape the judge reads.");
 		if (scriptedFail) console.log(`  And every completion whose request carries "${scriptedFail.marker}" is ${scriptedFail.hang ? "held open and never answered" : "answered with an HTTP 500"}, ${scriptedFail.times === "all" ? "every time" : `${scriptedFail.times} time(s)`}: what this run proves is the waiting.`);
 	} else {
-		lock = useRealProviderRecords({ spec: realSpec! });
+		lock = useRealProviderRecords({ spec: realSpec!, signInFromHome: args.signInFromHome === true });
 	}
 	setBenchModel(lock);
 	worker = await createMaintenanceWorker();

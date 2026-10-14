@@ -164,26 +164,6 @@ function wordsOf(normalized: string): string[] {
 	return normalized ? normalized.split(" ") : [];
 }
 
-function jaccard(a: readonly string[], b: readonly string[]): number {
-	const setA = new Set(a);
-	const setB = new Set(b);
-	let shared = 0;
-	for (const word of setA) if (setB.has(word)) shared += 1;
-	const union = setA.size + setB.size - shared;
-	return union === 0 ? 0 : shared / union;
-}
-
-function normalizedLookAlike(a: string, b: string): boolean {
-	// Two notes that say nothing do not say one thing.
-	if (!a || !b) return false;
-	if (a === b) return true;
-	const wordsA = wordsOf(a);
-	const wordsB = wordsOf(b);
-	if (wordsA.length < NOTE_LOOKALIKE_MIN_WORDS || wordsB.length < NOTE_LOOKALIKE_MIN_WORDS) return false;
-	if (` ${a} `.includes(` ${b} `) || ` ${b} `.includes(` ${a} `)) return true;
-	return jaccard(wordsA, wordsB) >= NOTE_LOOKALIKE_JACCARD;
-}
-
 /**
  * Whether the words of `inner` appear in `outer` in the same order, not
  * necessarily next to each other: "Anna pays Bert" is within "Anna pays Bert
@@ -200,15 +180,6 @@ export function noteWordsWithin(inner: string, outer: string): boolean {
 		at += 1;
 	}
 	return true;
-}
-
-/**
- * Whether two notes say one thing: their normalised words are equal; or both
- * are at least six words and one contains the other as a phrase; or both are
- * at least six words and their word sets overlap by four fifths or more.
- */
-export function noteTextsLookAlike(a: string, b: string): boolean {
-	return normalizedLookAlike(normalizeNoteText(a), normalizeNoteText(b));
 }
 
 // --- A note read once: its words, its values and where they sit -------------
@@ -337,7 +308,11 @@ function sameMultiset(a: readonly string[], b: readonly string[]): boolean {
 	return sortedA.every((word, i) => word === sortedB[i]);
 }
 
-/** The twin test on two analysed notes: the same rule as `normalizedLookAlike`, read off the words and sets the analysis already holds. */
+/**
+ * Whether two analysed notes say one thing: their normalised words are equal;
+ * or both are at least six words and one contains the other as a phrase; or
+ * both are at least six words and their word sets overlap by four fifths or more.
+ */
 function analyzedLookAlike(a: AnalyzedNote, b: AnalyzedNote): boolean {
 	if (!a.normalized || !b.normalized) return false;
 	if (a.normalized === b.normalized) return true;

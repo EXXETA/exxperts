@@ -418,3 +418,25 @@ test("the bundle checks never take a package from above the install root", async
 	await assert.rejects(bundleServer({ root, log: () => {} }), /whatwg-url \(needed by jsdom\) is missing/);
 	assert.match(checkServerFiles(root).join("\n"), /whatwg-url \(needed by jsdom\) is missing/);
 });
+
+test("another entry bundles into a folder beside dist, never into dist", async () => {
+	const dir = fixtureTree({ "apps/web-server/src/other-entry.ts": 'globalThis.otherEntry = true;\nawait import("./index.js");\n' });
+	const marker = path.join(dir, "apps", "web-server", "dist", "kept.txt");
+	fs.mkdirSync(path.dirname(marker), { recursive: true });
+	fs.writeFileSync(marker, "the default bundle's folder\n");
+
+	await assert.rejects(bundleServer({ root: dir, entry: "apps/web-server/src/other-entry.ts", log: () => {} }), /never goes to apps\/web-server\/dist/);
+	await assert.rejects(bundleServer({ root: dir, entry: "apps/web-server/src/other-entry.ts", out: "apps/web-server/x/dist-other", log: () => {} }), /--out must be/);
+	await assert.rejects(bundleServer({ root: dir, out: "apps/dist-other", log: () => {} }), /--out must be/);
+	assert.ok(fs.existsSync(marker), "a refused bundle emptied dist");
+
+	const { outFile, metafile } = await bundleServer({ root: dir, entry: "apps/web-server/src/other-entry.ts", out: "apps/web-server/dist-other", log: () => {} });
+	assert.equal(outFile, path.join(dir, "apps", "web-server", "dist-other", "server.mjs"));
+	assert.ok(Object.keys(metafile.inputs).includes("apps/web-server/src/other-entry.ts"));
+	assert.ok(Object.keys(metafile.inputs).includes("apps/web-server/src/index.ts"));
+	assert.deepEqual(checkServerFiles(dir, "apps/web-server/dist-other"), []);
+	assert.ok(fs.existsSync(marker), "the other entry's bundle touched dist");
+	assert.match(checkServerFiles(dir).join("\n"), /apps\/web-server\/dist\/server\.mjs is missing/);
+	const result = JSON.parse(runNode(outFile));
+	assert.equal(result.config, "config-inlined");
+});

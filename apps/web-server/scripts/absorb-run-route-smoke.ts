@@ -244,6 +244,18 @@ const gateway = http.createServer((req, res) => {
 
 // --- The spawned server ------------------------------------------------------
 
+/** A conversation open in the room that has started (a question and its answer), written as the room's own code writes one: Pi-backed, so its start text stays frozen. */
+async function openStartedConversation(agentId: string): Promise<void> {
+	process.env.HOME = tempHome;
+	process.env.USERPROFILE = tempHome;
+	process.env.EXXPERTS_CODING_AGENT_DIR = agentDir;
+	const agents = await import("../src/persistent-agents.js");
+	const threadId = "pi_started_0001";
+	agents.writePersistentAgentThread(agentId, threadId, { state: "active", origin: "home", model: { provider: "openai-compatible", model: "room-model" }, items: [{ kind: "user", id: "u1", text: "A question." }, { kind: "assistant", id: "a1", text: "An answer." }] }, {
+		createRuntime: ({ model }) => agents.createPersistentAgentPiSessionJsonlThreadRuntime({ agentId, threadId, model, cwd: tempHome }),
+	});
+}
+
 function smokeEnv(): NodeJS.ProcessEnv {
 	const env: NodeJS.ProcessEnv = { ...process.env };
 	for (const key of ["ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN", "OPENAI_API_KEY", "AZURE_OPENAI_API_KEY", "EXXETA_AI_API_KEY", "COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN", "GEMINI_API_KEY", "GOOGLE_CLOUD_API_KEY", "OPENROUTER_API_KEY"]) {
@@ -279,6 +291,8 @@ async function waitForServer(server: ChildProcessWithoutNullStreams): Promise<vo
 
 async function requestJson(pathname: string, init?: AuthedFetchInit): Promise<{ status: number; body: any }> {
 	const response = await authedFetch(`${baseUrl}${pathname}`, init);
+	// A room's words never sit in an HTTP cache, a Forget must leave no copy behind.
+	assert(response.headers.get("cache-control") === "no-store", `${pathname} answers with cache-control: no-store, got ${response.headers.get("cache-control")}`);
 	const text = await response.text();
 	return { status: response.status, body: text ? JSON.parse(text) : null };
 }
@@ -374,7 +388,12 @@ try {
 	const runId = String(proposed.body?.runId ?? "");
 	assert(typeof proposed.body?.runId === "string" && runId.length > 0, `POST absorb/propose should answer with the run's id, got ${JSON.stringify(proposed.body)}`);
 
+	// A start that is refused keeps the discussion another tab may still have.
+	const keptDiscussionPath = path.join(agentsRoot, roomId, "runtime", "memorize-discussion.json");
+	fs.writeFileSync(keptDiscussionPath, JSON.stringify({ read: { assessmentMarkdown } }));
 	const second = await requestJson(`${room}/absorb/propose`, jsonBody("POST", { assessmentMarkdown }));
+	assert(fs.existsSync(keptDiscussionPath), "a refused start leaves the kept discussion as it was");
+	fs.rmSync(keptDiscussionPath, { force: true });
 	assert(second.status === 409, `a second Memorize while one is running should be refused with 409, got ${second.status}: ${JSON.stringify(second.body)}`);
 	assert(second.body?.code === "absorb_run_active", `the refusal should carry the code the client branches on, got ${JSON.stringify(second.body)}`);
 	assert(second.body?.details?.runId === runId, `the refusal should name the run in the way, so the client can offer to cancel it, got ${JSON.stringify(second.body?.details)}`);
@@ -432,6 +451,19 @@ try {
 	assert(unprotected.status === 200 && unprotected.body.demotion.keepTopics.length === 0 && unprotected.body.demotion.keepIds.includes(keptId), `clearing the topics keeps the kept ids, got ${JSON.stringify(unprotected.body?.demotion?.keepIds)}`);
 
 	// --- 6. Raising the limit on the run instead ------------------------------
+	// A limit the room's Memory model cannot hold (its gateway window shrank to
+	// 60k, which holds 10k and not 40k) is refused before it reaches the run.
+	const modelsFile = path.join(agentDir, "models.json");
+	const roomModelWindow = (contextWindow: number) => {
+		const models = JSON.parse(fs.readFileSync(modelsFile, "utf-8"));
+		models.providers["openai-compatible"].models[0].contextWindow = contextWindow;
+		fs.writeFileSync(modelsFile, JSON.stringify(models, null, 2), { mode: 0o600 });
+	};
+	roomModelWindow(60_000);
+	const pastTheModel = await requestJson(`${runUrl}/budget`, jsonBody("POST", { budgetTokens: RAISED_BUDGET_TOKENS }));
+	roomModelWindow(128_000);
+	assert(pastTheModel.status === 400 && pastTheModel.body?.error === "A memory budget of 40k needs a larger Memory model than Room Model. Choose one in Room settings, Model first.", `a limit the Memory model cannot hold is refused on the card, got ${pastTheModel.status}: ${JSON.stringify(pastTheModel.body)}`);
+	assert((await requestJson(`${runUrl}`)).body?.budget?.budgetTokens === MIN_BUDGET_TOKENS, "a refused raise leaves the run's limit");
 	const raised = await requestJson(`${runUrl}/budget`, jsonBody("POST", { budgetTokens: RAISED_BUDGET_TOKENS }));
 	assert(raised.status === 200, `POST absorb/runs/:runId/budget should return 200, got ${raised.status}: ${JSON.stringify(raised.body)}`);
 	assert(raised.body.budget.budgetTokens === RAISED_BUDGET_TOKENS, `the run should come back measured against the new budget, got ${JSON.stringify(raised.body.budget)}`);
@@ -473,6 +505,7 @@ try {
 	assert(typeof approved.body.eventRelPath === "string" && approved.body.eventRelPath.startsWith("events/absorb/") && !path.isAbsolute(approved.body.eventRelPath), `an approval names its record by the room-relative path, got ${JSON.stringify(approved.body.eventRelPath)}`);
 	assert(approved.body.memoryBudget.overBudget === false && approved.body.memoryBudget.reviewTargetEstimatedTokens > 0, `the written memory should be measured and inside its budget, got ${JSON.stringify(approved.body.memoryBudget)}`);
 	assert(approved.body.recentContextEntryCount === 0, `every session was folded, so none should be left remembered, got ${JSON.stringify(approved.body.recentContextEntryCount)}`);
+	assert(!("openConversationKeepsMemory" in approved.body), `a room with no open conversation has none left on older memory, got ${JSON.stringify(approved.body.openConversationKeepsMemory)}`);
 
 	const writtenL1b = fs.readFileSync(l1bPath, "utf-8");
 	assert(!/^###\s+RC-/m.test(writtenL1b), "the folded sessions should be gone from the room's memory file");
@@ -558,8 +591,11 @@ try {
 	const pageModels = (outcome: string) => pageRecords.filter((record) => record.page?.outcome === outcome).map((record) => `${record.provider}/${record.model}`).sort();
 	assert(JSON.stringify(pageModels("folded")) === JSON.stringify(["gateway-backup/narrow-model", "gateway-backup/narrow-model", "gateway-backup/narrow-model", "openai-compatible/room-model", "openai-compatible/room-model"]), `the two read before the stop keep the room model and the three after name the chosen one, got ${JSON.stringify(pageModels("folded"))}`);
 	assert(JSON.stringify(pageModels("outage-stop")) === JSON.stringify(["openai-compatible/room-model"]), `the stop is the room model's, got ${JSON.stringify(pageModels("outage-stop"))}`);
+	// A conversation open in the room that has started keeps the memory it started with, and the save says so.
+	await openStartedConversation(resumeRoomId);
 	const resumeSaved = await requestJson(`${resumeRoom}/absorb/approve`, jsonBody("POST", { runId: resumeProposed.body.runId }));
 	assert(resumeSaved.status === 200, `the resumed run saves, got ${resumeSaved.status}: ${JSON.stringify(resumeSaved.body)}`);
+	assert(resumeSaved.body.openConversationKeepsMemory === true, `the save says the started open conversation keeps the memory it started with, got ${JSON.stringify(resumeSaved.body.openConversationKeepsMemory)}`);
 	const eventRecord = JSON.parse(fs.readFileSync(path.join(resumeRoomDir, resumeSaved.body.eventRelPath), "utf-8"));
 	assert(eventRecord.process?.model?.provider === "gateway-backup" && eventRecord.process.model.model === "narrow-model", `the save records the model the rest was read with, got ${JSON.stringify(eventRecord.process)}`);
 	const savedRun = await requestJson(resumeRunUrl);

@@ -82,6 +82,7 @@ import {
 	sizeLine,
 	startBenchServer,
 	startScriptedRoomGateway,
+	SIGN_IN_FROM_HOME_FLAG,
 	useRealProviderRecords,
 	writeScriptedProviderRecords,
 	type BenchServer,
@@ -178,6 +179,8 @@ interface BenchArgs {
 	foldEvery?: number;
 	showMemory: boolean;
 	keepHome: boolean;
+	/** Copy the sign-in from ~/.exxperts/agent for a real run (else RECALL_BENCH_AGENT_DIR names one). */
+	signInFromHome?: boolean;
 	ask: boolean;
 	limit?: number;
 	baseline?: "none" | "transcript";
@@ -253,6 +256,7 @@ function parseArgs(argv: string[]): BenchArgs {
 		else if (flag === "--gate-conflicts") args.gateConflicts = true;
 		else if (flag === "--show-memory") args.showMemory = true;
 		else if (flag === "--keep-home") args.keepHome = true;
+		else if (flag === SIGN_IN_FROM_HOME_FLAG) args.signInFromHome = true;
 		else throw new Error(`Unknown flag: ${flag}`);
 	}
 	return args;
@@ -1124,7 +1128,7 @@ if (args.ask) {
 	const asked = args.limit === undefined ? questions.length : Math.min(args.limit, questions.length / fixtures.length) * fixtures.length;
 	if (args.judge && !realSpec) console.log(`judge: ${args.judge} needs a real model: the scripted gateway answers by quoting and would only ever agree with itself. Set RECALL_BENCH_MODEL to judge; every row's judge field stays null and the scorer's own verdict is the number.`);
 	if (realSpec) {
-		const lock = useRealProviderRecords({ spec: realSpec });
+		const lock = useRealProviderRecords({ spec: realSpec, signInFromHome: args.signInFromHome === true });
 		// Every write is stamped with the model the room will answer with: a
 		// room's active AI profile has to approve the lock on its own records.
 		setBenchModel(lock);

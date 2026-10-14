@@ -8,11 +8,31 @@ export interface ShellConfig {
 	args: string[];
 }
 
+/** How the Windows lookup's failure begins, so a caller can tell it from other command errors. */
+const NO_BASH_SHELL_FOUND = "No bash shell found.";
+
+export function isNoShellFoundMessage(text: string): boolean {
+	return text.startsWith(NO_BASH_SHELL_FOUND);
+}
+
+// Tests only: the platform the lookup takes itself to run on, so a smoke on
+// macOS or Linux can walk the Windows lookup. The web server sets it only
+// behind its test switch; nothing else calls it.
+let lookupPlatformForTests: NodeJS.Platform | undefined;
+
+export function setShellLookupPlatformForTests(platform: NodeJS.Platform | undefined): void {
+	lookupPlatformForTests = platform;
+}
+
+function lookupPlatform(): NodeJS.Platform {
+	return lookupPlatformForTests ?? process.platform;
+}
+
 /**
  * Find bash executable on PATH (cross-platform)
  */
 function findBashOnPath(): string | null {
-	if (process.platform === "win32") {
+	if (lookupPlatform() === "win32") {
 		// Windows: Use 'where' and verify file exists (where can return non-existent paths)
 		try {
 			const result = spawnSync("where", ["bash.exe"], { encoding: "utf-8", timeout: 5000 });
@@ -83,7 +103,7 @@ export function getShellConfig(customShellPath?: string): ShellConfig {
 		throw new Error(`Custom shell path not found: ${customShellPath}`);
 	}
 
-	if (process.platform === "win32") {
+	if (lookupPlatform() === "win32") {
 		// 2. Try Git Bash in known locations, including no-admin per-user installs
 		const paths: string[] = [];
 		const programFiles = process.env.ProgramFiles;
@@ -118,7 +138,7 @@ export function getShellConfig(customShellPath?: string): ShellConfig {
 		}
 
 		throw new Error(
-			`No bash shell found. Options:\n` +
+			`${NO_BASH_SHELL_FOUND} Options:\n` +
 				`  1. Install Git for Windows: https://git-scm.com/download/win\n` +
 				`  2. Add your bash to PATH (Cygwin, MSYS2, etc.)\n` +
 				"  3. Set shellPath in settings.json\n\n" +
@@ -137,6 +157,20 @@ export function getShellConfig(customShellPath?: string): ShellConfig {
 	}
 
 	return { shell: "sh", args: ["-c"] };
+}
+
+/**
+ * The same lookup as getShellConfig, with null for its no-shell failure only;
+ * any other failure (a custom shell path that does not exist) still throws.
+ * Nothing is cached, so a shell installed meanwhile is found next time.
+ */
+export function findShellConfig(customShellPath?: string): ShellConfig | null {
+	try {
+		return getShellConfig(customShellPath);
+	} catch (error) {
+		if (error instanceof Error && isNoShellFoundMessage(error.message)) return null;
+		throw error;
+	}
 }
 
 export function getShellEnv(): NodeJS.ProcessEnv {

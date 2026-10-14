@@ -207,9 +207,10 @@ export interface CreateDelegateTaskToolOptions {
 	/**
 	 * Fire-and-forget launch injected by the connection: registers the slot,
 	 * emits `task_started`, and runs the worker beside the live thread. Must not
-	 * throw; a refused launch returns a reason for the model.
+	 * throw; a refused launch returns a reason for the model, `plain` when it
+	 * is a sentence for the person, read as it is.
 	 */
-	launch: (plan: SpecialistSessionPlan) => { ok: true } | { ok: false; reason: string };
+	launch: (plan: SpecialistSessionPlan) => { ok: true } | { ok: false; reason: string; plain?: true };
 }
 
 export function createDelegateTaskTool(options: CreateDelegateTaskToolOptions): ToolDefinition<any, any> {
@@ -260,7 +261,7 @@ export function createDelegateTaskTool(options: CreateDelegateTaskToolOptions): 
 				if (userMessage && verbatimUserRequestMatches(requestQuote, userMessage) && consumeAutoDispatch()) {
 					const autoStarted = launch(plan);
 					if (!autoStarted.ok) {
-						return refusal(`The specialist could not start: ${autoStarted.reason}`, { outcome: "launch-failed" });
+						return refusal(autoStarted.plain ? autoStarted.reason : `The specialist could not start: ${autoStarted.reason}`, { outcome: "launch-failed" });
 					}
 					return {
 						content: [{
@@ -308,7 +309,7 @@ export function createDelegateTaskTool(options: CreateDelegateTaskToolOptions): 
 			}
 			const started = launch(plan);
 			if (!started.ok) {
-				return refusal(`The specialist could not start: ${started.reason}`, { outcome: "launch-failed" });
+				return refusal(started.plain ? started.reason : `The specialist could not start: ${started.reason}`, { outcome: "launch-failed" });
 			}
 			return {
 				content: [{

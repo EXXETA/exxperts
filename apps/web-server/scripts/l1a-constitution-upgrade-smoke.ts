@@ -171,7 +171,7 @@ try {
 
 	// Plan: v1 -> v2 upgrade, nothing written.
 	const plan = planPersistentAgentConstitutionUpgrade(agentId);
-	assert(plan.action === "upgrade" && plan.fromTemplateVersion === 1 && plan.toTemplateVersion === 3, "plan should propose v1 -> v3 upgrade");
+	assert(plan.action === "upgrade" && plan.fromTemplateVersion === 1 && plan.toTemplateVersion === 4, "plan should propose v1 -> v4 upgrade");
 	assert(plan.mode === "default", "plan should fall back to the default mode");
 	assert(readText(l1aPath) === LEGACY_V1_L1A, "planning must not modify L1a");
 	assert(listFiles(path.join(agentRoot, "L1a-archive")).length === 0, "planning must not create archives");
@@ -183,7 +183,7 @@ try {
 
 	const newL1a = readText(l1aPath);
 	const newMarker = parsePersistentAgentL1aMarker(newL1a);
-	assert(newMarker.templateVersion === 3 && newMarker.mode === "default", "upgraded L1a should carry template v3 / default mode");
+	assert(newMarker.templateVersion === 4 && newMarker.mode === "default", "upgraded L1a should carry template v4 / default mode");
 	assert(newL1a.includes("You work with **Alice Example**"), "upgraded L1a should rebuild identity from agent.json");
 	assert(newL1a.includes("sharp thinking partner"), "upgraded L1a should carry the default mode body");
 	assert(!newL1a.includes("L1b"), "upgraded L1a should not teach internal layer jargon");
@@ -197,7 +197,7 @@ try {
 	assert(eventFiles.length === 1, "upgrade should write exactly one event record");
 	const event = JSON.parse(readText(path.join(agentRoot, "events/constitution-upgrade", eventFiles[0])));
 	assert(event.operation === "constitution_upgrade" && event.schemaVersion === 1, "event record should be schema-versioned");
-	assert(event.fromTemplateVersion === 1 && event.toTemplateVersion === 3, "event record should record version transition");
+	assert(event.fromTemplateVersion === 1 && event.toTemplateVersion === 4, "event record should record version transition");
 	assert(event.source.l1aFingerprint.value === sha256(LEGACY_V1_L1A), "event source fingerprint should match legacy L1a sha256");
 	assert(event.result.l1aFingerprint.value === sha256(newL1a), "event result fingerprint should match new L1a sha256");
 
@@ -259,10 +259,10 @@ try {
 	const beforeMeta = JSON.parse(readText(v2AgentJsonPath));
 	const firstRun = runUpgradeRunner(v2AgentId);
 	assert(firstRun.status === 0, `the upgrade runner should succeed (exit ${firstRun.status}): ${firstRun.output}`);
-	assert(/upgraded constitution v2 -> v3/.test(firstRun.output), `the runner should report the v2 -> v3 upgrade (got: ${firstRun.output})`);
+	assert(/upgraded constitution v2 -> v4/.test(firstRun.output), `the runner should report the v2 -> v4 upgrade (got: ${firstRun.output})`);
 
 	const v3L1a = readText(v2L1aPath);
-	assert(parsePersistentAgentL1aMarker(v3L1a).templateVersion === 3, "the reopened room should carry template v3");
+	assert(parsePersistentAgentL1aMarker(v3L1a).templateVersion === 4, "the reopened room should carry template v4");
 	for (const point of V3_MEMORY_POINTS) assert(v3L1a.includes(point), `the v3 constitution should carry this memory point: ${point}`);
 	assert(!v3L1a.includes("L1b"), "the v3 constitution should still not teach internal layer jargon");
 
@@ -272,7 +272,7 @@ try {
 	const v2Events = listFiles(v2EventDir);
 	assert(v2Events.length === 1, "the upgrade should write exactly one event record");
 	const v2Event = JSON.parse(readText(path.join(v2EventDir, v2Events[0])));
-	assert(v2Event.fromTemplateVersion === 2 && v2Event.toTemplateVersion === 3, "the event record should read v2 -> v3");
+	assert(v2Event.fromTemplateVersion === 2 && v2Event.toTemplateVersion === 4, "the event record should read v2 -> v4");
 	assert(v2Event.source.l1aFingerprint.value === sha256(V2_ROOM_L1A) && v2Event.result.l1aFingerprint.value === sha256(v3L1a), "the event record should fingerprint both constitutions");
 
 	// Nothing else in the room moved: the constitution is the only rewrite,
@@ -292,7 +292,7 @@ try {
 
 	// Opening it a second time changes nothing at all.
 	const secondRun = runUpgradeRunner(v2AgentId);
-	assert(secondRun.status === 0 && /already at template v3/.test(secondRun.output), `a second open should be a no-op (got: ${secondRun.output})`);
+	assert(secondRun.status === 0 && /already at template v4/.test(secondRun.output), `a second open should be a no-op (got: ${secondRun.output})`);
 	assert(listFiles(v2ArchiveDir).length === 1, "a second open must not write another archive");
 	assert(listFiles(v2EventDir).length === 1, "a second open must not write another event record");
 	const afterSecond = snapshotRoom(v2Root);
@@ -316,6 +316,32 @@ try {
 	const selectedRun = runUpgradeRunner(selectedAgentId);
 	assert(selectedRun.status !== 0 && /room runtime state is "active"/.test(selectedRun.output), `the runner should still refuse a selected room and say why (exit ${selectedRun.status}): ${selectedRun.output}`);
 	assert(readText(selectedL1aPath) === selectedL1a, "the runner's refusal must leave the constitution exactly as it was");
+
+	// ── A v3 room someone edited by hand: v4 swaps one phrase, nothing else ──
+	const OWN_LINE = "On Fridays, open with the week's one unfinished promise.";
+	const V3_PHRASE = "the transcripts of memorized conversations";
+	const V4_PHRASE = "the transcripts of remembered conversations";
+	const v3Room = (name: string, edit: (l1a: string) => string) => {
+		const id = createPersistentAgentFromScaffoldInput({ displayName: name, userName: "Alice Example", preferredUserAddress: "Alice" }).agent.agentId;
+		const file = path.join(tempAgentsRoot, id, "L1a.md");
+		const v4 = readText(file);
+		assert(v4.includes(V4_PHRASE) && v4.includes("template_version=4"), "a new room is scaffolded at v4 with the remembered phrase");
+		const v3 = edit(v4.replace("template_version=4", "template_version=3").replace(V4_PHRASE, V3_PHRASE));
+		fs.writeFileSync(file, v3);
+		return { id, file, v3, root: path.join(tempAgentsRoot, id) };
+	};
+	const edited = v3Room("Edited Room", (l1a) => l1a.replace("## Identity\n", `## Identity\n\n${OWN_LINE}\n`));
+	const editedResult = upgradePersistentAgentConstitution(edited.id);
+	const editedAfter = readText(edited.file);
+	assert(editedResult.plan.fromTemplateVersion === 3 && editedResult.upgradeId != null, "a v3 room upgrades to v4");
+	assert(editedAfter === edited.v3.replace("template_version=3", "template_version=4").replace(V3_PHRASE, V4_PHRASE), `a v3 room keeps what the person wrote, with only the phrase and the marker changed (own line kept: ${editedAfter.includes(OWN_LINE)})`);
+	const editedArchives = listFiles(path.join(edited.root, "L1a-archive"));
+	assert(editedArchives.length === 1 && readText(path.join(edited.root, "L1a-archive", editedArchives[0])) === edited.v3, "the v3 constitution is archived byte-exactly");
+	const editedEvents = listFiles(path.join(edited.root, "events/constitution-upgrade"));
+	assert(editedEvents.length === 1 && JSON.parse(readText(path.join(edited.root, "events/constitution-upgrade", editedEvents[0]))).toTemplateVersion === 4, "the v3 upgrade is recorded");
+	const reworded = v3Room("Reworded Room", (l1a) => l1a.replace(V3_PHRASE, "every conversation I was told to keep"));
+	upgradePersistentAgentConstitution(reworded.id);
+	assert(readText(reworded.file) === reworded.v3.replace("template_version=3", "template_version=4"), "a v3 room without the phrase only moves its marker");
 
 	console.log("l1a constitution upgrade smoke passed");
 } catch (error) {

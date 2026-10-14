@@ -13,6 +13,10 @@ process.env.HOME = tempHome;
 process.env.USERPROFILE = tempHome;
 
 const canonicalDir = path.join(tempHome, ".exxperts", "agent", "skills");
+// The server's own temp folder, so the folders an upload makes there can be counted.
+const serverTmp = path.join(tempHome, "tmp");
+fs.mkdirSync(serverTmp, { recursive: true });
+const uploadFolders = () => fs.readdirSync(serverTmp).filter((name) => name.startsWith("exxperts-skill-upload-"));
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const webServerDir = path.resolve(scriptDir, "..");
@@ -76,7 +80,7 @@ try {
 		shell: process.platform === "win32",
 		...SMOKE_SERVER_SPAWN_TREE_OPTIONS,
 		cwd: webServerDir,
-		env: { ...process.env, HOME: tempHome, USERPROFILE: tempHome, PORT: String(port), ...SMOKE_SERVER_AUTH_ENV, EXXETA_HOME: repoRoot },
+		env: { ...process.env, HOME: tempHome, USERPROFILE: tempHome, TMPDIR: serverTmp, TMP: serverTmp, TEMP: serverTmp, PORT: String(port), ...SMOKE_SERVER_AUTH_ENV, EXXETA_HOME: repoRoot },
 	});
 	server.stdout.on("data", (chunk) => serverOutput.push(String(chunk)));
 	server.stderr.on("data", (chunk) => serverOutput.push(String(chunk)));
@@ -155,6 +159,16 @@ try {
 	}));
 	assert(filteredOut.status === 400, `an archive whose SKILL.md files are all filtered out should be rejected, got ${filteredOut.status}`);
 	assert(/no SKILL\.md/i.test(String(filteredOut.body?.error)), "filtered-out archive should report no SKILL.md found");
+
+	// --- Reject: an archive whose bundled files include an unsafe name leaves no folder behind ---
+	const foldersBefore = uploadFolders().length;
+	const unsafeName = await upload("unsafe.zip", await zipBase64({
+		"unsafe/SKILL.md": skillMd("unsafe", "unsafe name", "A body."),
+		"unsafe/a-fine-file.txt": "fine",
+		"unsafe/not:fine.txt": "a colon",
+	}));
+	assert(unsafeName.status === 400 && /unsafe file name/.test(String(unsafeName.body?.error)), `an unsafe file name is refused as before, got ${unsafeName.status}: ${JSON.stringify(unsafeName.body)}`);
+	assert(uploadFolders().length === foldersBefore, `a refused upload leaves no upload folder in the temp folder, got ${uploadFolders().length - foldersBefore} more`);
 
 	// --- Fix: a description BEGINNING with a quote round-trips through write + read ----
 	// buildUserSkillMarkdown wrote a bare `description: "x"`, which the parser then read

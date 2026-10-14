@@ -6,6 +6,7 @@ import { EMPTY_INSTRUCTIONS_BOX, GLOBAL_INSTRUCTIONS_PLACEHOLDER, instructionsCl
 import { globalOutcomeAfter } from "../room-instructions-outcome";
 import { PaneHeader } from "./pane-header";
 import { useRegisteredSave, type RegisterSave } from "./use-registered-save";
+import { SHARED_SERVER_ADMIN_LINE, useRemoteClientContext } from "../remote-client-context";
 
 async function fetchGlobalInstructions(): Promise<GlobalInstructionsResponse> {
 	const response = await apiFetch("/api/settings/instructions");
@@ -41,6 +42,9 @@ export function GlobalInstructionsSection({ onDirtyChange, registerSave }: { onD
 	const [saving, setSaving] = useState(false);
 	const [message, setMessage] = useState<string | null>(null);
 	const [error, setError] = useState<string | null>(null);
+	// On a shared server the text reaches everyone's rooms, so only its admin
+	// changes it: the pane shows it read-only, with one line.
+	const readOnly = useRemoteClientContext().sharedServer;
 
 	useEffect(() => {
 		let cancelled = false;
@@ -69,7 +73,7 @@ export function GlobalInstructionsSection({ onDirtyChange, registerSave }: { onD
 	const dirty = loaded !== null && measured !== stored;
 	// A file that cannot be read shows as an empty box, and the empty draft
 	// still differs from what is stored: Save replaces or removes it.
-	const canSave = loaded !== null && (dirty || !!unreadable) && over === 0 && controls === 0 && !saving;
+	const canSave = !readOnly && loaded !== null && (dirty || !!unreadable) && over === 0 && controls === 0 && !saving;
 	const savedAt = savedAtLabel(loaded?.instructions.updatedAt);
 	const clearLink = instructionsClearLink(box, saving);
 
@@ -123,16 +127,17 @@ export function GlobalInstructionsSection({ onDirtyChange, registerSave }: { onD
 				aria-label="Global instructions"
 				aria-describedby="global-instructions-count"
 				disabled={loaded === null || saving}
+				readOnly={readOnly}
 				onChange={(event) => { const value = event.target.value; setBox((state) => reduceInstructionsBox(state, { type: "type", value })); setMessage(null); setError(null); }}
 			/>
 			<div className="room-instructions-foot">
 				<span id="global-instructions-count" className={over > 0 || controls > 0 ? "room-instructions-count over" : "room-instructions-count"} aria-live="polite">{count}</span>
-				<div className="rs-pane-actions">
+				{readOnly ? <p className="cli-note">{SHARED_SERVER_ADMIN_LINE}</p> : <div className="rs-pane-actions">
 					{clearLink && (
 						<button className="rs-btn" type="button" disabled={clearLink.disabled} onClick={() => { setBox((state) => reduceInstructionsBox(state, { type: "link" })); setMessage(null); setError(null); }}>{clearLink.label}</button>
 					)}
 					<button className="rs-btn" type="button" disabled={!canSave} onClick={() => void submit(measured)}>{saving ? "Saving…" : "Save"}</button>
-				</div>
+				</div>}
 			</div>
 			{savedAt && !dirty && <p className="settings-help">Last saved {savedAt}.</p>}
 			{dirty && !saving && <p className="settings-help">Unsaved changes.</p>}

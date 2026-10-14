@@ -405,7 +405,7 @@ describe("default model selection", () => {
 
 	test("openai defaults track current models", () => {
 		expect(defaultModelPerProvider.openai).toBe("gpt-5.4");
-		expect(defaultModelPerProvider["openai-codex"]).toBe("gpt-6-sol");
+		expect(defaultModelPerProvider["openai-codex"]).toBe("gpt-6.1-sol");
 	});
 
 	test("zai, minimax, and cerebras defaults track current models", () => {

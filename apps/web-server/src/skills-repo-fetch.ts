@@ -23,6 +23,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import JSZip from "jszip";
 import { filterRepoScanSkillFiles, scanInvisibleUnicode, type InvisibleUnicodeScan } from "./skills-import.js";
 
 /** A skill discovered in a cloned repo (the multi-select list row, spec §3). */
@@ -254,14 +255,79 @@ function killProcessTree(child: ChildProcess): void {
 	}
 }
 
+// What a person reads when this machine cannot run git at all, in place of
+// "spawn git ENOENT": which tool is missing, where to get it, and no command
+// to type. Git for Windows is found in its install folder even when the app
+// was opened before the install changed PATH, so "try again" is enough there.
+export function gitMissingMessage(platform: NodeJS.Platform = process.platform): string {
+	if (platform === "win32") {
+		return "Importing skills from a repository needs Git, which isn't installed on this computer. Install Git for Windows from gitforwindows.org, then try again. If it still says this, restart exxperts.";
+	}
+	return "Importing skills from a repository needs Git, which isn't installed on this computer. Install it with your system's software manager, then try again.";
+}
+
+// A Mac without Apple's command line tools has /usr/bin/git, but only as a
+// stand-in that fails with xcode-select's text. The app then asks macOS for
+// its install window itself (below), so the sentence's promise holds however
+// git was started.
+export const MAC_DEVELOPER_TOOLS_MISSING = "Importing skills from a repository needs Apple's command line tools, which this Mac doesn't have yet. macOS has just offered to install them in a separate window. Install them (it takes a few minutes), then try again.";
+
+/** One of the two sentences above: the machine lacks a tool, the repository is fine. */
+export function isMissingToolMessage(message: string): boolean {
+	return message === MAC_DEVELOPER_TOOLS_MISSING || message === gitMissingMessage();
+}
+
+// Asking for the install opens Apple's own window, where the person decides;
+// nothing installs by itself. Once per few minutes, so the featured sources,
+// which fail together, open one window between them. The command can be named
+// for a test, which must never open the real window.
+let lastDeveloperToolsRequest = 0;
+export function requestMacDeveloperToolsInstall(now = Date.now()): void {
+	if (now - lastDeveloperToolsRequest < 5 * 60_000) return;
+	lastDeveloperToolsRequest = now;
+	const command = process.env.EXXPERTS_DEVTOOLS_INSTALL_COMMAND?.trim() || "/usr/bin/xcode-select";
+	try {
+		spawn(command, ["--install"], { stdio: "ignore", detached: true }).once("error", () => {}).unref();
+	} catch {}
+}
+
+// Only the stand-in's own first words count: a line a server sends back
+// arrives as "remote: ..." and must not be taken for this Mac's state.
+export function isMacDeveloperToolsStub(stderr: string, platform: NodeJS.Platform = process.platform): boolean {
+	return platform === "darwin" && /^xcode-select: note: No developer tools were found/im.test(stderr);
+}
+
+/**
+ * The git to run: "git" from PATH, else on Windows the standard install
+ * folders, where Git for Windows lands even when the running app's PATH
+ * predates the install (an app keeps the PATH it was started with).
+ */
+export function resolveGitCommand(platform: NodeJS.Platform = process.platform, env: NodeJS.ProcessEnv = process.env, exists: (p: string) => boolean = fs.existsSync): string {
+	if (platform !== "win32") return "git";
+	const pathValue = env.PATH ?? env.Path ?? "";
+	const onPath = pathValue.split(";").some((dir) => dir.trim() && exists(path.win32.join(dir.trim(), "git.exe")));
+	if (onPath) return "git";
+	const candidates = [env.ProgramFiles, env["ProgramFiles(x86)"], env.LOCALAPPDATA && path.win32.join(env.LOCALAPPDATA, "Programs")]
+		.filter((root): root is string => Boolean(root))
+		.map((root) => path.win32.join(root, "Git", "cmd", "git.exe"));
+	return candidates.find((candidate) => exists(candidate)) ?? "git";
+}
+
 function runGit(args: string[], what: string, timeoutMs: number, env: NodeJS.ProcessEnv, cwd?: string): Promise<{ code: number; stdout: string; stderr: string }> {
 	return new Promise((resolve, reject) => {
 		let child: ChildProcess;
+		// A missing git is a missing tool, not a broken repository: say so in
+		// words, and keep the system's own text for whoever reads the log.
+		const missing = (err: unknown) => {
+			if ((err as NodeJS.ErrnoException | undefined)?.code !== "ENOENT") return err;
+			console.warn(`[skills] git is not available: ${(err as Error).message}`);
+			return new Error(gitMissingMessage(), { cause: err });
+		};
 		try {
 			// Its own process group off Windows, so the timeout can end the whole tree.
-			child = spawn("git", args, { stdio: ["ignore", "pipe", "pipe"], env, cwd, detached: process.platform !== "win32" });
+			child = spawn(resolveGitCommand(), args, { stdio: ["ignore", "pipe", "pipe"], env, cwd, detached: process.platform !== "win32" });
 		} catch (err) {
-			reject(err);
+			reject(missing(err));
 			return;
 		}
 		let stdout = "";
@@ -284,7 +350,7 @@ function runGit(args: string[], what: string, timeoutMs: number, env: NodeJS.Pro
 		});
 		child.once("error", (err) => {
 			clearTimeout(timer);
-			reject(err);
+			reject(missing(err));
 		});
 		child.once("close", (code) => {
 			clearTimeout(timer);
@@ -448,8 +514,10 @@ export function describeCloneFailure(rawStderr: string, source: ResolvedRepoSour
  * Shallow-clone a validated source into a fresh temp directory and return its
  * path. Depth 1, no tags, single branch, submodules NOT recursed, hooks/templates
  * neutralized. On any failure the temp dir is removed and an Error is thrown.
+ * `askForDeveloperTools: false` keeps a Mac's install window shut when git is
+ * only a fallback that a missing tool does not explain.
  */
-export async function cloneRepoShallow(source: ResolvedRepoSource, timeoutMs = CLONE_TIMEOUT_MS): Promise<string> {
+export async function cloneRepoShallow(source: ResolvedRepoSource, timeoutMs = CLONE_TIMEOUT_MS, options: { askForDeveloperTools?: boolean } = {}): Promise<string> {
 	if (source.kind === "git" && addressHasPassword(source.cloneArg)) throw new Error(PASSWORD_IN_ADDRESS);
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "exxperts-skill-repo-"));
 	const args = [
@@ -478,6 +546,11 @@ export async function cloneRepoShallow(source: ResolvedRepoSource, timeoutMs = C
 	args.push("--", source.cloneArg, dir);
 	try {
 		const result = await runGit(args, "clone", timeoutMs, hardenedGitEnv());
+		if (result.code !== 0 && isMacDeveloperToolsStub(result.stderr)) {
+			console.warn("[skills] git is Apple's stand-in: the command line tools are not installed");
+			if (options.askForDeveloperTools !== false) requestMacDeveloperToolsInstall();
+			throw new Error(MAC_DEVELOPER_TOOLS_MISSING);
+		}
 		if (result.code !== 0) throw new Error(describeCloneFailure(result.stderr, source) || `git clone exited with code ${result.code}`);
 		return dir;
 	} catch (err) {
@@ -487,6 +560,222 @@ export async function cloneRepoShallow(source: ResolvedRepoSource, timeoutMs = C
 			fs.rmSync(dir, { recursive: true, force: true });
 		} catch {}
 		throw err instanceof Error ? err : new Error(String(err));
+	}
+}
+
+// --- GitHub archive ----------------------------------------------------------
+//
+// A public GitHub repository needs no git: GitHub serves every branch and tag
+// as a zip, so the featured directory and most imports work on a computer with
+// nothing installed (Windows has no git, and a fresh Mac has only Apple's
+// stand-in). The zip is read, never run, like a clone. Private repositories
+// (GitHub answers 404 without a sign-in), other hosts and SSH addresses stay
+// with git, which knows the person's stored sign-in.
+
+const ARCHIVE_MAX_DOWNLOAD_BYTES = 64 * 1024 * 1024;
+const ARCHIVE_MAX_UNPACKED_BYTES = 256 * 1024 * 1024;
+const ARCHIVE_MAX_REDIRECTS = 3;
+// GitHub answers in well under a second. A network where only a proxy reaches
+// the internet (which git honours and this download does not) must not eat
+// git's time, so the download gets this long to start.
+const ARCHIVE_ANSWER_TIMEOUT_MS = 15_000;
+
+/** Why a download failed: git may sign in, the repository is too big, or anything else. */
+type ArchiveFailureKind = "not-found" | "too-large" | "failed";
+
+class ArchiveFailure extends Error {
+	constructor(readonly kind: ArchiveFailureKind, message: string, options?: { cause?: unknown }) {
+		super(message, options);
+	}
+}
+
+/**
+ * The zip address of a public GitHub source, or null when git must fetch it.
+ * Only `https://github.com/owner/repo` (optionally `.git`, a trailing slash, a
+ * `#branch` or `#tag`) qualifies: an SSH address or a user name in it is a
+ * deliberate sign-in, and any other shape is left to git to accept or refuse.
+ * The base can be pointed at a stand-in on this machine for a test, never
+ * anywhere else.
+ */
+export function githubArchiveUrl(source: ResolvedRepoSource, base = archiveBase()): string | null {
+	if (source.kind !== "git") return null;
+	let parsed: URL;
+	try {
+		parsed = new URL(source.cloneArg);
+	} catch {
+		return null;
+	}
+	if (parsed.protocol !== "https:" || parsed.hostname.toLowerCase() !== "github.com" || parsed.port || parsed.username || parsed.search || parsed.hash) return null;
+	const repo = parsed.pathname.replace(/\/+$/, "").replace(/\.git$/, "").split("/").filter(Boolean);
+	const ref = (source.ref ?? "HEAD").split("/");
+	if (repo.length !== 2 || [...repo, ...ref].some((segment) => !segment || segment === "." || segment === "..")) return null;
+	return `${base.replace(/\/+$/, "")}/${repo.map(encodeURIComponent).join("/")}/archive/${ref.map(encodeURIComponent).join("/")}.zip`;
+}
+
+function archiveBase(): string {
+	const override = process.env.EXXPERTS_GITHUB_ARCHIVE_BASE?.trim();
+	try {
+		if (override && ["127.0.0.1", "localhost", "[::1]"].includes(new URL(override).hostname)) return override;
+	} catch {}
+	return "https://github.com";
+}
+
+function fetchFailureReason(err: unknown): string {
+	if (err instanceof Error && (err.name === "TimeoutError" || err.name === "AbortError")) return "GitHub did not answer in time";
+	const cause = (err as { cause?: { code?: unknown; message?: unknown } } | undefined)?.cause;
+	const detail = typeof cause?.code === "string" ? cause.code : typeof cause?.message === "string" ? cause.message : err instanceof Error ? err.message : String(err);
+	return `GitHub could not be reached (${detail})`;
+}
+
+/** Download the zip, following GitHub's own redirects only, capped in size. */
+async function downloadArchive(url: string, timeoutMs: number, maxBytes: number): Promise<Buffer> {
+	const answered = new AbortController();
+	const answerTimer = setTimeout(() => answered.abort(new DOMException("GitHub did not answer", "TimeoutError")), Math.min(timeoutMs, ARCHIVE_ANSWER_TIMEOUT_MS));
+	const signal = AbortSignal.any([AbortSignal.timeout(timeoutMs), answered.signal]);
+	try {
+		return await downloadFollowing(url, signal, maxBytes, () => clearTimeout(answerTimer));
+	} finally {
+		clearTimeout(answerTimer);
+	}
+}
+
+async function downloadFollowing(url: string, signal: AbortSignal, maxBytes: number, onAnswer: () => void): Promise<Buffer> {
+	const start = new URL(url);
+	let current = start;
+	for (let hop = 0; ; hop++) {
+		let res: Response;
+		try {
+			res = await fetch(current, { redirect: "manual", signal, headers: { "user-agent": "exxperts" } });
+		} catch (err) {
+			throw new ArchiveFailure("failed", fetchFailureReason(err), { cause: err });
+		}
+		if (res.status >= 300 && res.status < 400) {
+			const location = res.headers.get("location");
+			const next = location ? new URL(location, current) : null;
+			const github = next && ((next.protocol === start.protocol && next.host === start.host) || (next.protocol === "https:" && next.host === "codeload.github.com"));
+			if (!next || !github || hop >= ARCHIVE_MAX_REDIRECTS) throw new ArchiveFailure("failed", "GitHub sent the download to an unexpected address");
+			await res.body?.cancel().catch(() => {});
+			current = next;
+			continue;
+		}
+		if (res.status === 404 || res.status === 401 || res.status === 403) throw new ArchiveFailure("not-found", `GitHub has no public download at this address (${res.status})`);
+		if (!res.ok || !res.body) throw new ArchiveFailure("failed", `GitHub answered ${res.status}`);
+		onAnswer();
+		if (Number(res.headers.get("content-length")) > maxBytes) throw new ArchiveFailure("too-large", "the repository is too large to download as a zip");
+		const chunks: Buffer[] = [];
+		let total = 0;
+		try {
+			for await (const chunk of res.body) {
+				total += chunk.byteLength;
+				if (total > maxBytes) throw new ArchiveFailure("too-large", "the repository is too large to download as a zip");
+				chunks.push(Buffer.from(chunk));
+			}
+		} catch (err) {
+			if (err instanceof ArchiveFailure) throw err;
+			throw new ArchiveFailure("failed", fetchFailureReason(err), { cause: err });
+		}
+		return Buffer.concat(chunks);
+	}
+}
+
+/** One entry's bytes, aborted the moment they pass the cap (a zip bomb never unpacks). */
+function readEntryCapped(entry: JSZip.JSZipObject, maxBytes: number): Promise<Buffer> {
+	return new Promise((resolve, reject) => {
+		const chunks: Buffer[] = [];
+		let total = 0;
+		let aborted = false;
+		const stream = entry.nodeStream();
+		stream.on("data", (chunk: Buffer | string) => {
+			if (aborted) return;
+			const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk), "utf-8");
+			total += buf.length;
+			if (total > maxBytes) {
+				aborted = true;
+				reject(new ArchiveFailure("too-large", "the repository is too large to unpack"));
+				(stream as unknown as { destroy?: () => void }).destroy?.();
+				return;
+			}
+			chunks.push(buf);
+		});
+		stream.on("error", (err: Error) => {
+			if (!aborted) reject(err);
+		});
+		stream.on("end", () => {
+			if (!aborted) resolve(Buffer.concat(chunks));
+		});
+	});
+}
+
+/**
+ * Unpack GitHub's zip into `dir` as plain files, dropping the one folder GitHub
+ * wraps everything in. Like the clone (`core.symlinks=false`), no symlink is
+ * made; a name that could leave the folder, or that a file system or the skill
+ * digest would misread, is skipped.
+ */
+async function unpackArchive(buffer: Buffer, dir: string, maxBytes: number): Promise<void> {
+	let zip: JSZip;
+	try {
+		zip = await JSZip.loadAsync(buffer);
+	} catch (err) {
+		throw new ArchiveFailure("failed", "GitHub's download was not a readable zip", { cause: err });
+	}
+	const entries = Object.values(zip.files).filter((entry) => !entry.dir);
+	if (entries.length > WALK_MAX_FILES) throw new ArchiveFailure("too-large", "the repository has too many files to unpack");
+	const root = path.resolve(dir);
+	let remaining = maxBytes;
+	for (const entry of entries) {
+		const rel = entry.name.slice(entry.name.indexOf("/") + 1);
+		const segments = rel.split("/");
+		if (!rel || entry.name.indexOf("/") < 0 || rel.includes("\\") || segments.some((segment) => !segment || segment === "." || segment === "..")) continue;
+		// Stricter than a clone on purpose: names Windows reserves for devices
+		// or silently trims, and names the skill digest or a file system would
+		// misread, are left out; no skill needs one.
+		if (/[\p{Cc}\p{Cf}:]/u.test(rel) || segments.some((segment) => /^(con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³])(\..*)?$/i.test(segment) || /[. ]$/.test(segment))) continue;
+		if (((Number(entry.unixPermissions) || 0) & 0o170000) === 0o120000) continue;
+		const dest = path.join(root, ...segments);
+		if (!dest.startsWith(root + path.sep)) continue;
+		let bytes: Buffer;
+		try {
+			bytes = await readEntryCapped(entry, remaining);
+		} catch (err) {
+			if (err instanceof ArchiveFailure) throw err;
+			throw new ArchiveFailure("failed", "GitHub's download was not a readable zip", { cause: err });
+		}
+		remaining -= bytes.length;
+		fs.mkdirSync(path.dirname(dest), { recursive: true });
+		fs.writeFileSync(dest, bytes);
+	}
+}
+
+/**
+ * A checkout of the source to scan: GitHub's zip for a public GitHub address,
+ * else a shallow git clone. When the zip fails, git tries: a private
+ * repository needs its sign-in, and a very big one is git's job. When GitHub
+ * could not be reached, git may still get through (it uses the system's proxy
+ * and certificates), but if git is missing too, the reason shown is GitHub's,
+ * and a Mac is not asked to install tools that would not have helped.
+ */
+export async function fetchRepoCheckout(source: ResolvedRepoSource, timeoutMs = CLONE_TIMEOUT_MS, limits: { downloadBytes?: number; unpackedBytes?: number } = {}): Promise<string> {
+	const url = githubArchiveUrl(source);
+	if (!url) return cloneRepoShallow(source, timeoutMs);
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "exxperts-skill-repo-"));
+	let failure: ArchiveFailure;
+	try {
+		await unpackArchive(await downloadArchive(url, timeoutMs, limits.downloadBytes ?? ARCHIVE_MAX_DOWNLOAD_BYTES), dir, limits.unpackedBytes ?? ARCHIVE_MAX_UNPACKED_BYTES);
+		return dir;
+	} catch (err) {
+		try {
+			fs.rmSync(dir, { recursive: true, force: true });
+		} catch {}
+		failure = err instanceof ArchiveFailure ? err : new ArchiveFailure("failed", err instanceof Error ? err.message : String(err), { cause: err });
+	}
+	console.warn(`[skills] GitHub's zip of ${source.display} failed (${failure.message}); trying git`);
+	if (failure.kind !== "failed") return cloneRepoShallow(source, timeoutMs);
+	try {
+		return await cloneRepoShallow(source, timeoutMs, { askForDeveloperTools: false });
+	} catch (err) {
+		if (err instanceof Error && isMissingToolMessage(err.message)) throw new Error(failure.message, { cause: err });
+		throw err;
 	}
 }
 
@@ -894,6 +1183,8 @@ export interface FeaturedSourceResult {
 	token: string | null;
 	skills: RepoFoundSkill[];
 	error?: string;
+	/** The error is a tool this machine lacks, the same for every source. */
+	missingTool?: boolean;
 }
 
 interface CachedFeatured {
@@ -930,14 +1221,19 @@ export async function loadFeaturedSource(entry: FeaturedSource): Promise<Feature
 		return result;
 	}
 	try {
-		const dir = await cloneRepoShallow(resolved.value);
+		const dir = await fetchRepoCheckout(resolved.value);
 		const token = registerCheckout(dir, resolved.value.display);
 		const result: FeaturedSourceResult = { source: entry.source, author: entry.author, token, skills: scanRepoSkills(dir) };
 		featuredCache.set(entry.source, { result, fetchedAt: Date.now() });
 		return result;
 	} catch (err) {
-		const result: FeaturedSourceResult = { source: entry.source, author: entry.author, token: null, skills: [], error: err instanceof Error ? err.message : String(err) };
-		featuredCache.set(entry.source, { result, fetchedAt: Date.now() });
+		const error = err instanceof Error ? err.message : String(err);
+		const missingTool = isMissingToolMessage(error);
+		const result: FeaturedSourceResult = { source: entry.source, author: entry.author, token: null, skills: [], error, ...(missingTool ? { missingTool: true } : {}) };
+		// A missing tool fails in milliseconds, so there is no slow clone to
+		// spare, and the sentence says "try again" once it is installed: that
+		// must not meet a remembered failure.
+		if (!missingTool) featuredCache.set(entry.source, { result, fetchedAt: Date.now() });
 		return result;
 	}
 }

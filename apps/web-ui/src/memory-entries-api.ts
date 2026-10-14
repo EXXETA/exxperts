@@ -33,7 +33,8 @@ export function fetchMemoryHistory(agentId: PersistentAgentId): Promise<MemoryHi
 	return fetchJson<MemoryHistoryResponse>(`${memoryBase(agentId)}/history`);
 }
 
-export function createMemoryEntry(agentId: PersistentAgentId, entry: { topic: string; kind: EntryKind; text: string }): Promise<MemoryEntryWriteResponse> {
+/** `newTopic`: the name was typed as a new topic. `requestId`: the add sent again after a lost answer finds its first one. */
+export function createMemoryEntry(agentId: PersistentAgentId, entry: { topic: string; kind: EntryKind; text: string; newTopic?: boolean; requestId?: string }): Promise<MemoryEntryWriteResponse> {
 	return fetchJson<MemoryEntryWriteResponse>(`${memoryBase(agentId)}/entries`, {
 		method: "POST",
 		headers: { "content-type": "application/json" },
@@ -42,7 +43,7 @@ export function createMemoryEntry(agentId: PersistentAgentId, entry: { topic: st
 }
 
 /** One field at a time, exactly as the route accepts it. */
-export function updateMemoryEntry(agentId: PersistentAgentId, entryId: string, change: { text: string } | { pinned: boolean } | { topic: string } | { status: "open" | "done" }): Promise<MemoryEntryWriteResponse> {
+export function updateMemoryEntry(agentId: PersistentAgentId, entryId: string, change: { text: string } | { pinned: boolean } | { topic: string; newTopic?: boolean } | { status: "open" | "done" }): Promise<MemoryEntryWriteResponse> {
 	return fetchJson<MemoryEntryWriteResponse>(`${memoryBase(agentId)}/entries/${encodeURIComponent(entryId)}`, {
 		method: "PUT",
 		headers: { "content-type": "application/json" },

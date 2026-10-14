@@ -145,7 +145,7 @@ Not included in this local tarball flow: Electron, Docker, native installers, DM
 
 ## Prebuilt release archives (phase 0)
 
-`scripts/bundle-release.mjs` produces a self-contained per-OS archive so end users need neither Node nor npm to run exxperts. It builds and packs the repo, installs the tarball into a temporary npm prefix (the same pipeline as `install:global`, including the npm allow flags and the postinstall replay), then stages and compresses:
+`scripts/bundle-release.mjs` produces a self-contained per-OS archive so end users need neither Node nor npm to run exxperts. It builds and packs the repo, unpacks the tarball into a temporary folder and installs it from the repo's `package-lock.json` with `npm ci --omit=dev`. The build then fails unless every third-party npm package in the tree is a non-dev lockfile entry (`scripts/payload-lock-check.mjs`), so the release scan reads each one and `sbom-app.cdx.json` lists it. It replays the postinstall, then stages and compresses:
 
 ```
 exxperts/
@@ -156,7 +156,7 @@ exxperts/
 
 The shim runs `vendor/node/bin/node app/bin/exxperts.cjs`, and because the launcher chain spawns all children via its own `process.execPath`, everything downstream (tsx, the web server, the CLI runtime) uses the vendored Node. The Node version is pinned in `scripts/release-node-version.json` together with the per-target sha256 of the nodejs.org archive (checked weekly by `scripts/check-node-currency.mjs`), and the download is verified against that pinned hash.
 
-Deliberately not bundled: Chromium (a per-user cache download, fetched later with `npx playwright install chromium`; artifact preview degrades gracefully without it) and git (a soft dependency, only needed for the skills-repo fetch). The `.env` file is read from `app/.env` inside the unpacked archive, so provider configuration travels with the install location, not the archive.
+Deliberately not bundled: Chromium (a per-user cache download, fetched later with `npx playwright install chromium`; artifact preview degrades gracefully without it) and git (a soft dependency: a public GitHub repository's skills arrive as GitHub's zip, so git is needed only to import from a private repository, another host or an SSH address). The `.env` file is read from `app/.env` inside the unpacked archive, so provider configuration travels with the install location, not the archive.
 
 Targets must be built on a matching host (native deps like esbuild install only the host platform's binary): `win-x64`, `darwin-arm64`, `linux-x64`.
 

@@ -27,6 +27,9 @@ const repoRoot = path.resolve(scriptDir, "..", "..", "..");
 
 const FAIL_MARKER = "SMOKE_PROVIDER_FAILS";
 const HANG_MARKER = "SMOKE_PROVIDER_HANGS";
+const SLOW_FIRST_MARKER = "SMOKE_PROVIDER_SLOW_FIRST";
+// The silence limit these cases run with; the first event may take twice it.
+const IDLE_MS = 1000;
 // The reserve the runtime keeps free is 16384 tokens, so a 20k window plus a
 // reported context well above 3616 tokens is squarely in compaction territory.
 const MODEL_CONTEXT_WINDOW = 20000;
@@ -54,7 +57,17 @@ const gateway = http.createServer((req, res) => {
 	}
 	let body = "";
 	req.on("data", (chunk) => { body += chunk; });
-	req.on("end", () => {
+	let delayed = false;
+	req.on("end", function respond() {
+		if (body.includes(SLOW_FIRST_MARKER) && !delayed) {
+			// The provider thinks before its first byte, longer than the silence
+			// limit but within the first wait: a slow gateway, a cold model.
+			openConnections.add(res);
+			res.on("close", () => openConnections.delete(res));
+			delayed = true;
+			setTimeout(respond, IDLE_MS * 1.5);
+			return;
+		}
 		const record = { body, finished: false };
 		requests.push(record);
 		if (body.includes(FAIL_MARKER)) {
@@ -121,7 +134,7 @@ try {
 	if (!model) throw new Error("the synthetic maintenance model should be in the registry");
 	const workerModel: NonNullable<typeof model> = model;
 
-	async function runWorker(systemPrompt: string, timeoutMs?: number, options: { lock?: typeof modelLock; maxTokens?: number } = {}) {
+	async function runWorker(systemPrompt: string, timeoutMs?: number, options: { lock?: typeof modelLock; maxTokens?: number; idleTimeoutMs?: number } = {}) {
 		const lock = options.lock ?? modelLock;
 		const lockModel = lock === modelLock ? workerModel : registry.find(lock.provider, lock.model);
 		if (!lockModel) throw new Error(`the synthetic model ${lock.model} should be in the registry`);
@@ -137,6 +150,7 @@ try {
 			modelRegistry: registry,
 			...(timeoutMs ? { timeoutMs } : {}),
 			...(options.maxTokens ? { maxTokens: options.maxTokens } : {}),
+			...(options.idleTimeoutMs ? { idleTimeoutMs: options.idleTimeoutMs } : {}),
 		});
 	}
 
@@ -212,6 +226,28 @@ try {
 	requests.length = 0;
 	const full = await runWorker("Synthetic Memorize prompt, full ceiling.", undefined, { lock: largeLock });
 	assert(requestedOutputCap(requests[0]!.body) === 64000 && full.modelMaxOutputTokens === 64000, `an uncapped call asks for the model's full ceiling, got ${requestedOutputCap(requests[0]!.body)} / ${full.modelMaxOutputTokens}`);
+
+	// --- 6. The silence limit counts the provider's own events -------------
+	// The runtime announces the turn and the prompt before it calls the
+	// provider; those are not the provider answering. A first byte that comes
+	// after the silence limit but within the first wait (twice it) is an
+	// answer, not a stall.
+	requests.length = 0;
+	const slowFirst = await runWorker(`Synthetic Memory model prompt. ${SLOW_FIRST_MARKER}`, undefined, { idleTimeoutMs: IDLE_MS });
+	assert(slowFirst.text.includes("Draft line two."), `a slow first byte within the first wait is answered, got ${JSON.stringify(slowFirst.text)}`);
+	assert(requests.length === 1, `a slow first byte is one request, got ${requests.length}`);
+
+	// A stream that stopped coming after its first delta is a stall, named so.
+	requests.length = 0;
+	let stall: Error | undefined;
+	const stallStarted = Date.now();
+	try {
+		await runWorker(`Synthetic Memory model prompt. ${HANG_MARKER}`, undefined, { idleTimeoutMs: IDLE_MS });
+	} catch (error) {
+		stall = error as Error;
+	}
+	assert(stall instanceof IsolatedPersistentAgentWorkerTurnError && stall.reason === "stalled", `a stream that stopped coming fails as stalled, got ${stall?.message}`);
+	assert(Date.now() - stallStarted < IDLE_MS * 4, "a stall ends within the silence limit after the last delta");
 
 	console.log("lifecycle-worker-session-smoke: PASS");
 } catch (error) {

@@ -1236,6 +1236,15 @@ strong, b { font-weight: 700; }
 	margin-top: 14px;
 	padding: 10px 12px;
 }
+.home-resume-status {
+	border: 1px solid color-mix(in srgb, var(--fg-soft) 16%, var(--border-soft));
+	border-radius: 12px;
+	color: var(--fg-soft);
+	font-size: 13px;
+	line-height: 1.45;
+	margin-top: 14px;
+	padding: 10px 12px;
+}
 .landing .cli-note {
 	font-size: 12px;
 	line-height: 1.5;
@@ -2504,22 +2513,9 @@ strong, b { font-weight: 700; }
 .persistent-agent-card.ready { border-color: var(--border-soft); }
 .persistent-agent-card.live { border-color: color-mix(in srgb, var(--fg-soft) 24%, var(--border-soft)); }
 .persistent-agent-card.standby { border-color: var(--border-soft); }
-.persistent-agent-card.missing {
-	border-color: color-mix(in srgb, var(--warning) 25%, var(--border-soft));
-	box-shadow: inset 3px 0 0 color-mix(in srgb, var(--warning) 58%, transparent);
-}
-.persistent-agent-card.error {
-	border-color: color-mix(in srgb, var(--error) 36%, var(--border-soft));
-	box-shadow: inset 3px 0 0 color-mix(in srgb, var(--error) 70%, transparent);
-}
-.persistent-agent-card.mem-soft {
-	/* Soft maintenance keeps the edge stripe only; the full border is reserved for hard states. */
-	box-shadow: inset 3px 0 0 color-mix(in srgb, var(--warning) 58%, transparent);
-}
-.persistent-agent-card.mem-hard {
-	border-color: color-mix(in srgb, var(--error) 36%, var(--border-soft));
-	box-shadow: inset 3px 0 0 color-mix(in srgb, var(--error) 70%, transparent);
-}
+/* A room's state shows by its badge and the meter's fill only, a broken or missing room's too. */
+.persistent-agent-card.missing,
+.persistent-agent-card.error { border-color: var(--border-soft); }
 .persistent-agent-card-main {
 	display: flex;
 	flex-direction: column;
@@ -2617,8 +2613,6 @@ strong, b { font-weight: 700; }
 	overflow-wrap: anywhere;
 	text-align: left;
 }
-.persistent-agent-card.mem-soft .persistent-agent-meta { color: color-mix(in srgb, var(--warning) 82%, var(--muted)); }
-.persistent-agent-card.mem-hard .persistent-agent-meta { color: color-mix(in srgb, var(--error) 82%, var(--muted)); }
 .memory-meter {
 	display: flex;
 	flex-direction: column;
@@ -2915,6 +2909,10 @@ strong, b { font-weight: 700; }
 	line-height: 1.55;
 	margin: 0;
 }
+/* The open conversation's line is its own statement, set apart from the counts. */
+.checkpoint-input-heading p.saved-open-conversation-line {
+	margin-top: 12px;
+}
 .checkpoint-field-label {
 	font-family: "Bandeins Strange", "Sen", sans-serif;
 	font-size: 11px;
@@ -2988,23 +2986,6 @@ strong, b { font-weight: 700; }
 	outline: none;
 	border-color: color-mix(in srgb, var(--fg) 40%, var(--border));
 }
-.checkpoint-input-meta {
-	display: flex;
-	justify-content: center;
-	gap: 8px;
-	flex-wrap: wrap;
-	font-size: 12px;
-	color: var(--muted);
-}
-.checkpoint-input-meta span {
-	border: 1px solid var(--border);
-	border-radius: 999px;
-	padding: 6px 9px;
-	max-width: 220px;
-	white-space: nowrap;
-	overflow: hidden;
-	text-overflow: ellipsis;
-}
 .checkpoint-generating-state,
 .checkpoint-proposal-page {
 	display: grid;
@@ -3026,11 +3007,6 @@ strong, b { font-weight: 700; }
 	font-size: clamp(28px, 3.8vw, 42px);
 	line-height: 1.02;
 	margin: 6px 0 12px;
-}
-.checkpoint-proposal-arc {
-	color: var(--fg);
-	font-size: 16px;
-	line-height: 1.58;
 }
 .checkpoint-generating-state p {
 	color: var(--muted);
@@ -3086,9 +3062,6 @@ strong, b { font-weight: 700; }
 .checkpoint-proposal-summary li p {
 	margin: 0;
 }
-.checkpoint-input-meta.subtle {
-	opacity: 0.78;
-}
 /* How Remember read (or will read) the conversation: one quiet line. */
 .checkpoint-read-note {
 	margin: 0;
@@ -3097,54 +3070,9 @@ strong, b { font-weight: 700; }
 	color: var(--muted);
 	text-align: center;
 }
-.checkpoint-full-entry-trigger {
-	justify-self: center;
-	margin-top: 2px;
-}
-.checkpoint-full-review {
-	display: grid;
-	gap: 10px;
-}
-.checkpoint-review-actions {
-	display: flex;
-	justify-content: flex-end;
-	gap: 10px;
-	flex-wrap: wrap;
-}
 .checkpoint-saved-page {
 	max-width: 560px;
 	margin: 0 auto;
-}
-.checkpoint-full-entry {
-	max-height: 420px;
-	overflow: auto;
-	white-space: pre-wrap;
-	border: 1px solid var(--border);
-	border-radius: 14px;
-	background: var(--bg);
-	padding: 14px;
-	font-size: 12px;
-	line-height: 1.45;
-}
-.checkpoint-full-entry.checkpoint-full-entry-rendered {
-	white-space: normal;
-	padding: 16px 18px;
-	font-size: 13.5px;
-	line-height: 1.55;
-}
-.checkpoint-full-entry-rendered p {
-	margin: 0 0 10px;
-}
-.checkpoint-full-entry-rendered p:last-child {
-	margin-bottom: 0;
-}
-.checkpoint-full-entry-rendered ul,
-.checkpoint-full-entry-rendered ol {
-	margin: 6px 0 12px 18px;
-	padding: 0;
-}
-.checkpoint-full-entry-rendered li + li {
-	margin-top: 4px;
 }
 .checkpoint-edit-field {
 	display: grid;
@@ -3190,6 +3118,48 @@ strong, b { font-weight: 700; }
 	justify-content: center;
 	gap: 10px;
 	flex-wrap: wrap;
+}
+/* A long entry or its editor scrolls the dialog: Save and Discard stay at its foot. */
+.checkpoint-proposal-page .checkpoint-preview-actions {
+	position: sticky;
+	bottom: -30px;
+	margin: 0 -30px -30px;
+	padding: 14px 30px 30px;
+	background: var(--panel);
+}
+/* Remember's review: the whole entry scrolls inside the card; the heading,
+   the notices and the buttons stay where they are. */
+.checkpoint-input-card.checkpoint-review-card {
+	max-height: min(860px, 85vh);
+	overflow: hidden;
+	display: flex;
+	flex-direction: column;
+}
+.checkpoint-review-card .checkpoint-proposal-page {
+	display: flex;
+	flex-direction: column;
+	min-height: 0;
+}
+.checkpoint-review-card .checkpoint-proposal-page > * {
+	flex: none;
+}
+.checkpoint-review-card .checkpoint-proposal-page > .checkpoint-proposal-result {
+	flex: 0 1 auto;
+	min-height: 0;
+	overflow: auto;
+}
+.checkpoint-review-card .checkpoint-proposal-page .checkpoint-preview-actions {
+	position: static;
+	margin: 0;
+	padding: 0;
+}
+.checkpoint-whole-entry section + section {
+	margin-top: 14px;
+}
+.checkpoint-whole-entry h4 {
+	margin: 0 0 6px;
+	font-size: 13px;
+	color: var(--muted);
 }
 /* Sits in the action row, left of the buttons (the proposal rows are
    flex-end), so the disabled approve explains itself without a scroll. */
@@ -3719,17 +3689,6 @@ strong, b { font-weight: 700; }
 	border-color: var(--exx-action-primary-bg);
 	color: var(--exx-action-primary-fg);
 }
-/* Summary notes a Memorize could not sort: a line and its way to Review. */
-.maintain-hint {
-	display: flex;
-	align-items: center;
-	justify-content: space-between;
-	gap: 12px;
-}
-.maintain-hint p {
-	margin: 0;
-	font-size: 14px;
-}
 .maintain-footnote {
 	margin: 0;
 	color: var(--muted);
@@ -3948,10 +3907,6 @@ strong, b { font-weight: 700; }
 	display: grid;
 	gap: 12px;
 }
-.absorb-candidate-disclosure .checkpoint-full-entry {
-	margin-top: 12px;
-	max-height: 520px;
-}
 .absorb-markdown-preview {
 	display: grid;
 	gap: 10px;
@@ -4066,8 +4021,6 @@ strong, b { font-weight: 700; }
    the list is the screen's spine — quiet rows, one state sentence each. */
 .absorb-run-progress {
 	width: 100%;
-	max-width: 760px;
-	margin: 0 auto;
 }
 .absorb-run-sessions,
 .absorb-run-entries {
@@ -4146,6 +4099,10 @@ strong, b { font-weight: 700; }
 	line-height: 1.5;
 	margin: 0;
 }
+.memory-entry-text p { margin: 0; }
+.memory-entry-text ul { margin: 2px 0; padding-left: 18px; }
+.memory-entry-text ul:last-child { margin-bottom: 0; }
+.memory-entry-gap { height: 6px; }
 .absorb-run-change-diff {
 	display: grid;
 	grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -4243,6 +4200,12 @@ strong, b { font-weight: 700; }
 	text-transform: uppercase;
 	color: var(--muted);
 }
+.absorb-run-guidance-not-done {
+	margin: 10px 0 0;
+	font-size: 13.5px;
+	line-height: 1.5;
+}
+.absorb-run-guidance > ul,
 .absorb-run-guidance-block ul {
 	margin: 0;
 	padding-left: 18px;
@@ -4273,10 +4236,10 @@ strong, b { font-weight: 700; }
 /* A run that stopped for its model, or kept every conversation whole: one
    notice, its sentence and the ways on. */
 .absorb-run-stop-note,
-.absorb-run-summaries-note {
+.absorb-run-summaries-note,
+.model-notice {
 	display: grid;
 	gap: 10px;
-	font-size: 13px;
 }
 .absorb-run-stop-note p,
 .absorb-run-summaries-note p {
@@ -4522,6 +4485,21 @@ strong, b { font-weight: 700; }
 	padding: 4px 0 4px 12px;
 	background: transparent;
 	text-align: left;
+}
+/* A line that says something went wrong or asks the person to act (a model
+   notice, a stopped run, a run left open) reads as body text, not as a hint. */
+.memory-action-note {
+	color: var(--fg);
+	font-size: inherit;
+	line-height: inherit;
+	text-align: left;
+	margin: 0;
+	padding: 0;
+	border: 0;
+	background: transparent;
+}
+.memory-action-note p {
+	margin: 0;
 }
 .absorb-warning-list {
 	text-align: left;
@@ -7815,6 +7793,10 @@ strong, b { font-weight: 700; }
 		flex-direction: column;
 		gap: 14px;
 	}
+	/* Stacked, the Maintain header starts on the page's left edge like everything under it. */
+	.maintain-workspace .absorb-workspace-header {
+		align-items: flex-start;
+	}
 	.absorb-workspace-header .rs-btn {
 		margin-top: 0;
 	}
@@ -8408,6 +8390,9 @@ strong, b { font-weight: 700; }
 	gap: 12px;
 	align-items: center;
 }
+.rs-info-keep {
+	white-space: nowrap;
+}
 .rs-info-anchor {
 	position: relative;
 	display: inline-flex;
@@ -8491,6 +8476,13 @@ label.settings-row {
 	font-weight: 500;
 }
 .settings-row-sub {
+	color: var(--muted);
+	font-size: 13px;
+	line-height: 1.45;
+}
+/* What a memory editor says before Save: its count near the limit, or why Save waits. */
+.memory-editor-limit {
+	margin: 6px 0 0;
 	color: var(--muted);
 	font-size: 13px;
 	line-height: 1.45;
@@ -8971,8 +8963,7 @@ label.settings-row {
 	color: var(--error);
 }
 .room-schedules-run-status.status-queued,
-.room-schedules-run-status.status-running,
-.room-schedules-run-status.status-deferred {
+.room-schedules-run-status.status-running {
 	border-color: color-mix(in srgb, var(--warning) 24%, transparent);
 	color: var(--warning);
 }
@@ -9314,8 +9305,9 @@ label.settings-row {
 	flex-direction: column;
 	gap: 12px;
 }
+/* The theme's error red, a touch toward the text colour so it reads at 4.5:1 on the dark pane too. */
 .room-maintenance-error {
-	color: var(--danger, #c0392b);
+	color: color-mix(in srgb, var(--error) 80%, var(--fg));
 	font-size: 12px;
 }
 /* The budget row: the slider and its value on the right, as wide as the
@@ -9493,9 +9485,6 @@ label.settings-row {
 	justify-content: flex-end;
 	gap: 8px;
 }
-.memory-entry-move .settings-form-foot {
-	margin-left: auto;
-}
 .memory-entry-meta {
 	display: flex;
 	align-items: baseline;
@@ -9556,9 +9545,19 @@ label.settings-row {
 .memory-entry-add textarea::placeholder {
 	color: var(--muted);
 }
-.memory-entry-move select {
-	width: auto;
-	min-width: 160px;
+/* Move's list and a new topic's name share one width, and the buttons follow
+   them on the line, wrapping below on a phone. */
+.memory-entry-move select,
+.memory-entry-move input[type="text"] {
+	width: 220px;
+	max-width: 100%;
+}
+/* The Memorize card's sorted notes: the topic reads apart from the note, and Move opens below it. */
+.absorb-run-sorted-topic {
+	color: var(--muted);
+}
+.absorb-run-sorted-row .memory-entry-move {
+	margin: 6px 0 8px;
 }
 
 /* A segmented choice (the workspace access mode, the schedule's mode): the
@@ -9739,6 +9738,37 @@ label.settings-row {
 .connector-oauth-fields {
 	display: grid;
 	gap: 12px;
+}
+/* A custom header: its name, its value, and a remove button. */
+.connector-header-row {
+	display: grid;
+	grid-template-columns: minmax(0, 2fr) minmax(0, 3fr) auto;
+	gap: 8px;
+	align-items: center;
+}
+.connector-header-add {
+	justify-self: start;
+	background: none;
+	border: none;
+	padding: 0;
+	font-size: 13px;
+	color: var(--muted);
+	cursor: pointer;
+}
+.connector-header-add:hover {
+	color: var(--fg);
+}
+.connector-header-remove {
+	background: none;
+	border: none;
+	padding: 4px 6px;
+	font-size: 16px;
+	line-height: 1;
+	color: var(--muted);
+	cursor: pointer;
+}
+.connector-header-remove:hover {
+	color: var(--fg);
 }
 .connector-form-field span {
 	font-size: 13px;
@@ -11329,7 +11359,7 @@ button.composer-staged-tile-frame:focus-visible { outline: 2px solid var(--exx-p
    top-right done) that gave "something happened" three places to look. */
 .composer-toasts {
 	position: absolute;
-	bottom: 100%;
+	bottom: calc(100% + var(--above-composer-dock-height, 0px));
 	left: 0;
 	right: 0;
 	z-index: 60;
@@ -11339,26 +11369,6 @@ button.composer-staged-tile-frame:focus-visible { outline: 2px solid var(--exx-p
 	gap: 8px;
 	padding-bottom: 10px;
 	pointer-events: none; /* the gaps stay click-through; the toasts re-enable it */
-}
-/* Home surface for the background-answer toast (community #14 slice 3): the
-   launcher has no composer to anchor the stack to, so it floats at the
-   viewport's bottom centre instead. z 30 keeps it with the popover family,
-   above in-flow content and the desktop shell's drag strip (z 20). */
-.launcher-toasts {
-	position: fixed;
-	bottom: 24px;
-	left: 50%;
-	transform: translateX(-50%);
-	width: min(560px, calc(100vw - 32px));
-	z-index: 30;
-}
-/* A toast raised from inside the settings dialog sits above it. */
-.launcher-toasts.settings-toast {
-	z-index: 80;
-}
-.launcher-toasts .composer-toasts {
-	position: static;
-	padding-bottom: 0;
 }
 .room-toast {
 	pointer-events: auto;
@@ -12578,16 +12588,11 @@ button.composer-staged-tile-frame:focus-visible { outline: 2px solid var(--exx-p
 	border-radius: 50%;
 	background: var(--error);
 }
-/* Three things want the bottom centre: this banner, the task-store banner and
-   the launcher toasts. They are rendered in that order, so later siblings step
-   up one slot for each earlier one that is on screen. The pitch clears the
-   tallest of the three even when its text wraps to two lines. Without this the
-   connection banner simply sat on top of the toasts and hid them, and the
-   task-store banner and the toasts had been sharing one slot all along. */
+/* Two things want the bottom centre: this banner and the task-store banner.
+   They are rendered in that order, so the second steps up one slot when the
+   first is on screen. The pitch clears the taller one even when its text
+   wraps to two lines. */
 .connection-lost-banner ~ .task-store-gc-banner { bottom: 120px; }
-.connection-lost-banner ~ .launcher-toasts,
-.task-store-gc-banner ~ .launcher-toasts { bottom: 120px; }
-.connection-lost-banner ~ .task-store-gc-banner ~ .launcher-toasts { bottom: 216px; }
 
 /* Desktop app (Electron shell) -------------------------------------- */
 /* macOS hidden title bar: the sidebar header doubles as the window drag
@@ -12664,16 +12669,17 @@ html.desktop-app-mac.sidebar-collapsed .topbar {
 /* Maintain workspaces (chooser, Memorize, Review) are full-page
    takeovers with no sidebar: their header carries the exit button in the top
    48px, so without the lift the strip eats its clicks. Same pattern: header
-   above the strip, bar drags, controls opt out; content steps past the
-   traffic lights, which otherwise sit on the kicker line. */
+   above the strip, bar drags, controls opt out. The content starts below the
+   traffic lights (x 18-78, y 18-32 at 100%), as Home does, so the title keeps
+   the content's left edge. The text starts at 52px (48px on the discussion
+   step), which clears the buttons down to about 67% zoom: Electron's 69.4% too. */
 html.desktop-app-mac .absorb-workspace-header {
 	position: relative;
 	z-index: 21;
 	-webkit-app-region: drag;
-	padding-left: 84px;
-	/* Level with the topbar's breathing inset (additive over base). */
-	padding-top: calc(18px + 14px);
 }
+html.desktop-app-mac .maintain-workspace .absorb-workspace-header { padding-top: 52px; }
+html.desktop-app-mac .maintain-workspace .absorb-workspace-header.compact { padding-top: 48px; }
 html.desktop-app-mac .absorb-workspace-header a,
 html.desktop-app-mac .absorb-workspace-header button,
 html.desktop-app-mac .absorb-workspace-header input {
@@ -12736,24 +12742,6 @@ html.desktop-app-mac .mem-fullscreen {
 	font-size: 24px;
 	line-height: 1.15;
 	margin: 6px 0 8px;
-}
-.checkpoint-input-card .checkpoint-input-heading p {
-	max-width: 640px;
-}
-.checkpoint-proposal-meta-row {
-	display: flex;
-	justify-content: space-between;
-	align-items: center;
-	gap: 10px;
-	flex-wrap: wrap;
-	margin-top: 4px;
-}
-.checkpoint-proposal-meta-row .checkpoint-input-meta {
-	justify-content: flex-start;
-}
-.checkpoint-proposal-meta-row .checkpoint-review-actions {
-	display: flex;
-	gap: 12px;
 }
 .checkpoint-input-card:not(.maintain-confirm-card) .checkpoint-preview-actions {
 	justify-content: flex-start;
@@ -13538,7 +13526,7 @@ html.sidebar-collapsed:not(.desktop-app-mac) .landing:not(.settings-dialog .land
 		width: 100%;
 		max-width: none;
 	}
-	/* The list of panes: one row each with a chevron, Delete room last. */
+	/* The list of panes: one row each with a chevron, Archive or delete last. */
 	.settings-dialog-nav {
 		gap: 0;
 		padding: 4px 8px 16px;
@@ -14559,6 +14547,28 @@ html.sidebar-collapsed:not(.desktop-app-mac) .landing:not(.settings-dialog .land
 	color: var(--muted);
 	font-size: 12px;
 }
+.room-model-option-main {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+}
+.room-model-option.unpickable {
+	cursor: default;
+}
+.room-model-option.unpickable .room-model-option-name {
+	color: var(--muted);
+}
+.room-model-option-reason {
+	color: var(--muted);
+	font-size: 12px;
+}
+.room-model-menu-note {
+	margin: 4px 0 0;
+	padding: 8px 14px 10px;
+	color: var(--muted);
+	font-size: 12px;
+	line-height: 1.45;
+}
 .room-model-sheet-backdrop {
 	display: none;
 }
@@ -14572,7 +14582,6 @@ html.sidebar-collapsed:not(.desktop-app-mac) .landing:not(.settings-dialog .land
 	align-items: flex-start;
 	gap: 8px;
 }
-.room-model-switch-line,
 .room-model-switch-note {
 	margin: 0;
 	color: var(--muted);
@@ -14666,4 +14675,23 @@ html.sidebar-collapsed:not(.desktop-app-mac) .landing:not(.settings-dialog .land
 	.room-model-menu-kicker {
 		padding: 10px 18px 4px;
 	}
+}
+
+.persistent-agent-full-line {
+	margin: 6px 0 0;
+	color: var(--fg);
+	font-size: 12px;
+	line-height: 1.4;
+}
+.memory-entry-move-label {
+	font-size: 12.5px;
+	color: var(--muted);
+}
+
+/* A room opening from its address: one calm line instead of Home on the way. */
+.app-opening-room {
+	padding: 48px 24px;
+	text-align: center;
+	font-size: 14px;
+	color: var(--muted);
 }

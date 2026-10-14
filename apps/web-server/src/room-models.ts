@@ -24,7 +24,11 @@ import { AuthStorage, getAgentDir, ModelRegistry } from "@exxeta/exxperts-runtim
 import { getAvailablePersistentAgentAiProfiles, getPersistentAgentAiProfile, isBuiltInPersistentAgentAiProfileId, isPersistentAgentAiProfileId, isPersistentRoomModelForProfile, persistentAgentModelLocksEqual, type PersistentAgentAiProfile, type PersistentAgentModelLock } from "./persistent-agent-ai-profiles.js";
 import { PERSISTENT_AGENT_AI_PROFILE_FILE, readPersistentAgentAiProfileState, readSavedPersistentAgentAiProfileId } from "./persistent-agent-ai-profile-state.js";
 import { DEFAULT_PERSISTENT_ROOM_AGENTS_ROOT, persistentAgentRootPath } from "./persistent-room-workspace-policy.js";
+import { formatTokenLimit } from "./persistent-room-maintenance-settings.js";
+import { minimumMemoryWindow } from "./token-estimate.js";
 import { productAppStatePath } from "../../../pi-package/product-state-paths.js";
+import { canonicalModelName, modelOnProvider } from "../../web-ui/src/model-names.js";
+import { roomModelUnavailableLine, type RoomModelRefusalOf } from "./model-not-offered.js";
 
 export type RoomModelTask = "conversation" | "memory";
 export const ROOM_MODEL_TASKS: readonly RoomModelTask[] = ["conversation", "memory"];
@@ -221,20 +225,6 @@ export interface RoomModelCatalogOptions {
 	hasModel?: (lock: PersistentAgentModelLock) => boolean;
 }
 
-/**
- * The model registry for reading: the real auth store when an auth file
- * exists, an empty in-memory one otherwise. Creating the real store writes an
- * auth file, and room status and listings are read-only paths.
- */
-export function readOnlyModelRegistry(): ModelRegistry {
-	try {
-		if (fs.existsSync(path.join(getAgentDir(), "auth.json"))) return ModelRegistry.create(AuthStorage.create());
-	} catch {
-		// An unreadable auth store reads as nothing signed in.
-	}
-	return ModelRegistry.create(AuthStorage.inMemory());
-}
-
 function defaultAuthProbes(registryIn?: ModelRegistry): Pick<RoomModelCatalogOptions, "hasAuth" | "hasModel"> & { registry: ModelRegistry } {
 	// No auth file means nothing is signed in; checked first because creating
 	// the store writes one, and this runs on read-only paths too.
@@ -380,6 +370,61 @@ export function resolveRoomModel(agentId: string, task: RoomModelTask, catalog: 
 	return { stored, chosen: stored, effective: null, source: "room", reason: available.reason };
 }
 
+// --- A default an update moved ---------------------------------------------------
+
+/**
+ * Defaults a release moved. The 0.14 migration wrote each install's defaults
+ * from its profile once, so a profile's new model reaches an install only by
+ * moving the stored default, once, unless something on disk shows the person
+ * chose it (room-models-migration.ts). 0.14.3: ChatGPT's went from GPT-6 Sol
+ * to GPT-6.1 Sol, the memory default and the conversation default both.
+ */
+export const DEFAULT_MOVES: Record<RoomModelTask, ReadonlyArray<{ from: PersistentAgentModelLock; to: PersistentAgentModelLock }>> = {
+	conversation: [{ from: { provider: "openai-codex", model: "gpt-6-sol" }, to: { provider: "openai-codex", model: "gpt-6.1-sol" } }],
+	memory: [{ from: { provider: "openai-codex", model: "gpt-6-sol" }, to: { provider: "openai-codex", model: "gpt-6.1-sol" } }],
+};
+
+/** The record of the move this install made on a row, kept apart from the migration report a later start may rewrite. */
+export function defaultMoveFile(task: RoomModelTask): string {
+	return productAppStatePath(`${task}-default-move.json`);
+}
+
+export interface DefaultMove {
+	from: PersistentAgentModelLock;
+	to: PersistentAgentModelLock;
+	at: string;
+	/** Set once the default read back as moved: the move is never made again, so a default picked again stays. */
+	done?: boolean;
+}
+
+export function readDefaultMove(task: RoomModelTask): DefaultMove | null {
+	try {
+		const raw = JSON.parse(fs.readFileSync(defaultMoveFile(task), "utf-8"));
+		const from = readLock(raw?.from);
+		const to = readLock(raw?.to);
+		return from && to && typeof raw?.at === "string" ? { from, to, at: raw.at, ...(raw.done === true ? { done: true } : {}) } : null;
+	} catch {
+		return null;
+	}
+}
+
+/** Written before the default moves, so a start cut short between the two moves it again. */
+export function writeDefaultMove(task: RoomModelTask, move: DefaultMove): void {
+	writeJsonReadBack(defaultMoveFile(task), move);
+}
+
+/**
+ * The Memory models a Remember page may be saved on: the room's own, and, for
+ * a room on the default that an update moved, the model it moved from, so a
+ * page written before the update still saves.
+ */
+export function rememberSaveMemoryModels(agentId: string, catalog: RoomModelCatalog = createRoomModelCatalog()): { expectedMemoryModel: PersistentAgentModelLock | null; movedFromMemoryModel?: PersistentAgentModelLock } {
+	const resolution = resolveRoomModel(agentId, "memory", catalog);
+	const move = resolution.stored ? null : readDefaultMove("memory");
+	const moved = move && resolution.effective && persistentAgentModelLocksEqual(resolution.effective, move.to) ? move.from : undefined;
+	return { expectedMemoryModel: resolution.effective, ...(moved ? { movedFromMemoryModel: moved } : {}) };
+}
+
 // --- Refusals ---------------------------------------------------------------------
 
 /** The names a refusal reads: the model's and its provider's, as the surface shows them. */
@@ -388,15 +433,15 @@ export interface RoomModelNames {
 	provider(providerId: string): string;
 }
 
-/** Names from the catalog: the registry's model name and AI setup's provider name, the bare ids when they are unknown. */
+/** Names from the catalog: the model's name as the Model pickers show it and AI setup's provider name, the bare ids when they are unknown. */
 export function catalogModelNames(catalog: RoomModelCatalog): RoomModelNames {
 	return {
 		model: (lock) => {
+			let registered = "";
 			try {
-				return String(catalog.registry.find(lock.provider, lock.model)?.name ?? "").trim() || lock.model;
-			} catch {
-				return lock.model;
-			}
+				registered = String(catalog.registry.find(lock.provider, lock.model)?.name ?? "").trim();
+			} catch {}
+			return canonicalModelName({ model: lock.model, modelLabel: registered || undefined, provider: lock.provider }).name || lock.model;
 		},
 		provider: (providerId) => catalog.providers.find((provider) => provider.providerId === providerId)?.label ?? providerId,
 	};
@@ -410,10 +455,13 @@ export function catalogModelNames(catalog: RoomModelCatalog): RoomModelNames {
 export class RoomModelUnavailableError extends Error {
 	readonly statusCode = 409;
 	readonly code: "provider_signed_out" | "room_model_unavailable";
+	/** The provider, for the notice's Sign in button. */
+	readonly details: { provider: string };
 	constructor(message: string, readonly reason: RoomModelUnavailableReason, readonly provider: string) {
 		super(message);
 		this.name = "RoomModelUnavailableError";
 		this.code = reason === "signed-out" ? "provider_signed_out" : "room_model_unavailable";
+		this.details = { provider };
 	}
 }
 
@@ -424,17 +472,55 @@ export class RoomModelUnavailableError extends Error {
  * `of` is "room" for the room at hand, `{ room }` for another room by name (a
  * consult), "defaults" for AI setup's Default models.
  */
-export function roomModelUnavailableError(resolution: RoomModelResolution, task: RoomModelTask, names: RoomModelNames, of: "room" | "defaults" | { room: string } = "room"): RoomModelUnavailableError | null {
+export function roomModelUnavailableError(resolution: RoomModelResolution, task: RoomModelTask, names: RoomModelNames, of: RoomModelRefusalOf = "room"): RoomModelUnavailableError | null {
 	const chosen = resolution.chosen;
 	if (resolution.effective || !chosen || !resolution.reason) return null;
-	const row = task === "memory" ? "memory model" : "model";
-	const subject = of === "room" ? `This room's ${row}` : of === "defaults" ? `The default ${row}` : `The ${row} of ${of.room}`;
-	const settings = typeof of === "object" ? "its Room settings, Model" : "Room settings, Model";
-	const state = resolution.reason === "signed-out" ? "is signed out" : "is no longer offered";
-	const wayOut = of !== "defaults"
-		? resolution.reason === "signed-out" ? `Sign in again in Settings, AI setup, or choose another model in ${settings}.` : `Choose another model in ${settings}.`
-		: resolution.reason === "signed-out" ? "Sign in again, or choose another default, in Settings, AI setup." : "Choose another default in Settings, AI setup.";
-	return new RoomModelUnavailableError(`${subject}, ${names.model(chosen)} on ${names.provider(chosen.provider)}, ${state}. ${wayOut}`, resolution.reason, chosen.provider);
+	return new RoomModelUnavailableError(roomModelUnavailableSentence(chosen, resolution.reason, task, names, of), resolution.reason, chosen.provider);
+}
+
+export type { RoomModelRefusalOf };
+
+/** That refusal's sentence (draft wording), also for a call the provider refused because it no longer serves the model. */
+export function roomModelUnavailableSentence(chosen: PersistentAgentModelLock, reason: RoomModelUnavailableReason, task: RoomModelTask, names: RoomModelNames, of: RoomModelRefusalOf = "room"): string {
+	return roomModelUnavailableLine(modelOnProvider(names.model(chosen), names.provider(chosen.provider)), reason, task, of);
+}
+
+// --- The Memory model's size -------------------------------------------------------
+
+/**
+ * Refused because a Memory model's window is too small for a room's memory
+ * budget (minimumMemoryWindow): at the Memory pick, the AI defaults, a raised
+ * budget, and the start of Memorize and Review, where the screens show it as
+ * the model notice with Choose another model.
+ */
+export class MemoryModelTooSmallError extends Error {
+	readonly code = "memory_model_too_small";
+	constructor(message: string, readonly statusCode: number) {
+		super(message);
+		this.name = "MemoryModelTooSmallError";
+	}
+}
+
+/** Whether a Memory model's window holds Memorize at a memory budget; a window that is not known is never refused. */
+export function memoryModelHoldsBudget(lock: PersistentAgentModelLock, budgetTokens: number, contextWindow: number | undefined): boolean {
+	return !(typeof contextWindow === "number" && contextWindow > 0) || contextWindow >= minimumMemoryWindow(budgetTokens, lock);
+}
+
+/**
+ * The refusal for this room's Memory model ("room"), for this room going back
+ * to a default too small for it ("default"), or for the AI defaults, naming a
+ * room on the default whose own pick is the other way out.
+ */
+export function memoryModelTooSmallSentence(model: string, of: "room" | "maintenance" | "default" | { room: string } = "room"): string {
+	if (of === "default") return `The default, ${model}, is too small for this room's memory. Keep this room's own Memory model, or choose a larger default in Settings, AI setup.`;
+	if (typeof of === "object") return `${model} is too small for ${of.room}'s memory. Choose a larger default, or give ${of.room} its own Memory model in its Room settings.`;
+	// Memorize, Remember and Review say it outside Room settings, so they say where the budget is.
+	return `${model} is too small for this room's memory. Choose another Memory model, or lower the memory budget in ${of === "maintenance" ? "Room settings, Memory" : "Memory"}.`;
+}
+
+/** The refusal of a budget raised past what the room's Memory model holds. */
+export function memoryBudgetNeedsLargerModelSentence(budgetTokens: number, model: string): string {
+	return `A memory budget of ${formatTokenLimit(budgetTokens)} needs a larger Memory model than ${model}. Choose one in Room settings, Model first.`;
 }
 
 /**

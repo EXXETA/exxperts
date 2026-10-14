@@ -29,7 +29,7 @@ import {
 	writeScheduledPromptBackgroundRunInputArtifact,
 	writeScheduledPromptBackgroundRunOutputArtifact,
 } from "./scheduled-prompt-background-artifacts.js";
-import { checkScheduledPromptBackgroundRunExecutionReadiness } from "./scheduled-prompt-background-readiness.js";
+import { checkScheduledPromptBackgroundRunExecutionReadiness, scheduledRunMetCurrentConversation } from "./scheduled-prompt-background-readiness.js";
 import {
 	readPersistentRoomScheduleStore,
 	validatePersistentRoomScheduleRoomId,
@@ -426,7 +426,7 @@ export async function processScheduledPromptBackgroundRunExecutionOnce(
 	const executePrompt = input.executePrompt ?? executePersistentRoomBackgroundPrompt;
 
 	const recoveredRecords = recoverExpiredBackgroundRunLeases({ kind: "scheduled-prompt", now, limit });
-	reviveTransientlyBlockedBackgroundRuns({ kind: "scheduled-prompt", now, limit });
+	reviveTransientlyBlockedBackgroundRuns({ kind: "scheduled-prompt", now, limit, metCurrentConversation: scheduledRunMetCurrentConversation });
 	const recovered = recoveredRecords.map((record) => ({
 		runId: record.runId,
 		finalStatus: record.status,

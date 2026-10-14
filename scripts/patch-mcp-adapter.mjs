@@ -3,8 +3,9 @@
 //
 // Patches against the exactly-pinned 2.10.0 sources. The cosmetic ones warn
 // instead of failing if a future version changes the surrounding code, so
-// installs never break; patch 6 (a room's startup config read) fails the
-// install instead, because a room depends on it:
+// installs never break; patches 6 and 7 (a room's startup config read, the
+// sign-in binding) fail the install instead, because rooms and sign-ins
+// depend on them:
 //
 // 1. Rebrand the OAuth callback pages. The adapter serves hard-coded
 //    Pi-branded pages from its OAuth loopback server with no customization
@@ -352,4 +353,102 @@ try {
 } catch (e) {
 	console.error(`patch-mcp-adapter: ERROR startup config read patch failed (${e.message})`);
 	process.exitCode = 1;
+}
+
+// --- Patch 7: connector sign-ins stay with the server that issued them -----
+// The MCP SDK stamps every sign-in it saves with the authorization server
+// that issued it, and a stamp for another server reads back as absent: a
+// refresh token or a client secret is then never posted there. The adapter's
+// store dropped the stamp, so the binding never took effect. The stored
+// shapes now keep `issuer` and hand it back, and a stored client also hands
+// back its dates and redirect URIs, so the SDK's one-time re-save of a sign-in
+// from 0.14.2 keeps the whole record. A client from the connector's settings
+// is bound too: it carries the stamp of the server it first signed in at, and
+// the store keeps only its ID and the stamp, never the configured secret. When
+// discovery names another server, it is refused with a plain message before
+// any registration, sign-in or token request there (the provider remembers
+// the server each run discovered, in memory only, so discovery stays
+// uncached); a save that could only be a registration at another server is
+// refused too. This one must apply: when it cannot, the install fails.
+
+const bindingPatches = [
+	[
+		"mcp-auth.ts",
+		[
+			["  scope?: string;\n}", "  scope?: string;\n  issuer?: string;\n}"],
+			["  redirectUris?: string[];\n}", "  redirectUris?: string[];\n  issuer?: string;\n}"],
+		],
+	],
+	[
+		"mcp-oauth-provider.ts",
+		[
+			[
+				"export class McpOAuthProvider implements OAuthClientProvider {\n  private readonly redirectUrlSnapshot: string | undefined\n",
+				"// Compared as the SDK compares stamps: parsed URLs, one trailing slash tolerated.\nfunction sameIssuer(a: string, b: string): boolean {\n  let [x, y] = [a, b]\n  try {\n    [x, y] = [new URL(a).href, new URL(b).href]\n  } catch {}\n  return x === y || (x.endsWith(\"/\") && x.slice(0, -1) === y) || (y.endsWith(\"/\") && y.slice(0, -1) === x)\n}\n\nfunction signInServerChanged(serverName: string): Error {\n  return new Error(`The sign-in server for connector \"${serverName}\" has changed. If you expect this, sign out of the connector and sign in again.`)\n}\n\nexport class McpOAuthProvider implements OAuthClientProvider {\n  private readonly redirectUrlSnapshot: string | undefined\n  private discoveredIssuer: string | undefined\n",
+			],
+			[
+				"  private get usesClientCredentials(): boolean {",
+				"  // The SDK reports the authorization server it discovered before it reads\n  // the client; kept in memory only, so discovery is never skipped.\n  async saveDiscoveryState(state: { authorizationServerUrl: string }): Promise<void> {\n    this.discoveredIssuer = state.authorizationServerUrl\n  }\n\n  private get usesClientCredentials(): boolean {",
+			],
+			[
+				"      return {\n        client_id: this.config.clientId,\n        client_secret: this.config.clientSecret,\n      }",
+				"      const stored = (await getAuthForUrl(this.serverName, this.serverUrl))?.clientInfo\n      const issuer = stored?.clientId === this.config.clientId ? stored.issuer : undefined\n      if (issuer && this.discoveredIssuer && !sameIssuer(issuer, this.discoveredIssuer)) {\n        throw signInServerChanged(this.serverName)\n      }\n      return {\n        client_id: this.config.clientId,\n        client_secret: this.config.clientSecret,\n        ...(issuer ? { issuer } : {}),\n      }",
+			],
+			[
+				"        client_id: entry.clientInfo.clientId,\n        client_secret: entry.clientInfo.clientSecret,\n      }",
+				"        client_id: entry.clientInfo.clientId,\n        client_secret: entry.clientInfo.clientSecret,\n        client_id_issued_at: entry.clientInfo.clientIdIssuedAt,\n        client_secret_expires_at: entry.clientInfo.clientSecretExpiresAt,\n        redirect_uris: entry.clientInfo.redirectUris,\n        issuer: entry.clientInfo.issuer,\n      }",
+			],
+			[
+				"  async saveClientInformation(info: OAuthClientInformationFull): Promise<void> {\n    const redirectUris",
+				"  async saveClientInformation(info: OAuthClientInformationFull): Promise<void> {\n    if (this.config.clientId) {\n      const stored = (await getAuthForUrl(this.serverName, this.serverUrl))?.clientInfo\n      if (info.client_id !== this.config.clientId || (stored?.clientId === this.config.clientId && stored.issuer)) {\n        throw signInServerChanged(this.serverName)\n      }\n      updateClientInfo(this.serverName, { clientId: info.client_id, issuer: info.issuer }, this.serverUrl)\n      return\n    }\n    const redirectUris",
+			],
+			["      redirectUris,\n    }\n    updateClientInfo", "      redirectUris,\n      issuer: info.issuer,\n    }\n    updateClientInfo"],
+			["      scope: entry.tokens.scope,\n    }", "      scope: entry.tokens.scope,\n      issuer: entry.tokens.issuer,\n    }"],
+			["      scope: tokens.scope,\n    }\n    updateTokens", "      scope: tokens.scope,\n      issuer: tokens.issuer,\n    }\n    updateTokens"],
+		],
+	],
+];
+
+for (const [file, replacements] of bindingPatches) {
+	try {
+		const filePath = path.join(adapterDir, file);
+		const source = fs.readFileSync(filePath, "utf-8");
+		if (replacements.every(([, to]) => source.includes(to))) {
+			console.log(`patch-mcp-adapter: sign-in binding in ${file} already patched`);
+		} else if (!replacements.every(([from]) => source.split(from).length === 2)) {
+			console.error(`patch-mcp-adapter: ERROR sign-in binding anchors not found in ${file} (adapter changed, or partly patched?); connector sign-ins would not stay with their server`);
+			process.exitCode = 1;
+		} else {
+			fs.writeFileSync(filePath, replacements.reduce((text, [from, to]) => text.replace(from, () => to), source));
+			console.log(`patch-mcp-adapter: connector sign-ins in ${file} stay with the server that issued them`);
+		}
+	} catch (e) {
+		console.error(`patch-mcp-adapter: ERROR sign-in binding patch failed for ${file} (${e.message})`);
+		process.exitCode = 1;
+	}
+}
+
+// --- Patch 8: the name we register with ------------------------------------
+// Dynamic client registration names the app "Pi Coding Agent" with the
+// adapter's GitHub page, and a provider can show that name on its sign-in
+// screen. Register as exxperts with its own address instead; a clientName or
+// clientUri in the connector's settings still wins.
+
+try {
+	const providerPath = path.join(adapterDir, "mcp-oauth-provider.ts");
+	const provider = fs.readFileSync(providerPath, "utf-8");
+	const names = [
+		['this.config.clientName ?? "Pi Coding Agent"', 'this.config.clientName ?? "exxperts"'],
+		['this.config.clientUri ?? "https://github.com/nicobailon/pi-mcp-adapter"', 'this.config.clientUri ?? "https://github.com/EXXETA/exxperts"'],
+	];
+	if (names.every(([from, to]) => !provider.includes(from) && provider.includes(to))) {
+		console.log("patch-mcp-adapter: registration name already patched");
+	} else if (!names.every(([from]) => provider.split(from).length === 3)) {
+		console.warn("patch-mcp-adapter: registration name defaults not found (adapter changed?); skipping");
+	} else {
+		fs.writeFileSync(providerPath, names.reduce((text, [from, to]) => text.replaceAll(from, () => to), provider));
+		console.log("patch-mcp-adapter: connectors register as exxperts");
+	}
+} catch (e) {
+	console.warn(`patch-mcp-adapter: registration name skipped (${e.message})`);
 }

@@ -37,6 +37,7 @@ const {
 	openPersistentAgentPiSessionManager,
 	parseCheckpointApprovalRequest,
 	writeApprovedCheckpoint,
+	writePersistentAgentRuntimeState,
 	writePersistentAgentThread,
 } = await import("../src/persistent-agents.js");
 
@@ -129,21 +130,13 @@ try {
 	assert(saved.recentContextEntryCount === 11, `the saved session should be the eleventh entry, got ${saved.recentContextEntryCount}`);
 	assert(getPersistentAgentStatus(dueRoom).status === "needs_absorb", "the room stays due for Memorize after saving past the hard cap");
 
-	// --- 2. At the block cap saving refuses, and names the way out -----------
+	// --- 2. Remember never refuses on count: a 21st page is saved like any other
 	createPersistentAgentFromScaffoldInput({ displayName: "Cap Smoke Full Room", userName: "Synthetic User", preferredUserAddress: "Synthetic User" });
 	const fullRoom = "cap-smoke-full-room";
 	setRecentContextEntries(fullRoom, RECENT_CONTEXT_BLOCK_CAP);
 	assert(getPersistentAgentStatus(fullRoom).recentContext.fullEntries === RECENT_CONTEXT_BLOCK_CAP, "the full room should hold the block cap's worth of entries");
-
-	const refusal = await expectRejects(
-		() => saveOneSession(fullRoom, "pi_cap_full_0001", 21),
-		/not ready: needs_absorb/,
-		"saving at the block cap",
-	);
-	// The phrase above is what the surfaces match on to offer a remedy; the
-	// sentence itself must also say what to do for the surfaces that show it raw.
-	assert(/Memorize/.test(refusal.message), `the refusal should name Memorize as the way out, got: ${refusal.message}`);
-	assert(/20/.test(refusal.message), `the refusal should say how many sessions the room is holding, got: ${refusal.message}`);
+	const beyond = await saveOneSession(fullRoom, "pi_cap_full_0001", 21);
+	assert(beyond.recentContextEntryCount === RECENT_CONTEXT_BLOCK_CAP + 1, `a Remember in a full room saves its page, got ${beyond.recentContextEntryCount} entries`);
 
 	// --- 3. One under the block cap still saves ------------------------------
 	createPersistentAgentFromScaffoldInput({ displayName: "Cap Smoke Edge Room", userName: "Synthetic User", preferredUserAddress: "Synthetic User" });
@@ -170,7 +163,19 @@ try {
 	assert(entryRefusal, "a room holding the block cap's worth of sessions must refuse to open");
 	assert(/not ready: needs_absorb/.test(entryRefusal.message), `the entry refusal should keep the phrase the surfaces match on, got: ${entryRefusal.message}`);
 	assert(/Memorize/.test(entryRefusal.message), `the entry refusal should name Memorize as the way out, got: ${entryRefusal.message}`);
-	assert(/20/.test(entryRefusal.message), `the entry refusal should say how many sessions the room is holding, got: ${entryRefusal.message}`);
+	assert(/2[01]/.test(entryRefusal.message), `the entry refusal should say how many sessions the room is holding, got: ${entryRefusal.message}`);
+
+	// --- 5. A full room whose open conversation has messages always opens ----
+	// A scheduled task's conversation, an undo's, another device's: nothing in
+	// it is lost by entering, and refusing it left no way back in but Memorize.
+	createPersistentAgentFromScaffoldInput({ displayName: "Cap Smoke Busy Full Room", userName: "Synthetic User", preferredUserAddress: "Synthetic User" });
+	const busyFullRoom = "cap-smoke-busy-full-room";
+	setRecentContextEntries(busyFullRoom, RECENT_CONTEXT_BLOCK_CAP);
+	writePersistentAgentThread(busyFullRoom, "pi_cap_busy_0001", { state: "active", origin: "scheduler", model, items: [{ kind: "user", id: "u1", text: "The scheduled task's question." }, { kind: "assistant", id: "a1", text: "The scheduled task's answer." }] } as any, {
+		createRuntime: ({ model: threadModel }) => createPersistentAgentPiSessionJsonlThreadRuntime({ agentId: busyFullRoom, threadId: "pi_cap_busy_0001", model: threadModel, cwd: tempCwd }),
+	});
+	writePersistentAgentRuntimeState(busyFullRoom, { state: "active", activeThreadId: "pi_cap_busy_0001", model });
+	assertPersistentAgentAcceptsSession(getPersistentAgentStatus(busyFullRoom));
 
 	fs.rmSync(tempHome, { recursive: true, force: true });
 	fs.rmSync(tempCwd, { recursive: true, force: true });

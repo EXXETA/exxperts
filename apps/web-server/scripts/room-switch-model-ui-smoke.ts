@@ -158,6 +158,13 @@ try {
 		await page.locator(".room-model-option").filter({ hasText: "GPT Fake" }).click();
 		const switchButton = page.getByRole("button", { name: "Switch the open conversation too" });
 		await switchButton.waitFor({ timeout: 10000 });
+		// The block says only what the click does, read before the click: the
+		// note above the button, no "next conversation" line.
+		const block = page.locator(".room-settings-section:not([hidden]) .room-model-switch");
+		const blockText = await block.innerText();
+		assert(!blockText.includes("Applies to your next conversation"), `the switch block has no next-conversation line, got ${JSON.stringify(blockText)}`);
+		const parts = await block.locator(":scope > *").evaluateAll((nodes) => nodes.map((node) => node.tagName === "BUTTON" ? "button" : String(node.textContent)));
+		assert(JSON.stringify(parts) === JSON.stringify(["The first answer after a switch reads the whole conversation again.", "button"]), `the note sits above the button and nothing else is there, got ${JSON.stringify(parts)}`);
 		await switchButton.click();
 		await page.waitForSelector(".settings-dialog", { state: "detached", timeout: 10000 });
 		await page.getByText("Continued on GPT Fake", { exact: true }).waitFor({ timeout: 10000 });

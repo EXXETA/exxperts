@@ -1,7 +1,7 @@
 import { type FormEvent, useEffect, useRef, useState } from "react";
 import type { PersistentAgentStatus, PersistentRoomCapabilityPolicyView, PersistentRoomWorkspaceAccessMode } from "../types";
 import { chooseSystemFolder, clearPersistentRoomWorkspaceDefault, fetchPersistentRoomWorkspaceDefault, savePersistentRoomWorkspaceDefault } from "../persistent-room-workspace-api";
-import { useRemoteClientContext } from "../remote-client-context";
+import { showsComputerOnlyControls, useRemoteClientContext } from "../remote-client-context";
 import { PaneHeader } from "./pane-header";
 import { useRegisteredSave, type RegisterSave } from "./use-registered-save";
 
@@ -83,15 +83,29 @@ function accessModeHint(mode: PersistentRoomWorkspaceAccessMode): string {
 		: "The room stays inside this folder. It can read everything here, and with write tools enabled it can create and edit files inside it.";
 }
 
-function WorkspaceDefaultPolicySummary({ policy, warnings, setupDisabled, onSetWorkspace }: { policy: PersistentRoomCapabilityPolicyView | null; warnings: string[]; setupDisabled: boolean; onSetWorkspace: () => void }) {
+function WorkspaceDefaultPolicySummary({ policy, warnings, setupDisabled, onSetWorkspace, sharedServer, shellMissingNote }: { policy: PersistentRoomCapabilityPolicyView | null; warnings: string[]; setupDisabled: boolean; onSetWorkspace: () => void; sharedServer: boolean; shellMissingNote: string | null }) {
 	const currentRoot = policy?.roots[0] ?? null;
+	// A shared server is no one's own computer: its folders are not offered to
+	// rooms, so there is nothing to set and no invitation to set it.
+	if (sharedServer && (!policy || !currentRoot)) {
+		return (
+			<div className="settings-rows">
+				<div className="settings-row">
+					<div className="settings-row-main">
+						<span className="settings-row-label">No workspace</span>
+						<span className="settings-row-sub">On a shared server, rooms don't use a folder.</span>
+					</div>
+				</div>
+			</div>
+		);
+	}
 	if (!policy || !currentRoot) {
 		return (
 			<div className="settings-rows">
 				<div className="settings-row">
 					<div className="settings-row-main">
 						<span className="settings-row-label">No workspace yet</span>
-						<span className="settings-row-sub">Without a folder, this room can't read or write files, export documents, or use Bash. Set a project folder to unlock file work.</span>
+						<span className="settings-row-sub">Without a folder, this room can't read or write files, export documents, or run commands. Set a project folder to unlock file work.</span>
 					</div>
 					<button className="rs-btn" type="button" disabled={setupDisabled} onClick={onSetWorkspace}>Set workspace</button>
 				</div>
@@ -130,6 +144,7 @@ function WorkspaceDefaultPolicySummary({ policy, warnings, setupDisabled, onSetW
 				)}
 			</div>
 			{honestyNote && <p className="settings-help">{honestyNote}</p>}
+			{isLocalFiles && policy.bashEnabled && shellMissingNote && <p className="settings-help workspace-shell-missing">{shellMissingNote}</p>}
 			<p className="settings-help">Changes apply from your next message, also in a conversation that is already running.</p>
 			{warnings.length > 0 && (
 				<ul className="workspaces-warnings">
@@ -152,13 +167,19 @@ export function RoomWorkspaceSection({ status, onDirtyChange, registerSave }: { 
 	// so no policy save or session rebind is involved.
 	// The native folder chooser opens a dialog on the computer; from a remote
 	// device that can only confuse (the server refuses it anyway), so the
-	// button hides and the typed-path input stands alone.
+	// button hides and the typed-path input stands alone. On a shared server
+	// the folder is not set from here at all: Set workspace, Edit workspace
+	// and Clear are not offered, so the editor (folder, tools, Bash) never opens.
 	const remoteClient = useRemoteClientContext();
+	const sharedServer = remoteClient.sharedServer;
 	const [editing, setEditing] = useState(false);
 	const [draftRoot, setDraftRoot] = useState("");
 	const [draftAccessMode, setDraftAccessMode] = useState<PersistentRoomWorkspaceAccessMode>("localFiles");
 	const [draftToolNames, setDraftToolNames] = useState<string[]>([...ALL_LOCAL_FILES_TOOL_NAMES]);
 	const [draftBashEnabled, setDraftBashEnabled] = useState(false);
+	// The server's own shell lookup (Windows without Git finds none); asked
+	// again each time the editor opens, so it goes once Git is installed.
+	const [shellMissingNote, setShellMissingNote] = useState<string | null>(null);
 	const [error, setError] = useState<string | null>(null);
 	const [message, setMessage] = useState<string | null>(null);
 	// The outcome line renders below the (tall) edit form inside a scrolling
@@ -194,6 +215,7 @@ export function RoomWorkspaceSection({ status, onDirtyChange, registerSave }: { 
 		setDraftAccessMode("localFiles");
 		setDraftToolNames([...ALL_LOCAL_FILES_TOOL_NAMES]);
 		setDraftBashEnabled(false);
+		setShellMissingNote(null);
 		setMessage(null);
 		if (!canManageWorkspace) {
 			setLoading(false);
@@ -207,6 +229,7 @@ export function RoomWorkspaceSection({ status, onDirtyChange, registerSave }: { 
 				if (cancelled) return;
 				setPolicy(response.policy);
 				setWarnings(response.warnings ?? []);
+				setShellMissingNote(response.shellMissingNote || null);
 			})
 			.catch((e) => {
 				if (!cancelled) setError((e as Error).message || "Failed to load workspace default.");
@@ -298,6 +321,7 @@ export function RoomWorkspaceSection({ status, onDirtyChange, registerSave }: { 
 		setDraftToolNames(draftToolNamesForPolicy(policy));
 		setDraftBashEnabled(policy?.workspaceAccessMode === "localFiles" && policy?.bashEnabled === true);
 		setEditing(true);
+		void fetchPersistentRoomWorkspaceDefault(status.id).then((response) => setShellMissingNote(response.shellMissingNote || null), () => {});
 		setError(null);
 		setMessage(null);
 	}
@@ -354,7 +378,7 @@ export function RoomWorkspaceSection({ status, onDirtyChange, registerSave }: { 
 						<button className="rs-btn" type="button" disabled={saving} onClick={startOrCancelEditing}>Cancel</button>
 						<button className="rs-btn rs-btn-primary" type="submit" form="workspace-editor-form" disabled={saving}>{saving ? "Saving…" : policy ? "Save changes" : "Save workspace"}</button>
 					</>
-				) : policy && (
+				) : policy && !sharedServer && (
 					<>
 						<button className="rs-btn" disabled={!canManageWorkspace || loading || saving} title="Remove the saved workspace folder" onClick={() => void clearWorkspaceDefault()}>{saving ? "Updating…" : "Clear"}</button>
 						<button className="rs-btn" disabled={!canManageWorkspace || loading || saving} onClick={startOrCancelEditing}>Edit workspace</button>
@@ -362,7 +386,7 @@ export function RoomWorkspaceSection({ status, onDirtyChange, registerSave }: { 
 				)}
 			/>
 			<div className="workspaces-room-body">
-				{loading ? <p className="settings-empty">Loading workspace default…</p> : !editing && <WorkspaceDefaultPolicySummary policy={policy} warnings={warnings} setupDisabled={!canManageWorkspace || saving} onSetWorkspace={startOrCancelEditing} />}
+				{loading ? <p className="settings-empty">Loading workspace default…</p> : !editing && <WorkspaceDefaultPolicySummary policy={policy} warnings={warnings} setupDisabled={!canManageWorkspace || saving} onSetWorkspace={startOrCancelEditing} sharedServer={sharedServer} shellMissingNote={shellMissingNote} />}
 				{editing && (
 					<form id="workspace-editor-form" className="workspaces-default-form" onSubmit={(event) => void submitWorkspaceDefault(event)}>
 						<div className="settings-rows">
@@ -384,7 +408,7 @@ export function RoomWorkspaceSection({ status, onDirtyChange, registerSave }: { 
 									{trimmedDraftRoot.length > 0 && policy && (
 										<button className="rs-btn" type="button" disabled={saving} onClick={() => { setDraftRoot(""); setError(null); setMessage(null); }}>Keep saved folder</button>
 									)}
-									{!remoteClient.remote && (
+									{showsComputerOnlyControls(remoteClient) && (
 										<button className="rs-btn" type="button" disabled={saving || choosingFolder} onClick={() => void chooseWorkspaceRootFolder()}>
 											{choosingFolder ? "Choosing…" : "Choose folder…"}
 										</button>
@@ -420,6 +444,7 @@ export function RoomWorkspaceSection({ status, onDirtyChange, registerSave }: { 
 												<span className="settings-row-main">
 													<span className="settings-row-label">Bash</span>
 													<span className="settings-row-sub">Shell commands, off by default. Whether they ask first is set in the chat header.</span>
+													{shellMissingNote && <span className="settings-row-sub workspace-shell-missing">{shellMissingNote}</span>}
 												</span>
 												<input className="workspaces-tool-switch" type="checkbox" checked={draftBashEnabled} disabled={saving} onChange={() => { setDraftBashEnabled((current) => !current); setError(null); setMessage(null); }} aria-label="Bash shell access" />
 											</label>

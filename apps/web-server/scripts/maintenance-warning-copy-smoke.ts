@@ -1,51 +1,23 @@
-// Smoke for the maintenance warning copy (apps/web-ui/src/maintenance-warnings.ts):
-// the one place server warning vocabulary becomes sentences a person reads.
-// Pins that every warning a maintenance run can emit has a sentence of its own —
-// engine strings ("assessment missing Deep Memory change bullets", "the
-// assessment was regenerated once (first attempt: …)") must never reach the
-// screen with a capital letter glued on, and that a warning nobody has translated yet still
-// arrives, capitalised, rather than disappearing.
+// Smoke for the maintenance warning copy (apps/web-ui/src/maintenance-warnings.ts).
+// Server warnings are engine vocabulary: none reaches the screen, every one
+// goes to the console. A save that failed says what happened in plain words,
+// with no status code and no raw detail.
 
-import { describeMaintenanceWarning, formatAbsorbRunSaveError, isStaleMaintenanceMessage, meaningfulMaintenanceWarnings } from "../../web-ui/src/maintenance-warnings.js";
+import { formatAbsorbRunSaveError, isStaleMaintenanceMessage, logMaintenanceWarnings } from "../../web-ui/src/maintenance-warnings.js";
+import * as warningCopy from "../../web-ui/src/maintenance-warnings.js";
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
 }
 
-// The exact shapes the server emits (absorb-consolidation.ts writes the first,
-// persistent-agents.ts composes the retry disclosure).
-const MISSING_SECTION = "assessment missing Deep Memory change bullets";
-const REGENERATED = "the assessment was regenerated once (first attempt: assessment missing What to remember bullets; assessment missing What to forget bullets)";
-
-// 1. A section the assessment came back without reads as a sentence.
+// 1. Warnings go to the console, never the screen; the status line is not logged.
 {
-	const sentence = describeMaintenanceWarning(MISSING_SECTION);
-	assert(!sentence.startsWith("Assessment missing"), `the server prefix must not reach the screen (got: ${sentence})`);
-	assert(sentence.startsWith('The assessment\'s "Deep Memory" section came back empty'), `the sentence names the section a person knows (got: ${sentence})`);
-	assert(sentence.includes("The rest of the assessment is intact."), "and it says what is still usable");
-}
-
-// 2. The section names a person reads are the product's, not the engine's.
-{
-	const sentence = describeMaintenanceWarning("assessment missing What to forget bullets");
-	assert(sentence.includes("What can be cleared from recent sessions"), `the engine's section name is translated (got: ${sentence})`);
-}
-
-// 3. A regenerated assessment says why, in the reasons a person can act on.
-{
-	const sentence = describeMaintenanceWarning(REGENERATED);
-	assert(!sentence.startsWith("The assessment was regenerated"), `the server string must not reach the screen (got: ${sentence})`);
-	assert(sentence.startsWith("The first assessment draft was"), `the sentence owns the subject (got: ${sentence})`);
-	assert(sentence.includes('"What should be preserved"') && sentence.includes('"What can be cleared from recent sessions"'), "and it names the sections in the product's words");
-	const notBetter = describeMaintenanceWarning(`${REGENERATED}, but the second attempt was not better, so the first is shown`);
-	assert(notBetter.includes("The second attempt was no better, so the first is shown."), `a second attempt that did not help is said out loud (got: ${notBetter})`);
-}
-
-// 4. Unknown warnings pass through, and the status line is not a warning.
-{
-	assert(describeMaintenanceWarning("something nobody translated yet") === "Something nobody translated yet", "an unknown warning passes through capitalised, never dropped");
-	assert(meaningfulMaintenanceWarnings([MISSING_SECTION, "no memory has been written"]).length === 1, "the non-mutation status line is not a warning");
-	assert(meaningfulMaintenanceWarnings([REGENERATED])[0].startsWith("The first assessment draft was"), "the list translates through the same branch");
+	const logged: string[] = [];
+	const info = console.info;
+	console.info = (line: string) => { logged.push(line); };
+	try { logMaintenanceWarnings(["assessment missing Deep Memory change bullets", "no memory has been written"]); } finally { console.info = info; }
+	assert(logged.length === 1 && logged[0].includes("assessment missing"), `one warning logged, got ${JSON.stringify(logged)}`);
+	assert(!("meaningfulMaintenanceWarnings" in warningCopy) && !("describeMaintenanceWarning" in warningCopy), "nothing turns a warning into a line on screen");
 }
 
 // 5. A Memorize save that failed lands on the run's card, which has no draft
@@ -58,9 +30,9 @@ const REGENERATED = "the assessment was regenerated once (first attempt: assessm
 	const gone = "That memory update is no longer open. Start Memorize again.";
 	assert(formatAbsorbRunSaveError(gone) === gone, "the server's own sentence that names the way out passes through");
 	const http = formatAbsorbRunSaveError("Request failed (502)");
-	assert(http.includes("HTTP 502") && http.includes("Nothing was saved."), `a bare HTTP failure is a sentence (got: ${http})`);
-	const other = formatAbsorbRunSaveError("This memory update has nothing to save.");
-	assert(other.includes("Your memory is unchanged") && other.includes("Details: This memory update has nothing to save."), `anything else keeps the reassurance and the detail (got: ${other})`);
+	assert(!/HTTP|502/.test(http) && http.includes("Nothing was saved."), `a bare HTTP failure is a plain sentence (got: ${http})`);
+	const other = formatAbsorbRunSaveError("ENOENT: something raw");
+	assert(other.includes("Your memory is unchanged") && !/ENOENT|Details/.test(other), `anything else keeps the reassurance, never the detail (got: ${other})`);
 	for (const message of ["this memory proposal is stale", "the conversation this proposal came from is missing; this memory proposal is stale", "Request failed (413)", "assessmentHandoff.text is too large", "memory budget changed", "token growth exceeds the limit", "The file could not be saved to this room's Files."]) {
 		const own = formatAbsorbRunSaveError(message).replace(message, "");
 		assert(!/proposal|draft/i.test(own), `no save sentence says proposal or draft (got: ${own})`);

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { resolveRouteUrl, type ArtifactRef } from "./ArtifactViewer";
-import { useRemoteClientContext } from "../remote-client-context";
+import { showsComputerOnlyControls, useRemoteClientContext } from "../remote-client-context";
 
 interface Props {
 	taskId: string;
@@ -97,7 +97,7 @@ export function AssetViewerFooter({ taskId, artifact, userFileName, roomId, canI
 				<button type="button" className="artifact-viewer-quiet" disabled={!downloadUrl} onClick={downloadSnapshot} title="Download a snapshot of this file to your Downloads folder">
 					⬇ Download
 				</button>
-				{onSaveTo && !remoteClient.remote && (
+				{onSaveTo && showsComputerOnlyControls(remoteClient) && (
 					<button type="button" className="artifact-viewer-quiet" onClick={onSaveTo} title="Save a snapshot of this file into a folder you pick">
 						💾 Save…
 					</button>

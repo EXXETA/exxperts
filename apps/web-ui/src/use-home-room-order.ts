@@ -2,7 +2,19 @@ import { useEffect, useRef, useSyncExternalStore } from "react";
 import type { RoomOrderChoice } from "../../web-server/src/room-order";
 import { roomLastUsedTimes } from "../../web-server/src/room-order";
 import { createHomeRoomOrderController, lastUsedRefreshFrom, type HomeRoomOrderController, type HomeRoomOrderView, type RefreshRooms } from "./home-room-order";
-import { fetchRoomOrder, saveRoomOrder } from "./room-order-api";
+import { fetchRemoteClientContext } from "./remote-client-context";
+import { fetchRoomOrder, saveRoomOrder, type RoomOrderResponse } from "./room-order-api";
+
+/**
+ * On a shared server the saved order would be one order for everyone, so it
+ * is neither read nor offered: the rooms are listed A to Z, with no sentence
+ * about an order that could not be loaded.
+ */
+const SHARED_SERVER_ORDER: RoomOrderResponse = { order: { mode: "name-asc", customOrder: [], updatedAt: null }, modes: [] };
+
+function readRoomOrder(): Promise<RoomOrderResponse> {
+	return fetchRemoteClientContext().then((context) => (context.sharedServer ? SHARED_SERVER_ORDER : fetchRoomOrder()));
+}
 
 /**
  * The hook around the home screen's order controller: one controller for the
@@ -22,7 +34,7 @@ export function useHomeRoomOrder(homeShown: boolean, rooms: { statuses: Readonly
 	const controllerRef = useRef<HomeRoomOrderController | null>(null);
 	if (!controllerRef.current) {
 		controllerRef.current = createHomeRoomOrderController({
-			read: fetchRoomOrder,
+			read: readRoomOrder,
 			save: saveRoomOrder,
 			refreshLastUsed: lastUsedRefreshFrom((onFetched) => roomsRef.current.refresh(onFetched)),
 			lastUsedInHand: () => roomLastUsedTimes(roomsRef.current.statuses),

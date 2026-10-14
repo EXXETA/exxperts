@@ -86,18 +86,6 @@ export const CONNECTOR_CATALOG: ConnectorCatalogEntry[] = [
 		url: "https://mcp.deepwiki.com/mcp",
 	},
 	{
-		id: "figma",
-		name: "Figma",
-		description: "Bring Figma design context into your rooms.",
-		// Figma's OAuth login only admits allowlisted partner apps (a login
-		// attempt 403s), so the catalog leads with the path that works for
-		// everyone: a personal access token, sent as X-Figma-Token.
-		kind: "token",
-		url: "https://mcp.figma.com/mcp",
-		tokenHint: "Personal access token (figd_...)",
-		docsUrl: "https://www.figma.com/developers/api#access-tokens",
-	},
-	{
 		id: "canva",
 		name: "Canva",
 		description: "Search, create, and export Canva designs.",

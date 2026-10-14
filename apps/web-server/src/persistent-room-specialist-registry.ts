@@ -56,6 +56,10 @@ export interface SpecialistRegistryEntry {
 	 * makes new files, which keeps the working row it always had.
 	 */
 	reviseTargetNames?: string[];
+	/** The conversation the task was started from. */
+	conversationId?: string;
+	/** Set when that conversation was forgotten: the task is stopped and its result thrown away. */
+	discarded?: boolean;
 }
 
 export interface SpecialistRegistryEntryInput {
@@ -67,6 +71,7 @@ export interface SpecialistRegistryEntryInput {
 	model: unknown;
 	abortController: AbortController;
 	reviseTargetNames?: string[];
+	conversationId?: string;
 }
 
 /** Mirrors the client reducer's TASK_TAIL_CAP: replaying more would be dropped there anyway. */
@@ -122,6 +127,18 @@ export function abortAllSpecialistTasks(roomId: string): number {
 	let aborted = 0;
 	for (const entry of room.tasks.values()) {
 		entry.stoppedByUser = true;
+		entry.abortController.abort();
+		aborted += 1;
+	}
+	return aborted;
+}
+
+/** Forget's stop: every running task started from the conversation is aborted, and its result is to be thrown away. */
+export function abortConversationSpecialistTasks(roomId: string, conversationId: string): number {
+	let aborted = 0;
+	for (const entry of rooms.get(roomId)?.tasks.values() ?? []) {
+		if (entry.conversationId !== conversationId) continue;
+		entry.discarded = true;
 		entry.abortController.abort();
 		aborted += 1;
 	}

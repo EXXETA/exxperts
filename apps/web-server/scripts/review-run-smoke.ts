@@ -46,11 +46,10 @@ const {
 	hasActiveReviewRun,
 	keepReviewRunEntries,
 	resetReviewRunsForTests,
-	REVIEW_RUN_RETENTION_MS,
-	REVIEW_TIDY_CONNECTION_LOST_TWICE,
+	REVIEW_TIDY_WORKER_FAILED,
 	REVIEW_TIDY_REFUSED_TWICE,
+	REVIEW_TIDY_NOT_REACHED,
 	reviewRunStatus,
-	rewindReviewRunClockForTests,
 	setReviewRunBudget,
 	setReviewTidyRetryPauseForTests,
 	startReviewRun,
@@ -64,6 +63,7 @@ const { IsolatedPersistentAgentWorkerTurnError } = await import("../src/persiste
 const { appendArchive, readArchive } = await import("../src/memory-entries-store.js");
 const { readPersistentRoomMaintenanceSettings, writePersistentRoomMaintenanceSettings } = await import("../src/persistent-room-maintenance-settings.js");
 const { undoMemorySave } = await import("../src/memory-undo.js");
+const { ModelUnreachableError } = await import("../src/model-call-causes.js");
 const { buildRoomMemoryHistory, readMemoryEventDiff } = await import("../src/memory-api.js");
 
 const MODEL = { provider: "openai-compatible", model: "gpt-5.5", label: "GPT-5.5" };
@@ -527,7 +527,7 @@ try {
 	assert(doomedCalls.length === 2, `a call that never comes back buys exactly one more, got ${doomedCalls.length} calls for ${DOOMED_TOPIC}`);
 	const left = run.leftAsIs.find((entry) => entry.topics.includes(DOOMED_TOPIC));
 	assert(left, `a group whose calls never came back should be named on the card, got ${JSON.stringify(run.leftAsIs)}`);
-	assert(left!.reason === REVIEW_TIDY_CONNECTION_LOST_TWICE, `two calls that dropped the same way are said "twice", got ${JSON.stringify(left!.reason)}`);
+	assert(left!.reason === REVIEW_TIDY_WORKER_FAILED, `a group that fails while the model answers says so in one sentence, whatever dropped, got ${JSON.stringify(left!.reason)}`);
 	assert(!run.changes.some((change) => change.topic === DOOMED_TOPIC), `a group left as it was changes nothing, got ${JSON.stringify(run.changes.filter((c) => c.topic === DOOMED_TOPIC))}`);
 	assert(REVIEW_TIDY_REFUSED_TWICE.length > 0, "the twice-refused sentence exists for the group whose replies the memory could not accept");
 
@@ -637,14 +637,24 @@ try {
 
 	// --- 4. Approve: the one write ---------------------------------------------
 	const beforeApproval = fs.readFileSync(roomA.l1bPath, "utf-8");
-	const approved = approveReviewRun(roomA.agentId, run.runId, APPROVED_AT);
+	// The raise lands with the memory file, never before it: a crash between the two keeps neither.
+	const rename = fs.renameSync;
+	let limitAsMemoryLands: number | undefined;
+	fs.renameSync = ((from: fs.PathLike, to: fs.PathLike) => {
+		if (String(to) === roomA.l1bPath) limitAsMemoryLands = readPersistentRoomMaintenanceSettings(roomA.agentId).memoryBudgetTokens;
+		return rename(from, to);
+	}) as typeof fs.renameSync;
+	let approved;
+	try { approved = approveReviewRun(roomA.agentId, run.runId, APPROVED_AT); } finally { fs.renameSync = rename; }
+	assert(limitAsMemoryLands === TIGHT_BUDGET, `the room keeps its limit until the memory file lands, got ${limitAsMemoryLands}`);
 	assert(approved.writesMemory === true && approved.reviewId === approved.saveId, `an approval names the write it made under both names, got ${JSON.stringify({ reviewId: approved.reviewId, saveId: approved.saveId })}`);
 	assert(approved.eventRelPath.startsWith("events/review/") && !path.isAbsolute(approved.eventRelPath), `the approval names its record by the room-relative path, got ${JSON.stringify(approved.eventRelPath)}`);
 	assert(approved.notesChanged === run.changes.length && approved.topicsTidied > 0, `the saved screen counts what was tidied, got ${JSON.stringify({ notesChanged: approved.notesChanged, topicsTidied: approved.topicsTidied })}`);
 	assert(approved.archivedEntries > 0 && approved.archivedForBudget === 0, `after the budget was raised nothing left for the budget alone, got ${JSON.stringify({ archivedEntries: approved.archivedEntries, archivedForBudget: approved.archivedForBudget })}`);
 	assert(approved.memoryBudget.overBudget === false, `the written memory should be inside the budget it was measured against, got ${JSON.stringify(approved.memoryBudget)}`);
 	assert(approved.budgetRaisedTo === RAISED_BUDGET && approved.memoryBudget.budgetTokens === RAISED_BUDGET && readPersistentRoomMaintenanceSettings(roomA.agentId).memoryBudgetTokens === RAISED_BUDGET, `the limit the card raised becomes the room's setting in the same save, got ${JSON.stringify({ budgetRaisedTo: approved.budgetRaisedTo, memoryBudget: approved.memoryBudget })}`);
-	expectThrows(() => approveReviewRun(roomA.agentId, run.runId, APPROVED_AT), /stale/i, "a second approval of the same run");
+	const again = approveReviewRun(roomA.agentId, run.runId, APPROVED_AT);
+	assert(again.alreadySaved === true && again.saveId === approved.saveId, `a second approval of the same run answers that it saved, got ${JSON.stringify({ alreadySaved: again.alreadySaved, saveId: again.saveId })}`);
 
 	const written = fs.readFileSync(roomA.l1bPath, "utf-8");
 	assert(written !== beforeApproval, "approve is the write");
@@ -746,10 +756,6 @@ try {
 	assert(fs.readFileSync(roomB.l1bPath, "utf-8") === roomBBytes, "a cancelled run writes nothing at all");
 	expectThrows(() => approveReviewRun(roomB.agentId, runB.runId), /not ready/, "approving a cancelled run");
 	assert(!hasActiveReviewRun(roomB.agentId), "a cancelled run releases the room");
-
-	// A finished run is reaped once nobody has been near it for an hour.
-	rewindReviewRunClockForTests(roomB.agentId, REVIEW_RUN_RETENTION_MS + 1000);
-	expectThrows(() => getReviewRun(roomB.agentId, runB.runId), /no longer open/, "an abandoned run, an hour later");
 
 	// A room with nothing to tidy says so rather than starting a run.
 	// A fresh room's scaffold carries two placeholder lines; truly empty means
@@ -925,8 +931,8 @@ try {
 	assert(fs.readFileSync(roomF.l1bPath, "utf-8").includes(CONFLICT_OLD), "nothing is written before an approval, whatever was refused");
 	resetReviewRunsForTests();
 
-	// Room U: the tidy is told which notes in Unsorted are conversations kept
-	// whole, tried or not, and never a note that is not a summary.
+	// Room U: the tidy is told every note waiting in Unsorted, a summary, tried
+	// or not, and any other note alike.
 	const roomU = createRoom("Review Unsorted Room", (agentId) => [
 		"<!-- exxeta:l1b schema_version=1 -->", "", "## Chronos", "", `- Persistent agent id: ${agentId}`, "- Last checkpoint: none", "",
 		"## Deep Memory", "", "<!-- entries: next=900 -->", "",
@@ -938,9 +944,63 @@ try {
 	const promptsU: string[] = [];
 	const startedU = startReviewRun(roomU.agentId, { depth: "wording", model: MODEL, topics: ["Unsorted"], generate: async (prompt) => { promptsU.push(prompt); return reply("Nothing to tidy.", []); }, resolveModelWindow: () => MODEL_WINDOW, now: RUN_CLOCK });
 	await settle(roomU.agentId, startedU.runId, "room unsorted");
-	const unsortedLine = promptsU[0]?.split("## Material: Conversations Kept Whole In Unsorted\n\n")[1]?.split("\n")[0];
-	assert(unsortedLine === "- m-0501: each is a conversation kept whole. File each under its topic with move, or merge it into the note that says the same.", `the tidy lists the summary note alone, got ${JSON.stringify(unsortedLine)}`);
+	const unsortedLine = promptsU[0]?.split("## Material: Notes Waiting In Unsorted\n\n")[1]?.split("\n")[0];
+	assert(unsortedLine === "- m-0501, m-0502: each waits for a topic. File each under its topic with move, or merge it into the note that says the same.", `the tidy lists every note in Unsorted, got ${JSON.stringify(unsortedLine)}`);
 	cancelReviewRun(roomU.agentId, startedU.runId, new Date(`${RUN_DAY}T09:01:00.000Z`));
+	resetReviewRunsForTests();
+
+	// What the person asked to move to the archive and the run did not: the card says so, never listing it as done.
+	// A line names its note by id, or by its quoted words (the start of the note, or its words before the colon).
+	const roomAsk = createRoom("Review Asked Archive Room", (agentId) => [
+		"<!-- exxeta:l1b schema_version=1 -->", "", "## Chronos", "", `- Persistent agent id: ${agentId}`, "- Last checkpoint: none", "",
+		"## Deep Memory", "", "<!-- entries: next=900 -->", "",
+		"### Ways of working", "",
+		"<!-- e: id=m-0601 kind=practice saved=2026-06-01 -->", "- Set up a shared calendar for the release dates.", "",
+		"<!-- e: id=m-0604 kind=practice saved=2026-06-01 -->", "- Release notes go out on Fridays.", "",
+		"## Active Items", "",
+		"<!-- e: id=m-0602 kind=item saved=2026-06-01 status=open -->", "- Get to know Synthetic User: current projects, priorities, and how they prefer to work.", "",
+		"<!-- e: id=m-0603 kind=item saved=2026-06-01 status=open -->", "- Book the venue in Lueneburg.", "",
+		"## Recent Context", "",
+	].join("\n"));
+	const askedRemove = [
+		"Ways of working: \"Set up a shared calendar for the release dates\" [m-0601] - the calendar has been set up",
+		"Active Items: \"Get to know Synthetic User\u2026\" - you asked to close it",
+		"Active Items: \"Book the venue in Lueneburg\" [m-0603]",
+		"Anything about the old office",
+	];
+	const startedAsk = startReviewRun(roomAsk.agentId, { depth: "tidy", model: MODEL, guidance: { keepAsIs: [], shorten: [], remove: askedRemove, answers: [], instructions: [], topics: [] }, generate: async () => reply("Archived the calendar note.", [{ op: "archive", id: "m-0601", why: "finished" }]), resolveModelWindow: () => MODEL_WINDOW, now: RUN_CLOCK });
+	const runAsk = await settle(roomAsk.agentId, startedAsk.runId, "room asked archive");
+	assert(runAsk.state === "ready", `the asked-archive run ends ready, got ${runAsk.state} ${runAsk.error ?? ""}`);
+	assert(JSON.stringify(runAsk.removeNotDone) === JSON.stringify([askedRemove[1], askedRemove[2]]), `the card names the two requests the run did not carry out, and claims nothing for a line that names no note, got ${JSON.stringify(runAsk.removeNotDone)}`);
+	cancelReviewRun(roomAsk.agentId, startedAsk.runId, new Date(`${RUN_DAY}T09:01:00.000Z`));
+	resetReviewRunsForTests();
+
+	// The scaffold's starter goal held without a marker: Review reads it as a note with an id, so it can archive it,
+	// and a quoted request no note matches is named as not done.
+	const roomStarter = createRoom("Review Starter Goal Room", (agentId) => [
+		"<!-- exxeta:l1b schema_version=1 -->", "", "## Chronos", "", `- Persistent agent id: ${agentId}`, "- Last checkpoint: none", "",
+		"## Deep Memory", "", "<!-- entries: next=900 -->", "",
+		"### Ways of working", "",
+		"<!-- e: id=m-0601 kind=practice saved=2026-06-01 -->", "- Release notes go out on Fridays.", "",
+		"## Active Items", "",
+		"- Get to know Synthetic User: current projects, priorities, and how they prefer to work.", "",
+		"<!-- e: id=m-0603 kind=item saved=2026-06-01 status=open -->", "- Book the venue in Lueneburg.", "",
+		"## Recent Context", "",
+	].join("\n"));
+	const starterRemove = ["Open items: \"Get to know Synthetic User: current projects, priorities, and how they prefer to work.\" - you said it is finished.", "Ways of working: \"Plan the old office move\" - it is done."];
+	let starterId = "";
+	const startedStarter = startReviewRun(roomStarter.agentId, { depth: "tidy", model: MODEL, guidance: { keepAsIs: [], shorten: [], remove: starterRemove, answers: [], instructions: [], topics: [] }, generate: async (prompt: string) => {
+		starterId = /\[(m-\d{4})[^\]]*\] Get to know Synthetic User/.exec(prompt)?.[1] ?? starterId;
+		return starterId ? reply("Closed the starter goal.", [{ op: "archive", id: starterId, why: "finished" }]) : reply("Nothing to do.", []);
+	}, resolveModelWindow: () => MODEL_WINDOW, now: RUN_CLOCK });
+	const runStarter = await settle(roomStarter.agentId, startedStarter.runId, "room starter goal");
+	assert(runStarter.state === "ready" && starterId, `Review reads the unmarked starter goal with an id, got ${runStarter.state} ${starterId}`);
+	// A line that names no note (a paraphrase the model may still have acted on) claims nothing either way: the card lists it in its own words.
+	const { reviewRunGuidanceSummary } = await import("../../web-ui/src/memory-v2-copy.js");
+	const starterCard = reviewRunGuidanceSummary(runStarter as any);
+	assert(JSON.stringify(runStarter.removeNotDone ?? []) === "[]" && starterCard?.removeNotDone.length === 0 && starterCard?.remove.includes("Ways of working: \"Plan the old office move\" - it is done."), `the starter goal is archived, and a line naming no note is listed as said, never as not done, got ${JSON.stringify(starterCard)}`);
+	approveReviewRun(roomStarter.agentId, startedStarter.runId, new Date(`${RUN_DAY}T09:01:00.000Z`));
+	assert(!fs.readFileSync(roomStarter.l1bPath, "utf-8").includes("- Get to know Synthetic User"), "after Save the room no longer reads the starter goal");
 	resetReviewRunsForTests();
 
 	// =====================================================================
@@ -978,6 +1038,29 @@ try {
 	rememberMeanwhile(roomR.agentId, "TIDY-REMEMBERED-AGAIN", new Date(`${RUN_DAY}T09:12:00.000Z`));
 	expectThrows(() => approveReviewRun(roomR.agentId, startedR2.runId, APPROVED_AT), /stale/i, "approving over a note edited by hand, with a Remember on top");
 	cancelReviewRun(roomR.agentId, startedR2.runId, new Date(`${RUN_DAY}T09:13:00.000Z`));
+	resetReviewRunsForTests();
+
+	// The Memory model cannot be reached: the run stops starting groups, what
+	// finished can be saved, the rest is left as it was with the reason, and the
+	// card gets the cause its notice needs (Sign in, here).
+	resetReviewRunsForTests();
+	const roomNoModel = createRoom("Review Unreachable Smoke Room");
+	writePersistentRoomMaintenanceSettings(roomNoModel.agentId, { memoryBudgetTokens: RAISED_BUDGET });
+	const roomNoModelBytes = fs.readFileSync(roomNoModel.l1bPath, "utf-8");
+	let unreachableCalls = 0;
+	const signedOut: ReviewRunGenerate = async () => {
+		unreachableCalls += 1;
+		throw new ModelUnreachableError("signed-out", MODEL);
+	};
+	const startedNoModel = startReviewRun(roomNoModel.agentId, { depth: "tidy", model: MODEL, generate: signedOut, resolveModelWindow: () => MODEL_WINDOW, now: RUN_CLOCK });
+	const runNoModel = await settle(roomNoModel.agentId, startedNoModel.runId, "room unreachable");
+	assert(runNoModel.state === "ready", `an unreachable model ends the run ready, got ${runNoModel.state}`);
+	assert(runNoModel.stop?.kind === "outage" && runNoModel.stop.cause === "signed-out", `the stop names the cause for the notice, got ${JSON.stringify(runNoModel.stop)}`);
+	assert(unreachableCalls <= 3, `no group starts after the first one learned it, got ${unreachableCalls} calls`);
+	assert(runNoModel.leftAsIs.length > 0 && runNoModel.leftAsIs.every((row) => row.reason === REVIEW_TIDY_NOT_REACHED), `every group not tidied says why, got ${JSON.stringify(runNoModel.leftAsIs.map((row) => row.reason))}`);
+	assert(runNoModel.wait === undefined, "no wait line is left on a stopped run");
+	assert(fs.readFileSync(roomNoModel.l1bPath, "utf-8") === roomNoModelBytes, "a stopped run writes nothing");
+	cancelReviewRun(roomNoModel.agentId, startedNoModel.runId);
 	resetReviewRunsForTests();
 
 	console.log(`review-run-smoke: OK (${calls.length + callsD.length + callsE.length + callsF.length} scripted model calls)`);

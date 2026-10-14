@@ -23,8 +23,11 @@ async function main(): Promise<void> {
 	assert(selected.ok && !selected.cancelled, `selected folder should succeed: ${JSON.stringify(selected)}`);
 	assert(selected.path === "/Users/example/Workspace Folder/", `selected path should be trimmed, got ${selected.path}`);
 	assert(capturedCommand === "/custom/osascript", `runner should receive configured osascript path, got ${capturedCommand}`);
-	assert(capturedArgs.length === 2 && capturedArgs[0] === "-e", `runner should receive osascript -e args, got ${capturedArgs.join(" ")}`);
-	assert(capturedArgs[1]?.includes("choose folder"), "osascript should invoke native choose folder dialog");
+	assert(capturedArgs.length === 4 && capturedArgs[0] === "-l" && capturedArgs[1] === "JavaScript" && capturedArgs[2] === "-e", `runner should receive osascript -l JavaScript -e args, got ${capturedArgs.join(" ")}`);
+	assert(capturedArgs[3]?.includes("app.chooseFolder(") && !capturedArgs[3].includes("NSOpenPanel"), "osascript should open the system's choose folder window, which takes focus (a bare NSOpenPanel did not)");
+	// Cmd+V in New Folder reaches the text field only through an Edit menu.
+	assert(capturedArgs[3].includes('["Paste", "paste:", "v"]') && capturedArgs[3].includes("sharedApplication.mainMenu = bar"), "the script should give itself an Edit menu with Paste");
+	assert(capturedArgs[3].indexOf("mainMenu = bar") < capturedArgs[3].indexOf("chooseFolder("), "the menu is in place before the window opens");
 	assert(capturedTimeout === 1234, `runner should receive timeout, got ${capturedTimeout}`);
 
 	const cancelledRunner: LocalFolderPickerRunner = async () => {
@@ -157,7 +160,7 @@ async function main(): Promise<void> {
 			return { stdout: "/Users/example/Data\n", stderr: "" };
 		},
 	});
-	assert(promptedMacArgs[1]?.includes('with prompt "Choose the exxperts data folder"'), `osascript should carry the data-folder prompt, got ${promptedMacArgs[1]}`);
+	assert(promptedMacArgs[3]?.includes('withPrompt: "Choose the exxperts data folder"'), `osascript should carry the data-folder prompt, got ${promptedMacArgs[3]}`);
 
 	let promptedLinuxArgs: string[] = [];
 	await chooseLocalFolder({
@@ -194,7 +197,7 @@ async function main(): Promise<void> {
 			return { stdout: "/Users/example/Data\n", stderr: "" };
 		},
 	});
-	assert(quotedMacArgs[1] === 'POSIX path of (choose folder with prompt "Choose \\"the\\" folder")', `osascript should escape a quoted prompt, got ${quotedMacArgs[1]}`);
+	assert(quotedMacArgs[3]?.includes('withPrompt: "Choose \\"the\\" folder"'), `osascript should escape a quoted prompt, got ${quotedMacArgs[3]}`);
 
 	let quotedWindowsArgs: string[] = [];
 	await chooseLocalFolder({

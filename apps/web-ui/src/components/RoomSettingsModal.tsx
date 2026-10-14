@@ -15,7 +15,7 @@ import { confirmChoice } from "./confirm-dialog";
 import { SettingsDialog } from "./settings-dialog";
 
 function roomStatusLabel(status: PersistentAgentStatus["status"]): string {
-	return status === "needs_absorb" ? "ready to memorize" : status;
+	return status === "needs_absorb" ? "memorize due" : status;
 }
 
 export type SettingsPane = "workspace" | "model" | "memory" | "instructions" | "skills" | "connectors" | "schedules" | "session" | "danger";
@@ -98,6 +98,12 @@ export function RoomSettingsModal({ status, onClose, onArchive, onPurge, onRefre
 	// Callers that open the modal at a particular pane (the Memory tab's link
 	// into this room's memory) say so once; the nav owns it from then on.
 	const [pane, setPane] = useState<SettingsPane>(initialPane ?? "workspace");
+	// Skills the room paused because they changed: counted on the Skills entry
+	// until reviewed, so the way to the review is visible from any pane. The
+	// Skills pane is always mounted (only hidden), so it reports the count on
+	// its own load and again after each review.
+	const [pausedSkillCount, setPausedSkillCount] = useState(0);
+	const panes = PANES.map((entry) => (entry.id === "skills" && pausedSkillCount > 0 ? { ...entry, label: `Skills · ${pausedSkillCount} to review` } : entry));
 	const currentName = status.displayName || status.id;
 	const [editingName, setEditingName] = useState(false);
 	const [nameDraft, setNameDraft] = useState("");
@@ -258,7 +264,7 @@ export function RoomSettingsModal({ status, onClose, onArchive, onPurge, onRefre
 			title={title}
 			headNote={renameMessages}
 			navLabel="Room settings sections"
-			nav={[...PANES, { id: "danger" as const, label: "Delete room", danger: true }]}
+			nav={[...panes, { id: "danger" as const, label: "Archive or delete", danger: true }]}
 			active={pane}
 			onSelect={setPane}
 			onClose={requestClose}
@@ -278,7 +284,7 @@ export function RoomSettingsModal({ status, onClose, onArchive, onPurge, onRefre
 				<RoomInstructionsSection status={status} onDirtyChange={handleInstructionsDirtyChange} registerSave={registerInstructionsSave} />
 			</section>
 			<section className="room-settings-section" hidden={pane !== "skills"}>
-				<RoomSkillsSection status={status} onOpenSkillsLibrary={onOpenSkillsLibrary ? () => closeThen(onOpenSkillsLibrary) : undefined} />
+				<RoomSkillsSection status={status} onOpenSkillsLibrary={onOpenSkillsLibrary ? () => closeThen(onOpenSkillsLibrary) : undefined} onPausedCount={setPausedSkillCount} />
 			</section>
 			<section className="room-settings-section" hidden={pane !== "connectors"}>
 				<RoomConnectorsSection status={status} onOpenConnectors={onOpenConnectors ? () => closeThen(onOpenConnectors) : undefined} />

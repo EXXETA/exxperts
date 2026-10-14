@@ -41,6 +41,22 @@ assert(aborted.message === `${workerLabel} was aborted before it answered`, `abo
 const empty = isolatedPersistentAgentWorkerFailure({ workerLabel, text: "   \n", stopReason: "stop", emptyTextError, errorMessage: undefined });
 assert(empty instanceof Error && !(empty instanceof IsolatedPersistentAgentWorkerTurnError), "a normal empty turn is a plain error");
 assert(empty.message === emptyTextError, "empty-reply error keeps the caller's exact string");
+// It carries how the turn stopped, so its diagnostics record says why there was no text.
+assert((empty as Error & { stopReason?: string }).stopReason === "stop", `the empty-reply error carries its stop reason, got ${JSON.stringify((empty as Error & { stopReason?: string }).stopReason)}`);
+{
+	const fs = await import("node:fs");
+	const os = await import("node:os");
+	const path = await import("node:path");
+	const { recordMaintenanceWorkerCalls } = await import("../src/maintenance-diagnostics.js");
+	const roomRootDir = fs.mkdtempSync(path.join(os.tmpdir(), "worker-empty-record-"));
+	const thrown = Object.assign(new Error(emptyTextError), { stopReason: "length", usage: { input: 137, output: 2144, cacheRead: 0, cacheWrite: 0, totalTokens: 2281, cost: 0 } });
+	const recorder = recordMaintenanceWorkerCalls<{ provider: string; model: string }, { text: string }>({ roomRootDir, agentId: "room-1", process: "memorize-placement" }, async () => { throw thrown; });
+	await recorder.generate("Reply with one title.", { provider: "anthropic", model: "claude-opus-5-5" }).catch(() => undefined);
+	const files = fs.readdirSync(roomRootDir, { recursive: true }).map(String).filter((name) => name.endsWith(".json"));
+	const record = JSON.parse(fs.readFileSync(path.join(roomRootDir, files[0]!), "utf-8"));
+	assert(record.outcome === "error" && record.stopReason === "length" && record.inputTokens === 137 && record.outputTokens === 2144, `a failed call's record keeps its stop reason and what it used, got ${JSON.stringify(record)}`);
+	fs.rmSync(roomRootDir, { recursive: true, force: true });
+}
 
 // 6. Normal stop with text, and a length stop: no failure — truncation is the caller's refusal, not this function's.
 assert(isolatedPersistentAgentWorkerFailure({ workerLabel, text: "ok", stopReason: "stop", errorMessage: undefined, emptyTextError }) === undefined, "a normal answer is not a failure");

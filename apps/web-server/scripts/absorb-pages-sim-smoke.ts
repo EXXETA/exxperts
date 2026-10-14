@@ -51,8 +51,6 @@ interface Room {
 	filed: Set<string>;
 	/** When set, each filing also runs the REAL filer on the page's text, which must never throw. */
 	fileReal?: (page: Page) => void;
-	/** Pages filed "stopped-twice". */
-	stoppedTwice: Set<string>;
 }
 
 interface RunOptions {
@@ -194,7 +192,6 @@ async function runOnce(room: Room, run: number, opts: RunOptions = {}): Promise<
 		onPageStart: (page) => { started += 1; inFlight = page; result.order.push(page.id); },
 		onPageEnd: (page, ending, trace) => {
 			result.endings.set(page.id, ending);
-			if (ending.kind === "summarized" && ending.reason === "stopped-twice") room.stoppedTwice.add(page.id);
 			result.traces.set(page.id, { ...trace });
 			if (++ended === opts.throwAtPageEnd) throw new Error("the run's own code threw");
 		},
@@ -240,7 +237,7 @@ async function runOnce(room: Room, run: number, opts: RunOptions = {}): Promise<
 const waitingCount = (room: Room): number => room.waiting.length;
 
 function newRoom(pages: Page[]): Room {
-	return { waiting: [...pages], store: { records: new Map(), throttled: new Map() }, notes: 0, left: new Map(), filed: new Set(), stoppedTwice: new Set() };
+	return { waiting: [...pages], store: { records: new Map(), throttled: new Map() }, notes: 0, left: new Map(), filed: new Set() };
 }
 
 const cloneState = (state: PageFailureState): PageFailureState => ({ records: new Map(state.records), throttled: new Map(state.throttled) });
@@ -255,25 +252,16 @@ function pages(kind: Kind, count: number, born = 0): Page[] {
 	});
 }
 
-/** Pages reached as a real outage began that were filed "stopped-twice": the accepted downgrade, counted. */
-let onsetDowngrades = 0;
-
 /** The assertions every mix must meet, checked after each run. */
 function checkRun(room: Room, run: RunResult, before: PageFailureState, label: string): void {
-	// Records flush once when the loop ends, a throw out of the loop included, and never after a crash.
-	assert(run.crashed ? run.flushes === 0 : run.flushes === 1, `${label}: records are written ${run.crashed ? "never after a crash" : "exactly once"}, got ${run.flushes}`);
+	// Records are written when each page ends and when the loop ends, a throw out of the loop included; a crash keeps what was written before it.
+	assert(run.crashed || run.flushes >= 1, `${label}: records are written when the loop ends, got ${run.flushes}`);
 	// Plain pages first, then recorded pages, then throttled ones.
 	const rank = (id: string) => (before.records.has(id) ? 1 : before.throttled.has(id) ? 2 : 0);
 	assert(run.order.every((id, i) => i === 0 || rank(run.order[i - 1]) <= rank(id)), `${label}: plain pages go first, recorded next, throttled last (${run.order.map(rank).join("")})`);
 	// An outage never records or summarizes a page, and never blames its first page.
 	for (const id of run.attemptedWhileDown) {
 		const ending = run.endings.get(id);
-		// The accepted downgrade: a page that stopped an earlier run, reached just
-		// as a real outage begins after the model answered other pages, is filed.
-		if (ending?.kind === "summarized" && ending.reason === "stopped-twice" && before.throttled.has(id)) {
-			onsetDowngrades += 1;
-			continue;
-		}
 		assert(!ending || ending.kind === "outage" || ending.kind === "cancelled", `${label}: a page reached while the model was down ends as the outage, got ${ending?.kind} for ${id}`);
 		if (!run.crashed) assert(room.store.records.get(id) === before.records.get(id), `${label}: an outage never records a page (${id})`);
 		assert(!room.filed.has(id) || !run.endings.has(id) || run.endings.get(id)!.kind !== "summarized", `${label}: an outage never summarizes a page (${id})`);
@@ -332,8 +320,10 @@ async function scenario(label: string, room: Room, runs: RunOptions[], opts: { a
 		"The input exceeds the maximum number of tokens allowed",
 		"ValidationException: Input is too long for requested model.",
 		"Your input tokens exceed the configured limit of 272000 tokens.",
+		"BedrockException: Context Window Error - ...",
+		"input length and `max_tokens` exceed context limit: 187254 + 32000 > 200000, decrease input length or `max_tokens` and try again",
 	]) assert(requestTooLarge(message), `a request too large is read as such: ${message.slice(0, 50)}`);
-	for (const message of ["429 Too Many Requests", "Rate limit reached for tokens per min (TPM): Limit 30000, Used 29000, Requested 2000", "the prompt was long", "413", "max_tokens is too large: 16000. This model supports at most 4096 completion tokens, whereas you provided 16000.", "max_tokens: 16000 > 8192, which is the maximum allowed number of output tokens for this model"]) assert(!requestTooLarge(message), `and nothing else is, the output cap against a smaller model included: ${message.slice(0, 50)}`);
+	for (const message of ["429 Too Many Requests", "Rate limit reached for tokens per min (TPM): Limit 30000, Used 29000, Requested 2000", "the prompt was long", "413", "max_tokens is too large: 16000. This model supports at most 4096 completion tokens, whereas you provided 16000.", "max_tokens: 16000 > 8192, which is the maximum allowed number of output tokens for this model", "This model has a context window of 200000 tokens."]) assert(!requestTooLarge(message), `and nothing else is, the output cap against a smaller model included: ${message.slice(0, 50)}`);
 	console.log("1. rules: the outage patterns, the rate-limit wait, the order and the pruning");
 }
 
@@ -342,17 +332,15 @@ async function scenario(label: string, room: Room, runs: RunOptions[], opts: { a
 	// Two and five sticky poison pages at the head, healthy pages behind.
 	for (const poison of [2, 5]) {
 		const room = newRoom([...pages("sticky-throw", poison), ...pages("healthy", 8)]);
-		await scenario(`${poison} poison pages at the head`, room, [{}, {}]);
-		assert(waitingCount(room) === 0, `${poison} poison pages: every page ends within two runs, ${room.waiting.length} still wait`);
+		await scenario(`${poison} poison pages at the head`, room, [{}]);
+		assert(waitingCount(room) === 0, `${poison} poison pages: every page ends in one run while the model answers, ${room.waiting.length} still wait`);
 		assert([...room.left.values()].filter((how) => how === "summarized").length === poison, `${poison} poison pages: exactly the poison pages are summarized`);
 	}
 	// A lone sticky page, a sticky timeout, unreadable and cut-off replies, a reply of which nothing lands, and an apply throw.
 	for (const kind of ["sticky-throw", "sticky-timeout"] as Kind[]) {
 		const room = newRoom(pages(kind, 1));
 		await scenario(`a lone ${kind} page`, room, [{}]);
-		assert(waitingCount(room) === 1 && room.store.records.size === 1, `a lone ${kind} page waits with a record after its first run`);
-		await scenario(`a lone ${kind} page`, room, [{}]);
-		assert(waitingCount(room) === 0 && room.left.values().next().value === "summarized" && (room.store.records.size as number) === 0, `and is summarized in its second, its record gone`);
+		assert(waitingCount(room) === 0 && room.left.values().next().value === "summarized" && room.store.records.size === 0, `a lone ${kind} page is filed in its first run, with no record`);
 	}
 	{
 		const room = newRoom([...pages("unreadable", 1), ...pages("cutoff", 1), ...pages("nothing-lands", 1), ...pages("apply-throw", 1), ...pages("unreadable-once", 1), ...pages("drop", 1), ...pages("flaky-drop", 1)]);
@@ -426,8 +414,9 @@ async function scenario(label: string, room: Room, runs: RunOptions[], opts: { a
 		assert(!result.outage && ending.kind === "summarized" && ending.reason === "too-large" && waitingCount(room) === 0 && room.store.records.size === 0 && room.store.throttled.size === 0, `a too-large page is summarized in its first run, got ${JSON.stringify(ending)}`);
 	}
 	// A page that stops every run as an outage (a rate limit on its size, a probe
-	// the model is too slow to answer while it is in flight): the next run takes it
-	// last, and when it stops that run too after other pages folded, it is filed.
+	// the model is too slow to answer while it is in flight): the next run takes
+	// it last, so every other page ends first, and it stops that run too. Busy
+	// is patience: it is never filed while the model is busy with it.
 	for (const kind of ["sticky-429", "sticky-slow-probe"] as Kind[]) {
 		const room = newRoom([...pages(kind, 1), ...pages("sticky-throw", 1), ...pages("healthy", 4)]);
 		const stubborn = room.waiting[0].id;
@@ -439,15 +428,11 @@ async function scenario(label: string, room: Room, runs: RunOptions[], opts: { a
 		before = cloneState(room.store);
 		const second = await runOnce(room, 1);
 		checkRun(room, second, before, `${kind}, run 2`);
-		const ending = second.endings.get(stubborn);
-		assert(second.order[second.order.length - 1] === stubborn && ending?.kind === "summarized" && ending.reason === "stopped-twice", `${kind}: the second run takes it last and files it, got ${JSON.stringify(ending)} in ${second.order.join(",")}`);
-		assert(!second.outage && room.store.throttled.size === 0 && waitingCount(room) === 1, `${kind}: the run goes on, the note is gone, only the recorded page waits (${room.waiting.length})`);
-		await scenario(`${kind}, run 3`, room, [{}]);
-		assert(waitingCount(room) === 0 && [...room.left.values()].filter((how) => how === "summarized").length === 2, `${kind}: the sticky page behind it gets its second try and every page has ended`);
+		assert(second.order[second.order.length - 1] === stubborn && second.endings.get(stubborn)?.kind === "outage" && second.outage, `${kind}: the second run takes it last and it stops that run, got ${JSON.stringify(second.endings.get(stubborn))} in ${second.order.join(",")}`);
+		assert(waitingCount(room) === 1 && room.filed.size === 1 && room.store.throttled.has(stubborn), `${kind}: every other page has ended, the sticky-throw one filed, and only it waits, noted (${room.waiting.length})`);
 	}
 	// The model dies after a page folds, with three noted pages behind: the
-	// evidence is spent on the first, so exactly one is filed at the onset and
-	// the next one stops the run; the third waits with its note.
+	// first noted page stops the run as the outage it is; nothing is filed.
 	{
 		const room = newRoom([...pages("healthy", 1), ...pages("healthy", 3)]);
 		const [p1, t1, t2, t3] = room.waiting.map((page) => page.id);
@@ -457,10 +442,10 @@ async function scenario(label: string, room: Room, runs: RunOptions[], opts: { a
 		const result = await runOnce(room, 0, { downFrom: 1, downTo: 1_000 });
 		checkRun(room, result, before, "the model dies before three noted pages");
 		const endings = [t1, t2, t3].map((id) => result.endings.get(id)?.kind ?? "unreached");
-		assert(result.endings.get(p1)?.kind === "folded" && JSON.stringify(endings) === JSON.stringify(["summarized", "outage", "unreached"]) && result.outage, `one noted page is filed at the onset and the next stops the run, got ${JSON.stringify(endings)}`);
-		assert(room.store.throttled.get(t2)?.at !== before.throttled.get(t2)?.at && room.store.throttled.get(t3)?.at === before.throttled.get(t3)?.at, "the page that stopped the run renews its note, the one behind keeps its own");
+		assert(result.endings.get(p1)?.kind === "folded" && JSON.stringify(endings) === JSON.stringify(["outage", "unreached", "unreached"]) && result.outage && room.filed.size === 0, `the first noted page stops the run and none is filed, got ${JSON.stringify(endings)}`);
+		assert(room.store.throttled.get(t1)?.at !== before.throttled.get(t1)?.at && room.store.throttled.get(t2)?.at === before.throttled.get(t2)?.at, "the page that stopped the run renews its note, the ones behind keep theirs");
 	}
-	// A noted page alone in its run cannot show the failure is its own: it waits, and renews its note.
+	// A noted page stops each run it reaches and renews its note; company folds first.
 	{
 		const room = newRoom(pages("sticky-429", 1));
 		const lone = room.waiting[0].id;
@@ -468,28 +453,13 @@ async function scenario(label: string, room: Room, runs: RunOptions[], opts: { a
 			const before = cloneState(room.store);
 			const result = await runOnce(room, r);
 			checkRun(room, result, before, `a lone sticky-429 page, run ${r + 1}`);
-			assert(result.outage && result.endings.get(lone)?.kind === "outage" && room.store.throttled.get(lone)?.at === new Date(Date.UTC(2026, 8, 28, 0, r)).toISOString(), `alone, it stops each run and its note is renewed (run ${r + 1})`);
+			assert(result.outage && result.endings.get(lone)?.kind === "outage" && room.store.throttled.get(lone)?.at === new Date(Date.UTC(2026, 8, 28, 0, r)).toISOString(), `it stops each run and its note is renewed (run ${r + 1})`);
 		}
-		assert(waitingCount(room) === 1 && room.filed.size === 0, "alone, it is never filed");
 		room.waiting.push(...pages("healthy", 1));
 		const before = cloneState(room.store);
 		const result = await runOnce(room, 3);
 		checkRun(room, result, before, "a lone sticky-429 page, with company");
-		assert(waitingCount(room) === 0 && result.endings.get(lone)?.kind === "summarized", "once another page folds first in its run, it is filed");
-	}
-	// A record counts only on the model that wrote it.
-	{
-		const room = newRoom(pages("sticky-throw", 1));
-		const id = room.waiting[0].id;
-		await scenario("a record on model A", room, [{}]);
-		assert(room.store.records.get(id)?.model === "sim-model", "the first failure is recorded with its model");
-		const other = { provider: "sim", model: "other-model" };
-		const before = cloneState(room.store);
-		const result = await runOnce(room, 1, { model: other });
-		checkRun(room, result, before, "the same page on model B");
-		assert(result.endings.get(id)?.kind === "waiting" && room.store.records.get(id)?.model === "other-model", `another model gets its own first try, and its record replaces the old one, got ${JSON.stringify(result.endings.get(id))}`);
-		await runOnce(room, 2, { model: other });
-		assert(waitingCount(room) === 0 && room.left.get(id) === "summarized", "and its own second failure files the page");
+		assert(waitingCount(room) === 1 && room.filed.size === 0 && result.order[0] !== lone, "the page with it folds first, and the busy page is never filed");
 	}
 	// Oversize, a filer that throws, the retry asks, and a trace that keeps both replies.
 	{
@@ -499,13 +469,22 @@ async function scenario(label: string, room: Room, runs: RunOptions[], opts: { a
 		checkRun(room, result, newRoom([]).store, "oversize, filing and asks");
 		const reasonOf = (id: string) => { const ending = result.endings.get(id)!; return "reason" in ending ? `${ending.kind}:${ending.reason}` : ending.kind; };
 		assert(reasonOf(oversize) === "summarized:oversize" && !result.asks.has(oversize), "an oversize page is filed without a call");
-		assert(reasonOf(filingThrows) === "waiting:filing-threw" && !room.store.records.has(filingThrows) && room.waiting.some((page) => page.id === filingThrows), "a filing that throws leaves the page waiting, unrecorded");
+		assert(reasonOf(filingThrows) === "waiting:filing-threw" && room.store.records.get(filingThrows)?.code === "filing-threw" && room.waiting.some((page) => page.id === filingThrows), "a filing that throws leaves the page waiting, recorded so the next run does not ask it again");
 		assert(JSON.stringify(result.asks.get(cutoff)) === JSON.stringify([null, { kind: "unreadable", cutOff: true }]), `a cut-off reply is asked again with the cut-off line, got ${JSON.stringify(result.asks.get(cutoff))}`);
 		assert(JSON.stringify(result.asks.get(unreadable)) === JSON.stringify([null, { kind: "unreadable", cutOff: false }]), "an unreadable reply is asked again with the unreadable line");
-		assert(JSON.stringify(result.asks.get(nothing)) === JSON.stringify([null]) && reasonOf(nothing) === "summarized:nothing-usable", `a reply of which nothing lands is filed at once, never asked again, got ${JSON.stringify(result.asks.get(nothing))}`);
+		assert(JSON.stringify(result.asks.get(nothing)) === JSON.stringify([null, { kind: "nothing-usable" }]) && reasonOf(nothing) === "summarized:nothing-usable", `a reply of which nothing lands is asked once more, then filed, got ${JSON.stringify(result.asks.get(nothing))}`);
 		assert(reasonOf(mixed) === "summarized:nothing-usable" && JSON.stringify(result.traces.get(mixed)?.unusable) === JSON.stringify(["no-fence"]) && result.traces.get(mixed)?.attempts === 2, `the trace keeps the unreadable reply's class before the one of which nothing landed, got ${JSON.stringify(result.traces.get(mixed))}`);
 		const stickyTrace = result.traces.get(sticky)!;
 		assert(stickyTrace.attempts === 2 && stickyTrace.probe === "answered" && stickyTrace.failureCode === "provider-error" && JSON.stringify(result.pauses.filter((pause) => pause === "short")) === JSON.stringify(["short"]), `a thrown page's trace holds its attempts, its probe and its code, after one short pause, got ${JSON.stringify(stickyTrace)} ${JSON.stringify(result.pauses)}`);
+	}
+	// A page whose filing threw is placed by code in the next run, with no call.
+	{
+		const room = newRoom(pages("filing-throws", 1));
+		const [id] = room.waiting.map((page) => page.id);
+		await runOnce(room, 0);
+		const again = await runOnce(room, 0);
+		const ending = again.endings.get(id!)!;
+		assert(!again.asks.has(id!) && "reason" in ending && ending.reason === "filing-threw", `the second run makes no call for it, got ${JSON.stringify(again.asks.get(id!))} ${JSON.stringify(ending)}`);
 	}
 	// Cancel while a pause or a probe is waited out: the page waits, unrecorded and un-noted.
 	for (const when of ["pause", "probe"] as const) {
@@ -520,27 +499,27 @@ async function scenario(label: string, room: Room, runs: RunOptions[], opts: { a
 		const room = newRoom([...pages("sticky-throw", 1), ...pages("healthy", 2)]);
 		const result = await runOnce(room, 0, { throwAtPageEnd: 2 });
 		checkRun(room, result, newRoom([]).store, "a throw out of the loop");
-		assert(result.threw && result.flushes === 1 && room.store.records.size === 1, "a throw out of the loop still writes the probe-confirmed records it held");
+		assert(result.threw && result.flushes >= 1 && room.store.records.size === 0, "a throw out of the loop still writes what it held, and a probe-confirmed failure holds no record");
 	}
 	// Cancel mid-run: the records held so far are written, the page in flight is not blamed.
 	{
 		const room = newRoom([...pages("sticky-throw", 2), ...pages("healthy", 4)]);
 		const result = await runOnce(room, 0, { cancelAtPage: 4 });
 		checkRun(room, result, newRoom([]).store, "cancel mid-run");
-		assert(result.flushes === 1 && room.store.records.size === 2, `cancel still writes the records held before it (${room.store.records.size})`);
+		assert(result.flushes >= 1 && room.store.records.size === 0, `a cancel writes what it held, and the failures before it were filed, not recorded (${room.store.records.size})`);
 		assert(result.endings.get(result.order[3])?.kind === "cancelled" && !room.store.records.has(result.order[3]), "the page in flight at the cancel is not a failure");
 		assert(waitingCount(room) === 6, "a cancelled run saves nothing");
 	}
-	// A crash before the flush: nothing is written, and the next run simply starts again.
+	// A crash mid-run keeps the records of the pages that ended before it, and the next run goes on from them.
 	{
 		const room = newRoom([...pages("sticky-throw", 2), ...pages("healthy", 4)]);
 		const result = await runOnce(room, 0, { crashAtPage: 4 });
 		checkRun(room, result, newRoom([]).store, "crash mid-run");
-		assert(result.crashed && result.flushes === 0 && room.store.records.size === 0, "a crash writes no record");
-		await scenario("after the crash", room, [{}, {}]);
-		assert(waitingCount(room) === 0, "two runs after a crash, every page has ended");
+		assert(result.crashed && room.store.records.size === 0, `a crash keeps what was written before it, and filed pages hold no record, got ${room.store.records.size}`);
+		await scenario("after the crash", room, [{}]);
+		assert(waitingCount(room) === 0, "one run after a crash, every page has ended");
 	}
-	console.log("2. mixes: poison heads, lone and sticky pages, content failures, outage, 429s and quota, pages that stop every run, records per model, filing, asks, traces, cancel, a throw and a crash");
+	console.log("2. mixes: poison heads, lone and sticky pages, content failures, outage, 429s and quota, pages that stop every run, filing, asks, traces, cancel, a throw and a crash");
 }
 
 // --- 3. At scale, with pages arriving between runs --------------------------------------
@@ -551,7 +530,10 @@ async function scenario(label: string, room: Room, runs: RunOptions[], opts: { a
 		seed = (seed * 1_103_515_245 + 12_345) % 2_147_483_648;
 		return seed / 2_147_483_648;
 	};
-	const mix: Array<[Kind, number]> = [["healthy", 0.631], ["drop", 0.05], ["unreadable-once", 0.06], ["flaky-drop", 0.05], ["unreadable", 0.03], ["cutoff", 0.02], ["nothing-lands", 0.03], ["unreadable-then-nothing", 0.005], ["apply-throw", 0.01], ["sticky-throw", 0.03], ["sticky-timeout", 0.02], ["flaky-429", 0.02], ["tpm-429", 0.02], ["too-large", 0.005], ["oversize", 0.005], ["quota", 0.002], ["sticky-429", 0.006], ["sticky-slow-probe", 0.006]];
+	// No page here fails as an outage on every call (a quota, a rate limit on
+	// its size, a probe too slow beside it): busy is patience, so such a page
+	// waits; section 2 shows it goes last and holds up no other page.
+	const mix: Array<[Kind, number]> = [["healthy", 0.645], ["drop", 0.05], ["unreadable-once", 0.06], ["flaky-drop", 0.05], ["unreadable", 0.03], ["cutoff", 0.02], ["nothing-lands", 0.03], ["unreadable-then-nothing", 0.005], ["apply-throw", 0.01], ["sticky-throw", 0.03], ["sticky-timeout", 0.02], ["flaky-429", 0.02], ["tpm-429", 0.02], ["too-large", 0.005], ["oversize", 0.005]];
 	const draw = (): Kind => {
 		let x = random();
 		for (const [kind, weight] of mix) if ((x -= weight) < 0) return kind;
@@ -601,10 +583,8 @@ async function scenario(label: string, room: Room, runs: RunOptions[], opts: { a
 		const plainAhead = room.waiting.filter((page) => !room.store.throttled.has(page.id)).length;
 		const opts: RunOptions = run % 25 === 24 ? { downFrom: globalCalls + 3, downTo: globalCalls + 3 + 1_000_000 } : run % 25 === 12 ? { downFrom: globalCalls + plainAhead, downTo: globalCalls + plainAhead + 1_000_000 } : {};
 		const before = cloneState(room.store);
-		const onsetBefore = onsetDowngrades;
 		const result = await runOnce(room, run, opts);
 		checkRun(room, result, before, `scale run ${run + 1}`);
-		assert(onsetDowngrades - onsetBefore <= 1, `scale run ${run + 1}: at most one noted page is filed at an outage onset (${onsetDowngrades - onsetBefore})`);
 		if (result.outage) outages += 1;
 		// A complete run counts for every page it reached while the model was up,
 		// outage window or not: only a page the run tried while the model was down
@@ -631,26 +611,10 @@ async function scenario(label: string, room: Room, runs: RunOptions[], opts: { a
 	const summarized = [...room.left.values()].filter((how) => how === "summarized").length;
 	const folded = [...room.left.values()].filter((how) => how === "folded").length;
 	const dropped = [...room.left.values()].filter((how) => how === "dropped").length;
-	// The drain, for real: a noted page left alone waits, and is filed once a plain page arrives and folds first.
-	{
-		const [lone] = pages("sticky-429", 1);
-		room.waiting.push(lone);
-		const alone = await runOnce(room, run++);
-		assert(alone.outage && room.waiting.length === 1 && room.store.throttled.has(lone.id), "a sticky page alone at the end waits, noted");
-		while (room.waiting.length > 0) {
-			room.waiting.push(...pages("healthy", 1));
-			drained += 1;
-			const before = cloneState(room.store);
-			checkRun(room, await runOnce(room, run++), before, "the drain");
-			assert(drained < 5, "the drain ends");
-		}
-		assert(drained === 1 && room.left.get(lone.id) === "summarized", `one plain page is enough to file it (${drained})`);
-	}
-	const stoppedTwice = [...room.left.keys()].filter((id) => room.stoppedTwice.has(id)).length;
-	assert(room.left.size === target + drained + 1, `every page ended (${room.left.size} of ${target}, the lone sticky page and ${drained} plain after them)`);
+	assert(room.left.size === target + drained, `every page ended (${room.left.size} of ${target}, and ${drained} plain after them)`);
 	assert(room.store.records.size === 0 && room.store.throttled.size === 0, "no record or note outlives its page: 0 throttled for good");
 	const seconds = (Date.now() - started) / 1000;
-	console.log(`3. scale: ${target} pages (+${drained} plain after them) over ${run} runs (${outages} with an outage), ${folded} folded, ${dropped} dropped, ${summarized} summarized (${stoppedTwice} stopped twice, ${onsetDowngrades} of them at an outage onset), 0 throttled for good, at most ${maxWaiting} waiting before a run and ${maxAfterReachable} after a complete one, ${seconds.toFixed(2)}s`);
+	console.log(`3. scale: ${target} pages (+${drained} plain after them) over ${run} runs (${outages} with an outage), ${folded} folded, ${dropped} dropped, ${summarized} summarized, 0 throttled for good, at most ${maxWaiting} waiting before a run and ${maxAfterReachable} after a complete one, ${seconds.toFixed(2)}s`);
 }
 
 // --- 4. The sidecar ---------------------------------------------------------------------
@@ -1008,8 +972,9 @@ async function scenario(label: string, room: Room, runs: RunOptions[], opts: { a
 }
 
 // --- 7. The summary re-read: a note filed whole, read again by later runs -------------------
-// Rooms of summary notes in Unsorted (dated and undated, one pinned, one moved
-// out of Unsorted, one with a hand-added must-keep line), re-read by runs on
+// Rooms of summary notes in Unsorted and one placed under a topic by code
+// (dated and undated, one pinned, one with a hand-added must-keep line, and a
+// plain note beside the placed one), re-read by runs on
 // two Memory models, some runs saved and some thrown away. Each page's reply
 // gives back every point, some, only a drop, only empty texts, points memory
 // already holds, nothing readable, a failure the model answers for, or no
@@ -1018,11 +983,11 @@ async function scenario(label: string, room: Room, runs: RunOptions[], opts: { a
 // the run itself owns (the save, tried, the archive row) is played as the run
 // plays it. Nothing a summary said may leave memory unless its note is in the
 // archive whole; a point the reply gave back is current; the note is never in
-// what its own fold reads; at most REREAD_CAP a run; once per model.
+// what its own fold reads; every note a run may read is read; once per model.
 {
 	const { applyFoldOps, decideFoldOps, parseFoldOps } = await import("../src/absorb-ops.js");
 	const { cloneDocument, listAreas } = await import("../src/memory-entries.js");
-	const { REREAD_CAP, rereadModelKey, rereadPage, rereadSorted, rereadTriedOn, selectRereads, withTried } = await import("../src/absorb-reread.js");
+	const { REREADS_PER_RUN, rereadModelKey, rereadPage, rereadSorted, rereadTriedOn, selectRereads, withTried } = await import("../src/absorb-reread.js");
 	type Doc = ReturnType<typeof parseMemoryDocument>;
 	type Entry = Doc["topics"][number]["entries"][number];
 	let seed = 20261001;
@@ -1047,7 +1012,7 @@ async function scenario(label: string, room: Room, runs: RunOptions[], opts: { a
 	type Behaviour = "all" | "some" | "held" | "drop" | "empty" | "unreadable" | "answered-failure" | "outage";
 	const BEHAVIOURS: Behaviour[] = ["all", "all", "some", "held", "drop", "empty", "unreadable", "answered-failure", "outage"];
 	const entriesOf = (doc: Doc) => doc.topics.flatMap((topic) => topic.entries);
-	const totals = { rooms: 0, runs: 0, pages: 0, sorted: 0, triedAgainOnAnother: 0, outages: 0, capped: 0 };
+	const totals = { rooms: 0, runs: 0, pages: 0, sorted: 0, triedAgainOnAnother: 0, outages: 0, placedRead: 0 };
 	for (let room = 0; room < 150; room++) {
 		const notes: string[] = [];
 		const points = new Map<string, string[]>();
@@ -1065,8 +1030,11 @@ async function scenario(label: string, room: Room, runs: RunOptions[], opts: { a
 		}
 		// A summary note a hand edit left with nothing but a must-keep line has nothing to re-read.
 		lines.push("<!-- e: id=m-0149 kind=fact saved=2026-09-01 learned=2026-07-01 summary=true -->", `- **must-keep** The ${token()} rule stays as written.`, "");
-		// A summary note Review moved out of Unsorted is sorted already.
-		lines.push("### Accounts", "", "<!-- e: id=m-0150 kind=fact saved=2026-09-01 summary=true -->", `- The ${token()} call was sorted by hand.`, "", "## Recent Context", "");
+		// A page code placed under a topic is a summary note there, read like the others; a plain note beside it never is.
+		const placedWords = [token(), token()];
+		lines.push("### Accounts", "", "<!-- e: id=m-0150 kind=fact saved=2026-09-01 from=RC-0001 summary=true -->", "- Call about the placed account", ...placedWords.map((word) => `  - The ${word} point is agreed with the ${pick(WORDS)} team.`), "", "<!-- e: id=m-0151 kind=fact saved=2026-09-01 -->", `- The ${token()} account is plain.`, "", "## Recent Context", "");
+		notes.push("m-0150");
+		points.set("m-0150", placedWords);
 		let doc: Doc = parseMemoryDocument(lines.join("\n"));
 		let next = 200;
 		const archive: Array<Entry & { why: string }> = [];
@@ -1078,12 +1046,13 @@ async function scenario(label: string, room: Room, runs: RunOptions[], opts: { a
 			const saved = random() < 0.8;
 			const selected = selectRereads(doc, model);
 			const label = `room ${room}, run ${runIndex} on ${key}`;
-			assert(REREAD_CAP === 5 && selected.length <= 5, `${label}: at most 5 re-reads, got ${selected.length} (cap ${REREAD_CAP})`);
-			if (selected.length === 5) totals.capped += 1;
-			assert(selected.every((entry) => entry.id !== pinnedId && entry.id !== "m-0150" && entry.id !== "m-0149" && !(entry.tried ?? []).includes(key)), `${label}: a pinned note, a sorted one, one with only must-keep lines and one this model tried are never re-read`);
+			const readable = entriesOf(doc).filter((entry) => entry.summary && entry.id !== pinnedId && entry.id !== "m-0149" && !(entry.tried ?? []).includes(key));
+			assert(selected.length === Math.min(REREADS_PER_RUN, readable.length), `${label}: every note it may read is read, up to the run's ${REREADS_PER_RUN}, got ${selected.length} of ${readable.length}`);
+			if (selected.some((entry) => entry.id === "m-0150")) totals.placedRead += 1;
+			assert(selected.every((entry) => entry.id !== pinnedId && entry.id !== "m-0151" && entry.id !== "m-0149" && !(entry.tried ?? []).includes(key)), `${label}: a pinned note, a plain one, one with only must-keep lines and one this model tried are never re-read`);
 			const days = selected.map((entry) => entry.learned ?? "~");
 			assert(days.every((day, i) => i === 0 || days[i - 1] <= day), `${label}: oldest learned first, undated last, got ${days.join(",")}`);
-			for (const entry of selected) if (entriesOf(doc).some((other) => other.id !== entry.id && other.summary && !other.pinned && (other.tried ?? []).length > 0 && !(other.tried ?? []).includes(key) && doc.topics.some((topic) => topic.title === "Unsorted" && topic.entries.includes(other)))) totals.triedAgainOnAnother += 1;
+			for (const entry of selected) if (entriesOf(doc).some((other) => other.id !== entry.id && other.summary && !other.pinned && (other.tried ?? []).length > 0 && !(other.tried ?? []).includes(key))) totals.triedAgainOnAnother += 1;
 			let working = cloneDocument(doc);
 			let workingNext = next;
 			const rows: Array<Entry & { why: string }> = [];
@@ -1179,8 +1148,60 @@ async function scenario(label: string, room: Room, runs: RunOptions[], opts: { a
 		}
 		totals.rooms += 1;
 	}
-	assert(totals.capped > 0 && totals.outages > 0 && totals.triedAgainOnAnother > 0 && totals.sorted > 0, `the section drew the cap, outages, a second model's try and sorted notes (${JSON.stringify(totals)})`);
-	console.log(`7. re-read: ${totals.rooms} rooms, ${totals.runs} runs on two models, ${totals.pages} re-read pages, ${totals.sorted} notes sorted and archived whole, ${totals.outages} outages that tried nothing, ${totals.capped} runs at the cap of ${REREAD_CAP}; nothing lost, every point given back is current, never twice on one model`);
+	assert(totals.placedRead > 0 && totals.outages > 0 && totals.triedAgainOnAnother > 0 && totals.sorted > 0, `the section drew a placed note read, outages, a second model's try and sorted notes (${JSON.stringify(totals)})`);
+	console.log(`7. re-read: ${totals.rooms} rooms, ${totals.runs} runs on two models, ${totals.pages} re-read pages, ${totals.sorted} notes sorted and archived whole, ${totals.outages} outages that tried nothing, ${totals.placedRead} runs that read a placed note; nothing lost, every point given back is current, never twice on one model`);
+}
+
+// The shared patience (model-call-causes.ts) hands the fold loop a model
+// that cannot be reached: the run stops with the cause the notice needs, and
+// no page is recorded or noted for it. A failure the patience already waited
+// out is not waited out again, and a probe that finds the model signed out
+// says so.
+{
+	const { ModelUnreachableError } = await import("../src/model-call-causes.js");
+	const unreachableDeps = (call: () => Promise<PageReply>, probe: () => Promise<boolean> = async () => true) => {
+		let calls = 0;
+		let pauses = 0;
+		const deps: PageDeps<string> = {
+			key: (page) => page,
+			oversize: () => false,
+			call: async () => { calls += 1; return call(); },
+			read: () => ({ usable: true, ops: [] }),
+			apply: () => "folded",
+			fileSummary: () => {},
+			probe,
+			retryable: () => true,
+			failureMessage: (error) => error instanceof Error ? error.message : String(error),
+			failureCode: () => "provider-error",
+			pause: async () => { pauses += 1; },
+			cancelled: () => false,
+			model: { provider: "p", model: "m" },
+			now: () => new Date(Date.UTC(2026, 9, 8)),
+			flush: () => {},
+		};
+		return { deps, calls: () => calls, pauses: () => pauses };
+	};
+	const model = { provider: "p", model: "m" };
+	for (const detail of ["signed-out", "quota", "not-offered", "not-answering"] as const) {
+		const run = unreachableDeps(async () => { throw new ModelUnreachableError(detail, model); });
+		let held: PageFailureState | undefined;
+		const outcome = await foldPages(["u-1", "u-2"], { records: new Map(), throttled: new Map() }, { ...run.deps, flush: (state) => { held = state; } });
+		assert(outcome.stoppedForOutage && outcome.unreachable === detail, `${detail}: the run stops with the cause (${JSON.stringify(outcome)})`);
+		assert(run.calls() === 1 && run.pauses() === 0, `${detail}: no retry and no second page (${run.calls()} calls)`);
+		assert(held!.records.size === 0 && held!.throttled.size === 0, `${detail}: nothing is recorded or noted against the page`);
+	}
+	const stillBusy = unreachableDeps(async () => { throw new ModelUnreachableError("still-busy", model, undefined, "rate-limit"); });
+	let busyHeld: PageFailureState | undefined;
+	const busyOutcome = await foldPages(["b-1"], { records: new Map(), throttled: new Map() }, { ...stillBusy.deps, flush: (state) => { busyHeld = state; } });
+	assert(busyOutcome.unreachable === "still-busy" && busyOutcome.outageClass === "rate-limit" && busyHeld!.throttled.has("b-1"), "still busy is the rate limit it always was: the page goes last next run");
+	const spent = unreachableDeps(async () => { throw Object.assign(new Error("502 Bad Gateway"), { patienceSpent: true }); });
+	let ending: PageEnding | undefined;
+	await foldPages(["s-1"], { records: new Map(), throttled: new Map() }, { ...spent.deps, onPageEnd: (_page, end) => { ending = end; } });
+	assert(spent.calls() === 1 && spent.pauses() === 0 && ending?.kind === "summarized", `a failure the patience already waited out goes straight to the probe, then down the ladder (${spent.calls()} calls, ${ending?.kind})`);
+	const signedOutProbe = unreachableDeps(async () => { throw Object.assign(new Error("502 Bad Gateway"), { patienceSpent: true }); }, async () => { throw new ModelUnreachableError("signed-out", model); });
+	const probeOutcome = await foldPages(["p-1"], { records: new Map(), throttled: new Map() }, signedOutProbe.deps);
+	assert(probeOutcome.unreachable === "signed-out", "a probe that finds the model signed out names it");
+	console.log("  ok  an unreachable model stops the fold with its cause, and nothing counts against a page");
 }
 
 console.log("absorb-pages-sim smoke passed");

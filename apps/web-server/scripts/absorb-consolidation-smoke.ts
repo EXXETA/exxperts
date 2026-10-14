@@ -130,11 +130,11 @@ try {
 	assert(assessmentResponse.source.generatedAt, "assessment response should include source generation timestamp");
 
 	const altAssessmentResponse = await buildAbsorbAssessment(agentId, CHATGPT_CODEX_ABSORB_MODEL, async (prompt, model) => {
-		assert(prompt.includes("System-selected model: openai-codex/gpt-6-sol"), "ChatGPT Plus/Pro absorb prompt should use profile-mapped model metadata");
-		assert(model.provider === "openai-codex" && model.model === "gpt-6-sol", "ChatGPT Plus/Pro absorb assessment should pass profile-mapped model to generator");
+		assert(prompt.includes("System-selected model: openai-codex/gpt-6.1-sol"), "ChatGPT Plus/Pro absorb prompt should use profile-mapped model metadata");
+		assert(model.provider === "openai-codex" && model.model === "gpt-6.1-sol", "ChatGPT Plus/Pro absorb assessment should pass profile-mapped model to generator");
 		return { text: assessmentFixture };
 	});
-	assert(altAssessmentResponse.process.model.provider === "openai-codex" && altAssessmentResponse.process.model.model === "gpt-6-sol", "ChatGPT Plus/Pro absorb response should report profile-mapped process model");
+	assert(altAssessmentResponse.process.model.provider === "openai-codex" && altAssessmentResponse.process.model.model === "gpt-6.1-sol", "ChatGPT Plus/Pro absorb response should report profile-mapped process model");
 
 
 	// --- Assessment parser tolerance: markdown variants carry the same content ---
@@ -150,6 +150,9 @@ try {
 	assert(nestedParsed.fields.stableMemoryChanges.deepMemory.length === 2, `sub-heading label followed by bullets should parse (got ${JSON.stringify(nestedParsed.fields.stableMemoryChanges.deepMemory)})`);
 	assert(nestedParsed.fields.stableMemoryChanges.activeItems.length === 1 && nestedParsed.fields.stableMemoryChanges.activeItems[0] === "Track the backend thread.", "bare bold label followed by bullets should parse and stop at the next label");
 	assert(nestedParsed.warnings.length === 0, `nested assessment should raise no warnings (got ${JSON.stringify(nestedParsed.warnings)})`);
+	// A nested list stays nested: the names belong to their heading bullet, not beside it.
+	const nestedList = parseAbsorbAssessment("## Absorb assessment\n\n### What to remember\n- People and roles:\n  - Jonas Weber leads billing.\n  - Lea Novak handles partners.\n- Invoices go out on the first working day.\n\n### What to forget\n- None\n\n### Needs your judgment\n- None\n");
+	assert(JSON.stringify(nestedList.fields.whatToRemember) === JSON.stringify(["People and roles:\n  - Jonas Weber leads billing.\n  - Lea Novak handles partners.", "Invoices go out on the first working day."]), `a nested list stays under its bullet, got ${JSON.stringify(nestedList.fields.whatToRemember)}`);
 	assert(parseAbsorbAssessment("## Absorb assessment\n\n### What changes in stable memory\n- Deep Memory work continues elsewhere.\n").fields.stableMemoryChanges.deepMemory.length === 0, "a label without a separator must not be read as a labeled bullet");
 	assert(parseAbsorbAssessment("## Absorb assessment\n\n### What changes in stable memory\n- Deep Memory-related notes stay.\n").fields.stableMemoryChanges.deepMemory.length === 0, "a hyphen glued to the label is not a separator");
 	const emphasis = parseAbsorbAssessment("## Absorb assessment\n\n### What changes in stable memory\n- Deep Memory: **keep** the boundary and **drop** the noise\n- Active Items: **all of it**\n").fields.stableMemoryChanges;

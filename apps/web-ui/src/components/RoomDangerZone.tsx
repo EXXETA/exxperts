@@ -87,7 +87,7 @@ export function RoomDangerZone({ status, visible, onArchive, onPurge }: {
 	return (
 		<div className="room-danger-zone">
 			<PaneHeader
-				title="Delete room"
+				title="Archive or delete"
 				line={counts
 					? `This room holds ${lifecycleCountsLine(counts)} on this machine.`
 					: countsFailed

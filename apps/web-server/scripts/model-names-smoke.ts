@@ -7,7 +7,7 @@
 //
 // Run: npm run smokes -- model-names   (or tsx this file)
 
-import { canonicalModelKey, canonicalModelName, modelDisplayName, providerDisplayName } from "../../web-ui/src/model-names.js";
+import { canonicalModelKey, canonicalModelName, modelDisplayName, modelOnProvider, providerDisplayName } from "../../web-ui/src/model-names.js";
 
 let failures = 0;
 function check(desc: string, actual: unknown, expected: unknown) {
@@ -55,6 +55,8 @@ const NAME_CASES: Array<{ model?: string; modelLabel?: string; provider?: string
 	{ model: "gpt-6-astra", name: "GPT-6 Astra" },
 	{ model: "claude-opus-5-5", name: "Claude Opus 5.5" },
 	{ model: "claude-sonnet-5-5", name: "Claude Sonnet 5.5" },
+	{ model: "claude-haiku-5-5", name: "Claude Haiku 5.5" },
+	{ model: "claude-haiku-5-5", provider: "anthropic", name: "Claude Haiku 5.5", providerName: "Anthropic / Claude" },
 	{ model: "gpt-6-sol", name: "GPT-6 Sol" },
 	{ model: "gpt-6.1-sol", name: "GPT-6.1 Sol" },
 	{ model: "gpt-6-luna", name: "GPT-6 Luna" },
@@ -117,6 +119,12 @@ check("distinct models keep distinct keys", new Set(DISTINCT.map((d) => canonica
 check("modelDisplayName shorthand", modelDisplayName({ model: "moonshotai.kimi-k2.5" }), "Kimi K2.5");
 check("providerDisplayName known id", providerDisplayName("github-copilot"), "GitHub Copilot");
 check("providerDisplayName unknown id passes through", providerDisplayName("acme-gw"), "acme-gw");
+
+// A sentence names the provider only when the model's name does not already say it.
+check("modelOnProvider drops a provider the name already says", modelOnProvider("Claude Opus 4.8", "Claude"), "Claude Opus 4.8");
+check("modelOnProvider keeps another provider", modelOnProvider("Claude Opus 4.8", "GitHub Copilot"), "Claude Opus 4.8 on GitHub Copilot");
+check("modelOnProvider keeps ChatGPT", modelOnProvider("GPT-6.1 Sol", "ChatGPT Plus/Pro"), "GPT-6.1 Sol on ChatGPT Plus/Pro");
+check("modelOnProvider needs a whole word", modelOnProvider("Claudette 2", "Claude"), "Claudette 2 on Claude");
 
 if (failures > 0) {
 	console.error(`\nmodel-names smoke: ${failures} failure(s)`);

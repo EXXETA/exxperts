@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { PersistentAgentStatus } from "../types";
-import { fetchPersistentRoomMaintenanceSettings, updatePersistentRoomMaintenanceSettings } from "../persistent-room-management-api";
-import { AUTOMATIC_APPLY_SETTING_LABEL } from "../memory-v2-copy";
+import { checkPersistentRoomMemoryBudget, fetchPersistentRoomMaintenanceSettings, updatePersistentRoomMaintenanceSettings } from "../persistent-room-management-api";
+import { AUTOMATIC_APPLY_SETTING_LABEL, roomSettingsBudgetRefusal } from "../memory-v2-copy";
 import {
 	AUTOMATIC_APPLY_INFO,
 	budgetSettledHint,
@@ -17,7 +17,7 @@ import {
 	ROOM_MEMORY_TOGGLES_FOOTNOTE,
 	ROOM_MEMORY_TOGGLES_TITLE,
 } from "../memory-surface-copy";
-import { RsInfo } from "./rs-info";
+import { RsInfoLabel } from "./rs-info";
 import { RoomMemoryEntriesSection, RoomMemoryHistorySection } from "./room-memory-entries";
 import { PaneHeader } from "./pane-header";
 
@@ -44,6 +44,11 @@ export function RoomMaintenanceSection({ status, onRefresh }: { status: Persiste
 	const [budgetSettledTo, setBudgetSettledTo] = useState<number | null>(null);
 	const [saving, setSaving] = useState(false);
 	const [error, setError] = useState<string | null>(null);
+	// The last refused budget, the server's refusal and the Memory model it was
+	// refused for. It shows only while it is still true: a move of the slider or
+	// a saved budget ends it, and another Memory model asks the server again.
+	const [budgetRefusal, setBudgetRefusal] = useState<{ budget: number; text: string; model: string } | null>(null);
+	const memoryModel = status.models?.memory.chosen ? `${status.models.memory.chosen.provider}/${status.models.memory.chosen.model}` : "";
 	const budgetSaveTimer = useRef<number | null>(null);
 	// What the room's memory measures right now. The room status carries it too,
 	// but that arrives on a poll; the notes pane re-reads it after every write
@@ -66,6 +71,7 @@ export function RoomMaintenanceSection({ status, onRefresh }: { status: Persiste
 		setSavedBudget(null);
 		setBudgetSettledTo(null);
 		setError(null);
+		setBudgetRefusal(null);
 		fetchPersistentRoomMaintenanceSettings(status.id)
 			.then((response) => {
 				if (cancelled) return;
@@ -95,13 +101,38 @@ export function RoomMaintenanceSection({ status, onRefresh }: { status: Persiste
 					setSavedBudget(response.settings.memoryBudgetTokens);
 					setBudget((current) => (current === budget ? response.settings.memoryBudgetTokens : current));
 					setError(null);
+					setBudgetRefusal(null);
+					// Which Memory models hold this room's memory follows the budget: the Model pane reads the room again.
+					onRefresh?.();
 				})
-				.catch((e) => setError((e as Error).message));
+				.catch((e) => {
+					// A refused budget is not the room's budget: the slider goes back to the saved one, the refusal stays under it.
+					setBudget((current) => (current === budget ? savedBudget : current));
+					setBudgetRefusal({ budget, text: roomSettingsBudgetRefusal((e as Error).message), model: memoryModel });
+				});
 		}, 500);
 		return () => {
 			if (budgetSaveTimer.current !== null) window.clearTimeout(budgetSaveTimer.current);
 		};
 	}, [budget, savedBudget, status.id]);
+
+	// The room's Memory model changed since the refusal (in Model, or a default
+	// that moved): the server says whether the new one holds the refused budget.
+	// It does, the line goes; it does not, the line names the new model.
+	useEffect(() => {
+		if (!budgetRefusal || budgetRefusal.model === memoryModel) return;
+		let cancelled = false;
+		const refused = budgetRefusal.budget;
+		checkPersistentRoomMemoryBudget(status.id, refused)
+			.then((refusal) => {
+				if (cancelled) return;
+				setBudgetRefusal((current) => (current?.budget !== refused ? current : refusal ? { budget: refused, text: roomSettingsBudgetRefusal(refusal), model: memoryModel } : null));
+			})
+			.catch(() => {});
+		return () => {
+			cancelled = true;
+		};
+	}, [budgetRefusal, memoryModel, status.id]);
 
 	async function toggleFastPath(next: boolean) {
 		if (saving || fastPath === null) return;
@@ -156,8 +187,7 @@ export function RoomMaintenanceSection({ status, onRefresh }: { status: Persiste
 					<label className="settings-row">
 						<div className="settings-row-main">
 							<span className="settings-row-label">
-								{AUTOMATIC_APPLY_SETTING_LABEL}
-								<RsInfo text={AUTOMATIC_APPLY_INFO} />
+								<RsInfoLabel label={AUTOMATIC_APPLY_SETTING_LABEL} info={AUTOMATIC_APPLY_INFO} />
 							</span>
 							<span className="settings-row-sub">{ROOM_MEMORY_TOGGLES_FOOTNOTE}</span>
 						</div>
@@ -173,8 +203,7 @@ export function RoomMaintenanceSection({ status, onRefresh }: { status: Persiste
 					<label className="settings-row">
 						<div className="settings-row-main">
 							<span className="settings-row-label">
-								{REMEMBER_WITHOUT_PREVIEW_LABEL}
-								<RsInfo text={REMEMBER_WITHOUT_PREVIEW_INFO} />
+								<RsInfoLabel label={REMEMBER_WITHOUT_PREVIEW_LABEL} info={REMEMBER_WITHOUT_PREVIEW_INFO} />
 							</span>
 						</div>
 						<input
@@ -211,7 +240,10 @@ export function RoomMaintenanceSection({ status, onRefresh }: { status: Persiste
 								step={1000}
 								value={budget ?? MEMORY_BUDGET_MIN_TOKENS}
 								disabled={budget === null}
-								onChange={(e) => setBudget(Number(e.target.value))}
+								onChange={(e) => {
+									setBudget(Number(e.target.value));
+									setBudgetRefusal(null);
+								}}
 								aria-label={`${MEMORY_LIMIT_LABEL} in tokens`}
 							/>
 							<strong className="memory-budget-value">{budget !== null ? `${fmtTokensK(budget)} tokens` : "…"}</strong>
@@ -219,6 +251,7 @@ export function RoomMaintenanceSection({ status, onRefresh }: { status: Persiste
 					</div>
 				</div>
 			</div>
+			{budgetRefusal && <div className="room-maintenance-error">{budgetRefusal.text}</div>}
 			{error && <div className="room-maintenance-error">{error}</div>}
 			<RoomMemoryEntriesSection key={reloadKey} status={status} onMemoryTokens={setLiveTokens} onArchiveDeleted={() => setHistoryKey((key) => key + 1)} onChanged={onRefresh} />
 			{/* The history re-reads itself after an Undo and keeps what that undo said, so it is not remounted; a note deleted for good re-reads it too. */}

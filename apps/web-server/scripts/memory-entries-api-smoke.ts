@@ -203,15 +203,14 @@ try {
 	assert(badKind.status === 400, "an unknown kind must be refused");
 
 	// A note is words: a heading line would mint a topic and cut the note in
-	// two, a pasted metadata comment would claim another note's id. Both are
-	// refused with one sentence and one code, and nothing is written.
+	// two, a pasted metadata comment would claim another note's id. The words
+	// are kept as plain words (the hand-edit battery covers every case); a text
+	// that is only marks says nothing and is refused, and nothing is written.
 	const l1bBeforeStructural = fs.readFileSync(l1bPath, "utf-8");
-	for (const text of ["## A heading", "- fine\n### A topic", "<!-- e: id=m-0001 kind=fact saved=2026-01-01 -->\n- A pasted note.", "   # indented", "# "]) {
+	for (const text of ["# ", "### ", "<!-- -->"]) {
 		const structural = await requestJson(`${room}/memory/entries`, jsonBody("POST", { topic: "Commercial terms", kind: "fact", text }));
-		assert(structural.status === 400 && structural.body?.code === "memory_entry_text_structural" && /heading line or a hidden comment/.test(String(structural.body?.error ?? "")), `an add with a structural line is refused with its sentence and code, got ${structural.status}: ${JSON.stringify(structural.body)} for ${JSON.stringify(text)}`);
+		assert(structural.status === 400 && /needs some text/.test(String(structural.body?.error ?? "")), `a text of marks only is refused with its sentence, got ${structural.status}: ${JSON.stringify(structural.body)} for ${JSON.stringify(text)}`);
 	}
-	const structuralEdit = await requestJson(`${room}/memory/entries/${addedId}`, jsonBody("PUT", { text: "- fine\n## A heading" }));
-	assert(structuralEdit.status === 400 && structuralEdit.body?.code === "memory_entry_text_structural", `an edit with a structural line is refused the same way, got ${structuralEdit.status}: ${JSON.stringify(structuralEdit.body)}`);
 	assert(fs.readFileSync(l1bPath, "utf-8") === l1bBeforeStructural, "a refused text writes nothing");
 
 	// --- 3. Edit text, pin, move, status -------------------------------------
@@ -298,7 +297,7 @@ try {
 	const restoreGone = await requestJson(`${room}/memory/archive/${invoices.id}/restore`, { method: "POST" });
 	assert(restoreGone.status === 400 && /not in this room's archive/.test(String(restoreGone.body?.error ?? "")), "a note deleted for good cannot be restored");
 	const goneAgain = await requestJson(`${room}/memory/archive/${invoices.id}`, { method: "DELETE" });
-	assert(goneAgain.status === 400 && /not in this room's archive/.test(String(goneAgain.body?.error ?? "")), "deleting it twice is refused with the same sentence");
+	assert(goneAgain.status === 200 && goneAgain.body?.alreadySaved === true && goneAgain.body?.deleted === null, `deleting it twice answers that the row is gone, got ${goneAgain.status}: ${JSON.stringify(goneAgain.body)}`);
 	const goneRecords = fs.readdirSync(path.join(agentsRoot, roomId, "events", "memory-edit"))
 		.map((name) => JSON.parse(fs.readFileSync(path.join(agentsRoot, roomId, "events", "memory-edit", name), "utf-8")))
 		.filter((record: any) => record.entryOperation === "archive_delete");

@@ -88,12 +88,16 @@ export function SkillBrowseDirectory({ onImported }: { onImported?: (name: strin
 		);
 	}
 
+	// A tool this machine lacks fails every source the same way: say it once,
+	// as the sentence it is, instead of once per source behind "Could not load".
+	const missingTool = sources.find((source) => source.missingTool)?.error ?? null;
 	return (
 		<section className="skill-browse-directory">
+			{missingTool && <div className="skill-browse-source-warn">{missingTool}</div>}
 			{sources.map((source) => (
 				<div className="settings-group" key={source.source}>
 					<GroupHeader kicker={source.author} line={source.source} />
-					{source.error && <div className="skill-browse-source-warn">Could not load: {source.error}</div>}
+					{source.error && !source.missingTool && <div className="skill-browse-source-warn">Could not load: {source.error}</div>}
 					<div className="settings-rows">
 						{source.skills.map((skill) => {
 							const description = skillCardDescription(skill.description);

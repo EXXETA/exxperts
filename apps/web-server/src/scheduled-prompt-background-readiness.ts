@@ -15,7 +15,7 @@ import {
 } from "./persistent-agent-ai-profiles.js";
 import { readPersistentAgentAiProfileState } from "./persistent-agent-ai-profile-state.js";
 import { resolveScheduledRoomModel, RoomModelUnavailableError } from "./room-models.js";
-import { classifyPersistentRoomBackgroundRunTarget } from "./persistent-agents.js";
+import { classifyPersistentRoomBackgroundRunTarget, getPersistentAgentStatus, getPersistentAgentThread } from "./persistent-agents.js";
 import {
 	readPersistentRoomScheduleStore,
 	validatePersistentRoomScheduleRoomId,
@@ -298,4 +298,21 @@ export function checkScheduledPromptBackgroundRunExecutionReadiness(
 		model: runtimeCheck.model,
 		checks: { schedule: "enabled", room: "ready", modelPolicy: modelPolicyCheck, runtimeModel: "ready" },
 	});
+}
+
+/**
+ * Whether a run blocked on a prepared conversation met the one its room has now: only then may it go there, late.
+ * A newer prepared conversation not started yet (a second Remember or Forget) is the one it waits for now, and
+ * so is one a boundary opened after closing the recorded one, started or not. Null when the room cannot be read now.
+ */
+export function scheduledRunMetCurrentConversation(record: BackgroundRunRecord): boolean | null {
+	if (record.scope.kind !== "persistent-room" || !record.target?.threadId) return false;
+	try {
+		const active = getPersistentAgentStatus(record.scope.roomId).activeThread;
+		if (active?.threadId === record.target.threadId || active?.preparedByBoundary) return true;
+		const closedBy = getPersistentAgentThread(record.scope.roomId, record.target.threadId)?.closedReason;
+		return !!closedBy && (active?.origin === "checkpoint" || active?.origin === "memento");
+	} catch {
+		return null;
+	}
 }

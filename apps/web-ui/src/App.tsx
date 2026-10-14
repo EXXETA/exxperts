@@ -4,7 +4,10 @@ import { Sidebar } from "./components/Sidebar";
 import { AssetsPanel } from "./components/assets-panel";
 import { AssetViewerFooter } from "./components/asset-viewer-footer";
 import { ToastStack, type ToastView } from "./components/toast-stack";
+import { usePausedSkillsNotice } from "./paused-skills-notice";
 import { readReviseConflicts, reviseConflictSentence } from "../../web-server/src/revise-conflict-notice";
+import { modelNotOnAccount, modelNotOnAccountSentence } from "../../web-server/src/model-not-on-account";
+import { modelNotOffered, roomModelUnavailableLine } from "../../web-server/src/model-not-offered";
 import { assetDisplayTitle, assetTemplateShortName, projectAssetRows, rowShelfFileName, shelfTruthForRoom, type AssetLedgerRowInput, type AssetRowView, type ShelfFileRowInput } from "./assets-panel";
 import { commitRoomFileDelete, fileToBase64, listRoomFiles, renameRoomFile, roomFileUrl, saveRoomFileToFolder, stageRoomFileDelete, undoRoomFileDelete, uploadRoomFile, type RoomShelfFile } from "./room-files-api";
 import { chooseSystemFolder, fetchPersistentRoomWorkspaceDefault } from "./persistent-room-workspace-api";
@@ -32,7 +35,7 @@ import { isSignInFailure } from "./sign-in-failure";
 import { GroupHeader, PaneHeader } from "./components/pane-header";
 import { roomFilesSentence } from "./components/RoomDangerZone";
 import { WhatsNewDialog } from "./components/whats-new-dialog";
-import { useRemoteClientContext } from "./remote-client-context";
+import { fetchRemoteClientContext, SHARED_SERVER_ADMIN_LINE, showsComputerOnlyControls, useRemoteClientContext } from "./remote-client-context";
 import { RemoteAccessPage } from "./components/remote-access-page";
 import { StateProfileSection } from "./components/state-profile-section";
 import { GlobalInstructionsSection } from "./components/GlobalInstructionsSection";
@@ -46,18 +49,23 @@ import { MarkdownRenderer } from "./components/Markdown";
 import { RoomSettingsModal, type SettingsPane } from "./components/RoomSettingsModal";
 import { AddProviderPanel, ApiKeyForm, ConfigureProfileModal, GatewayApproveModelsModal, GatewayConfigModal, useProviderLogin } from "./components/add-provider-panel";
 import { AiDefaultsGroup } from "./components/ai-defaults-group";
-import { apiErrorCode, apiFetch, fetchJson, isUnexplainedRequestFailure } from "./api";
-import { canonicalModelName, modelDisplayName, modelTooltipName } from "./model-names";
+import { ApiRequestError, apiErrorCode, apiFetch, fetchJson, isUnexplainedRequestFailure } from "./api";
+import { askUntilAnswered, editorLimitLine, lostUndoLanded, sameNoteWords, SAVE_ANSWER_LOST_SENTENCE, SAVE_NOT_LANDED_SENTENCE, saveAnswerLost, settleLostRunSave, UNDO_NOT_LANDED_SENTENCE } from "./memory-save-answer";
+import { MEMORY_PAGE_MAX_CHARS, memoryTextHasWords, memoryTypedText, rememberPageFromParts } from "../../web-server/src/memory-typed-text";
+import { ModelNoticePanel, modelNoticeFromError, modelWaitLine, type ModelNotice, type ModelWait } from "./components/model-notice";
+import { canonicalModelName, modelDisplayName, modelOnProvider, modelTooltipName } from "./model-names";
 import type { ApprovalPreviewData } from "./approval-preview";
-import { describeMaintenanceWarning, formatAbsorbRunSaveError, isStaleMaintenanceMessage, meaningfulMaintenanceWarnings, sectionLabel } from "./maintenance-warnings";
-import { fetchRememberReadEstimate, isPlainRememberSentence, quickRememberBlockers, rememberEstimateSentence, rememberSendsTranscript, rememberProgressSentence, rememberReadSentences, rememberToolOutputSentence, type RememberReadEstimate } from "./remember-read";
-import { AbsorbRunActiveError, approveAbsorbRun, cancelAbsorbRun, fetchAbsorbRun, keepAbsorbRunEntries, resumeAbsorbRun, setAbsorbRunBudget, startAbsorbRun, editAbsorbRunEntry, chooseAbsorbRunBeside } from "./absorb-run-api";
-import { ABSORB_ALL_SUMMARIZED_SENTENCE, ABSORB_CHOOSE_MODEL_LABEL, DISCUSS_FIRST_LABEL, DISCUSS_FIRST_TITLE, maintainChooserFootnote, memorizeChooserText, unsortedHintText, ABSORB_RUN_ACTIVE_ACTION, ABSORB_RUN_ACTIVE_SENTENCE, absorbRunAllSummarized, absorbRunFastPathBlockers, FIRST_READ_MISSING_SENTENCE, AUTOMATIC_APPLY_ON_SENTENCE, absorbRunIsWorking, absorbRunNewTopics, absorbRunSavedSentence, KEEP_DEBOUNCE_MS, keepBatchAction, LIMIT_RAISED_ON_SAVE_SENTENCE, nextKeepIds, nextKeepTopics, overLimitFirstRead, RUN_POLL_INTERVAL_MS, RUN_POLL_LOST_SENTENCE, RUN_POLL_MAX_RETRIES, absorbRunSavedHeadline, absorbRunFullPercent, absorbRunNotesChanged, reviewChangeCounts, reviewRunFastPathBlockers, reviewRunFullPercent, reviewRunIsWorking, REVIEW_RUN_ACTIVE_ACTION, REVIEW_RUN_ACTIVE_SENTENCE } from "./memory-v2-copy";
-import { AbsorbRunCard, AbsorbRunFailedScreen, placeholderAbsorbRun } from "./components/absorb-run-screen";
+import { formatAbsorbRunSaveError, isStaleMaintenanceMessage, logMaintenanceWarnings, sectionLabel } from "./maintenance-warnings";
+import { appRouteHash, parseAppRouteHash, type AppRoute } from "./app-route";
+import { fetchRememberReadEstimate, isPlainRememberSentence, RECENT_SESSIONS_BLOCK_CAP, recentSessionsHeadsUp, rememberFillsRoomHeadsUp, REMEMBER_SAVED_REOPEN_SENTENCE, REMEMBER_SAVED_ELSEWHERE_SENTENCE, isRememberOutcome, isPlainProductSentence, quickRememberNeedsPreview, rememberEstimateSentence, rememberFailureSentence, rememberRefusedWholeSentence, rememberSendsTranscript, rememberProgressSentence, type RememberReadEstimate, rememberRestartSentence } from "./remember-read";
+import { AbsorbRunActiveError, approveAbsorbRun, cancelAbsorbRun, fetchAbsorbRun, keepAbsorbRunEntries, resumeAbsorbRun, setAbsorbRunBudget, startAbsorbRun, editAbsorbRunEntry, chooseAbsorbRunBeside, moveAbsorbRunSortedNote } from "./absorb-run-api";
+import { editableMemoryBody, plainFirstReadLine, plainMemoryText, storedMemoryBody, absorbRunSortedRows, absorbRunAllSummarizedSentence, absorbRunOutageModelName, ABSORB_CHOOSE_MODEL_LABEL, DISCUSS_FIRST_LABEL, DISCUSS_FIRST_TITLE, maintainChooserFootnote, memorizeChooserText, memorizeNotesText, ABSORB_RUN_ACTIVE_ACTION, ABSORB_RUN_ACTIVE_SENTENCE, absorbRunAllSummarized, absorbRunFastPathBlockers, FIRST_READ_MISSING_SENTENCE, AUTOMATIC_APPLY_ON_SENTENCE, absorbRunIsWorking, absorbRunNewTopics, absorbRunSavedSentence, KEEP_DEBOUNCE_MS, keepBatchAction, LIMIT_RAISED_ON_SAVE_SENTENCE, OPEN_CONVERSATION_KEEPS_MEMORY_SENTENCE, nextKeepIds, nextKeepTopics, overLimitFirstRead, RUN_POLL_INTERVAL_MS, RUN_POLL_LOST_SENTENCE, RUN_POLL_MAX_RETRIES, absorbRunSavedHeadline, absorbRunFullPercent, absorbRunNotesChanged, reviewChangeCounts, reviewRunFastPathBlockers, reviewRunFullPercent, reviewRunIsWorking, REVIEW_RUN_ACTIVE_ACTION, REVIEW_RUN_ACTIVE_SENTENCE } from "./memory-v2-copy";
+import { AbsorbRunCard, AbsorbRunFailedScreen, placeholderAbsorbRun, type NoteEdit, type SortedMove } from "./components/absorb-run-screen";
+import { closeSidebarOnPhone } from "./sidebar-collapse";
 import { ReviewCard, ReviewDepthPicker, ReviewFirstReadSections, ReviewRunFailedScreen, ReviewRunProgressScreen, ReviewSavedScreen, reviewPercent, type ReviewUndoState } from "./components/review-screen";
-import { approveReviewRun, cancelReviewRun, editReviewRunEntry, fetchReviewRun, fetchReviewStatus, keepReviewRunEntries, requestReviewAssessment, requestReviewDiscussionSignoff, requestReviewDiscussionTurn, ReviewRunActiveError, setReviewRunBudget, startReviewRun, type ReviewDiscussionMessage } from "./review-api";
+import { approveReviewRun, cancelReviewRun, editReviewRunEntry, fetchReviewRun, fetchReviewStatus, keepReviewRunEntries, requestReviewAssessment, requestReviewDiscussionSignoff, requestReviewDiscussionTurn, resumeReviewRun, ReviewRunActiveError, setReviewRunBudget, startReviewRun, type ReviewDiscussionMessage } from "./review-api";
 import { undoMemorySave } from "./memory-entries-api";
-import type { AbsorbApprovalResponse, AbsorbAssessmentResponse, AbsorbAvailability, AbsorbDiscussionMessage, AbsorbDiscussionSignoffResponse, AbsorbDiscussionTokenBudget, AbsorbDiscussionTurnResponse, AbsorbProposalSourceMetadata, AbsorbRun, AuthStatusResponse, ChatItem, CheckpointApprovalResponse, CheckpointProposalResponse, ContextHealthStatus, LoginProviderCatalogEntry, PersistentAgentAiProfileSelectionStatus, PersistentAgentAiProfileStatus, ArchivedPersistentAgentSummary, PersistentAgentArchiveResponse, PersistentAgentCreateRequest, PersistentAgentCreateResponse, PersistentAgentId, PersistentAgentMementoBoundaryResponse, PersistentAgentPurgeResponse, PersistentAgentStatus, PersistentAgentThreadOrigin, PersistentAgentThreadRecord, ReviewAssessmentResponse, ReviewAvailability, ReviewDepth, ReviewDiscussionTokenBudget, ReviewGuidance, ReviewRun, ReviewRunApprovalResponse, RoomModelLockView, WebChatModelOption, WebChatModelStatus } from "./types";
+import type { AbsorbApprovalResponse, AbsorbAssessmentResponse, AbsorbAvailability, AbsorbDiscussionMessage, AbsorbDiscussionSignoffResponse, AbsorbDiscussionTokenBudget, AbsorbDiscussionTurnResponse, AbsorbProposalSourceMetadata, AbsorbRun, AuthStatusResponse, ChatItem, CheckpointApprovalResponse, CheckpointProposalResponse, ContextHealthStatus, LoginProviderCatalogEntry, PersistentAgentAiProfileSelectionStatus, PersistentAgentAiProfileStatus, ArchivedPersistentAgentSummary, PersistentAgentArchiveResponse, PersistentAgentCreateRequest, PersistentAgentCreateResponse, PersistentAgentId, PersistentAgentMementoBoundaryResponse, PersistentAgentPurgeResponse, PersistentAgentStatus, PersistentAgentThreadOrigin, PersistentAgentThreadRecord, ReviewAssessmentResponse, ReviewAvailability, ReviewDepth, ReviewStatusResponse, ReviewDiscussionTokenBudget, ReviewGuidance, ReviewRun, ReviewRunApprovalResponse, RoomModelLockView, WebChatModelOption, WebChatModelStatus } from "./types";
 import type { ConversationSwitchNotice } from "./room-models-api";
 import { archivePersistentRoom, fetchArchivedPersistentRooms, fetchPersistentRoomMaintenanceSettings, purgePersistentRoom, restorePersistentRoom, updatePersistentRoomMaintenanceSettings, type PersistentRoomPurgeError } from "./persistent-room-management-api";
 import { ARRIVAL_REVEAL_PACING, createAssistantStreamState, DEFAULT_REVEAL_PACING, isAssistantStreamActive, outputLimitNoticeForTurn, reduceAssistantStream, type AssistantStreamAction, type AssistantStreamEffect, type AssistantStreamState, type RevealPacing } from "./assistant-stream";
@@ -88,6 +96,8 @@ type AbsorbWorkflowState = {
 	/** The conversations waiting, from the status read at the start; the card shell lists them before the run reports. */
 	conversations?: { id: string; title: string; date: string }[];
 	assessment: AbsorbAssessmentResponse | null;
+	// The Memory model could not answer the first read, the discussion or the sign-off.
+	notice?: ModelNotice | null;
 	approvalResult: AbsorbApprovalResponse | null;
 	discussionMessages?: AbsorbDiscussionMessage[];
 	discussionTokenBudget?: AbsorbDiscussionTokenBudget | null;
@@ -142,6 +152,8 @@ type ReviewWorkflowState = {
 	// Why Review cannot start, in the server's own words.
 	unavailableReason?: string | null;
 	assessment: ReviewAssessmentResponse | null;
+	// The Memory model could not answer the first read, the discussion or the sign-off: the notice and its ways out.
+	notice?: ModelNotice | null;
 	// How far this tidy goes. Null follows the room's own recommendation, and
 	// the request then carries whatever the picker is showing.
 	depth?: ReviewDepth | null;
@@ -152,9 +164,6 @@ type ReviewWorkflowState = {
 	discussionSending?: boolean;
 	// Non-fatal server notes from a successful turn; rendered amber, never red.
 	discussionWarnings?: string | null;
-	// Disclosures from the sign-off that started this tidy (a shortened
-	// transcript, a trimmed summary): rendered on the card, never dropped.
-	signoffWarnings?: string[];
 	// Room setting known up front so automation is disclosed BEFORE the write,
 	// not after (the flow otherwise promises "nothing is saved yet").
 	fastPathEnabled?: boolean;
@@ -214,6 +223,12 @@ function missingFirstRead(agentId: PersistentAgentId, availability: AbsorbAvaila
 		warnings: [],
 		firstReadMissing: why,
 	};
+}
+
+/** Review with no first read: the tidy reads every topic. */
+function missingReviewFirstRead(agentId: PersistentAgentId, status: ReviewStatusResponse): ReviewAssessmentResponse {
+	const availability: ReviewAvailability = { available: true, reason: "available", message: "", topics: status.topics, notes: status.notes, ...status.budget, recommendedDepth: status.recommendedDepth };
+	return { agentId, writesMemory: false, availability, assessmentMarkdown: "None.", fields: { couldBeShorter: [], staleOrContradicts: [], needsYourCall: [], topics: [] }, warnings: [], source: { l1bFingerprint: { algorithm: "sha256", value: "" } }, firstReadMissing: true };
 }
 
 function assessmentRetryFeedback(assessment: { warnings: string[] } | null | undefined): string[] | undefined {
@@ -387,12 +402,12 @@ function readRevealPacing(): RevealPacing {
 	return pacing;
 }
 const newConversationId = () => `c_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
-const DIRECT_RESUME_INCOMPATIBLE_MODEL_MESSAGE = "This standby thread is locked to a model that is not available in the active AI profile. Select a compatible AI profile to resume it.";
+const DIRECT_RESUME_INCOMPATIBLE_MODEL_MESSAGE = "This conversation's model is not available now. Choose another model in Room settings, Model, to continue it.";
 
 function formatDirectResumeError(error: unknown): string {
 	const message = error instanceof Error ? error.message : String(error ?? "");
 	if (/model is not approved/i.test(message)) return DIRECT_RESUME_INCOMPATIBLE_MODEL_MESSAGE;
-	return message || "Could not resume this standby thread.";
+	return message || "Could not continue this conversation.";
 }
 
 /**
@@ -412,8 +427,6 @@ function stopRunningToolItems(items: ChatItem[]): ChatItem[] {
 function hasUserInput(items: ChatItem[]): boolean {
 	return items.some((item) => item.kind === "user" && item.text.trim().length > 0);
 }
-
-const MAINTAIN_BLOCKED_BY_OPEN_CONVERSATION = "Remember or Forget the open conversation first, then Maintain becomes available.";
 
 function hasUserVisibleTurn(items: ChatItem[]): boolean {
 	return items.some((item) => (item.kind === "user" || item.kind === "assistant") && item.text.trim().length > 0);
@@ -679,9 +692,10 @@ function AiProfileRowMenu({ anchorRef, onDismiss, children }: { anchorRef: React
 function AiProfileSwitcherSection({ status, authStatus, onRefresh, onRefreshAuth, onSignedIn, focus }: { status: PersistentAgentAiProfileSelectionStatus | null; authStatus: AuthStatusResponse | null; onRefresh: () => void; onRefreshAuth: () => void; /** A sign-in or a key was just saved here. */ onSignedIn?: () => void; focus?: { providerId: string } | null }) {
 	// On a remote device the provider/gateway setup routes are local-only
 	// (remote-route-policy is the truth), so those controls render as facts
-	// with one honest line instead of failing per tap.
+	// with one honest line instead of failing per tap. On a shared server only
+	// its admin may change them, so they read the same way.
 	const remoteClient = useRemoteClientContext();
-	const remoteSetupLocked = remoteClient.remote;
+	const remoteSetupLocked = remoteClient.remote || remoteClient.sharedServer;
 	const [addProviderOpen, setAddProviderOpen] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [modelsOpenId, setModelsOpenId] = useState<string | null>(null);
@@ -985,7 +999,7 @@ function AiProfileSwitcherSection({ status, authStatus, onRefresh, onRefreshAuth
 			    its old name there. A string rather than the status object, so a
 			    refetch that changed nothing costs no fetch. */}
 			{remoteSetupLocked ? (
-				<p className="cli-note">Providers and gateways are set up on the computer itself.</p>
+				<p className="cli-note">{remoteClient.sharedServer ? SHARED_SERVER_ADMIN_LINE : "Providers and gateways are set up on the computer itself."}</p>
 			) : (
 				<AddProviderPanel
 					open={addProviderOpen}
@@ -1029,7 +1043,7 @@ function AiProfileSwitcherSection({ status, authStatus, onRefresh, onRefreshAuth
 }
 
 // Exported for the jsdom probe of arrange mode (a probe outside the app renders the real screen); the app itself never imports it.
-export function Landing({ roomOrder, onChooseRoomOrder, onArrangingChange, onOpenSettings, onOpenDashboard, onOpenMemory, onOpenPersistentAgent, onResumePersistentAgent, onMaintainPersistentAgent, onCreatePersistentAgent, onArchiveRoom, onPurgeRoom, onMementoForget, modelStatus, persistentAgentStatuses, persistentThread, persistentLive, persistentResumeError, onRefreshPersistentAgent, theme, appearance, onSetAppearance, aiProfileStatus: aiProfileSelection, backgroundReadyRooms, purgingRooms, unresumableRooms }: { roomOrder: HomeRoomOrderView; onChooseRoomOrder: (choice: RoomOrderChoice) => Promise<boolean>; /** Told whenever arrange mode has unsaved moves or stops having them, and false when the screen goes; the app asks the leave question at its own exits. */ onArrangingChange: (dirty: boolean) => void; onOpenSettings: (section?: SettingsSection) => void; onOpenDashboard: () => void; onOpenMemory: () => void; onOpenPersistentAgent: (status: PersistentAgentStatus) => Promise<void> | void; onResumePersistentAgent: (status: PersistentAgentStatus) => Promise<void> | void; onMaintainPersistentAgent: (target: MaintainTarget) => void; onCreatePersistentAgent: (request: PersistentAgentCreateRequest) => Promise<PersistentAgentCreateResponse>; onArchiveRoom: (agentId: PersistentAgentId, confirmation: string) => Promise<PersistentAgentArchiveResponse>; onPurgeRoom: (agentId: PersistentAgentId, confirmation: string) => Promise<PersistentAgentPurgeResponse>; onMementoForget: (agentId: PersistentAgentId) => void; modelStatus: WebChatModelStatus | null; persistentAgentStatuses: PersistentAgentStatus[]; persistentThread: PersistentAgentThread | null; persistentLive: boolean; persistentResumeError: string | null; onRefreshPersistentAgent: () => void; theme: ThemeMode; appearance: AppearancePreference; onSetAppearance: (pref: AppearancePreference) => void; aiProfileStatus: PersistentAgentAiProfileSelectionStatus | null; backgroundReadyRooms?: ReadonlySet<PersistentAgentId>; purgingRooms?: ReadonlySet<PersistentAgentId>; unresumableRooms?: ReadonlySet<PersistentAgentId> }) {
+export function Landing({ roomOrder, onChooseRoomOrder, onArrangingChange, onOpenSettings, onOpenDashboard, onOpenMemory, onOpenPersistentAgent, onResumePersistentAgent, onMaintainPersistentAgent, onCreatePersistentAgent, onArchiveRoom, onPurgeRoom, onMementoForget, modelStatus, persistentAgentStatuses, persistentThread, persistentLive, persistentResumeError, onRefreshPersistentAgent, theme, appearance, onSetAppearance, aiProfileStatus: aiProfileSelection, backgroundReadyRooms, purgingRooms }: { roomOrder: HomeRoomOrderView; onChooseRoomOrder: (choice: RoomOrderChoice) => Promise<boolean>; /** Told whenever arrange mode has unsaved moves or stops having them, and false when the screen goes; the app asks the leave question at its own exits. */ onArrangingChange: (dirty: boolean) => void; onOpenSettings: (section?: SettingsSection) => void; onOpenDashboard: () => void; onOpenMemory: () => void; onOpenPersistentAgent: (status: PersistentAgentStatus) => Promise<void> | void; onResumePersistentAgent: (status: PersistentAgentStatus) => Promise<void> | void; onMaintainPersistentAgent: (target: MaintainTarget) => void; onCreatePersistentAgent: (request: PersistentAgentCreateRequest) => Promise<PersistentAgentCreateResponse>; onArchiveRoom: (agentId: PersistentAgentId, confirmation: string) => Promise<PersistentAgentArchiveResponse>; onPurgeRoom: (agentId: PersistentAgentId, confirmation: string) => Promise<PersistentAgentPurgeResponse>; onMementoForget: (agentId: PersistentAgentId) => void; modelStatus: WebChatModelStatus | null; persistentAgentStatuses: PersistentAgentStatus[]; persistentThread: PersistentAgentThread | null; persistentLive: boolean; persistentResumeError: string | null; onRefreshPersistentAgent: () => void; theme: ThemeMode; appearance: AppearancePreference; onSetAppearance: (pref: AppearancePreference) => void; aiProfileStatus: PersistentAgentAiProfileSelectionStatus | null; backgroundReadyRooms?: ReadonlySet<PersistentAgentId>; purgingRooms?: ReadonlySet<PersistentAgentId> }) {
 	const [createOpen, setCreateOpen] = useState(false);
 	useEscapeKey(() => setCreateOpen(false), createOpen);
 	const [settingsRoomId, setSettingsRoomId] = useState<PersistentAgentId | null>(null);
@@ -1052,6 +1066,8 @@ export function Landing({ roomOrder, onChooseRoomOrder, onArrangingChange, onOpe
 	// no card appears in one place and moves to another. With no rooms there
 	// is nothing to order and the empty state shows at once, as it always did.
 	const roomStatuses = persistentAgentStatuses;
+	// On a shared server the order is A to Z and cannot be changed (use-home-room-order.ts).
+	const { sharedServer } = useRemoteClientContext();
 	const orderedRoomStatuses = roomOrder.order ? orderRooms(persistentAgentStatuses, roomOrder.order, roomOrder.lastUsed) : [];
 	const gridDrawn = roomOrder.order !== null || roomStatuses.length === 0;
 
@@ -1277,24 +1293,25 @@ export function Landing({ roomOrder, onChooseRoomOrder, onArrangingChange, onOpe
 						<p>{roomStatuses.length === 0 ? "Create your first room to get started." : "Pick up where you left off, or start a new room."}</p>
 					</div>
 					<div className="landing-hero-actions">
-						{roomOrder.order && (arranging || roomStatuses.length >= ROOM_SORT_MIN_ROOMS) && (
+						{roomOrder.order && !sharedServer && (arranging || roomStatuses.length >= ROOM_SORT_MIN_ROOMS) && (
 							<RoomSortControl order={roomOrder.order} saving={roomOrder.saving} saveError={roomOrder.saveError} onChoose={chooseMode} onArrange={startArranging} arranging={arrangement ? { onSave: () => void saveArrangement(), onCancel: cancelArranging } : null} />
 						)}
 						<div className="room-arrange-live" role="status" aria-live="polite">{announcement}</div>
 					</div>
 				</div>
 				{aiProfileStatus && aiProfileStatus.ready === false && (
-					<button type="button" className="home-ai-profile-status setup-needed" onClick={() => onOpenSettings("ai-setup")} title="Open Settings to finish AI setup">
+					<button type="button" className="home-ai-profile-status setup-needed" onClick={() => onOpenSettings("ai-setup")} title={sharedServer ? "Open Settings to see the AI setup" : "Open Settings to finish AI setup"}>
 						{aiProfileStatus.message}
 					</button>
 				)}
-				{persistentResumeError && (
-					<div className="home-resume-error" role="alert">{persistentResumeError}</div>
+				{persistentResumeError && (persistentResumeError === REMEMBER_SAVED_REOPEN_SENTENCE || persistentResumeError === REMEMBER_SAVED_ELSEWHERE_SENTENCE
+					? <div className="home-resume-status" role="status">{persistentResumeError}</div>
+					: <div className="home-resume-error" role="alert">{persistentResumeError}</div>
 				)}
 			</section>
 			<section ref={gridRef} className={`landing-grid${roomStatuses.length === 0 ? " landing-grid--empty" : ""}${arranging ? " is-arranging" : ""}`} aria-label="exxperts entry points">
 				{(arrangedStatuses ?? orderedRoomStatuses).map((status, index, list) => {
-					const card = <PersistentAgentCard key={status.id} status={status} arranging={arranging} unresumable={unresumableRooms?.has(status.id) ?? false} thread={persistentThread?.agentId === status.id ? persistentThread : null} live={persistentLive && persistentThread?.agentId === status.id} duplicateDisplayName={hasDuplicateDisplayName(status)} backgroundReady={backgroundReadyRooms?.has(status.id) ?? false} purging={purgingRooms?.has(status.id) ?? false} onEnter={onOpenPersistentAgent} onResume={onResumePersistentAgent} onMaintain={onMaintainPersistentAgent} onOpenSettings={() => openRoomSettings(status)} onOpenModelSettings={() => openRoomSettings(status, "model")} providerLabels={providerLabels} />;
+					const card = <PersistentAgentCard key={status.id} status={status} arranging={arranging} thread={persistentThread?.agentId === status.id ? persistentThread : null} live={persistentLive && persistentThread?.agentId === status.id} duplicateDisplayName={hasDuplicateDisplayName(status)} backgroundReady={backgroundReadyRooms?.has(status.id) ?? false} purging={purgingRooms?.has(status.id) ?? false} onEnter={onOpenPersistentAgent} onResume={onResumePersistentAgent} onMaintain={onMaintainPersistentAgent} onOpenSettings={() => openRoomSettings(status)} onOpenModelSettings={() => openRoomSettings(status, "model")} providerLabels={providerLabels} />;
 					if (!arrangedStatuses) return card;
 					const held = dragView?.id === status.id;
 					return (
@@ -1722,14 +1739,15 @@ function MaintainChooserShell({ target, roomStatus, onAbsorb, onDiscussFirst, on
 	const memoryBudget = roomStatus?.memoryBudget ?? null;
 	const waiting = memoryStatus?.recentContextCount ?? null;
 	const sessionBlockCap = roomStatus?.recentContext?.blockCap ?? 20;
-	const nothingWaiting = waiting === 0;
+	// Notes waiting for a topic, or for their first re-read, keep Memorize open with no conversation waiting.
+	const notesToSort = memoryStatus?.notesToSort ?? 0;
+	const nothingWaiting = waiting === 0 && notesToSort === 0;
 	// A room that saves a clean update without the card starts Memorize
 	// without a first read; Discuss first is its way to one.
 	const automatic = roomStatus?.fastPathSecondApproval === true;
 	// The belt for a deep link: the card and maintainBlockedReason already
 	// keep Maintain closed on a room whose memory is still its scaffold.
 	const nothingToReview = nothingToMaintain(memoryStatus);
-	const unsorted = memoryStatus?.unsortedAfterReread ?? 0;
 	const fullPercent = memoryBudget && memoryBudget.budgetTokens > 0 ? Math.round((memoryBudget.reviewTargetEstimatedTokens / memoryBudget.budgetTokens) * 100) : null;
 	const overLimit = fullPercent !== null && fullPercent > 100;
 	// One recommendation at a time: waiting conversations come first, because
@@ -1737,7 +1755,7 @@ function MaintainChooserShell({ target, roomStatus, onAbsorb, onDiscussFirst, on
 	const recommended: "memorize" | "review" | null = waiting !== null && waiting > 0 ? "memorize" : overLimit ? "review" : null;
 	const waitingWords = waiting === null ? null : waiting === 0 ? "Nothing waiting to be memorized" : <><strong>{waiting}</strong> {waiting === 1 ? "conversation" : "conversations"} waiting to be memorized</>;
 	const fullWords = fullPercent === null ? null : overLimit ? <>memory is <strong className="over">above its budget</strong></> : <>memory <strong>{fullPercent}%</strong> full</>;
-	const statusTitle = memoryBudget ? `The memory budget is set in Room settings: ${fmtTokensK(memoryBudget.reviewTargetEstimatedTokens)} of ${fmtTokensK(memoryBudget.budgetTokens)} tokens in use. Chat keeps working until the room holds ${sessionBlockCap} waiting conversations.` : undefined;
+	const statusTitle = memoryBudget ? `The memory budget is set in Room settings: ${fmtTokensK(memoryBudget.reviewTargetEstimatedTokens)} of ${fmtTokensK(memoryBudget.budgetTokens)} tokens in use. A new conversation needs Memorize once the room holds ${sessionBlockCap}.` : undefined;
 	const memorizeCard = (
 		<button type="button" className={`maintain-action${recommended === "memorize" ? " recommended" : ""}`} disabled={nothingWaiting} title={nothingWaiting ? "Have a conversation with this room first." : undefined} onClick={onAbsorb}>
 			<span className="maintain-action-body">
@@ -1747,7 +1765,7 @@ function MaintainChooserShell({ target, roomStatus, onAbsorb, onDiscussFirst, on
 				</span>
 				<span className="maintain-action-text">{nothingWaiting
 					? `Nothing to memorize yet. Have a conversation with ${target.displayName} first.`
-					: memorizeChooserText(waiting ?? 0, automatic)}</span>
+					: waiting === 0 ? memorizeNotesText(notesToSort) : memorizeChooserText(waiting ?? 0, automatic)}</span>
 			</span>
 			<span className="maintain-action-go" aria-hidden="true">Start</span>
 		</button>
@@ -1789,12 +1807,6 @@ function MaintainChooserShell({ target, roomStatus, onAbsorb, onDiscussFirst, on
 							<span className="maintain-action-go" aria-hidden="true">Start</span>
 						</button>
 					</section>
-					{unsorted > 0 && (
-						<div className="maintain-hint">
-							<p>{unsortedHintText(unsorted)}</p>
-							<button type="button" className="rs-btn" disabled={nothingToReview} onClick={onPrune}>Review</button>
-						</div>
-					)}
 					<p className="maintain-footnote">{maintainChooserFootnote(automatic)}</p>
 				</div>
 			</main>
@@ -1804,14 +1816,46 @@ function MaintainChooserShell({ target, roomStatus, onAbsorb, onDiscussFirst, on
 
 type CheckpointApprovalEditFields = { sessionArc: string; body: string; parked: string };
 
-function buildApprovedRecentContextMarkdown(proposal: CheckpointProposalResponse, fields: CheckpointApprovalEditFields): string {
-	const heading = proposal.proposedRecentContext.split(/\r?\n/)[0]?.trim() || `### RC-DRAFT | ${fields.parked.trim().toLowerCase() === "none" ? "CLOSED" : "OPEN"} | ${new Date().toISOString().slice(0, 10)} | ${proposal.preview.title}`;
-	return `${heading}\n\n**Session arc:** ${fields.sessionArc.trim()}\n\n**Body:**\n${fields.body.trim()}\n\n**Parked:**\n${fields.parked.trim() || "None"}\n`;
+/** The editor's fields for a proposal, as the Memory model wrote them. */
+function checkpointFieldsOf(proposal: CheckpointProposalResponse): CheckpointApprovalEditFields {
+	return {
+		sessionArc: proposal.fields.sessionArc,
+		// The editor shows a line's must-keep marker as "Keep:"; the save gives it back.
+		body: editableMemoryBody(proposal.fields.body),
+		// Nothing open shows as an empty field; an empty one saves as None.
+		parked: /^none\.?$/i.test(proposal.fields.parked?.trim() ?? "") ? "" : proposal.fields.parked?.trim() ?? "",
+	};
+}
+
+/** Which proposal a set of edits belongs to: edits outlive the dialog, never their proposal. */
+function checkpointEditsKey(proposal: CheckpointProposalResponse): string {
+	return `${proposal.agentId}\n${proposal.conversationId}\n${proposal.proposedRecentContext}`;
 }
 
 
 
-function ReviewWorkflowShell({ state, loadingMessage, waitingMessage, keepIds, onStopAbandonedRun, onAbort, onDiscuss, onSendDiscussionMessage, onContinueFromDiscussion, onContinueWithoutDiscussion, onContinue, onBackToAssessment, onReassess, onRestart, onSetDepth, onCancelRun, onToggleRunKeep, onToggleRunKeepTopic, onRaiseRunBudget, onEditRunEntry, onSaveRun, onRunBackToAssessment, onUndo, returnLabel }: { state: ReviewWorkflowState; loadingMessage: string; waitingMessage: string; keepIds: string[]; onStopAbandonedRun: () => void; onAbort: () => void; onDiscuss: () => void; onSendDiscussionMessage: (message: string) => void; onContinueFromDiscussion: () => void; onContinueWithoutDiscussion: () => void; onContinue: () => void; onBackToAssessment: () => void; onReassess: () => void; onRestart: () => void; onSetDepth: (depth: ReviewDepth) => void; onCancelRun: () => void; onToggleRunKeep: (entryIds: string[], next: boolean) => void; onToggleRunKeepTopic: (section: "Deep Memory" | "Active Items", topic: string, next: boolean) => void; onRaiseRunBudget: (budgetTokens: number) => void; onEditRunEntry: (entryId: string, text: string) => Promise<void>; onSaveRun: () => void; onRunBackToAssessment: () => void; onUndo: () => void; returnLabel: string }) {
+/**
+ * The wait of a Memory model call a screen is waiting on as one request (a
+ * first read, a discussion turn, a sign-off): the room's status says it, asked
+ * every few seconds while the request is open.
+ */
+function useMemoryCallWait(fetchStatus: ((agentId: PersistentAgentId) => Promise<{ wait?: ModelWait }>), agentId: PersistentAgentId | null): ModelWait | null {
+	const [wait, setWait] = useState<ModelWait | null>(null);
+	useEffect(() => {
+		setWait(null);
+		if (!agentId) return;
+		let stopped = false;
+		const timer = window.setInterval(() => {
+			fetchStatus(agentId).then((status) => { if (!stopped) setWait(status.wait ?? null); }, () => {});
+		}, 3_000);
+		return () => { stopped = true; window.clearInterval(timer); };
+	}, [fetchStatus, agentId]);
+	return wait;
+}
+
+function ReviewWorkflowShell({ state, loadingMessage, waitingMessage, keepIds, turnWait = false, onStopAbandonedRun, onAbort, onDiscuss, onSendDiscussionMessage, onContinueFromDiscussion, onContinueWithoutDiscussion, onContinue, onBackToAssessment, onReassess, onRestart, onSetDepth, onCancelRun, onToggleRunKeep, onToggleRunKeepTopic, onRaiseRunBudget, onEditRunEntry, onSaveRun, onRunBackToAssessment, onResumeRun, onUndo, onChooseModel, onSignIn, returnLabel }: { state: ReviewWorkflowState; loadingMessage: string; waitingMessage: string; keepIds: string[]; turnWait?: boolean; onStopAbandonedRun: () => void; onAbort: () => void; onDiscuss: () => void; onSendDiscussionMessage: (message: string) => void; onContinueFromDiscussion: () => void; onContinueWithoutDiscussion: () => void; onContinue: () => void; onBackToAssessment: () => void; onReassess: () => void; onRestart: () => void; onSetDepth: (depth: ReviewDepth) => void; onCancelRun: () => void; onToggleRunKeep: (entryIds: string[], next: boolean) => void; onToggleRunKeepTopic: (section: "Deep Memory" | "Active Items", topic: string, next: boolean) => void; onRaiseRunBudget: (budgetTokens: number) => void; onEditRunEntry: NoteEdit; onSaveRun: () => void; onRunBackToAssessment: () => void; onResumeRun: () => void; onUndo: () => void; onChooseModel: () => void; onSignIn: (provider: string) => void; returnLabel: string }) {
+	// A first read, a discussion turn or the sign-off waiting out a busy Memory model says so.
+	const callWait = useMemoryCallWait(fetchReviewStatus, state.target && (state.step === "assessing" || state.step === "signing_off" || (state.step === "discussing" && state.discussionSending)) ? state.target.agentId : null);
 	if (state.step === "closed") return null;
 	const loading = state.step === "checking" || state.step === "assessing";
 	const availability = state.availability;
@@ -1838,7 +1882,7 @@ function ReviewWorkflowShell({ state, loadingMessage, waitingMessage, keepIds, o
 			: state.step === "running" || state.step === "run_card" || state.step === "signing_off" || state.step === "run_failed"
 				? `Step 2 of 2 · what changes in ${targetLabel}'s memory`
 				: state.step === "approving"
-					? "Saving…"
+					? (turnWait ? ROOM_TURN_WAIT_LINE : "Saving…")
 					: state.step === "saved"
 						? (undo.done ? "Undone" : "Saved")
 						: `Tidying what ${targetLabel} knows.`;
@@ -1860,6 +1904,7 @@ function ReviewWorkflowShell({ state, loadingMessage, waitingMessage, keepIds, o
 			</header>
 			<main className="absorb-workspace-main">
 				<section className="checkpoint-input-card absorb-workflow-card">
+				{callWait && <p className="checkpoint-read-note" role="status">{modelWaitLine(callWait)}</p>}
 					{loading ? (
 						<div className="checkpoint-generating-state absorb-loading-state">
 							<h2>{loadingMessage}</h2>
@@ -1902,7 +1947,7 @@ function ReviewWorkflowShell({ state, loadingMessage, waitingMessage, keepIds, o
 							</div>
 						)
 					) : state.step === "run_failed" ? (
-						<ReviewRunFailedScreen error={state.error ?? "The tidy could not be finished."} onBack={onRunBackToAssessment} onRetry={onContinue} />
+						<ReviewRunFailedScreen onBack={onRunBackToAssessment} onRetry={onContinue} />
 					) : state.step === "run_card" && run ? (
 						<ReviewCard
 							run={run}
@@ -1919,6 +1964,9 @@ function ReviewWorkflowShell({ state, loadingMessage, waitingMessage, keepIds, o
 							onBack={onRunBackToAssessment}
 							backLabel="Back"
 							onSave={onSaveRun}
+							onTryAgain={onResumeRun}
+							onChooseModel={onChooseModel}
+							onSignIn={onSignIn}
 						/>
 					) : state.step === "saved" && state.approvalResult ? (
 						<ReviewSavedScreen
@@ -1930,11 +1978,9 @@ function ReviewWorkflowShell({ state, loadingMessage, waitingMessage, keepIds, o
 							archivedForBudget={state.approvalResult.archivedForBudget}
 							rebasedOnto={state.approvalResult.rebasedOnto}
 							limitRaised={state.approvalResult.budgetRaisedTo !== undefined}
-							warnings={[
-								...(state.fastPathApplied ? ["This room saves memory updates on its own, so these changes were saved without a second look."] : []),
-								...(state.signoffWarnings ?? []),
-								...state.approvalResult.warnings,
-							]}
+							openConversationKeepsMemory={state.approvalResult.openConversationKeepsMemory === true}
+							// Only the plain outcome: the sign-off's and the save's own notes are the engine's, not the person's.
+							warnings={state.fastPathApplied ? ["This room saves memory updates on its own, so these changes were saved without a second look."] : []}
 							undo={undo}
 							onUndo={onUndo}
 							onReturn={onAbort}
@@ -1944,12 +1990,13 @@ function ReviewWorkflowShell({ state, loadingMessage, waitingMessage, keepIds, o
 						<div className="checkpoint-proposal-page absorb-error-state">
 							<div className="checkpoint-input-heading">
 								<h2>Review could not start</h2>
-								<p>No memory was changed. You can start Maintain again right away.</p>
+								<p>No memory was changed. You can open Maintain again right away.</p>
 							</div>
 							{state.error && <div className="checkpoint-proposal-error" role="alert">{state.error}</div>}
+							{state.notice && <ModelNoticePanel notice={state.notice} onTryAgain={onRestart} onChooseModel={onChooseModel} onSignIn={(provider) => onSignIn(provider ?? "")} />}
 							<div className="checkpoint-preview-actions">
 								<button className="rs-btn" onClick={onAbort}>{returnLabel}</button>
-								<button className="rs-btn rs-btn-primary" onClick={onRestart}>Start Maintain again</button>
+								{!state.notice && <button className="rs-btn rs-btn-primary" onClick={onRestart}>Start Maintain again</button>}
 							</div>
 						</div>
 					) : state.step === "discussing" && assessment ? (
@@ -1957,6 +2004,7 @@ function ReviewWorkflowShell({ state, loadingMessage, waitingMessage, keepIds, o
 							<MaintenanceDiscussion
 								assessmentMarkdown={assessment.assessmentMarkdown}
 								aside={<ReviewFirstReadSections fields={assessment.fields} compact />}
+								notice={state.notice && <ModelNoticePanel notice={state.notice} onChooseModel={onChooseModel} onSignIn={(provider) => onSignIn(provider ?? "")} />}
 								generateLabel="Continue →"
 								backLabel="Back"
 								messages={discussionMessages}
@@ -1976,11 +2024,12 @@ function ReviewWorkflowShell({ state, loadingMessage, waitingMessage, keepIds, o
 						<div className="checkpoint-proposal-page absorb-assessment-page review-assessment-page">
 							<div className="checkpoint-input-heading checkpoint-proposal-heading">
 								<h2>What {targetLabel}'s notes need</h2>
-								<p>A first read{topicCount > 0 ? ` of ${topicCount} ${topicCount === 1 ? "topic" : "topics"}` : ""}.</p>
+								<p>{assessment.firstReadMissing ? FIRST_READ_MISSING_SENTENCE : `A first read${topicCount > 0 ? ` of ${topicCount} ${topicCount === 1 ? "topic" : "topics"}` : ""}.`}</p>
 							</div>
 							{state.error && <div className="checkpoint-proposal-error" role="alert">{state.error}</div>}
+							{state.notice && <ModelNoticePanel notice={state.notice} onTryAgain={onReassess} onChooseModel={onChooseModel} onSignIn={(provider) => onSignIn(provider ?? "")} />}
 							{state.activeRunConflictId && (
-								<div className="absorb-help-note absorb-run-conflict-note">
+								<div className="memory-action-note absorb-run-conflict-note">
 									<span>{REVIEW_RUN_ACTIVE_SENTENCE}</span>
 									<button className="rs-btn" onClick={onStopAbandonedRun} title="Stop the tidy this room is still holding, then start this one.">{REVIEW_RUN_ACTIVE_ACTION}</button>
 								</div>
@@ -1992,11 +2041,10 @@ function ReviewWorkflowShell({ state, loadingMessage, waitingMessage, keepIds, o
 								<ReviewDepthPicker availability={availability} staleFlagged={staleFlagged} lookAlike={lookAlike} disagreeing={disagreeing} chosen={state.depth ?? availability.recommendedDepth} onChoose={onSetDepth} />
 							)}
 							{assessment.fields.needsYourCall.length > 0 && <p className="absorb-help-note">Answer these in Discuss first, and the tidy follows your answers. Continue lets the room decide on its own.</p>}
-							{meaningfulMaintenanceWarnings(assessment.warnings).length > 0 && <div className="checkpoint-proposal-warnings">{meaningfulMaintenanceWarnings(assessment.warnings).map((warning) => <div key={warning}>{warning}</div>)}</div>}
 							<div className="checkpoint-preview-actions">
 								<button className="rs-btn" onClick={onAbort}>Cancel</button>
 								<button className="rs-btn" onClick={onReassess} title="Read the notes again, asking the room to fix what this read got wrong. Nothing is saved.">Read again</button>
-								<button className={`rs-btn${assessment.fields.needsYourCall.length > 0 ? " rs-btn-primary" : ""}`} onClick={onDiscuss} title="Talk the first read through before anything is tidied. The discussion itself is not saved.">Discuss first</button>
+								{!assessment.firstReadMissing && <button className={`rs-btn${assessment.fields.needsYourCall.length > 0 ? " rs-btn-primary" : ""}`} onClick={onDiscuss} title="Talk the first read through before anything is tidied. The discussion itself is not saved.">Discuss first</button>}
 								<button className={`rs-btn${assessment.fields.needsYourCall.length > 0 ? "" : " rs-btn-primary"}`} onClick={onContinue} title="Tidy the notes and show every change before saving">Continue →</button>
 							</div>
 							{state.fastPathEnabled && <p className="checkpoint-footnote">{AUTOMATIC_APPLY_ON_SENTENCE} · a clean tidy is saved without a second look</p>}
@@ -2008,7 +2056,9 @@ function ReviewWorkflowShell({ state, loadingMessage, waitingMessage, keepIds, o
 	);
 }
 
-function AbsorbWorkflowShell({ state, loadingMessage, waitingMessage, keepIds, onStopAbandonedRun, onAbort, onDiscuss, onSendDiscussionMessage, onGenerateFromDiscussion, onGenerate, onBackToAssessment, onReassess, onDraftWithoutDiscussion, onRestart, onCancelRun, onToggleRunKeep, onToggleRunKeepTopic, onRaiseRunBudget, onRaiseLimitBeforeRun, onReviewFirst, onEditRunEntry, onChooseRunBeside, onApproveRun, onRunBackToAssessment, onResumeRun, onChooseModel, returnLabel }: { state: AbsorbWorkflowState; loadingMessage: string; waitingMessage: string; keepIds: string[]; onStopAbandonedRun: () => void; onAbort: () => void; onDiscuss: () => void; onSendDiscussionMessage: (message: string) => void; onGenerateFromDiscussion: () => void; onGenerate: () => void; onBackToAssessment: () => void; onReassess: () => void; onDraftWithoutDiscussion: () => void; onRestart: () => void; onCancelRun: () => void; onToggleRunKeep: (entryIds: string[], next: boolean) => void; onToggleRunKeepTopic: (section: "Deep Memory" | "Active Items", topic: string, next: boolean) => void; onRaiseRunBudget: (budgetTokens: number) => void; onRaiseLimitBeforeRun: (budgetTokens: number) => void; onReviewFirst: () => void; onEditRunEntry: (entryId: string, text: string) => Promise<void>; onChooseRunBeside: (entryId: string, choice: "replace" | "keep-both") => Promise<void>; onApproveRun: () => void; onRunBackToAssessment: () => void; onResumeRun: () => void; onChooseModel: () => void; returnLabel: string }) {
+function AbsorbWorkflowShell({ state, loadingMessage, waitingMessage, keepIds, turnWait = false, onStopAbandonedRun, onAbort, onDiscuss, onSendDiscussionMessage, onGenerateFromDiscussion, onGenerate, onBackToAssessment, onReassess, onDraftWithoutDiscussion, onRestart, onCancelRun, onToggleRunKeep, onToggleRunKeepTopic, onRaiseRunBudget, onRaiseLimitBeforeRun, onReviewFirst, onEditRunEntry, onChooseRunBeside, onMoveRunSorted, onApproveRun, onRunBackToAssessment, onResumeRun, onChooseModel, onSignIn, returnLabel }: { state: AbsorbWorkflowState; loadingMessage: string; waitingMessage: string; keepIds: string[]; turnWait?: boolean; onStopAbandonedRun: () => void; onAbort: () => void; onDiscuss: () => void; onSendDiscussionMessage: (message: string) => void; onGenerateFromDiscussion: () => void; onGenerate: () => void; onBackToAssessment: () => void; onReassess: () => void; onDraftWithoutDiscussion: () => void; onRestart: () => void; onCancelRun: () => void; onToggleRunKeep: (entryIds: string[], next: boolean) => void; onToggleRunKeepTopic: (section: "Deep Memory" | "Active Items", topic: string, next: boolean) => void; onRaiseRunBudget: (budgetTokens: number) => void; onRaiseLimitBeforeRun: (budgetTokens: number) => void; onReviewFirst: () => void; onEditRunEntry: NoteEdit; onChooseRunBeside: (entryId: string, choice: "replace" | "keep-both") => Promise<void>; onMoveRunSorted: SortedMove; onApproveRun: () => void; onRunBackToAssessment: () => void; onResumeRun: () => void; onChooseModel: () => void; onSignIn: (provider: string) => void; returnLabel: string }) {
+	// A first read, a discussion turn or the sign-off waiting out a busy Memory model says so.
+	const callWait = useMemoryCallWait(fetchAbsorbStatus, state.target && (state.step === "assessing" || state.step === "signing_off" || (state.step === "discussing" && state.discussionSending)) ? state.target.agentId : null);
 	if (state.step === "closed") return null;
 	const loading = state.step === "checking" || state.step === "assessing";
 	const availability = state.availability;
@@ -2027,7 +2077,7 @@ function AbsorbWorkflowShell({ state, loadingMessage, waitingMessage, keepIds, o
 			: state.step === "running" || state.step === "run_card" || state.step === "proposing"
 				? `Step 2 of 2 · what ${targetLabel} will keep`
 				: state.step === "approving"
-					? "Saving…"
+					? (turnWait ? ROOM_TURN_WAIT_LINE : "Saving…")
 					: state.step === "saved"
 						? "Saved"
 						: `What ${targetLabel} keeps from its conversations.`;
@@ -2049,6 +2099,7 @@ function AbsorbWorkflowShell({ state, loadingMessage, waitingMessage, keepIds, o
 			</header>
 			<main className="absorb-workspace-main">
 				<section className="checkpoint-input-card absorb-workflow-card">
+				{callWait && <p className="checkpoint-read-note" role="status">{modelWaitLine(callWait)}</p>}
 				{loading ? (
 					<div className="checkpoint-generating-state absorb-loading-state">
 						<h2>{loadingMessage}</h2>
@@ -2109,7 +2160,7 @@ function AbsorbWorkflowShell({ state, loadingMessage, waitingMessage, keepIds, o
 						</div>
 					)
 				) : state.step === "run_failed" ? (
-					<AbsorbRunFailedScreen error={state.error ?? "The memory update could not be finished."} onBackToAssessment={onRunBackToAssessment} onRetry={onGenerate} />
+					<AbsorbRunFailedScreen onBackToAssessment={onRunBackToAssessment} onRetry={onGenerate} />
 				) : state.step === "run_card" && state.run ? (
 					<AbsorbRunCard
 						run={state.run}
@@ -2124,24 +2175,27 @@ function AbsorbWorkflowShell({ state, loadingMessage, waitingMessage, keepIds, o
 						onRaiseBudget={onRaiseRunBudget}
 						onEditEntry={onEditRunEntry}
 						onChooseBeside={onChooseRunBeside}
+						onMoveSorted={onMoveRunSorted}
 						onApprove={onApproveRun}
 						onCancel={onCancelRun}
 						onBackToAssessment={onRunBackToAssessment}
 						onResume={onResumeRun}
 						onChooseModel={onChooseModel}
+						onSignIn={onSignIn}
 					/>
 				) : state.step === "saved" && state.approvalResult && state.run ? (
 					<div className="checkpoint-proposal-page checkpoint-saved-page absorb-saved-state">
 						<div className="checkpoint-input-heading checkpoint-proposal-heading">
-							<h2>{absorbRunSavedHeadline(state.approvalResult, targetLabel)}</h2>
-							<p>{absorbRunSavedSentence({ ...state.approvalResult, newTopics: absorbRunNewTopics(state.run) })} Memory is {absorbRunFullPercent(state.run)}% full.</p>
+							<h2>{absorbRunSavedHeadline({ ...state.approvalResult, sortedNotes: absorbRunSortedRows(state.run).length }, targetLabel)}</h2>
+							<p>{absorbRunSavedSentence({ ...state.approvalResult, sortedNotes: absorbRunSortedRows(state.run).length, newTopics: state.approvalResult.newTopics ?? absorbRunNewTopics(state.run) })} Memory is {absorbRunFullPercent(state.run)}% full.</p>
 							{state.approvalResult.budgetRaisedTo !== undefined && <p>{LIMIT_RAISED_ON_SAVE_SENTENCE}</p>}
+							{state.approvalResult.openConversationKeepsMemory && <p className="saved-open-conversation-line">{OPEN_CONVERSATION_KEEPS_MEMORY_SENTENCE}</p>}
 							{state.fastPathApplied && <p className="absorb-fast-path-note">This room applies memory updates automatically, so this update was saved without a second look.</p>}
 						</div>
 						{/* Saved without a second look, so the notice the card would have shown is shown here. */}
 						{state.fastPathApplied && absorbRunAllSummarized(state.run) && (
-							<div className="absorb-help-note absorb-run-summaries-note" role="status">
-								<p>{ABSORB_ALL_SUMMARIZED_SENTENCE}</p>
+							<div className="memory-action-note absorb-run-summaries-note" role="status">
+								<p>{absorbRunAllSummarizedSentence(availability?.model ? absorbRunOutageModelName(availability.model, availability.model) : "The Memory model")}</p>
 								<div className="absorb-run-note-actions"><button className="rs-btn" onClick={onChooseModel}>{ABSORB_CHOOSE_MODEL_LABEL}</button></div>
 							</div>
 						)}
@@ -2152,7 +2206,6 @@ function AbsorbWorkflowShell({ state, loadingMessage, waitingMessage, keepIds, o
 							<div className="absorb-review-status"><span>Memory</span><strong>{absorbRunFullPercent(state.run)}% full</strong></div>
 						</div>
 						{state.approvalResult.warnings.length > 0 && <div className="checkpoint-proposal-warnings">{state.approvalResult.warnings.map((warning) => <div key={warning}>{warning}</div>)}</div>}
-						<p className="checkpoint-footnote">The previous memory is kept, so this update can be undone from Room settings → Memory.</p>
 						<div className="checkpoint-preview-actions">
 							<button className="rs-btn rs-btn-primary" onClick={onAbort}>{returnLabel}</button>
 						</div>
@@ -2161,12 +2214,13 @@ function AbsorbWorkflowShell({ state, loadingMessage, waitingMessage, keepIds, o
 					<div className="checkpoint-proposal-page absorb-error-state">
 						<div className="checkpoint-input-heading">
 							<h2>Memorizing could not start</h2>
-							<p>No memory was changed. You can start Maintain again right away.</p>
+							<p>No memory was changed. You can open Maintain again right away.</p>
 						</div>
 						{state.error && <div className="checkpoint-proposal-error" role="alert">{state.error}</div>}
+						{state.notice && <ModelNoticePanel notice={state.notice} onTryAgain={onRestart} onChooseModel={onChooseModel} onSignIn={(provider) => onSignIn(provider ?? "")} />}
 						<div className="checkpoint-preview-actions">
 							<button className="rs-btn" onClick={onAbort}>{returnLabel}</button>
-							<button className="rs-btn rs-btn-primary" onClick={onRestart}>Start Maintain again</button>
+							{!state.notice && <button className="rs-btn rs-btn-primary" onClick={onRestart}>Start Maintain again</button>}
 						</div>
 					</div>
 				) : state.step === "discussing" && assessment ? (
@@ -2174,6 +2228,7 @@ function AbsorbWorkflowShell({ state, loadingMessage, waitingMessage, keepIds, o
 						<MaintenanceDiscussion
 							assessmentMarkdown={assessment.assessmentMarkdown}
 							aside={<AbsorbFirstReadSections fields={assessment.fields} compact />}
+							notice={state.notice && <ModelNoticePanel notice={state.notice} onChooseModel={onChooseModel} onSignIn={(provider) => onSignIn(provider ?? "")} />}
 							generateLabel="Continue →"
 							backLabel="Back"
 							messages={discussionMessages}
@@ -2196,8 +2251,9 @@ function AbsorbWorkflowShell({ state, loadingMessage, waitingMessage, keepIds, o
 							<p>{assessment.firstReadMissing ? FIRST_READ_MISSING_SENTENCE : "A first read."}</p>
 						</div>
 						{state.error && <div className="checkpoint-proposal-error" role="alert">{state.error}</div>}
+						{state.notice && <ModelNoticePanel notice={state.notice} onTryAgain={onReassess} onChooseModel={onChooseModel} onSignIn={(provider) => onSignIn(provider ?? "")} />}
 						{state.activeRunConflictId && (
-							<div className="absorb-help-note absorb-run-conflict-note">
+							<div className="memory-action-note absorb-run-conflict-note">
 								<span>{ABSORB_RUN_ACTIVE_SENTENCE}</span>
 								<button className="rs-btn" onClick={onStopAbandonedRun} title="Stop the update this room is still holding, then draft this one.">{ABSORB_RUN_ACTIVE_ACTION}</button>
 							</div>
@@ -2237,7 +2293,6 @@ function AbsorbWorkflowShell({ state, loadingMessage, waitingMessage, keepIds, o
 							</div>
 						)}
 						{assessment.fields.needsJudgment.length > 0 && <p className="absorb-help-note">Answer these in Discuss first, and the update follows your answers. Continue lets the room decide on its own.</p>}
-						{meaningfulMaintenanceWarnings(assessment.warnings).length > 0 && <div className="checkpoint-proposal-warnings">{meaningfulMaintenanceWarnings(assessment.warnings).map((warning) => <div key={warning}>{warning}</div>)}</div>}
 						<div className="checkpoint-preview-actions">
 							<button className="rs-btn" onClick={onAbort}>Cancel</button>
 							<button className="rs-btn" onClick={onReassess} title={assessment.firstReadMissing ? "Read the conversations again. Nothing is saved." : "Read the conversations again, asking the model to fix what this read got wrong. Nothing is saved."}>Read again</button>
@@ -2269,7 +2324,7 @@ function compactCount(value: number): string {
 	return value >= 1000 ? `${(value / 1000).toFixed(value >= 10000 ? 0 : 1)}k` : String(value);
 }
 
-function MaintenanceDiscussion({ assessmentMarkdown, aside, generateLabel = "Draft memory update", backLabel = "Back to assessment", messages, budget, warnings, error, sending, emptyHint, placeholder, onSend, onBack, onGenerate, onDraftWithoutDiscussion }: { assessmentMarkdown: string; aside?: ReactNode; generateLabel?: string; backLabel?: string; messages: Array<{ role: string; content: string }>; budget: { state: string; canContinue: boolean } | null | undefined; warnings: string | null; error: string | null; sending: boolean; emptyHint: string; placeholder: string; onSend: (text: string) => void; onBack: () => void; onGenerate: () => void; onDraftWithoutDiscussion: () => void }) {
+function MaintenanceDiscussion({ assessmentMarkdown, aside, generateLabel = "Draft memory update", backLabel = "Back to assessment", messages, budget, warnings, error, notice, sending, emptyHint, placeholder, onSend, onBack, onGenerate, onDraftWithoutDiscussion }: { assessmentMarkdown: string; aside?: ReactNode; generateLabel?: string; backLabel?: string; messages: Array<{ role: string; content: string }>; budget: { state: string; canContinue: boolean } | null | undefined; warnings: string | null; error: string | null; notice?: ReactNode; sending: boolean; emptyHint: string; placeholder: string; onSend: (text: string) => void; onBack: () => void; onGenerate: () => void; onDraftWithoutDiscussion: () => void }) {
 	const [input, setInput] = useState("");
 	const transcriptRef = useRef<HTMLElement | null>(null);
 	const transcriptChars = messages.reduce((total, message) => total + message.content.length, 0);
@@ -2295,11 +2350,12 @@ function MaintenanceDiscussion({ assessmentMarkdown, aside, generateLabel = "Dra
 					<MarkdownPreview body={assessmentMarkdown} />
 				</details>
 			)}
-			{budget?.state === "soft_warning" && <div className="checkpoint-proposal-warnings">This discussion is approaching its token limit. Draft the memory update from it soon.</div>}
-			{budget?.state === "hard_stop" && <div className="checkpoint-proposal-error" role="alert">This discussion reached its token limit. Draft the memory update from it, or leave the discussion.</div>}
+			{budget?.state === "soft_warning" && <div className="checkpoint-proposal-warnings">This discussion is getting long. Continue to the update soon.</div>}
+			{budget?.state === "hard_stop" && <div className="checkpoint-proposal-error" role="alert">This discussion has grown too long to carry on. Continue to the update with what you have agreed so far, or leave the discussion.</div>}
 			{warnings && <div className="checkpoint-proposal-warnings">{warnings}</div>}
 			{error && <div className="checkpoint-proposal-error" role="alert">{error}</div>}
-			{(error || !canContinue) && !sending && (
+			{notice}
+			{(error || notice || !canContinue) && !sending && (
 				// The way out that always exists: the draft from the assessment alone.
 				// The discussion stays in memory, so it is still there behind
 				// "Back to discussion" on the proposal screen.
@@ -2337,7 +2393,8 @@ function MaintenanceDiscussion({ assessmentMarkdown, aside, generateLabel = "Dra
 					<div className="absorb-discussion-box-bottom">
 						<div className={`absorb-discussion-counter${counterTone}`} aria-live="polite">
 							{aside ? (messages.length > 0 ? "When you are done, press Continue →. " : "Nothing here is saved; what you agree goes into the notes. ") : ""}
-							{messages.length} of {DISCUSSION_MAX_MESSAGES} messages · {compactCount(transcriptChars)} of {compactCount(DISCUSSION_MAX_TRANSCRIPT_CHARS)} characters
+							{messages.length} of {DISCUSSION_MAX_MESSAGES} messages
+							{transcriptChars >= DISCUSSION_MAX_TRANSCRIPT_CHARS * 0.75 ? ` · ${compactCount(transcriptChars)} of ${compactCount(DISCUSSION_MAX_TRANSCRIPT_CHARS)} characters` : ""}
 							{input.length >= DISCUSSION_MAX_MESSAGE_CHARS * 0.75 ? ` · this message ${compactCount(input.length)} of ${compactCount(DISCUSSION_MAX_MESSAGE_CHARS)}` : ""}
 							{transcriptFull ? " · limit reached: go on or go back" : ""}
 						</div>
@@ -2377,9 +2434,9 @@ function AbsorbFirstReadSections({ fields, compact = false }: { fields: AbsorbAs
 	// conversations, so the model's rough filing plan is not shown twice.
 	return (
 		<>
-			<AssessmentSection title="Worth remembering" items={fields.whatToRemember} wide={!compact} />
-			<AssessmentSection title="Can be let go" items={fields.whatToForget} wide={!compact} />
-			{fields.needsJudgment.length > 0 && <AssessmentSection title="Needs your call" items={fields.needsJudgment} wide={!compact} />}
+			<AssessmentSection title="Worth remembering" items={fields.whatToRemember.map(plainFirstReadLine)} wide={!compact} />
+			<AssessmentSection title="Can be let go" items={fields.whatToForget.map(plainFirstReadLine)} wide={!compact} />
+			{fields.needsJudgment.length > 0 && <AssessmentSection title="Needs your call" items={fields.needsJudgment.map(plainFirstReadLine)} wide={!compact} />}
 		</>
 	);
 }
@@ -2436,7 +2493,7 @@ function renderInlineMarkdown(text: string) {
 // worker failure's own detail, never to arbitrary messages, so "token limit"
 // or a room called "oauth" cannot trip it.
 function isMaintenanceSignInFailure(detail: string): boolean {
-	return /authentication_error|permission_error|unauthori[sz]ed|\b40[13]\b|api[ -]?key|oauth|token (?:has |is )?(?:expired|invalid|revoked)|invalid[_ ]token|not (?:logged|signed) in|credential/i.test(detail);
+	return /authentication_error|permission_error|unauthori[sz]ed|^\s*40[13]\b|\b(?:status(?:[ _]?code)?|http(?:\/[\d.]+)?|error[ _]code)\s*[:=]?\s*40[13]\b|api[ -]?key|oauth|token (?:has |is )?(?:expired|invalid|revoked)|invalid[_ ]token|not (?:logged|signed) in|credential/i.test(detail);
 }
 
 // First line only, capped: a provider error can be a whole JSON body.
@@ -2452,7 +2509,7 @@ function shortenWorkerFailureDetail(detail: string): string {
 // screen the user is on. Returns null for messages the caller formats itself.
 function formatMaintenanceRequestError(message: string): string | null {
 	if (/assessmentHandoff\.text is too large/i.test(message)) return "The discussion summary handed to the drafting step was too long, so the draft was not generated. No memory was updated. Draft without the discussion, or go back to the assessment.";
-	if (/assessmentMarkdown is too large/i.test(message)) return "The assessment is too long for the next step. No memory was updated. Get a shorter one: Reassess from the assessment screen, or start Maintain again.";
+	if (/assessmentMarkdown is too large/i.test(message)) return "The assessment is too long for the next step. No memory was updated. Get a shorter one: Reassess from the assessment screen, or open Maintain again.";
 	if (/discussion (transcript|messages) (is|are) too large/i.test(message)) return "This discussion has reached its size limit. Generate the proposal from what you have, or go back to the assessment.";
 	if (/(discussion message \d+ content|userMessage) is too large/i.test(message)) return "That message is too long (12,000 characters max). Shorten it and send again.";
 	if (/userMessage is required/i.test(message)) return "Type a message first.";
@@ -2460,42 +2517,46 @@ function formatMaintenanceRequestError(message: string): string | null {
 		// Memorize's guidance offers Review as the shrink path; Review's own
 		// guidance cannot (Review is what overflowed), so it only offers a model.
 		const remedy = /run Review to shrink/i.test(message)
-			? "Run Review to shrink stable memory, or choose a memory model with a larger window in Room settings, Model, then try again."
-			: "Choose a memory model with a larger window in Room settings, Model, then run it again.";
-		const discussion = /discussion/i.test(message) ? " — the discussion itself was already shortened as far as it goes" : "";
-		return `This room's memory is too large for the maintenance model to read in one request${discussion}. No memory was updated. ${remedy}`;
+			? "Run Review to tidy the notes, or choose a Memory model that can read more at once in Room settings, Model, then try again."
+			: "Choose a Memory model that can read more at once in Room settings, Model, then run it again.";
+		return `This room's memory is too large for the Memory model to read in one request. No memory was updated. ${remedy}`;
 	}
 	if (/Request failed \(413\)|FST_ERR_CTP_BODY_TOO_LARGE|body is too large|Payload Too Large/i.test(message)) return "The request was too large for the server to accept. No memory was updated. Try again with a shorter discussion, or draft from the assessment alone.";
-	const httpStatus = /Request failed \((\d+)\)/.exec(message);
-	if (httpStatus) return `The server could not complete this step (HTTP ${httpStatus[1]}). No memory was updated. Try again in a moment.`;
+	if (/Request failed \(\d+\)/.test(message)) return "The server could not complete this step. No memory was updated. Try again in a moment.";
 	// A worker turn that ended in the session's own error (F1). The sign-in
-	// class gets the one remedy that helps; anything else keeps its detail so a
-	// transient provider failure and a setup problem stay distinguishable.
-	// Before the worker surfaced this, every such failure read "empty reply".
+	// class gets the one remedy that helps; anything else says the model did
+	// not respond, its detail going to the console only.
 	const workerFailed = /^.+? failed: ([\s\S]+)$/.exec(message);
 	const noApiKey = /^No API key found for/i.test(message);
 	if (workerFailed || noApiKey) {
 		const detail = shortenWorkerFailureDetail(workerFailed?.[1] ?? message);
-		if (noApiKey || isMaintenanceSignInFailure(detail)) return "The maintenance model's sign-in is missing or no longer valid. No memory was updated. Sign in again in AI setup, then run this step again.";
-		return `The maintenance model could not respond (${detail}). No memory was updated. Try again; if it repeats, check the model and its sign-in in AI setup.`;
+		if (noApiKey || isMaintenanceSignInFailure(detail)) return "The Memory model's sign-in is missing or no longer valid. No memory was updated. Sign in again in Settings, AI setup, then run this step again.";
+		console.info(`[maintenance] ${detail}`);
+		return "The Memory model could not respond. No memory was updated. Try again; if it repeats, choose another model in Room settings, Model.";
 	}
-	if (/was aborted before it answered/i.test(message)) return "This step was stopped before the maintenance model answered. No memory was updated. Run it again.";
-	if (/produced no text/i.test(message)) return "The maintenance model returned an empty reply. No memory was updated. Try again.";
-	if (/model not found/i.test(message)) return "The maintenance model set in the AI profile is not available. No memory was updated. Check AI setup.";
+	if (/was aborted before it answered/i.test(message)) return "This step was stopped before the Memory model answered. No memory was updated. Run it again.";
+	if (/produced no text/i.test(message)) return "The Memory model returned an empty reply. No memory was updated. Try again.";
+	if (/model not found/i.test(message)) return "The Memory model is not available. No memory was updated. Choose another Memory model in Room settings, Model.";
 	if (/was cut off at the model's output limit|came back at \d+ characters after \d+ attempt/i.test(message)) return message;
 	// The Review ops refusal is written server-side as one product sentence with its remedy; wrapping it would state the non-mutation twice.
 	if (/^The Review draft could not be built/.test(message)) return message;
 	// Last line of defence: a bare field-name rejection never reaches the screen as-is.
-	if (/^[A-Za-z][\w.]* (is|are) (required|too large|invalid)/.test(message) || /must be (user|one of)/.test(message)) return `The server rejected this request (${message}). No memory was updated. Restart Maintain; if it repeats, this is a bug worth reporting.`;
+	if (/^[A-Za-z][\w.]* (is|are) (required|too large|invalid)/.test(message) || /must be (user|one of)/.test(message)) {
+		console.info(`[maintenance] ${message}`);
+		return "The server could not take this request. No memory was updated. Open Maintain again.";
+	}
 	return null;
 }
 
 function formatAbsorbWorkflowError(message: string): string {
-	if (isStaleMaintenanceMessage(message)) return "Memory changed while this workflow was open. No memory was updated. Please restart Maintain to review the latest memory state.";
+	if (isStaleMaintenanceMessage(message)) return "Memory changed while this was open. No memory was updated. Open Maintain again to work from the latest memory.";
 	const request = formatMaintenanceRequestError(message);
 	if (request) return request;
-	if (/token budget exceeded|token limit|hard_stop/i.test(message)) return "This discussion reached its token limit. Draft the memory update from it if you can, or abort and restart Maintain.";
-	return message;
+	if (/token budget exceeded|token limit|hard_stop/i.test(message)) return "This discussion has grown too long to carry on. Continue to the update with what you have agreed so far, or leave the discussion.";
+	// The server's own sentences pass; anything else goes to the console.
+	if (isPlainProductSentence(message)) return message;
+	console.info(`[maintenance] ${message}`);
+	return "The update stopped unexpectedly. No memory was updated. Try again.";
 }
 
 // The unavailable screens branch on the server's reason: the entry-count story
@@ -2521,53 +2582,53 @@ function absorbUnavailableCopy(availability: AbsorbAvailability): { heading: str
 	}
 	return {
 		heading: "Memorizing cannot start yet",
-		body: "Memorizing cannot run for this room right now. No memory was changed. If this persists, check the room's AI profile in AI setup.",
+		body: "Memorizing cannot run for this room right now. No memory was changed. If this persists, check the Memory model in Room settings, Model.",
 		detail: availability.message || availability.error || null,
 	};
 }
 
-// Mirrors RECENT_CONTEXT_HARD_CAP in persistent-agents.ts: the 10th remembered
-// session is where Memorize is due. The room keeps working — it still chats and
-// still saves sessions — until the block cap below, which mirrors
-// RECENT_CONTEXT_BLOCK_CAP and is where the room can hold no more.
-const RECENT_SESSIONS_CAP = 10;
-const RECENT_SESSIONS_BLOCK_CAP = 20;
-
 // Remember runs inside the room, where Maintain is not reachable — so its
 // failures must say what to do, not echo the engine's 409.
+const REMEMBER_OTHER_CONVERSATION_OPEN = "Remember stopped because another conversation is open now. Open Remember again.";
+/** A window still on a conversation the room moved on from (draft). */
+const ROOM_MOVED_ON_SENTENCE = "This room went on in another window. Reload to continue there.";
 function formatRememberError(message: string): string {
 	// Remember's own refusals are already written for the person: pass them through.
 	if (isPlainRememberSentence(message)) return message;
-	if (/not ready: needs_absorb/i.test(message)) return `This room is holding ${RECENT_SESSIONS_BLOCK_CAP} remembered sessions, which is as many as it can hold. Nothing was saved. Memorize them first: leave the room, then use Maintain → Memorize from Home, and come back to Remember.`;
-	if (isStaleMaintenanceMessage(message)) return "Memory changed while this proposal was open. Nothing was saved. Generate the proposal again to work from the latest memory state.";
-	return formatMaintenanceRequestError(message) ?? message;
+	if (isStaleMaintenanceMessage(message)) return "This conversation changed after Remember read it. Generate again.";
+	return formatMaintenanceRequestError(message) ?? rememberFailureSentence(message);
 }
 
-function recentSessionsHeadsUp(remaining: number | null | undefined): string | null {
-	if (typeof remaining !== "number") return null;
-	if (remaining >= RECENT_SESSIONS_CAP) return `Memorize is due for this room (${remaining} of ${RECENT_SESSIONS_BLOCK_CAP} remembered sessions). Run it from Home → Maintain; chatting and remembering keep working until the room reaches ${RECENT_SESSIONS_BLOCK_CAP}.`;
-	if (remaining === RECENT_SESSIONS_CAP - 1) return `Heads-up: one more Remember makes Memorize due for this room (${RECENT_SESSIONS_CAP} remembered sessions). Run it from Home → Maintain when it is.`;
-	return null;
+/** A Maintain save waiting for a turn in the room to end (draft). */
+const ROOM_TURN_WAIT_LINE = "Waiting for the reply in this room to finish…";
+
+/** A save that brought the room to as many remembered conversations as it can hold. */
+function roomFilledBy(approval: { recentContextEntryCount?: number | null } | null): boolean {
+	return (approval?.recentContextEntryCount ?? 0) >= RECENT_SESSIONS_BLOCK_CAP;
 }
 
 // Draft failures land back on the assessment screen, so the copy reassures
 // that the assessment survived and points at the Draft action on that screen.
 function formatMaintenanceDraftError(message: string): string {
-	if (isStaleMaintenanceMessage(message)) return "Memory changed while this workflow was open. No memory was updated. Restart Maintain to work from the latest memory state.";
+	if (isStaleMaintenanceMessage(message)) return "Memory changed while this was open. No memory was updated. Open Maintain again to work from the latest memory.";
 	const request = formatMaintenanceRequestError(message);
 	if (request) return request;
-	return `The memory update draft could not be generated. No memory was updated and your assessment is untouched. Details: ${message}`;
+	console.info(`[maintenance] ${message}`);
+	return "This step could not finish. No memory was updated. Try again.";
 }
 
 // Review's own failures, in the room's words: what happened, whether anything
 // was saved, and the one thing to do next. The server's refusals are already
-// product-worded, so an unmapped one is passed straight through.
+// product-worded and pass through; anything else is one plain sentence.
 function formatReviewWorkflowError(message: string): string {
 	if (isStaleMaintenanceMessage(message)) return "The memory changed while Review was open. Nothing was saved. Start Review again to read the notes as they are now.";
 	const request = formatMaintenanceRequestError(message);
 	if (request) return request;
 	if (/token budget exceeded|token limit|hard_stop/i.test(message)) return "This discussion is as long as it can be. Continue from what you have said, or go back to the first read.";
-	return message;
+	// The server's own sentences pass; anything else goes to the console.
+	if (isPlainProductSentence(message)) return message;
+	console.info(`[maintenance] ${message}`);
+	return "Review stopped unexpectedly. Nothing was saved. Try again.";
 }
 
 // A save that failed lands back on the card, so the way out it names is the one
@@ -2576,13 +2637,15 @@ function formatReviewApprovalError(message: string): string {
 	if (isStaleMaintenanceMessage(message)) return "The memory changed while this tidy was open. Nothing was saved. Start Review again to read the notes as they are now.";
 	const request = formatMaintenanceRequestError(message);
 	if (request) return request;
-	return `These changes could not be saved. The memory is unchanged and this tidy is still here. Details: ${message}`;
+	console.info(`[maintenance] ${message}`);
+	return "These changes could not be saved. The memory is unchanged and this tidy is still here.";
 }
 
-function CheckpointPreviewShell({ chat, itemCount, rememberText, density, proposal, loading, progress, onCancelGenerate, error, approvalLoading, approvalError, approvalResult, quickRequested, quickBlockedReasons, consultRunning, taskRunning, pendingConsultHandoffCount, pendingTaskHandoffCount, onRememberTextChange, onDensityChange, onGenerate, onApprove, onDiscard, onContinueAfterCheckpoint, onRestAfterCheckpoint, onClose }: { chat: NonNullable<PersistentChatConfig>; itemCount: number; rememberText: string; density: CheckpointDensity; proposal: CheckpointProposalResponse | null; loading: boolean; progress: { read: number; of: number } | null; onCancelGenerate: () => void; error: string | null; approvalLoading: boolean; approvalError: string | null; approvalResult: CheckpointApprovalResponse | null; quickRequested: boolean; quickBlockedReasons: string[] | null; consultRunning: boolean; taskRunning: boolean; pendingConsultHandoffCount: number; pendingTaskHandoffCount: number; onRememberTextChange: (text: string) => void; onDensityChange: (density: CheckpointDensity) => void; onGenerate: () => void; onApprove: (approvedRecentContext: string) => void; onDiscard: () => void; onContinueAfterCheckpoint: () => void; onRestAfterCheckpoint: () => void; onClose: () => void }) {
-	const [showFullEntry, setShowFullEntry] = useState(false);
+function CheckpointPreviewShell({ chat, itemCount, rememberText, density, proposal, loading, progress, onCancelGenerate, error, notice, onChooseModel, onSignIn, approvalLoading, approvalError, approvalResult, quickRequested, skipsPreview, quickBlockedReasons, consultRunning, taskRunning, pendingConsultHandoffCount, pendingTaskHandoffCount, approvedFields, onFieldsChange, onRememberTextChange, onDensityChange, onGenerate, onApprove, onDiscard, onContinueAfterCheckpoint, onRestAfterCheckpoint, onMemorizeAfterCheckpoint, onClose }: { chat: NonNullable<PersistentChatConfig>; itemCount: number; rememberText: string; density: CheckpointDensity; proposal: CheckpointProposalResponse | null; loading: boolean; progress: { read: number; of: number; wait?: ModelWait } | null; onCancelGenerate: () => void; error: string | null; notice: ModelNotice | null; onChooseModel: () => void; onSignIn: (provider: string | undefined) => void; approvalLoading: boolean; approvalError: string | null; approvalResult: CheckpointApprovalResponse | null; quickRequested: boolean; skipsPreview: boolean; quickBlockedReasons: string[] | null; consultRunning: boolean; taskRunning: boolean; pendingConsultHandoffCount: number; pendingTaskHandoffCount: number; approvedFields: CheckpointApprovalEditFields; onFieldsChange: (fields: CheckpointApprovalEditFields) => void; onRememberTextChange: (text: string) => void; onDensityChange: (density: CheckpointDensity) => void; onGenerate: () => void; onApprove: (approvedFields: CheckpointApprovalEditFields) => void; onDiscard: () => void; onContinueAfterCheckpoint: () => void; onRestAfterCheckpoint: () => void; onMemorizeAfterCheckpoint: () => void; onClose: () => void }) {
+	const roomFilled = roomFilledBy(approvalResult);
 	const [editing, setEditing] = useState(false);
-	const [approvedFields, setApprovedFields] = useState<CheckpointApprovalEditFields>({ sessionArc: "", body: "", parked: "None" });
+	// A read-only device may not send Cancel, Save or Discard: it closes the dialog, and the Remember goes on.
+	const readOnly = useRemoteClientContext().capability === "read-only";
 	// One pass or N parts, said before anything is generated. Asked once when
 	// the dialog opens; a failed estimate just leaves the line out.
 	const [readEstimate, setReadEstimate] = useState<RememberReadEstimate | null>(null);
@@ -2599,31 +2662,33 @@ function CheckpointPreviewShell({ chat, itemCount, rememberText, density, propos
 		else onClose();
 	}, !approvalLoading && !loading);
 	useEffect(() => {
-		setShowFullEntry(false);
 		setEditing(false);
-		setApprovedFields({
-			sessionArc: proposal?.fields.sessionArc ?? "",
-			body: proposal?.fields.body ?? "",
-			parked: proposal?.fields.parked?.trim() || "None",
-		});
 	}, [proposal]);
-	const approvedDraft = proposal ? buildApprovedRecentContextMarkdown(proposal, approvedFields) : "";
-	// Rendered review view: the draft without its RC-DRAFT header line — that
-	// line is engine framing; the saved entry (approvedDraft) keeps it.
-	const renderedDraft = approvedDraft.split(/\r?\n/).slice(1).join("\n").trim();
-	const displayWarnings = proposal ? meaningfulMaintenanceWarnings(proposal.warnings) : [];
-	// Why the one-click path landed on the preview instead of saving: blockers
-	// already listed as warnings above are not repeated, so what remains is the
-	// review-first notice and the gate's own reasons (e.g. incomplete draft).
-	const quickFallbackNotices = quickRequested && quickBlockedReasons ? quickBlockedReasons.filter((reason) => !displayWarnings.includes(reason)) : [];
-	const approvalReady = Boolean(approvedFields.sessionArc.trim() && approvedFields.body.trim() && approvedFields.parked.trim());
+	// What Save sends: the parts, with the editor's "Keep:" given back as the marker.
+	const savedFields = proposal ? { ...approvedFields, body: storedMemoryBody(approvedFields.body, proposal.fields.body) } : approvedFields;
+	// Counted as the server counts the page it builds from these parts (L2).
+	const pageLength = proposal ? rememberPageFromParts(proposal.proposedRecentContext.split(/\r?\n/, 1)[0] ?? "", savedFields).length : 0;
+	const keepsWords = memoryTextHasWords(memoryTypedText(savedFields.body));
+	const pageLimit = editorLimitLine(pageLength, MEMORY_PAGE_MAX_CHARS, keepsWords);
+	// Before Save: the room's count after this save, when it nears the cap (the proposal counts before it).
+	const fillsHeadsUp = proposal ? rememberFillsRoomHeadsUp(proposal.compressionTelemetry?.recentContextEntryCount, chat.displayName) : null;
+	const quickSaves = quickRequested && skipsPreview;
+	// Save needs only what to keep, within the page's limit; when it cannot save, one line says what to do.
+	const approvalReady = pageLimit.canSave;
+	const approvalBlockedLine = !proposal ? null : !keepsWords ? (proposal.fields.body.trim() ? "Write what to keep before saving." : "The Memory model returned nothing to keep. Generate again, or Edit to write it.") : pageLimit.line;
+	// A line that asks to Generate again comes with the button for it.
+	const asksGenerateAgain = (line: string | null | undefined) => Boolean(line && /\bGenerate again\b/.test(line));
+	const generateAgain = !readOnly && (asksGenerateAgain(approvalError) || asksGenerateAgain(approvalBlockedLine));
+	// A conversation that changed after Remember read it cannot be saved as read: Generate again leads, Save goes.
+	// A Save lost on the way keeps Save first: saving again finds it saved.
+	const mustGenerateAgain = generateAgain && /changed after Remember read it/.test(approvalError ?? "");
 	function updateApprovedField(field: keyof CheckpointApprovalEditFields, value: string) {
-		setApprovedFields((current) => ({ ...current, [field]: value }));
+		onFieldsChange({ ...approvedFields, [field]: value });
 	}
 	async function confirmDiscard() {
 		const ok = await confirmDialog({
 			title: "Discard this memory proposal?",
-			body: "It has not been saved. If you discard it, you return to the active thread and the proposal is lost.",
+			body: "It has not been saved. If you discard it, you go back to the conversation and the proposal is lost.",
 			confirmLabel: "Discard",
 			danger: true,
 		});
@@ -2638,8 +2703,8 @@ function CheckpointPreviewShell({ chat, itemCount, rememberText, density, propos
 	// §2.3 locked verbatim string; the queue holds both block kinds, so each kind
 	// gets its own line.
 	if (taskRunning) consultHonestyNotices.push("A specialist task is still running; its result won't be part of what you remember (artifacts already written stay on disk).");
-	if (pendingConsultHandoffCount > 0) consultHonestyNotices.push("A transferred consult hasn't entered memory yet; it will carry into the fresh conversation.");
-	if (pendingTaskHandoffCount > 0) consultHonestyNotices.push("A transferred task result hasn't entered memory yet; it will carry into the fresh conversation.");
+	if (pendingConsultHandoffCount > 0) consultHonestyNotices.push("A transferred consult hasn't entered memory yet. Send a message before you save, so it is part of this conversation.");
+	if (pendingTaskHandoffCount > 0) consultHonestyNotices.push("A transferred task result hasn't entered memory yet. Send a message before you save, so it is part of this conversation.");
 	const honestyNoticesNode = consultHonestyNotices.length > 0 ? (
 		<div className="checkpoint-consult-notices" role="status">
 			{consultHonestyNotices.map((notice) => <div key={notice}>{notice}</div>)}
@@ -2647,15 +2712,17 @@ function CheckpointPreviewShell({ chat, itemCount, rememberText, density, propos
 	) : null;
 	return (
 		<div className="checkpoint-preview-backdrop" role="dialog" aria-modal="true" aria-label="Remember this conversation">
-			<section className="checkpoint-input-card">
+			<section className={`checkpoint-input-card${proposal && !loading && !approvalResult ? " checkpoint-review-card" : ""}`}>
 				{loading ? (
 					<div className="checkpoint-generating-state">
 						<span className="spinner" />
 						<p className="card-kicker">Remember</p>
-						<h2>Drafting memory proposal…</h2>
-						<p>{rememberProgressSentence(progress)} Nothing is saved yet.</p>
+						{/* Remember without the preview saves when the read ends: it says so from the start (decision 39). */}
+						<h2>{quickSaves ? "Saving memory…" : "Remembering…"}</h2>
+						<p>{quickSaves ? `Saving to ${chat.displayName}’s memory…` : `${rememberProgressSentence(progress)} Nothing is saved yet.`}</p>
+						{progress?.wait && <p className="checkpoint-read-note" role="status">{modelWaitLine(progress.wait)}</p>}
 						<div className="checkpoint-preview-actions">
-							<button className="rs-btn" onClick={onCancelGenerate}>Cancel</button>
+							{readOnly ? <button className="rs-btn" onClick={onClose}>Close</button> : <button className="rs-btn" onClick={onCancelGenerate}>Cancel</button>}
 						</div>
 					</div>
 				) : quickRequested && !quickBlockedReasons?.length && approvalLoading && !approvalResult ? (
@@ -2663,20 +2730,22 @@ function CheckpointPreviewShell({ chat, itemCount, rememberText, density, propos
 						<span className="spinner" />
 						<p className="card-kicker">Remember</p>
 						<h2>Saving memory…</h2>
-						<p>The proposal came back clean, so it is being saved to {chat.displayName}’s Recent Context.</p>
+						<p>Saving to {chat.displayName}’s memory…</p>
 					</div>
 				) : approvalResult ? (
 					<div className="checkpoint-proposal-page checkpoint-saved-page">
 						<div className="checkpoint-input-heading">
 							<p className="card-kicker">Remembered</p>
 							<h2>Memory updated</h2>
-							<p>This conversation is now part of {chat.displayName}’s memory. You can pick up right where you left off.</p>
+							<p>{roomFilled ? recentSessionsHeadsUp(approvalResult.recentContextEntryCount, chat.displayName) : (proposal && rememberRefusedWholeSentence(proposal)) || `This conversation is now part of ${chat.displayName}’s memory. Keep chatting starts a new conversation that knows it.`}</p>
 						</div>
-						{recentSessionsHeadsUp(approvalResult.recentContextEntryCount) && <div className="checkpoint-proposal-warnings checkpoint-sessions-headsup" role="status">{recentSessionsHeadsUp(approvalResult.recentContextEntryCount)}</div>}
+						{!roomFilled && !fillsHeadsUp && recentSessionsHeadsUp(approvalResult.recentContextEntryCount) && <div className="checkpoint-proposal-warnings checkpoint-sessions-headsup" role="status">{recentSessionsHeadsUp(approvalResult.recentContextEntryCount)}</div>}
 						{approvalResult.warnings.length > 0 && <div className="checkpoint-proposal-warnings">{approvalResult.warnings.map((warning) => <div key={warning}>{warning}</div>)}</div>}
+						{/* A full room has no Keep chatting: its next conversation waits for Memorize. */}
 						<div className="checkpoint-preview-actions">
-							<button className="rs-btn rs-btn-primary" onClick={onContinueAfterCheckpoint} title="Stay in this room on a fresh thread">Continue working</button>
+							{!roomFilled && <button className="rs-btn rs-btn-primary" onClick={onContinueAfterCheckpoint} title="Stay in this room with a new conversation">Keep chatting</button>}
 							<button className="rs-btn" onClick={onRestAfterCheckpoint}>Return Home</button>
+							{roomFilled && <button className="rs-btn rs-btn-primary" onClick={onMemorizeAfterCheckpoint}>Memorize</button>}
 						</div>
 					</div>
 				) : proposal ? (
@@ -2686,78 +2755,67 @@ function CheckpointPreviewShell({ chat, itemCount, rememberText, density, propos
 							<h2>Review what {chat.displayName} will remember</h2>
 						</div>
 						<div className="checkpoint-proposal-result standalone">
-							{!editing && (
-								<div className="checkpoint-proposal-summary">
-									<h3 className="checkpoint-entry-title">{proposal.preview.title}</h3>
-									<div className="checkpoint-proposal-arc"><MarkdownRenderer>{proposal.preview.summary}</MarkdownRenderer></div>
-									{proposal.preview.keyPoints.length > 0 && (
-										<ul>
-											{proposal.preview.keyPoints.map((point, index) => <li key={`${index}-${point}`}><MarkdownRenderer>{point}</MarkdownRenderer></li>)}
-										</ul>
-									)}
-								</div>
-							)}
-							{!editing && (
-								<div className="checkpoint-proposal-meta-row">
-									<div className="checkpoint-input-meta subtle">
-										{proposal.preview.hasParkedItems && <span>includes parked items</span>}
-										<span>~{proposal.estimatedTokens} tokens</span>
-										{/* C4: Remember never moves the review-target budget, so its honest
-										    pre-approval number is the intake fill — while the user can still
-										    act on it (the cap heads-up used to appear only after saving). */}
-										{typeof proposal.compressionTelemetry?.recentContextEntryCount === "number" && (
-											<span>{proposal.compressionTelemetry.recentContextEntryCount} of {RECENT_SESSIONS_CAP} recent sessions used</span>
-										)}
-									</div>
-									{showFullEntry ? (
-										<div className="checkpoint-review-actions">
-											<button className="rs-btn" onClick={() => setShowFullEntry(false)}>Hide full entry</button>
-											<button className="rs-btn" onClick={() => setEditing(true)} title="Edit the entry before saving">Edit</button>
-										</div>
-									) : (
-										<button className="rs-btn checkpoint-full-entry-trigger" onClick={() => setShowFullEntry(true)}>Show full entry</button>
-									)}
-								</div>
-							)}
-							{!editing && proposal.rememberRead && <p className="checkpoint-read-note">{rememberReadSentences(proposal.rememberRead).join(" ")}</p>}
 							{editing ? (
 								<div className="checkpoint-edit-field checkpoint-structured-editor">
 									<span className="checkpoint-field-label">Edit the entry before saving</span>
-									{/* The C4 sight line stays up while editing: edits can't change the
-									    count, and Save remains one click away from this sub-state. */}
-									{typeof proposal.compressionTelemetry?.recentContextEntryCount === "number" && (
-										<div className="checkpoint-input-meta subtle"><span>{proposal.compressionTelemetry.recentContextEntryCount} of {RECENT_SESSIONS_CAP} recent sessions used</span></div>
-									)}
 									<label>
-										<span>Session arc</span>
+										<span>What happened</span>
 										<textarea value={approvedFields.sessionArc} onChange={(e) => updateApprovedField("sessionArc", e.target.value)} rows={4} />
 									</label>
 									<label>
-										<span>Body</span>
+										<span>What to keep</span>
 										<textarea value={approvedFields.body} onChange={(e) => updateApprovedField("body", e.target.value)} rows={14} />
 									</label>
 									<label>
-										<span>Parked / Open items</span>
+										<span>Still open</span>
 										<textarea value={approvedFields.parked} onChange={(e) => updateApprovedField("parked", e.target.value)} rows={5} />
 									</label>
 									<button className="rs-btn" onClick={() => setEditing(false)}>Done editing</button>
 								</div>
-							) : showFullEntry ? (
-								<div className="checkpoint-full-review">
-									<div className="checkpoint-full-entry checkpoint-full-entry-rendered">
-										<MarkdownRenderer>{renderedDraft}</MarkdownRenderer>
-									</div>
+							) : (
+								// The whole entry that will be saved, under the editor's section names; a part the model left empty is left out.
+								<div className="checkpoint-proposal-summary checkpoint-whole-entry">
+									{proposal.fields.title.trim() && <h3 className="checkpoint-entry-title">{plainMemoryText(proposal.fields.title.trim())}</h3>}
+									{approvedFields.sessionArc.trim() && (
+										<section>
+											<h4>What happened</h4>
+											<MarkdownRenderer>{plainMemoryText(approvedFields.sessionArc.trim())}</MarkdownRenderer>
+										</section>
+									)}
+									{approvedFields.body.trim() && (
+										<section>
+											<h4>What to keep</h4>
+											<MarkdownRenderer>{plainMemoryText(storedMemoryBody(approvedFields.body, proposal.fields.body).trim())}</MarkdownRenderer>
+										</section>
+									)}
+									{approvedFields.parked.trim() && !/^none\.?$/i.test(approvedFields.parked.trim()) && (
+										<section>
+											<h4>Still open</h4>
+											<MarkdownRenderer>{plainMemoryText(approvedFields.parked.trim())}</MarkdownRenderer>
+										</section>
+									)}
 								</div>
-							) : null}
-							{(displayWarnings.length > 0 || quickFallbackNotices.length > 0) && <div className="checkpoint-proposal-warnings">{[...displayWarnings, ...quickFallbackNotices].map((warning) => <div key={warning}>{warning}</div>)}</div>}
-							{approvalError && <div className="checkpoint-proposal-error" role="alert">{approvalError}</div>}
+							)}
 						</div>
 						{honestyNoticesNode}
+						{approvalError && <div className="checkpoint-proposal-error" role="alert">{approvalError}</div>}
+						{fillsHeadsUp && <div className="checkpoint-proposal-warnings checkpoint-sessions-headsup" role="status">{fillsHeadsUp}</div>}
 						<div className="checkpoint-preview-actions">
-							<button className="rs-btn rs-btn-primary" disabled={approvalLoading || !approvalReady} onClick={() => onApprove(approvedDraft)}>{approvalLoading ? "Saving…" : "Save to memory"}</button>
-							<button className="rs-btn" disabled={approvalLoading} onClick={() => void confirmDiscard()} title="Throw away this draft. Nothing is saved">Discard</button>
+							{!readOnly && approvalBlockedLine && <span className="proposal-approve-blocked-reason" role="status">{approvalBlockedLine}</span>}
+							{readOnly ? <button className="rs-btn" onClick={onClose}>Close</button> : !mustGenerateAgain && <button className="rs-btn rs-btn-primary" disabled={approvalLoading || !approvalReady} onClick={() => onApprove(savedFields)}>{approvalLoading ? "Saving…" : "Save to memory"}</button>}
+							{generateAgain && <button className={mustGenerateAgain ? "rs-btn rs-btn-primary" : "rs-btn"} disabled={approvalLoading} onClick={onGenerate}>Generate again</button>}
+							{!readOnly && !editing && <button className="rs-btn" disabled={approvalLoading} onClick={() => setEditing(true)} title="Edit the entry before saving">Edit</button>}
+							{!readOnly && <button className="rs-btn" disabled={approvalLoading} onClick={() => void confirmDiscard()} title="Throw away this draft. Nothing is saved">Discard</button>}
 						</div>
 					</div>
+				) : notice ? (
+					// One notice with its ways out: the options form gives way to it.
+					<>
+						<div className="checkpoint-input-heading">
+							<p className="card-kicker">Remember</p>
+						</div>
+						<ModelNoticePanel notice={notice} onTryAgain={itemCount === 0 ? undefined : onGenerate} onChooseModel={onChooseModel} onSignIn={onSignIn} onClose={onClose} />
+					</>
 				) : (
 					<>
 						<div className="checkpoint-input-heading">
@@ -2789,12 +2847,14 @@ function CheckpointPreviewShell({ chat, itemCount, rememberText, density, propos
 								rows={4}
 							/>
 						</label>
-						{readEstimate && <p className="checkpoint-read-note">{rememberEstimateSentence(readEstimate)}</p>}
-						{error && <div className="checkpoint-proposal-error" role="alert">{error}</div>}
+						{readEstimate && rememberEstimateSentence(readEstimate) && <p className="checkpoint-read-note">{rememberEstimateSentence(readEstimate)}</p>}
+						{error && (isRememberOutcome(error) ? <p className="checkpoint-read-note" role="status">{error}</p> : <div className="checkpoint-proposal-error" role="alert">{error}</div>)}
 						{honestyNoticesNode}
 						<div className="checkpoint-preview-actions">
 							<button className="rs-btn" onClick={onClose}>Close</button>
-							<button className="rs-btn rs-btn-primary" disabled={itemCount === 0} onClick={onGenerate}>Generate memory proposal</button>
+							{/* A Remember that did not finish can be let go without a new read. */}
+							{!readOnly && asksGenerateAgain(error) && <button className="rs-btn" onClick={onDiscard} title="Let this Remember go. Nothing is saved">Discard</button>}
+							<button className="rs-btn rs-btn-primary" disabled={itemCount === 0} onClick={onGenerate}>{asksGenerateAgain(error) ? "Generate again" : "Generate memory proposal"}</button>
 						</div>
 					</>
 				)}
@@ -2927,15 +2987,19 @@ export function App() {
 		})();
 		return () => { cancelled = true; };
 	}, []);
+	// A remote device never sees the Remote access section: the server refuses
+	// the admin routes there regardless. Nor does a shared server, which is no
+	// one's own computer.
+	const clientContext = useRemoteClientContext();
+	const computerOnlyControls = showsComputerOnlyControls(clientContext);
+	// On a shared server the seen POST is not offered either: the browser's
+	// own record above is the only one.
 	const dismissWhatsNew = (): void => {
 		if (!whatsNew) return;
 		try { localStorage.setItem("exxperts.whats-new-seen", whatsNew.version); } catch {}
-		void apiFetch("/api/whats-new/seen", { method: "POST" }).catch(() => {});
+		if (!clientContext.sharedServer) void apiFetch("/api/whats-new/seen", { method: "POST" }).catch(() => {});
 		setWhatsNew(null);
 	};
-	// A remote device never sees the Remote access section: the server refuses
-	// the admin routes there regardless.
-	const remoteClient = useRemoteClientContext().remote;
 	// "system" follows the OS setting via prefers-color-scheme. The old
 	// "exxperts.theme" key is read as a fallback so an explicit pre-appearance
 	// choice of light/dark survives the rename; users who never chose follow
@@ -2959,6 +3023,7 @@ export function App() {
 	const theme: ThemeMode = appearance === "system" ? (systemDark ? "dark" : "light") : appearance;
 	const [items, setItems] = useState<ChatItem[]>([]);
 	const [composerResetNonce, setComposerResetNonce] = useState(0);
+	const closedByFullSaveRef = useRef(false);
 	// V6 iterate affordance: a one-shot composer prefill. Set together with a
 	// nonce bump (the composer re-seeds its draft from initialDraftValue on a
 	// nonce change); cleared by every OTHER nonce bump site so a stale prefill
@@ -2988,6 +3053,22 @@ export function App() {
 	// inability to reach the engine, past a grace window, after retries that
 	// really failed. False through boot and through every ordinary swap.
 	const [connectionWarning, setConnectionWarning] = useState(false);
+	// Signed out, not lost: on a shared server a sign-in that ran out also
+	// ends the connection. Before saying it is lost, the page asks once
+	// whether the person is still signed in; a 401 sends it to sign in
+	// (apiFetch). Any other answer, or none at all (an outage, a restart),
+	// is a real loss and the text shows. On this computer it shows at once.
+	const [signInChecked, setSignInChecked] = useState(false);
+	useEffect(() => {
+		setSignInChecked(false);
+		if (!connectionWarning || !clientContext.sharedServer) return;
+		let cancelled = false;
+		void apiFetch("/api/auth/status")
+			.then((res) => res.body?.cancel(), () => {})
+			.finally(() => { if (!cancelled) setSignInChecked(true); });
+		return () => { cancelled = true; };
+	}, [connectionWarning, clientContext.sharedServer]);
+	const showConnectionLost = connectionWarning && (!clientContext.sharedServer || signInChecked);
 	// Room WS auto-reconnect: "reconnecting" while backoff attempts run,
 	// "failed" once the attempt cap is reached (only the manual Reconnect
 	// affordance or a tab re-focus starts a new cycle). The pill copy follows
@@ -3000,6 +3081,8 @@ export function App() {
 	// provider, but no sign-in brings it back, so the notice offers only
 	// another model.
 	const [roomModelNotOffered, setRoomModelNotOffered] = useState(false);
+	// Another window moved this room to a new conversation: this one offers Reload, and sends nothing until then.
+	const [roomMovedOn, setRoomMovedOn] = useState(false);
 	// A turn failed on the sign-in (a key that is gone or refused, a failed
 	// refresh) while the socket stayed up: the same one notice, until a
 	// sign-in in AI setup, the next message, or the conversation moves. The
@@ -3087,13 +3170,15 @@ export function App() {
 	const stagedAttachmentsRef = useRef<StagedAttachment[]>([]);
 	useEffect(() => { stagedAttachmentsRef.current = stagedAttachments; }, [stagedAttachments]);
 	// Store-wide GC (contract §4): assessed once per app load; the safety valve
-	// stays silent below its threshold.
+	// stays silent below its threshold. Not on a shared server: it lists every
+	// room's tasks, so it is not asked for there.
 	const [gcAssessment, setGcAssessment] = useState<TaskStoreGcView | null>(null);
 	const [gcReviewOpen, setGcReviewOpen] = useState(false);
 	const [gcBusy, setGcBusy] = useState(false);
 	useEffect(() => {
 		void (async () => {
 			try {
+				if ((await fetchRemoteClientContext()).sharedServer) return;
 				const res = await apiFetch("/api/task-store/gc");
 				if (!res.ok) return;
 				const data = await res.json().catch(() => null);
@@ -3143,6 +3228,9 @@ export function App() {
 	const [conversationId, setConversationId] = useState<string>(() => newConversationId());
 	const [authStatus, setAuthStatus] = useState<AuthStatusResponse | null>(null);
 	const [modelStatus, setModelStatus] = useState<WebChatModelStatus | null>(null);
+	// The socket's handlers outlive the render that made them: they read the provider names here.
+	const modelStatusRef = useRef(modelStatus);
+	modelStatusRef.current = modelStatus;
 	const [aiProfileStatus, setAiProfileStatus] = useState<PersistentAgentAiProfileSelectionStatus | null>(null);
 	const [persistentAgentStatuses, setPersistentAgentStatuses] = useState<PersistentAgentStatus[]>([]);
 	// The saved order of the home screen. Every rule about it (withheld on each
@@ -3167,6 +3255,8 @@ export function App() {
 	// treat the open room as "cooking with nobody inside" and fire the
 	// done-moment toast at the user sitting in front of the answer.
 	const refreshPersistentAgentStatusRef = useRef<() => Promise<void>>(async () => {});
+	// The room this tab just left, while the server may not have seen its socket close yet.
+	const leftRoomRef = useRef<{ id: string; at: number } | null>(null);
 	const refreshSetupStatusRef = useRef<() => void>(() => {});
 	refreshSetupStatusRef.current = () => {
 		void refreshAuthStatus();
@@ -3185,10 +3275,6 @@ export function App() {
 	const [persistentThread, setPersistentThread] = useState<PersistentAgentThread | null>(null);
 	const [persistentChat, setPersistentChat] = useState<PersistentChatConfig>(null);
 	const [persistentResumeError, setPersistentResumeError] = useState<string | null>(null);
-	// Rooms whose memory did not fit their locked model's window at open: their
-	// standby thread cannot be resumed, so it must not keep Maintain disabled —
-	// Maintain (after Forget) is the way out the refusal names.
-	const [memoryOverflowRooms, setMemoryOverflowRooms] = useState<ReadonlySet<PersistentAgentId>>(new Set());
 	// Entering a room checks whether the workspace nudge is due there: only for
 	// rooms with NO workspace default, and only until it was dismissed once.
 	const workspaceNudgeAgentId = persistentChat?.agentId ?? null;
@@ -3237,15 +3323,22 @@ export function App() {
 	const [checkpointRememberText, setCheckpointRememberText] = useState("");
 	const [checkpointDensity, setCheckpointDensity] = useState<CheckpointDensity>("standard");
 	const [checkpointProposal, setCheckpointProposal] = useState<CheckpointProposalResponse | null>(null);
+	// The person's edits to the proposal: closing the dialog keeps them; Save, Discard or Generate again let them go.
+	const [checkpointEdits, setCheckpointEdits] = useState<{ key: string; fields: CheckpointApprovalEditFields } | null>(null);
+	const checkpointFields = checkpointProposal ? (checkpointEdits?.key === checkpointEditsKey(checkpointProposal) ? checkpointEdits.fields : checkpointFieldsOf(checkpointProposal)) : { sessionArc: "", body: "", parked: "" };
 	const [checkpointProposalLoading, setCheckpointProposalLoading] = useState(false);
 	// The running proposal request: Cancel aborts it, and the server stops the
 	// worker when the request closes.
 	const checkpointProposalAbortRef = useRef<AbortController | null>(null);
 	// How far the server has read, polled while the proposal generates.
-	const [checkpointProgress, setCheckpointProgress] = useState<{ read: number; of: number } | null>(null);
+	const [checkpointProgress, setCheckpointProgress] = useState<{ read: number; of: number; wait?: ModelWait } | null>(null);
 	const [checkpointProposalError, setCheckpointProposalError] = useState<string | null>(null);
+	// The Memory model cannot be reached: the one notice, with its ways out.
+	const [checkpointProposalNotice, setCheckpointProposalNotice] = useState<ModelNotice | null>(null);
 	const [checkpointApprovalLoading, setCheckpointApprovalLoading] = useState(false);
 	const [checkpointApprovalError, setCheckpointApprovalError] = useState<string | null>(null);
+	/** Bumped after a reconnect: the room looks up its Remember again. */
+	const [rememberLookupNonce, setRememberLookupNonce] = useState(0);
 	const [checkpointApprovalResult, setCheckpointApprovalResult] = useState<CheckpointApprovalResponse | null>(null);
 	const [checkpointQuickRequested, setCheckpointQuickRequested] = useState(false);
 	const [checkpointQuickBlockedReasons, setCheckpointQuickBlockedReasons] = useState<string[] | null>(null);
@@ -3319,6 +3412,12 @@ export function App() {
 	const reconnectTimerRef = useRef<number | null>(null);
 	// "Connected again" after an outage; the toast clears itself.
 	const [reconnectedNotice, setReconnectedNotice] = useState<number | null>(null);
+	// The room stood down to wait on a sign-in or another model, not on the
+	// connection: the ready that ends the wait is no reconnect to announce.
+	const roomWaitsOnChoiceRef = useRef(false);
+	// The conversations this window sent a Remember save for: a later Save that
+	// finds the entry already saved landed from here, not from another window.
+	const checkpointSavesSentRef = useRef(new Set<string>());
 	// Deliberate socket closes (navigation resets, leaving the room) must not
 	// trigger the auto-reconnect; these paths arm the flag and the WS effect
 	// clears it when it builds the next socket.
@@ -3657,10 +3756,13 @@ export function App() {
 		return () => window.removeEventListener("focus", onFocus);
 	}, []);
 
+	// The three start-up reads keep an answer only when it is OK: a refusal's
+	// body ({ error, code }) is not a status, and stored as one it would break
+	// the screens that read it. The last good answer stays.
 	async function refreshAuthStatus() {
 		try {
-			const status = await apiFetch("/api/auth/status").then((r) => r.json()) as AuthStatusResponse;
-			setAuthStatus(status);
+			const res = await apiFetch("/api/auth/status");
+			if (res.ok) setAuthStatus(await res.json() as AuthStatusResponse);
 		} catch {}
 		// Model availability is derived from provider auth, so every auth
 		// transition must invalidate it too. Most importantly the fresh
@@ -3672,8 +3774,9 @@ export function App() {
 
 	async function refreshModelStatus(options?: { rethrow?: boolean }) {
 		try {
-			const status = await apiFetch("/api/persistent-agent-room/model-status").then((r) => r.json()) as WebChatModelStatus;
-			setModelStatus(status);
+			const res = await apiFetch("/api/persistent-agent-room/model-status");
+			if (!res.ok) throw new Error(`The model status could not be read (${res.status}).`);
+			setModelStatus(await res.json() as WebChatModelStatus);
 		} catch (e) {
 			// Background refreshes stay quiet; a caller that just changed what
 			// the model list depends on must not report success over stale data.
@@ -3683,8 +3786,8 @@ export function App() {
 
 	async function refreshAiProfileStatus() {
 		try {
-			const status = await apiFetch("/api/persistent-agent-ai-profile").then((r) => r.json()) as PersistentAgentAiProfileSelectionStatus;
-			setAiProfileStatus(status);
+			const res = await apiFetch("/api/persistent-agent-ai-profile");
+			if (res.ok) setAiProfileStatus(await res.json() as PersistentAgentAiProfileSelectionStatus);
 		} catch {}
 	}
 
@@ -3810,6 +3913,10 @@ export function App() {
 			const statuses = await fetchPersistentAgentStatuses();
 			const activeStatuses = Array.isArray(statuses) ? statuses : [];
 			setPersistentAgentStatuses(activeStatuses);
+			// A read served before the server saw the left room's socket close shows it locked by this app: read once more.
+			const left = leftRoomRef.current;
+			leftRoomRef.current = null;
+			if (left && Date.now() - left.at < 10_000 && activeStatuses.some((status) => status.id === left.id && status.activeLock?.surface === "web")) window.setTimeout(() => void refreshPersistentAgentStatusRef.current(), 1000);
 			if (typeof onFetched === "function") onFetched(activeStatuses);
 			// Background-generation bookkeeping (community #14): note rooms
 			// cooking without us inside; when one settles with a completed turn,
@@ -4059,7 +4166,7 @@ export function App() {
 		try {
 			// The debounced persist owns the current live room — carry its queue so a
 			// transfer (enqueue) or a send (clear) reaches the thread record.
-			if (persistentChat) await savePersistentAgentThread(persistentChat, "active", "unknown", items, pendingHandoffsRef.current);
+			if (persistentChat && !closedByFullSaveRef.current) await savePersistentAgentThread(persistentChat, "active", "unknown", items, pendingHandoffsRef.current);
 		} catch {}
 	}
 
@@ -4070,11 +4177,14 @@ export function App() {
 	// stands the poll down (slice 3) — the done-moment toast has to fire there
 	// too; the refresh itself skips the open room and never reconciles while a
 	// room is bound, so the landing write stays unraced.
+	// A Maintain save polls too: the server waits for a turn, and the screen says so.
+	const maintainSaving = absorbWorkflow.step === "approving" || reviewWorkflow.step === "approving";
+	const roomTurnInFlight = (agentId?: string) => persistentAgentStatuses.some((status) => status.id === agentId && status.activeThread?.inFlight === true);
 	useEffect(() => {
-		if (!persistentAgentStatuses.some((status) => status.activeThread?.inFlight && status.id !== persistentChat?.agentId)) return;
-		const id = window.setInterval(() => { void refreshPersistentAgentStatus(); }, 5_000);
+		if (!maintainSaving && !persistentAgentStatuses.some((status) => status.activeThread?.inFlight && status.id !== persistentChat?.agentId)) return;
+		const id = window.setInterval(() => { void refreshPersistentAgentStatus(); }, maintainSaving ? 2_000 : 5_000);
 		return () => window.clearInterval(id);
-	}, [persistentAgentStatuses, persistentChat]);
+	}, [persistentAgentStatuses, persistentChat, maintainSaving]);
 
 	useEffect(() => { itemsRef.current = items; }, [items]);
 	// No deps on purpose: the function closes over most of the room state, so
@@ -4420,7 +4530,7 @@ export function App() {
 		const onPageHide = () => {
 			flushAssistantStream();
 			const chat = persistentChatRef.current;
-			if (!chat) return;
+			if (!chat || closedByFullSaveRef.current) return;
 			try {
 				void apiFetch(`/api/persistent-agents/${encodeURIComponent(chat.agentId)}/threads/${encodeURIComponent(chat.conversationId)}`, {
 					method: "PUT",
@@ -4673,6 +4783,11 @@ export function App() {
 			// offline across the rebind.
 			const draft = textareaRef.current?.value ?? "";
 			resetLiveUiState();
+			// The reset closed Remember's dialog: its following stops, and the room asks the server again how its
+			// Remember stands (still reading, finished, or cut by a restart), so the dialog comes back with the truth.
+			checkpointProposalAbortRef.current?.abort();
+			checkpointProposalAbortRef.current = null;
+			setRememberLookupNonce((n) => n + 1);
 			if (draft) setComposerPrefill(draft);
 			setItems(liveThread.items);
 			setPersistentThread(liveThread);
@@ -4709,6 +4824,7 @@ export function App() {
 			reconnectAttemptRef.current = 0;
 			reconnectStartedAtRef.current = null;
 			if (roomReconnectStateRef.current !== "idle") setRoomReconnect("idle");
+			roomWaitsOnChoiceRef.current = false;
 		} else {
 			// Inside a room the room ladder owns the socket; a pending non-room
 			// retry must not fire a version bump into it.
@@ -4830,15 +4946,9 @@ export function App() {
 			const msg = JSON.parse(raw.data);
 			if (msg.type === "ready") {
 				// The ready frame is the true end of a reconnect cycle: the room
-				// lock accepted this session. The clear belongs to the room this
-				// socket was opened for — key it on the closure, not on whatever
-				// room is current when the frame lands, and let only the live
-				// socket touch the rest of the UI (the same staleness rule the
-				// refusal path applies): a late ready from a replaced socket must
-				// not clear its successor's overflow mark or reset its reconnect
-				// ladder.
-				const readyRoom = persistentChat?.agentId ?? null;
-				if (readyRoom) setMemoryOverflowRooms((rooms) => rooms.has(readyRoom) ? new Set([...rooms].filter((id) => id !== readyRoom)) : rooms);
+				// lock accepted this session. Only the live socket touches the UI:
+				// a late ready from a replaced socket must not reset its
+				// successor's reconnect ladder.
 				if (wsRef.current !== ws) return;
 				cancelScheduledReconnect();
 				setSignedOutProvider(null);
@@ -4847,8 +4957,9 @@ export function App() {
 				reconnectStartedAtRef.current = null;
 				if (roomReconnectStateRef.current !== "idle") {
 					setRoomReconnect("idle");
-					setReconnectedNotice(Date.now());
+					if (!roomWaitsOnChoiceRef.current) setReconnectedNotice(Date.now());
 				}
+				roomWaitsOnChoiceRef.current = false;
 				if (msg.model?.label) setCurrentModelFromName({ model: msg.model.model, modelLabel: String(msg.model.label), provider: msg.model.provider });
 				// The server binds on its own model (the saved lock, or the room's
 				// pick for an empty conversation); the room's model follows it.
@@ -5012,6 +5123,7 @@ export function App() {
 					// by itself once the provider is signed in or another model is
 					// picked.
 					setRoomReconnect("failed");
+					roomWaitsOnChoiceRef.current = true;
 					if (msg.code === "provider_signed_out") setSignedOutProvider(typeof msg.provider === "string" ? msg.provider : "");
 					else setRoomModelNotOffered(true);
 					flushAssistantStream();
@@ -5022,11 +5134,23 @@ export function App() {
 				// The room holds as many remembered conversations as it can: every
 				// redial reaches the same refusal, and the way out (Maintain, then
 				// Memorize) is on Home. So the ladder stands down, the room is left
-				// the ordinary way, and Home says why. The room is marked so its
-				// Maintain opens although its conversation is still open.
+				// the ordinary way, and Home says why.
+				// Another window moved the room on: the message goes back into the box, and the room offers Reload.
+				if (msg.code === "conversation_moved") {
+					if (wsRef.current !== ws) return;
+					flushAssistantStream();
+					const sent = [...itemsRef.current].reverse().find((item) => item.kind === "user");
+					if (sent) {
+						setItems((s) => s.filter((item) => item !== sent));
+						setComposerPrefill(sent.text);
+						setComposerResetNonce((value) => value + 1);
+					}
+					setRoomMovedOn(true);
+					setBusy(false);
+					busyRef.current = false;
+					return;
+				}
 				if (msg.code === "room_full") {
-					const refusedRoom = persistentChat?.agentId ?? null;
-					if (refusedRoom) setMemoryOverflowRooms((rooms) => rooms.has(refusedRoom) ? rooms : new Set([...rooms, refusedRoom]));
 					if (wsRef.current !== ws) return;
 					suppressReconnectRef.current = true;
 					cancelScheduledReconnect();
@@ -5034,20 +5158,15 @@ export function App() {
 					flushAssistantStream();
 					setBusy(false);
 					busyRef.current = false;
-					const text = typeof msg.message === "string" && msg.message ? msg.message : "This room is holding as many remembered conversations as it can. Memorize them first: use Maintain on its card, then open it again.";
+					const text = typeof msg.message === "string" && msg.message ? msg.message : `${persistentChatRef.current?.displayName || "This room"} holds as many remembered conversations as it can. Memorize them from Maintain on its Home card to start a new conversation.`;
 					// A save refused on the way out has already said so on Home; both stay.
 					void finishLeaveRoom().then(() => setPersistentResumeError((current) => current ? `${current} ${text}` : text));
 					return;
 				}
 				if (msg.code === "memory_overflow") {
-					// The refusal belongs to the room this socket was opened for —
-					// key the mark on the closure's room, not on whatever room is
-					// current when the frame lands, and let only the live socket
-					// touch the room's UI (the same staleness rule onclose applies):
-					// a frame from a replaced socket must not mark its successor's
-					// room or mute its reconnect ladder.
-					const refusedRoom = persistentChat?.agentId ?? null;
-					if (refusedRoom) setMemoryOverflowRooms((rooms) => rooms.has(refusedRoom) ? rooms : new Set([...rooms, refusedRoom]));
+					// Only the live socket touches the room's UI (the same staleness
+					// rule onclose applies): a frame from a replaced socket must not
+					// mute its successor's reconnect ladder.
 					if (wsRef.current !== ws) return;
 					// No reconnect chrome: a redial, a tab focus, or a Reconnect press
 					// would all reach the same memory and the same window.
@@ -5413,9 +5532,9 @@ export function App() {
 
 
 	function isRoutineRetrievalTool(name: string): boolean {
-		// A read of the archive is the one memory tool the person should see: it
-		// says the room went to its older notes for this answer, as a chip that
-		// names what it looked for. The rest stay behind the activity line.
+		// A memory search is the one memory tool the person should see: it says
+		// the room searched its memory for this answer, as a chip that names what
+		// it looked for. The rest stay behind the activity line.
 		if (name === "memory_recall") return false;
 		return name.startsWith("kb_") || name.startsWith("memory_");
 	}
@@ -5491,6 +5610,14 @@ export function App() {
 				const contextOverflow = /context(?:[ _-]?window| length)|too many tokens|maximum context|prompt is too long|exceeds? (?:the )?(?:model'?s? )?(?:context|token|input)/i.test(detail);
 				// A sign-in that cannot be used (the catalog may still call the
 				// provider signed in): the one notice with Sign in, not the raw line.
+				// The provider refusing the model for this account: its plan or its
+				// admin. One plain line with the way out; the raw words go to the console.
+				const notOnAccount = !contextOverflow && modelNotOnAccount(detail);
+				if (notOnAccount) console.warn("[exxperts] the provider refused the model for this account:", detail);
+				// The provider no longer offering the model: the line the room's model row shows, with its way out.
+				const notOffered = !contextOverflow && !notOnAccount && modelNotOffered(detail);
+				if (notOffered) console.warn("[exxperts] the provider no longer offers the model:", detail);
+				const turnModel = { model: String(ev.message.model ?? ""), provider: String(ev.message.provider ?? "") };
 				if (!contextOverflow && isSignInFailure(detail)) {
 					streamErrorLineIdRef.current = null;
 					noteTurnSignInFailure(detail, typeof ev.message.provider === "string" ? ev.message.provider : undefined);
@@ -5499,8 +5626,12 @@ export function App() {
 					id: errorLineId,
 					level: "error",
 					text: contextOverflow
-						? `The model could not respond: the conversation plus this room's memory exceed its context window${detail ? ` · ${detail}` : ""}. Run Review from Maintain to shrink memory, or continue on a model with a larger window in Room settings, Model.`
-						: `The model could not respond${detail ? ` · ${detail}` : ""} · check the model and its sign-in in AI setup.`,
+						? `The model could not respond: the conversation plus this room's memory are more than it can read at once${detail ? ` · ${detail}` : ""}. Run Review from Maintain to shrink memory, or continue on a model that can read more at once in Room settings, Model.`
+						: notOnAccount
+							? modelNotOnAccountSentence(modelDisplayName(turnModel) || "This model", ev.message.provider)
+							: notOffered
+								? roomModelUnavailableLine(modelOnProvider(modelDisplayName(turnModel) || turnModel.model, modelStatusRef.current?.providers?.find((provider) => provider.id === turnModel.provider)?.label ?? turnModel.provider), "not-offered", "conversation")
+								: `The model could not respond${detail ? ` · ${detail}` : ""} · check the model and its sign-in in AI setup.`,
 				}]);
 			}
 			// A turn that ran out of output budget owes the room an explanation.
@@ -5715,7 +5846,7 @@ export function App() {
 	}
 
 	const send = (text: string): boolean => {
-		if (busyRef.current || turnCancellingRef.current) return false;
+		if (busyRef.current || turnCancellingRef.current || closedByFullSaveRef.current) return false;
 		const payload = text.trim();
 		// Ready staged attachments ride THIS message (files UI slice): their
 		// notes join the wire text, their chips join the bubble. A message may
@@ -6146,6 +6277,9 @@ export function App() {
 		return true;
 	}
 
+	// Remember runs on the server as a job: this starts it and follows it to
+	// its end. A closed tab or a reload no longer stops it; Cancel does, from
+	// any tab, and a second start on the same conversation attaches to it.
 	async function requestCheckpointProposal(targetChat: NonNullable<PersistentChatConfig>, density: CheckpointDensity, rememberText: string, signal?: AbortSignal): Promise<CheckpointProposalResponse> {
 		// A paced tail may still be draining after busy cleared — the proposal
 		// must see the complete answer.
@@ -6166,23 +6300,83 @@ export function App() {
 				conversationId: targetChat.conversationId,
 				density,
 				rememberText,
+				background: true,
 				...(transcriptItems ? { items: transcriptItems } : {}),
 			}),
 		});
-		if (!res.ok) {
-			let message = `Failed to generate proposal (${res.status})`;
+		if (!res.ok) throw await rememberRequestError(res);
+		return await followCheckpointJob(targetChat, signal);
+	}
+
+	/**
+	 * Polls the Remember job on this conversation once a second ("part 2 of
+	 * 4", the wait line) until it ends, then reads its proposal or its notice.
+	 * Two answers of none past the first seconds mean the server restarted and ended the
+	 * job; the parts it had read are kept, and the dialog says how many.
+	 */
+	async function followCheckpointJob(targetChat: NonNullable<PersistentChatConfig>, signal?: AbortSignal): Promise<CheckpointProposalResponse> {
+		const base = `/api/persistent-agents/${encodeURIComponent(targetChat.agentId)}/checkpoint`;
+		const query = `conversationId=${encodeURIComponent(targetChat.conversationId)}`;
+		const startedAt = Date.now();
+		let missing = 0;
+		const stopIfCancelled = () => {
+			if (!signal?.aborted) return;
+			throw signal.reason instanceof Error ? signal.reason : Object.assign(new Error("Remember was cancelled."), { name: "AbortError" });
+		};
+		for (;;) {
+			stopIfCancelled();
 			try {
-				const body = await res.json();
-				if (body?.error) message = String(body.error);
-			} catch {}
-			throw new Error(message);
+				const res = await apiFetch(`${base}/progress?${query}`, signal ? { signal } : {});
+				const progress = res.ok ? await res.json() as { state?: string; read?: number; of?: number; wait?: ModelWait } : null;
+				if (progress?.state === "none") {
+					if (Date.now() - startedAt >= 3_000 && ++missing >= 2) throw new Error(rememberRestartSentence());
+				} else if (progress) {
+					missing = 0;
+					if (progress.state === "restarted") throw new Error(rememberRestartSentence());
+					if (progress.state !== "reading") break;
+					if (typeof progress.read === "number" && typeof progress.of === "number") {
+						setCheckpointProgress({ read: progress.read, of: progress.of, ...(progress.wait ? { wait: progress.wait } : {}) });
+					}
+				}
+			} catch (error) {
+				stopIfCancelled();
+				if (error instanceof Error && !(error instanceof TypeError)) throw error;
+			}
+			await new Promise((resolve) => window.setTimeout(resolve, 1_000));
 		}
+		stopIfCancelled();
+		const res = await apiFetch(`${base}/result?${query}`, signal ? { signal } : {});
+		if (!res.ok) throw await rememberRequestError(res);
 		const proposal = await res.json() as CheckpointProposalResponse;
 		const currentChat = persistentChatRef.current;
-		if (!currentChat || currentChat.agentId !== targetChat.agentId || currentChat.conversationId !== targetChat.conversationId) throw new Error("The room changed. Please reopen Remember.");
-		if (proposal.agentId !== targetChat.agentId) throw new Error("This memory proposal does not match the current room.");
-		if (proposal.conversationId !== targetChat.conversationId || proposal.process?.parentConversationId !== targetChat.conversationId) throw new Error("This memory proposal does not match the current conversation.");
+		if (!currentChat || currentChat.agentId !== targetChat.agentId || currentChat.conversationId !== targetChat.conversationId || proposal.agentId !== targetChat.agentId || proposal.conversationId !== targetChat.conversationId || proposal.process?.parentConversationId !== targetChat.conversationId) throw new Error(REMEMBER_OTHER_CONVERSATION_OPEN);
 		return proposal;
+	}
+
+	async function rememberRequestError(res: Response): Promise<ApiRequestError> {
+		let message = "Remember stopped unexpectedly. Nothing was saved. Generate again.";
+		let code: string | undefined;
+		let details: unknown;
+		try {
+			const body = await res.json();
+			if (body?.error) message = String(body.error);
+			if (typeof body?.code === "string") code = body.code;
+			if (body?.details !== undefined) details = body.details;
+		} catch {}
+		return new ApiRequestError(message, res.status, code, details);
+	}
+
+	/** A cancel returns to the dialog as it was; a model that cannot be reached gets the one notice; any other failure says why. */
+	function showCheckpointProposalFailure(e: unknown, cancel: AbortController) {
+		if (e instanceof ApiRequestError && e.code === "conversation_moved") {
+			setCheckpointPreviewOpen(false);
+			setRoomMovedOn(true);
+			return;
+		}
+		const notice = cancel.signal.aborted ? null : modelNoticeFromError(e);
+		if (notice) setCheckpointProposalNotice(notice);
+		else if (!cancel.signal.aborted) setCheckpointProposalError(formatRememberError((e as Error).message));
+		else if (cancel.signal.reason instanceof Error && cancel.signal.reason.name !== "AbortError") setCheckpointProposalError(cancel.signal.reason.message);
 	}
 
 	async function generateCheckpointProposal() {
@@ -6192,8 +6386,10 @@ export function App() {
 			setCheckpointProposalError("Stop or wait for the current response before remembering.");
 			return;
 		}
+		setCheckpointEdits(null);
 		setCheckpointProposalLoading(true);
 		setCheckpointProposalError(null);
+		setCheckpointProposalNotice(null);
 		setCheckpointApprovalError(null);
 		setCheckpointApprovalResult(null);
 		setCheckpointProposal(null);
@@ -6203,55 +6399,99 @@ export function App() {
 			const proposal = await requestCheckpointProposal(targetChat, checkpointDensity, checkpointRememberText, cancel.signal);
 			setCheckpointProposal(proposal);
 		} catch (e) {
-			// A cancel returns to the dialog as it was; any other failure says why.
-			if (!cancel.signal.aborted) setCheckpointProposalError(formatRememberError((e as Error).message));
-			else if (cancel.signal.reason instanceof Error && cancel.signal.reason.name !== "AbortError") setCheckpointProposalError(cancel.signal.reason.message);
+			showCheckpointProposalFailure(e, cancel);
 		} finally {
 			if (checkpointProposalAbortRef.current === cancel) checkpointProposalAbortRef.current = null;
 			setCheckpointProposalLoading(false);
 		}
 	}
 
-	function cancelCheckpointProposal(reason?: Error) {
-		checkpointProposalAbortRef.current?.abort(reason);
+	/** Cancel, from this tab or any other: the job on the server stops; the parts it read stay kept. */
+	function cancelCheckpointProposal() {
+		checkpointProposalAbortRef.current?.abort();
+		const chat = persistentChatRef.current;
+		if (chat) void apiFetch(`/api/persistent-agents/${encodeURIComponent(chat.agentId)}/checkpoint/cancel`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ conversationId: chat.conversationId }) }).catch(() => {});
 	}
 
-	// "Part 2 of 4" while a proposal generates. A 404 means the server has no
-	// Remember running for this conversation: normal for a moment at the start
-	// and the end of a request, but twice in a row past the first seconds it
-	// means the server restarted and took the Remember with it, and the dialog
-	// says so instead of spinning forever.
-	useEffect(() => {
-		const targetChat = persistentChat;
-		if (!checkpointProposalLoading || !targetChat) {
-			setCheckpointProgress(null);
+	/** Discard: the kept proposal and parts go too, so a reopened dialog starts fresh. */
+	function discardCheckpointProposalOnServer() {
+		const chat = persistentChatRef.current;
+		if (chat) void apiFetch(`/api/persistent-agents/${encodeURIComponent(chat.agentId)}/checkpoint/cancel`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ conversationId: chat.conversationId, discard: true }) }).catch(() => {});
+	}
+
+	/**
+	 * A Remember this conversation already has on the server: one still
+	 * reading (started in another tab, or before a reload) is followed in the
+	 * dialog, and a finished one's entry is shown; entering the room opens the
+	 * dialog for either, so an entry read while the tab was closed waits there.
+	 */
+	async function resumeCheckpointJob(openOnEntry: boolean) {
+		const targetChat = persistentChatRef.current;
+		if (!targetChat || checkpointProposalAbortRef.current || checkpointProposal) return;
+		let state: string | undefined;
+		try {
+			const res = await apiFetch(`/api/persistent-agents/${encodeURIComponent(targetChat.agentId)}/checkpoint/progress?conversationId=${encodeURIComponent(targetChat.conversationId)}`);
+			if (!res.ok) return;
+			state = ((await res.json()) as { state?: string }).state;
+		} catch {
 			return;
 		}
-		let stopped = false;
-		let missing = 0;
-		const startedAt = Date.now();
-		const url = `/api/persistent-agents/${encodeURIComponent(targetChat.agentId)}/checkpoint/progress?conversationId=${encodeURIComponent(targetChat.conversationId)}`;
-		const timer = window.setInterval(async () => {
-			try {
-				const res = await apiFetch(url);
-				if (stopped) return;
-				if (res.ok) {
-					missing = 0;
-					setCheckpointProgress(await res.json() as { read: number; of: number });
-					return;
-				}
-				if (res.status !== 404 || Date.now() - startedAt < 3_000) return;
-				missing += 1;
-				if (missing >= 2) cancelCheckpointProposal(new Error("Remember stopped before it finished, because the app restarted while it was reading. Nothing was saved. Generate the proposal again."));
-			} catch {}
-		}, 1_000);
-		return () => {
-			stopped = true;
-			window.clearInterval(timer);
-		};
-	}, [checkpointProposalLoading, persistentChat?.agentId, persistentChat?.conversationId]);
+		// The app restarted while Remember read this conversation: the dialog says so, with Generate again and Discard.
+		if (state === "restarted") {
+			setCheckpointPreviewOpen(true);
+			setCheckpointProposalError(rememberRestartSentence());
+			return;
+		}
+		if (state !== "reading" && state !== "done") return;
+		if (!openOnEntry && !checkpointPreviewOpen) return;
+		if (checkpointProposalAbortRef.current) return;
+		setCheckpointPreviewOpen(true);
+		setCheckpointProposalLoading(true);
+		setCheckpointProposalError(null);
+		setCheckpointProposalNotice(null);
+		const cancel = new AbortController();
+		checkpointProposalAbortRef.current = cancel;
+		try {
+			setCheckpointProposal(await followCheckpointJob(targetChat, cancel.signal));
+		} catch (e) {
+			// A finished entry the conversation has moved past says so (the reply's own sentence, with Generate again and Discard).
+			if (e instanceof ApiRequestError && e.status === 404) setCheckpointProposalError(formatRememberError(e.message));
+			else showCheckpointProposalFailure(e, cancel);
+		} finally {
+			if (checkpointProposalAbortRef.current === cancel) checkpointProposalAbortRef.current = null;
+			setCheckpointProposalLoading(false);
+		}
+	}
+
+	useEffect(() => {
+		if (!checkpointProposalLoading) setCheckpointProgress(null);
+	}, [checkpointProposalLoading]);
+
+	// Leaving the conversation (Back, Home, another room) stops this page's
+	// following of its Remember; the job reads on, and entering again follows it anew.
+	const followedConversation = persistentChat ? `${persistentChat.agentId}\n${persistentChat.conversationId}` : "";
+	useEffect(() => () => {
+		checkpointProposalAbortRef.current?.abort();
+		checkpointProposalAbortRef.current = null;
+	}, [followedConversation]);
+
+	// Entering a room whose conversation Remember is reading opens the dialog
+	// in its reading state, with the read count, the wait line and Cancel; one
+	// whose Remember finished opens it on the entry.
+	useEffect(() => {
+		void resumeCheckpointJob(true);
+	}, [persistentChat?.agentId, persistentChat?.conversationId, rememberLookupNonce]);
+
+	// Opening the dialog shows a proposal a finished job kept.
+	useEffect(() => {
+		if (checkpointPreviewOpen) closeSidebarOnPhone();
+		if (checkpointPreviewOpen) void resumeCheckpointJob(false);
+	}, [checkpointPreviewOpen]);
 
 	async function bindToApprovedCheckpointRuntime(approval: CheckpointApprovalResponse, targetChat: NonNullable<PersistentChatConfig>): Promise<void> {
+		// The save landed; a tab that moved to another conversation meanwhile does not switch, and parks with the saved line.
+		const currentChat = persistentChatRef.current;
+		if (!currentChat || currentChat.agentId !== targetChat.agentId || currentChat.conversationId !== targetChat.conversationId) throw new Error(REMEMBER_OTHER_CONVERSATION_OPEN);
 		const freshThreadId = approval.postCheckpoint.activeThreadId || approval.runtimeBoundary.newThreadId;
 		const record = await fetchPersistentAgentThread(targetChat.agentId, freshThreadId);
 		const thread = threadRecordToLocalThread(record, targetChat.displayName);
@@ -6346,29 +6586,54 @@ export function App() {
 		setSessionVersion((v) => v + 1);
 	}
 
-	async function approveCheckpointProposal(approvedRecentContext: string) {
+	async function approveCheckpointProposal(approvedFields: CheckpointApprovalEditFields) {
 		const targetChat = persistentChat;
 		const proposal = checkpointProposal;
 		if (!targetChat || !proposal || checkpointApprovalLoading) return;
 		if (busyRef.current || turnCancellingRef.current) {
-			setCheckpointApprovalError("Stop or wait for the current response before approving a memory proposal.");
+			setCheckpointApprovalError("Stop the answer or wait for it to finish, then save.");
 			return;
 		}
 		if (proposal.agentId !== targetChat.agentId) {
-			setCheckpointApprovalError("This memory proposal does not match the current room. Please regenerate it.");
+			setCheckpointApprovalError(REMEMBER_OTHER_CONVERSATION_OPEN);
 			return;
 		}
 		if (proposal.conversationId !== targetChat.conversationId || proposal.process?.parentConversationId !== targetChat.conversationId) {
-			setCheckpointApprovalError("This memory proposal does not match the current conversation. Please regenerate it.");
+			setCheckpointApprovalError(REMEMBER_OTHER_CONVERSATION_OPEN);
 			return;
 		}
 		setCheckpointApprovalLoading(true);
 		setCheckpointApprovalError(null);
 		try {
-			const approval = await requestCheckpointApproval(targetChat, proposal, approvedRecentContext);
-			await bindToApprovedCheckpointRuntime(approval, targetChat);
-			setCheckpointApprovalResult(approval);
+			const savedHereBefore = checkpointSavesSentRef.current.has(checkpointSaveKey(targetChat));
+			let approval: CheckpointApprovalResponse;
+			let answerWasLost = false;
+			try {
+				approval = await requestCheckpointApproval(targetChat, proposal, approvedFields);
+			} catch (e) {
+				if (!saveAnswerLost(e)) throw e;
+				// The answer was lost: the line says so, and the room says once it answers whether this conversation saved.
+				setCheckpointApprovalError(SAVE_ANSWER_LOST_SENTENCE);
+				const landed = await lostRememberSaveLanded(targetChat, proposal, approvedFields);
+				if (!landed) {
+					setCheckpointApprovalError(SAVE_NOT_LANDED_SENTENCE);
+					return;
+				}
+				approval = landed;
+				answerWasLost = true;
+				setCheckpointApprovalError(null);
+			}
 			void refreshPersistentAgentStatus();
+			// A save that had already landed parks the window, unless it filled the room or this window's answer was the one lost: then its page shows.
+			if (approval.alreadySaved && !answerWasLost && !roomFilledBy(approval)) { parkAfterSavedRemember(targetChat, savedHereBefore ? REMEMBER_SAVED_REOPEN_SENTENCE : REMEMBER_SAVED_ELSEWHERE_SENTENCE); return; }
+			// A tab that moved to another conversation meanwhile never shows this save's page: the card says it.
+			// Asked before the bind, which is what moves this tab to the fresh conversation.
+			if (tabMovedFrom(targetChat)) return;
+			// A save that fills the room never binds: the empty conversation would be refused. Its page offers Memorize.
+			if (!roomFilledBy(approval)) {
+				try { await bindToApprovedCheckpointRuntime(approval, targetChat); } catch { parkAfterSavedRemember(targetChat); return; }
+			}
+			setCheckpointApprovalResult(approval);
 		} catch (e) {
 			setCheckpointApprovalError(formatRememberError((e as Error).message));
 		} finally {
@@ -6376,7 +6641,30 @@ export function App() {
 		}
 	}
 
-	async function requestCheckpointApproval(targetChat: NonNullable<PersistentChatConfig>, proposal: CheckpointProposalResponse, approvedRecentContext: string): Promise<CheckpointApprovalResponse> {
+	/**
+	 * After a Remember Save whose answer was lost: once the server answers, the
+	 * room says whether this conversation saved, and a saved one gives its answer
+	 * again (the Save sent again writes nothing). It is sent with the fields the
+	 * first Save sent, so the server checks what the person typed. Null: it did
+	 * not save.
+	 */
+	async function lostRememberSaveLanded(targetChat: NonNullable<PersistentChatConfig>, proposal: CheckpointProposalResponse, approvedFields: CheckpointApprovalEditFields): Promise<CheckpointApprovalResponse | null> {
+		const progress = await askUntilAnswered(() => fetchJson<{ saved?: true }>(`/api/persistent-agents/${encodeURIComponent(targetChat.agentId)}/checkpoint/progress?conversationId=${encodeURIComponent(targetChat.conversationId)}`));
+		if (!progress.saved) return null;
+		return await askUntilAnswered(() => requestCheckpointApproval(targetChat, proposal, approvedFields));
+	}
+
+	function checkpointSaveKey(chat: NonNullable<PersistentChatConfig>): string {
+		return `${chat.agentId}\n${chat.conversationId}`;
+	}
+
+	/**
+	 * Save sends the three parts: the server builds the page from the
+	 * proposal's heading, each part under the one rule, so nothing typed in a
+	 * part can read as another part.
+	 */
+	async function requestCheckpointApproval(targetChat: NonNullable<PersistentChatConfig>, proposal: CheckpointProposalResponse, approvedFields: CheckpointApprovalEditFields): Promise<CheckpointApprovalResponse> {
+		checkpointSavesSentRef.current.add(checkpointSaveKey(targetChat));
 		const res = await apiFetch(`/api/persistent-agents/${encodeURIComponent(targetChat.agentId)}/checkpoint/approve`, {
 			method: "POST",
 			headers: { "content-type": "application/json" },
@@ -6385,21 +6673,22 @@ export function App() {
 				model: targetChat.model,
 				density: proposal.density,
 				proposal,
-				approvedRecentContext,
+				approvedFields,
 			}),
 		});
 		if (!res.ok) {
 			let message = `Failed to save this memory (${res.status})`;
+			let code: string | undefined;
 			try {
 				const body = await res.json();
 				if (body?.error) message = String(body.error);
+				if (typeof body?.code === "string") code = body.code;
 			} catch {}
-			throw new Error(message);
+			// A proxy's 502 with no word of its own is a lost answer, as the network's is.
+			throw new ApiRequestError(message, res.status, code);
 		}
 		const approval = await res.json() as CheckpointApprovalResponse;
-		const currentChat = persistentChatRef.current;
-		if (!currentChat || currentChat.agentId !== targetChat.agentId || currentChat.conversationId !== targetChat.conversationId) throw new Error("The room changed after approval. Refresh the room status before continuing.");
-		if (approval.agentId !== targetChat.agentId || approval.conversationId !== targetChat.conversationId) throw new Error("The save response does not match the current room.");
+		if (approval.agentId !== targetChat.agentId || approval.conversationId !== targetChat.conversationId) throw new Error(REMEMBER_OTHER_CONVERSATION_OPEN);
 		return approval;
 	}
 
@@ -6413,6 +6702,7 @@ export function App() {
 		setCheckpointRememberText("");
 		setCheckpointProposal(null);
 		setCheckpointProposalError(null);
+		setCheckpointProposalNotice(null);
 		setCheckpointApprovalError(null);
 		setCheckpointApprovalResult(null);
 		setCheckpointPreviewOpen(true);
@@ -6424,17 +6714,15 @@ export function App() {
 			proposal = await requestCheckpointProposal(targetChat, "standard", "", cancel.signal);
 			setCheckpointProposal(proposal);
 		} catch (e) {
-			if (!cancel.signal.aborted) setCheckpointProposalError(formatRememberError((e as Error).message));
-			else if (cancel.signal.reason instanceof Error && cancel.signal.reason.name !== "AbortError") setCheckpointProposalError(cancel.signal.reason.message);
+			showCheckpointProposalFailure(e, cancel);
 			setCheckpointProposalLoading(false);
 			return;
 		} finally {
 			if (checkpointProposalAbortRef.current === cancel) checkpointProposalAbortRef.current = null;
 		}
 		setCheckpointProposalLoading(false);
-		const blockers = quickRememberBlockers(proposal);
-		if (blockers.length > 0) {
-			setCheckpointQuickBlockedReasons(blockers);
+		if (quickRememberNeedsPreview(proposal)) {
+			setCheckpointQuickBlockedReasons([]);
 			return;
 		}
 		// The room decides whether a blocker-free proposal may skip the preview.
@@ -6442,47 +6730,82 @@ export function App() {
 		// the proposal, never silently applying it.
 		const skipsPreview = await fetchQuickCheckpointPreference(targetChat.agentId);
 		setRememberSkipsPreview(skipsPreview);
+		// Off: the review simply opens, as Remember's own review.
 		if (!skipsPreview) {
-			setCheckpointQuickBlockedReasons(["To save without this preview, turn on Remember without the preview in Room settings, Memory."]);
+			setCheckpointQuickRequested(false);
 			return;
 		}
 		setCheckpointApprovalLoading(true);
 		try {
-			const approvedRecentContext = buildApprovedRecentContextMarkdown(proposal, {
-				sessionArc: proposal.fields.sessionArc,
-				body: proposal.fields.body,
-				parked: proposal.fields.parked?.trim() || "None",
-			});
-			const approval = await requestCheckpointApproval(targetChat, proposal, approvedRecentContext);
-			await bindToApprovedCheckpointRuntime(approval, targetChat);
+			const approvedFields = { sessionArc: proposal.fields.sessionArc, body: proposal.fields.body, parked: proposal.fields.parked?.trim() || "None" };
+			const savedHereBefore = checkpointSavesSentRef.current.has(checkpointSaveKey(targetChat));
+			let approval: CheckpointApprovalResponse;
+			try {
+				approval = await requestCheckpointApproval(targetChat, proposal, approvedFields);
+			} catch (e) {
+				if (!saveAnswerLost(e)) throw e;
+				// The answer was lost: once the server answers, the room says whether this conversation saved.
+				const landed = await lostRememberSaveLanded(targetChat, proposal, approvedFields);
+				if (!landed) throw new Error(SAVE_NOT_LANDED_SENTENCE);
+				approval = { ...landed, alreadySaved: undefined };
+			}
 			void refreshPersistentAgentStatus();
+			if (approval.alreadySaved && !roomFilledBy(approval)) { parkAfterSavedRemember(targetChat, savedHereBefore ? REMEMBER_SAVED_REOPEN_SENTENCE : REMEMBER_SAVED_ELSEWHERE_SENTENCE); return; }
+			if (roomFilledBy(approval)) {
+				if (tabMovedFrom(targetChat)) return;
+				setCheckpointApprovalResult(approval);
+				setCheckpointPreviewOpen(true);
+				return;
+			}
+			try { await bindToApprovedCheckpointRuntime(approval, targetChat); } catch { parkAfterSavedRemember(targetChat); return; }
 			resetCheckpointInput();
-			// Disclose what the gate does not block on: shortened tool output
-			// rides the saved line together with approval warnings.
 			// "automatically" is deliberate: the saved line must disclose that no
 			// human reviewed this entry before it was written.
-			let savedNote = "Saved to memory automatically.";
-			const trimmedNote = rememberToolOutputSentence(proposal.rememberRead);
-			const disclosedNotes = [...(trimmedNote ? [trimmedNote] : []), ...approval.warnings];
-			if (disclosedNotes.length > 0) savedNote += ` ${disclosedNotes.join(" ")}`;
+			const refusedWhole = rememberRefusedWholeSentence(proposal);
+			let savedNote = refusedWhole ? refusedWhole.replace(/^Saved\./, "Saved to memory automatically.") : "Saved to memory automatically.";
 			// The manual path shows the sessions-cap heads-up in the preview; the
 			// auto path has no preview, so it rides the saved line instead.
 			const headsUp = recentSessionsHeadsUp(approval.recentContextEntryCount);
 			if (headsUp) savedNote += ` ${headsUp}`;
 			setItems((s) => [...s, { kind: "system", id: nid(), text: savedNote }]);
 		} catch (e) {
-			setCheckpointApprovalError(`The memory entry could not save automatically. Review and approve it manually. ${formatRememberError((e as Error).message)}`);
+			// The cause only when it is one of Remember's plain sentences: no raw text.
+			const cause = formatRememberError((e as Error).message);
+			setCheckpointApprovalError(`Saving did not work this time. Here is the entry to save.${isPlainRememberSentence(cause) ? ` ${cause}` : ""}`);
 		} finally {
 			setCheckpointApprovalLoading(false);
 		}
 	}
 
+	// The save landed and only opening the fresh conversation failed, or the save
+	// had already landed: the room is parked on Home with the plain outcome, and
+	// the entry is never offered again. Only a save this window never sent was
+	// saved in another window, and Home says so.
+	// A tab that moved to another conversation meanwhile stays where it went.
+	function parkAfterSavedRemember(targetChat: NonNullable<PersistentChatConfig>, sentence = REMEMBER_SAVED_REOPEN_SENTENCE): void {
+		if (tabMovedFrom(targetChat)) return;
+		resetCheckpointInput();
+		setPersistentChat(null);
+		setPersistentThread(null);
+		setItems([]);
+		setPersistentResumeError(sentence);
+		setView("home");
+		void refreshPersistentAgentStatus();
+	}
+
+	function tabMovedFrom(targetChat: NonNullable<PersistentChatConfig>): boolean {
+		const currentChat = persistentChatRef.current;
+		return !!currentChat && (currentChat.agentId !== targetChat.agentId || currentChat.conversationId !== targetChat.conversationId);
+	}
+
 	function resetCheckpointInput() {
 		setCheckpointPreviewOpen(false);
+		setCheckpointEdits(null);
 		setCheckpointRememberText("");
 		setCheckpointDensity("standard");
 		setCheckpointProposal(null);
 		setCheckpointProposalError(null);
+		setCheckpointProposalNotice(null);
 		setCheckpointProposalLoading(false);
 		setCheckpointApprovalError(null);
 		setCheckpointApprovalLoading(false);
@@ -6543,28 +6866,17 @@ export function App() {
 		retrievalActivityIdRef.current = null;
 		resetCheckpointInput();
 		resetMaintainWorkflows();
+		setRoomMovedOn(false);
 	}
 
 	// Why this room cannot be maintained right now, in words that name the way
 	// out; null when Maintain can start. Mirrors the launcher card's canMaintain.
 	function maintainBlockedReason(agentId: PersistentAgentId): string | null {
 		if (persistentChat) return "A room session is open. Close it, then start Maintain.";
+		// An open conversation, here or elsewhere, never locks Maintain: it keeps
+		// the boot it started with, and its next bind boots on the memory as it is
+		// then. A save that meets a turn waits for it on the server.
 		const status = persistentAgentStatuses.find((candidate) => candidate.id === agentId) ?? null;
-		if (status?.activeLock) {
-			return status.activeLock.surface === "scheduler"
-				? "This room is working on a scheduled background task. Wait for it to finish, then start Maintain."
-				: "This room is active in another place. Close it there, then start Maintain.";
-		}
-		const localStandby = persistentThread?.state === "standby" && persistentThread.agentId === agentId ? persistentThread : null;
-		const hasThread = Boolean(localStandby)
-			|| (!!status && (status.runtime.state === "standby" || status.runtime.state === "active") && !!status.runtime.activeThreadId);
-		// Only a conversation someone has spoken in holds anything Maintain
-		// could leave behind. The fresh one Remember or Forget prepares is empty,
-		// and its next bind boots on the memory as it is then.
-		const threadHasTurns = localStandby
-			? hasUserVisibleTurn(localStandby.items)
-			: (status?.activeThread?.hasUserVisibleTurns ?? true);
-		if (hasThread && threadHasTurns && !memoryOverflowRooms.has(agentId)) return MAINTAIN_BLOCKED_BY_OPEN_CONVERSATION;
 		if (status && status.exists && status.status !== "ready" && status.status !== "needs_absorb") return "This room needs attention before it can be maintained.";
 		if (status && nothingToMaintain(status.memoryStatus)) return NOTHING_TO_MAINTAIN_SENTENCE;
 		return null;
@@ -6577,6 +6889,11 @@ export function App() {
 		resetAbsorbWorkflow();
 		resetReviewWorkflow();
 		setMaintainChooserOpen(true);
+		// A Memorize a restart left waiting for Save or Discard opens at once, not behind the chooser.
+		const opened = maintainRunRef.current;
+		void fetchAbsorbStatus(target.agentId).then((availability) => {
+			if (availability.waitingRunId && opened === maintainRunRef.current) void startAbsorbWorkflow({ target });
+		}, () => {});
 		return true;
 	}
 
@@ -6600,11 +6917,7 @@ export function App() {
 	}
 
 	async function startPruneMemoryWorkflow() {
-		// The overflow exemption must mirror maintainBlockedReason: when the
-		// server refused this room's memory at the window, the latched standby
-		// thread is exactly what Maintain exists to fix — without the exemption
-		// the chooser opens and this click dies silently.
-		if (persistentChat || (maintainTarget && persistentThread?.state === "standby" && persistentThread.agentId === maintainTarget.agentId && !memoryOverflowRooms.has(maintainTarget.agentId))) return;
+		if (persistentChat) return;
 		const target = maintainTarget;
 		setReviewLoadingIndex(Math.floor(Math.random() * REVIEW_LOADING_MESSAGES.length));
 		setMaintainChooserOpen(false);
@@ -6618,25 +6931,37 @@ export function App() {
 		try {
 			const status = await fetchReviewStatus(target.agentId);
 			if (run !== maintainRunRef.current) return;
+			if (status.waitingRunId) return beginReviewRunWatch({ ...CLOSED_REVIEW_WORKFLOW, step: "assessment", target, assessment: missingReviewFirstRead(target.agentId, status) }, status.waitingRunId);
 			if (!status.available) {
 				setReviewWorkflow({ ...CLOSED_REVIEW_WORKFLOW, step: "unavailable", target, unavailableReason: status.reason ?? null });
 				return;
 			}
 			setReviewWorkflow({ ...CLOSED_REVIEW_WORKFLOW, step: "assessing", target });
-			const assessment = await requestReviewAssessment(target.agentId);
+			// The first read never blocks Review: with no first read, the tidy reads every topic.
+			let notice: ModelNotice | null = null;
+			const assessment = await requestReviewAssessment(target.agentId).catch((error: unknown) => {
+				notice = modelNoticeFromError(error);
+				if (!notice && !isUnexplainedRequestFailure(error)) throw error;
+				return missingReviewFirstRead(target.agentId, status);
+			});
 			const fastPathEnabled = await roomFastPathEnabled(target.agentId);
 			if (run !== maintainRunRef.current) return;
-			setReviewWorkflow({ ...CLOSED_REVIEW_WORKFLOW, step: "assessment", target, availability: assessment.availability, assessment, fastPathEnabled });
+			// A discussion kept from before a reload (or from another tab) comes back as it was.
+			const kept = assessment.keptDiscussion;
+			setReviewWorkflow(kept?.messages.length
+				? { ...CLOSED_REVIEW_WORKFLOW, step: "discussing", target, availability: assessment.availability, assessment, notice, fastPathEnabled, discussionMessages: kept.messages, discussionTokenBudget: kept.tokenBudget, discussionSending: false }
+				: { ...CLOSED_REVIEW_WORKFLOW, step: "assessment", target, availability: assessment.availability, assessment, notice, fastPathEnabled });
 		} catch (e) {
 			if (run !== maintainRunRef.current) return;
-			setReviewWorkflow({ ...CLOSED_REVIEW_WORKFLOW, step: "error", target, error: formatReviewWorkflowError((e as Error).message) });
+			const notice = modelNoticeFromError(e);
+			setReviewWorkflow({ ...CLOSED_REVIEW_WORKFLOW, step: "error", target, notice, error: notice ? null : formatReviewWorkflowError((e as Error).message) });
 		}
 	}
 
 	function abortReviewWorkflow() {
 		const hasDiscussionTranscript = (reviewWorkflow.discussionMessages?.length ?? 0) > 0 && (reviewWorkflow.step === "discussing" || reviewWorkflow.step === "signing_off");
 		if (hasDiscussionTranscript) {
-			setMaintainConfirm({ title: "Leave this discussion?", body: "The discussion is temporary and will be discarded. No memory has been changed.", confirmLabel: "Discard discussion", cancelLabel: "Keep discussing", onConfirm: exitMaintainWorkflows });
+			setMaintainConfirm({ title: "Leave Review?", body: "Your discussion is kept; it comes back when you open Review again, unless your memory or its Memory model changes first.", confirmLabel: "Leave", cancelLabel: "Keep discussing", onConfirm: exitMaintainWorkflows });
 			return;
 		}
 		// A tidy is live work on the server: leaving it has to stop it too.
@@ -6651,9 +6976,9 @@ export function App() {
 	// temporary transcript is discarded, after the existing confirm.
 	function backToReviewAssessment() {
 		if (reviewWorkflow.step !== "discussing" || reviewWorkflow.discussionSending) return;
-		const leave = () => setReviewWorkflow((current) => current.step === "discussing" ? { ...current, step: "assessment", discussionMessages: [], discussionTokenBudget: null, discussionSending: false, discussionWarnings: null, guidance: null, error: null } : current);
+		const leave = () => setReviewWorkflow((current) => current.step === "discussing" ? { ...current, step: "assessment", discussionMessages: [], discussionTokenBudget: null, discussionSending: false, discussionWarnings: null, guidance: null, notice: null, error: null } : current);
 		if ((reviewWorkflow.discussionMessages?.length ?? 0) > 0) {
-			setMaintainConfirm({ title: "Leave this discussion?", body: "The discussion is temporary and will be discarded. The first read is kept. No memory has been changed.", confirmLabel: "Back to the first read", cancelLabel: "Keep discussing", onConfirm: leave });
+			setMaintainConfirm({ title: "Back to the first read?", body: "Your discussion is kept; it comes back when you open Review again, unless your memory or its Memory model changes first.", confirmLabel: "Back to the first read", cancelLabel: "Keep discussing", onConfirm: leave });
 			return;
 		}
 		leave();
@@ -6673,11 +6998,12 @@ export function App() {
 		try {
 			const assessment = await requestReviewAssessment(target.agentId, { retryFeedback: reviewAssessmentRetryFeedback(prior) });
 			if (run !== maintainRunRef.current) return;
-			setReviewWorkflow({ ...reviewWorkflow, step: "assessment", availability: assessment.availability, assessment, depth: null, guidance: null, discussionMessages: [], discussionTokenBudget: null, discussionWarnings: null, signoffWarnings: undefined, error: null });
+			setReviewWorkflow({ ...reviewWorkflow, step: "assessment", availability: assessment.availability, assessment, notice: null, depth: null, guidance: null, discussionMessages: [], discussionTokenBudget: null, discussionWarnings: null, error: null });
 		} catch (e) {
 			if (run !== maintainRunRef.current) return;
 			// The previous first read is still valid: keep it on screen with the reason.
-			setReviewWorkflow({ ...reviewWorkflow, step: "assessment", error: formatReviewWorkflowError((e as Error).message) });
+			const notice = modelNoticeFromError(e);
+			setReviewWorkflow({ ...reviewWorkflow, step: "assessment", notice, error: notice ? null : formatReviewWorkflowError((e as Error).message) });
 		}
 	}
 
@@ -6690,7 +7016,7 @@ export function App() {
 		if (!assessment || reviewWorkflow.step !== "assessment") return;
 		setReviewWorkflow({
 			...reviewWorkflow,
-			step: "discussing",
+			step: "discussing", notice: null,
 			discussionMessages: [],
 			discussionTokenBudget: null,
 			discussionSending: false,
@@ -6711,7 +7037,7 @@ export function App() {
 		if (!userMessage.content) return;
 		const optimisticMessages = [...(reviewWorkflow.discussionMessages ?? []), userMessage];
 		const run = maintainRunRef.current;
-		setReviewWorkflow({ ...reviewWorkflow, discussionMessages: optimisticMessages, discussionSending: true, error: null });
+		setReviewWorkflow({ ...reviewWorkflow, discussionMessages: optimisticMessages, discussionSending: true, notice: null, error: null });
 		try {
 			// The transcript carries the person's latest line as its last message;
 			// the server reads the conversation the screen shows, not a second copy.
@@ -6720,18 +7046,21 @@ export function App() {
 				messages: optimisticMessages,
 			});
 			if (run !== maintainRunRef.current) return;
+			logMaintenanceWarnings(response.warnings);
 			setReviewWorkflow({
 				...reviewWorkflow,
 				step: "discussing",
 				discussionMessages: [...optimisticMessages, response.message],
 				discussionTokenBudget: response.tokenBudget,
 				discussionSending: false,
-				discussionWarnings: meaningfulMaintenanceWarnings(response.warnings).join("\n") || null,
+				discussionWarnings: null,
+				notice: null,
 				error: null,
 			});
 		} catch (e) {
 			if (run !== maintainRunRef.current) return;
-			setReviewWorkflow({ ...reviewWorkflow, step: "discussing", discussionMessages: optimisticMessages, discussionSending: false, error: formatReviewWorkflowError((e as Error).message) });
+			const notice = modelNoticeFromError(e);
+			setReviewWorkflow({ ...reviewWorkflow, step: "discussing", discussionMessages: optimisticMessages, discussionSending: false, notice, error: notice ? null : formatReviewWorkflowError((e as Error).message) });
 		}
 	}
 
@@ -6746,7 +7075,7 @@ export function App() {
 			return;
 		}
 		const run = maintainRunRef.current;
-		setReviewWorkflow({ ...reviewWorkflow, step: "signing_off", error: null });
+		setReviewWorkflow({ ...reviewWorkflow, step: "signing_off", notice: null, error: null });
 		try {
 			const signoff = await requestReviewDiscussionSignoff(target.agentId, { assessmentMarkdown: assessment.assessmentMarkdown, messages });
 			if (run !== maintainRunRef.current) return;
@@ -6755,7 +7084,7 @@ export function App() {
 				step: "signing_off",
 				guidance: signoff.guidance,
 				discussionMessages: messages,
-				signoffWarnings: signoff.warnings,
+				notice: null,
 				error: null,
 			};
 			setReviewWorkflow(base);
@@ -6765,7 +7094,8 @@ export function App() {
 			beginReviewRunWatch(base, started.runId);
 		} catch (e) {
 			if (run !== maintainRunRef.current) return;
-			setReviewWorkflow({ ...reviewWorkflow, step: "discussing", discussionSending: false, error: formatReviewWorkflowError((e as Error).message) });
+			const notice = modelNoticeFromError(e);
+			setReviewWorkflow({ ...reviewWorkflow, step: "discussing", discussionSending: false, notice, error: notice ? null : formatReviewWorkflowError((e as Error).message) });
 		}
 	}
 
@@ -6786,7 +7116,7 @@ export function App() {
 		const run = maintainRunRef.current;
 		const guidance = options?.withoutDiscussion ? null : reviewWorkflow.guidance ?? null;
 		const depth = reviewWorkflow.depth ?? reviewWorkflow.availability?.recommendedDepth ?? "wording";
-		const base: ReviewWorkflowState = { ...reviewWorkflow, step: "assessment", guidance, signoffWarnings: guidance ? reviewWorkflow.signoffWarnings : undefined, activeRunConflictId: null, error: null };
+		const base: ReviewWorkflowState = { ...reviewWorkflow, step: "assessment", guidance, activeRunConflictId: null, error: null };
 		setReviewWorkflow({ ...base, step: "running", runId: null, run: null, runBusy: false, runPollError: null, error: null });
 		try {
 			const started = await startReviewRun(target.agentId, { depth, topics: assessment.fields.topics, ...(guidance ? { guidance } : {}) });
@@ -6802,9 +7132,10 @@ export function App() {
 				setReviewWorkflow({ ...base, step: "assessment", activeRunConflictId: e.runId, error: null });
 				return;
 			}
-			const startError = formatReviewWorkflowError((e as Error).message);
-			if (fromDiscussion) setReviewWorkflow({ ...reviewWorkflow, step: "discussing", discussionSending: false, error: startError });
-			else setReviewWorkflow({ ...base, step: "assessment", error: startError });
+			const notice = modelNoticeFromError(e);
+			const startError = notice ? null : formatReviewWorkflowError((e as Error).message);
+			if (fromDiscussion) setReviewWorkflow({ ...reviewWorkflow, step: "discussing", discussionSending: false, notice, error: startError });
+			else setReviewWorkflow({ ...base, step: "assessment", notice, error: startError });
 		}
 	}
 
@@ -6962,9 +7293,30 @@ export function App() {
 		void withReviewRunRequest((target, runId) => keepReviewRunEntries(target.agentId, runId, { keepTopics }));
 	}
 
-	/** The card's Edit on a note: the person's words replace the room's before saving. */
-	function editReviewRunEntryText(entryId: string, text: string): Promise<void> {
-		return withReviewRunRequest((target, runId) => editReviewRunEntry(target.agentId, runId, entryId, text));
+	/**
+	 * The card's Edit. The server's refusal goes back to the note, its editor
+	 * open; a lost answer says so there, the review is read again once the server
+	 * answers, and the note says what is true.
+	 */
+	async function editReviewRunEntryText(entryId: string, text: string, onLost: (line: string) => void): Promise<void> {
+		const target = reviewWorkflow.target;
+		const runId = reviewWorkflow.run?.runId ?? reviewWorkflow.runId;
+		if (!target || !runId) return;
+		const runToken = maintainRunRef.current;
+		const current = () => runToken === maintainRunRef.current;
+		setReviewWorkflow((state) => ({ ...state, runBusy: true, error: null }));
+		try {
+			const updated = await editReviewRunEntry(target.agentId, runId, entryId, text);
+			if (current()) setReviewWorkflow((state) => ({ ...state, run: updated }));
+		} catch (e) {
+			if (!saveAnswerLost(e)) throw e;
+			onLost(SAVE_ANSWER_LOST_SENTENCE);
+			const run = await askUntilAnswered(() => fetchReviewRun(target.agentId, runId), { stopped: () => !current() });
+			if (current()) setReviewWorkflow((state) => ({ ...state, run }));
+			if (!sameNoteWords(run.changes.find((change) => change.id === entryId)?.after, text)) throw new Error(SAVE_NOT_LANDED_SENTENCE);
+		} finally {
+			if (current()) setReviewWorkflow((state) => ({ ...state, runBusy: false }));
+		}
 	}
 
 	/** Cancel always asks first: a tidy costs minutes of reading to redo. */
@@ -6983,6 +7335,26 @@ export function App() {
 	 * Stopping never costs the first read: the minutes already spent on it are
 	 * the reason a person stops a tidy at all.
 	 */
+	/** Try again or Continue on the card: the same run tidies the groups not done; a run the server no longer holds starts Review again. */
+	async function resumeReviewRunAfterStop(): Promise<void> {
+		const target = reviewWorkflow.target;
+		const runId = reviewWorkflow.run?.runId ?? reviewWorkflow.runId;
+		if (!target || !runId || reviewWorkflow.runBusy) return;
+		const runToken = maintainRunRef.current;
+		setReviewWorkflow((current) => ({ ...current, runBusy: true, error: null }));
+		try {
+			await resumeReviewRun(target.agentId, runId);
+		} catch (e) {
+			if (runToken !== maintainRunRef.current) return;
+			const code = apiErrorCode(e);
+			if (code === "review_run_unknown") return void startPruneMemoryWorkflow();
+			if (code !== "review_run_not_ready" && code !== "review_run_nothing_waiting") return setReviewWorkflow((current) => ({ ...current, runBusy: false, error: formatReviewWorkflowError((e as Error).message) }));
+		}
+		if (runToken !== maintainRunRef.current) return;
+		reviewRunSettledRef.current = null;
+		setReviewWorkflow((current) => ({ ...current, step: "running", runId, runBusy: false, runPollError: null, fastPathBlockedReasons: undefined, error: null }));
+	}
+
 	async function reviewRunBackToAssessment(): Promise<void> {
 		clearReviewKeepDraft();
 		const target = reviewWorkflow.target;
@@ -7002,8 +7374,8 @@ export function App() {
 		setMaintainConfirm({
 			title: `Save these changes to ${target.displayName}'s memory?`,
 			body: overLimit
-				? "The notes are tidied as shown; conversations waiting to be memorized are not touched. This leaves memory above its budget. A copy of today's memory is kept, so this can be undone."
-				: "The notes are tidied as shown; conversations waiting to be memorized are not touched. A copy of today's memory is kept, so this can be undone.",
+				? "The notes are tidied as shown; conversations waiting to be memorized are not touched. This leaves memory above its budget."
+				: "The notes are tidied as shown; conversations waiting to be memorized are not touched.",
 			confirmLabel: overLimit ? "Save over the budget" : "Save",
 			cancelLabel: "Keep reading",
 			onConfirm: () => { void performReviewRunApproval(target, reviewRun); },
@@ -7020,6 +7392,27 @@ export function App() {
 			setReviewWorkflow((current) => ({ ...current, step: "saved", run: reviewRun, approvalResult, runBusy: false, error: null }));
 		} catch (e) {
 			if (runToken !== maintainRunRef.current) return;
+			if (saveAnswerLost(e)) return settleLostReviewSave(target, reviewRun, runToken);
+			setReviewWorkflow((current) => ({ ...current, step: "run_card", run: reviewRun, runBusy: false, error: formatReviewApprovalError((e as Error).message) }));
+		}
+	}
+
+	/** A Save whose answer was lost: the card says so, and shows what is true once the server answers. */
+	async function settleLostReviewSave(target: MaintainTarget, reviewRun: ReviewRun, runToken: number): Promise<void> {
+		const stopped = () => runToken !== maintainRunRef.current;
+		setReviewWorkflow((current) => ({ ...current, step: "run_card", run: reviewRun, runBusy: true, error: SAVE_ANSWER_LOST_SENTENCE }));
+		try {
+			const outcome = await settleLostRunSave({ read: () => fetchReviewRun(target.agentId, reviewRun.runId), save: () => approveReviewRun(target.agentId, reviewRun.runId), gone: (error) => apiErrorCode(error) === "review_run_unknown", stopped });
+			if (stopped()) return;
+			if ("unsaved" in outcome) {
+				setReviewWorkflow((current) => ({ ...current, step: "run_card", run: outcome.unsaved, runBusy: false, error: SAVE_NOT_LANDED_SENTENCE }));
+				return;
+			}
+			await refreshPersistentAgentStatus();
+			if (stopped()) return;
+			setReviewWorkflow((current) => ({ ...current, step: "saved", run: reviewRun, approvalResult: outcome.saved, runBusy: false, error: null }));
+		} catch (e) {
+			if (stopped()) return;
 			setReviewWorkflow((current) => ({ ...current, step: "run_card", run: reviewRun, runBusy: false, error: formatReviewApprovalError((e as Error).message) }));
 		}
 	}
@@ -7049,6 +7442,20 @@ export function App() {
 			setReviewWorkflow((current) => ({ ...current, undo: { busy: false, done: true, error: null, limitLoweredTo: response.limitLoweredTo } }));
 		} catch (e) {
 			if (run !== maintainRunRef.current) return;
+			if (saveAnswerLost(e)) {
+				// The answer was lost: the line says so, and the room's history says whether it undid.
+				setReviewWorkflow((current) => ({ ...current, undo: { busy: true, done: false, error: SAVE_ANSWER_LOST_SENTENCE } }));
+				try {
+					const undone = await lostUndoLanded(target.agentId, saveId, () => run !== maintainRunRef.current);
+					if (undone) await refreshPersistentAgentStatus();
+					if (run !== maintainRunRef.current) return;
+					setReviewWorkflow((current) => ({ ...current, undo: undone ? { busy: false, done: true, error: null } : { busy: false, done: false, error: UNDO_NOT_LANDED_SENTENCE } }));
+				} catch (error) {
+					if (run !== maintainRunRef.current) return;
+					setReviewWorkflow((current) => ({ ...current, undo: { busy: false, done: false, error: (error as Error).message } }));
+				}
+				return;
+			}
 			setReviewWorkflow((current) => ({ ...current, undo: { busy: false, done: false, error: (e as Error).message } }));
 		}
 	}
@@ -7056,7 +7463,7 @@ export function App() {
 	function abortAbsorbWorkflow() {
 		const hasDiscussionTranscript = (absorbWorkflow.discussionMessages?.length ?? 0) > 0 && (absorbWorkflow.step === "discussing" || absorbWorkflow.step === "signing_off" || absorbWorkflow.step === "proposing");
 		if (hasDiscussionTranscript) {
-			setMaintainConfirm({ title: "Abort this memory discussion?", body: "The discussion transcript is temporary and will be discarded. No memory has been changed.", confirmLabel: "Discard discussion", cancelLabel: "Keep discussing", onConfirm: exitMaintainWorkflows });
+			setMaintainConfirm({ title: "Leave Memorize?", body: "Your discussion is kept; it comes back when you open Memorize again, unless your memory or its Memory model changes first.", confirmLabel: "Leave", cancelLabel: "Keep discussing", onConfirm: exitMaintainWorkflows });
 			return;
 		}
 		// A run is live work on the server: leaving it has to stop it too.
@@ -7071,9 +7478,9 @@ export function App() {
 	// temporary transcript is discarded, after the existing confirm.
 	function backToAbsorbAssessment() {
 		if (absorbWorkflow.step !== "discussing" || absorbWorkflow.discussionSending) return;
-		const leave = () => setAbsorbWorkflow((current) => current.step === "discussing" ? { ...current, step: "assessment", discussionMessages: [], discussionTokenBudget: null, discussionSending: false, discussionWarnings: null, assessmentHandoff: null, error: null } : current);
+		const leave = () => setAbsorbWorkflow((current) => current.step === "discussing" ? { ...current, step: "assessment", discussionMessages: [], discussionTokenBudget: null, discussionSending: false, discussionWarnings: null, assessmentHandoff: null, notice: null, error: null } : current);
 		if ((absorbWorkflow.discussionMessages?.length ?? 0) > 0) {
-			setMaintainConfirm({ title: "Leave this discussion?", body: "The discussion transcript is temporary and will be discarded. Your assessment is kept. No memory has been changed.", confirmLabel: "Back to assessment", cancelLabel: "Keep discussing", onConfirm: leave });
+			setMaintainConfirm({ title: "Back to the first read?", body: "Your discussion is kept; it comes back when you open Memorize again, unless your memory or its Memory model changes first.", confirmLabel: "Back to the first read", cancelLabel: "Keep discussing", onConfirm: leave });
 			return;
 		}
 		leave();
@@ -7090,13 +7497,11 @@ export function App() {
 	// Start, or Discuss first from the chooser. A room that saves a clean update
 	// without the card starts on Start with no first read: the run begins at
 	// once. Discuss first, and every other room, reads first as always.
-	async function startAbsorbWorkflow(options?: { discuss?: boolean }) {
-		// The overflow exemption must mirror maintainBlockedReason: when the
-		// server refused this room's memory at the window, the latched standby
-		// thread is exactly what Maintain exists to fix — without the exemption
-		// the chooser opens and this click dies silently.
-		if (persistentChat || (maintainTarget && persistentThread?.state === "standby" && persistentThread.agentId === maintainTarget.agentId && !memoryOverflowRooms.has(maintainTarget.agentId))) return;
-		const target = maintainTarget;
+	// `target` comes from a click that also left the room, before the page state caught up.
+	async function startAbsorbWorkflow(options?: { discuss?: boolean; target?: MaintainTarget }) {
+		if (persistentChat && !options?.target) return;
+		const target = options?.target ?? maintainTarget;
+		if (options?.target) setMaintainTarget(options.target);
 		setMaintainChooserOpen(false);
 		resetReviewWorkflow();
 		if (!target) {
@@ -7109,13 +7514,18 @@ export function App() {
 		try {
 			const availability = await fetchAbsorbStatus(target.agentId);
 			if (run !== maintainRunRef.current) return;
+			if (availability.waitingRunId) {
+				beginAbsorbRunWatch({ step: "running", target, availability, assessment: missingFirstRead(target.agentId, availability, "skipped"), approvalResult: null, error: null }, availability.waitingRunId);
+				return;
+			}
 			if (!availability.available) {
 				setAbsorbUnavailable(availability, target);
 				return;
 			}
 			const fastPathEnabled = await roomFastPathEnabled(target.agentId);
 			if (run !== maintainRunRef.current) return;
-			if (fastPathEnabled && !options?.discuss) {
+			// With no conversation waiting there is nothing for a first read: the run sorts the notes alone.
+			if ((fastPathEnabled && !options?.discuss) || availability.recentContextEntryCount === 0) {
 				const from: AbsorbWorkflowState = { step: "assessment", target, availability, conversations: availability.sessions, assessment: missingFirstRead(target.agentId, availability, "skipped"), approvalResult: null, fastPathEnabled, error: null };
 				setAbsorbWorkflow(from);
 				await generateAbsorbProposal({ from });
@@ -7125,18 +7535,25 @@ export function App() {
 			// The first read never blocks Memorize: when the request itself fails
 			// without the server saying why, the screen goes on without one. A
 			// sentence the server wrote is its answer and is shown as before.
+			let notice: ModelNotice | null = null;
 			const assessment = await requestAbsorbAssessment(target.agentId).catch((error: unknown) => {
-				if (!isUnexplainedRequestFailure(error)) throw error;
+				notice = modelNoticeFromError(error);
+				if (!notice && !isUnexplainedRequestFailure(error)) throw error;
 				return missingFirstRead(target.agentId, availability);
 			});
 			if (run !== maintainRunRef.current) return;
-			const read: AbsorbWorkflowState = { step: "assessment", target, availability: withAbsorbStatusFields(assessment.availability, availability), conversations: availability.sessions, assessment, approvalResult: null, fastPathEnabled, error: null };
+			const read: AbsorbWorkflowState = { step: "assessment", target, availability: withAbsorbStatusFields(assessment.availability, availability), conversations: availability.sessions, assessment, notice, approvalResult: null, fastPathEnabled, error: null };
 			// Discuss first opens the discussion on the read it just made; a read
 			// with no source has nothing to discuss and stays on the first read.
-			setAbsorbWorkflow(options?.discuss && assessment.source ? { ...read, step: "discussing", discussionMessages: [], discussionTokenBudget: null, discussionSending: false, assessmentHandoff: null } : read);
+			// A discussion kept from before a reload (or from another tab) comes back as it was.
+			const kept = assessment.keptDiscussion;
+			if (kept && assessment.source) setAbsorbWorkflow({ ...read, step: "discussing", discussionMessages: kept.messages, discussionTokenBudget: kept.tokenBudget, discussionSending: false, assessmentHandoff: null });
+			else setAbsorbWorkflow(options?.discuss && assessment.source ? { ...read, step: "discussing", discussionMessages: [], discussionTokenBudget: null, discussionSending: false, assessmentHandoff: null } : read);
 		} catch (e) {
 			if (run !== maintainRunRef.current) return;
-			setAbsorbError(formatAbsorbWorkflowError((e as Error).message), null, target);
+			// A Memory model signed out or too small: the one notice with its ways out.
+			const notice = modelNoticeFromError(e);
+			setAbsorbWorkflow({ step: "error", target, availability: null, assessment: null, approvalResult: null, notice, error: notice ? null : formatAbsorbWorkflowError((e as Error).message) });
 		}
 	}
 
@@ -7152,12 +7569,14 @@ export function App() {
 		setAbsorbLoadingIndex(Math.floor(Math.random() * ABSORB_LOADING_MESSAGES.length));
 		setAbsorbWorkflow({ ...absorbWorkflow, step: "assessing", approvalResult: null, error: null });
 		try {
+			let notice: ModelNotice | null = null;
 			const assessment = await requestAbsorbAssessment(target.agentId, { retryFeedback: assessmentRetryFeedback(prior) }).catch((error: unknown) => {
-				if (!isUnexplainedRequestFailure(error)) throw error;
+				notice = modelNoticeFromError(error);
+				if (!notice && !isUnexplainedRequestFailure(error)) throw error;
 				return missingFirstRead(target.agentId, prior.availability);
 			});
 			if (run !== maintainRunRef.current) return;
-			setAbsorbWorkflow({ ...absorbWorkflow, step: "assessment", availability: withAbsorbStatusFields(assessment.availability, absorbWorkflow.availability), assessment, approvalResult: null, assessmentHandoff: null, discussionMessages: [], discussionTokenBudget: null, discussionWarnings: null, signoffWarnings: undefined, error: null });
+			setAbsorbWorkflow({ ...absorbWorkflow, step: "assessment", availability: withAbsorbStatusFields(assessment.availability, absorbWorkflow.availability), assessment, notice, approvalResult: null, assessmentHandoff: null, discussionMessages: [], discussionTokenBudget: null, discussionWarnings: null, signoffWarnings: undefined, error: null });
 		} catch (e) {
 			if (run !== maintainRunRef.current) return;
 			// The previous assessment is still valid: keep it on screen with the reason.
@@ -7203,7 +7622,7 @@ export function App() {
 		if (!assessment?.source || absorbWorkflow.step !== "assessment") return;
 		setAbsorbWorkflow({
 			...absorbWorkflow,
-			step: "discussing",
+			step: "discussing", notice: null,
 					approvalResult: null,
 			discussionMessages: [],
 			discussionTokenBudget: null,
@@ -7226,7 +7645,7 @@ export function App() {
 		const priorMessages = absorbWorkflow.discussionMessages ?? [];
 		const optimisticMessages = [...priorMessages, userMessage];
 		const run = maintainRunRef.current;
-		setAbsorbWorkflow({ ...absorbWorkflow, discussionMessages: optimisticMessages, discussionSending: true, error: null });
+		setAbsorbWorkflow({ ...absorbWorkflow, discussionMessages: optimisticMessages, discussionSending: true, notice: null, error: null });
 		try {
 			const response = await requestAbsorbDiscussionTurn(target.agentId, {
 				source: assessment.source,
@@ -7235,6 +7654,7 @@ export function App() {
 				userMessage: userMessage.content,
 			});
 			if (run !== maintainRunRef.current) return;
+			logMaintenanceWarnings(response.warnings);
 			setAbsorbWorkflow({
 				...absorbWorkflow,
 				step: "discussing",
@@ -7242,12 +7662,14 @@ export function App() {
 				discussionMessages: [...optimisticMessages, response.message],
 				discussionTokenBudget: response.tokenBudget,
 				discussionSending: false,
-				discussionWarnings: meaningfulMaintenanceWarnings(response.warnings).join("\n") || null,
+				discussionWarnings: null,
+				notice: null,
 				error: null,
 			});
 		} catch (e) {
 			if (run !== maintainRunRef.current) return;
-			setAbsorbWorkflow({ ...absorbWorkflow, step: "discussing", discussionMessages: optimisticMessages, discussionSending: false, error: formatAbsorbWorkflowError((e as Error).message) });
+			const notice = modelNoticeFromError(e);
+			setAbsorbWorkflow({ ...absorbWorkflow, step: "discussing", discussionMessages: optimisticMessages, discussionSending: false, notice, error: notice ? null : formatAbsorbWorkflowError((e as Error).message) });
 		}
 	}
 
@@ -7261,7 +7683,7 @@ export function App() {
 			return;
 		}
 		const run = maintainRunRef.current;
-		setAbsorbWorkflow({ ...absorbWorkflow, step: "signing_off", error: null });
+		setAbsorbWorkflow({ ...absorbWorkflow, step: "signing_off", notice: null, error: null });
 		try {
 			const signoff = await requestAbsorbDiscussionSignoff(target.agentId, {
 				source: assessment.source,
@@ -7297,7 +7719,8 @@ export function App() {
 			beginAbsorbRunWatch(base, response.runId);
 		} catch (e) {
 			if (run !== maintainRunRef.current) return;
-			setAbsorbWorkflow({ ...absorbWorkflow, step: "discussing", discussionSending: false, error: formatAbsorbWorkflowError((e as Error).message) });
+			const notice = modelNoticeFromError(e);
+			setAbsorbWorkflow({ ...absorbWorkflow, step: "discussing", discussionSending: false, notice, error: notice ? null : formatAbsorbWorkflowError((e as Error).message) });
 		}
 	}
 
@@ -7338,10 +7761,12 @@ export function App() {
 				return;
 			}
 			// A run that could not start never destroys work: the discussion or the
-			// first read survives with an inline error.
-			const draftError = formatMaintenanceDraftError((e as Error).message);
-			if (fromDiscussion) setAbsorbWorkflow({ ...current, step: "discussing", discussionSending: false, approvalResult: null, assessmentHandoff: null, error: draftError });
-			else setAbsorbWorkflow({ ...current, step: "assessment", approvalResult: null, error: draftError });
+			// first read survives with an inline error, or with the model notice
+			// when the Memory model is the reason.
+			const notice = modelNoticeFromError(e);
+			const draftError = notice ? null : formatMaintenanceDraftError((e as Error).message);
+			if (fromDiscussion) setAbsorbWorkflow({ ...current, step: "discussing", discussionSending: false, approvalResult: null, assessmentHandoff: null, notice, error: draftError });
+			else setAbsorbWorkflow({ ...current, step: "assessment", approvalResult: null, notice, error: draftError });
 		}
 	}
 
@@ -7362,7 +7787,9 @@ export function App() {
 		if (absorbRunSettledRef.current === absorbRun.runId) return;
 		absorbRunSettledRef.current = absorbRun.runId;
 		if (absorbRun.state === "failed") {
-			setAbsorbWorkflow((current) => ({ ...current, step: "run_failed", run: absorbRun, runBusy: false, runPollError: null, error: absorbRun.error ?? "The memory update could not be finished." }));
+			// What stopped it goes to the console; the screen says what happened.
+			if (absorbRun.error) console.info(`[maintenance] ${absorbRun.error}`);
+			setAbsorbWorkflow((current) => ({ ...current, step: "run_failed", run: absorbRun, runBusy: false, runPollError: null, error: null }));
 			return;
 		}
 		if (absorbRun.state === "cancelled") {
@@ -7513,12 +7940,54 @@ export function App() {
 		void withAbsorbRunRequest((target, runId) => keepAbsorbRunEntries(target.agentId, runId, { keepTopics }));
 	}
 
-	/** The card's Edit on a note: the person's words replace the model's before saving. */
-	function editAbsorbRunEntryText(entryId: string, text: string): Promise<void> {
-		return withAbsorbRunRequest((target, runId) => editAbsorbRunEntry(target.agentId, runId, entryId, text));
+	/**
+	 * The card's Edit. The server's refusal goes back to the note, its editor
+	 * open; a lost answer says so there, the update is read again once the
+	 * server answers, and the note says what is true.
+	 */
+	async function editAbsorbRunEntryText(entryId: string, text: string, onLost: (line: string) => void): Promise<void> {
+		const target = absorbWorkflow.target;
+		const runId = absorbWorkflow.run?.runId ?? absorbWorkflow.runId;
+		if (!target || !runId) return;
+		const runToken = maintainRunRef.current;
+		const current = () => runToken === maintainRunRef.current;
+		setAbsorbWorkflow((state) => ({ ...state, runBusy: true, error: null }));
+		try {
+			const updated = await editAbsorbRunEntry(target.agentId, runId, entryId, text);
+			if (current()) setAbsorbWorkflow((state) => ({ ...state, run: updated }));
+		} catch (e) {
+			if (!saveAnswerLost(e)) throw e;
+			onLost(SAVE_ANSWER_LOST_SENTENCE);
+			const run = await askUntilAnswered(() => fetchAbsorbRun(target.agentId, runId), { stopped: () => !current() });
+			if (current()) setAbsorbWorkflow((state) => ({ ...state, run }));
+			const change = run.sessions.flatMap((session) => session.changes ?? []).find((candidate) => candidate.id === entryId);
+			if (!sameNoteWords(change?.after, text)) throw new Error(SAVE_NOT_LANDED_SENTENCE);
+		} finally {
+			if (current()) setAbsorbWorkflow((state) => ({ ...state, runBusy: false }));
+		}
 	}
 	function chooseAbsorbRunBesideNote(entryId: string, choice: "replace" | "keep-both"): Promise<void> {
 		return withAbsorbRunRequest((target, runId) => chooseAbsorbRunBeside(target.agentId, runId, entryId, choice));
+	}
+	async function moveAbsorbRunSorted(entryId: string, topic: string, onLost: (line: string) => void): Promise<void> {
+		const target = absorbWorkflow.target;
+		const runId = absorbWorkflow.run?.runId ?? absorbWorkflow.runId;
+		if (!target || !runId) return;
+		const runToken = maintainRunRef.current;
+		const current = () => runToken === maintainRunRef.current;
+		setAbsorbWorkflow((state) => ({ ...state, runBusy: true, error: null }));
+		try {
+			const updated = await moveAbsorbRunSortedNote(target.agentId, runId, entryId, topic);
+			if (current()) setAbsorbWorkflow((state) => ({ ...state, run: updated }));
+		} catch (e) {
+			if (!saveAnswerLost(e)) throw e;
+			onLost(SAVE_ANSWER_LOST_SENTENCE);
+			const run = await askUntilAnswered(() => fetchAbsorbRun(target.agentId, runId), { stopped: () => !current() });
+			if (current()) setAbsorbWorkflow((state) => ({ ...state, run }));
+			if (run.sorted?.find((row) => row.id === entryId)?.topic !== topic.replace(/\s+/g, " ").trim()) throw new Error(SAVE_NOT_LANDED_SENTENCE);
+		} finally {
+			if (current()) setAbsorbWorkflow((state) => ({ ...state, runBusy: false }));
+		}
 	}
 
 	/** Cancel always asks first: a run costs minutes of model work to redo. */
@@ -7591,8 +8060,8 @@ export function App() {
 		setMaintainConfirm({
 			title: `Save these notes to ${target.displayName}'s memory?`,
 			body: overBudget
-				? "The remembered conversations become lasting notes, and memory stays above its budget because of what you kept. A copy of today's memory is kept, so this can be undone."
-				: "The remembered conversations become lasting notes. A copy of today's memory is kept, so this can be undone.",
+				? "The remembered conversations become lasting notes, and memory stays above its budget because of what you kept."
+				: "The remembered conversations become lasting notes.",
 			confirmLabel: overBudget ? "Save over the budget" : "Save",
 			cancelLabel: "Keep reading",
 			onConfirm: () => { void performAbsorbRunApproval(target, absorbRun); },
@@ -7609,6 +8078,27 @@ export function App() {
 			setAbsorbWorkflow((current) => ({ ...current, step: "saved", run: absorbRun, approvalResult, runBusy: false, error: null }));
 		} catch (e) {
 			if (runToken !== maintainRunRef.current) return;
+			if (saveAnswerLost(e)) return settleLostAbsorbSave(target, absorbRun, runToken);
+			setAbsorbWorkflow((current) => ({ ...current, step: "run_card", run: absorbRun, runBusy: false, error: formatAbsorbRunSaveError((e as Error).message) }));
+		}
+	}
+
+	/** A Save whose answer was lost: the card says so, and shows what is true once the server answers. */
+	async function settleLostAbsorbSave(target: MaintainTarget, absorbRun: AbsorbRun, runToken: number): Promise<void> {
+		const stopped = () => runToken !== maintainRunRef.current;
+		setAbsorbWorkflow((current) => ({ ...current, step: "run_card", run: absorbRun, runBusy: true, error: SAVE_ANSWER_LOST_SENTENCE }));
+		try {
+			const outcome = await settleLostRunSave({ read: () => fetchAbsorbRun(target.agentId, absorbRun.runId), save: () => approveAbsorbRun(target.agentId, absorbRun.runId), gone: (error) => apiErrorCode(error) === "absorb_run_unknown", stopped });
+			if (stopped()) return;
+			if ("unsaved" in outcome) {
+				setAbsorbWorkflow((current) => ({ ...current, step: "run_card", run: outcome.unsaved, runBusy: false, error: SAVE_NOT_LANDED_SENTENCE }));
+				return;
+			}
+			await refreshPersistentAgentStatus();
+			if (stopped()) return;
+			setAbsorbWorkflow((current) => ({ ...current, step: "saved", run: absorbRun, approvalResult: outcome.saved, runBusy: false, error: null }));
+		} catch (e) {
+			if (stopped()) return;
 			setAbsorbWorkflow((current) => ({ ...current, step: "run_card", run: absorbRun, runBusy: false, error: formatAbsorbRunSaveError((e as Error).message) }));
 		}
 	}
@@ -7752,6 +8242,23 @@ export function App() {
 		setBackgroundDoneToast((current) => (current?.agentId === agentId ? null : current));
 	}
 
+	// Reload in a window the room moved on from: it joins the room's conversation, the typed message kept in the box.
+	async function reloadMovedRoom(): Promise<void> {
+		const chat = persistentChatRef.current;
+		if (!chat) return;
+		const draft = textareaRef.current?.value ?? "";
+		if (draft.trim()) roomDraftsRef.current.set(chat.agentId, draft);
+		try {
+			const status = (await fetchPersistentAgentStatuses()).find((candidate) => candidate.id === chat.agentId);
+			if (!status) throw new Error("This room is no longer available. Refresh Home and try again.");
+			await openRoomFromAddress(status);
+		} catch (e) {
+			setPersistentResumeError((e as Error).message);
+			setView("home");
+			await refreshPersistentAgentStatus();
+		}
+	}
+
 	async function openPersistentAgentResume(status: PersistentAgentStatus) {
 		setPersistentResumeError(null);
 		clearBackgroundActivityBadge(status.id);
@@ -7759,7 +8266,7 @@ export function App() {
 		const localThreadId = persistentThread?.agentId === status.id && (persistentThread.state === "standby" || persistentThread.state === "live") ? persistentThread.conversationId : null;
 		const threadId = runtimeThreadId || localThreadId;
 		if (!threadId) {
-			setPersistentResumeError("No standby thread was found for this room. Refresh Home and try again.");
+			setPersistentResumeError("No conversation to continue was found for this room. Refresh Home and try again.");
 			await refreshPersistentAgentStatus();
 			return;
 		}
@@ -7798,8 +8305,8 @@ export function App() {
 	}
 
 	// The background-answer toast's Open (slice 3): from Home a plain resume;
-	// from inside another room the full leave grammar first — goHome owns the
-	// leave-and-let-it-finish confirm, and a declined confirm stays put.
+	// from inside another room the full leave grammar first: goHome saves the
+	// prompt and lets a running answer finish in the background.
 	async function openRoomFromBackgroundToast(agentId: PersistentAgentId): Promise<void> {
 		setBackgroundDoneToast(null);
 		if (persistentChatRef.current) {
@@ -7868,7 +8375,7 @@ export function App() {
 		const inFlightWarning = persistentRoomInFlight ? "The response currently being written will be stopped. " : "";
 		const ok = await confirmDialog({
 			title: "Forget this conversation and start fresh?",
-			body: `${inFlightWarning}This will discard the current room transcript. Nothing will be saved to memory.`,
+			body: `${inFlightWarning}This deletes this conversation for good. Nothing from it is saved to memory.`,
 			confirmLabel: "Forget",
 			danger: true,
 		});
@@ -7914,7 +8421,7 @@ export function App() {
 				await discardEmptyPreparedBoundaryThread(approval.agentId, postCheckpointThreadId);
 			} catch (e) {
 				setCheckpointApprovalError(formatRememberError((e as Error).message));
-				return;
+				return false;
 			}
 		} else if (!approval && persistentChat) {
 			void setPersistentRuntimeIdle(persistentChat.agentId);
@@ -7930,6 +8437,13 @@ export function App() {
 		setItems([]);
 		setView("home");
 		void refreshPersistentAgentStatus();
+		return true;
+	}
+
+	// The Remember that filled the room: Home, and Memorize starts on it.
+	async function memorizeAfterCheckpoint() {
+		const target = persistentChat ? { agentId: persistentChat.agentId, displayName: persistentChat.displayName } : null;
+		if (await restAfterCheckpoint() && target) void startAbsorbWorkflow({ target });
 	}
 
 	const resolveApproval = useCallback((requestId: string, value: any, label: string) => {
@@ -8170,8 +8684,11 @@ export function App() {
 		const timer = window.setTimeout(() => setReconnectedNotice(null), 3000);
 		return () => window.clearTimeout(timer);
 	}, [reconnectedNotice]);
+	// Skills this room paused because they changed: said once, on entering.
+	const pausedSkillsToast = usePausedSkillsNotice(persistentChat?.agentId ?? null, () => openRoomSettings("skills"));
 	const roomToasts = useMemo<ToastView[]>(() => {
 		const list: ToastView[] = [];
+		if (pausedSkillsToast) list.push(pausedSkillsToast);
 		if (reconnectedNotice !== null) list.push({ id: `reconnected:${reconnectedNotice}`, tone: "success", text: "Connected again." });
 		if (backgroundDoneToastView) list.push(backgroundDoneToastView);
 		if (exportNotice) list.push({ id: "export", tone: exportNotice.kind, text: exportNotice.text });
@@ -8216,7 +8733,7 @@ export function App() {
 			});
 		}
 		return list;
-	}, [reconnectedNotice, backgroundDoneToastView, exportNotice, removeNotice, fileDeleteNotice, taskDoneToast]);
+	}, [pausedSkillsToast, reconnectedNotice, backgroundDoneToastView, exportNotice, removeNotice, fileDeleteNotice, taskDoneToast]);
 	// The chip in a message opens the file exactly as its Files row does (taste
 	// pass), so the two entry points can never drift: find the row that stands
 	// for that shelf file and take the row's own path. A ref keeps the handler
@@ -8265,6 +8782,9 @@ export function App() {
 	// reading the server-side flags above.
 	const roomWorkingForChrome = persistentRoomRunning || (Boolean(persistentChat) && revealing);
 	const roomInFlightForChrome = persistentRoomInFlight || (Boolean(persistentChat) && revealing);
+	// The save that filled the room closed this conversation on the server: no message box, only the ways on.
+	const closedByFullSave = Boolean(persistentChat && checkpointApprovalResult && roomFilledBy(checkpointApprovalResult) && checkpointApprovalResult.conversationId === persistentChat.conversationId);
+	closedByFullSaveRef.current = closedByFullSave;
 	// Stop while the answer is only still appearing: the turn is over and the
 	// answer is saved, so there is nothing to abort. Show the rest at once.
 	function stopTurn() {
@@ -8275,24 +8795,19 @@ export function App() {
 		void abortCurrentTurn();
 	}
 	// Resolves true when the leave actually happened (or nothing needed
-	// leaving) — a declined leave-and-let-it-finish confirm resolves false, so
-	// a caller chaining a navigation (the background-answer toast's Open) can
-	// stand down without reading state that only settles on the next render.
+	// leaving), and false only when a leave could not happen, so a caller
+	// chaining a navigation (the background-answer toast's Open) can stand down
+	// without reading state that only settles on the next render.
 	async function goHome(): Promise<boolean> {
+		// A conversation the save that filled the room closed leaves the way Return Home does: nothing is saved into it.
+		if (closedByFullSaveRef.current) return restAfterCheckpoint();
 		// A fully-received answer may still be revealing its tail (busy
 		// already false); leaving must not persist a truncated tail.
 		flushAssistantStream();
 		if (persistentChat && persistentRoomInFlight && !turnCancelling) {
-			// Community #14 slice 2: leaving no longer kills the response — the
-			// server keeps writing it and lands it in the conversation; the room
-			// card announces when it is ready.
-			const ok = await confirmDialog({
-				title: "Leave and let it finish in the background?",
-				body: "The assistant is still responding. The answer will be waiting in this room.",
-				confirmLabel: "Leave",
-				cancelLabel: "Stay",
-			});
-			if (!ok) return false;
+			// Leaving does not stop the response: the server keeps writing it
+			// and lands it in the conversation, and the room card shows it
+			// answering, then ready. So there is nothing to confirm.
 			// Make sure the prompt that started this turn is on disk before the
 			// socket closes: the server lands the answer by appending to the
 			// saved thread file (the landing supersedes any partial tail saved
@@ -8364,6 +8879,7 @@ export function App() {
 			resetMaintainWorkflows();
 			setBusy(false);
 		}
+		if (releasingAgentId) leftRoomRef.current = { id: releasingAgentId, at: Date.now() };
 		if (releasingAgentId && !options.detachInFlight) {
 			setPersistentAgentStatuses((statuses) => statuses.map((s) => (s.id === releasingAgentId ? { ...s, activeLock: null } : s)));
 		}
@@ -8426,6 +8942,152 @@ export function App() {
 	// modal here declares aria-modal — so the chord no-ops instead of
 	// stacking overlays. Same fresh-render ref seam as refreshSetupStatusRef:
 	// the mount-scoped listener must call the CURRENT render's openers.
+	// Back and Forward move between Home, a room, Maintain, Memory and the
+	// dashboard as on a normal website: each change of screen is a history
+	// entry, and the address names the screen, so a reload on a room opens it.
+	const maintainAgentId = absorbWorkflow.target?.agentId ?? reviewWorkflow.target?.agentId ?? (maintainChooserOpen ? maintainTarget?.agentId : undefined);
+	const shownRoute: AppRoute = maintainAgentId ? { screen: "maintain", agentId: maintainAgentId }
+		: view === "chat" && persistentChat ? { screen: "room", agentId: persistentChat.agentId }
+		: view === "memory" || view === "dashboard" ? { screen: view }
+		: { screen: "home" };
+	const shownHash = appRouteHash(shownRoute);
+	// The address the page was loaded on, opened once the rooms are known.
+	const routeOnLoadRef = useRef<AppRoute | null>(parseAppRouteHash(window.location.hash));
+	// Until a room's address has opened that room, Home is not shown for a moment on the way: the room's id while it opens.
+	const [openingRoomFromAddress, setOpeningRoomFromAddress] = useState<string | null>(() => routeOnLoadRef.current?.screen === "room" ? routeOnLoadRef.current.agentId : null);
+	useEffect(() => {
+		if (!openingRoomFromAddress) return;
+		const giveUp = window.setTimeout(() => setOpeningRoomFromAddress(null), 5_000);
+		return () => window.clearTimeout(giveUp);
+	}, [openingRoomFromAddress]);
+	// Each entry the app makes carries its place in the history (appIndex). Set by Back or Forward: the address shown
+	// then and the place it came from. The address already moved: a screen that went elsewhere, or found nothing
+	// there (a room that is gone), is written over it; a screen that stayed (a Leave confirm) goes back to where
+	// it was, every entry kept.
+	const historyIndexRef = useRef<number>(typeof window.history.state?.appIndex === "number" ? window.history.state.appIndex : 0);
+	const fromHistoryRef = useRef<{ shown: string; index: number } | null>(null);
+	const nothingThereRef = useRef(false);
+	const ignorePopRef = useRef(false);
+	// Where a Back the screen refused went: a Leave right after lands there, as Back would have, adding no entry.
+	const refusedBackRef = useRef<{ hash: string; index: number } | null>(null);
+	const shownHashRef = useRef(shownHash);
+	shownHashRef.current = shownHash;
+	const entryState = (index: number) => ({ ...(window.history.state ?? {}), appIndex: index });
+	const [routeSettled, setRouteSettled] = useState(0);
+	useEffect(() => {
+		if (routeOnLoadRef.current) {
+			if (shownHash === "#/") return;
+			routeOnLoadRef.current = null;
+		}
+		if (window.location.hash === shownHash || (window.location.hash === "" && shownHash === "#/")) {
+			fromHistoryRef.current = null;
+			nothingThereRef.current = false;
+			return;
+		}
+		const popped = fromHistoryRef.current;
+		if (popped !== null) {
+			const stayed = popped.shown === shownHash && !nothingThereRef.current;
+			const back = popped.index - historyIndexRef.current;
+			fromHistoryRef.current = null;
+			nothingThereRef.current = false;
+			if (stayed && back !== 0) {
+				refusedBackRef.current = { hash: window.location.hash || "#/", index: historyIndexRef.current };
+				goWithoutRoute(back, popped.index);
+			} else {
+				window.history.replaceState(entryState(historyIndexRef.current), "", shownHash);
+			}
+			return;
+		}
+		const refused = refusedBackRef.current;
+		refusedBackRef.current = null;
+		if (refused?.hash === shownHash) {
+			goWithoutRoute(refused.index - historyIndexRef.current, refused.index);
+			return;
+		}
+		historyIndexRef.current += 1;
+		window.history.pushState(entryState(historyIndexRef.current), "", shownHash);
+	}, [shownHash, routeSettled]);
+	/** Moves `by` entries to the one at `index`, whose screen is already shown: its popstate is not a route. */
+	function goWithoutRoute(by: number, index: number): void {
+		ignorePopRef.current = true;
+		// Never left on: a return that never arrives must not swallow the person's next Back.
+		window.setTimeout(() => { ignorePopRef.current = false; }, 1_000);
+		historyIndexRef.current = index;
+		window.history.go(by);
+	}
+	useEffect(() => {
+		const route = routeOnLoadRef.current;
+		if (!route || route.screen === "home") return;
+		if (route.screen === "memory" || route.screen === "dashboard") {
+			routeOnLoadRef.current = null;
+			setView(route.screen);
+			return;
+		}
+		const status = persistentAgentStatuses.find((candidate) => candidate.id === route.agentId);
+		if (!status) {
+			if (persistentAgentStatuses.length > 0) {
+				routeOnLoadRef.current = null;
+				setOpeningRoomFromAddress(null);
+			}
+			return;
+		}
+		routeOnLoadRef.current = null;
+		if (route.screen === "room") void openRoomFromAddress(status).finally(() => setOpeningRoomFromAddress(null));
+		else openMaintainChooser({ agentId: status.id, displayName: status.displayName ?? status.id });
+	}, [persistentAgentStatuses]);
+	// A room opens from its address as its card opens it: a conversation waiting there is resumed. An empty
+	// one a save or Forget prepared is retired for a fresh one, unless another window has the room open on it.
+	const openRoomFromAddress = (status: PersistentAgentStatus): Promise<void> => {
+		const prepared = !!(status.activeThread?.preparedByBoundary ?? status.activeThread?.preparedByCheckpoint);
+		const shownElsewhere = status.activeLock?.surface === "web";
+		const waiting = (!prepared || shownElsewhere) && (status.runtime.state === "standby" || status.runtime.state === "active") && !!status.runtime.activeThreadId;
+		return waiting ? openPersistentAgentResume(status) : openPersistentAgent(status);
+	};
+	const applyRouteRef = useRef<(route: AppRoute) => Promise<void>>(async () => {});
+	applyRouteRef.current = async (route: AppRoute) => {
+		// Leaving Maintain asks what its own close asks.
+		if (maintainAgentId) {
+			if (route.screen === "maintain" && route.agentId === maintainAgentId) return;
+			if (absorbWorkflow.target) abortAbsorbWorkflow();
+			else if (reviewWorkflow.target) abortReviewWorkflow();
+			else closeMaintainChooser();
+			return;
+		}
+		if (route.screen === "room" && view === "chat" && persistentChat?.agentId === route.agentId) return;
+		if (view === "chat" && !(await goHome())) return;
+		if (route.screen === "room" || route.screen === "maintain") {
+			const status = persistentAgentStatuses.find((candidate) => candidate.id === route.agentId);
+			if (!status) {
+				nothingThereRef.current = true;
+				return;
+			}
+			if (route.screen === "room") await openRoomFromAddress(status);
+			else openMaintainChooser({ agentId: status.id, displayName: status.displayName ?? status.id });
+			return;
+		}
+		setView(route.screen);
+	};
+	useEffect(() => {
+		if (typeof window.history.state?.appIndex !== "number") window.history.replaceState(entryState(historyIndexRef.current), "");
+		const onPop = (event: PopStateEvent) => {
+			// The return from a refused move: already where the screen is.
+			if (ignorePopRef.current) {
+				ignorePopRef.current = false;
+				return;
+			}
+			refusedBackRef.current = null;
+			// A second Back before the first settled keeps the place the first one came from.
+			fromHistoryRef.current ??= { shown: shownHashRef.current, index: historyIndexRef.current };
+			// An entry the browser made itself (an address typed or followed) has no place yet: it is the next one.
+			const known = typeof event.state?.appIndex === "number";
+			historyIndexRef.current = known ? event.state.appIndex : historyIndexRef.current + 1;
+			if (!known) window.history.replaceState(entryState(historyIndexRef.current), "");
+			void applyRouteRef.current(parseAppRouteHash(window.location.hash)).finally(() => setRouteSettled((count) => count + 1));
+		};
+		window.addEventListener("popstate", onPop);
+		return () => window.removeEventListener("popstate", onPop);
+	}, []);
+
 	const settingsChordRef = useRef<(event: KeyboardEvent) => void>(() => {});
 	settingsChordRef.current = (event: KeyboardEvent) => {
 		// The platform's own convention: ⌘ on a Mac, Ctrl elsewhere — matching
@@ -8502,13 +9164,13 @@ export function App() {
 					title: "External tools your rooms can reach",
 					content: (
 						<div className="landing ai-setup-page connectors-page">
-							<PaneHeader title="Connectors" line="External tools your rooms can reach. Add one here, then enable it in each room that should use it." />
+							<PaneHeader title="Connectors" line={clientContext.sharedServer ? "External tools your rooms can reach." : "External tools your rooms can reach. Add one here, then enable it in each room that should use it."} />
 							<ConnectorsPage />
 						</div>
 					),
 				},
 				{ id: "skills", label: "Skills", title: "Reusable know-how your rooms can pick up", content: <SkillsPage /> },
-				...(remoteClient ? [] : [{
+				...(computerOnlyControls ? [{
 					id: "remote" as const,
 					label: "Remote access",
 					content: (
@@ -8517,11 +9179,11 @@ export function App() {
 							<RemoteAccessPage />
 						</div>
 					),
-				}]),
+				}] : []),
 				// Local-only like Remote access: switching restarts this computer's
 				// server and rotates the sign-in token, which a remote device can
 				// neither survive nor complete.
-				...(remoteClient ? [] : [{
+				...(computerOnlyControls ? [{
 					id: "profile" as const,
 					label: "Profiles",
 					title: "Which exxperts data profile this computer runs",
@@ -8531,13 +9193,13 @@ export function App() {
 							<StateProfileSection />
 						</div>
 					),
-				}]),
+				}] : []),
 			]}
 		/>
 	) : null;
 	const withConnectionBanner = (content: ReactNode): ReactNode => (
 		<>
-			{connectionWarning && <ConnectionLostBanner />}
+			{showConnectionLost && <ConnectionLostBanner />}
 			{content}
 			{settingsOverlayNode}
 		</>
@@ -8553,12 +9215,16 @@ export function App() {
 	}));
 
 	if (view === "home") {
+		if (openingRoomFromAddress) {
+			const openingName = persistentAgentStatuses.find((status) => status.id === openingRoomFromAddress)?.displayName?.trim();
+			return withConnectionBanner(<div className="app-opening-room" role="status">{openingName ? `Opening ${openingName}…` : "Opening the room…"}</div>);
+		}
 		if (absorbWorkflowOpen) {
 			const absorbModelSettingsRoom = absorbModelSettingsOpen && absorbWorkflow.target ? persistentAgentStatuses.find((status) => status.id === absorbWorkflow.target!.agentId) ?? null : null;
 			return withConnectionBanner(
 				<>
 					{maintainConfirm && <MaintainConfirmDialog confirm={maintainConfirm} onClose={() => setMaintainConfirm(null)} />}
-					<AbsorbWorkflowShell state={absorbWorkflow} loadingMessage={ABSORB_LOADING_MESSAGES[absorbLoadingIndex]} waitingMessage={ABSORB_WAITING_MESSAGES[absorbWaitingIndex]} keepIds={absorbKeepDraft ?? absorbWorkflow.run?.demotion.keepIds ?? []} onStopAbandonedRun={() => void stopAbandonedAbsorbRun()} onAbort={abortAbsorbWorkflow} onDiscuss={startAbsorbDiscussion} onSendDiscussionMessage={sendAbsorbDiscussionMessage} onGenerateFromDiscussion={generateAbsorbProposalFromDiscussion} onGenerate={() => void generateAbsorbProposal()} onBackToAssessment={backToAbsorbAssessment} onReassess={reassessAbsorb} onDraftWithoutDiscussion={() => void generateAbsorbProposal({ withoutDiscussion: true })} onRestart={restartMaintain} onCancelRun={confirmCancelAbsorbRun} onToggleRunKeep={toggleAbsorbRunKeep} onToggleRunKeepTopic={toggleAbsorbRunKeepTopic} onRaiseRunBudget={raiseAbsorbRunBudget} onRaiseLimitBeforeRun={(tokens) => void raiseAbsorbLimitBeforeRun(tokens)} onReviewFirst={reviewFirstFromAbsorb} onEditRunEntry={editAbsorbRunEntryText} onChooseRunBeside={chooseAbsorbRunBesideNote} onApproveRun={approveAbsorbRunUpdate} onRunBackToAssessment={() => void absorbRunBackToAssessment()} onResumeRun={() => void resumeAbsorbRunAfterStop()} onChooseModel={() => setAbsorbModelSettingsOpen(true)} returnLabel={maintainReturnLabel} />
+					<AbsorbWorkflowShell state={absorbWorkflow} turnWait={absorbWorkflow.step === "approving" && roomTurnInFlight(absorbWorkflow.target?.agentId)} loadingMessage={ABSORB_LOADING_MESSAGES[absorbLoadingIndex]} waitingMessage={ABSORB_WAITING_MESSAGES[absorbWaitingIndex]} keepIds={absorbKeepDraft ?? absorbWorkflow.run?.demotion.keepIds ?? []} onStopAbandonedRun={() => void stopAbandonedAbsorbRun()} onAbort={abortAbsorbWorkflow} onDiscuss={startAbsorbDiscussion} onSendDiscussionMessage={sendAbsorbDiscussionMessage} onGenerateFromDiscussion={generateAbsorbProposalFromDiscussion} onGenerate={() => void generateAbsorbProposal()} onBackToAssessment={backToAbsorbAssessment} onReassess={reassessAbsorb} onDraftWithoutDiscussion={() => void generateAbsorbProposal({ withoutDiscussion: true })} onRestart={restartMaintain} onCancelRun={confirmCancelAbsorbRun} onToggleRunKeep={toggleAbsorbRunKeep} onToggleRunKeepTopic={toggleAbsorbRunKeepTopic} onRaiseRunBudget={raiseAbsorbRunBudget} onRaiseLimitBeforeRun={(tokens) => void raiseAbsorbLimitBeforeRun(tokens)} onReviewFirst={reviewFirstFromAbsorb} onEditRunEntry={editAbsorbRunEntryText} onChooseRunBeside={chooseAbsorbRunBesideNote} onMoveRunSorted={moveAbsorbRunSorted} onApproveRun={approveAbsorbRunUpdate} onRunBackToAssessment={() => void absorbRunBackToAssessment()} onResumeRun={() => void resumeAbsorbRunAfterStop()} onChooseModel={() => setAbsorbModelSettingsOpen(true)} onSignIn={(provider) => openSignIn(provider)} returnLabel={maintainReturnLabel} />
 					{absorbModelSettingsRoom && (
 						<RoomSettingsModal status={absorbModelSettingsRoom} initialPane="model" onClose={() => setAbsorbModelSettingsOpen(false)} onArchive={archivePersistentAgentRoom} onPurge={purgePersistentAgentRoom} onRefresh={refreshPersistentAgentStatus} onOpenSkillsLibrary={() => openSettings("skills")} onOpenConnectors={() => openSettings("connectors")} />
 					)}
@@ -8566,10 +9232,14 @@ export function App() {
 			);
 		}
 		if (reviewWorkflowOpen) {
+			const reviewModelSettingsRoom = absorbModelSettingsOpen && reviewWorkflow.target ? persistentAgentStatuses.find((status) => status.id === reviewWorkflow.target!.agentId) ?? null : null;
 			return withConnectionBanner(
 				<>
 					{maintainConfirm && <MaintainConfirmDialog confirm={maintainConfirm} onClose={() => setMaintainConfirm(null)} />}
-					<ReviewWorkflowShell state={reviewWorkflow} loadingMessage={REVIEW_LOADING_MESSAGES[reviewLoadingIndex]} waitingMessage={REVIEW_WAITING_MESSAGES[reviewWaitingIndex]} keepIds={reviewKeepDraft ?? reviewWorkflow.run?.demotion.keepIds ?? []} onStopAbandonedRun={() => void stopAbandonedReviewRun()} onAbort={abortReviewWorkflow} onDiscuss={startReviewDiscussion} onSendDiscussionMessage={sendReviewDiscussionMessage} onContinueFromDiscussion={() => void startReviewTidyFromDiscussion()} onContinueWithoutDiscussion={() => void startReviewTidy({ withoutDiscussion: true })} onContinue={() => void startReviewTidy()} onBackToAssessment={backToReviewAssessment} onReassess={() => void reassessReview()} onRestart={restartMaintain} onSetDepth={setReviewDepth} onCancelRun={confirmCancelReviewRun} onToggleRunKeep={toggleReviewRunKeep} onToggleRunKeepTopic={toggleReviewRunKeepTopic} onRaiseRunBudget={raiseReviewRunBudget} onEditRunEntry={editReviewRunEntryText} onSaveRun={approveReviewRunUpdate} onRunBackToAssessment={() => void reviewRunBackToAssessment()} onUndo={undoReviewSave} returnLabel={maintainReturnLabel} />
+					<ReviewWorkflowShell state={reviewWorkflow} turnWait={reviewWorkflow.step === "approving" && roomTurnInFlight(reviewWorkflow.target?.agentId)} loadingMessage={REVIEW_LOADING_MESSAGES[reviewLoadingIndex]} waitingMessage={REVIEW_WAITING_MESSAGES[reviewWaitingIndex]} keepIds={reviewKeepDraft ?? reviewWorkflow.run?.demotion.keepIds ?? []} onStopAbandonedRun={() => void stopAbandonedReviewRun()} onAbort={abortReviewWorkflow} onDiscuss={startReviewDiscussion} onSendDiscussionMessage={sendReviewDiscussionMessage} onContinueFromDiscussion={() => void startReviewTidyFromDiscussion()} onContinueWithoutDiscussion={() => void startReviewTidy({ withoutDiscussion: true })} onContinue={() => void startReviewTidy()} onBackToAssessment={backToReviewAssessment} onReassess={() => void reassessReview()} onRestart={restartMaintain} onSetDepth={setReviewDepth} onCancelRun={confirmCancelReviewRun} onToggleRunKeep={toggleReviewRunKeep} onToggleRunKeepTopic={toggleReviewRunKeepTopic} onRaiseRunBudget={raiseReviewRunBudget} onEditRunEntry={editReviewRunEntryText} onSaveRun={approveReviewRunUpdate} onRunBackToAssessment={() => void reviewRunBackToAssessment()} onResumeRun={() => void resumeReviewRunAfterStop()} onUndo={undoReviewSave} onChooseModel={() => setAbsorbModelSettingsOpen(true)} onSignIn={(provider) => openSignIn(provider)} returnLabel={maintainReturnLabel} />
+					{reviewModelSettingsRoom && (
+						<RoomSettingsModal status={reviewModelSettingsRoom} initialPane="model" onClose={() => setAbsorbModelSettingsOpen(false)} onArchive={archivePersistentAgentRoom} onPurge={purgePersistentAgentRoom} onRefresh={refreshPersistentAgentStatus} onOpenSkillsLibrary={() => openSettings("skills")} onOpenConnectors={() => openSettings("connectors")} />
+					)}
 				</>
 			);
 		}
@@ -8580,9 +9250,11 @@ export function App() {
 			<>
 				{gcAssessment && !gcReviewOpen && <TaskStoreGcBanner assessment={gcAssessment} onReview={() => setGcReviewOpen(true)} onDismiss={() => setGcAssessment(null)} />}
 				{gcReviewOpen && gcAssessment && <TaskStoreGcDialog assessment={gcAssessment} busy={gcBusy} onConfirm={() => void confirmTaskStoreGc()} onClose={() => setGcReviewOpen(false)} />}
-				{backgroundDoneToastView && <div className="launcher-toasts"><ToastStack toasts={[backgroundDoneToastView]} /></div>}
+				{/* No "finished a response" note here: on Home the room's own card
+				    already turns to response ready. Inside another room, where the
+				    card cannot be seen, the room's toast stack carries it. */}
 				{whatsNew && <WhatsNewDialog version={whatsNew.version} entries={whatsNew.entries} onClose={dismissWhatsNew} />}
-				<Landing roomOrder={homeRoomOrder.view} onChooseRoomOrder={homeRoomOrder.choose} onArrangingChange={(dirty) => { roomArrangeDirtyRef.current = dirty; }} onOpenSettings={openSettings} onOpenDashboard={() => setView("dashboard")} onOpenMemory={() => setView("memory")} onOpenPersistentAgent={openPersistentAgent} onResumePersistentAgent={openPersistentAgentResume} onMaintainPersistentAgent={(target) => { if (!openMaintainChooser(target)) setPersistentResumeError(maintainBlockedReason(target.agentId) ?? "Maintain is not available for this room right now."); }} onCreatePersistentAgent={createPersistentAgentRoom} onArchiveRoom={archivePersistentAgentRoom} onPurgeRoom={purgePersistentAgentRoom} onMementoForget={(agentId) => { roomDraftsRef.current.delete(agentId); }} modelStatus={modelStatus} persistentAgentStatuses={persistentAgentStatuses} persistentThread={persistentThread} persistentLive={!!persistentChat} persistentResumeError={persistentResumeError} onRefreshPersistentAgent={refreshPersistentAgentStatus} theme={theme} appearance={appearance} onSetAppearance={setAppearance} aiProfileStatus={aiProfileStatus} backgroundReadyRooms={backgroundReadyRooms} purgingRooms={purgingRooms} unresumableRooms={memoryOverflowRooms} />
+				<Landing roomOrder={homeRoomOrder.view} onChooseRoomOrder={homeRoomOrder.choose} onArrangingChange={(dirty) => { roomArrangeDirtyRef.current = dirty; }} onOpenSettings={openSettings} onOpenDashboard={() => setView("dashboard")} onOpenMemory={() => setView("memory")} onOpenPersistentAgent={openPersistentAgent} onResumePersistentAgent={openPersistentAgentResume} onMaintainPersistentAgent={(target) => { if (!openMaintainChooser(target)) setPersistentResumeError(maintainBlockedReason(target.agentId) ?? "Maintain is not available for this room right now."); }} onCreatePersistentAgent={createPersistentAgentRoom} onArchiveRoom={archivePersistentAgentRoom} onPurgeRoom={purgePersistentAgentRoom} onMementoForget={(agentId) => { roomDraftsRef.current.delete(agentId); }} modelStatus={modelStatus} persistentAgentStatuses={persistentAgentStatuses} persistentThread={persistentThread} persistentLive={!!persistentChat} persistentResumeError={persistentResumeError} onRefreshPersistentAgent={refreshPersistentAgentStatus} theme={theme} appearance={appearance} onSetAppearance={setAppearance} aiProfileStatus={aiProfileStatus} backgroundReadyRooms={backgroundReadyRooms} purgingRooms={purgingRooms} />
 			</>
 		);
 	}
@@ -8723,14 +9395,14 @@ export function App() {
 			busy={busy || revealing}
 			usage={usage}
 			contextHealth={persistentChat ? contextHealth : null}
-			loadRememberEstimate={persistentChat ? () => fetchRememberReadEstimate(persistentChat.agentId, persistentChat.conversationId) : undefined}
 			currentModelLabel={currentModel.name}
 			currentModelProvider={currentModel.provider}
 			topbarActions={
 				persistentChat
 					? (
 						<>
-							<BashModeChip agentId={persistentChat.agentId} bashEnabled={roomBashEnabled} settingsOpen={roomSettingsOpen} />
+							{/* Commands are not run on a shared server, so there is no mode to show. */}
+							{!clientContext.sharedServer && <BashModeChip agentId={persistentChat.agentId} bashEnabled={roomBashEnabled} settingsOpen={roomSettingsOpen} />}
 							{/* Gated on being IN a room, not on the polled status list:
 							    a stale or empty list is exactly the stuck-room case
 							    Forget exists to rescue, and the button vanishing then
@@ -8782,7 +9454,11 @@ export function App() {
 			connected={connectedForChrome}
 			reconnectState={roomReconnectState}
 			onReconnect={retryRoomReconnectNow}
-			connectionStopped={stoppedProvider !== null
+			connectionStopped={closedByFullSave
+				? { line: recentSessionsHeadsUp(checkpointApprovalResult?.recentContextEntryCount, persistentChat?.displayName) ?? "", onReturnHome: () => void restAfterCheckpoint(), onMemorize: () => void memorizeAfterCheckpoint() }
+				: roomMovedOn
+				? { line: ROOM_MOVED_ON_SENTENCE, onReload: () => void reloadMovedRoom() }
+				: stoppedProvider !== null
 				? { line: `${modelStatus?.providers?.find((provider) => provider.id === stoppedProvider)?.label ?? "This conversation's provider"} is signed out. Sign in again to continue this conversation.`, onSignIn: () => openSignIn(stoppedProvider), onChooseModel: () => openRoomSettings("model") }
 				: roomModelNotOffered
 					? { line: `${currentPersistentStatus?.models?.conversation.chosen?.name ?? "This room's model"} is no longer offered. Choose another model to continue.`, onChooseModel: () => openRoomSettings("model") }
@@ -8804,7 +9480,7 @@ export function App() {
 			stopLabel="Stop"
 			textareaRef={textareaRef}
 			composerPlaceholder={persistentRoomCancelling ? "Stopping current response…" : roomWorkingForChrome ? "Working… Stop before sending another message" : `Ask ${activeDisplay}…`}
-			sendUnavailable={!connected || roomInFlightForChrome}
+			sendUnavailable={!connected || roomInFlightForChrome || closedByFullSave || roomMovedOn}
 			initialDraftValue={composerPrefill || undefined}
 			draftResetKey={composerResetNonce}
 			composerAllowEmptySend={stagedAttachments.some((entry) => entry.status === "ready")}
@@ -8898,7 +9574,7 @@ export function App() {
 				</>
 			) : undefined}
 			previewSlot={rightPaneSlot}
-			checkpointPreviewSlot={checkpointPreviewOpen && persistentChat && <CheckpointPreviewShell chat={persistentChat} itemCount={items.length} rememberText={checkpointRememberText} density={checkpointDensity} proposal={checkpointProposal} loading={checkpointProposalLoading} progress={checkpointProgress} onCancelGenerate={() => cancelCheckpointProposal()} error={checkpointProposalError} approvalLoading={checkpointApprovalLoading} approvalError={checkpointApprovalError} approvalResult={checkpointApprovalResult} quickRequested={checkpointQuickRequested} quickBlockedReasons={checkpointQuickBlockedReasons} consultRunning={consultState.phase === "streaming"} taskRunning={taskState.phase === "running"} pendingConsultHandoffCount={pendingHandoffs.filter((block) => !isSpecialistHandoffBlock(block)).length} pendingTaskHandoffCount={pendingHandoffs.filter(isSpecialistHandoffBlock).length} onRememberTextChange={(text) => { setCheckpointRememberText(text); setCheckpointProposal(null); setCheckpointProposalError(null); setCheckpointApprovalError(null); setCheckpointApprovalResult(null); }} onDensityChange={(next) => { setCheckpointDensity(next); setCheckpointProposal(null); setCheckpointProposalError(null); setCheckpointApprovalError(null); setCheckpointApprovalResult(null); }} onGenerate={generateCheckpointProposal} onApprove={approveCheckpointProposal} onDiscard={() => { setCheckpointProposal(null); setCheckpointProposalError(null); setCheckpointApprovalError(null); setCheckpointApprovalResult(null); setCheckpointQuickRequested(false); setCheckpointQuickBlockedReasons(null); setCheckpointPreviewOpen(false); }} onContinueAfterCheckpoint={continueAfterCheckpoint} onRestAfterCheckpoint={restAfterCheckpoint} onClose={() => setCheckpointPreviewOpen(false)} />}
+			checkpointPreviewSlot={checkpointPreviewOpen && persistentChat && <CheckpointPreviewShell chat={persistentChat} itemCount={items.length} rememberText={checkpointRememberText} density={checkpointDensity} proposal={checkpointProposal} loading={checkpointProposalLoading} progress={checkpointProgress} onCancelGenerate={() => cancelCheckpointProposal()} error={checkpointProposalError} notice={checkpointProposalNotice} onChooseModel={() => openRoomSettings("model")} onSignIn={(provider) => openSignIn(provider ?? persistentChat.model.provider)} approvalLoading={checkpointApprovalLoading} approvalError={checkpointApprovalError} approvalResult={checkpointApprovalResult} quickRequested={checkpointQuickRequested} skipsPreview={rememberSkipsPreview} quickBlockedReasons={checkpointQuickBlockedReasons} consultRunning={consultState.phase === "streaming"} taskRunning={taskState.phase === "running"} pendingConsultHandoffCount={pendingHandoffs.filter((block) => !isSpecialistHandoffBlock(block)).length} pendingTaskHandoffCount={pendingHandoffs.filter(isSpecialistHandoffBlock).length} approvedFields={checkpointFields} onFieldsChange={(fields) => { if (checkpointProposal) setCheckpointEdits({ key: checkpointEditsKey(checkpointProposal), fields }); }} onRememberTextChange={(text) => { setCheckpointRememberText(text); setCheckpointProposal(null); setCheckpointProposalError(null); setCheckpointProposalNotice(null); setCheckpointApprovalError(null); setCheckpointApprovalResult(null); }} onDensityChange={(next) => { setCheckpointDensity(next); setCheckpointProposal(null); setCheckpointProposalError(null); setCheckpointProposalNotice(null); setCheckpointApprovalError(null); setCheckpointApprovalResult(null); }} onGenerate={generateCheckpointProposal} onApprove={approveCheckpointProposal} onDiscard={() => { discardCheckpointProposalOnServer(); setCheckpointEdits(null); setCheckpointProposal(null); setCheckpointProposalError(null); setCheckpointProposalNotice(null); setCheckpointApprovalError(null); setCheckpointApprovalResult(null); setCheckpointQuickRequested(false); setCheckpointQuickBlockedReasons(null); setCheckpointPreviewOpen(false); }} onContinueAfterCheckpoint={continueAfterCheckpoint} onRestAfterCheckpoint={restAfterCheckpoint} onMemorizeAfterCheckpoint={memorizeAfterCheckpoint} onClose={() => { if (roomFilledBy(checkpointApprovalResult)) void restAfterCheckpoint(); else setCheckpointPreviewOpen(false); }} />}
 			globalOverlaySlot={
 				<>
 					{roomSettingsOpen && currentPersistentStatus && (

@@ -37,20 +37,18 @@ async function main(): Promise<void> {
 	assert.equal(plain.auth, undefined);
 	assert.equal(plain.oauth, undefined);
 
-	// Figma personal access tokens (figd_…) persist as the X-Figma-Token
-	// header with OAuth auto-detect disabled — mcp.figma.com rejects them in
-	// an Authorization header, and its OAuth login only admits allowlisted
-	// partner apps. Any other token stays standard bearer auth.
-	await addMcpServer({ name: "figma", url: "https://mcp.figma.com/mcp", bearerToken: "figd_test_token" });
-	const figma = JSON.parse(fs.readFileSync(added.path, "utf-8")).mcpServers.figma;
-	assert.equal(figma.auth, false);
-	assert.equal(figma.bearerToken, undefined);
-	assert.deepEqual(figma.headers, { "X-Figma-Token": "figd_test_token" });
+	// A token is standard bearer auth.
 	await addMcpServer({ name: "generic-token", url: "https://example.com/mcp", bearerToken: "tok-123" });
 	const generic = JSON.parse(fs.readFileSync(added.path, "utf-8")).mcpServers["generic-token"];
 	assert.equal(generic.auth, "bearer");
 	assert.equal(generic.bearerToken, "tok-123");
 	assert.equal(generic.headers, undefined);
+
+	// A key in its own header, written into the config file by hand, comes
+	// with auth: false to switch off OAuth auto-detect.
+	const withHeader = JSON.parse(fs.readFileSync(added.path, "utf-8"));
+	withHeader.mcpServers["header-key"] = { url: "https://example.com/mcp", auth: false, headers: { "X-Api-Key": "key-123" } };
+	fs.writeFileSync(added.path, JSON.stringify(withHeader, null, 2));
 
 	// Status marks the custom client as explicit OAuth (drives "Login
 	// required" + the login button even when tools list unauthenticated);
@@ -64,8 +62,8 @@ async function main(): Promise<void> {
 	assert.equal(plainStatus?.auth.explicit, false);
 	// The header-token entry reads as token auth, not "no login needed" and
 	// not a loginable OAuth server.
-	const figmaStatus = status.servers.find((s: { name: string }) => s.name === "figma");
-	assert.equal(figmaStatus?.auth.mode, "bearer");
+	const headerStatus = status.servers.find((s: { name: string }) => s.name === "header-key");
+	assert.equal(headerStatus?.auth.mode, "bearer");
 
 	// Rejected combinations.
 	await assert.rejects(

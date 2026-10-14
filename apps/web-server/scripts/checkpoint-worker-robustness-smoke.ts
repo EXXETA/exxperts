@@ -75,13 +75,13 @@ try {
 			{ kind: "toolResult", id: "t1", name: "bash", status: "success", text: longToolBody },
 		],
 	});
-	assert(capped.telemetry.reductionStage === "standard", "default rendering should report the standard reduction stage");
 	assert(capped.telemetry.elidedItemCount === 1, "long tool result should be counted as elided");
 	assert(capped.telemetry.elidedChars === longToolBody.length - 4_000, "elided char count should match the 4k cap");
 	assert(capped.prompt.includes("characters elided from this item"), "capped tool result should carry a declared elision marker");
 	assert(!capped.prompt.includes(longToolBody), "full tool body must not reach the prompt");
 
-	// 2. Budget pressure tightens tool results first.
+	// 2. Budget pressure never cuts tool results below the 4k cap: the single
+	// pass refuses, and Remember reads the conversation in parts.
 	const manyToolItems = Array.from({ length: 10 }, (_, index) => ({
 		kind: "toolResult" as const,
 		id: `t${index + 1}`,
@@ -89,13 +89,15 @@ try {
 		status: "success",
 		text: "tool-output ".repeat(1100).trim(),
 	}));
-	const tightened = buildCheckpointCompressionPrompt({ ...promptBase, items: manyToolItems, promptTokenBudget: 8_000 });
-	assert(tightened.telemetry.reductionStage === "tight-tool-results", "budget pressure should escalate to tight-tool-results");
-	assert(tightened.telemetry.promptEstimatedTokens <= 8_000, "tightened prompt should fit the budget");
-	assert(tightened.telemetry.promptTokenBudget === 8_000, "telemetry should expose the prompt token budget");
+	let toolPressureRefused = false;
+	try {
+		buildCheckpointCompressionPrompt({ ...promptBase, items: manyToolItems, promptTokenBudget: 8_000 });
+	} catch (error) {
+		toolPressureRefused = error instanceof CheckpointPromptOverflowError && (error as { promptTokenBudget?: number }).promptTokenBudget === 8_000;
+	}
+	assert(toolPressureRefused, "tool results over the budget at the 4k cap refuse the single pass instead of being cut further");
 
-	// 3. Heavier pressure never cuts what the room said: past the tool-result
-	// stages the single pass refuses, and Remember reads the conversation in
+	// 3. Pressure never cuts what the room said either: the single pass refuses, and Remember reads the conversation in
 	// parts instead (remember-two-stage-smoke).
 	const chattyItems = [
 		...manyToolItems,
@@ -128,30 +130,26 @@ try {
 	const normal = buildCheckpointCompressionPrompt({ ...promptBase, items: [{ kind: "user", id: "u1", text: "context ".repeat(1300).trim() }] });
 	assert(normal.shortSessionMode === "none", "~10k-char transcript should stay none");
 
-	// 6. Missing required field triggers exactly one retry with a Retry Notice.
+	// 6. A missing BODY counts as a cut reply: it is asked once more, shorter.
 	const retryPrompts: string[] = [];
 	const retryProposal = await buildCheckpointProposal(proposalInput("c_retry_0001", legacyUserItems(3, 2_000)), async (prompt) => {
 		retryPrompts.push(prompt);
 		return { text: retryPrompts.length === 1 ? missingBodyFields() : completeFields() };
 	});
-	assert(retryPrompts.length === 2, "missing BODY should trigger exactly one retry");
-	assert(/## Retry Notice/.test(retryPrompts[1]), "retry prompt should carry the Retry Notice section");
-	assert(/missing required field\(s\): BODY/.test(retryPrompts[1]), "retry notice should name the missing field");
+	assert(retryPrompts.length === 2, "missing BODY should be asked once more");
+	assert(/## Retry Notice/.test(retryPrompts[1]) && /BODY was missing/.test(retryPrompts[1]), "the second ask says BODY was missing");
 	assert(retryProposal.compressionAttempts === 2, "proposal should report two compression attempts");
-	assert(retryProposal.fields.body.length > 0, "retry should recover the BODY field");
-	assert(retryProposal.warnings.some((warning) => /regenerated once/.test(warning)), "proposal warnings should record the retry");
+	assert(retryProposal.fields.body.length > 0, "the second ask recovers the BODY field");
+	assert(JSON.stringify(retryProposal.warnings) === JSON.stringify(["no memory has been written"]), "the second ask is for the diagnostics, not a warning on the proposal");
 
-	// 7. Persistent missing required field fails guided after the retry.
+	// 7. A BODY that never comes still gives a page Save accepts: the ladder ends in what came.
 	let stubbornCalls = 0;
-	await expectRejects(
-		() => buildCheckpointProposal(proposalInput("c_stubborn_0001", legacyUserItems(3, 2_000)), async () => {
-			stubbornCalls += 1;
-			return { text: missingBodyFields() };
-		}),
-		/did not produce required field\(s\) BODY after 2 attempt\(s\)/,
-		"persistently missing BODY should fail guided",
-	);
-	assert(stubbornCalls === 2, "guided failure should stop after the single retry");
+	const stubborn = await buildCheckpointProposal(proposalInput("c_stubborn_0001", legacyUserItems(3, 2_000)), async () => {
+		stubbornCalls += 1;
+		return { text: missingBodyFields() };
+	});
+	assert(stubbornCalls === 3, `a missing BODY climbs the whole ladder and stops, got ${stubbornCalls} calls`);
+	assert(stubborn.fields.body.length > 0 && !/Shortened/.test(stubborn.fields.body), "the page keeps the arc as its body, with no marker");
 
 	// 8. A transcript too large for one pass on a small window is read in
 	// parts instead of refused (remember-two-stage-smoke pins the parts).

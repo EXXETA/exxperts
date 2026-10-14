@@ -1,5 +1,8 @@
-import { spawnSync } from "node:child_process";
-import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import type { ChildProcess, ChildProcessByStdio, ChildProcessWithoutNullStreams } from "node:child_process";
+import diagnosticsChannel from "node:diagnostics_channel";
+import type { Socket } from "node:net";
+import type { Writable } from "node:stream";
 
 // Server-spawning smokes authenticate like a programmatic caller: the smoke
 // pins the client auth token by putting EXXPERTS_AUTH_TOKEN in the server env
@@ -39,6 +42,84 @@ export function authedFetch(url: string | URL, init: AuthedFetchInit = {}): Prom
 // its own process group (detached) so the whole tree can be signalled at once.
 export const SMOKE_SERVER_SPAWN_TREE_OPTIONS: { detached?: boolean } =
 	process.platform === "win32" ? {} : { detached: true };
+
+// That group also keeps the server out of reach of whatever ends the smoke
+// itself: the runner's timeout (SIGKILL to the smoke's process group,
+// scripts/run-smokes.mjs), Ctrl-C, SIGTERM, or an exit that skips the smoke's
+// clean-up would leave it running with its temp HOME. No handler can catch
+// SIGKILL, so the first process a smoke starts also starts a watchdog: node in
+// a session of its own, told through a pipe that only the smoke holds which
+// children are running ("+pid" when one starts, "-pid" when it exits). When the
+// smoke is gone, however it went, the pipe closes and the watchdog stops every
+// child still listed (SIGTERM to its process group, SIGKILL after 10 s), then
+// exits; after a clean run the list is empty and it exits at once. The smoke's
+// children are seen through Node's child_process channel, so no smoke changes.
+// POSIX only: on Windows the runner's taskkill /T ends the smoke's whole tree.
+const WATCHDOG_SOURCE = [
+	"const pids = new Set();",
+	"let rest = '';",
+	"process.stdin.setEncoding('utf8');",
+	"process.stdin.on('data', (chunk) => {",
+	"	const lines = (rest + chunk).split('\\n');",
+	"	rest = lines.pop();",
+	"	for (const line of lines) (line[0] === '+' ? pids.add(Number(line.slice(1))) : pids.delete(Number(line.slice(1))));",
+	"});",
+	"process.stdin.on('error', () => {});",
+	"const signal = (pid, name) => {",
+	"	try { process.kill(-pid, name); return true; } catch {}",
+	"	try { process.kill(pid, name); return true; } catch { return false; }",
+	"};",
+	"process.stdin.on('close', () => {",
+	"	for (const pid of pids) if (!signal(pid, 'SIGTERM')) pids.delete(pid);",
+	"	const until = Date.now() + 10000;",
+	"	const check = () => {",
+	"		for (const pid of pids) if (!signal(pid, 0)) pids.delete(pid);",
+	"		if (pids.size > 0 && Date.now() < until) return void setTimeout(check, 100);",
+	"		for (const pid of pids) signal(pid, 'SIGKILL');",
+	"		process.exit(0);",
+	"	};",
+	"	check();",
+	"});",
+].join("\n");
+
+let watchdog: ChildProcessByStdio<Writable, null, null> | null | undefined;
+let startingWatchdog = false;
+
+function tellWatchdog(line: string): void {
+	if (watchdog === undefined) {
+		startingWatchdog = true;
+		try {
+			// Detached: a kill of the smoke's process group does not reach it. The
+			// label names the smoke it watches, for ps and the smoke-server-process smoke.
+			watchdog = spawn(process.execPath, ["-e", WATCHDOG_SOURCE, "exxperts-smoke-watchdog", String(process.pid)], { detached: true, stdio: ["pipe", "ignore", "ignore"], env: {} });
+			watchdog.on("error", () => {
+				watchdog = null;
+			});
+			watchdog.stdin.on("error", () => {});
+			// Neither the watchdog nor its pipe keeps the smoke running.
+			watchdog.unref();
+			(watchdog.stdin as Socket).unref();
+		} catch {
+			watchdog = null;
+		} finally {
+			startingWatchdog = false;
+		}
+	}
+	watchdog?.stdin.write(`${line}\n`);
+}
+
+if (process.platform !== "win32") {
+	diagnosticsChannel.subscribe("child_process", (message) => {
+		if (startingWatchdog) return;
+		const child = (message as { process: ChildProcess }).process;
+		child.once("spawn", () => {
+			const pid = child.pid;
+			if (pid === undefined) return;
+			tellWatchdog(`+${pid}`);
+			child.once("exit", () => tellWatchdog(`-${pid}`));
+		});
+	});
+}
 
 function killTree(pid: number, signal: NodeJS.Signals): void {
 	if (process.platform === "win32") {

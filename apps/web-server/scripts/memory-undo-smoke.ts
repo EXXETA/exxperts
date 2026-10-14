@@ -447,7 +447,8 @@ try {
 	assert(saveRow?.kind === "learn" && saveRow?.undone === true, `the history keeps the undone save and marks it undone, got ${JSON.stringify(saveRow)}`);
 
 	// --- The same save twice ---------------------------------------------------
-	expectRefusal(() => undoMemorySave(roomA.agentId, save.saveId, UNDONE_AT), "memory_undo_stale", /has changed since this save/, "undoing the same save twice");
+	const undoneAgain = undoMemorySave(roomA.agentId, save.saveId, UNDONE_AT);
+	assert(undoneAgain.alreadyUndone === true && undoneAgain.undone.saveId === save.saveId, `undoing the same save twice answers that it is undone, got ${JSON.stringify(undoneAgain)}`);
 
 	// =====================================================================
 	// A hand edit after the save: the memory has moved on, so the offer is gone.
@@ -538,7 +539,7 @@ try {
 	assert(reviewHistory.find((event) => event.id === reviewSaveId)?.undone === true, "the history marks the undone Review");
 	assert(reviewHistory.find((event) => event.kind === "undo")?.undoneKind === "review", "the undo row says which kind of save it took back");
 	assert(undoneReview.limitLoweredTo === undefined, "a save of the old Review had no card to raise the limit from, so there is nothing to lower");
-	expectRefusal(() => undoMemorySave(roomB.agentId, reviewSaveId, UNDONE_AT), "memory_undo_stale", /has changed since this save/, "undoing the same Review twice");
+	assert(undoMemorySave(roomB.agentId, reviewSaveId, UNDONE_AT).alreadyUndone === true, "undoing the same Review twice answers that it is undone");
 
 	console.log("memory-undo smoke: PASS");
 } finally {

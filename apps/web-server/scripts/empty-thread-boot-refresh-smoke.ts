@@ -3,7 +3,10 @@
 // spoken in it, a bind rebuilds that snapshot from the memory as it is now
 // (Memorize and Review may have run in between); a conversation with turns
 // stays frozen; an unchanged memory rewrites nothing; and a Remember made in
-// the rebuilt conversation is not called stale because of the rebuild.
+// the rebuilt conversation is not called stale because of the rebuild. So the
+// boot gate's refusal at an empty conversation sends people to Maintain (the
+// smaller memory reaches the next open), and at one with messages to a model
+// with a larger window (its boot stays as it started).
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -23,6 +26,7 @@ const tempCwd = fs.mkdtempSync(path.join(os.tmpdir(), "exxperts-empty-thread-boo
 process.env.EXXETA_PERSISTENT_AGENTS_ROOT = root;
 
 const {
+	assertPersistentAgentBootPromptFitsWindow,
 	createPersistentAgentFromScaffoldInput,
 	buildCheckpointProposal,
 	createPersistentAgentInstance,
@@ -32,6 +36,7 @@ const {
 	parseCheckpointApprovalRequest,
 	readPersistentAgentBootPromptSnapshot,
 	refreshEmptyPersistentAgentThreadBootSnapshot,
+	savePersistentRoomInstructions,
 	writeApprovedCheckpoint,
 	writePersistentAgentThread,
 } = await import("../src/persistent-agents.js");
@@ -153,6 +158,52 @@ try {
 	check("session with messages: no rebuild", refresh5 !== null && refresh5.rebuilt === null);
 
 	if (nextThreadId) check("the next prepared conversation boots on the latest memory", bootPromptOf(nextThreadId).includes(TIDIED));
+
+	// The boot gate at an empty prepared conversation: the room refuses to
+	// start on a memory too large for the window, and after a Memorize-shaped
+	// shrink the next open boots fresh and passes.
+	if (nextThreadId) {
+		const lean = fs.readFileSync(l1bPath, "utf-8");
+		refreshEmptyPersistentAgentThreadBootSnapshot(agentId, nextThreadId);
+		const leanPrompt = bootPromptOf(nextThreadId);
+		fs.writeFileSync(l1bPath, `${lean}\n- BOOT_FILLER_SENTINEL ${"Words that make this memory too large to boot on a small window. ".repeat(800)}\n`, "utf-8");
+		check("too large: the empty conversation is rebuilt on the larger memory", Boolean(refreshEmptyPersistentAgentThreadBootSnapshot(agentId, nextThreadId)?.rebuilt) && bootPromptOf(nextThreadId).includes("BOOT_FILLER_SENTINEL"));
+		const heavyPrompt = bootPromptOf(nextThreadId);
+		const fits = (systemPrompt: string, contextWindow: number, conversationId?: string): string | null => {
+			try {
+				assertPersistentAgentBootPromptFitsWindow({ agentId, model, systemPrompt, window: { contextWindow, maxOutputTokens: 1000 }, ...(conversationId ? { conversationId } : {}) });
+				return null;
+			} catch (error) {
+				return (error as Error).message;
+			}
+		};
+		let contextWindow = 2000;
+		while (fits(leanPrompt, contextWindow) !== null && contextWindow < 1_000_000) contextWindow += 500;
+		check("too large: a window holds the lean memory and refuses the larger one", fits(leanPrompt, contextWindow) === null && fits(heavyPrompt, contextWindow) !== null, contextWindow);
+		const refusal = fits(heavyPrompt, contextWindow, nextThreadId) ?? "";
+		check("too large, empty: the refusal sends people to Maintain and to a larger model", /open Maintain from Home and run (Memorize|Review)/.test(refusal) && refusal.includes("choose a model that can read more at once in Room settings, Model"), refusal);
+		check("too large, empty: the refusal no longer sends people to Forget", !/Forget \(it closes|unlocks the room/.test(refusal), refusal);
+		check("too large, empty: the refusal names the model as the app shows it", refusal.includes("the usable window of GPT-5.5 "), refusal);
+		fs.writeFileSync(l1bPath, lean, "utf-8");
+		check("after a smaller memory: the next open rebuilds the empty conversation", Boolean(refreshEmptyPersistentAgentThreadBootSnapshot(agentId, nextThreadId)?.rebuilt) && !bootPromptOf(nextThreadId).includes("BOOT_FILLER_SENTINEL"));
+		check("after a smaller memory: the room starts on the same window", fits(bootPromptOf(nextThreadId), contextWindow, nextThreadId) === null);
+
+		// A conversation with messages keeps the boot it started with, so a
+		// smaller memory does not reach it: its refusal names the switch.
+		const turnsRefusal = fits(heavyPrompt, contextWindow, busyThreadId) ?? "";
+		check("too large, with messages: the refusal names switching this conversation to a larger model", turnsRefusal.includes("Room settings, Model") && /switch the open conversation/i.test(turnsRefusal), turnsRefusal);
+		check("too large, with messages: the refusal does not promise that Maintain fixes it", !/open Maintain from Home and run (Memorize|Review) to make the memory smaller, or/.test(turnsRefusal) && !/Forget \(it closes|unlocks the room/.test(turnsRefusal), turnsRefusal);
+		check("too large, with messages: the refusal says the conversation cannot continue, and how to continue here", turnsRefusal.includes("so this conversation cannot continue on this model.") && turnsRefusal.includes("To continue here, choose a model that can read more at once in Room settings, Model, and switch the open conversation to it."), turnsRefusal);
+
+		// With instructions, the way to a fresh boot is Forget; with messages,
+		// the sentence says that Forget deletes this conversation.
+		savePersistentRoomInstructions(agentId, "Answer in short sentences. ".repeat(40));
+		const emptyWithInstructions = fits(heavyPrompt, contextWindow, nextThreadId) ?? "";
+		const turnsWithInstructions = fits(heavyPrompt, contextWindow, busyThreadId) ?? "";
+		check("instructions, empty: Forget starts the room again, said as before", emptyWithInstructions.includes("and then choosing Forget starts the room again") && !emptyWithInstructions.includes("which deletes this conversation"), emptyWithInstructions);
+		check("instructions, with messages: the sentence says Forget deletes this conversation", turnsWithInstructions.includes("and then choosing Forget (which deletes this conversation) starts the room again"), turnsWithInstructions);
+		savePersistentRoomInstructions(agentId, "");
+	}
 } catch (error) {
 	failures += 1;
 	console.error(error instanceof Error ? error.stack || error.message : error);

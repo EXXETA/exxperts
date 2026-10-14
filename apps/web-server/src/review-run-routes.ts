@@ -22,10 +22,15 @@ import {
 	getReviewRun,
 	keepReviewRunEntries,
 	parseReviewRunStartRequest,
+	resumeReviewRun,
 	reviewRunStatus,
 	setReviewRunBudget,
 	startReviewRun,
 } from "./review-run.js";
+import { withRoomSaveLock } from "./memory-commit.js";
+import { saveWithOpenConversationCheck } from "./persistent-agents.js";
+import { roomCallWait } from "./model-call-causes.js";
+import { waitForMemoryRoomTurn } from "./memory-entries-store.js";
 
 export interface ReviewRunRouteDeps {
 	/** The room's own maintenance-status check, so these routes refuse exactly like their neighbours. */
@@ -39,6 +44,8 @@ export interface ReviewRunRouteDeps {
 	resolveModelWindow(model: PersistentAgentModelLock): CheckpointModelWindow | undefined;
 	/** The isolated worker call: one prompt, one reply, cancellable by the run. */
 	generate(agentId: string, prompt: string, model: PersistentAgentModelLock, options: { signal: AbortSignal; timeoutMs: number; thinkingLevel: "low" }): Promise<AbsorbGenerateResult>;
+	/** Refuses a limit raised past what the room's Memory model holds. */
+	refuseBudgetRaise?(agentId: string, budgetTokens: unknown): void;
 }
 
 export function registerReviewRunRoutes(app: FastifyInstance, deps: ReviewRunRouteDeps): void {
@@ -49,7 +56,10 @@ export function registerReviewRunRoutes(app: FastifyInstance, deps: ReviewRunRou
 	// it costs now, and which depth to offer first.
 	app.get("/api/persistent-agents/:id/review/status", async (req, reply) => {
 		try {
-			return reviewRunStatus(roomId(req));
+			// A first read or a discussion turn waiting out a busy model: its screen says so.
+			const id = roomId(req);
+			const wait = roomCallWait(id, "review");
+			return { ...reviewRunStatus(id), ...(wait ? { wait } : {}) };
 		} catch (e) {
 			return deps.errorReply(reply, e);
 		}
@@ -103,7 +113,9 @@ export function registerReviewRunRoutes(app: FastifyInstance, deps: ReviewRunRou
 	// The limit on the run only; the room's setting follows on approve.
 	app.post("/api/persistent-agents/:id/review/runs/:runId/budget", async (req, reply) => {
 		try {
-			return setReviewRunBudget(roomId(req), runIdOf(req), (req.body as any)?.budgetTokens);
+			const id = roomId(req);
+			deps.refuseBudgetRaise?.(id, (req.body as any)?.budgetTokens);
+			return setReviewRunBudget(id, runIdOf(req), (req.body as any)?.budgetTokens);
 		} catch (e) {
 			return deps.errorReply(reply, e);
 		}
@@ -117,6 +129,20 @@ export function registerReviewRunRoutes(app: FastifyInstance, deps: ReviewRunRou
 		}
 	});
 
+	// Try again after an outage or a restart: the same run tidies the groups not
+	// done, with the room's Memory model as it is now.
+	app.post("/api/persistent-agents/:id/review/runs/:runId/resume", async (req, reply) => {
+		try {
+			const id = roomId(req);
+			return resumeReviewRun(id, runIdOf(req), deps.modelLock(id), new Date(), {
+				resolveModelWindow: deps.resolveModelWindow,
+				generate: (prompt, modelLock, options) => deps.generate(id, prompt, modelLock, options),
+			});
+		} catch (e) {
+			return deps.errorReply(reply, e);
+		}
+	});
+
 	app.post("/api/persistent-agents/:id/review/runs/:runId/cancel", async (req, reply) => {
 		try {
 			return cancelReviewRun(roomId(req), runIdOf(req));
@@ -125,11 +151,16 @@ export function registerReviewRunRoutes(app: FastifyInstance, deps: ReviewRunRou
 		}
 	});
 
-	// The run's one write. Everything it refuses on — a stale memory, a run that
-	// is not ready, a room mid-turn — belongs to the run itself.
+	// The run's one write. A turn in flight is waited for, up to two minutes;
+	// everything else it refuses on (a stale memory, a run that is not ready)
+	// belongs to the run itself.
 	app.post("/api/persistent-agents/:id/review/runs/:runId/approve", async (req, reply) => {
 		try {
-			return approveReviewRun(roomId(req), runIdOf(req));
+			const id = roomId(req);
+			return await withRoomSaveLock(id, async () => {
+				await waitForMemoryRoomTurn(id);
+				return saveWithOpenConversationCheck(id, () => approveReviewRun(id, runIdOf(req)));
+			});
 		} catch (e) {
 			return deps.errorReply(reply, e);
 		}

@@ -64,13 +64,19 @@ const answer = (marker: string): AbsorbGenerateResult => ({ text: `One durable l
 const providerError = (message: string) => new IsolatedPersistentAgentWorkerTurnError("memorize fold worker", "error", message);
 
 type Script = (attempt: number, prompt: string) => AbsorbGenerateResult | Promise<AbsorbGenerateResult>;
+/** What a real model does with a small call: thinking spends the cap and the reply comes back empty, as Opus 5.5 did on the sort. */
+const THINKING_ROOM_TOKENS = 4096;
 function scripted(scripts: Record<string, Script>, calls: Array<{ id: string; prompt: string; maxTokens?: number }>): AbsorbRunGenerate {
 	return async (prompt, _model, options) => {
 		const id = sessionOf(prompt);
-		calls.push({ id, prompt, maxTokens: (options as { maxTokens?: number }).maxTokens });
+		const { maxTokens, thinkingLevel } = options as { maxTokens?: number; thinkingLevel?: string };
+		calls.push({ id, prompt, maxTokens });
 		const script = scripts[id];
 		assert(script, `no script for ${id}`);
-		return script(calls.filter((call) => call.id === id).length, prompt);
+		const reply = await script(calls.filter((call) => call.id === id).length, prompt);
+		const thinks = thinkingLevel !== undefined && thinkingLevel !== "off";
+		if (maxTokens !== undefined && ((thinks && maxTokens < THINKING_ROOM_TOKENS) || maxTokens < Math.ceil(reply.text.length / 4))) throw new Error("the fold worker produced no text");
+		return reply;
 	};
 }
 const probeAnswers: AbsorbRunProbe = async () => ({ text: "OK" });
@@ -108,9 +114,10 @@ await section("nothing-lands", async () => {
 	const unknown = (): AbsorbGenerateResult => ({ text: fence([{ op: "update", id: "m-9999", text: "- UNKNOWN-POINT is kept although its note is gone." }]) });
 	const started = startAbsorbRun({ agentId: room.agentId, assessmentMarkdown: ASSESSMENT, model: MODEL, generate: scripted({ "RC-0001": nothing, "RC-0002": unknown, "RC-0003": () => answer("HEALTHY-POINT") }, calls), probe: probeAnswers, now: RUN_CLOCK });
 	const done = await settle(room.agentId, started.runId);
-	assert(view(done, "RC-0001").outcome === "summarized" && calls.filter((call) => call.id === "RC-0001").length === 1, `a reply of which nothing lands is summarized after one call, got "${view(done, "RC-0001").outcome}" after ${calls.filter((call) => call.id === "RC-0001").length}`);
+	const rc1 = calls.filter((call) => call.id === "RC-0001");
+	assert(view(done, "RC-0001").outcome === "summarized" && rc1.length >= 2 && rc1[1].prompt.includes("answer with one drop"), `a reply of which nothing lands is asked once more, then placed, got "${view(done, "RC-0001").outcome}" after ${rc1.length}`);
 	assert(view(done, "RC-0002").outcome === "folded" && calls.filter((call) => call.id === "RC-0002").length === 1, `an update of an unknown id is folded in one call, got "${view(done, "RC-0002").outcome}"`);
-	assert(!calls.some((call) => call.prompt.includes("## Retry Notice")), "no call is ever asked again with reasons");
+	assert(!calls.some((call) => call.prompt.includes("## Retry Notice")), "no call is ever asked again with the old notice");
 	// The fold records say how each op ended, in codes, and never a word of the reply.
 	const diagnosticsDir = path.join(root, room.agentId, "events", "maintenance-diagnostics");
 	const folds = fs.readdirSync(diagnosticsDir, { recursive: true }).map(String).filter((name) => name.endsWith(".json")).map((name) => fs.readFileSync(path.join(diagnosticsDir, name), "utf-8")).filter((raw) => JSON.parse(raw).process === "memorize-fold");
@@ -119,8 +126,256 @@ await section("nothing-lands", async () => {
 	assert(folds.every((raw) => !raw.includes("UNKNOWN-POINT") && !raw.includes("NOTHING-POINT")) && folds.some((raw) => JSON.parse(raw).fold?.pairs?.subset === 0), "the fold records carry no room text, and the pair counts");
 	approveAbsorbRun(room.agentId, started.runId, new Date("2026-09-13T09:05:00.000Z"));
 	const written = fs.readFileSync(room.l1bPath, "utf-8");
-	assert(!/^### RC-0001 \|/m.test(written) && written.includes("NOTHING-POINT is the durable point.") && /^### Unsorted$/m.test(written), "the approve removes it from Recent Context and its page is in Unsorted");
+	assert(!/^### RC-0001 \|/m.test(written) && written.includes("NOTHING-POINT is the durable point.") && !/^### Unsorted$/m.test(written), "the approve removes it from Recent Context and its page is placed under a topic, not Unsorted");
 	assert(written.includes("UNKNOWN-POINT is kept although its note is gone."), "the redirected text is in memory");
+});
+
+// No Unsorted: a page the model cannot fold is placed by code under the topic
+// its words match, or under a topic named after it; never in Unsorted.
+await section("never-unsorted", async () => {
+	const room = createRoom("Never Unsorted Room", [page("RC-0001", "Renewal terms", "RENEWAL-POINT", " The Nordwind contract renews in April with new terms."), page("RC-0002", "Quantum lab budget", "QUANTUM-POINT")]);
+	const prose = (): AbsorbGenerateResult => ({ text: "I folded this conversation into memory for you." });
+	const started = startAbsorbRun({ agentId: room.agentId, assessmentMarkdown: ASSESSMENT, model: MODEL, generate: scripted({ "RC-0001": prose, "RC-0002": prose }, []), probe: probeAnswers, now: RUN_CLOCK });
+	await settle(room.agentId, started.runId);
+	approveAbsorbRun(room.agentId, started.runId, new Date("2026-09-13T09:05:00.000Z"));
+	const written = fs.readFileSync(room.l1bPath, "utf-8");
+	const topicOf = (marker: string) => [...written.slice(0, written.indexOf(marker)).matchAll(/^### (.+)$/gm)].at(-1)?.[1];
+	assert(!/^### Unsorted$/m.test(written), "nothing lands in Unsorted");
+	assert(topicOf("RENEWAL-POINT") === "Renewals", `a page whose words match a topic is placed under it, got ${topicOf("RENEWAL-POINT")}`);
+	assert(topicOf("QUANTUM-POINT") === "Quantum lab budget", `a page that matches nothing opens a topic named after it, got ${topicOf("QUANTUM-POINT")}`);
+});
+
+// The ladder, in the run that reads the page: a page the whole fold cannot
+// read is folded in pieces (rung 3); a page whose call is refused while the
+// model answers goes down at a high level, in this run, never waiting; what
+// nothing folds is placed under the topic one tiny call names (rung 5), as one
+// note the card explains; a reply of which nothing lands is asked once more
+// and may answer with a drop (rung 2).
+await section("ladder", async () => {
+	const long = (id: string, title: string, marker: string) => [`### ${id} | OPEN | 2026-09-11 | ${title}`, "", `**Session arc:** ${title} was talked through.`, "", "**Body:**", ...[1, 2, 3, 4].map((n) => `- ${marker}-${n} is a durable point.`), "", "**Parked:**", `- Follow up on ${marker}.`, ""].join("\n");
+	const room = createRoom("Ladder Room", [long("RC-0001", "Pieces call", "PIECE"), long("RC-0002", "Refused call", "REFUSE"), page("RC-0003", "Prose call", "PROSE"), page("RC-0004", "Empty call", "EMPTY")]);
+	const whole = (prompt: string) => /^### RC-\d+ \|/m.test(prompt);
+	const highLevel = (prompt: string) => prompt.includes("## Read at a High Level");
+	const pointsIn = (prompt: string, marker: string) => [1, 2, 3, 4].filter((n) => prompt.includes(`- ${marker}-${n} is a durable point.`)).map((n) => ({ op: "add", topic: "Renewals", kind: "fact", text: `- ${marker}-${n} is a durable point.` }));
+	const opsFor = (prompt: string, marker: string) => [...pointsIn(prompt, marker), ...(prompt.includes(`Follow up on ${marker}`) ? [{ op: "add", topic: "Follow-ups", kind: "item", text: `- Follow up on ${marker}.` }] : [])];
+	const calls: Array<{ id: string; prompt: string }> = [];
+	const generate = scripted({
+		"RC-0001": (_n, prompt) => (whole(prompt) ? { text: "I folded it for you." } : { text: fence(opsFor(prompt, "PIECE")) }),
+		"RC-0002": (_n, prompt) => { if (!highLevel(prompt)) throw providerError("the response was blocked by the content_filter"); return { text: fence(opsFor(prompt, "REFUSE")) }; },
+		"RC-0003": () => ({ text: "Nothing to see here." }),
+		"RC-0004": (n, prompt) => ({ text: prompt.includes("answer with one drop") ? fence([{ op: "drop", reason: "Nothing new." }]) : fence([{ op: "add", topic: "Renewals", kind: "fact", text: "" }]) }),
+		"?": (_n, prompt) => ({ text: prompt.includes("Answer with the one title") ? "Renewals" : "?" }),
+	}, calls);
+	const done = await settle(room.agentId, startAbsorbRun({ agentId: room.agentId, assessmentMarkdown: ASSESSMENT, model: MODEL, generate, probe: probeAnswers, now: RUN_CLOCK }).runId);
+	const outcomes = done.sessions.map((session) => `${session.id}:${session.outcome}`).join(",");
+	assert(view(done, "RC-0001").outcome === "folded" && view(done, "RC-0002").outcome === "folded", `pages the whole fold could not take fold in pieces in this run, got ${outcomes}`);
+	assert(view(done, "RC-0003").outcome === "summarized" && !view(done, "RC-0003").reason && (view(done, "RC-0003").changes ?? []).some((change: any) => change.topic === "Renewals"), `a page nothing folds is placed under the topic the call named, and the card reads it like any other, got ${JSON.stringify(view(done, "RC-0003"))}`);
+	assert(view(done, "RC-0004").outcome === "dropped", `a reply of which nothing landed is asked once more and its drop stands, got ${view(done, "RC-0004").outcome}`);
+	assert(Object.keys(records(room.runtimeDir)).length === 0 && done.state === "ready" && !done.stop, "nothing waits and nothing is recorded: a refusal while the model answers is the page's own, read in this run");
+	approveAbsorbRun(room.agentId, done.runId, new Date("2026-09-13T09:05:00.000Z"));
+	const written = fs.readFileSync(room.l1bPath, "utf-8");
+	for (const marker of ["PIECE", "REFUSE"]) for (const n of [1, 2, 3, 4]) assert(written.includes(`- ${marker}-${n} is a durable point.`), `${marker}-${n} landed as a note of its own`);
+	assert(written.includes("Follow up on PIECE") && !/^### Unsorted$/m.test(written), "the parked piece landed, and nothing is in Unsorted");
+	const topicOf = (marker: string) => [...written.slice(0, written.indexOf(marker)).matchAll(/^### (.+)$/gm)].at(-1)?.[1];
+	assert(topicOf("PROSE") === "Renewals", `the placed note sits under the topic the call named, got ${topicOf("PROSE")}`);
+});
+
+// The one-time sort: notes an older Memorize left in Unsorted go under topics
+// at the start of the next run, by one placement call for up to 20 notes, and
+// by code for any the reply did not name. The card lists the moves and a note
+// can be moved before Save. A room with nothing waiting runs for the sort alone.
+await section("sort-unsorted", async () => {
+	const unsorted = [
+		"### Unsorted", "",
+		"<!-- e: id=m-0101 kind=fact saved=2026-09-01 summary=true -->", "- Call about the renewal", "  - The renewal moves to May.", "",
+		"<!-- e: id=m-0102 kind=fact saved=2026-09-01 -->", "- Invoices go out on the first working day.", "",
+		"<!-- e: id=m-0103 kind=fact saved=2026-09-01 -->", "- The Nordwind contract renews with the April terms each year.", "",
+	];
+	const withUnsorted = (room: { l1bPath: string }) => fs.writeFileSync(room.l1bPath, fs.readFileSync(room.l1bPath, "utf-8").replace("## Active Items", `${unsorted.join("\n")}\n## Active Items`));
+	const sortReply = (_n: number, prompt: string): AbsorbGenerateResult => ({ text: prompt.includes("m-0101") && prompt.includes("For each note") ? "m-0101: Renewals\nm-0102: Billing" : "?" });
+	const room = createRoom("Sort Room", [page("RC-0001", "Healthy", "HEALTHY-POINT")]);
+	withUnsorted(room);
+	const done = await settle(room.agentId, startAbsorbRun({ agentId: room.agentId, assessmentMarkdown: ASSESSMENT, model: MODEL, generate: scripted({ "RC-0001": () => answer("HEALTHY-POINT"), "?": sortReply }, []), probe: probeAnswers, now: RUN_CLOCK }).runId);
+	const moves = Object.fromEntries((done.sorted ?? []).map((move) => [move.id, move.topic]));
+	assert(moves["m-0101"] === "Renewals" && moves["m-0102"] === "Billing" && moves["m-0103"] === "Renewals", `the card lists each note's move, the one the reply did not name placed by code, got ${JSON.stringify(done.sorted)}`);
+	run.moveAbsorbRunSortedNote(room.agentId, done.runId, "m-0102", "Invoicing");
+	approveAbsorbRun(room.agentId, done.runId, new Date("2026-09-13T09:05:00.000Z"));
+	const written = fs.readFileSync(room.l1bPath, "utf-8");
+	const topicOf = (marker: string) => [...written.slice(0, written.indexOf(marker)).matchAll(/^### (.+)$/gm)].at(-1)?.[1];
+	assert(!/^### Unsorted$/m.test(written) && topicOf("The renewal moves to May.") === "Renewals" && topicOf("Invoices go out") === "Invoicing" && written.includes("HEALTHY-POINT"), `nothing is left in Unsorted, and the moved note is where the person put it, got ${topicOf("Invoices go out")}`);
+	assert(/id=m-0101 [^>]*summary=true/.test(written), "a summary note keeps its mark, so a later re-read refines it");
+	// Nothing waiting: Memorize runs for the sort alone.
+	const alone = createRoom("Sort Alone Room", []);
+	withUnsorted(alone);
+	const { getAbsorbAvailability } = await import("../src/persistent-agents.js");
+	assert(getAbsorbAvailability(alone.agentId).available, `Memorize is available for the sort alone, got ${JSON.stringify(getAbsorbAvailability(alone.agentId))}`);
+	const only = await settle(alone.agentId, startAbsorbRun({ agentId: alone.agentId, assessmentMarkdown: ASSESSMENT, model: MODEL, generate: scripted({ "?": sortReply, "m-0101": () => answer("The renewal moves to May") }, []), probe: probeAnswers, now: RUN_CLOCK }).runId);
+	assert(only.state === "ready" && (only.sorted ?? []).length === 3, `a room with nothing waiting sorts its Unsorted notes, got ${only.state} ${JSON.stringify(only.sorted)}`);
+});
+
+// The sort call comes back empty: each note gets its own placement call, then
+// code at a lower floor; the notes that match nothing go under ONE topic, never
+// one topic per note (Unsorted under another name).
+await section("sort-fails-grouped", async () => {
+	const room = createRoom("Sort Fails Room", []);
+	fs.writeFileSync(room.l1bPath, fs.readFileSync(room.l1bPath, "utf-8").replace("## Active Items", [
+		"### Unsorted", "",
+		"<!-- e: id=m-0101 kind=fact saved=2026-09-01 -->", "- Invoices go out on the first working day of the month.", "",
+		"<!-- e: id=m-0102 kind=fact saved=2026-09-01 -->", "- Travel is booked through the travel desk, never directly.", "",
+		"<!-- e: id=m-0103 kind=fact saved=2026-09-01 -->", "- Expense reports are filed by the fifth.", "",
+		"## Active Items",
+	].join("\n")));
+	const calls: Array<{ id: string; prompt: string }> = [];
+	const generate = scripted({ "?": (_n, prompt) => {
+		if (prompt.includes("For each note")) throw new Error("the fold worker produced no text");
+		return { text: "?" };
+	} }, calls);
+	const done = await settle(room.agentId, startAbsorbRun({ agentId: room.agentId, assessmentMarkdown: ASSESSMENT, model: MODEL, generate, probe: probeAnswers, now: RUN_CLOCK }).runId);
+	const sorted = done.sorted ?? [];
+	assert(calls.filter((call) => call.prompt.includes("Answer with the one title")).length === 3, `a failed sort asks the placement call once per note, got ${calls.length} calls`);
+	assert(sorted.length === 3 && sorted.every((move) => move.topic === "Invoices go out"), `the notes that share no word with any topic open one topic, named by the first one's first words, got ${JSON.stringify(sorted)}`);
+	const saved = approveAbsorbRun(room.agentId, done.runId, new Date("2026-09-13T09:05:00.000Z"));
+	assert(saved.newTopics === 1, `a topic the sort opened is a new topic on the saved page, got ${saved.newTopics}`);
+	const written = fs.readFileSync(room.l1bPath, "utf-8");
+	assert(!/^### Unsorted$/m.test(written) && !written.includes("### Invoices go out on the first working day of the month.") && !written.includes("### Travel is booked"), `no Unsorted and no topic per note, got ${[...written.matchAll(/^### (.+)$/gm)].map((m) => m[1]).join(" | ")}`);
+	// One real shared word is enough to go under a topic.
+	const near = createRoom("Sort Near Room", []);
+	fs.writeFileSync(near.l1bPath, fs.readFileSync(near.l1bPath, "utf-8").replace("## Active Items", "### Unsorted\n\n<!-- e: id=m-0101 kind=fact saved=2026-09-01 -->\n- The Nordwind portal is down.\n\n## Active Items"));
+	const nearDone = await settle(near.agentId, startAbsorbRun({ agentId: near.agentId, assessmentMarkdown: ASSESSMENT, model: MODEL, generate: scripted({ "?": (_n, prompt) => { if (prompt.includes("For each note")) throw new Error("the fold worker produced no text"); return { text: "?" }; } }, []), probe: probeAnswers, now: RUN_CLOCK }).runId);
+	assert(nearDone.sorted?.[0]?.topic === "Renewals", `a note sharing one real word with a topic goes under it, got ${JSON.stringify(nearDone.sorted)}`);
+	// Stopwords and words of two letters do not count; an equal score goes to the earlier topic.
+	const { parseMemoryDocument } = await import("../src/memory-entries.js");
+	const { sortByCode } = await import("../src/memory-placement.js");
+	const doc = parseMemoryDocument(["## Deep Memory", "", "### Alpha", "", "<!-- e: id=m-0002 kind=fact saved=2026-09-01 -->", "- Nordwind is on Q3.", "", "### Beta", "", "<!-- e: id=m-0001 kind=fact saved=2026-09-01 -->", "- Harbour is on Q3.", "", "## Active Items", ""].join("\n"));
+	assert(sortByCode(doc, "Harbour and Nordwind") === "Alpha", `an equal score goes to the earlier topic, got ${sortByCode(doc, "Harbour and Nordwind")}`);
+	assert(sortByCode(doc, "It is on the Q3 list") === null, `stopwords and words of two letters place nothing, got ${sortByCode(doc, "It is on the Q3 list")}`);
+});
+
+// A removal the person asked for by naming an entry is done by code before
+// Save; one that names nothing memory holds is listed as not done; free text
+// is not a request the run claims.
+await section("asked-removal", async () => {
+	const room = createRoom("Asked Removal Room", [page("RC-0001", "Healthy", "HEALTHY-POINT")]);
+	const asked = ["Remove the \"Send the draft to legal\" task.", "Delete the \"Book the venue in Lueneburg\" task.", "Keep the notes short."];
+	const done = await settle(room.agentId, startAbsorbRun({ agentId: room.agentId, assessmentMarkdown: ASSESSMENT, model: MODEL, guidance: { pin: [], drop: [], corrections: [], topics: [], instructions: asked }, generate: scripted({ "RC-0001": () => answer("HEALTHY-POINT") }, []), probe: probeAnswers, now: RUN_CLOCK }).runId);
+	assert(JSON.stringify(done.requests) === JSON.stringify([{ text: asked[0], done: true, entry: "- Send the draft to legal." }, { text: asked[1], done: false }]), `the card's requests are what code did, naming the entry removed, got ${JSON.stringify(done.requests)}`);
+	approveAbsorbRun(room.agentId, done.runId, new Date("2026-09-13T09:05:00.000Z"));
+	const written = fs.readFileSync(room.l1bPath, "utf-8");
+	assert(!written.includes("- Send the draft to legal.") && written.includes("HEALTHY-POINT"), "the task the person asked to remove is gone from memory after Save");
+	// A negated or "keep" instruction is guidance, not a removal; quoted words
+	// match an entry only as a whole; two matching entries are named as such.
+	const guarded = createRoom("Guarded Removal Room", [page("RC-0001", "Healthy", "HEALTHY-POINT")]);
+	fs.writeFileSync(guarded.l1bPath, fs.readFileSync(guarded.l1bPath, "utf-8")
+		.replace("- The Nordwind contract renews in April.\n", "- The Nordwind contract renews in April.\n\n<!-- e: id=m-0003 kind=fact saved=2026-09-01 -->\n- Nordwind renewal.\n\n<!-- e: id=m-0006 kind=fact saved=2026-09-01 -->\n- Berlin office.\n")
+		.replace("- Send the draft to legal.\n", "- Send the draft to legal.\n\n<!-- e: id=m-0004 kind=item saved=2026-09-01 status=open -->\n- Call the Lueneburg venue.\n\n<!-- e: id=m-0005 kind=item saved=2026-09-02 status=open -->\n- Call the Lueneburg venue.\n"));
+	const guardedAsked = ["Do not remove the \"Send the draft to legal\" task.", "Keep the \"Send the draft to legal\" task, never close it.", "Remove the \"Nordwind renewal note for April\".", "Close the \"Call the Lueneburg venue\" task.", "Drop the formal tone.", "Remove the note about moving out of the Berlin office next spring.", "Drop the \"formal\" tone.", "Remove \"TODO\" markers from the notes.", "Bring back \"Send the draft to legal\" from the archive.", "Restore the \"Berlin office\" note from the archive."];
+	const guardedDone = await settle(guarded.agentId, startAbsorbRun({ agentId: guarded.agentId, assessmentMarkdown: ASSESSMENT, model: MODEL, guidance: { pin: [], drop: [], corrections: [], topics: [], instructions: guardedAsked }, generate: scripted({ "RC-0001": () => answer("HEALTHY-POINT") }, []), probe: probeAnswers, now: RUN_CLOCK }).runId);
+	assert(JSON.stringify(guardedDone.requests) === JSON.stringify([{ text: guardedAsked[2], done: false }, { text: guardedAsked[3], done: false, several: true }]), `negated and keep instructions, and a removal verb with no entry named in quotes, or only a short quoted word, are guidance; a part match is no match; two matches say so, got ${JSON.stringify(guardedDone.requests)}`);
+	approveAbsorbRun(guarded.agentId, guardedDone.runId, new Date("2026-09-13T09:05:00.000Z"));
+	const guardedWritten = fs.readFileSync(guarded.l1bPath, "utf-8");
+	assert(/status=open -->\n- Send the draft to legal\./.test(guardedWritten) && guardedWritten.includes("- Nordwind renewal.") && guardedWritten.includes("- Berlin office.") && guardedWritten.split("- Call the Lueneburg venue.").length === 3, "nothing the person did not ask to remove is removed");
+	// "Retire" and "archive" are removals too, and an open item is named by its words before the colon: the starter goal
+	// the card listed was then done, not left in memory.
+	const starter = createRoom("Starter Goal Room", [page("RC-0001", "Healthy", "HEALTHY-POINT")]);
+	fs.writeFileSync(starter.l1bPath, fs.readFileSync(starter.l1bPath, "utf-8")
+		.replace("- Send the draft to legal.\n", "- Send the draft to legal.\n\n<!-- e: id=m-0007 kind=item saved=2026-09-01 status=open -->\n- Get to know Fernando: current projects, priorities, and how they prefer to work.\n\n<!-- e: id=m-0008 kind=item saved=2026-09-01 status=open -->\n- Book the train: Lisbon to Porto on Friday.\n"));
+	const starterAsked = ["Retire the starter goal \"Get to know Fernando\".", "Archive the \"Book the train\" item, it is done."];
+	const starterDone = await settle(starter.agentId, startAbsorbRun({ agentId: starter.agentId, assessmentMarkdown: ASSESSMENT, model: MODEL, guidance: { pin: [], drop: [], corrections: [], topics: [], instructions: starterAsked }, generate: scripted({ "RC-0001": () => answer("HEALTHY-POINT") }, []), probe: probeAnswers, now: RUN_CLOCK }).runId);
+	assert(JSON.stringify(starterDone.requests) === JSON.stringify([{ text: starterAsked[0], done: true, entry: "- Get to know Fernando: current projects, priorities, and how they prefer to work." }, { text: starterAsked[1], done: true, entry: "- Book the train: Lisbon to Porto on Friday." }]), `a retire or archive naming an item by its label is done by code, got ${JSON.stringify(starterDone.requests)}`);
+	approveAbsorbRun(starter.agentId, starterDone.runId, new Date("2026-09-13T09:05:00.000Z"));
+	const starterWritten = fs.readFileSync(starter.l1bPath, "utf-8");
+	// Two instructions naming the same note: the second finds it already done, never "nothing matched".
+	const twice = createRoom("Twice Removal Room", [page("RC-0001", "Healthy", "HEALTHY-POINT")]);
+	const twiceAsked = ["Delete \"The Nordwind contract renews in April\".", "Remove the \"The Nordwind contract renews in April\" note as well."];
+	const twiceDone = await settle(twice.agentId, startAbsorbRun({ agentId: twice.agentId, assessmentMarkdown: ASSESSMENT, model: MODEL, guidance: { pin: [], drop: [], corrections: [], topics: [], instructions: twiceAsked }, generate: scripted({ "RC-0001": () => answer("HEALTHY-POINT") }, []), probe: probeAnswers, now: RUN_CLOCK }).runId);
+	assert(JSON.stringify(twiceDone.requests?.map((request: any) => request.done)) === JSON.stringify([true, true]), `the second request on a removed note is done too, got ${JSON.stringify(twiceDone.requests)}`);
+	assert(!/status=open -->\n- Get to know Fernando/.test(starterWritten) && !/status=open -->\n- Book the train/.test(starterWritten) && /status=open -->\n- Send the draft to legal\./.test(starterWritten), "the retired items are no longer open after Save, and the rest are");
+	// The scaffold's starter goal as a room holds it: no marker, above the marked items. The card's
+	// REMOVED is true only when Save takes it out of what the room reads.
+	const scaffolded = createRoom("Scaffolded Starter Room", [page("RC-0001", "Healthy", "HEALTHY-POINT")]);
+	fs.writeFileSync(scaffolded.l1bPath, fs.readFileSync(scaffolded.l1bPath, "utf-8").replace("## Active Items\n\n", "## Active Items\n\n- Get to know Sam: current projects, priorities, and how they prefer to work.\n\n"));
+	const scaffoldedDone = await settle(scaffolded.agentId, startAbsorbRun({ agentId: scaffolded.agentId, assessmentMarkdown: ASSESSMENT, model: MODEL, guidance: { pin: [], drop: [], corrections: [], topics: [], instructions: ["Retire the starter goal \"Get to know Sam\"."] }, generate: scripted({ "RC-0001": () => answer("HEALTHY-POINT") }, []), probe: probeAnswers, now: RUN_CLOCK }).runId);
+	assert(scaffoldedDone.requests?.[0]?.done === true, `the unmarked starter goal is found and retired, got ${JSON.stringify(scaffoldedDone.requests)}`);
+	approveAbsorbRun(scaffolded.agentId, scaffoldedDone.runId, new Date("2026-09-13T09:05:00.000Z"));
+	const scaffoldedWritten = fs.readFileSync(scaffolded.l1bPath, "utf-8");
+	assert(!/(^|-->\n)- Get to know Sam/m.test(scaffoldedWritten.replace(/<!-- e: [^>]*status=done[^>]*-->\n- Get to know Sam/, "")), `after Save the room no longer reads the starter goal as open, got ${scaffoldedWritten.slice(scaffoldedWritten.indexOf("## Active Items"), scaffoldedWritten.indexOf("## Recent Context"))}`);
+});
+
+// A page that holds only its dated title (every part was refused at Remember)
+// is dropped by code with no call: nothing to keep, no topic invented.
+await section("dated-page", async () => {
+	const dated = ["### RC-0001 | CLOSED | 2026-09-11 | Conversation of 2026-09-11", "", "**Session arc:** Conversation of 2026-09-11", "", "**Body:**", "- Conversation of 2026-09-11", "", "**Parked:**", "None", ""].join("\n");
+	const room = createRoom("Dated Page Room", [dated, page("RC-0002", "Healthy", "HEALTHY-POINT")]);
+	const calls: Array<{ id: string; prompt: string }> = [];
+	const done = await settle(room.agentId, startAbsorbRun({ agentId: room.agentId, assessmentMarkdown: ASSESSMENT, model: MODEL, generate: scripted({ "RC-0002": () => answer("HEALTHY-POINT") }, calls), probe: probeAnswers, now: RUN_CLOCK }).runId);
+	assert(view(done, "RC-0001").outcome === "dropped" && view(done, "RC-0001").reason === "Its page holds no notes.", `the dated page is dropped with its plain reason, got ${JSON.stringify(view(done, "RC-0001"))}`);
+	assert(!calls.some((call) => call.id === "RC-0001" || call.prompt.includes("Conversation of 2026-09-11")), "no call is made for it");
+	assert(done.progress.folded === 2, `it counts as read, got ${done.progress.folded}`);
+	const saved = approveAbsorbRun(room.agentId, done.runId, new Date("2026-09-13T09:05:00.000Z"));
+	assert(saved.notedSessions === 1 && saved.nothingToKeep === 1, `the save counts what it applied: one conversation became notes, one had nothing to keep, got ${JSON.stringify({ noted: saved.notedSessions, nothing: saved.nothingToKeep })}`);
+	const written = fs.readFileSync(room.l1bPath, "utf-8");
+	assert(!/^### RC-0001 \|/m.test(written) && !written.includes("Conversation of 2026-09-11") && !/^### Unsorted$/m.test(written), "Save removes it from Recent Context and memory gains nothing from it");
+});
+
+// The outage rule holds inside the ladder: a ladder call (pieces, the rest,
+// the placement) that fails after the patience asks the probe. No answer: the
+// page waits whole, nothing filed, the working copy as before the page. An
+// answer: the failure is the page's own, and it climbs. A crash mid-ladder
+// journals no landed piece. A placement record holds no room text.
+await section("ladder-outage", async () => {
+	const long = (id: string, marker: string) => [`### ${id} | OPEN | 2026-09-11 | Ladder call`, "", "**Session arc:** It was talked through.", "", "**Body:**", ...[1, 2, 3, 4].map((n) => `- ${marker}-${n} is a durable point.`), "", "**Parked:**", "None", ""].join("\n");
+	const spent = () => { throw Object.assign(providerError("terminated"), { patienceSpent: true }); };
+	for (const [probe, expected] of [[probeFails, "pending"], [probeAnswers, "summarized"]] as const) {
+		const room = createRoom(`Ladder Outage Room ${expected}`, [long("RC-0001", "LADDER")]);
+		const calls: Array<{ id: string; prompt: string }> = [];
+		// The whole page is prose twice (unreadable), then every ladder call fails after the patience.
+		const generate = scripted({ "RC-0001": (n) => (n <= 2 ? { text: "Prose, no list." } : spent()), "?": () => spent() }, calls);
+		const done = await settle(room.agentId, startAbsorbRun({ agentId: room.agentId, assessmentMarkdown: ASSESSMENT, model: MODEL, generate, probe, now: RUN_CLOCK }).runId);
+		const rc1 = view(done, "RC-0001");
+		assert(rc1.outcome === expected, `a ladder call that fails after the patience asks the probe: ${probe === probeFails ? "no answer, the page waits" : "an answer, it climbs and is placed"}, got "${rc1.outcome}" after ${calls.length} calls`);
+		if (probe === probeFails) assert(done.stop?.kind === "outage" && !(rc1.changes ?? []).length, `the run stops on the outage and the page carries nothing, got ${JSON.stringify({ stop: done.stop, changes: rc1.changes })}`);
+		else {
+			const diagnosticsDir = path.join(root, room.agentId, "events", "maintenance-diagnostics");
+			const placements = fs.readdirSync(diagnosticsDir, { recursive: true }).map(String).filter((name) => name.endsWith(".json")).map((name) => fs.readFileSync(path.join(diagnosticsDir, name), "utf-8")).filter((raw) => JSON.parse(raw).process === "memorize-placement");
+			assert(placements.length > 0 && placements.every((raw) => !raw.includes("LADDER")), `a placement record holds no room text, got ${placements.length} record(s)`);
+		}
+	}
+	// A crash mid-ladder: the journal holds the page as it was, with no landed piece.
+	const crash = createRoom("Ladder Crash Room", [long("RC-0001", "CRASHPIECE")]);
+	const journal = path.join(crash.runtimeDir, "memorize-run.json");
+	let piece = 0;
+	const hangsOnSecondPiece = scripted({ "RC-0001": (n, prompt) => {
+		if (n <= 2) return { text: "Prose, no list." };
+		piece += 1;
+		if (piece >= 2) return new Promise<AbsorbGenerateResult>(() => {});
+		return { text: fence([1, 2, 3, 4].filter((k) => prompt.includes(`CRASHPIECE-${k} is`)).map((k) => ({ op: "add", topic: "Renewals", kind: "fact", text: `- CRASHPIECE-${k} is a durable point.` }))) };
+	} }, []);
+	const crashed = startAbsorbRun({ agentId: crash.agentId, assessmentMarkdown: ASSESSMENT, model: MODEL, generate: hangsOnSecondPiece, probe: probeAnswers, now: RUN_CLOCK });
+	const deadline = Date.now() + 30_000;
+	while (piece < 2) { assert(Date.now() < deadline, "the second piece is in flight"); await sleep(2); }
+	await sleep(20);
+	assert(fs.existsSync(journal) && !fs.readFileSync(journal, "utf-8").includes("CRASHPIECE-1 is a durable point.\"") , "the journal holds no piece that landed while the page is in its ladder");
+	resetAbsorbRunsForTests(); // the server restarts mid-ladder
+	const revived = getAbsorbRun(crash.agentId, crashed.runId);
+	assert(view(revived, "RC-0001").outcome === "pending" && !(view(revived, "RC-0001").changes ?? []).length && !view(revived, "RC-0001").reason, `the page revives whole and waits for Continue, with no landed piece and no cause, got ${JSON.stringify(view(revived, "RC-0001"))}`);
+	// Continue redoes it (down the ladder, never asked whole again), and the run goes on.
+	const continued = await settle(crash.agentId, run.resumeAbsorbRun(crash.agentId, crashed.runId, MODEL, new Date(), { generate: scripted({ "RC-0001": (_n, prompt) => ({ text: fence([1, 2, 3, 4].filter((k) => prompt.includes(`CRASHPIECE-${k} is`)).map((k) => ({ op: "add", topic: "Renewals", kind: "fact", text: `- CRASHPIECE-${k} is a durable point.` }))) }) }, []), probe: probeAnswers }).runId);
+	assert(view(continued, "RC-0001").outcome === "folded", `Continue folds the page that was in flight, got ${JSON.stringify(view(continued, "RC-0001"))}`);
+});
+
+// The sort's call that cannot reach the model ends the run as a page outage
+// does: the notice with its cause, nothing sorted, the notes still in Unsorted.
+await section("sort-outage", async () => {
+	const { ModelUnreachableError } = await import("../src/model-call-causes.js");
+	const room = createRoom("Sort Outage Room", []);
+	fs.writeFileSync(room.l1bPath, fs.readFileSync(room.l1bPath, "utf-8").replace("## Active Items", "### Unsorted\n\n<!-- e: id=m-0101 kind=fact saved=2026-09-01 -->\n- Invoices go out on the first working day.\n\n## Active Items"));
+	const signedOut: AbsorbRunGenerate = async () => { throw new ModelUnreachableError("signed-out", MODEL); };
+	const done = await settle(room.agentId, startAbsorbRun({ agentId: room.agentId, assessmentMarkdown: ASSESSMENT, model: MODEL, generate: signedOut, probe: probeAnswers, now: RUN_CLOCK }).runId);
+	assert(done.state === "ready" && done.stop?.kind === "outage" && done.stop.cause === "signed-out" && !(done.sorted ?? []).length, `the sort stops the run with the notice and sorts nothing, got ${JSON.stringify({ state: done.state, stop: done.stop, sorted: done.sorted })}`);
+	// Sign in, then Try again: the resume sorts the notes first.
+	run.resumeAbsorbRun(room.agentId, done.runId, MODEL, new Date(), { generate: async () => ({ text: "m-0101: Billing" }) });
+	const resumed = await settle(room.agentId, done.runId);
+	assert(!resumed.stop && JSON.stringify(resumed.sorted) === JSON.stringify([{ id: "m-0101", text: "- Invoices go out on the first working day.", topic: "Billing" }]), `Try again sorts the notes waiting in Unsorted, got ${JSON.stringify({ stop: resumed.stop, sorted: resumed.sorted })}`);
 });
 
 // A draft list, prose taking it back, then an empty list as the last fence:
@@ -174,7 +429,8 @@ await section("cut-off", async () => {
 	const started = startAbsorbRun({ agentId: room.agentId, assessmentMarkdown: ASSESSMENT, model: MODEL, generate: scripted({ "RC-0001": salvage, "RC-0002": cut }, calls), probe: probeAnswers, now: RUN_CLOCK });
 	const done = await settle(room.agentId, started.runId);
 	assert(view(done, "RC-0001").outcome === "folded" && view(done, "RC-0001").attempts === 1, `a cut-off reply with a complete fence is salvaged, got "${view(done, "RC-0001").outcome}" after ${view(done, "RC-0001").attempts}`);
-	assert(view(done, "RC-0002").outcome === "summarized" && calls.filter((call) => call.id === "RC-0002").length === 2, `a cut-off reply with nothing to salvage is asked again, then summarized, got "${view(done, "RC-0002").outcome}"`);
+	const rc2 = calls.filter((call) => call.id === "RC-0002");
+	assert(view(done, "RC-0002").outcome === "summarized" && rc2[1]?.prompt.includes("ran to the output limit"), `a cut-off reply with nothing to salvage is asked again, then placed, got "${view(done, "RC-0002").outcome}"`);
 });
 
 // An apply that throws files that page as its summary, and the run goes on.
@@ -191,7 +447,28 @@ await section("apply-throws", async () => {
 		assert(done.state === "ready", `an apply that throws does not fail the run, got "${done.state}" ${done.error ?? ""}`);
 		assert(view(done, "RC-0001").outcome === "summarized" && view(done, "RC-0002").outcome === "folded", `the page is summarized and the next one folds, got ${JSON.stringify(done.sessions.map((s) => s.outcome))}`);
 		const added = (view(done, "RC-0001").changes ?? []).filter((change) => change.kind === "added");
-		assert(added.length === 1 && added[0].topic === "Unsorted", `only the summary note is added for the page whose apply threw, got ${JSON.stringify(added)}`);
+		assert(added.length === 1 && added[0].topic === "Throws", `only the summary note is added for the page whose apply threw, placed under its own topic, got ${JSON.stringify(added)}`);
+	} finally {
+		run.setAbsorbFoldApplyForTests(null);
+	}
+});
+
+// An apply that throws on one op keeps the ops that apply, op by op, with no
+// new call; the op that threw is kept whole as one note under a topic.
+await section("apply-throws-one", async () => {
+	const room = createRoom("Apply One Room", [page("RC-0001", "Two points", "GOOD-POINT")]);
+	run.setAbsorbFoldApplyForTests((doc, ops, ctx) => {
+		if (ops.some((op) => "text" in op && String(op.text).includes("BAD-POINT"))) throw new Error("the applier threw");
+		return applyFoldOps(doc, ops, ctx);
+	});
+	try {
+		const calls: Array<{ id: string; prompt: string }> = [];
+		const two = (): AbsorbGenerateResult => ({ text: fence([{ op: "add", topic: "Renewals", kind: "fact", text: "- GOOD-POINT is the durable point." }, { op: "add", topic: "Renewals", kind: "fact", text: "- BAD-POINT breaks the applier." }]) });
+		const done = await settle(room.agentId, startAbsorbRun({ agentId: room.agentId, assessmentMarkdown: ASSESSMENT, model: MODEL, generate: scripted({ "RC-0001": two }, calls), probe: probeAnswers, now: RUN_CLOCK }).runId);
+		assert(view(done, "RC-0001").outcome === "folded" && calls.length === 1, `the ops that apply are kept with no new call, got "${view(done, "RC-0001").outcome}" after ${calls.length} call(s)`);
+		approveAbsorbRun(room.agentId, done.runId, new Date("2026-09-13T09:05:00.000Z"));
+		const written = fs.readFileSync(room.l1bPath, "utf-8");
+		assert(written.includes("- GOOD-POINT is the durable point.") && written.includes("BAD-POINT breaks the applier.") && !/^### Unsorted$/m.test(written), "the good op is a note of its own and the bad one's text is kept under a topic");
 	} finally {
 		run.setAbsorbFoldApplyForTests(null);
 	}
@@ -211,34 +488,26 @@ await section("window-unknown", async () => {
 // A prompt too large for the window is filed as its summary, with no raw text.
 await section("oversize", async () => {
 	const room = createRoom("Oversize Room", [page("RC-0001", "Too big", "BIG-POINT")]);
-	const started = startAbsorbRun({ agentId: room.agentId, assessmentMarkdown: ASSESSMENT, model: MODEL, generate: scripted({}, []), probe: probeAnswers, resolveModelWindow: () => ({ contextWindow: 1_000, maxOutputTokens: 200 }), now: RUN_CLOCK });
+	const calls: Array<{ id: string; prompt: string }> = [];
+	const started = startAbsorbRun({ agentId: room.agentId, assessmentMarkdown: ASSESSMENT, model: MODEL, generate: scripted({ "?": () => ({ text: "Too big" }) }, calls), probe: probeAnswers, resolveModelWindow: () => ({ contextWindow: 1_000, maxOutputTokens: 200 }), now: RUN_CLOCK });
 	const done = await settle(room.agentId, started.runId);
-	assert(view(done, "RC-0001").outcome === "summarized" && !view(done, "RC-0001").reason, `an oversize page is summarized, got "${view(done, "RC-0001").outcome}" / "${view(done, "RC-0001").reason}"`);
+	assert(view(done, "RC-0001").outcome === "summarized" && !view(done, "RC-0001").reason && (view(done, "RC-0001").changes ?? []).some((change: any) => change.topic === "Too big"), `an oversize page is placed, and the card reads it like any other, got "${view(done, "RC-0001").outcome}" / "${view(done, "RC-0001").reason}"`);
+	// A piece or the rest too large for the window is never sent to be refused.
+	assert(calls.every((call) => call.id !== "RC-0001"), `no fold of a piece too large for the window is sent, got ${calls.filter((call) => call.id === "RC-0001").length}`);
 });
 
-// A probe-confirmed failure waits once with a record, keyed by the Remember's
-// checkpoint id; the second one is filed as its summary; recorded pages go last.
-// A provider error is not worded as a dropped
-// connection; a dropped connection is.
+// A failure the probe shows is the page's own (the model answers) goes down
+// the ladder in this run: no record, no waiting, no second run.
 await section("second-failure", async () => {
 	const room = createRoom("Second Failure Room", [page("RC-0001", "Poison", "POISON-POINT", "", "cp-777"), page("RC-0002", "Healthy", "HEALTHY-POINT"), page("RC-0003", "Dropped", "DROPPED-POINT")]);
 	const poison = () => { throw providerError("the content was filtered"); };
 	const dropped = () => { throw providerError("terminated"); };
-	const first = startAbsorbRun({ agentId: room.agentId, assessmentMarkdown: ASSESSMENT, model: MODEL, generate: scripted({ "RC-0001": poison, "RC-0002": () => answer("HEALTHY-POINT"), "RC-0003": dropped }, []), probe: probeAnswers, now: RUN_CLOCK });
-	const one = await settle(room.agentId, first.runId);
-	assert(view(one, "RC-0001").outcome === "failed" && Object.keys(records(room.runtimeDir)).length === 2, `a first probe-confirmed failure waits with a record, got "${view(one, "RC-0001").outcome}" and ${Object.keys(records(room.runtimeDir)).length} record(s)`);
-	assert(view(one, "RC-0001").reason === run.ABSORB_FOLD_WORKER_FAILED_TWICE && view(one, "RC-0003").reason === run.ABSORB_FOLD_CONNECTION_LOST_TWICE, `a provider error reads as the model failing, a dropped connection as the connection, got "${view(one, "RC-0001").reason}" / "${view(one, "RC-0003").reason}"`);
-	assert("cp-777" in records(room.runtimeDir) && !Object.keys(records(room.runtimeDir)).some((key) => key.startsWith("RC-")), `the record is keyed by the checkpoint id, never the RC id, got ${Object.keys(records(room.runtimeDir)).join(",")}`);
+	const one = await settle(room.agentId, startAbsorbRun({ agentId: room.agentId, assessmentMarkdown: ASSESSMENT, model: MODEL, generate: scripted({ "RC-0001": poison, "RC-0002": () => answer("HEALTHY-POINT"), "RC-0003": dropped }, []), probe: probeAnswers, now: RUN_CLOCK }).runId);
+	assert(view(one, "RC-0001").outcome === "summarized" && view(one, "RC-0003").outcome === "summarized" && view(one, "RC-0002").outcome === "folded" && !one.stop, `each failing page is placed in this run, got ${JSON.stringify(one.sessions.map((s) => s.outcome))}`);
+	assert(Object.keys(records(room.runtimeDir)).length === 0, "and nothing is recorded");
 	const diagnosticsDir = path.join(root, room.agentId, "events", "maintenance-diagnostics");
 	const pageKeys = fs.readdirSync(diagnosticsDir, { recursive: true }).map(String).filter((name) => name.endsWith(".json")).map((name) => JSON.parse(fs.readFileSync(path.join(diagnosticsDir, name), "utf-8"))).filter((record) => record.process === "memorize-page").map((record) => record.page.key);
-	assert(pageKeys.includes("cp-777") && !pageKeys.some((key: string) => key.startsWith("RC-")), `the page diagnostics are keyed by the checkpoint id too, got ${pageKeys.join(",")}`);
-	assert(!JSON.stringify(records(room.runtimeDir)).includes("POISON"), "the record holds no room text");
-	const calls: Array<{ id: string; prompt: string }> = [];
-	const second = startAbsorbRun({ agentId: room.agentId, assessmentMarkdown: ASSESSMENT, model: MODEL, generate: scripted({ "RC-0001": poison, "RC-0002": () => answer("HEALTHY-POINT"), "RC-0003": dropped }, calls), probe: probeAnswers, now: RUN_CLOCK });
-	const two = await settle(room.agentId, second.runId);
-	assert(calls[0].id === "RC-0002", `a page carrying a record folds last, got ${calls.map((call) => call.id).join(",")}`);
-	assert(view(two, "RC-0001").outcome === "summarized" && view(two, "RC-0003").outcome === "summarized", `the second probe-confirmed failure summarizes, got "${view(two, "RC-0001").outcome}"`);
-	assert(Object.keys(records(room.runtimeDir)).length === 0, "and its record is gone");
+	assert(pageKeys.includes("cp-777") && !pageKeys.some((key: string) => key.startsWith("RC-")), `the page diagnostics are keyed by the checkpoint id, never the RC id, got ${pageKeys.join(",")}`);
 });
 
 // A dropped connection is told by its own words, never by a sentence that uses the word "terminated".
@@ -274,21 +543,21 @@ await section("blip-wait", async () => {
 	}
 });
 
-// A WebSocket that failed twice is said as the connection dropping, not as a failed worker.
+// A dropped connection while the model answers is the page's own: retried
+// once, then down the ladder and placed in this run, never waiting.
 await section("websocket-sentence", async () => {
 	const room = createRoom("WebSocket Room", [page("RC-0001", "Socket", "SOCKET-POINT")]);
-	const calls: Array<{ id: string; prompt: string }> = [];
-	const done = await settle(room.agentId, startAbsorbRun({ agentId: room.agentId, assessmentMarkdown: ASSESSMENT, model: MODEL, generate: scripted({ "RC-0001": () => { throw providerError("WebSocket error"); } }, calls), probe: probeAnswers, now: RUN_CLOCK }).runId);
-	assert(view(done, "RC-0001").reason === run.ABSORB_FOLD_CONNECTION_LOST_TWICE, `the reason names the connection, got "${view(done, "RC-0001").reason}"`);
+	const done = await settle(room.agentId, startAbsorbRun({ agentId: room.agentId, assessmentMarkdown: ASSESSMENT, model: MODEL, generate: scripted({ "RC-0001": () => { throw providerError("WebSocket error"); } }, []), probe: probeAnswers, now: RUN_CLOCK }).runId);
+	assert(view(done, "RC-0001").outcome === "summarized" && !view(done, "RC-0001").reason && (view(done, "RC-0001").changes ?? []).some((change: any) => change.topic === "Socket") && !done.stop, `the page is placed in this run, got ${JSON.stringify(view(done, "RC-0001"))}`);
 });
 
-// The probe asks at low reasoning, so a reasoning model does not think its way to the ceiling.
-await section("probe-low", async () => {
-	const room = createRoom("Probe Low Room", [page("RC-0001", "Poison", "POISON-POINT")]);
+// The probe asks with no thinking, so a reasoning model does not think its way to the ceiling.
+await section("probe-off", async () => {
+	const room = createRoom("Probe Off Room", [page("RC-0001", "Poison", "POISON-POINT")]);
 	const probeOptions: Array<{ thinkingLevel?: string; timeoutMs?: number }> = [];
 	const probe: AbsorbRunProbe = async (prompt, model, options) => { probeOptions.push(options); return probeAnswers(prompt, model, options); };
 	await settle(room.agentId, startAbsorbRun({ agentId: room.agentId, assessmentMarkdown: ASSESSMENT, model: MODEL, generate: scripted({ "RC-0001": () => { throw providerError("the content was filtered"); } }, []), probe, now: RUN_CLOCK }).runId);
-	assert(probeOptions.length === 1 && probeOptions[0].thinkingLevel === "low" && probeOptions[0].timeoutMs === 45_000, `the probe asks at low reasoning within its 45 s, got ${JSON.stringify(probeOptions)}`);
+	assert(probeOptions.length >= 1 && probeOptions.every((options) => options.thinkingLevel === "off" && options.timeoutMs === 45_000), `every probe (the fold's, then the ladder's) asks with no thinking within its 45 s, got ${JSON.stringify(probeOptions)}`);
 });
 
 // An outage stops the run, records nothing, and says so; a rate limit is an outage whatever the probe says; Try again resumes.
@@ -352,7 +621,7 @@ await section("rate-limit", async () => {
 	const next = startAbsorbRun({ agentId: room.agentId, assessmentMarkdown: ASSESSMENT, model: MODEL, generate: scripted({ "RC-0001": limited, "RC-0002": () => answer("BEHIND-POINT") }, second), probe: probeAnswers, now: RUN_CLOCK });
 	const two = await settle(room.agentId, next.runId);
 	assert(second[0].id === "RC-0002", `the page that stopped the last run goes last, got ${second.map((call) => call.id).join(",")}`);
-	assert(!two.stop && view(two, "RC-0001").outcome === "summarized" && view(two, "RC-0002").outcome === "folded", `stopping this run too after another page folded, it is kept as its summary, got ${JSON.stringify(two.sessions.map((s) => s.outcome))} stop ${JSON.stringify(two.stop)}`);
+	assert(two.stop?.cause === "busy" && view(two, "RC-0001").outcome === "pending" && view(two, "RC-0002").outcome === "folded", `busy is an outage every time: it stops the run after the other page folded, and is never filed, got ${JSON.stringify(two.sessions.map((s) => s.outcome))} stop ${JSON.stringify(two.stop)}`);
 });
 
 // A page whose probe the model is too slow to answer: the same, without a rate limit's words.
@@ -369,7 +638,7 @@ await section("slow-probe", async () => {
 	assert(first.stop?.cause === "not-answering" && view(first, "RC-0002").outcome === "pending", `a failed probe stops the run, got ${JSON.stringify(first.stop)}`);
 	cancelAbsorbRun(room.agentId, first.runId);
 	const two = await settle(room.agentId, startAbsorbRun({ agentId: room.agentId, assessmentMarkdown: ASSESSMENT, model: MODEL, generate, probe: slowProbe, now: RUN_CLOCK }).runId);
-	assert(!two.stop && view(two, "RC-0001").outcome === "summarized" && view(two, "RC-0002").outcome === "folded", `the page that stopped a run twice is kept as its summary, not in the way again, got ${JSON.stringify(two.sessions.map((s) => s.outcome))}`);
+	assert(two.stop?.cause === "not-answering" && view(two, "RC-0001").outcome === "pending" && view(two, "RC-0002").outcome === "folded", `the page that stopped a run goes last, so the other folds first; a probe that fails stops the run again, got ${JSON.stringify(two.sessions.map((s) => s.outcome))}`);
 });
 
 // Cancel works while a rate-limited call waits out its pause.
@@ -488,36 +757,54 @@ await section("resume-pin", async () => {
 	assert(new RegExp(`id=${keptId}\\b[^\\n]*pinned=true`).test(saved), "the note the resumed fold pinned is saved pinned");
 });
 
-// A record counts only on the model that wrote it.
-await section("record-model", async () => {
-	const room = createRoom("Record Model Room", [page("RC-0001", "Poison", "POISON-POINT")]);
-	const poison = () => { throw providerError("the content was filtered"); };
-	const other = { provider: "openai-compatible", model: "gpt-5.5-mini", label: "GPT-5.5 mini" };
-	const one = await settle(room.agentId, startAbsorbRun({ agentId: room.agentId, assessmentMarkdown: ASSESSMENT, model: MODEL, generate: scripted({ "RC-0001": poison }, []), probe: probeAnswers, now: RUN_CLOCK }).runId);
-	assert(view(one, "RC-0001").outcome === "failed", "the first failure waits");
-	cancelAbsorbRun(room.agentId, one.runId);
-	const two = await settle(room.agentId, startAbsorbRun({ agentId: room.agentId, assessmentMarkdown: ASSESSMENT, model: other, generate: scripted({ "RC-0001": poison }, []), probe: probeAnswers, now: RUN_CLOCK }).runId);
-	const record = Object.values(records(room.runtimeDir))[0] as { model?: string } | undefined;
-	assert(view(two, "RC-0001").outcome === "failed" && record?.model === "gpt-5.5-mini", `another Memory model gets its own first try and its record replaces the old one, got "${view(two, "RC-0001").outcome}" ${JSON.stringify(record)}`);
+
+// A page in flight when the app restarted carries its own record, on any
+// model: the next run never asks the fold call for it again, so a page that
+// brings the server down cannot loop. It goes straight down the ladder.
+await section("restarted-record", async () => {
+	const room = createRoom("Restarted Record Room", [page("RC-0001", "Crasher", "CRASH-POINT", "", "cp-555"), page("RC-0002", "Healthy", "HEALTHY-POINT")]);
+	fs.mkdirSync(room.runtimeDir, { recursive: true });
+	fs.writeFileSync(path.join(room.runtimeDir, "memorize-page-failures.json"), JSON.stringify({ schemaVersion: 1, records: { "cp-555": { at: "2026-09-12T09:00:00.000Z", provider: "openai-compatible", model: "gpt-5.4", code: "restarted" } }, throttled: {} }));
+	const calls: Array<{ id: string; prompt: string }> = [];
+	const done = await settle(room.agentId, startAbsorbRun({ agentId: room.agentId, assessmentMarkdown: ASSESSMENT, model: MODEL, generate: scripted({ "RC-0001": () => answer("CRASH-POINT"), "RC-0002": () => answer("HEALTHY-POINT") }, calls), probe: probeAnswers, now: RUN_CLOCK }).runId);
+	// The whole-page fold reads the whole memory; the ladder's rungs read less of it.
+	assert(!calls.some((call) => call.id === "RC-0001" && call.prompt.includes("The Nordwind contract renews in April.")), `no whole-page fold call for a page the restart caught, got ${calls.map((call) => call.id).join(",")}`);
+	assert(view(done, "RC-0001").outcome !== "failed" && view(done, "RC-0002").outcome === "folded", `the page does not wait again, got "${view(done, "RC-0001").outcome}"`);
+	assert(Object.keys(records(room.runtimeDir)).length === 0, "and its record is gone");
+	// Caught by a restart a second time, in the ladder: no fold call at all, only the placement.
+	const again = createRoom("Restarted Twice Room", [page("RC-0001", "Crasher", "CRASH-POINT", "", "cp-556")]);
+	fs.mkdirSync(again.runtimeDir, { recursive: true });
+	fs.writeFileSync(path.join(again.runtimeDir, "memorize-page-failures.json"), JSON.stringify({ schemaVersion: 1, records: { "cp-556": { at: "2026-09-12T09:00:00.000Z", provider: "openai-compatible", model: "gpt-5.5", code: "restarted-twice" } }, throttled: {} }));
+	const againCalls: Array<{ id: string; prompt: string }> = [];
+	const twice = await settle(again.agentId, startAbsorbRun({ agentId: again.agentId, assessmentMarkdown: ASSESSMENT, model: MODEL, generate: scripted({ "RC-0001": () => answer("CRASH-POINT"), "?": () => ({ text: "Renewals" }) }, againCalls), probe: probeAnswers, now: RUN_CLOCK }).runId);
+	assert(againCalls.length === 0 && view(twice, "RC-0001").outcome === "summarized" && !view(twice, "RC-0001").reason, `a page a restart caught twice is placed as one note by code, with no call at all, got ${againCalls.map((call) => call.id).join(",")} and "${view(twice, "RC-0001").outcome}"`);
+	// With no call, a model that cannot be reached does not hold it: it is placed all the same.
+	const down = createRoom("Restarted Twice Down Room", [page("RC-0001", "Crasher", "DOWN-POINT", "", "cp-557")]);
+	fs.mkdirSync(down.runtimeDir, { recursive: true });
+	fs.writeFileSync(path.join(down.runtimeDir, "memorize-page-failures.json"), JSON.stringify({ schemaVersion: 1, records: { "cp-557": { at: "2026-09-12T09:00:00.000Z", provider: "openai-compatible", model: "gpt-5.5", code: "restarted-twice" } }, throttled: {} }));
+	const spent = () => { throw Object.assign(providerError("terminated"), { patienceSpent: true }); };
+	const stopped = await settle(down.agentId, startAbsorbRun({ agentId: down.agentId, assessmentMarkdown: ASSESSMENT, model: MODEL, generate: scripted({ "?": () => spent() }, []), probe: probeFails, now: RUN_CLOCK }).runId);
+	assert(!stopped.stop && view(stopped, "RC-0001").outcome === "summarized", `a page a restart caught twice is placed with no call, whatever the model, got ${JSON.stringify({ stop: stopped.stop, outcome: view(stopped, "RC-0001").outcome })}`);
 });
 
 // A provider that says the request is too large: the page is kept as its summary at once, never an outage.
 await section("too-large", async () => {
 	const room = createRoom("Too Large Room", [page("RC-0001", "Huge", "HUGE-POINT"), page("RC-0002", "Behind", "BEHIND-POINT")]);
-	const started = startAbsorbRun({ agentId: room.agentId, assessmentMarkdown: ASSESSMENT, model: MODEL, generate: scripted({ "RC-0001": () => { throw providerError("Request too large for gpt-4o in organization org-x on tokens per min (TPM): Limit 30000, Requested 41290. rate_limit_exceeded"); }, "RC-0002": () => answer("BEHIND-POINT") }, []), probe: probeFails, now: RUN_CLOCK });
+	const started = startAbsorbRun({ agentId: room.agentId, assessmentMarkdown: ASSESSMENT, model: MODEL, generate: scripted({ "RC-0001": () => { throw providerError("Request too large for gpt-4o in organization org-x on tokens per min (TPM): Limit 30000, Requested 41290. rate_limit_exceeded"); }, "RC-0002": () => answer("BEHIND-POINT"), "?": () => ({ text: "Huge" }) }, []), probe: probeFails, now: RUN_CLOCK });
 	const done = await settle(room.agentId, started.runId);
 	assert(!done.stop && view(done, "RC-0001").outcome === "summarized" && view(done, "RC-0002").outcome === "folded", `a request too large is summarized and the run goes on, got ${JSON.stringify(done.sessions.map((s) => s.outcome))} stop ${JSON.stringify(done.stop)}`);
+	assert(!view(done, "RC-0001").reason, `a page placed as one note carries no sentence about it, got ${view(done, "RC-0001").reason}`);
 	assert(Object.keys(records(room.runtimeDir)).length === 0, "and nothing is recorded");
 });
 
-// The records flush when the loop ends, cancel included.
+// A record is written when its page ends, so a restart mid-run keeps it; a cancel keeps it too.
 await section("cancel-flush", async () => {
 	const room = createRoom("Cancel Room", [page("RC-0001", "Poison", "POISON-POINT"), page("RC-0002", "Slow", "SLOW-POINT")]);
 	let release = () => {};
 	const blocked = new Promise<void>((resolve) => { release = resolve; });
 	let reachedSlow = false;
 	const slow: AbsorbRunGenerate = async (prompt, model, options) => {
-		if (sessionOf(prompt) === "RC-0001") throw providerError("the content was filtered");
+		if (sessionOf(prompt) !== "RC-0002") throw providerError("the content was filtered");
 		reachedSlow = true;
 		await new Promise<void>((resolve) => { options.signal.addEventListener("abort", () => resolve()); void blocked.then(resolve); });
 		throw new IsolatedPersistentAgentWorkerTurnError("memorize fold worker", "aborted", "cancelled");
@@ -525,12 +812,41 @@ await section("cancel-flush", async () => {
 	const started = startAbsorbRun({ agentId: room.agentId, assessmentMarkdown: ASSESSMENT, model: MODEL, generate: slow, probe: probeAnswers, now: RUN_CLOCK });
 	const deadline = Date.now() + 30_000;
 	while (!reachedSlow) { assert(Date.now() < deadline, "the run reached the slow page"); await sleep(2); }
-	assert(Object.keys(records(room.runtimeDir)).length === 0, "records are held, not written, while the loop runs");
+	assert(Object.keys(records(room.runtimeDir)).length === 0, "the failed page was placed, not recorded");
 	cancelAbsorbRun(room.agentId, started.runId);
 	release();
-	const flushDeadline = Date.now() + 30_000;
-	while (Object.keys(records(room.runtimeDir)).length === 0) { assert(Date.now() < flushDeadline, "the records flush when a cancelled loop ends"); await sleep(2); }
-	assert(Object.keys(records(room.runtimeDir)).length === 1, "the page that failed before the cancel is recorded; the one in flight is not");
+	await settle(room.agentId, started.runId).catch(() => undefined);
+	assert(Object.keys(records(room.runtimeDir)).length === 0, "a cancel records neither the placed page nor the one in flight");
+});
+
+// Titles the sort names in another case or spacing open one topic, not two.
+await section("sort-one-topic-whatever-the-case", async () => {
+	const room = createRoom("Sort Case Room", []);
+	fs.writeFileSync(room.l1bPath, fs.readFileSync(room.l1bPath, "utf-8").replace("## Active Items", "### Unsorted\n\n<!-- e: id=m-0101 kind=fact saved=2026-09-01 -->\n- Invoices go out on the first.\n\n<!-- e: id=m-0102 kind=fact saved=2026-09-01 -->\n- Late invoices get a reminder.\n\n<!-- e: id=m-0103 kind=fact saved=2026-09-01 -->\n- Credit notes need approval.\n\n## Active Items"));
+	const sortReply = (_n: number, prompt: string): AbsorbGenerateResult => ({ text: prompt.includes("For each note") ? "m-0101: Invoicing rules\nm-0102: invoicing Rules\nm-0103:  Invoicing  rules" : "?" });
+	const done = await settle(room.agentId, startAbsorbRun({ agentId: room.agentId, assessmentMarkdown: ASSESSMENT, model: MODEL, generate: scripted({ "?": sortReply }, []), probe: probeAnswers, now: RUN_CLOCK }).runId);
+	const topics = new Set((done.sorted ?? []).map((move) => move.topic));
+	assert(topics.size === 1, `one topic, got ${JSON.stringify([...topics])}`);
+});
+
+// The discussion a run came from is kept until the run can come back from a
+// restart as a card: a restart during the sort finds it still there.
+await section("discussion-kept-until-folds", async () => {
+	const room = createRoom("Kept Discussion Room", [page("RC-0001", "Healthy", "HEALTHY-POINT")]);
+	fs.writeFileSync(room.l1bPath, fs.readFileSync(room.l1bPath, "utf-8").replace("## Active Items", "### Unsorted\n\n<!-- e: id=m-0101 kind=fact saved=2026-09-01 -->\n- Invoices go out on the first working day.\n\n## Active Items"));
+	const kept = path.join(room.runtimeDir, "memorize-discussion.json");
+	fs.writeFileSync(kept, JSON.stringify({ read: { assessmentMarkdown: ASSESSMENT } }));
+	let release!: () => void;
+	const gate = new Promise<void>((resolve) => { release = resolve; });
+	let sorting = false;
+	const sortReply = async (): Promise<AbsorbGenerateResult> => { sorting = true; await gate; return { text: "m-0101: Billing" }; };
+	const started = startAbsorbRun({ agentId: room.agentId, assessmentMarkdown: ASSESSMENT, model: MODEL, generate: scripted({ "RC-0001": () => answer("HEALTHY-POINT"), "?": sortReply }, []), probe: probeAnswers, now: RUN_CLOCK });
+	const deadline = Date.now() + 30_000;
+	while (!sorting) { assert(Date.now() < deadline, "the run reached the sort"); await sleep(2); }
+	assert(fs.existsSync(kept), "during the sort the discussion is still kept");
+	release();
+	const done = await settle(room.agentId, started.runId);
+	assert(done.state === "ready" && !fs.existsSync(kept), `once the folds begin the discussion goes, got ${done.state} and ${fs.existsSync(kept) ? "a kept discussion" : "none"}`);
 });
 
 fs.rmSync(tempHome, { recursive: true, force: true });

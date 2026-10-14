@@ -1,3 +1,4 @@
+import { fmtMemoryDay } from "./memory-surface-copy";
 import type {
 	PersistentRoomScheduleCreateRequest,
 	PersistentRoomScheduleJob,
@@ -119,10 +120,9 @@ export function formatNativeTimeSummary(value: string): string | null {
 	return formatParsedTimeSummary(parsed);
 }
 
+/** The app's clock: 24-hour, as Memory says it ("17:18"). */
 export function formatParsedTimeSummary({ hour, minute }: ParsedNativeTime): string {
-	const period = hour < 12 ? "AM" : "PM";
-	const hour12 = hour % 12 === 0 ? 12 : hour % 12;
-	return `${hour12}:${String(minute).padStart(2, "0")} ${period}`;
+	return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
 }
 
 export function generateDailyCronSchedule(time: string): string | null {
@@ -463,7 +463,7 @@ export function formatFriendlyWhenForJob(job: PersistentRoomScheduleJob, now = n
 		const date = new Date(job.schedule);
 		if (!Number.isNaN(date.getTime())) {
 			const summary = formatNativeTimeSummary(toNativeTimeValue(date.getHours(), date.getMinutes()));
-			if (summary) return `Once on ${date.toLocaleDateString()} at ${summary}.`;
+			if (summary) return `Once on ${fmtMemoryDay(date.getTime())} at ${summary}.`;
 		}
 	}
 	return formatAdvancedScheduleSummary(job.type, job.schedule);

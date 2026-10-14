@@ -145,12 +145,17 @@ try {
 	const estimate = await api(`/api/persistent-agents/${agentId}/checkpoint/estimate?conversationId=${conversationId}`);
 	assert(estimate.body?.model?.model === "maint-model", `the estimate names the memory model too, got ${JSON.stringify(estimate.body)}`);
 	pass("Remember runs on the room's memory model at a 16k cap, ignoring the model in the request, and the proposal and the estimate name it");
+	// The usage record says which Memory model call it was, beside its cache counts, so a run can compare cache settings.
+	const usageRows = fs.readFileSync(path.join(appDir, "usage.jsonl"), "utf-8").trim().split("\n").map((line) => JSON.parse(line));
+	const rememberRow = usageRows.find((row) => row.agent === agentId && row.callKind === "remember-single");
+	assert(rememberRow && typeof rememberRow.cacheRead === "number" && typeof rememberRow.cacheWrite === "number", `the Remember's usage row names its call kind with its cache counts, got ${JSON.stringify(usageRows.map((row) => ({ kind: row.kind, callKind: row.callKind })))}`);
+	pass("the Remember's usage row names its call kind, with cacheRead and cacheWrite");
 
 	// The memory row changes before approval: the proposal is refused.
 	await api(`/api/persistent-agents/${agentId}/models`, { method: "PUT", body: JSON.stringify({ memory: { provider: "openai-compatible", model: "room-model" } }) });
 	const approveBody = { conversationId, density: proposal.body.density, proposal: proposal.body, approvedRecentContext: proposal.body.proposedRecentContext };
 	const refused = await api(`/api/persistent-agents/${agentId}/checkpoint/approve`, { method: "POST", body: JSON.stringify(approveBody) });
-	assert(refused.status === 409 && refused.body?.error === "The memory model changed after this proposal was written. Nothing was saved. Generate the proposal again.", `an approval after the memory row changed is refused with the plain sentence, got ${refused.status} ${JSON.stringify(refused.body)}`);
+	assert(refused.status === 409 && refused.body?.error === "The Memory model changed after this entry was written. Nothing was saved. Generate again.", `an approval after the memory row changed is refused with the plain sentence, got ${refused.status} ${JSON.stringify(refused.body)}`);
 	pass("an approval after the memory row changed is refused with the plain sentence, and nothing is saved");
 
 	// A memory pick on a signed-out provider: refused, and nothing runs in its place.
@@ -159,7 +164,8 @@ try {
 	assert(rows.body.models.memory.reason === "signed-out" && rows.body.models.memory.effective === null && /^This room's memory model, .+, is signed out\. Sign in again in Settings, AI setup, or choose another model in Room settings, Model\.$/.test(rows.body.models.memory.refusal), `a memory pick on a signed-out provider waits and says why, got ${JSON.stringify(rows.body.models.memory)}`);
 	gatewayRequests.length = 0;
 	const waiting = await api(`/api/persistent-agents/${agentId}/checkpoint/propose`, { method: "POST", body: JSON.stringify({ conversationId, density: "standard" }) });
-	assert(waiting.status === 409 && waiting.body?.code === "provider_signed_out" && waiting.body?.error === rows.body.models.memory.refusal, `Remember is refused with the row's sentence, got ${waiting.status} ${JSON.stringify(waiting.body)}`);
+	// The Remember dialog shows the one shared notice: the full model name, Nothing was lost, and Sign in as a button.
+	assert(waiting.body?.code === "model_unreachable" && waiting.body?.details?.detail === "signed-out" && waiting.body?.details?.provider === "anthropic" && waiting.body?.error === "Claude Opus 5.5 cannot answer because its provider is signed out. Nothing was lost.", `Remember is refused with the shared signed-out notice, got ${waiting.status} ${JSON.stringify(waiting.body)}`);
 	assert(!gatewayRequests.some((request) => request.remember), `no model read the conversation in its place, got ${JSON.stringify(gatewayRequests)}`);
 	pass("a memory pick on a signed-out provider is refused with the sentence, and no other model runs Remember");
 

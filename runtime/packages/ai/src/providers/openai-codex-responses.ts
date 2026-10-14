@@ -106,6 +106,18 @@ function isRetryableError(status: number, errorText: string): boolean {
 	return /rate.?limit|overloaded|service.?unavailable|upstream.?connect|connection.?refused/i.test(errorText);
 }
 
+/**
+ * ChatGPT refusing a model for this account (its plan, its administrator), as
+ * a 400: "The 'gpt-6.1-sol' model is not supported when using Codex with a
+ * ChatGPT account." Asking again cannot change the answer, so it is never
+ * retried. The same words as modelNotOnAccount in
+ * apps/web-server/src/model-not-on-account.ts, which reads the refusal for the
+ * screens; its smoke proves the two agree.
+ */
+export function codexModelNotOnAccount(message: string): boolean {
+	return /\bmodel is not supported when using Codex with a ChatGPT account\b/i.test(message);
+}
+
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 	return new Promise((resolve, reject) => {
 		if (signal?.aborted) {
@@ -274,7 +286,7 @@ export const streamOpenAICodexResponses: StreamFunction<"openai-codex-responses"
 					}
 					lastError = error instanceof Error ? error : new Error(String(error));
 					// Network errors are retryable
-					if (attempt < MAX_RETRIES && !lastError.message.includes("usage limit")) {
+					if (attempt < MAX_RETRIES && !lastError.message.includes("usage limit") && !codexModelNotOnAccount(lastError.message)) {
 						const delayMs = BASE_DELAY_MS * 2 ** attempt;
 						await sleep(delayMs, options?.signal);
 						continue;
@@ -1223,8 +1235,11 @@ async function parseErrorResponse(response: Response): Promise<{ message: string
 	try {
 		const parsed = JSON.parse(raw) as {
 			error?: { code?: string; type?: string; message?: string; plan_type?: string; resets_at?: number };
+			detail?: unknown;
 		};
 		const err = parsed?.error;
+		// Some refusals carry their words as a bare `detail` string instead of an `error` object.
+		if (!err && typeof parsed?.detail === "string" && parsed.detail.trim()) message = parsed.detail;
 		if (err) {
 			const code = err.code || err.type || "";
 			if (/usage_limit_reached|usage_not_included|rate_limit_exceeded/i.test(code) || response.status === 429) {

@@ -8,9 +8,23 @@ dist-release/
 *.tgz
 .DS_Store
 
-# Personal AI-session context (each contributor can have their own)
+# Personal AI-session context (each contributor can have their own); only the
+# shared session files under the top .claude/ are tracked
 AGENTS.md
-.claude/
+CLAUDE.md
+CLAUDE.local.md
+.claude/*
+!.claude/rules/
+!.claude/agents/
+!.claude/slices/
+!.claude/repo-map.md
+*/**/.claude/
+
+# Personal planning notes
+planning/
+
+# Build output folders besides dist/
+dist-*/
 
 # Obsidian editor config (personal)
 .obsidian/
