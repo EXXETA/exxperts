@@ -38,14 +38,14 @@ function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
 }
 
-/** Every file under the home that holds the word. */
+/** Every file under the home that holds the word, with forward slashes on every system. */
 function filesHolding(word: string): string[] {
 	const found: string[] = [];
 	const walk = (dir: string) => {
 		for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
 			const file = path.join(dir, entry.name);
 			if (entry.isDirectory()) walk(file);
-			else if (fs.readFileSync(file, "utf-8").includes(word)) found.push(path.relative(tempHome, file));
+			else if (fs.readFileSync(file, "utf-8").includes(word)) found.push(path.relative(tempHome, file).split(path.sep).join("/"));
 		}
 	};
 	walk(tempHome);
