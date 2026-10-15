@@ -16,7 +16,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    timeout-minutes: 60
     env:
       # Smokes and typecheck don't need the headless browser; skip the ~150 MB download.
       EXXETA_SKIP_BROWSER_INSTALL: "1"

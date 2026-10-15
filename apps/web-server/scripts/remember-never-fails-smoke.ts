@@ -451,7 +451,11 @@ try {
 		assert(fs.existsSync(path.join(pa.createPersistentAgentInstance(room.agentId).rootDir, "runtime", "remember", room.threadId, "proposal.json")), "the proposal is kept on disk for the reopened dialog");
 	});
 
-	await section("a finished page that cannot be stored on this computer ends in a plain line, never in the unexpected stop", async () => {
+	// chmod has no teeth on Windows or as root (the Linux gate runs as root), so
+	// the refusal is only forced where the file system will honour it.
+	const canForceFsRefusal = process.platform !== "win32" && process.getuid?.() !== 0;
+	if (!canForceFsRefusal) console.log("remember never fails smoke: the unstorable-page check skipped (folder modes have no effect on Windows or as root)");
+	else await section("a finished page that cannot be stored on this computer ends in a plain line, never in the unexpected stop", async () => {
 		assert(!(job instanceof Error), "remember-job.ts is missing");
 		const room = roomWithConversation("disk refuses", { messages: 6 });
 		const work = path.join(pa.createPersistentAgentInstance(room.agentId).rootDir, "runtime", "remember", room.threadId);

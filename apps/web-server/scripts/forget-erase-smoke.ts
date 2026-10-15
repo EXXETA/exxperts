@@ -205,7 +205,10 @@ try {
 
 	// --- A file that cannot go yet does not fail the Forget ---------------------------
 	// (Windows: a file held open.) The conversation is forgotten; the rest is erased.
-	{
+	// chmod has no teeth on Windows or as root (the Linux gate runs as root), so
+	// the refusal is only forced where the file system will honour it.
+	const canForceFsRefusal = process.platform !== "win32" && process.getuid?.() !== 0;
+	if (canForceFsRefusal) {
 		const heldRoomId = agents.createPersistentAgentFromScaffoldInput({ displayName: "Forget Held Room", userName: "Synthetic User", preferredUserAddress: "Synthetic User" }).agent.agentId;
 		const heldRoom = path.join(root, heldRoomId);
 		const HELD = "VELLORANTHIS";
@@ -242,7 +245,7 @@ try {
 		assert(fs.readFileSync(path.join(threads, "c_record_0001.json"), "utf-8").includes(RECORD), "the record still holds the words, as on Windows");
 		assert(fs.existsSync(path.join(heldRoom, "runtime", "forget-held-back")), "a record that could not be emptied is marked held back, so the next start sweeps");
 		console.log("ok a record that cannot be emptied yet is held back");
-	}
+	} else console.log("forget erase smoke: the held-file checks skipped (folder modes have no effect on Windows or as root)");
 	{
 		// A forgotten record that names a transcript a kept conversation names as its own: the sweep never deletes it.
 		const sharedId = agents.createPersistentAgentFromScaffoldInput({ displayName: "Forget Shared Room", userName: "Synthetic User", preferredUserAddress: "Synthetic User" }).agent.agentId;
