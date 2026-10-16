@@ -1,5 +1,8 @@
 import { redirectToSignInOn401 } from "./api";
 import type { ArchivedPersistentAgentSummary, PersistentAgentArchiveRequest, PersistentAgentArchiveResponse, PersistentAgentId, PersistentAgentLifecycleCounts, PersistentAgentPurgeBusyReason, PersistentAgentPurgeResponse, PersistentAgentRenameResponse, PersistentAgentRestoreResponse } from "./types";
+import type { SkillDetail } from "./skills-api";
+import type { SkillReference } from "./skills-repo-api";
+import { createDisplayCache, invalidateDisplayCaches } from "./display-cache";
 
 const PURGE_BUSY_REASONS: readonly PersistentAgentPurgeBusyReason[] = ["room_lock", "turn_in_flight", "detached_cooking", "specialist_running"];
 
@@ -34,6 +37,7 @@ async function fetchJson<T>(input: RequestInfo | URL, init?: RequestInit, fallba
 	redirectToSignInOn401(response);
 	const payload = await readJsonOrText(response);
 	if (!response.ok) throw new Error(parsePersistentRoomManagementError(payload, fallbackError));
+	if (init?.method === "PUT" && String(input).endsWith("/skill-settings")) window.dispatchEvent(new window.Event("skill-libraries-changed"));
 	return payload as T;
 }
 
@@ -198,6 +202,8 @@ export interface PersistentRoomEnabledSkillStatus {
 	displayName?: string;
 	sha256: string;
 	currentSha256: string | null;
+	packageSha256?: string;
+	currentPackageSha256?: string | null;
 	status: "ok" | "hash-mismatch" | "missing";
 	/** Execution approval in this room, pinned to the skill's whole-content digest:
 	 *  "none" (never approved), "approved" (this exact version may run its files),
@@ -215,28 +221,80 @@ export interface PersistentRoomEnabledSkillStatus {
 
 export interface PersistentRoomSkillSettingsResponse {
 	agentId: PersistentAgentId;
-	settings: { schemaVersion: 1; enabledSkills: { name: string; sha256: string }[]; updatedAt: string };
+	settings: { schemaVersion: 1; enabledSkills: { name: string; sha256: string; packageSha256?: string }[]; enabledSources?: PersistentRoomSourceGrant[]; updatedAt: string };
 	skills: PersistentRoomEnabledSkillStatus[];
+	sources?: PersistentRoomEnabledSourceStatus[];
 }
+
+export interface PersistentRoomSourceGrant {
+	libraryId: string;
+	materialsSha256: string;
+	skills: Array<{ name: string; sha256: string; packageSha256: string }>;
+	excludedSkills: string[];
+}
+
+export interface PersistentRoomEnabledSourceStatus {
+	libraryId: string;
+	name: string;
+	source: string;
+	materialsSha256: string;
+	currentMaterialsSha256: string | null;
+	materialCount: number;
+	skills: string[];
+	excludedSkills: string[];
+	status: "ok" | "review-required" | "missing";
+}
+
+export interface PersistentRoomSourceReview {
+	libraryId: string;
+	name: string;
+	source: string;
+	revision?: string;
+	materialsSha256: string;
+	materials: SkillReference[];
+	skills: SkillDetail[];
+}
+
+export function fetchPersistentRoomSourceReview(agentId: PersistentAgentId, libraryId: string): Promise<PersistentRoomSourceReview> {
+	return fetchJson(`/api/persistent-agents/${encodeURIComponent(agentId)}/skill-sources/${encodeURIComponent(libraryId)}/review`, undefined, "Failed to load source review.");
+}
+
+export async function updatePersistentRoomSourceSetting(agentId: PersistentAgentId, mutation: ({ action: "enable-source" } & PersistentRoomSourceGrant) | { action: "disable-source"; libraryId: string } | { action: "exclude-source-skill"; libraryId: string; name: string; excluded: boolean }): Promise<PersistentRoomSkillSettingsResponse> {
+	const result = await fetchJson<PersistentRoomSkillSettingsResponse>(`/api/persistent-agents/${encodeURIComponent(agentId)}/skill-settings?view=summary`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(mutation) }, "Failed to update room source settings.");
+	invalidateDisplayCaches();
+	await roomSkillCache(agentId).load(() => Promise.resolve(result));
+	return result;
+}
+
+const roomSkillCaches = new Map<string, ReturnType<typeof createDisplayCache<PersistentRoomSkillSettingsResponse>>>();
+function roomSkillCache(agentId: string) {
+	let cache = roomSkillCaches.get(agentId);
+	if (!cache) { cache = createDisplayCache<PersistentRoomSkillSettingsResponse>(); roomSkillCaches.set(agentId, cache); }
+	return cache;
+}
+export const peekPersistentRoomSkillSettings = (agentId: PersistentAgentId) => roomSkillCache(agentId).peek();
 
 export function fetchPersistentRoomSkillSettings(agentId: PersistentAgentId): Promise<PersistentRoomSkillSettingsResponse> {
-	return fetchJson<PersistentRoomSkillSettingsResponse>(
-		`/api/persistent-agents/${encodeURIComponent(agentId)}/skill-settings`,
+	return roomSkillCache(agentId).load(() => fetchJson<PersistentRoomSkillSettingsResponse>(
+		`/api/persistent-agents/${encodeURIComponent(agentId)}/skill-settings?view=summary`,
 		undefined,
 		"Failed to load room skill settings."
-	);
+	), true);
 }
 
-export function updatePersistentRoomSkillSetting(agentId: PersistentAgentId, action: "enable" | "disable" | "approve-execution" | "revoke-execution", name: string): Promise<PersistentRoomSkillSettingsResponse> {
-	return fetchJson<PersistentRoomSkillSettingsResponse>(
-		`/api/persistent-agents/${encodeURIComponent(agentId)}/skill-settings`,
+export async function updatePersistentRoomSkillSetting(agentId: PersistentAgentId, action: "enable" | "disable" | "approve-execution" | "revoke-execution", name: string, reviewed?: { sha256?: string; packageSha256?: string }): Promise<PersistentRoomSkillSettingsResponse> {
+	const result = await fetchJson<PersistentRoomSkillSettingsResponse>(
+		`/api/persistent-agents/${encodeURIComponent(agentId)}/skill-settings?view=summary`,
 		{
 			method: "PUT",
 			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ action, name }),
+			body: JSON.stringify({ action, name, ...reviewed }),
 		},
 		"Failed to update room skill settings."
 	);
+	invalidateDisplayCaches();
+	await roomSkillCache(agentId).load(() => Promise.resolve(result));
+	return result;
 }
 
 // ── Per-room MCP: connector grants ───────────────────────────────────────────

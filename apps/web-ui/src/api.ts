@@ -1,3 +1,5 @@
+import { clearDisplayCaches } from "./display-cache";
+
 // A 401 means the session cookie is missing or stale (for example cleared
 // while the app was open): the server is fine but every further call fails
 // the same way, so the actionable surface is the server's sign-in hint page
@@ -63,5 +65,6 @@ export async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> 
 		} catch {}
 		throw new ApiRequestError(message, res.status, code, details);
 	}
+	if (url === "/api/auth/logout" || url === "/api/settings/state-profile/switch") clearDisplayCaches();
 	return await res.json() as T;
 }

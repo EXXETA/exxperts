@@ -230,6 +230,10 @@ Rooms get tools through a per-room policy rather than a global grant:
   shared with other agent tools (read-only on our side); wherever a
   skill lives, a room only uses it after you review and enable it
   there, and an edited skill must be re-reviewed.
+- **`read_skill_reference`**: rooms read only the reference files selected in a
+  reviewed repository package. Design libraries can opt into PDF, DOCX, XLSX,
+  images, SVG, fonts and style sources; reference changes also require room
+  review. See [Skill libraries](skill-libraries.md).
 - **Consult**: a room can ask another room a question via @-mention in
   chat; the consulted room answers read-only from its own memory and
   context.

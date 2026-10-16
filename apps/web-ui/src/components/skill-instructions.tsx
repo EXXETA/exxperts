@@ -10,7 +10,7 @@ const FOLDED_HEIGHT = 340;
  * holds a long text to about 340 px with a fade and a Show all toggle; the
  * review screen leaves it unfolded, since that screen asks you to read it.
  */
-export function SkillInstructions({ body, foldable = false }: { body: string; foldable?: boolean }) {
+export function SkillInstructions({ body, foldable = false, onOpenReference }: { body: string; foldable?: boolean; onOpenReference?: (href: string) => void }) {
 	const docRef = useRef<HTMLDivElement | null>(null);
 	const [tall, setTall] = useState(false);
 	const [open, setOpen] = useState(false);
@@ -29,7 +29,7 @@ export function SkillInstructions({ body, foldable = false }: { body: string; fo
 	return (
 		<>
 			<div ref={docRef} className={`skill-doc${folded ? " folded" : ""}`}>
-				<MarkdownRenderer codeTokens>{body}</MarkdownRenderer>
+				<MarkdownRenderer codeTokens onOpenReference={onOpenReference}>{body}</MarkdownRenderer>
 			</div>
 			{foldable && tall && (
 				<button

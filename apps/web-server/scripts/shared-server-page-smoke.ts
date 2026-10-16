@@ -307,7 +307,9 @@ try {
 
 			await openTab(page, "Skills");
 			assert((await countText(page, ".settings-overlay", SHARED_LINE)) === 1, "shared Skills: no shared-server line");
-			assert((await page.locator(".settings-overlay .pane-head-actions button").count()) === 0, "shared Skills: Browse featured or Add skill is offered");
+			for (const name of ["Repository libraries", "Add skill"]) {
+				assert((await page.locator(".settings-overlay").getByRole("button", { name, exact: true }).count()) === 0, `shared Skills: ${name} is offered`);
+			}
 			await closeSettings(page);
 			pass("shared: Settings has no Remote access or Profiles; AI setup, its default models, web search, instructions, connectors and skills are read-only with the line");
 			assert(asked.length === 0, `shared start, Home and Settings: the page asked for what a shared server refuses: ${asked.join(", ")}`);
@@ -400,7 +402,9 @@ try {
 			await openTab(page, "Connectors");
 			assert((await page.locator(".settings-overlay .connector-dir-search").count()) === 1, "this computer: the connector directory is missing");
 			await openTab(page, "Skills");
-			assert((await page.locator(".settings-overlay .pane-head-actions button").filter({ hasText: "Browse featured" }).count()) === 1, "this computer: Browse featured is missing");
+			for (const name of ["Repository libraries", "Add skill"]) {
+				assert((await page.locator(".settings-overlay").getByRole("button", { name, exact: true }).count()) === 1, `this computer: ${name} is missing`);
+			}
 			assert((await page.locator(".settings-overlay").getByText(SHARED_LINE, { exact: true }).count()) === 0, "this computer: the shared-server line is shown");
 			await closeSettings(page);
 			pass("this computer: the sort control, Wallet, Remote access, Profiles and every setting control are there, with no shared-server line");

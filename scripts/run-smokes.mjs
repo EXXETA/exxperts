@@ -1,8 +1,8 @@
 #!/usr/bin/env node
-// Runs the web-server smoke suite: every apps/web-server/scripts/*-smoke.ts,
+// Runs every apps/{web-server,web-ui}/scripts/*-smoke.ts,
 // sequentially (smokes bind ports and isolate HOME; parallel runs would race).
 // Usage: npm run smokes [-- <filter>...]  — filters are substrings of the
-// smoke file name; any match includes the smoke.
+// smoke file name or qualified server/ui label; any match includes the smoke.
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import { pathToFileURL, fileURLToPath } from "node:url";
@@ -10,19 +10,29 @@ import fs from "node:fs";
 import path from "node:path";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const smokeDir = path.join(repoRoot, "apps", "web-server", "scripts");
+const suites = [
+	{ name: "server", directory: "web-server", tsconfig: "tsconfig.scripts.json" },
+	{ name: "ui", directory: "web-ui", tsconfig: "tsconfig.json" },
+];
 const require = createRequire(import.meta.url);
 // --import needs a URL, not a bare path — a Windows drive-letter path would be misparsed.
 const tsxLoader = pathToFileURL(require.resolve("tsx/esm")).href;
 
 const filters = process.argv.slice(2).filter((arg) => !arg.startsWith("-"));
-const smokes = fs.readdirSync(smokeDir)
-	.filter((name) => name.endsWith("-smoke.ts"))
-	.filter((name) => filters.length === 0 || filters.some((f) => name.includes(f)))
-	.sort();
+const smokes = suites.flatMap((suite) => {
+	const appDir = path.join(repoRoot, "apps", suite.directory);
+	return fs.readdirSync(path.join(appDir, "scripts"))
+		.filter((name) => name.endsWith("-smoke.ts"))
+		.sort()
+		.map((name) => ({
+			name: `${suite.name}/${name}`,
+			file: path.join(appDir, "scripts", name),
+			tsconfig: path.join(appDir, suite.tsconfig),
+		}));
+}).filter(({ name }) => filters.length === 0 || filters.some((filter) => name.includes(filter)));
 
 if (smokes.length === 0) {
-	console.error(filters.length ? `No smokes match: ${filters.join(", ")}` : `No smokes found in ${smokeDir}`);
+	console.error(filters.length ? `No smokes match: ${filters.join(", ")}` : "No server or UI smokes found");
 	process.exit(1);
 }
 
@@ -49,11 +59,12 @@ for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
 	});
 }
 
-function runSmoke(name) {
+function runSmoke(smoke) {
 	return new Promise((resolve) => {
 		const startedAt = Date.now();
-		const child = spawn(process.execPath, ["--import", tsxLoader, path.join(smokeDir, name)], {
+		const child = spawn(process.execPath, ["--import", tsxLoader, smoke.file], {
 			cwd: repoRoot,
+			env: { ...process.env, TSX_TSCONFIG_PATH: smoke.tsconfig },
 			stdio: ["ignore", "pipe", "pipe"],
 			...(process.platform === "win32" ? {} : { detached: true }),
 		});
@@ -70,7 +81,7 @@ function runSmoke(name) {
 		child.on("close", (code) => {
 			runningSmokes.delete(child);
 			clearTimeout(timer);
-			resolve({ name, code: timedOut ? 1 : (code ?? 1), output, seconds: (Date.now() - startedAt) / 1000 });
+			resolve({ name: smoke.name, code: timedOut ? 1 : (code ?? 1), output, seconds: (Date.now() - startedAt) / 1000 });
 		});
 	});
 }
@@ -97,12 +108,12 @@ function skipLines(output) {
 
 const results = [];
 console.log(`Running ${smokes.length} smoke${smokes.length === 1 ? "" : "s"}…\n`);
-for (const name of smokes) {
-	process.stdout.write(`  ${name} … `);
-	let result = await runSmoke(name);
+for (const smoke of smokes) {
+	process.stdout.write(`  ${smoke.name} … `);
+	let result = await runSmoke(smoke);
 	if (isInterferenceFailure(result)) {
 		process.stdout.write(`retrying after a file-permission denial outside the smoke … `);
-		result = await runSmoke(name);
+		result = await runSmoke(smoke);
 	}
 	results.push(result);
 	const skips = result.code === 0 ? skipLines(result.output) : [];

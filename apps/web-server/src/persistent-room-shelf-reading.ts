@@ -376,6 +376,12 @@ export interface ShelfImageForVision {
  */
 export async function readShelfImageForVision(roomIdRaw: string, rawName: string, options: PersistentRoomShelfStorageOptions = {}): Promise<ShelfImageForVision> {
 	const resolved = resolveShelfFilePath(roomIdRaw, rawName, options);
+	return readReferenceImageForVision(resolved.absolutePath, resolved.name);
+}
+
+/** Caller must supply a bounded, already authorized snapshot file. */
+export async function readReferenceImageForVision(absolutePath: string, name: string): Promise<ShelfImageForVision> {
+	const resolved = { absolutePath, name, stat: fs.statSync(absolutePath) };
 	if (resolved.stat.size > SHELF_READ_MAX_FILE_BYTES) {
 		throw new PersistentRoomShelfError("file_too_large", `The file is larger than the ${SHELF_READ_MAX_FILE_BYTES / (1024 * 1024)} MB reading cap.`);
 	}
@@ -415,6 +421,12 @@ export interface ShelfPdfRasterForVision {
  */
 export async function rasterizeShelfPdfForVision(roomIdRaw: string, rawName: string, firstPage: number, options: PersistentRoomShelfStorageOptions = {}): Promise<ShelfPdfRasterForVision> {
 	const resolved = resolveShelfFilePath(roomIdRaw, rawName, options);
+	return rasterizeReferencePdfForVision(resolved.absolutePath, resolved.name, firstPage);
+}
+
+/** Caller must supply a bounded, already authorized snapshot file. */
+export async function rasterizeReferencePdfForVision(absolutePath: string, name: string, firstPage: number): Promise<ShelfPdfRasterForVision> {
+	const resolved = { absolutePath, name, stat: fs.statSync(absolutePath) };
 	if (resolved.stat.size > SHELF_READ_MAX_FILE_BYTES) {
 		throw new PersistentRoomShelfError("file_too_large", `The file is larger than the ${SHELF_READ_MAX_FILE_BYTES / (1024 * 1024)} MB reading cap.`);
 	}

@@ -45,6 +45,14 @@ const again = pausedSkillsDecision("room-a", changedAgain, first.remember);
 assert.deepEqual(again.show?.text, "A skill changed, so this room paused it.");
 assert.ok(again.remember.includes("room-a:xlsx@xlsx-v3"));
 
+// Reference-only repository updates have distinct package versions even when instructions match.
+const referenceChange = { ...skill("brand", "hash-mismatch", "same-manifest"), currentPackageSha256: "package-v2" };
+const firstPackage = pausedSkillsDecision("room-a", [referenceChange], []);
+assert.ok(firstPackage.show, "a reference-only update is announced");
+assert.equal(pausedSkillsDecision("room-a", [referenceChange], firstPackage.remember).show, null, "the same package is not announced twice");
+const nextPackage = { ...referenceChange, currentPackageSha256: "package-v3" };
+assert.ok(pausedSkillsDecision("room-a", [nextPackage], firstPackage.remember).show, "another reference-only update is announced despite identical instructions");
+
 // Another room with the same change has its own notice.
 assert.ok(pausedSkillsDecision("room-b", two, first.remember).show, "each room says it for itself");
 

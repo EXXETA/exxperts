@@ -85,9 +85,10 @@ function roomFileNameFromSrc(src: string): string | null {
 // renderMermaid is true — the caller passes false while the message streams,
 // so expensive rendering never runs on incomplete content; the fence shows as
 // a normal code block until the message is complete.
-function markdownComponents(renderMermaid: boolean, onOpenRoomFile?: (name: string) => void, codeTokens = false): Components {
+function markdownComponents(renderMermaid: boolean, onOpenRoomFile?: (name: string) => void, codeTokens = false, onOpenReference?: (href: string) => void): Components {
 	return {
 		a({ href, children, ...props }) {
+			if (onOpenReference && href && !/^[a-z][a-z0-9+.-]*:|^\/\//i.test(href) && !href.startsWith("#")) return <button type="button" className="rs-text-btn" onClick={() => onOpenReference(href)}>{children}</button>;
 			return (
 				<a href={href} target="_blank" rel="noopener noreferrer" {...props}>
 					{children}
@@ -96,6 +97,7 @@ function markdownComponents(renderMermaid: boolean, onOpenRoomFile?: (name: stri
 		},
 		img({ src, alt }) {
 			const url = typeof src === "string" ? src : "";
+			if (onOpenReference && url) return <button type="button" className="rs-text-btn" onClick={() => onOpenReference(url)}>{alt || url} (open image)</button>;
 			if (url && isSafeImageSrc(url)) {
 				const image = <img src={url} alt={alt ?? ""} loading="lazy" />;
 				const roomFile = onOpenRoomFile ? roomFileNameFromSrc(url) : null;
@@ -125,6 +127,7 @@ function markdownComponents(renderMermaid: boolean, onOpenRoomFile?: (name: stri
 			// span, so a stylesheet can let it wrap only between tokens (a table
 			// cell on a skill's page). The text itself is unchanged.
 			if (codeTokens && !className && typeof children === "string" && !children.includes("\n")) {
+				if (onOpenReference && !/\s|^[a-z][a-z0-9+.-]*:|^\/\//i.test(children) && /\.(?:md|markdown|txt|json|css|scss|html?|svg|pdf|docx|xlsx|png|jpe?g|gif|webp|woff2?|ttf|otf)(?:[?#].*)?$/i.test(children)) return <code {...props}><button type="button" className="rs-text-btn" onClick={() => onOpenReference(children)}>{children}</button></code>;
 				return <code {...props}>{children.split(/(\s+)/).map((part, i) => (/^\s*$/.test(part) ? part : <span key={i} className="md-code-token">{part}</span>))}</code>;
 			}
 			return <code className={className} {...props}>{children}</code>;
@@ -156,8 +159,8 @@ function markdownComponents(renderMermaid: boolean, onOpenRoomFile?: (name: stri
  * the file name. Pass a stable identity — it is a dependency of the memoised
  * component map, so a fresh function each render re-parses the markdown.
  */
-function MarkdownRendererImpl({ children, renderMermaid = true, onOpenRoomFile, codeTokens = false }: { children: string; renderMermaid?: boolean; onOpenRoomFile?: (name: string) => void; codeTokens?: boolean }) {
-	const components = useMemo(() => markdownComponents(renderMermaid, onOpenRoomFile, codeTokens), [renderMermaid, onOpenRoomFile, codeTokens]);
+function MarkdownRendererImpl({ children, renderMermaid = true, onOpenRoomFile, codeTokens = false, onOpenReference }: { children: string; renderMermaid?: boolean; onOpenRoomFile?: (name: string) => void; codeTokens?: boolean; onOpenReference?: (href: string) => void }) {
+	const components = useMemo(() => markdownComponents(renderMermaid, onOpenRoomFile, codeTokens, onOpenReference), [renderMermaid, onOpenRoomFile, codeTokens, onOpenReference]);
 	return <ReactMarkdown remarkPlugins={MARKDOWN_PLUGINS} components={components}>{children}</ReactMarkdown>;
 }
 

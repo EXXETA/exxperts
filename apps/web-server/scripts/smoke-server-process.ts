@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
-import type { ChildProcess, ChildProcessByStdio, ChildProcessWithoutNullStreams } from "node:child_process";
+import type { ChildProcess, ChildProcessByStdio } from "node:child_process";
 import diagnosticsChannel from "node:diagnostics_channel";
 import type { Socket } from "node:net";
 import type { Writable } from "node:stream";
@@ -136,7 +136,7 @@ function killTree(pid: number, signal: NodeJS.Signals): void {
 // Stop the smoke's server without ever hanging: SIGTERM the tree, wait
 // bounded, escalate to SIGKILL. An unbounded wait-for-exit here is exactly
 // what turned one leaked server process into a 45-minute CI timeout.
-export async function stopSmokeServer(server: ChildProcessWithoutNullStreams | null | undefined): Promise<void> {
+export async function stopSmokeServer(server: ChildProcess | null | undefined): Promise<void> {
 	if (!server || server.exitCode != null || server.pid == null) return;
 	const exited = new Promise<void>((resolve) => server.once("exit", () => resolve()));
 	const waitUpTo = (ms: number) => Promise.race([exited, new Promise<void>((resolve) => setTimeout(resolve, ms))]);
