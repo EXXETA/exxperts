@@ -149,7 +149,7 @@ const unit = path.join(tempRoot, "unit");
 		assert(!fs.existsSync(path.join(home, ".exxperts", "demo")), "the refused alias must not have been created inside the family");
 	}
 	const link = path.join(unit, "alias-link");
-	fs.symlinkSync(path.join(home, ".exxperts"), link, "dir");
+	fs.symlinkSync(path.join(home, ".exxperts"), link, process.platform === "win32" ? "junction" : "dir");
 	let failure: Error | null = null;
 	try {
 		stateProfiles.planHomeMove(home, path.join(link, "inside"));
@@ -197,7 +197,7 @@ const unit = path.join(tempRoot, "unit");
 	const realTree = path.join(unit, "linked-real-tree");
 	fs.mkdirSync(path.join(realTree, "app"), { recursive: true });
 	fs.mkdirSync(home, { recursive: true });
-	fs.symlinkSync(realTree, path.join(home, ".exxperts"), "dir");
+	fs.symlinkSync(realTree, path.join(home, ".exxperts"), process.platform === "win32" ? "junction" : "dir");
 	assert(stateProfiles.listStateFamily(home).includes(".exxperts"), "a linked state tree is still a family member: a plan that cannot see it would move nothing and point the home at an empty folder");
 	let failure: Error | null = null;
 	try {

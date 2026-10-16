@@ -1,136 +1,84 @@
-// Importing skills on a machine that cannot run git.
-//
-// Importing from a repository clones it with git. On Windows without Git the
-// person read "spawn git ENOENT"; on a Mac without Apple's command line tools,
-// /usr/bin/git is a stand-in whose xcode-select text came through word for
-// word. Both now say which tool is missing and where to get it, with no command
-// to type, while every other git failure keeps its own words. This drives the
-// real clone with git hidden, then with a stand-in that answers like Apple's,
-// then with one that fails for an ordinary reason, and checks that Git for
-// Windows is found in its install folders when PATH does not have it.
-//
-// Run: node scripts/run-smokes.mjs skills-git-missing
-
+// Missing Git uses the active snapshot pipeline; public API coverage is in repository-transport-smoke.
+import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
-import http from "node:http";
-import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
-import {
-	cloneRepoShallow,
-	gitMissingMessage,
-	isMacDeveloperToolsStub,
-	isMissingToolMessage,
-	loadFeaturedSource,
-	MAC_DEVELOPER_TOOLS_MISSING,
-	resolveGitCommand,
-	resolveRepoSource,
-} from "../src/skills-repo-fetch.js";
+import { disposeAllCheckouts, loadFeaturedSource, scanRepository } from "../src/skills-repo-fetch.js";
+import { anonymousRepositoryAccess, clearRepositoryAccess, gitMissingMessage, grantRepositoryAccess, repositoryGitAvailable, resolveGitCommand } from "../src/skills-repository-access.js";
 
-function assert(condition: unknown, message: string): asserts condition {
-	if (!condition) throw new Error(message);
-}
+const files = new Set(["C:\\Tools\\Git\\cmd\\git.exe", "C:\\Program Files\\Git\\cmd\\git.exe", "C:\\Users\\ana\\AppData\\Local\\Programs\\Git\\cmd\\git.exe"]);
+const exists = (file: string) => files.has(file);
+assert.equal(resolveGitCommand("win32", { PATH: "C:\\Windows;C:\\Tools\\Git\\cmd" }, exists), "git");
+assert.equal(resolveGitCommand("win32", { Path: "C:\\Windows", ProgramFiles: "C:\\Program Files" }, exists), "C:\\Program Files\\Git\\cmd\\git.exe");
+assert.equal(resolveGitCommand("win32", { PATH: "C:\\Windows", LOCALAPPDATA: "C:\\Users\\ana\\AppData\\Local" }, exists), "C:\\Users\\ana\\AppData\\Local\\Programs\\Git\\cmd\\git.exe");
+assert.equal(resolveGitCommand("win32", { PATH: "C:\\Windows" }, () => false), "git");
+assert.equal(resolveGitCommand("darwin", {}, () => false), "git");
+assert.match(gitMissingMessage("win32"), /gitforwindows\.org/);
+assert.match(gitMissingMessage("darwin"), /Apple's command line tools/);
+assert(!/has just offered|separate window/.test(gitMissingMessage("darwin")), "missing tools do not imply an installer was opened");
 
-// Git for Windows found on PATH, in its install folders, or not at all.
-{
-	const files = new Set([
-		"C:\\Tools\\Git\\cmd\\git.exe",
-		"C:\\Program Files\\Git\\cmd\\git.exe",
-		"C:\\Users\\ana\\AppData\\Local\\Programs\\Git\\cmd\\git.exe",
-	]);
-	const exists = (p: string) => files.has(p);
-	assert(resolveGitCommand("win32", { PATH: "C:\\Windows;C:\\Tools\\Git\\cmd" }, exists) === "git", "git on PATH runs as git");
-	assert(resolveGitCommand("win32", { Path: "C:\\Windows", ProgramFiles: "C:\\Program Files" }, exists) === "C:\\Program Files\\Git\\cmd\\git.exe", "an install PATH has not caught up with is found in Program Files");
-	assert(resolveGitCommand("win32", { PATH: "C:\\Windows", LOCALAPPDATA: "C:\\Users\\ana\\AppData\\Local" }, exists) === "C:\\Users\\ana\\AppData\\Local\\Programs\\Git\\cmd\\git.exe", "a per-user install is found too");
-	assert(resolveGitCommand("win32", { PATH: "C:\\Windows" }, () => false) === "git", "with no git anywhere, plain git (and the plain message)");
-	assert(resolveGitCommand("darwin", {}, () => false) === "git", "other systems always use PATH");
-}
-
-if (process.platform === "win32") {
-	console.log("skills git missing smoke: the clone half skipped, its stand-in git is a shell script");
-	process.exit(0);
-}
-
-// GitHub's zip would spare these sources git; a stand-in that answers 404
-// (as GitHub does for a private repository) keeps them on the git path.
-const github = http.createServer((_req, res) => res.writeHead(404).end("Not Found"));
-await new Promise<void>((resolve) => github.listen(0, "127.0.0.1", resolve));
-process.env.EXXPERTS_GITHUB_ARCHIVE_BASE = `http://127.0.0.1:${(github.address() as AddressInfo).port}`;
-
-const resolved = resolveRepoSource("https://github.com/anthropics/skills");
-// Never the real xcode-select: a stand-in records that the install was asked for.
-const installDir = fs.mkdtempSync(path.join(os.tmpdir(), "exxperts-devtools-"));
-const installAsked = path.join(installDir, "asked");
-const installStandIn = `${installAsked}.sh`;
-fs.writeFileSync(installStandIn, `#!/bin/sh\nprintf '%s\\n' "$*" >> '${installAsked}'\n`, { mode: 0o755 });
-process.env.EXXPERTS_DEVTOOLS_INSTALL_COMMAND = installStandIn;
-assert(resolved.ok, "a GitHub address resolves");
-const source = resolved.value;
-const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "exxperts-git-missing-"));
-const originalPath = process.env.PATH;
-
-async function cloneError(binDir: string): Promise<string> {
-	process.env.PATH = binDir;
-	try {
-		await cloneRepoShallow(source, 10_000);
-		return "";
-	} catch (err) {
-		return err instanceof Error ? err.message : String(err);
-	} finally {
-		process.env.PATH = originalPath;
-	}
-}
-
-function standIn(name: string, stderr: string): string {
-	const dir = path.join(tempRoot, name);
-	fs.mkdirSync(dir);
-	fs.writeFileSync(path.join(dir, "git"), `#!/bin/sh\nprintf '%s\\n' '${stderr}' >&2\nexit 1\n`, { mode: 0o755 });
-	return dir;
-}
+const work = fs.mkdtempSync(path.join(os.tmpdir(), "exxperts-git-missing-"));
+const names = ["PATH", "ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA", "EXXPERTS_STATE_HOME", "EXXETA_SKILLS_ALLOW_LOCAL_REPO", "EXXPERTS_DEVTOOLS_INSTALL_COMMAND"];
+const original = new Map(names.map((name) => [name, process.env[name]]));
+const originalFetch = globalThis.fetch;
+const git = resolveGitCommand();
+const installed = await repositoryGitAvailable();
+const repository = path.join(work, "repository");
+const noGit = path.join(work, "empty");
+const asked = path.join(work, "install-asked");
+fs.mkdirSync(repository); fs.mkdirSync(noGit);
 
 try {
-	const empty = path.join(tempRoot, "empty");
-	fs.mkdirSync(empty);
-	const missing = await cloneError(empty);
-	assert(missing === gitMissingMessage(), `no git at all reads as the missing tool, got: ${missing}`);
-	assert(!/ENOENT|spawn/.test(missing), "and no system error text reaches the screen");
-
-	// Apple's stand-in exists only on a Mac; elsewhere its text is just a failure.
-	if (process.platform === "darwin") {
-		const mac = await cloneError(standIn("mac", "xcode-select: note: No developer tools were found, requesting install."));
-		assert(mac === MAC_DEVELOPER_TOOLS_MISSING, `Apple's stand-in reads as the missing tools, got: ${mac}`);
-		assert(!/xcode-select|sudo/.test(mac), "with no command to type");
-		for (let i = 0; i < 40 && !fs.existsSync(installAsked); i++) await new Promise((r) => setTimeout(r, 50));
-		assert(fs.existsSync(installAsked) && fs.readFileSync(installAsked, "utf8").trim() === "--install", "the app asks macOS for the install window itself");
-
-		// The featured directory marks it, so the page says it once, not per source,
-		// and does not remember it: "try again" after installing must really try.
-		process.env.PATH = path.join(tempRoot, "mac");
-		try {
-			const featured = await loadFeaturedSource({ source: "https://github.com/anthropics/skills", author: "anthropics" });
-			assert(featured.missingTool === true && featured.error === MAC_DEVELOPER_TOOLS_MISSING, `a featured source marks the missing tool: ${JSON.stringify(featured)}`);
-			const other = standIn("other-featured", "fatal: unable to access 'https://github.com/anthropics/skills/': Could not resolve host");
-			process.env.PATH = other;
-			const retried = await loadFeaturedSource({ source: "https://github.com/anthropics/skills", author: "anthropics" });
-			assert(retried.error?.includes("Could not resolve host") && !retried.missingTool, `a retry after the tool appears runs again, not from memory: ${JSON.stringify(retried)}`);
-		} finally {
-			process.env.PATH = originalPath;
+	if (installed) {
+		fs.writeFileSync(path.join(repository, "SKILL.md"), "---\nname: retry-tool\n---\nSynthetic missing-tool retry fixture.\n");
+		for (const args of [["init", "-q", "-b", "main"], ["config", "uploadpack.allowFilter", "true"], ["add", "-A"], ["-c", "user.name=Smoke", "-c", "user.email=smoke@example.invalid", "commit", "-qm", "fixture"]]) {
+			const result = spawnSync(git, args, { cwd: repository, encoding: "utf8" });
+			assert.equal(result.status, 0, result.stderr);
 		}
-		assert(!isMacDeveloperToolsStub("remote: xcode-select: note: No developer tools were found", "darwin"), "a server's remote: line is not this Mac's state");
-		assert(!isMacDeveloperToolsStub("xcode-select: note: No developer tools were found", "linux"), "and only a Mac has Apple's stand-in");
-		assert(isMissingToolMessage(gitMissingMessage()) && isMissingToolMessage(MAC_DEVELOPER_TOOLS_MISSING), "both sentences read as a missing tool");
-		await new Promise((r) => setTimeout(r, 300));
-		assert(fs.readFileSync(installAsked, "utf8").trim().split("\n").length === 1, "and asks once, not once per failing source");
 	}
-
-	const other = await cloneError(standIn("other", "fatal: repository 'https://github.com/anthropics/skills/' not found"));
-	assert(/repository .* not found/.test(other), `any other git failure keeps its own words, got: ${other}`);
-	assert(!isMissingToolMessage(other), "and is not mistaken for a missing tool");
-
+	process.env.EXXPERTS_STATE_HOME = path.join(work, "profile");
+	process.env.EXXETA_SKILLS_ALLOW_LOCAL_REPO = "1";
+	process.env.PATH = noGit;
+	for (const name of ["ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"]) delete process.env[name];
+	if (process.platform !== "win32") {
+		const installer = path.join(work, "installer.sh");
+		fs.writeFileSync(installer, `#!/bin/sh\necho asked > '${asked}'\n`, { mode: 0o755 });
+		process.env.EXXPERTS_DEVTOOLS_INSTALL_COMMAND = installer;
+	}
+	let apiRequests = 0;
+	globalThis.fetch = async () => { apiRequests++; throw new Error("No private API or archive request is authorized."); };
+	assert.equal(await repositoryGitAvailable(), false, "the fixture hides PATH and standard Windows install folders");
+	const source = "https://github.com/fixture/private";
+	const access = grantRepositoryAccess(source, undefined, { ...anonymousRepositoryAccess(), mode: "local-git" });
+	await assert.rejects(scanRepository(source, {}, undefined, false, { accessId: access.id }), (error: unknown) => {
+		assert.equal((error as { code?: string }).code, "GIT_REQUIRED");
+		assert.equal((error as Error).message, gitMissingMessage());
+		assert(!/ENOENT|spawn/.test((error as Error).message));
+		return true;
+	});
+	assert.equal(apiRequests, 0, "private mode never falls back to public API or full archives");
+	const featured = await loadFeaturedSource({ source: repository, author: "fixture" });
+	assert.equal(featured.missingTool, true);
+	assert.equal(featured.error, gitMissingMessage());
+	assert(!fs.existsSync(asked), "missing Git never opens a developer-tools installer");
+	for (const name of ["PATH", "ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"]) {
+		const value = original.get(name); if (value === undefined) delete process.env[name]; else process.env[name] = value;
+	}
+	if (installed) {
+		const retried = await loadFeaturedSource({ source: repository, author: "fixture" });
+		assert(!retried.error && !retried.missingTool && retried.skills[0]?.name === "retry-tool", "a missing-tool result is not cached after Git becomes available");
+	} else console.log("skills git missing smoke skipped retry after installation (Git is unavailable)");
+	if (process.platform !== "win32") {
+		const bin = path.join(work, "stand-in"); fs.mkdirSync(bin);
+		fs.writeFileSync(path.join(bin, "git"), '#!/bin/sh\nif [ "$1" = --version ]; then echo "git version fixture"; exit 0; fi\necho "fatal: Could not resolve host fixture.invalid" >&2\nexit 128\n', { mode: 0o755 });
+		process.env.PATH = bin;
+		await assert.rejects(scanRepository("https://github.com/fixture/ordinary-error"), /Could not resolve host fixture\.invalid/);
+		assert.equal(apiRequests, 0, "ordinary Git failures preserve their error without an implicit transport switch");
+	}
 	console.log("skills git missing smoke: ok");
 } finally {
-	process.env.PATH = originalPath;
-	github.close();
-	fs.rmSync(tempRoot, { recursive: true, force: true });
-	fs.rmSync(installDir, { recursive: true, force: true });
+	clearRepositoryAccess(); disposeAllCheckouts(); globalThis.fetch = originalFetch;
+	for (const [name, value] of original) { if (value === undefined) delete process.env[name]; else process.env[name] = value; }
+	fs.rmSync(work, { recursive: true, force: true });
 }

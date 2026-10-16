@@ -135,10 +135,9 @@ try {
 		await page.locator(".persistent-agent-card").filter({ hasText: "Switch UI Room" }).getByRole("button", { name: "Enter →" }).click();
 		const composer = page.locator("textarea").first();
 		await composer.waitFor({ timeout: 15000 });
-		// Send waits for the room's socket; its title says when it is there.
-		await page.locator('button[title="Send"]').first().waitFor({ timeout: 15000 });
-		await page.waitForTimeout(800);
 		await composer.fill("First question on Claude.");
+		// The title stays quiet during a socket swap; only enabled means this draft can be sent.
+		await page.locator('button[aria-label="Send"]:enabled').first().waitFor({ timeout: 15000 });
 		await composer.press("Enter");
 		await page.getByText("Answer from claude-fake.").waitFor({ timeout: 20000 });
 		const status = await (await authedFetch(`${baseUrl}/api/persistent-agents/${agentId}/status`)).json() as { runtime?: { activeThreadId?: string } };
@@ -174,6 +173,7 @@ try {
 
 		// The next message goes out on GPT over the same socket.
 		await composer.fill("Second question, now on GPT.");
+		await page.locator('button[aria-label="Send"]:enabled').first().waitFor({ timeout: 15000 });
 		await composer.press("Enter");
 		await page.getByText("Answer from gpt-fake.").waitFor({ timeout: 20000 });
 		assert(requests[requests.length - 1]?.model === "gpt-fake", `the next turn runs on GPT, got ${requests[requests.length - 1]?.model}`);

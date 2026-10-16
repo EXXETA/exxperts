@@ -367,7 +367,7 @@ try {
 	fs.writeFileSync(path.join(linkedTok, "keep.md"), "not the shelf's");
 	fs.utimesSync(linkedTok, past, past);
 	fs.renameSync(trashDir, `${trashDir}.real`);
-	fs.symlinkSync(linkTarget, trashDir, "dir");
+	fs.symlinkSync(linkTarget, trashDir, process.platform === "win32" ? "junction" : "dir");
 	sweepExpiredShelfTrash(roomId);
 	const linkTargetKept = fs.existsSync(path.join(linkedTok, "keep.md"));
 	fs.unlinkSync(trashDir);

@@ -110,11 +110,7 @@ async function main(): Promise<void> {
 	}
 }
 
-// The connection test's own 20 s timer would keep the process alive.
-main().then(
-	() => process.exit(0),
-	(err) => {
-		console.error(err);
-		process.exit(1);
-	},
-);
+main().catch((err) => {
+	console.error(err);
+	process.exitCode = 1;
+});

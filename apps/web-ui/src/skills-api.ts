@@ -2,6 +2,8 @@
 // tiny typed wrappers over the server CRUD at /api/skills, plus the upload/accept
 // pair the review screen (the trust moment, spec §3) drives.
 import { fetchJson } from "./api";
+import type { SkillReference, SkillRepoProvenance } from "./skills-repo-api";
+import { createDisplayCache, invalidateDisplayCaches } from "./display-cache";
 
 /** A hidden/zero-width/bidi character the server's scan flagged in a body. Mirrors
  *  the server `InvisibleUnicodeFinding` — surfaced (never silently stripped) at review. */
@@ -17,6 +19,7 @@ export interface SkillProvenanceView {
 	source: string;
 	license: string | null;
 	importedAt: string;
+	repo?: SkillRepoProvenance;
 }
 
 /** A skill as the library list returns it. */
@@ -35,6 +38,8 @@ export interface SkillListItem {
 	rooms: SkillRoomRef[];
 	/** How many files it carries that a room can be allowed to run. */
 	fileCount: number;
+	/** The imported copy differs locally; its original provenance is retained. */
+	locallyModified?: boolean;
 }
 
 /** A room that enables a skill. */
@@ -47,6 +52,8 @@ export interface SkillRoomRef {
 export interface SkillDetail extends SkillListItem {
 	scanFindings: SkillScanFinding[];
 	bundledScripts: string[];
+	sha256?: string;
+	packageSha256?: string;
 }
 
 /**
@@ -63,13 +70,19 @@ export interface SkillCandidate {
 	license: string | null;
 	scanFindings: SkillScanFinding[];
 	bundledScripts: string[];
+	revision?: string;
+	references?: SkillReference[];
 	/** Upload only: checkout token for the bundled files the zip carried. Passed back
 	 *  on accept so those files are vendored next to the SKILL.md. */
 	token?: string;
 }
 
-export function fetchSkills(): Promise<SkillListItem[]> {
-	return fetchJson<SkillListItem[]>("/api/skills");
+const summaryCache = createDisplayCache<SkillListItem[]>();
+export const peekSkillSummaries = () => summaryCache.peek();
+export const invalidateSkillSummaries = () => summaryCache.invalidate();
+
+export function fetchSkills(options?: { summary?: boolean; refresh?: boolean }): Promise<SkillListItem[]> {
+	return options?.summary ? summaryCache.load(() => fetchJson<SkillListItem[]>("/api/skills?view=summary"), options.refresh) : fetchJson<SkillListItem[]>("/api/skills");
 }
 
 export function fetchSkill(id: string): Promise<SkillDetail> {
@@ -84,16 +97,20 @@ export interface WriteSkillRequest {
 }
 
 /** Hand-written skill — server assigns provenance source "local" (spec §3 path 1). */
-export function createSkill(request: WriteSkillRequest): Promise<SkillListItem> {
-	return fetchJson<SkillListItem>("/api/skills", {
+export async function createSkill(request: WriteSkillRequest): Promise<SkillListItem> {
+	const result = await fetchJson<SkillListItem>("/api/skills", {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
 		body: JSON.stringify(request),
 	});
+	invalidateDisplayCaches();
+	return result;
 }
 
-export function deleteSkill(id: string): Promise<{ ok: boolean; deleted: string }> {
-	return fetchJson(`/api/skills/${encodeURIComponent(id)}`, { method: "DELETE" });
+export async function deleteSkill(id: string): Promise<{ ok: boolean; deleted: string }> {
+	const result = await fetchJson<{ ok: boolean; deleted: string }>(`/api/skills/${encodeURIComponent(id)}`, { method: "DELETE" });
+	invalidateDisplayCaches();
+	return result;
 }
 
 /** Upload a `.md`/`.zip`/`.skill` and get back a review candidate (NOT yet saved). The
@@ -108,8 +125,8 @@ export function uploadSkillFile(filename: string, contentBase64: string): Promis
 }
 
 /** Persist a reviewed candidate to the library (Accept on the review screen). */
-export function acceptSkillCandidate(candidate: SkillCandidate): Promise<SkillListItem> {
-	return fetchJson<SkillListItem>("/api/skills/accept", {
+export async function acceptSkillCandidate(candidate: SkillCandidate): Promise<SkillListItem> {
+	const result = await fetchJson<SkillListItem>("/api/skills/accept", {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
 		body: JSON.stringify({
@@ -122,6 +139,8 @@ export function acceptSkillCandidate(candidate: SkillCandidate): Promise<SkillLi
 			...(candidate.token ? { token: candidate.token } : {}),
 		}),
 	});
+	invalidateDisplayCaches();
+	return result;
 }
 
 /** Read a File as base64 (no data: prefix), chunked so large files don't overflow the

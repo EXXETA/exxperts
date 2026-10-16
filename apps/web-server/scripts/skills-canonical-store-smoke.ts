@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { sha256 } from "../src/skills-store.js";
+import { sha256, writeSkillProvenance } from "../src/skills-store.js";
 
 // Isolated HOME: the canonical store resolves to <HOME>/.exxperts/agent/skills
 // (loader dir) and the legacy store to <HOME>/.exxperts/app/skills.
@@ -69,6 +69,9 @@ async function requestJson(pathname: string, init: AuthedFetchInit = {}): Promis
 seedSkill(legacyDir, "legacy-migrated-skill", "moved from the pre-unification web store");
 seedSkill(legacyDir, "collision-skill", "LEGACY body that must NOT overwrite canonical");
 seedSkill(canonicalDir, "collision-skill", "CANONICAL body that must survive the migration");
+seedSkill(canonicalDir, "legacy-repo-skill", "Original imported instructions.");
+const legacyImportDir = path.join(canonicalDir, "legacy-repo-skill");
+writeSkillProvenance(legacyImportDir, { source: "https://example.invalid/team/skills", importedAt: "2026-01-01T00:00:00Z", license: "MIT", sha256: sha256(fs.readFileSync(path.join(legacyImportDir, "SKILL.md"), "utf8")) });
 
 let server: ChildProcessWithoutNullStreams | null = null;
 const serverOutput: string[] = [];
@@ -109,6 +112,10 @@ try {
 	assert(names.includes("legacy-migrated-skill"), "GET /api/skills should surface the migrated skill from the canonical store");
 	const migratedView = (list.body as any[]).find((s) => s.name === "legacy-migrated-skill");
 	assert(migratedView.source === "user", "migrated skill should read as a user-source skill");
+	assert(list.body.find((skill: any) => skill.name === "legacy-repo-skill").locallyModified === false, "unchanged legacy imports retain repository classification");
+	const editedImport = await requestJson("/api/skills/legacy-repo-skill", { method: "PUT", body: JSON.stringify({ id: "legacy-repo-skill", displayName: "Legacy import", description: "Local adaptation", instructions: "Locally adapted instructions." }) });
+	assert(editedImport.status === 200 && editedImport.body.locallyModified === true, "editing a legacy import classifies it as custom even after its fingerprint is refreshed");
+	assert(editedImport.body.provenance.source === "https://example.invalid/team/skills" && editedImport.body.license === "MIT", "classification must preserve source and license");
 
 	// --- Canonical read/write via API + provenance sidecar (spec §1) ----------
 	const instructions = "Always cite your sources before answering.";

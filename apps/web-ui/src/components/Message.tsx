@@ -382,6 +382,12 @@ type ToolChatItem = Extract<ChatItem, { kind: "tool" }>;
  */
 function ToolChip({ item, nested }: { item: ToolChatItem; nested?: boolean }) {
 	const summary = summariseToolArgs(item.name, item.args);
+	const isReference = item.name === "read_library_reference" || item.name === "read_skill_reference";
+	const referencePath = isReference ? String(item.details?.reference ?? item.args?.reference ?? "") : "";
+	const isLibraryListing = item.name === "read_library_reference" && (item.details?.listing === true || !referencePath || referencePath === "." || referencePath === "/" || referencePath.endsWith("/"));
+	const referenceTarget = !referencePath || referencePath === "." || referencePath === "/" ? "Library root" : referencePath.replace(/\\/g, "/").split("/").filter(Boolean).at(-1) || "Library root";
+	const reading = item.status === "running" || item.status === "stopped";
+	const referenceName = isLibraryListing ? `📁 ${reading ? "Browsing" : "Browse"} library references` : `📄 ${reading ? "Reading" : "Read"} ${item.name === "read_library_reference" ? "library" : "skill"} reference`;
 	const icon = item.status === "running" ? "…" : item.status === "error" ? "✗" : item.status === "stopped" ? "■" : "✓";
 	// fetch_url reads as a source: show the page title + domain (from the
 	// result details) instead of the raw tool name and URL argument.
@@ -396,12 +402,12 @@ function ToolChip({ item, nested }: { item: ToolChatItem; nested?: boolean }) {
 		? `🌐 ${String(item.details?.title || "Fetch URL")}`
 		: isWebSearch
 			? `🔍 ${searchQuery || "Web search"}`
-			: mcpView ? mcpView.name : genericChipName(item.name, item.status);
-	const chipSummary = isFetchUrl ? fetchDomain || summary : isWebSearch ? "" : mcpView ? mcpView.summary : summary;
+			: mcpView ? mcpView.name : isReference ? referenceName : genericChipName(item.name, item.status);
+	const chipSummary = isFetchUrl ? fetchDomain || summary : isWebSearch ? "" : mcpView ? mcpView.summary : isReference ? `${referenceTarget}${item.name === "read_skill_reference" && item.args?.name ? ` · ${item.args.name}` : ""}`.slice(0, 160) : summary;
 	const provider = nested && isWebSearch ? String(item.details?.provider ?? "") : "";
 	return (
 		<details className={`tool-chip ${item.status}`}>
-			<summary>
+			<summary title={isReference ? [referencePath || "Library root", item.args?.libraryId ? `Source: ${item.args.libraryId}` : ""].filter(Boolean).join(" · ") : undefined}>
 				<span className="icon">{icon}</span>
 				<span className="name">{chipName}</span>
 				{chipSummary && <span className="summary">{chipSummary}</span>}
@@ -409,6 +415,7 @@ function ToolChip({ item, nested }: { item: ToolChatItem; nested?: boolean }) {
 				{item.status === "running" && <span className="spinner" />}
 			</summary>
 			<div className="chip-body">
+				{isReference && <div className="chip-reference-context"><span className="label">Path</span><code>{referencePath || "Library root"}</code>{item.args?.from && <><span className="label">Linked from</span><code>{String(item.args.from)}</code></>}{item.args?.libraryId && <><span className="label">Source</span><code>{String(item.args.libraryId)}</code></>}</div>}
 				{item.result && item.status !== "running" ? (
 					<div className="chip-result">
 						<span className="label">{item.status === "error" ? "error" : "result"}</span>

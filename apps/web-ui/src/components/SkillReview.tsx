@@ -1,8 +1,11 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import type { SkillCandidate } from "../skills-api";
 import { FileGroupList, groupFilesByFolder } from "./file-groups";
 import { SkillSourceRows, SkillWarnings } from "./skill-facts";
 import { SkillInstructions } from "./skill-instructions";
+import { SkillReferences } from "./SkillReferences";
+import { RsInfo } from "./rs-info";
+import type { SkillFilePreviewData } from "../skills-repo-api";
 
 /** Server cap on a skill description (mirrors validateSkillWritePayload). */
 const DESCRIPTION_MAX = 1024;
@@ -31,6 +34,12 @@ export function SkillReview({
 	descriptionEditable = false,
 	busy = false,
 	error = null,
+	acceptLabel = "Accept and add to library",
+	onDownloadReference,
+	onPreviewReference,
+	onChangeReferences,
+	reviewInfo,
+	cancelLabel = "Cancel",
 }: {
 	candidate: SkillCandidate;
 	/** Renders the Accept button. Receives the (possibly edited) description so the
@@ -38,10 +47,16 @@ export function SkillReview({
 	onAccept: (description: string) => void;
 	onCancel: () => void;
 	/** Upload/accept flow only: render the editable, required single-line description
-	 *  field. The repo-import flows vendor the SKILL.md verbatim, so they stay read-only. */
+	 *  field. Repository descriptions stay as reviewed; only import name metadata may be normalized. */
 	descriptionEditable?: boolean;
 	busy?: boolean;
 	error?: string | null;
+	acceptLabel?: string;
+	onDownloadReference?: (path: string) => Promise<void>;
+	onPreviewReference?: (path: string) => Promise<SkillFilePreviewData>;
+	onChangeReferences?: () => void;
+	reviewInfo?: ReactNode;
+	cancelLabel?: string;
 }) {
 	const licenseKnown = Boolean(candidate.license && candidate.license.trim());
 	const findings = candidate.scanFindings ?? [];
@@ -52,19 +67,16 @@ export function SkillReview({
 
 	return (
 		<div className="skill-review">
+			<div className="skill-review-scroll">
 			<div className="skill-review-head">
 				<div className="skill-review-title-block">
 					<div className="agent-details-kicker">Review skill</div>
 					<h2>{candidate.name || candidate.id}</h2>
 					{candidate.description && !descriptionEditable && <p className="skill-review-desc">{candidate.description}</p>}
 				</div>
-				<button className="icon-btn" onClick={onCancel} aria-label="Cancel">Cancel</button>
 			</div>
 
-			<p className="skill-review-lead">
-				You are adopting the instructions below into your skills library. They become an
-				instruction the room follows once you enable this skill in it. Read them first.
-			</p>
+			{reviewInfo}
 
 			{descriptionEditable && (
 				<label className="skill-review-field">
@@ -86,6 +98,7 @@ export function SkillReview({
 
 			<div className="settings-rows skill-review-facts">
 				<SkillSourceRows source={candidate.source} license={candidate.license} />
+				{candidate.revision && <div className="settings-row"><span className="settings-row-label">Commit</span><code className="settings-row-value skill-reference-path">{candidate.revision}</code></div>}
 			</div>
 
 			<SkillWarnings licenseKnown={licenseKnown} findings={findings} />
@@ -102,15 +115,18 @@ export function SkillReview({
 				</div>
 			)}
 
-			<div className="skill-review-body-label">Instructions</div>
+			<div className="skill-review-body-label">Instructions <RsInfo text="Accepting saves these instructions to your skill library. A room uses them after you enable the skill in its settings." /></div>
 			<SkillInstructions body={candidate.body} />
+			{candidate.references && <section aria-label="Selected references"><SkillReferences references={candidate.references} onDownload={onDownloadReference} onPreview={onPreviewReference} /></section>}
 
-			{error && <div className="checkpoint-proposal-error skill-review-error">{error}</div>}
+			</div>
 
 			<div className="skill-review-actions">
-				<button className="rs-btn" disabled={busy} onClick={onCancel}>Cancel</button>
+				{error && <div className="checkpoint-proposal-error skill-review-error" role="alert">{error}</div>}
+				{onChangeReferences && <button className="rs-btn" disabled={busy} onClick={onChangeReferences}>Change reference selection</button>}
+				<button className="rs-btn" disabled={busy} onClick={onCancel}>{cancelLabel}</button>
 				<button className="rs-btn rs-btn-primary" disabled={acceptDisabled} onClick={() => onAccept(descriptionEditable ? description.trim() : candidate.description)}>
-					{busy ? "Adding…" : "Accept and add to library"}
+					{busy ? "Saving…" : acceptLabel}
 				</button>
 			</div>
 		</div>

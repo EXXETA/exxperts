@@ -66,7 +66,7 @@ const SECTIONS: Array<{ tab: string; honest: string; absent: string[] }> = [
 	{
 		tab: "Skills",
 		honest: "Skills are uploaded and edited on the computer itself.",
-		absent: [".pane-head-actions button"],
+		absent: [".skill-library-buttons button"],
 	},
 ];
 

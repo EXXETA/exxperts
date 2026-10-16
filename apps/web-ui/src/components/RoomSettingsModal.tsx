@@ -13,6 +13,8 @@ import { RoomScheduledTasksSection } from "./RoomScheduledTasksSection";
 import { RoomDangerZone } from "./RoomDangerZone";
 import { confirmChoice } from "./confirm-dialog";
 import { SettingsDialog } from "./settings-dialog";
+import { SkillsPage } from "./SkillsPage";
+import { SkillPreviewActive } from "./SkillFileButton";
 
 function roomStatusLabel(status: PersistentAgentStatus["status"]): string {
 	return status === "needs_absorb" ? "memorize due" : status;
@@ -58,7 +60,7 @@ function highlightMention(text: string, name: string): ReactNode {
 	return parts.length > 0 ? parts : text;
 }
 
-export function RoomSettingsModal({ status, onClose, onArchive, onPurge, onRefresh, onMementoApplied, onMementoForget, onOpenSkillsLibrary, onOpenConnectors, onConversationSwitched, initialPane }: { status: PersistentAgentStatus; onClose: () => void; onArchive: (agentId: PersistentAgentId, confirmation: string) => Promise<PersistentAgentArchiveResponse>; onPurge: (agentId: PersistentAgentId, confirmation: string) => Promise<PersistentAgentPurgeResponse>; onRefresh: () => void; onMementoApplied?: () => void; onMementoForget?: () => void; onOpenSkillsLibrary?: () => void; onOpenConnectors?: () => void; onConversationSwitched?: (conversationId: string, model: RoomModelLockView, notice: ConversationSwitchNotice) => void; initialPane?: SettingsPane }) {
+export function RoomSettingsModal({ status, onClose, onArchive, onPurge, onRefresh, onMementoApplied, onMementoForget, onOpenConnectors, onConversationSwitched, initialPane }: { status: PersistentAgentStatus; onClose: () => void; onArchive: (agentId: PersistentAgentId, confirmation: string) => Promise<PersistentAgentArchiveResponse>; onPurge: (agentId: PersistentAgentId, confirmation: string) => Promise<PersistentAgentPurgeResponse>; onRefresh: () => void; onMementoApplied?: () => void; onMementoForget?: () => void; onOpenConnectors?: () => void; onConversationSwitched?: (conversationId: string, model: RoomModelLockView, notice: ConversationSwitchNotice) => void; initialPane?: SettingsPane }) {
 	const workspaceDirtyRef = useRef(false);
 	const handleWorkspaceDirtyChange = useCallback((dirty: boolean) => { workspaceDirtyRef.current = dirty; }, []);
 	const workspaceSaveRef = useRef<(() => Promise<boolean>) | null>(null);
@@ -98,6 +100,9 @@ export function RoomSettingsModal({ status, onClose, onArchive, onPurge, onRefre
 	// Callers that open the modal at a particular pane (the Memory tab's link
 	// into this room's memory) say so once; the nav owns it from then on.
 	const [pane, setPane] = useState<SettingsPane>(initialPane ?? "workspace");
+	const [libraryTarget, setLibraryTarget] = useState<{ id?: string } | null>(null);
+	const [skillsRefresh, setSkillsRefresh] = useState(0);
+	function returnToRoomSkills() { setLibraryTarget(null); setSkillsRefresh((value) => value + 1); }
 	// Skills the room paused because they changed: counted on the Skills entry
 	// until reviewed, so the way to the review is visible from any pane. The
 	// Skills pane is always mounted (only hidden), so it reports the count on
@@ -266,7 +271,7 @@ export function RoomSettingsModal({ status, onClose, onArchive, onPurge, onRefre
 			navLabel="Room settings sections"
 			nav={[...panes, { id: "danger" as const, label: "Archive or delete", danger: true }]}
 			active={pane}
-			onSelect={setPane}
+			onSelect={(next) => { if (libraryTarget) returnToRoomSkills(); setPane(next); }}
 			onClose={requestClose}
 			initialShowList={!initialPane}
 		>
@@ -284,7 +289,8 @@ export function RoomSettingsModal({ status, onClose, onArchive, onPurge, onRefre
 				<RoomInstructionsSection status={status} onDirtyChange={handleInstructionsDirtyChange} registerSave={registerInstructionsSave} />
 			</section>
 			<section className="room-settings-section" hidden={pane !== "skills"}>
-				<RoomSkillsSection status={status} onOpenSkillsLibrary={onOpenSkillsLibrary ? () => closeThen(onOpenSkillsLibrary) : undefined} onPausedCount={setPausedSkillCount} />
+				<div hidden={libraryTarget !== null}><SkillPreviewActive.Provider value={pane === "skills" && libraryTarget === null}><RoomSkillsSection status={status} refreshKey={skillsRefresh} onPausedCount={setPausedSkillCount} onOpenSkillsLibrary={(id) => setLibraryTarget({ id })} /></SkillPreviewActive.Provider></div>
+				{libraryTarget && <SkillsPage onReturnToRoom={returnToRoomSkills} returnToRoomLabel="Room skills" initialLibraryId={libraryTarget.id} />}
 			</section>
 			<section className="room-settings-section" hidden={pane !== "connectors"}>
 				<RoomConnectorsSection status={status} onOpenConnectors={onOpenConnectors ? () => closeThen(onOpenConnectors) : undefined} />

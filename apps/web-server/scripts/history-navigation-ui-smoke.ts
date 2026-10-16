@@ -5,6 +5,7 @@
 // Offline: no model is called; the room's model points at a closed port.
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import fs from "node:fs";
+import { createServer, type AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -26,7 +27,14 @@ function assert(condition: unknown, message: string): asserts condition {
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const webServerDir = path.resolve(scriptDir, "..");
 const repoRoot = path.resolve(webServerDir, "..", "..");
-const port = 27000 + Math.floor(Math.random() * 10000);
+const port = await new Promise<number>((resolve, reject) => {
+	const probe = createServer();
+	probe.once("error", reject);
+	probe.listen(0, "127.0.0.1", () => {
+		const port = (probe.address() as AddressInfo).port;
+		probe.close((error) => error ? reject(error) : resolve(port));
+	});
+});
 const baseUrl = `http://127.0.0.1:${port}`;
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "exxperts-history-ui-"));

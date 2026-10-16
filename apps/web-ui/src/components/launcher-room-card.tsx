@@ -2,6 +2,7 @@ import { useState, type HTMLAttributes } from "react";
 import { NOTHING_TO_MAINTAIN_SENTENCE, nothingToMaintain } from "../memory-surface-copy";
 import { canonicalModelName } from "../model-names";
 import type { PersistentAgentId, PersistentAgentStatus, WebChatModelOption } from "../types";
+import { RoomSkillUpdateButton } from "./SkillUpdateNotice";
 
 export type LauncherRoomThread = {
 	state: "live" | "standby";
@@ -42,6 +43,7 @@ export type PersistentAgentCardProps = {
 	onResume: (status: PersistentAgentStatus) => Promise<void> | void;
 	onMaintain: (target: LauncherRoomMaintainTarget) => void;
 	onOpenSettings?: () => void;
+	onOpenSkillSettings?: () => void;
 	/** Opens Room settings on the Model pane (the card's model label). */
 	onOpenModelSettings?: () => void;
 	/** Each provider's name as AI setup shows it, by provider id. */
@@ -65,7 +67,7 @@ export function roomCanMaintain(status: PersistentAgentStatus | null | undefined
 	return !!status && status.exists && !purging && (status.status === "ready" || status.status === "needs_absorb") && !nothingToMaintain(status.memoryStatus);
 }
 
-export function PersistentAgentCard({ status, thread, live, duplicateDisplayName = false, onEnter, onResume, onMaintain, onOpenSettings, onOpenModelSettings, providerLabels, backgroundReady = false, purging = false, arranging = false }: PersistentAgentCardProps) {
+export function PersistentAgentCard({ status, thread, live, duplicateDisplayName = false, onEnter, onResume, onMaintain, onOpenSettings, onOpenSkillSettings, onOpenModelSettings, providerLabels, backgroundReady = false, purging = false, arranging = false }: PersistentAgentCardProps) {
 	const [entering, setEntering] = useState(false);
 	// React 18 knows no `inert` prop: the attribute is passed as a string.
 	const inertWhileArranging = arranging ? ({ inert: "", "aria-hidden": true } as HTMLAttributes<HTMLElement>) : {};
@@ -203,6 +205,7 @@ export function PersistentAgentCard({ status, thread, live, duplicateDisplayName
 					</div>
 				</div>
 				{status && status.errors.length > 0 && <div className="persistent-agent-error-summary">This room needs attention before it can be used.</div>}
+				{status && onOpenSkillSettings && <RoomSkillUpdateButton roomId={status.id} disabled={purging || arranging} onClick={onOpenSkillSettings} />}
 				<div className={`persistent-agent-meta ${memoryLevel}`}>
 				{memory ? (
 					memoryMeterReady ? (

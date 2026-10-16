@@ -76,9 +76,8 @@ function allowTool(t: string): boolean {
 		t === "mcp" ||
 		t === "web_search" ||
 		t === "fetch_url" ||
-		// read_skill is registered only for rooms with enabled skills, is read-only,
-		// and verifies the user-reviewed hash pin itself — safe at the policy baseline.
-		t === "read_skill" ||
+		// Skill readers verify room consent and the reviewed package themselves.
+		t === "read_skill" || t === "read_skill_reference" || t === "read_library_reference" ||
 		// The shelf read pair (files core slice): read-only, fenced to the room's
 		// own files/ folder by the tools themselves, default-on for every room.
 		t === "read_file" ||
