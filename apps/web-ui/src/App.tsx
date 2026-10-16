@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import { createPortal } from "react-dom";
 import { Sidebar } from "./components/Sidebar";
 import { AssetsPanel } from "./components/assets-panel";
+import { WorkspaceFileBrowser } from "./components/WorkspaceFileBrowser";
 import { AssetViewerFooter } from "./components/asset-viewer-footer";
 import { ToastStack, type ToastView } from "./components/toast-stack";
 import { usePausedSkillsNotice } from "./paused-skills-notice";
@@ -74,6 +75,7 @@ import { createTaskState, reduceTask, type TaskAction, type TaskState } from "./
 import { ConsultDock } from "./components/delegation-card";
 import { TaskRunView } from "./components/task-run-view";
 import { ArtifactViewer } from "./components/ArtifactViewer";
+import { MarkdownEditorPane, type MarkdownEditorHandle } from "./components/MarkdownEditorPane";
 import { EffortControl } from "./components/EffortControl";
 import { ChevronDownIcon, GearIcon, PaperclipIcon, TrashIcon } from "./components/icons";
 // The handoff grammar + queue helpers are the ONE shared source of truth, imported
@@ -1043,7 +1045,7 @@ function AiProfileSwitcherSection({ status, authStatus, onRefresh, onRefreshAuth
 }
 
 // Exported for the jsdom probe of arrange mode (a probe outside the app renders the real screen); the app itself never imports it.
-export function Landing({ roomOrder, onChooseRoomOrder, onArrangingChange, onOpenSettings, onOpenDashboard, onOpenMemory, onOpenPersistentAgent, onResumePersistentAgent, onMaintainPersistentAgent, onCreatePersistentAgent, onArchiveRoom, onPurgeRoom, onMementoForget, modelStatus, persistentAgentStatuses, persistentThread, persistentLive, persistentResumeError, onRefreshPersistentAgent, theme, appearance, onSetAppearance, aiProfileStatus: aiProfileSelection, backgroundReadyRooms, purgingRooms }: { roomOrder: HomeRoomOrderView; onChooseRoomOrder: (choice: RoomOrderChoice) => Promise<boolean>; /** Told whenever arrange mode has unsaved moves or stops having them, and false when the screen goes; the app asks the leave question at its own exits. */ onArrangingChange: (dirty: boolean) => void; onOpenSettings: (section?: SettingsSection) => void; onOpenDashboard: () => void; onOpenMemory: () => void; onOpenPersistentAgent: (status: PersistentAgentStatus) => Promise<void> | void; onResumePersistentAgent: (status: PersistentAgentStatus) => Promise<void> | void; onMaintainPersistentAgent: (target: MaintainTarget) => void; onCreatePersistentAgent: (request: PersistentAgentCreateRequest) => Promise<PersistentAgentCreateResponse>; onArchiveRoom: (agentId: PersistentAgentId, confirmation: string) => Promise<PersistentAgentArchiveResponse>; onPurgeRoom: (agentId: PersistentAgentId, confirmation: string) => Promise<PersistentAgentPurgeResponse>; onMementoForget: (agentId: PersistentAgentId) => void; modelStatus: WebChatModelStatus | null; persistentAgentStatuses: PersistentAgentStatus[]; persistentThread: PersistentAgentThread | null; persistentLive: boolean; persistentResumeError: string | null; onRefreshPersistentAgent: () => void; theme: ThemeMode; appearance: AppearancePreference; onSetAppearance: (pref: AppearancePreference) => void; aiProfileStatus: PersistentAgentAiProfileSelectionStatus | null; backgroundReadyRooms?: ReadonlySet<PersistentAgentId>; purgingRooms?: ReadonlySet<PersistentAgentId> }) {
+export function Landing({ roomOrder, onChooseRoomOrder, onArrangingChange, onOpenSettings, onOpenDashboard, onOpenMemory, onOpenPersistentAgent, onResumePersistentAgent, onMaintainPersistentAgent, onCreatePersistentAgent, onArchiveRoom, onPurgeRoom, onMementoForget, modelStatus, persistentAgentStatuses, persistentThread, persistentLive, persistentResumeError, onRefreshPersistentAgent, theme, appearance, onSetAppearance, aiProfileStatus: aiProfileSelection, backgroundReadyRooms, purgingRooms, unresumableRooms }: { roomOrder: HomeRoomOrderView; onChooseRoomOrder: (choice: RoomOrderChoice) => Promise<boolean>; /** Told whenever arrange mode has unsaved moves or stops having them, and false when the screen goes; the app asks the leave question at its own exits. */ onArrangingChange: (dirty: boolean) => void; onOpenSettings: (section?: SettingsSection) => void; onOpenDashboard: () => void; onOpenMemory: () => void; onOpenPersistentAgent: (status: PersistentAgentStatus) => Promise<void> | void; onResumePersistentAgent: (status: PersistentAgentStatus) => Promise<void> | void; onMaintainPersistentAgent: (target: MaintainTarget) => void; onCreatePersistentAgent: (request: PersistentAgentCreateRequest) => Promise<PersistentAgentCreateResponse>; onArchiveRoom: (agentId: PersistentAgentId, confirmation: string) => Promise<PersistentAgentArchiveResponse | null>; onPurgeRoom: (agentId: PersistentAgentId, confirmation: string) => Promise<PersistentAgentPurgeResponse | null>; onMementoForget: (agentId: PersistentAgentId) => void; modelStatus: WebChatModelStatus | null; persistentAgentStatuses: PersistentAgentStatus[]; persistentThread: PersistentAgentThread | null; persistentLive: boolean; persistentResumeError: string | null; onRefreshPersistentAgent: () => void; theme: ThemeMode; appearance: AppearancePreference; onSetAppearance: (pref: AppearancePreference) => void; aiProfileStatus: PersistentAgentAiProfileSelectionStatus | null; backgroundReadyRooms?: ReadonlySet<PersistentAgentId>; purgingRooms?: ReadonlySet<PersistentAgentId>; unresumableRooms?: ReadonlySet<PersistentAgentId> }) {
 	const [createOpen, setCreateOpen] = useState(false);
 	useEscapeKey(() => setCreateOpen(false), createOpen);
 	const [settingsRoomId, setSettingsRoomId] = useState<PersistentAgentId | null>(null);
@@ -3106,6 +3108,7 @@ export function App() {
 	type RightPaneOccupant =
 		| { kind: "preview"; data: ApprovalPreviewData }
 		| { kind: "artifactViewer"; taskId: string; templateLabel: string; artifact: { relativePath: string; extension: string }; asset?: AssetRowView }
+		| { kind: "markdownEditor"; path: string }
 		// The run view (status grammar, 2026-07-18): the live task's stream in the
 		// same pane slot; renders from taskState and swaps to the artifact viewer
 		// in place when the run ends.
@@ -3115,6 +3118,11 @@ export function App() {
 	// read the pane at event time, not at closure-capture time).
 	const rightPaneRef = useRef<RightPaneOccupant | null>(null);
 	rightPaneRef.current = rightPane;
+	const markdownEditorRef = useRef<MarkdownEditorHandle | null>(null);
+	const markdownEditorDirtyRef = useRef(false);
+	const markdownEditorPendingActionRef = useRef<(() => void | Promise<unknown>) | null>(null);
+	const [markdownEditorPrompt, setMarkdownEditorPrompt] = useState<"close" | "switch" | "navigate" | null>(null);
+	const [markdownEditorPromptBusy, setMarkdownEditorPromptBusy] = useState(false);
 	const [artifactMaximized, setArtifactMaximized] = useState(false);
 	// Bumped when a finished revise rewrote the bytes behind the OPEN viewer's
 	// files/<name> route — the URL doesn't change, so the frame key must.
@@ -3190,7 +3198,87 @@ export function App() {
 	}, []);
 	// Low-churn shim: the existing preview call sites keep working unchanged.
 	const preview = rightPane?.kind === "preview" ? rightPane.data : null;
-	const setPreview = (data: ApprovalPreviewData | null) => setRightPane(data ? { kind: "preview", data } : null);
+	const setPreview = (data: ApprovalPreviewData | null) => {
+		if (data && rightPaneRef.current?.kind === "markdownEditor" && !guardMarkdownEditorAction(() => setPreview(data), "switch")) return;
+		setRightPane(data ? { kind: "preview", data } : null);
+	};
+	const onMarkdownEditorDirtyChange = useCallback((dirty: boolean) => {
+		markdownEditorDirtyRef.current = dirty;
+	}, []);
+
+	function guardMarkdownEditorAction(action: () => void | Promise<unknown>, prompt: "close" | "switch" | "navigate"): boolean {
+		if (!markdownEditorDirtyRef.current) return true;
+		markdownEditorPendingActionRef.current = action;
+		setMarkdownEditorPrompt(prompt);
+		setMarkdownEditorPromptBusy(false);
+		return false;
+	}
+
+	function completeMarkdownEditorPrompt(action: (() => void | Promise<unknown>) | null): void {
+		markdownEditorPendingActionRef.current = null;
+		setMarkdownEditorPrompt(null);
+		setMarkdownEditorPromptBusy(false);
+		markdownEditorDirtyRef.current = false;
+		if (action) void action();
+	}
+
+	async function saveMarkdownEditorAndContinue(): Promise<void> {
+		if (markdownEditorPromptBusy) return;
+		setMarkdownEditorPromptBusy(true);
+		const saved = await markdownEditorRef.current?.save();
+		if (!saved) {
+			setMarkdownEditorPromptBusy(false);
+			setMarkdownEditorPrompt(null);
+			markdownEditorPendingActionRef.current = null;
+			return;
+		}
+		completeMarkdownEditorPrompt(markdownEditorPendingActionRef.current);
+	}
+
+	function discardMarkdownEditorAndContinue(): void {
+		markdownEditorRef.current?.discard();
+		completeMarkdownEditorPrompt(markdownEditorPendingActionRef.current);
+	}
+
+	function cancelMarkdownEditorPrompt(): void {
+		markdownEditorPendingActionRef.current = null;
+		setMarkdownEditorPrompt(null);
+		setMarkdownEditorPromptBusy(false);
+	}
+
+	function requestCloseMarkdownEditor(): void {
+		if (!guardMarkdownEditorAction(() => {
+			setArtifactMaximized(false);
+			setRightPane(null);
+		}, "close")) return;
+		setArtifactMaximized(false);
+		setRightPane(null);
+	}
+
+	function openWorkspaceMarkdown(entry: { relativePath: string; extension: string }): void {
+		const extension = entry.extension || (entry.relativePath.includes(".") ? entry.relativePath.slice(entry.relativePath.lastIndexOf(".")).toLowerCase() : "");
+		if (extension.toLowerCase() !== ".md") return;
+		const path = entry.relativePath;
+		if (rightPaneRef.current?.kind === "markdownEditor" && rightPaneRef.current.path === path) return;
+		if (!guardMarkdownEditorAction(() => {
+			setArtifactMaximized(false);
+			setRightPane({ kind: "markdownEditor", path });
+		}, "switch")) return;
+		setArtifactMaximized(false);
+		setRightPane({ kind: "markdownEditor", path });
+	}
+
+	useEffect(() => {
+		if (!markdownEditorPrompt) return;
+		const onKeyDown = (event: KeyboardEvent) => {
+			if (event.key === "Escape") {
+				event.preventDefault();
+				cancelMarkdownEditorPrompt();
+			}
+		};
+		document.addEventListener("keydown", onKeyDown);
+		return () => document.removeEventListener("keydown", onKeyDown);
+	}, [markdownEditorPrompt]);
 
 	// The room settings wheel in the topbar opens the same modal the launcher
 	// card's wheel opens. Declared here because the Escape handler below has to
@@ -3212,19 +3300,20 @@ export function App() {
 	// collision, file-delete confirm, Save-as prompt, room settings) owns Escape
 	// until dismissed — one Escape, one layer.
 	useEffect(() => {
-		const paneOpen = rightPane?.kind === "artifactViewer" || rightPane?.kind === "taskRun";
-		if (!paneOpen || assetDeleteConfirm || exportCollision || fileDeleteConfirm || saveAsPrompt || roomSettingsOpen) return;
+		const paneOpen = rightPane?.kind === "artifactViewer" || rightPane?.kind === "taskRun" || rightPane?.kind === "markdownEditor";
+		if (!paneOpen || assetDeleteConfirm || exportCollision || fileDeleteConfirm || saveAsPrompt || roomSettingsOpen || markdownEditorPrompt) return;
 		function onKeyDown(event: KeyboardEvent) {
 			if (event.key !== "Escape") return;
 			// A dialog that is not in this component's state (the expanded
 			// diagram viewer) owns Escape the same way: one Escape, one layer.
 			if (document.querySelector('[aria-modal="true"]')) return;
 			if (artifactMaximized) setArtifactMaximized(false);
+			else if (rightPane?.kind === "markdownEditor") requestCloseMarkdownEditor();
 			else setRightPane(null);
 		}
 		document.addEventListener("keydown", onKeyDown);
 		return () => document.removeEventListener("keydown", onKeyDown);
-	}, [rightPane, artifactMaximized, assetDeleteConfirm, exportCollision, fileDeleteConfirm, saveAsPrompt, roomSettingsOpen]);
+	}, [rightPane, artifactMaximized, assetDeleteConfirm, exportCollision, fileDeleteConfirm, saveAsPrompt, roomSettingsOpen, markdownEditorPrompt]);
 	const [conversationId, setConversationId] = useState<string>(() => newConversationId());
 	const [authStatus, setAuthStatus] = useState<AuthStatusResponse | null>(null);
 	const [modelStatus, setModelStatus] = useState<WebChatModelStatus | null>(null);
@@ -4002,9 +4091,10 @@ export function App() {
 	// endpoint retried briefly while the server's async lock release catches up.
 	// Having left, a failed archive reports on the Home banner and keeps the
 	// draft it parked, instead of failing into silence.
-	async function archivePersistentAgentRoom(agentId: PersistentAgentId, confirmation: string): Promise<PersistentAgentArchiveResponse> {
+	async function archivePersistentAgentRoom(agentId: PersistentAgentId, confirmation: string): Promise<PersistentAgentArchiveResponse | null> {
 		const roomName = persistentAgentStatuses.find((status) => status.id === agentId)?.displayName || agentId;
 		const leavingBoundRoom = persistentChat?.agentId === agentId;
+		if (leavingBoundRoom && !guardMarkdownEditorAction(() => { void archivePersistentAgentRoom(agentId, confirmation); }, "navigate")) return null;
 		if (leavingBoundRoom && persistentRoomInFlight) {
 			// Leaving now would detach the turn into background cooking, and the
 			// archive would then refuse on that — say it while the pane can show it.
@@ -4025,6 +4115,7 @@ export function App() {
 			suppressReconnectRef.current = true;
 			try { wsRef.current?.close(); } catch {}
 			setRoomSettingsOpen(false);
+			setRightPane(null);
 			setPersistentChat(null);
 			setPersistentThread(null);
 			setCheckpointPreviewOpen(false);
@@ -4072,9 +4163,10 @@ export function App() {
 	// the pane that would show a failure is unmounted, so a failed purge
 	// reports on the Home banner, refreshes the card's stale lock, and keeps
 	// the draft it parked, instead of failing into silence.
-	async function purgePersistentAgentRoom(agentId: PersistentAgentId, confirmation: string): Promise<PersistentAgentPurgeResponse> {
+	async function purgePersistentAgentRoom(agentId: PersistentAgentId, confirmation: string): Promise<PersistentAgentPurgeResponse | null> {
 		const roomName = persistentAgentStatuses.find((status) => status.id === agentId)?.displayName || agentId;
 		const leavingBoundRoom = persistentChat?.agentId === agentId;
+		if (leavingBoundRoom && !guardMarkdownEditorAction(() => { void purgePersistentAgentRoom(agentId, confirmation); }, "navigate")) return null;
 		if (leavingBoundRoom && persistentRoomInFlight) {
 			// Leaving now would detach the turn into background cooking, and the
 			// purge would then refuse on that — say it while the pane can show it.
@@ -4095,6 +4187,7 @@ export function App() {
 			suppressReconnectRef.current = true;
 			try { wsRef.current?.close(); } catch {}
 			setRoomSettingsOpen(false);
+			setRightPane(null);
 			setPersistentChat(null);
 			setPersistentThread(null);
 			setCheckpointPreviewOpen(false);
@@ -6051,6 +6144,7 @@ export function App() {
 	// reconstituted done-card. The live running row opens the run view instead;
 	// other rows without artifacts are not clickable.
 	function openAssetRow(row: AssetRowView) {
+		if (rightPaneRef.current?.kind === "markdownEditor" && !guardMarkdownEditorAction(() => openAssetRow(row), "switch")) return;
 		// Clicking the already-selected row closes the pane (same as the header
 		// X); a running task keeps running server-side either way.
 		if (rightPane && (rightPane.kind === "artifactViewer" || rightPane.kind === "taskRun") && rightPane.taskId === row.taskId) {
@@ -6502,6 +6596,7 @@ export function App() {
 		setUsage(ZERO_USAGE);
 		setContextHealth(null);
 		setPreview(null);
+		setRightPane(null);
 		setBusy(false);
 		flushAssistantStream();
 		clearTransientStreamNotes();
@@ -6545,6 +6640,7 @@ export function App() {
 		setUsage(ZERO_USAGE);
 		setContextHealth(null);
 		setPreview(null);
+		setRightPane(null);
 		setBusy(false);
 		flushAssistantStream();
 		clearTransientStreamNotes();
@@ -6602,6 +6698,7 @@ export function App() {
 			setCheckpointApprovalError(REMEMBER_OTHER_CONVERSATION_OPEN);
 			return;
 		}
+		if (!guardMarkdownEditorAction(() => { void approveCheckpointProposal(approvedRecentContext); }, "navigate")) return;
 		setCheckpointApprovalLoading(true);
 		setCheckpointApprovalError(null);
 		try {
@@ -6853,7 +6950,7 @@ export function App() {
 		// The effort pill belongs to the room being left: the next room's ready
 		// frame brings its own sticky level and its own model's capability.
 		setRoomEffort(null);
-		setPreview(null);
+		if (rightPaneRef.current?.kind !== "markdownEditor") setPreview(null);
 		setBusy(false);
 		setCurrentModelState(NO_CURRENT_MODEL);
 		setComposerPrefill("");
@@ -8132,6 +8229,7 @@ export function App() {
 
 
 	async function openPersistentAgent(target: PersistentAgentTarget) {
+		if (!guardMarkdownEditorAction(() => { void openPersistentAgent(target); }, "navigate")) return;
 		const label = target.displayName?.trim() || "Exxpert";
 		// The server decides a new conversation's model (the room's conversation
 		// row); the resolved row only fills the room's header until the saved
@@ -8173,6 +8271,7 @@ export function App() {
 		const nextConversationId = newConversationId();
 		setPersistentResumeError(null);
 		clearBackgroundActivityBadge(target.id);
+		setRightPane(null);
 		resetLiveUiState();
 		// Same carry pattern as the offline-rebind rescue: resetLiveUiState just
 		// cleared the composer, so re-seed it with this room's parked draft.
@@ -8260,6 +8359,7 @@ export function App() {
 	}
 
 	async function openPersistentAgentResume(status: PersistentAgentStatus) {
+		if (!guardMarkdownEditorAction(() => { void openPersistentAgentResume(status); }, "navigate")) return;
 		setPersistentResumeError(null);
 		clearBackgroundActivityBadge(status.id);
 		const runtimeThreadId = status.runtime.state === "standby" || status.runtime.state === "active" ? status.runtime.activeThreadId : null;
@@ -8279,6 +8379,7 @@ export function App() {
 			const restoredQueue = readConsultHandoffQueue(record.pendingHandoffs);
 			applyPendingHandoffs(restoredQueue, deriveTrailingConsultIds(liveThread.items, restoredQueue.length));
 			await savePersistentAgentThread(liveThread, "active", "launcher", liveThread.items, restoredQueue);
+			setRightPane(null);
 			resetLiveUiState();
 			const savedDraft = roomDraftsRef.current.get(status.id);
 			if (savedDraft) setComposerPrefill(savedDraft);
@@ -8368,6 +8469,7 @@ export function App() {
 	}
 
 	async function mementoPersistentThread() {
+		if (!guardMarkdownEditorAction(() => { void mementoPersistentThread(); }, "navigate")) return;
 		const targetChat = persistentChat;
 		if (!targetChat) return;
 		// Memento always works, even mid-stream: the server stops the current
@@ -8407,6 +8509,7 @@ export function App() {
 		const approval = checkpointApprovalResult;
 		const targetChat = persistentChat;
 		if (approval && targetChat && targetChat.conversationId !== approval.postCheckpoint.activeThreadId) {
+			if (!guardMarkdownEditorAction(() => continueAfterCheckpoint(), "navigate")) return;
 			void bindToApprovedCheckpointRuntime(approval, targetChat).then(() => resetCheckpointInput()).catch((error) => setCheckpointApprovalError(formatRememberError((error as Error).message)));
 			return;
 		}
@@ -8414,6 +8517,7 @@ export function App() {
 	}
 
 	async function restAfterCheckpoint() {
+		if (!guardMarkdownEditorAction(() => { void restAfterCheckpoint(); }, "navigate")) return;
 		const approval = checkpointApprovalResult;
 		const postCheckpointThreadId = approval?.postCheckpoint.activeThreadId;
 		if (approval && postCheckpointThreadId) {
@@ -8431,6 +8535,7 @@ export function App() {
 		if (restingAgentId) roomDraftsRef.current.delete(restingAgentId);
 		setPersistentThread(null);
 		setPersistentChat(null);
+		setRightPane(null);
 		resetLiveUiState();
 		applyPendingHandoffs([], new Set());
 		setConversationId(newConversationId());
@@ -8475,6 +8580,7 @@ export function App() {
 	// row rides along when the ledger has it, with a card-state fallback for
 	// the beat between task_end and the panel refetch landing.
 	const openArtifactViewer = useCallback((taskId: string, templateLabel: string, artifact: { relativePath: string; extension: string }) => {
+		if (rightPaneRef.current?.kind === "markdownEditor" && !guardMarkdownEditorAction(() => openArtifactViewer(taskId, templateLabel, artifact), "switch")) return;
 		setArtifactMaximized(false);
 		markAssetRowViewed(taskId);
 		let asset = assetRowsRef.current.find((candidate) => candidate.taskId === taskId && candidate.artifacts.length > 0);
@@ -8801,6 +8907,7 @@ export function App() {
 	async function goHome(): Promise<boolean> {
 		// A conversation the save that filled the room closed leaves the way Return Home does: nothing is saved into it.
 		if (closedByFullSaveRef.current) return restAfterCheckpoint();
+		if (!guardMarkdownEditorAction(() => { void goHome(); }, "navigate")) return false;
 		// A fully-received answer may still be revealing its tail (busy
 		// already false); leaving must not persist a truncated tail.
 		flushAssistantStream();
@@ -8875,6 +8982,7 @@ export function App() {
 				}
 			}
 			setPersistentChat(null);
+			setRightPane(null);
 			setCheckpointPreviewOpen(false);
 			resetMaintainWorkflows();
 			setBusy(false);
@@ -8922,6 +9030,7 @@ export function App() {
 	// typing into a dead one (refreshPersistentAgentStatus deliberately stands
 	// down while a room is open). Leave the room the way archiving does.
 	function leaveRoomAfterMemento(): void {
+		if (!guardMarkdownEditorAction(() => leaveRoomAfterMemento(), "navigate")) return;
 		if (persistTimerRef.current) {
 			window.clearTimeout(persistTimerRef.current);
 			persistTimerRef.current = null;
@@ -8931,6 +9040,7 @@ export function App() {
 		if (persistentChat) roomDraftsRef.current.delete(persistentChat.agentId);
 		setPersistentChat(null);
 		setPersistentThread(null);
+		setRightPane(null);
 		setView("home");
 		void refreshPersistentAgentStatus();
 	}
@@ -9328,6 +9438,16 @@ export function App() {
 				/>
 			)}
 			{preview && <Preview content={preview.content} title={preview.title} type={preview.type} onClose={() => setPreview(null)} />}
+			{rightPane?.kind === "markdownEditor" && persistentChat && (
+				<MarkdownEditorPane
+					ref={markdownEditorRef}
+					agentId={persistentChat.agentId}
+					conversationId={persistentChat.conversationId}
+					path={rightPane.path}
+					onClose={requestCloseMarkdownEditor}
+					onDirtyChange={onMarkdownEditorDirtyChange}
+				/>
+			)}
 			{rightPane?.kind === "taskRun" && taskState.phase !== "none" && taskState.taskId === rightPane.taskId && (
 				<TaskRunView
 					state={taskState}
@@ -9376,6 +9496,7 @@ export function App() {
 	return (
 		<InRoomChatShellView
 			onHome={goHome}
+			sidebarResizable
 			sidebar={
 				<Sidebar
 					onHome={goHome}
@@ -9383,6 +9504,7 @@ export function App() {
 					appearance={appearance}
 					onSetAppearance={setAppearance}
 					onSettings={openSettings}
+					workspaceSlot={persistentChat ? <WorkspaceFileBrowser agentId={persistentChat.agentId} conversationId={persistentChat.conversationId} selectedPath={rightPane?.kind === "markdownEditor" ? rightPane.path : null} onFileSelect={openWorkspaceMarkdown} /> : undefined}
 					assetsSlot={persistentChat ? <AssetsPanel rows={assetRows} selectedTaskId={selectedAssetTaskId} onSelect={openAssetRow} onStopRunning={() => dispatchTask({ type: "abort_requested" })} onRemove={(row) => void removeAssetRow(row)} onDeleteFile={(row, fileName) => requestFileDelete(row, fileName)} onRenameFile={(row, fileName, newName) => void renameFileRow(row, fileName, newName)} /> : undefined}
 				/>
 			}
@@ -9577,8 +9699,21 @@ export function App() {
 			checkpointPreviewSlot={checkpointPreviewOpen && persistentChat && <CheckpointPreviewShell chat={persistentChat} itemCount={items.length} rememberText={checkpointRememberText} density={checkpointDensity} proposal={checkpointProposal} loading={checkpointProposalLoading} progress={checkpointProgress} onCancelGenerate={() => cancelCheckpointProposal()} error={checkpointProposalError} notice={checkpointProposalNotice} onChooseModel={() => openRoomSettings("model")} onSignIn={(provider) => openSignIn(provider ?? persistentChat.model.provider)} approvalLoading={checkpointApprovalLoading} approvalError={checkpointApprovalError} approvalResult={checkpointApprovalResult} quickRequested={checkpointQuickRequested} skipsPreview={rememberSkipsPreview} quickBlockedReasons={checkpointQuickBlockedReasons} consultRunning={consultState.phase === "streaming"} taskRunning={taskState.phase === "running"} pendingConsultHandoffCount={pendingHandoffs.filter((block) => !isSpecialistHandoffBlock(block)).length} pendingTaskHandoffCount={pendingHandoffs.filter(isSpecialistHandoffBlock).length} approvedFields={checkpointFields} onFieldsChange={(fields) => { if (checkpointProposal) setCheckpointEdits({ key: checkpointEditsKey(checkpointProposal), fields }); }} onRememberTextChange={(text) => { setCheckpointRememberText(text); setCheckpointProposal(null); setCheckpointProposalError(null); setCheckpointProposalNotice(null); setCheckpointApprovalError(null); setCheckpointApprovalResult(null); }} onDensityChange={(next) => { setCheckpointDensity(next); setCheckpointProposal(null); setCheckpointProposalError(null); setCheckpointProposalNotice(null); setCheckpointApprovalError(null); setCheckpointApprovalResult(null); }} onGenerate={generateCheckpointProposal} onApprove={approveCheckpointProposal} onDiscard={() => { discardCheckpointProposalOnServer(); setCheckpointEdits(null); setCheckpointProposal(null); setCheckpointProposalError(null); setCheckpointProposalNotice(null); setCheckpointApprovalError(null); setCheckpointApprovalResult(null); setCheckpointQuickRequested(false); setCheckpointQuickBlockedReasons(null); setCheckpointPreviewOpen(false); }} onContinueAfterCheckpoint={continueAfterCheckpoint} onRestAfterCheckpoint={restAfterCheckpoint} onMemorizeAfterCheckpoint={memorizeAfterCheckpoint} onClose={() => { if (roomFilledBy(checkpointApprovalResult)) void restAfterCheckpoint(); else setCheckpointPreviewOpen(false); }} />}
 			globalOverlaySlot={
 				<>
+					{markdownEditorPrompt && (
+						<div className="checkpoint-preview-backdrop maintain-confirm-backdrop" role="dialog" aria-modal="true" aria-label="Unsaved Markdown changes">
+							<section className="checkpoint-input-card maintain-confirm-card markdown-editor-confirm">
+								<h2>Unsaved Markdown changes</h2>
+								<p>{markdownEditorPrompt === "switch" ? "Save this file before opening another Markdown file?" : "Save this file before leaving the editor?"}</p>
+								<div className="checkpoint-preview-actions">
+									<button type="button" className="landing-action secondary" autoFocus onClick={cancelMarkdownEditorPrompt}>Cancel</button>
+									<button type="button" className="landing-action secondary" onClick={discardMarkdownEditorAndContinue} disabled={markdownEditorPromptBusy}>Discard changes</button>
+									<button type="button" className="landing-action" onClick={() => void saveMarkdownEditorAndContinue()} disabled={markdownEditorPromptBusy}>{markdownEditorPromptBusy ? "Saving…" : "Save and continue"}</button>
+								</div>
+							</section>
+						</div>
+					)}
 					{roomSettingsOpen && currentPersistentStatus && (
-						<RoomSettingsModal status={currentPersistentStatus} initialPane={roomSettingsPane} onClose={() => setRoomSettingsOpen(false)} onArchive={archivePersistentAgentRoom} onPurge={purgePersistentAgentRoom} onRefresh={refreshPersistentAgentStatus} onMementoApplied={leaveRoomAfterMemento} onConversationSwitched={adoptSwitchedConversationModel} onOpenSkillsLibrary={() => openSettings("skills")} onOpenConnectors={() => openSettings("connectors")} />
+						<RoomSettingsModal status={currentPersistentStatus} initialPane={roomSettingsPane} onClose={() => setRoomSettingsOpen(false)} onArchive={archivePersistentAgentRoom} onPurge={purgePersistentAgentRoom} onRefresh={refreshPersistentAgentStatus} onMementoApplied={leaveRoomAfterMemento} onConversationSwitched={adoptSwitchedConversationModel} onBeforeMemento={(continueAction) => guardMarkdownEditorAction(continueAction, "navigate")} onOpenSkillsLibrary={() => openSettings("skills")} onOpenConnectors={() => openSettings("connectors")} />
 					)}
 					{assetDeleteConfirm && <AssetDeleteDialog title={assetDeleteConfirm.title} onDelete={() => { const row = assetDeleteConfirm; setAssetDeleteConfirm(null); if (row) void deleteAssetRow(row); }} onCancel={() => setAssetDeleteConfirm(null)} />}
 					{fileDeleteConfirm && <FileDeleteDialog fileName={fileDeleteConfirm.fileName} reason={fileDeleteConfirm.reason} onDelete={() => { const confirm = fileDeleteConfirm; setFileDeleteConfirm(null); if (confirm) void performFileDelete(confirm.fileName); }} onCancel={() => setFileDeleteConfirm(null)} />}

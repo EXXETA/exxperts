@@ -3,3 +3,13 @@ Copyright 2026 EXXETA AG
 
 The bundled runtime under runtime/ is derived from Pi by Mario Zechner,
 licensed under the MIT License. See runtime/LICENSE and runtime/NOTICE.md.
+
+Portions of the Markdown editor surface, toolbar, search decorations, and synchronization are adapted from Omnigent at
+https://github.com/omnigent-ai/omnigent/tree/da7555532be25cd127a3cdee8bf8bb32071932fb.
+Copyright (2026) Databricks, Inc.
+This Software includes software developed at Databricks
+(https://www.databricks.com/) and its use is subject to the included LICENSE file.
+The adapted Omnigent source is licensed under the Apache License, Version 2.0;
+its source paths, fixed commit, and exxperts changes are identified in the
+relevant source-file headers. No Omnigent third-party runtime dependencies are
+included by this port.
