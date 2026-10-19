@@ -139,9 +139,9 @@ try {
 		source: "manual",
 		now: new Date("2026-05-27T00:05:00.000Z"),
 	});
-	const localFilesTools = new Map(createPersistentRoomWorkspaceTools(localFilesPolicy).map((tool: any) => [tool.name, tool]));
+	const localFilesTools = createPersistentRoomWorkspaceTools(localFilesPolicy, { localFilesCwd: workspaceRoot });
 	assert(isPersistentRoomWorkspaceToolPolicyEnabled(localFilesPolicy), "local-files policy should activate workspace tools");
-	assert(localFilesTools.size === 0, "local-files mode should register no curated workspace tools; native runtime tools own that surface");
+	assert(localFilesTools.map((tool: any) => tool.name).join(",") === "ls,find,grep,read,write,edit" && localFilesTools.every((tool: any) => tool.label === tool.name), "local-files mode should register the six native file tools, wrapped, never the curated workspace tools");
 	const localFilesNoSpreadsheetPolicy = createPersistentRoomCapabilityPolicy({
 		agentId: agentId,
 		conversationId: "c_workspace_tools_local_files_no_spreadsheet_smoke",
@@ -155,7 +155,7 @@ try {
 		now: new Date("2026-05-27T00:06:00.000Z"),
 	});
 	assert(isPersistentRoomWorkspaceToolPolicyEnabled(localFilesNoSpreadsheetPolicy), "local-files native-only custom policy should still activate native runtime tools");
-	assert(createPersistentRoomWorkspaceTools(localFilesNoSpreadsheetPolicy).length === 0, "local-files custom selection should register no curated tools either");
+	assert(createPersistentRoomWorkspaceTools(localFilesNoSpreadsheetPolicy, { localFilesCwd: workspaceRoot }).map((tool: any) => tool.name).join(",") === "ls,read", "a local-files custom selection should wrap exactly its own native tools");
 
 	const lsRoot = await execute(tools, "ls", { path: "." }, tmp);
 	assert(lsRoot.includes("README.md"), "ls . should include safe file");

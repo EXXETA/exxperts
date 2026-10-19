@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { authedFetch, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer } from "./smoke-server-process.js";
+import { authedFetch, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, freePort } from "./smoke-server-process.js";
 
 // Every maintenance worker call leaves one record of what happened: the sizes,
 // the timings, the stop reason, which of the template's markers the reply
@@ -187,7 +187,7 @@ async function settleReviewRun(agentId: string, runId: string) {
 
 let server: ChildProcessWithoutNullStreams | null = null;
 const serverOutput: string[] = [];
-const port = 24000 + Math.floor(Math.random() * 10000);
+const port = await freePort();
 const baseUrl = `http://127.0.0.1:${port}`;
 
 async function waitForServer(child: ChildProcessWithoutNullStreams): Promise<void> {

@@ -79,7 +79,7 @@ const runtimeFile = (dir, file) => new RegExp(`(^|/)(runtime/packages/${dir}|nod
 // reviewed file fails the build as a new file does. It is a ceiling, not an
 // exact count: the release install resolves dependency versions without the
 // lockfile, so its copy of a package can hold fewer places than the
-// checkout's (measured 2026-09-30: the Mistral SDK's telemetry has 1 in the
+// checkout's (measured: the Mistral SDK's telemetry has 1 in the
 // release and 0 in the checkout, the AWS user agent helper 0 and 2).
 export const REVIEWED_DYNAMIC_LOADS = [
 	{ file: runtimeFile("ai", "dist/(env-api-keys|providers/openai-codex-responses)\\.js"), sites: 2, reason: "imports node builtins by name, which resolve the same from any folder" },
@@ -187,7 +187,7 @@ const LOAD_REWRITES = [
 	},
 ];
 
-function loadRewritesPlugin() {
+export function loadRewritesPlugin() {
 	return {
 		name: "exxperts-load-rewrites",
 		setup(build) {

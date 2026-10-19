@@ -1,7 +1,7 @@
 // Anthropic thinking-binding probe (dev only).
 //
 // Asks the Anthropic Messages API whether a request that carries the beta
-// header thinking-binding-controls-2026-08-01 and the field
+// header `thinking-binding-controls-2026-08-01` and the field
 // thinking.block_binding.prefix_mismatch_behavior = "drop_block" is accepted
 // on the credential exxperts holds. The credential is ANTHROPIC_API_KEY when
 // that is set, otherwise the stored Claude sign-in, read the way the provider
@@ -55,8 +55,8 @@ const BINDING_BETA = "thinking-binding-controls-2026-08-01";
 // runtime/packages/ai/src/providers/anthropic.ts).
 const OAUTH_BETAS = ["claude-code-20250219", "oauth-2025-04-20"];
 // Same value as claudeCodeVersion in the provider, which is not exported:
-// 2.1.280, the minimum the subscription named for claude-opus-5-5 on
-// 2026-09-22 (error_code claude_code_version_too_old on 2.1.251).
+// 2.1.280, the minimum the subscription named for claude-opus-5-5
+// (error_code claude_code_version_too_old on 2.1.251).
 const CLAUDE_CODE_VERSION = "2.1.280";
 // The provider's default: a third of the model's output limit (128000 for the
 // Claude 5 line).

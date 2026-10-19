@@ -11,7 +11,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
-import { authedFetch, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer } from "./smoke-server-process.js";
+import { authedFetch, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort } from "./smoke-server-process.js";
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -20,7 +20,7 @@ function assert(condition: unknown, message: string): asserts condition {
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const webServerDir = path.resolve(scriptDir, "..");
 const repoRoot = path.resolve(webServerDir, "..", "..");
-const port = 27000 + Math.floor(Math.random() * 10000);
+const port = await freePort();
 const baseUrl = `http://127.0.0.1:${port}`;
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "exxperts-memorize-dead-address-"));
@@ -142,7 +142,7 @@ try {
 			const ui = await (await browser.newContext({ viewport: { width: 1280, height: 900 } })).newPage();
 			await ui.goto(`${baseUrl}/auth/session?token=${SMOKE_AUTH_TOKEN}`);
 			await ui.waitForLoadState("networkidle");
-			const dismiss = ui.locator(".whats-new-foot .btn-primary");
+			const dismiss = ui.locator(".whats-new-close");
 			if (await dismiss.count()) await dismiss.click();
 			await ui.locator(".persistent-agent-card").filter({ hasText: "Screen Room" }).getByRole("button", { name: "Maintain", exact: true }).click();
 			await ui.locator(".maintain-action").filter({ hasText: "Memorize" }).first().click();

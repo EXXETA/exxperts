@@ -14,8 +14,8 @@ import { SHELF_RASTER_PAGES_PER_READ, rasterizeShelfPdfForVision, readShelfFileT
  * These tools are deliberately independent of the workspace grant plumbing:
  * the shelf is an always-on read surface every room owns, while workspace
  * tools exist only where the user granted a folder. The two fences never share
- * a policy record, an env channel, or a path root (Borja's collision check —
- * the shelf fence is the filename validator + the shelf dir, nothing else).
+ * a policy record, an env channel, or a path root: the shelf fence is the
+ * filename validator + the shelf dir, nothing else.
  *
  * Output is the same trust class as fetch_url: document content is data, not
  * instructions (the L0 kernel establishes this for all tool output), and each

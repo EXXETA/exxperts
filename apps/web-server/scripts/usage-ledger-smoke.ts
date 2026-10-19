@@ -22,6 +22,7 @@ try {
 	// --- canonical model grouping (spec: model-names.ts) merges raw-id variants
 	assert(modelGroupOf({ model: "claude-opus-4-8" }).key === modelGroupOf({ model: "claude-opus-4.8" }).key, "raw-id variants share a group");
 	assert(modelGroupOf({ model: "claude-opus-4-8" }).name === "Claude Opus 4.8", "group renders the canonical name");
+	assert(modelGroupOf({ model: "claude-sonnet-4-5-20250929" }).key !== modelGroupOf({ model: "claude-sonnet-4-5" }).key && modelGroupOf({ model: "claude-sonnet-4-5-20250929" }).name === "Claude Sonnet 4.5", "a dated snapshot keeps its own row, under its plain name");
 	assert(modelGroupOf({ model: "gpt-5.5" }).key === modelGroupOf({ model: "gpt-5.5", modelLabel: "ChatGPT Plus/Pro — GPT-5.5" }).key, "label eras share a group");
 
 	// --- ledger append + chronological load --------------------------------
@@ -120,7 +121,7 @@ try {
 	assert(fooSource && fooSource.turns === 1 && Math.abs(fooSource.cost - fooEstimate) < 1e-9 && fooSource.estimatedTurns === 1 && fooSource.unpricedTurns === 0, `the live gateway source is labeled and priced at today's rate, got ${JSON.stringify(fooSource)}`);
 	const oldSource = usage.sources.find((s: any) => s.source === "billed" && s.name === "Removed gateway (gateway-old)");
 	assert(oldSource && oldSource.turns === 1 && oldSource.cost === 0 && oldSource.unpricedTurns === 1, `a gateway nothing answers for reads as removed, got ${JSON.stringify(usage.sources.map((s: any) => s.name))}`);
-	const anthropicSource = usage.sources.find((s: any) => s.source === "billed" && s.name === "Anthropic / Claude");
+	const anthropicSource = usage.sources.find((s: any) => s.source === "billed" && s.name === "Claude");
 	assert(anthropicSource && Math.abs(anthropicSource.cost - 0.02) < 1e-9 && anthropicSource.unpricedTurns === 0 && anthropicSource.estimatedTurns === 0, `a stored-cost source stays exact, got ${JSON.stringify(anthropicSource)}`);
 	const gpt = usage.byModel.find((m: any) => m.id === "gpt-5.5");
 	assert(gpt && gpt.turns === 3, "canonical model group spans eras");

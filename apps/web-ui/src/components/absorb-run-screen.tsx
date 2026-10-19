@@ -12,7 +12,7 @@ import { modelWaitLine } from "./model-notice";
 import { noteLimitLine } from "../memory-save-answer";
 import { TopicMove } from "./topic-move";
 import { MEMORY_CARD_NOTE_MAX_CHARS } from "../../../web-server/src/memory-typed-text";
-import { ABSORB_REREAD_ROW_LABEL, absorbRunSortedRows, absorbRunSortedTitle, absorbRunAllSummarizedSentence, ABSORB_NOTHING_READ_SAVE_TITLE, ABSORB_NOTHING_READ_SENTENCE, absorbRunNothingRead, absorbRunNothingToSave, ABSORB_CHOOSE_MODEL_LABEL, ABSORB_TRY_AGAIN_LABEL, absorbRunAllSummarized, absorbRunOutageModelName, absorbRunOutageSentence, absorbRunRows, absorbRunWaitingCount, ARCHIVE_EXPLANATION, absorbRunFailedSessionNote, absorbRunGuidanceSummary, absorbRunNotDoneSentence, absorbRunNotesChanged, absorbRunProgressLine, absorbRunReadCount, archiveHeading, archiveLimitSummary, archiveRowTag, archiveTopicGroupSummary, automaticApplyNeedsReviewSentence, changeBesideTag, changeKindLabel, entryFirstLine, HISTORY_ROW_LINE, KEEP_BOTH_LABEL, entryGroupPage, entryKindLabel, entryOriginSentence, filterEntriesByText, groupEntriesByTopic, KEEP_NOTE_HINT, KEEP_TOPIC_LABEL, MEMORY_LIMIT_BAR_LABEL, NEW_TOPIC_TAG, showMoreLabel, topicKept, topicLabel } from "../memory-v2-copy";
+import { memoryModelSignInLabel, ABSORB_REREAD_ROW_LABEL, absorbRunSortedRows, absorbRunSortedTitle, absorbRunAllSummarizedSentence, ABSORB_NOTHING_READ_SAVE_TITLE, ABSORB_NOTHING_READ_SENTENCE, absorbRunNothingRead, absorbRunNothingToSave, ABSORB_CHOOSE_MODEL_LABEL, ABSORB_TRY_AGAIN_LABEL, absorbRunAllSummarized, absorbRunOutageModelName, absorbRunOutageSentence, absorbRunRows, absorbRunWaitingCount, ARCHIVE_EXPLANATION, absorbRunFailedSessionNote, absorbRunGuidanceSummary, absorbRunNotDoneSentence, absorbRunNotesChanged, absorbRunProgressLine, absorbRunReadCount, archiveHeading, archiveLimitSummary, archiveRowTag, archiveTopicGroupSummary, automaticApplyNeedsReviewSentence, changeBesideTag, changeKindLabel, entryFirstLine, HISTORY_ROW_LINE, KEEP_BOTH_LABEL, entryGroupPage, entryKindLabel, entryOriginSentence, filterEntriesByText, groupEntriesByTopic, KEEP_NOTE_HINT, KEEP_TOPIC_LABEL, MEMORY_LIMIT_BAR_LABEL, NEW_TOPIC_TAG, showMoreLabel, topicKept, topicLabel } from "../memory-v2-copy";
 
 /** The words of a note, editable in place: the textarea holds the text without its bullet marker. */
 /** A card's Move: rejects with the server's refusal; `onLost` shows the lost-answer line while the page finds out. */
@@ -464,12 +464,12 @@ export function AbsorbRunCard({ run, roomName, memoryModel, working = false, hea
 			{run.wait && <p className="checkpoint-read-note" role="status">{modelWaitLine(run.wait)}</p>}
 			{outage && (
 				<div className="memory-action-note absorb-run-stop-note" role="status">
-					<p>{absorbRunOutageSentence(absorbRunOutageModelName(outage.model, memoryModel), outage.cause, absorbRunWaitingCount(run), outage.model.provider)}</p>
+					<p>{absorbRunOutageSentence(absorbRunOutageModelName(outage.model, memoryModel), outage.cause, absorbRunWaitingCount(run), outage.model.provider, outage.key)}</p>
 					<div className="absorb-run-note-actions">
 						{onResume && <button className="rs-btn" disabled={busy} onClick={onResume}>{outage.cause === "restarted" ? "Continue" : ABSORB_TRY_AGAIN_LABEL}</button>}
 						{/* A restart says nothing about the model: it answered, so Continue is the one way on. */}
 						{onChooseModel && outage.cause !== "restarted" && <button className="rs-btn" disabled={busy} onClick={onChooseModel}>{ABSORB_CHOOSE_MODEL_LABEL}</button>}
-						{onSignIn && outage.cause === "signed-out" && <button className="rs-btn rs-btn-primary" disabled={busy} onClick={() => onSignIn(outage.model.provider)}>Sign in</button>}
+						{onSignIn && outage.cause === "signed-out" && <button className="rs-btn rs-btn-primary" disabled={busy} onClick={() => onSignIn(outage.model.provider)}>{memoryModelSignInLabel(outage.key)}</button>}
 					</div>
 				</div>
 			)}

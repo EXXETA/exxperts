@@ -448,11 +448,14 @@ async function createPersistentRoomBackgroundSession(input: {
 	const toolPolicy = getPersistentRoomToolPolicy(input.roomId, { workspaceToolsEnabled, workspaceToolNames, workspaceAccessMode: effectiveWorkspacePolicy.workspaceAccessMode, bashEnabled: false, bashRuntimeAllowed: false });
 	const backgroundToolNames = persistentRoomBackgroundSessionToolNames(toolPolicy.allowedToolNames);
 	const customTools = workspaceToolsEnabled && effectiveWorkspacePolicy.policy
-		// Same read override as the live bind: a Full access room's scheduled or
-		// detached run reads documents through the same wrapper, bound to the
-		// session cwd this run binds with.
-		? createPersistentRoomWorkspaceTools(effectiveWorkspacePolicy.policy, { localFilesReadCwd: input.cwd })
+		// Same file tools as the live bind, bound to the session cwd this run
+		// binds with.
+		? createPersistentRoomWorkspaceTools(effectiveWorkspacePolicy.policy, { localFilesCwd: input.cwd })
 		: [];
+	const customToolNames = new Set(customTools.map((tool) => String(tool.name)));
+	if (customToolNames.size !== workspaceToolNames.length || !workspaceToolNames.every((toolName) => customToolNames.has(toolName))) {
+		throw new Error("persistent-room workspace tool policy mismatch");
+	}
 	// One read for the whole run, which is also the whole binding: a background
 	// run is a single turn and finishes under the rule it started with.
 	const nativeSearchDecision = resolveNativeProviderSearchDecision(input.model.provider);

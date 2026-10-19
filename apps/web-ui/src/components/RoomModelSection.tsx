@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { credentialGoneWords, modelCredentialWords } from "../../../web-server/src/model-not-offered";
 import { modelDisplayName, modelOnProvider } from "../model-names";
 import { useRemoteClientContext } from "../remote-client-context";
 import { fetchRoomModelProviders, putRoomModels, switchConversationModel, switchRoomBusySentence, type ConversationSwitchNotice } from "../room-models-api";
@@ -40,9 +41,11 @@ function lockName(lock: RoomModelLockView): string {
 function unavailableSentence(row: RoomModelRowView, task: RoomModelTask): string | null {
 	if (!row.chosen || !row.reason || row.effective) return null;
 	const named = modelOnProvider(lockName(row.chosen), row.chosen.providerLabel);
-	const what = row.source === "default" ? `The default, ${named},` : named;
+	const gone = row.keyGone ? "key-missing" : "signed-out";
+	const words = row.reason === "signed-out" ? modelCredentialWords(lockName(row.chosen), row.chosen.providerLabel, named, gone) : { subject: named, state: "is no longer offered" };
+	const what = row.source === "default" ? `The default, ${words.subject},` : words.subject;
 	return row.reason === "signed-out"
-		? `${what} is signed out. This room waits until you sign in again or choose another model.`
+		? `${what} ${words.state}. This room waits until you ${credentialGoneWords(gone).again.toLowerCase()} or choose another model.`
 		: `${what} is no longer offered. This room waits until you choose another ${task === "memory" ? "Memory model" : "model"}.`;
 }
 

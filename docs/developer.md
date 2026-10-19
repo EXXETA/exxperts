@@ -138,7 +138,6 @@ Current product/app state lives under `~/.exxperts/app/`, including:
 - `persistent-room-schedules/` and `background-runs/`
 - `persistent-agent-ai-profile.json` (the Default models) and `openai-compatible-ai-profile.json` (gateway policy, when configured); each room's Conversation and Memory models live in `personalized-agents/<id>/runtime/models.json`
 - `usage.jsonl`
-- `memory.jsonl` (CLI fact store, created on first use)
 - `agents/`, `skills/`
 - `web-search.json` and `searxng/`
 

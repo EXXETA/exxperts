@@ -808,6 +808,9 @@ function run(overrides: Partial<AbsorbRun> = {}): AbsorbRun {
 	// A model busy past the shared patience; a quota is its own cause now (model-call-causes.ts).
 	assert(outage("GPT-5.5", "busy", 1) === "Memorize paused because GPT-5.5 is still busy after several tries. 1 conversation is still waiting.", `the busy sentence, one waiting (got: ${outage("GPT-5.5", "busy", 1)})`);
 	assert(outage("GPT-5.5", "signed-out", 1) === "Memorize paused because GPT-5.5 cannot answer because its provider is signed out. 1 conversation is still waiting.", `the signed-out sentence (got: ${outage("GPT-5.5", "signed-out", 1)})`);
+	const keyOutage = copy.absorbRunOutageSentence as (model: string, cause: "signed-out", waiting: number, provider?: string, key?: "missing" | "refused") => string;
+	assert(keyOutage("GPT-5.5", "signed-out", 1, "openai", "missing") === "Memorize paused because GPT-5.5 cannot answer because its provider has no key saved. 1 conversation is still waiting.", `the key-missing sentence (got: ${keyOutage("GPT-5.5", "signed-out", 1, "openai", "missing")})`);
+	assert(keyOutage("GPT-5.5", "signed-out", 1, "openai", "refused") === "Memorize paused because GPT-5.5 cannot answer because its provider did not accept the saved key. 1 conversation is still waiting.", `the key-refused sentence (got: ${keyOutage("GPT-5.5", "signed-out", 1, "openai", "refused")})`);
 	assert(outage("GPT-5.5", "quota", 2) === "Memorize paused because GPT-5.5 has reached its usage limit. 2 conversations are still waiting.", `the quota sentence (got: ${outage("GPT-5.5", "quota", 2)})`);
 	assert(outage("GPT-5.5", "not-offered", 1) === "Memorize paused because GPT-5.5 is no longer offered. 1 conversation is still waiting.", `the not-offered sentence (got: ${outage("GPT-5.5", "not-offered", 1)})`);
 	// The notice names the model that stopped, from the run's own stop, even
@@ -815,7 +818,7 @@ function run(overrides: Partial<AbsorbRun> = {}): AbsorbRun {
 	const outageModel = copy.absorbRunOutageModelName as ((stopped: { provider: string; model: string }, memoryModel?: { provider: string; model: string; label?: string } | null) => string) | undefined;
 	assert(outageModel, "the notice's model name comes from the run's stop");
 	const swapped = outageModel({ provider: "anthropic", model: "claude-opus-5-5" }, { provider: "openai", model: "gpt-5.5", label: "GPT-5.5" });
-	assert(swapped === "Claude Opus 5.5 (Anthropic / Claude)", `a notice after a switch names the model that stopped, never the room's earlier one (got: ${swapped})`);
+	assert(swapped === "Claude Opus 5.5 (Claude)", `a notice after a switch names the model that stopped, never the room's earlier one (got: ${swapped})`);
 	const sameModel = outageModel({ provider: "openai-compatible", model: "rm-7" }, { provider: "openai-compatible", model: "rm-7", label: "Room Model" });
 	assert(sameModel === "Room Model (OpenAI-compatible gateway)", `the room's label names the model that stopped when it is that model (got: ${sameModel})`);
 	const otherLabel = outageModel({ provider: "openai-compatible", model: "rm-7" }, { provider: "openai-compatible", model: "narrow-7", label: "Narrow Model" });

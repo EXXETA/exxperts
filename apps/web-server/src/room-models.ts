@@ -20,7 +20,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { AuthStorage, getAgentDir, ModelRegistry } from "@exxeta/exxperts-runtime";
+import { ANTHROPIC_API_KEY_PROVIDER, AuthStorage, getAgentDir, ModelRegistry } from "@exxeta/exxperts-runtime";
 import { getAvailablePersistentAgentAiProfiles, getPersistentAgentAiProfile, isBuiltInPersistentAgentAiProfileId, isPersistentAgentAiProfileId, isPersistentRoomModelForProfile, persistentAgentModelLocksEqual, type PersistentAgentAiProfile, type PersistentAgentModelLock } from "./persistent-agent-ai-profiles.js";
 import { PERSISTENT_AGENT_AI_PROFILE_FILE, readPersistentAgentAiProfileState, readSavedPersistentAgentAiProfileId } from "./persistent-agent-ai-profile-state.js";
 import { DEFAULT_PERSISTENT_ROOM_AGENTS_ROOT, persistentAgentRootPath } from "./persistent-room-workspace-policy.js";
@@ -255,6 +255,18 @@ function pushUnique(list: PersistentAgentModelLock[], lock: PersistentAgentModel
 	if (!list.some((candidate) => persistentAgentModelLocksEqual(candidate, lock))) list.push({ provider: lock.provider, model: lock.model });
 }
 
+/**
+ * The model each picker tags Recommended for a provider: a curated provider's
+ * recommendation, and on the Claude key the sign-in's, as it serves the same
+ * models. Only a tag: what a default resolves to stays the key's own choice.
+ */
+export function taggedRecommendation(provider: RoomModelProvider, catalog: RoomModelCatalog): Record<RoomModelTask, PersistentAgentModelLock | undefined> {
+	if (provider.curated) return provider.recommended;
+	const signIn = provider.providerId === ANTHROPIC_API_KEY_PROVIDER ? catalog.providers.find((candidate) => candidate.providerId === "anthropic" && candidate.curated) : undefined;
+	const onKey = (lock: PersistentAgentModelLock | undefined) => lock && { provider: ANTHROPIC_API_KEY_PROVIDER, model: lock.model };
+	return { conversation: onKey(signIn?.recommended.conversation), memory: onKey(signIn?.recommended.memory) };
+}
+
 /** One read of the profiles and the sign-ins, for everything resolved in one request. */
 export function createRoomModelCatalog(options: RoomModelCatalogOptions = {}): RoomModelCatalog {
 	const profiles = options.profiles ?? getAvailablePersistentAgentAiProfiles();
@@ -455,13 +467,13 @@ export function catalogModelNames(catalog: RoomModelCatalog): RoomModelNames {
 export class RoomModelUnavailableError extends Error {
 	readonly statusCode = 409;
 	readonly code: "provider_signed_out" | "room_model_unavailable";
-	/** The provider, for the notice's Sign in button. */
-	readonly details: { provider: string };
+	/** The provider, for the notice's Sign in button; `key` when a key connection has no key saved. */
+	readonly details: { provider: string; key?: "missing" };
 	constructor(message: string, readonly reason: RoomModelUnavailableReason, readonly provider: string) {
 		super(message);
 		this.name = "RoomModelUnavailableError";
 		this.code = reason === "signed-out" ? "provider_signed_out" : "room_model_unavailable";
-		this.details = { provider };
+		this.details = { provider, ...(reason === "signed-out" && !providerSignsIn(provider) ? { key: "missing" as const } : {}) };
 	}
 }
 
@@ -482,7 +494,18 @@ export type { RoomModelRefusalOf };
 
 /** That refusal's sentence (draft wording), also for a call the provider refused because it no longer serves the model. */
 export function roomModelUnavailableSentence(chosen: PersistentAgentModelLock, reason: RoomModelUnavailableReason, task: RoomModelTask, names: RoomModelNames, of: RoomModelRefusalOf = "room"): string {
-	return roomModelUnavailableLine(modelOnProvider(names.model(chosen), names.provider(chosen.provider)), reason, task, of);
+	const bare = { model: names.model(chosen), provider: names.provider(chosen.provider) };
+	return roomModelUnavailableLine(modelOnProvider(bare.model, bare.provider), reason, task, of, providerSignsIn(chosen.provider), bare);
+}
+
+/**
+ * Whether a provider's credential is a sign-in (a subscription): only those
+ * are "signed out". Every other provider, a gateway too, holds a key. Read
+ * from the runtime's sign-in list, so a removed provider still answers; the
+ * in-memory store never touches the auth file.
+ */
+export function providerSignsIn(providerId: string): boolean {
+	return AuthStorage.inMemory().getOAuthProviders().some((provider) => provider.id === providerId);
 }
 
 // --- The Memory model's size -------------------------------------------------------

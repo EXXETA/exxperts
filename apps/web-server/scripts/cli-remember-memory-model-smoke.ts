@@ -150,7 +150,7 @@ try {
 	notes.length = 0;
 	titleShown = "";
 	await checkpoint("", ctx("Discard"));
-	assert(notes.includes("This room's memory model, GPT Fake on Fake GPT, is signed out. Sign in again in Settings, AI setup, or choose another model in Room settings, Model."), `a signed-out Memory row is refused in one line, got ${JSON.stringify(notes)}`);
+	assert(notes.includes("This room's memory model, GPT Fake on Fake GPT, has no key saved. Add the key again in Settings, AI setup, or choose another model in Room settings, Model."), `a Memory row whose key is gone is refused in one line, got ${JSON.stringify(notes)}`);
 	assert(requests.length === 0 && titleShown === "", `nothing read the conversation in its place, got ${JSON.stringify(requests)}`);
 	console.log("cli-remember-memory-model smoke: ok");
 } finally {

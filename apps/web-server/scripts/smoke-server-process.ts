@@ -1,7 +1,8 @@
 import { spawn, spawnSync } from "node:child_process";
 import type { ChildProcess, ChildProcessByStdio, ChildProcessWithoutNullStreams } from "node:child_process";
 import diagnosticsChannel from "node:diagnostics_channel";
-import type { Socket } from "node:net";
+import net from "node:net";
+import type { AddressInfo, Socket } from "node:net";
 import type { Writable } from "node:stream";
 
 // Server-spawning smokes authenticate like a programmatic caller: the smoke
@@ -24,6 +25,50 @@ export function smokeHomeEnv(tempHome: string, extra: Record<string, string | un
 	delete env.EXXPERTS_STATE_HOME;
 	delete env.EXXPERTS_CODING_AGENT_DIR;
 	return env;
+}
+
+// A port nothing listens on, for a server or fake a smoke starts: the system
+// picks it, and the probe closes before the smoke binds it. A random pick
+// from a fixed range can clash with another smoke running alongside. Another
+// process can still take the port in that short gap, so the runner retries a
+// smoke once when its server or fake finds the port taken. A smoke that
+// needs two ports asks twice and never gets the same one back. The remote
+// smokes' tunnel listener binds the same port on ::1 later, so the port must
+// be free there too (a system without IPv6 skips that half). The server
+// itself never gets PORT=0: PORT also sets its allowed origins, remote mode
+// and the live-connection origin. Each port handed out is printed ("smoke
+// port N"), so the runner retries only a clash on one of them.
+const portsGiven = new Set<number>();
+// The bound port, or the listen error's code.
+function probePort(port: number, host: string): Promise<number | string> {
+	return new Promise((resolve) => {
+		const probe = net.createServer();
+		probe.once("error", (error: NodeJS.ErrnoException) => resolve(error.code ?? error.message));
+		probe.listen(port, host, () => {
+			const { port: bound } = probe.address() as AddressInfo;
+			probe.close(() => resolve(bound));
+		});
+	});
+}
+export async function freePort(): Promise<number> {
+	let lastError = "";
+	for (let tries = 0; tries < 20; tries++) {
+		const port = await probePort(0, "127.0.0.1");
+		if (typeof port === "string") {
+			lastError = `127.0.0.1: ${port}`;
+			continue;
+		}
+		if (portsGiven.has(port)) continue;
+		const v6 = await probePort(port, "::1");
+		if (typeof v6 === "string" && v6 !== "EADDRNOTAVAIL" && v6 !== "EAFNOSUPPORT") {
+			lastError = `::1: ${v6}`;
+			continue;
+		}
+		portsGiven.add(port);
+		console.error(`smoke port ${port}`);
+		return port;
+	}
+	throw new Error(`freePort found no port free on 127.0.0.1 and ::1 in 20 tries${lastError ? ` (last error: ${lastError})` : ""}`);
 }
 
 // init.headers is deliberately narrowed to a plain object: a Headers instance
@@ -135,11 +180,20 @@ function killTree(pid: number, signal: NodeJS.Signals): void {
 
 // Stop the smoke's server without ever hanging: SIGTERM the tree, wait
 // bounded, escalate to SIGKILL. An unbounded wait-for-exit here is exactly
-// what turned one leaked server process into a 45-minute CI timeout.
+// what turned one leaked server process into a 45-minute CI timeout. The
+// bound's timer is cleared once the server exits: left pending, it kept every
+// smoke alive for the full 10 s after a clean stop. A stop is printed: a
+// port clash after it may be a restart finding the old server still there,
+// which the runner must not retry away.
 export async function stopSmokeServer(server: ChildProcessWithoutNullStreams | null | undefined): Promise<void> {
 	if (!server || server.exitCode != null || server.pid == null) return;
+	console.error("smoke server stopped");
 	const exited = new Promise<void>((resolve) => server.once("exit", () => resolve()));
-	const waitUpTo = (ms: number) => Promise.race([exited, new Promise<void>((resolve) => setTimeout(resolve, ms))]);
+	const waitUpTo = async (ms: number) => {
+		let timer: NodeJS.Timeout | undefined;
+		await Promise.race([exited, new Promise<void>((resolve) => { timer = setTimeout(resolve, ms); })]);
+		clearTimeout(timer);
+	};
 	killTree(server.pid, "SIGTERM");
 	await waitUpTo(10_000);
 	if (server.exitCode == null) {

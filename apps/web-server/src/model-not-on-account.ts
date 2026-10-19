@@ -31,7 +31,13 @@ export function modelNotOnAccount(message: string): boolean {
 /** The account a provider's sign-in is, as the person knows it. */
 const ACCOUNT_NAMES: Record<string, string> = {
 	"openai-codex": "ChatGPT",
+	"anthropic-api-key": "Anthropic",
 };
+
+/** The service a provider's credential belongs to, as the person knows it ("Anthropic" for the Claude API key); undefined where the provider's own name says it. */
+export function providerAccountName(provider: string): string | undefined {
+	return ACCOUNT_NAMES[provider];
+}
 
 /** "isn't available on your ChatGPT account" (draft wording), after the model's name. */
 export function notOnAccountWhy(provider: string | undefined): string {

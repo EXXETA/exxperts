@@ -143,8 +143,7 @@ function readJournal(file: string): RecordMigrationJournal | null {
 }
 
 /**
- * Per-record migration, journaled so it truly heals (review follow-up on the
- * !348 crash-window): the intended shelf name of every file is written to a
+ * Per-record migration, journaled so it truly heals after a crash: the intended shelf name of every file is written to a
  * journal BEFORE any rename. A crash between rename and ledger rewrite then
  * leaves the journal behind, and the re-run finishes the rewrite from it —
  * source gone + journaled shelf name present = the move happened, record the

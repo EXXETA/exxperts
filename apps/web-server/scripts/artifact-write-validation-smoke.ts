@@ -1,5 +1,4 @@
-// Prompt-hardening slice 1 (visuals contract D4 amendment 2026-07-17): the
-// write-time content floor for raw .html and .svg artifacts. SVG mirrors the
+// The write-time content floor for raw .html and .svg artifacts. SVG mirrors the
 // HTML blocklist — the in-app surfaces (<img>, CSP route) were always safe,
 // but an EXPORTED file leaves them behind, so the file itself is validated.
 // Also pins the instructive tails of the rejection messages: the error text is

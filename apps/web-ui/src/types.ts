@@ -1,4 +1,5 @@
 import type { RememberRead } from "./remember-read";
+import type { CredentialKey } from "../../web-server/src/model-not-offered";
 
 /**
  * Display label for an agent id in usage/history views. Rooms are labelled by
@@ -107,6 +108,8 @@ export interface RoomModelRowView {
 	effective: RoomModelLockView | null;
 	source: "room" | "default" | "fallback" | "none";
 	reason?: "signed-out" | "not-offered";
+	/** Signed out on a key provider or a gateway: its key is gone, so no sign-in brings it back. */
+	keyGone?: true;
 	/** The server's refusal while the chosen model cannot run: the model, its provider, why, and the way out. */
 	refusal?: string;
 	/** Memory row only: the offered models too small for this room's memory (on the defaults, for the room named). */
@@ -488,7 +491,7 @@ export interface AbsorbApprovalResponse {
 	openConversationKeepsMemory?: true;
 }
 
-// ── Memory v2 (api contract 2026-09-13) ────────────────────────────────────
+// ── Memory v2 ──────────────────────────────────────────────────────────────
 // One entry of the room's memory as every screen shows it. Estimated tokens
 // are the product's chars/4, computed by the server; the client never
 // re-derives a size or a budget verdict.
@@ -772,7 +775,8 @@ export interface AbsorbRun {
 	 * model was not answering, or was busy or at its usage limit. What finished
 	 * is on the card; the rest wait. Absent otherwise.
 	 */
-	stop?: { kind: "outage" | "restart"; model: { provider: string; model: string }; cause: MemoryModelStopCause };
+	/** `key`: a signed-out key connection's key is missing, or saved and refused. */
+	stop?: { kind: "outage" | "restart"; model: { provider: string; model: string }; cause: MemoryModelStopCause; key?: CredentialKey };
 	/** A busy Memory model being waited out: the card says when the next try is. */
 	wait?: { cause: "busy" | "unreached"; detail: string; attempt: number; nextTryAt: string; again?: boolean };
 }
@@ -872,7 +876,8 @@ export interface ReviewRun {
 	/** failed: one product sentence. */
 	error?: string;
 	/** The run stopped before every group was tidied because the Memory model cannot be reached: the card shows the one notice. */
-	stop?: { kind: "outage" | "restart"; model: { provider: string; model: string }; cause: MemoryModelStopCause };
+	/** `key`: a signed-out key connection's key is missing, or saved and refused. */
+	stop?: { kind: "outage" | "restart"; model: { provider: string; model: string }; cause: MemoryModelStopCause; key?: CredentialKey };
 	/** A busy Memory model being waited out: the card says when the next try is. */
 	wait?: { cause: "busy" | "unreached"; detail: string; attempt: number; nextTryAt: string; again?: boolean };
 }
@@ -1387,11 +1392,11 @@ export interface PersistentAgentStatus {
 	root: string;
 	runtime: PersistentAgentRuntimeState;
 	activeThread: PersistentAgentActiveThreadSummary | null;
-	/** Community #14 slice 3: a detached turn landed its answer while no session was connected; the server clears it when a session next binds to the room. */
+	/** A detached turn landed its answer while no session was connected; the server clears it when a session next binds to the room. */
 	unseenLandedAnswer?: { threadId: string; turnId: string; terminalReason: "completed" | "failed"; landedAt: number; origin?: "detached-turn" | "scheduled-run" };
 	/** Set when this room is currently open or busy in another surface (CLI, browser, or scheduled background work). */
 	activeLock?: { surface: "cli" | "web" | "scheduler" | string; acquiredAt: number } | null;
-	/** Issue #33: the web lock is held by a detached turn still cooking with NO client attached, so stepping back in is offered; a room genuinely open in another window stays locked out. */
+	/** The web lock is held by a detached turn still cooking with NO client attached, so stepping back in is offered; a room genuinely open in another window stays locked out. */
 	answeringDetached?: boolean;
 	/** When a turn last started in this room, through any door, or the estimate below; null when the room has neither (never used, or archived before it was given an estimate). Read by the "Recently used" order only. */
 	lastUsedAt: string | null;

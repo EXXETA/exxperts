@@ -102,7 +102,6 @@ All of these can go in `.env` (auto-loaded) or your shell.
 |---|---|---|
 | `ANTHROPIC_API_KEY` | (none) | Set if not using subscription auth. |
 | `OPENAI_API_KEY` | (none) | Same. |
-| `EXXETA_KB_VAULTS` | (none) | Optional override/additional Markdown vault config for the knowledge tools. Primary persistent config is `~/.exxperts/app/kb-vaults.json`. |
 | `EXXETA_SEARCH_PROVIDER` | (unset = built-in DuckDuckGo) | Web search provider: unset for the built-in DuckDuckGo backend, `searxng` for a local SearXNG, `disabled` to turn web search off. |
 | `EXXETA_SEARCH_BASE_URL` | (none) | Required when `EXXETA_SEARCH_PROVIDER=searxng`, for example `http://127.0.0.1:8888`. Start a local instance with `./scripts/searxng start`. |
 | `PORT` | `8787` | Web server port. |
@@ -199,7 +198,6 @@ Smokes: `npm run smoke:state-home-move` and `npm run smoke:data-dir`
 | `~/.exxperts/app/openai-compatible-gateways.json` | Saved OpenAI-compatible gateways (name, base URL, approved models with image support and context window, plus the per-model prices and caching capability detection read), when configured | yes |
 | `~/.exxperts/app/openai-compatible-ai-profile.json` | First gateway's profile policy, kept as a mirror for the terminal setup wizard | yes |
 | `~/.exxperts/app/usage.jsonl` | The Wallet ledger: one line per turn with tokens and cost; gateway turns are booked at the gateway's published price, a turn from before a price was on file is estimated at today's rate and marked with an approximation sign, and a turn nobody can price shows "no price on file" | yes |
-| `~/.exxperts/app/memory.jsonl` | CLI long-term fact store (created on first use) | yes |
 | `~/.exxperts/app/agents/`, `~/.exxperts/app/skills/` | User-created agents/skills | yes |
 | `~/.exxperts/app/artifacts/` | Approved artifacts (created on first use) | yes |
 | `~/.exxperts/app/kb-vaults.json` | Knowledge-vault config (created on first use) | yes |

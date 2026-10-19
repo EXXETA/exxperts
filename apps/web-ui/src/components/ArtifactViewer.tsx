@@ -17,7 +17,7 @@ interface Props {
 	/** Asset-panel mode (contract §2 rung 3): the asset's display title leads the header. */
 	assetTitle?: string;
 	/**
-	 * Room-scoped history (2026-07-18): "From an earlier thread · Jul 12" for
+	 * Origin line: "From an earlier thread · Jul 12" for
 	 * rows born in another conversation. One muted header line — the whole
 	 * disclosure; attaching stays gate-free.
 	 */

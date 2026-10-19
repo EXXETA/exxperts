@@ -318,7 +318,7 @@ export function reduceConsult(previous: ConsultState, action: ConsultAction): Co
 			}
 			// consult_end.text is authoritative — it replaces the live deltas.
 			// stopRequested resets here: in an abort-vs-end race where the end wins,
-			// the armed flag must not leak into `done` (hardening 2026-07-11 — benign
+			// the armed flag must not leak into `done` (benign
 			// today, but no done-state should ever carry a live stop request).
 			return {
 				state: {

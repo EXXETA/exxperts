@@ -253,7 +253,7 @@ const TASK_FIXTURE_STOPPED: TaskState = {
 
 function TaskCardsFixtureScreen({ fixture }: { fixture: TaskCardsFixtureState }) {
 	void fixture;
-	// The done-card is retired (status grammar, 2026-07-18); its surviving
+	// The done-card is retired; its surviving
 	// surfaces are the run view (running / stopped) and the kept thread item.
 	// Done results live in the artifact viewer, exercised by the app itself.
 	const stack = [

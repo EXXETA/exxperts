@@ -5,7 +5,7 @@
 // store OUTSIDE the room dir, while refusing whenever the room is busy and
 // never touching workspace roots or the agent-state side.
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { authedFetch, type AuthedFetchInit, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer } from "./smoke-server-process.js";
+import { authedFetch, freePort, type AuthedFetchInit, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer } from "./smoke-server-process.js";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -19,7 +19,7 @@ const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const webServerDir = path.resolve(scriptDir, "..");
 const repoRoot = path.resolve(webServerDir, "..", "..");
 const appStateDir = path.join(tempHome, ".exxperts", "app");
-const port = 24000 + Math.floor(Math.random() * 10000);
+const port = await freePort();
 const baseUrl = `http://127.0.0.1:${port}`;
 
 function assert(condition: unknown, message: string): asserts condition {

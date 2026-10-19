@@ -1,6 +1,6 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { modelDisplayName } from "../model-names";
+import { distinctModelNames, modelDisplayName } from "../model-names";
 import type { RoomModelLock, RoomModelProviderView, RoomModelTask } from "../types";
 
 // The one model picker, used by a room's Model pane and by the defaults for
@@ -50,7 +50,9 @@ export function RoomModelPicker({ providers, task, value, inherited = false, dis
 	const showProvider = ready.length > 1;
 	const valueProvider = value ? providers.find((provider) => provider.id === value.provider) : undefined;
 	const valueOption = value && valueProvider ? valueProvider[task].find((option) => option.model === value.model) ?? valueProvider.conversation.find((option) => option.model === value.model) : undefined;
-	const valueName = value ? modelDisplayName({ model: value.model, modelLabel: valueOption?.label, provider: value.provider }) : "Choose a model";
+	const names = new Map(ready.map((provider) => [provider.id, distinctModelNames(provider[task].map((option) => ({ model: option.model, modelLabel: option.label, provider: option.provider })))]));
+	const valueIndex = value && valueProvider ? valueProvider[task].findIndex((option) => option.model === value.model) : -1;
+	const valueName = value ? (valueIndex >= 0 ? names.get(value.provider)?.[valueIndex] : undefined) ?? modelDisplayName({ model: value.model, modelLabel: valueOption?.label, provider: value.provider }) : "Choose a model";
 
 	function close(returnFocus = true) {
 		setOpen(false);
@@ -161,7 +163,8 @@ export function RoomModelPicker({ providers, task, value, inherited = false, dis
 						{ready.map((provider) => (
 							<div key={provider.id} className="room-model-menu-group" role="group" aria-label={provider.label}>
 								<p className="room-model-menu-kicker">{provider.label}</p>
-								{provider[task].map((option) => {
+								{provider[task].map((option, index) => {
+									const name = names.get(provider.id)?.[index];
 									const selected = !!value && lockKey(value) === lockKey(option);
 									const reason = unpickable?.get(lockKey(option));
 									return (
@@ -179,7 +182,7 @@ export function RoomModelPicker({ providers, task, value, inherited = false, dis
 											}}
 										>
 											<span className="room-model-option-main">
-												<span className="room-model-option-name">{modelDisplayName({ model: option.model, modelLabel: option.label, provider: option.provider })}</span>
+												<span className="room-model-option-name">{name}</span>
 												{reason && <span className="room-model-option-reason">{reason}</span>}
 											</span>
 											{option.recommended && <span className="room-model-option-tag">Recommended</span>}

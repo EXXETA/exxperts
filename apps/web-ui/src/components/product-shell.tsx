@@ -29,8 +29,8 @@ export function ConfigMenu({ onSettings, appearance, onSetAppearance }: { onSett
 	const [open, setOpen] = useState(false);
 	const [helpOpen, setHelpOpen] = useState(false);
 	const wrapRef = useRef<HTMLDivElement>(null);
-	// Desktop only; in a browser tab this stays empty and the row keeps
-	// showing the plain version.
+	// Desktop only; in a browser tab nothing offers an update, so the menu
+	// has no update row.
 	const update = useUpdateNotice();
 	// Remote-access admin lives on the computer; a phone viewing the app over
 	// the tunnel gets neither the menu entry nor the indicator (the server
@@ -85,30 +85,28 @@ export function ConfigMenu({ onSettings, appearance, onSetAppearance }: { onSett
 					>
 						Help
 					</button>
-					{/* The offer is its own line above the metadata, so the version
-					    the user is running stays readable next to the version on
-					    offer (a swapped-out version line answered "update to what,
-					    from what?" with only half of it). Dismiss silences the gear
-					    dot only; the offer stays here for whenever the user wants
-					    it. */}
+					{/* The offer is a menu row like Settings and Help. "Not now" hides
+					    the gear dot only; the row stays until the update is installed. */}
 					{update.available && (
 						<div className="menu-update-row">
 							<button
-								className="menu-meta-update-btn"
+								className="menu-item menu-update"
+								role="menuitem"
 								onClick={() => {
 									requestUpdate();
 									setOpen(false);
 								}}
 							>
-								Update to v{update.available}
+								<span>Update to {update.available}</span>
+								{update.dotVisible && <span className="menu-update-dot" aria-hidden="true" />}
 							</button>
 							{update.dotVisible && (
-								<button className="menu-meta-dismiss" onClick={update.dismiss} title="Hide the update dot — the update stays available here">Dismiss</button>
+								<button className="menu-update-later" role="menuitem" onClick={update.dismiss} title="Hide the dot on the gear; the update stays here">Not now</button>
 							)}
 						</div>
 					)}
 					<div className="menu-meta-row">
-						<span className="menu-meta-version">{APP_VERSION}</span>
+						<span>Version <span className="menu-meta-version">{APP_VERSION}</span></span>
 						<a className="menu-meta-link" href={GITHUB_URL} target="_blank" rel="noopener noreferrer">GitHub</a>
 					</div>
 				</div>

@@ -9,6 +9,7 @@ import type { AbsorbRun, AbsorbRunChange, AbsorbRunChangeKind, AbsorbRunSession,
 import { fmtMemoryDay } from "./memory-surface-copy";
 import { modelTooltipName } from "./model-names";
 import { notOnAccountWhy } from "../../web-server/src/model-not-on-account";
+import { credentialGoneOf, credentialGoneWhy, credentialGoneWords, type CredentialKey } from "../../web-server/src/model-not-offered";
 
 /** Token counts are read, not scanned: group them the way the budget line does. */
 export function fmtTokenCount(value: number): string {
@@ -154,11 +155,16 @@ export function absorbRunNothingToSave(run: AbsorbRun): boolean {
 export const ABSORB_NOTHING_READ_SENTENCE = "No conversation was read yet.";
 export const ABSORB_NOTHING_READ_SAVE_TITLE = "Nothing to save yet: no conversation was read.";
 
-/** Why a run stopped on its Memory model, as the notice's sentence says it (draft wording). The provider names the account a refusal is about. */
-export function memoryModelStopWhy(cause: MemoryModelStopCause, provider?: string): string {
+/** The signed-out stop's button: Sign in, or Add key or Replace key on a key connection. */
+export function memoryModelSignInLabel(key?: CredentialKey): string {
+	return credentialGoneWords(credentialGoneOf(key)).button;
+}
+
+/** Why a run stopped on its Memory model, as the notice's sentence says it (draft wording). The provider names the account a refusal is about; `key` tells a key connection's missing or refused key from a sign-in. */
+export function memoryModelStopWhy(cause: MemoryModelStopCause, provider?: string, key?: CredentialKey): string {
 	switch (cause) {
 		case "busy": return "is still busy after several tries";
-		case "signed-out": return "cannot answer because its provider is signed out";
+		case "signed-out": return credentialGoneWhy(credentialGoneOf(key));
 		case "quota": return "has reached its usage limit";
 		case "not-offered": return "is no longer offered";
 		case "not-on-account": return notOnAccountWhy(provider);
@@ -167,8 +173,8 @@ export function memoryModelStopWhy(cause: MemoryModelStopCause, provider?: strin
 }
 
 /** The one notice of a run that stopped because its Memory model is not answering, or is busy. It names the conversations still waiting, never "0 conversations". */
-export function absorbRunOutageSentence(model: string, cause: MemoryModelStopCause, waiting: number, provider?: string): string {
-	const why = memoryModelStopWhy(cause, provider);
+export function absorbRunOutageSentence(model: string, cause: MemoryModelStopCause, waiting: number, provider?: string, key?: CredentialKey): string {
+	const why = memoryModelStopWhy(cause, provider, key);
 	const still = waiting === 0 ? "" : waiting === 1 ? " 1 conversation is still waiting." : ` ${waiting} conversations are still waiting.`;
 	return `${cause === "restarted" ? "The app restarted. Finished conversations are on this card. Save keeps them." : `Memorize paused because ${model} ${why}.`}${still}`;
 }
@@ -592,7 +598,6 @@ export function entryOriginSentence(entry: EntryCard): string | null {
 	return `from a conversation saved ${entry.saved}`;
 }
 
-/** The first line of an entry, for a row that has no room for the whole text. */
 // ── A page as the person sees it ───────────────────────────────────────────
 // The stored page keeps the format the models read (its section labels and
 // the must-keep marker); what the person reads says the same in plain words.
@@ -695,6 +700,7 @@ export function noteBlocks(text: string): NoteBlock[] {
 	return blocks;
 }
 
+/** The first line of an entry, for a row that has no room for the whole text. */
 export function entryFirstLine(text: string): string {
 	const line = text.split("\n").map((part) => part.replace(/^[\s\-*•]+/, "").trim()).find((part) => part.length > 0) ?? "";
 	return line.length > 180 ? `${line.slice(0, 180)}…` : line;

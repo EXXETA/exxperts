@@ -6,6 +6,7 @@
 // Also the calm line a busy model's wait shows, with the next try's time.
 
 import { ApiRequestError } from "../api";
+import { credentialGoneOf, credentialGoneWords, type CredentialKey } from "../../../web-server/src/model-not-offered";
 
 export type ModelNoticeDetail = "signed-out" | "quota" | "not-offered" | "not-on-account" | "not-answering" | "still-busy" | "too-small";
 
@@ -15,6 +16,8 @@ export interface ModelNotice {
 	sentence: string;
 	/** The provider to sign in to, when sign-in is the cause and it is known. */
 	provider?: string;
+	/** Signed out on a key connection: its key is missing, or saved and refused. */
+	key?: CredentialKey;
 }
 
 /** The model's wait, as the server publishes it: busy, or not reached yet. */
@@ -30,12 +33,13 @@ export interface ModelWait {
 /** The notice for a failed request, when the failure is the Memory model not being reachable; null for every other failure. */
 export function modelNoticeFromError(error: unknown): ModelNotice | null {
 	if (!(error instanceof ApiRequestError)) return null;
-	const details = (error.details ?? {}) as { detail?: string; provider?: string };
+	const details = (error.details ?? {}) as { detail?: string; provider?: string; key?: CredentialKey };
+	const key = details.key === "missing" || details.key === "refused" || details.key === "no-workspace" ? { key: details.key } : {};
 	if (error.code === "model_unreachable" && isNoticeDetail(details.detail)) {
 		console.warn("[exxperts] the Memory model could not be reached:", details.detail);
-		return { detail: details.detail, sentence: error.message, ...(details.provider ? { provider: details.provider } : {}) };
+		return { detail: details.detail, sentence: error.message, ...(details.provider ? { provider: details.provider } : {}), ...key };
 	}
-	if (error.code === "provider_signed_out") return { detail: "signed-out", sentence: error.message, ...(details.provider ? { provider: details.provider } : {}) };
+	if (error.code === "provider_signed_out") return { detail: "signed-out", sentence: error.message, ...(details.provider ? { provider: details.provider } : {}), ...key };
 	if (error.code === "room_model_unavailable") return { detail: "not-offered", sentence: error.message };
 	// The Memory model's window no longer holds the room's memory: the way out is another model.
 	if (error.code === "memory_model_too_small") return { detail: "too-small", sentence: error.message };
@@ -89,7 +93,7 @@ export function ModelNoticePanel({ notice, kept, onTryAgain, onChooseModel, onSi
 			<div className="absorb-run-note-actions">
 				{tryAgain && <button type="button" className="rs-btn" disabled={busy} onClick={tryAgain}>Try again</button>}
 				{onChooseModel && <button type="button" className="rs-btn" disabled={busy} onClick={onChooseModel}>Choose another model</button>}
-				{signIn && <button type="button" className="rs-btn rs-btn-primary" disabled={busy} onClick={() => onSignIn(notice.provider)}>Sign in</button>}
+				{signIn && <button type="button" className="rs-btn rs-btn-primary" disabled={busy} onClick={() => onSignIn(notice.provider)}>{credentialGoneWords(credentialGoneOf(notice.key)).button}</button>}
 				{onClose && <button type="button" className="rs-btn" onClick={onClose}>Close</button>}
 			</div>
 		</div>

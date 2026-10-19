@@ -36,7 +36,7 @@ Every room has two model rows in **Room settings, Model**:
 - **Conversation**: the model the room talks with. A new conversation starts on it, and so do the room's scheduled tasks.
 - **Memory**: the model that does the room's memory work: Remember, Memorize and Review, and also its file and document tasks, Consult and Ask memory. Ask memory across several rooms runs on the Memory default.
 
-Each row has one picker with the approved models grouped by provider. In the Memory picker, each provider's recommended memory model is marked **Recommended**.
+Each row has one picker with the approved models grouped by provider. In the Memory picker, the models this release recommends for Claude and ChatGPT Plus/Pro are marked **Recommended**, and the Claude API key's models take the Claude sign-in's tag.
 
 A row without a model of its own reads **Default ·** and the model's name, and follows the **Default models** in **Settings, AI setup** (Conversation and Memory). Pick a model on the row to give the room its own. Rooms that existed before 0.14 keep the model they used; the defaults apply to new rooms and to every Memory row that has no model of its own.
 
@@ -167,7 +167,7 @@ Each model in the list carries four decisions:
 - **Supports web search**: whether this model may search the web through the gateway's own search machinery. Ticking it makes Exxperts ask for provider-side search on every request to that model, so the model can look things up itself instead of only through the room's `web_search` tool. Leave it unticked unless the gateway really runs search for that model. A gateway that does not will do one of two things, and only one of them is loud: some reject that model's requests outright, others accept the request, ignore the field and answer without searching. Because the second failure is silent, confirm a newly ticked model with a question about something current before relying on it. The room's own `web_search` tool stays available either way, and the two coexist. Detection ticks this for you where a gateway declares it; otherwise it is yours to set. See [`web-search.md`](web-search.md) for the app's own search, which is a separate setting.
 - **Context window**: the token budget Exxperts assumes for this model. It drives the room's context reading and decides when a conversation is compacted, so a wrong number here is felt as premature compaction or as a chip that never fills.
 
-Below the list, pick the gateway's **Recommended memory model**: it is marked Recommended in the Memory picker for this gateway, and rooms still choose theirs in Room settings, Model. Save, and the gateway appears as a row in AI setup.
+Below the list, pick the gateway's **Memory model**, the one it suggests for memory work; rooms still choose theirs in Room settings, Model. Save, and the gateway appears as a row in AI setup.
 
 Model ids are exact strings supplied by your gateway and are often case-sensitive. If you are unsure whether the id is `gpt-5.5`, `GPT-5.5`, `gpt5.5`, or another alias, ask the gateway owner/admin or check the gateway's API/model documentation before approving it.
 
@@ -221,7 +221,7 @@ The setup command prompts only for non-secret values:
 - gateway base URL;
 - primary persistent-room model id or gateway alias;
 - optional additional persistent-room model ids or gateway aliases;
-- optional maintenance model id or gateway alias (the gateway's recommended memory model), defaulting to the primary model.
+- optional maintenance model id or gateway alias (the gateway's memory model), defaulting to the primary model.
 
 Model ids are exact strings supplied by your gateway. They are often case-sensitive, and Exxperts does not discover or validate them during setup. If you are unsure whether the id is `gpt-5.5`, `GPT-5.5`, `gpt5.5`, or another alias, ask the gateway owner/admin or check the gateway's API/model documentation before approving it for Exxperts.
 
@@ -292,7 +292,7 @@ The local app policy approves only the model ids you approved:
 | Process | Mapping |
 | --- | --- |
 | Conversation row | Explicit `roomModels` for that gateway |
-| Memory row (Remember, Memorize, Review, and the other memory work) | Any approved model; `maintenanceModel` is the gateway's recommended memory model |
+| Memory row (Remember, Memorize, Review, and the other memory work) | Any approved model; `maintenanceModel` is the gateway's memory model |
 
 A memory-only model is included in runtime `models.json` so memory work can use it, but it is not offered for conversation unless you also list it as a room model.
 

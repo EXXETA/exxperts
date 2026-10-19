@@ -19,10 +19,13 @@ import {
 	patienceSpent,
 	PATIENCE_WAITS_MS,
 	roomCallWait,
+	signInFailed,
 	withRoomCallWait,
 	type PatienceWait,
 } from "../src/model-call-causes.js";
 import { IsolatedPersistentAgentWorkerTurnError } from "../src/persistent-agent-worker-runtime.js";
+// The very function the page's Memory lines read a worker failure with (App.tsx, maintenanceCredentialLine).
+import { signInFailed as pageSignInFailed } from "../src/model-not-offered.js";
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -357,6 +360,56 @@ for (const [words, detail] of [["401 authentication_error", "signed-out"], ["ins
 	assert(error.message.includes("Claude Sonnet 5") && !error.message.includes(words), "the sentence names the model and never the provider's raw words");
 }
 pass("signed out, out of quota and no longer offered end at once, in the product's words");
+
+{
+	// A key connection says which way its key is gone; a sign-in stays signed out.
+	const keyModel = { provider: "openai", model: "gpt-5.5", label: "GPT-5.5" };
+	const clock = fakeClock();
+	const refused = await rejects(callWithPatience(scripted([workerError("401 Incorrect API key provided")]).call, { model: keyModel, sleep: clock.sleep, now: clock.now }));
+	assert(refused instanceof ModelUnreachableError && refused.details.detail === "signed-out" && refused.details.key === "refused" && refused.message === "GPT-5.5 cannot answer because its provider did not accept the saved key. Nothing was lost.", `a 401 on a key is the saved key refused, got ${String(refused)} ${JSON.stringify((refused as any)?.details)}`);
+	const missing = new ModelUnreachableError("signed-out", keyModel, new Error("No API key found for openai"));
+	assert(missing.details.key === "missing" && missing.message === "GPT-5.5 cannot answer because its provider has no key saved. Nothing was lost.", `no key found is the key missing, got ${missing.message}`);
+	assert(new ModelUnreachableError("signed-out", { provider: "gateway-synthetic", model: "m", label: "Gateway Model" }).details.key === "missing", "a gateway refused before any call has no key saved");
+	const signedOut = new ModelUnreachableError("signed-out", model, workerError("401 authentication_error"));
+	assert(signedOut.details.key === undefined && signedOut.message === "Claude Sonnet 5 cannot answer because its provider is signed out. Nothing was lost.", `a sign-in stays signed out, got ${signedOut.message}`);
+	const claudeKey = { provider: "anthropic-api-key", model: "claude-opus-5-5", label: "Claude Opus 5.5" };
+	const workspace = workerError('400 {"type":"error","error":{"type":"invalid_request_error","message":"This API key is not scoped to a workspace, so this request must include the anthropic-workspace-id header with the ID of the workspace to use. Add the header, or use an API key that is scoped to a workspace."}}');
+	const noWorkspace = await rejects(callWithPatience(scripted([workspace]).call, { model: claudeKey, sleep: clock.sleep, now: clock.now }));
+	assert(noWorkspace instanceof ModelUnreachableError && noWorkspace.details.key === "no-workspace" && noWorkspace.message === "Claude Opus 5.5 cannot answer because its key isn't tied to a workspace. Nothing was lost.", `Anthropic's workspace 400 is its own case, never signed out, got ${String(noWorkspace)}`);
+	assert(classifyModelFailure(new Error("The api key field in this request was ignored")).cause === "other" && !signInFailed("Set the OAuth scope or a credential helper in your config"), "words that only name an API key, OAuth or a credential are not a sign-in");
+	pass("a key connection's Memory model says no key saved, the saved key refused, or a key outside a workspace; a sign-in says signed out; a passing mention of an API key is not a sign-in");
+}
+
+{
+	// The runtime's own words, verbatim: every provider's stream without a key
+	// (runtime/packages/ai/src/providers/anthropic.ts and the rest), and the
+	// session's check for a sign-in it cannot use (agent-session.ts).
+	const noKey = (provider: string) => `No API key for provider: ${provider}`;
+	const expired = (provider: string) => `Authentication failed for "${provider}". Credentials may have expired or network is unavailable. Run '/login ${provider}' to re-authenticate.`;
+	const signIns = [model, { provider: "openai-codex", model: "gpt-6.1-sol", label: "GPT-6.1 Sol" }];
+	const keys = [{ provider: "openai", model: "gpt-5.5", label: "GPT-5.5" }, { provider: "anthropic-api-key", model: "claude-opus-5-5", label: "Claude Opus 5.5" }];
+	for (const words of [...signIns.flatMap((m) => [noKey(m.provider), expired(m.provider)]), ...keys.map((m) => noKey(m.provider))]) {
+		const failure = classifyModelFailure(workerError(words));
+		assert(failure.cause === "unreachable" && failure.detail === "signed-out", `"${words}" reads as a credential gone, got ${JSON.stringify(failure)}`);
+		assert(pageSignInFailed(words), `the page's Memory line reads "${words}" as a key or sign-in`);
+	}
+	for (const m of signIns) {
+		for (const words of [noKey(m.provider), expired(m.provider)]) {
+			const clock = fakeClock();
+			const error = await rejects(callWithPatience(scripted([workerError(words)]).call, { model: m, sleep: clock.sleep, now: clock.now }));
+			assert(error instanceof ModelUnreachableError && error.details.key === undefined && error.message === `${m.label} cannot answer because its provider is signed out. Nothing was lost.`, `a sign-in's "${words}" says signed out, got ${String(error)}`);
+		}
+	}
+	for (const m of keys) {
+		const clock = fakeClock();
+		const error = await rejects(callWithPatience(scripted([workerError(noKey(m.provider))]).call, { model: m, sleep: clock.sleep, now: clock.now }));
+		assert(error instanceof ModelUnreachableError && error.details.key === "missing" && error.message === `${m.label} cannot answer because its provider has no key saved. Nothing was lost.`, `a key connection's "${noKey(m.provider)}" says no key saved, got ${String(error)}`);
+	}
+	for (const words of ["Pick a provider: No API key for provider is configured here", "Authentication failed for the proxy", "Credentials may have expired"]) {
+		assert(classifyModelFailure(new Error(words)).cause === "other" && !pageSignInFailed(words), `"${words}" is not the runtime's phrase, so not a sign-in`);
+	}
+	pass("the runtime's \"No API key for provider\" and \"Authentication failed ... Credentials may have expired\" say signed out on a sign-in and no key saved on a key, on the server and on the page");
+}
 
 {
 	const stall = () => new IsolatedPersistentAgentWorkerTurnError("w", "aborted", "stopped answering", { reason: "stalled" });

@@ -160,6 +160,8 @@ export { defaultModelPerProvider } from "./core/model-resolver.js";
 export { BUILT_IN_PROVIDER_DISPLAY_NAMES } from "./core/provider-display-names.js";
 export { BUILT_IN_MODEL_PROVIDERS, isApiKeyLoginProvider } from "./core/provider-login.js";
 export { listGitHubCopilotModels } from "@exxeta/exxperts-ai/oauth";
+// The Anthropic API key provider, beside the Claude sign-in (see its note in the ai package).
+export { ANTHROPIC_API_KEY_PROVIDER, isDirectAnthropicProvider } from "@exxeta/exxperts-ai";
 // Model reasoning capability, for embedders that need to clamp a level to what
 // a model can actually do without going through the session setter (which also
 // writes the machine-wide default), and to show the dial the way the model's
@@ -305,6 +307,7 @@ export {
 	type ReadToolOptions,
 	renderSpreadsheetPreview,
 	resolveReadPath,
+	resolveToCwd,
 	restoreLineEndings,
 	SpreadsheetPreviewError,
 	type SpreadsheetPreviewErrorCode,
@@ -417,22 +420,6 @@ export {
 	resolveLoopStrategy,
 	createStrategyStopHook,
 } from "@exxeta/exxperts-core";
-// Coordination primitives
-export {
-	CoordinationManager,
-	createCoordinationManager,
-	type CoordinationManagerOptions,
-	type CoordinationEvent,
-	type CoordinationEventListener,
-	type LedgerEntry,
-	type LedgerEntryKind,
-	type HandoffBriefing,
-	type DelegateBriefing,
-	type DelegateResult,
-	type PendingReturnSummary,
-	type GuardrailBlock,
-	type AgentRuntimeLimits,
-} from "./core/coordination.js";
 // Context policy
 export {
 	type ContextPolicy,

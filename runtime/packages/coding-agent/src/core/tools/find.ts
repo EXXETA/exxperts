@@ -109,6 +109,10 @@ const defaultFindOperations: FindOperations = {
 export interface FindToolOptions {
 	/** Custom operations for find. Default: local filesystem plus fd */
 	operations?: FindOperations;
+	/** Leave a result out when this returns true for its absolute path. */
+	skipPath?: (absolutePath: string) => boolean;
+	/** Globs fd never walks into (`--exclude`). Ignored by custom operations. */
+	excludeGlobs?: string[];
 }
 
 function formatFindCall(
@@ -219,10 +223,12 @@ export function createFindToolDefinition(
 								settle(() => reject(new Error("Operation aborted")));
 								return;
 							}
-							const results = await ops.glob(pattern, searchPath, {
-								ignore: ["**/node_modules/**", "**/.git/**"],
-								limit: effectiveLimit,
-							});
+							const results = (
+								await ops.glob(pattern, searchPath, {
+									ignore: ["**/node_modules/**", "**/.git/**"],
+									limit: effectiveLimit,
+								})
+							).filter((p) => !options?.skipPath?.(path.resolve(searchPath, p)));
 							if (signal?.aborted) {
 								settle(() => reject(new Error("Operation aborted")));
 								return;
@@ -315,6 +321,7 @@ export function createFindToolDefinition(
 						if (useGlobMode) {
 							args.unshift("--glob");
 						}
+						for (const excludeGlob of options?.excludeGlobs ?? []) args.push("--exclude", excludeGlob);
 						args.push("--", effectivePattern, searchPath);
 
 						const child = spawn(fdPath, args, { stdio: ["ignore", "pipe", "pipe"] });
@@ -375,9 +382,12 @@ export function createFindToolDefinition(
 							}
 
 							const relativized: string[] = [];
+							let resultCount = 0;
 							for (const rawLine of lines) {
 								const line = rawLine.replace(/\r$/, "").trim();
 								if (!line) continue;
+								resultCount++;
+								if (options?.skipPath?.(path.resolve(searchPath, line))) continue;
 								const hadTrailingSlash = line.endsWith("/") || line.endsWith("\\");
 								let relativePath = line;
 								if (line.startsWith(searchPath)) {
@@ -389,7 +399,21 @@ export function createFindToolDefinition(
 								relativized.push(toPosixPath(relativePath));
 							}
 
-							const resultLimitReached = relativized.length >= effectiveLimit;
+							if (relativized.length === 0) {
+								const text =
+									resultCount >= effectiveLimit
+										? `The first ${effectiveLimit} results were all left out, so there may be more files. Use a narrower path or pattern, or limit=${effectiveLimit * 2}`
+										: "No files found matching pattern";
+								settle(() =>
+									resolve({
+										content: [{ type: "text", text }],
+										details: resultCount >= effectiveLimit ? { resultLimitReached: effectiveLimit } : undefined,
+									}),
+								);
+								return;
+							}
+
+							const resultLimitReached = resultCount >= effectiveLimit;
 							const rawOutput = relativized.join("\n");
 							const truncation = truncateHead(rawOutput, { maxLines: Number.MAX_SAFE_INTEGER });
 							let resultOutput = truncation.content;

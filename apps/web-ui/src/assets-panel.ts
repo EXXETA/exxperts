@@ -2,7 +2,7 @@
  * Assets panel projection (assets contract §2, rung 3 — mockup v2).
  *
  * Pure logic for the in-room rail's Artifacts section: the room's ledger rows
- * (room-scoped history, 2026-07-18 — rows survive Memento/checkpoint) + the
+ * (rows survive Memento/checkpoint) + the
  * live task state + the thread's transferred task ids → compact row view-models.
  * The subline is the SINGLE status channel (no state badges); running shows
  * as a pulsing icon, orphaned as a dashed icon + muted title. Kept free of
@@ -50,7 +50,7 @@ export interface AssetRowView {
 	/** The single status channel: a status word alone, or the time on plain done rows. */
 	subline: string;
 	/**
-	 * Status grammar (2026-07-18): done-and-never-opened — the steady green dot
+	 * Done-and-never-opened — the steady green dot
 	 * plus a "ready · time" subline. Decays to the plain row on first open.
 	 */
 	unread: boolean;
@@ -58,8 +58,8 @@ export interface AssetRowView {
 	failed: boolean;
 	inConversation: boolean;
 	/**
-	 * Origin disclosure for rows born in another conversation (room-scoped
-	 * history, 2026-07-18): "From an earlier thread · Jul 12". Empty for rows
+	 * Origin disclosure for rows born in another conversation:
+	 * "From an earlier thread · Jul 12". Empty for rows
 	 * of the live conversation — the rail subline never carries origin; the
 	 * viewer header is its only surface.
 	 */
@@ -119,8 +119,8 @@ export function assetTemplateShortName(templateId: string): string {
 }
 
 /**
- * Row titles name the THING, not the instruction (2026-07-18 live test: every
- * document task in a room shared the brief's "Create a polished…" prefix).
+ * Row titles name the THING, not the instruction (every document task in a
+ * room shared the brief's "Create a polished…" prefix).
  * Prettified primary-artifact filename — extension dropped, dashes/underscores
  * to spaces. Rows without files keep the task title: nothing to name them yet.
  */
@@ -171,7 +171,7 @@ function withTime(word: string, row: AssetLedgerRowInput, input: ProjectAssetRow
 function sublineForRow(row: AssetLedgerRowInput, input: ProjectAssetRowsInput): string {
 	// Precedence: the most conversation-relevant fact wins; the subline stays a
 	// single channel by design (thumbnails/badges dissolved at the grill).
-	// Status words stand alone (language pass 2026-07-18). "in workspace" is
+	// Status words stand alone. "in workspace" is
 	// GONE entirely (files-management slice): snapshot destinations are not
 	// file state — an export changes nothing about the file on the shelf.
 	if (input.threadTaskIds.has(row.taskId)) return withTime("in conversation", row, input);
@@ -185,7 +185,7 @@ function sublineForRow(row: AssetLedgerRowInput, input: ProjectAssetRowsInput): 
 	}
 	if (row.outcome === "error") return "didn't finish";
 	const when = shortTime(row.endedAt ?? row.startedAt, input.now);
-	// Unread rows lead with the ready word (status grammar, 2026-07-18): the
+	// Unread rows lead with the ready word: the
 	// green dot says "news", the subline says what kind. Decays on first open.
 	if (isUnreadRow(row, input)) return when ? `ready · ${when}` : "ready";
 	// Resting rows read verb + moment, one grammar for the whole list (taste

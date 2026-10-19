@@ -1,5 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer } from "./smoke-server-process.js";
+import { SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, freePort } from "./smoke-server-process.js";
 import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
@@ -35,7 +35,7 @@ fs.mkdirSync(tempAgentsRoot, { recursive: true, mode: 0o700 });
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const webServerDir = path.resolve(scriptDir, "..");
 const repoRoot = path.resolve(webServerDir, "..", "..");
-const port = 26000 + Math.floor(Math.random() * 10000);
+const port = await freePort();
 const baseUrl = `http://127.0.0.1:${port}`;
 
 async function waitForServer(server: ChildProcessWithoutNullStreams): Promise<void> {
@@ -127,13 +127,16 @@ function serverLogLinesSince(from: number): Array<Record<string, any>> {
 	});
 }
 
-// Every log line of the first request logged since serverOutput[from], once
-// its "request completed" line has arrived. The probes run one at a time.
-async function logOfNextRequest(from: number): Promise<Array<Record<string, any>>> {
+// Every log line of the first request logged since serverOutput[from] (the
+// first whose address contains `addressPart` and whose method is `method`,
+// when given), once its "request completed" line has arrived. The probes
+// run one at a time, but on a loaded machine an earlier request's lines can
+// still arrive after `from`.
+async function logOfNextRequest(from: number, addressPart?: string, method?: string): Promise<Array<Record<string, any>>> {
 	const deadline = Date.now() + 5000;
 	for (;;) {
 		const lines = serverLogLinesSince(from);
-		const incoming = lines.find((line) => line.msg === "incoming request");
+		const incoming = lines.find((line) => line.msg === "incoming request" && (addressPart === undefined || String(line.req?.url ?? "").includes(addressPart)) && (method === undefined || line.req?.method === method));
 		if (incoming && lines.some((line) => line.reqId === incoming.reqId && line.msg === "request completed")) {
 			return lines.filter((line) => line.reqId === incoming.reqId);
 		}
@@ -319,7 +322,7 @@ try {
 	//     error.
 	const headWsFrom = serverOutput.length;
 	const headWs = await requestWithHeaders("/ws", { "X-Exxperts-Auth": SMOKE_AUTH_TOKEN }, "HEAD");
-	const headWsErrors = (await logOfNextRequest(headWsFrom)).filter((line) => Number(line.level) >= 50 || line.err);
+	const headWsErrors = (await logOfNextRequest(headWsFrom, "/ws", "HEAD")).filter((line) => Number(line.level) >= 50 || line.err);
 	assert(
 		headWs.status === 404 && headWsErrors.length === 0,
 		`HEAD /ws: expected a plain 404 with no error logged, got ${headWs.status} with ${headWsErrors.length} error line(s)${headWsErrors.map((line) => `: ${line.err?.message ?? line.msg}`).join("")}`,
@@ -356,7 +359,7 @@ try {
 	for (const probe of tokenLogProbes) {
 		const from = serverOutput.length;
 		const res = await requestWithHeaders(probe.path, probe.headers ?? {});
-		const lines = await logOfNextRequest(from);
+		const lines = await logOfNextRequest(from, "/auth/session");
 		const loggedUrl = withoutSmokeToken(String(lines.find((line) => line.msg === "incoming request")?.req?.url ?? ""));
 		const inClear = lines.filter((line) => JSON.stringify(line).includes(SMOKE_AUTH_TOKEN));
 		if (res.status !== probe.status) tokenLogFailures.push(`${probe.label}: expected ${probe.status}, got ${res.status}`);

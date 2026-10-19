@@ -22,9 +22,10 @@
 
 import { rememberSentenceModelName } from "./checkpoint-compression.js";
 import { modelNotOnAccount, modelNotOnAccountSentence, notOnAccountWhy, type NotOnAccountWayOut } from "./model-not-on-account.js";
-import { modelNotOffered } from "./model-not-offered.js";
+import { isSignInFailure } from "../../web-ui/src/sign-in-failure.js";
+import { anthropicKeyNeedsWorkspace, credentialGoneOf, credentialGoneWhy, modelNotOffered, signInFailed, type CredentialKey } from "./model-not-offered.js";
 import { IsolatedPersistentAgentWorkerTurnError } from "./persistent-agent-worker-runtime.js";
-import { catalogModelNames, createRoomModelCatalog, roomModelUnavailableSentence, type RoomModelRefusalOf } from "./room-models.js";
+import { catalogModelNames, createRoomModelCatalog, providerSignsIn, roomModelUnavailableSentence, type RoomModelRefusalOf } from "./room-models.js";
 
 export type OutageClass = "rate-limit" | "quota" | "too-many-requests" | "overload";
 export type BusyDetail = "rate-limit" | "too-many-requests" | "overload" | "server-error" | "connection" | "stalled" | "timed-out";
@@ -161,17 +162,7 @@ export function contentRefused(message: string): boolean {
 		|| /\bfinish[_ ]?reason\W+(?:SAFETY|PROHIBITED_CONTENT|BLOCKLIST|SPII)\b/i.test(message);
 }
 
-/**
- * A missing or rejected sign-in, at the call or in the registry before it. A
- * 401 or 403 counts only as a status (opening the message, or beside
- * "status", "HTTP" or "error code"): inside other words it is a count, as in
- * a rate limit's "Requested 401".
- */
-export function signInFailed(message: string): boolean {
-	return /authentication_error|permission_error|unauthori[sz]ed|^\s*40[13]\b|\b(?:status(?:[ _]?code)?|http(?:\/[\d.]+)?|error[ _]code)\s*[:=]?\s*40[13]\b|api[ -]?key|oauth|token (?:has |is )?(?:expired|invalid|revoked)|invalid[_ ]token|not (?:logged|signed) in|credential|\bprovider not connected\b|\bsigned out\b/i.test(message);
-}
-
-export { modelNotOffered };
+export { modelNotOffered, signInFailed };
 
 // --- The decision -----------------------------------------------------------------
 
@@ -210,7 +201,8 @@ export function classifyModelFailure(error: unknown, options: { signal?: AbortSi
 	if (modelNotOnAccount(words)) return { cause: "unreachable", detail: "not-on-account" };
 	// A key with no access to one model is that model not offered, not a sign-in.
 	if (modelNotOffered(words)) return { cause: "unreachable", detail: "not-offered" };
-	if (/^No API key found for/i.test(words) || signInFailed(words)) return { cause: "unreachable", detail: "signed-out" };
+	// A key made outside a workspace: refused on every call, so a credential cause with its own words, never "signed out".
+	if (/^No API key found for/i.test(words) || anthropicKeyNeedsWorkspace(words) || signInFailed(words)) return { cause: "unreachable", detail: "signed-out" };
 	// Gemini says "quota" for its per-minute limit too, and then names the
 	// wait; a quota that is really spent names none, or hours.
 	if (outage === "quota") return named === undefined || named > QUOTA_SPENT_WAIT_MS ? { cause: "unreachable", detail: "quota" } : { cause: "busy", detail: "rate-limit", waitMs: named };
@@ -255,6 +247,32 @@ export interface ModelUnreachableDetails {
 	label?: string;
 	/** For a busy model given up on: the busy kind it last answered with. */
 	busy?: BusyDetail;
+	/** Signed out on a key connection: its key is missing, or saved and refused. */
+	key?: CredentialKey;
+}
+
+/**
+ * A signed-out key connection's state, from the failure: no key found (or no
+ * failure, a refusal before any call) is missing; Anthropic's 400 for a key
+ * made outside a workspace is its own case; anything else, a 401 or a 403, is
+ * the service refusing the saved key. Undefined for a sign-in.
+ */
+export function credentialKeyOf(detail: UnreachableDetail, provider: string, last?: unknown): CredentialKey | undefined {
+	if (detail !== "signed-out" || providerSignsIn(provider)) return undefined;
+	if (last === undefined || (last as { code?: unknown })?.code === "provider_signed_out") return "missing";
+	const words = failureWords(last);
+	if (anthropicKeyNeedsWorkspace(words)) return "no-workspace";
+	return /^No API key found for|\bNo API key for provider: |\bprovider not connected\b/i.test(words) ? "missing" : "refused";
+}
+
+/**
+ * A key connection's state when a chat turn on it failed for its credential,
+ * read with the page's own matcher, which leaves out a 403 or a permission
+ * error on purpose; undefined for a sign-in or any other failure.
+ */
+export function failedTurnKey(provider: string, words: string): CredentialKey | undefined {
+	if (!provider || !(isSignInFailure(words) || anthropicKeyNeedsWorkspace(words))) return undefined;
+	return credentialKeyOf("signed-out", provider, new Error(words));
 }
 
 /**
@@ -262,10 +280,10 @@ export interface ModelUnreachableDetails {
  * the app shows it everywhere, whether the caller passed a label or a bare
  * model lock.
  */
-export function modelUnreachableSentence(detail: UnreachableDetail, model: ModelNoticeModel): string {
+export function modelUnreachableSentence(detail: UnreachableDetail, model: ModelNoticeModel, key?: CredentialKey): string {
 	const name = rememberSentenceModelName(model);
 	switch (detail) {
-		case "signed-out": return `${name} cannot answer because its provider is signed out. Nothing was lost.`;
+		case "signed-out": return `${name} ${credentialGoneWhy(credentialGoneOf(key))}. Nothing was lost.`;
 		case "quota": return `${name} has reached its usage limit. Nothing was lost.`;
 		case "not-offered": return `${name} is no longer offered. Nothing was lost.`;
 		case "not-on-account": return `${name} ${notOnAccountWhy(model.provider)}. Nothing was lost.`;
@@ -287,9 +305,10 @@ export class ModelUnreachableError extends Error {
 	/** The failure that ended the patience, for the log only. */
 	readonly last: unknown;
 	constructor(detail: UnreachableDetail, model: ModelNoticeModel, last?: unknown, busy?: BusyDetail) {
-		super(modelUnreachableSentence(detail, model));
+		const key = credentialKeyOf(detail, model.provider, last);
+		super(modelUnreachableSentence(detail, model, key));
 		this.name = "ModelUnreachableError";
-		this.details = { cause: "unreachable", detail, provider: model.provider, model: model.model, ...(model.label ? { label: model.label } : {}), ...(busy ? { busy } : {}) };
+		this.details = { cause: "unreachable", detail, provider: model.provider, model: model.model, ...(model.label ? { label: model.label } : {}), ...(busy ? { busy } : {}), ...(key ? { key } : {}) };
 		this.last = last;
 	}
 }

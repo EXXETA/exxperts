@@ -190,7 +190,7 @@ function instantiate(options?: any): Map<string, RegisteredTool> {
 	assert(oversized.isError === true && String(oversized.content?.[0]?.text ?? "").includes("capped"), "oversized svg must be rejected everywhere");
 }
 
-// ── 5. Deck template v2: free model-authored HTML (D3 amendment 2026-07-12) ──
+// ── 5. Deck template v2: free model-authored HTML ──
 {
 	const deck = templates.getSpecialistTemplate("deck")!;
 	assert(deck.version === 3, `deck template must be v3 (v2 free-HTML + slice-2 single-sourced constraints), got v${deck.version}`);
@@ -275,6 +275,13 @@ function instantiate(options?: any): Map<string, RegisteredTool> {
 	assert(sibling.isError === true && String(sibling.content?.[0]?.text ?? "").includes("read scope"), "sibling-task read must be refused");
 	const secret = await read.execute("4", { filename: "secret.md", folder: "private" }, undefined, undefined, headlessCtx);
 	assert(secret.isError === true && !String(secret.content?.[0]?.text ?? "").includes("SECRET-CONTENT"), "store-wide read must be refused without leaking content");
+	// The scope check runs before the existence check, so a refusal never tells
+	// whether an out-of-scope artifact exists.
+	const missing = await read.execute("4b", { filename: "absent.md", folder: "tasks/tsk-r0" }, undefined, undefined, headlessCtx);
+	const missingText = String(missing.content?.[0]?.text ?? "");
+	const siblingText = String(sibling.content?.[0]?.text ?? "");
+	assert(missing.isError === true && missingText.includes("read scope") && !/not found/i.test(missingText), `a missing out-of-scope read must get the scope refusal, got: ${missingText}`);
+	assert(missingText.replace("absent.md", "X") === siblingText.replace("sibling.md", "X"), "a missing and an existing out-of-scope artifact must get the same refusal");
 
 	const listed = await list.execute("5", {}, undefined, undefined, headlessCtx);
 	const listedPaths: string[] = (listed.details?.artifacts ?? []).map((a: any) => String(a.path));

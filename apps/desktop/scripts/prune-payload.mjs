@@ -45,9 +45,9 @@ export const DESKTOP_DROP = [
 // The most files the trimmed app/ folder may hold, the one Windows users
 // install. Each file costs install and update time there, as the virus
 // scanner checks every new file, so growth has to be a reviewed decision.
-// Measured on 2026-09-30 for 0.14.1: 2,145 files on darwin-arm64, and about
-// 2,148 on win-x64 estimated from the 0.14.0 zip index; the ceiling sits
-// about 16 percent above.
+// Measured: 2,145 files on darwin-arm64, and about 2,148 on win-x64
+// estimated from an earlier release's zip index; the ceiling sits about 16
+// percent above.
 export const DESKTOP_MAX_FILES = 2_500;
 
 export function countFiles(dir) {

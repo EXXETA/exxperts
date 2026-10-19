@@ -370,9 +370,9 @@ async function runRoomTurnChecks(): Promise<void> {
  */
 async function runLiveRoomFlip(roomId: string): Promise<void> {
 	const { spawn } = await import("node:child_process");
-	const { authedFetch, SMOKE_AUTH_HEADERS, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer } = await import("./smoke-server-process.js");
+	const { authedFetch, SMOKE_AUTH_HEADERS, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, freePort } = await import("./smoke-server-process.js");
 	const WebSocketImpl: any = (await import("ws")).default;
-	const port = 24000 + Math.floor(Math.random() * 10000);
+	const port = await freePort();
 	const baseUrl = `http://127.0.0.1:${port}`;
 	const conversationId = "native-search-live";
 

@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { authedFetch, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, type AuthedFetchInit } from "./smoke-server-process.js";
+import { authedFetch, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, freePort, type AuthedFetchInit } from "./smoke-server-process.js";
 
 // Pins the in-app move of the exxperts home (Settings → Profiles → Move):
 //
@@ -33,7 +33,7 @@ function assert(condition: unknown, message: string): asserts condition {
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const webServerDir = path.resolve(scriptDir, "..");
 const repoRoot = path.resolve(webServerDir, "..", "..");
-const port = 26000 + Math.floor(Math.random() * 10000);
+const port = await freePort();
 const baseUrl = `http://127.0.0.1:${port}`;
 
 const stateProfiles = createRequire(import.meta.url)(path.join(repoRoot, "bin", "lib", "state-profiles.cjs")) as {
@@ -308,7 +308,8 @@ async function applyAndAwaitExit(server: ChildProcessWithoutNullStreams, dir: st
 	const response = await api("/api/settings/state-home/apply", { method: "POST", body: JSON.stringify({ dir }) });
 	assert(response.status === 200 && response.body?.restarting === true, `apply: expected restarting reply, got ${response.status} ${JSON.stringify(response.body)}`);
 	assert(response.body.signInPath === `/auth/session?token=${encodeURIComponent(SMOKE_AUTH_TOKEN)}`, `apply reply must carry the sign-in link, got ${response.body.signInPath}`);
-	const code = await Promise.race([exited, new Promise<never>((_, reject) => setTimeout(() => reject(new Error("server did not exit after apply")), 15000))]);
+	let exitTimer: NodeJS.Timeout | undefined;
+	const code = await Promise.race([exited, new Promise<never>((_, reject) => { exitTimer = setTimeout(() => reject(new Error("server did not exit after apply")), 15000); })]).finally(() => clearTimeout(exitTimer));
 	assert(code === stateProfiles.SWITCH_EXIT_CODE, `server must exit with the sentinel code, got ${code}`);
 	assert(fs.existsSync(stateProfiles.homeMoveIntentPath(loginHome)), "the move intent must be recorded for the supervisor");
 }

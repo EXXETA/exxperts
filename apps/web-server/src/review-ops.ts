@@ -1018,13 +1018,6 @@ export interface ReviewApplyContext {
 }
 
 /**
- * What a merge that joins both members of a disagreeing pair says about it:
- * the reason the newer value replaced the older, and the member that left.
- * With equal dates nothing but the merged text itself decides, so the value
- * it kept is the one said to stand. A merge whose survivor is neither member
- * names the first member as the one that left.
- */
-/**
  * Each op judged alone (Memorize does the same since S2): an op is kept when
  * the reply's ops kept before it and this one pass the validator together, so
  * the rules between ops (one op per note, a fold then a move) still hold. A
@@ -1041,6 +1034,13 @@ export function keepValidReviewOps(ops: readonly ReviewOp[], notes: readonly Rev
 	return { ops: kept, dropped };
 }
 
+/**
+ * What a merge that joins both members of a disagreeing pair says about it:
+ * the reason the newer value replaced the older, and the member that left.
+ * With equal dates nothing but the merged text itself decides, so the value
+ * it kept is the one said to stand. A merge whose survivor is neither member
+ * names the first member as the one that left.
+ */
 function resolvedConflict(pair: ReviewConflictPair, mergedText: string, survivorId: string, topicOf: (id: string) => string, today: string): { reason: string; conflictWith: { id: string; topic: string } } | undefined {
 	let [older, newer] = conflictMembers(pair);
 	if (pair.newer === null && keptOlderValues(older.text, newer.text, mergedText).length > 0) [older, newer] = [newer, older];

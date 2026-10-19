@@ -440,6 +440,40 @@ try {
 		assert(!fs.existsSync(path.join(room.instance.rootDir, "runtime", "commit", "memory.json")), `no memory write is left pending after ${write} crashed at ${step.name}`);
 	});
 
+	// --- 6c. A row moved into the archive is there before it leaves the core --
+	// A write that archives a row writes the archive first, then the core. A
+	// crash between the two costs a duplicate, never the row.
+	for (const step of [
+		{ name: "the archive", pattern: /[\\/]archive[\\/]entries\.md/ },
+		{ name: "the core file", pattern: /[\\/]L1b[\\/]current\.md/ },
+	]) await section(`a write that archives a row crashed at ${step.name}`, async () => {
+		const room = await roomWithProposal(`archive move ${step.name}`);
+		const doc = loadMemoryDocument(room.agentId).doc;
+		const topic = doc.topics[0]!;
+		const row = { ...(topic.entries[0] ?? {}), id: "E-MOVING-1", text: "A note on its way to the archive." } as any;
+		topic.entries.push(row);
+		writeMemoryDocument(room.agentId, doc, { why: "edit", snapshotLabel: "edit" } as any);
+		assert(memoryOf(room.instance).includes(row.text), "the row is in the core before the move");
+		const moved = loadMemoryDocument(room.agentId).doc;
+		const movedTopic = moved.topics[0]!;
+		const leaving = movedTopic.entries.find((entry) => entry.id === row.id)!;
+		movedTopic.entries = movedTopic.entries.filter((entry) => entry.id !== row.id);
+		const crash = crashOnWrite(step.pattern);
+		try {
+			writeMemoryDocument(room.agentId, moved, { why: "edit", snapshotLabel: "edit", archiveAppend: [{ entry: leaving, why: "user", topic: movedTopic.title, section: movedTopic.section }] } as any);
+		} catch {
+			// the injected crash
+		} finally {
+			crash.restore();
+		}
+		assert(crash.hit(), `the write writes ${step.name} (the crash should have struck there)`);
+		nextRequest(room.agentId);
+		const inCore = memoryOf(room.instance).includes(row.text);
+		const inArchive = readArchive(room.agentId).some((entry) => entry.id === row.id);
+		assert(inCore || inArchive, `a write that archives a row crashed at ${step.name} lost the row: it is in neither the core nor the archive`);
+		assert(!fs.existsSync(path.join(room.instance.rootDir, "runtime", "commit", "memory.json")), `no memory write is left pending after a crash at ${step.name}`);
+	});
+
 	// --- 7. Forget: closing the conversation is the commit point -------------
 	const { writePersistentAgentMementoBoundary } = await import("../src/persistent-agents.js");
 	const mementoRecords = (instance: ReturnType<typeof createPersistentAgentInstance>) => {

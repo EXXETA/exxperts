@@ -1,6 +1,6 @@
 {
   "name": "@exxeta/exxperts-app",
-  "version": "0.14.3",
+  "version": "0.14.4",
   "license": "Apache-2.0",
   "private": true,
   "type": "module",
@@ -41,6 +41,7 @@
     "apps/web-server/tsconfig.json",
     "apps/web-ui/dist",
     "apps/web-ui/src/model-names.ts",
+    "apps/web-ui/src/sign-in-failure.ts",
     "runtime/packages/ai/dist",
     "runtime/packages/ai/package.json",
     "runtime/packages/agent/dist",
@@ -76,7 +77,6 @@
     "@mistralai/mistralai": "^2.2.0",
     "@mozilla/readability": "^0.6.0",
     "@silvia-odwyer/photon-node": "^0.3.4",
-    "@types/mime-types": "^2.1.4",
     "chalk": "^5.6.2",
     "cli-highlight": "^2.1.11",
     "diff": "^8.0.2",
@@ -91,7 +91,6 @@
     "jsdom": "^29.1.1",
     "jszip": "^3.10.1",
     "marked": "^15.0.12",
-    "mime-types": "^3.0.1",
     "minimatch": "^10.2.3",
     "node-html-markdown": "^2.0.0",
     "openai": "6.26.0",
@@ -109,8 +108,7 @@
     "uuid": "^14.0.0",
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
     "yaml": "^2.8.2",
-    "yauzl": "^2.10.0",
-    "zod-to-json-schema": "^3.24.6"
+    "yauzl": "^2.10.0"
   },
   "devDependencies": {
     "@types/jsdom": "^28.0.3",

@@ -70,7 +70,7 @@ try {
 	assert(reduceTask(initial, { type: "started", taskId: "tsk-abc", template: "deck", templateLabel: "Slide deck" }).state.templateVersion === null, "absent template version stays null (readers fall back to 1)");
 	assert(afterStart.state.title === "Q3 client review deck", "client-supplied title captured for the face");
 	assert(afterStart.state.model?.model === "claude-x", "model captured (kept off the face, for provenance)");
-	// Minimized-by-default (Borja, 2026-07-12): a new task opens as the pill;
+	// Minimized-by-default: a new task opens as the pill;
 	// the user expands deliberately. A same-id refresh keeps the fold state.
 	assert(afterStart.state.minimized, "a new task starts folded to the pill");
 	assert(!reduceTask(reduceTask(initial, started).state, { type: "open" }).state.minimized, "open expands the fresh pill");

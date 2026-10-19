@@ -184,14 +184,6 @@ function formatConsultDate(ms: number): string {
 	return new Date(ms).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
 }
 
-/**
- * The permanent thread item a Consult transfer leaves behind (Consult MR-5
- * §4.4). Visitor (lila) accent, `@room` chip, question line, a collapsed answer
- * (expandable), and a human-readable provenance footer. The raw sha256 is NEVER
- * rendered (Borja 2026-07-11) — it lives in the item data and the handoff block
- * only. `pending` drives the "included with your next message" hint, shown until
- * the next send consumes the pending-transfer queue.
- */
 /** One expandable Q/A within a transferred consult item (latest or earlier). */
 function ConsultThreadExchange({ label, question, answer, asOf, defaultExpanded }: { label: string; question: string; answer: string; asOf?: string; defaultExpanded: boolean }) {
 	const contentId = useId();
@@ -219,6 +211,14 @@ function ConsultThreadExchange({ label, question, answer, asOf, defaultExpanded 
 	);
 }
 
+/**
+ * The permanent thread item a Consult transfer leaves behind. Visitor (lila)
+ * accent, `@room` chip, question line, a collapsed answer (expandable), and a
+ * human-readable provenance footer. The raw sha256 is NEVER rendered — it
+ * lives in the item data and the handoff block only. `pending` drives the
+ * "included with your next message" hint, shown until the next send consumes
+ * the pending-transfer queue.
+ */
 export function ConsultThreadItem({ item, pending }: { item: Extract<ChatItem, { kind: "consult" }>; pending: boolean }) {
 	// §8.4: a stacked item (N≥2) carries the whole conversation in `exchanges[]`;
 	// a legacy/N=1 item renders from the flat fields as a single-exchange stack.
@@ -228,7 +228,7 @@ export function ConsultThreadItem({ item, pending }: { item: Extract<ChatItem, {
 	const stacked = exchanges.length > 1;
 	const lastIndex = exchanges.length - 1;
 	// ONE provenance footer: the latest as-of (§8.4). The raw sha256 is never
-	// rendered (Borja 2026-07-11) — it lives in the item data + handoff block only.
+	// rendered — it lives in the item data + handoff block only.
 	const footerDate = formatConsultDate(exchanges[lastIndex].consultedAt);
 	return (
 		<div className="consult-item">
@@ -276,12 +276,12 @@ type TaskChatItem = Extract<ChatItem, { kind: "task" }>;
 type TaskArtifactItem = TaskChatItem["artifacts"][number];
 
 /**
- * One artifact on the transferred task item — the thread-item counterpart of the
- * card's TaskArtifactTile, using the same task-stream helpers (no duplication).
+ * One artifact on the transferred task item, drawn with the task-stream helpers
+ * (no duplication).
  * Precedence: (1) the ONE representative thumbnail rides only the FIRST artifact
  * (item.thumbnailDataUri); (2) an SVG whose route URL is derivable renders inline
  * via that URL; (3) otherwise a typed chip (DECK/HTML/SVG kind + basename). Click
- * routes to the coordinator-wired viewer via onOpen.
+ * opens the viewer through onOpen.
  */
 function TaskThreadArtifact({ item, artifact, isFirst, onOpen }: { item: TaskChatItem; artifact: TaskArtifactItem; isFirst: boolean; onOpen: (relativePath: string) => void }) {
 	const name = artifactBasename(artifact.relativePath);
@@ -324,8 +324,8 @@ function TaskThreadArtifact({ item, artifact, isFirst, onOpen }: { item: TaskCha
  * summary, and a muted one-line provenance footer (template id + date — allowed
  * here because the thread item is the durable record, unlike the card face).
  *
- * `onOpenTaskArtifact` is exposed for the coordinator to wire (App.tsx / the
- * in-room-chat dispatch pass it the V5 panel-viewer opener); when it is absent
+ * `onOpenTaskArtifact` is the panel-viewer opener that App.tsx passes in
+ * through the in-room-chat dispatch; when it is absent
  * the chips/thumbnail are inert no-ops, so the item always renders safely.
  */
 export function TaskThreadItem({ item, onOpenTaskArtifact }: { item: TaskChatItem; onOpenTaskArtifact?: (taskId: string, relativePath: string) => void }) {

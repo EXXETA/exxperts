@@ -7,9 +7,6 @@
  * - Approval-gated writes (all model-initiated writes require user approval)
  * - Read-only access in delegated subprocesses by default
  * - Session-end summarisation with user approval
- *
- * Moved from pi-package/extensions/memory to the runtime so every agent and
- * every mode (CLI, web, delegate) has memory access without extension wiring.
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync } from "node:fs";
@@ -26,7 +23,7 @@ export interface Memory {
 	ts: number;
 	text: string;
 	tags?: string[];
-	/** Source: "user" for /remember, "agent" for memory_note, "session" for session-end summary */
+	/** Source: "user" for a fact saved directly, "agent" for proposeNote, "session" for session-end summary */
 	source?: "user" | "agent" | "session";
 }
 

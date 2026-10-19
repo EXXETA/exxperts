@@ -2,6 +2,7 @@ import { useEffect, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { apiFetch } from "../api";
 import { agentLabel } from "../types";
 import { GATEWAY_PROVIDER_ID_PREFIX, modelDisplayName, modelTooltipName } from "../model-names";
+import { allInput, cacheWords } from "../usage-words";
 
 // The Wallet never blends real and estimated dollars: the server splits every
 // aggregate by source (billed API spend, plan-covered subscription usage,
@@ -166,6 +167,7 @@ const PROVIDER_SHORT: Record<string, string> = {
 	"openai-codex": "ChatGPT",
 	"github-copilot": "Copilot",
 	anthropic: "Claude",
+	"anthropic-api-key": "Claude API key",
 	openai: "OpenAI",
 	"openai-compatible": "gateway",
 	google: "Gemini",
@@ -196,6 +198,8 @@ function shortSourceName(row: UsageRow): string | undefined {
 }
 
 function sourceCell(row: UsageRow): string {
+	// The Claude key sits beside the Claude plan, so its rows say which one paid.
+	if (row.provider === "anthropic-api-key") return "Claude API key";
 	if (row.authType === "api_key") return "API key";
 	const short = shortSourceName(row);
 	if (row.authType === "oauth") return short ? short + " plan" : "plan";
@@ -511,7 +515,7 @@ export function Dashboard() {
 										<td title={modelCellTitle(r)}>{modelCell(r)}</td>
 										<td>{sourceCell(r)}</td>
 										<td><span className="kind-chip">{KIND_LABELS[r.kind ?? "chat"] ?? r.kind}</span></td>
-										<td>{fmtTok(r.input)}</td>
+										<td title={turnTokensTitle(r)}>{fmtTok(allInput(r))}{cacheWords(r, fmtTok) && <span className="recent-cache-note">({cacheWords(r, fmtTok)})</span>}</td>
 										<td>{fmtTok(r.output)}</td>
 										<td>{fmtPriced(rowPriced(r), r.authType === "api_key")}</td>
 									</tr>
@@ -561,6 +565,21 @@ function backgroundKindsNote(kinds: Record<string, Priced>): string | undefined 
 		parts.push(`${kind} ${fmtPriced(k, false)} over ${k.turns} run${k.turns === 1 ? "" : "s"}`);
 	}
 	return parts.length ? `incl. ${parts.join(", ")}` : undefined;
+}
+
+/**
+ * The turn's tokens and value in full numbers: "9,413 in (9,409 stored for
+ * reuse), 44 out, $0.05". A cost under a cent shows to three decimals
+ * ("$0.001"), where the table's cell says "<$0.01".
+ */
+function turnTokensTitle(r: UsageRow): string {
+	const full = (tokens: number) => tokens.toLocaleString("en-US");
+	const cache = cacheWords(r, full);
+	const priced = rowPriced(r);
+	const exact = r.authType === "api_key" && priced.estimatedTurns === 0;
+	const cost = priced.cost >= 0.01 ? fmtCost(priced.cost) : priced.cost >= 0.001 ? `$${priced.cost.toFixed(3)}` : "<$0.001";
+	const value = priced.cost === 0 ? (priced.unpricedTurns > 0 ? "no price on file" : "$0.00") : `${exact ? "" : "≈ "}${cost}`;
+	return `${full(allInput(r))} in${cache ? ` (${cache})` : ""}, ${full(r.output)} out, ${value}`;
 }
 
 /** One ledger row as the three-state money helper sees it. */

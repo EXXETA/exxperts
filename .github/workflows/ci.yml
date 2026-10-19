@@ -55,8 +55,9 @@ jobs:
       - name: Script tests
         run: npm run test:scripts
 
+      # Serial on purpose: no sync has yet proved parallel runs on these runners.
       - name: Smoke suite
-        run: npm run smokes
+        run: npm run smokes -- --jobs 1
 
   # npm 12 gates dependency install scripts (allowScripts) and URL-tarball
   # dependencies (allow-remote). Node 20's npm 10 never exercises those gates,

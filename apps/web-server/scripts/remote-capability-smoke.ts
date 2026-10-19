@@ -4,7 +4,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { authedFetch, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, type AuthedFetchInit } from "./smoke-server-process.js";
+import { authedFetch, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, freePort, type AuthedFetchInit } from "./smoke-server-process.js";
 
 // Pins the capability + per-room-exposure unit:
 //
@@ -29,7 +29,7 @@ function assert(condition: unknown, message: string): asserts condition {
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const webServerDir = path.resolve(scriptDir, "..");
 const repoRoot = path.resolve(webServerDir, "..", "..");
-const port = 26000 + Math.floor(Math.random() * 10000);
+const port = await freePort();
 const baseUrl = `http://127.0.0.1:${port}`;
 const tunnelHostHeader = `[::1]:${port}`;
 
@@ -91,8 +91,10 @@ async function adminJson(pathname: string, init: AuthedFetchInit = {}): Promise<
 
 function tunnelRequest(pathname: string, options: { method?: string; headers?: Record<string, string>; body?: string } = {}): Promise<{ status: number; body: string }> {
 	return new Promise((resolve, reject) => {
+		// Its own connection each time: a capability flip destroys the device's
+		// sockets, and a kept-alive one reused right after would reset.
 		const req = http.request(
-			{ host: "::1", port, path: pathname, method: options.method ?? "GET", headers: { Host: tunnelHostHeader, ...options.headers } },
+			{ host: "::1", port, path: pathname, method: options.method ?? "GET", agent: false, headers: { Host: tunnelHostHeader, ...options.headers } },
 			(res) => {
 				const chunks: Buffer[] = [];
 				res.on("data", (chunk) => chunks.push(chunk as Buffer));

@@ -12,6 +12,26 @@ for (const [provider, models] of Object.entries(MODELS)) {
 	modelRegistry.set(provider, providerModels);
 }
 
+/**
+ * An Anthropic API key is its own provider beside the Claude sign-in, because
+ * the credential store holds one credential per provider: a key saved under
+ * "anthropic" would replace the sign-in. Its models are the Anthropic list
+ * itself, prices included, so a new Claude model reaches both from one source.
+ */
+export const ANTHROPIC_API_KEY_PROVIDER = "anthropic-api-key";
+
+/** The providers that call Anthropic's own API directly: the sign-in and the key. */
+export function isDirectAnthropicProvider(provider: string): boolean {
+	return provider === "anthropic" || provider === ANTHROPIC_API_KEY_PROVIDER;
+}
+
+const anthropicModels = modelRegistry.get("anthropic");
+if (anthropicModels) {
+	const keyModels = new Map<string, Model<Api>>();
+	for (const [id, model] of anthropicModels) keyModels.set(id, { ...model, provider: ANTHROPIC_API_KEY_PROVIDER });
+	modelRegistry.set(ANTHROPIC_API_KEY_PROVIDER, keyModels);
+}
+
 type ModelApi<
 	TProvider extends KnownProvider,
 	TModelId extends keyof (typeof MODELS)[TProvider],

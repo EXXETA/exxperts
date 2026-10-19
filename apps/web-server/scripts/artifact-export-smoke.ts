@@ -1,5 +1,5 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { authedFetch, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer } from "./smoke-server-process.js";
+import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { authedFetch, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, freePort } from "./smoke-server-process.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -48,7 +48,7 @@ fs.mkdirSync(workspaceRoot, { recursive: true });
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const webServerDir = path.resolve(scriptDir, "..");
 const repoRoot = path.resolve(webServerDir, "..", "..");
-const port = 27000 + Math.floor(Math.random() * 10000);
+const port = await freePort();
 const baseUrl = `http://127.0.0.1:${port}`;
 
 // Point the policy module (imported below to seed the room default) at the temp
@@ -240,6 +240,194 @@ try {
 	assert(nested.status === 200, `nested export: expected 200, got ${nested.status}: ${JSON.stringify(nested.body)}`);
 	assert(String(nested.body?.savedTo ?? "") === path.join(workspaceRealRoot, "inner.html"), `nested export: should flatten to workspace/inner.html, got "${nested.body?.savedTo}"`);
 	assert(!fs.existsSync(path.join(workspaceRealRoot, "sub")), "nested export: must not recreate source subfolders in the workspace");
+
+	// 6b. A link in the workspace that carries the destination's name: the export
+	//     never writes through it. The default answers "exists", Keep both takes
+	//     the next free name, and Replace is refused in plain words, whether the
+	//     link points outside the workspace or at a file inside it.
+	const outsideTarget = path.join(tempRoot, "outside-target.md");
+	const insideTarget = path.join(workspaceRealRoot, "inside-target.md");
+	const linkPath = path.join(workspaceRealRoot, "notes.md");
+	let linksWork = true;
+	for (const [label, target] of [["outside", outsideTarget], ["inside", insideTarget]] as const) {
+		fs.writeFileSync(target, "LINK-TARGET-ORIGINAL");
+		try {
+			fs.symlinkSync(target, linkPath);
+		} catch (error) {
+			console.log(`artifact-export-smoke: link case skipped (${(error as NodeJS.ErrnoException).code ?? "no symlink"})`);
+			linksWork = false;
+			fs.rmSync(target, { force: true });
+			break;
+		}
+		const asIs = await exportArtifact("tsk-export1", "tasks/tsk-export1/notes.md", ROOM_WITH_WORKSPACE);
+		assert(asIs.status === 409 && asIs.body?.code === "exists", `${label} link, default: expected 409 exists, got ${asIs.status}: ${JSON.stringify(asIs.body)}`);
+		const replaced = await exportArtifact("tsk-export1", "tasks/tsk-export1/notes.md", ROOM_WITH_WORKSPACE, undefined, { overwrite: true });
+		assert(replaced.status === 400, `${label} link, Replace: expected 400, got ${replaced.status}: ${JSON.stringify(replaced.body)}`);
+		assert(replaced.body?.error === "The file with this name in the room's folder is a shortcut to somewhere else, so it was not replaced. Use Keep both instead.", `${label} link, Replace: the refusal must be the plain sentence, got ${JSON.stringify(replaced.body)}`);
+		const keptBoth = await exportArtifact("tsk-export1", "tasks/tsk-export1/notes.md", ROOM_WITH_WORKSPACE, undefined, { rename: true });
+		assert(keptBoth.status === 200 && String(keptBoth.body?.savedTo ?? "") === path.join(workspaceRealRoot, "notes-2.md"), `${label} link, Keep both: expected notes-2.md, got ${keptBoth.status}: ${JSON.stringify(keptBoth.body)}`);
+		assert(!fs.lstatSync(String(keptBoth.body.savedTo)).isSymbolicLink() && fs.readFileSync(String(keptBoth.body.savedTo), "utf-8") === MD_BODY, `${label} link, Keep both: notes-2.md must be a real copy`);
+		assert(fs.readFileSync(target, "utf-8") === "LINK-TARGET-ORIGINAL", `${label} link: the link's target was written`);
+		assert(fs.lstatSync(linkPath).isSymbolicLink(), `${label} link: the link itself must be left in place`);
+		fs.unlinkSync(linkPath);
+		fs.unlinkSync(path.join(workspaceRealRoot, "notes-2.md"));
+		fs.rmSync(target, { force: true });
+	}
+	if (linksWork) {
+		// A link that leads nowhere, at the name and at the next free name: both
+		// count as taken, and nothing is created through either.
+		const danglingTarget = path.join(tempRoot, "dangling-target.md");
+		const nextLinkPath = path.join(workspaceRealRoot, "notes-2.md");
+		fs.symlinkSync(danglingTarget, linkPath);
+		fs.symlinkSync(danglingTarget, nextLinkPath);
+		for (const resolution of [undefined, { overwrite: true }]) {
+			const res = await exportArtifact("tsk-export1", "tasks/tsk-export1/notes.md", ROOM_WITH_WORKSPACE, undefined, resolution);
+			assert(res.status === 409 || res.status === 400, `dangling link ${JSON.stringify(resolution ?? {})}: expected a refusal, got ${res.status}: ${JSON.stringify(res.body)}`);
+			assert(!fs.existsSync(danglingTarget), `dangling link ${JSON.stringify(resolution ?? {})}: a file was created through the link`);
+		}
+		const keptBoth = await exportArtifact("tsk-export1", "tasks/tsk-export1/notes.md", ROOM_WITH_WORKSPACE, undefined, { rename: true });
+		assert(keptBoth.status === 200 && String(keptBoth.body?.savedTo ?? "") === path.join(workspaceRealRoot, "notes-3.md"), `dangling links, Keep both: expected notes-3.md, got ${keptBoth.status}: ${JSON.stringify(keptBoth.body)}`);
+		assert(!fs.existsSync(danglingTarget), "dangling links, Keep both: a file was created through a link");
+		for (const name of [linkPath, nextLinkPath, String(keptBoth.body.savedTo)]) fs.unlinkSync(name);
+	} else {
+		console.log("artifact-export-smoke: dangling link case skipped");
+	}
+
+	// 6c. Another name of an outside file (a hard link) and a FIFO at the
+	//     destination's name: Replace puts a new file at the name and writes
+	//     into neither, and the server keeps answering.
+	const answerWithin = <T,>(promise: Promise<T>, label: string): Promise<T> => Promise.race([
+		promise,
+		new Promise<T>((_, reject) => setTimeout(() => reject(new Error(`${label}: the server did not answer within 10 s`)), 10_000).unref()),
+	]);
+	const hardTarget = path.join(tempRoot, "hard-target.md");
+	fs.writeFileSync(hardTarget, "HARD-TARGET-ORIGINAL");
+	fs.linkSync(hardTarget, linkPath);
+	const hardDefault = await exportArtifact("tsk-export1", "tasks/tsk-export1/notes.md", ROOM_WITH_WORKSPACE);
+	assert(hardDefault.status === 409 && hardDefault.body?.code === "exists", `hard link, default: expected 409 exists, got ${hardDefault.status}: ${JSON.stringify(hardDefault.body)}`);
+	const hardReplace = await answerWithin(exportArtifact("tsk-export1", "tasks/tsk-export1/notes.md", ROOM_WITH_WORKSPACE, undefined, { overwrite: true }), "hard link, Replace");
+	assert(hardReplace.status === 200, `hard link, Replace: expected 200, got ${hardReplace.status}: ${JSON.stringify(hardReplace.body)}`);
+	assert(fs.readFileSync(hardTarget, "utf-8") === "HARD-TARGET-ORIGINAL", "hard link, Replace: the other name's file was written");
+	assert(fs.readFileSync(linkPath, "utf-8") === MD_BODY && fs.statSync(linkPath).nlink === 1, "hard link, Replace: the name must now hold a new file of its own");
+	fs.unlinkSync(linkPath);
+	if (process.platform !== "win32" && spawnSync("mkfifo", [linkPath]).status === 0) {
+		const fifoReplace = await answerWithin(exportArtifact("tsk-export1", "tasks/tsk-export1/notes.md", ROOM_WITH_WORKSPACE, undefined, { overwrite: true }), "FIFO, Replace");
+		assert(fifoReplace.status === 200 && fs.lstatSync(linkPath).isFile() && fs.readFileSync(linkPath, "utf-8") === MD_BODY, `FIFO, Replace: expected a new file at the name, got ${fifoReplace.status}: ${JSON.stringify(fifoReplace.body)}`);
+		assert((await answerWithin(fetch(`${baseUrl}/healthz`), "health after the FIFO")).ok, "the server must keep answering after a FIFO at the name");
+		fs.unlinkSync(linkPath);
+	} else {
+		console.log("artifact-export-smoke: FIFO case skipped");
+	}
+	assert(fs.readdirSync(workspaceRealRoot).every((name) => !name.endsWith(".tmp")), "Replace must leave no temporary file behind");
+
+	// 6d. Replace gives the new file the old file's permission bits and, when
+	//     the account belongs to it, its group; a Replace with nothing at the
+	//     name gives what a new export gives.
+	if (process.platform !== "win32") {
+		const replaceNotes = () => exportArtifact("tsk-export1", "tasks/tsk-export1/notes.md", ROOM_WITH_WORKSPACE, undefined, { overwrite: true });
+		for (const mode of [0o600, 0o664]) {
+			fs.writeFileSync(linkPath, "KEPT-ORIGINAL");
+			fs.chmodSync(linkPath, mode);
+			const replacedKept = await replaceNotes();
+			const modeAfter = fs.statSync(linkPath).mode & 0o777;
+			assert(replacedKept.status === 200 && fs.readFileSync(linkPath, "utf-8") === MD_BODY, `a 0${mode.toString(8)} file, Replace: expected the new bytes, got ${replacedKept.status}: ${JSON.stringify(replacedKept.body)}`);
+			assert(modeAfter === mode, `a 0${mode.toString(8)} file, Replace: the file came back 0${modeAfter.toString(8)}`);
+			fs.unlinkSync(linkPath);
+		}
+		const exportedNew = await exportArtifact("tsk-export1", "tasks/tsk-export1/notes.md", ROOM_WITH_WORKSPACE);
+		const newMode = fs.statSync(linkPath).mode & 0o777;
+		fs.unlinkSync(linkPath);
+		const replacedNothing = await replaceNotes();
+		const replacedNothingMode = fs.statSync(linkPath).mode & 0o777;
+		assert(exportedNew.status === 200 && replacedNothing.status === 200 && replacedNothingMode === newMode, `Replace with nothing at the name: expected 0${newMode.toString(8)}, as a new export gets, got 0${replacedNothingMode.toString(8)}`);
+		const otherGroup = process.getgroups?.().find((gid) => gid !== fs.statSync(linkPath).gid);
+		let grouped = false;
+		if (otherGroup !== undefined) {
+			try {
+				fs.chownSync(linkPath, -1, otherGroup);
+				grouped = true;
+			} catch {}
+		}
+		if (grouped) {
+			const replacedGrouped = await replaceNotes();
+			const groupAfter = fs.statSync(linkPath).gid;
+			assert(replacedGrouped.status === 200 && groupAfter === otherGroup, `a file in group ${otherGroup}, Replace: the file came back in group ${groupAfter}`);
+		} else {
+			console.log("artifact-export-smoke: group case skipped (no second group to give the file)");
+		}
+		fs.unlinkSync(linkPath);
+		assert(fs.readdirSync(workspaceRealRoot).every((name) => !name.endsWith(".tmp")), "Replace must leave no temporary file behind");
+	} else {
+		console.log("artifact-export-smoke: permission case skipped (Windows has no permission bits)");
+	}
+
+	// 6f. On macOS, Replace keeps what the old file carried beside its bytes:
+	//     its Finder tag and comment (extended attributes) and its creation date.
+	if (process.platform === "darwin") {
+		const detailsPath = linkPath;
+		const tags = "com.apple.metadata:_kMDItemUserTags";
+		const comment = "com.apple.metadata:kMDItemFinderComment";
+		fs.writeFileSync(detailsPath, "KEPT-ORIGINAL");
+		assert(spawnSync("xattr", ["-w", tags, "(\"Red\\n6\")", detailsPath]).status === 0 && spawnSync("xattr", ["-w", comment, "a comment", detailsPath]).status === 0, "the Finder tag and comment could not be set");
+		// A modification time before the creation date moves the creation date back on macOS.
+		const created = new Date("2020-01-02T10:00:00Z");
+		fs.utimesSync(detailsPath, created, created);
+		const createdMs = fs.statSync(detailsPath).birthtimeMs;
+		const replacedDetails = await exportArtifact("tsk-export1", "tasks/tsk-export1/notes.md", ROOM_WITH_WORKSPACE, undefined, { overwrite: true });
+		const read = (attribute: string) => spawnSync("xattr", ["-p", attribute, detailsPath], { encoding: "utf-8" }).stdout.trim();
+		assert(replacedDetails.status === 200 && fs.readFileSync(detailsPath, "utf-8") === MD_BODY, `a tagged file, Replace: expected the new bytes`);
+		assert(read(tags) === "(\"Red\\n6\")", `a tagged file, Replace: the Finder tag is gone, got "${read(tags)}"`);
+		assert(read(comment) === "a comment", `a tagged file, Replace: the Finder comment is gone, got "${read(comment)}"`);
+		assert(fs.statSync(detailsPath).birthtimeMs === createdMs, `a tagged file, Replace: the creation date moved from ${new Date(createdMs).toISOString()} to ${fs.statSync(detailsPath).birthtime.toISOString()}`);
+		fs.unlinkSync(detailsPath);
+		assert(fs.readdirSync(path.dirname(detailsPath)).every((name) => !name.endsWith(".tmp")), "Replace must leave no temporary file behind");
+	} else {
+		console.log("SKIPPED: artifact-export-smoke: Finder details case (macOS only)");
+	}
+
+	// 6e. A file the account may not write is not replaced, as before: the
+	//     answer is the one a failed export gives, and the file stays as it was.
+	if (process.platform === "win32" || process.getuid?.() !== 0) {
+		fs.writeFileSync(linkPath, "READ-ONLY-ORIGINAL");
+		fs.chmodSync(linkPath, 0o444);
+		try {
+			const refused = await exportArtifact("tsk-export1", "tasks/tsk-export1/notes.md", ROOM_WITH_WORKSPACE, undefined, { overwrite: true });
+			assert(refused.status === 500 && refused.body?.error === "Failed to export the artifact to the room workspace.", `read-only file, Replace: expected 500 with the export failure, got ${refused.status}: ${JSON.stringify(refused.body)}`);
+			assert(fs.readFileSync(linkPath, "utf-8") === "READ-ONLY-ORIGINAL", "read-only file, Replace: the file was replaced");
+		} finally {
+			fs.chmodSync(linkPath, 0o644);
+			fs.unlinkSync(linkPath);
+		}
+	} else {
+		console.log("artifact-export-smoke: read-only file case skipped (root may write any file)");
+	}
+
+	// 6f. A workspace folder where the file can be changed but no new file can
+	//     be made: Replace writes into the file itself when it is a plain file
+	//     with no other name, and refuses a second name of an outside file.
+	if (process.platform !== "win32" && process.getuid?.() !== 0) {
+		const secondNamePath = path.join(workspaceRealRoot, "diagram.svg");
+		const lockedOutside = path.join(tempRoot, "locked-outside.svg");
+		fs.writeFileSync(linkPath, "LOCKED-ORIGINAL");
+		fs.writeFileSync(lockedOutside, "LOCKED-OUTSIDE-ORIGINAL");
+		fs.linkSync(lockedOutside, secondNamePath);
+		const inodeBefore = fs.statSync(linkPath).ino;
+		const workspaceMode = fs.statSync(workspaceRealRoot).mode & 0o7777;
+		fs.chmodSync(workspaceRealRoot, 0o555);
+		try {
+			const inPlace = await exportArtifact("tsk-export1", "tasks/tsk-export1/notes.md", ROOM_WITH_WORKSPACE, undefined, { overwrite: true });
+			assert(inPlace.status === 200 && fs.readFileSync(linkPath, "utf-8") === MD_BODY && fs.statSync(linkPath).ino === inodeBefore, `folder without new files, Replace: expected the file itself rewritten, got ${inPlace.status}: ${JSON.stringify(inPlace.body)}`);
+			const secondName = await exportArtifact("tsk-export1", "tasks/tsk-export1/diagram.svg", ROOM_WITH_WORKSPACE, undefined, { overwrite: true });
+			assert(secondName.status === 500 && secondName.body?.error === "Failed to export the artifact to the room workspace.", `folder without new files, a second name of an outside file: expected the export failure, got ${secondName.status}: ${JSON.stringify(secondName.body)}`);
+			assert(fs.readFileSync(lockedOutside, "utf-8") === "LOCKED-OUTSIDE-ORIGINAL", "folder without new files: the outside file was written through its second name");
+		} finally {
+			fs.chmodSync(workspaceRealRoot, workspaceMode);
+		}
+		fs.unlinkSync(linkPath);
+		fs.unlinkSync(secondNamePath);
+	} else {
+		console.log("artifact-export-smoke: folder without new files case skipped (a read-only folder does not stop new files on Windows or for root)");
+	}
 
 	// 7. Missing roomId → 400 (no room to resolve a workspace for).
 	const noRoom = await exportArtifact("tsk-export1", "tasks/tsk-export1/diagram.svg", "");

@@ -20,7 +20,7 @@ import { fileURLToPath } from "node:url";
 import type { AbsorbRun, AbsorbRunGenerate } from "../src/absorb-run.js";
 import type { ReviewRun, ReviewRunGenerate } from "../src/review-run.js";
 import type { AbsorbGenerateResult, PersistentAgentPiSessionJsonlThreadRuntime } from "../src/persistent-agents.js";
-import { authedFetch, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer } from "./smoke-server-process.js";
+import { authedFetch, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, freePort } from "./smoke-server-process.js";
 
 const webServerDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "heavy-room-home-"));
@@ -159,7 +159,7 @@ let server: ChildProcessWithoutNullStreams | null = null;
 const serverOutput: string[] = [];
 try {
 	// --- Home, entering and a chat save, through the real server -------------------
-	const port = 34000 + Math.floor(Math.random() * 10000);
+	const port = await freePort();
 	server = spawn("npx", ["tsx", "src/index.ts"], {
 		shell: process.platform === "win32",
 		...SMOKE_SERVER_SPAWN_TREE_OPTIONS,
@@ -283,6 +283,7 @@ try {
 		for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
 			const file = path.join(dir, entry.name);
 			if (entry.isDirectory()) walk(file);
+			// portability-ok: the list is only checked for being empty, so its slashes never matter
 			else if (fs.readFileSync(file, "utf-8").includes(FORGET_WORD)) holding.push(path.relative(tempHome, file));
 		}
 	};

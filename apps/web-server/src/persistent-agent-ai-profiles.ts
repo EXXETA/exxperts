@@ -1,3 +1,4 @@
+import { providerDisplayName } from "../../web-ui/src/model-names.js";
 import { readBuiltInAiProfilePreferences, type BuiltInAiProfilePreference } from "./built-in-ai-profile-preferences.js";
 import { isCustomAiProfileId, readCustomAiProfiles } from "./custom-ai-profiles.js";
 import {
@@ -67,7 +68,7 @@ export const DEFAULT_PERSISTENT_AGENT_AI_PROFILE_ID = "chatgpt-codex" satisfies 
 export const PERSISTENT_AGENT_AI_PROFILES = {
 	"chatgpt-codex": {
 		id: "chatgpt-codex",
-		label: "ChatGPT Plus/Pro",
+		label: providerDisplayName("openai-codex"),
 		providerId: "openai-codex",
 		providerLabel: "ChatGPT Plus/Pro",
 		description: "ChatGPT subscription profile for persistent-agent room and maintenance workflows.",
@@ -89,7 +90,7 @@ export const PERSISTENT_AGENT_AI_PROFILES = {
 	},
 	anthropic: {
 		id: "anthropic",
-		label: "Claude",
+		label: providerDisplayName("anthropic"),
 		providerId: "anthropic",
 		providerLabel: "Anthropic / Claude",
 		description: "Claude subscription profile for persistent-agent room and maintenance workflows.",

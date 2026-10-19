@@ -1,5 +1,5 @@
 // The memory budget binds on the review target (Deep Memory + Active Items),
-// not the whole L1b (decision 2026-08-26): Recent Context tokens are transient
+// not the whole L1b: Recent Context tokens are transient
 // intake that Memorize clears, so counting them nudges the wrong process. The
 // server computes the ONE over-budget predicate; every meter, badge, and bar
 // renders it and never re-derives the comparison. This smoke pins the status

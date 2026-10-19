@@ -161,7 +161,7 @@ try {
 	assert(fs.existsSync(markerPath), "healing run must restore the marker");
 
 	// ---- Journal heal: crash between rename and ledger rewrite ---------------
-	// Simulate the exact !348 review-note window: the file already renamed onto
+	// Simulate the exact crash window: the file already renamed onto
 	// the shelf, the journal naming where it went, the record still pointing at
 	// the dead tasks/ path. The re-run must finish the rewrite from the journal.
 	record("tsk-crashed", "2026-07-05T10:00:00.000Z");

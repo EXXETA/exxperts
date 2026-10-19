@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { authedFetch, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, type AuthedFetchInit } from "./smoke-server-process.js";
+import { authedFetch, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, freePort, type AuthedFetchInit } from "./smoke-server-process.js";
 
 // Pins the data-profile unit (pointer + env indirection, NO renames):
 //
@@ -30,7 +30,7 @@ function assert(condition: unknown, message: string): asserts condition {
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const webServerDir = path.resolve(scriptDir, "..");
 const repoRoot = path.resolve(webServerDir, "..", "..");
-const port = 26000 + Math.floor(Math.random() * 10000);
+const port = await freePort();
 const baseUrl = `http://127.0.0.1:${port}`;
 
 const stateProfiles = createRequire(import.meta.url)(path.join(repoRoot, "bin", "lib", "state-profiles.cjs")) as {
@@ -177,7 +177,8 @@ async function switchAndAwaitExit(server: ChildProcessWithoutNullStreams, target
 	assert(response.status === 200 && response.body?.restarting === true, `switch to ${JSON.stringify(target)}: expected restarting reply, got ${response.status} ${JSON.stringify(response.body)}`);
 	// Env-pinned tokens never rotate, so the reply's sign-in link carries the pin.
 	assert(response.body.signInPath === `/auth/session?token=${encodeURIComponent(SMOKE_AUTH_TOKEN)}`, `switch reply must carry the sign-in link, got ${response.body.signInPath}`);
-	const code = await Promise.race([exited, new Promise<never>((_, reject) => setTimeout(() => reject(new Error("server did not exit after switch")), 15000))]);
+	let exitTimer: NodeJS.Timeout | undefined;
+	const code = await Promise.race([exited, new Promise<never>((_, reject) => { exitTimer = setTimeout(() => reject(new Error("server did not exit after switch")), 15000); })]).finally(() => clearTimeout(exitTimer));
 	// npx→tsx wrap the server, but both propagate the child's exit code.
 	assert(code === stateProfiles.SWITCH_EXIT_CODE, `server must exit with the sentinel code, got ${code}`);
 	assert(stateProfiles.readActiveProfile(tempHome) === target, `the pointer must name ${JSON.stringify(target)} after the switch`);

@@ -79,11 +79,11 @@ const NODE_VERSION = NODE_PIN.version;
 
 // The most files a release archive may carry, one ceiling for every target.
 // Each file costs install and update time on Windows, where the virus scanner
-// checks every new file, so growth has to be a reviewed decision. Measured on
-// 2026-09-29 for 0.14.1: the darwin-arm64 archive held 32,389 files before the
-// payload trim and 13,611 after it (win-x64 and linux-x64 estimated at 13,662
-// and 13,605 from the 0.14.0 archives); the ceiling sits about 10 percent
-// above the trimmed count.
+// checks every new file, so growth has to be a reviewed decision. Measured:
+// the darwin-arm64 archive held 32,389 files before the payload trim and
+// 13,611 after it (win-x64 and linux-x64 estimated at 13,662 and 13,605 from
+// an earlier release's archives); the ceiling sits about 10 percent above
+// the trimmed count.
 const MAX_ARCHIVE_FILES = 15_000;
 
 // ---------------------------------------------------------------------------

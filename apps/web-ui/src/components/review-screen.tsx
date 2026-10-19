@@ -7,7 +7,7 @@
  * is.
  */
 import { modelWaitLine } from "./model-notice";
-import { ABSORB_CHOOSE_MODEL_LABEL, ABSORB_TRY_AGAIN_LABEL, memoryModelStopWhy, plainFirstReadLine } from "../memory-v2-copy";
+import { ABSORB_CHOOSE_MODEL_LABEL, ABSORB_TRY_AGAIN_LABEL, memoryModelSignInLabel, memoryModelStopWhy, plainFirstReadLine } from "../memory-v2-copy";
 import { modelTooltipName } from "../model-names";
 import { useState } from "react";
 import type { ArchivedEntryCard, ArchiveRow, ReviewAssessmentFields, ReviewAvailability, ReviewDepth, ReviewRun } from "../types";
@@ -319,12 +319,12 @@ export function ReviewCard({ run, roomName, keepIds, busy, error, fastPathBlocke
 			{error && <div className="checkpoint-proposal-error" role="alert">{error}</div>}
 			{run.stop && (
 				<div className="memory-action-note absorb-run-stop-note" role="status">
-					<p>{run.stop.cause === "restarted" ? "The app restarted. What was tidied is on this card; the rest is unchanged." : `Review paused because ${modelTooltipName({ provider: run.stop.model.provider, model: run.stop.model.model })} ${memoryModelStopWhy(run.stop.cause, run.stop.model.provider)}. What was tidied can be saved; the rest is unchanged.`}</p>
+					<p>{run.stop.cause === "restarted" ? "The app restarted. What was tidied is on this card; the rest is unchanged." : `Review paused because ${modelTooltipName({ provider: run.stop.model.provider, model: run.stop.model.model })} ${memoryModelStopWhy(run.stop.cause, run.stop.model.provider, run.stop.key)}. What was tidied can be saved; the rest is unchanged.`}</p>
 					<div className="absorb-run-note-actions">
 						{onTryAgain && <button className="rs-btn" disabled={busy} onClick={onTryAgain}>{run.stop.cause === "restarted" ? "Continue" : ABSORB_TRY_AGAIN_LABEL}</button>}
 						{/* A restart says nothing about the model: it answered, so Continue is the one way on. */}
 						{onChooseModel && run.stop.cause !== "restarted" && <button className="rs-btn" disabled={busy} onClick={onChooseModel}>{ABSORB_CHOOSE_MODEL_LABEL}</button>}
-						{onSignIn && run.stop.cause === "signed-out" && <button className="rs-btn rs-btn-primary" disabled={busy} onClick={() => onSignIn(run.stop!.model.provider)}>Sign in</button>}
+						{onSignIn && run.stop.cause === "signed-out" && <button className="rs-btn rs-btn-primary" disabled={busy} onClick={() => onSignIn(run.stop!.model.provider)}>{memoryModelSignInLabel(run.stop.key)}</button>}
 					</div>
 				</div>
 			)}

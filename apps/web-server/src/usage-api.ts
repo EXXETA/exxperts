@@ -13,7 +13,7 @@
  */
 
 import type { FastifyInstance } from "fastify";
-import { canonicalModelName } from "../../web-ui/src/model-names.js";
+import { canonicalModelName, modelIdDate, providerDisplayName } from "../../web-ui/src/model-names.js";
 import { GATEWAY_PROVIDER_ID_PREFIX } from "./openai-compatible-gateways.js";
 import { loadUsage } from "./usage-log.js";
 import type { UsageRow } from "./usage-log.js";
@@ -29,32 +29,25 @@ const PROVIDER_BY_LABEL_PREFIX: Record<string, string> = {
 	"OpenAI / ChatGPT subscription": "openai-codex",
 	"GitHub Copilot": "github-copilot",
 	"Anthropic / Claude": "anthropic",
+	"Claude API key": "anthropic-api-key",
 	OpenAI: "openai",
 	"OpenAI-compatible gateway": "openai-compatible",
 	"Google / Gemini": "google",
 	OpenRouter: "openrouter",
 };
 
-const SOURCE_DISPLAY: Record<string, string> = {
-	"openai-codex": "ChatGPT Plus/Pro",
-	"github-copilot": "GitHub Copilot",
-	anthropic: "Anthropic / Claude",
-	openai: "OpenAI",
-	"openai-compatible": "OpenAI-compatible gateway",
-	google: "Google / Gemini",
-	openrouter: "OpenRouter",
-};
-
 // Grouping builds on the shared naming module: two rows are the same model
-// iff they display as the same canonical name (model-names.ts is the spec).
+// iff they display as the same canonical name (model-names.ts is the spec),
+// and a dated snapshot stays apart from its undated name.
 // Cached because every request keys thousands of rows.
-const modelGroupCache = new Map<string, { key: string; name: string }>();
-export function modelGroupOf(row: { model?: string; modelLabel?: string; provider?: string }): { key: string; name: string } {
+const modelGroupCache = new Map<string, { key: string; name: string; date?: string }>();
+export function modelGroupOf(row: { model?: string; modelLabel?: string; provider?: string }): { key: string; name: string; date?: string } {
 	const cacheKey = (row.model ?? "") + "|" + (row.modelLabel ?? "") + "|" + (row.provider ?? "");
 	let group = modelGroupCache.get(cacheKey);
 	if (!group) {
 		const name = canonicalModelName(row).name || (row.model ?? "");
-		group = { key: name.toLowerCase(), name };
+		const date = row.model ? modelIdDate(row.model) : null;
+		group = date ? { key: `${name.toLowerCase()} (${date})`, name, date } : { key: name.toLowerCase(), name };
 		modelGroupCache.set(cacheKey, group);
 	}
 	return group;
@@ -160,7 +153,7 @@ export function registerUsageApi(app: FastifyInstance, deps: UsageApiDeps): void
 	const isGateway = (provider: string): boolean => provider === "openai-compatible" || provider.startsWith(GATEWAY_PROVIDER_ID_PREFIX);
 	const sourceDisplayName = (provider: string): string =>
 		(isGateway(provider) ? deps.providerDisplayName(provider) : undefined) ??
-		SOURCE_DISPLAY[provider] ??
+		(providerDisplayName(provider) !== provider ? providerDisplayName(provider) : undefined) ??
 		deps.providerDisplayName(provider) ??
 		// A gateway id nothing answers for any more is a gateway that was
 		// removed; its turns still happened and still cost money.
@@ -181,18 +174,28 @@ export function registerUsageApi(app: FastifyInstance, deps: UsageApiDeps): void
 		const groupTurns = new Map<string, number>();
 		const groupNames = new Map<string, string>();
 		const groupRawIds = new Map<string, Set<string>>();
+		const groupDates = new Map<string, string>();
 		for (const r of rows) {
 			if (!r.model) continue;
-			const { key, name } = modelGroupOf(r);
+			const { key, name, date } = modelGroupOf(r);
 			groupTurns.set(key, (groupTurns.get(key) ?? 0) + 1);
 			if (!groupNames.has(key)) groupNames.set(key, name);
+			if (date) groupDates.set(key, date);
 			let raw = groupRawIds.get(key);
 			if (!raw) groupRawIds.set(key, (raw = new Set()));
 			raw.add(r.model);
 		}
+		// A dated snapshot shows its date only beside a model of the same name.
+		const nameCounts = new Map<string, number>();
+		for (const name of groupNames.values()) nameCounts.set(name.toLowerCase(), (nameCounts.get(name.toLowerCase()) ?? 0) + 1);
+		const groupLabel = (key: string): string => {
+			const name = groupNames.get(key) ?? key;
+			const date = groupDates.get(key);
+			return date && (nameCounts.get(name.toLowerCase()) ?? 0) > 1 ? `${name} (${date})` : name;
+		};
 		const models = Array.from(groupTurns.entries())
 			.sort((a, b) => b[1] - a[1])
-			.map(([key, turns]) => ({ id: key, label: groupNames.get(key) ?? key, turns, rawIds: groupRawIds.get(key)?.size ?? 1 }));
+			.map(([key, turns]) => ({ id: key, label: groupLabel(key), turns, rawIds: groupRawIds.get(key)?.size ?? 1 }));
 		const modelParam = String(query.model ?? "all");
 		const model = models.some((m) => m.id === modelParam) ? modelParam : "all";
 		const modelOk = (r: UsageRow) => model === "all" || (r.model ? modelGroupOf(r).key === model : false);

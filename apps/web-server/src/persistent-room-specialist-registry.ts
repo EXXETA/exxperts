@@ -1,5 +1,5 @@
 /**
- * Room-scoped specialist registry (option 4, grill-locked 2026-07-19).
+ * Room-scoped specialist registry.
  *
  * The structural heart of "a delegation belongs to the room, not to the tab
  * that asked for it": specialist bookkeeping — the running set, the cap, the

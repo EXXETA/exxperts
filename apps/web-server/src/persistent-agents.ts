@@ -1045,7 +1045,7 @@ export interface PersistentAgentStatus {
 	root: string;
 	runtime: PersistentAgentRuntimeState;
 	activeThread: PersistentAgentActiveThreadSummary | null;
-	/** Community #14 slice 3: a detached turn landed while nobody was connected; cleared when a session next binds to the room. */
+	/** A detached turn landed while nobody was connected; cleared when a session next binds to the room. */
 	unseenLandedAnswer?: PersistentAgentUnseenLandedAnswer;
 	displayName?: string;
 	description?: string;
@@ -1090,7 +1090,7 @@ export interface PersistentAgentStatus {
 }
 
 // The budget binds on the review target — Deep Memory + Active Items — not the
-// whole L1b (decision 2026-08-26). The server computes the one predicate here;
+// whole L1b. The server computes the one predicate here;
 // meters, badges, and bars render this block and never re-derive the comparison.
 export interface PersistentAgentMemoryBudget {
 	budgetTokens: number;
@@ -2084,7 +2084,7 @@ export function getPersistentAgentRuntimeState(agentIdRaw: string): PersistentAg
 	return normalizeRuntimeState(readJson(file), instance.agentId);
 }
 
-// Community #14 slice 3: a detached turn landed its answer while no client was
+// A detached turn landed its answer while no client was
 // watching. Same shape as the specialist away-notice — an unnoticed ending
 // recorded at landing time, surfaced on the room status, and cleared when a
 // session next binds to the room (the user is about to see the landed answer
@@ -7460,7 +7460,7 @@ export function normalizeConsultPriorExchanges(raw: unknown): ConsultPriorExchan
 	if (raw.length >= CONSULT_MAX_STACK_EXCHANGES) throw new Error(`priorExchanges exceeds the ${CONSULT_MAX_STACK_EXCHANGES}-exchange stack cap`);
 	return raw.map((entry: any, index) => {
 		const question = String(entry?.question ?? "").trim();
-		// Defensive length cap on the re-fed answer (hardening 2026-07-11): without
+		// Defensive length cap on the re-fed answer: without
 		// it, 20 multi-MB answers sit in server memory before the prompt-side trim
 		// (trimPriorAnswer → 2,000 chars) ever runs. Truncation, not rejection —
 		// long legitimate answers are re-fed truncated, matching the prompt's own

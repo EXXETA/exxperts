@@ -22,8 +22,7 @@ import { DEFAULT_PERSISTENT_ROOM_AGENTS_ROOT, persistentAgentRootPath } from "./
  * off too.
  *
  * `memoryBudgetTokens` is the room's memory budget. It binds on the
- * REVIEW TARGET — Deep Memory + Active Items — not the whole L1b (decision
- * 2026-08-26): Recent Context is transient intake that Memorize clears, and
+ * REVIEW TARGET — Deep Memory + Active Items — not the whole L1b: Recent Context is transient intake that Memorize clears, and
  * Chronos is system-managed and near-constant, so counting either would nudge
  * the wrong process. It drives the settings meter, the room-card badge, and
  * the memory-page bar (all through `overMemoryBudget` below), the budget
@@ -55,7 +54,7 @@ export interface PersistentRoomMaintenanceSettingsStorageOptions {
 }
 
 export const MEMORY_BUDGET_MIN_TOKENS = 10_000;
-// The ceiling, raised from 50k with memory v2 (decision 2026-09-12): the
+// The ceiling, raised from 50k with memory v2: the
 // server now enforces the budget deterministically on every maintenance write,
 // so a large room's first v2 run would archive two thirds of its memory unless
 // its owner can set a budget that keeps what is there. The DEFAULT stays 20k —

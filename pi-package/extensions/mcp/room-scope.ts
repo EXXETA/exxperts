@@ -17,7 +17,7 @@
  *    is replaced by a granted-only warm-up in prepareRoomScopedMcpSessionCache;
  *    eager/keep-alive lifecycles and the adapter's direct-tools cache
  *    bootstrap deliberately keep their global warm behavior (the user opted
- *    those servers into background connections; owner decision 2026-08-11);
+ *    those servers into background connections);
  *  - tool RESULTS are sanitized: any delegated result whose details name a
  *    server outside the grant list is replaced by the refusal, so a stray
  *    adapter-side resolution can never hand the room an ungranted answer.
@@ -623,8 +623,7 @@ export async function ensureRoomScopedMcpGrantsMigration(options: PersistentRoom
 }
 
 /**
- * Cold-cache session preparation for a room (owner decision 2026-08-11, the
- * middle path): when the adapter's metadata cache file does not exist yet,
+ * Cold-cache session preparation for a room: when the adapter's metadata cache file does not exist yet,
  * its session start would bootstrap-connect EVERY configured server once to
  * warm the cache - ungranted ones included. Instead, create the cache file
  * empty (which switches that bootstrap off) and warm ONLY the room's granted

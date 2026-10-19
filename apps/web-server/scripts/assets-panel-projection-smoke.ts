@@ -86,7 +86,7 @@ try {
 	const runningTitle = projectAssetRows([], { liveTask: { taskId: "tsk-l", title: "Create a deck", templateId: "deck" }, threadTaskIds: new Set(), now: NOW });
 	assert(runningTitle[0].title === "Create a deck", "the live running row keeps the task title (no file yet)");
 
-	// Origin line (room-scoped history, 2026-07-18): rows born in another
+	// Origin line: rows born in another
 	// conversation carry the viewer disclosure; the rail subline never does.
 	const originRows = projectAssetRows(
 		[
@@ -107,7 +107,7 @@ try {
 	);
 	assert(noLiveConv[0].originLine === "", "no live conversation known → no origin claim");
 
-	// Status grammar (2026-07-18): green unread dot = done, has files, never
+	// Green unread dot = done, has files, never
 	// opened, never acted on — subline leads with "ready". Decays on viewedAt;
 	// attach/export imply seen, so their sublines stand with no dot. Errors
 	// carry the steady danger dot beside the shipped subline.

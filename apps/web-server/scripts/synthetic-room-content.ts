@@ -32,7 +32,7 @@ export const WORLD = {
 	window: { start: "2026-06-01", end: "2026-08-30" },
 } as const;
 
-/** One theme per Deep Memory section; names match the template builder's SECTION_TOPICS one to one. */
+/** One theme per Deep Memory section; names match the template builder's TEMPLATE_SECTION_TOPICS one to one. */
 export const CORPUS_SECTION_THEMES: ReadonlyArray<{ topic: string; brief: string }> = [
 	{ topic: "Collaboration & Working Style", brief: "How the user and each named colleague actually work together: review habits, meeting rhythms, communication preferences, friction points and what resolved them." },
 	{ topic: "Project Notes", brief: "Concrete state of the named projects: milestones hit or slipped, scope calls, blockers, who owns what next, numbers that matter (rows, latencies, costs, dates)." },
@@ -308,7 +308,7 @@ export const TEMPLATE_SECTION_TOPICS = [
 
 export function savedDate(rand: () => number, sectionIndex: number, sectionCount: number): string {
 	// Older sections carry older stamps: spread saved-on dates across ~3 months
-	// (June–August 2026) with per-bullet jitter, so temporal steering has a real
+	// (June to August of the fixture year) with per-bullet jitter, so temporal steering has a real
 	// gradient to read.
 	const start = Date.UTC(2026, 5, 1);
 	const end = Date.UTC(2026, 7, 30);

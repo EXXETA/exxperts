@@ -6,13 +6,13 @@ interface Props {
 	selectedTaskId: string | null;
 	onSelect: (row: AssetRowView) => void;
 	/**
-	 * Stop the LIVE running task (status grammar, 2026-07-18): the hover-reveal
+	 * Stop the LIVE running task: the hover-reveal
 	 * stop square on the running row — one of Stop's two homes, beside the run
 	 * view's footer action. Only the genuinely live row ever offers it.
 	 */
 	onStopRunning?: () => void;
 	/**
-	 * Remove from list (user control, 2026-07-20): the hover-reveal ✕ on rows
+	 * Remove from list: the hover-reveal ✕ on rows
 	 * that are RUNS, not files (multi-file, legacy tasks/ paths). A list
 	 * operation only — files are kept; the caller shows the Undo toast.
 	 */
@@ -33,8 +33,7 @@ function visibleCountForViewport(innerHeight: number): number {
 }
 
 /**
- * The in-room rail's Files section (files UI slice; formerly "Artifacts",
- * assets contract §2 rung 3, mockup v2; room-scoped 2026-07-18): ONE list
+ * The in-room rail's Files section: ONE list
  * for everything the room made and everything the user gave it — compact
  * rows with type icon, title, and the subline as the single status channel;
  * resting rows read verb + moment in ONE grammar — "created · Jul 23" for

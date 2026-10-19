@@ -242,6 +242,7 @@ await section("unusable-journal", async () => {
 	const runtimeDir = path.join(path.dirname(path.dirname(room.l1bPath)), "runtime");
 	fs.mkdirSync(runtimeDir, { recursive: true });
 	for (const name of ["review-run.json", "memorize-run.json"]) fs.writeFileSync(path.join(runtimeDir, name), JSON.stringify({ schemaVersion: 1, slot: { run: { runId: "r_old", agentId: room.agentId, state: "prepass" } } }));
+	// portability-ok: the run must read as absent whether or not the delete is refused
 	fs.chmodSync(runtimeDir, 0o500);
 	try {
 		const absorb = await import("../src/absorb-run.js");

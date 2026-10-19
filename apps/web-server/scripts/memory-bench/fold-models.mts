@@ -54,9 +54,10 @@ export function sessionFromPrompt(prompt: string): string {
 }
 
 /**
- * The entry's address as the fold prompt writes it: `- [m-0031 · learned
- * 2026-08-02] …`, `- [m-0032 · pinned · learned …] …` for a pinned one, and
- * `· in memory since 2026-09-01` for a note no dated conversation wrote.
+ * The entry's address as the fold prompt writes it:
+ * `- [m-0031 · learned 2026-08-02] …`, `- [m-0032 · pinned · learned …] …`
+ * for a pinned one, and `· in memory since 2026-09-01` for a note no dated
+ * conversation wrote.
  */
 const ENTRY_ADDRESS = /^(?:\s*(?:[-*+]|\d+[.)])\s+)?\[([^\]\s·]+)((?:\s+·\s+[^\]·]+)*)\]\s*([\s\S]*)$/;
 

@@ -81,7 +81,7 @@ export interface ConsultDockProps {
 	onOpen: () => void;
 	onStop: () => void;
 	onDismiss: () => void;
-	/** MR-5 wires this to the pending-queue transfer; inert stub for MR-4. */
+	/** Transfers the answer into the conversation through the pending-transfer queue. */
 	onTransfer: () => void;
 	/** Stacked consult (§8.2): ask the same room a follow-up from the done card.
 	 * Returns whether it was accepted (false → socket down / rejected: draft kept). */
@@ -180,7 +180,7 @@ function ConsultFollowUp({ speaker, onFollowUp }: { speaker: string; onFollowUp:
 		if (!question) return;
 		// Only clear the draft when the follow-up was accepted — a rejection
 		// (socket down, reducer refused) must not eat the user's typed question
-		// (hardening 2026-07-11; same rule as the composer's consult path).
+		// (same rule as the composer's consult path).
 		if (onFollowUp(question)) setDraft("");
 	};
 	return (
@@ -284,7 +284,7 @@ export function ConsultDock({ state, onMinimize, onOpen, onStop, onDismiss, onTr
 			</button>
 		);
 	} else if (state.phase === "done") {
-		// §4.5's as-of date lives in the subline ONLY (Borja, 2026-07-11): the
+		// The as-of date lives in the subline ONLY: the
 		// header already carries the full provenance sentence, so the footer
 		// repeats nothing. The raw L1b fingerprint is machine provenance — it
 		// stays in state for the MR-5 handoff block but is not rendered. §8.5: the
@@ -307,7 +307,7 @@ export function ConsultDock({ state, onMinimize, onOpen, onStop, onDismiss, onTr
 			// subline"): a room-specific warning (e.g. the needs_absorb memory-lag
 			// note) reads more clearly as a standalone ⚠ notice than appended to the
 			// provenance subline, which is already a full sentence. Same information,
-			// clearer placement (Borja review, 2026-07-11).
+			// clearer placement.
 			notices.push(
 				<div className="consult-warning" role="status" key="warnings">
 					{state.warnings.map((w, i) => (
@@ -353,7 +353,7 @@ export function ConsultDock({ state, onMinimize, onOpen, onStop, onDismiss, onTr
 	// ceiling is hit (§8.6) the input is replaced by the "no longer fits" state.
 	// A FRESH consult can also overflow (B's memory alone exceeds the budget) —
 	// there is no conversation and nothing to transfer, so the copy must not
-	// promise either (hardening 2026-07-11, fresh-eyes review).
+	// promise either.
 	let followUpSlot: ReactNode;
 	if (state.overflow) {
 		followUpSlot = (
@@ -384,11 +384,3 @@ export function ConsultDock({ state, onMinimize, onOpen, onStop, onDismiss, onTr
 		</div>
 	);
 }
-
-/* ===========================================================================
- * The task-card variant (visuals track V4) lived here until 2026-07-18, when
- * the done-card was retired (status grammar slice): its duties moved to the
- * Artifacts rail (state dots, hover-stop), the run view (live stream + Stop),
- * the done toast, and the viewer footer (transfer/change-request/export). The pure
- * task reducer (task-stream.ts) survives as those surfaces' state source.
- * =========================================================================== */

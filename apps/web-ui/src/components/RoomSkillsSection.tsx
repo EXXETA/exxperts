@@ -8,16 +8,6 @@ import { MarkdownRenderer } from "./Markdown";
 import { RsInfo } from "./rs-info";
 import { PaneHeader } from "./pane-header";
 
-/**
- * Room settings wheel — Skills panel (skills MR-5, spec §4/§5; enabled-first
- * redesign, Borja 2026-07-11). Shows ONLY the room's enabled skills, so the
- * wheel stays constant-size however large the library grows; adding more goes
- * through a searchable picker over the not-yet-enabled library. Enabling pins
- * the skill's current sha256 server-side; a skill whose body changed since
- * enablement shows a "re-review required" state and is NOT injected until
- * re-enabled after review. The resident-cost line keeps the
- * ~100-tokens-per-skill index price visible.
- */
 /** A skill's problem in plain words, under its description; null when it works. */
 function skillProblemLine(state: PersistentRoomEnabledSkillStatus): string | null {
 	if (state.status === "hash-mismatch") return "Changed since you enabled it. The room stopped using it until you review the new version.";
@@ -38,6 +28,15 @@ function runFilesLine(executeState: PersistentRoomEnabledSkillStatus["executeSta
 	return one ? "Off: the room follows its instructions but does not run its file." : `Off: the room follows its instructions but does not run its ${count} files.`;
 }
 
+/**
+ * Room settings wheel — Skills panel. Shows ONLY the room's enabled skills, so
+ * the wheel stays constant-size however large the library grows; adding more
+ * goes through a searchable picker over the not-yet-enabled library. Enabling
+ * pins the skill's current sha256 server-side; a skill whose body changed since
+ * enablement shows a "re-review required" state and is NOT injected until
+ * re-enabled after review. The resident-cost line keeps the
+ * ~100-tokens-per-skill index price visible.
+ */
 export function RoomSkillsSection({ status, onOpenSkillsLibrary, onPausedCount }: { status: PersistentAgentStatus; onOpenSkillsLibrary?: () => void; onPausedCount?: (count: number) => void }) {
 	const [library, setLibrary] = useState<SkillListItem[] | null>(null);
 	const [enabled, setEnabled] = useState<PersistentRoomEnabledSkillStatus[] | null>(null);

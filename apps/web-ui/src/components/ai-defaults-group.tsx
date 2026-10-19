@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { credentialGoneWords, modelCredentialWords } from "../../../web-server/src/model-not-offered";
 import { modelDisplayName, modelOnProvider } from "../model-names";
 import { SHARED_SERVER_ADMIN_LINE, useRemoteClientContext } from "../remote-client-context";
 import { fetchAiDefaults, fetchRoomModelProviders, putAiDefaults } from "../room-models-api";
@@ -21,8 +22,10 @@ function lockName(lock: RoomModelLockView): string {
 function defaultUnavailableSentence(row: AiDefaultsView[RoomModelTask]): string | null {
 	if (!row.stored || !row.reason || row.effective) return null;
 	const named = modelOnProvider(lockName(row.stored), row.stored.providerLabel);
+	const gone = row.keyGone ? "key-missing" : "signed-out";
+	const words = modelCredentialWords(lockName(row.stored), row.stored.providerLabel, named, gone);
 	return row.reason === "signed-out"
-		? `${named} is signed out. Rooms on this default wait until you sign in again or choose another here.`
+		? `${words.subject} ${words.state}. Rooms on this default wait until you ${credentialGoneWords(gone).again.toLowerCase()} or choose another here.`
 		: `${named} is no longer offered. Rooms on this default wait until you choose another here.`;
 }
 
