@@ -204,8 +204,10 @@ function readPackageFile(root: string, relativePath: string, maxBytes: number): 
  * Legacy packages return null; malformed or altered managed packages fail closed.
  */
 export function readManagedSkillPackage(skillDir: string): ManagedSkillPackage | null {
-	const root = path.resolve(skillDir);
-	if (fs.lstatSync(root).isSymbolicLink()) throw new Error("Managed skill directories cannot be symbolic links.");
+	const directory = path.resolve(skillDir);
+	if (fs.lstatSync(directory).isSymbolicLink()) throw new Error("Managed skill directories cannot be symbolic links.");
+	// Resolve parent aliases (macOS /var -> /private/var) before checking package-relative paths.
+	const root = fs.realpathSync(directory);
 	const sidecar = path.join(root, SKILL_PROVENANCE_FILENAME);
 	if (!fs.existsSync(sidecar)) return null;
 	const raw = JSON.parse(readPackageFile(root, SKILL_PROVENANCE_FILENAME, 512 * 1024).toString("utf8"));
