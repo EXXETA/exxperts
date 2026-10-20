@@ -11,6 +11,7 @@ import * as copy from "../../web-ui/src/memory-v2-copy.js";
 import * as warnings from "../../web-ui/src/maintenance-warnings.js";
 import type { AbsorbRun, AbsorbRunSession } from "../../web-ui/src/types.js";
 import { memoryTopicNameProblem, topicNameSentence } from "../src/memory-typed-text.js";
+import { credentialGoneWords } from "../src/model-not-offered.js";
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -128,7 +129,14 @@ check("a typed topic name the file cannot take says why, in the same words on ev
 
 check("a sign-in that is missing names where to sign in", () => {
 	const formatters = app.slice(app.indexOf("function formatMaintenanceRequestError"), app.indexOf("function CheckpointPreviewShell"));
-	assert(formatters.includes("The Memory model's sign-in is missing or no longer valid. No memory was updated. Sign in again in Settings, AI setup, then run this step again."), "the sign-in remedy names Settings, AI setup");
+	// The credential remedy: the server's matchers and words (model-not-offered.ts), in the step's frame.
+	const frame = "`The Memory model ${gone.state}. No memory was updated. ${gone.again} in Settings, AI setup, then run this step again.`";
+	// The page cannot tell a key from a sign-in, so its fallback never builds either one's words.
+	const fallback = app.slice(app.indexOf("function maintenanceCredentialLine"), app.indexOf("function shortenWorkerFailureDetail"));
+	assert(!fallback.includes('credentialGoneWords("key-missing")') && !fallback.includes('credentialGoneWords("signed-out")') && fallback.includes("/^No API key found for/i.test(detail) || signInFailed(detail)"), "no key found reads as the neutral line, never as a key or a sign-in");
+	assert(formatters.includes("maintenanceCredentialLine(") && app.includes(frame) && app.includes("The Memory model's key or sign-in is missing or was not accepted. No memory was updated. Check it in Settings, AI setup, then run this step again.") && !app.includes("isMaintenanceSignInFailure"), "the credential remedy names Settings, AI setup, with the server's matchers");
+	const line = (words: { state: string; again: string }) => `The Memory model ${words.state}. No memory was updated. ${words.again} in Settings, AI setup, then run this step again.`;
+	assert(line(credentialGoneWords("key-no-workspace")) === "The Memory model has a key that isn't tied to a workspace. No memory was updated. Replace it with a key made inside a workspace in Settings, AI setup, then run this step again.", "a key outside a workspace reads as its own line");
 	assert(!formatters.includes("Sign in again, then"), "no sign-in remedy without its place");
 });
 

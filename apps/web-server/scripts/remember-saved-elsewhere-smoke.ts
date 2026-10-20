@@ -12,7 +12,7 @@ import path from "node:path";
 import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
-import { authedFetch, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer } from "./smoke-server-process.js";
+import { authedFetch, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort } from "./smoke-server-process.js";
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -31,7 +31,7 @@ function assert(condition: unknown, message: string): asserts condition {
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const webServerDir = path.resolve(scriptDir, "..");
 const repoRoot = path.resolve(webServerDir, "..", "..");
-const port = 27000 + Math.floor(Math.random() * 10000);
+const port = await freePort();
 const baseUrl = `http://127.0.0.1:${port}`;
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "exxperts-remember-elsewhere-"));
@@ -147,7 +147,7 @@ try {
 		const page = await ctx.newPage();
 		await page.goto(`${baseUrl}/auth/session?token=${SMOKE_AUTH_TOKEN}`);
 		await page.waitForLoadState("networkidle");
-		const dismissWhatsNew = async (p: typeof page) => { const dismiss = p.locator(".whats-new-foot .btn-primary"); if (await dismiss.count()) await dismiss.click(); };
+		const dismissWhatsNew = async (p: typeof page) => { const dismiss = p.locator(".whats-new-close"); if (await dismiss.count()) await dismiss.click(); };
 		await dismissWhatsNew(page);
 		const homeLine = page.locator(".home-resume-status");
 		const activeConversation = (id: string) => authedFetch(`${baseUrl}/api/persistent-agents/${encodeURIComponent(id)}/status`).then(async (r) => (await r.json()).activeThread?.threadId as string);

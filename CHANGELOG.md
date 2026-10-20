@@ -17,6 +17,20 @@ User-visible changes per release. Historical private/internal development notes 
   expires, normalize imported names and keep review actions visible. Windows publication
   retries retain the previously accepted package if a reviewed import cannot be published.
 
+## 0.14.4 (2026-10-19)
+
+- Models: Claude also works with an API key from console.anthropic.com, beside the Claude sign-in.
+  Add it in Settings, AI setup, Add provider; its use is billed to that Anthropic account.
+- What's new: After an update, this window shows every release you missed. Big releases open in
+  full; smaller updates fold into rows you open, newest first.
+- Wallet: Cached token count fixes.
+- Fixed: Model names no longer carry the date from their id, and Default models update as soon as
+  you approve models.
+- Security: Full access rooms no longer open secret files, keys, logins, shell startup files or the
+  app's own data. Files that run code later, such as git hooks, can be read but not changed. You can
+  still change them yourself, or through a command you approve.
+- Security: Save with Replace never writes through a shortcut to somewhere else.
+
 ## 0.14.3 (2026-10-15)
 
 - Memory: Remember, Memorize and Review always finish while the Memory model answers, and nothing

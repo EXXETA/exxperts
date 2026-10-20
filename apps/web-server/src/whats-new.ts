@@ -4,23 +4,8 @@ import { fileURLToPath } from "node:url";
 import { productAppStatePath } from "../../../pi-package/product-state-paths.js";
 
 /**
- * The one-time What's new window after an update.
- *
- * The app already knows what changed, because the changelog ships inside the
- * package next to package.json; what was missing was the moment where the
- * person who just updated gets told. This module owns that moment's facts:
- * which version is running, what the changelog says about it, and which
- * version was last acknowledged. The window speaks in minors: what it shows
- * is always the changelog section of the running version's x.y.0 base, so a
- * pure patch update passes quietly (the changelog still documents every
- * patch) and an update that crosses a minor boundary tells the minor's
- * whole story even when a patch of it is what ended up running. The rule
- * that makes it one-time and fresh-install-silent lives in resolveWhatsNew.
- * A missing record alone does not mean a fresh install: everyone updating into the first version that
- * carries this feature has no record either, so the module looks for state
- * that only using the app leaves behind to tell the two apart. A truly fresh
- * machine records quietly; an existing one gets its window, and only a
- * dismissal (or a sectionless changelog) records.
+ * People skip updates, so the window shows every release since the one this
+ * machine last acknowledged.
  *
  * The acknowledged version persists in ~/.exxperts/app/whats-new.json, the
  * same shape of tiny document as web-search.json next door, written the same
@@ -37,6 +22,10 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PACKAGE_ROOT = process.env.EXXETA_HOME ? path.resolve(process.env.EXXETA_HOME) : path.resolve(__dirname, "..", "..", "..");
 
 const FILE_NAME = "whats-new.json";
+
+// A record without this marker was written when patch updates passed unseen,
+// so it vouches only for its line's x.y.0.
+const RULE = "every-release";
 
 export function whatsNewStatePath(): string {
 	return productAppStatePath(FILE_NAME);
@@ -87,40 +76,28 @@ export function readChangelog(packageRoot: string = PACKAGE_ROOT): string | null
 	}
 }
 
-/**
- * The bullets under `## <version> ...`, without their leading "- ", or null
- * when the changelog has no section for that version. A bullet in this file
- * is one long markdown paragraph; a wrapped continuation line joins its
- * bullet with a space so a future hand-wrapped entry still reads as one.
- */
-export function parseChangelogEntries(markdown: string, version: string): string[] | null {
-	const lines = markdown.split(/\r?\n/);
-	let inSection = false;
-	let found = false;
-	const entries: string[] = [];
-	for (const line of lines) {
-		const heading = /^##\s+(\S+)/.exec(line);
-		if (heading) {
-			if (inSection) break;
-			inSection = heading[1] === version;
-			if (inSection) found = true;
-			continue;
-		}
-		if (!inSection) continue;
-		if (/^-\s+/.test(line)) {
-			entries.push(line.replace(/^-\s+/, "").trim());
-		} else if (line.trim() && entries.length > 0) {
-			entries[entries.length - 1] = `${entries[entries.length - 1]} ${line.trim()}`;
+export type WhatsNewRelease = { version: string; date: string | null; entries: string[] };
+
+/** A bullet is one markdown paragraph: a wrapped line joins its bullet. */
+export function parseChangelogReleases(markdown: string): WhatsNewRelease[] {
+	const releases: WhatsNewRelease[] = [];
+	let current: WhatsNewRelease | null = null;
+	for (const line of markdown.split(/\r?\n/)) {
+		if (line.startsWith("#")) {
+			const heading = /^##\s+(\d+\.\d+\.\d+)(?=\s|$)(?:\s+\((\d{4}-\d{2}-\d{2})\))?/.exec(line);
+			const fresh = heading !== null && !releases.some((release) => release.version === heading[1]);
+			current = fresh ? { version: heading[1], date: heading[2] ?? null, entries: [] } : null;
+			if (current) releases.push(current);
+		} else if (current && /^-\s+/.test(line)) {
+			current.entries.push(line.replace(/^-\s+/, "").trim());
+		} else if (current && line.trim() && current.entries.length > 0) {
+			current.entries[current.entries.length - 1] += ` ${line.trim()}`;
 		}
 	}
-	return found ? entries : null;
+	return releases;
 }
 
-/**
- * Plain numeric dotted comparison, enough for this package's x.y.z versions.
- * Anything that does not parse as numbers compares equal, which errs toward
- * not showing a window rather than showing one twice.
- */
+/** Numeric x.y.z comparison; a part that is not a number reads as 0. */
 export function compareVersions(a: string, b: string): number {
 	const parse = (value: string): number[] => value.split(".").map((part) => {
 		const n = Number.parseInt(part, 10);
@@ -136,12 +113,6 @@ export function compareVersions(a: string, b: string): number {
 	return 0;
 }
 
-/**
- * The x.y.0 base of a version, the section the window speaks in. Parsed the
- * same forgiving way compareVersions parses: a part that is not a number
- * reads as 0, which for a malformed version errs toward an existing early
- * section rather than none at all.
- */
 export function minorBase(version: string): string {
 	const parts = version.split(".").map((part) => {
 		const n = Number.parseInt(part, 10);
@@ -150,15 +121,12 @@ export function minorBase(version: string): string {
 	return `${parts[0] ?? 0}.${parts[1] ?? 0}.0`;
 }
 
-export function readAcknowledgedVersion(): string | null {
+function readAcknowledgement(): { version: string; everyRelease: boolean } | null {
 	try {
-		const raw = fs.readFileSync(whatsNewStatePath(), "utf8");
-		const version = (JSON.parse(raw) as { acknowledgedVersion?: unknown }).acknowledgedVersion;
-		return typeof version === "string" && version.trim() ? version.trim() : null;
+		const record = JSON.parse(fs.readFileSync(whatsNewStatePath(), "utf8")) as { acknowledgedVersion?: unknown; rule?: unknown };
+		const version = typeof record.acknowledgedVersion === "string" ? record.acknowledgedVersion.trim() : "";
+		return /^\d+\.\d+\.\d+$/.test(version) ? { version, everyRelease: record.rule === RULE } : null;
 	} catch {
-		// Missing file and unreadable file both read as "no record": the worst
-		// this can do is record the current version and stay quiet, never show
-		// a window that was already dismissed twice in a row.
 		return null;
 	}
 }
@@ -167,58 +135,51 @@ export function recordAcknowledgedVersion(version: string): void {
 	const filePath = whatsNewStatePath();
 	fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
 	const tmpPath = `${filePath}.${process.pid}.tmp`;
-	fs.writeFileSync(tmpPath, `${JSON.stringify({ acknowledgedVersion: version }, null, 2)}\n`, { mode: 0o600 });
+	fs.writeFileSync(tmpPath, `${JSON.stringify({ acknowledgedVersion: version, rule: RULE }, null, 2)}\n`, { mode: 0o600 });
 	fs.renameSync(tmpPath, filePath);
 }
 
-export type WhatsNewPayload = { version: string; entries: string[] | null; show: boolean };
+export type WhatsNewSections = { major: WhatsNewRelease[]; minor: WhatsNewRelease[] };
+
+export type WhatsNewPayload = { version: string; sections: WhatsNewSections | null; show: boolean };
 
 /**
- * What the window should do right now. The content, when there is any, is
- * the changelog section of the running version's minor base: an update that
- * stays inside an already-acknowledged minor records the current version
- * quietly and shows nothing, while an update crossing a minor boundary
- * shows the x.y.0 section's bullets under the running version. Should the
- * changelog lack the x.y.0 section, the running version's own section is
- * the fallback before giving up. Reading this can write: a genuinely fresh
- * install records the current version on the spot, and so does an update
- * whose changelog has nothing to say for either version, because an empty
- * window helps nobody and the next update should count from here. A machine
- * with no record but with prior installation state is an update into the
- * first version that carries this feature: it gets the window and records
- * only on dismissal, like any other update.
+ * Reading can write: a fresh install, or an update with nothing to show,
+ * records the running version so the next update counts from here.
  */
 export function resolveWhatsNew(packageRoot: string = PACKAGE_ROOT): WhatsNewPayload {
 	const version = readAppVersion(packageRoot);
-	if (!version) return { version: "", entries: null, show: false };
-	const acknowledged = readAcknowledgedVersion();
+	if (!version) return { version: "", sections: null, show: false };
+	const acknowledged = readAcknowledgement();
 	if (acknowledged === null && !hasPriorInstallationState()) {
 		recordAcknowledgedVersion(version);
-		return { version, entries: null, show: false };
+		return { version, sections: null, show: false };
 	}
-	if (acknowledged !== null && compareVersions(acknowledged, version) >= 0) {
-		return { version, entries: null, show: false };
+	if (acknowledged !== null && compareVersions(acknowledged.version, version) >= 0) {
+		return { version, sections: null, show: false };
 	}
-	const base = minorBase(version);
-	if (acknowledged !== null && compareVersions(acknowledged, base) >= 0) {
-		// A pure patch update: some x.y.* was already acknowledged, so the
-		// minor's story has been seen. Record quietly so the next update
-		// counts from here; the changelog still documents the patch.
-		recordAcknowledgedVersion(version);
-		return { version, entries: null, show: false };
-	}
+	// No record on a machine in use: an update from before this window
+	// existed, from a version nobody knows, so the running line tells its story.
+	const unseen = (release: string): boolean => acknowledged === null
+		? compareVersions(release, minorBase(version)) >= 0
+		: compareVersions(release, acknowledged.everyRelease ? acknowledged.version : minorBase(acknowledged.version)) > 0;
 	const changelog = readChangelog(packageRoot);
-	let entries = changelog === null ? null : parseChangelogEntries(changelog, base);
-	if ((!entries || entries.length === 0) && changelog !== null && base !== version) {
-		// The changelog should always carry the x.y.0 section; if it somehow
-		// does not, the running version's own section beats saying nothing.
-		entries = parseChangelogEntries(changelog, version);
-	}
-	if (!entries || entries.length === 0) {
+	if (changelog === null) return { version, sections: null, show: false };
+	const releases = parseChangelogReleases(changelog)
+		.filter((release) => release.entries.length > 0 && unseen(release.version) && compareVersions(release.version, version) <= 0);
+	if (releases.length === 0) {
 		recordAcknowledgedVersion(version);
-		return { version, entries: null, show: false };
+		return { version, sections: null, show: false };
 	}
-	return { version, entries, show: true };
+	const isMajor = (release: WhatsNewRelease): boolean => minorBase(release.version) === release.version;
+	return {
+		version,
+		sections: {
+			major: releases.filter(isMajor).sort((a, b) => compareVersions(a.version, b.version)),
+			minor: releases.filter((release) => !isMajor(release)).sort((a, b) => compareVersions(b.version, a.version)),
+		},
+		show: true,
+	};
 }
 
 /** The seen POST: recording the current version again is a no-op by shape. */

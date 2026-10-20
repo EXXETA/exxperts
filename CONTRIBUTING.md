@@ -26,10 +26,11 @@ The repository layout and day-to-day developer commands are documented in [`docs
 ## Before you open a pull request
 
 1. **Build cleanly:** `npm run build` from the repo root.
-2. **Run the smoke suite:** `npm run smokes`. It must pass completely. The suite is fast and is the same gate CI runs.
+2. **Run the smoke suite:** `npm run smokes`. It must pass completely. It runs several smokes at once (`--jobs 1` runs them one at a time), and CI runs the same suite, one at a time.
 3. **Keep the change focused.** One fix or one feature per PR reviews quickly; mixed PRs stall.
 4. **Match the surrounding code.** Follow the style, naming, and comment density of the files you touch. No reformatting-only changes, please.
-5. If your change affects behavior a user can see, update the relevant page under `docs/` in the same PR.
+5. **Comments say why.** A comment explains why the code is the way it is, or documents an API or how to run a script. Leave out names, dates, our own release numbers and issue or pull request numbers: git and the pull request keep those.
+6. If your change affects behavior a user can see, update the relevant page under `docs/` in the same PR.
 
 Platform note: exxperts supports macOS, Windows, and Linux. If your change touches process handling, file paths, or anything shell-adjacent, be suspicious of platform differences. CI will check all three, but a moment of thought saves a red build.
 

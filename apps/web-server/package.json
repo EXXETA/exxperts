@@ -90,7 +90,8 @@
     "smoke:revise-conflict-notice": "tsx scripts/revise-conflict-notice-smoke.ts",
     "smoke:persistent-room-effort": "tsx scripts/persistent-room-effort-smoke.ts",
     "smoke:lifecycle-worker-truncation": "tsx scripts/lifecycle-worker-truncation-smoke.ts",
-    "smoke:skills-execution-exposure": "tsx scripts/skills-execution-exposure-smoke.ts"
+    "smoke:skills-execution-exposure": "tsx scripts/skills-execution-exposure-smoke.ts",
+    "smoke:full-access-skills-folder": "tsx scripts/full-access-skills-folder-smoke.ts"
   },
   "dependencies": {
     "@fastify/websocket": "^11.2.0",

@@ -1,5 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { authedFetch, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer } from "./smoke-server-process.js";
+import { authedFetch, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, freePort } from "./smoke-server-process.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -9,7 +9,7 @@ const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "exxperts-provider-status
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const webServerDir = path.resolve(scriptDir, "..");
 const repoRoot = path.resolve(webServerDir, "..", "..");
-const port = 23000 + Math.floor(Math.random() * 10000);
+const port = await freePort();
 const baseUrl = `http://127.0.0.1:${port}`;
 const agentDir = path.join(tempHome, ".exxperts", "agent");
 const productAppRoot = path.join(tempHome, ".exxperts", "app");

@@ -11,7 +11,7 @@ interface Props {
 	roomId?: string;
 	canIterate: boolean;
 	/** The specialist's summary — the done-card's "Details" disclosure, relocated
-	 * here when the card was retired (status grammar, 2026-07-18). */
+	 * here when the card was retired. */
 	summary?: string;
 	onIterate: (brief: string) => boolean;
 	iteratePending: boolean;

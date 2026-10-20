@@ -1,25 +1,5 @@
-// The memory entries STORE (memory v2, stream D2) — the layer between the pure
-// entry model (memory-entries.ts) and the room's files on disk.
-//
-// Everything a caller needs to read or change a room's memory entry by entry is
-// here, and every write obeys the same three rules the maintenance writes obey:
-//
-//   1. The previous file is archived first, byte for byte, as
-//      `L1b/archive/<stamp>-before-<id>.md`: the convention the older saves
-//      and writeApprovedCheckpoint already follow, so one room has one snapshot
-//      shape whatever wrote it.
-//   2. An immutable event record lands in `events/memory-edit/<id>.json`, so a
-//      user edit is provable in the room's history exactly like a Memorize.
-//   3. A write refuses while the room has a turn in flight. Memory is the one
-//      thing a running turn is reading; changing it underneath is how a room
-//      answers from a memory nobody has any more.
-//
-// Reads are reads. The ONE exception is the migration of a file that has never
-// carried entry ids: the first load of such a file performs a normal write
-// (snapshot, event record, storage render) and every load after it writes
-// nothing. That is deliberate — migration is a change to the room's memory and
-// is recorded as one — and it is pinned by a smoke, because a read that writes
-// on every call would rewrite a room's memory on every page load.
+// The store between the pure entry model (memory-entries.ts) and the room's files. Every memory write refuses during a turn, which
+// reads this memory, and a notes-file write also snapshots the old file and records an event. Reads write only one migration and the budget's settle.
 
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -56,25 +36,10 @@ export interface BudgetState {
 	overBudget: boolean;
 }
 
-/**
- * What a write records about itself: the event record's kind and the history
- * row's. "absorb" is the Memorize v2 run and "review" the Review v2 run: both
- * go through this one write like every other change to a room's memory, but
- * record themselves under `events/absorb` and `events/review` (see
- * `writeEventRecord` below), because one write is one row in the room's history
- * and each of the two already has a row shape of its own.
- *
- * "undo" is the one write that puts an earlier file back byte for byte (see
- * `restoreMemoryFile`): it records itself here like every other change, because
- * putting a memory back is a change to it, not the absence of one.
- */
+/** "absorb" and "review" go through this one write but record under their own folders (the `eventRecord` option); "undo" puts an earlier file back byte for byte (restoreMemoryFile). */
 export type MemoryEditKind = "migrate" | "user_edit" | "absorb" | "review" | "undo";
 
-/**
- * The user-facing operation a `user_edit` record carries, for the history row.
- * "archive_delete" is the one operation that never touches the notes file: it
- * takes a row out of the archive for good (see `deleteArchivedEntry`).
- */
+/** The operation a `user_edit` record carries; "archive_delete" alone never touches the notes file (deleteArchivedEntry). */
 export type MemoryEditOperation = "add" | "edit" | "pin" | "unpin" | "move" | "status" | "delete" | "restore" | "archive_delete";
 
 /** What an archive delete keeps of the note it removed, so the history can say what went. */
@@ -87,7 +52,7 @@ export interface MemoryArchiveDeleteEdit {
 	text?: string;
 }
 
-/** One entry on its way out of the core, with the address a restore needs. */
+/** One archive row a write appends, with the address a restore needs. */
 export interface MemoryArchiveAppend {
 	entry: MemoryEntry;
 	why: ArchiveReason;
@@ -100,11 +65,9 @@ export interface MemoryArchiveAppend {
 }
 
 export interface MemoryWriteOptions {
-	/** The event record's kind: what happened to the memory. */
 	why: MemoryEditKind;
 	/** The `<event>` half of the snapshot name and the event id's prefix ("migrate", "edit", …). */
 	snapshotLabel: string;
-	/** Entries leaving the core in this same write. */
 	archiveAppend?: MemoryArchiveAppend[];
 	/** Entries coming back out of the archive in this same write (a restore). */
 	archiveRemoveIds?: string[];
@@ -113,19 +76,10 @@ export interface MemoryWriteOptions {
 	operation?: MemoryEditOperation;
 	/** The page's id for this request: an add sent again after its answer was lost finds it here and adds nothing. */
 	requestId?: string;
-	/** How many entries the migration gave an id to. */
 	entriesAssigned?: number;
-	/**
-	 * How the write stamps the room's system-managed Chronos. Defaults to the
-	 * memory-edit stamp; Memorize passes its consolidation stamp, so one write
-	 * dates itself in the field its own workflow owns.
-	 */
+	/** How the write stamps Chronos: the memory-edit stamp by default; Memorize and Review pass their own. */
 	stampChronos?: (l1b: string, now: Date, writeId: string) => string;
-	/**
-	 * Builds the event record instead of the default `events/memory-edit` one.
-	 * It only builds: the write keeps the record in its intent and writes it
-	 * after the core file, so the record lands with the memory or not at all.
-	 */
+	/** Builds the event record instead of the default memory-edit one. It only builds: the write keeps it in its intent and writes it after the core, so it lands with the memory or not at all. */
 	eventRecord?: (input: {
 		agentId: string;
 		writeId: string;
@@ -205,43 +159,25 @@ export interface MemoryDocumentLoad {
 	budget: BudgetState;
 	/** True only on the one load that migrated a v1 file AND wrote it. */
 	migrated: boolean;
-	/** The migration's write, when this load performed one. */
 	migration?: MemoryWriteResult;
-	/**
-	 * Set when the load migrated the parsed document IN MEMORY and wrote nothing:
-	 * the caller holds a document with ids the file does not have yet, and owes
-	 * the user that write (or no write at all).
-	 */
+	/** Set when the load migrated in memory only: the caller holds ids the file does not have yet, and owes that write (or none). */
 	pendingMigration?: { entriesAssigned: number };
 }
 
 export interface LoadMemoryDocumentOptions {
 	/**
-	 * What a load may do to a file that has never carried entry ids:
-	 *  - `true` (the default): migrate it and WRITE the migration, snapshot and
-	 *    event record included — what the entries pane's own reads do, because a
-	 *    person opening the pane is asking for the ids;
-	 *  - `false`: leave it alone and hand back the document as it parses — for
-	 *    readers that must never write (diagnostics, the status block);
-	 *  - `"in-memory"`: migrate the parsed document and write NOTHING, reporting
-	 *    it as `pendingMigration`. This is what a memory update's proposal and a
-	 *    read-only pane use: the cards carry ids, the file on disk is untouched,
-	 *    and the write happens once, at approval, or never.
+	 * What a load may do to a file without entry ids: `true` (default) migrates and writes, as a pane edit does before its own
+	 * write; `false` leaves it alone, for readers that never write; `"in-memory"` migrates and writes nothing (pendingMigration), as the pane's reads do.
 	 */
 	migrate?: boolean | "in-memory";
 	now?: Date;
 }
 
-// --- product sentences -------------------------------------------------------
-
-/**
- * The room is mid-turn. One sentence, no jargon: the model is reading this
- * memory right now, which is exactly why the edit waits.
- */
+/** The room is mid-turn: the model is reading this memory right now, which is why the edit waits. */
 export const MEMORY_ROOM_BUSY_SENTENCE = "This room is in the middle of a turn. Wait for it to finish, then change the memory.";
 export const MEMORY_ENTRY_UNKNOWN_SENTENCE = "That entry is not in this room's memory any more.";
 export const MEMORY_ARCHIVED_ENTRY_UNKNOWN_SENTENCE = "That entry is not in this room's archive any more.";
-/** A restore of a note the core already holds, in this or an older version: nothing is put in beside it. */
+/** A restore of a note the core already holds, in this or another version: nothing is put in beside it. */
 export const MEMORY_ENTRY_ALREADY_IN_CORE_SENTENCE = "This note is already in memory.";
 /** A restore of an older value a newer conversation replaced: it stays in the archive as history. */
 export const MEMORY_ENTRY_HISTORY_SENTENCE = "This is an older value kept as history, so it cannot be restored as current.";
@@ -270,8 +206,6 @@ export function memoryEntryHistoryError(): Error {
 export function memoryEntryAlreadyInCoreError(): Error {
 	return productError(MEMORY_ENTRY_ALREADY_IN_CORE_SENTENCE, "memory_entry_already_in_core", 409);
 }
-
-// --- disk primitives (the house pattern: one small atomic writer per module) --
 
 function ensureDir(dir: string): void {
 	fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -326,18 +260,11 @@ function readArchiveText(files: RoomFiles): string {
 	try {
 		return fs.readFileSync(files.archiveEntriesPath, "utf-8");
 	} catch {
-		return ""; // no archive yet — the common case
+		return "";
 	}
 }
 
-// --- guards ------------------------------------------------------------------
-
-/**
- * The one guard every write passes. It reads the SAME activeThread.inFlight the
- * background-run classifier reads (running or cancelling), and deliberately not
- * the room lock: a person editing entries in Room settings has the room open,
- * so a lock check would refuse every edit the pane exists to make.
- */
+/** The guard every write passes: activeThread.inFlight, as the background-run classifier reads it, never the room lock, which the open pane holds. */
 export function memoryRoomBusy(agentIdRaw: string): boolean {
 	try {
 		return getPersistentAgentStatus(agentIdRaw).activeThread?.inFlight === true;
@@ -346,11 +273,7 @@ export function memoryRoomBusy(agentIdRaw: string): boolean {
 	}
 }
 
-/**
- * A Maintain save that meets a turn waits for it to end, up to two minutes,
- * instead of refusing; past that the write refuses as before. The caller
- * holds the save lock and writes with no await after this returns.
- */
+/** A Maintain save that meets a turn waits up to two minutes for it to end, then refuses as before; the caller holds the save lock and writes with no await after this. */
 export async function waitForMemoryRoomTurn(agentIdRaw: string, limitMs = 120_000): Promise<void> {
 	for (const until = Date.now() + limitMs; memoryRoomBusy(agentIdRaw) && Date.now() < until; ) await new Promise((resolve) => setTimeout(resolve, 250));
 }
@@ -359,15 +282,7 @@ export function assertMemoryWriteAllowed(agentIdRaw: string): void {
 	if (memoryRoomBusy(agentIdRaw)) throw memoryRoomBusyError();
 }
 
-// --- budget ------------------------------------------------------------------
-
-/**
- * The room's budget line: what Deep Memory + Active Items cost the room in its
- * CONTEXT render, against the budget its owner set. The shared numerator
- * (reviewTargetEstimatedTokensFromL1b in persistent-agents.ts) measures the
- * same render, so the status block, the settings meter, the room card, the
- * approval card and this module's enforcement pass all speak one number.
- */
+/** The budget line: Deep Memory and Active Items in their context render against the owner's budget; the shared numerator in persistent-agents.ts measures the same render. */
 export function memoryBudgetState(agentIdRaw: string, doc: MemoryDocument, limitTo?: number): BudgetState {
 	settleMemoryBudget(agentIdRaw);
 	const budgetTokens = limitTo ?? readPersistentRoomMaintenanceSettings(agentIdRaw).memoryBudgetTokens;
@@ -383,20 +298,8 @@ export interface MemoryBudgetSettlement {
 }
 
 /**
- * The budget starts where the room is. A room that comes to the entry model
- * from 0.11.2 with the default budget would meet the budget rule on its first
- * Memorize and watch two thirds of its notes go to the archive on day one; so
- * the first time its budget is read against its own file, the budget is set
- * to the room's size plus a quarter (at least the default, at most the
- * ceiling), and the person tightens it later with the slider. Every other
- * room keeps what it has: one already on the entry model is never resized,
- * and a budget the person set in 0.11.2 is theirs.
- *
- * The one place that decides the rule. Every reader of a room's budget calls
- * it first; once `memoryBudgetSettled` is on disk every later call is a
- * settings read and nothing more. Never touches the memory file; never runs
- * for an archived room (callers already refuse those); one settings write per
- * room, ever. A room whose file cannot be read is left for the next reader.
+ * The first read of a room without entry ids on the default budget sets the budget to the room's size plus a quarter (at least the default, at most the ceiling), so its first Memorize does not archive most notes.
+ * Call it before reading a room's budget, as getPersistentAgentStatus does; it writes the settings once per room, never the memory file, and callers refuse archived rooms.
  */
 export function settleMemoryBudget(agentIdRaw: string): MemoryBudgetSettlement {
 	const settings = readPersistentRoomMaintenanceSettings(agentIdRaw);
@@ -426,18 +329,10 @@ export function settleMemoryBudget(agentIdRaw: string): MemoryBudgetSettlement {
 	}
 }
 
-// --- the archive file --------------------------------------------------------
-
 export function readArchive(agentIdRaw: string): ArchivedEntry[] {
 	return parseArchive(readArchiveText(roomFiles(agentIdRaw)));
 }
 
-/**
- * Appends entries to `L1b/archive/entries.md` on their own — what a demotion
- * pass uses when it is not writing the core in the same step. The archive never
- * enters a prompt and is append-only, so it carries no snapshot of its own; the
- * core file's snapshots are the room's history.
- */
 export function appendArchive(agentIdRaw: string, appends: MemoryArchiveAppend[], now = new Date()): ArchivedEntry[] {
 	const files = roomFiles(agentIdRaw);
 	assertMemoryWriteAllowed(files.agentId);
@@ -468,9 +363,7 @@ function archiveTextWith(current: string, appends: MemoryArchiveAppend[], remove
 export interface MemoryArchiveDeleteResult {
 	agentId: string;
 	memoryEditId: string;
-	/** The row that left the archive, as it was. */
 	deleted: ArchivedEntry;
-	/** What the archive holds now. */
 	archive: ArchivedEntry[];
 	eventRecordPath: string;
 	eventRelPath: string;
@@ -478,17 +371,7 @@ export interface MemoryArchiveDeleteResult {
 
 const ARCHIVE_DELETE_TEXT_KEEP_CHARS = 200;
 
-/**
- * Deletes one archived note for good: the only write in this module that
- * destroys anything. The archive is otherwise the way out of memory and the
- * way back; a person may decide a note has no way back, and this is that
- * decision. It refuses while the room is busy like every write, refuses an
- * unknown row with the archive's own sentence, and records itself under
- * `events/memory-edit` as a user edit — the room's history must show a note
- * leaving for good exactly as it shows one being restored. The notes file is
- * not touched, so there is no snapshot of it; the record keeps the note's
- * first lines so the history can still say what went.
- */
+/** Deletes one archived note for good, the only write here that destroys anything. The notes file is untouched, so no snapshot; the record keeps the note's topic for the history, and its first characters. */
 export function deleteArchivedEntry(agentIdRaw: string, entryId: string, now = new Date()): MemoryArchiveDeleteResult {
 	const files = roomFiles(agentIdRaw);
 	assertMemoryWriteAllowed(files.agentId);
@@ -545,29 +428,13 @@ export function deleteArchivedEntry(agentIdRaw: string, entryId: string, now = n
 	};
 }
 
-// --- the room's context render ----------------------------------------------
-
-/**
- * What the room reads every turn: the storage file with its metadata comments
- * stripped and one archive pointer line under every topic that has archived
- * entries. A file nobody has migrated comes back verbatim (see
- * renderMemoryContext), so switching the boot path to this function changes no
- * existing room's prompt by a single byte. Never writes, never migrates: a boot
- * is not the place to change a room's memory.
- */
+/** The context render with archive pointers and pair days; a never-migrated file comes back verbatim. Never writes or migrates. */
 export function contextRender(agentIdRaw: string): string {
 	const files = roomFiles(agentIdRaw);
 	return renderMemoryContext(readL1bOrThrow(files), readArchiveText(files), { pairDays: true });
 }
 
-// --- load --------------------------------------------------------------------
-
-/**
- * The fallback saved-on date migration gives an entry that carries no "(saved
- * YYYY-MM-DD)" stamp: the file's own last checkpoint (or consolidation) day,
- * which is the last day this memory demonstrably changed. Today only when the
- * room has never had either.
- */
+/** Migration's fallback saved-on date: the file's last checkpoint day, else its last consolidation day, each a day this memory demonstrably changed; today when there is neither. */
 function fallbackSavedDate(doc: MemoryDocument, now: Date): string {
 	for (const label of ["Last checkpoint at", "Last consolidation at"]) {
 		const match = new RegExp(`^-\\s*${label}:\\s*(\\d{4}-\\d{2}-\\d{2})`, "m").exec(doc.chronos);
@@ -576,16 +443,7 @@ function fallbackSavedDate(doc: MemoryDocument, now: Date): string {
 	return isoDay(now);
 }
 
-/**
- * The counter the room's next id comes from, as the store hands it out: never
- * below one past the highest number the ARCHIVE holds. The parser recovers a
- * missing counter from the core file's own ids (the counter rule), but the
- * archive is the other half of a room's memory and it can carry a number the
- * core no longer does — an entry that left the core, or the versions of one —
- * and an id minted below it would come back as a duplicate the day the row is
- * restored. Lifting the counter is safe in every case: ids only ever go up, and
- * a counter that is already ahead is left where it is.
- */
+/** The parsed document with its counter never below one past the archive's highest number: an id minted below it would duplicate an archived row the day it is restored. */
 function parseWithCounterAboveArchive(l1b: string, archive: ArchivedEntry[]): MemoryDocument {
 	const doc = parseMemoryDocument(l1b);
 	doc.nextEntryNumber = Math.max(doc.nextEntryNumber, highestEntryNumber(archive.map((entry) => entry.id)) + 1);
@@ -620,36 +478,15 @@ export function loadMemoryDocument(agentIdRaw: string, options: LoadMemoryDocume
 		entriesAssigned: migrated.assigned,
 		now,
 	});
-	// Re-read what actually landed: the document the caller holds must be the
-	// document on disk, stamped Chronos line included, or its next write would
-	// silently revert it.
+	// Re-read what landed: the caller's document must be the one on disk, stamped Chronos included, or its next write would revert it.
 	const doc = parseWithCounterAboveArchive(fs.readFileSync(files.l1bPath, "utf-8"), archive);
 	return { doc, archive, budget: migration.budget, migrated: true, migration };
 }
 
-// --- write -------------------------------------------------------------------
-
-/**
- * The one write. Order is not an accident: the intent first (memory-commit.ts),
- * then the snapshot (so the previous file survives whatever follows), then the
- * archive's new rows (so an entry is in the archive before it is out of the
- * core: a crash between the two costs a duplicate, never a loss), then the
- * core, which is the commit point, then the rows taken out of the archive, the
- * limit and the event record, which a crash after the core leaves for the next
- * request to finish (a row restored to the core leaves the archive only once
- * it is there).
- */
-/**
- * How many of a room's newest records a request sent again reads: it is sent
- * again minutes after the first, so a room's long history is never read whole.
- */
+/** How many of a room's newest records a resent request reads: it comes minutes after the first, so a long history is never read whole. */
 export const RECENT_RECORDS_READ = 500;
 
-/**
- * The names of a folder's newest records, newest first. A name is its label
- * (`edit_`, `review_`, `undo_`...), then the time it was written, so the order
- * is the time's, whatever the label.
- */
+/** A folder's newest records, newest first: a name is its label then its write time, so the order is the time's, whatever the label. */
 export function newestRecordFiles(dir: string): string[] {
 	const time = (file: string) => file.slice(file.indexOf("_") + 1);
 	return fs.readdirSync(dir).filter((file) => file.endsWith(".json")).sort((a, b) => time(b).localeCompare(time(a))).slice(0, RECENT_RECORDS_READ);
@@ -673,6 +510,10 @@ export function findMemoryEditRecord(agentIdRaw: string, matches: (record: Memor
 	return null;
 }
 
+/**
+ * The one write, in this order: the intent (memory-commit.ts), the snapshot, the archive's new rows (a crash then costs a
+ * duplicate, never a loss), the core as the commit point, then archive removals, the limit and the event record, which a crash leaves to the next request.
+ */
 export function writeMemoryDocument(agentIdRaw: string, doc: MemoryDocument, options: MemoryWriteOptions): MemoryWriteResult {
 	const files = roomFiles(agentIdRaw);
 	assertMemoryWriteAllowed(files.agentId);
@@ -756,8 +597,6 @@ function memoryEditRecordPlan(files: RoomFiles, memoryEditId: string, now: Date,
 	return { eventRecordPath, record };
 }
 
-// --- the commit ----------------------------------------------------------------
-
 /** A memory write in flight (memory-commit.ts): ids, the hash of the core it writes, and what follows the core. */
 interface MemoryCommitIntent {
 	writeId: string;
@@ -777,10 +616,8 @@ function sha256(text: string): string {
 }
 
 /**
- * The intent, the snapshot, the archive's new rows, the core (the commit
- * point), then the rest. A failure after the core does not undo the save: it is logged,
- * its intent stays, and the next request finishes it, so the caller hears
- * that the save landed, which is true.
+ * The intent, the snapshot, the archive's new rows, the core (the commit point), then the rest. A failure after the core
+ * keeps its intent for the next request to finish, so the caller hears that the save landed, which is true.
  */
 function commitMemoryWrite(files: RoomFiles, input: { writeId: string; currentL1b: string; nextL1b: string; archivedL1bPath: string; archiveText?: string; archiveRemoveIds?: string[]; limitTo?: number; plan: MemoryEventRecordPlan }): void {
 	const rootDir = files.instance.rootDir;
@@ -804,10 +641,7 @@ function commitMemoryWrite(files: RoomFiles, input: { writeId: string; currentL1
 			console.error(`[memory-commit] a memory save in ${files.agentId} that never landed could not be cleared: ${(error as Error)?.name ?? "Error"}`);
 		}
 	}
-	// The save stays synchronous from the intent to its clear: the settle runs outside the
-	// save lock, so an await in between would let a status request finish or
-	// drop this save mid-flight. Keep it synchronous, or take the lock in the
-	// settle.
+	// Synchronous from the intent to its clear: the settle runs outside the save lock, so an await here would let a status request finish or drop this save mid-flight.
 	writeCommitIntent(rootDir, "memory", intent);
 	ensureDir(files.archiveDir);
 	fs.writeFileSync(input.archivedL1bPath, input.currentL1b, { mode: 0o600, flag: "wx" });
@@ -861,14 +695,12 @@ function settleMemoryIntent(agentId: string, rootDir: string, core: string, inte
 	if (intent.earlier) settleMemoryIntent(agentId, rootDir, core, intent.earlier);
 }
 
-// --- restore -----------------------------------------------------------------
-
 export interface MemoryRestoreOptions {
 	/** The bytes to put back as `current.md` — an earlier snapshot of this room, verbatim. */
 	restoredL1b: string;
 	/** The `<event>` half of the snapshot name and the write id's prefix ("undo"). */
 	snapshotLabel: string;
-	/** Archive rows the restored file's own write had appended, taken back out with it. */
+	/** Archive rows the undone save appended, taken back out with it. */
 	archiveRemoveIds?: string[];
 	/** This write's event record and where it lands, built before the core is written. Same seam Memorize uses. */
 	eventRecord(input: {
@@ -900,16 +732,8 @@ export interface MemoryRestoreResult {
 }
 
 /**
- * The other write: an earlier file put back byte for byte. It is deliberately
- * NOT writeMemoryDocument with a parsed document — that re-renders, and a
- * restore that re-renders is a new file that merely resembles the old one. The
- * order is the same one every write here obeys: the intent, the file being
- * replaced snapshotted, the core, then the rows out of the archive and the
- * event record.
- *
- * Chronos is not stamped: the restored file already carries the Chronos lines
- * of the state it is being put back to, and writing today's date over them
- * would claim a change that is being taken back.
+ * The other write: an earlier file put back byte for byte, never re-rendered through writeMemoryDocument, in the same
+ * order as every write here. Chronos is not stamped: the restored file carries the Chronos of the state it puts back.
  */
 export function restoreMemoryFile(agentIdRaw: string, options: MemoryRestoreOptions): MemoryRestoreResult {
 	const files = roomFiles(agentIdRaw);
@@ -922,10 +746,7 @@ export function restoreMemoryFile(agentIdRaw: string, options: MemoryRestoreOpti
 	const writeId = `${options.snapshotLabel}_${stamp}_${shortRandomId()}`;
 	const archivedL1bPath = path.join(files.archiveDir, `${stamp}-before-${writeId}.md`);
 
-	// A row the archive no longer holds is left alone rather than refused: what
-	// guarantees these rows are the restored write's own is the caller's
-	// staleness check, and a memory that is already back should not be held
-	// hostage to a row someone took out by hand.
+	// A row the archive no longer holds is skipped, not refused: the caller's staleness check vouches for the rows, and a memory already back is never held hostage to a row taken out by hand.
 	let archiveText = readArchiveText(files);
 	const removedArchiveIds: string[] = [];
 	for (const id of options.archiveRemoveIds ?? []) {

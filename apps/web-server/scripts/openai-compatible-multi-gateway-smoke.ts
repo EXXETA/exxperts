@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { authedFetch, type AuthedFetchInit, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer } from "./smoke-server-process.js";
+import { authedFetch, freePort, type AuthedFetchInit, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer } from "./smoke-server-process.js";
 
 /**
  * Several saved gateways, side by side.
@@ -40,9 +40,9 @@ const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "exxperts-multi-gateway-h
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const webServerDir = path.resolve(scriptDir, "..");
 const repoRoot = path.resolve(webServerDir, "..", "..");
-const port = 24000 + Math.floor(Math.random() * 10000);
-const stubPort = port + 1;
-const foreignPort = port + 2;
+const port = await freePort();
+const stubPort = await freePort();
+const foreignPort = await freePort();
 const baseUrl = `http://127.0.0.1:${port}`;
 const stubGatewayBaseUrl = `http://127.0.0.1:${stubPort}/v1`;
 const restrictedGatewayBaseUrl = `http://127.0.0.1:${stubPort}/restricted/v1`;

@@ -13,7 +13,7 @@
 // Run: node scripts/run-smokes.mjs web-search-settings
 
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { authedFetch, type AuthedFetchInit, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer } from "./smoke-server-process.js";
+import { authedFetch, freePort, type AuthedFetchInit, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer } from "./smoke-server-process.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -92,7 +92,7 @@ let server: ChildProcessWithoutNullStreams | null = null;
 const serverOutput: string[] = [];
 
 async function startServer(extraEnv: NodeJS.ProcessEnv = {}): Promise<void> {
-	port = 24000 + Math.floor(Math.random() * 10000);
+	port = await freePort();
 	baseUrl = `http://127.0.0.1:${port}`;
 	server = spawn("npx", ["tsx", "src/index.ts"], {
 		shell: process.platform === "win32",

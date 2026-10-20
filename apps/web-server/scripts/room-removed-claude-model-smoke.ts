@@ -25,7 +25,7 @@ import path from "node:path";
 import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
-import { authedFetch, SMOKE_AUTH_HEADERS, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer } from "./smoke-server-process.js";
+import { authedFetch, SMOKE_AUTH_HEADERS, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort } from "./smoke-server-process.js";
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -48,7 +48,7 @@ function pass(label: string): void {
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const webServerDir = path.resolve(scriptDir, "..");
 const repoRoot = path.resolve(webServerDir, "..", "..");
-const port = 27000 + Math.floor(Math.random() * 10000);
+const port = await freePort();
 const baseUrl = `http://127.0.0.1:${port}`;
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "exxperts-removed-claude-"));
@@ -286,7 +286,7 @@ try {
 		const connectedAgain = () => page.evaluate(() => (window as any).__connectedAgain as number);
 		await page.goto(`${baseUrl}/auth/session?token=${SMOKE_AUTH_TOKEN}`);
 		await page.waitForLoadState("networkidle");
-		const dismiss = page.locator(".whats-new-foot .btn-primary");
+		const dismiss = page.locator(".whats-new-close");
 		if (await dismiss.count()) await dismiss.click();
 
 		// --- A conversation started on it keeps answering ------------------------------------

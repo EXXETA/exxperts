@@ -63,6 +63,10 @@ const defaultGrepOperations: GrepOperations = {
 export interface GrepToolOptions {
 	/** Custom operations for grep. Default: local filesystem plus ripgrep */
 	operations?: GrepOperations;
+	/** Leave a file's matches out, uncounted, when this returns true for its absolute path. */
+	skipPath?: (absolutePath: string) => boolean;
+	/** Globs ripgrep never searches, applied after the call's own glob so they win. */
+	excludeGlobs?: string[];
 }
 
 function formatGrepCall(
@@ -216,6 +220,7 @@ export function createGrepToolDefinition(
 						if (ignoreCase) args.push("--ignore-case");
 						if (literal) args.push("--fixed-strings");
 						if (glob) args.push("--glob", glob);
+						for (const excludeGlob of options?.excludeGlobs ?? []) args.push("--glob", `!${excludeGlob}`);
 						args.push("--", pattern, searchPath);
 
 						const child = spawn(rgPath, args, { stdio: ["ignore", "pipe", "pipe"] });
@@ -227,6 +232,9 @@ export function createGrepToolDefinition(
 						let aborted = false;
 						let killedDueToLimit = false;
 						const outputLines: string[] = [];
+						// ripgrep reports a file's matches together, so one answer per file run is enough.
+						let lastCheckedPath: string | undefined;
+						let lastPathSkipped = false;
 
 						const cleanup = () => {
 							rl.close();
@@ -278,8 +286,15 @@ export function createGrepToolDefinition(
 								return;
 							}
 							if (event.type === "match") {
-								matchCount++;
 								const filePath = event.data?.path?.text;
+								if (filePath && options?.skipPath) {
+									if (filePath !== lastCheckedPath) {
+										lastCheckedPath = filePath;
+										lastPathSkipped = options.skipPath(path.resolve(filePath));
+									}
+									if (lastPathSkipped) return;
+								}
+								matchCount++;
 								const lineNumber = event.data?.line_number;
 								const lineText = event.data?.lines?.text;
 								if (filePath && typeof lineNumber === "number")

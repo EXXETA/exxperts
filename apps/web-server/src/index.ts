@@ -28,7 +28,7 @@
  *                        (what an effort frame actually took hold as)
  *                      { type: "error", message: string }
  *                      { type: "turn_reattach", turnId, conversationId, settled, userText?, anchorItemId?, startedAt? }
- *                        (issue #33: sent right after "ready" when this session
+ *                        (sent right after "ready" when this session
  *                        stepped back into a room whose detached turn is still
  *                        cooking or just landed; the whole turn's event frames
  *                        replay immediately after it, then live frames continue.
@@ -41,7 +41,7 @@
  *                        should render instantly; frames after it are live
  *                        and reveal at reading pace)
  *                      { type: "error", code: "room_displaced", ... }
- *                        (issue #33: this session's adopted turn was taken over
+ *                        (this session's adopted turn was taken over
  *                        by a newer connection for the same room)
  *
  * Persona is forced to "business" here — that is who the web UI is for.
@@ -62,9 +62,9 @@ import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import Fastify, { LogController, type FastifyRequest } from "fastify";
 import websocket from "@fastify/websocket";
-import { createAgentSession, clampThinkingLevel, getThinkingLevelLadder, resolveThinkingLevelRung, DefaultResourceLoader, getAgentDir, SessionManager, SettingsManager, CoordinationManager, AuthStorage, ModelRegistry, defaultModelPerProvider, isApiKeyLoginProvider, listGitHubCopilotModels } from "@exxeta/exxperts-runtime";
+import { ANTHROPIC_API_KEY_PROVIDER, createAgentSession, clampThinkingLevel, getThinkingLevelLadder, resolveThinkingLevelRung, DefaultResourceLoader, getAgentDir, SessionManager, SettingsManager, AuthStorage, ModelRegistry, defaultModelPerProvider, isApiKeyLoginProvider, listGitHubCopilotModels } from "@exxeta/exxperts-runtime";
 import { createWebUiContext } from "./web-ui-context.js";
-import { cancelProviderLogin, logoutProvider, ProviderAuthError, providerLoginState, saveProviderApiKey, startProviderLogin } from "./provider-auth.js";
+import { cancelProviderLogin, checkProviderApiKey, logoutProvider, ProviderAuthError, providerLoginState, saveProviderApiKey, startProviderLogin } from "./provider-auth.js";
 import { migrateBuiltInAiProfiles } from "./built-in-ai-profile-migration.js";
 import { deleteCustomAiProfile, isCustomAiProfileId, isReservedCustomProfileProvider, readCustomAiProfiles, writeCustomAiProfile } from "./custom-ai-profiles.js";
 import { ConsultPromptOverflowError } from "./consult.js";
@@ -83,7 +83,8 @@ import { createPersistentRoomBashApprovalExtension, createPersistentRoomBashAppr
 import { migratePersistentRoomBashAutoApproveDefaults, readPersistentRoomBashSettings, writePersistentRoomBashSettings } from "./persistent-room-bash-settings.js";
 import { applyShellLookupTestSwitch, createPersistentRoomShellMissingExtension, PERSISTENT_ROOM_SHELL_MISSING_SENTENCE, persistentRoomShellFound } from "./persistent-room-shell-missing.js";
 import { rememberSentenceModelName } from "./checkpoint-compression.js";
-import { createRoomModelCatalog, memoryBudgetNeedsLargerModelSentence, memoryModelHoldsBudget, MemoryModelTooSmallError, memoryModelTooSmallSentence, parseModelLock, readRoomModels, rememberSaveMemoryModels, resolveAiDefault, resolveRoomModel, ROOM_MODEL_TASKS, RoomModelUnavailableError, roomModelUnavailableError, writeAiDefaults, writeRoomModels, type RoomModelCatalog, type RoomModelNames, type RoomModelResolution, type RoomModelTask } from "./room-models.js";
+import { createRoomModelCatalog, providerSignsIn, taggedRecommendation, memoryBudgetNeedsLargerModelSentence, memoryModelHoldsBudget, MemoryModelTooSmallError, memoryModelTooSmallSentence, parseModelLock, readRoomModels, rememberSaveMemoryModels, resolveAiDefault, resolveRoomModel, ROOM_MODEL_TASKS, RoomModelUnavailableError, roomModelUnavailableError, writeAiDefaults, writeRoomModels, type RoomModelCatalog, type RoomModelNames, type RoomModelResolution, type RoomModelTask } from "./room-models.js";
+import { credentialGoneWords, providerCredentialClause } from "./model-not-offered.js";
 import { migrateRoomModels } from "./room-models-migration.js";
 import { isRoomEffortLevel, readPersistentRoomEffortChoice, writePersistentRoomEffortChoice, type RoomEffortLevel } from "./persistent-room-effort-settings.js";
 import { buildPersistentRoomCurrentInstructionsSection, readGlobalInstructions, writeGlobalInstructions, ROOM_INSTRUCTIONS_MAX_CHARS } from "./persistent-room-instructions.js";
@@ -190,7 +191,7 @@ import { clearKeptDiscussion, firstReadOnce, keepDiscussionTurns } from "./memor
 import { cancelRememberJob, discardRememberJob, dropKeptProposal, getRememberJob, rememberCancelledReply, rememberJobSettled, startRememberJob, takeRestartedRemember } from "./remember-job.js";
 import { countRememberPartNotes } from "./remember-parts-cache.js";
 import { absorbRunStatusFields, approveAbsorbRun, cancelAbsorbRun, chooseAbsorbRunBeside, editAbsorbRunEntry, getAbsorbRun, keepAbsorbRunEntries, moveAbsorbRunSortedNote, parseAbsorbRunProposeRequest, resumeAbsorbRun, setAbsorbRunBudget, startAbsorbRun, ABSORB_PROBE_PROMPT, ABSORB_PROBE_TIMEOUT_MS, type AbsorbRunApprovalResponse } from "./absorb-run.js";
-import { callWithPatience, failureWords, MODEL_CALL_IDLE_TIMEOUT_MS, ModelUnreachableError, notOfferedLine, notOnAccountLine, roomCallWait, withRoomCallWait, type PatienceWait } from "./model-call-causes.js";
+import { callWithPatience, failedTurnKey, failureWords, MODEL_CALL_IDLE_TIMEOUT_MS, ModelUnreachableError, notOfferedLine, notOnAccountLine, roomCallWait, withRoomCallWait, type PatienceWait } from "./model-call-causes.js";
 import { FOLD_TRIGGER_PROMPT } from "./absorb-ops.js";
 import { registerReviewRunRoutes } from "./review-run-routes.js";
 import { hasActiveReviewRun } from "./review-run.js";
@@ -303,12 +304,12 @@ type PersistentRoomLiveSession = {
 };
 const persistentRoomLiveSessions = new Map<string, PersistentRoomLiveSession>();
 // Rooms whose web client disconnected while a turn was in flight and whose
-// turn keeps cooking detached (community #14). The room lock stays held until
+// turn keeps cooking detached. The room lock stays held until
 // the finished answer lands in the thread file; this set only makes the
 // refusal message honest for a connection attempt that bounces off that lock
 // ("finishing a response" rather than "open in another browser session").
 const detachedCookingRooms = new Set<string>();
-// Issue #33 (stepping back into a room): the handle a NEW connection uses to
+// Stepping back into a room: the handle a NEW connection uses to
 // adopt a room's detached cooking turn instead of bouncing off it. Registered
 // by the detaching connection's close handler, removed the moment the turn
 // settles, and implemented entirely inside the detaching connection's closure
@@ -346,7 +347,7 @@ type DetachedCookingTurnHandle = {
 	stop: (connectionId: string) => Promise<void>;
 };
 const detachedCookingTurnHandles = new Map<string, DetachedCookingTurnHandle>();
-// Watchdog for a detached turn (community #14): a hung provider stream would
+// Watchdog for a detached turn: a hung provider stream would
 // otherwise cook forever — the lock heartbeat renews indefinitely,
 // detachedCookingRooms refuses every new web connection, and no user-reachable
 // stop exists short of a server restart. When a turn detaches, a deadline this
@@ -355,7 +356,7 @@ const detachedCookingTurnHandles = new Map<string, DetachedCookingTurnHandle>();
 // note. 12 minutes is deliberately far above any legitimate single turn while
 // still bounded. Env override exists for tests only.
 const DETACHED_TURN_DEADLINE_MS = Number(process.env.EXXETA_DETACHED_TURN_DEADLINE_MS ?? "") || 12 * 60_000;
-// Issue #33 (review): the reattach replay buffer is byte-capped. A turn whose
+// The reattach replay buffer is byte-capped. A turn whose
 // frames exceed this stops buffering, frees what it held, and marks itself
 // replay-unavailable: a reattach then gets the honest room_cooking bounce (the
 // landing still carries the full answer) instead of a truncated replay whose
@@ -607,7 +608,7 @@ app.addHook("onRequest", async (req, reply) => {
 	}
 	// Requests accepted by the remote-mode tunnel listener take their own
 	// branch: everything the loopback guard demands, minus loopback shape,
-	// plus (in a later unit) device identity. The socket tag is the
+	// plus device identity. The socket tag is the
 	// authority; the checks inside are belt-and-suspenders on top of it.
 	// With remote OFF no socket is ever tagged, so this branch is dead code
 	// and the loopback path below is byte-identical to today.
@@ -682,8 +683,8 @@ app.addHook("onRequest", async (req, reply) => {
 		}
 		// Authenticated device: bind the socket for per-device revocation,
 		// refresh last-seen, attach the record for capability checks, and let
-		// the request proceed to the shared routes. Capability and per-room
-		// exposure enforcement build on this attachment in a later unit.
+		// the request proceed to the shared routes. The route capability check
+		// and the hidden-room filters read this attachment.
 		remoteMode.registerDeviceSocket((req.raw as any)?.socket, device.id);
 		remoteDevices.touchLastSeen(device.id);
 		(req as any).exxRemoteDevice = device;
@@ -1513,7 +1514,7 @@ function recordPersistentRoomPromptDiagnostics(input: {
 	}));
 }
 
-// `answeringDetached` (issue #33): the web lock is held by a detached cooking
+// `answeringDetached`: the web lock is held by a detached cooking
 // turn with NO client attached, so the launcher card can offer stepping back
 // in; a room genuinely open in another window keeps its lock-and-stay-out.
 app.get("/api/persistent-agents", async (req) => {
@@ -2136,7 +2137,7 @@ app.get("/api/persistent-agents/:id/tasks", async (req, reply) => {
 		return persistentAgentNormalUseErrorReply(reply, e);
 	}
 });
-// First-open stamp (status grammar, 2026-07-18): the green unread dot decays
+// First-open stamp: the green unread dot decays
 // exactly once — the client posts when the user first opens or acts on a row.
 // Idempotent; a missing row is a 404, not an error worth surfacing.
 app.post("/api/persistent-agents/:id/tasks/:taskId/viewed", async (req, reply) => {
@@ -2151,7 +2152,7 @@ app.post("/api/persistent-agents/:id/tasks/:taskId/viewed", async (req, reply) =
 		return persistentAgentNormalUseErrorReply(reply, e);
 	}
 });
-// Panel remove-from-list (user control, 2026-07-20): a list operation only —
+// Panel remove-from-list: a list operation only —
 // the row gets a removedAt stamp, the panel listing hides it, files stay. The
 // toast's Undo clears the stamp. Running rows must settle first.
 app.post("/api/persistent-agents/:id/tasks/:taskId/removed", async (req, reply) => {
@@ -2224,7 +2225,7 @@ app.get("/api/persistent-agents/:id/threads/:threadId", async (req, reply) => {
 		return persistentAgentNormalUseErrorReply(reply, e);
 	}
 });
-// Post-stream landing (community #14 follow-up): thread answers are client-
+// Post-stream landing: thread answers are client-
 // authored, and the client's debounced persist fires ~500ms after the LAST
 // reveal tick, so a settled turn has a window where the finished answer exists
 // only client-side. These helpers guard both directions of the double-write:
@@ -3583,9 +3584,10 @@ app.post("/api/auth/api-key", async (req, reply) => {
 	const key = typeof body.key === "string" ? body.key : "";
 	if (!provider) return reply.code(400).send({ error: "provider is required" });
 	try {
+		const notice = await checkProviderApiKey(provider, key);
 		saveProviderApiKey(provider, key);
 		// Never echo the key back.
-		return { ok: true, provider };
+		return { ok: true, provider, ...(notice ? { notice } : {}) };
 	} catch (e) {
 		const statusCode = e instanceof ProviderAuthError ? e.statusCode : 500;
 		return reply.code(statusCode).send({ error: (e as Error).message });
@@ -3610,6 +3612,7 @@ const WEB_CHAT_PROVIDER_LABELS: Record<string, string> = {
 	"openai-codex": "ChatGPT Plus/Pro",
 	openai: "OpenAI",
 	anthropic: "Anthropic / Claude",
+	[ANTHROPIC_API_KEY_PROVIDER]: "Claude API key",
 	"github-copilot": "GitHub Copilot",
 	"openai-compatible": "OpenAI-compatible gateway",
 	google: "Google / Gemini",
@@ -3637,6 +3640,8 @@ const WEB_CHAT_MODEL_LABELS: Record<string, Record<string, string>> = {
 		"claude-opus-4-6": "Opus 4.6",
 	},
 };
+// The key provider serves the Anthropic list, so it shows the same names.
+WEB_CHAT_MODEL_LABELS[ANTHROPIC_API_KEY_PROVIDER] = WEB_CHAT_MODEL_LABELS.anthropic;
 const DEFAULT_AGENT_SESSION_MAX_TOKENS_CAP = 32000;
 
 type WebChatModelSelection = { provider: string; model: string };
@@ -3757,7 +3762,7 @@ function modelStatusPayload(model: any) {
 // the names a person reads and the refusal every surface shows.
 
 type RoomModelLockPayload = { provider: string; model: string; label: string; name: string; providerLabel: string; contextWindow?: number };
-type RoomModelRowPayload = { stored: RoomModelLockPayload | null; chosen: RoomModelLockPayload | null; effective: RoomModelLockPayload | null; source: RoomModelResolution["source"]; reason?: RoomModelResolution["reason"]; refusal?: string; tooSmall?: MemoryModelTooSmallPayload[]; default?: RoomModelLockPayload | null };
+type RoomModelRowPayload = { stored: RoomModelLockPayload | null; chosen: RoomModelLockPayload | null; effective: RoomModelLockPayload | null; source: RoomModelResolution["source"]; reason?: RoomModelResolution["reason"]; keyGone?: true; refusal?: string; tooSmall?: MemoryModelTooSmallPayload[]; default?: RoomModelLockPayload | null };
 /** A Memory model the picker greys out: too small for this room's memory, or (on the defaults) for the room named. */
 type MemoryModelTooSmallPayload = { provider: string; model: string; room?: string };
 
@@ -3802,6 +3807,7 @@ function roomModelRowPayload(resolution: RoomModelResolution, task: RoomModelTas
 		effective: roomModelLockPayload(resolution.effective, registry, catalog),
 		source: resolution.source,
 		...(resolution.reason ? { reason: resolution.reason } : {}),
+		...(resolution.reason === "signed-out" && resolution.chosen && !providerSignsIn(resolution.chosen.provider) ? { keyGone: true } : {}),
 		...(refusal ? { refusal: refusal.message } : {}),
 	};
 }
@@ -3848,8 +3854,9 @@ function parseRoomModelPatch(body: any, catalog: RoomModelCatalog, options: { al
 		const lock = parseModelLock(raw);
 		const available = catalog.availability(lock, task);
 		if (!available.ok) {
+			const gone = providerSignsIn(lock.provider) ? "signed-out" : "key-missing";
 			const message = available.reason === "signed-out"
-				? `${webChatProviderLabel(lock.provider)} is signed out; sign in again in Settings, AI setup, then choose this model.`
+				? `${providerCredentialClause(webChatProviderLabel(lock.provider), gone)}; ${credentialGoneWords(gone).again.toLowerCase()} in Settings, AI setup, then choose this model.`
 				: `${lock.model} is not offered for ${task === "memory" ? "memory work" : "rooms"} by ${webChatProviderLabel(lock.provider)}.`;
 			throw Object.assign(new Error(message), { statusCode: 400 });
 		}
@@ -4200,7 +4207,8 @@ function resolvePersistentAgentBindModel(registry: ModelRegistry, params: URLSea
 		// The refusal class, so every route that binds (the first bind, the
 		// rebind before a message, an adopted turn's rebuild) stands down with
 		// the one notice instead of a line.
-		throw new RoomModelUnavailableError(`${webChatProviderLabel(lock.provider)} is signed out, so this conversation cannot continue on ${name}. Sign in again in Settings, AI setup, or continue it on another model in Room settings, Model.`, "signed-out", lock.provider);
+		const gone = providerSignsIn(lock.provider) ? "signed-out" : "key-missing";
+		throw new RoomModelUnavailableError(`${providerCredentialClause(webChatProviderLabel(lock.provider), gone)}, so this conversation cannot continue on ${name}. ${credentialGoneWords(gone).again} in Settings, AI setup, or continue it on another model in Room settings, Model.`, "signed-out", lock.provider);
 	}
 	return model;
 }
@@ -4478,14 +4486,17 @@ function roomModelProvidersPayload(registry: ModelRegistry, catalog = createRoom
 		const contextWindow = modelContextWindow(model);
 		return [{ provider: lock.provider, model: lock.model, label: webChatModelLabel(lock.provider, model), recommended: Boolean(recommended && recommended.provider === lock.provider && recommended.model === lock.model), ...(contextWindow ? { contextWindow } : {}) }];
 	});
-	return catalog.providers.map((provider) => ({
-		id: provider.providerId,
-		label: provider.label,
-		ready: provider.ready,
-		// "Recommended" only where the release curates the list.
-		conversation: options(provider.conversation, provider.curated ? provider.recommended.conversation : undefined),
-		memory: options(provider.memory, provider.curated ? provider.recommended.memory : undefined),
-	}));
+	return catalog.providers.map((provider) => {
+		// "Recommended" only where the release curates the list, the Claude key taking the sign-in's.
+		const tagged = taggedRecommendation(provider, catalog);
+		return {
+			id: provider.providerId,
+			label: provider.label,
+			ready: provider.ready,
+			conversation: options(provider.conversation, tagged.conversation),
+			memory: options(provider.memory, tagged.memory),
+		};
+	});
 }
 
 const getPersistentAgentRoomModelStatusHandler = async () => getWebChatModelStatus();
@@ -4553,7 +4564,8 @@ app.get("/api/persistent-agent-ai-profiles/model-catalog", async (req, reply) =>
 			}
 		} catch {}
 	}
-	const defaultModelId = (defaultModelPerProvider as Record<string, string>)[providerId];
+	// The key provider serves the Anthropic list, so it suggests the sign-in's default.
+	const defaultModelId = (defaultModelPerProvider as Record<string, string>)[providerId === ANTHROPIC_API_KEY_PROVIDER ? "anthropic" : providerId];
 	const suggested = models.find((model) => model.id === defaultModelId)?.id ?? models[0].id;
 	return {
 		provider: providerId,
@@ -4759,15 +4771,15 @@ function saveGatewayEverywhere(gateway: OpenAiCompatibleGateway, key: string, is
 	forgetGatewayProviderLabel(gateway.providerId);
 }
 
+/** The code a refusal carries when a new address needs its own key: the edit form says it at the key field. */
+const GATEWAY_KEY_FOR_NEW_ADDRESS = "gateway_key_for_new_address";
+
 /**
  * Whether two gateway addresses name the same server: scheme, host and port,
  * nothing else. The path is deliberately not part of it, because correcting
  * /v1 to / on the edit form is the ordinary reason to re-probe a saved
  * gateway. Anything that does not parse as a URL is nobody's server.
  */
-/** The code a refusal carries when a new address needs its own key: the edit form says it at the key field. */
-const GATEWAY_KEY_FOR_NEW_ADDRESS = "gateway_key_for_new_address";
-
 function sameGatewayOrigin(a: string, b: string): boolean {
 	try {
 		return new URL(a).origin === new URL(b).origin;
@@ -5005,11 +5017,8 @@ app.put("/api/settings/room-order", async (req, reply) => {
 });
 
 app.get("/api/settings/web-search", async () => webSearchSettingsPayload());
-// The one-time What's new window after an update. The GET can record: a
-// machine with no acknowledgement yet (fresh install, or the first run of the
-// version that grew this feature) is recorded quietly instead of shown a
-// window about things that are not new to it. The POST records the current
-// version and is idempotent.
+// The GET can record: a fresh install, or an update with nothing to show, is
+// recorded quietly. The POST records the running version and is idempotent.
 app.get("/api/whats-new", async () => resolveWhatsNew());
 app.post("/api/whats-new/seen", async () => {
 	acknowledgeWhatsNew();
@@ -7196,19 +7205,19 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 		if (roomLockHeartbeat) { clearInterval(roomLockHeartbeat); roomLockHeartbeat = null; }
 		try { roomLock.release(persistentAgentIdForSession, roomLockOwner); } catch {}
 	};
-	// Issue #33: the detached cooking turn this connection stepped back into.
+	// The detached cooking turn this connection stepped back into.
 	// Claimed synchronously below (before any await), adopted once the session
 	// is bound. Null on the ordinary connect path.
 	let claimedCookingTurn: DetachedCookingTurnHandle | null = null;
 	// Reattach is OPT-IN, declared by the client on the connect URL. A client
-	// that does not declare it (a pre-#33 bundle in a stale tab) would ignore
+	// that does not declare it (an older bundle in a stale tab) would ignore
 	// turn_reattach, double-render the replay under its persisted partial and
 	// then PERSIST the duplicated transcript over the clean landing write; such
-	// clients keep the pre-#33 room_cooking bounce they understand.
+	// clients keep the older room_cooking bounce they understand.
 	const clientSupportsReattach = params.get("reattach") === "1";
 	{
 		// A detached turn still cooking for THIS conversation no longer bounces
-		// the connection (issue #33): the session claims it here and adopts it
+		// the connection: the session claims it here and adopts it
 		// after binding, so the user steps back into the answer being written.
 		// The lock acquire below is then the ordinary web-over-web takeover;
 		// the detaching connection's release and heartbeat are owner-checked,
@@ -7261,18 +7270,18 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 		roomLockHeartbeat = setInterval(() => roomLock.heartbeat(persistentAgentIdForSession, roomLockOwner), 30_000);
 		// A session is binding to this room: whatever landed unseen in THIS
 		// conversation is about to be seen in the transcript, so its marker's
-		// job is done (community #14 slice 3, the away-notice clear). A badge
+		// job is done (the away-notice clear). A badge
 		// for an answer waiting in another conversation of this room survives a
 		// bind that never opens it.
 		try { clearPersistentAgentUnseenLandedAnswerForBind(persistentAgentIdForSession, persistentConversationId); } catch {}
 		// Register release immediately so the lock is freed even if later session
 		// setup throws or the connection drops before the main close handler.
-		// A turn detached by the disconnect (community #14) keeps the lock — the
+		// A turn detached by the disconnect keeps the lock — the
 		// heartbeat keeps running and the prompt handler releases after the
 		// finished answer lands in the thread file.
 		socket.on("close", () => {
 			if (turnKeepsCookingOnClose()) return;
-			// #33: leaving (or dying) while a claimed cooking turn is still in
+			// Leaving (or dying) while a claimed cooking turn is still in
 			// flight re-detaches it. The lock this connection took over stays
 			// held for the cooking turn (this closure's heartbeat keeps it
 			// fresh); the settle path releases it through the handle's claim.
@@ -7299,7 +7308,7 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 		promptSettled: boolean;
 	};
 	let activePersistentWebTurn: ActivePersistentWebTurn | null = null;
-	// Community #14 (detach instead of abort): a disconnect while a turn is in
+	// Detach instead of abort: a disconnect while a turn is in
 	// flight no longer cancels it. All close handlers consult this predicate in
 	// the same tick, so the lock listener, the live-session listener and the
 	// main close handler agree on the same answer. A turn the user already
@@ -7310,7 +7319,7 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 	// handler owns landing the finished answer, releasing the room lock and
 	// disposing the session.
 	let detachedFromClient = false;
-	// Post-stream tail (community #14 follow-up): thread answers are client-
+	// Post-stream tail: thread answers are client-
 	// authored and the debounced persist rearms on every reveal tick, so the
 	// first write carrying the answer lands ~500ms after the LAST tick. A turn
 	// that settled "completed" therefore has a window where the finished answer
@@ -7328,7 +7337,7 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 	// the answer ends, but the landing may still need the prompt text to
 	// restore a never-persisted user item.
 	let currentTurnUserTextForLanding = "";
-	// Issue #33: the reattach handle THIS connection registered when its turn
+	// The reattach handle THIS connection registered when its turn
 	// detached, plus the hooks the adopting connection registered on it. All
 	// null until a detach happens; the handle methods run in this closure.
 	let detachedCookingHandle: DetachedCookingTurnHandle | null = null;
@@ -7370,8 +7379,8 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 	const clearDetachedTurnDeadline = (): void => {
 		if (detachedTurnDeadlineTimer) { clearTimeout(detachedTurnDeadlineTimer); detachedTurnDeadlineTimer = null; }
 	};
-	// Watchdog arm (community #14; factored for #33 so a reattach that leaves
-	// again can re-arm it): nobody is watching this turn anymore, so a hung
+	// Watchdog arm (factored out so a reattach that leaves again can re-arm
+	// it): nobody is watching this turn anymore, so a hung
 	// provider stream would hold the room lock and refuse every new connection
 	// forever. Past the deadline the turn is aborted the way a user stop aborts
 	// it, with terminal reason `failed`, so the landing write parks the partial
@@ -7396,7 +7405,7 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 	// consult runs; starting a consult while a turn is in flight is rejected.
 	type ActiveWebConsult = { consultId: string; abortController: AbortController; stoppedByUser: boolean };
 	let activeWebConsult: ActiveWebConsult | null = null;
-	// Specialist tasks (visuals V2; option 4 2026-07-19): run-free beside the
+	// Specialist tasks: run-free beside the
 	// turn like consults, but model-proposed (delegate_task) rather than
 	// socket-initiated, so the only inbound frame is task_abort. Bookkeeping
 	// lives in the ROOM-SCOPED registry (persistent-room-specialist-registry) —
@@ -7511,7 +7520,10 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 		}
 	};
 
-	const resultPreview = (s: string): string => CoordinationManager.compactText(s, 500);
+	const resultPreview = (s: string, max = 500): string => {
+		const clean = s.replace(/\s+/g, " ").trim();
+		return clean.length > max ? clean.slice(0, max - 1) + "…" : clean;
+	};
 	const withPersistentRoomRestoredLiveThreadContext = (prompt: string): string => {
 		if (!persistentRoomRestoredLiveThreadPending || !persistentRoomRestoredLiveThreadContext) return prompt;
 		persistentRoomRestoredLiveThreadPending = false;
@@ -7541,7 +7553,8 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 			prompt,
 		].join("\n");
 	};
-	const isRetrievalTool = (name: string): boolean => CoordinationManager.isRetrievalTool(name);
+	const isRetrievalTool = (name: string): boolean =>
+		name.startsWith("kb_") || name.startsWith("graph_") || name.startsWith("memory_");
 	const flushSessionEvents = () => new Promise<void>((resolve) => setTimeout(resolve, 25));
 	const setActivePersistentWebTurnTerminalReason = (reason: PersistentWebTurnTerminalReason): void => {
 		const turn = activePersistentWebTurn;
@@ -7581,7 +7594,7 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 		try { (sessionToDispose as any).dispose?.(); } catch {}
 	};
 
-	// Community #14 slice 1: the client is gone but the turn ran to its end —
+	// The client is gone but the turn ran to its end —
 	// land the outcome into the thread file server-side, the same write shape
 	// scheduled background execution uses. The client may have persisted a
 	// partial tail of this very answer before the drop (debounced persist /
@@ -7591,7 +7604,7 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 	const landDetachedTurnOutcome = (turnId: string, terminalReason: PersistentWebTurnTerminalReason, options: { watchedByAdopter?: boolean; snapshot?: SettledTurnLandingSnapshot } = {}): void => {
 		const current = getPersistentAgentThread(persistentAgentIdForSession, persistentConversationId);
 		if (!current || current.state === "closed") return;
-		// Issue #33: `watchedByAdopter` means a session stepped back in and
+		// `watchedByAdopter` means a session stepped back in and
 		// watched this turn land live. The write itself stays (it is the
 		// crash-safe record of the paid answer, and the adopter's own persist
 		// supersedes it with equivalent content), but everything that assumes
@@ -7705,7 +7718,7 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 	const liveSessionHandle: PersistentRoomLiveSession = {
 		connectionId,
 		conversationId: persistentConversationId,
-		// #33: an adopted cooking turn runs in the DETACHING connection's
+		// An adopted cooking turn runs in the DETACHING connection's
 		// closure; quiescing this session must stop that turn too, or Memento
 		// would dispose an idle session while the room keeps cooking.
 		quiesceForBoundary: async () => {
@@ -7949,7 +7962,7 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 		try { socket.send(JSON.stringify(msg)); } catch { return false; }
 		return true;
 	};
-	// Issue #33: turn-scoped frames (the event family, usage, the turn's error
+	// Turn-scoped frames (the event family, usage, the turn's error
 	// frame) go through here so they are recorded for a reattach replay and,
 	// while an adopter is inside, forwarded to its socket instead of this one.
 	const sendTurnFrame = (msg: unknown) => {
@@ -8024,21 +8037,33 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 			bashEnabled: persistentRoomEffectiveWorkspacePolicy?.bashEnabled === true,
 			bashRuntimeAllowed: true,
 		});
+		// Full access with the terminal on right now, the pair the bash tool's own
+		// gate reads; asked on every call, so turning either off closes the next one.
+		const persistentRoomTerminalOn = (): boolean => {
+			try {
+				const livePolicy = resolvePersistentRoomEffectiveWorkspacePolicy(persistentAgentId, persistentConversationId);
+				return livePolicy?.workspaceAccessMode === "localFiles" && livePolicy?.bashEnabled === true;
+			} catch {
+				return false;
+			}
+		};
 		const persistentRoomCustomTools = persistentRoomWorkspaceToolsEnabled && persistentRoomCapabilityPolicy
-			// Full access rooms get the document-aware read override, bound to the
-			// same cwd the session itself binds with below.
-			? createPersistentRoomWorkspaceTools(persistentRoomCapabilityPolicy, { localFilesReadCwd: persistentRoomRuntimeCwdForEffectiveWorkspacePolicy(persistentRoomEffectiveWorkspacePolicy, REPO_ROOT) })
+			// Full access file tools resolve paths against the same cwd the session
+			// itself binds with below.
+			? createPersistentRoomWorkspaceTools(persistentRoomCapabilityPolicy, {
+				localFilesCwd: persistentRoomRuntimeCwdForEffectiveWorkspacePolicy(persistentRoomEffectiveWorkspacePolicy, REPO_ROOT),
+				skillsFolder: () => (persistentRoomTerminalOn() ? agentSkillsDir() : null),
+			})
 			: [];
 		if (persistentRoomWorkspaceToolsEnabled) {
 			const allowedToolNames = persistentRoomToolPolicy?.allowedToolNames ?? [];
 			const customToolNames = persistentRoomCustomTools.map((tool) => String(tool.name));
 			const workspaceToolNames = persistentRoomEffectiveWorkspacePolicy?.allowedToolNames ?? [];
 			const customToolSet = new Set(customToolNames);
-			const boundedMode = persistentRoomEffectiveWorkspacePolicy?.workspaceAccessMode !== "localFiles";
 			if (
 				!workspaceToolNames.every((toolName) => allowedToolNames.includes(toolName)) ||
 				!customToolNames.every((toolName) => workspaceToolNames.includes(toolName)) ||
-				(boundedMode && (customToolNames.length !== workspaceToolNames.length || !workspaceToolNames.every((toolName) => customToolSet.has(toolName))))
+				customToolNames.length !== workspaceToolNames.length || !workspaceToolNames.every((toolName) => customToolSet.has(toolName))
 			) {
 				throw new Error("persistent-room workspace tool policy mismatch");
 			}
@@ -8355,15 +8380,7 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 				// by the permissions extension, restored on install completion), so a
 				// live read at tool-call time always saw it unset and the gate could
 				// never open.
-				// The room's LIVE policy must put bash on the table right now: full
-				// local access with the bash switch on, the same pair the bash
-				// tool's own gate reads.
-				try {
-					const livePolicy = resolvePersistentRoomEffectiveWorkspacePolicy(persistentAgentId, persistentConversationId);
-					if (livePolicy?.workspaceAccessMode !== "localFiles" || livePolicy?.bashEnabled !== true) return null;
-				} catch {
-					return null;
-				}
+				if (!persistentRoomTerminalOn()) return null;
 				// The room must hold an execution approval for this skill, pinned
 				// to the EXACT files on disk right now — a drifted file set is an
 				// approval that no longer exists.
@@ -8725,9 +8742,12 @@ ${lines.join("\n")}`;
 			}
 		}
 		session.subscribe((event) => {
-			// #33: turn frames route through the reattach-aware sender, so a
+			// Turn frames route through the reattach-aware sender, so a
 			// session stepping back in can replay them and then receive the rest.
-			sendTurnFrame({ type: "event", event: projectAgentEventForWebClient(event) });
+			// A turn refused for a key's credential carries the key's state, so the room names it.
+			const ended = event?.type === "message_end" ? (event.message as { stopReason?: string; provider?: string; errorMessage?: string }) : undefined;
+			const credentialKey = ended?.stopReason === "error" ? failedTurnKey(String(ended.provider ?? ""), String(ended.errorMessage ?? "")) : undefined;
+			sendTurnFrame({ type: "event", event: credentialKey ? { ...projectAgentEventForWebClient(event), credentialKey } : projectAgentEventForWebClient(event) });
 			// A failed auto-compaction used to vanish here: the client ignores the
 			// event, nothing was logged, and the room quietly paid for the same
 			// summary again on every later turn. Say it once per attempt. This is
@@ -8915,7 +8935,7 @@ ${lines.join("\n")}`;
 		return;
 	}
 
-	// Issue #33: this session's agent session was bound while (or right after)
+	// This session's agent session was bound while (or right after)
 	// an adopted turn was writing to the room's session history, so its context
 	// predates the turn's landing. Rebuild it through the same single-rebind
 	// gate workspace changes use: frames arriving mid-rebind await it, and the
@@ -8959,7 +8979,7 @@ ${lines.join("\n")}`;
 		if (testBindDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, Math.min(testBindDelayMs, 10_000)));
 	}
 
-	// Issue #33 (stepping back into a room): adopt the cooking turn this
+	// Stepping back into a room: adopt the cooking turn this
 	// connection claimed at connect. Adopt + snapshot + replay run in ONE
 	// synchronous block, so no frame can slip between the replayed snapshot
 	// and the live sink: the seam is gapless and duplicate-free by
@@ -9217,7 +9237,7 @@ ${lines.join("\n")}`;
 				// post-stream landing snapshot must not fire against it.
 				settledTurnLandingSnapshot = null;
 				resetTurnTrace();
-				// #33: a fresh turn owns a fresh replay buffer, and records the
+				// A fresh turn owns a fresh replay buffer, and records the
 				// supersede anchor: the last item the thread file held BEFORE this
 				// turn produced anything (the client's debounced persist of this
 				// prompt lands ~500ms later, so the file still ends on the prior
@@ -9290,10 +9310,11 @@ ${lines.join("\n")}`;
 			} catch (e) {
 				promptDiagnosticsPendingTurn = undefined;
 				if (!activePersistentWebTurn?.terminalReason) setActivePersistentWebTurnTerminalReason("failed");
-				// #33: the turn's failure frame belongs to the turn stream, so a
+				// The turn's failure frame belongs to the turn stream, so a
 				// session that stepped back in sees it live (or in the replay).
 				// A window the room moved on from: the room keeps the message and offers Reload.
-				sendTurnFrame({ type: "error", message: (e as Error).message, ...((e as any)?.code === "conversation_moved" ? { code: "conversation_moved" } : {}) });
+				const credentialKey = failedTurnKey(String((session as any)?.model?.provider ?? ""), (e as Error).message);
+				sendTurnFrame({ type: "error", message: (e as Error).message, ...(credentialKey ? { credentialKey } : {}), ...((e as any)?.code === "conversation_moved" ? { code: "conversation_moved" } : {}) });
 			} finally {
 				// Clear the consent text only for a turn that actually began: a
 				// CONCURRENT prompt frame that 409s at beginPersistentAgentTurn never
@@ -9309,7 +9330,7 @@ ${lines.join("\n")}`;
 					// same order scheduled background execution uses). New
 					// connections still cannot slip in between — the acquire path
 					// refuses while this room is in detachedCookingRooms, and a
-					// reattach (#33) binds to the SETTLED handle from here on.
+					// reattach binds to the SETTLED handle from here on.
 					const cookingHandle = detachedFromClient ? detachedCookingHandle : null;
 					// Two different questions. Adopted: a session claimed the cooking
 					// turn and is watching it live, so the settle hands it the signal
@@ -9361,7 +9382,7 @@ ${lines.join("\n")}`;
 						if (persistentRoomLiveSessions.get(persistentAgentIdForSession) === liveSessionHandle) persistentRoomLiveSessions.delete(persistentAgentIdForSession);
 						releaseRoomLockNow();
 						if (adoptedByLiveSession) {
-							// #33: hand the adopter the settle signal so it rebinds
+							// Hand the adopter the settle signal so it rebinds
 							// its session against the landed history.
 							try { adopterOnSettled?.(); } catch (error) { app.log.warn({ err: error }, "adopted-turn settle callback failed"); }
 						} else if (cookingHandle?.claimantConnectionId) {
@@ -9381,7 +9402,7 @@ ${lines.join("\n")}`;
 							try { (session as any)?.dispose?.(); } catch {}
 						}
 					}
-					// #33 buffer lifecycle (review): the replay buffer dies with
+					// Buffer lifecycle: the replay buffer dies with
 					// the turn, on EVERY connection, attached or detached, so an
 					// idle tab never retains its last turn's stream. The one
 					// exception is a claimant still alive mid-bind, whose settled
@@ -9392,7 +9413,7 @@ ${lines.join("\n")}`;
 				}
 			}
 		} else if (msg.type === "abort") {
-			// #33: Stop after a reattach cancels the ADOPTED turn, which runs in
+			// Stop after a reattach cancels the ADOPTED turn, which runs in
 			// the detaching connection's closure, through the same cancelling
 			// machinery a never-left session uses. Claimant-checked: a session
 			// another window displaced falls through to its own (idle) session,
@@ -9412,7 +9433,7 @@ ${lines.join("\n")}`;
 			const consultError = (message: string, code?: string) => send({ type: "consult_error", consultId, message, ...(code ? { code } : {}) });
 			// Start gate: a consult may not start while this room is answering.
 			// (The reverse is allowed — prompts process normally during a consult.)
-			// An adopted cooking turn (#33) counts as answering too.
+			// An adopted cooking turn counts as answering too.
 			if (activePersistentWebTurn || (claimedCookingTurn && !claimedCookingTurn.settled)) {
 				consultError("This room is answering right now. Wait for the current turn to finish, then consult.");
 				return;
@@ -9506,9 +9527,8 @@ ${lines.join("\n")}`;
 			if (!taskId) return;
 			abortSpecialistTask(persistentAgentIdForSession, taskId);
 		} else if (msg.type === "task_iterate") {
-			// Iterate chip-chat (contract §5 amendment 2026-07-12, ONE-CLICK
-			// amendment 2026-07-13 — pending review): the ONE client-initiated
-			// delegation path. The brief is USER-authored (typed on the done card)
+			// Iterate chip-chat: the ONE client-initiated
+			// delegation path. The brief is USER-authored (typed under the open file, in the viewer's footer)
 			// and the click IS the approval, the D7 shape (export precedent):
 			// legitimate because every other field is server-derived — the frame
 			// carries only {taskId, brief}; template and read scope come from
@@ -9530,7 +9550,7 @@ ${lines.join("\n")}`;
 					// Connection memory first; the ledger fallback (rung 3) covers panel
 					// rows older than the reseed window. Same D7 shape either way: the
 					// template and read scope come from the server's own records.
-					// Room-wide lookup (room-scoped history, 2026-07-18): a row born in
+					// Room-wide lookup: a row born in
 					// an earlier conversation is just as revisable — the B5 rule
 					// (ok+artifacts only) lives inside the resolver and still applies.
 					let source = completedWebTasks.get(sourceTaskId);
@@ -9663,15 +9683,14 @@ ${lines.join("\n")}`;
 	socket.on("close", () => {
 		app.log.info("ws client disconnected");
 		// A consult answer that was never transferred is re-derivable: kill the
-		// worker and discard silently (boundary matrix, locked 2026-07-10).
+		// worker and discard silently.
 		activeWebConsult?.abortController.abort();
-		// Specialist tasks SURVIVE the connection (option 4, grill-locked
-		// 2026-07-19 — a delegation belongs to the room, not to the tab that
-		// asked for it). This connection merely stops being the room's sink;
+		// Specialist tasks SURVIVE the connection (a delegation belongs to the
+		// room, not to the tab that asked for it). This connection merely stops being the room's sink;
 		// endings nobody hears finalize with noticed:false and arrive as
 		// away-notices on the next connect.
 		unbindSpecialistSink(persistentAgentIdForSession, sendChecked);
-		// Community #14 slice 1: a disconnect no longer cancels an in-flight
+		// A disconnect no longer cancels an in-flight
 		// turn. The session keeps cooking with the room lock held; pending and
 		// future interactive dialogs reject the way scheduled background work
 		// does, and the prompt handler lands the finished answer into the
@@ -9681,7 +9700,7 @@ ${lines.join("\n")}`;
 			detachedCookingRooms.add(persistentAgentIdForSession);
 			uiContext.detach("The user left the room while this response was being written, so interactive questions cannot be answered right now. Proceed with your best judgment and finish the task; anything that strictly needs the user's approval must be left undone and mentioned in your answer.");
 			armDetachedTurnDeadline();
-			// Issue #33: register the reattach handle, so a session stepping
+			// Register the reattach handle, so a session stepping
 			// back into the room adopts this cooking turn instead of bouncing.
 			// Methods run in THIS closure; the registry entry dies at settle.
 			const handle: DetachedCookingTurnHandle = {
@@ -9853,8 +9872,8 @@ function staticSecurityHeadersFor(req: { raw?: { socket?: unknown } }): Record<s
 // a sandbox="" viewer), so nothing legitimate needs to execute even in a
 // directly-opened tab. Opaque origin + default-src 'none' stays the real
 // containment; this just removes an execution capability nothing uses.
-// (Hardening pass 2026-07-12, spec §4 updated — a future scripted template
-// must widen this deliberately, per-decision, not inherit it.)
+// (A future scripted template must widen this deliberately, per-decision,
+// not inherit it.)
 const ARTIFACT_SECURITY_HEADERS: Record<string, string> = {
 	"content-security-policy": "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:",
 	"x-content-type-options": "nosniff",
@@ -9989,6 +10008,179 @@ app.get("/api/artifacts/:taskId/*", async (req, reply) => {
 	return reply.type(type).send(fs.createReadStream(servePath));
 });
 
+// A name counts as taken when anything is at it, a link that leads nowhere
+// included, since on Windows an exclusive create is not known to stop at such
+// a link.
+function nameIsTaken(candidate: string): boolean {
+	try {
+		fs.lstatSync(candidate);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+// On Windows a rename fails while another program, such as a virus scanner or
+// the search indexer, briefly holds one of the two files, so there it is tried
+// again for about a second.
+async function renameOverName(from: string, to: string): Promise<void> {
+	const giveUpAt = Date.now() + 1000;
+	for (;;) {
+		try {
+			fs.renameSync(from, to);
+			return;
+		} catch (e) {
+			const code = (e as NodeJS.ErrnoException).code;
+			if (process.platform !== "win32" || Date.now() >= giveUpAt || (code !== "EPERM" && code !== "EACCES" && code !== "EBUSY")) throw e;
+		}
+		await new Promise((resolve) => setTimeout(resolve, 50));
+	}
+}
+
+// The old bytes are held in memory while a file is written in place, so a
+// larger file takes the rename.
+const IN_PLACE_UP_TO = 64 * 1024 * 1024;
+
+// A disk that cannot sync a file (some network and FUSE ones) still keeps
+// what was written; any other answer is a failed write.
+function syncToDisk(fd: number): void {
+	try {
+		fs.fsyncSync(fd);
+	} catch (e) {
+		if (!["EINVAL", "ENOTSUP", "ENOSYS", "EOPNOTSUPP"].includes((e as NodeJS.ErrnoException).code ?? "")) throw e;
+	}
+}
+
+// Puts the bytes in as the whole file, from its start, and on the disk.
+function writeWhole(fd: number, bytes: Buffer): void {
+	fs.ftruncateSync(fd);
+	for (let done = 0; done < bytes.length; ) done += fs.writeSync(fd, bytes, done, bytes.length - done, done);
+	syncToDisk(fd);
+}
+
+// Writes into the old file through a descriptor that is still the plain file
+// the check saw, with no other name, so nothing put at the name after the
+// check (a link, a FIFO, another file) is written. Answers false, with nothing
+// written, when it is not. A write that fails hands over to orElse, and when
+// that fails too, the old bytes go back in before the error is thrown. With
+// nothing else to try, a file it may not read is written without them.
+async function writeInPlaceIfSoleName(destPath: string, old: fs.BigIntStats, bytes: Buffer, orElse?: () => Promise<void>): Promise<boolean> {
+	const open = (access: number) => fs.openSync(destPath, access | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0));
+	let fd: number;
+	let readable = true;
+	try {
+		fd = open(fs.constants.O_RDWR);
+	} catch (e) {
+		if (orElse || (e as NodeJS.ErrnoException).code !== "EACCES") return false;
+		try {
+			fd = open(fs.constants.O_WRONLY);
+			readable = false;
+		} catch {
+			return false;
+		}
+	}
+	try {
+		let before: Buffer | undefined;
+		try {
+			const now = fs.fstatSync(fd, { bigint: true });
+			if (!now.isFile() || now.nlink !== 1n || now.dev !== old.dev || now.ino !== old.ino) return false;
+			if (readable && now.size <= IN_PLACE_UP_TO) before = fs.readFileSync(fd);
+			else if (orElse) return false;
+		} catch {
+			return false;
+		}
+		try {
+			writeWhole(fd, bytes);
+		} catch (failed) {
+			try {
+				if (!orElse) throw failed;
+				await orElse();
+			} catch {
+				try { if (before) writeWhole(fd, before); } catch {}
+				throw failed;
+			}
+		}
+		return true;
+	} finally {
+		fs.closeSync(fd);
+	}
+}
+
+// The old bytes are cut before the new ones land, so a write in place needs
+// the disk to have room for them; one that cannot say so has none.
+function folderHasRoomFor(folder: string, size: number): boolean {
+	try {
+		const disk = fs.statfsSync(folder);
+		return disk.bavail * disk.bsize >= size + 1024 * 1024;
+	} catch {
+		return false;
+	}
+}
+
+// Writes a new file beside the name and renames it over the name, so whatever
+// the name pointed at is never written. It takes the old file's permission
+// bits, and its group where the system allows it; a folder that lets no new
+// file be made leaves only a write in place, when inPlaceIfNoNewFile allows it.
+async function writeNewFileOverName(destPath: string, old: fs.BigIntStats | undefined, bytes: Buffer, newFileMode: number, inPlaceIfNoNewFile: boolean): Promise<void> {
+	const tempPath = path.join(path.dirname(destPath), `.save-${crypto.randomBytes(8).toString("hex")}.tmp`);
+	// Created owner-only, so no other account can open it before it has the
+	// old file's bits.
+	let fd: number;
+	try {
+		fd = fs.openSync(tempPath, "wx", old?.isFile() ? 0o600 : newFileMode);
+	} catch (e) {
+		const code = (e as NodeJS.ErrnoException).code;
+		if (inPlaceIfNoNewFile && old?.isFile() && (code === "EACCES" || code === "EPERM") && (await writeInPlaceIfSoleName(destPath, old, bytes))) return;
+		throw e;
+	}
+	try {
+		try {
+			if (old?.isFile()) {
+				// The group first, so the old bits never apply to another group; where
+				// the old group cannot be kept, the group the file has gets no access.
+				let bits = Number(old.mode & 0o777n);
+				try {
+					fs.fchownSync(fd, -1, Number(old.gid));
+				} catch {
+					if (fs.fstatSync(fd).gid !== Number(old.gid)) bits &= 0o707;
+				}
+				fs.fchmodSync(fd, bits);
+			}
+			fs.writeFileSync(fd, bytes);
+			syncToDisk(fd);
+		} finally {
+			fs.closeSync(fd);
+		}
+		await renameOverName(tempPath, destPath);
+	} catch (e) {
+		try { fs.rmSync(tempPath, { force: true }); } catch {}
+		throw e;
+	}
+}
+
+// Replace on Save… or an export writes a plain file with one name in place,
+// so it keeps what it carries beside its bytes (Finder tags and comments,
+// ACLs, its creation date); anything else takes writeNewFileOverName. A
+// symbolic link at the name is refused first, since the person can see it and
+// choose around it. Answers false for a symbolic link.
+async function writeReplacingNoLink(destPath: string, bytes: Buffer, newFileMode: number): Promise<boolean> {
+	let old: fs.BigIntStats | undefined;
+	try {
+		old = fs.lstatSync(destPath, { bigint: true });
+	} catch (e) {
+		if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+	}
+	if (old?.isSymbolicLink()) return false;
+	// The rename needs only the folder's write permission, so a file the person
+	// may not write is refused here, with the error a write into it would give.
+	if (old) fs.accessSync(destPath, fs.constants.W_OK);
+	if (old?.isFile() && old.nlink === 1n && old.size <= IN_PLACE_UP_TO && folderHasRoomFor(path.dirname(destPath), bytes.length)) {
+		if (await writeInPlaceIfSoleName(destPath, old, bytes, () => writeNewFileOverName(destPath, old, bytes, newFileMode, false))) return true;
+	}
+	await writeNewFileOverName(destPath, old, bytes, newFileMode, true);
+	return true;
+}
+
 // V5 — export a task artifact into a room's workspace folder. Self-contained
 // sibling to the GET route above. The export click in the UI IS the human
 // approval (locked decision D7): there is no ui_request bridge and no interactive
@@ -10092,7 +10284,7 @@ app.post("/api/artifacts/:taskId/export", async (req, reply) => {
 	if (!destPath) {
 		return reply.code(400).send({ error: "Export destination escapes the room workspace folder." });
 	}
-	if (!overwrite && !rename && fs.existsSync(destPath)) {
+	if (!overwrite && !rename && nameIsTaken(destPath)) {
 		return reply.code(409).send({ error: "A file with this name already exists in the room workspace.", code: "exists" });
 	}
 	let savedTo = destPath;
@@ -10104,10 +10296,11 @@ app.post("/api/artifacts/:taskId/export", async (req, reply) => {
 			// moves us to the next suffix — race-safe without locks.
 			const parsed = path.parse(destName);
 			let written = false;
-			for (let suffix = fs.existsSync(destPath) ? 2 : 1; suffix <= 200; suffix += 1) {
+			for (let suffix = 1; suffix <= 200; suffix += 1) {
 				const candidateName = suffix === 1 ? destName : `${parsed.name}-${suffix}${parsed.ext}`;
 				const candidate = confinedDestPath(candidateName);
 				if (!candidate) return reply.code(400).send({ error: "Export destination escapes the room workspace folder." });
+				if (nameIsTaken(candidate)) continue;
 				try {
 					fs.writeFileSync(candidate, bytes, { flag: "wx", mode: 0o600 });
 					savedTo = candidate;
@@ -10120,10 +10313,13 @@ app.post("/api/artifacts/:taskId/export", async (req, reply) => {
 			if (!written) return reply.code(500).send({ error: "Could not find a free name for the exported file." });
 		} else {
 			// flag "wx" fails closed if a same-name file appears between the check
-			// above and the write (TOCTOU); it drops to "w" ONLY on the client's
-			// explicit Replace choice. 0o600 keeps the exported copy private like
-			// other server-side writes.
-			fs.writeFileSync(destPath, bytes, { flag: overwrite ? "w" : "wx", mode: 0o600 });
+			// above and the write; only the client's explicit Replace choice
+			// replaces. 0o600 keeps a new exported copy private like other
+			// server-side writes.
+			if (!overwrite) fs.writeFileSync(destPath, bytes, { flag: "wx", mode: 0o600 });
+			else if (!(await writeReplacingNoLink(destPath, bytes, 0o600))) {
+				return reply.code(400).send({ error: "The file with this name in the room's folder is a shortcut to somewhere else, so it was not replaced. Use Keep both instead." });
+			}
 		}
 	} catch (e) {
 		if ((e as NodeJS.ErrnoException).code === "EEXIST") {
@@ -10436,7 +10632,7 @@ app.post("/api/persistent-agents/:id/files/:name/save", async (req, reply) => {
 	};
 	const destPath = confined(exportName);
 	if (!destPath) return reply.code(400).send({ error: "The file name cannot land in the chosen folder." });
-	if (!overwrite && !rename && fs.existsSync(destPath)) {
+	if (!overwrite && !rename && nameIsTaken(destPath)) {
 		return reply.code(409).send({ error: "A file with this name already exists in the chosen folder.", code: "exists" });
 	}
 	let savedTo = destPath;
@@ -10445,10 +10641,11 @@ app.post("/api/persistent-agents/:id/files/:name/save", async (req, reply) => {
 		if (rename) {
 			const parsed = path.parse(exportName);
 			let written = false;
-			for (let suffix = fs.existsSync(destPath) ? 2 : 1; suffix <= 200; suffix += 1) {
+			for (let suffix = 1; suffix <= 200; suffix += 1) {
 				const candidateName = suffix === 1 ? exportName : `${parsed.name}-${suffix}${parsed.ext}`;
 				const candidate = confined(candidateName);
 				if (!candidate) return reply.code(400).send({ error: "The file name cannot land in the chosen folder." });
+				if (nameIsTaken(candidate)) continue;
 				try {
 					fs.writeFileSync(candidate, content, { flag: "wx", mode: 0o644 });
 					savedTo = candidate;
@@ -10460,7 +10657,10 @@ app.post("/api/persistent-agents/:id/files/:name/save", async (req, reply) => {
 			}
 			if (!written) return reply.code(500).send({ error: "Could not find a free name in the chosen folder." });
 		} else {
-			fs.writeFileSync(destPath, content, { flag: overwrite ? "w" : "wx", mode: 0o644 });
+			if (!overwrite) fs.writeFileSync(destPath, content, { flag: "wx", mode: 0o644 });
+			else if (!(await writeReplacingNoLink(destPath, content, 0o644))) {
+				return reply.code(400).send({ error: "The file with this name in the chosen folder is a shortcut to somewhere else, so it was not replaced. Use Keep both, or pick another name." });
+			}
 		}
 	} catch (e) {
 		if ((e as NodeJS.ErrnoException).code === "EEXIST") {

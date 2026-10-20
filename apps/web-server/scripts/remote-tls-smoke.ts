@@ -4,7 +4,7 @@ import https from "node:https";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { authedFetch, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer } from "./smoke-server-process.js";
+import { authedFetch, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, freePort } from "./smoke-server-process.js";
 
 // Pins the TLS stage of remote mode (src/remote-tls.ts + the https path in
 // src/remote-mode.ts): with certificate material present, the tunnel
@@ -49,7 +49,7 @@ function assert(condition: unknown, message: string): asserts condition {
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const webServerDir = path.resolve(scriptDir, "..");
 const repoRoot = path.resolve(webServerDir, "..", "..");
-const port = 26000 + Math.floor(Math.random() * 10000);
+const port = await freePort();
 const baseUrl = `http://127.0.0.1:${port}`;
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "exxperts-remote-tls-"));
@@ -151,6 +151,7 @@ function runMintProbe(mode: string): Promise<{ code: number; stdout: string }> {
 		fs.writeFileSync(
 			path.join(fakeBin, "tailscale"),
 			[
+				// portability-ok: the mint probe runs only inside the win32 guard below
 				"#!/bin/sh",
 				'case "$1" in',
 				'  version) echo "1.99.9 fake"; exit 0;;',
@@ -188,6 +189,7 @@ function runMintProbe(mode: string): Promise<{ code: number; stdout: string }> {
 				'\tout.certBlocks = (result.material.cert.match(/BEGIN CERTIFICATE/g) ?? []).length;',
 				'\tout.keyOk = /BEGIN [A-Z0-9 ]*PRIVATE KEY/.test(result.material.key) && !result.material.key.includes("CERTIFICATE");',
 				'\tconst dir = path.join(String(process.env.HOME), ".exxperts", "app", "remote-tls");',
+				// portability-ok: the mint probe runs only inside the win32 guard below
 				'\tout.modes = ["cert.pem", "key.pem"].map((name) => (fs.statSync(path.join(dir, name)).mode & 0o777).toString(8));',
 				"}",
 				"console.log(JSON.stringify(out));",

@@ -281,8 +281,8 @@ try {
 	// ── Cold cache: session start warms ONLY granted connectors ──────────────
 	// Without the guard, a missing cache file makes the adapter's session
 	// start bootstrap-connect EVERY configured server once, ungranted beta
-	// included (owner decision 2026-08-11: restrict the bootstrap to grants;
-	// eager/keep-alive keep their global behavior).
+	// included (the bootstrap is restricted to grants; eager/keep-alive keep
+	// their global behavior).
 	const alphaHitsBeforeCold = alphaRecorder.hits();
 	const betaHitsBeforeCold = betaRecorder.hits();
 	fs.rmSync(path.join(agentDir, "mcp-cache.json"), { force: true });

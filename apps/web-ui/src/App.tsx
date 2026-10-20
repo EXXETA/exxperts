@@ -6,8 +6,8 @@ import { AssetViewerFooter } from "./components/asset-viewer-footer";
 import { ToastStack, type ToastView } from "./components/toast-stack";
 import { usePausedSkillsNotice } from "./paused-skills-notice";
 import { readReviseConflicts, reviseConflictSentence } from "../../web-server/src/revise-conflict-notice";
-import { modelNotOnAccount, modelNotOnAccountSentence } from "../../web-server/src/model-not-on-account";
-import { modelNotOffered, roomModelUnavailableLine } from "../../web-server/src/model-not-offered";
+import { modelNotOnAccount, modelNotOnAccountSentence, providerAccountName } from "../../web-server/src/model-not-on-account";
+import { anthropicKeyNeedsWorkspace, credentialGoneOf, credentialGoneWhy, credentialGoneWords, modelNotOffered, providerCredentialClause, roomModelUnavailableLine, signInFailed, type CredentialKey } from "../../web-server/src/model-not-offered";
 import { assetDisplayTitle, assetTemplateShortName, projectAssetRows, rowShelfFileName, shelfTruthForRoom, type AssetLedgerRowInput, type AssetRowView, type ShelfFileRowInput } from "./assets-panel";
 import { commitRoomFileDelete, fileToBase64, listRoomFiles, renameRoomFile, roomFileUrl, saveRoomFileToFolder, stageRoomFileDelete, undoRoomFileDelete, uploadRoomFile, type RoomShelfFile } from "./room-files-api";
 import { chooseSystemFolder, fetchPersistentRoomWorkspaceDefault } from "./persistent-room-workspace-api";
@@ -34,7 +34,7 @@ import { SettingsOverlay, type SettingsSection } from "./components/settings-ove
 import { isSignInFailure } from "./sign-in-failure";
 import { GroupHeader, PaneHeader } from "./components/pane-header";
 import { roomFilesSentence } from "./components/RoomDangerZone";
-import { WhatsNewDialog } from "./components/whats-new-dialog";
+import { sharedServerReleases, WhatsNewDialog, type WhatsNewSections } from "./components/whats-new-dialog";
 import { fetchRemoteClientContext, SHARED_SERVER_ADMIN_LINE, showsComputerOnlyControls, useRemoteClientContext } from "./remote-client-context";
 import { RoomSkillUpdateButton } from "./components/SkillUpdateNotice";
 import { RemoteAccessPage } from "./components/remote-access-page";
@@ -54,7 +54,7 @@ import { ApiRequestError, apiErrorCode, apiFetch, fetchJson, isUnexplainedReques
 import { askUntilAnswered, editorLimitLine, lostUndoLanded, sameNoteWords, SAVE_ANSWER_LOST_SENTENCE, SAVE_NOT_LANDED_SENTENCE, saveAnswerLost, settleLostRunSave, UNDO_NOT_LANDED_SENTENCE } from "./memory-save-answer";
 import { MEMORY_PAGE_MAX_CHARS, memoryTextHasWords, memoryTypedText, rememberPageFromParts } from "../../web-server/src/memory-typed-text";
 import { ModelNoticePanel, modelNoticeFromError, modelWaitLine, type ModelNotice, type ModelWait } from "./components/model-notice";
-import { canonicalModelName, modelDisplayName, modelOnProvider, modelTooltipName } from "./model-names";
+import { canonicalModelName, distinctModelNames, modelDisplayName, modelOnProvider, modelTooltipName, providerDisplayName } from "./model-names";
 import type { ApprovalPreviewData } from "./approval-preview";
 import { formatAbsorbRunSaveError, isStaleMaintenanceMessage, logMaintenanceWarnings, sectionLabel } from "./maintenance-warnings";
 import { appRouteHash, parseAppRouteHash, type AppRoute } from "./app-route";
@@ -596,9 +596,6 @@ type RegistryModel = { label?: string; model: string; provider?: string };
 function nameInput(model: RegistryModel) {
 	return { model: model.model, modelLabel: model.label, provider: model.provider };
 }
-function registryModelName(model: RegistryModel): string {
-	return modelDisplayName(nameInput(model)) || model.model;
-}
 function registryModelTooltip(model: RegistryModel): string {
 	return modelTooltipName(nameInput(model)) || model.model;
 }
@@ -608,12 +605,13 @@ type CurrentModel = { name: string; provider: string | null };
 const NO_CURRENT_MODEL: CurrentModel = { name: "", provider: null };
 
 function ModelNameList({ models }: { models: RegistryModel[] }) {
+	const names = distinctModelNames(models.map(nameInput));
 	return (
 		<>
 			{models.map((model, index) => (
 				<span key={`${model.provider ?? ""}/${model.model}/${index}`}>
 					{index > 0 ? ", " : ""}
-					<span title={registryModelTooltip(model)}>{registryModelName(model)}</span>
+					<span title={registryModelTooltip(model)}>{names[index] || model.model}</span>
 				</span>
 			))}
 		</>
@@ -623,12 +621,13 @@ function ModelNameList({ models }: { models: RegistryModel[] }) {
 // A provider's models in product vocabulary: the ones its rooms may pick, and
 // the connection. Which model runs memory work is the rooms' choice (the
 // defaults above, or Room settings, Model), not the provider's.
-function AiProfileModelsDetail({ profile }: { profile: PersistentAgentAiProfileStatus }) {
+// keySaved: the stored credential is a key, so it reads "key saved", as the row's subline does.
+function AiProfileModelsDetail({ profile, keySaved }: { profile: PersistentAgentAiProfileStatus; keySaved: boolean }) {
 	const roomModels = profile.processes?.persistentRoom.models ?? [];
 	return (
 		<div className="ai-profile-models" role="presentation">
 			<div className="ai-profile-models-row"><span>Rooms</span><span>{roomModels.length > 0 ? <ModelNameList models={roomModels} /> : "no room models listed"}</span></div>
-			<div className="ai-profile-models-row"><span>Connection</span><span>{profile.provider.configured ? `signed in · ${authSourceLabel(profile.provider.source, profile.provider.label)}` : "not signed in"}</span></div>
+			<div className="ai-profile-models-row"><span>Connection</span><span>{profile.provider.configured ? `${keySaved ? "key saved" : "signed in"} · ${authSourceLabel(profile.provider.source, profile.provider.label)}` : "not signed in"}</span></div>
 		</div>
 	);
 }
@@ -699,6 +698,8 @@ function AiProfileSwitcherSection({ status, authStatus, onRefresh, onRefreshAuth
 	const remoteSetupLocked = remoteClient.remote || remoteClient.sharedServer;
 	const [addProviderOpen, setAddProviderOpen] = useState(false);
 	const [error, setError] = useState<string | null>(null);
+	// A key saved without its service's check (it could not be reached): one plain line.
+	const [keyNotice, setKeyNotice] = useState<string | null>(null);
 	const [modelsOpenId, setModelsOpenId] = useState<string | null>(null);
 	const [editProfile, setEditProfile] = useState<PersistentAgentAiProfileStatus | null>(null);
 	// Opened to sign a provider in again (a room stopped on it): its row is
@@ -778,19 +779,17 @@ function AiProfileSwitcherSection({ status, authStatus, onRefresh, onRefreshAuth
 
 	async function saveApiKey(profile: PersistentAgentAiProfileStatus, key: string) {
 		setError(null);
-		try {
-			await fetchJson("/api/auth/api-key", {
-				method: "POST",
-				headers: { "content-type": "application/json" },
-				body: JSON.stringify({ provider: profile.provider.id, key }),
-			});
-			setKeyProfileId(null);
-			onRefresh();
-			onRefreshAuth();
-			onSignedIn?.();
-		} catch (e) {
-			setError((e as Error).message);
-		}
+		setKeyNotice(null);
+		const saved = await fetchJson<{ notice?: string }>("/api/auth/api-key", {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ provider: profile.provider.id, key }),
+		});
+		setKeyNotice(saved.notice ?? null);
+		setKeyProfileId(null);
+		onRefresh();
+		onRefreshAuth();
+		onSignedIn?.();
 	}
 
 	async function signOut(profile: PersistentAgentAiProfileStatus) {
@@ -850,7 +849,7 @@ function AiProfileSwitcherSection({ status, authStatus, onRefresh, onRefreshAuth
 					<button className="rs-btn add-provider-toggle" type="button" aria-expanded={addProviderOpen} onClick={() => setAddProviderOpen((value) => !value)}>Add provider</button>
 				)}
 			/>
-			<AiDefaultsGroup refreshKey={(status?.profiles ?? []).map((profile) => `${profile.id}:${profile.ready ? 1 : 0}:${profile.processes?.persistentRoom.models.length ?? 0}`).join(",")} />
+			<AiDefaultsGroup refreshKey={(status?.profiles ?? []).map((profile) => `${profile.id}:${profile.ready ? 1 : 0}:${[...profile.requiredModels, ...(profile.processes?.persistentRoom.models ?? [])].map((model) => `${model.provider}/${model.model}`).join("+")}`).join(",")} />
 			<div className="settings-group">
 			<GroupHeader kicker="Providers" />
 			{status ? (
@@ -976,9 +975,9 @@ function AiProfileSwitcherSection({ status, authStatus, onRefresh, onRefreshAuth
 											<div className="add-provider-instructions ai-profile-signin-instructions">{login.instructions}</div>
 										)}
 										{keyProfileId === profile.id && (
-											<ApiKeyForm className="ai-profile-key-form" placeholder={`${profile.label} API key or token`} onSave={(key) => saveApiKey(profile, key)} onCancel={() => setKeyProfileId(null)} />
+											<ApiKeyForm className="ai-profile-key-form" providerName={profile.label} onSave={(key) => saveApiKey(profile, key)} onCancel={() => setKeyProfileId(null)} />
 										)}
-										{modelsOpen && <AiProfileModelsDetail profile={profile} />}
+										{modelsOpen && <AiProfileModelsDetail profile={profile} keySaved={signedInWithOAuth === false} />}
 									</div>
 								);
 							})}
@@ -1014,6 +1013,7 @@ function AiProfileSwitcherSection({ status, authStatus, onRefresh, onRefreshAuth
 			{status?.state.message && <p className="cli-note">{status.state.message}</p>}
 			{status?.customProfiles?.errors?.map((message) => <p key={message} className="cli-note">{message}</p>)}
 			{(error ?? login.error) && <div className="checkpoint-proposal-error" role="alert">{error ?? login.error}</div>}
+			{keyNotice && !(error ?? login.error) && <p className="settings-help" role="status">{keyNotice}</p>}
 			{editProfile && (
 				<ConfigureProfileModal
 					providerId={editProfile.provider.id}
@@ -1729,10 +1729,6 @@ function TaskStoreGcDialog({ assessment, busy, onConfirm, onClose }: { assessmen
 		</div>
 	);
 }
-
-// The leave-guard dialog and the native beforeunload prompt lived here until
-// option 4 (2026-07-19): both warned about the leave-abort, and the abort is
-// gone — a delegation belongs to the room, not to the tab that asked for it.
 
 function MaintainChooserShell({ target, roomStatus, onAbsorb, onDiscussFirst, onPrune, onReturn, returnLabel }: { target: MaintainTarget; roomStatus: PersistentAgentStatus | null; onAbsorb: () => void; onDiscussFirst: () => void; onPrune: () => void; onReturn: () => void; returnLabel: string }) {
 	useEscapeKey(onReturn, true);
@@ -2490,11 +2486,20 @@ function renderInlineMarkdown(text: string) {
 	return parts.map((part, index) => part.startsWith("**") && part.endsWith("**") ? <strong key={index}>{part.slice(2, -2)}</strong> : <span key={index}>{part}</span>);
 }
 
-// Provider wording for a rejected or missing credential. Applied only to a
-// worker failure's own detail, never to arbitrary messages, so "token limit"
-// or a room called "oauth" cannot trip it.
-function isMaintenanceSignInFailure(detail: string): boolean {
-	return /authentication_error|permission_error|unauthori[sz]ed|^\s*40[13]\b|\b(?:status(?:[ _]?code)?|http(?:\/[\d.]+)?|error[ _]code)\s*[:=]?\s*40[13]\b|api[ -]?key|oauth|token (?:has |is )?(?:expired|invalid|revoked)|invalid[_ ]token|not (?:logged|signed) in|credential/i.test(detail);
+// A credential the Memory model cannot use, in the frame of the step's other
+// sentences. Read only from a worker failure's own detail, never from
+// arbitrary messages, with the server's matchers (model-not-offered.ts).
+function maintenanceCredentialLine(detail: string): string | null {
+	// A workspace 400 is always a key.
+	if (anthropicKeyNeedsWorkspace(detail)) {
+		const gone = credentialGoneWords("key-no-workspace");
+		return `The Memory model ${gone.state}. No memory was updated. ${gone.again} in Settings, AI setup, then run this step again.`;
+	}
+	// A missing or refused key, or an ended sign-in: the runtime says "No API
+	// key found" for a signed-out sign-in too, and the page cannot tell a key
+	// from a sign-in here.
+	if (/^No API key found for/i.test(detail) || signInFailed(detail)) return "The Memory model's key or sign-in is missing or was not accepted. No memory was updated. Check it in Settings, AI setup, then run this step again.";
+	return null;
 }
 
 // First line only, capped: a provider error can be a whole JSON body.
@@ -2530,8 +2535,9 @@ function formatMaintenanceRequestError(message: string): string | null {
 	const workerFailed = /^.+? failed: ([\s\S]+)$/.exec(message);
 	const noApiKey = /^No API key found for/i.test(message);
 	if (workerFailed || noApiKey) {
+		const credential = maintenanceCredentialLine(workerFailed?.[1] ?? message);
+		if (credential) return credential;
 		const detail = shortenWorkerFailureDetail(workerFailed?.[1] ?? message);
-		if (noApiKey || isMaintenanceSignInFailure(detail)) return "The Memory model's sign-in is missing or no longer valid. No memory was updated. Sign in again in Settings, AI setup, then run this step again.";
 		console.info(`[maintenance] ${detail}`);
 		return "The Memory model could not respond. No memory was updated. Try again; if it repeats, choose another model in Room settings, Model.";
 	}
@@ -2979,17 +2985,23 @@ export function App() {
 	// the computer records durably; the GET stays readable remotely because
 	// the window is purely informative. Shown on Home only, never over a
 	// room. Any failure here means no window, never a broken app.
-	const [whatsNew, setWhatsNew] = useState<{ version: string; entries: string[] } | null>(null);
+	const [whatsNew, setWhatsNew] = useState<{ version: string; sections: WhatsNewSections } | null>(null);
 	useEffect(() => {
 		let cancelled = false;
 		void (async () => {
 			try {
-				const data = await fetchJson<{ version: string; entries: string[] | null; show: boolean }>("/api/whats-new");
-				if (cancelled || !data.show || !data.version || !data.entries || data.entries.length === 0) return;
+				const data = await fetchJson<{ version: string; sections: WhatsNewSections | null; show: boolean }>("/api/whats-new");
+				if (cancelled || !data.show || !data.version || !data.sections) return;
+				let seenMark: string | null = null;
 				try {
-					if (localStorage.getItem("exxperts.whats-new-seen") === data.version) return;
+					seenMark = localStorage.getItem("exxperts.whats-new-seen");
 				} catch {}
-				setWhatsNew({ version: data.version, entries: data.entries });
+				if (seenMark === data.version) return;
+				// Only on a shared server: elsewhere the server's record governs, and a
+				// mark written under the earlier rule can be later than what it showed.
+				const sections = (await fetchRemoteClientContext()).sharedServer ? sharedServerReleases(data.sections, seenMark) : data.sections;
+				if (cancelled || sections.major.length + sections.minor.length === 0) return;
+				setWhatsNew({ version: data.version, sections });
 			} catch {}
 		})();
 		return () => { cancelled = true; };
@@ -3036,7 +3048,7 @@ export function App() {
 	// nonce change); cleared by every OTHER nonce bump site so a stale prefill
 	// never resurrects after send/reset.
 	const [composerPrefill, setComposerPrefill] = useState("");
-	// A draft typed in a room survives leaving and coming back (community #13).
+	// A draft typed in a room survives leaving and coming back.
 	// In-memory and text-only by design: staged attachments already persist on
 	// the room shelf, and nothing about an unsent message belongs on disk.
 	// Captured on a plain leave, restored on the next open/resume; forget flows
@@ -3095,7 +3107,8 @@ export function App() {
 	// sign-in in AI setup, the next message, or the conversation moves. The
 	// server reads the sign-ins again before every message, so the next send
 	// after a sign-in runs on it.
-	const [turnSignedOutProvider, setTurnSignedOutProvider] = useState<string | null>(null);
+	const [turnSignedOut, setTurnSignedOut] = useState<{ provider: string; key?: CredentialKey } | null>(null);
+	const turnSignedOutProvider = turnSignedOut?.provider ?? null;
 	const [busy, setBusy] = useState(false);
 	const [turnCancelling, setTurnCancelling] = useState(false);
 	const [turnInterruptedNote, setTurnInterruptedNote] = useState<string | null>(null);
@@ -3113,7 +3126,7 @@ export function App() {
 	type RightPaneOccupant =
 		| { kind: "preview"; data: ApprovalPreviewData }
 		| { kind: "artifactViewer"; taskId: string; templateLabel: string; artifact: { relativePath: string; extension: string }; asset?: AssetRowView }
-		// The run view (status grammar, 2026-07-18): the live task's stream in the
+		// The run view: the live task's stream in the
 		// same pane slot; renders from taskState and swaps to the artifact viewer
 		// in place when the run ends.
 		| { kind: "taskRun"; taskId: string };
@@ -3127,7 +3140,7 @@ export function App() {
 	// files/<name> route — the URL doesn't change, so the frame key must.
 	const [viewerReloadNonce, setViewerReloadNonce] = useState(0);
 	const [exportNotice, setExportNotice] = useState<{ kind: "success" | "error"; text: string } | null>(null);
-	// The done-moment toast (status grammar, 2026-07-18): fires once when a task
+	// The done-moment toast: fires once when a task
 	// ends and nothing else is already showing the result; top-right, ~6 s,
 	// click opens the viewer. The rail's green dot is the durable signal.
 	const [taskDoneToast, setTaskDoneToast] = useState<{ taskId: string; title: string; kind: "done" | "error"; templateLabel: string; artifact: { relativePath: string; extension: string } | null } | null>(null);
@@ -3250,7 +3263,7 @@ export function App() {
 	// question with it (home-room-arrange.ts, the ONE sentence).
 	const roomArrangeDirtyRef = useRef(false);
 	const [persistentAgentStatus, setPersistentAgentStatus] = useState<PersistentAgentStatus | null>(null);
-	// Community #14 slice 2: rooms observed finishing a response WITHOUT us
+	// Rooms observed finishing a response WITHOUT us
 	// inside (left mid-generation, or found in flight from outside). When a
 	// status refresh later shows such a room settled with a completed turn,
 	// its card gets a "response ready" badge until the room is opened. Session-
@@ -3270,7 +3283,7 @@ export function App() {
 		void refreshAiProfileStatus();
 	};
 	const [backgroundReadyRooms, setBackgroundReadyRooms] = useState<ReadonlySet<PersistentAgentId>>(new Set());
-	// Rooms with a purge in flight (community #10): the delete endpoint may be
+	// Rooms with a purge in flight: the delete endpoint may be
 	// retrying for a few seconds after an in-room delete, and the card must not
 	// offer a door into a room that is about to stop existing.
 	const [purgingRooms, setPurgingRooms] = useState<ReadonlySet<PersistentAgentId>>(new Set());
@@ -3513,7 +3526,7 @@ export function App() {
 	// moment this session caught up.
 	const reattachStartedAtRef = useRef<number | null>(null);
 	const streamErrorLineIdRef = useRef<string | null>(null);
-	// One output-limit line per turn. Turn frames replay on reattach (#33), so
+	// One output-limit line per turn. Turn frames replay on reattach, so
 	// the guard has to survive the same message_end arriving twice.
 	const outputLimitNoticeShownRef = useRef(false);
 	const retryNoticeIdRef = useRef<string | null>(null);
@@ -3528,9 +3541,8 @@ export function App() {
 	// (openArtifactViewer attaches the row to whatever entry path opened it).
 	const assetRowsRef = useRef<AssetRowView[]>([]);
 	const openAssetRowRef = useRef<((row: AssetRowView) => void) | null>(null);
-	// Assets panel data: fetch the room-wide REST list (room-scoped history,
-	// 2026-07-18 grill: rows survive Memento and checkpoint — both only mint a
-	// new conversation). The stale-guard is per-room; a thread switch within the
+	// Assets panel data: fetch the room-wide REST list (rows survive Memento
+	// and checkpoint — both only mint a new conversation). The stale-guard is per-room; a thread switch within the
 	// same room keeps the rows it already has.
 	const refreshAssetRows = useCallback(async () => {
 		const chat = persistentChatRef.current;
@@ -3606,7 +3618,7 @@ export function App() {
 			setExportNotice({ kind: "error", text: (e as Error).message || "The file could not be added." });
 		}
 	}, [refreshRoomFiles]);
-	// Community #52: a file pasted into the composer (a screenshot, a copied
+	// A file pasted into the composer (a screenshot, a copied
 	// picture, a document copied from the file manager) stages through the
 	// SAME path the 📎 uses — same upload, same chip, same refusals. The only
 	// extra work is a name for clipboard images: they arrive as anonymous
@@ -3976,7 +3988,7 @@ export function App() {
 				if (persistentThread) setPersistentThread(null);
 				return;
 			}
-			// A room finishing a detached response (community #14) is NOT an
+			// A room finishing a detached response is NOT an
 			// abandoned active thread: reconciling it back to standby here would
 			// race the server-side landing write. Leave it alone until it settles.
 			if (resumableStatus.activeThread?.inFlight) return;
@@ -4177,8 +4189,8 @@ export function App() {
 		} catch {}
 	}
 
-	// While some room is finishing a response with nobody inside (community
-	// #14), keep the statuses fresh so the card flips from working to
+	// While some room is finishing a response with nobody inside, keep the
+	// statuses fresh so the card flips from working to
 	// "response ready" without waiting for a window refocus. Scoped: only
 	// polls while such a room exists. Being inside a DIFFERENT room no longer
 	// stands the poll down (slice 3) — the done-moment toast has to fire there
@@ -4555,7 +4567,7 @@ export function App() {
 		};
 	}, []);
 
-	// --- Room WS auto-reconnect (offline-forever fix, 2026-07-20) ------------
+	// --- Room WS auto-reconnect ---------------------------------------------
 	// A dropped room socket used to stay dead until a manual page refresh:
 	// onclose only flipped `connected`, and nothing ever rebuilt the socket.
 	// Reconnect = a programmatic Resume — the same steps as
@@ -4772,7 +4784,7 @@ export function App() {
 			// file is at least as fresh (another surface may have advanced the
 			// room while this tab was offline), the file wins — like Resume.
 			// One case beats the length heuristic outright: the server-side
-			// landing of a detached turn (community #14) CONSOLIDATES — it strips
+			// landing of a detached turn CONSOLIDATES — it strips
 			// the trailing partial assistant debris after the last user message
 			// and appends one `detached-*` item — so the landed file has FEWER
 			// items than the stale local transcript while being strictly newer.
@@ -4850,7 +4862,7 @@ export function App() {
 			wsParams.set("persistentAgentId", persistentChat.agentId);
 			wsParams.set("modelProvider", persistentChat.model.provider);
 			wsParams.set("model", persistentChat.model.model);
-			// Community #33: this client understands turn_reattach (supersede,
+			// This client understands turn_reattach (supersede,
 			// replay, restored prompt). The server only adopts a cooking turn
 			// onto connections that declare it; older bundles keep the
 			// room_cooking bounce they understand.
@@ -4981,7 +4993,7 @@ export function App() {
 				return;
 			}
 			if (msg.type === "model_switched") {
-				setTurnSignedOutProvider(null);
+				setTurnSignedOut(null);
 				// The conversation continues on another model: the server rebound the
 				// session. The room's model, the chip, the effort dial and the socket's
 				// model follow, and one quiet line marks the place in the transcript
@@ -5004,8 +5016,8 @@ export function App() {
 				return;
 			}
 			if (msg.type === "turn_reattach") {
-				// Stepping back into a room whose answer is still being written
-				// (community #33): the server adopted this session onto the
+				// Stepping back into a room whose answer is still being written:
+				// the server adopted this session onto the
 				// in-flight turn and replays the WHOLE turn's event frames right
 				// after this frame; live frames continue seamlessly behind them.
 				// Drop the persisted partial assistant tail first (the replay
@@ -5100,7 +5112,7 @@ export function App() {
 				return;
 			}
 			if (msg.type === "error") {
-				// Detach-vs-death (community #14): the original drop delivers no
+				// Detach-vs-death: the original drop delivers no
 				// signal (the network is gone), so the server tells us HERE, on the
 				// reconnect bounce, that the room is still finishing the response in
 				// the background. Make the bubble note honest, then stand the
@@ -5199,7 +5211,7 @@ export function App() {
 				flushAssistantStream();
 				// A turn refused on the sign-in: the one notice, not the raw line.
 				if (isSignInFailure(String(msg.message ?? ""))) {
-					noteTurnSignInFailure(String(msg.message));
+					noteTurnSignInFailure(String(msg.message), undefined, msg.credentialKey);
 					setItems((s) => stopRunningToolItems(s));
 				} else {
 					// A failure that repeats on every reconnect attempt (a bind that
@@ -5359,7 +5371,7 @@ export function App() {
 				});
 				void refreshAssetRows();
 				void refreshRoomFiles();
-				// Done-moment (status grammar, 2026-07-18): if the user is watching
+				// Done-moment: if the user is watching
 				// the run view, swap it for the artifact viewer in place — no toast
 				// needed. Otherwise the toast fires once; the green dot persists.
 				if (next.taskId === endTaskId && next.phase === "done") {
@@ -5512,7 +5524,7 @@ export function App() {
 	// that provider is signed in: a sign-in in this window refreshes the model
 	// status, and one made elsewhere (another tab, the CLI) is noticed when this
 	// window comes back to the front. Another room or conversation starts clean.
-	useEffect(() => { setSignedOutProvider(null); setRoomModelNotOffered(false); setTurnSignedOutProvider(null); }, [persistentSocketKey]);
+	useEffect(() => { setSignedOutProvider(null); setRoomModelNotOffered(false); setTurnSignedOut(null); }, [persistentSocketKey]);
 	useEffect(() => {
 		if (signedOutProvider === null) return;
 		const ready = modelStatus?.providers?.some((provider) => provider.ready && (signedOutProvider === "" || provider.id === signedOutProvider));
@@ -5625,9 +5637,11 @@ export function App() {
 				const notOffered = !contextOverflow && !notOnAccount && modelNotOffered(detail);
 				if (notOffered) console.warn("[exxperts] the provider no longer offers the model:", detail);
 				const turnModel = { model: String(ev.message.model ?? ""), provider: String(ev.message.provider ?? "") };
-				if (!contextOverflow && isSignInFailure(detail)) {
+				// The server reads a key's state from the same failure; the workspace 400 is the one case the matcher above leaves out.
+				const credentialKey = (ev as { credentialKey?: CredentialKey }).credentialKey;
+				if (!contextOverflow && (isSignInFailure(detail) || credentialKey === "no-workspace")) {
 					streamErrorLineIdRef.current = null;
-					noteTurnSignInFailure(detail, typeof ev.message.provider === "string" ? ev.message.provider : undefined);
+					noteTurnSignInFailure(detail, typeof ev.message.provider === "string" ? ev.message.provider : undefined, credentialKey);
 				} else setItems((s) => [...s, {
 					kind: "system",
 					id: errorLineId,
@@ -5812,7 +5826,7 @@ export function App() {
 	}
 
 	// The blip note said the response was killed; the reconnect bounce just
-	// proved it is still being written server-side (community #14). Rewrite the
+	// proved it is still being written server-side. Rewrite the
 	// note in place — UI only, deliberately not persisted: the server-side
 	// landing supersedes this whole partial bubble anyway.
 	function rewriteConnectionLostNoteForCookingRoom() {
@@ -5906,7 +5920,7 @@ export function App() {
 		// every turn; the composer's only job is to say when the user CHOOSES,
 		// which the effort frame does.
 		ws.send(JSON.stringify({ type: "prompt", text: wireText }));
-		setTurnSignedOutProvider(null);
+		setTurnSignedOut(null);
 		dispatchStream({ type: "new_turn", now: performance.now() });
 		outputLimitNoticeShownRef.current = false;
 		retrievalActivityIdRef.current = null;
@@ -5958,7 +5972,7 @@ export function App() {
 	// carries the prior exchanges. The as-of is re-read from the room's current
 	// status (a fresh point-in-time read, §8.5), not pinned to the first ask.
 	function handleConsultFollowUp(question: string): boolean {
-		// Socket guard (hardening 2026-07-11, fresh-eyes MAJOR): without this, a
+		// Socket guard: without this, a
 		// follow-up during a reconnect blip advanced the reducer to `streaming`
 		// with no frame sent — a permanently hung card whose completed (and still
 		// transferable) answer became unreachable. Mirror handleConsultRequest:
@@ -6048,12 +6062,6 @@ export function App() {
 		dispatchConsult({ type: "dismiss" });
 	}
 
-	// Visuals V6's card-transfer path retired with the done-card (status grammar,
-	// 2026-07-18), and the viewer-footer transfer door retired with the files UI
-	// slice: the room has eyes on its shelf now (manifest + read tools), so no
-	// manual re-injection remains — completion announcement goes automatic with
-	// the revise slice (slimmed handoff on the pending queue).
-
 	// Assets panel (rung 3): open a ledger row in the right-pane viewer — the
 	// reconstituted done-card. The live running row opens the run view instead;
 	// other rows without artifacts are not clickable.
@@ -6110,7 +6118,7 @@ export function App() {
 		}
 	}
 
-	// Remove from list (user control, 2026-07-20): a list operation only — the
+	// Remove from list: a list operation only — the
 	// ledger row gets a removedAt stamp and the panel hides it; files are kept.
 	// No dialog: nothing is destroyed, and the toast's Undo clears the stamp.
 	async function removeAssetRow(row: AssetRowView) {
@@ -8298,7 +8306,7 @@ export function App() {
 			setCurrentModel(liveThread.model);
 			setView("chat");
 			setSessionVersion((v) => v + 1);
-			// Community #33: entering a still-cooking room takes two awaited
+			// Entering a still-cooking room takes two awaited
 			// round trips between the clear at the top and the room binding
 			// here; a status poll in that gap re-enrolls the room as "cooking
 			// with nobody inside", which would toast an answer the user is about
@@ -8477,8 +8485,8 @@ export function App() {
 	// V5: open a task artifact beside the chat (the pane's second occupant).
 	// Every fresh open starts un-maximized; opening over a preview (or vice
 	// versa) swaps the occupant — one slot, last click wins. Whatever the entry
-	// path (done card, thread item, Assets row), the viewer gets the SAME
-	// reconstituted done-card chrome (Borja, live test 2026-07-18): the asset
+	// path (thread item, Assets row), the viewer gets the SAME
+	// reconstituted done-card chrome: the asset
 	// row rides along when the ledger has it, with a card-state fallback for
 	// the beat between task_end and the panel refetch landing.
 	const openArtifactViewer = useCallback((taskId: string, templateLabel: string, artifact: { relativePath: string; extension: string }) => {
@@ -8581,7 +8589,7 @@ export function App() {
 			}
 			const savedName = result.savedTo.split(/[\\/]/).pop() ?? exportName;
 			const isHtml = exportName.toLowerCase().endsWith(".html");
-			// Filename, not the full path (Borja, live test 2026-07-18) — with Keep
+			// Filename, not the full path — with Keep
 			// both it was suffixed, and that is what the user has to learn here.
 			setExportNotice({ kind: "success", text: `Saved “${savedName}”.` + (isHtml ? " Note: once saved, HTML files open outside the app's protections." : "") });
 		} catch (e) {
@@ -8839,15 +8847,15 @@ export function App() {
 			setTurnInterruptedNote(null);
 			turnInterruptedNoteRef.current = null;
 		}
-		// Option 4 (2026-07-19): leaving no longer stops a running specialist —
+		// Leaving no longer stops a running specialist —
 		// the worker survives in the room-scoped registry and the rail's pulsing
 		// row greets the user on return. No guard dialog; nothing to warn about.
 		await finishLeaveRoom();
 		return true;
 	}
 
-	// The tail of goHome, split out so the leave-guard dialog's "Leave anyway"
-	// can resume the exact same path. `detachInFlight` (community #14) leaves a
+	// The tail of goHome, split out so the other leave paths take the exact
+	// same steps. `detachInFlight` leaves a
 	// still-running turn cooking on the server: the standby save is the
 	// server's job then (the landing write parks the thread), and the room's
 	// active-lock badge is deliberately kept — the lock really is still held
@@ -8909,9 +8917,9 @@ export function App() {
 	// A turn refused on the sign-in: the raw text goes to the log, the room
 	// shows the one notice, and the message the person sent goes back into an
 	// empty composer, to send again once signed in.
-	function noteTurnSignInFailure(detail: string, provider?: string): void {
+	function noteTurnSignInFailure(detail: string, provider?: string, key?: CredentialKey): void {
 		console.warn("[exxperts] the turn failed on the provider's sign-in:", detail);
-		setTurnSignedOutProvider(provider || persistentChatRef.current?.model.provider || "");
+		setTurnSignedOut({ provider: provider || persistentChatRef.current?.model.provider || "", ...(key ? { key } : {}) });
 		const lastUser = [...itemsRef.current].reverse().find((item) => item.kind === "user");
 		if (lastUser?.kind === "user" && lastUser.text && !(textareaRef.current?.value ?? "").trim()) {
 			setComposerPrefill(lastUser.text);
@@ -8919,6 +8927,21 @@ export function App() {
 		}
 	}
 	const stoppedProvider = signedOutProvider ?? turnSignedOutProvider;
+	// The sign-in providers are always on the auth list; one missing from it
+	// (a key provider or a gateway whose key was removed) holds a key. The
+	// socket refuses a provider with no credential at all; a turn fails on a
+	// key the provider refused while it is still saved, its state named by the
+	// turn's failing frame.
+	const stoppedSignsIn = !stoppedProvider || !authStatus || authStatus.providers.find((provider) => provider.id === stoppedProvider)?.oauth === true;
+	const stoppedGone = stoppedSignsIn ? "signed-out" : signedOutProvider !== null ? "key-missing" : credentialGoneOf(turnSignedOut?.key ?? "refused");
+	const stoppedWords = credentialGoneWords(stoppedGone);
+	// A provider whose key was removed can leave the model list; its name then
+	// comes from the names table, and only an unknown id reads as "This
+	// conversation's provider".
+	const stoppedProviderLabel = stoppedProvider ? modelStatus?.providers?.find((provider) => provider.id === stoppedProvider)?.label ?? (providerDisplayName(stoppedProvider) !== stoppedProvider ? providerDisplayName(stoppedProvider) : null) : null;
+	// A refused key is the service's word ("Anthropic did not accept the saved
+	// key"), never the row's ("Claude API key").
+	const stoppedSubject = (stoppedGone === "key-refused" && stoppedProvider ? providerAccountName(stoppedProvider) : undefined) ?? stoppedProviderLabel ?? "This conversation's provider";
 	// Settings, AI setup, at the signed-out provider's row, to sign in again.
 	function openSignIn(providerId: string): void {
 		setAiSetupFocus(providerId ? { providerId } : null);
@@ -9141,7 +9164,7 @@ export function App() {
 					label: "AI setup",
 					content: (
 						<div className="landing ai-setup-page">
-							<AiProfileSwitcherSection status={aiProfileStatus} authStatus={authStatus} onRefresh={refreshAiProfileStatus} onRefreshAuth={refreshAuthStatus} onSignedIn={() => setTurnSignedOutProvider(null)} focus={aiSetupFocus} />
+							<AiProfileSwitcherSection status={aiProfileStatus} authStatus={authStatus} onRefresh={refreshAiProfileStatus} onRefreshAuth={refreshAuthStatus} onSignedIn={() => setTurnSignedOut(null)} focus={aiSetupFocus} />
 						</div>
 					),
 				},
@@ -9260,7 +9283,7 @@ export function App() {
 				{/* No "finished a response" note here: on Home the room's own card
 				    already turns to response ready. Inside another room, where the
 				    card cannot be seen, the room's toast stack carries it. */}
-				{whatsNew && <WhatsNewDialog version={whatsNew.version} entries={whatsNew.entries} onClose={dismissWhatsNew} />}
+				{whatsNew && <WhatsNewDialog sections={whatsNew.sections} onClose={dismissWhatsNew} />}
 				<Landing roomOrder={homeRoomOrder.view} onChooseRoomOrder={homeRoomOrder.choose} onArrangingChange={(dirty) => { roomArrangeDirtyRef.current = dirty; }} onOpenSettings={openSettings} onOpenDashboard={() => setView("dashboard")} onOpenMemory={() => setView("memory")} onOpenPersistentAgent={openPersistentAgent} onResumePersistentAgent={openPersistentAgentResume} onMaintainPersistentAgent={(target) => { if (!openMaintainChooser(target)) setPersistentResumeError(maintainBlockedReason(target.agentId) ?? "Maintain is not available for this room right now."); }} onCreatePersistentAgent={createPersistentAgentRoom} onArchiveRoom={archivePersistentAgentRoom} onPurgeRoom={purgePersistentAgentRoom} onMementoForget={(agentId) => { roomDraftsRef.current.delete(agentId); }} modelStatus={modelStatus} persistentAgentStatuses={persistentAgentStatuses} persistentThread={persistentThread} persistentLive={!!persistentChat} persistentResumeError={persistentResumeError} onRefreshPersistentAgent={refreshPersistentAgentStatus} theme={theme} appearance={appearance} onSetAppearance={setAppearance} aiProfileStatus={aiProfileStatus} backgroundReadyRooms={backgroundReadyRooms} purgingRooms={purgingRooms} />
 			</>
 		);
@@ -9467,7 +9490,7 @@ export function App() {
 				: roomMovedOn
 				? { line: ROOM_MOVED_ON_SENTENCE, onReload: () => void reloadMovedRoom() }
 				: stoppedProvider !== null
-				? { line: `${modelStatus?.providers?.find((provider) => provider.id === stoppedProvider)?.label ?? "This conversation's provider"} is signed out. Sign in again to continue this conversation.`, onSignIn: () => openSignIn(stoppedProvider), onChooseModel: () => openRoomSettings("model") }
+				? { line: stoppedGone === "key-no-workspace" ? `${modelDisplayName({ model: persistentChat?.model.model, modelLabel: persistentChat?.model.label, provider: persistentChat?.model.provider }) || "This conversation's model"} ${credentialGoneWhy(stoppedGone)}.` : `${providerCredentialClause(stoppedSubject, stoppedGone)}. ${stoppedWords.again} to continue this conversation.`, onSignIn: () => openSignIn(stoppedProvider), signInLabel: stoppedWords.button, onChooseModel: () => openRoomSettings("model") }
 				: roomModelNotOffered
 					? { line: `${currentPersistentStatus?.models?.conversation.chosen?.name ?? "This room's model"} is no longer offered. Choose another model to continue.`, onChooseModel: () => openRoomSettings("model") }
 					: undefined}

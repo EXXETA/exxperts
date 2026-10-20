@@ -28,6 +28,7 @@ import path from "node:path";
 
 import { MEMORY_CARD_NOTE_MAX_CHARS, memoryTextHasWords, memoryTypedText } from "./memory-typed-text.js";
 import { ModelUnreachableError, patienceSpent, WaitLine, type PatienceWait } from "./model-call-causes.js";
+import type { CredentialKey } from "./model-not-offered.js";
 import { recordMemoryUse } from "./memory-use.js";
 import { codeSorter, isUnsorted } from "./memory-placement.js";
 import { hasActiveAbsorbRun, memoryUseForRanking, savedRunRecord, dropRunJournal, readRunJournal, writeRunJournal, parseRunKeepRequest, rebaseOntoDisk, type AbsorbRunArchiveRow, type AbsorbRunBudget, type AbsorbRunDemotion, type AbsorbRunEntryCard, type RankedArchiveAppend } from "./absorb-run.js";
@@ -167,7 +168,8 @@ export interface ReviewRun {
 	 * cannot be reached: the card shows the one notice (Try again, Choose
 	 * another model, Sign in when that is the cause). What finished can be saved.
 	 */
-	stop?: { kind: "outage" | "restart"; model: { provider: string; model: string }; cause: "not-answering" | "busy" | "signed-out" | "quota" | "not-offered" | "not-on-account" | "restarted" };
+	/** `key`: a signed-out key connection's key is missing, or saved and refused. */
+	stop?: { kind: "outage" | "restart"; model: { provider: string; model: string }; cause: "not-answering" | "busy" | "signed-out" | "quota" | "not-offered" | "not-on-account" | "restarted"; key?: CredentialKey };
 	/** A busy Memory model being waited out: the card says when the next try is. */
 	wait?: PatienceWait;
 }
@@ -870,6 +872,7 @@ async function tidyGroups(slot: RunSlot, titles: readonly string[], nowFn: () =>
 			kind: "outage",
 			model: { provider: slot.model.provider, model: slot.model.model },
 			cause: detail === "signed-out" || detail === "quota" || detail === "not-offered" || detail === "not-on-account" ? detail : detail === "still-busy" ? "busy" : "not-answering",
+			...(stopped.details.key ? { key: stopped.details.key } : {}),
 		};
 	}
 }
@@ -1186,13 +1189,6 @@ export function cancelReviewRun(agentIdRaw: string, runId: string, now = new Dat
 
 // --- Approval --------------------------------------------------------------------
 
-/**
- * ONE write: the candidate document (post-tidy, post-demotion, the kept notes back in),
- * everything that left the core appended to the archive with its reason,
- * Chronos stamped, and the run's own account in the review event record.
- * Anything else that changed the file since the run started makes the run
- * stale, and nothing is written.
- */
 /** A Review save already made, told again: from the run while it is kept, from the room's history once it is gone. Null: this run never saved. */
 function savedReviewAnswer(agentId: string, runId: string): ReviewRunApprovalResponse | null {
 	const live = RUNS.get(agentId);
@@ -1217,6 +1213,13 @@ function savedReviewAnswer(agentId: string, runId: string): ReviewRunApprovalRes
 	};
 }
 
+/**
+ * ONE write: the candidate document (post-tidy, post-demotion, the kept notes back in),
+ * everything that left the core appended to the archive with its reason,
+ * Chronos stamped, and the run's own account in the review event record.
+ * Anything else that changed the file since the run started makes the run
+ * stale, and nothing is written.
+ */
 export function approveReviewRun(agentIdRaw: string, runId: string, now = new Date()): ReviewRunApprovalResponse {
 	const agentId = createPersistentAgentInstance(agentIdRaw).agentId;
 	// A Save sent again after its answer was lost: it saved once, and says so.

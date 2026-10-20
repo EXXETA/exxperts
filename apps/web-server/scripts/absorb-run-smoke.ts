@@ -386,10 +386,11 @@ function sessionIdFromPrompt(prompt: string): string {
 /**
  * The entries this prompt says may be addressed, read back the way a model
  * reads them: off the memory itself, where every entry opens with its own id
- * and its date: `- [m-0031 · learned 2026-08-02] …`, `- [m-0032 · pinned ·
- * learned …] …` for a pinned one; with no learned day, `· saved 2026-09-01`
- * for a note a fold wrote or `· in memory since 2026-09-01` for one nothing
- * wrote, and `· rewritten 2026-09-11` once a fold rewrote it.
+ * and its date: `- [m-0031 · learned 2026-08-02] …`,
+ * `- [m-0032 · pinned · learned …] …` for a pinned one; with no learned day,
+ * `· saved 2026-09-01` for a note a fold wrote or
+ * `· in memory since 2026-09-01` for one nothing wrote, and
+ * `· rewritten 2026-09-11` once a fold rewrote it.
  */
 const ENTRY_ADDRESS = /^(?:\s*(?:[-*+]|\d+[.)])\s+)?\[([^\]\s·]+)((?:\s+·\s+[^\]·]+)*)\]\s*([\s\S]*)$/;
 

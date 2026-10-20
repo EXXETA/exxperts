@@ -211,7 +211,7 @@ try {
 	);
 	await expectError(() => buildConsultAnswer({ targetAgentId, question: "q" }, CONSULT_MODEL, async () => ({ text: "   " })), /produced no text/, "empty worker output should be rejected");
 
-	// Stacked-consult trust boundary (§8.1/§8.6 + hardening 2026-07-11): the wire
+	// Stacked-consult trust boundary: the wire
 	// caps are enforced BEFORE the worker runs — 20-exchange backstop (20 priors
 	// would make a 21st exchange), per-question length, junk shapes.
 	const prior = { question: "earlier q", answerMarkdown: "earlier a" };

@@ -171,7 +171,7 @@ export interface ConsultStackHandoffInput {
 /** Marker appended when an earlier answer is trimmed harder to fit (§8.8). */
 export const CONSULT_HANDOFF_EARLIER_TRIM_MARKER = "[earlier answer trimmed; full text was visible in the consult card]";
 
-/** Marker appended when a question is trimmed to keep the block under its cap (hardening 2026-07-11). */
+/** Marker appended when a question is trimmed to keep the block under its cap. */
 export const CONSULT_HANDOFF_QUESTION_TRIM_MARKER = "[question trimmed; full text was visible in the consult card]";
 
 /** Cap an earlier (non-final) answer to `max`, appending the earlier-trim marker if capped. */
@@ -202,9 +202,9 @@ function fingerprintString(fingerprint: ConsultHandoffFingerprint): string {
  * updated between exchanges" tail on drift). Earlier answers are capped at
  * `earlierAnswerCap`, the final answer at `finalAnswerCap` (normally 4,000),
  * every question at `questionCap` — questions MUST be cappable too, or the 12k
- * block invariant fails on long-question stacks (hardening 2026-07-11: the
- * fresh-eyes review proved 2×4,000-char questions + a 4,000-char final answer
- * already exceed the cap with every answer trimmed to zero).
+ * block invariant fails on long-question stacks (2×4,000-char questions + a
+ * 4,000-char final answer already exceed the cap with every answer trimmed to
+ * zero).
  */
 function renderStackedBlock(input: ConsultStackHandoffInput, earlierAnswerCap: number, questionCap: number, finalAnswerCap: number): string {
 	const slug = input.slug;
@@ -272,7 +272,7 @@ export function buildConsultHandoffBlockFromStack(input: ConsultStackHandoffInpu
 	// Shrink until the block fits the 12k queue cap. The ladder trims earlier
 	// answers first (they are the final answer's context), then questions, then —
 	// only if still over — the final answer itself. ≤12k is an INVARIANT of this
-	// function (hardening 2026-07-11): validateConsultHandoffQueue rejects
+	// function: validateConsultHandoffQueue rejects
 	// oversized entries at the thread write, so an over-cap block would brick
 	// every subsequent save of the thread; the builder must never emit one.
 	const LADDER: Array<{ earlier: number; question: number; final: number }> = [

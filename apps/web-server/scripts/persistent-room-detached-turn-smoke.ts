@@ -5,9 +5,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { authedFetch, type AuthedFetchInit, SMOKE_AUTH_HEADERS, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer } from "./smoke-server-process.js";
+import { authedFetch, freePort, type AuthedFetchInit, SMOKE_AUTH_HEADERS, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer } from "./smoke-server-process.js";
 
-// Community #14 slice 1 end-to-end: closing the room websocket while a turn is
+// End to end: closing the room websocket while a turn is
 // in flight DETACHES the turn instead of aborting it. Against a real spawned
 // server with a synthetic OpenAI-compatible SSE gateway, proves:
 //   1. the provider stream is NOT aborted by the disconnect and runs to its end;
@@ -26,7 +26,7 @@ import { authedFetch, type AuthedFetchInit, SMOKE_AUTH_HEADERS, SMOKE_SERVER_AUT
 // unseen-landed-answer marker on the room status (threadId/turnId/terminal
 // reason), binding a new session clears it, a cancelled turn never writes one,
 // and the watchdog landing records the marker with terminalReason failed.
-// Issue #33 (stepping back into a room) extends the run:
+// Stepping back into a room extends the run:
 //   2. (rewritten) a connection for the SAME conversation no longer bounces
 //      mid-cook: it binds, receives turn_reattach plus the replayed stream
 //      from the turn's very first chunk, then the live continuation, and
@@ -59,7 +59,7 @@ import { authedFetch, type AuthedFetchInit, SMOKE_AUTH_HEADERS, SMOKE_SERVER_AUT
 //      cooking handle, not the cooking set adopt() clears), with the
 //      adopter's stream and lock untouched;
 //  13. reattach is opt-in: a connection without the reattach capability gets
-//      the pre-#33 room_cooking bounce and zero replay frames, while a
+//      the older room_cooking bounce and zero replay frames, while a
 //      capable connection adopts the same turn right afterwards;
 //  14. settle during bind, made deterministic via the test-only bind delay:
 //      the reattach frame arrives settled with the whole answer replayed
@@ -95,7 +95,7 @@ const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "exxperts-detached-turn-h
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const webServerDir = path.resolve(scriptDir, "..");
 const repoRoot = path.resolve(webServerDir, "..", "..");
-const port = 24000 + Math.floor(Math.random() * 10000);
+const port = await freePort();
 const baseUrl = `http://127.0.0.1:${port}`;
 const agentDir = path.join(tempHome, ".exxperts", "agent");
 const productAppRoot = path.join(tempHome, ".exxperts", "app");
@@ -103,7 +103,7 @@ const productAppRoot = path.join(tempHome, ".exxperts", "app");
 const SLOW_MARKER = "SLOW_STREAM_MARKER";
 const HANG_MARKER = "HANG_STREAM_MARKER";
 const BIG_MARKER = "BIG_STREAM_MARKER";
-// 16 chunks x 400ms give the reattach sections (issue #33) a wide enough
+// 16 chunks x 400ms give the reattach sections a wide enough
 // mid-cook window to bind, replay and leave again before the stream ends.
 const SLOW_ANSWER_CHUNKS = Array.from({ length: 16 }, (_, i) => `slow part ${i + 1}. `);
 const HANG_ANSWER_CHUNKS = ["Hang part 1. "];
@@ -254,7 +254,7 @@ function deltaText(frame: Frame): string {
 	return update?.type === "text_delta" ? String(update.delta ?? "") : "";
 }
 
-// Every delta from `fromIndex` on, joined: the reattach seam proof (issue #33)
+// Every delta from `fromIndex` on, joined: the reattach seam proof
 // is that replayed plus live deltas concatenate to the answer, once, in order.
 function joinedDeltas(frames: Frame[], fromIndex: number): string {
 	return frames.slice(fromIndex).map(deltaText).join("");
@@ -279,7 +279,7 @@ class WsHarness {
 
 	static async connect(persistentAgentId: string, conversationId: string, options: { reattach?: boolean; extraParams?: string } = {}): Promise<WsHarness> {
 		// The reattach capability rides every connect by default, like the real
-		// client; `reattach: false` impersonates a pre-#33 bundle.
+		// client; `reattach: false` impersonates an older bundle.
 		const reattachParam = options.reattach === false ? "" : "&reattach=1";
 		const socket = new WebSocketImpl(`ws://127.0.0.1:${port}/ws?persistentAgentId=${persistentAgentId}&conversationId=${conversationId}&modelProvider=openai-compatible&model=room-model${reattachParam}${options.extraParams ?? ""}`, { headers: { ...SMOKE_AUTH_HEADERS } });
 		const harness = new WsHarness(socket);
@@ -336,7 +336,7 @@ function smokeEnv(): NodeJS.ProcessEnv {
 	env.EXXETA_HOME = repoRoot;
 	env.EXXPERTS_CODING_AGENT_DIR = agentDir;
 	env.EXXETA_DETACHED_TURN_DEADLINE_MS = String(DETACHED_DEADLINE_OVERRIDE_MS);
-	// #33 test introspection: honors the testBindDelayMs connect param (pins
+	// Test introspection: honors the testBindDelayMs connect param (pins
 	// the settle-during-bind branch deterministically) and the replay-buffer
 	// stats probe.
 	env.EXXPERTS_TEST_INTROSPECTION = "1";
@@ -467,7 +467,7 @@ try {
 	ws.close();
 	ws = null;
 
-	// --- 2. While cooking: stepping back in ADOPTS the turn (issue #33) ------
+	// --- 2. While cooking: stepping back in ADOPTS the turn ------------------
 	await new Promise((resolve) => setTimeout(resolve, 400));
 	const slowRequest = gatewayRequests.find((request) => request.slow)!;
 	assert(!slowRequest.aborted, "the provider stream must NOT be aborted by the disconnect");
@@ -615,7 +615,7 @@ try {
 	assert(afterHangStatus.unseenLandedAnswer?.terminalReason === "failed", `the watchdog landing should record an unseen marker with terminalReason failed, got ${JSON.stringify(afterHangStatus.unseenLandedAnswer)}`);
 	assert(afterHangStatus.unseenLandedAnswer.threadId === conversationId, `watchdog marker should name the landed thread, got ${JSON.stringify(afterHangStatus.unseenLandedAnswer)}`);
 
-	// --- 7. Full reattach: watch the answer land (issue #33) -----------------
+	// --- 7. Full reattach: watch the answer land -----------------------------
 	// A fresh room so the landing assertions cannot be polluted by earlier
 	// sections' landed items.
 	const room7 = await createRoom("Reattach Watch Room");
@@ -901,11 +901,11 @@ try {
 	ws12b = null;
 	await waitUntil(async () => !(await getStatus(room12)).activeLock, "room12 lock released", 20_000);
 
-	// --- 13. Reattach is opt-in: a pre-#33 client keeps its bounce ------------
+	// --- 13. Reattach is opt-in: an older client keeps its bounce -------------
 	// A client that does not declare the reattach capability would ignore
 	// turn_reattach, double-render the replay under its persisted partial, and
 	// then persist the duplicated transcript over the clean landing. It must
-	// get the pre-#33 room_cooking bounce and NOTHING else; a capable
+	// get the older room_cooking bounce and NOTHING else; a capable
 	// connection for the same conversation still adopts normally afterwards.
 	const room13 = await createRoom("Reattach Optin Room");
 	const conv13 = `smokeconv13_${Date.now().toString(36)}`;

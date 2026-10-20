@@ -85,7 +85,7 @@ export function createPersistentRoomBashApprovalGuard(options: CreatePersistentR
  * (which never get bash anyway) never see an approval pause.
  */
 export function createPersistentRoomBashApprovalExtension(guard: PersistentRoomBashApprovalGuard) {
-	return async (pi: { on: (event: "tool_call", handler: (event: any, ctx: any) => Promise<{ block: boolean; reason: string } | undefined>) => void }) => {
+	return async function persistentRoomBashApproval(pi: { on: (event: "tool_call", handler: (event: any, ctx: any) => Promise<{ block: boolean; reason: string } | undefined>) => void }) {
 		pi.on("tool_call", async (event: any, ctx: any) => {
 			if (event?.toolName !== "bash") return undefined;
 			const command = typeof event?.input?.command === "string" ? event.input.command : "";

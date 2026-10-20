@@ -39,6 +39,7 @@ import path from "node:path";
 import {
 	answerTokens,
 	askRoom,
+	benchModelsLine,
 	claimsFailed,
 	claimsLine,
 	createBenchRoom,
@@ -49,6 +50,7 @@ import {
 	firstReadTallyLine,
 	ingestSessions,
 	pad,
+	parseBenchModelSpec,
 	prepareBenchHome,
 	ProviderGaveUpError,
 	resultsDir,
@@ -542,6 +544,8 @@ if (args.resume) {
 }
 
 const numbers = estimate(todo, foldEvery, args.baseline, args.firstRead);
+// A real run's ingest names its models when it starts; a dry run starts none, so it names them here.
+if (args.dryRun && !args.scripted && args.baseline === undefined) console.log(benchModelsLine(parseBenchModelSpec(realSpec!, "RECALL_BENCH_MODEL")));
 printEstimate(numbers, args, foldEvery);
 if (args.dryRun) {
 	console.log("dry run: nothing was built, nothing was called, no home was made; drop --dry-run to run it");
@@ -652,7 +656,7 @@ try {
 		console.log("  what this run proves is that the pipeline runs end to end and that the files come out in the shape the judge reads.");
 		if (scriptedFail) console.log(`  And every completion whose request carries "${scriptedFail.marker}" is ${scriptedFail.hang ? "held open and never answered" : "answered with an HTTP 500"}, ${scriptedFail.times === "all" ? "every time" : `${scriptedFail.times} time(s)`}: what this run proves is the waiting.`);
 	} else {
-		lock = useRealProviderRecords({ spec: realSpec!, signInFromHome: args.signInFromHome === true });
+		lock = await useRealProviderRecords({ spec: realSpec!, signInFromHome: args.signInFromHome === true });
 	}
 	setBenchModel(lock);
 	worker = await createMaintenanceWorker();

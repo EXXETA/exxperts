@@ -16,7 +16,7 @@ import os from "node:os";
 import path from "node:path";
 import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
-import { authedFetch, SMOKE_AUTH_HEADERS, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, type AuthedFetchInit } from "./smoke-server-process.js";
+import { authedFetch, SMOKE_AUTH_HEADERS, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort, type AuthedFetchInit } from "./smoke-server-process.js";
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -29,7 +29,7 @@ function pass(label: string): void {
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const webServerDir = path.resolve(scriptDir, "..");
 const repoRoot = path.resolve(webServerDir, "..", "..");
-const port = 27000 + Math.floor(Math.random() * 10000);
+const port = await freePort();
 const baseUrl = `http://127.0.0.1:${port}`;
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "exxperts-empty-follows-pick-"));
@@ -223,10 +223,10 @@ try {
 	socket.addEventListener("message", (event: { data: unknown }) => { try { frames.push(JSON.parse(String(event.data))); } catch {} });
 	await waitUntil(() => frames.some((frame) => frame.type === "error" || frame.type === "ready"), "the waiting conversation's first frame");
 	const refusal = frames.find((frame) => frame.type === "error");
-	assert(refusal?.code === "provider_signed_out" && refusal.provider === "fake-gpt" && refusal.message === "This room's model, GPT Fake on Fake GPT, is signed out. Sign in again in Settings, AI setup, or choose another model in Room settings, Model.", `the empty conversation waits with the room's refusal, got ${JSON.stringify(frames)}`);
+	assert(refusal?.code === "provider_signed_out" && refusal.provider === "fake-gpt" && refusal.message === "This room's model, GPT Fake on Fake GPT, has no key saved. Add the key again in Settings, AI setup, or choose another model in Room settings, Model.", `the empty conversation waits with the room's refusal, got ${JSON.stringify(frames)}`);
 	assert(!frames.some((frame) => frame.type === "ready") && requests.length === requestsBefore, "nothing bound on Claude, the lock it was prepared with, and no model was asked");
 	assert((await api(`/api/persistent-agents/${agentId}/threads/${waitingId}`)).body.thread.model.model === CLAUDE.model, "the conversation's lock is left as it was, for when the room can run again");
-	pass("while the room's pick is signed out, an empty conversation refuses with the room's sentence instead of running on the model it was prepared with");
+	pass("while the room's pick has no key saved, an empty conversation refuses with the room's sentence instead of running on the model it was prepared with");
 
 	console.log("empty conversation follows pick smoke passed");
 } catch (error) {

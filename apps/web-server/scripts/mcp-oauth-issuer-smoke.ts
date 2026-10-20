@@ -281,7 +281,8 @@ async function fetchCallback(url: string): Promise<Response> {
 }
 
 function withTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
-	return Promise.race([promise, new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`${label} timed out after 20s`)), 20_000))]);
+	let timer: NodeJS.Timeout | undefined;
+	return Promise.race([promise, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(`${label} timed out after 20s`)), 20_000); })]).finally(() => clearTimeout(timer));
 }
 
 async function main(): Promise<void> {

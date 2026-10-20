@@ -1,47 +1,8 @@
-// The memory entry model (memory v2, stream B) — the pure layer that turns
-// `L1b/current.md` into addressable pieces and back.
-//
-// Today a memory is one string: storage and the room's context render are the
-// same bytes, and the only address anything has is a subsection title. This
-// module splits the two apart and gives every bullet and paragraph an id, a
-// kind, a saved-on date and its originating session, so maintenance can emit
-// small checkable operations against pieces instead of rewriting the file.
-//
-// What lives here and what does not:
-//   - here: parsing, migration, the two renders, the area map, the
-//     deterministic ranker, budget demotion, the archive file, user edits;
-//   - not here: anything that talks to a model, a route, or the filesystem.
-//     Every function is pure and returns a new document.
-//
-// Conventions shared with the Review operations layer (review-ops.ts):
-//   - an area address is "Section / Subsection" (memoryAreaId);
-//   - must-keep is a marker anywhere in an entry, and a marked entry is pinned;
-//   - sizes go through the ONE estimator (token-estimate.ts), never re-derived.
-//
-// THE LINE MODEL (the one rule everything below obeys):
-//   A line ends at "\r\n", "\n", "\r", U+2028 or U+2029 — the same terminators
-//   the memory-map splitters' multiline anchors break on. A line is stored
-//   WITHOUT its terminator and with every other byte intact (indentation and
-//   trailing spaces are identity, never trimmed). Rebuilt regions are written
-//   back with ONE terminator for the whole document, `memoryDocumentEol(doc)`:
-//   the first terminator found in the document's own verbatim text. Regions
-//   this module does not own (the preamble, Chronos, Recent Context and any
-//   other top-level section) are carried as verbatim slices and never touched,
-//   so their bytes survive whatever they are.
-//   THE EDGE RULE: a block loses its leading and trailing BLANK lines and
-//   nothing else (a "blank" line is one whose trim() is empty, so a line of
-//   spaces at an edge is a separator and goes; inside a block it stays).
-//   Consequence: a document in storage format — one this module rendered —
-//   round-trips byte for byte through parse and render, CRLF, trailing spaces
-//   and blank-line structure included. A hand-written file with, say, three
-//   blank lines between two bullets is parsed happily and rendered in the
-//   canonical layout; that first render is the migration write, and every
-//   render after it is a fixed point.
+// The memory entry model: `L1b/current.md` into addressable entries and back, pure (no model, route or filesystem).
+// Lines split at the terminators the splitters in memory-shape.ts break on; a document this module rendered round-trips byte for byte.
 
 import type { MemoryUse } from "./memory-use.js";
 import { estimateTokens, estimateTokensFromChars } from "./token-estimate.js";
-
-// --- The model ---------------------------------------------------------------
 
 export type EntryKind = "event" | "fact" | "practice" | "item";
 export type ItemStatus = "open" | "done";
@@ -63,19 +24,18 @@ export interface MemoryEntry {
 	/** Originating Recent Context id, e.g. "RC-0007". */
 	from?: string;
 	pinned: boolean;
-	/** Items only. */
 	status?: ItemStatus;
-	/** YYYY-MM-DD of the last update or supersede. */
+	/** YYYY-MM-DD the note was last touched: a fold's update, supersede or close, a Replace, a hand edit, or a Review close. */
 	updated?: string;
-	/** YYYY-MM-DD of the conversation that last wrote the text, from its page's heading; absent when no dated conversation did, and never guessed. */
+	/** YYYY-MM-DD the room learned what the text says: the day of the conversation that wrote it (from its page's heading) or of a hand edit, the newest of the notes' days after a Replace or a Review merge; never guessed. */
 	learned?: string;
-	/** The ids, comma-separated, of notes the person kept beside this one though the two may disagree: a Memorize save writes it on both, and any rewrite of the text clears it. */
+	/** Comma-separated ids of notes the person kept beside this one though they may disagree: only a Memorize save writes it, on both; a fold's rewrite keeps the ids it still disagrees with, and any other rewrite of the text, or a restore, drops it. */
 	disagrees?: string;
-	/** Times referenced (recall or update); a ranking input. */
+	/** Times a fold's update, supersede or close touched it, or a Replace confirmed it; a ranking input. Recalls are counted apart, in memory-use.ts. */
 	refs?: number;
 	/** The note is a conversation's approved summary, filed whole because the fold gave nothing usable; stored as `summary=true`. */
 	summary?: true;
-	/** The Memory models that re-read this summary note in a saved Memorize, each as rereadModelKey writes it (a comma in an id encoded); stored as `tried=` with the models comma-separated. A model on the list does not re-read it again. */
+	/** Memory models that already re-read this summary note (as rereadModelKey writes them), stored as `tried=`; a listed model never re-reads it. */
 	tried?: string[];
 	/** Metadata keys this version does not write itself, in file order: carried through every rewrite, so a field it does not know is never lost. */
 	extra?: Record<string, string>;
@@ -89,7 +49,7 @@ export interface MemoryTopic {
 	title: string;
 	/** The exact "### Title" line, null for implicit topics. */
 	heading: string | null;
-	/** Prose before the first entry, verbatim (usually empty). */
+	/** Always empty from the parser, which reads prose before the first entry as notes without an id. */
 	intro: string;
 	entries: MemoryEntry[];
 }
@@ -117,11 +77,8 @@ export interface MemoryDocument {
 }
 
 /**
- * Why an entry left the core. "budget" is the ranked demotion, "superseded" an
- * older version of an entry that is still in memory, "done" a finished item,
- * "user" a person deleting one by hand. Review adds the two reasons a tidy
- * gives: "stale" (the note no longer holds) and "duplicate" (another note
- * already carries the point).
+ * Why an entry left the core: "budget" demotion, "superseded" by its newer version, a "done" item, a "user"
+ * deletion, Review's "stale" and "duplicate", "history" an older value kept (never restored), "sorted" a summary note a re-read sorted.
  */
 export const ARCHIVE_REASONS = ["budget", "superseded", "done", "user", "stale", "duplicate", "history", "sorted"] as const;
 
@@ -151,26 +108,18 @@ export interface ArchiveTopicIndexRow {
 /** Per-topic archive counts, keyed by the "Section / Topic" address. */
 export type ArchiveIndex = Record<string, ArchiveTopicIndexRow>;
 
-/** The ONE address of a topic, the Review layer's convention: "Section / Subsection". */
 export function memoryAreaId(section: MemorySection, topic: string): string {
 	return `${section} / ${topic}`;
 }
 
-/**
- * A topic as the run cards name it when a person protects one: "Deep
- * Memory/Nordwind integration". The card sends this string back, so it is the
- * one shape both engines and the browser agree on.
- */
+/** The topic address the run cards send back when a person protects a topic; both engines and the browser use this shape. */
 export function memoryTopicAddress(section: MemorySection, topic: string): string {
 	return `${section}/${topic}`;
 }
 
-/** Two topic addresses are the same topic when they agree case-insensitively, trimmed. */
 export function memoryTopicAddressKey(address: string): string {
 	return address.trim().toLowerCase();
 }
-
-// --- The line model ----------------------------------------------------------
 
 const LINE_TERMINATOR = /\r\n|[\n\r\u2028\u2029]/;
 const LINE_TERMINATORS_G = /\r\n|[\n\r\u2028\u2029]/g;
@@ -187,7 +136,6 @@ function isBlank(line: string): boolean {
 	return !line.trim();
 }
 
-/** The ONE edge rule: leading and trailing BLANK lines go, nothing else. */
 function stripBlankEdges(lines: string[]): string[] {
 	const out = [...lines];
 	while (out.length > 0 && isBlank(out[0])) out.shift();
@@ -195,11 +143,7 @@ function stripBlankEdges(lines: string[]): string[] {
 	return out;
 }
 
-/**
- * The document's ONE terminator: the first one in its own text, verbatim
- * regions first (they are the bytes we did not write). "\n" when the document
- * holds no terminator at all.
- */
+/** The document's one line ending: the first in its own text, verbatim regions first (those bytes are not ours); "\n" if none. */
 export function memoryDocumentEol(doc: MemoryDocument): string {
 	const sources = [doc.preamble, doc.chronos, doc.recentContext, ...doc.otherSections.map((s) => s.text)];
 	for (const topic of doc.topics) {
@@ -213,22 +157,15 @@ export function memoryDocumentEol(doc: MemoryDocument): string {
 	return "\n";
 }
 
-// --- Markers, headings and stamps --------------------------------------------
-
-/** The Review layer's marker, same predicate: a marked entry is pinned. */
 const MUST_KEEP_MARKER = /\*\*must-keep\b/i;
 /** A code span, whose words are quoted, never a marker: `x` and ``x``. */
 const CODE_SPAN = /(`+)[^`\r\n]*?\1/g;
 
-/**
- * Whether a text carries the must-keep marker outside a code span: the
- * applier and a hand edit pin on it. A marker quoted in a code span is text.
- */
+/** Whether the text carries the must-keep marker outside a code span. */
 export function hasMustKeepMarker(text: string): boolean {
 	return MUST_KEEP_MARKER.test(text.replace(CODE_SPAN, ""));
 }
 
-/** One stretch of a line outside code spans, the must-keep labels taken out. */
 function withoutMarkersIn(plain: string): string {
 	return plain
 		// "**must-keep - words**" keeps its words, bold.
@@ -241,23 +178,15 @@ function withoutMarkersIn(plain: string): string {
 }
 
 /**
- * A note's text once its must-keep marker has done its work: the note is
- * pinned, and the pin, not the words, is what keeps it, so the marker does not
- * stay on as a label. "**must-keep**" and "**must-keep:**" leave with the space
- * and any dash after them; "**must-keep - words**" keeps its words bold; a
- * marker in a code span stays, being text. Only the lines that held a marker
- * change. A text that would be left with no words keeps its marker.
+ * The text without its must-keep labels, since the pin now keeps the note. Only lines that held a marker
+ * change; a marker in a code span stays, and a text left with no words keeps its marker.
  */
 export function withoutMustKeepMarkers(text: string): string {
 	const stripped = stripMustKeepMarkers(text);
 	return hasWords(stripped) ? stripped : text;
 }
 
-/**
- * Whether a text says anything but its must-keep markers and list marks: a
- * text of "**must-keep**" alone, or "- ###", says nothing. A marker in a code
- * span is text.
- */
+/** Whether a text says anything beyond its must-keep markers and list marks. */
 export function saysMoreThanMustKeep(text: string): boolean {
 	return hasWords(stripMustKeepMarkers(text));
 }
@@ -266,7 +195,6 @@ function hasWords(text: string): boolean {
 	return /[\p{L}\p{N}]/u.test(text.replace(/^\s*(?:[-*+]|\d+[.)])\s*/gm, ""));
 }
 
-/** The text with its must-keep markers taken out, outside code spans; only the lines that held one change. */
 function stripMustKeepMarkers(text: string): string {
 	const parts = text.split(/(\r\n|\n|\r|\u2028|\u2029)/);
 	for (let i = 0; i < parts.length; i += 2) {
@@ -285,14 +213,13 @@ function stripMustKeepMarkers(text: string): string {
 const BULLET_LINE = /^(\s*)(?:[-*+]|\d+[.)])\s/;
 const TOP_LEVEL_HEADING = /^##\s+(.+?)\s*$/;
 const SUBSECTION_HEADING = /^###\s+(.+?)\s*$/;
-/** What the memory-map splitters read as a boundary: two or three hashes at column 0. */
+/** The boundary the splitters in memory-shape.ts cut at: two or three hashes at column 0. */
 const SPLITTER_HEADING_LINE = /^#{2,3}(?:\s|$)/;
 const ENTRY_META_LINE = /^[ \t]*<!--\s*e:\s*([\s\S]*?)\s*-->[ \t]*$/;
 const ENTRY_COUNTER_LINE = /^[ \t]*<!--\s*entries:\s*next=(\d+)\s*-->[ \t]*$/;
 const SAVED_STAMP = /\(saved ([^)]*)\)/g;
 const ISO_DATE = /(?<!\d)\d{4}-\d{2}-\d{2}(?!\d)/g;
 
-/** Every ISO date inside a "(saved …)" stamp, in order — the Review layer's reader, same shape. */
 export function savedStampDatesIn(text: string): string[] {
 	return Array.from(text.matchAll(SAVED_STAMP)).flatMap((m) => m[1].match(ISO_DATE) ?? []);
 }
@@ -301,8 +228,6 @@ function indentOf(line: string): number {
 	const bullet = BULLET_LINE.exec(line);
 	return bullet ? bullet[1].length : line.length - line.trimStart().length;
 }
-
-// --- Metadata comments -------------------------------------------------------
 
 /** A field starts the line or follows whitespace, so `learned-at=x` is one key, never `at`. */
 const META_FIELD = /(?:^|\s)([A-Za-z_][A-Za-z0-9_.-]*)=(?:"((?:[^"\\]|\\.)*)"|(\S*))/g;
@@ -316,8 +241,7 @@ function parseMetaFields(raw: string): Record<string, string> {
 }
 
 function metaValue(value: string): string {
-	// A value can never carry a comment closer; "-- >" keeps the line readable
-	// and the comment well-formed (a topic title is the only free-text field).
+	// A value never carries a comment closer: "-- >" keeps the metadata comment well-formed.
 	const safe = value.replace(/-->/g, "-- >");
 	return /[\s"\\]/.test(safe) ? `"${safe.replace(/(["\\])/g, "\\$1")}"` : safe;
 }
@@ -331,12 +255,10 @@ function entryMetaFields(entry: MemoryEntry): string[] {
 	if (entry.learned) fields.push(`learned=${entry.learned}`);
 	if (entry.disagrees) fields.push(`disagrees=${entry.disagrees}`);
 	if (entry.refs !== undefined) fields.push(`refs=${entry.refs}`);
-	// The order is canonical: known keys first, then the unknown ones in the
-	// order they were read. A newer version's key written between two known
-	// ones is moved, never lost (parsing is order-free).
+	// Known keys first, then unknown ones in read order: parsing is order-free, so a newer version's key is moved, never lost.
 	if (entry.summary) fields.push("summary=true");
 	if (entry.tried && entry.tried.length > 0) fields.push(`tried=${metaValue(entry.tried.join(","))}`);
-	// An untrusted date kept as written gives way to a real one, so no key is written twice.
+	// An untrusted value kept as written gives way to a real one, so no key is written twice.
 	const written = (key: string) => (key === "learned" && entry.learned) || (key === "disagrees" && entry.disagrees) || (key === "until" && (entry as Partial<ArchivedEntry>).until);
 	for (const [key, value] of Object.entries(entry.extra ?? {})) if (!written(key)) fields.push(`${key}=${metaValue(value)}`);
 	return fields;
@@ -356,7 +278,6 @@ function archivedMetadataLine(entry: ArchivedEntry): string {
 /** The keys an entry's or an archive row's metadata line is written with here; every other key is the entry's `extra`. */
 const OWN_META_KEYS = new Set(["id", "kind", "saved", "from", "pinned", "status", "updated", "learned", "disagrees", "refs", "summary", "tried", "archived", "why", "until", "topic", "section"]);
 
-/** A day as the dates are written, YYYY-MM-DD; anything else is no date to compare. */
 export const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
 
 /** The ids a `disagrees` key holds: entry ids, comma-separated; anything else is kept as written and trusted by nothing. */
@@ -382,8 +303,6 @@ function entryFromMeta(fields: Record<string, string>, text: string): MemoryEntr
 	return entry;
 }
 
-// --- Parsing -----------------------------------------------------------------
-
 interface RawSection {
 	title: string;
 	/** The whole section, verbatim, heading line included. */
@@ -403,13 +322,6 @@ function splitTopLevelSections(l1b: string): { preamble: string; sections: RawSe
 	return { preamble, sections };
 }
 
-/**
- * Blocks of unmarked material — what migration reads as entries. A bullet takes
- * its continuation with it (deeper-indented sub-bullets, wrapped lines, and the
- * loose-list blank whose next non-blank line is still deeper); a paragraph runs
- * to the next blank line or bullet. Mirrors the Review layer's must-keep block
- * walk, so the two agree on where a bullet ends.
- */
 function splitUnmarkedBlocks(lines: string[]): string[][] {
 	const blocks: string[][] = [];
 	let i = 0;
@@ -448,13 +360,10 @@ function parseTopicBody(bodyLines: string[], eol: string): { intro: string; entr
 	if (metaIndexes.length === 0) {
 		return {
 			intro: "",
-			// Nothing is marked yet: every bullet and paragraph is an entry without an id.
 			entries: splitUnmarkedBlocks(stripBlankEdges(bodyLines)).map((block) => ({ id: "", kind: "fact" as EntryKind, saved: "", pinned: false, text: block.join(eol) })),
 		};
 	}
-	// What sits above the first marker is read by the room like any note (the
-	// scaffold's starter goal kept unmarked in a marked file), so it is a note
-	// without an id, never hidden prose: the next write gives it one.
+	// Lines above the first marker are notes without an id, since the room reads them; the next write gives them one.
 	const unmarked = splitUnmarkedBlocks(stripBlankEdges(bodyLines.slice(0, metaIndexes[0]))).map((block) => ({ id: "", kind: "fact" as EntryKind, saved: "", pinned: false, text: block.join(eol) }));
 	const entries = metaIndexes.map((at, n) => {
 		const end = n + 1 < metaIndexes.length ? metaIndexes[n + 1] : bodyLines.length;
@@ -466,7 +375,6 @@ function parseTopicBody(bodyLines: string[], eol: string): { intro: string; entr
 
 function parseSectionTopics(sectionText: string, section: MemorySection, eol: string): { topics: MemoryTopic[]; nextEntryNumber: number | null } {
 	const lines = splitLines(sectionText);
-	// Drop the section's own heading line; keep everything else byte for byte.
 	const body = lines.slice(1);
 	let nextEntryNumber: number | null = null;
 	const kept: string[] = [];
@@ -496,17 +404,8 @@ function parseSectionTopics(sectionText: string, section: MemorySection, eol: st
 }
 
 /**
- * Reads `L1b/current.md` into the entry model. Tolerant on purpose: a file that
- * has never been migrated parses fine, with every bullet and paragraph an entry
- * whose id is still empty. Sections this module does not own are carried
- * verbatim with their original position.
- *
- * THE COUNTER RULE: the id counter is the `<!-- entries: next=N -->` line when
- * the file has one. When it does not — a hand edit dropped it, a tool rewrote
- * the section — a file that already carries entry ids must not start again at
- * 1, because the next add would mint an id the file already has. The counter
- * is recovered from the ids themselves: one past the highest number any entry
- * carries. A file with no ids at all starts at 1, as before.
+ * Reads `L1b/current.md` into the entry model; a never-migrated file parses with empty ids. Without its counter
+ * line, the counter is one past the highest id, so an add never mints an id the file already has.
  */
 export function parseMemoryDocument(l1b: string): MemoryDocument {
 	const eol = firstEol(l1b) ?? "\n";
@@ -536,12 +435,7 @@ export function parseMemoryDocument(l1b: string): MemoryDocument {
 	};
 }
 
-/**
- * The entries of the first Deep Memory section, each with its topic's title
- * and an empty text, read from their metadata lines with the lines and rules
- * parseMemoryDocument uses, without building the document: for the room's
- * status, which reads the file on every refresh.
- */
+/** The first Deep Memory section's entries, text left empty, read without building the document: the room status reads this on every refresh. */
 export function scanDeepMemoryEntries(l1b: string): Array<{ topic: string; entry: MemoryEntry }> {
 	const out: Array<{ topic: string; entry: MemoryEntry }> = [];
 	let seen = false;
@@ -558,8 +452,6 @@ export function scanDeepMemoryEntries(l1b: string): Array<{ topic: string; entry
 	}
 	return out;
 }
-
-// --- Migration ---------------------------------------------------------------
 
 function entryNumber(id: string): number | null {
 	const m = /^m-(\d+)$/.exec(id);
@@ -578,12 +470,7 @@ export function entryBaseId(id: string): string {
 	return VERSIONED_ENTRY_ID.exec(id)?.[1] ?? id;
 }
 
-/**
- * The highest number any of these ids carries, versions counted under their
- * base (`m-0031-v2` counts as 31); 0 when none of them is an entry id. This is
- * what a counter is recovered from, and what the store lifts a counter above
- * when the archive holds a higher number than the core file knows of.
- */
+/** The highest entry number among these ids, versions counted under their base (`m-0031-v2` is 31); 0 if none. */
 export function highestEntryNumber(ids: Iterable<string>): number {
 	let highest = 0;
 	for (const id of ids) {
@@ -594,12 +481,8 @@ export function highestEntryNumber(ids: Iterable<string>): number {
 }
 
 /**
- * THE ID RULE for an entry's older text on its way to the archive: it keeps the
- * entry's own id with a version suffix, because the archive is addressable (a
- * restore looks an entry up by id) and two rows claiming one address would make
- * a restore a coin toss. `taken` is every id the archive already holds for this
- * write, so two versions of one entry in a single run get `-v1` and `-v2`.
- * Memorize and Review both archive a replaced text, and they mint the same id.
+ * The archive id for an entry's older text: its own id plus the next `-vN` free in `taken`, since a restore looks
+ * rows up by id. Memorize and Review both mint it this way.
  */
 export function nextVersionedEntryId(id: string, taken: Iterable<string>): string {
 	let highest = 0;
@@ -611,26 +494,12 @@ export function nextVersionedEntryId(id: string, taken: Iterable<string>): strin
 }
 
 /**
- * THE PRACTICE RULES of migration. They decide ONE thing: the kind a Deep
- * Memory entry gets the day the file first receives its ids, and the kind
- * decides one thing in turn — the order entries leave in when the limit bites
- * (a practice outranks a fact in `rankEntriesForDemotion`); nothing else reads
- * it. A note is a practice when its topic title reads like a way of working
- * (the title rule) or its own text, bullet stripped, opens like an instruction
- * (the text rule); everything else is a fact. A person cannot change a kind by
- * hand yet, so a call these rules get wrong stands until a Memorize or Review
- * rewrites the note.
- *
- * Both rules read English and German. The word edges are Unicode lookarounds,
- * not `\b`: `\b` only knows ASCII letters, so it would sit inside "Präferenzen"
- * wherever an umlaut meets a letter and never at the edge of a word that starts
- * or ends with one. A compound is not a match ("Spielregeln" is not "Regeln"),
- * and neither is a look-alike opening ("Immerhin" is not "immer").
+ * At migration only, a Deep Memory note is a practice when its topic title or its first line matches these
+ * (English and German). Word edges are Unicode lookarounds, because `\b` knows only ASCII letters and breaks on umlauts.
  */
 export const MIGRATION_PRACTICE_TITLE_RULE = /(?<![\p{L}\p{N}])(working style|working-style|preferences?|practices?|conventions?|guidelines?|rules?|how (we|i|to) work|style guide|ways of working|arbeitsweise|vorgehen|regeln|präferenzen|konventionen|richtlinien|zusammenarbeit|gewohnheiten|so arbeiten wir)(?![\p{L}\p{N}])/iu;
 export const MIGRATION_PRACTICE_TEXT_RULE = /^(always|never|prefer|avoid|do not|don't|use|ask before|keep|immer|nie|niemals|bitte stets|bitte immer|wir halten es so|grundsätzlich|stets|vermeide|verwende|nutze|frage? vorher|keine)(?![\p{L}\p{N}])|^(when|whenever|before|after) /iu;
 
-/** The kind migration gives a Deep Memory entry: the two rules above, in that order. */
 function migratedDeepMemoryKind(topicTitle: string, text: string): EntryKind {
 	if (MIGRATION_PRACTICE_TITLE_RULE.test(topicTitle)) return "practice";
 	const first = splitLines(text).find((line) => !isBlank(line)) ?? "";
@@ -638,23 +507,12 @@ function migratedDeepMemoryKind(topicTitle: string, text: string): EntryKind {
 }
 
 /**
- * THE TEMPLATE RULE of migration. A v1 memory opened its Deep Memory with a
- * paragraph the scaffold wrote, not the room: "Durable understanding is still
- * forming. What is known so far comes from the scaffolded identity: …" on day
- * one, and after the first consolidation "Durable understanding consolidated
- * across sessions since March 2026. Newer saved-on stamps win on conflict."
- * Migrated as it stands, that paragraph became a note under "General" — one
- * nobody wrote and nobody wants to read. So, at migration only, an entry
- * without an id in the heading-less first Deep Memory topic is DROPPED when
- * its text opens with "Durable understanding" or mentions a "saved-on stamp"
- * (case-insensitive), and a heading-less topic left with nothing is removed.
- * Every other leading paragraph stays what it was: a note under "General".
- * An entry that has an id is never touched, template words or not.
+ * At migration only, an unmarked note in the heading-less first Deep Memory topic that matches these is the
+ * scaffold's template paragraph, not the room's words, and is dropped. A note with an id is never touched.
  */
 export const MIGRATION_TEMPLATE_OPENING_RULE = /^\s*Durable understanding/;
 export const MIGRATION_TEMPLATE_TEXT_RULE = /saved-on stamp/i;
 
-/** Is this leading Deep Memory paragraph the scaffold's own words? The two rules above. */
 function isMigrationTemplateParagraph(text: string): boolean {
 	return MIGRATION_TEMPLATE_OPENING_RULE.test(text) || MIGRATION_TEMPLATE_TEXT_RULE.test(text);
 }
@@ -665,16 +523,8 @@ const SAVED_STAMP_WITH_LEADING_SPACE = / ?\(saved [^)]*\)/g;
 const HAS_SAVED_STAMP = /\(saved [^)]*\)/;
 
 /**
- * The entry's text with every "(saved …)" stamp taken out. The stamp was how a
- * v1 memory dated a bullet; after migration the date lives in the metadata
- * comment, and a note that still carries the stamp says its date twice, once
- * in the room's context. Only a line that held a stamp changes: the stamp goes
- * with the space before it, any run of spaces the removal leaves inside the
- * line collapses to one (its indentation is kept: a sub-bullet stays nested),
- * its trailing spaces go, and a line the removal leaves empty is dropped.
- * Every other line keeps its bytes — trailing spaces included, they are
- * identity under the line model. A text the removal would leave empty comes
- * back as it was: migration never deletes an entry.
+ * The text without its "(saved …)" stamps, once migration has moved the date into metadata. Only lines that held
+ * a stamp change; a text the removal would empty comes back as it was, so this step never deletes an entry.
  */
 function withoutSavedStamps(text: string, eol: string): string {
 	if (!HAS_SAVED_STAMP.test(text)) return text;
@@ -688,28 +538,18 @@ function withoutSavedStamps(text: string, eol: string): string {
 }
 
 /**
- * Assigns an id to every entry that has none, and gives Deep Memory prose a
- * topic to live under. Kinds: an Active Items entry is an open item; a Deep
- * Memory entry is a practice or a fact by the two rules above. Saved-on comes
- * from a "(saved YYYY-MM-DD)" stamp inside the entry when there is one, else
- * from `fallbackSaved` — and once the date is taken the stamp itself leaves
- * the text (`withoutSavedStamps`). A must-keep marker anywhere in the entry
- * pins it. The scaffold's own opening paragraph is dropped (the template rule
- * above). Idempotent: an entry that has an id is never touched, so an
- * already-migrated document is returned unchanged with `assigned: 0`.
+ * Gives every entry without an id an id, a kind, a saved-on date (its stamp, else `fallbackSaved`) and a pin when
+ * marked must-keep, and drops the scaffold's template paragraph. Idempotent: an entry with an id is never touched.
  */
 export function migrateMemoryDocument(doc: MemoryDocument, opts: { fallbackSaved: string }): { doc: MemoryDocument; assigned: number } {
 	const next = cloneDocument(doc);
 	const eol = memoryDocumentEol(next);
-	// The scaffold's own opening paragraph leaves first (the template rule), and
-	// a heading-less topic it was the whole of leaves with it.
 	const leading = next.topics.find((t) => t.section === "Deep Memory");
 	if (leading && leading.heading === null) {
 		leading.entries = leading.entries.filter((entry) => entry.id || !isMigrationTemplateParagraph(entry.text));
 		if (leading.entries.length === 0 && isBlank(leading.intro)) next.topics.splice(next.topics.indexOf(leading), 1);
 	}
 	const deepTopics = next.topics.filter((t) => t.section === "Deep Memory");
-	// Prose Deep Memory (no subsection at all) becomes one topic, "General".
 	if (deepTopics.length === 1 && deepTopics[0].heading === null) deepTopics[0].heading = `### ${deepTopics[0].title}`;
 	let counter = next.nextEntryNumber;
 	for (const topic of next.topics) for (const entry of topic.entries) {
@@ -738,44 +578,23 @@ export function migrateMemoryDocument(doc: MemoryDocument, opts: { fallbackSaved
 	return { doc: next, assigned };
 }
 
-// --- Rendering ---------------------------------------------------------------
-
 export type MemoryRenderMode = "storage" | "context";
 
 export interface MemoryRenderOptions {
 	/** Per-topic archive counts, rendered as one pointer line per topic that has them. */
 	archiveIndex?: ArchiveIndex;
-	/**
-	 * Write every entry's id into its own first line, as `- [m-0031] …` (a
-	 * paragraph entry takes the same marker without a bullet) and a pinned one as
-	 * `- [m-0032 · pinned] …`. The context render only: storage keeps its
-	 * metadata comments, which carry the id already.
-	 */
+	/** Context render only: each entry's id in its first line, `- [m-0031] …` or `- [m-0032 · pinned] …`. */
 	entryIds?: boolean;
-	/**
-	 * The room's own read: a note kept beside one it may disagree with carries
-	 * the day it was learned at the end of its first line, "(learned
-	 * 2026-08-02)", while both notes still name each other and the day is
-	 * known. Never the fold's render, whose addresses carry the day already.
-	 */
+	/** Room read only: a note of a mutual disagree pair ends its first line with "(learned YYYY-MM-DD)" when the day is known. */
 	pairDays?: boolean;
-	/**
-	 * Render ONLY these sections and nothing else — no preamble, no Chronos, no
-	 * Recent Context, no other section. This is how the fold prompt reads a
-	 * memory: the two sections a fold changes, in their canonical order.
-	 */
+	/** Only these sections, in canonical order, and nothing else: Memorize, Review and the notes view read a memory this way. */
 	sections?: readonly MemorySection[];
 }
 
 /** The bullet a line opens with, marker and its spacing included — where an inline id goes. */
 const BULLET_PREFIX = /^\s*(?:[-*+]|\d+[.)])\s+/;
 
-/**
- * The entry's own lines with its address written into the first of them. The id
- * is the fold's handle on the entry, so it travels where the entry's words are
- * rather than in a list beside them: a list of 800 rows costs more than the
- * memory it points at.
- */
+// The id travels on the entry's first line, not in a list beside it: a list of 800 rows costs more than the memory.
 function withInlineEntryId(entry: MemoryEntry, eol: string): string {
 	if (!entry.id) return entry.text;
 	const lines = splitLines(entry.text);
@@ -788,7 +607,6 @@ function withInlineEntryId(entry: MemoryEntry, eol: string): string {
 
 const ARCHIVE_MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"] as const;
 
-/** "2026-07" as a person says it: "Jul 2026". An unparseable stamp reads as nothing. */
 function archiveMonthLabel(month: string): string {
 	const parts = /^(\d{4})-(\d{2})$/.exec(String(month ?? "").slice(0, 7));
 	if (!parts) return "";
@@ -796,13 +614,7 @@ function archiveMonthLabel(month: string): string {
 	return name ? `${name} ${parts[1]}` : "";
 }
 
-/**
- * The months a topic's archived notes span, in the fewest words that stay true:
- * one month reads "May 2026", one year reads "Mar to Jul 2026", and a range
- * that crosses new year names both years. Stamps nobody wrote read as nothing,
- * and the pointer line drops the clause rather than promising a date it has not
- * got.
- */
+/** "May 2026", "Mar to Jul 2026", or both years across new year; an unreadable stamp drops the clause. */
 function archiveMonthRange(earliest: string, latest: string): string {
 	const from = archiveMonthLabel(earliest);
 	const to = archiveMonthLabel(latest);
@@ -812,13 +624,7 @@ function archiveMonthRange(earliest: string, latest: string): string {
 	return sameYear ? `${from.slice(0, 3)} to ${to}` : `${from} to ${to}`;
 }
 
-/**
- * The pointer a demoted topic always carries in context, so demotion is
- * disclosure and not forgetting: the room can see there is more AND is told how
- * to read it, by name — a pointer the room cannot follow is just a regret. One
- * note reads "1 older note"; the only cost of getting the plural right is one
- * branch.
- */
+/** The line every demoted topic carries in context, naming memory_recall, so demotion is disclosure, not forgetting. */
 function archivePointerLine(row: ArchiveTopicIndexRow): string {
 	const months = archiveMonthRange(row.earliest, row.latest);
 	const noun = `${row.count} older ${row.count === 1 ? "note" : "notes"}`;
@@ -865,22 +671,13 @@ function renderSection(doc: MemoryDocument, section: MemorySection, mode: Memory
 }
 
 /**
- * The two renders. `storage` is the file on disk: metadata comments and the id
- * counter included. `context` is what the room reads every turn: both stripped
- * (about fifteen tokens an entry), plus one archive pointer line at the end of
- * every topic that has archived entries, when an index is given.
- *
- * Everything this module does not own — the preamble, Chronos, Recent Context
- * and any other top-level section — is written back byte for byte, each other
- * section at its recorded position. `sections` asks for a PARTIAL render
- * instead: those sections alone, which is how a maintenance prompt reads the
- * part of the memory it may change without paying for the rest.
+ * `storage` is the file on disk; `context` is what the room reads every turn, without metadata and with archive
+ * pointer lines. Sections this module does not own go back byte for byte at their recorded position.
  */
 export function renderMemoryDocument(doc: MemoryDocument, mode: MemoryRenderMode, opts?: MemoryRenderOptions): string {
 	const eol = memoryDocumentEol(doc);
 	if (opts?.sections) {
 		const wanted = new Set(opts.sections);
-		// The canonical order, whatever order the caller asked in.
 		return MEMORY_SECTIONS.filter((section) => wanted.has(section)).map((section) => renderSection(doc, section, mode, eol, opts)).join("");
 	}
 	const parts: string[] = [];
@@ -897,15 +694,8 @@ export function renderMemoryDocument(doc: MemoryDocument, mode: MemoryRenderMode
 const RC_METADATA_LINE = /^[ \t]*<!--\s*rc_metadata:[\s\S]*?-->[ \t]*$/;
 
 /**
- * The room's boot read of its memory, less the checkpoint provenance
- * comments: every remembered conversation carries an `rc_metadata` line
- * (checkpoint id, session id, conversation id, model, approval instant) that
- * the product's own readers join on and the model has no use for — sixty
- * tokens a conversation of ids in a prompt that promises the mechanism stays
- * invisible. Only the boot strips it: the context render itself is what every
- * save's fingerprint measures, and changing it would make every earlier save
- * read as stale to undo. The blank line the comment sat between is folded so
- * the heading still stands one blank line above the body.
+ * The room's boot read without its `rc_metadata` lines. Only the boot strips them: the context render is what
+ * every save's fingerprint measures, so changing it would make every earlier save read as stale to undo.
  */
 export function stripRecentContextMetadata(text: string): string {
 	const eol = text.includes("\r\n") ? "\r\n" : "\n";
@@ -918,25 +708,14 @@ export function stripRecentContextMetadata(text: string): string {
 	return out.join(eol);
 }
 
-/**
- * Has this file been through migration? True as soon as it carries the id
- * counter or a single entry metadata line — the two things only the storage
- * render writes. The store reads this to decide whether a read must migrate,
- * and the room boot reads it to stay byte-for-byte out of the way of a file
- * nobody has migrated yet.
- */
+/** True once the file carries the id counter or an entry metadata line, which only the storage render writes. */
 export function isMigratedMemoryDocument(l1b: string): boolean {
 	return splitLines(l1b).some((line) => ENTRY_COUNTER_LINE.test(line) || ENTRY_META_LINE.test(line));
 }
 
 /**
- * The room's context render, from bytes to bytes: metadata comments and the id
- * counter stripped, one archive pointer line per topic that has archived
- * entries. THE NO-OP RULE: a file that has never been migrated is returned
- * verbatim — there is no metadata to strip, and a room's boot prompt must not
- * change the day this code ships. Every re-layout a parse-and-render would do
- * belongs to the migration write, which is a deliberate, archived, recorded
- * event; never to a read.
+ * The room's context render, bytes to bytes. A never-migrated file comes back verbatim: re-layout belongs to the
+ * recorded migration write, never to a read.
  */
 export function renderMemoryContext(l1b: string, archiveText?: string, opts: { pairDays?: boolean } = {}): string {
 	if (!isMigratedMemoryDocument(l1b)) return l1b;
@@ -944,13 +723,7 @@ export function renderMemoryContext(l1b: string, archiveText?: string, opts: { p
 	return renderMemoryDocument(parseMemoryDocument(l1b), "context", { ...(index ? { archiveIndex: index } : {}), ...(opts.pairDays ? { pairDays: true } : {}) });
 }
 
-// --- Sizes -------------------------------------------------------------------
-
-/**
- * What the room pays for its durable memory: the CONTEXT render of Deep Memory
- * and Active Items, section headings included — the same two sections the
- * Review target covers, so the budget meter and the ranker speak one number.
- */
+/** The context render's tokens for Deep Memory and Active Items, headings included: the one number the budget meter and the budget pass share. */
 export function reviewTargetTokens(doc: MemoryDocument): number {
 	const eol = memoryDocumentEol(doc);
 	return estimateTokens(renderSection(doc, "Deep Memory", "context", eol) + renderSection(doc, "Active Items", "context", eol));
@@ -960,10 +733,7 @@ export function entryTokens(entry: MemoryEntry): number {
 	return estimateTokens(entry.text);
 }
 
-// --- The area map ------------------------------------------------------------
-
 export interface MemoryAreaRow {
-	/** The entry's id. */
 	id: string;
 	topic: string;
 	section: string;
@@ -971,18 +741,18 @@ export interface MemoryAreaRow {
 	pinned: boolean;
 	saved: string;
 	tokens: number;
-	/** The entry's first line, trimmed — what the fold prompt and the card show. */
+	/** The entry's first line, trimmed: the first read's material and the fold's bullet check read it. */
 	firstLine: string;
-	/** The whole entry, so the fold can refuse an add that repeats it. */
+	/** The whole entry, so the fold knows an add that repeats it or may disagree with it. */
 	text: string;
-	/** YYYY-MM-DD of the conversation that last wrote the text, when one did: the day the fold weighs a page against. */
+	/** YYYY-MM-DD the room learned what the text says (a conversation's day or a hand edit's, the newest one after a Replace or a Review merge), when known: the day the fold weighs a page against. */
 	learned?: string;
-	/** Without `learned`, what dates the note instead: the conversation that wrote it, and the day a fold last rewrote it. */
+	/** Without `learned`, what dates the note instead: the conversation that wrote it, and the day it was last touched. */
 	from?: string;
 	updated?: string;
 }
 
-/** Every entry as one row, in document order: the map the fold prompt and the Memory pane read. */
+/** Every entry as one row, in document order: what the fold and the first read judge against. */
 export function listAreas(doc: MemoryDocument): MemoryAreaRow[] {
 	const rows: MemoryAreaRow[] = [];
 	for (const topic of doc.topics) {
@@ -1010,7 +780,6 @@ export function findEntry(doc: MemoryDocument, id: string): MemoryEntry | undefi
 	return findEntryLocation(doc, id)?.entry;
 }
 
-/** The entry and the topic holding it — what every edit needs. */
 export function findEntryLocation(doc: MemoryDocument, id: string): { entry: MemoryEntry; topic: MemoryTopic } | undefined {
 	if (!id) return undefined;
 	for (const topic of doc.topics) {
@@ -1020,24 +789,9 @@ export function findEntryLocation(doc: MemoryDocument, id: string): { entry: Mem
 	return undefined;
 }
 
-// --- Ranking and demotion ----------------------------------------------------
-
 /**
- * THE SCORE. Every constant of the demotion order in one place, so the bench
- * prints them beside its numbers and a change to the order is a change here.
- * A note's score is kind + use + recency − size; the lowest leaves first.
- *   practiceWeight, factWeight, eventWeight, doneItemWeight — what the kind is
- *     worth on its own: a practice is what works, a fact is what is known, an
- *     event and a finished item are what happened.
- *   useCap — the use term is log2(1 + refs + recalls), capped here: three
- *     uses lift a fact level with a practice never recalled, seven lift it one
- *     past, and the cap stops it there, so a note that is read is kept and a
- *     note that is merely read often is not kept above everything.
- *   recencyWeight, recencyHorizonDays — the recency term falls from the weight
- *     at a touch today to nothing at the horizon; past it a note is simply old,
- *     and one untouched for a year scores as one untouched for two.
- *   sizeDivisor, sizeCap — the size term is estimated tokens over the divisor,
- *     capped, so among notes worth the same the one that costs more leaves first.
+ * Every constant of the demotion order, in one place so the bench prints them. A note's score is kind + use
+ * (log2(1 + uses), capped) + recency (to nothing at the horizon) - size (tokens over the divisor, capped).
  */
 export const DEMOTION_SCORE = {
 	practiceWeight: 3,
@@ -1063,7 +817,6 @@ function localDay(date = new Date()): string {
 	return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 }
 
-/** A YYYY-MM-DD as a day count, NaN when the field does not hold a date. */
 function dayNumber(day: string): number {
 	const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(day);
 	if (!match) return Number.NaN;
@@ -1104,13 +857,7 @@ function kindWeight(entry: MemoryEntry): number {
 	}
 }
 
-/**
- * The reason in a person's words: the terms that decided the score, joined
- * with commas. The date always comes first — as the kind's own phrase for an
- * event or a done item, else as the last touch — then the use, then the size
- * when it is worth naming. Two terms at the least, so a reason is never a bare
- * "never recalled".
- */
+/** The deciding terms: the date first, then the use, then the size when worth naming; never a bare "never recalled". */
 function demotionReason(entry: MemoryEntry, input: { useCount: number; days: number; today: string; tokens: number; oldestOfKind: boolean }): string {
 	const parts: string[] = [];
 	const touched = entry.updated ?? entry.saved;
@@ -1132,15 +879,8 @@ function demotionReason(entry: MemoryEntry, input: { useCount: number; days: num
 }
 
 /**
- * The demotion order, lowest value first — deterministic and total.
- * Pinned entries are not in it at all, and neither is an open item: a thread
- * still open is protected outright, whatever it costs. Every other entry gets
- * the score `DEMOTION_SCORE` describes — its kind, its use (refs and the
- * recalls `use` counts), how recently it was touched (`updated`, falling back
- * to `saved`, measured to `today`) and, against it, its size — and the order
- * is the score ascending. On a tie the larger entry leaves first, then the
- * oldest saved-on; the last tie-break is the id. Each entry carries its score
- * and the reason a person reads on the card.
+ * The demotion order, lowest score first, deterministic and total. Pinned entries and open items are left out;
+ * a tie goes to the larger entry, then the older saved-on, then the id.
  */
 export function rankEntriesForDemotion(doc: MemoryDocument, opts: { use?: MemoryUse; today?: string } = {}): RankedEntry[] {
 	const today = opts.today ?? localDay();
@@ -1157,9 +897,7 @@ export function rankEntriesForDemotion(doc: MemoryDocument, opts: { use?: Memory
 		return { entry, useCount, days, tokens, score: kindWeight(entry) + use + recency - size };
 	});
 	scored.sort((a, b) => a.score - b.score || b.tokens - a.tokens || a.entry.saved.localeCompare(b.entry.saved) || a.entry.id.localeCompare(b.entry.id));
-	// "The oldest of its kind": the first of its kind to leave, and none of its
-	// kind was touched longer ago — the shape a person needs when a note they
-	// did use leaves only because it is the oldest practice, say.
+	// "The oldest of its kind": a used note that leaves only because none of its kind was touched longer ago.
 	const firstOfKind = new Set<EntryKind>();
 	return scored.map((row) => {
 		const first = !firstOfKind.has(row.entry.kind);
@@ -1178,26 +916,14 @@ export interface DemotionResult {
 	protectedOpenItems: number;
 }
 
-/**
- * Exactly what one entry costs the context render: its own lines plus the
- * terminator of the last line and the blank line after it. Lets the budget pass
- * subtract instead of re-rendering the whole memory once per demoted entry —
- * the number is identical either way, which the smoke checks.
- */
+/** What one entry adds to the context render (its lines, the last terminator and the blank after), so the budget pass subtracts instead of re-rendering. */
 function contextEntryChars(entry: MemoryEntry, eol: string): number {
 	return entry.text.length + 2 * eol.length;
 }
 
 /**
- * Brings Deep Memory + Active Items under the room's budget by taking entries
- * off the bottom of the ranking. Pinned entries, `keepIds` and every entry of a
- * topic in `keepTopics` (addresses as `memoryTopicAddress` writes them) are
- * never taken, and neither is an open item (the ranking leaves it out). `today`
- * is the run's date: what this run just saved goes last, whatever its score,
- * so a fold's own material is never archived by the same run's budget pass
- * unless nothing else is left. `use` is the room's recall counter, a ranking
- * input. Pure — it returns a new document and the entries that left, each
- * with its score and reason; writing them to the archive is the caller's step.
+ * Brings Deep Memory and Active Items under budget from the bottom of the ranking. Pinned entries, `keepIds`, `keepTopics`
+ * and open items stay; entries saved `today` go last, and leave only when nothing else is left.
  */
 export function demoteToBudget(doc: MemoryDocument, budgetTokens: number, opts: { keepIds?: string[]; keepTopics?: string[]; today: string; use?: MemoryUse }): DemotionResult {
 	const next = cloneDocument(doc);
@@ -1223,15 +949,11 @@ export function demoteToBudget(doc: MemoryDocument, budgetTokens: number, opts: 
 		demoted.push(entry);
 	}
 	const overageTokens = Math.max(0, estimateTokensFromChars(chars) - budgetTokens);
-	// What the open-item protection cost: the open items still in place when
-	// the budget could not be met and neither a pin nor a keep held them.
 	const protectedOpenItems = overageTokens > 0
 		? next.topics.flatMap((t) => t.entries).filter((e) => e.kind === "item" && e.status === "open" && !e.pinned && !keep.has(e.id)).length
 		: 0;
 	return { doc: next, demoted, overageTokens, protectedOpenItems };
 }
-
-// --- The archive file (`L1b/archive/entries.md`) ------------------------------
 
 /** The archive's file name, inside the room's existing `L1b/archive` directory. */
 export const MEMORY_ARCHIVE_ENTRIES_FILE = "entries.md";
@@ -1266,7 +988,7 @@ export function renderArchive(entries: ArchivedEntry[], eol = "\n"): string {
 	return archivePreamble(eol) + archiveBlocks(entries, eol);
 }
 
-/** Appends demoted, superseded, closed or deleted entries; an empty file gets the header first. */
+/** Appends rows, whatever their reason; an empty file gets the header first. */
 export function appendToArchive(text: string, entries: MemoryEntry[], meta: Array<{ archived: string; why: ArchiveReason; until?: string; topic: string; section: MemorySection }>): string {
 	const eol = firstEol(text) ?? "\n";
 	if (meta.length !== entries.length) throw new Error("appendToArchive needs one metadata record per entry");
@@ -1275,27 +997,14 @@ export function appendToArchive(text: string, entries: MemoryEntry[], meta: Arra
 	return head + archiveBlocks(archived, eol);
 }
 
-/**
- * Every id the archive text holds, in file order — what a writer unions with
- * its own run's rows before it mints a versioned id (`nextVersionedEntryId`),
- * so a second run that supersedes the same entry does not mint the `-v1` the
- * first run already wrote.
- */
+/** Every id the archive holds: union it with the run's own rows before `nextVersionedEntryId`, or a second run mints the same `-v1`. */
 export function archiveIdsTaken(text: string): string[] {
 	return parseArchive(text).map((entry) => entry.id);
 }
 
 /**
- * Takes one entry back out — what a restore does before it re-inserts. Any text
- * above the first entry is kept.
- *
- * When two rows claim one id (a run that minted its versioned ids against its
- * own rows only, before the archive was consulted), the NEWEST row goes — the
- * last one appended. The archive is append-only, so the last row with an id is
- * the one the latest save wrote, and an undo takes back the rows the latest save
- * added: taking the first would put an older save's row back in the memory and
- * leave the undone save's row behind. A restore is served by the same choice,
- * because it is the newest text that was in memory most recently.
+ * Takes one entry out of the archive. When two rows share the id, the newest (last) goes: an undo takes back the
+ * latest save's rows, and a restore wants the text most recently in memory.
  */
 export function removeFromArchive(text: string, id: string): { text: string; entry?: ArchivedEntry } {
 	const eol = firstEol(text) ?? "\n";
@@ -1325,13 +1034,8 @@ export function archiveIndex(entries: ArchivedEntry[]): ArchiveIndex {
 }
 
 /**
- * The core entry that is a version of this id, if there is one: the id itself,
- * or one sharing its base (`m-0031` and `m-0031-v1` are one note at two times).
- * THE ONE-PLACE RULE of a restore reads this: a note is in the core once or not
- * at all, so an archived row whose note is already in memory — the newer text
- * it was superseded by, or a copy an earlier fault left on both sides — is
- * refused rather than pushed in beside it, where two rows with one address
- * would make every later edit a coin toss.
+ * The core entry sharing this id's base, if any. A restore refuses when there is one: a note is in the core once or
+ * not at all, since two rows with one address would make every later edit a coin toss.
  */
 export function findEntryVersion(doc: MemoryDocument, id: string): { entry: MemoryEntry; topic: MemoryTopic } | undefined {
 	const base = entryBaseId(id);
@@ -1343,7 +1047,6 @@ export function findEntryVersion(doc: MemoryDocument, id: string): { entry: Memo
 	return undefined;
 }
 
-/** Restores one row into a document already copied: the one-place rule, then the push and the counter. */
 function restoreInto(next: MemoryDocument, archived: ArchivedEntry): void {
 	if (archived.why === "history") throw new Error(`a restore was not checked: "${archived.id}" is an older value kept as history`);
 	if (findEntryVersion(next, archived.id)) throw new Error(`a restore was not checked: "${archived.id}" is already in memory`);
@@ -1354,8 +1057,6 @@ function restoreInto(next: MemoryDocument, archived: ArchivedEntry): void {
 	if (archived.updated) entry.updated = archived.updated;
 	if (archived.learned) entry.learned = archived.learned;
 	if (archived.refs !== undefined) entry.refs = archived.refs;
-	// A summary note stays one when restored, and keys this build does not know
-	// are kept; the day it stopped holding stays with the archive.
 	if (archived.summary) entry.summary = true;
 	if (archived.tried) entry.tried = [...archived.tried];
 	const { until: _until, ...extra } = archived.extra ?? {};
@@ -1365,30 +1066,19 @@ function restoreInto(next: MemoryDocument, archived: ArchivedEntry): void {
 	if (n !== null && n >= next.nextEntryNumber) next.nextEntryNumber = n + 1;
 }
 
-/**
- * Puts an archived entry back into its topic, at the end; a topic that is gone
- * is created. Throws when a version of the entry is already in the core (see
- * `findEntryVersion`): callers check first and answer with their own sentence.
- */
+/** Puts an archived entry back at the end of its topic, created if gone. Throws for a history row or when a version is in the core (`findEntryVersion`); the restore route checks both first. */
 export function restoreEntry(doc: MemoryDocument, archived: ArchivedEntry): MemoryDocument {
 	const next = cloneDocument(doc);
 	restoreInto(next, archived);
 	return next;
 }
 
-/**
- * `restoreEntry` for many at once, with ONE copy of the document: a run that
- * puts hundreds of budget rows back before ranking them again would otherwise
- * copy a large memory once per row on every keep. Same refusal, row by row,
- * against the document as the earlier rows have left it.
- */
+/** `restoreEntry` for many rows with one copy of the document, each row checked against the rows before it. */
 export function restoreEntries(doc: MemoryDocument, archived: readonly ArchivedEntry[]): MemoryDocument {
 	const next = cloneDocument(doc);
 	for (const row of archived) restoreInto(next, row);
 	return next;
 }
-
-// --- User edits --------------------------------------------------------------
 
 export type MemoryUserEdit =
 	| { op: "edit"; id: string; text: string; today?: string }
@@ -1399,16 +1089,7 @@ export type MemoryUserEdit =
 	| { op: "status"; id: string; status: ItemStatus; today?: string }
 	| { op: "add"; topic: string; kind: EntryKind; text: string; saved: string };
 
-/**
- * A line the file would read as structure rather than as the note's words: a
- * heading (one or more `#` and then a space or the end of the line, so a
- * `#hashtag` mid-line or at its start is still a word) or the opening of a
- * comment (`<!--`, which is how the file writes an entry's metadata and its id
- * counter). Leading whitespace does not hide either. A note carrying one would
- * corrupt the file it is written into: a `### X` line mints a topic and cuts
- * the note in two, and a pasted `<!-- e: id=… -->` line claims an id another
- * note has. `null` when every line is plain text.
- */
+/** A heading or a comment opener, even indented: in a note it would mint a topic and cut the note, or claim another note's id. */
 const STRUCTURAL_LINE = /^\s*(?:#+(?:\s|$)|<!--)/;
 
 export function findStructuralLine(text: string): string | null {
@@ -1416,12 +1097,8 @@ export function findStructuralLine(text: string): string | null {
 }
 
 /**
- * One user edit from the Memory pane, applied to a copy. Nothing here involves
- * a model; the route turns the result into a normal write (snapshot, event
- * record, Chronos stamp). A delete hands the entry back so the caller can
- * archive it with why=user. An add or an edit whose text carries a structural
- * line (`findStructuralLine`) throws: the route refuses it first with its own
- * sentence, and this is the backstop for any other caller.
+ * One Memory pane edit, applied to a copy; a delete hands the entry back for the archive. A structural line throws,
+ * as the backstop behind the route's own rewrite (memoryTypedText).
  */
 export function applyUserEdit(doc: MemoryDocument, edit: MemoryUserEdit): { doc: MemoryDocument; archived?: MemoryEntry } {
 	if (edit.op === "add" || edit.op === "edit") {
@@ -1482,27 +1159,17 @@ export function applyUserEdit(doc: MemoryDocument, edit: MemoryUserEdit): { doc:
 	}
 }
 
-/**
- * The topic of that title, or a new one at the end of its section. The intended
- * section is looked at first, then the other one (a move to "Active Items"
- * finds the implicit list wherever the caller came from); `intendedSection` also
- * decides where a title nobody has yet is created.
- */
+/** The topic of that title, the intended section first, else a new one at the end of its section. */
 function topicFor(doc: MemoryDocument, intendedSection: MemorySection, title: string): MemoryTopic {
 	const existing = doc.topics.find((t) => t.section === intendedSection && t.title === title) ?? doc.topics.find((t) => t.title === title);
 	if (existing) return existing;
 	const section: MemorySection = title === MEMORY_ACTIVE_ITEMS_TOPIC ? "Active Items" : intendedSection;
 	const topic: MemoryTopic = { section, title, heading: `### ${title}`, intro: "", entries: [] };
-	// New topics go at the end of their own section, never after another's:
-	// Deep Memory renders before Active Items, so a first Deep Memory topic goes
-	// to the front and a first Active Items topic to the back.
 	let last = -1;
 	doc.topics.forEach((t, i) => { if (t.section === section) last = i; });
 	doc.topics.splice(last >= 0 ? last + 1 : section === "Deep Memory" ? 0 : doc.topics.length, 0, topic);
 	return topic;
 }
-
-// --- Copies ------------------------------------------------------------------
 
 function cloneEntry(entry: MemoryEntry): MemoryEntry {
 	const copy = entry.extra ? { ...entry, extra: { ...entry.extra } } : { ...entry };

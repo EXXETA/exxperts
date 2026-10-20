@@ -81,7 +81,7 @@ export interface TaskLedgerRecord {
 	/**
 	 * Stamped the first time the user opens this task's result (viewer, from
 	 * any entry path) or acts on it (attach). Unset on a done row = the green
-	 * unread dot in the Files rail (status grammar, 2026-07-18) — green
+	 * unread dot in the Files rail — green
 	 * means "you haven't seen this yet", so it must decay exactly once.
 	 */
 	viewedAt?: string;

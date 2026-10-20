@@ -5,7 +5,7 @@ import { DEFAULT_PERSISTENT_ROOM_AGENTS_ROOT, persistentAgentRootPath } from "./
 import { listTaskLedgerRecords, rewriteTaskLedgerRecord } from "./persistent-room-task-ledger.js";
 
 /**
- * The room shelf (files feature, core slice — file-story design doc 2026-07-26).
+ * The room shelf (the files feature).
  *
  * `personalized-agents/<roomId>/files/` is the canonical home of every file the
  * room made and every file the user gave it. The filename IS the identity: no

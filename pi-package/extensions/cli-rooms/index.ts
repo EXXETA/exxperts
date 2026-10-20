@@ -760,11 +760,15 @@ export default function (pi: ExtensionAPI) {
 	const env = roomEnv();
 	if (env) {
 		const policy = resolvePersistentRoomCapabilityPolicy(env.agentId, env.threadId).policy;
-		if (isPersistentRoomWorkspaceToolPolicyEnabled(policy)) {
-			for (const tool of createPersistentRoomWorkspaceTools(policy)) {
-				pi.registerTool(tool);
-			}
-		}
+		const workspaceTools = policy && (policy.workspaceAccessMode === "localFiles" || isPersistentRoomWorkspaceToolPolicyEnabled(policy))
+			? createPersistentRoomWorkspaceTools(policy, { localFilesCwd: process.cwd() })
+			: [];
+		for (const tool of workspaceTools) pi.registerTool(tool);
+		// The launcher enabled these file tools by name; one left unregistered would
+		// run as the bare native tool, so the room does not start.
+		const registered = new Set(workspaceTools.map((tool) => String(tool.name)));
+		const launched = String(process.env.EXXETA_PERSISTENT_ROOM_WORKSPACE_TOOLS || "").split(",").map((name) => name.trim()).filter(Boolean);
+		if (launched.some((name) => !registered.has(name))) throw new Error("persistent-room workspace tool policy mismatch");
 	}
 
 	const listRoomsHandler = async (_args: string, ctx: ExtensionCommandContext): Promise<void> => {
@@ -826,8 +830,9 @@ export default function (pi: ExtensionAPI) {
 
 		// Recent-context usage + last checkpoint. Checkpoints (/checkpoint) save
 		// session memory but do NOT drain this buffer — only the web app's
-		// Maintain/Absorb does. When it fills (hard cap) the room can't be opened
-		// on the CLI until maintained there.
+		// Maintain/Absorb does. At the hard cap the room still opens; at the
+		// block cap a new conversation is refused until the room is maintained
+		// (assertPersistentAgentAcceptsSession, the gate the web app uses too).
 		let memory = "recent context (unavailable)";
 		let lastSaved: string | null = null;
 		try {
@@ -922,11 +927,11 @@ export default function (pi: ExtensionAPI) {
 			return;
 		}
 		if (pick === changeModel) {
-			// The active thread's model is locked (same as the UI). This sets the
-			// default for new conversations, which every room without its own pick
-			// follows: the CLI offers the default's provider only. Choosing a model
-			// per room is a web feature (Room settings, Model) until the parity
-			// track brings it here.
+			// This leaves the open conversation's model as it is (the web app can
+			// switch it) and sets the default for new conversations, which every
+			// room without its own pick follows: the CLI offers the default's
+			// provider only. Choosing a model per room is a web feature (Room
+			// settings, Model).
 			try {
 				const catalog = createRoomModelCatalog();
 				const resolved = resolveAiDefault("conversation", catalog);

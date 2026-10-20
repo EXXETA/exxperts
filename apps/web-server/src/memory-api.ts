@@ -1,16 +1,6 @@
 /**
- * Read-only room-memory telemetry.
- *
- * Rooms remember through the persistent-agent checkpoint architecture: each
- * room's durable memory is the `L1b/current.md` document, grown through
- * approval-gated checkpoints (see checkpoint-compression / absorb-consolidation).
- * Nothing here mutates memory — it only *reads and aggregates* what checkpoints
- * already record, so the app can finally show the user the memory it builds.
- *
- * Sources, all already on disk:
- *  - `L1b/current.md`            → current memory size + topic map (memoryMetrics)
- *  - `events/checkpoint/*.json`  → the growth history (one record per checkpoint)
- *  - PersistentAgentStatus        → recent-context backlog + absorb readiness
+ * Room-memory telemetry: reads and aggregates what L1b/current.md, the event records and the usage log already
+ * hold. It never writes the memory file; the one write is settleMemoryBudget's one-time budget setting.
  */
 
 import fs from "node:fs";
@@ -37,35 +27,22 @@ export interface MemoryGrowthPoint {
 	ts: number;
 	/** measured L1b size after the event (estimated tokens) */
 	tokens: number;
-	/** chars the checkpoint added (the session folded into memory); 0 for absorbs */
+	/** checkpoint: the chars the session added; review: the token delta; 0 for a Memorize */
 	added: number;
-	/** title of what was learned, when recorded */
 	title: string | null;
-	/** which kind of event produced this point */
 	kind: "checkpoint" | "absorb" | "review";
-	/** Deep Memory section tokens at this event (measured from the snapshot) */
+	/** Deep Memory and Active Items tokens at this event, from its snapshot */
 	consolidated: number;
 	/** recent-context (pending) tokens at this event */
 	recent: number;
 }
 
-/**
- * Payoff signals — the join of memory with the usage log. All measured, no
- * causal claim: L1b is injected every turn (footprintTokens), and because it's
- * a stable prompt block it's cached, so most of it comes back as cheap
- * cacheRead rather than fresh input. `costPerTurn` / `cacheRatio` are read
- * straight from usage.jsonl for this room.
- */
+/** Payoff signals from usage.jsonl, measured, no causal claim: memory is a stable prompt block, so most of it comes back as cache reads. */
 export interface RoomPayoff {
 	turns: number;
 	totalCost: number;
 	costPerTurn: number;
-	/**
-	 * Cache hit rate: cacheRead / (cacheRead + input) over this room's turns —
-	 * the fraction of each turn's read context served from cache rather than as
-	 * fresh input. NOTE: this covers the whole stable prompt (system prompt +
-	 * tools + memory + history), not the memory block alone.
-	 */
+	/** cacheRead / (cacheRead + input) over this room's turns; it covers the whole stable prompt, not the memory block alone. */
 	cacheHitRate: number;
 }
 
@@ -73,58 +50,38 @@ export interface RoomMemorySummary {
 	id: string;
 	displayName: string;
 	description?: string;
-	/**
-	 * The room has a parked conversation waiting to be resumed — the exact
-	 * condition behind the Rooms page's "standby" chip. False for a settled
-	 * room (which shows no state chip anywhere).
-	 */
+	/** A parked conversation waits to be resumed: the condition behind the Rooms page's "standby" chip. */
 	standbyThread: boolean;
 	/** measured tokens of L1b — this is what's injected into every turn */
 	l1bTokens: number;
-	/** how many notes this room's memory holds, and across how many topics */
 	notes: number;
 	noteTopics: number;
-	/**
-	 * The room's memory against the limit its owner set, measured with the ONE
-	 * numerator the limit itself uses — so "99% full" here and "99% full" in
-	 * Room settings are the same sentence about the same bytes.
-	 */
+	/** The memory against its limit, measured with the numerator the limit itself uses, so this and Room settings agree. */
 	memoryLimit: { budgetTokens: number; reviewTargetEstimatedTokens: number; overBudget: boolean } | null;
-	/** number of top-level memory areas (from the memory map) */
 	areas: number;
 	checkpoints: number;
 	lastCheckpointAt: number | null;
-	/** when this room's deep memory was last reviewed/pruned, if ever */
 	lastReviewAt: number | null;
-	/** deep-memory token change from that last review (negative = pruned) */
+	/** the last review's token change (negative = pruned) */
 	lastReviewTokenDelta: number;
-	/** recent-context entries waiting to be absorbed into durable memory */
 	recentContextBacklog: number;
-	/** the room is ready for a consolidation pass */
 	needsAbsorb: boolean;
-	/** L1b size after each checkpoint, oldest → newest (drives the sparkline) */
+	/** Memory size after each checkpoint, Memorize and Review, oldest first: the Memory growth chart's points. */
 	series: MemoryGrowthPoint[];
-	/** number of Recent Context session entries (awaiting absorb) */
 	sessions: number;
-	/** recent (pending, not-yet-consolidated) session titles, newest first */
+	/** the newest four waiting conversation titles, newest first */
 	topics: string[];
 	/** key things the room knows (bold phrases from durable memory) */
 	knows: string[];
-	/** token split of this room's memory by layer */
 	composition: MemoryComposition;
 	/** measured usage payoff for this room, or null if it has no logged turns */
 	payoff: RoomPayoff | null;
 }
 
-/** Memory token split by layer. "Deep memory" in the UI means `deep` ONLY. */
 export interface MemoryComposition {
-	/** the Deep Memory section — distilled knowledge */
 	deep: number;
-	/** Active Items — open threads and tasks */
 	active: number;
-	/** Recent Context — session summaries not yet absorbed */
 	recent: number;
-	/** Chronos — the chronological timeline spine */
 	chronos: number;
 }
 
@@ -133,95 +90,51 @@ export interface RecentSession {
 	title: string;
 	tokens: number;
 	ts: number | null;
-	/**
-	 * True when `ts` is the exact approval instant (from rc_metadata or the
-	 * checkpoint record). False when it is only the heading's YYYY-MM-DD date
-	 * (hand-edited or pre-schema entries) — a date parses to UTC midnight, so
-	 * hour-level "ago" wording from it would be invented precision; the UI must
-	 * not render finer than days for these.
-	 */
+	/** False when `ts` is only the heading's date, parsed as UTC midnight: the UI must not render finer than days. */
 	tsPrecise: boolean;
-	/**
-	 * When the checkpoint that admitted this entry was approved (ISO). Null when
-	 * no event record matches (hand-edited files, pre-schema rooms) — the UI
-	 * shows a receipt only for entries that truly have one.
-	 */
+	/** When the checkpoint that admitted this entry was approved (ISO); null when no event record matches, and the UI then shows no receipt. */
 	approvedAt: string | null;
-	/**
-	 * The entry's full text (without its heading line), so the user can READ
-	 * what the room saved, not just its title. Recent Context is the only
-	 * memory area whose map row has no click-to-read; this fills that hole.
-	 */
+	/** The entry's full text without its heading line, so the person can read what the room saved. */
 	content: string;
 	/** the gate-written checkpoint id — the key for the conversation endpoint */
 	checkpointId: string | null;
-	/**
-	 * The source conversation's closed-thread file is still on disk, so the
-	 * receipt can offer "open the conversation". False when the record has no
-	 * runtime boundary or the thread file is gone — the UI never shows a link
-	 * it can't honour.
-	 */
+	/** The source conversation's thread file is still on disk, so the receipt can offer to open it. */
 	conversation: boolean;
 }
 
-/**
- * One memory-changing event for the room's history timeline, composed from the
- * immutable event records under events/. Read-only provenance: nothing here is
- * derived from model output.
- */
+/** One memory-changing event for the room's history, composed from the event records under events/, never from model output. */
 export interface MemoryHistoryEvent {
 	ts: number;
-	/**
-	 * `user_edit` is a person changing one entry from the Memory pane and
-	 * `migrate` is the one-time write that gave a room's memory its entry ids;
-	 * both are normal archived, recorded memory writes, so they belong in the
-	 * same timeline as the maintenance ones. `undo` is a Memorize or Review save
-	 * taken back: its own row, because putting a memory back is a change to it.
-	 */
+	/** `user_edit` is a Memory pane change, `migrate` the one-time write that gave entry ids, `undo` a Memorize or Review save taken back. */
 	kind: "checkpoint" | "learn" | "review" | "user_edit" | "migrate" | "undo";
-	/** the event record's own id (checkpointId / absorbId / structuralReviewId) */
+	/** the event record's own id: checkpointId, absorbId, reviewId, structuralReviewId or memoryEditId */
 	id?: string | null;
-	/**
-	 * The same record id under the name the undo route takes it by, so a row a
-	 * person can take back carries the key that takes it back. Undo serves the
-	 * Memorize and Review kinds; every other row carries it for identity only,
-	 * and the route answers those with its own sentence.
-	 */
+	/** The record id under the name the undo route takes; undo serves Memorize and Review rows only. */
 	saveId?: string | null;
-	/**
-	 * A before/after diff can be served for this event: its archived snapshot
-	 * is still on disk. Only set for learn/review — the UI never offers "what
-	 * changed" it can't honour.
-	 */
+	/** A before/after diff can be served: the archived snapshot is still on disk (Memorize, Review and memory edits). */
 	diffable?: boolean;
 	/** checkpoint: the kept session's title (older records may lack it) */
 	title?: string | null;
 	/** learn: how many Recent Context sessions were consolidated */
 	sessions?: number | null;
-	/** learn: deep-memory size before/after, estimated tokens */
+	/** learn: the Deep Memory and Active Items size before and after, estimated tokens */
 	deepTokensBefore?: number | null;
 	deepTokensAfter?: number | null;
-	/** review: deep-memory token delta (negative = trimmed) */
+	/** review: the Deep Memory and Active Items token delta (negative = trimmed) */
 	tokenDelta?: number | null;
-	/** review: how many topics the tidy touched, and how many notes it changed */
 	topicsTidied?: number | null;
 	notesChanged?: number | null;
-	/** user_edit: the entry the edit was about */
 	entryId?: string | null;
 	/** user_edit: what was done to it (add | edit | pin | unpin | move | status | delete | restore | archive_delete) */
 	operation?: string | null;
 	/** user_edit archive_delete: the topic the deleted note had, so the row can name it */
 	topic?: string | null;
-	/** migrate: how many entries the migration gave an id to */
 	entriesAssigned?: number | null;
 	/** undo: which save was taken back, of which kind, and when it had been saved */
 	undoneSaveId?: string | null;
 	undoneKind?: "memorize" | "review" | null;
 	undoneAt?: string | null;
-	/**
-	 * learn/review: this save was taken back by a later undo. The row is kept —
-	 * the save happened — and the UI says so rather than erasing it.
-	 */
+	/** learn/review: a later undo took this save back; the row stays and says so. */
 	undone?: boolean;
 }
 
@@ -230,31 +143,28 @@ export interface MemoryOverview {
 	totals: {
 		rooms: number;
 		l1bTokens: number;
-		/** notes across every room, and the topics they sit in */
 		notes: number;
 		noteTopics: number;
 		checkpoints: number;
 		recentContextBacklog: number;
 		roomsNeedingAbsorb: number;
-		/** cross-room memory composition by layer */
 		composition: MemoryComposition;
 	};
 	rooms: RoomMemorySummary[];
 }
 
-/** How developed a room's memory is — a heuristic from size + consolidations. */
+/** How developed a room's memory is: a heuristic from its Remember saves and its Deep Memory size. */
 export interface RoomMaturity {
 	/** 0..3 */
 	level: number;
 	/** Forming | Practiced | Established | Deep */
 	label: string;
-	/** durable ÷ (durable + recent): how much memory is consolidated */
+	/** deep ÷ (deep + recent): how much memory is consolidated */
 	consolidatedPct: number;
 }
 
 export interface RoomMemoryDetail extends RoomMemorySummary {
 	l1aExists: boolean;
-	/** the memory map: composition by area, with measured token weight */
 	memoryMap: MemoryMapRow[];
 	/** the room's topics with their note counts, in document order */
 	memoryTopics: MemoryTopicRow[];
@@ -262,7 +172,6 @@ export interface RoomMemoryDetail extends RoomMemorySummary {
 	recentSessions: RecentSession[];
 	/** the room's memory changelog, newest first, capped */
 	history: MemoryHistoryEvent[];
-	/** how developed this room's memory is */
 	maturity: RoomMaturity;
 }
 
@@ -270,8 +179,7 @@ const MATURITY_LABELS = ["Forming", "Practiced", "Established", "Deep"];
 
 function roomMaturity(summary: RoomMemorySummary): RoomMaturity {
 	const { deep, recent } = summary.composition;
-	// Depth grows with consolidations and deep knowledge; recent-only memory
-	// counts less because it hasn't been distilled yet.
+	// Depth grows with Remember saves and Deep Memory's size; waiting conversations add no size until Memorize distills them.
 	const score = summary.checkpoints + deep / 200;
 	const level = score < 2 ? 0 : score < 6 ? 1 : score < 15 ? 2 : 3;
 	return {
@@ -280,8 +188,6 @@ function roomMaturity(summary: RoomMemorySummary): RoomMaturity {
 		consolidatedPct: deep + recent > 0 ? deep / (deep + recent) : 0,
 	};
 }
-
-// --- disk readers (defensive: a room may have no checkpoints or no L1b yet) ---
 
 function readEventRecords<T extends { approvedAt: string }>(id: string, pickDir: (instance: ReturnType<typeof createPersistentAgentInstance>) => string): T[] {
 	let dir: string;
@@ -294,7 +200,7 @@ function readEventRecords<T extends { approvedAt: string }>(id: string, pickDir:
 	try {
 		files = fs.readdirSync(dir);
 	} catch {
-		return []; // no events of this kind yet
+		return [];
 	}
 	const records: T[] = [];
 	for (const file of files) {
@@ -316,8 +222,6 @@ function readCheckpoints(id: string): CheckpointEventRecord[] {
 	return readEventRecords<CheckpointEventRecord>(id, (instance) => instance.checkpointEventDir());
 }
 
-// --- per-room usage join (read from the same usage.jsonl the dashboard uses) ---
-
 interface UsageRow {
 	ts: number;
 	agent: string;
@@ -326,7 +230,6 @@ interface UsageRow {
 	cost: number;
 }
 
-/** Aggregate usage.jsonl per room (agent). Read once per request, defensively. */
 function loadPayoffByRoom(): Map<string, RoomPayoff> {
 	const file = productAppStatePath("usage.jsonl");
 	const acc = new Map<string, { turns: number; cost: number; input: number; cacheRead: number }>();
@@ -334,7 +237,7 @@ function loadPayoffByRoom(): Map<string, RoomPayoff> {
 	try {
 		text = fs.readFileSync(file, "utf-8");
 	} catch {
-		return new Map(); // no usage logged yet
+		return new Map();
 	}
 	for (const line of text.split("\n")) {
 		if (!line) continue;
@@ -369,7 +272,6 @@ interface RoomL1bInfo {
 	composition: MemoryComposition;
 	/** session titles in document order (oldest → newest) */
 	sessionTitles: string[];
-	/** key phrases (bold) from durable memory */
 	knows: string[];
 	/** the room's topics with their note counts, in document order */
 	topics: MemoryTopicRow[];
@@ -378,11 +280,7 @@ interface RoomL1bInfo {
 /** Structural section names — never useful as "knows about" chips. */
 const KNOWS_STRUCTURAL = new Set(["deep memory", "active items", "recent context", "chronos", "memory"]);
 
-/**
- * Pull distinct key phrases from durable memory as "knows about" chips: bold
- * phrases first (the strongest signal), then section headings as a fallback so
- * memories written without bold still get chips.
- */
+/** Distinct key phrases as "knows about" chips: bold phrases first, section headings as a fallback. */
 function extractKnows(durable: string): string[] {
 	const seen = new Set<string>();
 	const out: string[] = [];
@@ -418,17 +316,7 @@ function topSectionBody(src: string, name: string): string | null {
 	return null;
 }
 
-/**
- * What the model reads, from the bytes on disk. Every size this module reports
- * is measured on this render and never on the raw file, so the Memory tab and
- * the room's own limit speak one number: the limit's numerator
- * (reviewTargetEstimatedTokensFromL1b) measures exactly this render too, and a
- * file's storage bookkeeping — the id counter and the per-note metadata lines —
- * never reaches a prompt, so it must never be charged to a room here either.
- * The room's own read adds one thing this render leaves out: the day each note
- * of a kept pair was learned, "(learned D)", a few tokens per marked note that
- * no size here counts.
- */
+/** What the model reads: every size here is measured on this render, never the raw file, so the Memory tab and the room's limit (reviewTargetEstimatedTokensFromL1b) agree. */
 function memoryContextRender(l1b: string): string {
 	try {
 		return renderMemoryContext(l1b);
@@ -437,21 +325,18 @@ function memoryContextRender(l1b: string): string {
 	}
 }
 
-/** One topic of a room's memory as the surfaces list it: its name and how many notes it holds. */
 export interface MemoryTopicRow {
 	section: "Deep Memory" | "Active Items";
 	topic: string;
 	notes: number;
 }
 
-/** A parsed document's topics, in document order, with their note counts; a topic without notes is not listed. */
 function topicRowsOf(doc: MemoryDocument): MemoryTopicRow[] {
 	return doc.topics
 		.filter((topic) => topic.entries.length > 0)
 		.map((topic) => ({ section: topic.section, topic: topic.title, notes: topic.entries.length }));
 }
 
-/** The room's topics, in document order, with their note counts. */
 function readRoomTopics(l1b: string): MemoryTopicRow[] {
 	try {
 		return topicRowsOf(parseMemoryDocument(l1b));
@@ -460,7 +345,6 @@ function readRoomTopics(l1b: string): MemoryTopicRow[] {
 	}
 }
 
-/** Read a room's L1b once and derive everything: total, composition, sessions. */
 function readRoomL1bInfo(id: string): RoomL1bInfo {
 	let stored: string;
 	try {
@@ -489,16 +373,11 @@ function readRoomL1bInfo(id: string): RoomL1bInfo {
 			topics,
 		};
 	} catch {
-		// Legacy/malformed topology — everything counts as deep.
 		return { metrics, composition: { deep: metrics.estimatedTokens, active: 0, recent: 0, chronos: 0 }, sessionTitles: [], knows: [], topics };
 	}
 }
 
-/**
- * Split the Recent Context section into its individual sessions. Each entry is
- * a `### RC-#### | STATUS | date | Title` subsection; we surface a human title
- * and the session's current token size (same unit as the memory map).
- */
+/** The Recent Context sessions, one per `### RC-#### | STATUS | date | Title` subsection, sized in the memory map's unit. */
 function recentContextSessions(recentContext: string): Array<{ id: string | null; checkpointId: string | null; title: string; tokens: number; ts: number | null; tsPrecise: boolean; content: string }> {
 	const headings = Array.from(recentContext.matchAll(/^###\s+(.+?)\s*$/gm));
 	const out: Array<{ id: string | null; checkpointId: string | null; title: string; tokens: number; ts: number | null; tsPrecise: boolean; content: string }> = [];
@@ -506,9 +385,7 @@ function recentContextSessions(recentContext: string): Array<{ id: string | null
 		const start = headings[i].index ?? 0;
 		const end = i + 1 < headings.length ? (headings[i + 1].index ?? recentContext.length) : recentContext.length;
 		const body = recentContext.slice(start, end);
-		// Heading like "RC-0004 | OPEN | 2026-07-07 | Finalized reading list". Prefer
-		// the trailing human title; take the date from the entry itself (not a
-		// guessed checkpoint), so any "ago" we show is factual.
+		// Heading like "RC-0004 | OPEN | 2026-07-07 | Finalized reading list"; the date comes from the entry itself, so any "ago" is factual.
 		const cells = headings[i][1].split("|").map((s) => s.trim()).filter(Boolean);
 		const title = cells.length >= 4 ? cells.slice(3).join(" | ") : headings[i][1].trim();
 		const id = cells.length > 0 && /^RC-\d+$/i.test(cells[0]) ? cells[0].toUpperCase() : null;
@@ -518,18 +395,12 @@ function recentContextSessions(recentContext: string): Array<{ id: string | null
 			const parsed = Date.parse(dateMatch[0]);
 			if (Number.isFinite(parsed)) ts = parsed;
 		}
-		// The provenance join key is the checkpoint_id from the rc_metadata
-		// comment the gate wrote into the entry. RC-#### labels are REUSED after
-		// a consolidation clears Recent Context, so joining on the label can
-		// attach a consolidated record's receipt to an unrelated hand-added
-		// entry; checkpoint ids are unique per event. No metadata, no receipt.
+		// The join key is the rc_metadata checkpoint_id, never the RC label: labels are reused after a consolidation clears Recent Context. No metadata, no receipt.
 		const rawBody = body.slice(headings[i][0].length);
 		const meta = rawBody.match(/<!--\s*rc_metadata:([\s\S]*?)-->/);
 		const cpMatch = meta ? meta[1].match(/checkpoint_id=([^;\s]+)/) : null;
 		const checkpointId = cpMatch ? cpMatch[1] : null;
-		// The gate also stamps the exact approval instant into rc_metadata.
-		// Prefer it over the heading's day: the heading date parses to UTC
-		// midnight, which turns a memory saved this afternoon into "15h ago".
+		// The approval instant in rc_metadata beats the heading's day, which parses to UTC midnight.
 		let tsPrecise = false;
 		const approvedMatch = meta ? meta[1].match(/approved_at=([^;\s]+)/) : null;
 		if (approvedMatch) {
@@ -539,22 +410,13 @@ function recentContextSessions(recentContext: string): Array<{ id: string | null
 				tsPrecise = true;
 			}
 		}
-		// Strip the rc_metadata identity comment (and any other HTML comment)
-		// from the readable text, like cleanAreaBody does for the area reader.
 		const content = rawBody.replace(/<!--[\s\S]*?-->/g, "").trim();
 		out.push({ id, checkpointId, title, tokens: memoryMetrics(body).estimatedTokens, ts, tsPrecise, content });
 	}
 	return out;
 }
 
-/**
- * The full memory composition — everything the room carries, not just the
- * prune-target. `buildMemoryMap` covers only Deep Memory +
- * Active Items (that map exists to prune stable memory); it deliberately omits
- * Recent Context (the un-absorbed session summaries — usually the bulk) and
- * Chronos (the timeline). We add those back. Recent Context stays a single
- * summarised row — the per-session detail lives in `recentSessions`.
- */
+/** The full memory composition: `buildMemoryMap` covers only Deep Memory and Active Items, so Recent Context (one summary row) and Chronos are added back. */
 function buildFullMemoryMap(stored: string): MemoryMapRow[] {
 	const l1b = memoryContextRender(stored);
 	try {
@@ -573,12 +435,10 @@ function buildFullMemoryMap(stored: string): MemoryMapRow[] {
 		}
 		return rows;
 	} catch {
-		// Legacy/malformed topology — fall back to the review-target-only map.
 		return memoryMetrics(l1b).memoryMap;
 	}
 }
 
-/** Read a room's L1b once and return its Recent Context sessions (doc order). */
 function readRoomSessions(id: string): Array<{ id: string | null; checkpointId: string | null; title: string; tokens: number; ts: number | null; tsPrecise: boolean; content: string }> {
 	try {
 		const parts = extractMemorySourceParts(memoryContextRender(createPersistentAgentInstance(id).readL1b()));
@@ -588,15 +448,9 @@ function readRoomSessions(id: string): Array<{ id: string | null; checkpointId: 
 	}
 }
 
-/**
- * Per-layer sizes measured at an event, from the event's stored snapshot.
- * `deep` is the Deep Memory section ONLY (events record per-section metrics);
- * older records without topLevel fall back to the coarser non-recent figure.
- */
+/** Per-layer sizes at an event, from its stored snapshot; older records without topLevel fall back to the non-recent figure. */
 function eventLayers(result: CheckpointEventRecord["result"]): { deep: number; recent: number } {
-	// The lasting layer counts what the memory meter counts: the notes AND the
-	// open items (Deep Memory + Active Items), so a point on the chart and the
-	// bar beside it never disagree about how full the room is.
+	// The lasting layer counts Deep Memory and Active Items, as the memory meter does, so a chart point and the bar beside it agree.
 	const tl = result.sections?.topLevel;
 	const deepSection = tl?.find((s) => s.title?.trim().toLowerCase() === "deep memory");
 	const activeSection = tl?.find((s) => s.title?.trim().toLowerCase() === "active items");
@@ -619,7 +473,6 @@ function growthPoint(record: CheckpointEventRecord): MemoryGrowthPoint {
 	};
 }
 
-/** Absorb (consolidation) events — read like checkpoints, for the growth series. */
 function readAbsorbs(id: string): AbsorbEventRecord[] {
 	let dir: string;
 	try {
@@ -683,12 +536,12 @@ function readRecordsIn<T>(dir: () => string): T[] {
 	return records;
 }
 
-/** The whole-rewrite Reviews of 0.11.x, still on disk in rooms that ran them. */
+/** The whole-rewrite Reviews of older versions, still on disk in rooms that ran them. */
 function readReviews(id: string): StructuralReviewEventRecord[] {
 	return readRecordsIn<StructuralReviewEventRecord>(() => createPersistentAgentInstance(id).structuralReviewEventDir());
 }
 
-/** Review v2 saves (note by note), the ones every room makes from 0.12 on. */
+/** The note-by-note Review saves. */
 function readReviewRuns(id: string): ReviewEventRecord[] {
 	return readRecordsIn<ReviewEventRecord>(() => createPersistentAgentInstance(id).reviewEventDir());
 }
@@ -724,20 +577,13 @@ function reviewPoint(record: StructuralReviewEventRecord): MemoryGrowthPoint {
 	};
 }
 
-/** Merged growth series: remembered sessions + Memorize (absorb) + Review (prune), oldest → newest. */
 function growthSeries(id: string, checkpoints: CheckpointEventRecord[]): MemoryGrowthPoint[] {
 	const points = [...checkpoints.map(growthPoint), ...readAbsorbs(id).map(absorbPoint), ...reviewPoints(id)];
-	// A record with a malformed approvedAt parses to ts 0 — as a chart point it
-	// would render a clickable moment at the epoch whose snapshot fetch can
-	// only fail (`at <= 0` is rejected), so it stays out of the series.
+	// A malformed approvedAt parses to ts 0: as a chart point it would be a clickable moment whose snapshot fetch fails (`at <= 0` is rejected).
 	return points.filter((p) => p.ts > 0).sort((a, b) => a.ts - b.ts);
 }
 
-/**
- * The room's memory against its limit. The room status already carries this
- * block; a room whose status was built without it is measured here through the
- * same numerator, so there is never a second way of counting.
- */
+/** The room's memory against its limit: from the status when it carries it, else measured through the same numerator. */
 function roomMemoryLimit(status: PersistentAgentStatus): RoomMemorySummary["memoryLimit"] {
 	if (status.memoryBudget) return status.memoryBudget;
 	try {
@@ -788,13 +634,10 @@ function summarizeRoom(status: PersistentAgentStatus, payoffByRoom: Map<string, 
 	};
 }
 
-// --- public builders (called by the routes) ---
-
 export function buildMemoryOverview(): MemoryOverview {
 	// listPersistentAgents() returns active (non-archived) rooms only.
 	const payoffByRoom = loadPayoffByRoom();
 	const rooms = listPersistentAgents().map((status) => summarizeRoom(status, payoffByRoom));
-	// Heaviest memory first — that's where the signal is.
 	rooms.sort((a, b) => b.l1bTokens - a.l1bTokens);
 	return {
 		generatedAt: Date.now(),
@@ -817,8 +660,6 @@ export function buildMemoryOverview(): MemoryOverview {
 	};
 }
 
-// --- local memory search: grep the durable memory, no model involved --------
-
 export interface MemorySearchHit {
 	roomId: string;
 	room: string;
@@ -838,7 +679,7 @@ export function searchMemory(query: string, roomId?: string, limit = 25): Memory
 		try {
 			l1b = createPersistentAgentInstance(status.id).readL1b();
 		} catch {
-			continue; // no L1b to search
+			continue;
 		}
 		const room = status.displayName?.trim() || status.id;
 		let area = "Start of memory";
@@ -861,8 +702,6 @@ export function searchMemory(query: string, roomId?: string, limit = 25): Memory
 	return hits;
 }
 
-// --- hivemind retrieval: assemble cross-room memory context for a question ---
-
 const ASK_BUDGET_TOKENS = 12000;
 
 const ASK_STOPWORDS = new Set(
@@ -881,20 +720,12 @@ function safeRoomLabel(name: string): string {
 
 export interface MemoryAskContext {
 	context: string;
-	/** room display names in scope for this answer */
 	sources: string[];
 	/** the display names of the rooms with memory that `include` kept out */
 	leftOut: string[];
 }
 
-/**
- * Gather memory across ALL rooms to answer a question (the "hivemind").
- * Hybrid: if every room's memory fits the budget, include it all (best
- * synthesis). Otherwise rank rooms by how well they match the question's
- * content words and include the most relevant, truncating to fit. Always
- * returns non-empty context when any memory exists. Read-only. A room
- * `include` refuses is left out and counted in `leftOut`.
- */
+/** Memory across rooms for a question: all of it when it fits the budget, else the rooms ranked by the question's words, truncated to fit. Never empty while a room in scope that `include` keeps has memory. */
 export function buildMemoryAskContext(question: string, budgetTokens = ASK_BUDGET_TOKENS, roomIds?: string[], include?: (roomId: string) => boolean): MemoryAskContext {
 	const scope = roomIds && roomIds.length ? new Set(roomIds) : null;
 	const blocks: Array<{ room: string; text: string; tokens: number }> = [];
@@ -921,7 +752,6 @@ export function buildMemoryAskContext(question: string, budgetTokens = ASK_BUDGE
 		return { context: render(blocks), sources: blocks.map((b) => b.room), leftOut };
 	}
 
-	// Over budget — rank rooms by term-frequency match to the question.
 	const terms = queryTerms(question);
 	const scored = blocks
 		.map((b) => {
@@ -934,28 +764,24 @@ export function buildMemoryAskContext(question: string, budgetTokens = ASK_BUDGE
 	const picked: Array<{ room: string; text: string }> = [];
 	let used = 0;
 	for (const b of scored) {
-		if (b.score === 0 && picked.length > 0) break; // once we have relevant rooms, don't pad with irrelevant ones
+		if (b.score === 0 && picked.length > 0) break;
 		const remaining = budgetTokens - used;
 		if (remaining <= 250) break;
 		if (b.tokens <= remaining) {
 			picked.push({ room: b.room, text: b.text });
 			used += b.tokens;
 		} else {
-			// truncate this room to fit the remaining budget rather than skip it
 			picked.push({ room: b.room, text: b.text.slice(0, remaining * 4) + "\n\n…(truncated)" });
 			used = budgetTokens;
 			break;
 		}
 	}
-	// Guarantee non-empty: if nothing scored/fit, include the largest room truncated.
 	if (picked.length === 0) {
 		const big = [...blocks].sort((a, z) => z.tokens - a.tokens)[0];
 		picked.push({ room: big.room, text: big.text.slice(0, budgetTokens * 4) + "\n\n…(truncated)" });
 	}
 	return { context: render(picked), sources: picked.map((b) => b.room), leftOut };
 }
-
-// --- catch-up digest: what each room learned since a given timestamp --------
 
 export interface DigestRoomChange {
 	id: string;
@@ -982,7 +808,7 @@ export function buildMemoryDigest(sinceMs: number): MemoryDigest {
 		const points = readCheckpoints(status.id).map(growthPoint).filter((p) => p.ts >= sinceMs);
 		const reviewsSince = reviewPoints(status.id).filter((p) => p.ts >= sinceMs);
 		if (points.length === 0 && reviewsSince.length === 0) continue;
-		points.sort((a, b) => b.ts - a.ts); // newest first
+		points.sort((a, b) => b.ts - a.ts);
 		// Prefer the newest recent-context session title (a real, human label)
 		// over the checkpoint's approvedEntry.title, which is often absent.
 		const sessions = readRoomSessions(status.id);
@@ -997,7 +823,6 @@ export function buildMemoryDigest(sinceMs: number): MemoryDigest {
 			learned: points,
 		});
 	}
-	// Biggest mover first.
 	changes.sort((a, b) => b.addedChars - a.addedChars);
 	return {
 		since: sinceMs,
@@ -1013,15 +838,12 @@ export function buildMemoryDigest(sinceMs: number): MemoryDigest {
 	};
 }
 
-// --- read one memory area's content (for the click-to-read memory map) ------
-
 export interface MemoryAreaContent {
 	area: string;
 	/** the section's body markdown, without its heading or schema comments */
 	content: string;
 }
 
-/** Strip schema/HTML comments and a single leading heading line. */
 function cleanAreaBody(text: string): string {
 	return text
 		.replace(/<!--[\s\S]*?-->/g, "")
@@ -1029,11 +851,7 @@ function cleanAreaBody(text: string): string {
 		.trim();
 }
 
-/**
- * Return the raw text of one memory area so the user can READ their memory,
- * not just measure it. Read-only. Areas match the memory map's top-level rows:
- * review-target sections (Deep Memory, Active Items, …) plus "Timeline".
- */
+/** The text of one memory area, so the person can read memory, not just measure it: a top-level section, "Timeline", or a topic. */
 export function readMemoryArea(id: string, areaName: string): MemoryAreaContent | null {
 	let l1b: string;
 	try {
@@ -1050,7 +868,6 @@ export function readMemoryArea(id: string, areaName: string): MemoryAreaContent 
 	if (areaName.trim().toLowerCase() === "timeline") {
 		return { area: "Timeline", content: cleanAreaBody(parts.preservedChronos) };
 	}
-	// Split the review target into its top-level (##) sections and match by name.
 	const src = parts.sourceReviewTargetL1b;
 	const headings = Array.from(src.matchAll(/^##\s+(.+?)\s*$/gm));
 	for (let i = 0; i < headings.length; i++) {
@@ -1060,10 +877,7 @@ export function readMemoryArea(id: string, areaName: string): MemoryAreaContent 
 		const end = i + 1 < headings.length ? (headings[i + 1].index ?? src.length) : src.length;
 		return { area: name, content: cleanAreaBody(src.slice(start, end)) };
 	}
-	// A topic, not a whole section: the surfaces list memory by topic now, so a
-	// click on "Team and roles" must be readable the same way a section is. The
-	// `###` heading lines are the topic titles the parser reads, and only the
-	// body under one of them is returned — never a neighbouring topic's text.
+	// A topic, not a whole section: only the body under its `###` heading, never a neighbouring topic's text.
 	const topicHeadings = Array.from(src.matchAll(/^###\s+(.+?)\s*$/gm));
 	for (let i = 0; i < topicHeadings.length; i++) {
 		const name = topicHeadings[i][1].trim();
@@ -1076,14 +890,7 @@ export function readMemoryArea(id: string, areaName: string): MemoryAreaContent 
 	return null;
 }
 
-// --- read a memory's source conversation (for the provenance receipt) -------
-
-/**
- * A stored conversation item, sanitized for the wire. Thread files carry the
- * app's own display items (kind user | assistant | tool | system, plus a few
- * composite kinds we fold into system text); tool args/results can be large,
- * so both are capped with an explicit truncation flag.
- */
+/** A stored conversation item for the wire; composite kinds fold into system text, and long fields are capped with a flag. */
 export interface TranscriptWireItem {
 	kind: "user" | "assistant" | "tool" | "system";
 	text?: string;
@@ -1122,7 +929,6 @@ function capped(text: string, cap: number): { text: string; truncated: boolean }
 	return text.length > cap ? { text: text.slice(0, cap) + "\n…", truncated: true } : { text, truncated: false };
 }
 
-/** One stored thread item → wire item, or null for empty/unknown items. */
 function transcriptWireItem(raw: any): TranscriptWireItem | null {
 	if (!raw || typeof raw !== "object") return null;
 	const kind = String(raw.kind ?? "");
@@ -1156,9 +962,7 @@ function transcriptWireItem(raw: any): TranscriptWireItem | null {
 		if (truncated) item.truncated = true;
 		return item;
 	}
-	// Composite display kinds fold into readable system text — the transcript
-	// stays honest ("a consult happened, here is what was asked and answered")
-	// without the UI needing to know every display-cache shape.
+	// Composite display kinds fold into readable system text, so the UI need not know every display shape.
 	if (kind === "consult") {
 		const room = String(raw.targetDisplayName ?? raw.targetRoomId ?? "another exxpert").trim();
 		const exchanges: any[] = Array.isArray(raw.exchanges) && raw.exchanges.length
@@ -1180,16 +984,10 @@ function transcriptWireItem(raw: any): TranscriptWireItem | null {
 		const body = capped(`Specialist task: **${title}**${summary ? `\n\n${summary}` : ""}`, TRANSCRIPT_TEXT_CAP);
 		return { kind: "system", text: body.text, ...(body.truncated ? { truncated: true } : {}) };
 	}
-	return null; // a future display kind — skipped, counted in itemsTotal
+	return null; // a future display kind: skipped, and not counted in itemsTotal
 }
 
-/**
- * The conversation a checkpoint receipt points at, read from the room's own
- * closed-thread file (write-once after the boundary). The chain is exactly
- * what the records prove: checkpoint id → event record →
- * runtimeBoundary.closedThreadId → runtime/threads/<id>.json. Read-only; a
- * missing link returns stored:false rather than a guess.
- */
+/** The conversation a checkpoint receipt points at: checkpoint id, event record, closedThreadId, the thread file. A missing link is stored:false, never a guess. */
 export function readConversationTranscript(id: string, checkpointIdRaw: string): ConversationTranscriptResult | null {
 	let instance: ReturnType<typeof createPersistentAgentInstance>;
 	try {
@@ -1214,9 +1012,7 @@ export function readConversationTranscript(id: string, checkpointIdRaw: string):
 	}
 	const rawItems = Array.isArray(thread.items) ? thread.items : [];
 	const items: TranscriptWireItem[] = [];
-	// itemsTotal counts the RENDERABLE items in the stored thread, so
-	// itemsTotal > items.length means exactly one thing: the cap cut the tail
-	// (the UI's truncation note must never fire for merely-skipped internals).
+	// itemsTotal counts renderable items only, so itemsTotal > items.length means the cap cut the tail, never that internals were skipped.
 	let renderable = 0;
 	for (const raw of rawItems) {
 		const item = transcriptWireItem(raw);
@@ -1234,22 +1030,12 @@ export function readConversationTranscript(id: string, checkpointIdRaw: string):
 	};
 }
 
-// --- what a Learn/Review changed: before/after from the archive chain -------
-
-/**
- * Every recorded memory write archives the L1b it replaced
- * (paths.archivedL1bRelPath) — the gate events and the memory edits alike: a
- * hand edit, the migration, an undo. So the archives form a chain of recorded
- * states: the state AFTER write N is the archive of the next write, or today's
- * document when N is the latest. Nothing is reconstructed — only recorded
- * snapshots are served.
- */
+/** Every recorded memory write archives the L1b it replaced, so the state after write N is the next write's archive, or today's document; only recorded snapshots are served. */
 interface ArchiveChainLink {
 	ts: number;
 	archivedRelPath: string;
 }
 
-/** An event record's archived-snapshot rel path, tolerating older records. */
 function archivedRelPathOf(instance: ReturnType<typeof createPersistentAgentInstance>, record: { paths?: { archivedL1bRelPath?: string }; archivedL1bPath?: string }): string | null {
 	if (record.paths?.archivedL1bRelPath) return record.paths.archivedL1bRelPath;
 	// Deprecated absolute-path field on older records — usable only when it
@@ -1288,20 +1074,16 @@ function archiveChain(id: string): ArchiveChainLink[] {
 	for (const record of readEventRecords<AbsorbEventRecord>(id, (i) => i.absorbEventDir())) push(record);
 	for (const record of readEventRecords<ReviewEventRecord>(id, (i) => i.reviewEventDir())) push(record);
 	for (const record of readEventRecords<StructuralReviewEventRecord>(id, (i) => i.structuralReviewEventDir())) push(record);
-	// The memory edits: hand edits, the migration, undos and archive deletes.
-	// An archive delete leaves the notes file as it was and records no
-	// snapshot, so it adds no link; every other edit does.
+	// The memory edits: an archive delete records no snapshot, so it adds no link; every other edit does.
 	for (const record of readEventRecords<MemoryEditEventRecord>(id, (i) => i.memoryEditEventDir())) push(record);
 	links.sort((a, b) => a.ts - b.ts);
 	return links;
 }
 
-/** Strip schema/HTML comments (rc_metadata etc.) from a snapshot for reading/diffing. */
 function stripDocComments(text: string): string {
 	return text.replace(/<!--[\s\S]*?-->/g, "").trim();
 }
 
-/** One memory section's before/after texts for the change view. */
 export interface MemoryEventSectionDiff {
 	section: string;
 	/** the section's text before the event, comments stripped ("" if absent) */
@@ -1312,29 +1094,14 @@ export interface MemoryEventSectionDiff {
 	afterTokens: number;
 }
 
-/**
- * The history rows a diff can be served for: the two maintenance saves and the
- * three memory edits that snapshot the file they replace. A Remember appends
- * one waiting conversation and has its own reader; an archive delete changes
- * no notes file, so there is nothing to diff.
- */
+/** The history rows a diff can be served for: the two maintenance saves and the memory edits that snapshot the file they replace. */
 export type MemoryEventDiffKind = "learn" | "review" | "user_edit" | "migrate" | "undo";
 
 export const MEMORY_EVENT_DIFF_KINDS: readonly MemoryEventDiffKind[] = ["learn", "review", "user_edit", "migrate", "undo"];
 
-/** What happened to one note between the two sides of a change. */
 export type MemoryNoteChangeKind = "added" | "archived" | "updated" | "moved" | "pinned" | "unpinned" | "closed" | "reopened";
 
-/**
- * One note's row in the change view. `before` is its text on the before side,
- * `after` on the after side; an added note has no before, an archived one no
- * after, every other change carries both. `from` names the topic a note came
- * from when it moved (an updated note that also moved is one row, change
- * "updated", with `from` set). `why` is the archive reason when the record's
- * own archived rows carry it; `reason` is what the ranking saw, in a person's
- * words, when the budget took the note, or which value replaced which when a
- * save superseded it.
- */
+/** One note's row in the change view: `from` names the topic a moved note came from; `why` is the archive reason, `reason` what the ranking saw or which value replaced which. */
 export interface MemoryNoteChange {
 	id: string;
 	change: MemoryNoteChangeKind;
@@ -1356,36 +1123,17 @@ export interface MemoryEventDiff {
 	/** the record's own id: absorbId, reviewId, structuralReviewId or memoryEditId */
 	eventId: string;
 	approvedAt: string;
-	/**
-	 * True when both sides parsed into notes and `topics` says what changed
-	 * note by note; false is the legacy fallback (a side that does not parse
-	 * into topics), where `sections` carries the line view instead.
-	 */
+	/** True when both sides parsed into notes and `topics` lists changes note by note; false falls back to `sections`. */
 	notes: boolean;
-	/**
-	 * The topics that changed, after side's document order first, before-only
-	 * topics appended; a topic with no rows is omitted. Empty when `notes` is
-	 * false.
-	 */
+	/** The changed topics, after side's order first, before-only topics appended; empty when `notes` is false. */
 	topics: MemoryEventTopicDiff[];
 	/** The waiting conversations that left and arrived between the two sides, by title, in document order. */
 	conversations: { left: string[]; joined: string[] };
-	/**
-	 * The legacy line view, present ONLY when `notes` is false: the changed
-	 * sections — one per topic, in the words a person reads — after side's
-	 * order first, before-only sections appended, each carrying its full
-	 * before/after text. Splitting happens BEFORE diffing, so a change can
-	 * never be attributed to the wrong topic.
-	 */
+	/** The line view, only when `notes` is false: changed sections, split before diffing so a change is never attributed to the wrong topic. */
 	sections?: MemoryEventSectionDiff[];
 	/** where the after side came from: the next event's archive, or today's document */
 	afterBasis: "next-archive" | "current";
-	/**
-	 * The after side hashes to the fingerprint this record stored at write
-	 * time — the diff shows exactly what this event changed. False means the
-	 * memory also changed outside the gate before the next recorded state;
-	 * null when the record carries no fingerprint to check against.
-	 */
+	/** Whether the after side hashes to the fingerprint the record stored; false means memory also changed outside the gate, null that there is nothing to check against. */
 	afterVerified: boolean | null;
 }
 
@@ -1408,21 +1156,12 @@ function topicNotesText(topic: MemoryTopic): string {
 		.join("\n\n");
 }
 
-/**
- * Both sides of a change split into the sections the change view names, with
- * ONE naming for both sides: a topic is named by its heading text as written
- * (an unmigrated document still splits by its `###` headings); an Active Items
- * topic whose title a Deep Memory topic also carries, on either side, reads
- * "<Topic> · open items" so the two never fold into one section. Recent
- * Context is "Waiting conversations", Chronos is "Timeline", and any other
- * top-level section keeps its own heading.
- */
+/** Both sides split into the change view's sections with one naming: a topic by its heading, an Active Items topic sharing a Deep Memory title as "<Topic> · open items". */
 function diffSectionsOf(beforeRaw: string, afterRaw: string): { before: DiffSection[]; after: DiffSection[] } {
 	let docs: [MemoryDocument, MemoryDocument];
 	try {
 		docs = [parseMemoryDocument(beforeRaw), parseMemoryDocument(afterRaw)];
 	} catch {
-		// Legacy/malformed topology — one honest whole-document section per side.
 		return {
 			before: [{ name: "Memory", text: stripDocComments(beforeRaw) }],
 			after: [{ name: "Memory", text: stripDocComments(afterRaw) }],
@@ -1443,7 +1182,6 @@ function diffSectionsOf(beforeRaw: string, afterRaw: string): { before: DiffSect
 	return { before: sectionsOf(docs[0]), after: sectionsOf(docs[1]) };
 }
 
-/** The change view's name for a topic: its title, or "<Topic> · open items" for an Active Items topic that shares its title with a Deep Memory topic. */
 function changeViewTopicName(topic: MemoryTopic, deepTitles: ReadonlySet<string>): string {
 	return topic.section === "Active Items" && deepTitles.has(topic.title) ? `${topic.title}${OPEN_ITEMS_SUFFIX}` : topic.title;
 }
@@ -1467,18 +1205,11 @@ function archivedRowValuesOf<R extends { id?: unknown }, T>(rows: ReadonlyArray<
 	return out;
 }
 
-/** The archive reasons a record's rows carry, keyed by entry id. */
 function archivedReasonsOf(rows: ReadonlyArray<{ id?: unknown; why?: unknown }> | undefined): Map<string, ArchiveReason> {
 	return archivedRowValuesOf(rows, (row: { why?: unknown }) => ARCHIVE_REASONS.find((known) => known === row.why));
 }
 
-/**
- * The words a record's archived rows carry, keyed by each row's own id: what
- * the ranking saw on a row the budget took, or which value replaced which on
- * a `-vN` row a save superseded. A versioned id is kept as it is, not folded
- * into its entry's id, so an updated note finds its own superseded versions
- * and a note that left by another door never wears a version's words.
- */
+/** The words a record's archived rows carry, by each row's own id; a `-vN` id stays as it is, so an updated note finds its own superseded versions. */
 function rankingReasonsOf(rows: ReadonlyArray<{ id?: unknown; reason?: unknown }> | undefined): Map<string, string> {
 	const out = new Map<string, string>();
 	for (const row of rows ?? []) {
@@ -1512,14 +1243,7 @@ interface IndexedEntry {
 	topic: string;
 }
 
-/**
- * Both sides of a change paired note by note. A side that has no entry ids
- * yet is migrated in memory the way the first 0.12 save migrates it — ids in
- * document order, the "(saved …)" stamps taken off — so the before-copy of
- * that save pairs with what the save wrote instead of differing on every
- * line. Null is the legacy case: a side that does not parse, or no topics on
- * either side; the caller falls back to the line view then.
- */
+/** Both sides paired note by note; a side without entry ids is migrated in memory as its save migrated it. Null when a side does not parse or neither has topics. */
 export function diffNotesOf(
 	beforeRaw: string,
 	afterRaw: string,
@@ -1536,13 +1260,7 @@ export function diffNotesOf(
 	}
 	const [before, after] = docs;
 	if (before.topics.length === 0 && after.topics.length === 0) return null;
-	// A side that had no ids got them from the in-memory migration, which numbers
-	// entries in document order — the numbering the save wrote only while the
-	// migration rules stay what they were that day. So such a side is paired by
-	// what a note says instead: each of its entries takes the id of the entry on
-	// the other side that says the same (its own topic first), and one that
-	// nothing matches keeps an id no other side can hold, so it reads as archived
-	// or added rather than paired with a stranger.
+	// A side that had no ids is paired by what each note says, its own topic first: the migration's numbering matches the save only while its rules stay the same. An unmatched note gets an id no side holds.
 	if (!isMigratedMemoryDocument(beforeRaw) || !isMigratedMemoryDocument(afterRaw)) {
 		const keyed = isMigratedMemoryDocument(beforeRaw) ? before : after;
 		const other = keyed === before ? after : before;
@@ -1573,7 +1291,6 @@ export function diffNotesOf(
 	};
 	const beforeById = indexOf(before);
 	const afterById = indexOf(after);
-	// Topic order: the after side's document order, then before-only topics.
 	const rowsByTopic = new Map<string, MemoryNoteChange[]>();
 	for (const doc of [after, before]) for (const topic of doc.topics) {
 		const name = changeViewTopicName(topic, deepTitles);
@@ -1616,7 +1333,6 @@ export function diffNotesOf(
 	}
 	const topics: MemoryEventTopicDiff[] = [];
 	for (const [section, changes] of rowsByTopic) if (changes.length) topics.push({ section, changes });
-	// The waiting conversations, keyed by checkpoint id (the title when there is none).
 	const conversationsOf = (doc: MemoryDocument) => recentContextSessions(doc.recentContext).map((session) => ({ key: session.checkpointId ?? session.title, title: session.title }));
 	const beforeConversations = conversationsOf(before);
 	const afterConversations = conversationsOf(after);
@@ -1631,12 +1347,7 @@ export function diffNotesOf(
 	};
 }
 
-/**
- * What a history row actually changed — a Memorize, a Review, a hand edit, the
- * migration or an undo: the record's own archived snapshot against the next
- * recorded state. Read-only; null when the record or its archive is gone (the
- * UI only offers the diff for `diffable` rows).
- */
+/** What a history row changed: the record's archived snapshot against the next recorded state. Null when the record or its archive is gone. */
 export function readMemoryEventDiff(id: string, kind: MemoryEventDiffKind, eventIdRaw: string): MemoryEventDiff | null {
 	let instance: ReturnType<typeof createPersistentAgentInstance>;
 	try {
@@ -1645,11 +1356,7 @@ export function readMemoryEventDiff(id: string, kind: MemoryEventDiffKind, event
 		return null;
 	}
 	let record: AbsorbEventRecord | ReviewEventRecord | StructuralReviewEventRecord | MemoryEditEventRecord | null = null;
-	// The path helpers validate the event id (rejects separators/traversal). A
-	// review is looked for in both places: the note-level Review records itself
-	// under events/review, and the whole-rewrite one it replaces under
-	// events/structural-review. The three memory-edit kinds share one
-	// directory and one record shape.
+	// The path helpers validate the event id (no separators or traversal). A review is looked for under events/review and events/structural-review.
 	const files = kind === "learn"
 		? [() => instance.absorbEventRecordPath(eventIdRaw)]
 		: kind === "review"
@@ -1695,19 +1402,12 @@ export function readMemoryEventDiff(id: string, kind: MemoryEventDiffKind, event
 			return null;
 		}
 	}
-	// A memory-edit record carries no fingerprint of what it wrote, so its after
-	// side is unverified rather than claimed. The records that do carry one
-	// measured it two ways over time: the older ones on the raw file, memory
-	// v2's saves on the room's context render (the way the undo checks a save
-	// is still the latest), so the after side is checked both ways.
+	// A memory-edit record carries no fingerprint, so its after side is unverified. Older records fingerprinted the raw file, newer ones the context render, so both are checked.
 	const storedFingerprint = "result" in record ? record.result?.l1bFingerprint?.value : undefined;
 	const afterVerified = storedFingerprint
 		? [fingerprintL1bSource(afterRaw).value, fingerprintL1bSource(memoryContextRender(afterRaw)).value].includes(storedFingerprint)
 		: null;
-	// The two sides paired note by note. The record's own archived rows say
-	// why a note left: Memorize and Review keep them under `run`, a hand
-	// delete on the edit record itself. A side without ids is migrated in
-	// memory as of this record's day, the way the save itself migrated it.
+	// The record's archived rows say why a note left: under `run` for Memorize and Review, on the record for a hand delete.
 	const archivedRows = "run" in record ? record.run?.archived : "archived" in record ? record.archived : undefined;
 	const archivedWhy = archivedReasonsOf(archivedRows);
 	// The rows the budget took say what the ranking saw, and a superseded
@@ -1722,10 +1422,6 @@ export function readMemoryEventDiff(id: string, kind: MemoryEventDiffKind, event
 		// an unreadable archive costs the reason words, not the change view
 	}
 	const paired = diffNotesOf(beforeRaw, afterRaw, { fallbackSaved: new Date(ts).toISOString().slice(0, 10), archivedWhy, archivedWhyByText, archivedReason });
-	// Legacy: a side that does not parse into topics. Split first, diff per
-	// section: pair the two sides by section name (after side's order wins,
-	// before-only sections appended) and keep only the sections whose text
-	// actually differs.
 	let sections: MemoryEventSectionDiff[] | undefined;
 	if (!paired) {
 		const { before: beforeSections, after: afterSections } = diffSectionsOf(beforeRaw, afterRaw);
@@ -1771,20 +1467,14 @@ export function readMemoryEventDiff(id: string, kind: MemoryEventDiffKind, event
 	};
 }
 
-// --- time travel: the memory as it was at a past moment ---------------------
-
 export interface MemorySnapshot {
 	/** the requested moment (epoch ms) */
 	at: number;
-	/**
-	 * archive: the state recorded just before the first event after `at` —
-	 * exactly what the memory held at that moment. current: `at` is after the
-	 * last recorded event, so this is today's document.
-	 */
+	/** archive: the state recorded just before the first event after `at`; current: `at` is after the last event, so today's document. */
 	basis: "archive" | "current";
 	/** the boundary event's approval time (epoch ms) for archive snapshots */
 	boundaryTs: number | null;
-	/** the full snapshot text, comments stripped (the "Read all" document) */
+	/** the full snapshot text, comments stripped */
 	content: string;
 	estimatedTokens: number;
 	/** the memory map of that moment — same rows and measuring as the live map */
@@ -1793,15 +1483,10 @@ export interface MemorySnapshot {
 	areas: Record<string, string>;
 	/** the Recent Context sessions of that moment, newest first, with receipts */
 	recentSessions: RecentSession[];
-	/** token split by layer at that moment */
 	composition: MemoryComposition;
 }
 
-/**
- * Everything the detail view shows about a memory document, derived from one
- * snapshot text with the exact same code paths as the live view — so a past
- * state renders like today's, and the map can never disagree with the content.
- */
+/** One snapshot through the live view's code paths, so a past state reads like today's. */
 function deriveSnapshotView(id: string, stored: string): Pick<MemorySnapshot, "content" | "estimatedTokens" | "memoryMap" | "areas" | "recentSessions" | "composition"> {
 	// A stored snapshot is measured and read the same way today's memory is:
 	// through the context render, never the raw file.
@@ -1830,7 +1515,6 @@ function deriveSnapshotView(id: string, stored: string): Pick<MemorySnapshot, "c
 			chronos: memoryMetrics(parts.preservedChronos).estimatedTokens,
 		};
 	} catch {
-		// Legacy/malformed topology — everything counts as deep, no session split.
 		composition = { deep: memoryMetrics(raw).estimatedTokens, active: 0, recent: 0, chronos: 0 };
 	}
 	return {
@@ -1843,23 +1527,14 @@ function deriveSnapshotView(id: string, stored: string): Pick<MemorySnapshot, "c
 	};
 }
 
-/**
- * The room's memory as it was at `at`, from the archive chain: every gate
- * event stored the document it replaced, so the state at any past moment is
- * the archive of the first event after that moment (or today's document when
- * no later event exists). Recorded snapshots only — nothing reconstructed.
- */
+/** The memory as it was at `at`: the archive of the first event after that moment, or today's document; recorded snapshots only. */
 export function readMemorySnapshotAt(id: string, at: number): MemorySnapshot | null {
 	const state = readRecordedStateAt(id, at);
 	if (!state) return null;
 	return { at, basis: state.basis, boundaryTs: state.boundaryTs, ...deriveSnapshotView(id, state.raw) };
 }
 
-/**
- * The bytes the memory held at `at`, from the archive chain: the archive of
- * the first write after that moment, or today's document when there is none.
- * `at` undefined asks for today's document outright.
- */
+/** The bytes at `at` from the archive chain; `at` undefined asks for today's document. */
 function readRecordedStateAt(id: string, at: number | undefined): { raw: string; basis: MemorySnapshot["basis"]; boundaryTs: number | null } | null {
 	let instance: ReturnType<typeof createPersistentAgentInstance>;
 	try {
@@ -1882,13 +1557,11 @@ function readRecordedStateAt(id: string, at: number | undefined): { raw: string;
 	}
 }
 
-/** One topic of a notes view: what the topic list says of it, plus its notes as rendered in that view. */
 export interface MemoryNotesTopic extends MemoryTopicRow {
-	/** the topic's rendered body — the same text the area reader gives, from this document */
+	/** the topic's body as the notes view renders it, its archive pointer line included */
 	content: string;
 }
 
-/** The notes view of one recorded state: today's, or the state at a past moment. */
 export interface MemoryNotesView {
 	/** the requested moment (epoch ms); now for today's view */
 	at: number;
@@ -1908,15 +1581,7 @@ const NOTES_VIEW_SECTIONS: ReadonlyArray<{ section: MemoryTopicRow["section"]; e
 	{ section: "Active Items", engine: "## Active Items", words: "## Open items", implicitTopic: MEMORY_ACTIVE_ITEMS_TOPIC },
 ];
 
-/**
- * A memory document as the room reads it at the start of every conversation:
- * the context render of its notes and open items alone — no Chronos, no
- * waiting conversations, the metadata comments and the id counter stripped,
- * one archive pointer line under every topic that has archived notes — with
- * the two section headings in the words a person reads, plus each topic's
- * share of that text. Pure: the same bytes give the same view whether they
- * are today's file or an archived copy of it.
- */
+/** A memory document as the room reads it at the start of a conversation (notes and open items, context render, archive pointers; no pair days), with the headings in a person's words. Pure. */
 export function notesViewOf(raw: string, index?: ArchiveIndex): Pick<MemoryNotesView, "content" | "topics"> {
 	const doc = parseMemoryDocument(raw);
 	const rendered = renderMemoryDocument(doc, "context", { sections: MEMORY_SECTIONS, archiveIndex: index }).trim();
@@ -1950,11 +1615,7 @@ export function notesViewOf(raw: string, index?: ArchiveIndex): Pick<MemoryNotes
 	return { content: lines.join("\n"), topics };
 }
 
-/**
- * The room's notes view: today's file, or with `at` the recorded state at
- * that moment from the archive chain. The Memory tab's "Full memory" panel
- * and its memory-as-of-a-moment read this, and the client stays dumb.
- */
+/** The room's notes view: today's file, or with `at` the recorded state then; the Memory tab's "Full memory" panel and its view of a past moment read it. */
 export function readMemoryNotesView(id: string, at?: number): MemoryNotesView | null {
 	const state = readRecordedStateAt(id, at);
 	if (!state) return null;
@@ -1967,15 +1628,7 @@ export function readMemoryNotesView(id: string, at?: number): MemoryNotesView | 
 	return { at: at ?? Date.now(), basis: state.basis, boundaryTs: state.boundaryTs, ...notesViewOf(state.raw, index) };
 }
 
-/**
- * Provenance join for a set of Recent Context sessions: a gated entry names
- * its admitting event in the rc_metadata comment (checkpoint_id, unique per
- * event). RC-#### labels are reused after consolidations, so they are display
- * only, never a join key; an entry without the metadata (hand-edited files)
- * honestly gets no receipt, even if it reuses a consolidated entry's label.
- * The receipt offers "open the conversation" only while the closed-thread
- * file the record names is actually on disk. Returns newest first.
- */
+/** Receipts for Recent Context sessions, joined on the rc_metadata checkpoint_id, never the reused RC label; an entry without it gets none. Newest first. */
 function sessionsWithReceipts(id: string, sessions: Array<{ id: string | null; checkpointId: string | null; title: string; tokens: number; ts: number | null; tsPrecise: boolean; content: string }>): RecentSession[] {
 	const receiptByCheckpoint = new Map<string, { approvedAt: string; conversation: boolean }>();
 	for (const record of readCheckpoints(id)) {
@@ -1986,9 +1639,7 @@ function sessionsWithReceipts(id: string, sessions: Array<{ id: string | null; c
 		.reverse()
 		.map((s) => {
 			const receipt = s.checkpointId ? receiptByCheckpoint.get(s.checkpointId) : undefined;
-			// An entry whose rc_metadata carries no approval instant can still
-			// borrow the receipt's: the checkpoint record's approvedAt is the
-			// same fact, recorded by the same gate.
+			// An entry without an approval instant borrows the checkpoint record's, the same fact from the same gate.
 			let ts = s.ts;
 			let tsPrecise = s.tsPrecise;
 			if (!tsPrecise && receipt) {
@@ -2002,7 +1653,6 @@ function sessionsWithReceipts(id: string, sessions: Array<{ id: string | null; c
 		});
 }
 
-/** Whether the closed-thread file a checkpoint record names is still on disk, so the conversation can be opened. */
 function conversationStored(id: string, record: CheckpointEventRecord): boolean {
 	const threadId = record.runtimeBoundary?.closedThreadId;
 	if (!threadId) return false;
@@ -2026,13 +1676,7 @@ export interface MemoryConversationRow {
 	conversation: boolean;
 }
 
-/**
- * Every conversation the room has kept, newest first: one row per checkpoint
- * record. The title is the one the record stored, else the one its waiting
- * entry still carries, else "Conversation". `waiting` says whether today's
- * file still holds the entry un-memorized; `conversation` whether the stored
- * transcript can still be opened — decided exactly as the receipts decide it.
- */
+/** Every conversation the room has kept, newest first, one row per checkpoint record; `conversation` is decided as the receipts decide it. */
 export function listMemoryConversations(id: string): MemoryConversationRow[] {
 	const waitingTitles = new Map<string, string>();
 	for (const s of readRoomSessions(id)) if (s.checkpointId) waitingTitles.set(s.checkpointId, s.title);
@@ -2054,18 +1698,9 @@ export function listMemoryConversations(id: string): MemoryConversationRow[] {
 /** History entries returned per room — plenty for the timeline, bounded for the wire. */
 const MEMORY_HISTORY_CAP = 40;
 
-/**
- * The room's memory changelog, composed from the immutable event records. Every
- * entry is a change the user approved (or auto-applied under their setting);
- * newest first, capped.
- */
 function buildMemoryHistory(id: string): MemoryHistoryEvent[] {
 	const events: MemoryHistoryEvent[] = [];
-	// A record stores the entry's title at the gate; older records carry none,
-	// and while their RC entry is still in the L1b, its heading supplies one.
-	// The join is the entry's checkpoint_id from its rc_metadata comment,
-	// unique per event, so a title can only come from the exact entry this
-	// record admitted (false provenance is worse than none).
+	// Older records carry no title; while their entry is still in the file its heading supplies one, joined on checkpoint_id so a title never comes from another entry.
 	const titleByCheckpoint = new Map<string, string>();
 	for (const s of readRoomSessions(id)) if (s.checkpointId) titleByCheckpoint.set(s.checkpointId, s.title);
 	// "What changed" is offered only while the event's archived snapshot is
@@ -2079,9 +1714,7 @@ function buildMemoryHistory(id: string): MemoryHistoryEvent[] {
 			return false;
 		}
 	};
-	// The saves that were taken back. Their rows stay — the save did happen —
-	// and carry the mark, because a timeline that quietly drops an undone save
-	// tells a person their memory changed for no reason they can see.
+	// An undone save's row stays and carries the mark: a timeline that drops it would show memory changing for no visible reason.
 	const memoryEdits = readEventRecords<MemoryEditEventRecord>(id, (instance) => instance.memoryEditEventDir());
 	const undoneSaveIds = new Set(memoryEdits.filter((record) => record.kind === "undo" && record.undoneSaveId).map((record) => String(record.undoneSaveId)));
 	for (const record of readCheckpoints(id)) {
@@ -2102,9 +1735,7 @@ function buildMemoryHistory(id: string): MemoryHistoryEvent[] {
 			...(record.absorbId && undoneSaveIds.has(record.absorbId) ? { undone: true } : {}),
 		});
 	}
-	// Review v2's saves, and beside them the whole-rewrite Review's own. Both are
-	// reviews to a person, so both are the same row kind; what differs is what
-	// each record can say about itself.
+	// Note-level Review saves and the older whole-rewrite ones: both are reviews to a person.
 	for (const record of readEventRecords<ReviewEventRecord>(id, (instance) => instance.reviewEventDir())) {
 		events.push({
 			ts: Date.parse(record.approvedAt),
@@ -2129,9 +1760,6 @@ function buildMemoryHistory(id: string): MemoryHistoryEvent[] {
 			...(record.structuralReviewId && undoneSaveIds.has(record.structuralReviewId) ? { undone: true } : {}),
 		});
 	}
-	// Entry edits, the migration and the undos: the same event-record shape,
-	// read from events/memory-edit/ the way every other kind reads its own
-	// directory.
 	for (const record of memoryEdits) {
 		events.push({
 			ts: Date.parse(record.approvedAt),
@@ -2149,7 +1777,6 @@ function buildMemoryHistory(id: string): MemoryHistoryEvent[] {
 	return events.filter((e) => Number.isFinite(e.ts)).sort((a, b) => b.ts - a.ts).slice(0, MEMORY_HISTORY_CAP);
 }
 
-/** The room's memory changelog on its own, for the per-room history route. */
 export function buildRoomMemoryHistory(agentId: string): MemoryHistoryEvent[] {
 	return buildMemoryHistory(agentId);
 }
@@ -2163,10 +1790,9 @@ export function buildRoomMemory(status: PersistentAgentStatus): RoomMemoryDetail
 		memoryMap = buildFullMemoryMap(stored);
 		memoryTopics = readRoomTopics(stored);
 	} catch {
-		memoryMap = []; // no L1b to map
+		memoryMap = [];
 	}
-	// Newest first, each carrying its own recorded date (or null) — no guessed
-	// checkpoint pairing, so any time shown belongs to that session.
+	// Newest first, each with its own recorded date, so any time shown belongs to that session.
 	const recentSessions = sessionsWithReceipts(status.id, readRoomSessions(status.id));
 	return {
 		...summary,
@@ -2182,11 +1808,7 @@ export function buildRoomMemory(status: PersistentAgentStatus): RoomMemoryDetail
 // The app's ids are padded to four digits at least (RC-0001, m-0012): a real "m-150" in the person's words stays.
 const MEMORY_ID = String.raw`(?:RC-\d{4,}|m-\d{4,})(?:\s*[\u2013\u2014-]\s*(?:RC-\d{4,}|m-\d{4,}))?`;
 
-/**
- * An answer from memory as the person reads it: the ids the memory carries for
- * the engine (RC-0001, m-0012) are taken out, with the separator or brackets
- * that held them, so "Room · RC-0001" reads "Room".
- */
+/** An answer from memory as the person reads it: the engine's ids (RC-0001, m-0012) taken out with the separator or brackets that held them, so "Room · RC-0001" reads "Room". */
 export function withoutMemoryIds(text: string): string {
 	return text
 		.replace(new RegExp(String.raw`\s*\(\s*${MEMORY_ID}(?:\s*,\s*${MEMORY_ID})*\s*\)`, "g"), "")

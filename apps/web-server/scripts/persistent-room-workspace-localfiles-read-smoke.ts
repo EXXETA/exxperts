@@ -128,13 +128,19 @@ try {
 	});
 
 	const policy = makePolicy();
-	assert(createPersistentRoomWorkspaceTools(policy).length === 0, "localFiles without a session cwd should register no curated tools (back-compat)");
+	let withoutCwd: unknown = null;
+	try {
+		createPersistentRoomWorkspaceTools(policy);
+	} catch (error) {
+		withoutCwd = error;
+	}
+	assert(withoutCwd instanceof Error && withoutCwd.message === "Full access file tools need the session cwd", "localFiles without a session cwd must refuse rather than leave the native tools unchecked");
 	const noReadSelection = makePolicy({ kind: "custom", allowedToolNames: ["ls", "grep"] });
-	assert(createPersistentRoomWorkspaceTools(noReadSelection, { localFilesReadCwd: workspaceRoot }).length === 0, "a Full access selection without read should get no read wrapper");
+	assert(createPersistentRoomWorkspaceTools(noReadSelection, { localFilesCwd: workspaceRoot }).map((tool) => tool.name).join(",") === "ls,grep", "a Full access selection without read should wrap exactly its own tools");
 
-	const tools = createPersistentRoomWorkspaceTools(policy, { localFilesReadCwd: workspaceRoot });
-	assert(tools.length === 1 && tools[0]!.name === "read", "localFiles with read selected should register exactly the read wrapper");
-	const wrapper: any = tools[0];
+	const tools = createPersistentRoomWorkspaceTools(policy, { localFilesCwd: workspaceRoot });
+	assert(tools.map((tool) => tool.name).join(",") === "ls,find,grep,read,write,edit", "localFiles with the standard selection should wrap all six native file tools");
+	const wrapper: any = tools.find((tool) => tool.name === "read");
 	const native = createReadToolDefinition(workspaceRoot);
 	assert(wrapper.parameters === native.parameters, "the wrapper must keep the native read schema, nothing more");
 	assert(String(wrapper.description).startsWith(native.description), "the wrapper description must extend the native one, not replace it");

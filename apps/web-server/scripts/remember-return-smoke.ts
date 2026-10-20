@@ -13,7 +13,7 @@ import path from "node:path";
 import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
-import { authedFetch, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer } from "./smoke-server-process.js";
+import { authedFetch, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort } from "./smoke-server-process.js";
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -32,7 +32,7 @@ function assert(condition: unknown, message: string): asserts condition {
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const webServerDir = path.resolve(scriptDir, "..");
 const repoRoot = path.resolve(webServerDir, "..", "..");
-const port = 27000 + Math.floor(Math.random() * 10000);
+const port = await freePort();
 const baseUrl = `http://127.0.0.1:${port}`;
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "exxperts-remember-return-"));
@@ -138,7 +138,7 @@ try {
 		const open = async (target: typeof page) => {
 			await target.goto(`${baseUrl}/auth/session?token=${SMOKE_AUTH_TOKEN}`);
 			await target.waitForLoadState("networkidle");
-			const dismiss = target.locator(".whats-new-foot .btn-primary");
+			const dismiss = target.locator(".whats-new-close");
 			if (await dismiss.count()) await dismiss.click();
 		};
 		const enterRoom = async (target: typeof page) => {
@@ -241,7 +241,7 @@ try {
 		await fresh.setViewportSize({ width: 390, height: 844 });
 		await fresh.reload({ waitUntil: "domcontentloaded" });
 		await fresh.waitForTimeout(1500);
-		const dismissPhone = fresh.locator(".whats-new-foot .btn-primary");
+		const dismissPhone = fresh.locator(".whats-new-close");
 		if (await dismissPhone.count()) await dismissPhone.click();
 		await fresh.getByRole("button", { name: "Remember", exact: true }).click();
 		const save = dialogOf(fresh).getByRole("button", { name: "Save to memory" });

@@ -1,5 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { authedFetch, type AuthedFetchInit, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer } from "./smoke-server-process.js";
+import { authedFetch, freePort, type AuthedFetchInit, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer } from "./smoke-server-process.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -20,7 +20,7 @@ process.env.EXXETA_PERSISTENT_AGENTS_ROOT = tempAgentsRoot;
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const webServerDir = path.resolve(scriptDir, "..");
 const repoRoot = path.resolve(webServerDir, "..", "..");
-const port = 23000 + Math.floor(Math.random() * 10000);
+const port = await freePort();
 const baseUrl = `http://127.0.0.1:${port}`;
 
 function assert(condition: unknown, message: string): asserts condition {
@@ -113,7 +113,7 @@ try {
 	const filtered = await requestJson(`/api/persistent-agents/${encodedAgentId}/tasks?conversationId=conv-a`);
 	assert(filtered.status === 200 && filtered.body.tasks.length === 1 && filtered.body.tasks[0].taskId === "tsk-api1", "conversationId filter should narrow the list");
 
-	// First-open stamp (status grammar, 2026-07-18): POST /viewed stamps once,
+	// First-open stamp: POST /viewed stamps once,
 	// stays idempotent, and the list reflects it — the green dot's decay.
 	const viewed = await requestJson(`/api/persistent-agents/${encodedAgentId}/tasks/tsk-api1/viewed`, { method: "POST" });
 	assert(viewed.status === 200 && typeof viewed.body?.viewedAt === "string" && viewed.body.viewedAt.length > 0, `viewed stamp should return the timestamp, got ${viewed.status}: ${JSON.stringify(viewed.body)}`);

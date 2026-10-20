@@ -1,13 +1,13 @@
 // Smoke for the display-time model naming module (apps/web-ui/src/model-names.ts).
 //
 // Table-driven: every model string observed in real usage.jsonl rows and room
-// thread locks (Fernando's Wallet/home screenshots, 2026-07) must map to a
+// thread locks must map to a
 // sensible canonical name, and raw-id spellings of the same model must share
 // a canonical key so grouped filters collapse them.
 //
 // Run: npm run smokes -- model-names   (or tsx this file)
 
-import { canonicalModelKey, canonicalModelName, modelDisplayName, modelOnProvider, providerDisplayName } from "../../web-ui/src/model-names.js";
+import { canonicalModelKey, canonicalModelName, distinctModelNames, modelDisplayName, modelIdDate, modelOnProvider, providerDisplayName } from "../../web-ui/src/model-names.js";
 
 let failures = 0;
 function check(desc: string, actual: unknown, expected: unknown) {
@@ -27,10 +27,10 @@ const NAME_CASES: Array<{ model?: string; modelLabel?: string; provider?: string
 	// Newer rows: raw id + provider label.
 	{ model: "gpt-5.5", modelLabel: "ChatGPT Plus/Pro — GPT-5.5", name: "GPT-5.5", providerName: "ChatGPT Plus/Pro" },
 	{ model: "gpt-5.4", modelLabel: "GitHub Copilot — GPT-5.4", name: "GPT-5.4", providerName: "GitHub Copilot" },
-	{ model: "claude-opus-5", modelLabel: "Anthropic / Claude — Opus 5", name: "Claude Opus 5", providerName: "Anthropic / Claude" },
-	{ model: "claude-opus-4-8", modelLabel: "Anthropic / Claude — Opus 4.8", name: "Claude Opus 4.8", providerName: "Anthropic / Claude" },
-	{ model: "claude-sonnet-5", modelLabel: "Anthropic / Claude — Sonnet 5", name: "Claude Sonnet 5", providerName: "Anthropic / Claude" },
-	{ model: "claude-sonnet-4-6", modelLabel: "Anthropic / Claude — Sonnet 4.6", name: "Claude Sonnet 4.6", providerName: "Anthropic / Claude" },
+	{ model: "claude-opus-5", modelLabel: "Anthropic / Claude — Opus 5", name: "Claude Opus 5", providerName: "Claude" },
+	{ model: "claude-opus-4-8", modelLabel: "Anthropic / Claude — Opus 4.8", name: "Claude Opus 4.8", providerName: "Claude" },
+	{ model: "claude-sonnet-5", modelLabel: "Anthropic / Claude — Sonnet 5", name: "Claude Sonnet 5", providerName: "Claude" },
+	{ model: "claude-sonnet-4-6", modelLabel: "Anthropic / Claude — Sonnet 4.6", name: "Claude Sonnet 4.6", providerName: "Claude" },
 	{ model: "claude-sonnet-5", modelLabel: "GitHub Copilot — Claude Sonnet 5", name: "Claude Sonnet 5", providerName: "GitHub Copilot" },
 	{ model: "claude-opus-4.6", modelLabel: "GitHub Copilot — Claude Opus 4.6", name: "Claude Opus 4.6", providerName: "GitHub Copilot" },
 	{ model: "claude-opus-4.8", modelLabel: "GitHub Copilot — Claude Opus 4.8", name: "Claude Opus 4.8", providerName: "GitHub Copilot" },
@@ -56,7 +56,7 @@ const NAME_CASES: Array<{ model?: string; modelLabel?: string; provider?: string
 	{ model: "claude-opus-5-5", name: "Claude Opus 5.5" },
 	{ model: "claude-sonnet-5-5", name: "Claude Sonnet 5.5" },
 	{ model: "claude-haiku-5-5", name: "Claude Haiku 5.5" },
-	{ model: "claude-haiku-5-5", provider: "anthropic", name: "Claude Haiku 5.5", providerName: "Anthropic / Claude" },
+	{ model: "claude-haiku-5-5", provider: "anthropic", name: "Claude Haiku 5.5", providerName: "Claude" },
 	{ model: "gpt-6-sol", name: "GPT-6 Sol" },
 	{ model: "gpt-6.1-sol", name: "GPT-6.1 Sol" },
 	{ model: "gpt-6-luna", name: "GPT-6 Luna" },
@@ -64,7 +64,7 @@ const NAME_CASES: Array<{ model?: string; modelLabel?: string; provider?: string
 	{ model: "all-team-models", name: "All Team Models" },
 	// Provider id supplies the provider display name when there is no label.
 	{ model: "gpt-5.5", provider: "openai-codex", name: "GPT-5.5", providerName: "ChatGPT Plus/Pro" },
-	{ model: "claude-opus-4-8", provider: "anthropic", name: "Claude Opus 4.8", providerName: "Anthropic / Claude" },
+	{ model: "claude-opus-4-8", provider: "anthropic", name: "Claude Opus 4.8", providerName: "Claude" },
 	// Unknown model with a clean curated label: the label's name part wins.
 	{ model: "sonar-pro-x1", modelLabel: "Perplexity — Sonar Pro X1", name: "Sonar Pro X1", providerName: "Perplexity" },
 	// Label without a provider dash: used verbatim.
@@ -125,6 +125,13 @@ check("modelOnProvider drops a provider the name already says", modelOnProvider(
 check("modelOnProvider keeps another provider", modelOnProvider("Claude Opus 4.8", "GitHub Copilot"), "Claude Opus 4.8 on GitHub Copilot");
 check("modelOnProvider keeps ChatGPT", modelOnProvider("GPT-6.1 Sol", "ChatGPT Plus/Pro"), "GPT-6.1 Sol on ChatGPT Plus/Pro");
 check("modelOnProvider needs a whole word", modelOnProvider("Claudette 2", "Claude"), "Claudette 2 on Claude");
+
+// A trailing release date is not part of the name; a list shows it only beside a look-alike.
+check("a dated Claude id reads as its name", modelDisplayName({ model: "claude-haiku-4-5-20251001" }), "Claude Haiku 4.5");
+check("a dashed date is dropped too", modelDisplayName({ model: "gpt-4o-2024-08-06" }), "GPT-4o");
+check("the date in plain form", modelIdDate("claude-sonnet-4-5-20250929"), "29 Sep 2025");
+check("no date, no date", modelIdDate("claude-opus-5-5"), null);
+check("a list dates only its look-alikes", distinctModelNames([{ model: "claude-sonnet-4-5" }, { model: "claude-sonnet-4-5-20250929" }, { model: "claude-haiku-4-5-20251001" }]), ["Claude Sonnet 4.5", "Claude Sonnet 4.5 (29 Sep 2025)", "Claude Haiku 4.5"]);
 
 if (failures > 0) {
 	console.error(`\nmodel-names smoke: ${failures} failure(s)`);

@@ -1518,8 +1518,7 @@ const SVG_ALLOWED_DECLARATION_URIS = [
 	"http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd",
 ];
 
-// Write-time floor for .svg mirroring validateRawHtmlArtifactContent (hardening
-// 2026-07-17, amends the earlier "consumption-side only" posture): the in-app
+// Write-time floor for .svg mirroring validateRawHtmlArtifactContent: the in-app
 // surfaces (<img>, CSP-sandboxed route) never execute SVG script, but an
 // EXPORTED file leaves those protections behind, so the file itself must honor
 // what the specialist prompt promises. Fragment hrefs (<use href="#id">) and

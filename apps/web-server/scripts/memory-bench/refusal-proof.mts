@@ -88,7 +88,7 @@ function questionSessions(): RecallSession[] {
 type Generate = (prompt: string, call?: { callKind?: string; trigger?: string; signal?: AbortSignal }) => Promise<Reply>;
 async function makeModel(lock: ModelLock): Promise<{ generate: Generate; window: { contextWindow: number; maxOutputTokens: number } }> {
 	if (scripted) return { generate: scriptedGenerate, window: { contextWindow: 200_000, maxOutputTokens: 16_000 } };
-	useRealProviderRecords({ spec: `${lock.provider}/${lock.model}`, signInFromHome: argv.includes(SIGN_IN_FROM_HOME_FLAG) });
+	await useRealProviderRecords({ spec: `${lock.provider}/${lock.model}`, signInFromHome: argv.includes(SIGN_IN_FROM_HOME_FLAG) });
 	const worker = await createMaintenanceWorker();
 	// The window the product's Remember reads, from the same registry.
 	return {

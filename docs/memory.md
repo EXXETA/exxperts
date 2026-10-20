@@ -5,15 +5,15 @@
 
 ## TL;DR
 
-exxperts has two memory systems, one per surface:
+exxperts keeps its memory in rooms, and both surfaces open the same rooms:
 
 | Surface | Memory | Where | Who writes it |
 | --- | --- | --- | --- |
 | **Persistent rooms (web)** | The room's notes, grown through Remember → Memorize → Review | `~/.exxperts/app/personalized-agents/<id>/` | Only you, through approval screens |
-| **CLI (ExxCode)** | Context files + a fact store + session compaction | repo `AGENTS.md`, `~/.exxperts/app/memory.jsonl` | You directly, or the model with your approval |
+| **CLI (ExxCode)** | The same room's memory: `/checkpoint` is its Remember; Memorize and Review run in the web app | `~/.exxperts/app/personalized-agents/<id>/` | Only you, through approval screens |
 
-The room memory engine is the product's core; the CLI layers are
-conveniences for the coding workspace.
+The room memory engine is the product's core. Neither surface loads a
+repo's context files, such as `AGENTS.md`.
 
 ## Room memory: notes, topics, archive
 
@@ -357,26 +357,17 @@ How to run it again is in the bench's own
 
 ## CLI memory (ExxCode)
 
-The coding workspace has three lighter layers:
+The CLI opens the same rooms as the web app, and a room there reads and
+writes the memory described above:
 
-### Context files
-
-`AGENTS.md` in a repo root is auto-loaded into the session when you run
-the CLI from that repo. Use it for project conventions, personal
-defaults, and anything you keep re-typing. This is the
-highest-leverage, zero-config personalisation for coding sessions.
-
-### Fact store
-
-A long-term fact store at `~/.exxperts/app/memory.jsonl` (append-only
-JSONL, mode 0600), wired in by the `memory` extension:
-
-- the model can propose facts with `memory_note`; you Approve / Edit /
-  Decline;
-- `/remember <text>` saves directly, `/memories` browses, `/forget`
-  deletes;
-- stored facts are injected into the prompt under "Known facts about
-  this user".
+- `/checkpoint` is the CLI's Remember: a worker proposes the summary,
+  and nothing is saved until you approve it.
+- Memorize and Review run in the web app; the CLI sends you there when
+  a room's list of waiting conversations is full.
+- No context files are loaded: a repo's `AGENTS.md` or `CLAUDE.md` is
+  not read, in the CLI or in the web app. Standing conventions go in the
+  instructions, written in the web app (Settings → Instructions, or
+  Room settings → Instructions), which a room follows on both surfaces.
 
 ### Compaction
 

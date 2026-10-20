@@ -1023,7 +1023,7 @@ async function smokeReport(): Promise<void> {
   const updaterFlowOk = updaterFlow === "ok" || updaterFlow === "not-exercised";
   // The notice in the app window, end to end under the fake feed: the state
   // the shell pushed into the page must have produced the gear dot, and the
-  // settings menu must offer the version as an action WITHOUT hiding the
+  // settings menu must offer the version in its update row WITHOUT hiding the
   // version in use (a DOM read, so a renderer that silently dropped the push
   // cannot smoke green). The gear is clicked and clicked shut again so later
   // assertions see the same page.
@@ -1041,7 +1041,7 @@ async function smokeReport(): Promise<void> {
     await new Promise((r) => setTimeout(r, 400)); // let the menu render
     const rowLabel: unknown = await win.webContents
       .executeJavaScript(`(() => {
-        const btn = document.querySelector(".sidebar-config-menu .menu-meta-update-btn");
+        const btn = document.querySelector(".sidebar-config-menu .menu-update");
         const version = document.querySelector(".sidebar-config-menu .menu-meta-version");
         const label = (btn ? btn.textContent : "no-button")
           + "|" + (version && version.textContent.trim() ? "version-shown" : "version-hidden");
@@ -1051,7 +1051,7 @@ async function smokeReport(): Promise<void> {
       })()`)
       .catch(() => "error");
     await new Promise((r) => setTimeout(r, 300));
-    updateNoticeUi = dotPresent === "dot" && rowLabel === "Update to v9.9.9|version-shown"
+    updateNoticeUi = dotPresent === "dot" && rowLabel === "Update to 9.9.9|version-shown"
       ? "ok"
       : `fail(gear=${String(dotPresent)},row=${String(rowLabel)})`;
   }

@@ -200,6 +200,12 @@ RECALL_BENCH_MODEL=anthropic/claude-sonnet-5 npx tsx scripts/memory-bench/recall
 RECALL_BENCH_MODEL=anthropic/claude-sonnet-5 npx tsx scripts/memory-bench/recall-bench.mts --ask --scripted-ingest
 ```
 
+The memory work can run on a model of its own, as a room's Memory model does in the product. `RECALL_BENCH_MEMORY_MODEL=provider/model` runs Remember's checkpoint and Memorize's fold on it. `RECALL_BENCH_FOLD_MODEL` names the fold's model alone and wins for the fold when both are set. With neither, the checkpoint runs on the room model and the fold on the profile's Memorize model. Every run that remembers, and every dry run, prints a `models:` line naming the model of the checkpoint, the fold and the answers, and the LongMemEval adapter reads both settings the same way. The recall bench's dry run counts each ingest call as what its prompt carries (the instructions, the memory as stored, the waiting pages and the conversation), counted as the model that makes the call counts tokens:
+
+```
+RECALL_BENCH_MODEL=anthropic/claude-opus-5-5 RECALL_BENCH_MEMORY_MODEL=anthropic/claude-haiku-5-5 npx tsx scripts/memory-bench/recall-bench.mts --ask --dry-run
+```
+
 The two baselines either side of a room's memory. `--baseline none` is the floor: the same questions on a second room in the same home that nothing was ever remembered into, so whatever it scores is what the questions give away by themselves, and every point above it is a point the memory earned. `--baseline transcript` is the ceiling: every conversation rendered plain in one prompt with the question after it, no memory and no retrieval: the answer a room would give if a context window were free, printed with the size that says it is not.
 
 ```

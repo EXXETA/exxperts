@@ -21,7 +21,10 @@ const { IsolatedPersistentAgentWorkerTurnError } = await import("../src/persiste
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
 }
-const within = <T>(ms: number, promise: Promise<T>) => Promise.race([promise, new Promise<never>((_resolve, reject) => setTimeout(() => reject(new Error(`still waiting after ${ms} ms`)), ms))]);
+const within = <T>(ms: number, promise: Promise<T>) => {
+	let timer: NodeJS.Timeout | undefined;
+	return Promise.race([promise, new Promise<never>((_resolve, reject) => { timer = setTimeout(() => reject(new Error(`still waiting after ${ms} ms`)), ms); })]).finally(() => clearTimeout(timer));
+};
 
 try {
 	startProviderRetryUnit();

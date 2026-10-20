@@ -35,7 +35,7 @@ const PROFILE_PREFIX = ".exxperts-";
 // ---------------------------------------------------------------------------
 // The exxperts home: the ONE directory holding the whole state family, the
 // standard .exxperts tree plus every .exxperts-<name> profile. Default: the
-// OS login home. It can be relocated (issue #60), resolved in this order:
+// OS login home. It can be relocated, resolved in this order:
 //
 //   1. EXXPERTS_DATA_DIR (env): operator pinning for containers/automation.
 //      While set, the in-app move is refused: the operator owns the location.

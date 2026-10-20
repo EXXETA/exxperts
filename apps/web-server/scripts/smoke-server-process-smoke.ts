@@ -152,7 +152,9 @@ async function playAndEnd(ending: Ending, tsxLoader: string, thisFile: string): 
 		if (ending === "timeout") process.kill(-smokePid, "SIGKILL");
 		else if (ending === "ctrl-c") process.kill(-smokePid, "SIGINT");
 		else if (ending === "sigterm") process.kill(smokePid, "SIGTERM");
-		await Promise.race([exited, sleep(10_000)]);
+		let endTimer: NodeJS.Timeout | undefined;
+		await Promise.race([exited, new Promise<void>((resolve) => { endTimer = setTimeout(resolve, 10_000); })]);
+		clearTimeout(endTimer);
 		if (smoke.exitCode == null && smoke.signalCode == null) {
 			try { process.kill(-smokePid, "SIGKILL"); } catch {}
 			return { failure: "the played smoke did not end" };

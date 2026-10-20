@@ -188,6 +188,7 @@ try {
 		fs.writeFileSync(
 			helperScript,
 			[
+				// portability-ok: git runs this helper through its own sh (Git for Windows ships one)
 				"#!/bin/sh",
 				'echo "$1" >> "$FIXTURE_HELPER_LOG"',
 				"cat > /dev/null",
@@ -287,11 +288,25 @@ try {
 			const shorthand = resolveRepoSource(`fixture-user:fixture-pass@gitlab.example.com/group/repo`);
 			assert(!shorthand.ok && shorthand.error === passwordError, `a shorthand address with a password must be refused too, got ${JSON.stringify(shorthand)}`);
 			const requestsBefore = requests;
-			const tempBefore = fs.readdirSync(os.tmpdir()).filter((name) => name.startsWith("exxperts-skill-repo-")).length;
-			const bypass = await failureOf(scanRepository(pastedUrl));
-			assert(bypass === passwordError, `the clone itself must refuse an address with a password, got: ${bypass}`);
-			assert(requests === requestsBefore && helperOps().length === 0, "an address with a password must reach neither the host nor a helper");
-			assert(fs.readdirSync(os.tmpdir()).filter((name) => name.startsWith("exxperts-skill-repo-")).length === tempBefore, "a refused address must leave no checkout behind");
+			// The checkout count reads a temp folder of this smoke's own: other
+			// skills smokes running beside it make and remove exxperts-skill-repo-*
+			// folders in the shared one.
+			const ownTemp = path.join(workDir, "tmp");
+			fs.mkdirSync(ownTemp);
+			const sharedTemp = { TMPDIR: process.env.TMPDIR, TEMP: process.env.TEMP, TMP: process.env.TMP };
+			Object.assign(process.env, { TMPDIR: ownTemp, TEMP: ownTemp, TMP: ownTemp });
+			try {
+				const tempBefore = fs.readdirSync(os.tmpdir()).filter((name) => name.startsWith("exxperts-skill-repo-")).length;
+				const bypass = await failureOf(scanRepository(pastedUrl));
+				assert(bypass === passwordError, `the clone itself must refuse an address with a password, got: ${bypass}`);
+				assert(requests === requestsBefore && helperOps().length === 0, "an address with a password must reach neither the host nor a helper");
+				assert(fs.readdirSync(os.tmpdir()).filter((name) => name.startsWith("exxperts-skill-repo-")).length === tempBefore, "a refused address must leave no checkout behind");
+			} finally {
+				for (const [name, value] of Object.entries(sharedTemp)) {
+					if (value === undefined) delete process.env[name];
+					else process.env[name] = value;
+				}
+			}
 
 			// Credentials in addresses must also be rejected before the production pipeline connects.
 			const namedUrl = `http://fixture-user@127.0.0.1:${port}/team/skills.git`;

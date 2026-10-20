@@ -9,7 +9,7 @@ import type { AddressInfo } from "node:net";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import JSZip from "jszip";
 import * as XLSX from "xlsx";
-import { authedFetch, SMOKE_AUTH_HEADERS, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer } from "./smoke-server-process.js";
+import { authedFetch, freePort, SMOKE_AUTH_HEADERS, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer } from "./smoke-server-process.js";
 import { REFERENCE_KINDS, type RepositoryFilePolicy } from "../src/skills-file-policy.js";
 import { sha256 } from "../src/skills-store.js";
 import { persistentRoomSkillSettingsPath } from "../src/persistent-room-skill-settings.js";
@@ -29,7 +29,7 @@ const webServerDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 
 const repoRoot = path.resolve(webServerDir, "..", "..");
 const require = createRequire(import.meta.url);
 const loader = pathToFileURL(require.resolve("tsx/esm")).href;
-const port = 29000 + Math.floor(Math.random() * 10000);
+const port = await freePort();
 const base = `http://127.0.0.1:${port}`;
 const policy: RepositoryFilePolicy = { designRepo: true, allowedTypes: [...REFERENCE_KINDS], skillRoot: "skills", referenceRoots: ["brands/a", "extras"] };
 const startupAccess = { mode: "anonymous", rememberLocalAccess: false, checkOnStartup: true, consentVersion: 1 };

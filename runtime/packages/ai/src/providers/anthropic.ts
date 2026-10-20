@@ -7,7 +7,7 @@ import type {
 	RawMessageStreamEvent,
 } from "@anthropic-ai/sdk/resources/messages.js";
 import { getEnvApiKey } from "../env-api-keys.js";
-import { calculateCost, clampThinkingLevel, hasExplicitTopTierEffort } from "../models.js";
+import { calculateCost, clampThinkingLevel, hasExplicitTopTierEffort, isDirectAnthropicProvider } from "../models.js";
 import type {
 	AnthropicMessagesCompat,
 	Api,
@@ -977,7 +977,7 @@ function supportsAdaptiveThinking(model: Model<"anthropic-messages">): boolean {
  * import), so it and the provider share the one rule.
  */
 export function usesThinkingBlockBinding(model: Model<"anthropic-messages">): boolean {
-	if (model.provider !== "anthropic") return false;
+	if (!isDirectAnthropicProvider(model.provider)) return false;
 	return /claude-(fable|mythos)-5[-.]1(?:$|[^0-9])|claude-(opus|sonnet|haiku)-5[-.]5(?:$|[^0-9])/.test(model.id);
 }
 

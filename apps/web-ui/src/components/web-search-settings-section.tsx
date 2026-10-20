@@ -57,7 +57,7 @@ const OPTIONS: Array<{ id: WebSearchProvider; label: string; blurb: (providerSea
 		// search carries that on the model itself, past anything chosen here.
 		blurb: (providerSearchOn) =>
 			providerSearchOn
-				? "Claude and ChatGPT still search through the provider, gateway models where ticked. Rooms can still open links you give them."
+				? "Claude sign-in and ChatGPT rooms still search through the provider, gateway models where ticked. Rooms can still open links you give them."
 				: "Gateway models still search where ticked. Rooms can still open links you give them.",
 	},
 ];
@@ -281,8 +281,8 @@ export function WebSearchSettingsSection() {
 			{ providerSearch: next },
 			{ kind: "providerSearch", value: next },
 			next
-				? "Saved. Claude and ChatGPT rooms search on their own side from the next message."
-				: "Saved. Claude and ChatGPT rooms use the search below from the next message.",
+				? "Saved. Claude sign-in and ChatGPT rooms search on their own side from the next message."
+				: "Saved. Claude sign-in and ChatGPT rooms use the search below from the next message.",
 		);
 	}
 
@@ -325,8 +325,8 @@ export function WebSearchSettingsSection() {
 							<span className="settings-row-label">Provider search</span>
 							<span className="settings-row-sub">
 								{settings.providerSearch
-									? "On. Claude and ChatGPT rooms search on the provider's side."
-									: "Off. Claude and ChatGPT rooms use the search below."}
+									? "On. Claude sign-in and ChatGPT rooms search on the provider's side."
+									: "Off. Claude sign-in and ChatGPT rooms use the search below."}
 							</span>
 						</div>
 					</div>
@@ -368,7 +368,7 @@ export function WebSearchSettingsSection() {
 				<label className={`settings-row${togglePending ? " pending" : ""}`}>
 					<div className="settings-row-main">
 						<span className="settings-row-label">Provider search where available{togglePending ? " (saving…)" : ""}</span>
-						<span className="settings-row-sub">Claude and ChatGPT rooms search on the provider's side; nothing runs on your machine. Gateway models follow their own per-model web search tick, not this switch.</span>
+						<span className="settings-row-sub">Claude sign-in and ChatGPT rooms search on the provider's side; nothing runs on your machine. Gateway models follow their own per-model web search tick, not this switch. Rooms on a Claude API key use the search below.</span>
 					</div>
 					<input
 						className="workspaces-tool-switch"
@@ -385,8 +385,8 @@ export function WebSearchSettingsSection() {
 				<GroupHeader
 					kicker="Everything else"
 					line={providerSearchOn
-						? "The search every room uses except Claude and ChatGPT. Gateway models use it alongside their own."
-						: "The search every room uses, including Claude and ChatGPT while the switch above is off."}
+						? "The search every room uses except Claude sign-in and ChatGPT rooms. Gateway models use it alongside their own."
+						: "The search every room uses, including Claude sign-in and ChatGPT rooms while the switch above is off."}
 				/>
 				{envHeld && (
 					<p className="settings-help web-search-env-note" role="status">

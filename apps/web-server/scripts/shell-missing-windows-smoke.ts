@@ -26,7 +26,7 @@ import path from "node:path";
 import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
-import { authedFetch, SMOKE_AUTH_HEADERS, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, type AuthedFetchInit } from "./smoke-server-process.js";
+import { authedFetch, SMOKE_AUTH_HEADERS, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, freePort, type AuthedFetchInit } from "./smoke-server-process.js";
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -120,7 +120,7 @@ async function startServer(label: string, gatewayPort: number, extraEnv: Record<
 	}, null, 2), { mode: 0o600 });
 	fs.writeFileSync(path.join(productAppRoot, "persistent-agent-ai-profile.json"), JSON.stringify({ profileId: "openai-compatible" }, null, 2), { mode: 0o600 });
 
-	const port = 27000 + Math.floor(Math.random() * 10000);
+	const port = await freePort();
 	const baseEnv: Record<string, string | undefined> = { ...process.env };
 	delete baseEnv["ProgramFiles(x86)"];
 	delete baseEnv.LOCALAPPDATA;
@@ -223,7 +223,7 @@ type PaneLines = { summary: number; editor: number; text: string };
 async function readPane(page: any, server: SmokeServer, roomName: string): Promise<PaneLines> {
 	await page.goto(`${server.baseUrl}/auth/session?token=${SMOKE_AUTH_TOKEN}`);
 	await page.waitForLoadState("networkidle");
-	const dismiss = page.locator(".whats-new-foot .btn-primary");
+	const dismiss = page.locator(".whats-new-close");
 	if (await dismiss.count()) await dismiss.click();
 	await page.locator(".persistent-agent-card").filter({ hasText: roomName }).locator(".card-gear-btn").click();
 	await page.waitForSelector(".settings-dialog", { timeout: 10000 });

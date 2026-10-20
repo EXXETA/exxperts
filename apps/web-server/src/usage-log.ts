@@ -19,7 +19,7 @@ export interface UsageRow {
 	persona: string;
 	model?: string;
 	modelLabel?: string;
-	/** Provider id that served the turn (e.g. "openai-codex"). Recorded since Jul 2026. */
+	/** Provider id that served the turn (e.g. "openai-codex"). Absent on older rows. */
 	provider?: string;
 	/** How the provider was authenticated: subscription OAuth vs pay-per-token API key. */
 	authType?: UsageAuthType;
@@ -31,9 +31,9 @@ export interface UsageRow {
 	cacheWrite: number;
 	cost: number;
 	tools?: string[];
-	/** Background-run id for runs billed via appendUsageOnce. Recorded since Jul 2026. */
+	/** Background-run id for runs billed via appendUsageOnce. Absent on older rows. */
 	runId?: string;
-	/** Which Memory model call it was (memory-call-cache.ts), so cache settings can be compared. Recorded since Oct 2026. */
+	/** Which Memory model call it was (memory-call-cache.ts), so cache settings can be compared. Absent on older rows. */
 	callKind?: MemoryCallKind;
 }
 

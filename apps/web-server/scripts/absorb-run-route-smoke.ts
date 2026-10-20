@@ -23,13 +23,13 @@ import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { authedFetch, type AuthedFetchInit, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer } from "./smoke-server-process.js";
+import { authedFetch, freePort, type AuthedFetchInit, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer } from "./smoke-server-process.js";
 
 const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "absorb-run-route-home-"));
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const webServerDir = path.resolve(scriptDir, "..");
 const repoRoot = path.resolve(webServerDir, "..", "..");
-const port = 24000 + Math.floor(Math.random() * 10000);
+const port = await freePort();
 const baseUrl = `http://127.0.0.1:${port}`;
 const agentDir = path.join(tempHome, ".exxperts", "agent");
 const productAppRoot = path.join(tempHome, ".exxperts", "app");
@@ -569,7 +569,7 @@ try {
 	const refusedResume = await requestJson(`${resumeRunUrl}/resume`, jsonBody("POST", {}));
 	const refusedPropose = await requestJson(`${resumeRoom}/absorb/propose`, jsonBody("POST", {}));
 	assert(refusedResume.status >= 400 && refusedResume.status === refusedPropose.status && refusedResume.body?.error === refusedPropose.body?.error && refusedResume.body?.code === refusedPropose.body?.code, `Try again with a signed-out Memory model is refused as Memorize refuses it, got ${JSON.stringify(refusedResume)} and ${JSON.stringify(refusedPropose)}`);
-	assert(/Offline Gateway|gateway-offline|signed/i.test(String(refusedResume.body?.error ?? "")) && !/not answering/i.test(String(refusedResume.body?.error ?? "")), `the refusal names the sign-in, never the outage, got ${JSON.stringify(refusedResume.body)}`);
+	assert(/has no key saved/.test(String(refusedResume.body?.error ?? "")) && refusedResume.body?.details?.key === "missing" && !/not answering/i.test(String(refusedResume.body?.error ?? "")), `the refusal says the gateway has no key saved, never the outage, got ${JSON.stringify(refusedResume.body)}`);
 	assert(gatewayCalls.length === callsBeforeRefusal, `a refused Try again reads nothing, got ${JSON.stringify(gatewayCalls.slice(callsBeforeRefusal))}`);
 	const stillStopped = await requestJson(resumeRunUrl);
 	assert(stillStopped.body.state === "ready" && stillStopped.body.stop?.kind === "outage", `a refused Try again leaves the run as it stopped, got ${JSON.stringify({ state: stillStopped.body.state, stop: stillStopped.body.stop })}`);

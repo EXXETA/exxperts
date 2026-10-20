@@ -25,13 +25,13 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import type { AbsorbRunGenerate } from "../src/absorb-run.js";
-import { authedFetch, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer } from "./smoke-server-process.js";
+import { authedFetch, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, freePort } from "./smoke-server-process.js";
 
 const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "memory-history-diff-smoke-home-"));
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const webServerDir = path.resolve(scriptDir, "..");
 const repoRoot = path.resolve(webServerDir, "..", "..");
-const port = 24000 + Math.floor(Math.random() * 10000);
+const port = await freePort();
 const baseUrl = `http://127.0.0.1:${port}`;
 const agentDir = path.join(tempHome, ".exxperts", "agent");
 const smokeAppDir = path.join(tempHome, ".exxperts", "app");

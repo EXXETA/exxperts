@@ -204,7 +204,8 @@ async function runOnce(room: Room, run: number, opts: RunOptions = {}): Promise<
 	const work = foldPages(room.waiting, records, deps);
 	if (opts.crashAtPage !== undefined) {
 		// A crashed run never settles: give it every chance to, then walk away.
-		const settled = await Promise.race([work.then(() => true), new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 20))]);
+		let walkAway: NodeJS.Timeout | undefined;
+		const settled = await Promise.race([work.then(() => true), new Promise<boolean>((resolve) => { walkAway = setTimeout(() => resolve(false), 20); })]).finally(() => clearTimeout(walkAway));
 		if (!settled && crashed) {
 			result.crashed = true;
 			return result;

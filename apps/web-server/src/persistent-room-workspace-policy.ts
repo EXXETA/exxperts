@@ -182,8 +182,39 @@ export const PERSISTENT_ROOM_DEFAULT_WORKSPACE_ACCESS_MODE: PersistentRoomWorksp
 export const PERSISTENT_ROOM_LEGACY_WORKSPACE_ACCESS_MODE: PersistentRoomWorkspaceAccessMode = "bounded";
 // `.pi` and `.mcp.json` hold tool and connector settings, not documents: a
 // bounded room neither reads nor writes them.
-export const PERSISTENT_ROOM_DEFAULT_DENY_SEGMENTS = [".git", ".exxeta", ".exxperts", ".pi", "node_modules"] as const;
+export const PERSISTENT_ROOM_APP_STATE_SEGMENTS = [".exxeta", ".exxperts", ".pi"] as const;
+export const PERSISTENT_ROOM_DEFAULT_DENY_SEGMENTS = [".git", ...PERSISTENT_ROOM_APP_STATE_SEGMENTS, "node_modules"] as const;
 export const PERSISTENT_ROOM_DEFAULT_DENY_FILENAME_GLOBS = [".env", ".env.*", "*.pem", "*.key", "id_rsa", "id_ed25519", ".mcp.json"] as const;
+// Keynote saves a deck as a folder or a zip named `*.key`: Full access rooms
+// open such a folder, and a file of that name only when it is a zip.
+export const PERSISTENT_ROOM_ZIP_OPENS_FILENAME_GLOBS = ["*.key"] as const;
+// Committed templates that hold no secrets, although `.env.*` matches them.
+export const PERSISTENT_ROOM_SECRET_FILENAME_TEMPLATES = [".env.example", ".env.sample", ".env.template", ".env.dist"] as const;
+// Closed both ways in every room, matched as a run of parts anywhere in the
+// real path, so a folder granted inside `.aws` still hides its `credentials`.
+// A `**` part matches any run of parts.
+export const PERSISTENT_ROOM_DEFAULT_DENY_CREDENTIAL_PATHS = [
+	".netrc", ".git-credentials", ".aws/credentials", ".docker/config.json", ".kube/config", ".config/gh/hosts.yml",
+	".ssh", ".gnupg", "id_ecdsa", "id_dsa", "id_ecdsa_sk", "id_ed25519_sk",
+	".pypirc", ".envrc", ".config/gcloud", "AppData/Roaming/gcloud",
+	".config/mcp/mcp.json",
+	"proc/**/environ", "proc/**/cmdline",
+] as const;
+// Read but never written, matched the same way: git hooks and config (and the
+// files that point git at them), launch agents and `.mcp.json` run code later.
+export const PERSISTENT_ROOM_READ_ONLY_PATHS = [
+	"Library/LaunchAgents", ".gitconfig", ".config/git/config", ".git/hooks", ".git/config", ".git/**/config.worktree",
+	".git/modules/**/hooks", ".git/modules/**/config", ".git/**/commondir", ".husky", ".mcp.json",
+] as const;
+// Startup and package-manager files: closed both ways in the login home folder
+// (and wherever its entries really live), read but never written anywhere else.
+export const PERSISTENT_ROOM_HOME_CLOSED_PATHS = [
+	".zshrc", ".zshenv", ".zprofile", ".zlogin", ".zlogout", ".bashrc", ".bash_profile", ".bash_login", ".profile", ".config/fish",
+	".npmrc", ".yarnrc", ".yarnrc.yml",
+] as const;
+// Every `~/.exxperts-<name>` folder is another data profile's own tree, and the
+// `~/.exxperts.*` files beside the tree say where it lives and order its moves.
+export const PERSISTENT_ROOM_APP_SIBLING_GLOBS = [".exxperts-*", ".exxperts.*"] as const;
 
 export function defaultExxetaStateRoot(): string {
 	return productAppStateRoot();

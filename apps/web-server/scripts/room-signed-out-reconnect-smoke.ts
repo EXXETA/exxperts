@@ -21,7 +21,7 @@ import path from "node:path";
 import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
-import { authedFetch, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer } from "./smoke-server-process.js";
+import { authedFetch, SMOKE_AUTH_TOKEN, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort } from "./smoke-server-process.js";
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -40,7 +40,7 @@ function assert(condition: unknown, message: string): asserts condition {
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const webServerDir = path.resolve(scriptDir, "..");
 const repoRoot = path.resolve(webServerDir, "..", "..");
-const port = 27000 + Math.floor(Math.random() * 10000);
+const port = await freePort();
 const baseUrl = `http://127.0.0.1:${port}`;
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "exxperts-signed-out-ui-"));
@@ -180,15 +180,15 @@ try {
 		page.on("websocket", (ws) => { if (ws.url().includes("persistentAgentId=")) roomDials.push(ws.url()); });
 		await page.goto(`${baseUrl}/auth/session?token=${SMOKE_AUTH_TOKEN}`);
 		await page.waitForLoadState("networkidle");
-		const dismiss = page.locator(".whats-new-foot .btn-primary");
+		const dismiss = page.locator(".whats-new-close");
 		if (await dismiss.count()) await dismiss.click();
 
 		await page.locator(".persistent-agent-card").filter({ hasText: "Signed Out Room" }).getByRole("button", { name: "Resume →" }).click();
 		const banner = page.locator(".room-model-notice");
 		await banner.waitFor({ timeout: 15000 });
-		assert((await banner.innerText()).includes("Fake GPT is signed out. Sign in again to continue this conversation."), `the notice names the signed-out provider, got ${JSON.stringify(await banner.innerText())}`);
-		assert((await banner.getByRole("button").allInnerTexts()).join("|") === "Choose another model|Sign in", "the buttons read in the app's order, Sign in last");
-		assert((await banner.getByRole("button", { name: "Sign in" }).count()) === 1 && (await banner.getByRole("button", { name: "Choose another model" }).count()) === 1, "the notice offers Sign in and Choose another model");
+		assert((await banner.innerText()).includes("Fake GPT has no key saved. Add the key again to continue this conversation."), `the notice names the provider whose key is gone, got ${JSON.stringify(await banner.innerText())}`);
+		assert((await banner.getByRole("button").allInnerTexts()).join("|") === "Choose another model|Add key", "the buttons read in the app's order, Add key last");
+		assert((await banner.getByRole("button", { name: "Add key" }).count()) === 1 && (await banner.getByRole("button", { name: "Choose another model" }).count()) === 1, "the notice offers Add key and Choose another model");
 		const dialsWhileOut = roomDials.length;
 		await page.waitForTimeout(6000);
 		assert(roomDials.length === dialsWhileOut, `the room stops dialing a signed-out provider, got ${roomDials.length - dialsWhileOut} more dials`);
@@ -199,11 +199,11 @@ try {
 		await page.locator(".room-model-section").waitFor({ timeout: 10000 });
 		await page.keyboard.press("Escape");
 		await page.locator(".room-model-section").waitFor({ state: "detached", timeout: 10000 });
-		await banner.getByRole("button", { name: "Sign in" }).click();
+		await banner.getByRole("button", { name: "Add key" }).click();
 		await page.locator("[data-provider-id=\"fake-gpt\"]").waitFor({ timeout: 10000 });
 		await page.keyboard.press("Escape");
 		await page.locator("[data-provider-id=\"fake-gpt\"]").waitFor({ state: "detached", timeout: 10000 });
-		console.log("  ok  Choose another model opens Room settings, Model, and Sign in opens AI setup at the provider's row");
+		console.log("  ok  Choose another model opens Room settings, Model, and Add key opens AI setup at the provider's row");
 
 		// Signed in again elsewhere; the room notices when the window is back.
 		fs.writeFileSync(authFile, JSON.stringify({ "fake-claude": { type: "api_key", key: "synthetic-claude" }, "fake-gpt": { type: "api_key", key: "synthetic-gpt" } }, null, 2), { mode: 0o600 });
@@ -228,13 +228,13 @@ try {
 		await composer.fill("Still there?");
 		await composer.press("Enter");
 		await banner.waitFor({ timeout: 20000 });
-		assert((await banner.innerText()).includes("Fake GPT is signed out.") && (await banner.getByRole("button", { name: "Sign in" }).count()) === 1 && (await banner.getByRole("button", { name: "Choose another model" }).count()) === 1, `a turn that fails on the sign-in shows the one notice, got ${JSON.stringify(await banner.innerText())}`);
+		assert((await banner.innerText()).includes("Fake GPT did not accept the saved key. Replace the key to continue this conversation.") && (await banner.getByRole("button", { name: "Replace key" }).count()) === 1 && (await banner.getByRole("button", { name: "Choose another model" }).count()) === 1, `a turn that fails on the sign-in shows the one notice, got ${JSON.stringify(await banner.innerText())}`);
 		assert((await page.getByText(/could not respond|Incorrect API key/).count()) === 0, "no raw error on the face");
 		assert(warnings.some((text) => /the turn failed on the provider's sign-in:.*401/.test(text)), `the raw error goes to the log, got ${JSON.stringify(warnings)}`);
 		assert(requests.length === requestsBefore, "the provider refused the key, and nothing answered");
 		assert((await composer.inputValue()) === "Still there?", `the message is back in the composer, to send after signing in, got ${JSON.stringify(await composer.inputValue())}`);
 		assert((await page.getByRole("button", { name: "Reconnect" }).count()) === 0 && (await page.locator(".composer-connection").count()) === 0, "no Reconnect and no offline chip");
-		console.log("  ok  a turn that fails on the sign-in shows the one notice with Sign in, logs the raw error, and keeps the message");
+		console.log("  ok  a turn that fails on a refused key shows the one notice with Replace key, logs the raw error, and keeps the message");
 
 		// The person signs in again (the new key lands in the sign-in store):
 		// the next send runs on it, without leaving the room, and the notice goes.

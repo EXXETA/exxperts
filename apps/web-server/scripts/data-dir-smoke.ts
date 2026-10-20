@@ -4,9 +4,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { authedFetch, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, type AuthedFetchInit } from "./smoke-server-process.js";
+import { authedFetch, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, freePort, type AuthedFetchInit } from "./smoke-server-process.js";
 
-// Pins EXXPERTS_DATA_DIR (issue #60): one configured directory carries the
+// Pins EXXPERTS_DATA_DIR: one configured directory carries the
 // WHOLE state family (the standard tree at <dir>/.exxperts and every
 // profile at <dir>/.exxperts-<name>) via the same env indirection profiles
 // ride on (adoptStateHome, called first by every launcher):
@@ -27,7 +27,7 @@ function assert(condition: unknown, message: string): asserts condition {
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const webServerDir = path.resolve(scriptDir, "..");
 const repoRoot = path.resolve(webServerDir, "..", "..");
-const port = 26000 + Math.floor(Math.random() * 10000);
+const port = await freePort();
 const baseUrl = `http://127.0.0.1:${port}`;
 
 const stateProfiles = createRequire(import.meta.url)(path.join(repoRoot, "bin", "lib", "state-profiles.cjs")) as {
@@ -167,7 +167,8 @@ try {
 	const exited = new Promise<number | null>((resolve) => server!.once("exit", (code) => resolve(code)));
 	const switched = await api("/api/settings/state-profile/switch", { method: "POST", body: JSON.stringify({ name: "Demo" }) });
 	assert(switched.status === 200 && switched.body?.restarting === true, `switch must work against the data dir, got ${switched.status} ${JSON.stringify(switched.body)}`);
-	const code = await Promise.race([exited, new Promise<never>((_, reject) => setTimeout(() => reject(new Error("server did not exit after switch")), 15000))]);
+	let exitTimer: NodeJS.Timeout | undefined;
+	const code = await Promise.race([exited, new Promise<never>((_, reject) => { exitTimer = setTimeout(() => reject(new Error("server did not exit after switch")), 15000); })]).finally(() => clearTimeout(exitTimer));
 	assert(code === stateProfiles.SWITCH_EXIT_CODE, `switch must exit with the sentinel code, got ${code}`);
 	server = null;
 	assert(stateProfiles.readActiveProfile(dataDir) === "Demo", "the active-profile pointer must live inside the data dir");

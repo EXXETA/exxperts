@@ -11,6 +11,7 @@ import type { ChatItem, ContextHealthStatus } from "../types";
 import { completeMention, detectMentionQuery, filterMentionCandidates, resolveLeadingMention, type MentionCandidateRoom } from "../mention-popover";
 import { replyCopyTargets } from "../reply-copy";
 import { formatModelWithProvider, modelDisplayName } from "../model-names";
+import { allInput, cacheWords } from "../usage-words";
 
 export interface InRoomChatUsage {
 	turns: number;
@@ -43,7 +44,7 @@ export interface InRoomChatShellViewProps {
 	composerStagingSlot?: ReactNode;
 	/** Files UI slice: staged attachments make an attachments-only send legal. */
 	composerAllowEmptySend?: boolean;
-	/** #52: image files pasted into the textarea are handed here to be staged. */
+	/** Image files pasted into the textarea are handed here to be staged. */
 	composerOnPasteFiles?: (files: File[]) => void;
 	connected: boolean;
 	/** Room auto-reconnect: "reconnecting" while backoff attempts run, "failed" once capped. */
@@ -125,6 +126,8 @@ export interface ConnectionStopped {
 	line: string;
 	/** Settings, AI setup, at the provider's row; absent when signing in cannot help. */
 	onSignIn?: () => void;
+	/** That button's words: "Sign in", or "Add key" for a key provider. */
+	signInLabel?: string;
 	/** This room's Room settings, Model. */
 	onChooseModel?: () => void;
 	/** A conversation the room closed (the save that filled it): Home, or Memorize. */
@@ -362,7 +365,7 @@ function ConnectionBanner({ connected, reconnectState, onReconnect, stopped }: {
 				<span className="room-workspace-nudge-text">{stopped.line}</span>
 				<div className="room-workspace-nudge-actions">
 					{stopped.onChooseModel && <button type="button" className="rs-btn" onClick={stopped.onChooseModel}>Choose another model</button>}
-					{stopped.onSignIn && <button type="button" className="rs-btn rs-btn-primary" onClick={stopped.onSignIn}>Sign in</button>}
+					{stopped.onSignIn && <button type="button" className="rs-btn rs-btn-primary" onClick={stopped.onSignIn}>{stopped.signInLabel ?? "Sign in"}</button>}
 					{stopped.onReturnHome && <button type="button" className="rs-btn" onClick={stopped.onReturnHome}>Return Home</button>}
 					{stopped.onMemorize && <button type="button" className="rs-btn rs-btn-primary" onClick={stopped.onMemorize}>Memorize</button>}
 					{stopped.onReload && <button type="button" className="rs-btn rs-btn-primary" onClick={stopped.onReload}>Reload</button>}
@@ -568,7 +571,7 @@ interface ComposerInputProps {
 	stagingSlot?: ReactNode;
 	/** Files UI slice: ready attachments make an empty-text send legal (the note alone rides). */
 	allowEmptySend?: boolean;
-	/** #52: files pasted into the textarea (images, documents alike) are handed here to be staged. */
+	/** Files pasted into the textarea (images, documents alike) are handed here to be staged. */
 	onPasteFiles?: (files: File[]) => void;
 	/** The sole pending yes/no card, answered by Enter and Escape while the composer is empty. */
 	keyboardApproval?: { approve: () => void; decline: () => void } | null;
@@ -749,7 +752,7 @@ function ComposerInput({
 		}
 	}
 
-	// #52: a pasted file stages as an attachment, through the exact path the
+	// A pasted file stages as an attachment, through the exact path the
 	// 📎 uses. Every FILE on the clipboard is taken (a screenshot, a copied
 	// picture, a PDF or spreadsheet copied from the file manager) — what the
 	// room can read is the server's call at upload, which answers with the
@@ -1200,9 +1203,8 @@ export function InRoomChatShellView({
 										<div className="composer-status" aria-label="Chat status">
 											{currentModelLabel && <span title={`current chat model: ${formatModelWithProvider(currentModelLabel ?? "", currentModelProvider)}`}>model <strong>{compactModelLabel(currentModelLabel)}</strong></span>}
 											<span><strong>{usage.turns}</strong> turn{usage.turns === 1 ? "" : "s"}</span>
-											<span>↑ <strong>{fmtTok(usage.input)}</strong></span>
+											<span>↑ <strong>{fmtTok(allInput(usage))}</strong>{cacheWords(usage, fmtTok) && ` (${cacheWords(usage, fmtTok)})`}</span>
 											<span>↓ <strong>{fmtTok(usage.output)}</strong></span>
-											{usage.cacheRead > 0 && <span>cache <strong>{fmtTok(usage.cacheRead)}</strong></span>}
 											<span><strong>{fmtCost(usage.cost)}</strong></span>
 											{(usage.contextTokens ?? usage.totalTokens) > 0 && <span title="last assistant context">ctx <strong>{fmtTok(usage.contextTokens ?? usage.totalTokens)}</strong></span>}
 											{!connectionStopped && <span className={`composer-connection ${connected ? "live" : ""}`}>{connected ? "online" : reconnectState === "reconnecting" ? "reconnecting…" : "offline"}</span>}

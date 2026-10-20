@@ -4,12 +4,12 @@
 // direct DELETE), inline rename with the collision rule, and the 💾 Save…
 // export with its local-action guard, saveAs filename, and collision flow.
 // Boots the real server against an isolated HOME.
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { authedFetch, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer } from "./smoke-server-process.js";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { authedFetch, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, freePort } from "./smoke-server-process.js";
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -27,7 +27,31 @@ fs.mkdirSync(saveTargetDir, { recursive: true });
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const webServerDir = path.resolve(scriptDir, "..");
 const repoRoot = path.resolve(webServerDir, "..", "..");
-const port = 28000 + Math.floor(Math.random() * 10000);
+// While short-space exists, the server's disk reports no free space, so a
+// Replace must take the rename path. While failing-writes exists, every write
+// through a descriptor of bytes that contain its text fails. While unsyncable
+// exists, fsync answers ENOTSUP, as on a disk that cannot sync.
+const shortSpaceFlag = path.join(tempRoot, "short-space");
+const failingWritesFlag = path.join(tempRoot, "failing-writes");
+const unsyncableFlag = path.join(tempRoot, "unsyncable");
+const diskFakesPreload = path.join(tempRoot, "disk-fakes.mjs");
+fs.writeFileSync(diskFakesPreload, `import fs from "node:fs";
+const realStatfs = fs.statfsSync;
+fs.statfsSync = (...args) => fs.existsSync(${JSON.stringify(shortSpaceFlag)}) ? { ...realStatfs(...args), bavail: 0, bfree: 0 } : realStatfs(...args);
+const fails = (file, data) => {
+	if (typeof file !== "number" || !fs.existsSync(${JSON.stringify(failingWritesFlag)})) return false;
+	const bytes = typeof data === "string" ? Buffer.from(data) : Buffer.from(data.buffer, data.byteOffset, data.byteLength);
+	return bytes.includes(fs.readFileSync(${JSON.stringify(failingWritesFlag)}));
+};
+const failure = () => Object.assign(new Error("EIO: i/o error, write"), { code: "EIO" });
+const realFsync = fs.fsyncSync;
+fs.fsyncSync = (fd) => { if (fs.existsSync(${JSON.stringify(unsyncableFlag)})) throw Object.assign(new Error("ENOTSUP: operation not supported, fsync"), { code: "ENOTSUP" }); return realFsync(fd); };
+for (const name of ["writeSync", "writeFileSync"]) {
+	const real = fs[name];
+	fs[name] = (file, data, ...rest) => { if (fails(file, data)) throw failure(); return real(file, data, ...rest); };
+}
+`);
+const port = await freePort();
 const baseUrl = `http://127.0.0.1:${port}`;
 
 async function waitForServer(server: ChildProcessWithoutNullStreams): Promise<void> {
@@ -70,6 +94,7 @@ try {
 			EXXETA_HOME: repoRoot,
 			EXXPERTS_CODING_AGENT_DIR: tempAgentRuntimeRoot,
 			EXXETA_PERSISTENT_AGENTS_ROOT: tempAgentsRoot,
+			NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --import=${pathToFileURL(diskFakesPreload).href}`.trim(),
 		},
 	});
 	server.stdout.on("data", (chunk) => serverOutput.push(String(chunk)));
@@ -190,6 +215,271 @@ try {
 	const savedAsBadBody = (await savedAsBadName.json()) as { savedTo?: string };
 	assert(savedAsBadName.status !== 200 || !String(savedAsBadBody.savedTo ?? "").includes(".."), "a traversal saveAs must never escape the chosen folder");
 	assert(!fs.existsSync(path.join(tempRoot, "escape.md")), "traversal saveAs must not land outside the chosen folder");
+
+	// 6b. A link in the chosen folder that carries the saved file's name: Save…
+	//     never writes through it. The default answers "exists", Keep both takes
+	//     the next free name, and Replace is refused in plain words, whether the
+	//     link points outside the folder or at a file inside it.
+	const linkFolder = path.join(tempRoot, "link-folder");
+	fs.mkdirSync(linkFolder, { recursive: true });
+	const linkFolderReal = fs.realpathSync.native(linkFolder);
+	const linkPath = path.join(linkFolderReal, "notes.md");
+	let linksWork = true;
+	for (const [label, target] of [["outside", path.join(tempRoot, "outside-target.md")], ["inside", path.join(linkFolderReal, "inside-target.md")]] as const) {
+		fs.writeFileSync(target, "LINK-TARGET-ORIGINAL");
+		try {
+			fs.symlinkSync(target, linkPath);
+		} catch (error) {
+			console.log(`room-files-routes-smoke: link case skipped (${(error as NodeJS.ErrnoException).code ?? "no symlink"})`);
+			linksWork = false;
+			fs.rmSync(target, { force: true });
+			break;
+		}
+		const asIs = await save("notes.md", { targetDir: linkFolder });
+		assert(asIs.status === 409, `${label} link, default: expected 409, got ${asIs.status}`);
+		const replaced = await save("notes.md", { targetDir: linkFolder, overwrite: true });
+		const replacedBody = (await replaced.json()) as { error?: string };
+		assert(replaced.status === 400, `${label} link, Replace: expected 400, got ${replaced.status}: ${JSON.stringify(replacedBody)}`);
+		assert(replacedBody.error === "The file with this name in the chosen folder is a shortcut to somewhere else, so it was not replaced. Use Keep both, or pick another name.", `${label} link, Replace: the refusal must be the plain sentence, got ${JSON.stringify(replacedBody)}`);
+		const keptBoth = await save("notes.md", { targetDir: linkFolder, rename: true });
+		const keptBothBody = (await keptBoth.json()) as { savedTo: string };
+		assert(keptBoth.status === 200 && keptBothBody.savedTo === path.join(linkFolderReal, "notes-2.md"), `${label} link, Keep both: expected notes-2.md, got ${keptBoth.status}: ${JSON.stringify(keptBothBody)}`);
+		assert(!fs.lstatSync(keptBothBody.savedTo).isSymbolicLink() && fs.readFileSync(keptBothBody.savedTo, "utf-8") === "# alpha\nbeta\n", `${label} link, Keep both: notes-2.md must be a real copy`);
+		assert(fs.readFileSync(target, "utf-8") === "LINK-TARGET-ORIGINAL", `${label} link: the link's target was written`);
+		assert(fs.lstatSync(linkPath).isSymbolicLink(), `${label} link: the link itself must be left in place`);
+		fs.unlinkSync(linkPath);
+		fs.unlinkSync(keptBothBody.savedTo);
+		fs.rmSync(target, { force: true });
+	}
+	if (linksWork) {
+		// A link that leads nowhere, at the name and at the next free name: both
+		// count as taken, and nothing is created through either.
+		const danglingTarget = path.join(tempRoot, "dangling-target.md");
+		const nextLinkPath = path.join(linkFolderReal, "notes-2.md");
+		fs.symlinkSync(danglingTarget, linkPath);
+		fs.symlinkSync(danglingTarget, nextLinkPath);
+		const danglingDefault = await save("notes.md", { targetDir: linkFolder });
+		const danglingReplace = await save("notes.md", { targetDir: linkFolder, overwrite: true });
+		assert(danglingDefault.status === 409 && danglingReplace.status === 400, `dangling link: expected 409 and 400, got ${danglingDefault.status} and ${danglingReplace.status}`);
+		const danglingKeptBoth = await save("notes.md", { targetDir: linkFolder, rename: true });
+		const danglingKeptBothBody = (await danglingKeptBoth.json()) as { savedTo: string };
+		assert(danglingKeptBoth.status === 200 && danglingKeptBothBody.savedTo === path.join(linkFolderReal, "notes-3.md"), `dangling links, Keep both: expected notes-3.md, got ${danglingKeptBoth.status}: ${JSON.stringify(danglingKeptBothBody)}`);
+		assert(!fs.existsSync(danglingTarget), "dangling links: a file was created through a link");
+		for (const name of [linkPath, nextLinkPath, danglingKeptBothBody.savedTo]) fs.unlinkSync(name);
+	}
+
+	// 6c. Another name of an outside file (a hard link) and a FIFO at the saved
+	//     file's name: Replace puts a new file at the name and writes into
+	//     neither, and the server keeps answering.
+	const answerWithin = <T,>(promise: Promise<T>, label: string): Promise<T> => Promise.race([
+		promise,
+		new Promise<T>((_, reject) => setTimeout(() => reject(new Error(`${label}: the server did not answer within 10 s`)), 10_000).unref()),
+	]);
+	const hardTarget = path.join(tempRoot, "hard-target.md");
+	fs.writeFileSync(hardTarget, "HARD-TARGET-ORIGINAL");
+	fs.linkSync(hardTarget, linkPath);
+	const hardDefault = await save("notes.md", { targetDir: linkFolder });
+	assert(hardDefault.status === 409, `hard link, default: expected 409, got ${hardDefault.status}`);
+	const hardReplace = await answerWithin(save("notes.md", { targetDir: linkFolder, overwrite: true }), "hard link, Replace");
+	assert(hardReplace.status === 200, `hard link, Replace: expected 200, got ${hardReplace.status}: ${await hardReplace.text()}`);
+	assert(fs.readFileSync(hardTarget, "utf-8") === "HARD-TARGET-ORIGINAL", "hard link, Replace: the other name's file was written");
+	assert(fs.readFileSync(linkPath, "utf-8") === "# alpha\nbeta\n" && fs.statSync(linkPath).nlink === 1, "hard link, Replace: the name must now hold a new file of its own");
+	fs.unlinkSync(linkPath);
+	if (process.platform !== "win32" && spawnSync("mkfifo", [linkPath]).status === 0) {
+		const fifoReplace = await answerWithin(save("notes.md", { targetDir: linkFolder, overwrite: true }), "FIFO, Replace");
+		assert(fifoReplace.status === 200 && fs.lstatSync(linkPath).isFile() && fs.readFileSync(linkPath, "utf-8") === "# alpha\nbeta\n", `FIFO, Replace: expected a new file at the name, got ${fifoReplace.status}`);
+		assert((await answerWithin(fetch(`${baseUrl}/healthz`), "health after the FIFO")).ok, "the server must keep answering after a FIFO at the name");
+		fs.unlinkSync(linkPath);
+	} else {
+		console.log("room-files-routes-smoke: FIFO case skipped");
+	}
+	assert(fs.readdirSync(linkFolderReal).every((name) => !name.endsWith(".tmp")), "Replace must leave no temporary file behind");
+
+	// 6d. Replace gives the new file the old file's permission bits and, when
+	//     the account belongs to it, its group; a Replace with nothing at the
+	//     name gives what a new save gives.
+	if (process.platform !== "win32") {
+		const keptPath = path.join(linkFolderReal, "kept.md");
+		const replaceKept = () => save("notes.md", { targetDir: linkFolder, saveAs: "kept.md", overwrite: true });
+		for (const mode of [0o600, 0o664]) {
+			fs.writeFileSync(keptPath, "KEPT-ORIGINAL");
+			fs.chmodSync(keptPath, mode);
+			const replacedKept = await replaceKept();
+			const modeAfter = fs.statSync(keptPath).mode & 0o777;
+			assert(replacedKept.status === 200 && fs.readFileSync(keptPath, "utf-8") === "# alpha\nbeta\n", `a 0${mode.toString(8)} file, Replace: expected the new bytes, got ${replacedKept.status}: ${await replacedKept.text()}`);
+			assert(modeAfter === mode, `a 0${mode.toString(8)} file, Replace: the file came back 0${modeAfter.toString(8)}`);
+			fs.unlinkSync(keptPath);
+		}
+		const savedNew = await save("notes.md", { targetDir: linkFolder, saveAs: "kept.md" });
+		const newMode = fs.statSync(keptPath).mode & 0o777;
+		fs.unlinkSync(keptPath);
+		const replacedNothing = await replaceKept();
+		const replacedNothingMode = fs.statSync(keptPath).mode & 0o777;
+		assert(savedNew.status === 200 && replacedNothing.status === 200 && replacedNothingMode === newMode, `Replace with nothing at the name: expected 0${newMode.toString(8)}, as a new save gets, got 0${replacedNothingMode.toString(8)}`);
+		const otherGroup = process.getgroups?.().find((gid) => gid !== fs.statSync(keptPath).gid);
+		let grouped = false;
+		if (otherGroup !== undefined) {
+			try {
+				fs.chownSync(keptPath, -1, otherGroup);
+				grouped = true;
+			} catch {}
+		}
+		if (grouped) {
+			const replacedGrouped = await replaceKept();
+			const groupAfter = fs.statSync(keptPath).gid;
+			assert(replacedGrouped.status === 200 && groupAfter === otherGroup, `a file in group ${otherGroup}, Replace: the file came back in group ${groupAfter}`);
+		} else {
+			console.log("room-files-routes-smoke: group case skipped (no second group to give the file)");
+		}
+		fs.unlinkSync(keptPath);
+		assert(fs.readdirSync(linkFolderReal).every((name) => !name.endsWith(".tmp")), "Replace must leave no temporary file behind");
+	} else {
+		console.log("room-files-routes-smoke: permission case skipped (Windows has no permission bits)");
+	}
+
+	// 6f. On macOS, Replace keeps what the old file carried beside its bytes:
+	//     its Finder tag and comment (extended attributes) and its creation date.
+	if (process.platform === "darwin") {
+		const detailsPath = path.join(linkFolderReal, "details.md");
+		const tags = "com.apple.metadata:_kMDItemUserTags";
+		const comment = "com.apple.metadata:kMDItemFinderComment";
+		fs.writeFileSync(detailsPath, "KEPT-ORIGINAL");
+		assert(spawnSync("xattr", ["-w", tags, "(\"Red\\n6\")", detailsPath]).status === 0 && spawnSync("xattr", ["-w", comment, "a comment", detailsPath]).status === 0, "the Finder tag and comment could not be set");
+		// A modification time before the creation date moves the creation date back on macOS.
+		const created = new Date("2020-01-02T10:00:00Z");
+		fs.utimesSync(detailsPath, created, created);
+		const createdMs = fs.statSync(detailsPath).birthtimeMs;
+		const replacedDetails = await save("notes.md", { targetDir: linkFolder, saveAs: "details.md", overwrite: true });
+		const read = (attribute: string) => spawnSync("xattr", ["-p", attribute, detailsPath], { encoding: "utf-8" }).stdout.trim();
+		assert(replacedDetails.status === 200 && fs.readFileSync(detailsPath, "utf-8") === "# alpha\nbeta\n", `a tagged file, Replace: expected the new bytes`);
+		assert(read(tags) === "(\"Red\\n6\")", `a tagged file, Replace: the Finder tag is gone, got "${read(tags)}"`);
+		assert(read(comment) === "a comment", `a tagged file, Replace: the Finder comment is gone, got "${read(comment)}"`);
+		assert(fs.statSync(detailsPath).birthtimeMs === createdMs, `a tagged file, Replace: the creation date moved from ${new Date(createdMs).toISOString()} to ${fs.statSync(detailsPath).birthtime.toISOString()}`);
+		fs.unlinkSync(detailsPath);
+		assert(fs.readdirSync(path.dirname(detailsPath)).every((name) => !name.endsWith(".tmp")), "Replace must leave no temporary file behind");
+	} else {
+		console.log("SKIPPED: room-files-routes-smoke: Finder details case (macOS only)");
+	}
+
+	// 6g. A plain file with one name is written in place, so it stays the same
+	//     file; on a disk short of room for the new bytes, the new file is
+	//     written beside it and renamed over it, so the old one stays whole
+	//     until then.
+	{
+		const placePath = path.join(linkFolderReal, "in-place.md");
+		const replacePlace = () => save("notes.md", { targetDir: linkFolder, saveAs: "in-place.md", overwrite: true });
+		fs.writeFileSync(placePath, "KEPT-ORIGINAL");
+		const fileBefore = fs.statSync(placePath).ino;
+		const inPlace = await replacePlace();
+		assert(inPlace.status === 200 && fs.readFileSync(placePath, "utf-8") === "# alpha\nbeta\n" && fs.statSync(placePath).ino === fileBefore, `a plain file, Replace: expected the new bytes in the same file, got ${inPlace.status}`);
+		fs.writeFileSync(placePath, "KEPT-ORIGINAL");
+		fs.writeFileSync(shortSpaceFlag, "");
+		let shortReplace: Response;
+		try {
+			shortReplace = await replacePlace();
+		} finally {
+			fs.rmSync(shortSpaceFlag);
+		}
+		assert(shortReplace.status === 200 && fs.readFileSync(placePath, "utf-8") === "# alpha\nbeta\n" && fs.statSync(placePath).ino !== fileBefore, `a disk short of room, Replace: expected the new bytes in a new file renamed over the name, got ${shortReplace.status}`);
+		// Over 64 MiB, the old bytes are not held in memory, so the rename is used.
+		fs.truncateSync(placePath, 64 * 1024 * 1024 + 1);
+		const largeBefore = fs.statSync(placePath).ino;
+		const largeReplace = await replacePlace();
+		assert(largeReplace.status === 200 && fs.readFileSync(placePath, "utf-8") === "# alpha\nbeta\n" && fs.statSync(placePath).ino !== largeBefore, `a file over 64 MiB, Replace: expected the new bytes in a new file renamed over the name, got ${largeReplace.status}`);
+		fs.unlinkSync(placePath);
+		assert(fs.readdirSync(linkFolderReal).every((name) => !name.endsWith(".tmp")), "Replace must leave no temporary file behind");
+	}
+
+	// 6h. When the write in place fails and the rename fails too, the old
+	//     bytes go back into the same file, and the save answers its failure.
+	{
+		const failPath = path.join(linkFolderReal, "double-failure.md");
+		fs.writeFileSync(failPath, "KEPT-ORIGINAL");
+		const fileBefore = fs.statSync(failPath).ino;
+		fs.writeFileSync(failingWritesFlag, "# alpha");
+		let failedReplace: Response;
+		try {
+			failedReplace = await save("notes.md", { targetDir: linkFolder, saveAs: "double-failure.md", overwrite: true });
+		} finally {
+			fs.rmSync(failingWritesFlag);
+		}
+		const failedBody = (await failedReplace.json()) as { error?: string };
+		assert(failedReplace.status === 500 && failedBody.error === "The file could not be saved to the chosen folder.", `both writes failing, Replace: expected 500 with the save failure, got ${failedReplace.status}: ${JSON.stringify(failedBody)}`);
+		assert(fs.readFileSync(failPath, "utf-8") === "KEPT-ORIGINAL" && fs.statSync(failPath).ino === fileBefore, `both writes failing, Replace: the old file is not whole, got "${fs.readFileSync(failPath, "utf-8")}"`);
+		fs.unlinkSync(failPath);
+		assert(fs.readdirSync(linkFolderReal).every((name) => !name.endsWith(".tmp")), "Replace must leave no temporary file behind");
+	}
+
+	// 6i. A disk that cannot sync a file still takes the save.
+	{
+		const syncPath = path.join(linkFolderReal, "unsyncable.md");
+		fs.writeFileSync(syncPath, "KEPT-ORIGINAL");
+		const fileBefore = fs.statSync(syncPath).ino;
+		fs.writeFileSync(unsyncableFlag, "");
+		let unsynced: Response;
+		try {
+			unsynced = await save("notes.md", { targetDir: linkFolder, saveAs: "unsyncable.md", overwrite: true });
+		} finally {
+			fs.rmSync(unsyncableFlag);
+		}
+		assert(unsynced.status === 200 && fs.readFileSync(syncPath, "utf-8") === "# alpha\nbeta\n" && fs.statSync(syncPath).ino === fileBefore, `a disk that cannot sync, Replace: expected the new bytes in the same file, got ${unsynced.status}: ${await unsynced.text()}`);
+		fs.unlinkSync(syncPath);
+	}
+
+	// 6e. A file the account may not write is not replaced, as before: the
+	//     answer is the one a failed save gives, and the file stays as it was.
+	if (process.platform === "win32" || process.getuid?.() !== 0) {
+		const readOnlyPath = path.join(linkFolderReal, "read-only.md");
+		fs.writeFileSync(readOnlyPath, "READ-ONLY-ORIGINAL");
+		fs.chmodSync(readOnlyPath, 0o444);
+		try {
+			const refused = await save("notes.md", { targetDir: linkFolder, saveAs: "read-only.md", overwrite: true });
+			const refusedBody = (await refused.json()) as { error?: string };
+			assert(refused.status === 500 && refusedBody.error === "The file could not be saved to the chosen folder.", `read-only file, Replace: expected 500 with the save failure, got ${refused.status}: ${JSON.stringify(refusedBody)}`);
+			assert(fs.readFileSync(readOnlyPath, "utf-8") === "READ-ONLY-ORIGINAL", "read-only file, Replace: the file was replaced");
+		} finally {
+			fs.chmodSync(readOnlyPath, 0o644);
+			fs.unlinkSync(readOnlyPath);
+		}
+	} else {
+		console.log("room-files-routes-smoke: read-only file case skipped (root may write any file)");
+	}
+
+	// 6f. A folder where the file can be changed but no new file can be made:
+	//     Replace writes into the file itself when it is a plain file with no
+	//     other name, one it may write but not read included, and refuses a
+	//     second name of an outside file.
+	if (process.platform !== "win32" && process.getuid?.() !== 0) {
+		const lockedFolder = path.join(tempRoot, "locked-folder");
+		fs.mkdirSync(lockedFolder);
+		const lockedReal = fs.realpathSync.native(lockedFolder);
+		const lockedPath = path.join(lockedReal, "notes.md");
+		const lockedOutside = path.join(tempRoot, "locked-outside.md");
+		fs.writeFileSync(lockedPath, "LOCKED-ORIGINAL");
+		fs.writeFileSync(lockedOutside, "LOCKED-OUTSIDE-ORIGINAL");
+		fs.linkSync(lockedOutside, path.join(lockedReal, "second-name.md"));
+		const writeOnlyPath = path.join(lockedReal, "write-only.md");
+		fs.writeFileSync(writeOnlyPath, "WRITE-ONLY-ORIGINAL");
+		fs.chmodSync(writeOnlyPath, 0o200);
+		const inodeBefore = fs.statSync(lockedPath).ino;
+		const writeOnlyBefore = fs.statSync(writeOnlyPath).ino;
+		fs.chmodSync(lockedReal, 0o555);
+		try {
+			const inPlace = await save("notes.md", { targetDir: lockedFolder, overwrite: true });
+			assert(inPlace.status === 200 && fs.readFileSync(lockedPath, "utf-8") === "# alpha\nbeta\n" && fs.statSync(lockedPath).ino === inodeBefore, `folder without new files, Replace: expected the file itself rewritten, got ${inPlace.status}: ${await inPlace.text()}`);
+			const writeOnly = await save("notes.md", { targetDir: lockedFolder, saveAs: "write-only.md", overwrite: true });
+			fs.chmodSync(writeOnlyPath, 0o600);
+			assert(writeOnly.status === 200 && fs.readFileSync(writeOnlyPath, "utf-8") === "# alpha\nbeta\n" && fs.statSync(writeOnlyPath).ino === writeOnlyBefore, `folder without new files, a file it may write but not read, Replace: expected the file itself rewritten, got ${writeOnly.status}: ${await writeOnly.text()}`);
+			const secondName = await save("notes.md", { targetDir: lockedFolder, saveAs: "second-name.md", overwrite: true });
+			const secondNameBody = (await secondName.json()) as { error?: string };
+			assert(secondName.status === 500 && secondNameBody.error === "The file could not be saved to the chosen folder.", `folder without new files, a second name of an outside file: expected the save failure, got ${secondName.status}: ${JSON.stringify(secondNameBody)}`);
+			assert(fs.readFileSync(lockedOutside, "utf-8") === "LOCKED-OUTSIDE-ORIGINAL", "folder without new files: the outside file was written through its second name");
+		} finally {
+			fs.chmodSync(lockedReal, 0o755);
+		}
+	} else {
+		console.log("room-files-routes-smoke: folder without new files case skipped (a read-only folder does not stop new files on Windows or for root)");
+	}
 
 	// 7. Unified delete: stage returns a token → gone from the list; undo(token)
 	// → back; stage + commit(token) → bytes gone; missing name 404s.

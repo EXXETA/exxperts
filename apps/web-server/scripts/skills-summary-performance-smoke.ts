@@ -8,7 +8,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { performance } from "node:perf_hooks";
 import { computeSkillFilesDigest, sha256, skillPackageDisplayPin, writeSkillProvenance } from "../src/skills-store.js";
 import { persistentRoomSkillSettingsPath } from "../src/persistent-room-skill-settings.js";
-import { authedFetch, smokeHomeEnv, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer } from "./smoke-server-process.js";
+import { authedFetch, freePort, smokeHomeEnv, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer } from "./smoke-server-process.js";
 
 const work = fs.mkdtempSync(path.join(os.tmpdir(), "exxperts-summary-perf-"));
 const state = path.join(work, "state");
@@ -17,7 +17,7 @@ const project = path.join(work, "project");
 const serverDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const repoRoot = path.resolve(serverDir, "..", "..");
 const loader = pathToFileURL(createRequire(import.meta.url).resolve("tsx/esm")).href;
-const port = 31000 + Math.floor(Math.random() * 5000);
+const port = await freePort();
 const base = `http://127.0.0.1:${port}`;
 const policy = { designRepo: false, allowedTypes: ["markdown"] as const, skillRoot: "skills", referenceRoots: [] };
 const content = "a".repeat(Math.floor(64 * 1024 * 1024 / 500));

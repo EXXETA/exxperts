@@ -36,7 +36,7 @@ function toolNames(policy: any): string {
 }
 
 function registeredToolNames(policy: any): string {
-	return createPersistentRoomWorkspaceTools(policy).map((tool: any) => String(tool.name)).sort().join(",");
+	return createPersistentRoomWorkspaceTools(policy, { localFilesCwd: os.tmpdir() }).map((tool: any) => String(tool.name)).sort().join(",");
 }
 
 function assertBlockedDisjoint(toolPolicy: { allowedToolNames: string[]; blockedToolNames: string[] }, label: string): void {
@@ -222,7 +222,7 @@ try {
 		workspaceAccessMode: "localFiles",
 	});
 	assert(toolNames(localFilesPolicy) === "read,ls,find,grep,write,edit", "Local files standard policy should expose all non-bash local-files tools");
-	assert(registeredToolNames(localFilesPolicy) === "", "Local files mode should register no curated tools; native runtime tools own that surface");
+	assert(registeredToolNames(localFilesPolicy) === "edit,find,grep,ls,read,write", "Local files mode should register the six native file tools, wrapped");
 	assert(persistentRoomCapabilityPolicyView(localFilesPolicy).toolSelection.kind === "standard", "Local files standard view should expose standard selection");
 	const localFilesToolPolicy = getPersistentRoomToolPolicy(agentId, { workspaceToolsEnabled: true, workspaceToolNames: persistentRoomWorkspaceToolNamesForPolicy(localFilesPolicy), workspaceAccessMode: "localFiles" });
 	assert(localFilesToolPolicy.allowedToolNames.join(",") === "web_search,fetch_url,read_file,search_file,memory_recall,mcp,read,ls,find,grep,write,edit", "Local files room tool policy should allow web_search plus selected native file tools");
@@ -242,7 +242,7 @@ try {
 		toolSelection: { kind: "custom", allowedToolNames: ["read", "ls", "grep", "write"] },
 	});
 	assert(toolNames(localFilesCustomNoSpreadsheet) === "read,ls,grep,write", "Local files custom selection should preserve exact selected native subset");
-	assert(registeredToolNames(localFilesCustomNoSpreadsheet) === "", "Local files custom selection without spreadsheet read should register no custom tools");
+	assert(registeredToolNames(localFilesCustomNoSpreadsheet) === "grep,ls,read,write", "Local files custom selection should wrap exactly its selected native tools");
 	const localFilesCustomToolPolicy = getPersistentRoomToolPolicy(agentId, { workspaceToolsEnabled: true, workspaceToolNames: persistentRoomWorkspaceToolNamesForPolicy(localFilesCustomNoSpreadsheet), workspaceAccessMode: "localFiles" });
 	assert(localFilesCustomToolPolicy.allowedToolNames.join(",") === "web_search,fetch_url,read_file,search_file,memory_recall,mcp,read,ls,grep,write", "Local files custom allowlist should omit disabled native tools");
 	assert(localFilesCustomToolPolicy.blockedToolNames.includes("find") && localFilesCustomToolPolicy.blockedToolNames.includes("edit"), "Local files disabled tools should be blocked by tool policy");

@@ -12,7 +12,6 @@ import { PaneHeader } from "./pane-header";
 import { fetchRemoteClientContext, showsComputerOnlyControls, useRemoteClientContext } from "../remote-client-context";
 import { useSkillUpdateNotices } from "../skill-update-notices";
 
-/** Source groups stay compact; individual approvals and exceptions keep their own pins. */
 /** A skill's problem in plain words, under its description; null when it works. */
 function skillProblemLine(state: PersistentRoomEnabledSkillStatus): string | null {
 	if (state.status === "hash-mismatch") return "Changed since you enabled it. The room stopped using it until you review the new version.";
@@ -53,6 +52,7 @@ function RoomSourceReferences({ grant, onManage }: { grant: PersistentRoomSource
 	</div>;
 }
 
+/** Source groups stay compact; individual approvals and exceptions keep their own pins. */
 export function RoomSkillsSection({ status, onOpenSkillsLibrary, onPausedCount, refreshKey = 0 }: { status: PersistentAgentStatus; onOpenSkillsLibrary?: (libraryId?: string) => void; refreshKey?: number; onPausedCount?: (count: number) => void }) {
 	const remoteClient = useRemoteClientContext();
 	const localReferences = showsComputerOnlyControls(remoteClient);

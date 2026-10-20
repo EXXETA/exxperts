@@ -57,7 +57,7 @@ npm run test:scripts
 npm run smokes
 ```
 
-The UI TypeScript check includes its DOM smoke scripts. The central smoke runner discovers both server and UI `*-smoke.ts` files and runs them sequentially with each app's TypeScript configuration. Labels identify `server/` or `ui/`; `npm run smokes -- skill-repository` filters by filename substring, and `npm run smokes -- ui/` selects UI checks. Each smoke has a five-minute ceiling. Permission-denial retries and explicit partial skips remain visible in the result; a skip is not full coverage.
+The UI TypeScript check includes its DOM smoke scripts. The central smoke runner discovers both server and UI `*-smoke.ts` files and uses each app's TypeScript configuration. Local runs use the runner's default parallelism; `npm run smokes -- --jobs 1` runs sequentially, as CI does. Labels identify `server/` or `ui/`; `npm run smokes -- skill-repository` filters by filename substring, and `npm run smokes -- ui/` selects UI checks. Each smoke has a five-minute ceiling. Retries and explicit partial skips remain visible in the result; a skip is not full coverage.
 
 Desktop types also require the desktop package's own dependencies: run `npm ci` and `npx tsc --noEmit -p tsconfig.json` in `apps/desktop` (`ELECTRON_SKIP_BINARY_DOWNLOAD=1` skips Electron's binary when checking types only). The existing CI matrix runs the gates on Windows, macOS and Linux. Record actual failures and platform skips; local Windows checks do not substitute for the other platforms.
 
@@ -157,7 +157,6 @@ Current product/app state lives under `~/.exxperts/app/`, including:
 - `persistent-room-schedules/` and `background-runs/`
 - `persistent-agent-ai-profile.json` (the Default models) and `openai-compatible-ai-profile.json` (gateway policy, when configured); each room's Conversation and Memory models live in `personalized-agents/<id>/runtime/models.json`
 - `usage.jsonl`
-- `memory.jsonl` (CLI fact store, created on first use)
 - `agents/`, `skills/`
 - `web-search.json` and `searxng/`
 - `skill-libraries.json`: saved Git sources and update-check status; imported

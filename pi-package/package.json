@@ -9,15 +9,6 @@
   ],
   "type": "module",
   "pi": {
-    "extensions": [
-      "./extensions/content-policy",
-      "./extensions/permissions",
-      "./extensions/memory",
-      "./extensions/artifacts",
-      "./extensions/mcp",
-      "./extensions/web-search",
-      "./extensions/cli-rooms"
-    ],
     "themes": [
       "./themes"
     ]

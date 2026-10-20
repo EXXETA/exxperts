@@ -48,9 +48,9 @@ export type PersistentAgentCardProps = {
 	onOpenModelSettings?: () => void;
 	/** Each provider's name as AI setup shows it, by provider id. */
 	providerLabels?: Readonly<Record<string, string>>;
-	/** A response finished in this room after the user left it (community #14). */
+	/** A response finished in this room after the user left it. */
 	backgroundReady?: boolean;
-	/** A purge for this room is in flight (community #10): every door into the room closes until it resolves. */
+	/** A purge for this room is in flight: every door into the room closes until it resolves. */
 	purging?: boolean;
 	/**
 	 * The home screen is in arrange mode: the card keeps its Home look (the
@@ -138,7 +138,7 @@ export function PersistentAgentCard({ status, thread, live, duplicateDisplayName
 	// the conversation, so the badge and note say that instead of "open in
 	// another browser session".
 	const answeringInBackground = lockedElsewhere && lockSurface === "web" && !!status?.activeThread?.working;
-	// Issue #33: a response cooking with NO client attached is a room the user
+	// A response cooking with NO client attached is a room the user
 	// may step back into; the server adopts the session onto the live stream.
 	// A room genuinely open in another window keeps its lock-and-stay-out.
 	const canStepBackIn = answeringInBackground && status?.answeringDetached === true;

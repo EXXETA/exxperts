@@ -41,7 +41,7 @@ const templates = await import("../src/specialist-templates.js");
 	assert(section.includes("inline Approve button"), "index must describe the proposal card");
 	assert(section.includes("never ask in text first and wait for a typed reply"), "index must retire the typed-reply ceremony");
 	assert(section.includes("no memory"), "index must state the no-memory posture");
-	// Routing doctrine (prompt-hardening slice 3, battery-of-tests 2026-07-17):
+	// Routing doctrine:
 	// intent over wording, keep/share/present → specialist, offer on vague
 	// requests, deck ask-back. These lines are the fix for synonym-driven
 	// routing ("chart" delegated while "plot" stayed inline).

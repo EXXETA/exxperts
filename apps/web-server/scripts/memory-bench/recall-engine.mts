@@ -39,6 +39,7 @@ import { fileURLToPath } from "node:url";
 import { estimateTokens } from "../../src/token-estimate.js";
 import type { ArchivedEntry, MemoryDocument, MemoryEntry } from "../../src/memory-entries.js";
 import { NOTE_VALUE_WORDS, type ConflictNotePair } from "../../src/memory-duplicates.js";
+import { memoryCallCacheRetention, type MemoryCallKind } from "../../src/memory-call-cache.js";
 import { exactFoldModel } from "./fold-models.mjs";
 import { CONFLICT_SHAPES, stripRecallDirectives, type ConflictShape, type RecallAbility, type RecallPlant, type RecallQuestion, type RecallSession } from "./recall-fixtures.mjs";
 
@@ -238,6 +239,47 @@ export function parseBenchModelSpec(spec: string, name: string): { provider: str
 export function benchFoldModelFromEnv(): { provider: string; model: string } | null {
 	const spec = process.env.RECALL_BENCH_FOLD_MODEL?.trim();
 	return spec ? parseBenchModelSpec(spec, "RECALL_BENCH_FOLD_MODEL") : null;
+}
+
+/**
+ * RECALL_BENCH_MEMORY_MODEL: the room's Memory model, when named. The product
+ * runs Remember and Memorize on one memory model, so the checkpoint and the
+ * fold both follow it, and the memory work can be measured apart from the
+ * model that answers.
+ */
+export function benchMemoryModelFromEnv(): { provider: string; model: string } | null {
+	const spec = process.env.RECALL_BENCH_MEMORY_MODEL?.trim();
+	return spec ? parseBenchModelSpec(spec, "RECALL_BENCH_MEMORY_MODEL") : null;
+}
+
+/**
+ * The model each part of a real ingest runs on, and the setting that named it.
+ * The fold setting wins for the fold, so the fold can still be varied alone.
+ * With neither setting the checkpoint stays on the room model and the fold on
+ * the profile's Memorize model (null here, since only a run that has read the
+ * profile knows it), so a run that names neither measures what earlier runs did.
+ */
+export function benchIngestModels(roomModel: { provider: string; model: string }): { checkpoint: { provider: string; model: string }; checkpointFrom: string; fold: { provider: string; model: string } | null; foldFrom: string } {
+	const memory = benchMemoryModelFromEnv();
+	const fold = benchFoldModelFromEnv();
+	return {
+		checkpoint: memory ?? { provider: roomModel.provider, model: roomModel.model },
+		checkpointFrom: memory ? "RECALL_BENCH_MEMORY_MODEL" : "the room model",
+		fold: fold ?? memory,
+		foldFrom: fold ? "RECALL_BENCH_FOLD_MODEL" : memory ? "RECALL_BENCH_MEMORY_MODEL" : "the profile's Memorize model",
+	};
+}
+
+/**
+ * The models of the checkpoint, the fold and the answers in one line, because
+ * a cost or a score is only read right against the models behind it.
+ * `profileFold` is the profile's Memorize model, for a caller that has read it.
+ */
+export function benchModelsLine(roomModel: { provider: string; model: string }, profileFold?: { provider: string; model: string }): string {
+	const models = benchIngestModels(roomModel);
+	const name = (lock: { provider: string; model: string }) => `${lock.provider}/${lock.model}`;
+	const fold = models.fold ?? profileFold;
+	return `models: checkpoint on ${name(models.checkpoint)} (${models.checkpointFrom}) · fold on ${fold ? `${name(fold)} (${models.foldFrom})` : models.foldFrom} · answers on ${name(roomModel)}`;
 }
 
 /**
@@ -1922,18 +1964,18 @@ function withoutKnownFacts(answer: string, known: readonly string[]): string {
  * Whether an abstention invented something.
  *
  * A room that is asked about something it was never told should say so, and a
- * careful one often says the date it was asked on back while it does — "As of
- * 21 July 2026, nothing in my memory says…". An earlier version of this scorer
- * called any two-digit number an invention and marked those answers wrong,
+ * careful one often says the date it was asked on back while it does —
+ * "As of 21 July 2026, nothing in my memory says…". An earlier version of this
+ * scorer called any two-digit number an invention and marked those answers wrong,
  * which punished exactly the answers that are most careful about what they do
  * and do not know. So a number is only an invention when the fixture never gave
  * it to the room: the question's own trap spellings, or its `trapPattern` still
  * matching once every known fact has been taken out of the answer.
  *
  * A hedge is judged on the answer AS WRITTEN. "I don't know, but I believe it
- * was the Radisson" is a guess dressed as an abstention, and so is "I'm not
- * sure, probably 2026-11-30" even when that date is a fact the room holds — the
- * room was not asked for it and is guessing that it is the answer.
+ * was the Radisson" is a guess dressed as an abstention, and so is
+ * "I'm not sure, probably 2026-11-30" even when that date is a fact the room
+ * holds — the room was not asked for it and is guessing that it is the answer.
  */
 function abstentionInvention(input: { question: RecallQuestion; answer: string; known: readonly string[] }): string | null {
 	const { question, answer } = input;
@@ -2494,7 +2536,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 
-import { authedFetch, SMOKE_AUTH_HEADERS, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer } from "../smoke-server-process.js";
+import { authedFetch, SMOKE_AUTH_HEADERS, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, freePort } from "../smoke-server-process.js";
 
 const benchScriptsDir = fileURLToPath(new URL(".", import.meta.url));
 const webServerDir = path.resolve(benchScriptsDir, "..", "..");
@@ -2517,6 +2559,8 @@ export interface ScriptedRoomGateway {
 	assessments: string[];
 	/** The `reasoning_effort` each first-read and each fold request carried, null for none: the level the worker asked for. */
 	reasoningEfforts: { firstRead: Array<string | null>; fold: Array<string | null> };
+	/** The model each checkpoint and each fold request named: which model did the memory work. */
+	models: { checkpoint: string[]; fold: string[] };
 	close(): Promise<void>;
 }
 
@@ -2663,6 +2707,7 @@ export async function startScriptedRoomGateway(input: { questions: readonly Reca
 	let firstReads = 0;
 	const assessments: string[] = [];
 	const reasoningEfforts: { firstRead: Array<string | null>; fold: Array<string | null> } = { firstRead: [], fold: [] };
+	const models: { checkpoint: string[]; fold: string[] } = { checkpoint: [], fold: [] };
 	/** Requests held open by a hang on cue, so closing the gateway can end them. */
 	const hung = new Set<http.ServerResponse>();
 	const server = http.createServer((req, res) => {
@@ -2692,6 +2737,8 @@ export async function startScriptedRoomGateway(input: { questions: readonly Reca
 			try { parsed = JSON.parse(body); } catch { /* an unreadable body is answered like an unknown question */ }
 			if (body.includes(FIRST_READ_TASK_MARKER)) reasoningEfforts.firstRead.push(parsed.reasoning_effort ?? null);
 			if (body.includes(FOLD_TRIGGER_MARKER)) reasoningEfforts.fold.push(parsed.reasoning_effort ?? null);
+			if (body.includes("Produce the checkpoint compression fields now.")) models.checkpoint.push(String(parsed.model ?? ""));
+			if (body.includes(FOLD_TRIGGER_MARKER)) models.fold.push(String(parsed.model ?? ""));
 			const messages = parsed.messages ?? [];
 			const lines = requestLines(parsed);
 			const userText = messages.filter((message) => message.role === "user").map((message) => (typeof message.content === "string" ? message.content : Array.isArray(message.content) ? message.content.map((part) => (part as { text?: string })?.text ?? "").join(" ") : "")).join("\n");
@@ -2749,6 +2796,7 @@ export async function startScriptedRoomGateway(input: { questions: readonly Reca
 		get firstReads() { return firstReads; },
 		assessments,
 		reasoningEfforts,
+		models,
 		close: () => new Promise<void>((resolve) => {
 			for (const res of hung) res.destroy();
 			hung.clear();
@@ -2790,7 +2838,7 @@ export async function startBenchServer(input: { home: string; model: { provider:
 async function startBenchServerOnce(input: { home: string; model: { provider: string; model: string }; port?: number }): Promise<BenchServer> {
 	const home = homeOrThrow();
 	if (path.resolve(input.home) !== path.resolve(home.home)) throw new Error(`startBenchServer was handed ${input.home}, and this run's home is ${home.home}`);
-	const port = input.port ?? 39000 + Math.floor(Math.random() * 2000);
+	const port = input.port ?? await freePort();
 	const env: NodeJS.ProcessEnv = { ...process.env };
 	for (const key of ["ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN", "OPENAI_API_KEY", "AZURE_OPENAI_API_KEY", "EXXETA_AI_API_KEY", "COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN", "GEMINI_API_KEY", "GOOGLE_CLOUD_API_KEY", "OPENROUTER_API_KEY"]) delete env[key];
 	env.HOME = home.home;
@@ -2823,23 +2871,25 @@ async function startBenchServerOnce(input: { home: string; model: { provider: st
  * two AI-profile files. `baseUrl` points the provider at the scripted gateway;
  * a real run copies the machine's own records instead (`useRealProviderRecords`).
  */
-export function writeScriptedProviderRecords(input: { gatewayPort: number; modelId?: string; reasoning?: boolean }): { provider: string; model: string } {
+export function writeScriptedProviderRecords(input: { gatewayPort: number; modelId?: string; reasoning?: boolean; memoryModelId?: string }): { provider: string; model: string } {
 	const home = homeOrThrow();
 	// A scripted run writes its own records; it never writes into a shared dir.
 	if (benchSharedAgentDir()) throw new Error("a scripted run writes its own provider records, so RECALL_BENCH_AGENT_DIR does not apply; unset it");
 	const agentDir = path.join(home.home, ".exxperts", "agent");
 	const appDir = path.join(home.home, ".exxperts", "app");
 	const modelId = input.modelId ?? BENCH_MODEL.model;
+	// A second model on the same gateway lets a smoke tell the memory model's calls from the room model's by name.
+	const named = [{ id: modelId, name: "Room Model" }, ...(input.memoryModelId ? [{ id: input.memoryModelId, name: "Memory Model" }] : [])];
 	fs.mkdirSync(agentDir, { recursive: true, mode: 0o700 });
 	fs.writeFileSync(
 		path.join(agentDir, "models.json"),
-		JSON.stringify({ providers: { [SCRIPTED_PROVIDER_ID]: { name: "Synthetic Gateway", baseUrl: `http://127.0.0.1:${input.gatewayPort}/v1`, api: "openai-completions", models: [{ id: modelId, name: "Room Model", contextWindow: 128_000, maxTokens: 16_384, ...(input.reasoning ? { reasoning: true } : {}) }] } } }, null, 2),
+		JSON.stringify({ providers: { [SCRIPTED_PROVIDER_ID]: { name: "Synthetic Gateway", baseUrl: `http://127.0.0.1:${input.gatewayPort}/v1`, api: "openai-completions", models: named.map((model) => ({ ...model, contextWindow: 128_000, maxTokens: 16_384, ...(input.reasoning ? { reasoning: true } : {}) })) } } }, null, 2),
 		{ mode: 0o600 },
 	);
 	fs.writeFileSync(path.join(agentDir, "auth.json"), JSON.stringify({ [SCRIPTED_PROVIDER_ID]: { type: "api_key", key: "synthetic-recall-bench-key" } }, null, 2), { mode: 0o600 });
 	fs.writeFileSync(
 		path.join(appDir, `${SCRIPTED_PROVIDER_ID}-ai-profile.json`),
-		JSON.stringify({ profileId: SCRIPTED_PROVIDER_ID, providerId: SCRIPTED_PROVIDER_ID, label: "Synthetic Gateway", roomModels: [{ modelId, label: "Room Model" }], maintenanceModel: modelId }, null, 2),
+		JSON.stringify({ profileId: SCRIPTED_PROVIDER_ID, providerId: SCRIPTED_PROVIDER_ID, label: "Synthetic Gateway", roomModels: named.map((model) => ({ modelId: model.id, label: model.name })), maintenanceModel: modelId }, null, 2),
 		{ mode: 0o600 },
 	);
 	fs.writeFileSync(path.join(appDir, "persistent-agent-ai-profile.json"), JSON.stringify({ profileId: SCRIPTED_PROVIDER_ID }, null, 2), { mode: 0o600 });
@@ -2856,14 +2906,41 @@ export function signInSourceProblem(signInFromHome: boolean): string | null {
 }
 
 /**
+ * A provider no built-in profile or gateway covers (a key provider) offers its
+ * models to rooms only through a custom profile, the one Approve models
+ * writes, and the temp home has none. So the run writes it with the product's
+ * own writer: every named model of the provider for rooms, its fold model
+ * (else its memory model, else its room model) for Memorize and Review.
+ * Returns each seeded provider's profile id.
+ */
+async function seedCustomProfiles(appDir: string, locks: { provider: string; model: string }[]): Promise<Map<string, string>> {
+	const { CUSTOM_AI_PROFILES_FILE, customAiProfileIdForProvider, isReservedCustomProfileProvider, writeCustomAiProfile } = await import("../../src/custom-ai-profiles.js");
+	const seeded = new Map<string, string>();
+	for (const provider of new Set(locks.map((lock) => lock.provider))) {
+		if (isReservedCustomProfileProvider(provider)) continue;
+		// The product's readers read the path fixed when this module loaded;
+		// loaded before the temp home was made, it names another home, and a
+		// profile written here would be one no reader sees.
+		if (path.resolve(path.dirname(CUSTOM_AI_PROFILES_FILE)) !== path.resolve(appDir)) {
+			throw new Error(`custom-ai-profiles.js was loaded before the bench home was made: its readers read ${CUSTOM_AI_PROFILES_FILE}, not this run's ${appDir}`);
+		}
+		const models = locks.filter((lock) => lock.provider === provider).map((lock) => lock.model);
+		writeCustomAiProfile({ providerId: provider, roomModels: models, learnModel: models[models.length - 1]! });
+		seeded.set(provider, customAiProfileIdForProvider(provider));
+	}
+	return seeded;
+}
+
+/**
  * The machine's own provider records, COPIED into the temp home read-only: the
  * model catalogue and the signed-in credentials, so a real-model run reaches
  * the provider the person is already signed in to. Only when the run asked for
  * it (SIGN_IN_FROM_HOME_FLAG); a run that names no sign-in stops here, before
  * any call, and takes its temp home with it. Nothing is ever written back, and
- * no key is ever printed: the copy is read, never echoed.
+ * no key is ever printed: the copy is read, never echoed. The model catalogue
+ * is optional, as it is to the product: a provider the runtime knows needs none.
  */
-export function useRealProviderRecords(input: { spec: string; signInFromHome: boolean }): { provider: string; model: string } {
+export async function useRealProviderRecords(input: { spec: string; signInFromHome: boolean }): Promise<{ provider: string; model: string }> {
 	const home = homeOrThrow();
 	const problem = signInSourceProblem(input.signInFromHome);
 	if (problem) {
@@ -2876,21 +2953,37 @@ export function useRealProviderRecords(input: { spec: string; signInFromHome: bo
 	const shared = benchSharedAgentDir();
 	if (shared) {
 		// Read in place: found, never opened, never copied.
-		for (const file of ["models.json", "auth.json"]) {
-			if (!fs.existsSync(path.join(shared, file))) throw new Error(`${path.join(shared, file)} is not there, so RECALL_BENCH_AGENT_DIR names no signed-in agent dir`);
-		}
+		if (!fs.existsSync(path.join(shared, "auth.json"))) throw new Error(`${path.join(shared, "auth.json")} is not there, so RECALL_BENCH_AGENT_DIR names no signed-in agent dir`);
 	} else {
 		const realAgentDir = path.join(realHomeDir, ".exxperts", "agent");
 		const agentDir = path.join(home.home, ".exxperts", "agent");
 		fs.mkdirSync(agentDir, { recursive: true, mode: 0o700 });
 		for (const file of ["models.json", "auth.json"]) {
 			const from = path.join(realAgentDir, file);
-			if (!fs.existsSync(from)) throw new Error(`${from} is not there, so this machine has nothing signed in to copy; sign the provider in under AI setup first`);
+			if (!fs.existsSync(from)) {
+				if (file === "models.json") continue;
+				throw new Error(`${from} is not there, so this machine has nothing signed in to copy; sign the provider in under AI setup first`);
+			}
 			fs.copyFileSync(from, path.join(agentDir, file));
 			fs.chmodSync(path.join(agentDir, file), 0o600);
 		}
 	}
-	fs.writeFileSync(path.join(appDir, "persistent-agent-ai-profile.json"), JSON.stringify({ profileId: benchProfileIdFor(provider) }, null, 2), { mode: 0o600 });
+	const memory = benchMemoryModelFromEnv();
+	const fold = benchFoldModelFromEnv();
+	// The product's Approve models refuses a model the runtime does not know;
+	// the offer checks below cannot, as the profile they read is written here.
+	const { AuthStorage, ModelRegistry } = await import("@exxeta/exxperts-runtime");
+	const registry = ModelRegistry.create(AuthStorage.create());
+	for (const lock of [{ provider, model }, ...(memory ? [memory] : []), ...(fold ? [fold] : [])]) {
+		if (!registry.find(lock.provider, lock.model)) throw new Error(`model not found: ${lock.provider}/${lock.model}: check the id; a dry run stops here too`);
+	}
+	const seeded = await seedCustomProfiles(appDir, [{ provider, model }, ...(memory ? [memory] : []), ...(fold ? [fold] : [])]);
+	fs.writeFileSync(path.join(appDir, "persistent-agent-ai-profile.json"), JSON.stringify({ profileId: seeded.get(provider) ?? benchProfileIdFor(provider) }, null, 2), { mode: 0o600 });
+	// The floor every thread write checks, checked here before anything is spent.
+	const { isRoomModelOffered } = await import("../../src/room-models.js");
+	if (!isRoomModelOffered({ provider, model }, "conversation")) throw new Error(`${provider}/${model} is not offered to rooms by any provider: a built-in provider offers only its curated models`);
+	if (memory && !isRoomModelOffered(memory, "memory")) throw new Error(`RECALL_BENCH_MEMORY_MODEL ${memory.provider}/${memory.model} is not offered for memory by any provider: a built-in provider offers only its curated models`);
+	if (fold && !isRoomModelOffered(fold, "memory")) throw new Error(`RECALL_BENCH_FOLD_MODEL ${fold.provider}/${fold.model} is not offered for memory by any provider: a built-in provider offers only its curated models`);
 	return { provider, model };
 }
 
@@ -3091,6 +3184,8 @@ export interface MaintenanceWorkerCall {
 	 * the level every earlier number was measured with.
 	 */
 	modelDefaultThinking?: boolean;
+	/** The Memory model call this is, as the product names it: its prompt cache follows the product's setting. A judge or a baseline names none. */
+	callKind?: MemoryCallKind;
 }
 
 // --- Waiting a provider out ----------------------------------------------------
@@ -3309,6 +3404,7 @@ export async function createMaintenanceWorker(): Promise<MaintenanceWorker> {
 				...(input.modelDefaultThinking ? {} : { thinkingLevel: "low" as const }),
 				...(input.timeoutMs ? { timeoutMs: input.timeoutMs } : {}),
 				...(input.signal ? { signal: input.signal } : {}),
+				...(input.callKind ? { cacheRetention: memoryCallCacheRetention(input.callKind) } : {}),
 			}), { signal: input.signal });
 			spent.calls += 1;
 			spent.input += result.usage?.input ?? 0;
@@ -3399,22 +3495,24 @@ export async function createRealIngest(input: { roomModel: { provider: string; m
 	const profiles = await import("../../src/persistent-agent-ai-profiles.js");
 	const profileState = await import("../../src/persistent-agent-ai-profile-state.js");
 	const profileId = profileState.readPersistentAgentAiProfileState().profileId;
-	// Remember ran on the room model when the 0.13 bench was measured; the
-	// product now runs it on the room's memory row (backlog 49 decides the
-	// rerun). Kept on the room model so this harness measures what it did.
-	const checkpointModel = { provider: input.roomModel.provider, model: input.roomModel.model };
-	const foldModel = benchFoldModelFromEnv() ?? profiles.getAbsorbModelLock(profileId);
-	console.log(`memorize folds on ${foldModel.provider}/${foldModel.model}${process.env.RECALL_BENCH_FOLD_MODEL?.trim() ? " (RECALL_BENCH_FOLD_MODEL)" : " (the profile's Memorize model)"}`);
+	// The product's Remember reads on the room's memory row, so the checkpoint
+	// follows a named memory model; without one it stays on the room model,
+	// which is what every earlier number was measured with.
+	const models = benchIngestModels(input.roomModel);
+	const checkpointModel = models.checkpoint;
+	const foldModel = models.fold ?? profiles.getAbsorbModelLock(profileId);
+	console.log(benchModelsLine(input.roomModel, foldModel));
 	const worker = await createMaintenanceWorker();
 
 	/** One worker call, the way every maintenance call in the product makes one. */
-	const callWorker = (prompt: string, modelLock: { provider: string; model: string }, label: string, triggerPrompt: string, emptyTextError: string, options?: { signal?: AbortSignal; timeoutMs?: number; maxTokens?: number; modelDefaultThinking?: boolean }) =>
+	const callWorker = (prompt: string, modelLock: { provider: string; model: string }, label: string, triggerPrompt: string, emptyTextError: string, options?: { signal?: AbortSignal; timeoutMs?: number; maxTokens?: number; modelDefaultThinking?: boolean; callKind?: MemoryCallKind }) =>
 		worker.call({
 			prompt,
 			modelLock,
 			label,
 			triggerPrompt,
 			emptyTextError,
+			...(options?.callKind ? { callKind: options.callKind } : {}),
 			...(options?.modelDefaultThinking ? { modelDefaultThinking: true } : {}),
 			// The fold's own output cap, as the product passes it.
 			...(options?.maxTokens ? { maxOutputTokens: options.maxTokens } : {}),
@@ -3438,7 +3536,9 @@ export async function createRealIngest(input: { roomModel: { provider: string; m
 		const items = await writeConversationThread({ roomId, conversationId, session, model: input.roomModel, now });
 		const proposal = await persistentAgents.buildCheckpointProposal(
 			{ agentId: roomId, conversationId, model: input.roomModel, density: "standard", items, runtimeCwd: threadCwd },
-			(prompt, modelLock) => callWorker(prompt, modelLock, "checkpoint compression worker", "Produce the checkpoint compression fields now.", "checkpoint compression worker produced no text"),
+			(prompt, modelLock, call) => callWorker(prompt, modelLock, "checkpoint compression worker", "Produce the checkpoint compression fields now.", "checkpoint compression worker produced no text", { callKind: call?.callKind ?? "remember-single" }),
+			// As the product's route passes it: the model that reads the conversation.
+			{ model: checkpointModel },
 		);
 		const parsed = persistentAgents.parseCheckpointApprovalRequest(
 			{
@@ -3481,7 +3581,7 @@ export async function createRealIngest(input: { roomModel: { provider: string; m
 		// A call that fails, is cut off or runs too long comes back missing, never
 		// as a throw; a room that is not ready throws here as the fold's start would.
 		const read = await persistentAgents.buildAbsorbAssessment(roomId, foldModel, async (prompt, modelLock) => {
-			const result = await callWorker(prompt, modelLock, "memorize assessment worker", "Produce the compact absorb assessment now.", "absorb assessment worker produced no text", { modelDefaultThinking: true });
+			const result = await callWorker(prompt, modelLock, "memorize assessment worker", "Produce the compact absorb assessment now.", "absorb assessment worker produced no text", { modelDefaultThinking: true, callKind: "first-read" });
 			tally.calls += 1;
 			tally.input += result.usage?.input ?? 0;
 			tally.output += result.usage?.output ?? 0;
@@ -3503,13 +3603,13 @@ export async function createRealIngest(input: { roomModel: { provider: string; m
 			guidance: { pin: [], drop: [], corrections: [], topics: [], instructions: [] },
 			model: foldModel,
 			generate: (prompt: string, modelLock: { provider: string; model: string }, options: { signal?: AbortSignal; timeoutMs?: number; maxTokens?: number }) =>
-				callWorker(prompt, modelLock, "memorize fold worker", absorbOps.FOLD_TRIGGER_PROMPT, "the fold worker produced no text", options),
+				callWorker(prompt, modelLock, "memorize fold worker", absorbOps.FOLD_TRIGGER_PROMPT, "the fold worker produced no text", { ...options, callKind: "fold" }),
 			// Every call here, the probe too, still waits out the provider through
 			// withProviderRetry: this bench measures fold outcomes, not outage handling.
 			// As the propose route passes them: the tiny fixed question that tells a
 			// page's failure from an outage, and the window the oversize path reads.
 			probe: (prompt: string, modelLock: { provider: string; model: string }, options: { signal?: AbortSignal; timeoutMs?: number }) =>
-				callWorker(prompt, modelLock, "memorize probe worker", prompt, "the probe worker produced no text", options),
+				callWorker(prompt, modelLock, "memorize probe worker", prompt, "the probe worker produced no text", { ...options, callKind: "probe" }),
 			resolveModelWindow: (modelLock: { provider: string; model: string }) => worker.modelWindow(modelLock),
 			now: () => now,
 		});

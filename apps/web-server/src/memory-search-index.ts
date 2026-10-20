@@ -20,7 +20,7 @@
 //   one token rather than on one spelling. Case, diacritics, thousands
 //   separators, date spellings and quarter spellings are all folded; the plain
 //   words survive alongside the folded token, so a note about "Juli" is still
-//   findable by the word Juli and not only by 2026-07-11.
+//   findable by the word Juli and not only by `2026-07-11`.
 //
 // Defaults (k1, b, the prefix length, the topic bonus, the stopword lists, the
 // stemmer tables) are decisions, not accidents: they are named constants so the
@@ -286,7 +286,7 @@ function foldedDayWithoutYear(month: number, day: number, source: string): strin
 const ISO_MONTH_PATTERN = /(?<![\p{L}\d-])(\d{4})-(\d{1,2})(?![\p{L}\d-])/gu;
 const ISO_DATE_PATTERN = /(?<![\p{L}\d-])(\d{4})-(\d{1,2})-(\d{1,2})(?![\p{L}\d-])/gu;
 const DOTTED_DATE_PATTERN = /(?<![\p{L}\d.])(\d{1,2})\.\s?(\d{1,2})\.\s?(\d{4})(?![\p{L}\d-])/gu;
-// Day, month, year, read the European way and no other: 03/12/2025 is the
+// Day, month, year, read the European way and no other: `03/12/2025` is the
 // third of December. A two-digit year is not read.
 const SLASH_DATE_PATTERN = /(?<![\p{L}\d/])(\d{1,2})\/(\d{1,2})\/(\d{4})(?![\p{L}\d/])/gu;
 const DAY_MONTH_YEAR_PATTERN = /(?<![\p{L}\d])(\d{1,2})(?:\.|st|nd|rd|th)?\s+(?:of\s+)?(\p{L}+)\.?\s+(\d{4})(?![\p{L}\d-])/giu;

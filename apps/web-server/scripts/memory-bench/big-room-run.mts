@@ -150,7 +150,7 @@ const calls: CallRecord[] = [];
 let modelWindow = { contextWindow: 200_000, maxOutputTokens: 16_000 };
 async function makeAsk(lock: ModelLock) {
 	if (scripted) return async (room: string, kind: CallKind, prompt: string): Promise<Reply> => record(room, kind, prompt, async () => fakeAnswer(kind, prompt));
-	useRealProviderRecords({ spec: `${lock.provider}/${lock.model}`, signInFromHome: argv.includes(SIGN_IN_FROM_HOME_FLAG) });
+	await useRealProviderRecords({ spec: `${lock.provider}/${lock.model}`, signInFromHome: argv.includes(SIGN_IN_FROM_HOME_FLAG) });
 	const worker = await createMaintenanceWorker();
 	modelWindow = worker.modelWindow(lock);
 	const triggers: Record<CallKind, string> = { "remember-part": "Write the notes on this part now.", "remember-final": "Produce the checkpoint compression fields now.", "first-read": "Produce the compact absorb assessment now.", fold: FOLD_TRIGGER_PROMPT, placement: "Answer with the title only.", probe: "Answer now.", review: "Tidy these notes now." };

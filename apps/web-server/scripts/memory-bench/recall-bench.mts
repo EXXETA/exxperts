@@ -55,6 +55,8 @@ import {
 	createBenchRoom,
 	backHistoryTokensFor,
 	backHistoryWindow,
+	benchIngestModels,
+	benchModelsLine,
 	DEFAULT_MEMORY_BUDGET_TOKENS,
 	demotionScoreConstants,
 	flushRoomMemoryUse,
@@ -100,6 +102,7 @@ import {
 	type RecallRunSummary,
 	type RecallSource,
 } from "./recall-engine.mjs";
+import { modelTokenFactor } from "../../src/token-estimate.js";
 import { buildRecallFixture, CONFLICT_SHAPES, type ConflictShape, type RecallAbility, type RecallFixture, type RecallLanguage, type RecallQuestion } from "./recall-fixtures.mjs";
 import { judgeLabel, judgePrompt } from "./longmemeval-judge.mjs";
 
@@ -305,12 +308,12 @@ interface LanguageRun {
 	conflictFailures: string[];
 }
 
-async function runLanguage(fixture: RecallFixture, args: BenchArgs, home: string, server: BenchServer | null, ingestPair: RealIngest | null, scriptedRoom: boolean, judge: JudgeCall | null, known: readonly string[]): Promise<LanguageRun> {
-	const language = fixture.language;
-	const mechanical: string[] = [];
-	const warnings: string[] = [];
-	console.log(`\n=== ${language} · seed ${fixture.seed} · ${fixture.sessions.length} conversations · ${fixture.questions.length} questions ===`);
-
+/**
+ * How a language's room is seeded, worked out from the run. A function of its
+ * own because the dry run's estimate reads the same size: the checkpoints
+ * before the first Memorize read the whole back history.
+ */
+function backHistoryPlan(fixture: RecallFixture, args: BenchArgs) {
 	// The back history is sized from THIS run: the budget only reaches the
 	// fixture's own notes once the stretch of back history newer than the first
 	// fold outweighs the budget itself, and where the first fold falls depends
@@ -328,6 +331,16 @@ async function runLanguage(fixture: RecallFixture, args: BenchArgs, home: string
 	const sized = oneFold
 		? { tokens: DEFAULT_MEMORY_BUDGET_TOKENS * 2, fraction: 1, whyClamped: "one fold, so the floor" }
 		: backHistoryTokensFor({ budgetTokens: DEFAULT_MEMORY_BUDGET_TOKENS, window, firstFoldDate });
+	return { foldDates, window, oneFold, sized };
+}
+
+async function runLanguage(fixture: RecallFixture, args: BenchArgs, home: string, server: BenchServer | null, ingestPair: RealIngest | null, scriptedRoom: boolean, judge: JudgeCall | null, known: readonly string[]): Promise<LanguageRun> {
+	const language = fixture.language;
+	const mechanical: string[] = [];
+	const warnings: string[] = [];
+	console.log(`\n=== ${language} · seed ${fixture.seed} · ${fixture.sessions.length} conversations · ${fixture.questions.length} questions ===`);
+
+	const { foldDates, window, oneFold, sized } = backHistoryPlan(fixture, args);
 	// Nothing the fixture plants or accepts as an answer may appear in the
 	// filler; `createBenchRoom` throws if it does.
 	const forbiddenInBackHistory = [
@@ -1079,6 +1092,51 @@ function reportTranscriptBaseline(fixture: RecallFixture, args: BenchArgs): void
 	if (!process.env.RECALL_BENCH_MODEL) console.log("  no model configured, so the size is reported and nothing is asked; set RECALL_BENCH_MODEL to score it");
 }
 
+// --- The ingest estimate -----------------------------------------------------
+//
+// What a dry run prices a real ingest with, so each call is counted as what its
+// prompt carries. A checkpoint reads its instructions, the memory as stored,
+// the pages remembered since the last Memorize and the conversation; a fold
+// reads its instructions, the memory with each note's address and dates, and
+// one page. The sizes were read off the product's own prompts on this fixture,
+// and the total is counted as the model counts tokens, which is what is billed.
+
+/** Remember's instructions and the frame around what it reads. */
+const CHECKPOINT_INSTRUCTION_TOKENS = 2_400;
+/** The fold's instructions, its address legend and its task. */
+const FOLD_INSTRUCTION_TOKENS = 2_500;
+/** One remembered page: the checkpoints after it read it until the next Memorize, and so does its fold. */
+const PAGE_TOKENS = 400;
+/**
+ * The memory as stored, which Remember reads, carries a line of metadata on
+ * every note that the budget does not count: about 1.6 times the budget's
+ * count on this bench's short notes.
+ */
+const STORED_MEMORY_FACTOR = 1.6;
+/** Each note as a fold reads it carries its address and dates: about 1.45 times the budget's count here. */
+const FOLD_MEMORY_FACTOR = 1.45;
+
+function ingestEstimate(fixture: RecallFixture, args: BenchArgs, roomModel: { provider: string; model: string }): { calls: number; checkpointTokens: number; foldTokens: number } {
+	const foldEvery = args.foldEvery ?? 7;
+	const models = benchIngestModels(roomModel);
+	// Until the first Memorize the core is the whole back history, which that
+	// Memorize sheds to the budget before its first fold.
+	let memory = args.backHistory ?? backHistoryPlan(fixture, args).sized.tokens;
+	let waiting = 0;
+	let checkpointTokens = 0;
+	let foldTokens = 0;
+	for (const [index, session] of fixture.sessions.entries()) {
+		checkpointTokens += CHECKPOINT_INSTRUCTION_TOKENS + memory * STORED_MEMORY_FACTOR + waiting * PAGE_TOKENS + answerTokens(session.turns.map((turn) => turn.text).join("\n"));
+		waiting += 1;
+		if (waiting < foldEvery && index < fixture.sessions.length - 1) continue;
+		memory = Math.min(memory, DEFAULT_MEMORY_BUDGET_TOKENS);
+		foldTokens += waiting * (FOLD_INSTRUCTION_TOKENS + memory * FOLD_MEMORY_FACTOR + PAGE_TOKENS);
+		waiting = 0;
+	}
+	// A fold on the profile's Memorize model is counted as the room model counts: that model is only read once a run starts.
+	return { calls: fixture.sessions.length, checkpointTokens: Math.round(checkpointTokens * modelTokenFactor(models.checkpoint)), foldTokens: Math.round(foldTokens * modelTokenFactor(models.fold ?? roomModel)) };
+}
+
 // --- Main --------------------------------------------------------------------
 
 const args = parseArgs(process.argv.slice(2));
@@ -1128,7 +1186,7 @@ if (args.ask) {
 	const asked = args.limit === undefined ? questions.length : Math.min(args.limit, questions.length / fixtures.length) * fixtures.length;
 	if (args.judge && !realSpec) console.log(`judge: ${args.judge} needs a real model: the scripted gateway answers by quoting and would only ever agree with itself. Set RECALL_BENCH_MODEL to judge; every row's judge field stays null and the scorer's own verdict is the number.`);
 	if (realSpec) {
-		const lock = useRealProviderRecords({ spec: realSpec, signInFromHome: args.signInFromHome === true });
+		const lock = await useRealProviderRecords({ spec: realSpec, signInFromHome: args.signInFromHome === true });
 		// Every write is stamped with the model the room will answer with: a
 		// room's active AI profile has to approve the lock on its own records.
 		setBenchModel(lock);
@@ -1144,9 +1202,12 @@ if (args.ask) {
 			ingestPair = await createRealIngest({ roomModel: lock });
 		}
 		if (!args.scriptedIngest) {
-			const foldPrompt = DEFAULT_MEMORY_BUDGET_TOKENS + 1_500;
-			const checkpointPrompt = DEFAULT_MEMORY_BUDGET_TOKENS + 800;
-			console.log(`estimate: ingest ≈ ${sessions} checkpoint call(s) of ~${checkpointPrompt} prompt tokens + ${sessions} fold call(s) of ~${foldPrompt} across ${folds} Memorize run(s) ≈ ${Math.round((sessions * (checkpointPrompt + foldPrompt)) / 1000)}k prompt tokens per language`);
+			// A real run's ingest has printed it; a dry run builds no ingest.
+			if (args.dryRun) console.log(benchModelsLine(lock));
+			for (const fixture of fixtures) {
+				const ingest = ingestEstimate(fixture, args, lock);
+				console.log(`estimate: ingest (${fixture.language}) ≈ ${ingest.calls} checkpoint call(s) ≈ ${Math.round(ingest.checkpointTokens / 1000)}k + ${ingest.calls} fold call(s) ≈ ${Math.round(ingest.foldTokens / 1000)}k across ${folds} Memorize run(s) ≈ ${Math.round((ingest.checkpointTokens + ingest.foldTokens) / 1000)}k prompt tokens, as the model counts them; output tokens, retries and the probe are not estimated`);
+			}
 		}
 		const perCall = fixtures[0] ? Math.round(fixtures[0].sessions.length * 40 + 12_000) : 12_000;
 		console.log(`estimate: asking ≈ ${asked} question(s) × 2 calls ≈ ${asked * 2} calls of roughly ${perCall} prompt tokens each ≈ ${(asked * 2 * perCall / 1000).toFixed(0)}k prompt tokens${args.baseline === "none" ? ", and the same again for the baseline" : ""}`);

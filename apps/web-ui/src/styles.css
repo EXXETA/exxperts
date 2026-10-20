@@ -78,7 +78,7 @@
 	--exx-warning: #e8a838;
 	--exx-danger: #e85858;
 	--exx-danger-strong: #ff5555;
-	/* Status grammar (2026-07-18): the "thinker" blue — a live task working.
+	/* The "thinker" blue — a live task working.
 	   Only a genuinely running task may pulse in it; green stays for done. */
 	--exx-working: #7da7e8;
 	/* Brand lila: plan-covered usage accent in the Wallet. */
@@ -1116,12 +1116,6 @@ strong, b { font-weight: 700; }
 	border-color: var(--border);
 	background: var(--panel-2);
 }
-.sidebar-config-menu .menu-row + .menu-item,
-.sidebar-config-menu .menu-item + .menu-item {
-	border-top: 1px solid var(--border-soft);
-	margin-top: 4px;
-	padding-top: 10px;
-}
 .sidebar-config-menu .menu-appearance-seg {
 	display: inline-flex;
 	border: 1px solid var(--border);
@@ -1510,6 +1504,11 @@ strong, b { font-weight: 700; }
 	gap: 10px;
 }
 .add-provider-key-form input { flex: 1; }
+.add-provider-key-error {
+	flex-basis: 100%;
+	color: var(--danger);
+	font-size: 13px;
+}
 .add-provider-row-key-form,
 .add-provider-instructions {
 	padding: 0 0 12px;
@@ -7323,6 +7322,11 @@ strong, b { font-weight: 700; }
 	text-transform: uppercase;
 }
 .recent-body table tbody tr:last-child td { border-bottom: none; }
+.recent-cache-note {
+	display: block;
+	font-size: 11px;
+	opacity: 0.7;
+}
 .recent-body table th:first-child,
 .recent-body table td:first-child { padding-left: 18px; }
 .recent-body table th:last-child,
@@ -10056,15 +10060,14 @@ label.settings-row {
 	max-width: none;
 }
 
-/* Settings menu footer: version + GitHub link as quiet metadata below Help. */
+/* Settings menu footer: the version in use and the GitHub link, quiet
+   metadata below the menu rows. Spacing separates it; no line. */
 .sidebar-config-menu .menu-meta-row {
 	display: flex;
 	align-items: center;
 	justify-content: space-between;
 	gap: 8px;
 	padding: 8px 8px 2px;
-	margin-top: 4px;
-	border-top: 1px solid var(--border-soft);
 	font-size: var(--exx-font-size-xs);
 	color: var(--muted);
 }
@@ -10079,14 +10082,10 @@ label.settings-row {
 	outline: none;
 }
 
-/* Update notice (desktop app): an attention dot on the gear, and the version
-   line turned into the action that installs the new release. The dot wears
-   the same orange the room badges wear (var(--warning), the token behind
-   .persistent-agent-badge.standby and .status-dot.standby), so "something
-   here wants you" reads the same everywhere and follows the theme. The dot
-   sits inside the gear button so it rides along in both sidebar variants
-   (the footer one makes .sidebar-config static, so an outer anchor would
-   drift to the page corner). */
+/* Update notice (desktop app): a dot on the gear and an "Update to" row in
+   the menu. Both dots wear var(--warning), the orange of the room badges, so
+   "something here wants you" reads the same everywhere. The gear's dot sits
+   inside the button so it follows the gear in both sidebar layouts. */
 .sidebar-config-gear {
 	position: relative;
 }
@@ -10103,51 +10102,40 @@ label.settings-row {
 	box-shadow: 0 0 0 1.5px var(--panel);
 	pointer-events: none;
 }
-/* The offer keeps its own line: side by side with the version and the GitHub
-   link the four items crowded the 260px menu and wrapped. */
+/* The update row: a menu item whose label lines up with Settings and Help,
+   the dot right after the label, and "Not now" at the right end. */
 .sidebar-config-menu .menu-update-row {
 	display: flex;
 	align-items: center;
-	justify-content: space-between;
-	gap: 8px;
-	padding: 8px 8px 0;
-	margin-top: 4px;
-	border-top: 1px solid var(--border-soft);
+	gap: 4px;
 }
-/* One separator above the pair, not one between them: the offer and the
-   version it upgrades from belong to the same closing block. */
-.sidebar-config-menu .menu-update-row + .menu-meta-row {
-	border-top: 0;
-	margin-top: 0;
+.sidebar-config-menu .menu-update {
+	flex: 1 1 auto;
+	width: auto;
+	justify-content: flex-start;
+	gap: 6px;
 }
-.sidebar-config-menu .menu-meta-update-btn {
+.sidebar-config-menu .menu-update-dot {
+	flex: none;
+	width: 6px;
+	height: 6px;
+	border-radius: 50%;
+	background: var(--warning);
+}
+.sidebar-config-menu .menu-update-later {
+	flex: none;
 	background: transparent;
-	border: 1px solid color-mix(in srgb, var(--warning) 55%, var(--border));
+	border: 1px solid transparent;
 	border-radius: 6px;
-	color: var(--fg);
-	font-size: var(--exx-font-size-xs);
-	padding: 3px 8px;
-	cursor: pointer;
-	white-space: nowrap;
-}
-.sidebar-config-menu .menu-meta-update-btn:hover,
-.sidebar-config-menu .menu-meta-update-btn:focus-visible {
-	background: color-mix(in srgb, var(--warning) 18%, transparent);
-	border-color: var(--warning);
-	outline: none;
-}
-.sidebar-config-menu .menu-meta-dismiss {
-	background: transparent;
-	border: 0;
-	padding: 0;
 	color: var(--muted);
 	font-size: var(--exx-font-size-xs);
+	padding: 6px 8px;
 	cursor: pointer;
 }
-.sidebar-config-menu .menu-meta-dismiss:hover,
-.sidebar-config-menu .menu-meta-dismiss:focus-visible {
+.sidebar-config-menu .menu-update-later:hover,
+.sidebar-config-menu .menu-update-later:focus-visible {
 	color: var(--fg);
-	text-decoration: underline;
+	background: var(--panel-2);
 	outline: none;
 }
 
@@ -10375,7 +10363,7 @@ label.settings-row {
 .consult-fold { display: flex; justify-content: flex-end; }
 /* Folded, the pill aligns to the COMPOSER's right edge, not the narrower
    780px card zone — same rail constraint as .composer-layout plus the
-   .composer 18px side padding (Borja, 2026-07-11). */
+   .composer 18px side padding. */
 .consult-dock.consult-fold {
 	margin: 0 18px 10px;
 	width: calc(100% - 36px);
@@ -10424,7 +10412,7 @@ label.settings-row {
 .consult-item {
 	/* Same rail as normal chat rows (.bubble-row) so the lila edge sits at the
 	   transcript's left margin, and the same 780px reading width as .bubble for
-	   the content (Borja, 2026-07-11) — the distinction is the accent, not the
+	   the content — the distinction is the accent, not the
 	   layout. */
 	width: min(var(--chat-rail-width), 100%);
 	box-sizing: border-box;
@@ -10781,16 +10769,8 @@ button.composer-staged-tile-frame:focus-visible { outline: 2px solid var(--exx-p
 }
 
 
-/* NOTE FOR THE COORDINATOR: this file is authored standalone to avoid a
-   styles.css merge conflict with parallel tracks — MERGE IT INTO styles.css
-   (append after the consult MR-4/MR-5 block, ~line 8387) at integration; it is
-   not linked anywhere on its own. Everything here is namespaced `.task-` and
-   reuses the existing --exx-* custom properties, exactly like the V4 mockup
-   (task-card-mockup.html). The TaskDock reuses the DelegationCard base, so the
-   card/chip/footer/button chrome already comes from the `.consult-*` rules in
-   styles.css — the rules below only style the two RESERVED slots (status stream
-   + artifact strip), the task dock/pill wrappers, the summary/error text, and
-   the error accent. */
+/* Specialist tasks: everything here is namespaced `.task-` and reuses the
+   existing --exx-* custom properties. */
 
 /* -- dock + pill wrappers (mirror .consult-dock / .consult-fold / .fold-pill) - */
 .task-dock {
@@ -11072,8 +11052,7 @@ button.composer-staged-tile-frame:focus-visible { outline: 2px solid var(--exx-p
    Second occupant of the right pane (sibling to .preview-pane). Namespaced
    .artifact-viewer-* and built on the theme-aware alias tokens (--fg/--bg/…),
    which resolve to the --exx-* palette in styles.css :root, plus the --exx-*
-   spacing/radius scale directly. Import target: apps/web-ui/src/App.tsx (the
-   coordinator adds `import "./artifact-viewer.css";` next to the styles import).
+   spacing/radius scale directly.
    -------------------------------------------------------------------------- */
 .artifact-viewer {
 	min-width: 0;
@@ -11197,7 +11176,7 @@ button.composer-staged-tile-frame:focus-visible { outline: 2px solid var(--exx-p
 	opacity: 0.5;
 	cursor: default;
 }
-/* Quiet footer/header actions (artifact-pane polish, 2026-07-19): one primary
+/* Quiet footer/header actions: one primary
  * per state, everything else steps back until hover. Same affordance language
  * as the room-settings rs-quiet controls. */
 .artifact-viewer-quiet {
@@ -12976,7 +12955,7 @@ html.desktop-app-mac .mem-fullscreen {
 	-webkit-app-region: no-drag;
 }
 
-/* Checkpoint modal format pass (2026-07-23): the proposal modal family reads
+/* Checkpoint modal format: the proposal modal family reads
    like the room-settings dialogs - compact left-aligned header, meta and the
    full-entry affordance on one quiet row (chips left, control right), action
    row left-aligned with the primary first. Scoped to the modal card so the
@@ -12999,7 +12978,7 @@ html.desktop-app-mac .mem-fullscreen {
 	justify-content: flex-start;
 }
 
-/* Round 2 (2026-07-23): the gate surfaces of the Memorize/Review flows join the
+/* The gate surfaces of the Memorize/Review flows join the
    compact modal language (the Maintain landing keeps its own big headlines -
    different markup, untouched). Footnote pattern replaces explainer boxes:
    one quiet line below the action row. */
@@ -13027,7 +13006,7 @@ html.desktop-app-mac .mem-fullscreen {
 	margin-top: 4px;
 }
 
-/* Round 3 (2026-07-23): the disclosure rows carry the modal family's own
+/* The disclosure rows carry the modal family's own
    text-control pattern (the SHOW FULL ENTRY treatment): a quiet right-aligned
    DETAILS control that reads HIDE when open. Purely visual - the whole summary
    row stays the native disclosure (keyboard and screen-reader semantics
@@ -13126,7 +13105,7 @@ html.sidebar-collapsed:not(.desktop-app-mac) .landing:not(.settings-dialog .land
 }
 
 
-/* S7 final (Fernando's placement): the toggle lives in the sidebar FOOTER
+/* The toggle lives in the sidebar FOOTER
    next to the settings gear, both borderless quiet icon controls - one
    pattern across the mac app, Windows and the browser, far from every
    macOS chrome trap. Collapsed, the floating affordance sits bottom-left
@@ -14208,6 +14187,9 @@ html.sidebar-collapsed:not(.desktop-app-mac) .landing:not(.settings-dialog .land
 	color: var(--fg);
 	overflow: hidden;
 }
+.whats-new-dialog:focus {
+	outline: none;
+}
 /* Same typographic pattern as the Settings overlay's nav head. */
 .whats-new-title {
 	font-family: "Bandeins Strange Variable", "Bandeins Strange", "Sen", sans-serif;
@@ -14224,7 +14206,7 @@ html.sidebar-collapsed:not(.desktop-app-mac) .landing:not(.settings-dialog .land
 	padding: 2px 28px 8px;
 	display: flex;
 	flex-direction: column;
-	gap: 12px;
+	gap: 28px;
 	/* Same quiet scrollbar treatment as the Settings overlay panes. */
 	scrollbar-width: thin;
 	scrollbar-color: var(--border) transparent;
@@ -14249,27 +14231,136 @@ html.sidebar-collapsed:not(.desktop-app-mac) .landing:not(.settings-dialog .land
 	color: var(--fg);
 	font-weight: 700;
 }
+.whats-new-section {
+	display: flex;
+	flex-direction: column;
+	gap: 20px;
+}
+.whats-new-section-head {
+	margin: 0;
+	color: var(--muted);
+	font-family: var(--exx-font-display);
+	font-size: var(--exx-font-size-xs);
+	font-weight: 700;
+	text-transform: uppercase;
+	letter-spacing: 0.14em;
+}
+.whats-new-release {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+}
+.whats-new-release-head {
+	margin: 0;
+	display: flex;
+	align-items: baseline;
+	gap: 8px;
+	font-size: 15px;
+	font-weight: 400;
+	line-height: 1.3;
+	color: var(--fg);
+}
+.whats-new-release-head-first {
+	font-size: 17px;
+}
+.whats-new-release-version {
+	font-family: "Bandeins Strange", "Sen", sans-serif;
+	font-weight: 700;
+	letter-spacing: -0.01em;
+}
+.whats-new-release-date {
+	font-size: 12px;
+	color: var(--muted);
+}
+.whats-new-rows {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	margin-top: -8px;
+}
+.whats-new-row-head {
+	margin: 0;
+	font-size: 15px;
+	font-weight: 400;
+	line-height: 1.3;
+}
+.whats-new-row-toggle {
+	width: calc(100% + 12px);
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	column-gap: 8px;
+	row-gap: 4px;
+	padding: 10px 6px;
+	margin: 0 -6px;
+	border: none;
+	border-radius: 6px;
+	background: transparent;
+	color: var(--fg);
+	font: inherit;
+	text-align: left;
+	cursor: pointer;
+}
+.whats-new-row-toggle:hover .whats-new-row-labels {
+	color: var(--fg-soft);
+}
+.whats-new-row-toggle:focus-visible {
+	background: color-mix(in srgb, var(--fg) 14%, transparent);
+	outline: none;
+}
+.whats-new-row-toggle > .disclosure-chevron {
+	align-self: center;
+	/* The window has no motion, so the chevron turns at once. */
+	transition: none;
+}
+.whats-new-row-labels {
+	flex-basis: 100%;
+	padding-left: 20px;
+	font-size: 12px;
+	line-height: 1.45;
+	color: var(--muted);
+}
+.whats-new-row-lines {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+	padding: 2px 0 14px 20px;
+}
+.whats-new-row-lines[hidden] {
+	display: none;
+}
 .whats-new-foot {
 	display: flex;
 	align-items: center;
 	justify-content: space-between;
-	padding: 16px 28px 20px;
-	border-top: 1px solid var(--exx-divider);
+	padding: 28px 28px 20px;
 }
 .whats-new-full-link {
+	display: inline-flex;
+	align-items: center;
+	min-height: 24px;
+	padding: 0 6px;
+	margin: 0 -6px;
+	border: none;
+	border-radius: 6px;
+	background: transparent;
+	font: inherit;
 	font-size: 12px;
 	color: var(--fg-soft);
-	text-decoration: none;
-	border-bottom: 1px solid var(--exx-divider);
+	text-decoration-line: underline;
+	text-decoration-color: var(--exx-divider);
+	text-decoration-thickness: 1px;
+	text-underline-offset: 3px;
+	cursor: pointer;
 }
 .whats-new-full-link:hover {
 	color: var(--fg);
-	border-bottom-color: var(--fg-soft);
+	text-decoration-color: var(--fg-soft);
 }
-.whats-new-foot .btn-primary {
-	text-transform: none;
-	letter-spacing: normal;
-	font-size: 13px;
+.whats-new-full-link:focus-visible {
+	background: color-mix(in srgb, var(--fg) 14%, transparent);
+	color: var(--fg);
+	outline: none;
 }
 @media (max-width: 760px) {
 	.whats-new-backdrop {
@@ -14282,7 +14373,7 @@ html.sidebar-collapsed:not(.desktop-app-mac) .landing:not(.settings-dialog .land
 		padding: 2px 20px 8px;
 	}
 	.whats-new-foot {
-		padding: 14px 20px 16px;
+		padding: 24px 20px 16px;
 	}
 }
 
@@ -14511,7 +14602,7 @@ html.sidebar-collapsed:not(.desktop-app-mac) .landing:not(.settings-dialog .land
 	}
 }
 
-/* Room settings at the main Settings' density (visual pass 2026-08-31) ----
+/* Room settings at the main Settings' density -----------------------------
    The room settings modal speaks the Settings overlay's quiet grammar:
    hairline row rhythm instead of boxes, sentence-case action pills,
    tracked-caps group labels, outcomes as plain colored sentences. Everything

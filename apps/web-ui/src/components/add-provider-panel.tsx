@@ -3,13 +3,19 @@ import { GroupHeader } from "./pane-header";
 import type { LoginProviderCatalogEntry, PersistentAgentAiProfileStatus, ProviderModelCatalog } from "../types";
 import { useEscapeKey } from "./use-escape-key";
 import { ApiRequestError, apiFetch, fetchJson } from "../api";
-import { modelDisplayName } from "../model-names";
+import { distinctModelNames } from "../model-names";
+import { nameEndsInKey } from "../../../web-server/src/model-not-offered";
 import { applyToApproved, approvedCount, detectionAnswers, draftEffective, isNonChatMode, setAllApproved, trustDetected, type BulkDetection } from "../gateway-model-bulk";
 
 // Catalog entries carry a bare name ("Opus 4.8") or none; canonicalise so the
 // approval lists read the same as chips and Wallet ("Claude Opus 4.8").
-function catalogModelName(model: { id: string; name?: string }): string {
-	return modelDisplayName({ model: model.id, modelLabel: model.name }) || model.id;
+function catalogModelNames(models: Array<{ id: string; name?: string }>): string[] {
+	return distinctModelNames(models.map((model) => ({ model: model.id, modelLabel: model.name }))).map((name, index) => name || models[index].id);
+}
+
+function CatalogModelOptions({ models }: { models: Array<{ id: string; name?: string; suggestedDefault?: boolean }> }) {
+	const names = catalogModelNames(models);
+	return <>{models.map((model, index) => <option key={model.id} value={model.id}>{names[index]}{model.suggestedDefault ? " (suggested)" : ""}</option>)}</>;
 }
 
 // The model-approval checkbox list, shared by the provider and gateway modals.
@@ -19,12 +25,13 @@ export function ModelCheckboxList({ options, selected, onToggle, ariaLabel }: {
 	onToggle: (modelId: string) => void;
 	ariaLabel: string;
 }) {
+	const names = catalogModelNames(options);
 	return (
 		<div className="configure-profile-model-list" role="group" aria-label={ariaLabel}>
-			{options.map((option) => (
+			{options.map((option, index) => (
 				<label key={option.id} className="configure-profile-model-option" title={option.id}>
 					<input type="checkbox" checked={selected.has(option.id)} onChange={() => onToggle(option.id)} />
-					<span className="configure-profile-model-name">{catalogModelName(option)}</span>
+					<span className="configure-profile-model-name">{names[index]}</span>
 					{option.suggested && <span className="configure-profile-suggested">suggested</span>}
 				</label>
 			))}
@@ -38,19 +45,23 @@ export function ModelCheckboxList({ options, selected, onToggle, ariaLabel }: {
  * on a menu click and offers no way back leaves reloading the page as the only
  * exit, which is not an exit.
  */
-export function ApiKeyForm({ placeholder, onSave, className, onCancel }: {
-	placeholder: string;
+export function ApiKeyForm({ providerName, onSave, className, onCancel }: {
+	providerName: string;
 	onSave: (key: string) => Promise<void>;
 	className?: string;
 	onCancel?: () => void;
 }) {
 	const [key, setKey] = useState("");
 	const [saving, setSaving] = useState(false);
+	const [error, setError] = useState<string | null>(null);
 	async function save() {
 		setSaving(true);
+		setError(null);
 		try {
 			await onSave(key);
 			setKey("");
+		} catch (e) {
+			setError((e as Error).message);
 		} finally {
 			setSaving(false);
 		}
@@ -60,7 +71,7 @@ export function ApiKeyForm({ placeholder, onSave, className, onCancel }: {
 			<input
 				className="launcher-path-input create-room-input"
 				type="password"
-				placeholder={placeholder}
+				placeholder={nameEndsInKey(providerName) ? providerName : `${providerName} API key`}
 				value={key}
 				autoFocus
 				onChange={(e) => setKey(e.target.value)}
@@ -82,6 +93,7 @@ export function ApiKeyForm({ placeholder, onSave, className, onCancel }: {
 			<button className="rs-btn rs-btn-primary" disabled={!key.trim() || saving} onClick={() => void save()}>
 				{saving ? "Saving…" : "Save key"}
 			</button>
+			{error && <div className="add-provider-key-error" role="alert">{error}</div>}
 		</div>
 	);
 }
@@ -148,9 +160,9 @@ export function useProviderLogin(onDone: (providerId: string, ok: boolean) => vo
 }
 
 // Suggest-then-approve model configuration for one provider: which models its
-// rooms may use, and its recommended memory model (the one the memory picker
-// marks Recommended; each room's Memory row decides what runs). Saving creates
-// or updates the provider's custom AI profile.
+// rooms may use, and its memory model (each room's Memory row
+// decides what runs). Saving creates or updates the provider's custom AI
+// profile.
 export function ConfigureProfileModal({ providerId, providerName, existingProfile, allowRemove = true, onClose, onSaved }: {
 	providerId: string;
 	providerName: string;
@@ -274,11 +286,9 @@ export function ConfigureProfileModal({ providerId, providerName, existingProfil
 								/>
 							</div>
 							<div className="configure-profile-field">
-								<h3>Recommended memory model</h3>
-								<select className="configure-profile-select" value={learnModel} onChange={(e) => setLearnModel(e.target.value)} aria-label="Recommended memory model" title="Marked Recommended in the memory picker for this provider">
-									{catalog.models.map((model) => (
-										<option key={model.id} value={model.id}>{catalogModelName(model)}{model.suggestedDefault ? " (suggested)" : ""}</option>
-									))}
+								<h3>Memory model</h3>
+								<select className="configure-profile-select" value={learnModel} onChange={(e) => setLearnModel(e.target.value)} aria-label="Memory model">
+									<CatalogModelOptions models={catalog.models} />
 								</select>
 								<p className="cli-note">Rooms choose theirs in Room settings, Model.</p>
 							</div>
@@ -993,11 +1003,9 @@ export function GatewayConfigModal({ gatewayId, knownLabel, onClose, onSaved }: 
 						)}
 					</div>
 					<div className="configure-profile-field">
-						<h3>Recommended memory model</h3>
-						<select className="configure-profile-select" value={effectiveMaintenanceModel} onChange={(e) => setMaintenanceModel(e.target.value)} aria-label="Recommended memory model" title="Marked Recommended in the memory picker for this gateway" disabled={approvedIds.length === 0}>
-							{maintenanceEligibleIds.map((id) => (
-								<option key={id} value={id}>{catalogModelName({ id })}</option>
-							))}
+						<h3>Memory model</h3>
+						<select className="configure-profile-select" value={effectiveMaintenanceModel} onChange={(e) => setMaintenanceModel(e.target.value)} aria-label="Memory model" disabled={approvedIds.length === 0}>
+							<CatalogModelOptions models={maintenanceEligibleIds.map((id) => ({ id }))} />
 						</select>
 						<p className="cli-note">Rooms choose theirs in Room settings, Model.</p>
 					</div>
@@ -1204,11 +1212,9 @@ export function GatewayApproveModelsModal({ gatewayId, onClose, onSaved }: { gat
 								)}
 							</div>
 							<div className="configure-profile-field">
-								<h3>Recommended memory model</h3>
-								<select className="configure-profile-select" value={effectiveMaintenanceModel} onChange={(e) => setMaintenanceModel(e.target.value)} aria-label="Recommended memory model" title="Marked Recommended in the memory picker for this gateway" disabled={approvedIds.length === 0}>
-									{maintenanceEligibleIds.map((id) => (
-										<option key={id} value={id}>{catalogModelName({ id })}</option>
-									))}
+								<h3>Memory model</h3>
+								<select className="configure-profile-select" value={effectiveMaintenanceModel} onChange={(e) => setMaintenanceModel(e.target.value)} aria-label="Memory model" disabled={approvedIds.length === 0}>
+									<CatalogModelOptions models={maintenanceEligibleIds.map((id) => ({ id }))} />
 								</select>
 								<p className="cli-note">Rooms choose theirs in Room settings, Model.</p>
 							</div>
@@ -1231,7 +1237,12 @@ export function GatewayApproveModelsModal({ gatewayId, onClose, onSaved }: { gat
 }
 
 // Providers most people reach for first; the rest follow alphabetically.
-const POPULAR_PROVIDER_ORDER = ["google", "mistral", "openrouter", "deepseek", "xai", "groq", "together", "fireworks"];
+const POPULAR_PROVIDER_ORDER = ["anthropic-api-key", "google", "mistral", "openrouter", "deepseek", "xai", "groq", "together", "fireworks"];
+
+// One plain sentence beside a key form, where a provider needs it said.
+const PROVIDER_KEY_NOTES: Record<string, string> = {
+	"anthropic-api-key": "Create a key at console.anthropic.com. Its use is billed to that Anthropic account.",
+};
 
 // "Add provider" flow on the AI setup page: the full raw-Pi sign-in surface —
 // subscription (OAuth) providers plus API-key providers — followed by the
@@ -1263,6 +1274,8 @@ export function AddProviderPanel({ open, onOpenChange, onProfilesChanged, onKeyF
 	const [gatewayNotice, setGatewayNotice] = useState<string | null>(null);
 	const [filter, setFilter] = useState("");
 	const [addedNote, setAddedNote] = useState<string | null>(null);
+	// A key saved without its service's check (it could not be reached), told when the provider is added.
+	const keyNoticeRef = useRef<string | null>(null);
 
 	/** The provider whose key form is open, if any. */
 	const keyFormOpen = apiKeyProvider?.id ?? null;
@@ -1289,7 +1302,8 @@ export function AddProviderPanel({ open, onOpenChange, onProfilesChanged, onKeyF
 	// Called when a provider gains its profile: collapse the panel and narrate
 	// the hand-off so the row appearing above does not read as a disappearance.
 	function announceAdded(name: string) {
-		setAddedNote(`${name} added · it now appears above as a profile.`);
+		setAddedNote(`${name} added · it now appears above as a profile.${keyNoticeRef.current ? ` ${keyNoticeRef.current}` : ""}`);
+		keyNoticeRef.current = null;
 		onOpenChange(false);
 		setFilter("");
 	}
@@ -1349,21 +1363,18 @@ export function AddProviderPanel({ open, onOpenChange, onProfilesChanged, onKeyF
 	async function saveApiKey(key: string) {
 		if (!apiKeyProvider) return;
 		login.setError(null);
-		try {
-			await fetchJson("/api/auth/api-key", {
-				method: "POST",
-				headers: { "content-type": "application/json" },
-				body: JSON.stringify({ provider: apiKeyProvider.id, key }),
-			});
-			const needsProfile = !apiKeyProvider.profileId;
-			const picked = apiKeyProvider;
-			setApiKeyProvider(null);
-			if (needsProfile) setConfigureProvider({ id: picked.id, name: picked.name });
-			onProfilesChanged();
-			void refreshProviders();
-		} catch (e) {
-			login.setError((e as Error).message);
-		}
+		const saved = await fetchJson<{ notice?: string }>("/api/auth/api-key", {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ provider: apiKeyProvider.id, key }),
+		});
+		keyNoticeRef.current = saved.notice ?? null;
+		const needsProfile = !apiKeyProvider.profileId;
+		const picked = apiKeyProvider;
+		setApiKeyProvider(null);
+		if (needsProfile) setConfigureProvider({ id: picked.id, name: picked.name });
+		onProfilesChanged();
+		void refreshProviders();
 	}
 
 	// Providers that already carry a profile have their own row above.
@@ -1469,7 +1480,10 @@ export function AddProviderPanel({ open, onOpenChange, onProfilesChanged, onKeyF
 									</span>
 								</div>
 								{keyFormOpen === provider.id && (
-									<ApiKeyForm className="add-provider-row-key-form" placeholder={`${provider.name} API key`} onSave={saveApiKey} onCancel={() => setApiKeyProvider(null)} />
+									<>
+										<ApiKeyForm className="add-provider-row-key-form" providerName={provider.name} onSave={saveApiKey} onCancel={() => setApiKeyProvider(null)} />
+										{PROVIDER_KEY_NOTES[provider.id] && <p className="settings-help add-provider-key-note">{PROVIDER_KEY_NOTES[provider.id]}</p>}
+									</>
 								)}
 							</div>
 						))}

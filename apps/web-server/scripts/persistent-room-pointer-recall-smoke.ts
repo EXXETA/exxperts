@@ -1,9 +1,10 @@
 // The archive pointer line and the tool it points at, in the same turn.
 //
-// A demoted topic keeps a pointer in the room's context — "_Archived: 2 older
-// notes from Mar to May 2026; use memory_recall to read them._" — and the room
-// carries the tool that line names. Each half was covered on its own; the pair
-// was not, so either could have left the room without a smoke noticing.
+// A demoted topic keeps a pointer in the room's context —
+// "_Archived: 2 older notes from Mar to May 2026; use memory_recall to read them._"
+// — and the room carries the tool that line names. Each half was covered on its
+// own; the pair was not, so either could have left the room without a smoke
+// noticing.
 //
 // This one makes the pair the thing under test. The gateway is scripted to
 // DEPEND on both: it streams a memory_recall call only if the system prompt it
@@ -26,7 +27,7 @@ import os from "node:os";
 import path from "node:path";
 import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
-import { authedFetch, SMOKE_AUTH_HEADERS, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, type AuthedFetchInit } from "./smoke-server-process.js";
+import { authedFetch, SMOKE_AUTH_HEADERS, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, freePort, type AuthedFetchInit } from "./smoke-server-process.js";
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -35,7 +36,7 @@ function assert(condition: unknown, message: string): asserts condition {
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const webServerDir = path.resolve(scriptDir, "..");
 const repoRoot = path.resolve(webServerDir, "..", "..");
-const port = 27000 + Math.floor(Math.random() * 10000);
+const port = await freePort();
 const baseUrl = `http://127.0.0.1:${port}`;
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "exxperts-pointer-recall-"));

@@ -39,7 +39,7 @@ process.env.EXXETA_PERSISTENT_AGENTS_ROOT = agentsRoot;
 delete process.env.EXXETA_PERSISTENT_ROOM_AGENT;
 delete process.env.MCP_DIRECT_TOOLS;
 
-const { authedFetch, SMOKE_AUTH_HEADERS, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer } = await import("./smoke-server-process.js");
+const { authedFetch, SMOKE_AUTH_HEADERS, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, smokeHomeEnv, stopSmokeServer, freePort } = await import("./smoke-server-process.js");
 type AuthedFetchInit = Parameters<typeof authedFetch>[1];
 
 function assert(condition: unknown, message: string): asserts condition {
@@ -50,7 +50,7 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const webServerDir = path.resolve(scriptDir, "..");
 const repoRoot = path.resolve(webServerDir, "..", "..");
-const port = 24000 + Math.floor(Math.random() * 10000);
+const port = await freePort();
 const baseUrl = `http://127.0.0.1:${port}`;
 
 const marker = (name: string): string => path.join(markers, `${name}.txt`);

@@ -46,12 +46,14 @@ export interface CanonicalModelName {
  */
 export const GATEWAY_PROVIDER_ID_PREFIX = "gateway-";
 
-// Mirrors the server's WEB_CHAT_PROVIDER_LABELS so client-side fallbacks agree
-// with labels minted by the server for new rows.
+// The names AI setup shows, also for the Wallet and the built-in profiles.
+// The server still writes the older "Anthropic / Claude" into new rows'
+// labels (WEB_CHAT_PROVIDER_LABELS), so that one is read as the sign-in.
 const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
 	"openai-codex": "ChatGPT Plus/Pro",
 	openai: "OpenAI",
-	anthropic: "Anthropic / Claude",
+	anthropic: "Claude",
+	"anthropic-api-key": "Claude API key",
 	"github-copilot": "GitHub Copilot",
 	"openai-compatible": "OpenAI-compatible gateway",
 	google: "Google / Gemini",
@@ -107,6 +109,8 @@ export function splitProviderLabel(label: string): { provider: string; name: str
 	const name = label.slice(idx + 1).trim();
 	return provider && name ? { provider, name } : null;
 }
+
+const PROVIDER_ID_BY_LABEL: Record<string, string> = { "Anthropic / Claude": "anthropic" };
 
 /** Provider display name for a provider id; falls back to the id itself. */
 export function providerDisplayName(providerId: string): string {
@@ -169,8 +173,20 @@ function mergeVersionRuns(tokens: string[]): string[] {
 	return out;
 }
 
+// A trailing release date pins one snapshot of a model ("-20251001",
+// "-2024-08-06"); it is not part of the model's name.
+const TRAILING_DATE = /[-_.@](20\d{2})-?(0[1-9]|1[0-2])-?(0[1-9]|[12]\d|3[01])$/;
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/** The release date a model id ends with, in plain form ("29 Sep 2025"); null when it has none. */
+export function modelIdDate(rawId: string): string | null {
+	const match = TRAILING_DATE.exec(rawId.trim());
+	return match ? `${Number(match[3])} ${MONTHS[Number(match[2]) - 1]} ${match[1]}` : null;
+}
+
 /** Tidy a raw model id into a readable name without inventing anything. */
 function prettifyModelId(rawId: string): string {
+	rawId = rawId.replace(TRAILING_DATE, "") || rawId;
 	let tokens = mergeVersionRuns(tokenizeModelId(rawId));
 	if (tokens.length === 0) return rawId;
 
@@ -205,7 +221,8 @@ export function canonicalModelName(input: ModelNameInput): CanonicalModelName {
 	const rawId = (input.model ?? "").trim();
 	const label = (input.modelLabel ?? "").trim();
 	const split = label ? splitProviderLabel(label) : null;
-	const provider = split?.provider ?? (input.provider ? providerDisplayName(input.provider.trim()) : undefined);
+	const splitProvider = split ? (PROVIDER_ID_BY_LABEL[split.provider] ? providerDisplayName(PROVIDER_ID_BY_LABEL[split.provider]) : split.provider) : undefined;
+	const provider = splitProvider ?? (input.provider ? providerDisplayName(input.provider.trim()) : undefined);
 
 	if (rawId && KNOWN_FAMILY_ID.test(rawId)) {
 		return { name: prettifyModelId(rawId), ...(provider ? { provider } : {}) };
@@ -214,7 +231,7 @@ export function canonicalModelName(input: ModelNameInput): CanonicalModelName {
 		const namePart = stripDecoration(split.name);
 		// Gateway labels often just repeat the raw id after the dash — tidy it.
 		const name = namePart && namePart !== rawId ? (KNOWN_FAMILY_ID.test(namePart) ? prettifyModelId(namePart) : namePart) : prettifyModelId(rawId || namePart);
-		return { name, provider: split.provider };
+		return { name, provider: splitProvider! };
 	}
 	// A dashless label is already a curated name — better than tidying an
 	// unknown id generically.
@@ -226,6 +243,20 @@ export function canonicalModelName(input: ModelNameInput): CanonicalModelName {
 /** Just the canonical name (most call sites only render the name). */
 export function modelDisplayName(input: ModelNameInput): string {
 	return canonicalModelName(input).name;
+}
+
+/**
+ * The names of one list's models, in order. Two that would read the same tell
+ * themselves apart by the release date in their ids: "Claude Sonnet 4.5 (29 Sep 2025)".
+ */
+export function distinctModelNames(inputs: ModelNameInput[]): string[] {
+	const names = inputs.map((input) => modelDisplayName(input) || (input.model ?? ""));
+	const counts = new Map<string, number>();
+	for (const name of names) counts.set(name.toLowerCase(), (counts.get(name.toLowerCase()) ?? 0) + 1);
+	return names.map((name, index) => {
+		const date = (counts.get(name.toLowerCase()) ?? 0) > 1 ? modelIdDate(inputs[index].model ?? "") : null;
+		return date ? `${name} (${date})` : name;
+	});
 }
 
 /**

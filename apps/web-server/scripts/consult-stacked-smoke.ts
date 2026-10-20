@@ -151,7 +151,7 @@ try {
 	assert(longPrior.prompt.includes("[earlier answer trimmed"), "a long prior answer is trimmed with a marker");
 	assert(!longPrior.prompt.includes("P".repeat(2_100)), "the prior answer is trimmed below ~2,000 chars");
 
-	// ---- HARDENING (2026-07-11 fresh-eyes review) ---------------------------
+	// ---- HARDENING ----------------------------------------------------------
 
 	// 12k invariant vs LONG QUESTIONS: questions were the uncapped term — two
 	// 4,000-char questions + a 4,000-char final answer already exceeded the cap

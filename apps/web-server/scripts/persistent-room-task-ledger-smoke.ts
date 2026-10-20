@@ -150,7 +150,7 @@ try {
 	const reseed = selectTaskLedgerReseedRows(reseedRows, 2);
 	assert(reseed.length === 2 && reseed[0].taskId === "tsk-r2" && reseed[1].taskId === "tsk-r3", "reseed must keep the newest ok rows, oldest-first for insertion order");
 
-	// Remove from list (user control, 2026-07-20): removedAt is a LIST stamp,
+	// Remove from list: removedAt is a LIST stamp,
 	// separate from deletedAt (files gone). Listings keep returning removed
 	// rows — only the panel endpoint filters — and Undo clears the stamp.
 	const removeRoom = "task-ledger-smoke-remove";

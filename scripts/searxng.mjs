@@ -19,7 +19,7 @@ const BASE_URL = `http://127.0.0.1:${PORT}`;
 //   docker pull searxng/searxng:<tag>
 //   docker inspect --format '{{index .RepoDigests 0}}' searxng/searxng:<tag>
 // then paste the new digest here. Search sites keep changing their pages, so
-// an old pin slowly returns nothing (2026.6.5 lost Google in July 2026). An
+// an old pin slowly returns nothing (2026.6.5 lost Google). An
 // existing container on an older image is replaced on its next start or
 // update. Override with SEARXNG_IMAGE if needed. The registry is named so
 // Podman does not have to ask which one to search.

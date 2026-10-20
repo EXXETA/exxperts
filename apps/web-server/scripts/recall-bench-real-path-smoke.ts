@@ -54,7 +54,7 @@ function assert(condition: unknown, message: string): asserts condition {
 	process.env.RECALL_BENCH_AGENT_DIR = shared;
 	const { home } = prepareBenchHome("real-path-smoke");
 	assert(process.env.EXXPERTS_CODING_AGENT_DIR === shared, `the workers read the named agent dir, and EXXPERTS_CODING_AGENT_DIR is ${process.env.EXXPERTS_CODING_AGENT_DIR}`);
-	const lock = useRealProviderRecords({ spec: "openai-codex/gpt-6-sol", signInFromHome: false });
+	const lock = await useRealProviderRecords({ spec: "openai-codex/gpt-6-sol", signInFromHome: false });
 	assert(lock.provider === "openai-codex" && lock.model === "gpt-6-sol", `the lock is the spec, got ${JSON.stringify(lock)}`);
 	for (const file of ["models.json", "auth.json"]) assert(!fs.existsSync(path.join(home, ".exxperts", "agent", file)), `no ${file} is copied into the run's home`);
 	const profile = JSON.parse(fs.readFileSync(path.join(home, ".exxperts", "app", "persistent-agent-ai-profile.json"), "utf-8"));

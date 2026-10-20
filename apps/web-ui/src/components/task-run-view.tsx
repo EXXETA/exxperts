@@ -15,7 +15,7 @@ function tailLines(tail: string): string[] {
 }
 
 /**
- * The run view (status grammar, 2026-07-18): the homogenized viewer chrome's
+ * The run view: the homogenized viewer chrome's
  * RUNNING state — the done-card's status stream relocated behind one click on
  * the rail's running row. Same header shell as ArtifactViewer (title-led,
  * app-drawn, unforgeable); the body is the live mono tail, pinned to the

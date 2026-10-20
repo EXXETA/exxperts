@@ -172,7 +172,10 @@ function serverDead() {
 async function stopServer() {
 	if (!server || serverDead() || server.pid == null) return;
 	const exited = new Promise((resolve) => server.once("exit", resolve));
-	const waitUpTo = (ms) => Promise.race([exited, new Promise((resolve) => setTimeout(resolve, ms))]);
+	const waitUpTo = (ms) => {
+		let timer;
+		return Promise.race([exited, new Promise((resolve) => { timer = setTimeout(resolve, ms); })]).finally(() => clearTimeout(timer));
+	};
 	killTree(server.pid, "SIGTERM");
 	await waitUpTo(10_000);
 	if (!serverDead()) {
