@@ -253,10 +253,16 @@ class LiveServer {
 		const deadline = Date.now() + 60_000;
 		while (Date.now() < deadline) {
 			if (turnResults && frames.some((frame) => frame?.type === "event" && frame?.event?.type === "agent_end")) {
-				try { socket.close(); } catch {}
-				const results = turnResults as string[];
-				assert(results.length === calls.length, `expected ${calls.length} tool results, got ${results.length}`);
-				return results;
+				// agent_end precedes release of the room's turn guard; closing early can cancel cleanup.
+				const status = await this.json(`/api/persistent-agents/${encodeURIComponent(agentId)}/status`);
+				assert(status.status === 200, `room status: expected 200, got ${status.status}`);
+				assert(status.body?.activeThread?.threadId === conversationId, "the scripted conversation must remain active until its turn finishes");
+				if (status.body.activeThread.inFlight === false) {
+					try { socket.close(); } catch {}
+					const results = turnResults as string[];
+					assert(results.length === calls.length, `expected ${calls.length} tool results, got ${results.length}`);
+					return results;
+				}
 			}
 			const errors = frames.filter((frame) => String(frame?.type ?? "").includes("error"));
 			if (errors.length > 0) throw new Error(`turn errored: ${JSON.stringify(errors[0]).slice(0, 400)}`);
