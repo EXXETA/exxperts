@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { PaneHeader } from "./pane-header";
+import { GroupHeader, PaneHeader } from "./pane-header";
 import {
 	acceptSkillCandidate,
 	createSkill,
 	fetchSkill,
 	fetchSkills,
+	peekSkillSummaries,
 	fileToBase64,
 	uploadSkillFile,
 	type SkillCandidate,
@@ -14,11 +15,13 @@ import {
 } from "../skills-api";
 import { SkillReview } from "./SkillReview";
 import { SkillDetailPage, formatSkillDate } from "./skill-detail";
-import { skillTierLabel } from "../skill-source-copy";
+import { groupSkillsBySource, skillTierLabel } from "../skill-source-copy";
 import { SHARED_SERVER_ADMIN_LINE, useRemoteClientContext } from "../remote-client-context";
-import { SkillImportFromRepo } from "./SkillImportFromRepo";
-import { SkillBrowseDirectory } from "./SkillBrowseDirectory";
+import { SkillLibraries } from "./SkillLibraries";
+import { SkillSourceBrowser } from "./SkillSourceBrowser";
+import { SkillPreviewActive } from "./SkillFileButton";
 import { useEscapeKey } from "./use-escape-key";
+import { SkillLibraryPath, type SkillPathItem } from "./SkillLibraryPath";
 
 /** Client mirror of the server's slugifySkillId — the id must already be a slug for the
  *  write endpoint to accept it (it re-slugifies and requires equality). */
@@ -87,19 +90,15 @@ function SkillUploadModal({ onClose, onFile }: { onClose: () => void; onFile: (f
 function AddSkillMenu({ onWrite, onUpload, onImportRepo }: { onWrite: () => void; onUpload: () => void; onImportRepo: () => void }) {
 	const [open, setOpen] = useState(false);
 	const wrapRef = useRef<HTMLDivElement>(null);
+	useEscapeKey(() => setOpen(false), open);
 	useEffect(() => {
 		if (!open) return;
 		function onDown(e: MouseEvent) {
 			if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false);
 		}
-		function onKey(e: KeyboardEvent) {
-			if (e.key === "Escape") setOpen(false);
-		}
 		document.addEventListener("mousedown", onDown);
-		document.addEventListener("keydown", onKey);
 		return () => {
 			document.removeEventListener("mousedown", onDown);
-			document.removeEventListener("keydown", onKey);
 		};
 	}, [open]);
 	return (
@@ -177,7 +176,8 @@ type Mode =
 	| { kind: "list" }
 	| { kind: "write" }
 	| { kind: "import-repo" }
-	| { kind: "browse" }
+	| { kind: "libraries"; initialLibraryId?: string }
+	| { kind: "source"; key: string; label: string }
 	| { kind: "review"; candidate: SkillCandidate }
 	| { kind: "detail"; skill: SkillDetail };
 
@@ -217,16 +217,18 @@ function SkillRow({ skill, onOpen, opening = false }: { skill: SkillListItem; on
 	);
 }
 
-export function SkillsPage() {
-	const [skills, setSkills] = useState<SkillListItem[]>([]);
-	const [loading, setLoading] = useState(true);
+export function SkillsPage({ onReturnToRoom, returnToRoomLabel = "← Room settings", initialLibraryId }: { onReturnToRoom?: () => void; returnToRoomLabel?: string; initialLibraryId?: string } = {}) {
+	const [skills, setSkills] = useState<SkillListItem[]>(() => peekSkillSummaries() ?? []);
+	const [loading, setLoading] = useState(!peekSkillSummaries());
 	const [error, setError] = useState<string | null>(null);
 	const [notice, setNotice] = useState<string | null>(null);
-	const [mode, setMode] = useState<Mode>({ kind: "list" });
+	const [mode, setMode] = useState<Mode>(initialLibraryId ? { kind: "libraries", initialLibraryId } : { kind: "list" });
+	const [lastSource, setLastSource] = useState<{ key: string; label: string } | null>(null);
 	const [reviewBusy, setReviewBusy] = useState(false);
 	const [reviewError, setReviewError] = useState<string | null>(null);
 	const [uploadOpen, setUploadOpen] = useState(false);
 	const [openingName, setOpeningName] = useState<string | null>(null);
+	const [groupBySource, setGroupBySource] = useState(true);
 	// Remote devices browse the library read-only: the remote route policy
 	// (web-server remote-route-policy) serves the skill GET routes but refuses every
 	// write, upload, and repo import, so those affordances are not rendered there
@@ -240,7 +242,7 @@ export function SkillsPage() {
 		setLoading(true);
 		setError(null);
 		try {
-			setSkills(await fetchSkills());
+			setSkills(await fetchSkills({ summary: true, refresh: true }));
 		} catch (e) {
 			setError((e as Error).message);
 		} finally {
@@ -257,6 +259,7 @@ export function SkillsPage() {
 		setReviewError(null);
 		if (notice) setNotice(notice);
 	}
+	useEscapeKey(() => { if (!reviewBusy) { if (mode.kind === "list") onReturnToRoom?.(); else backToList(); } }, mode.kind !== "libraries" && mode.kind !== "import-repo" && (mode.kind !== "list" || Boolean(onReturnToRoom)));
 
 	async function onFilePicked(file: File | null) {
 		if (!file) return;
@@ -298,21 +301,25 @@ export function SkillsPage() {
 		}
 	}
 
-	const header = (actions?: ReactNode) => <PaneHeader title="Skills" line="Reusable know-how your rooms can pick up. Every skill is reviewed before it enters the library." actions={actions} />;
-	const backToLibrary = <button className="rs-btn" onClick={() => backToList()}>Back to library</button>;
+	const pathPrefix: SkillPathItem[] = onReturnToRoom ? [{ label: returnToRoomLabel, onClick: onReturnToRoom }] : [];
+	const header = (actions?: ReactNode) => onReturnToRoom ? <div className="skill-shared-header"><SkillLibraryPath items={[...pathPrefix, { label: "Skills" }]} shared />{actions}</div> : <PaneHeader title="Skills" line="Reusable know-how your rooms can pick up. Every skill is reviewed before it enters the library." actions={actions} />;
+	const skillTable = (items: SkillListItem[]) => <div className="skill-rows skill-table">
+		<div className="settings-table-head skill-table-head" aria-hidden="true"><span>Skill</span><span>Used in</span><span>Files</span><span>Updated</span><span /></div>
+		{items.map((skill) => <SkillRow key={skill.name} skill={skill} onOpen={() => void openDetail(skill.name)} opening={openingName === skill.name} />)}
+	</div>;
 	// Review / detail take over the page (the shared trust-moment screen).
 	if (mode.kind === "review") {
 		return (
 			<div className="landing skills-page">
 				{header()}
-				<SkillReview
+				<div className="skill-review-workspace skill-review-single"><div className="skill-workspace-toolbar"><button className="rs-text-btn" disabled={reviewBusy} onClick={() => backToList()}>← Skills</button></div><SkillReview
 					candidate={mode.candidate}
 					descriptionEditable
 					onAccept={(description) => void acceptCandidate({ ...mode.candidate, description })}
 					onCancel={() => backToList()}
 					busy={reviewBusy}
 					error={reviewError}
-				/>
+				/></div>
 			</div>
 		);
 	}
@@ -331,14 +338,20 @@ export function SkillsPage() {
 
 	return (
 		<div className="landing skills-page">
-			{header(mode.kind === "import-repo" || mode.kind === "browse"
-				? backToLibrary
-				: mode.kind === "write" || readOnly
+			{lastSource && <div hidden={mode.kind !== "source"}>
+				<SkillLibraryPath items={[...pathPrefix, { label: "Skills", onClick: backToList }, { label: lastSource.label }]} shared={Boolean(onReturnToRoom)} />
+				<SkillPreviewActive.Provider value={mode.kind === "source"}><SkillSourceBrowser key={lastSource.key} active={mode.kind === "source"} skills={groupSkillsBySource(skills).find((group) => group.key === lastSource.key)?.skills ?? []} readOnly={readOnly} onImported={() => { void refresh(); }} /></SkillPreviewActive.Provider>
+			</div>}
+			<div hidden={mode.kind === "source"}>
+			{mode.kind !== "import-repo" && mode.kind !== "libraries" && header(mode.kind === "write"
 					? undefined
-					: <>
-						<button className="rs-btn" onClick={() => setMode({ kind: "browse" })}>Browse featured</button>
-						<AddSkillMenu onWrite={() => setMode({ kind: "write" })} onUpload={() => setUploadOpen(true)} onImportRepo={() => setMode({ kind: "import-repo" })} />
-					</>)}
+					: <div className="skill-library-controls">
+						{!readOnly && <div className="skill-library-buttons">
+							<button className="rs-btn" onClick={() => setMode({ kind: "libraries" })}>Repository libraries</button>
+							<AddSkillMenu onWrite={() => setMode({ kind: "write" })} onUpload={() => setUploadOpen(true)} onImportRepo={() => setMode({ kind: "import-repo" })} />
+						</div>}
+						{(skills.length > 0 || (!loading && !error)) && <label className="skill-source-toggle"><input className="workspaces-tool-switch" type="checkbox" role="switch" checked={groupBySource} onChange={(event) => setGroupBySource(event.target.checked)} />Group by source</label>}
+					</div>)}
 			{uploadOpen && (
 				<SkillUploadModal
 					onClose={() => setUploadOpen(false)}
@@ -352,45 +365,29 @@ export function SkillsPage() {
 					onCancel={() => backToList()}
 				/>
 			) : mode.kind === "import-repo" ? (
-				<section className="ai-setup-section" aria-label="Import skills from a repository">
-					<h3 className="web-search-fallback-heading">Import from repo</h3>
-					<SkillImportFromRepo onImported={(name) => { setNotice(`Added “${name}” to your library.`); void refresh(); }} />
-				</section>
-			) : mode.kind === "browse" ? (
-				<section className="ai-setup-section" aria-label="Browse featured skill sources">
-					<SkillBrowseDirectory onImported={(name) => { setNotice(`Added “${name}” to your library.`); void refresh(); }} />
-				</section>
+				<section className="ai-setup-section"><SkillLibraries startAdding onBack={backToList} pathPrefix={pathPrefix} onImported={() => { void refresh(); }} /></section>
+			) : mode.kind === "libraries" ? (
+				<section className="ai-setup-section"><SkillLibraries initialLibraryId={mode.initialLibraryId} onBack={backToList} pathPrefix={pathPrefix} onImported={() => { void refresh(); }} /></section>
 			) : (
 				<section className="ai-setup-section" aria-label="Skills library">
 					{readOnly && <p className="cli-note">{remoteClient.sharedServer ? SHARED_SERVER_ADMIN_LINE : "Skills are uploaded and edited on the computer itself."}</p>}
 					{notice && <p className="cli-note" role="status">{notice}</p>}
 					{error && <div className="checkpoint-proposal-error">{error}</div>}
 					{loading && skills.length === 0 && <p className="ai-setup-copy">Loading your skills…</p>}
-					{!loading && skills.length === 0 && !error && (
+					{!loading && skills.length === 0 && !error && !groupBySource && (
 						<p className="settings-empty">{readOnly ? "No skills yet." : "No skills yet. Use Add skill to write, upload, or import one."}</p>
 					)}
-					{skills.length > 0 && (
-						<div className="skill-rows skill-table">
-							<div className="settings-table-head skill-table-head" aria-hidden="true">
-								<span>Skill</span>
-								<span>Used in</span>
-								<span>Files</span>
-								<span>Updated</span>
-								<span />
-							</div>
-							{skills.map((skill) => (
-								<SkillRow
-									key={skill.name}
-									skill={skill}
-									onOpen={() => void openDetail(skill.name)}
-									opening={openingName === skill.name}
-								/>
-							))}
-						</div>
-					)}
-					{skills.length > 0 && <p className="cli-note">A skill's files run only in rooms where you allow them, and only as they were when you did.</p>}
+					{(skills.length > 0 || (!loading && !error)) && <>
+						{groupBySource ? groupSkillsBySource(skills).map((group) => (
+							<section className="settings-group skill-source-group" key={group.key} aria-label={group.label}>
+								<GroupHeader kicker={group.key.startsWith("repo:") && group.skills.some((skill) => skill.provenance?.repo) ? <button className="rs-text-btn skill-source-link" onClick={() => { setLastSource({ key: group.key, label: group.label }); setMode({ kind: "source", key: group.key, label: group.label }); }}>{group.label}</button> : group.label} actions={<span className="cli-note">{group.skills.length} {group.skills.length === 1 ? "skill" : "skills"}</span>} />
+								{group.skills.length ? skillTable(group.skills) : <p className="settings-empty">{readOnly ? "No custom skills yet." : "No custom skills yet. Use Add skill to write or upload one."}</p>}
+							</section>
+						)) : skills.length > 0 && skillTable(skills)}
+					</>}
 				</section>
 			)}
+			</div>
 		</div>
 	);
 }

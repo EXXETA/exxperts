@@ -689,7 +689,7 @@ function run(overrides: Partial<AbsorbRun> = {}): AbsorbRun {
 	assert(allRoomsNotesShown(glanceRooms) === 15 && /notes: allRoomsNotesShown\(data\.rooms\)/.test(fs.readFileSync(new URL("../../web-ui/src/components/Memory.tsx", import.meta.url), "utf-8")), "at a glance adds up to the rows");
 	assert(roomMemoryFactsLine({ notes: 2, waiting: 1, lastMemorizedAt: null }) === "no memories saved yet \u00b7 1 conversation waiting", `a room never saved, with a conversation waiting, says the card's words and what waits (got: ${roomMemoryFactsLine({ notes: 2, waiting: 1, lastMemorizedAt: null })})`);
 	assert(roomMemoryFactsLine({ notes: 2, waiting: 0, lastMemorizedAt: null }) === "no memories saved yet", `a room never saved says what its Home card says, not its starter text as notes (got: ${roomMemoryFactsLine({ notes: 2, waiting: 0, lastMemorizedAt: null })})`);
-	assert(allRoomsFactsLine({ rooms: 3, notes: 1_204, waiting: 12 }) === "3 rooms · 1,204 notes · 12 conversations waiting", `the cross-room line (got: ${allRoomsFactsLine({ rooms: 3, notes: 1_204, waiting: 12 })})`);
+	assert(allRoomsFactsLine({ rooms: 3, notes: 1_204, waiting: 12 }) === `3 rooms · ${new Intl.NumberFormat().format(1204)} notes · 12 conversations waiting`, `the cross-room line (got: ${allRoomsFactsLine({ rooms: 3, notes: 1_204, waiting: 12 })})`);
 	const viewed = new Date(2026, 8, 12, 9, 0).getTime();
 	const changedNext = new Date(2026, 8, 14, 9, 0).getTime();
 	assert(asOfSentence(viewed, changedNext) === "Viewing this room's memory as it was on 12 Sep. It changed next on 14 Sep.", `the banner names the viewed day and the next change (got: ${asOfSentence(viewed, changedNext)})`);
@@ -1061,7 +1061,7 @@ function run(overrides: Partial<AbsorbRun> = {}): AbsorbRun {
 
 // A Memorize or Review that cannot start on its Memory model (signed out, too small) shows the one notice with its ways out.
 {
-	const app = fs.readFileSync(new URL("../../web-ui/src/App.tsx", import.meta.url), "utf8");
+	const app = fs.readFileSync(new URL("../../web-ui/src/App.tsx", import.meta.url), "utf8").replace(/\r\n/g, "\n");
 	assert(/const notice = modelNoticeFromError\(e\);\n\t\t\tsetAbsorbWorkflow\(\{ step: "error", target, availability: null, assessment: null, approvalResult: null, notice, error: notice \? null : formatAbsorbWorkflowError/.test(app), "Memorize's start asks for the notice");
 	assert(/const notice = modelNoticeFromError\(e\);\n\t\t\tsetReviewWorkflow\(\{ \.\.\.CLOSED_REVIEW_WORKFLOW, step: "error", target, notice, error: notice \? null : formatReviewWorkflowError/.test(app), "Review's start asks for the notice");
 	assert((app.match(/\{state\.notice && <ModelNoticePanel notice=\{state\.notice\} onTryAgain=\{onRestart\} onChooseModel=\{onChooseModel\} onSignIn=\{\(provider\) => onSignIn\(provider \?\? ""\)\} \/>\}/g) ?? []).length === 2, "both error steps show it");

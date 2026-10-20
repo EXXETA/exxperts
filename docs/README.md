@@ -14,6 +14,7 @@ This is the canonical index for documentation in this repository. Treat this pag
 - [Wallet](wallet.md): what rooms spend, where gateway prices come from, the approximation mark and "no price on file", caching savings, and the CSV export.
 - [Security](../SECURITY.md): threat model, supported deployments, release integrity, and vulnerability reporting.
 - [MCP client support](mcp.md): MCP connectors: transports, config locations, and commands.
+- [Skill libraries](skill-libraries.md): saved Git sources, individually selected design references, room review, and controlled updates.
 
 ## Current command and storage truth
 

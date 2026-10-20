@@ -158,11 +158,15 @@ try {
 		await page.getByRole("button", { name: "Room settings" }).click();
 		await page.waitForSelector(".settings-dialog", { timeout: 10000 });
 		await page.locator(".settings-dialog-nav-item").filter({ hasText: /^Memory$/ }).first().click();
-		const slider = page.locator(".room-settings-section:not([hidden]) .memory-budget-slider");
+		// The slider is visible but disabled until its saved budget has loaded.
+		const slider = page.locator(".room-settings-section:not([hidden]) .memory-budget-slider:enabled");
 		await slider.waitFor({ timeout: 10000 });
 		const saved = await slider.inputValue();
+		assert(saved === "20000", `the fixture's saved budget has loaded, got ${saved}`);
+		const refusedSave = page.waitForResponse((response) => response.request().method() === "PUT" && response.url().endsWith(`/api/persistent-agents/${agentId}/maintenance-settings`), { timeout: 10000 });
 		await slider.focus();
 		await page.keyboard.press("End");
+		assert((await refusedSave).status() === 400, "raising the budget beyond the Memory model's capacity is refused");
 		await page.locator(".room-settings-section:not([hidden])").getByText(/needs a larger Memory model/).waitFor({ timeout: 10000 });
 		await waitUntil(async () => (await slider.inputValue()) === saved, `the slider goes back to the saved ${saved} after the refusal`, 5000);
 

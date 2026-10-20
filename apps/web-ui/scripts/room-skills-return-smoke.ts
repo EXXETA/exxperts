@@ -1,0 +1,98 @@
+import assert from "node:assert/strict";
+import { createElement, act } from "react";
+import { createRoot } from "react-dom/client";
+import { JSDOM } from "jsdom";
+import { invalidateSkillSummaries } from "../src/skills-api";
+import { defaultRepoPolicy, invalidateSkillLibraries } from "../src/skills-repo-api";
+import type { PersistentAgentStatus } from "../src/types";
+
+const scheduleSummary = { executionEnabled: false as const, totalCount: 0, enabledCount: 0, nextRunAt: null, lastRunAt: null, lastStatus: null, lastError: null };
+const rooms: PersistentAgentStatus[] = ["Alpha", "Beta"].map((displayName) => ({ id: displayName.toLowerCase(), displayName, exists: true, status: "ready", root: "/synthetic", runtime: { schemaVersion: 1, agentId: displayName.toLowerCase(), state: "idle", activeThreadId: null, model: null, updatedAt: 0 }, activeThread: null, lastUsedAt: null, lastUsedIsEstimate: false, l1a: { path: "constitution", exists: true }, l1b: { path: "memory", exists: true, sections: [], missingSections: [] }, sectionRegistry: { path: "sections", exists: true, missingSections: [] }, recentContext: { fullEntries: 0, softCap: 10, hardCap: 20 }, memoryStatus: { recentContextCount: 0, recentContextSoftCap: 10, recentContextHardCap: 20, recentContextLevel: "empty", lastCheckpointId: null, lastCheckpointAt: null }, scheduleSummary, errors: [], warnings: [] }));
+const library = { id: "brand", name: "Synthetic Brand", source: "https://example.invalid/brand", status: "current", materialCount: 1, installedSkillCount: 0, ...defaultRepoPolicy };
+const materials = { schemaVersion: 1, libraryId: library.id, materialsSha256: "a".repeat(64), source: library.source, revision: "b".repeat(40), policy: defaultRepoPolicy, files: [{ path: "extras/guide.md", kind: "markdown", size: 20, sha256: "c".repeat(64), mimeType: "text/markdown" }] };
+const dom = new JSDOM("<div id='root'></div>", { url: "http://localhost/" });
+Object.defineProperty(dom.window, "matchMedia", { value: (media: string) => ({ media, matches: false, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {} }) });
+dom.window.HTMLElement.prototype.scrollIntoView = () => {};
+const previousFetch = globalThis.fetch;
+const globals = ["window", "document", "navigator", "HTMLElement", "localStorage", "IS_REACT_ACT_ENVIRONMENT", "__APP_VERSION__"] as const;
+const previous = globals.map((name) => Object.getOwnPropertyDescriptor(globalThis, name));
+Object.assign(globalThis, { window: dom.window, document: dom.window.document, HTMLElement: dom.window.HTMLElement, localStorage: dom.window.localStorage, IS_REACT_ACT_ENVIRONMENT: true, __APP_VERSION__: "synthetic" });
+Object.defineProperty(globalThis, "navigator", { configurable: true, writable: true, value: dom.window.navigator });
+const reads: string[] = [];
+let enteredRooms = 0;
+globalThis.fetch = (async (input, init) => {
+	assert(!init?.method || init.method === "GET", "navigation performs no writes");
+	const url = String(input); reads.push(url);
+	let payload: unknown;
+	if (url === "/api/remote/client-context") payload = { remote: false, capability: "full" };
+	else if (url === "/api/skills/update-notices") payload = { libraries: [{ id: "brand", name: library.name, status: "updates", rooms: [{ id: "beta", reviewRequired: false }] }] };
+	else if (url === "/api/skills?view=summary" || url === "/api/skills") payload = [];
+	else if (url === "/api/skills/libraries" || url === "/api/skills/libraries?view=summary") payload = { libraries: [library] };
+	else if (url.startsWith("/api/skills/libraries/brand/materials")) payload = { manifest: materials };
+	else if (url.includes("/skill-settings")) payload = { agentId: "beta", settings: { schemaVersion: 1, enabledSkills: [], enabledSources: [{ libraryId: "brand", materialsSha256: materials.materialsSha256, skills: [], excludedSkills: [] }], updatedAt: "" }, skills: [], sources: [{ libraryId: "brand", name: library.name, source: library.source, materialsSha256: materials.materialsSha256, currentMaterialsSha256: materials.materialsSha256, materialCount: 1, skills: [], excludedSkills: [], status: "ok" }] };
+	else if (url.includes("archived")) payload = { rooms: [], counts: { archived: 0 } };
+	else return new Response(JSON.stringify({ error: "Synthetic unrelated pane unavailable" }), { status: 404, headers: { "content-type": "application/json" } });
+	return new Response(JSON.stringify(payload), { headers: { "content-type": "application/json" } });
+}) as typeof fetch;
+const { Landing } = await import("../src/App");
+
+function Probe() {
+    return createElement(Landing, { roomOrder: { order: { mode: "name-asc", customOrder: [], unreadable: null, saveBlocked: false, loadFailed: false }, saving: false, saveError: null, lastUsed: new Map() }, onChooseRoomOrder: async () => true, onArrangingChange: () => {}, onOpenSettings: () => assert.fail("room skill navigation stays in the room"), onOpenDashboard: () => {}, onOpenMemory: () => {}, onOpenPersistentAgent: () => { enteredRooms++; }, onResumePersistentAgent: () => { enteredRooms++; }, onMaintainPersistentAgent: () => {}, onCreatePersistentAgent: async () => { throw new Error("Unexpected create"); }, onArchiveRoom: async () => { throw new Error("Unexpected archive"); }, onPurgeRoom: async () => { throw new Error("Unexpected purge"); }, onMementoForget: () => {}, modelStatus: null, persistentAgentStatuses: rooms, persistentThread: null, persistentLive: false, persistentResumeError: null, onRefreshPersistentAgent: () => {}, theme: "light", appearance: "light", onSetAppearance: () => {}, aiProfileStatus: null });
+}
+const container = dom.window.document.getElementById("root")!;
+const root = createRoot(container);
+const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
+const click = (element: Element) => act(async () => { (element as HTMLElement).click(); await flush(); });
+const libraryButton = () => [...container.querySelectorAll(".room-skills-section button")].find((button) => button.textContent?.trim() === "Open skills")!;
+try {
+	invalidateSkillSummaries();
+	invalidateSkillLibraries();
+	await act(async () => { root.render(createElement(Probe)); await flush(); });
+	const beta = [...container.querySelectorAll(".persistent-agent-card")].find((card) => card.textContent?.includes("Beta"))!;
+	await click(beta.querySelector(".card-gear-btn")!);
+	await click(container.querySelector(".rs-shell [data-section='skills']")!);
+	await click(libraryButton());
+	assert(!container.querySelector(".settings-overlay"), "the shared library does not open global Settings");
+	assert(container.querySelector(".rs-shell .skills-page"), "the library stays inside the room dialog");
+	assert(container.querySelector(".skill-library-scope")?.textContent?.includes("Shared library"), "shared edits are explicitly distinguished from room consent");
+	await click([...container.querySelectorAll(".skill-library-path button")].find((button) => button.textContent?.trim() === "Room skills")!);
+	assert.equal(container.querySelector("#room-settings-title")?.textContent, "Beta", "return restores the originating room, not the first/current room");
+	assert.equal(container.querySelector(".rs-shell .settings-dialog-nav-item.active")?.getAttribute("data-section"), "skills", "return restores the Skills pane");
+	assert.equal(enteredRooms, 0, "return never opens a conversation");
+	await click(libraryButton());
+	await act(async () => { dom.window.document.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Escape", bubbles: true })); await flush(); });
+	assert(!container.querySelector(".rs-shell .skills-page"), "Escape leaves the shared library before the room dialog");
+	assert.equal(container.querySelector("#room-settings-title")?.textContent, "Beta");
+	assert.equal(container.querySelector(".rs-shell .settings-dialog-nav-item.active")?.getAttribute("data-section"), "skills");
+	const repositoryUpdate = [...container.querySelectorAll(".room-skills-section button")].find((button) => button.textContent?.trim() === "↻ Repository update")!;
+	assert(repositoryUpdate && repositoryUpdate.getAttribute("title")?.includes("shared library"), "repository updates name their scope and destination");
+	assert(repositoryUpdate.closest(".room-source-update"), "the update action has its own row instead of running into Choose skills");
+	await click(repositoryUpdate);
+	assert(container.querySelector(".rs-shell .skill-source-detail"), "repository update opens this source inside the same room dialog");
+	assert(!container.querySelector(".settings-overlay"));
+	await click([...container.querySelectorAll(".skill-library-path button")].find((button) => button.textContent?.trim() === "Room skills")!);
+	await click(container.querySelector(".room-skills-section button[aria-label='Show local references from Synthetic Brand']")!);
+	const manageReferences = [...container.querySelectorAll(".room-skills-section button")].find((button) => button.textContent?.trim() === "Manage references")!;
+	await click(manageReferences);
+	assert(container.querySelector(".rs-shell .skill-source-detail"), "Manage references opens the source inside the same room");
+	assert.equal([...container.querySelectorAll(".rs-shell .skill-source-detail .skill-repository-views button")].find((button) => button.textContent?.trim() === "Files")?.getAttribute("aria-pressed"), "true", "the requested source starts in its saved Files view");
+	assert.equal(container.querySelector('.skill-library-path [aria-current="page"]')?.textContent, "Synthetic Brand");
+	assert(!container.textContent?.includes("Back to library"), "the three ambiguous back controls are replaced by a named path");
+	await click([...container.querySelectorAll(".skill-library-path button")].find((button) => button.textContent?.trim() === "Repositories")!);
+	assert([...container.querySelectorAll(".skill-library-source-open")].some((button) => !button.closest("[hidden]")), "Repositories returns to the source overview");
+	await click([...container.querySelectorAll(".skill-library-path button")].find((button) => button.textContent?.trim() === "Skills")!);
+	await click([...container.querySelectorAll("button")].find((button) => !button.closest("[hidden]") && button.textContent?.trim() === "Repository libraries")!);
+	assert(!container.querySelector(".rs-shell .skill-source-detail"), "the initial source target is consumed, so later registry navigation remains ordinary");
+	await act(async () => { dom.window.document.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Escape", bubbles: true })); await flush(); });
+	assert(container.querySelector(".rs-shell .skills-page"), "first Escape returns from Repositories to Skills");
+	await act(async () => { dom.window.document.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Escape", bubbles: true })); await flush(); });
+	assert.equal(container.querySelector("#room-settings-title")?.textContent, "Beta");
+	assert.equal(container.querySelector(".rs-shell .settings-dialog-nav-item.active")?.getAttribute("data-section"), "skills");
+	assert(!container.querySelector(".rs-shell .skills-page"), "second Escape returns to room Skills without closing the dialog");
+	assert(reads.every((url) => !url.endsWith("/scan")), "room/library roundtrip does not trigger Git scans");
+	console.log("room-skills-return-smoke: OK");
+} finally {
+	await act(async () => root.unmount()); globalThis.fetch = previousFetch;
+	globals.forEach((name, index) => { if (previous[index]) Object.defineProperty(globalThis, name, previous[index]!); else delete (globalThis as any)[name]; });
+	dom.window.close();
+}

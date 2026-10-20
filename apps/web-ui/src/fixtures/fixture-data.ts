@@ -998,6 +998,23 @@ export const inRoomChatFixtureStates: InRoomChatFixtureState[] = [
 		composerRightActions: [{ label: "", ariaLabel: "Attach a file", glyph: PaperclipIcon }, { label: "medium", glyph: GaugeIcon }, { label: "Remember" }],
 	}),
 	chatFixture({
+		id: "in-room-library-references",
+		label: "In-room / library references",
+		description: "Reference chips identify the actual file or folder; source IDs and full paths stay in their details. Synthetic data only.",
+		activeDisplay: "Brand Room",
+		ownerSecondary: "Persistent room · local references",
+		busy: false,
+		usage: activeChatUsage,
+		items: [
+			{ kind: "tool", id: "fixture-library-root", name: "read_library_reference", args: { libraryId: "fixture-library" }, status: "done", details: { listing: true }, result: "Synthetic root: shared/, references/." },
+			{ kind: "tool", id: "fixture-library-folder", name: "read_library_reference", args: { libraryId: "fixture-library", reference: "shared/images" }, status: "done", details: { listing: true }, result: "Synthetic folder: exxeta.png, logo.svg." },
+			{ kind: "tool", id: "fixture-library-file", name: "read_library_reference", args: { libraryId: "fixture-library", reference: "shared/images/exxeta.png" }, status: "done", details: { reference: "shared/images/exxeta.png" }, result: "Synthetic image reference read." },
+			{ kind: "tool", id: "fixture-skill-file", name: "read_skill_reference", args: { name: "brand", reference: "references/colors.css" }, status: "running" },
+		],
+		inputValue: "",
+		composerRightActions: [{ label: "", ariaLabel: "Attach a file", glyph: PaperclipIcon }, { label: "medium", glyph: GaugeIcon }, { label: "Remember" }],
+	}),
+	chatFixture({
 		id: "in-room-web-tool-bundles",
 		label: "In-room / web tool bundles",
 		description: "Consecutive web_search/fetch_url runs collapsed into bundle lines: resting, partial failure with the muted footnote, total failure in red, a single call unbundled, and a live bundle with the swapping tail.",

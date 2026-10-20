@@ -44,6 +44,25 @@ npm run build
 cd ..
 ```
 
+## Validation before a pull request
+
+Run the existing CI gates from the repository root:
+
+```bash
+npm run build
+npx tsc --noEmit -p apps/web-ui/tsconfig.json
+npx tsc --noEmit -p apps/web-server/tsconfig.json
+npm run typecheck:scripts
+npm run test:scripts
+npm run smokes
+```
+
+The UI TypeScript check includes its DOM smoke scripts. The central smoke runner discovers both server and UI `*-smoke.ts` files and uses each app's TypeScript configuration. Local runs use the runner's default parallelism; `npm run smokes -- --jobs 1` runs sequentially, as CI does. Labels identify `server/` or `ui/`; `npm run smokes -- skill-repository` filters by filename substring, and `npm run smokes -- ui/` selects UI checks. Each smoke has a five-minute ceiling. Retries and explicit partial skips remain visible in the result; a skip is not full coverage.
+
+Desktop types also require the desktop package's own dependencies: run `npm ci` and `npx tsc --noEmit -p tsconfig.json` in `apps/desktop` (`ELECTRON_SKIP_BINARY_DOWNLOAD=1` skips Electron's binary when checking types only). The existing CI matrix runs the gates on Windows, macOS and Linux. Record actual failures and platform skips; local Windows checks do not substitute for the other platforms.
+
+Repository-library fixtures use synthetic public content and isolated app state. They cover import/update review, file policies, local reference integrity, independent room approvals and access revocation without a real private browser sign-in. A visible desktop pass should additionally check source selection, references, update review and return to the same room. See [Skill libraries](skill-libraries.md) for the product and storage boundaries; test measurements and workstation-specific findings belong in the change's verification report.
+
 ## User install vs developer workflow
 
 There are two loops; keep them separate:
@@ -140,6 +159,8 @@ Current product/app state lives under `~/.exxperts/app/`, including:
 - `usage.jsonl`
 - `agents/`, `skills/`
 - `web-search.json` and `searxng/`
+- `skill-libraries.json`: saved Git sources and update-check status; imported
+  packages and their provenance stay in the canonical agent skill store.
 
 Embedded runtime provider/auth/model/session state lives under `~/.exxperts/agent/`, including provider/model registry files and local runtime auth state where applicable.
 

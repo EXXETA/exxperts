@@ -17,7 +17,7 @@ export function PaneHeader({ title, line, actions }: { title: string; line?: Rea
 }
 
 /** A group inside a pane: its kicker, an optional line, and its actions. */
-export function GroupHeader({ kicker, line, actions }: { kicker: string; line?: ReactNode; actions?: ReactNode }) {
+export function GroupHeader({ kicker, line, actions }: { kicker: ReactNode; line?: ReactNode; actions?: ReactNode }) {
 	return (
 		<div className="group-head">
 			<div className="pane-head-text">

@@ -2,6 +2,21 @@
 
 User-visible changes per release. Historical private/internal development notes are not part of this public-facing changelog.
 
+## Unreleased
+
+- Skills: Save repository libraries, group installed skills by source and browse their folder
+  structure, reference links and excluded files. Review selected instructions and materials
+  before saving local copies; additional design formats and shared directories require opt-in.
+- Skills: Enable reviewed sources or individual skills per room, with controlled readers for
+  selected local references. Check for updates without adopting them, preserve local edits and
+  require another review before changing room approvals.
+- Skills: Fetch public sources anonymously through filtered Git or a public GitHub/GitLab API.
+  Require explicit permission for local Git sign-ins or SSH, offer session-only tokens and show
+  browser-login storage effects and company GitLab setup. Startup checks are opt-in.
+- Skills: Reuse authorized snapshots and selected objects, preserve selections when a review
+  expires, normalize imported names and keep review actions visible. Windows publication
+  retries retain the previously accepted package if a reviewed import cannot be published.
+
 ## 0.14.4 (2026-10-19)
 
 - Models: Claude also works with an API key from console.anthropic.com, beside the Claude sign-in.

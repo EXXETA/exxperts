@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
-import type { ChildProcess, ChildProcessByStdio, ChildProcessWithoutNullStreams } from "node:child_process";
+import type { ChildProcess, ChildProcessByStdio } from "node:child_process";
 import diagnosticsChannel from "node:diagnostics_channel";
 import net from "node:net";
 import type { AddressInfo, Socket } from "node:net";
@@ -185,7 +185,7 @@ function killTree(pid: number, signal: NodeJS.Signals): void {
 // smoke alive for the full 10 s after a clean stop. A stop is printed: a
 // port clash after it may be a restart finding the old server still there,
 // which the runner must not retry away.
-export async function stopSmokeServer(server: ChildProcessWithoutNullStreams | null | undefined): Promise<void> {
+export async function stopSmokeServer(server: ChildProcess | null | undefined): Promise<void> {
 	if (!server || server.exitCode != null || server.pid == null) return;
 	console.error("smoke server stopped");
 	const exited = new Promise<void>((resolve) => server.once("exit", () => resolve()));

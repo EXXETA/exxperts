@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Runs the web-server smoke suite: every apps/web-server/scripts/*-smoke.ts.
+// Runs every apps/{web-server,web-ui}/scripts/*-smoke.ts.
 // Usage: npm run smokes [-- [--jobs N] <filter>...]. Filters are substrings
 // of the smoke file name; any match includes the smoke. N smokes run at once,
 // the slowest of the last run first; N defaults to half the machine's cores,
@@ -14,7 +14,10 @@ import os from "node:os";
 import path from "node:path";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const smokeDir = path.join(repoRoot, "apps", "web-server", "scripts");
+const suites = [
+	{ name: "server", directory: "web-server", tsconfig: "tsconfig.scripts.json" },
+	{ name: "ui", directory: "web-ui", tsconfig: "tsconfig.json" },
+];
 const require = createRequire(import.meta.url);
 // --import needs a URL, not a bare path — a Windows drive-letter path would be misparsed.
 const tsxLoader = pathToFileURL(require.resolve("tsx/esm")).href;
@@ -35,13 +38,16 @@ for (let i = 0; i < args.length; i++) {
 		process.exit(1);
 	} else filters.push(args[i]);
 }
-const smokes = fs.readdirSync(smokeDir)
-	.filter((name) => name.endsWith("-smoke.ts"))
-	.filter((name) => filters.length === 0 || filters.some((f) => name.includes(f)))
-	.sort();
+const smokes = suites.flatMap((suite) => {
+	const appDir = path.join(repoRoot, "apps", suite.directory);
+	return fs.readdirSync(path.join(appDir, "scripts"))
+		.filter((name) => name.endsWith("-smoke.ts"))
+		.sort()
+		.map((name) => ({ name: `${suite.name}/${name}`, file: path.join(appDir, "scripts", name), tsconfig: path.join(appDir, suite.tsconfig) }));
+}).filter(({ name }) => filters.length === 0 || filters.some((filter) => name.includes(filter)));
 
 if (smokes.length === 0) {
-	console.error(filters.length ? `No smokes match: ${filters.join(", ")}` : `No smokes found in ${smokeDir}`);
+	console.error(filters.length ? `No smokes match: ${filters.join(", ")}` : "No server or UI smokes found");
 	process.exit(1);
 }
 
@@ -90,11 +96,12 @@ for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
 	});
 }
 
-function runSmoke(name) {
+function runSmoke(smoke) {
 	return new Promise((resolve) => {
 		const startedAt = Date.now();
-		const child = spawn(process.execPath, ["--import", tsxLoader, path.join(smokeDir, name)], {
+		const child = spawn(process.execPath, ["--import", tsxLoader, smoke.file], {
 			cwd: repoRoot,
+			env: { ...process.env, TSX_TSCONFIG_PATH: smoke.tsconfig },
 			stdio: ["ignore", "pipe", "pipe"],
 			...(process.platform === "win32" ? {} : { detached: true }),
 		});
@@ -111,7 +118,7 @@ function runSmoke(name) {
 		child.on("close", (code) => {
 			runningSmokes.delete(child);
 			clearTimeout(timer);
-			resolve({ name, code: timedOut ? 1 : (code ?? 1), output, seconds: (Date.now() - startedAt) / 1000 });
+			resolve({ name: smoke.name, code: timedOut ? 1 : (code ?? 1), output, seconds: (Date.now() - startedAt) / 1000 });
 		});
 	});
 }
@@ -164,7 +171,7 @@ const failureDir = path.join(os.tmpdir(), "exxperts-smoke-failures");
 function saveOutput(name, attempt, output) {
 	try {
 		fs.mkdirSync(failureDir, { recursive: true });
-		const file = path.join(failureDir, `${name.replace(/\.ts$/, "")}.${process.pid}.${attempt}.log`);
+		const file = path.join(failureDir, `${name.replace(/\.ts$/, "").replace(/[\\/]/g, "-")}.${process.pid}.${attempt}.log`);
 		fs.writeFileSync(file, output);
 		return file;
 	} catch {
@@ -181,10 +188,11 @@ function failureTail(result) {
 // One run alone writes each smoke's name before it starts, so a smoke that
 // hangs is plain to see. Smokes running side by side each get one whole line
 // when they end, so their lines never mix.
-async function runAndReport(name) {
+async function runAndReport(smoke) {
+	const { name } = smoke;
 	let note = "";
 	if (jobs === 1) process.stdout.write(`  ${name} … `);
-	let result = await runSmoke(name);
+	let result = await runSmoke(smoke);
 	const interference = isInterferenceFailure(result);
 	const takenPort = interference ? undefined : portTakenFailure(result);
 	const retry = interference ? "retrying after a file-permission denial outside the smoke … "
@@ -194,7 +202,7 @@ async function runAndReport(name) {
 		const kept = firstTry ? `(first try: ${firstTry}) ` : "";
 		if (jobs === 1) process.stdout.write(`${retry}${kept}`);
 		else note = `${retry}${kept}`;
-		result = await runSmoke(name);
+		result = await runSmoke(smoke);
 		result.retried = true;
 	}
 	if (result.code !== 0) result.savedTo = saveOutput(name, "failed", result.output);
@@ -208,12 +216,12 @@ async function runAndReport(name) {
 }
 
 const timings = readTimings();
-const queue = jobs === 1 ? [...smokes] : [...smokes].sort((a, b) => (timings[b] ?? 0) - (timings[a] ?? 0));
+const queue = jobs === 1 ? [...smokes] : [...smokes].sort((a, b) => (timings[b.name] ?? 0) - (timings[a.name] ?? 0));
 const results = [];
 const startedAt = Date.now();
 console.log(`Running ${smokes.length} smoke${smokes.length === 1 ? "" : "s"}${jobs > 1 ? `, ${jobs} at a time` : ""}…\n`);
 await Promise.all(Array.from({ length: Math.min(jobs, queue.length) }, async () => {
-	for (let name = queue.shift(); name !== undefined; name = queue.shift()) results.push(await runAndReport(name));
+	for (let smoke = queue.shift(); smoke !== undefined; smoke = queue.shift()) results.push(await runAndReport(smoke));
 }));
 results.sort((a, b) => a.name.localeCompare(b.name));
 saveTimings(timings, results);

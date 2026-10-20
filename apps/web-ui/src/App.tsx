@@ -36,6 +36,7 @@ import { GroupHeader, PaneHeader } from "./components/pane-header";
 import { roomFilesSentence } from "./components/RoomDangerZone";
 import { sharedServerReleases, WhatsNewDialog, type WhatsNewSections } from "./components/whats-new-dialog";
 import { fetchRemoteClientContext, SHARED_SERVER_ADMIN_LINE, showsComputerOnlyControls, useRemoteClientContext } from "./remote-client-context";
+import { RoomSkillUpdateButton } from "./components/SkillUpdateNotice";
 import { RemoteAccessPage } from "./components/remote-access-page";
 import { StateProfileSection } from "./components/state-profile-section";
 import { GlobalInstructionsSection } from "./components/GlobalInstructionsSection";
@@ -1311,7 +1312,7 @@ export function Landing({ roomOrder, onChooseRoomOrder, onArrangingChange, onOpe
 			</section>
 			<section ref={gridRef} className={`landing-grid${roomStatuses.length === 0 ? " landing-grid--empty" : ""}${arranging ? " is-arranging" : ""}`} aria-label="exxperts entry points">
 				{(arrangedStatuses ?? orderedRoomStatuses).map((status, index, list) => {
-					const card = <PersistentAgentCard key={status.id} status={status} arranging={arranging} thread={persistentThread?.agentId === status.id ? persistentThread : null} live={persistentLive && persistentThread?.agentId === status.id} duplicateDisplayName={hasDuplicateDisplayName(status)} backgroundReady={backgroundReadyRooms?.has(status.id) ?? false} purging={purgingRooms?.has(status.id) ?? false} onEnter={onOpenPersistentAgent} onResume={onResumePersistentAgent} onMaintain={onMaintainPersistentAgent} onOpenSettings={() => openRoomSettings(status)} onOpenModelSettings={() => openRoomSettings(status, "model")} providerLabels={providerLabels} />;
+					const card = <PersistentAgentCard key={status.id} status={status} arranging={arranging} thread={persistentThread?.agentId === status.id ? persistentThread : null} live={persistentLive && persistentThread?.agentId === status.id} duplicateDisplayName={hasDuplicateDisplayName(status)} backgroundReady={backgroundReadyRooms?.has(status.id) ?? false} purging={purgingRooms?.has(status.id) ?? false} onEnter={onOpenPersistentAgent} onResume={onResumePersistentAgent} onMaintain={onMaintainPersistentAgent} onOpenSettings={() => openRoomSettings(status)} onOpenSkillSettings={() => openRoomSettings(status, "skills")} onOpenModelSettings={() => openRoomSettings(status, "model")} providerLabels={providerLabels} />;
 					if (!arrangedStatuses) return card;
 					const held = dragView?.id === status.id;
 					return (
@@ -1364,7 +1365,7 @@ export function Landing({ roomOrder, onChooseRoomOrder, onArrangingChange, onOpe
 				</div>
 			)}
 			{settingsRoom && (
-				<RoomSettingsModal status={settingsRoom} initialPane={settingsRoomPane} onClose={() => setSettingsRoomId(null)} onArchive={onArchiveRoom} onPurge={onPurgeRoom} onRefresh={onRefreshPersistentAgent} onMementoForget={() => onMementoForget(settingsRoom.id)} onOpenSkillsLibrary={() => onOpenSettings("skills")} onOpenConnectors={() => onOpenSettings("connectors")} />
+				<RoomSettingsModal status={settingsRoom} initialPane={settingsRoomPane} onClose={() => setSettingsRoomId(null)} onArchive={onArchiveRoom} onPurge={onPurgeRoom} onRefresh={onRefreshPersistentAgent} onMementoForget={() => onMementoForget(settingsRoom.id)} onOpenConnectors={() => onOpenSettings("connectors")} />
 			)}
 		</div>
 	);
@@ -2967,6 +2968,12 @@ export function App() {
 			// it appears, and the focus listener keeps it current after that.
 			void refreshAuthStatus();
 			void refreshAiProfileStatus();
+		})();
+	};
+	const closeSettings = (): void => {
+		void (async () => {
+			if (!await confirmLeavingGlobalInstructions("Close")) return;
+			setSettingsOverlay(null);
 		})();
 	};
 	// The one-time What's new window after an update. Asked once per app load;
@@ -9150,7 +9157,7 @@ export function App() {
 			active={settingsOverlay.section}
 			initialMobileNav={settingsOverlay.mobileNav}
 			onSelect={(section) => { void (async () => { if (section === settingsOverlay.section || await confirmLeavingGlobalInstructions("Leave")) setSettingsOverlay({ section, mobileNav: false }); })(); }}
-			onClose={() => { void (async () => { if (await confirmLeavingGlobalInstructions("Close")) setSettingsOverlay(null); })(); }}
+			onClose={closeSettings}
 			sections={[
 				{
 					id: "ai-setup",
@@ -9249,7 +9256,7 @@ export function App() {
 					{maintainConfirm && <MaintainConfirmDialog confirm={maintainConfirm} onClose={() => setMaintainConfirm(null)} />}
 					<AbsorbWorkflowShell state={absorbWorkflow} turnWait={absorbWorkflow.step === "approving" && roomTurnInFlight(absorbWorkflow.target?.agentId)} loadingMessage={ABSORB_LOADING_MESSAGES[absorbLoadingIndex]} waitingMessage={ABSORB_WAITING_MESSAGES[absorbWaitingIndex]} keepIds={absorbKeepDraft ?? absorbWorkflow.run?.demotion.keepIds ?? []} onStopAbandonedRun={() => void stopAbandonedAbsorbRun()} onAbort={abortAbsorbWorkflow} onDiscuss={startAbsorbDiscussion} onSendDiscussionMessage={sendAbsorbDiscussionMessage} onGenerateFromDiscussion={generateAbsorbProposalFromDiscussion} onGenerate={() => void generateAbsorbProposal()} onBackToAssessment={backToAbsorbAssessment} onReassess={reassessAbsorb} onDraftWithoutDiscussion={() => void generateAbsorbProposal({ withoutDiscussion: true })} onRestart={restartMaintain} onCancelRun={confirmCancelAbsorbRun} onToggleRunKeep={toggleAbsorbRunKeep} onToggleRunKeepTopic={toggleAbsorbRunKeepTopic} onRaiseRunBudget={raiseAbsorbRunBudget} onRaiseLimitBeforeRun={(tokens) => void raiseAbsorbLimitBeforeRun(tokens)} onReviewFirst={reviewFirstFromAbsorb} onEditRunEntry={editAbsorbRunEntryText} onChooseRunBeside={chooseAbsorbRunBesideNote} onMoveRunSorted={moveAbsorbRunSorted} onApproveRun={approveAbsorbRunUpdate} onRunBackToAssessment={() => void absorbRunBackToAssessment()} onResumeRun={() => void resumeAbsorbRunAfterStop()} onChooseModel={() => setAbsorbModelSettingsOpen(true)} onSignIn={(provider) => openSignIn(provider)} returnLabel={maintainReturnLabel} />
 					{absorbModelSettingsRoom && (
-						<RoomSettingsModal status={absorbModelSettingsRoom} initialPane="model" onClose={() => setAbsorbModelSettingsOpen(false)} onArchive={archivePersistentAgentRoom} onPurge={purgePersistentAgentRoom} onRefresh={refreshPersistentAgentStatus} onOpenSkillsLibrary={() => openSettings("skills")} onOpenConnectors={() => openSettings("connectors")} />
+						<RoomSettingsModal status={absorbModelSettingsRoom} initialPane="model" onClose={() => setAbsorbModelSettingsOpen(false)} onArchive={archivePersistentAgentRoom} onPurge={purgePersistentAgentRoom} onRefresh={refreshPersistentAgentStatus} onOpenConnectors={() => openSettings("connectors")} />
 					)}
 				</>
 			);
@@ -9261,7 +9268,7 @@ export function App() {
 					{maintainConfirm && <MaintainConfirmDialog confirm={maintainConfirm} onClose={() => setMaintainConfirm(null)} />}
 					<ReviewWorkflowShell state={reviewWorkflow} turnWait={reviewWorkflow.step === "approving" && roomTurnInFlight(reviewWorkflow.target?.agentId)} loadingMessage={REVIEW_LOADING_MESSAGES[reviewLoadingIndex]} waitingMessage={REVIEW_WAITING_MESSAGES[reviewWaitingIndex]} keepIds={reviewKeepDraft ?? reviewWorkflow.run?.demotion.keepIds ?? []} onStopAbandonedRun={() => void stopAbandonedReviewRun()} onAbort={abortReviewWorkflow} onDiscuss={startReviewDiscussion} onSendDiscussionMessage={sendReviewDiscussionMessage} onContinueFromDiscussion={() => void startReviewTidyFromDiscussion()} onContinueWithoutDiscussion={() => void startReviewTidy({ withoutDiscussion: true })} onContinue={() => void startReviewTidy()} onBackToAssessment={backToReviewAssessment} onReassess={() => void reassessReview()} onRestart={restartMaintain} onSetDepth={setReviewDepth} onCancelRun={confirmCancelReviewRun} onToggleRunKeep={toggleReviewRunKeep} onToggleRunKeepTopic={toggleReviewRunKeepTopic} onRaiseRunBudget={raiseReviewRunBudget} onEditRunEntry={editReviewRunEntryText} onSaveRun={approveReviewRunUpdate} onRunBackToAssessment={() => void reviewRunBackToAssessment()} onResumeRun={() => void resumeReviewRunAfterStop()} onUndo={undoReviewSave} onChooseModel={() => setAbsorbModelSettingsOpen(true)} onSignIn={(provider) => openSignIn(provider)} returnLabel={maintainReturnLabel} />
 					{reviewModelSettingsRoom && (
-						<RoomSettingsModal status={reviewModelSettingsRoom} initialPane="model" onClose={() => setAbsorbModelSettingsOpen(false)} onArchive={archivePersistentAgentRoom} onPurge={purgePersistentAgentRoom} onRefresh={refreshPersistentAgentStatus} onOpenSkillsLibrary={() => openSettings("skills")} onOpenConnectors={() => openSettings("connectors")} />
+						<RoomSettingsModal status={reviewModelSettingsRoom} initialPane="model" onClose={() => setAbsorbModelSettingsOpen(false)} onArchive={archivePersistentAgentRoom} onPurge={purgePersistentAgentRoom} onRefresh={refreshPersistentAgentStatus} onOpenConnectors={() => openSettings("connectors")} />
 					)}
 				</>
 			);
@@ -9288,9 +9295,9 @@ export function App() {
 		const memorySettingsRoom = memorySettingsRoomId ? persistentAgentStatuses.find((status) => status.id === memorySettingsRoomId) ?? null : null;
 		return withConnectionBanner(
 			<>
-				<MemoryShell onHome={goHome} onSettings={openSettings} onDashboard={() => setView("dashboard")} onMaintain={(target) => { if (openMaintainChooser(target, "memory")) setView("home"); }} maintainBlocked={maintainBlockedReason} onOpenMemorySettings={(target) => setMemorySettingsRoomId(target.agentId)} theme={theme} appearance={appearance} onSetAppearance={setAppearance} />
+				<MemoryShell onHome={goHome} onSettings={openSettings} onDashboard={() => setView("dashboard")} onMaintain={(target) => { if (openMaintainChooser(target, "memory")) setView("home"); }} maintainBlocked={maintainBlockedReason} onOpenMemorySettings={(target) => { setMemorySettingsRoomId(target.agentId); }} theme={theme} appearance={appearance} onSetAppearance={setAppearance} />
 				{memorySettingsRoom && (
-					<RoomSettingsModal status={memorySettingsRoom} initialPane="memory" onClose={() => setMemorySettingsRoomId(null)} onArchive={archivePersistentAgentRoom} onPurge={purgePersistentAgentRoom} onRefresh={refreshPersistentAgentStatus} onOpenSkillsLibrary={() => openSettings("skills")} onOpenConnectors={() => openSettings("connectors")} />
+					<RoomSettingsModal status={memorySettingsRoom} initialPane="memory" onClose={() => setMemorySettingsRoomId(null)} onArchive={archivePersistentAgentRoom} onPurge={purgePersistentAgentRoom} onRefresh={refreshPersistentAgentStatus} onOpenConnectors={() => openSettings("connectors")} />
 				)}
 			</>
 		);
@@ -9432,6 +9439,7 @@ export function App() {
 							    would be the worst possible moment to lose it. */}
 							<button className="icon-btn icon-btn-square icon-btn-danger" aria-label="Forget" title="Forget this conversation and start fresh. Nothing is saved to memory" onClick={() => void mementoPersistentThread()}><TrashIcon /></button>
 							{currentPersistentStatus?.exists && <button className="icon-btn icon-btn-square" aria-label="Room settings" title={`Room settings — ${roomSettingsChordHint()}`} onClick={() => openRoomSettings()}><GearIcon /></button>}
+							{currentPersistentStatus?.exists && <RoomSkillUpdateButton roomId={currentPersistentStatus.id} onClick={() => openRoomSettings("skills")} />}
 						</>
 					)
 					: undefined
@@ -9601,7 +9609,7 @@ export function App() {
 			globalOverlaySlot={
 				<>
 					{roomSettingsOpen && currentPersistentStatus && (
-						<RoomSettingsModal status={currentPersistentStatus} initialPane={roomSettingsPane} onClose={() => setRoomSettingsOpen(false)} onArchive={archivePersistentAgentRoom} onPurge={purgePersistentAgentRoom} onRefresh={refreshPersistentAgentStatus} onMementoApplied={leaveRoomAfterMemento} onConversationSwitched={adoptSwitchedConversationModel} onOpenSkillsLibrary={() => openSettings("skills")} onOpenConnectors={() => openSettings("connectors")} />
+						<RoomSettingsModal status={currentPersistentStatus} initialPane={roomSettingsPane} onClose={() => setRoomSettingsOpen(false)} onArchive={archivePersistentAgentRoom} onPurge={purgePersistentAgentRoom} onRefresh={refreshPersistentAgentStatus} onMementoApplied={leaveRoomAfterMemento} onConversationSwitched={adoptSwitchedConversationModel} onOpenConnectors={() => openSettings("connectors")} />
 					)}
 					{assetDeleteConfirm && <AssetDeleteDialog title={assetDeleteConfirm.title} onDelete={() => { const row = assetDeleteConfirm; setAssetDeleteConfirm(null); if (row) void deleteAssetRow(row); }} onCancel={() => setAssetDeleteConfirm(null)} />}
 					{fileDeleteConfirm && <FileDeleteDialog fileName={fileDeleteConfirm.fileName} reason={fileDeleteConfirm.reason} onDelete={() => { const confirm = fileDeleteConfirm; setFileDeleteConfirm(null); if (confirm) void performFileDelete(confirm.fileName); }} onCancel={() => setFileDeleteConfirm(null)} />}

@@ -131,9 +131,9 @@ try {
 		if (await dismiss.count()) await dismiss.click();
 		await a.locator(".persistent-agent-card").filter({ hasText: "Two Window Room" }).getByRole("button", { name: "Enter →" }).click();
 		const composerA = a.locator("textarea").first();
-		await a.locator('button[title="Send"]').first().waitFor({ timeout: 15000 });
-		await a.waitForTimeout(800);
 		await composerA.fill("First question.");
+		// The title stays quiet during a socket swap; only enabled means this draft can be sent.
+		await a.locator('button[aria-label="Send"]:enabled').first().waitFor({ timeout: 15000 });
 		await composerA.press("Enter");
 		await a.getByText("Answer from claude-fake.").first().waitFor({ timeout: 20000 });
 		const first = await activeThread();
@@ -155,6 +155,7 @@ try {
 		// Window A still shows the old conversation: a message typed there stays in the box with the plain line.
 		const typed = "Typed in the old window.";
 		await composerA.fill(typed);
+		await a.locator('button[aria-label="Send"]:enabled').first().waitFor({ timeout: 15000 });
 		await composerA.press("Enter");
 		await a.getByText(MOVED).first().waitFor({ timeout: 10000 }).catch(async (error) => { throw new Error(`the plain line did not show; the room reads: ${(await a.locator("main").innerText()).slice(-300)}`, { cause: error }); });
 		const pageText = await a.locator("body").innerText();
@@ -167,11 +168,10 @@ try {
 		// Reload joins the room's new conversation, keeps the message, and sends it there.
 		await a.getByRole("button", { name: "Reload" }).click();
 		await waitUntil(async () => (await a.getByText(MOVED).count()) === 0, "the line goes after Reload");
-		await a.locator('button[title="Send"]').first().waitFor({ timeout: 15000 });
-		await a.waitForTimeout(800);
 		assert(await activeThread() === moved, "Reload does not retire the conversation the other window shows");
 		assert(await a.locator("textarea").first().inputValue() === typed, `the message is still in the box after Reload, got ${JSON.stringify(await a.locator("textarea").first().inputValue())}`);
 		assert(await a.getByText("First question.").count() === 0, "window A now shows the room's new conversation");
+		await a.locator('button[aria-label="Send"]:enabled').first().waitFor({ timeout: 15000 });
 		await a.locator("textarea").first().press("Enter");
 		await a.getByText("Answer from claude-fake.").first().waitFor({ timeout: 20000 });
 		assert(await activeThread() === moved, "the message went out in the room's new conversation");

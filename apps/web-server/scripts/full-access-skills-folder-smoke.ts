@@ -1,10 +1,11 @@
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import type { AddressInfo } from "node:net";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { authedFetch, freePort, smokeHomeEnv, SMOKE_AUTH_HEADERS, SMOKE_SERVER_AUTH_ENV, SMOKE_SERVER_SPAWN_TREE_OPTIONS, stopSmokeServer, type AuthedFetchInit } from "./smoke-server-process.js";
 
 // A live Full access room with the terminal on reads and writes the person's
@@ -22,6 +23,7 @@ function assert(condition: unknown, message: string): asserts condition {
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const webServerDir = path.resolve(scriptDir, "..");
 const repoRoot = path.resolve(webServerDir, "..", "..");
+const tsxLoader = pathToFileURL(createRequire(import.meta.url).resolve("tsx/esm")).href;
 
 // Not resolved to its real path on purpose: on macOS the temp folder is a
 // link (/var to /private/var), so the paths the room uses differ from the
@@ -169,8 +171,7 @@ class LiveServer {
 
 	async start(env: Record<string, string | undefined>): Promise<void> {
 		this.port = await freePort();
-		this.process = spawn("npx", ["tsx", "src/index.ts"], {
-			shell: process.platform === "win32",
+		this.process = spawn(process.execPath, ["--import", tsxLoader, "src/index.ts"], {
 			...SMOKE_SERVER_SPAWN_TREE_OPTIONS,
 			cwd: webServerDir,
 			env: { ...env, PORT: String(this.port), ...SMOKE_SERVER_AUTH_ENV, EXXETA_HOME: repoRoot } as NodeJS.ProcessEnv,
@@ -253,10 +254,16 @@ class LiveServer {
 		const deadline = Date.now() + 60_000;
 		while (Date.now() < deadline) {
 			if (turnResults && frames.some((frame) => frame?.type === "event" && frame?.event?.type === "agent_end")) {
-				try { socket.close(); } catch {}
-				const results = turnResults as string[];
-				assert(results.length === calls.length, `expected ${calls.length} tool results, got ${results.length}`);
-				return results;
+				// agent_end precedes release of the room's turn guard; closing early can cancel cleanup.
+				const status = await this.json(`/api/persistent-agents/${encodeURIComponent(agentId)}/status`);
+				assert(status.status === 200, `room status: expected 200, got ${status.status}`);
+				assert(status.body?.activeThread?.threadId === conversationId, "the scripted conversation must remain active until its turn finishes");
+				if (status.body.activeThread.inFlight === false) {
+					try { socket.close(); } catch {}
+					const results = turnResults as string[];
+					assert(results.length === calls.length, `expected ${calls.length} tool results, got ${results.length}`);
+					return results;
+				}
 			}
 			const errors = frames.filter((frame) => String(frame?.type ?? "").includes("error"));
 			if (errors.length > 0) throw new Error(`turn errored: ${JSON.stringify(errors[0]).slice(0, 400)}`);

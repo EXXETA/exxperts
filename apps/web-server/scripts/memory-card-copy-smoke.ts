@@ -23,7 +23,7 @@ function check(condition: unknown, message: string): void {
 check(protectedOpenItemsSentence(0) === "", `no open items were held back: no sentence (got: ${JSON.stringify(protectedOpenItemsSentence(0))})`);
 check(protectedOpenItemsSentence(1) === "1 open item is kept; close it to free room.", `one open item, singular (got: ${JSON.stringify(protectedOpenItemsSentence(1))})`);
 check(protectedOpenItemsSentence(3) === "3 open items are kept; close them to free room.", `several open items, plural (got: ${JSON.stringify(protectedOpenItemsSentence(3))})`);
-check(protectedOpenItemsSentence(1200) === "1,200 open items are kept; close them to free room.", `a large count reads with its thousands separator (got: ${JSON.stringify(protectedOpenItemsSentence(1200))})`);
+check(protectedOpenItemsSentence(1200) === `${new Intl.NumberFormat().format(1200)} open items are kept; close them to free room.`, `a large count reads with its thousands separator (got: ${JSON.stringify(protectedOpenItemsSentence(1200))})`);
 
 check(archivedLabel("budget") === "archived · to make room", `an archived note without a reason reads as before (got: ${JSON.stringify(archivedLabel("budget"))})`);
 check(archivedLabel(undefined) === "archived" && archivedLabel(null) === "archived" && archivedLabel("") === "archived", "an archived note with no archive reason says only that it was");

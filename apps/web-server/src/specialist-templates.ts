@@ -26,7 +26,7 @@ export const SPECIALIST_GRANTABLE_TOOL_NAMES = new Set<string>([
 // Names/prefixes that must never appear in a specialist session no matter
 // what a template claims. This is a second, independent floor under the
 // grantable-set check — both must fail for a forbidden tool to slip through.
-const SPECIALIST_FORBIDDEN_TOOL_PATTERN = /^(memory_|kb_|mcp)|^(bash|delegate|start_handoff|return_handoff|web_search|fetch_url|read_skill)$/;
+const SPECIALIST_FORBIDDEN_TOOL_PATTERN = /^(memory_|kb_|mcp)|^(bash|delegate|start_handoff|return_handoff|web_search|fetch_url|read_skill|read_skill_reference|read_library_reference)$/;
 
 /** D9 caps, shared by all v1 templates. */
 export const SPECIALIST_TASK_CAPS = {

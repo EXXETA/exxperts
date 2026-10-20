@@ -4,22 +4,24 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { sha256 } from "../src/skills-store.js";
 import {
-	cloneRepoShallow,
 	describeCloneFailure,
 	disposeAllCheckouts,
 	getCheckout,
 	parseSkillFrontmatter,
-	readRepoCandidate,
-	registerCheckout,
 	resolveFeaturedSources,
 	resolveRepoSource,
-	scanRepoSkills,
+	scanRepository,
+	fetchRepoCandidate,
 	signInArgsFromConfigListing,
 	storedSignInArgs,
-	vendorRepoSkill,
+	importReviewedRepoSkill,
+	previewRepoFile,
+	withRepositoryBudget,
 } from "../src/skills-repo-fetch.js";
+import { anonymousRepositoryAccess, grantRepositoryAccess } from "../src/skills-repository-access.js";
+
+const scanWithLocalAccess = (source: string, timeout?: number) => withRepositoryBudget(() => scanRepository(source, {}, undefined, false, { forceRefresh: true, accessId: grantRepositoryAccess(source, undefined, { ...anonymousRepositoryAccess(), mode: "local-git" }).id }), timeout);
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -33,8 +35,8 @@ fs.mkdirSync(storeDir, { recursive: true });
 
 const cleanup: string[] = [workDir];
 
-function git(args: string[], cwd: string): void {
-	const res = spawnSync("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"], encoding: "utf-8" });
+function git(args: string[], cwd: string, input?: string): void {
+	const res = spawnSync("git", args, { cwd, stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"], input, encoding: "utf-8" });
 	if (res.status !== 0) throw new Error(`git ${args.join(" ")} failed: ${res.stderr || res.stdout}`);
 }
 
@@ -55,7 +57,7 @@ try {
 	writeSkill("cite-sources", "cite-sources", "cite before answering", "Always cite your sources before answering.");
 	writeSkill("nested/deep-skill", "deep-skill", "a nested skill", "Nested skills are still discovered.");
 	// A skill that bundles a non-.md file → scripts flag set; the file is inert.
-	writeSkill("with-scripts", "with-scripts", "ships a script", "This skill bundles a helper script that will not run.");
+	writeSkill("with-scripts", "with-scripts", "ships a script", "This skill bundles a helper script that will not run. [Notes](notes.md) [Root guide](../README.md)");
 	fs.writeFileSync(path.join(repoDir, "with-scripts", "run.py"), "print('this must never execute on import')\n");
 	fs.writeFileSync(path.join(repoDir, "with-scripts", "notes.md"), "# helper notes\n"); // .md sibling: not a script
 	// A unicode-poisoned skill → scan must surface a finding.
@@ -110,6 +112,9 @@ try {
 
 		const wanted = `Basic ${Buffer.from("fixture-user:fixture-pass").toString("base64")}`;
 		let requests = 0;
+		let fetchRequests = 0;
+		let protocol = "";
+		let disableFilterAfterProbe = false;
 		const server = http.createServer((req, res) => {
 			requests += 1;
 			const url = new URL(req.url ?? "/", "http://fixture");
@@ -121,6 +126,16 @@ try {
 				res.writeHead(401, { "www-authenticate": 'Basic realm="fixture"' }).end("HTTP Basic: Access denied\n");
 				return;
 			}
+			const requestChunks: Buffer[] = [];
+			let disableFilter = false;
+			req.on("data", (chunk: Buffer) => requestChunks.push(chunk));
+			req.on("end", () => {
+				const body = Buffer.concat(requestChunks).toString();
+				disableFilter = disableFilterAfterProbe && /command=ls-refs/.test(body);
+				if (/command=fetch|want [a-f0-9]{40}/.test(body)) {
+					fetchRequests++;
+				}
+			});
 			const cgi = spawn("git", ["http-backend"], {
 				env: {
 					...process.env,
@@ -131,7 +146,7 @@ try {
 					REQUEST_METHOD: req.method ?? "GET",
 					CONTENT_TYPE: String(req.headers["content-type"] ?? ""),
 					HTTP_CONTENT_ENCODING: String(req.headers["content-encoding"] ?? ""),
-					GIT_PROTOCOL: String(req.headers["git-protocol"] ?? ""),
+					GIT_PROTOCOL: protocol || String(req.headers["git-protocol"] ?? ""),
 					REMOTE_USER: "fixture-user",
 				},
 			});
@@ -156,7 +171,14 @@ try {
 				res.writeHead(status);
 				res.write(head.subarray(at + 4));
 			});
-			cgi.once("close", () => res.end());
+			res.once("close", () => { cgi.kill(); cgi.stdout.destroy(); });
+			cgi.once("close", () => {
+				if (disableFilter) {
+					git(["config", "uploadpack.allowFilter", "false"], path.join(serveRoot, "team", "skills.git"));
+					disableFilterAfterProbe = false;
+				}
+				res.end();
+			});
 		});
 		await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
 		const port = (server.address() as AddressInfo).port;
@@ -183,9 +205,9 @@ try {
 		const globalConfig = path.join(workDir, "global-gitconfig");
 		const writeGlobal = (global: string): void => fs.writeFileSync(globalConfig, global);
 		const helperOps = (): string[] => (fs.existsSync(helperLog) ? fs.readFileSync(helperLog, "utf-8").split(/\r?\n/).filter(Boolean) : []);
-		const failureOf = async (run: Promise<string>): Promise<string> => {
+		const failureOf = async (run: Promise<unknown>): Promise<string> => {
 			try {
-				cleanup.push(await run);
+				await run;
 			} catch (err) {
 				return err instanceof Error ? err.message : String(err);
 			}
@@ -196,6 +218,12 @@ try {
 		process.env.GIT_CONFIG_NOSYSTEM = "1";
 		process.env.GIT_CONFIG_GLOBAL = globalConfig;
 		process.env.FIXTURE_HELPER_LOG = helperLog;
+		const netrcHome = path.join(workDir, "netrc-home");
+		fs.mkdirSync(netrcHome);
+		for (const file of [".netrc", "_netrc"]) fs.writeFileSync(path.join(netrcHome, file), "machine 127.0.0.1 login fixture-user password fixture-pass\n");
+		for (const name of ["HOME", "USERPROFILE", "CURL_HOME", "XDG_CONFIG_HOME"]) process.env[name] = netrcHome;
+		process.env.NETRC = path.join(netrcHome, ".netrc");
+		process.env.GIT_CURL_VERBOSE = "true"; process.env.GIT_TRACE_CURL = "1";
 		try {
 			const privateUrl = `http://127.0.0.1:${port}/team/skills.git`;
 			const privateRepo = resolveRepoSource(privateUrl);
@@ -205,10 +233,50 @@ try {
 			// A stored sign-in signs the clone in, and the helper is only ever asked `get`.
 			writeGlobal(withHelper);
 			process.env.FIXTURE_HELPER_MODE = "good";
-			const signedIn = await cloneRepoShallow(privateRepo.value);
-			cleanup.push(signedIn);
-			assert(fs.existsSync(path.join(signedIn, "cite-sources", "SKILL.md")), "a private repo must clone with the stored sign-in");
-			assert(helperOps().join(",") === "get", `a successful import must only read the sign-in (no store), helper saw: ${helperOps().join(",")}`);
+			assert(/needs a sign-in/.test(await failureOf(scanRepository(privateUrl))), "anonymous downloads must never reuse configured credentials, including .netrc/_netrc");
+			assert(helperOps().length === 0, "anonymous downloads must not invoke a credential helper");
+			for (const name of ["HOME", "USERPROFILE", "CURL_HOME", "XDG_CONFIG_HOME", "NETRC"]) { if (envBefore[name] === undefined) delete process.env[name]; else process.env[name] = envBefore[name]; }
+			const access = grantRepositoryAccess(privateUrl, undefined, { ...anonymousRepositoryAccess(), mode: "local-git" });
+			await assertSnapshotFilterRefusal();
+			async function assertSnapshotFilterRefusal(): Promise<void> {
+				const before = fetchRequests;
+				let refused = false;
+				try { await scanRepository(privateUrl, {}, undefined, false, { accessId: access.id }); } catch (error) { refused = /filtered fetching/.test(String(error)); }
+				assert(refused, "a remote without filtering support must fail instead of importing a full clone");
+				assert(fetchRequests === before, "a filterless server must not receive any object-fetch request before refusal");
+			}
+			git(["config", "uploadpack.allowFilter", "true"], path.join(serveRoot, "team", "skills.git"));
+			fs.rmSync(helperLog, { force: true });
+			const snapshot = await scanRepository(privateUrl, {}, undefined, false, { accessId: access.id });
+			assert(snapshot.skills.find((skill) => skill.path === "with-scripts")?.referencePaths?.includes("with-scripts/notes.md"), "scan discovers links without selecting their contents");
+			const snapshotCandidate = await fetchRepoCandidate(snapshot.token, "cite-sources", []);
+			assert(snapshotCandidate.body.includes("Always cite"), "snapshot must fetch reviewed manifest bytes through stored credentials");
+			const snapshotDir = getCheckout(snapshot.token)?.dir;
+			assert(snapshotDir && !fs.existsSync(path.join(snapshotDir, "cite-sources", "SKILL.md")), "snapshot never creates a working-tree checkout");
+			const blockedOid = spawnSync("git", ["rev-parse", "HEAD:with-scripts/run.py"], { cwd: repoDir, encoding: "utf8" }).stdout.trim();
+			const localObjects = spawnSync("git", ["cat-file", "--batch-all-objects", "--batch-check=%(objectname)"], { cwd: snapshotDir, encoding: "utf8" });
+			assert(localObjects.status === 0 && !localObjects.stdout.split(/\r?\n/).includes(blockedOid), "batched discovery must not request unselected program blobs");
+			const hintedOid = spawnSync("git", ["rev-parse", "HEAD:with-scripts/notes.md"], { cwd: repoDir, encoding: "utf8" }).stdout.trim();
+			assert(!localObjects.stdout.split(/\r?\n/).includes(hintedOid), "finding a Markdown link must not fetch its reference bytes");
+			assert(helperOps().length >= 2 && helperOps().every((operation) => operation === "get"), `lazy blob reads must keep credentials read-only, got ${helperOps().join(",")}`);
+			assert(helperOps().length <= 4, `manifests and license must share a batched fetch, not one authenticated fetch per file: ${helperOps().join(",")}`);
+			git(["config", "uploadpack.allowReachableSHA1InWant", "true"], path.join(serveRoot, "team", "skills.git"));
+			const fixtureCommit = spawnSync("git", ["rev-parse", "HEAD"], { cwd: repoDir, encoding: "utf8" }).stdout.trim();
+			git(["update-ref", "--stdin"], path.join(serveRoot, "team", "skills.git"), Array.from({ length: 600 }, (_, index) => `update refs/heads/large-advertisement-${index}-after-capabilities ${fixtureCommit}\n`).join(""));
+			protocol = "version=0";
+			const protocolZero = await scanRepository(privateUrl, {}, undefined, false, { accessId: access.id, forceRefresh: true });
+			assert(protocolZero.transport === "git" && protocolZero.skills.length === snapshot.skills.length, "a v0 filter advertisement remains usable even when subsequent refs exceed the private trace budget");
+			protocol = "";
+			const beforePreview = fetchRequests;
+			await previewRepoFile(snapshot.token, "with-scripts/run.py").then(() => { throw new Error("program preview must be refused"); }, () => {});
+			assert(fetchRequests === beforePreview, "excluded program preview makes no object-fetch request");
+			const narrowed = await scanRepository(privateUrl, { skillRoot: "with-scripts" }, undefined, false, { accessId: access.id });
+			assert(narrowed.files.some((file) => file.path === "README.md" && !file.allowed && file.reason?.includes("outside approved")), "repository browsing exposes excluded names without granting access");
+			disableFilterAfterProbe = true;
+			const changedHost = await failureOf(scanWithLocalAccess(privateUrl));
+			assert(/filtered fetching/.test(changedHost) && !disableFilterAfterProbe, `a host withdrawing filter support after a successful preflight must abort the clone instead of publishing a snapshot, got: ${changedHost}`);
+			git(["config", "uploadpack.allowFilter", "true"], path.join(serveRoot, "team", "skills.git"));
+			fs.rmSync(helperLog, { force: true });
 
 			// An address that carries a password is refused before anything is fetched:
 			// it would otherwise be kept as the skill's source and shown in the app.
@@ -229,7 +297,7 @@ try {
 			Object.assign(process.env, { TMPDIR: ownTemp, TEMP: ownTemp, TMP: ownTemp });
 			try {
 				const tempBefore = fs.readdirSync(os.tmpdir()).filter((name) => name.startsWith("exxperts-skill-repo-")).length;
-				const bypass = await failureOf(cloneRepoShallow({ kind: "git", cloneArg: pastedUrl, display: pastedUrl, host: `127.0.0.1:${port}` }));
+				const bypass = await failureOf(scanRepository(pastedUrl));
 				assert(bypass === passwordError, `the clone itself must refuse an address with a password, got: ${bypass}`);
 				assert(requests === requestsBefore && helperOps().length === 0, "an address with a password must reach neither the host nor a helper");
 				assert(fs.readdirSync(os.tmpdir()).filter((name) => name.startsWith("exxperts-skill-repo-")).length === tempBefore, "a refused address must leave no checkout behind");
@@ -240,28 +308,17 @@ try {
 				}
 			}
 
-			// An address with only a user name stays allowed and signs in with the stored password.
-			const named = resolveRepoSource(`http://fixture-user@127.0.0.1:${port}/team/skills.git`);
-			assert(named.ok, `an address with only a user name must validate, got ${JSON.stringify(named)}`);
-			cleanup.push(await cloneRepoShallow(named.value));
-			assert(helperOps().join(",") === "get", `an address with a user name must sign in read-only, helper saw: ${helperOps().join(",")}`);
+			// Credentials in addresses must also be rejected before the production pipeline connects.
+			const namedUrl = `http://fixture-user@127.0.0.1:${port}/team/skills.git`;
+			assert(/must not contain credentials/.test(await failureOf(scanRepository(namedUrl))), "user names in repository addresses need an explicit access grant instead");
 
 			// A sign-in the host turns down is reported as such and NOT erased.
 			fs.rmSync(helperLog, { force: true });
 			process.env.FIXTURE_HELPER_MODE = "stale";
-			const stale = await failureOf(cloneRepoShallow(privateRepo.value));
+			const stale = await failureOf(scanWithLocalAccess(privateUrl));
 			assert(/turned down the sign-in/.test(stale), `a rejected sign-in must be named as rejected, got: ${stale}`);
 			assert(!helperOps().includes("erase"), "a rejected sign-in must never be erased from the credential store");
 
-			// The failure text for an address with a token as its user name names the host, never the token.
-			const tokenRepo = resolveRepoSource(`http://TOKEN-FIXTURE-123@127.0.0.1:${port}/team/skills.git`);
-			assert(tokenRepo.ok, "the token fixture address must validate");
-			const tokenFailure = await failureOf(cloneRepoShallow(tokenRepo.value));
-			assert(/turned down the sign-in/.test(tokenFailure) && !tokenFailure.includes("TOKEN-FIXTURE-123"), `a failure must not repeat the address's user name, got: ${tokenFailure}`);
-			const tokenForbidden = resolveRepoSource(`http://TOKEN-FIXTURE-123@127.0.0.1:${port}/forbidden/skills.git`);
-			assert(tokenForbidden.ok, "the token 403 fixture address must validate");
-			const tokenForbiddenFailure = await failureOf(cloneRepoShallow(tokenForbidden.value));
-			assert(/refused access to this repository/.test(tokenForbiddenFailure) && !tokenForbiddenFailure.includes("TOKEN-FIXTURE-123"), `a 403 must not repeat the address's user name, got: ${tokenForbiddenFailure}`);
 			// Whatever git version or server wrote the error, the text shown names no user name:
 			// older git prints the address as typed, and "remote:" lines are the server's own words.
 			const olderGit = "fatal: unable to access 'https://TOKEN-FIXTURE-123@gitlab.example.com/team/skills.git/': The requested URL returned error: 403\nremote: see https://name:TOKEN-FIXTURE-123@gitlab.example.com/help";
@@ -272,18 +329,18 @@ try {
 			process.env.FIXTURE_HELPER_MODE = "good";
 			const forbidden = resolveRepoSource(`http://127.0.0.1:${port}/forbidden/skills.git`);
 			assert(forbidden.ok, "the forbidden fixture URL must validate");
-			assert(/refused access to this repository/.test(await failureOf(cloneRepoShallow(forbidden.value))), "a 403 must be explained as missing access");
+			assert(/refused access to this repository/.test(await failureOf(scanWithLocalAccess(forbidden.value.cloneArg))), "a 403 must be explained as missing access");
 
 			// No helper anywhere: the failure says what to do.
 			writeGlobal("[core]\n\teditor = vim\n");
-			const signedOut = await failureOf(cloneRepoShallow(privateRepo.value));
-			assert(/needs a sign-in to 127\.0\.0\.1/.test(signedOut) && /Clone it once in a terminal/.test(signedOut), `a missing sign-in must say what to do, got: ${signedOut}`);
+			const signedOut = await failureOf(scanWithLocalAccess(privateUrl));
+			assert(/needs a sign-in to 127\.0\.0\.1/.test(signedOut) && /choose Repository access/.test(signedOut), `a missing sign-in must say what to do, got: ${signedOut}`);
 
 			// A later empty `helper =` switches the helpers before it off, as in plain git.
 			fs.rmSync(helperLog, { force: true });
 			writeGlobal(`${withHelper}[credential]\n\thelper =\n`);
 			assert((await storedSignInArgs(privateUrl)).join("|") === "-c|credential.helper=", "an empty `helper =` must reset the helpers that came before it");
-			assert(/needs a sign-in/.test(await failureOf(cloneRepoShallow(privateRepo.value))), "a reset helper must not sign the clone in");
+			assert(/needs a sign-in/.test(await failureOf(scanWithLocalAccess(privateUrl))), "a reset helper must not sign the clone in");
 			assert(helperOps().length === 0, "a reset helper must never be run");
 
 			// The helpers come from ONE scoped listing (`git config --list --show-scope --null`),
@@ -323,11 +380,11 @@ try {
 			writeGlobal(withHelper);
 			process.env.FIXTURE_HELPER_MODE = "waiting";
 			const startedAt = Date.now();
-			const waited = await failureOf(cloneRepoShallow(privateRepo.value, 2_000));
-			assert(/timed out after 2000ms/.test(waited), `a waiting helper must end in the timeout, got: ${waited}`);
+			const waited = await failureOf(scanWithLocalAccess(privateUrl, 2_000));
+			assert(/exceeded its total time budget/.test(waited), `a waiting helper must end in the timeout, got: ${waited}`);
 			assert(Date.now() - startedAt < 15_000, `the timeout must end the helper too, took ${Date.now() - startedAt}ms`);
 		} finally {
-			for (const name of ["GIT_CONFIG_NOSYSTEM", "GIT_CONFIG_GLOBAL", "FIXTURE_HELPER_LOG", "FIXTURE_HELPER_MODE"]) {
+			for (const name of ["GIT_CONFIG_NOSYSTEM", "GIT_CONFIG_GLOBAL", "FIXTURE_HELPER_LOG", "FIXTURE_HELPER_MODE", "HOME", "USERPROFILE", "CURL_HOME", "XDG_CONFIG_HOME", "GIT_CURL_VERBOSE", "GIT_TRACE_CURL", "NETRC"]) {
 				if (envBefore[name] === undefined) delete process.env[name];
 				else process.env[name] = envBefore[name];
 			}
@@ -337,52 +394,27 @@ try {
 		console.log("skills-repo-fetch-smoke: stored sign-in checks skipped (needs git 2.32+ with git-http-backend)");
 	}
 
-	// --- Shallow clone (clone/read only) ---------------------------------------
-	const checkout = await cloneRepoShallow((localResolved as { value: { kind: "local"; cloneArg: string; display: string } }).value);
-	cleanup.push(checkout);
-	assert(fs.existsSync(path.join(checkout, "cite-sources", "SKILL.md")), "clone must contain the skill files");
-	assert(fs.existsSync(path.join(checkout, ".git")), "clone produced a working checkout");
-
-	// --- Scan: SKILL.md-only, README excluded, nested included, scripts flagged --
-	const skills = scanRepoSkills(checkout);
-	const names = skills.map((s) => s.name).sort();
-	assert(names.join(",") === "cite-sources,deep-skill,poisoned,with-scripts", `scan must find exactly the four SKILL.md skills, got ${names.join(",")}`);
-	assert(!names.includes("README"), "scan must exclude the root README.md");
-	const withScripts = skills.find((s) => s.name === "with-scripts")!;
-	assert(withScripts.hasBundledScripts, "with-scripts must flag bundled scripts (run.py)");
-	assert(withScripts.path === "with-scripts", "found skill path must be the repo-relative skill dir");
-	const citeSources = skills.find((s) => s.name === "cite-sources")!;
-	assert(!citeSources.hasBundledScripts, "cite-sources has no non-.md files");
-	assert(citeSources.license === "MIT", `license must be detected from the root LICENSE, got ${citeSources.license}`);
-	const nested = skills.find((s) => s.name === "deep-skill")!;
-	assert(nested.path === "nested/deep-skill", "nested SKILL.md must be discovered at its dir");
-
-	// --- Candidate: body + invisible-unicode scan + bundled scripts -------------
-	const poisonedCandidate = readRepoCandidate(checkout, "poisoned", "local-fixture")!;
-	assert(poisonedCandidate.scanFindings.count === 1, `poisoned skill body must surface one invisible-unicode finding, got ${poisonedCandidate.scanFindings.count}`);
-	assert(poisonedCandidate.scanFindings.findings[0].codePoint === 0x200b, "the poison finding must be the ZERO WIDTH SPACE");
-	const scriptsCandidate = readRepoCandidate(checkout, "with-scripts", "local-fixture")!;
-	assert(scriptsCandidate.bundledScripts.includes("run.py"), "candidate must list the bundled run.py");
-	assert(!scriptsCandidate.bundledScripts.includes("notes.md"), "candidate must not count .md siblings as scripts");
-	// Traversal guard: a path escaping the checkout resolves to null (no read).
-	assert(readRepoCandidate(checkout, "../../etc", "local-fixture") === null, "candidate path traversal must be refused");
-
-	// --- Vendor: copies SKILL.md + bundled files, returns the persisted body -----
+	// --- Production snapshot discovery and exact reviewed acceptance -----------
+	git(["config", "uploadpack.allowFilter", "true"], repoDir);
+	const localScan = await scanRepository(repoDir, {}, undefined, true);
+	const skills = localScan.skills;
+	assert(skills.map((skill) => skill.name).sort().join(",") === "cite-sources,deep-skill,poisoned,with-scripts", "only true manifests, including nested skills, are discovered");
+	assert(skills.find((skill) => skill.name === "cite-sources")?.license === "MIT", "the root license is detected");
+	assert(skills.find((skill) => skill.name === "with-scripts")?.hasBundledScripts, "program names are flagged without reading their contents");
+	const poisonedCandidate = await fetchRepoCandidate(localScan.token, "poisoned", []);
+	assert(poisonedCandidate.scanFindings.count === 1 && poisonedCandidate.scanFindings.findings[0].codePoint === 0x200b, "review surfaces invisible Unicode");
+	const candidate = await fetchRepoCandidate(localScan.token, "with-scripts", ["with-scripts/notes.md"]);
 	const destSkillDir = path.join(storeDir, "with-scripts");
-	const vendored = vendorRepoSkill(checkout, "with-scripts", destSkillDir);
-	assert(fs.existsSync(path.join(destSkillDir, "SKILL.md")), "vendor must copy SKILL.md into the store dir");
-	assert(fs.existsSync(path.join(destSkillDir, "run.py")), "vendor must copy the bundled run.py (inert)");
-	assert(vendored.bundledCopied === 2, `vendor must report the bundled files copied (run.py + notes.md), got ${vendored.bundledCopied}`);
-	assert(sha256(vendored.body) === sha256("This skill bundles a helper script that will not run."), "vendored body must be the SKILL.md body (what provenance hashes)");
-
-	// --- Checkout cache + cleanup ----------------------------------------------
-	const token = registerCheckout(checkout, "local-fixture");
-	assert(getCheckout(token)?.dir === checkout, "a registered checkout must resolve by token");
-	assert(getCheckout("nonexistent-token") === null, "an unknown token must not resolve");
-	cleanup.splice(cleanup.indexOf(checkout), 1); // disposeAllCheckouts owns it now
+	await importReviewedRepoSkill(localScan.token, "with-scripts", ["with-scripts/notes.md"], candidate.reviewSha256, destSkillDir);
+	assert(fs.existsSync(path.join(destSkillDir, "SKILL.md")) && fs.existsSync(path.join(destSkillDir, "notes.md")), "reviewed instructions and selected notes are published");
+	assert(!fs.existsSync(path.join(destSkillDir, "run.py")), "programs are never copied merely because the skill directory contains them");
+	await fetchRepoCandidate(localScan.token, "../../etc", []).then(() => { throw new Error("traversal must be refused"); }, () => {});
+	const token = localScan.token;
+	const checkout = getCheckout(token)!.dir;
+	assert(!fs.existsSync(path.join(checkout, "cite-sources", "SKILL.md")), "no working tree is materialized");
+	assert(getCheckout("nonexistent-token") === null, "unknown tokens do not resolve");
 	disposeAllCheckouts();
-	assert(!fs.existsSync(checkout), "disposeAllCheckouts must remove the temp checkout from disk");
-	assert(getCheckout(token) === null, "a disposed checkout must no longer resolve");
+	assert(!fs.existsSync(checkout) && getCheckout(token) === null, "disposal removes the snapshot and its leases");
 
 	// --- Featured config override ----------------------------------------------
 	const restore = process.env.EXXPERTS_SKILLS_FEATURED_SOURCES;
@@ -401,25 +433,13 @@ try {
 	fs.writeFileSync(path.join(rootRepo, "unrelated.py"), "print('repo cruft that must not be vendored')\n");
 	fs.mkdirSync(path.join(rootRepo, "src"));
 	fs.writeFileSync(path.join(rootRepo, "src", "app.js"), "// more cruft\n");
-	const rootScan = scanRepoSkills(rootRepo);
-	assert(rootScan.length === 1 && rootScan[0].name === "root-skill" && rootScan[0].path === "", `a root SKILL.md is the single skill, got ${rootScan.map((s) => s.name).join(",")}`);
-	assert(!rootScan[0].hasBundledScripts, "a root skill reports NO bundled scripts — repo files are not its package");
-	const rootCand = readRepoCandidate(rootRepo, "", "local-fixture")!;
-	assert(rootCand.bundledScripts.length === 0, "root candidate lists no bundled scripts");
+	for (const args of [["init", "-q", "-b", "main"], ["config", "uploadpack.allowFilter", "true"], ["add", "-A"], ["-c", "user.name=Smoke", "-c", "user.email=smoke@test", "commit", "-q", "-m", "root fixture"]]) git(args, rootRepo);
+	const rootScan = await scanRepository(rootRepo, {}, undefined, true);
+	assert(rootScan.skills.length === 1 && rootScan.skills[0].path === "", "a root manifest is discovered");
+	const rootCandidate = await fetchRepoCandidate(rootScan.token, "", []);
 	const rootDest = path.join(storeDir, "root-skill");
-	const rootVendored = vendorRepoSkill(rootRepo, "", rootDest);
-	const vendoredFiles = fs.readdirSync(rootDest);
-	assert(vendoredFiles.length === 1 && vendoredFiles[0] === "SKILL.md", `a root skill must vendor ONLY SKILL.md, got: ${vendoredFiles.join(",")}`);
-	assert(rootVendored.bundledCopied === 0, "root skill vendors zero bundled files");
-
-	// --- H2: a symlinked SKILL.md is refused (no arbitrary out-of-checkout read) -
-	const secretFile = path.join(workDir, "secret.txt");
-	fs.writeFileSync(secretFile, "TOP SECRET PRIVATE KEY");
-	const symRepo = fs.mkdtempSync(path.join(os.tmpdir(), "exxperts-skills-symlink-"));
-	cleanup.push(symRepo);
-	fs.mkdirSync(path.join(symRepo, "x"));
-	fs.symlinkSync(secretFile, path.join(symRepo, "x", "SKILL.md"));
-	assert(readRepoCandidate(symRepo, "x", "local-fixture") === null, "a symlinked SKILL.md must be refused (no arbitrary file read)");
+	await importReviewedRepoSkill(rootScan.token, "", [], rootCandidate.reviewSha256, rootDest);
+	assert(fs.readdirSync(rootDest).every((name) => ["SKILL.md", "provenance.json"].includes(name)), "accepting a root skill never vendors the repository");
 
 	// --- cheap win: leading-dash hosts rejected independently of git's own fix --
 	assert(!resolveRepoSource("git@-oProxyCommand=x:a/b").ok, "an scp host starting with '-' must be rejected");
@@ -461,7 +481,9 @@ try {
 	// (f) Regression: the old plain single-line form still parses trimmed.
 	writeManifest("f-plain-single", "---\nname: f-plain-single\nlicense: MIT\ndescription: a plain one-line description\n---\n\nBody F.\n");
 
-	const fmSkills = scanRepoSkills(fmRepo);
+	for (const args of [["init", "-q", "-b", "main"], ["config", "uploadpack.allowFilter", "true"], ["add", "-A"], ["-c", "user.name=Smoke", "-c", "user.email=smoke@test", "commit", "-q", "-m", "frontmatter fixture"]]) git(args, fmRepo);
+	const fmScan = await scanRepository(fmRepo, {}, undefined, true);
+	const fmSkills = fmScan.skills;
 	const descOf = (name: string): string => fmSkills.find((s) => s.name === name)?.description ?? "__MISSING__";
 	assert(descOf("a-block-literal") === "First line of the block.\nSecond line stays literal.", `block scalar must keep both lines and drop the marker, got ${JSON.stringify(descOf("a-block-literal"))}`);
 	assert(descOf("b-double-escaped") === 'Use when the user mentions "deck," "slides."', `double-quoted \\" must unescape, got ${JSON.stringify(descOf("b-double-escaped"))}`);
@@ -471,7 +493,7 @@ try {
 	assert(descOf("f-plain-single") === "a plain one-line description", `plain single-line regression, got ${JSON.stringify(descOf("f-plain-single"))}`);
 	assert(fmSkills.find((s) => s.name === "f-plain-single")?.license === "MIT", "a plain license field must still parse");
 	// The review candidate sees the SAME parsed values (scan runs over body + parsed description).
-	const blockCand = readRepoCandidate(fmRepo, "a-block-literal", "local-fixture")!;
+	const blockCand = await fetchRepoCandidate(fmScan.token, "a-block-literal", []);
 	assert(blockCand.description === "First line of the block.\nSecond line stays literal." && !blockCand.description.includes("|"), "the review candidate must carry the parsed block description with no leaked marker");
 	assert(blockCand.scanFindings.count === 0, "a clean parsed description surfaces no invisible-unicode findings");
 

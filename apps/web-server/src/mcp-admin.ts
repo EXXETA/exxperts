@@ -452,10 +452,11 @@ export async function testMcpServer(name: string): Promise<McpServerTestResult> 
 	if (!entry) throw new McpAdminError(`No connector named "${name}" is configured.`, 404);
 
 	const manager = new managerMod.McpServerManager();
+	let connectionTimeout: ReturnType<typeof setTimeout> | undefined;
 	try {
 		const connection = await Promise.race([
 			manager.connect(name, entry),
-			new Promise<never>((_, reject) => setTimeout(() => reject(new Error("Connection timed out after 20s.")), 20_000)),
+			new Promise<never>((_, reject) => { connectionTimeout = setTimeout(() => reject(new Error("Connection timed out after 20s.")), 20_000); }),
 		]);
 		const toolNames = (connection.tools ?? []).map((tool: { name: string }) => tool.name);
 		// Refresh the metadata cache so the Connectors page lists the tools.
@@ -492,6 +493,7 @@ export async function testMcpServer(name: string): Promise<McpServerTestResult> 
 		}
 		return { ok: false, error: trimTransportError(message), needsAuth };
 	} finally {
+		if (connectionTimeout) clearTimeout(connectionTimeout);
 		try {
 			await manager.closeAll();
 		} catch {

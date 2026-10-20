@@ -16,6 +16,7 @@ import os from "node:os";
 import path from "node:path";
 import { getAgentDir } from "@exxeta/exxperts-runtime";
 import { stateHome } from "../../../pi-package/product-state-paths.js";
+import { normalizeRepoPath, normalizeRepositoryFilePolicy, referenceLocalPath, referencePathPermission, repositoryPathWithin, validatedReferenceText, type ReferenceKind, type RepositoryFilePolicy } from "./skills-file-policy.js";
 
 /** The canonical user skills store — the Pi loader's user dir. */
 export function agentSkillsDir(): string {
@@ -137,6 +138,153 @@ export interface SkillProvenance {
 	 *  `computeSkillFilesDigest`. Stamped by `writeSkillProvenance`; older
 	 *  sidecars lack it, and execution recomputes from disk anyway. */
 	filesSha256?: string;
+	/** A locally edited legacy import retains its original source and license. */
+	locallyModified?: boolean;
+	/** A reviewed repository snapshot; absent on legacy and manually created skills. */
+	repo?: SkillRepoProvenance;
+}
+
+export type SkillReferenceKind = ReferenceKind;
+
+export interface SkillReferenceEntry {
+	/** Original repository-relative path, used by the reference reader. */
+	path: string;
+	/** Relative path inside this skill's installed package. */
+	localPath: string;
+	kind: SkillReferenceKind;
+	size: number;
+	sha256: string;
+}
+
+export interface SkillRepoProvenance {
+	libraryId?: string;
+	source: string;
+	ref?: string;
+	revision: string;
+	skillPath: string;
+	policy: RepositoryFilePolicy;
+	references: SkillReferenceEntry[];
+}
+
+export interface ManagedSkillPackage {
+	repo: SkillRepoProvenance;
+	manifest: string;
+	packageSha256: string;
+	references: SkillReferenceEntry[];
+	/** The same bounded bytes whose hashes form packageSha256. Never expose this map in JSON. */
+	referenceBytes: ReadonlyMap<string, Buffer>;
+}
+
+/** Read regular, bounded package files without following links outside the package. */
+function readPackageFile(root: string, relativePath: string, maxBytes: number): Buffer {
+	const relative = normalizeRepoPath(relativePath);
+	let current = root;
+	for (const segment of relative.split("/")) {
+		current = path.join(current, segment);
+		if (fs.lstatSync(current).isSymbolicLink()) throw new Error("Skill package contains a symbolic link; re-import the reviewed package.");
+	}
+	const absolute = path.resolve(root, ...relative.split("/"));
+	const descriptor = fs.openSync(absolute, "r");
+	try {
+		const stat = fs.fstatSync(descriptor);
+		if (!stat.isFile() || stat.size > maxBytes) throw new Error("Skill package file is not regular or exceeds its size limit.");
+		const real = fs.realpathSync(absolute);
+		if (path.relative(root, real) !== path.relative(root, absolute)) throw new Error("Skill package path changed or escapes its directory.");
+		const bytes = fs.readFileSync(descriptor);
+		if (bytes.length > maxBytes || bytes.length !== stat.size) throw new Error("Skill package file changed while reading.");
+		return bytes;
+	} finally {
+		fs.closeSync(descriptor);
+	}
+}
+
+/**
+ * Read one managed package snapshot. Hash bytes AND the path/policy mapping:
+ * editing only a reference or its provenance must require a new room review.
+ * Legacy packages return null; malformed or altered managed packages fail closed.
+ */
+export function readManagedSkillPackage(skillDir: string): ManagedSkillPackage | null {
+	const directory = path.resolve(skillDir);
+	if (fs.lstatSync(directory).isSymbolicLink()) throw new Error("Managed skill directories cannot be symbolic links.");
+	// Resolve parent aliases (macOS /var -> /private/var) before checking package-relative paths.
+	const root = fs.realpathSync(directory);
+	const sidecar = path.join(root, SKILL_PROVENANCE_FILENAME);
+	if (!fs.existsSync(sidecar)) return null;
+	const raw = JSON.parse(readPackageFile(root, SKILL_PROVENANCE_FILENAME, 512 * 1024).toString("utf8"));
+	if (!raw?.repo) return null;
+	const input = raw.repo;
+	if (typeof input.source !== "string" || typeof input.revision !== "string" || !/^[0-9a-f]{40,64}$/.test(input.revision)) throw new Error("Invalid managed skill source or revision.");
+	if ((input.libraryId !== undefined && typeof input.libraryId !== "string") || (input.ref !== undefined && typeof input.ref !== "string")) throw new Error("Invalid managed skill source metadata.");
+	const skillPath = normalizeRepoPath(input.skillPath, true);
+	const policy = normalizeRepositoryFilePolicy(input.policy);
+	if (policy.skillRoot && skillPath !== policy.skillRoot && !repositoryPathWithin(skillPath, policy.skillRoot)) throw new Error("Managed skill lies outside its library's skill directory.");
+	if (!Array.isArray(input.references) || input.references.length > 499) throw new Error("Invalid managed skill reference list.");
+	const references: SkillReferenceEntry[] = [];
+	const sourcePaths = new Set<string>();
+	const localPaths = new Set<string>(["skill.md", SKILL_PROVENANCE_FILENAME]);
+	const referenceBytes = new Map<string, Buffer>();
+	const manifestBytes = readPackageFile(root, "SKILL.md", 512 * 1024);
+	const manifest = validatedReferenceText(manifestBytes);
+	let totalBytes = manifestBytes.length;
+	for (const ref of input.references) {
+		const originalPath = normalizeRepoPath(ref?.path);
+		const localPath = normalizeRepoPath(ref?.localPath);
+		const permission = referencePathPermission(originalPath, policy);
+		if (!permission.allowed || permission.kind !== ref.kind || !Number.isSafeInteger(ref.size) || ref.size < 0 || ref.size > 25 * 1024 * 1024 || !/^[0-9a-f]{64}$/.test(ref.sha256)) throw new Error("Invalid managed skill reference or file policy.");
+		if ((!repositoryPathWithin(originalPath, skillPath) && !policy.referenceRoots.some((area) => repositoryPathWithin(originalPath, area))) || localPath !== referenceLocalPath(originalPath, skillPath)) throw new Error("Reference path lies outside its selected directories or has an invalid local mapping.");
+		if (sourcePaths.has(originalPath.toLowerCase()) || localPaths.has(localPath.toLowerCase())) throw new Error("Managed skill contains colliding reference paths.");
+		sourcePaths.add(originalPath.toLowerCase());
+		localPaths.add(localPath.toLowerCase());
+		const bytes = readPackageFile(root, localPath, 25 * 1024 * 1024);
+		totalBytes += bytes.length;
+		if (totalBytes > 64 * 1024 * 1024) throw new Error("Managed skill exceeds the package size limit.");
+		const entry: SkillReferenceEntry = { path: originalPath, localPath, kind: ref.kind, size: ref.size, sha256: ref.sha256 };
+		references.push(entry);
+		referenceBytes.set(originalPath, bytes);
+	}
+	// Files absent from the selection are never read; their appearance still closes the package gate.
+	let fileCount = 0;
+	let directoryCount = 0;
+	const walk = (dir: string): void => {
+		if (++directoryCount > 2000 || path.relative(root, dir).split(path.sep).length > 50) throw new Error("Managed skill contains too many nested directories.");
+		for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+			const absolute = path.join(dir, entry.name);
+			const relative = path.relative(root, absolute).split(path.sep).join("/");
+			if (entry.isSymbolicLink() || (!entry.isDirectory() && !entry.isFile())) throw new Error("Managed skill contains a non-regular entry.");
+			if (entry.isDirectory()) { walk(absolute); continue; }
+			fileCount += 1;
+			if (fileCount > 501 || !localPaths.has(relative.toLowerCase())) throw new Error("Managed skill contains files outside the reviewed selection.");
+		}
+	};
+	walk(root);
+	references.sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
+	const repo: SkillRepoProvenance = {
+		...(input.libraryId !== undefined ? { libraryId: input.libraryId } : {}),
+		source: input.source,
+		...(input.ref !== undefined ? { ref: input.ref } : {}),
+		revision: input.revision,
+		skillPath,
+		policy: { ...policy, allowedTypes: [...policy.allowedTypes].sort(), referenceRoots: [...policy.referenceRoots].sort() },
+		references,
+	};
+	const content = [{ path: "SKILL.md", sha256: crypto.createHash("sha256").update(manifestBytes).digest("hex") }, ...references.map((ref) => ({ path: ref.localPath, sha256: crypto.createHash("sha256").update(referenceBytes.get(ref.path)!).digest("hex") }))];
+	return { repo, manifest, references, referenceBytes, packageSha256: sha256(JSON.stringify({ repo, content })) };
+}
+
+export function computeManagedSkillPackageDigest(skillDir: string): string | null {
+	return readManagedSkillPackage(skillDir)?.packageSha256 ?? null;
+}
+
+/** Advisory badges only: hashes declared in provenance never authorize a read or room update. */
+export function skillPackageDisplayPin(skillDir: string): { sha256: string; packageSha256: string } | null {
+	const input = readSkillProvenance(skillDir)?.repo;
+	if (!input) return null;
+	const manifestHash = sha256(fs.readFileSync(path.join(skillDir, "SKILL.md"), "utf8"));
+	const references = input.references.map((ref) => ({ path: ref.path, localPath: ref.localPath, kind: ref.kind, size: ref.size, sha256: ref.sha256 })).sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
+	const policy = normalizeRepositoryFilePolicy(input.policy);
+	const repo = { ...(input.libraryId !== undefined ? { libraryId: input.libraryId } : {}), source: input.source, ...(input.ref !== undefined ? { ref: input.ref } : {}), revision: input.revision, skillPath: input.skillPath, policy: { ...policy, allowedTypes: [...policy.allowedTypes].sort(), referenceRoots: [...policy.referenceRoots].sort() }, references };
+	const content = [{ path: "SKILL.md", sha256: manifestHash }, ...references.map((ref) => ({ path: ref.localPath, sha256: ref.sha256 }))];
+	return { sha256: manifestHash, packageSha256: sha256(JSON.stringify({ repo, content })) };
 }
 
 export const SKILL_PROVENANCE_FILENAME = "provenance.json";
@@ -165,6 +313,18 @@ export function readSkillProvenance(skillDir: string): SkillProvenance | null {
 		if (parsed && typeof parsed.source === "string" && typeof parsed.sha256 === "string") return parsed as SkillProvenance;
 	} catch {}
 	return null;
+}
+
+/** Classify the local copy without changing its import baseline or update ownership. */
+export function skillHasLocalEdits(skillDir: string): boolean {
+	const provenance = readSkillProvenance(skillDir);
+	if (!provenance || provenance.source === "local" || provenance.source === "upload") return false;
+	if (provenance.locallyModified === true) return true;
+	try {
+		const digest = computeSkillFilesDigest(skillDir);
+		return provenance.filesSha256 ? digest?.filesSha256 !== provenance.filesSha256
+			: digest?.files.find((file) => file.path === "SKILL.md")?.sha256 !== provenance.sha256;
+	} catch { return true; }
 }
 
 /**

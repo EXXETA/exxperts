@@ -12,7 +12,7 @@ export function pausedSkills(skills: readonly PersistentRoomEnabledSkillStatus[]
 
 /** One paused skill's change, as remembered: the room, the skill and the version it changed to. */
 export function pausedSkillMark(agentId: string, skill: PersistentRoomEnabledSkillStatus): string {
-	return `${agentId}:${skill.name}@${skill.currentSha256 ?? ""}`;
+	return `${agentId}:${skill.name}@${skill.currentSha256 ?? ""}${skill.currentPackageSha256 ? `/${skill.currentPackageSha256}` : ""}`;
 }
 
 /** The notice's words: the fact, and what to do about it. Null when nothing is paused. */

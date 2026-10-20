@@ -49,6 +49,10 @@
  */
 
 import "dotenv/config";
+import { RepositorySignIn } from "./skills-repository-auth.js";
+import { anonymousRepositoryAccess, assertRepositoryAccess, clearRepositoryAccess, grantRepositoryAccess, normalizeRepositoryAccess, repositoryAccessError, repositoryAccessSource, repositoryGitAvailable, resolveRepositoryAccess, revokeRepositoryAccess, type RepositoryAccessContext } from "./skills-repository-access.js";
+import { resetSkillLibraryAccess } from "./skills-libraries.js";
+import { resolveRepoSource } from "./skills-repo-fetch.js";
 import { estimateTokens, estimateTokensFromChars, switchFitNeededTokens } from "./token-estimate.js";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -85,8 +89,8 @@ import { migrateRoomModels } from "./room-models-migration.js";
 import { isRoomEffortLevel, readPersistentRoomEffortChoice, writePersistentRoomEffortChoice, type RoomEffortLevel } from "./persistent-room-effort-settings.js";
 import { buildPersistentRoomCurrentInstructionsSection, readGlobalInstructions, writeGlobalInstructions, ROOM_INSTRUCTIONS_MAX_CHARS } from "./persistent-room-instructions.js";
 import { assertPersistentRoomNotHeldByAnotherProcess, fingerprintPersistentAgentBootContextInstructions, savePersistentRoomInstructions } from "./persistent-agents.js";
-import { approvePersistentRoomSkillExecution, computeSkillStatuses, disablePersistentRoomSkill, effectiveEnabledSkills, enablePersistentRoomSkill, isValidSkillName, readPersistentRoomSkillSettings, revokePersistentRoomSkillExecution } from "./persistent-room-skill-settings.js";
-import { buildEnabledSkillsIndexSection, createReadSkillTool } from "./persistent-room-skill-tool.js";
+import { approvePersistentRoomSkillExecution, computeRoomSkillStatuses, configuredRoomSkillPins, disablePersistentRoomSkill, disablePersistentRoomSource, effectiveRoomEnabledSkills, enablePersistentRoomSkill, enablePersistentRoomSource, setPersistentRoomSourceSkillExcluded, isValidSkillName, readPersistentRoomSkillSettings, revokePersistentRoomSkillExecution, type PersistentRoomSkillSettings } from "./persistent-room-skill-settings.js";
+import { buildEnabledSkillsIndexSection, buildEnabledSourcesIndexSection, createReadSkillTool, createReadSkillReferenceTool, createReadLibraryReferenceTool } from "./persistent-room-skill-tool.js";
 import { buildSpecialistTemplatesIndexSection, createDelegateTaskTool, userAuthoredPromptText } from "./persistent-room-delegate-tool.js";
 import { buildSpecialistSessionPlan, ingestShelfInputs, runSpecialistWorker, listSpecialistTaskArtifacts, type SpecialistSessionPlan } from "./persistent-room-specialist-execution.js";
 import { PersistentRoomShelfError, absorbTaskArtifactsIntoShelf, allocateShelfFilename, buildShelfManifestSection, commitReviseArtifactsOntoShelf, commitShelfFileDelete, healShelfMaintenanceAtBoot, listShelfFiles, listShelfFilesWithOrigin, persistentRoomShelfDirPath, renameShelfFile, replayShelfRenameJournals, resolveShelfFilePath, sanitizeShelfFilename, stageShelfFileDelete, sweepExpiredShelfTrash, undoShelfFileDelete, validateShelfFilename, isShelfRelativePath, shelfFilenameFromRelativePath, type ShelfReviseConflict } from "./persistent-room-shelf.js";
@@ -161,9 +165,18 @@ import { classifyRemoteRoute } from "./remote-route-policy.js";
 import { createRemoteRoomExposureStore } from "./remote-room-exposure.js";
 import { createRemoteAuditLog } from "./remote-audit-log.js";
 import { qrMatrixFor } from "./remote-qr.js";
-import { agentSkillsDir, computeSkillFilesDigest, localSkillProvenance, migrateLegacyUserSkills, readSkillProvenance, removeManagedSkillDir, sha256, sharedAgentsSkillsDir, SKILL_PROVENANCE_FILENAME, writeSkillProvenance, type SkillProvenance } from "./skills-store.js";
+import { agentSkillsDir, computeSkillFilesDigest, computeManagedSkillPackageDigest, readManagedSkillPackage, skillPackageDisplayPin, localSkillProvenance, migrateLegacyUserSkills, readSkillProvenance, removeManagedSkillDir, sha256, sharedAgentsSkillsDir, skillHasLocalEdits, SKILL_PROVENANCE_FILENAME, writeSkillProvenance, type SkillProvenance } from "./skills-store.js";
+import { describeRoomLibraryChanges, libraryRoomsReviewHash, roomNeedsLibraryUpdate } from "./skill-library-room-updates.js";
+import { updatePersistentRoomLibrary, type EnabledSkillSource } from "./persistent-room-skill-settings.js";
 import { filterRepoScanSkillFiles, scanInvisibleUnicode, type InvisibleUnicodeFinding } from "./skills-import.js";
-import { fetchRepoCheckout, getCheckout, installCheckoutCleanup, loadFeaturedSource, parseSkillFrontmatter as parseFrontmatter, readRepoCandidate, registerCheckout, removeCheckout, resolveFeaturedSources, resolveRepoSource, scanRepoSkills, vendorRepoSkill, isMissingToolMessage } from "./skills-repo-fetch.js";
+import { getCheckout, installCheckoutCleanup, loadFeaturedSource, normalizedRepositorySkill, parseSkillFrontmatter as parseFrontmatter, registerCheckout, removeCheckout, resolveFeaturedSources, scanRepository, fetchRepoCandidate, importReviewedRepoSkill, readRepoReference, previewRepoFile, stopRepositoryFetches } from "./skills-repo-fetch.js";
+import { skillFilePreview } from "./skills-file-preview.js";
+import { readSkillLibraries, saveSkillLibrary, deleteSkillLibrary, scanSkillLibrary, checkSkillLibrary, checkAllSkillLibraries, prepareLibraryUpdate, recordSkillLibraryImport, refreshSkillLibraryFromSnapshot, skillBelongsToLibrary } from "./skills-libraries.js";
+import { normalizeRepositoryFilePolicy, referencePathPermission, repositoryPathWithin } from "./skills-file-policy.js";
+import { readManagedSkillReference, readManagedSkillReferenceBytes } from "./skills-reference-reading.js";
+import { readLibraryMaterialsIndex, currentLibraryMaterialsSha256, prepareLibraryMaterials, acceptLibraryMaterials, readLibraryMaterialBytes, readLibraryMaterialReference, listLibraryMaterialReferences, seedLibraryMaterialsFromSkills } from "./skills-library-materials.js";
+import { readRepositoryProgress, withRepositoryProgress } from "./skills-repository-progress.js";
+import { discoverRepositoryMaterials } from "./skills-repository-discovery.js";
 import JSZip from "jszip";
 import { appendUsage, resolveUsageAuthType } from "./usage-log.js";
 import type { UsageKind, UsageRow } from "./usage-log.js";
@@ -2745,22 +2758,31 @@ app.get("/api/persistent-agents/:id/skill-settings", async (req, reply) => {
 	try {
 		const status = getUsablePersistentAgentStatusForNormalUse(idRaw);
 		const settings = readPersistentRoomSkillSettings(status.id);
-		// `skills` is the mismatch view the settings panel (MR-5) renders:
-		// ok | hash-mismatch | missing per enabled skill, plus the execution
-		// approval state (none | approved | drifted) and, per skill, whether it
-		// is execution-capable at all and which bundled files it carries.
-		const skills = withSkillDisplayNames(computeSkillStatuses(settings.enabledSkills, skillLibraryFingerprint, (name) => resolveExecutableSkillFiles(name)?.filesSha256 ?? null));
-		return {
-			agentId: status.id,
-			settings,
-			skills: skills.map((skill) => {
-				const executable = resolveExecutableSkillFiles(skill.name);
-				return { ...skill, executable: executable !== null, bundledFiles: executable?.files ?? [], manualOnly: resolveLibrarySkillManifest(skill.name)?.disableModelInvocation === true };
-			}),
-		};
+		return roomSkillSettingsView(status.id, settings, (req.query as any)?.view === "summary");
 	} catch (e) {
 		return persistentAgentNormalUseErrorReply(reply, e);
 	}
+});
+app.get("/api/persistent-agents/:id/skill-sources/:libraryId/review", async (req, reply) => {
+	try {
+		getUsablePersistentAgentStatusForNormalUse(String((req.params as any).id));
+		const id = String((req.params as any).libraryId);
+		const library = readSkillLibraries().find((entry) => entry.id === id);
+		if (!library) return reply.code(404).send({ error: "This source is no longer tracked." });
+		const installed = installedSourceSkills(library);
+		const seeded = await seedLibraryMaterialsFromSkills(id, installed.map((skill) => path.join(agentSkillsDir(), skill.name)));
+		if (seeded.conflicts.length) return reply.code(409).send({ error: "This source has different reviewed copies of the same file. Choose its materials before enabling it.", conflicts: seeded.conflicts });
+		const materials = readLibraryMaterialsIndex(id);
+		if (!materials) return reply.code(409).send({ error: "Import this source's local materials before enabling it." });
+		const rooms = skillRoomsByName(req);
+		const skills = installedSourceSkills(library).map((skill) => {
+			const packet = readManagedSkillPackage(path.join(agentSkillsDir(), skill.name));
+			if (!packet || skillLibraryFingerprint(skill.name) !== packet.manifest) throw new Error("A source skill changed. Open its review again.");
+			const { fm, body } = parseFrontmatter(packet.manifest);
+			return { ...skill, body: body.trim(), description: fm.description || "", sha256: sha256(packet.manifest), packageSha256: packet.packageSha256, references: packet.references, rooms: rooms.get(skill.name) ?? [], fileCount: packet.references.length, scanFindings: scanInvisibleUnicode(packet.manifest).findings, bundledScripts: [] };
+		});
+		return { libraryId: id, name: library.name, source: library.source, revision: materials.revision, materialsSha256: materials.materialsSha256, materials: materials.files.map((file) => ({ ...file, localPath: file.path })), skills };
+	} catch (error) { return persistentAgentNormalUseErrorReply(reply, error); }
 });
 app.put("/api/persistent-agents/:id/skill-settings", async (req, reply) => {
 	const idRaw = String((req.params as any).id ?? "").trim();
@@ -2769,8 +2791,36 @@ app.put("/api/persistent-agents/:id/skill-settings", async (req, reply) => {
 		const body = (req.body ?? {}) as any;
 		const action = String(body.action ?? "");
 		const name = String(body.name ?? "");
+		if (["enable-source", "disable-source", "exclude-source-skill"].includes(action)) {
+			const libraryId = String(body.libraryId ?? "");
+			if (action === "enable-source") {
+				const library = readSkillLibraries().find((entry) => entry.id === libraryId);
+				const current = library ? installedSourceSkills(library) : [];
+				const materials = library ? readLibraryMaterialsIndex(libraryId) : null;
+				if (!library || !materials || body.materialsSha256 !== materials.materialsSha256 || !Array.isArray(body.skills) || body.skills.length !== current.length || !Array.isArray(body.excludedSkills) || new Set(body.excludedSkills).size !== body.excludedSkills.length || body.excludedSkills.some((entry: unknown) => typeof entry !== "string" || !current.some((skill) => skill.name === entry))) return reply.code(409).send({ error: "The source changed or has not been reviewed. Open its review again." });
+				for (const skill of current) {
+					const reviewed = body.skills.find((entry: any) => entry?.name === skill.name);
+					const manifest = skillLibraryFingerprint(skill.name);
+					const packageHash = libraryPackageFingerprint(skill.name);
+					if (!manifest || !packageHash || !/^[a-f0-9]{64}$/.test(packageHash) || reviewed?.sha256 !== sha256(manifest) || reviewed?.packageSha256 !== packageHash) return reply.code(409).send({ error: "A source skill changed since its review. Review the source again." });
+				}
+			}
+			if (action === "exclude-source-skill" && typeof body.excluded !== "boolean") return reply.code(400).send({ error: "excluded must be a boolean" });
+			const result = action === "enable-source" ? enablePersistentRoomSource(status.id, body)
+				: action === "disable-source" ? disablePersistentRoomSource(status.id, libraryId)
+				: setPersistentRoomSourceSkillExcluded(status.id, libraryId, name, body.excluded);
+			if (!result.ok) return reply.code(400).send({ error: result.reason });
+			return roomSkillSettingsView(status.id, result.settings, (req.query as any)?.view === "summary");
+		}
 		if (action !== "enable" && action !== "disable" && action !== "approve-execution" && action !== "revoke-execution") {
 			return reply.code(400).send({ error: "action must be 'enable', 'disable', 'approve-execution' or 'revoke-execution'" });
+		}
+		if (action === "enable" && readSkillProvenance(path.join(agentSkillsDir(), isValidSkillName(name) ? name : "invalid"))?.repo) {
+			const manifest = skillLibraryFingerprint(name);
+			const packageSha256 = libraryPackageFingerprint(name);
+			if (!manifest || !packageSha256 || !/^[a-f0-9]{64}$/.test(packageSha256) || body.sha256 !== sha256(manifest) || body.packageSha256 !== packageSha256) {
+				return reply.code(409).send({ error: "This skill package changed or has not been reviewed. Open its review again before enabling it." });
+			}
 		}
 		// Enable pins sha256(current library body), computed server-side by the
 		// resolver — the client never supplies the hash. An unknown skill is a 4xx.
@@ -2778,7 +2828,7 @@ app.put("/api/persistent-agents/:id/skill-settings", async (req, reply) => {
 		// way: server-computed, only for an already-enabled, execution-capable
 		// user-store skill. revoke-execution withdraws it; the skill stays enabled.
 		const result =
-			action === "enable" ? enablePersistentRoomSkill(status.id, name, skillLibraryFingerprint)
+			action === "enable" ? enablePersistentRoomSkill(status.id, name, skillLibraryFingerprint, {}, new Date(), libraryPackageFingerprint)
 			: action === "disable" ? disablePersistentRoomSkill(status.id, name)
 			: action === "approve-execution" ? approvePersistentRoomSkillExecution(status.id, name, (n) => resolveExecutableSkillFiles(n)?.filesSha256 ?? null)
 			: revokePersistentRoomSkillExecution(status.id, name);
@@ -2790,7 +2840,7 @@ app.put("/api/persistent-agents/:id/skill-settings", async (req, reply) => {
 				: "invalid skill name";
 			return reply.code(400).send({ error: message });
 		}
-		return { agentId: status.id, settings: result.settings, skills: withSkillDisplayNames(computeSkillStatuses(result.settings.enabledSkills, skillLibraryFingerprint, (n) => resolveExecutableSkillFiles(n)?.filesSha256 ?? null)) };
+		return roomSkillSettingsView(status.id, result.settings, (req.query as any)?.view === "summary");
 	} catch (e) {
 		return persistentAgentNormalUseErrorReply(reply, e);
 	}
@@ -5090,6 +5140,7 @@ app.post("/api/settings/state-profile/switch", async (req, reply) => {
 	} catch (e) {
 		return reply.code(409).send({ error: (e as Error).message });
 	}
+	clearRepositoryAccess(); repositorySignIn.cancel();
 	// Reply first, exit after it flushes. app.close() waits for in-flight
 	// replies and runs the onClose hook (scheduler loops); the unref'd timer
 	// is the ceiling in case a keep-alive or WS socket refuses to drain. It
@@ -5209,7 +5260,7 @@ interface SkillInfo {
 	/** Import origin + license + date from the provenance sidecar (spec §1). Null for
 	 *  builtin/project skills, which carry no sidecar. Surfaced by the library list and
 	 *  the review/detail screen (the trust moment — where it came from, what license). */
-	provenance: { source: string; license: string | null; importedAt: string } | null;
+	provenance: Pick<SkillProvenance, "source" | "license" | "importedAt" | "repo"> | null;
 	/** The license the skill carries: its import record's, or else the one its
 	 *  SKILL.md declares (a built-in, shared or project skill has no record). */
 	license: string | null;
@@ -5288,7 +5339,7 @@ function skillDirs(): { dir: string; source: string }[] {
 	];
 }
 
-function listSkills(): SkillInfo[] {
+function listSkills(manifests?: Map<string, ReturnType<typeof resolveLibrarySkillManifest>>): SkillInfo[] {
 	const byName = new Map<string, SkillInfo>();
 	for (const { dir, source } of skillDirs()) {
 		if (!fs.existsSync(dir)) continue;
@@ -5296,9 +5347,11 @@ function listSkills(): SkillInfo[] {
 			if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
 			const file = path.join(dir, entry.name, "SKILL.md");
 			if (!fs.existsSync(file)) continue;
-			const { fm, body } = parseFrontmatter(fs.readFileSync(file, "utf-8"));
+			const manifest = fs.readFileSync(file, "utf-8");
+			const { fm, body } = parseFrontmatter(manifest);
 			const name = (fm.name || entry.name).trim();
 			if (!name) continue;
+			manifests?.set(name, { manifest, body, description: (fm.description || "").trim(), disableModelInvocation: frontmatterFlagTrue(fm["disable-model-invocation"]) });
 			// Provenance lives only next to user-store skills (builtin/project carry none).
 			const sidecar = source === "user" ? readSkillProvenance(path.join(dir, entry.name)) : null;
 			byName.set(name, {
@@ -5308,7 +5361,7 @@ function listSkills(): SkillInfo[] {
 				body: body.trim(),
 				source,
 				protected: source !== "user",
-				provenance: sidecar ? { source: sidecar.source, license: sidecar.license, importedAt: sidecar.importedAt } : null,
+				provenance: sidecar ? { source: sidecar.source, license: sidecar.license, importedAt: sidecar.importedAt, ...(sidecar.repo ? { repo: sidecar.repo } : {}) } : null,
 				license: sidecar?.license?.trim() || fm.license?.trim() || null,
 				disableModelInvocation: frontmatterFlagTrue(fm["disable-model-invocation"]),
 			});
@@ -5331,7 +5384,7 @@ function skillRoomsByName(req: unknown): Map<string, SkillRoomRef[]> {
 	for (const room of listPersistentAgents()) {
 		if (remote && remoteRoomExposure.isHidden(room.id)) continue;
 		const ref = { id: room.id, name: room.displayName?.trim() || room.id };
-		for (const skill of readPersistentRoomSkillSettings(room.id).enabledSkills) {
+		for (const skill of configuredRoomSkillPins(readPersistentRoomSkillSettings(room.id))) {
 			const rooms = byName.get(skill.name) ?? [];
 			rooms.push(ref);
 			byName.set(skill.name, rooms);
@@ -5344,8 +5397,71 @@ function skillRoomsByName(req: unknown): Map<string, SkillRoomRef[]> {
 /** A library skill as the Skills pages read it: its rooms and how many files it
  *  carries, the files a room can be allowed to run (the room's Skills pane lists
  *  the same ones). */
-function librarySkillView(skill: SkillInfo, roomsByName: Map<string, SkillRoomRef[]>, files: string[] = resolveExecutableSkillFiles(skill.name)?.files ?? []) {
-	return { ...skill, rooms: roomsByName.get(skill.name) ?? [], fileCount: files.length };
+function librarySkillView(skill: SkillInfo, roomsByName: Map<string, SkillRoomRef[]>, files?: string[]) {
+	return { ...skill, rooms: roomsByName.get(skill.name) ?? [], fileCount: skill.provenance?.repo?.references?.length ?? (files ?? resolveExecutableSkillFiles(skill.name)?.files ?? []).length, locallyModified: skill.source === "user" && isValidSkillName(skill.name) && skillHasLocalEdits(path.join(agentSkillsDir(), skill.name)), ...(skill.provenance?.repo ? { packageSha256: libraryPackageFingerprint(skill.name), references: skill.provenance.repo.references } : {}) };
+}
+
+function librarySkillSummary(skill: SkillInfo, roomsByName: Map<string, SkillRoomRef[]>) {
+	const countFiles = (dir: string): number => {
+		let count = 0;
+		try { for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+			if (entry.name === "SKILL.md" || entry.name === SKILL_PROVENANCE_FILENAME || entry.isSymbolicLink()) continue;
+			if (entry.isDirectory()) count += countFiles(path.join(dir, entry.name));
+			else if (entry.isFile()) count++;
+		} } catch { /* A removed folder is refreshed by the detail endpoint. */ }
+		return count;
+	};
+	return { ...skill, rooms: roomsByName.get(skill.name) ?? [], fileCount: skill.provenance?.repo?.references.length ?? (skill.source === "user" ? countFiles(path.join(agentSkillsDir(), skill.name)) : 0) };
+}
+
+function installedSourceSkills(library: ReturnType<typeof readSkillLibraries>[number], all = listSkills()): SkillInfo[] {
+	return all.filter((skill) => skill.source === "user" && skillBelongsToLibrary(skill.provenance?.repo, library));
+}
+
+function roomSourceStatuses(settings: PersistentRoomSkillSettings, all = listSkills(), manifest = skillLibraryFingerprint, packageHash = libraryPackageFingerprint) {
+	const libraries = readSkillLibraries();
+	return (settings.enabledSources ?? []).map((grant) => {
+		const library = libraries.find((entry) => entry.id === grant.libraryId);
+		let materials = null;
+		let currentHash: string | null = null;
+		try { materials = readLibraryMaterialsIndex(grant.libraryId, grant.materialsSha256); currentHash = currentLibraryMaterialsSha256(grant.libraryId); } catch { /* The source row reports missing or altered materials. */ }
+		const current = library ? installedSourceSkills(library, all) : [];
+		const changed = library ? currentHash !== grant.materialsSha256 || current.length !== grant.skills.length || current.some((skill) => {
+			const pinned = grant.skills.find((entry) => entry.name === skill.name);
+			return !pinned || sha256(manifest(skill.name) ?? "") !== pinned.sha256 || packageHash(skill.name) !== pinned.packageSha256;
+		}) : false;
+		return { libraryId: grant.libraryId, name: library?.name ?? materials?.source.split("/").pop() ?? grant.libraryId, source: library?.source ?? materials?.source ?? "", materialsSha256: grant.materialsSha256, currentMaterialsSha256: currentHash, materialCount: materials?.files.length ?? 0, skills: grant.skills.map((skill) => skill.name), excludedSkills: grant.excludedSkills, status: !materials ? "missing" : changed ? "review-required" : "ok" };
+	});
+}
+
+/** Display snapshots never authorize skills; reviews and agent reads verify current bytes. */
+function roomSkillSettingsView(agentId: string, settings: PersistentRoomSkillSettings, summary: boolean) {
+	const manifests = new Map<string, ReturnType<typeof resolveLibrarySkillManifest>>();
+	const all = listSkills(summary ? manifests : undefined);
+	const packages = new Map<string, string | null>();
+	const executable = new Map<string, ReturnType<typeof resolveExecutableSkillFiles>>();
+	const resolveManifest = (name: string) => {
+		if (!manifests.has(name)) manifests.set(name, summary ? null : resolveLibrarySkillManifest(name));
+		return manifests.get(name)!;
+	};
+	const manifest = (name: string) => resolveManifest(name)?.manifest ?? null;
+	const packageHash = (name: string) => {
+		if (!packages.has(name)) {
+			try { packages.set(name, summary ? (all.find((skill) => skill.name === name)?.source === "user" ? skillPackageDisplayPin(path.join(agentSkillsDir(), name))?.packageSha256 ?? null : null) : libraryPackageFingerprint(name)); }
+			catch { packages.set(name, "invalid"); }
+		}
+		return packages.get(name)!;
+	};
+	const files = (name: string) => {
+		if (!executable.has(name)) {
+			// Managed repository packages cannot execute; their summary metadata is already loaded.
+			const managed = summary && all.some((skill) => skill.name === name && skill.source === "user" && skill.provenance?.repo);
+			executable.set(name, managed ? null : resolveExecutableSkillFiles(name));
+		}
+		return executable.get(name)!;
+	};
+	const skills = withSkillDisplayNames(computeRoomSkillStatuses(settings, manifest, (name) => files(name)?.filesSha256 ?? null, packageHash), all);
+	return { agentId, settings, sources: roomSourceStatuses(settings, all, manifest, packageHash), skills: skills.map((skill) => ({ ...skill, executable: files(skill.name) !== null, bundledFiles: files(skill.name)?.files ?? [], manualOnly: resolveManifest(skill.name)?.disableModelInvocation === true })) };
 }
 
 function slugifySkillId(value: string): string {
@@ -5359,7 +5475,8 @@ function slugifySkillId(value: string): string {
 }
 
 function skillExistsAnySource(id: string): boolean {
-	return skillDirs().some(({ dir }) => fs.existsSync(path.join(dir, id, "SKILL.md")));
+	return listSkills().some((skill) => skill.name === id)
+		|| skillDirs().some(({ dir }) => fs.existsSync(path.join(dir, id, "SKILL.md")));
 }
 
 /**
@@ -5406,8 +5523,8 @@ function resolveLibrarySkillManifest(name: string): { manifest: string; body: st
 /** The enablement fingerprint source (spec §7 must 2): the full SKILL.md manifest
  *  by name, or null when the skill is gone. enablePersistentRoomSkill hashes it. */
 /** A room's skill statuses with the name the Skills pane shows, so a notice can name the skill. */
-function withSkillDisplayNames<T extends { name: string }>(skills: T[]): Array<T & { displayName?: string }> {
-	const names = new Map(listSkills().map((skill) => [skill.name, skill.displayName] as const));
+function withSkillDisplayNames<T extends { name: string }>(skills: T[], library: SkillInfo[]): Array<T & { displayName?: string }> {
+	const names = new Map(library.map((skill) => [skill.name, skill.displayName] as const));
 	return skills.map((skill) => {
 		const displayName = names.get(skill.name);
 		return displayName ? { ...skill, displayName } : skill;
@@ -5416,6 +5533,39 @@ function withSkillDisplayNames<T extends { name: string }>(skills: T[]): Array<T
 
 function skillLibraryFingerprint(name: string): string | null {
 	return resolveLibrarySkillManifest(name)?.manifest ?? null;
+}
+
+function libraryPackageFingerprint(name: string): string | null {
+	if (!isValidSkillName(name) || listSkills().find((skill) => skill.name === name)?.source !== "user") return null;
+	try {
+		const directory = path.join(agentSkillsDir(), name);
+		if (!fs.existsSync(directory)) return null;
+		const provenance = readSkillProvenance(directory);
+		if (!provenance?.repo) return provenance === null && fs.existsSync(path.join(directory, SKILL_PROVENANCE_FILENAME)) ? "invalid" : null;
+		const packet = readManagedSkillPackage(directory);
+		if (!packet) return null;
+		const policy = currentSkillLibraryPolicy(name);
+		if (policy && ((packet.repo.skillPath !== policy.skillRoot && !repositoryPathWithin(packet.repo.skillPath, policy.skillRoot)) || packet.references.some((reference) => !referencePathPermission(reference.path, policy).allowed || (!repositoryPathWithin(reference.path, packet.repo.skillPath) && !policy.referenceRoots.some((root) => repositoryPathWithin(reference.path, root)))))) return "invalid";
+		return packet.packageSha256;
+	}
+	catch { return "invalid"; }
+}
+
+function currentSkillLibraryPolicy(name: string) {
+	const repo = readSkillProvenance(path.join(agentSkillsDir(), name))?.repo;
+	if (!repo?.libraryId) return undefined;
+	const library = readSkillLibraries().find((entry) => entry.id === repo.libraryId);
+	return library ? normalizeRepositoryFilePolicy(library) : undefined;
+}
+
+function lookupRoomLibrarySkill(name: string) {
+	const found = resolveLibrarySkillManifest(name);
+	if (!found) return null;
+	const fingerprint = libraryPackageFingerprint(name);
+	if (fingerprint === "invalid") throw new Error("Skill package or source policy changed; review it again.");
+	const packet = fingerprint ? readManagedSkillPackage(path.join(agentSkillsDir(), name)) : null;
+	if (packet && (packet.manifest !== found.manifest || packet.packageSha256 !== fingerprint)) throw new Error("Skill changed while reading. Review it again.");
+	return { ...found, ...(packet ? { packageSha256: packet.packageSha256, references: packet.references, source: packet.repo.source, revision: packet.repo.revision, skillPath: packet.repo.skillPath } : {}) };
 }
 
 /**
@@ -5432,6 +5582,8 @@ function skillLibraryFingerprint(name: string): string | null {
 function resolveExecutableSkillFiles(name: string): { skillDir: string; filesSha256: string; files: string[] } | null {
 	if (!isValidSkillName(name)) return null;
 	const skillDir = path.join(agentSkillsDir(), name);
+	const provenance = readSkillProvenance(skillDir);
+	if (!provenance || provenance.repo) return null;
 	const digest = computeSkillFilesDigest(skillDir);
 	if (!digest) return null;
 	let manifest: string;
@@ -5442,7 +5594,6 @@ function resolveExecutableSkillFiles(name: string): { skillDir: string; filesSha
 	}
 	const served = resolveLibrarySkillManifest(name);
 	if (!served || served.manifest !== manifest) return null;
-	if (!readSkillProvenance(skillDir)) return null;
 	if (scanInvisibleUnicode(manifest).findings.length > 0) return null;
 	return { skillDir, filesSha256: digest.filesSha256, files: digest.files.map((f) => f.path).filter((p) => p !== "SKILL.md") };
 }
@@ -5666,7 +5817,7 @@ async function buildSkillCandidateFromUpload(filename: string, buffer: Buffer): 
 
 app.get("/api/skills", async (req) => {
 	const roomsByName = skillRoomsByName(req);
-	return listSkills().map((skill) => librarySkillView(skill, roomsByName));
+	return listSkills().map((skill) => (req.query as any)?.view === "summary" ? librarySkillSummary(skill, roomsByName) : librarySkillView(skill, roomsByName));
 });
 app.get("/api/skills/:id", async (req, reply) => {
 	const id = slugifySkillId(String((req.params as any).id ?? ""));
@@ -5676,7 +5827,7 @@ app.get("/api/skills/:id", async (req, reply) => {
 	// candidate carries. Its files are the ones a room can be allowed to run, so a
 	// skill that can never run files (see resolveExecutableSkillFiles) lists none.
 	const files = resolveExecutableSkillFiles(skill.name)?.files ?? [];
-	return reply.send({ ...librarySkillView(skill, skillRoomsByName(req), files), scanFindings: scanInvisibleUnicode(`${skill.body}\n${skill.description ?? ""}`).findings, bundledScripts: files });
+	return reply.send({ ...librarySkillView(skill, skillRoomsByName(req), files), sha256: sha256(skillLibraryFingerprint(skill.name) ?? ""), scanFindings: scanInvisibleUnicode(`${skill.body}\n${skill.description ?? ""}`).findings, bundledScripts: files });
 });
 app.post("/api/skills/upload", { bodyLimit: 12 * 1024 * 1024 }, async (req, reply) => {
 	const raw = (req.body ?? {}) as { filename?: unknown; contentBase64?: unknown };
@@ -5782,7 +5933,8 @@ app.put("/api/skills/:id", async (req, reply) => {
 	// trip re-review just like a body edit. Origin (source/license/importedAt)
 	// survives: a local edit of an imported skill must not erase where it came from.
 	const existingProvenance = readSkillProvenance(path.dirname(file));
-	writeSkillProvenance(path.dirname(file), existingProvenance ? { ...existingProvenance, sha256: sha256(editedManifest) } : localSkillProvenance(editedManifest));
+	// Repository baselines stay at import time so a local UI edit remains a sync conflict.
+	if (!existingProvenance?.repo) writeSkillProvenance(path.dirname(file), existingProvenance ? { ...existingProvenance, sha256: sha256(editedManifest), ...(existingProvenance.source !== "local" && existingProvenance.source !== "upload" ? { locallyModified: true } : {}) } : localSkillProvenance(editedManifest));
 	const updated = listSkills().find((skill) => skill.name === id);
 	return reply.send(updated ? librarySkillView(updated, skillRoomsByName(req)) : { name: id, displayName: value.displayName, description: value.description, body: value.instructions, source: "user", protected: false, rooms: [], fileCount: 0, provenance: null, license: null });
 });
@@ -5818,79 +5970,486 @@ app.delete("/api/skills/:id", async (req, reply) => {
 const SKILLS_ALLOW_LOCAL_REPO = process.env.EXXETA_SKILLS_ALLOW_LOCAL_REPO === "1";
 installCheckoutCleanup();
 
-app.post("/api/skills/repo/scan", async (req, reply) => {
-	const source = String((req.body as any)?.source ?? "");
-	const resolved = resolveRepoSource(source, { allowLocal: SKILLS_ALLOW_LOCAL_REPO });
-	if (!resolved.ok) return reply.code(400).send({ error: resolved.error });
-	let dir: string;
+function skillLibraryErrorReply(reply: any, error: unknown) {
+	const code = (error as any)?.code;
+	return reply.code((error as any)?.statusCode ?? 400).send({ error: error instanceof Error ? error.message : "Skill library operation failed.", ...(typeof code === "string" && (code.startsWith("REPOSITORY_") || code === "GIT_REQUIRED") ? { code } : {}) });
+}
+
+const repositorySignIn = new RepositorySignIn();
+function repositoryAccessTarget(body: any) {
+	if (typeof body.source !== "string") throw new Error("Repository address is required.");
+	const resolved = resolveRepoSource(body.source);
+	if (!resolved.ok) throw new Error(resolved.error);
+	if (resolved.value.kind !== "git" || resolved.value.cloneArg !== resolved.value.display) throw new Error("Use a repository address without credentials.");
+	if (/^http:\/\//i.test(resolved.value.cloneArg)) throw new Error("Use HTTPS for repository access settings.");
+	if (body.libraryId !== undefined && typeof body.libraryId !== "string" || body.accessId !== undefined && typeof body.accessId !== "string") throw new Error("Repository access identifiers must be text.");
+	const library = body.libraryId === undefined ? undefined : readSkillLibraries().find((entry) => entry.id === body.libraryId);
+	if (body.libraryId !== undefined && (!library || repositoryAccessSource(library.source) !== repositoryAccessSource(resolved.value.cloneArg))) throw repositoryAccessError("The library address changed. Reopen its access settings.");
+	return { source: resolved.value.cloneArg, library };
+}
+async function repositoryAccessStatus(body: any) {
+	const { source, library } = repositoryAccessTarget(body);
+	let context: RepositoryAccessContext | undefined;
+	try { context = resolveRepositoryAccess(source, library?.id, library?.repositoryAccess, body.accessId); } catch (error) { if ((error as any)?.code !== "REPOSITORY_ACCESS_REQUIRED") throw error; }
+	const settings = context?.settings ?? library?.repositoryAccess ?? anonymousRepositoryAccess();
+	const gitAvailable = await repositoryGitAvailable();
+	const host = /^git@([^:]+):/.exec(source)?.[1] ?? new URL(source).host;
+	const provider = settings.provider ?? body.provider ?? (host === "github.com" ? "github" : /gitlab/i.test(host) ? "gitlab" : null);
+	if (provider !== null && provider !== "github" && provider !== "gitlab") throw new Error("Choose GitHub or GitLab.");
+	if (host === "github.com" && provider !== "github" || host === "gitlab.com" && provider !== "gitlab") throw new Error("The selected provider does not match this repository host.");
+	const setup = context?.settings.mode === "local-git" && gitAvailable && source.startsWith("https://") ? await repositorySignIn.status(source, provider ?? undefined) : { host, provider, ready: false, issues: !gitAvailable && settings.mode !== "anonymous" ? ["Git is required for private repository access. Public supported repositories can use the anonymous API."] : [], setupCommands: [], documentation: "https://github.com/git-ecosystem/git-credential-manager" };
+	return { ...setup, gitAvailable, mode: settings.mode, granted: Boolean(context), confirmed: Boolean(library?.repositoryAccess?.consentVersion === 1 || context?.confirmed), rememberLocalAccess: settings.rememberLocalAccess, checkOnStartup: settings.checkOnStartup, ...(context ? { accessId: context.id } : {}), ...(settings.apiBaseUrl ? { apiBaseUrl: settings.apiBaseUrl } : {}) };
+}
+app.post("/api/skills/repo/auth/status", async (req, reply) => {
+	try { reply.header("cache-control", "no-store"); return await repositoryAccessStatus(req.body ?? {}); }
+	catch (error) { return skillLibraryErrorReply(reply, error); }
+});
+app.post("/api/skills/repo/access", async (req, reply) => {
 	try {
-		dir = await fetchRepoCheckout(resolved.value);
-	} catch (err) {
-		const message = err instanceof Error ? err.message : String(err);
-		// A missing tool is a whole sentence of its own; the prefix would blame the repository.
-		return reply.code(502).send({ error: isMissingToolMessage(message) ? message : `could not fetch repository: ${message}` });
+		const body = (req.body ?? {}) as any;
+		const { source, library } = repositoryAccessTarget(body);
+		const settings = normalizeRepositoryAccess({ mode: body.mode, rememberLocalAccess: body.rememberLocalAccess, checkOnStartup: body.checkOnStartup, provider: body.provider, apiBaseUrl: body.apiBaseUrl, consentVersion: 1 })!;
+		if (settings.mode !== "anonymous" && !await repositoryGitAvailable()) throw Object.assign(new Error("Install Git to use private repository access. Public supported sources can use the anonymous API."), { code: "GIT_REQUIRED", statusCode: 422 });
+		let token = body.token;
+		if (settings.mode === "session-token" && token === undefined && library?.repositoryAccess?.mode === "session-token") { try { token = resolveRepositoryAccess(source, library.id, library.repositoryAccess).token; } catch {} }
+		const grant = grantRepositoryAccess(source, library?.id, settings, token);
+		let contextForResponse = grant;
+		if (library) {
+			const secret = grant.token;
+			try { saveSkillLibrary({ ...library, repositoryAccess: settings }); }
+			catch (error) { revokeRepositoryAccess(source, library.id); throw error; }
+			if (grant.controller.signal.aborted) contextForResponse = grantRepositoryAccess(source, library.id, settings, secret);
+			else contextForResponse = grant;
+		} else contextForResponse = grant;
+		return await repositoryAccessStatus({ ...body, accessId: contextForResponse.id });
+	} catch (error) { return skillLibraryErrorReply(reply, error); }
+});
+app.post("/api/skills/repo/access/revoke", async (req, reply) => {
+	try {
+		const body = (req.body ?? {}) as any;
+		const { source, library } = repositoryAccessTarget(body);
+		if (library) resetSkillLibraryAccess(library.id); else revokeRepositoryAccess(source);
+		return await repositoryAccessStatus({ source, libraryId: library?.id });
+	} catch (error) { return skillLibraryErrorReply(reply, error); }
+});
+app.post("/api/skills/repo/auth/login", async (req, reply) => {
+	const controller = new AbortController();
+	const abort = () => controller.abort();
+	req.raw.once("aborted", abort); reply.raw.once("close", abort);
+	try {
+		const body = (req.body ?? {}) as any;
+		if (body.provider !== "github" && body.provider !== "gitlab") throw new Error("Choose GitHub or GitLab.");
+		const { source, library } = repositoryAccessTarget(body);
+		const access = resolveRepositoryAccess(source, library?.id, library?.repositoryAccess, body.accessId);
+		if (access.settings.mode !== "local-git") throw repositoryAccessError("First allow this library to use local Git sign-in.");
+		await repositorySignIn.login(source, body.provider, AbortSignal.any([controller.signal, access.controller.signal]), body.allowCredentialStorage === true);
+		assertRepositoryAccess(access);
+		return { signedIn: true };
+	} catch (error) { return skillLibraryErrorReply(reply, error); }
+	finally { req.raw.removeListener("aborted", abort); reply.raw.removeListener("close", abort); }
+});
+
+function requestReferences(body: any): string[] {
+	if (body.references === undefined) return [];
+	if (!Array.isArray(body.references) || body.references.some((entry: unknown) => typeof entry !== "string")) throw new Error("references must be a list of selected paths");
+	return body.references;
+}
+
+function requireCurrentLibrary(repo: NonNullable<SkillProvenance["repo"]>): void {
+	if (!repo.libraryId) return;
+	const library = readSkillLibraries().find((entry) => entry.id === repo.libraryId);
+	if (!library || library.source !== repo.source || library.ref !== repo.ref || JSON.stringify(normalizeRepositoryFilePolicy(library)) !== JSON.stringify(repo.policy)) {
+		const error = new Error("The source configuration changed since this review. Scan and review it again.");
+		(error as any).statusCode = 409;
+		throw error;
 	}
-	const token = registerCheckout(dir, resolved.value.display);
-	return reply.send({ token, source: resolved.value.display, skills: scanRepoSkills(dir) });
+}
+
+function removeSkillStaging(directory: string): void {
+	const root = path.resolve(path.dirname(agentSkillsDir()));
+	const target = path.resolve(directory);
+	if (!target.startsWith(root + path.sep) || !path.basename(target).startsWith(".skill-library-")) throw new Error("Invalid skill staging directory.");
+	fs.rmSync(target, { recursive: true, force: true });
+}
+
+function holdSkillUpdateRooms(name: string | Set<string>): () => void {
+	const releases: Array<() => void> = [];
+	try {
+		for (const room of listPersistentAgents()) {
+			if (typeof name === "string" ? !configuredRoomSkillPins(readPersistentRoomSkillSettings(room.id)).some((skill) => skill.name === name) : !name.has(room.id)) continue;
+			const lock = roomLock.readLock(room.id);
+			const active = lock && roomLock.isActive(lock);
+			const threadId = room.activeThread?.threadId;
+			if ((active && (lock.surface !== "web" || lock.pid !== process.pid)) || (threadId && getPersistentAgentActiveTurnState(room.id, threadId).state !== "idle")) {
+				const error = new Error(`Room "${room.displayName || room.id}" is working. Apply this update after its turn finishes.`);
+				(error as any).statusCode = 409;
+				throw error;
+			}
+			// An idle web room belongs to this event loop; the final swap below never yields.
+			if (!active) {
+				const owner = { surface: "cli", pid: process.pid, label: "Reviewing a skill update" };
+				if (!roomLock.tryAcquire(room.id, owner).ok) {
+					const error = new Error("A room started working during this update. Try again after it finishes.");
+					(error as any).statusCode = 409;
+					throw error;
+				}
+				releases.push(() => roomLock.release(room.id, owner));
+			}
+		}
+		return () => { for (const release of releases.reverse()) release(); };
+	} catch (error) {
+		for (const release of releases.reverse()) release();
+		throw error;
+	}
+}
+
+function sendReferenceAttachment(reply: any, file: { bytes: Buffer; name: string; mimeType: string }) {
+	const name = path.posix.basename(file.name);
+	return reply.header("content-type", "application/octet-stream")
+		.header("content-disposition", `attachment; filename*=UTF-8''${encodeURIComponent(name)}`)
+		.header("x-content-type-options", "nosniff")
+		.header("cache-control", "no-store")
+		.send(file.bytes);
+}
+
+app.get("/api/skills/repo/progress/:id", async (req, reply) => {
+	try {
+		reply.header("cache-control", "no-store");
+		const progress = readRepositoryProgress((req.params as any).id);
+		return progress ? { progress } : reply.code(404).send({ error: "Repository progress unavailable." });
+	} catch (error) { return skillLibraryErrorReply(reply, error); }
+});
+
+app.post("/api/skills/repo/scan", async (req, reply) => {
+	try {
+		const body = (req.body ?? {}) as any;
+		if (body.accessId !== undefined && typeof body.accessId !== "string") throw new Error("Repository access identifier must be text.");
+		return await withRepositoryProgress(body.progressId, () => scanRepository(String(body.source ?? ""), body.policy, undefined, SKILLS_ALLOW_LOCAL_REPO, { accessId: body.accessId }));
+	} catch (error) { return skillLibraryErrorReply(reply, error); }
 });
 
 app.post("/api/skills/repo/candidate", async (req, reply) => {
-	const body = (req.body as any) ?? {};
-	const checkout = getCheckout(String(body.token ?? ""));
-	if (!checkout) return reply.code(404).send({ error: "repository checkout expired — rescan the URL" });
-	const candidate = readRepoCandidate(checkout.dir, String(body.path ?? ""), checkout.source);
-	if (!candidate) return reply.code(404).send({ error: "skill not found in the fetched repository" });
-	return reply.send(candidate);
+	try {
+		const body = (req.body ?? {}) as any;
+		return await withRepositoryProgress(body.progressId, () => fetchRepoCandidate(String(body.token ?? ""), String(body.path ?? ""), requestReferences(body)));
+	} catch (error) { return skillLibraryErrorReply(reply, error); }
+});
+
+app.post("/api/skills/repo/preview", async (req, reply) => {
+	try {
+		const body = (req.body ?? {}) as any;
+		return await previewRepoFile(String(body.token ?? ""), String(body.reference ?? ""));
+	} catch (error) { return skillLibraryErrorReply(reply, error); }
+});
+
+app.post("/api/skills/repo/reference", async (req, reply) => {
+	try {
+		const body = (req.body ?? {}) as any;
+		return sendReferenceAttachment(reply, await readRepoReference(String(body.token ?? ""), String(body.path ?? ""), String(body.reference ?? "")));
+	} catch (error) { return skillLibraryErrorReply(reply, error); }
 });
 
 app.post("/api/skills/repo/import", async (req, reply) => {
-	const body = (req.body as any) ?? {};
-	const checkout = getCheckout(String(body.token ?? ""));
-	if (!checkout) return reply.code(404).send({ error: "repository checkout expired — rescan the URL" });
-	const skillPath = String(body.path ?? "");
-	const candidate = readRepoCandidate(checkout.dir, skillPath, checkout.source);
-	if (!candidate) return reply.code(404).send({ error: "skill not found in the fetched repository" });
-	// The store id MUST be the FRONTMATTER name the skill will be listed under, not the
-	// repo DIRECTORY name: listSkills keys on `fm.name`, and delete/edit/enable all
-	// resolve `<store>/<id>` where id must equal that listed name — so a dir named after
-	// the directory instead would strand a library entry that can't be deleted, edited or
-	// enabled. Vendoring is verbatim (the reviewed body/sha256 is untouched), so the name
-	// must already be a canonical skill id (the same rule every other write enforces); a
-	// non-canonical name can't round-trip, so reject THIS skill's import naming the file.
-	const manifestRel = skillPath ? `${skillPath.replace(/\\/g, "/").replace(/\/+$/, "")}/SKILL.md` : "SKILL.md";
-	const rawName = candidate.name.trim();
-	const id = slugifySkillId(String(body.id ?? rawName));
-	if (!id || id !== rawName || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(id)) {
-		return reply.code(400).send({ error: `could not import ${manifestRel}: skill name "${candidate.name}" is not a valid skill id (expected lowercase letters, numbers and hyphens)` });
-	}
-	if (skillExistsAnySource(id)) return reply.code(409).send({ error: `skill id already exists: ${id}` });
-	const skillDir = path.join(agentSkillsDir(), id);
-	// Only clean up a dir THIS import created — never delete a pre-existing one on
-	// a vendor failure (skillExistsAnySource gates on SKILL.md, so a bare leftover
-	// dir could otherwise be removed out from under the user).
-	const skillDirPreexisted = fs.existsSync(skillDir);
-	let vendored: ReturnType<typeof vendorRepoSkill>;
+	let staging: string | undefined;
 	try {
-		vendored = vendorRepoSkill(checkout.dir, skillPath, skillDir);
-	} catch (err) {
-		if (!skillDirPreexisted) fs.rmSync(skillDir, { recursive: true, force: true });
-		return reply.code(400).send({ error: `could not import skill: ${err instanceof Error ? err.message : String(err)}` });
-	}
-	// Provenance via MR-1 machinery: source is the repo, sha256 pins the whole
-	// SKILL.md that actually landed on disk — exactly what enablement/re-review
-	// re-derive (spec §0/§2/§7).
-	const vendoredManifest = fs.readFileSync(path.join(skillDir, "SKILL.md"), "utf-8");
-	const provenance: SkillProvenance = { source: checkout.source, importedAt: new Date().toISOString(), license: vendored.license, sha256: sha256(vendoredManifest) };
-	writeSkillProvenance(skillDir, provenance);
-	const created = listSkills().find((s) => s.name === candidate.name) ?? listSkills().find((s) => s.name === id) ?? null;
-	return reply.code(201).send({ skill: created ? librarySkillView(created, skillRoomsByName(req)) : null, provenance, bundledCopied: vendored.bundledCopied });
+		const body = (req.body ?? {}) as any;
+		const references = requestReferences(body);
+		const token = String(body.token ?? "");
+		const skillPath = String(body.path ?? "");
+		const candidate = await fetchRepoCandidate(token, skillPath, references);
+		const id = String(body.id ?? candidate.name).trim();
+		if (!isValidSkillName(id) || id !== candidate.name || id !== slugifySkillId(id)) throw new Error(`Skill name "${candidate.name}" must be a unique lowercase name using letters, numbers and hyphens, up to 48 characters.`);
+		if (skillExistsAnySource(id)) return reply.code(409).send({ error: `skill id already exists: ${id}` });
+		const parent = path.dirname(agentSkillsDir());
+		fs.mkdirSync(parent, { recursive: true, mode: 0o700 });
+		staging = fs.mkdtempSync(path.join(parent, ".skill-library-import-"));
+		const imported = await importReviewedRepoSkill(token, skillPath, references, String(body.reviewSha256 ?? ""), staging);
+		requireCurrentLibrary(imported.provenance.repo!);
+		writeSkillProvenance(staging, imported.provenance);
+		readManagedSkillPackage(staging);
+		fs.mkdirSync(agentSkillsDir(), { recursive: true, mode: 0o700 });
+		const target = path.join(agentSkillsDir(), id);
+		if (skillExistsAnySource(id) || fs.existsSync(target)) return reply.code(409).send({ error: `skill directory already exists: ${id}` });
+		fs.renameSync(staging, target);
+		staging = undefined;
+		try { if (imported.provenance.repo?.libraryId) recordSkillLibraryImport(imported.provenance.repo.libraryId, imported.provenance.repo.revision, imported.provenance.repo.skillPath); }
+		catch { app.log.warn("Skill saved; its library update status could not be refreshed."); }
+		const created = listSkills().find((skill) => skill.name === id);
+		return reply.code(201).send({ skill: created ? librarySkillView(created, skillRoomsByName(req)) : null, provenance: readSkillProvenance(target), bundledCopied: imported.bundledCopied });
+	} catch (error) { return skillLibraryErrorReply(reply, error); }
+	finally { if (staging) removeSkillStaging(staging); }
 });
 
-app.get("/api/skills/featured", async () => {
-	const sources = resolveFeaturedSources();
-	const results = await Promise.all(sources.map((entry) => loadFeaturedSource(entry)));
-	return { sources: results };
+app.get("/api/skills/:id/references/:reference/preview", async (req, reply) => {
+	try {
+		const id = String((req.params as any).id ?? "");
+		if (!isValidSkillName(id) || listSkills().find((skill) => skill.name === id)?.source !== "user") return reply.code(404).send({ error: "Managed skill not found." });
+		const file = await readManagedSkillReferenceBytes(path.join(agentSkillsDir(), id), String((req.params as any).reference ?? ""), currentSkillLibraryPolicy(id));
+		return await skillFilePreview(file.reference.path, file.bytes);
+	} catch (error) { return skillLibraryErrorReply(reply, error); }
 });
+
+app.get("/api/skills/:id/references/:reference", async (req, reply) => {
+	try {
+		const id = String((req.params as any).id ?? "");
+		if (!isValidSkillName(id) || listSkills().find((skill) => skill.name === id)?.source !== "user") return reply.code(404).send({ error: "Managed skill not found." });
+		const currentPolicy = currentSkillLibraryPolicy(id);
+		return sendReferenceAttachment(reply, await readManagedSkillReferenceBytes(path.join(agentSkillsDir(), id), String((req.params as any).reference ?? ""), currentPolicy));
+	} catch (error) { return skillLibraryErrorReply(reply, error); }
+});
+
+function sourceUpdatePins(library: ReturnType<typeof readSkillLibraries>[number], all: SkillInfo[]): EnabledSkillSource {
+	return { libraryId: library.id, materialsSha256: currentLibraryMaterialsSha256(library.id) ?? "", excludedSkills: [], skills: installedSourceSkills(library, all).map((skill) => {
+		const pins = skillPackageDisplayPin(path.join(agentSkillsDir(), skill.name));
+		return { name: skill.name, sha256: pins?.sha256 ?? "", packageSha256: pins?.packageSha256 ?? "" };
+	}) };
+}
+
+function sourceRoomsNeedingUpdate(pins: EnabledSkillSource, rooms = listPersistentAgents(), settingsByRoom = new Map(rooms.map((room) => [room.id, readPersistentRoomSkillSettings(room.id)]))) {
+	return rooms.flatMap((room) => {
+		const settings = settingsByRoom.get(room.id)!;
+		if (!roomNeedsLibraryUpdate(settings, pins)) return [];
+		const lock = roomLock.readLock(room.id);
+		const busy = Boolean((lock && roomLock.isActive(lock) && (lock.surface !== "web" || lock.pid !== process.pid)) || (room.activeThread?.threadId && getPersistentAgentActiveTurnState(room.id, room.activeThread.threadId).state !== "idle"));
+		return [{ id: room.id, name: room.displayName || room.id, settings, busy }];
+	});
+}
+
+function sourceRoomsReview(req: unknown, id: string) {
+	const library = readSkillLibraries().find((entry) => entry.id === id);
+	if (!library) throw Object.assign(new Error("Source no longer exists."), { statusCode: 404 });
+	const materials = readLibraryMaterialsIndex(id);
+	if (!materials) throw Object.assign(new Error("Save this source's local references before updating its rooms."), { statusCode: 409 });
+	const all = listSkills();
+	const pins = sourceUpdatePins(library, all);
+	const roomsByName = skillRoomsByName(req);
+	const skills = installedSourceSkills(library, all).map((skill) => {
+		const directory = path.join(agentSkillsDir(), skill.name);
+		const packet = readManagedSkillPackage(directory);
+		const expected = pins.skills.find((pin) => pin.name === skill.name)!;
+		if (!packet || expected.sha256 !== sha256(packet.manifest) || expected.packageSha256 !== packet.packageSha256 || computeSkillFilesDigest(directory)?.filesSha256 !== readSkillProvenance(directory)?.filesSha256) throw Object.assign(new Error(`Skill "${skill.name}" has local changes. Resolve them before updating rooms.`), { statusCode: 409 });
+		const { fm, body } = parseFrontmatter(packet.manifest);
+		return { ...skill, body: body.trim(), description: fm.description || "", provenance: { ...skill.provenance!, repo: packet.repo }, sha256: expected.sha256, packageSha256: expected.packageSha256, references: packet.references, rooms: roomsByName.get(skill.name) ?? [], fileCount: packet.references.length, scanFindings: scanInvisibleUnicode(packet.manifest).findings, bundledScripts: [] };
+	});
+	const rooms = sourceRoomsNeedingUpdate(pins);
+	return { libraryId: id, name: library.name, source: library.source, revision: materials.revision, materialsSha256: materials.materialsSha256, materials: materials.files.map((file) => ({ ...file, localPath: file.path })), skills, rooms, reviewSha256: libraryRoomsReviewHash(pins, rooms), pins };
+}
+
+app.get("/api/skills/update-notices", async (_req, reply) => {
+	try {
+		const all = listSkills();
+		const allRooms = listPersistentAgents();
+		const settingsByRoom = new Map(allRooms.map((room) => [room.id, readPersistentRoomSkillSettings(room.id)]));
+		const libraries = readSkillLibraries().map((library) => {
+			const pins = sourceUpdatePins(library, all);
+			const rooms = sourceRoomsNeedingUpdate(pins, allRooms, settingsByRoom);
+			const assigned = allRooms.filter((room) => {
+				const settings = settingsByRoom.get(room.id)!;
+				return settings.enabledSources?.some((source) => source.libraryId === library.id) || settings.enabledSkills.some((skill) => pins.skills.some((pin) => pin.name === skill.name));
+			});
+			return { id: library.id, name: library.name, status: library.status, revision: library.revision, lastSuccessfulCheckAt: library.lastSuccessfulCheckAt, rooms: assigned.map((room) => ({ id: room.id, reviewRequired: rooms.some((target) => target.id === room.id) })) };
+		});
+		reply.header("cache-control", "no-store");
+		return { libraries };
+	} catch (error) { return skillLibraryErrorReply(reply, error); }
+});
+
+app.get("/api/skills/libraries/:id/rooms/review", async (req, reply) => {
+	try {
+		const id = String((req.params as any).id);
+		if (!readLibraryMaterialsIndex(id)) {
+			const library = readSkillLibraries().find((entry) => entry.id === id);
+			if (!library) throw Object.assign(new Error("Source no longer exists."), { statusCode: 404 });
+			const seeded = await seedLibraryMaterialsFromSkills(id, installedSourceSkills(library).map((skill) => path.join(agentSkillsDir(), skill.name)));
+			if (seeded.conflicts.length) throw Object.assign(new Error("Conflicting saved references. Choose this library's references before updating its rooms."), { statusCode: 409 });
+		}
+		const { pins, rooms, ...review } = sourceRoomsReview(req, id);
+		const materials = readLibraryMaterialsIndex(id, review.materialsSha256)!;
+		const previousVersions = new Map<string, ReturnType<typeof readLibraryMaterialsIndex>>();
+		return { ...review, rooms: rooms.map(({ settings, ...room }) => {
+			const source = settings.enabledSources?.find((entry) => entry.libraryId === id);
+			if (source && !previousVersions.has(source.materialsSha256)) {
+				try { previousVersions.set(source.materialsSha256, readLibraryMaterialsIndex(id, source.materialsSha256)); }
+				catch { previousVersions.set(source.materialsSha256, null); }
+			}
+			const changes = describeRoomLibraryChanges(settings, pins, source ? previousVersions.get(source.materialsSha256) ?? null : null, materials);
+			return { ...room, changes, enabledSkills: source?.skills.filter((skill) => !source.excludedSkills.includes(skill.name)).map((skill) => skill.name) ?? [], independentSkills: settings.enabledSkills.filter((skill) => review.skills.some((entry) => entry.name === skill.name)).map((skill) => skill.name) };
+		}) };
+	} catch (error) { return skillLibraryErrorReply(reply, error); }
+});
+
+app.post("/api/skills/libraries/:id/rooms/apply", async (req, reply) => {
+	try {
+		const body = (req.body ?? {}) as any;
+		if (!Array.isArray(body.roomIds) || !body.roomIds.length || body.roomIds.length > 1000 || body.roomIds.some((id: unknown) => typeof id !== "string") || new Set(body.roomIds).size !== body.roomIds.length || typeof body.reviewSha256 !== "string") throw new Error("Reviewed rooms and their review hash are required.");
+		const review = sourceRoomsReview(req, String((req.params as any).id));
+		if (review.reviewSha256 !== body.reviewSha256 || body.roomIds.some((id: string) => !review.rooms.some((room) => room.id === id))) return reply.code(409).send({ error: "The library or room selection changed. Review again before updating any rooms." });
+		const selected = review.rooms.filter((room) => body.roomIds.includes(room.id));
+		const release = holdSkillUpdateRooms(new Set(selected.map((room) => room.id)));
+		const updated: string[] = [];
+		const failures: Array<{ id: string; name: string; error: string }> = [];
+		try {
+			for (const room of selected) {
+				try { updatePersistentRoomLibrary(room.id, review.libraryId, review.pins, room.settings); updated.push(room.id); }
+				catch (error) { failures.push({ id: room.id, name: room.name, error: error instanceof Error ? error.message : "Room could not be updated." }); }
+			}
+		} finally { release(); }
+		return { updated, failures };
+	} catch (error) { return skillLibraryErrorReply(reply, error); }
+});
+
+app.get("/api/skills/libraries", async (_req, reply) => {
+	try {
+		const all = listSkills();
+		return { libraries: readSkillLibraries().map((library) => {
+			const installed = installedSourceSkills(library, all);
+			let manifest = null;
+			let materialsError: string | undefined;
+			try { manifest = readLibraryMaterialsIndex(library.id); } catch (error) { materialsError = (error as Error).message; }
+			return { ...library, installedSkillCount: installed.length, materialCount: manifest?.files.length ?? new Set(installed.flatMap((skill) => skill.provenance?.repo?.references.map((ref) => `${ref.path}:${ref.sha256}`) ?? [])).size, ...(manifest ? { materialsSha256: manifest.materialsSha256 } : {}), ...(materialsError ? { materialsError } : {}) };
+		}) };
+	}
+	catch (error) { return skillLibraryErrorReply(reply, error); }
+});
+app.post("/api/skills/repo/discovery", async (req, reply) => {
+	try {
+		const body = (req.body ?? {}) as any;
+		if (typeof body.token !== "string" || !Array.isArray(body.skillPaths) || body.skillPaths.some((entry: unknown) => typeof entry !== "string")) throw new Error("Repository snapshot and selected skill paths are required.");
+		return await withRepositoryProgress(body.progressId, () => discoverRepositoryMaterials(body.token, body.skillPaths));
+	} catch (error) { return skillLibraryErrorReply(reply, error); }
+});
+app.post("/api/skills/libraries", async (req, reply) => {
+	try { if ((req.body as any)?.repositoryAccess !== undefined) throw repositoryAccessError("Confirm repository access separately in this library's access panel."); return reply.code(201).send({ library: saveSkillLibrary({ ...(req.body as any), id: undefined }) }); }
+	catch (error) { return skillLibraryErrorReply(reply, error); }
+});
+app.put("/api/skills/libraries/:id", async (req, reply) => {
+	try {
+		const id = String((req.params as any).id);
+		const body = req.body as any;
+		if (body?.repositoryAccess !== undefined && JSON.stringify(normalizeRepositoryAccess(body.repositoryAccess)) !== JSON.stringify(readSkillLibraries().find((library) => library.id === id)?.repositoryAccess)) throw repositoryAccessError("Confirm repository access separately in this library's access panel.");
+		return { library: saveSkillLibrary({ ...body, id }) };
+	}
+	catch (error) { return skillLibraryErrorReply(reply, error); }
+});
+app.delete("/api/skills/libraries/:id", async (req, reply) => {
+	try { return { deleted: deleteSkillLibrary(String((req.params as any).id)) }; }
+	catch (error) { return skillLibraryErrorReply(reply, error); }
+});
+app.post("/api/skills/libraries/:id/scan", async (req, reply) => {
+	try {
+		const options = (req.body ?? {}) as { forceRefresh?: boolean; token?: string; progressId?: unknown };
+		if (options.forceRefresh !== undefined && typeof options.forceRefresh !== "boolean") throw new Error("forceRefresh must be a boolean");
+		if (options.token !== undefined && typeof options.token !== "string") throw new Error("snapshot token must be text");
+		return await withRepositoryProgress(options.progressId, () => scanSkillLibrary(String((req.params as any).id), options));
+	}
+	catch (error) { return skillLibraryErrorReply(reply, error); }
+});
+
+app.get("/api/skills/libraries/:id/materials", async (req, reply) => {
+	try {
+		const version = (req.query as { version?: unknown }).version;
+		if (version !== undefined && (typeof version !== "string" || !/^[a-f0-9]{64}$/.test(version))) throw new Error("Invalid material version.");
+		return { manifest: readLibraryMaterialsIndex(String((req.params as any).id), version) };
+	}
+	catch (error) { return skillLibraryErrorReply(reply, error); }
+});
+app.post("/api/skills/libraries/:id/materials/candidate", async (req, reply) => {
+	try {
+		const body = (req.body ?? {}) as any;
+		if (body.expectedCurrentHash !== null && typeof body.expectedCurrentHash !== "string") throw new Error("Expected material version is required.");
+		return await withRepositoryProgress(body.progressId, () => prepareLibraryMaterials(String((req.params as any).id), String(body.token ?? ""), requestReferences(body), body.expectedCurrentHash));
+	} catch (error) { return skillLibraryErrorReply(reply, error); }
+});
+app.post("/api/skills/libraries/:id/materials/accept", async (req, reply) => {
+	try {
+		const manifest = await withRepositoryProgress((req.body as any)?.progressId, () => acceptLibraryMaterials(String((req.params as any).id), String((req.body as any)?.candidateSha256 ?? "")));
+		try { recordSkillLibraryImport(manifest.libraryId, manifest.revision); }
+		catch { app.log.warn("Materials saved; their library update status could not be refreshed."); }
+		return { manifest };
+	}
+	catch (error) { return skillLibraryErrorReply(reply, error); }
+});
+app.post("/api/skills/libraries/:id/reconcile", async (req, reply) => {
+	try { return { library: await refreshSkillLibraryFromSnapshot(String((req.params as any).id), String((req.body as any)?.token ?? "")) }; }
+	catch (error) { return skillLibraryErrorReply(reply, error); }
+});
+app.post("/api/skills/libraries/:id/materials/:hash/preview", async (req, reply) => {
+	try {
+		const params = req.params as any;
+		const selected = await readLibraryMaterialBytes(String(params.id), String(params.hash), String((req.body as any)?.reference ?? ""));
+		return skillFilePreview(selected.reference.path, selected.bytes);
+	} catch (error) { return skillLibraryErrorReply(reply, error); }
+});
+app.post("/api/skills/libraries/:id/check", async (req, reply) => {
+	try { const library = await checkSkillLibrary(String((req.params as any).id)); return { library, updates: library.updates ?? [] }; }
+	catch (error) { return skillLibraryErrorReply(reply, error); }
+});
+app.get("/api/skills/libraries/:id/updates", async (req, reply) => {
+	try {
+		const library = readSkillLibraries().find((entry) => entry.id === String((req.params as any).id));
+		if (!library) return reply.code(404).send({ error: "Library no longer exists." });
+		return { library, updates: library.updates ?? [] };
+	} catch (error) { return skillLibraryErrorReply(reply, error); }
+});
+app.post("/api/skills/libraries/:id/updates/:name/candidate", async (req, reply) => {
+	try {
+		const params = req.params as any;
+		const body = (req.body ?? {}) as any;
+		if (body.token !== undefined && typeof body.token !== "string") throw new Error("snapshot token must be text");
+		const prepared = await withRepositoryProgress(body.progressId, () => prepareLibraryUpdate(String(params.id), String(params.name), body.references === undefined ? undefined : requestReferences(body), body.token));
+		return { ...prepared.candidate, token: prepared.token, localPackageSha256: prepared.update.localPackageSha256, changes: prepared.update.changes ?? [], affectedRooms: skillRoomsByName(req).get(String(params.name)) ?? [] };
+	} catch (error) { return skillLibraryErrorReply(reply, error); }
+});
+app.post("/api/skills/libraries/:id/updates/:name/apply", async (req, reply) => {
+	let staging: string | undefined;
+	try {
+		const params = req.params as any;
+		const body = (req.body ?? {}) as any;
+		const name = String(params.name);
+		if (!isValidSkillName(name)) throw new Error("Invalid skill name.");
+		const target = path.join(agentSkillsDir(), name);
+		const installed = readManagedSkillPackage(target);
+		const library = readSkillLibraries().find((entry) => entry.id === String(params.id));
+		if (!installed || !library || !skillBelongsToLibrary(installed.repo, library)) throw new Error("Skill is not installed from this library.");
+		if (computeSkillFilesDigest(target)?.filesSha256 !== readSkillProvenance(target)?.filesSha256) return reply.code(409).send({ error: "This skill has local edits. Preserve them before adopting a repository update." });
+		if (body.localPackageSha256 !== installed.packageSha256) return reply.code(409).send({ error: "The local package changed since this review. Review the update again." });
+		staging = fs.mkdtempSync(path.join(path.dirname(agentSkillsDir()), ".skill-library-update-"));
+		const imported = await importReviewedRepoSkill(String(body.token ?? ""), String(body.path ?? ""), requestReferences(body), String(body.reviewSha256 ?? ""), staging);
+		if (imported.provenance.repo?.libraryId !== String(params.id) || imported.provenance.repo.skillPath !== installed.repo.skillPath || normalizedRepositorySkill(fs.readFileSync(path.join(staging, "SKILL.md"), "utf8"), installed.repo.skillPath).name !== name) throw new Error("The reviewed update does not belong to this skill and library.");
+		requireCurrentLibrary(imported.provenance.repo);
+		writeSkillProvenance(staging, imported.provenance);
+		const prepared = readManagedSkillPackage(staging)!;
+		if (readManagedSkillPackage(target)?.packageSha256 !== body.localPackageSha256) return reply.code(409).send({ error: "The local package changed during this update. Review it again." });
+		const { revision: _beforeRevision, ...beforeContents } = installed.repo;
+		const { revision: _afterRevision, ...afterContents } = prepared.repo;
+		if (installed.manifest === prepared.manifest && JSON.stringify(beforeContents) === JSON.stringify(afterContents)) {
+			try { recordSkillLibraryImport(String(params.id), imported.provenance.repo.revision, imported.provenance.repo.skillPath); }
+			catch { app.log.warn("Unchanged skill preserved; its update status could not be refreshed."); }
+			const unchanged = listSkills().find((skill) => skill.name === name);
+			return { skill: unchanged ? librarySkillView(unchanged, skillRoomsByName(req)) : null, affectedRooms: [], unchanged: true };
+		}
+		const releaseRooms = holdSkillUpdateRooms(name);
+		try {
+			if (readManagedSkillPackage(target)?.packageSha256 !== body.localPackageSha256) return reply.code(409).send({ error: "The local package changed during this update. Review it again." });
+			const backup = path.join(path.dirname(agentSkillsDir()), `.skill-library-backup-${crypto.randomUUID()}`);
+			fs.renameSync(target, backup);
+			try { fs.renameSync(staging, target); staging = undefined; }
+			catch (error) { fs.renameSync(backup, target); throw error; }
+			try { removeSkillStaging(backup); } catch { app.log.warn("Reviewed skill updated; its backup could not be removed."); }
+		} finally { releaseRooms(); }
+		try { recordSkillLibraryImport(String(params.id), imported.provenance.repo.revision, imported.provenance.repo.skillPath); }
+		catch { app.log.warn("Skill updated; its library update status could not be refreshed."); }
+		const updated = listSkills().find((skill) => skill.name === name);
+		return { skill: updated ? librarySkillView(updated, skillRoomsByName(req)) : null, affectedRooms: skillRoomsByName(req).get(name) ?? [] };
+	} catch (error) { return skillLibraryErrorReply(reply, error); }
+	finally { if (staging) removeSkillStaging(staging); }
+});
+
+app.get("/api/skills/featured", async (req) => {
+	const sources = resolveFeaturedSources();
+	return { sources: (req.query as any)?.view === "catalog" ? sources : await Promise.all(sources.map((source) => loadFeaturedSource(source))) };
+});
+
 // --- usage tracking -----------------------------------------------------
 //
 // Every assistant message_end event carries a `usage` object
@@ -7536,7 +8095,7 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 		const resolvePersistentRoomEnabledSkillEntries = (): { name: string; description: string }[] => {
 			try {
 				const skillSettings = readPersistentRoomSkillSettings(persistentAgentId);
-				const effective = effectiveEnabledSkills(skillSettings.enabledSkills, skillLibraryFingerprint);
+				const effective = effectiveRoomEnabledSkills(skillSettings, skillLibraryFingerprint, libraryPackageFingerprint);
 				if (effective.length === 0) return [];
 				// Description comes from the SAME manifest the fingerprint pins, so the
 				// index can never surface a description whose change was not re-reviewed.
@@ -7803,8 +8362,7 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 			// body; both come from one manifest read, so verified and served bytes
 			// can never diverge.
 			lookupSkill: (name) => {
-				const resolved = resolveLibrarySkillManifest(name);
-				return resolved ? { manifest: resolved.manifest, body: resolved.body, description: resolved.description, disableModelInvocation: resolved.disableModelInvocation } : null;
+				return lookupRoomLibrarySkill(name);
 			},
 			telemetry: persistentRoomSkillTelemetry,
 			// The executable-skills gate chain, re-evaluated on EVERY read, so a
@@ -7832,6 +8390,15 @@ app.get("/ws", { websocket: true, exposeHeadRoute: false }, async (socket, req) 
 				if (!executable || executable.filesSha256 !== pinned.executeApproval.filesSha256) return null;
 				return { skillDir: executable.skillDir, files: executable.files };
 			},
+		}), createReadSkillReferenceTool({
+			agentId: persistentAgentId,
+			lookupSkill: lookupRoomLibrarySkill,
+			resolveReference: (name, reference, options, model) => readManagedSkillReference(path.join(agentSkillsDir(), name), reference, options, model, currentSkillLibraryPolicy(name)),
+		}), createReadLibraryReferenceTool({
+			agentId: persistentAgentId,
+			resolveSource: (id, hash) => readLibraryMaterialsIndex(id, hash),
+			listReferences: listLibraryMaterialReferences,
+			resolveReference: readLibraryMaterialReference,
 		})];
 		// The shelf pair (files core slice): default-on for every room, fenced to
 		// the room's own files/ folder by the tools themselves — deliberately
@@ -7898,6 +8465,17 @@ ${lines.join("\n")}`;
 					app.log.warn({ err: (error as Error).message }, "current workspace section build failed");
 				}
 				systemPrompt += buildEnabledSkillsIndexSection(resolvePersistentRoomEnabledSkillEntries());
+				try {
+					const grants = readPersistentRoomSkillSettings(persistentAgentId).enabledSources ?? [];
+					if (grants.length) {
+						const sourceNames = readSkillLibraries();
+						const sources = grants.flatMap((grant) => {
+							try { const manifest = readLibraryMaterialsIndex(grant.libraryId, grant.materialsSha256); return manifest ? [{ ...manifest, name: sourceNames.find((source) => source.id === grant.libraryId)?.name ?? manifest.source }] : []; }
+							catch { return []; }
+						});
+						systemPrompt += buildEnabledSourcesIndexSection(sources);
+					}
+				} catch (error) { app.log.warn({ err: (error as Error).message }, "source materials index build failed"); }
 				try {
 					const section = buildShelfManifestSection(persistentAgentId, {}, (name, entry) => cachedShelfPageCount(persistentAgentId, name, entry));
 					if (section) systemPrompt += section;
@@ -10282,8 +10860,14 @@ try {
 let schedulerPreflightLoopHandle: ReturnType<typeof startPersistentRoomSchedulePreflightLoop> | null = null;
 let schedulerExecutionLoopHandle: ReturnType<typeof startScheduledPromptBackgroundExecutionLoop> | null = null;
 let gatewayDeclarationsRefreshHandle: GatewayDeclarationsRefreshLoopHandle | null = null;
+let skillLibraryStartupTimer: ReturnType<typeof setTimeout> | null = null;
 
 app.addHook("onClose", async () => {
+	if (skillLibraryStartupTimer) clearTimeout(skillLibraryStartupTimer);
+	skillLibraryStartupTimer = null;
+	repositorySignIn.cancel();
+	clearRepositoryAccess();
+	stopRepositoryFetches();
 	schedulerExecutionLoopHandle?.stop();
 	schedulerExecutionLoopHandle = null;
 	schedulerPreflightLoopHandle?.stop();
@@ -10312,6 +10896,11 @@ const gatewayDeclarationsRefreshOptions = resolveGatewayDeclarationsRefreshOptio
 app.listen({ port: PORT, host: "127.0.0.1" })
 	.then(async () => {
 		console.log(`exxperts web server on http://localhost:${PORT} (ws: /ws, ui: /, local-only)`);
+		skillLibraryStartupTimer = setTimeout(() => {
+			skillLibraryStartupTimer = null;
+			void checkAllSkillLibraries().catch((error) => app.log.warn({ err: (error as Error).message }, "Skill library startup check failed; installed copies were preserved."));
+		}, 500);
+		skillLibraryStartupTimer.unref();
 		// After the loopback listener is up, honor a persisted remote-enable.
 		// applyBootState never throws and never touches the primary listener:
 		// a bad state file or a missing tailnet address degrades to remote-off

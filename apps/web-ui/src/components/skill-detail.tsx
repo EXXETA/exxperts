@@ -5,7 +5,10 @@ import { FileGroupList, groupFilesByFolder } from "./file-groups";
 import { GroupHeader, PaneHeader } from "./pane-header";
 import { SkillSourceRows, SkillWarnings } from "./skill-facts";
 import { SkillInstructions } from "./skill-instructions";
-import { protectedSkillDeleteLine } from "../skill-source-copy";
+import { protectedSkillDeleteLine, skillReferenceVersion } from "../skill-source-copy";
+import { previewInstalledReference } from "../skills-repo-api";
+import { SkillReferences } from "./SkillReferences";
+import { SkillFileButton } from "./SkillFileButton";
 
 /** A date as the library shows it ("Aug 15, 2026"), or "" when unreadable. */
 export function formatSkillDate(iso: string): string {
@@ -55,7 +58,7 @@ function ClampedDescription({ text }: { text: string }) {
  */
 export function SkillDetailPage({ skill, onBack, onDeleted, readOnly }: { skill: SkillDetail; onBack: () => void; onDeleted: (notice: string) => void; readOnly: boolean }) {
 	const name = skill.displayName || skill.name;
-	const files = skill.bundledScripts ?? [];
+	const files = skill.provenance?.repo ? [] : skill.bundledScripts ?? [];
 	const license = skill.license?.trim() ?? "";
 	const added = skill.provenance ? formatSkillDate(skill.provenance.importedAt) : "";
 	const roomNames = skill.rooms.map((room) => room.name);
@@ -95,6 +98,7 @@ export function SkillDetailPage({ skill, onBack, onDeleted, readOnly }: { skill:
 			<div className="settings-group">
 				<div className="settings-rows">
 					<SkillSourceRows source={skill.provenance?.source} tier={skill.source} license={license} />
+					{skill.provenance?.repo && <div className="settings-row"><span className="settings-row-label">Repository version</span><span className="settings-row-value skill-fact-value">{skill.provenance.repo.ref || "Default branch"} · <code title={skill.provenance.repo.revision}>{skill.provenance.repo.revision.slice(0, 12)}</code></span></div>}
 					{added && (
 						<div className="settings-row">
 							<span className="settings-row-label">Added</span>
@@ -127,8 +131,9 @@ export function SkillDetailPage({ skill, onBack, onDeleted, readOnly }: { skill:
 
 			<div className="settings-group">
 				<GroupHeader kicker="Instructions" line="What the room reads when it uses this skill." />
-				<SkillInstructions body={skill.body} foldable />
+				{skill.provenance?.repo && !readOnly ? <SkillFileButton key={JSON.stringify([skill.body, skillReferenceVersion(skill.provenance.repo.references)])} path={skill.provenance.repo.skillPath ? `${skill.provenance.repo.skillPath}/SKILL.md` : "SKILL.md"} body={skill.body} foldable referencePaths={skill.provenance.repo.references.map((reference) => reference.path)} load={(reference) => previewInstalledReference(skill.name, reference)} /> : <SkillInstructions body={skill.body} foldable />}
 			</div>
+			{skill.provenance?.repo && <div className="settings-group"><SkillReferences references={skill.provenance.repo.references} stored onPreview={readOnly ? undefined : (reference) => previewInstalledReference(skill.name, reference)} /></div>}
 
 			{!readOnly && deleteLine && (
 				<div className="settings-group">
